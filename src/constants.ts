@@ -25,34 +25,34 @@ Your task: Analyze the user's input and generate 8 DISTINCT expert archetypes (A
 ADAPT THE EIGHT ARCHETYPES TO THE TOPIC DOMAIN:
 
 For SCIENTIFIC topics, use:
-1. DR. APEX (First-Principles Physicist) - Reductionist, mathematical
-2. PROF. RIGOR (Meta-Scientist) - Statistical purist, skeptic
-3. FORGE (Industrial Engineer) - Scale, unit economics, manufacturing
-4. ECHO (Historian of Science) - Prior art, context, precedent
-5. GUARDIAN (Bioethicist/Safety) - Risk, downstream consequences
-6. QUANT (ML/Data Scientist) - Correlations, high-dimensional stats
-7. CATALYST (Experimentalist) - Rapid prototyping, validation
-8. VOX (Policy Strategist) - Public perception, funding, narrative
+1. Dr. Apex (First-Principles Physicist) - Reductionist, mathematical
+2. Prof. Rigor (Meta-Scientist) - Statistical purist, skeptic
+3. Forge (Industrial Engineer) - Scale, unit economics, manufacturing
+4. Echo (Historian of Science) - Prior art, context, precedent
+5. Guardian (Bioethicist/Safety) - Risk, downstream consequences
+6. Quant (ML/Data Scientist) - Correlations, high-dimensional stats
+7. Catalyst (Experimentalist) - Rapid prototyping, validation
+8. Vox (Policy Strategist) - Public perception, funding, narrative
 
 For BUSINESS topics, use:
-1. THE STRATEGIST (Business Strategy) - Market positioning, competitive advantage
-2. THE ANALYST (Financial Analysis) - ROI, unit economics, cash flow
-3. THE OPERATOR (Operations) - Scalability, execution, logistics
-4. THE HISTORIAN (Market History) - Prior attempts, lessons learned, precedent
-5. THE SKEPTIC (Risk Management) - Downside scenarios, failure modes
-6. THE DATA SCIENTIST (Analytics) - Customer behavior, market signals
-7. THE BUILDER (Product/MVP) - Rapid iteration, customer validation
-8. THE MARKETER (Go-to-Market) - Positioning, channels, narrative
+1. The Strategist (Business Strategy) - Market positioning, competitive advantage
+2. The Analyst (Financial Analysis) - ROI, unit economics, cash flow
+3. The Operator (Operations) - Scalability, execution, logistics
+4. The Historian (Market History) - Prior attempts, lessons learned, precedent
+5. The Skeptic (Risk Management) - Downside scenarios, failure modes
+6. The Data Scientist (Analytics) - Customer behavior, market signals
+7. The Builder (Product/MVP) - Rapid iteration, customer validation
+8. The Marketer (Go-to-Market) - Positioning, channels, narrative
 
 For LEGAL topics, use:
-1. THE CONSTITUTIONALIST (Constitutional Law) - Fundamental rights, precedent
-2. THE TEXTUALIST (Statutory Interpretation) - Plain meaning, legislative intent
-3. THE PRAGMATIST (Practical Impact) - Real-world consequences, enforcement
-4. THE HISTORIAN (Legal History) - Case law evolution, precedent analysis
-5. THE ETHICIST (Legal Ethics) - Justice, fairness, societal impact
-6. THE ECONOMIST (Law & Economics) - Efficiency, incentives, costs
-7. THE LITIGATOR (Trial Strategy) - Persuasion, evidence, jury appeal
-8. THE POLICYMAKER (Legislative Impact) - Broader implications, reform
+1. The Constitutionalist (Constitutional Law) - Fundamental rights, precedent
+2. The Textualist (Statutory Interpretation) - Plain meaning, legislative intent
+3. The Pragmatist (Practical Impact) - Real-world consequences, enforcement
+4. The Historian (Legal History) - Case law evolution, precedent analysis
+5. The Ethicist (Legal Ethics) - Justice, fairness, societal impact
+6. The Economist (Law & Economics) - Efficiency, incentives, costs
+7. The Litigator (Trial Strategy) - Persuasion, evidence, jury appeal
+8. The Policymaker (Legislative Impact) - Broader implications, reform
 
 For OTHER topics, adapt the 8 archetypes to fit the domain while maintaining diversity of perspectives.
 
