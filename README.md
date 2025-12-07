@@ -8,7 +8,7 @@
   [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-blue?logo=typescript)](https://www.typescriptlang.org/)
   [![React](https://img.shields.io/badge/React-19.2-61dafb?logo=react)](https://react.dev/)
   [![Vite](https://img.shields.io/badge/Vite-6.2-646cff?logo=vite)](https://vitejs.dev/)
-  [![Google Gemini](https://img.shields.io/badge/Gemini-2.0-4285f4?logo=google)](https://ai.google.dev/)
+  [![Google Gemini](https://img.shields.io/badge/Gemini-3.0-4285f4?logo=google)](https://ai.google.dev/)
   
   [View in AI Studio](https://ai.studio/apps/drive/1zHuDvmt4qgE86IYJnOAKhKOEkwpvR7qa) • [Report Bug](https://github.com/drix10/hypothesis-arena/issues) • [Request Feature](https://github.com/drix10/hypothesis-arena/issues)
 </div>
@@ -386,21 +386,11 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-## 🙏 Acknowledgments
-
-- **Google Gemini** - Powering the AI debates
-- **React Team** - Amazing framework
-- **Vite** - Lightning-fast build tool
-- **Recharts** - Beautiful chart library
-- **Lucide** - Clean icon set
-
----
-
 ## 📞 Support
 
 - **Issues**: [GitHub Issues](https://github.com/drix10/hypothesis-arena/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/drix10/hypothesis-arena/discussions)
-- **Email**: your.email@example.com
+- **Email**: ggdrishtant@gmail.com
 
 ---
 
