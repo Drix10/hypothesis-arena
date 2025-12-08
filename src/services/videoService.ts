@@ -32,15 +32,18 @@ export const generateWinningVideo = async (
   }
 
   // Strict API Key check for Veo
-  if (!process.env.API_KEY || process.env.API_KEY.length === 0) {
+  const { getApiKey } = require("./apiKeyManager");
+  const apiKey = getApiKey();
+
+  if (!apiKey || apiKey.length === 0) {
     throw new Error(
-      "Veo generation requires a valid API_KEY. Please ensure you have selected a key using the 'Select API Key' button."
+      "Veo generation requires a valid API key. Please provide your Gemini API key."
     );
   }
 
   // Initialize SDK
-  // Note: Creates a new instance to ensure any recently selected API key is used
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  // Note: Creates a new instance to ensure any recently provided API key is used
+  const ai = new GoogleGenAI({ apiKey });
 
   // Enhance prompt with additional technical direction
   // This consistency layer ensures the model output aligns with production standards

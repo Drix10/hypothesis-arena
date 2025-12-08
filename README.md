@@ -97,7 +97,7 @@ Hypothesis Arena transforms your research ideas through an AI-powered tournament
 ### Prerequisites
 
 - **Node.js** 18+ ([Download](https://nodejs.org/))
-- **Gemini API Key** ([Get one free](https://ai.google.dev/))
+- **Gemini API Key** ([Get one free](https://ai.google.dev/)) - You'll provide this when using the app
 
 ### Installation
 
@@ -114,23 +114,23 @@ Hypothesis Arena transforms your research ideas through an AI-powered tournament
    npm install
    ```
 
-3. **Configure API key**
-
-   Create or edit `.env.local` in the project root:
-
-   ```env
-   VITE_GEMINI_API_KEY=your_gemini_api_key_here
-   ```
-
-4. **Start development server**
+3. **Start development server**
 
    ```bash
    npm run dev
    ```
 
-5. **Open in browser**
+4. **Open in browser**
 
    Navigate to `http://localhost:5173`
+
+5. **Enter your API key**
+
+   When you first open the app, you'll be prompted to enter your Gemini API key.
+
+   - Get a free key at [ai.google.dev](https://ai.google.dev/)
+   - Your key is stored in memory only (never saved to disk)
+   - The key is cleared when you refresh or close the page
 
 ---
 
@@ -242,7 +242,6 @@ hypothesis-arena/
 │   ├── uiConstants.ts       # UI constants
 │   └── App.tsx              # Root component
 ├── dist/                    # Production build
-├── .env.local               # Environment variables
 ├── vite.config.ts           # Vite configuration
 ├── tsconfig.json            # TypeScript configuration
 └── package.json             # Dependencies
@@ -313,8 +312,9 @@ const model = genAI.getGenerativeModel({
 
 **Issue**: "API key not found"
 
-- **Solution**: Ensure `.env.local` exists with `VITE_GEMINI_API_KEY=your_key`
-- **Note**: Restart dev server after adding env variables
+- **Solution**: Enter your Gemini API key when prompted in the app
+- **Solution**: Get a free key at [ai.google.dev](https://ai.google.dev/)
+- **Note**: Your key is stored in memory only and cleared on page refresh
 
 **Issue**: "Tournament won't start"
 

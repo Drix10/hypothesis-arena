@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from "react";
 import Icon from "./Icon";
 import { logger } from "../services/utils/logger";
+import { hasApiKey } from "../services/apiKeyManager";
+import ApiKeyInput from "./ApiKeyInput";
 import "../types";
 
 interface Props {
@@ -25,7 +27,7 @@ const InputSection: React.FC<Props> = ({
     { mimeType: string; data: string } | undefined
   >();
   const [fileName, setFileName] = useState<string>("");
-  const [hasKey, setHasKey] = useState(false);
+  const [apiKeySet, setApiKeySet] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [showTooltip, setShowTooltip] = useState(false);
@@ -214,41 +216,14 @@ const InputSection: React.FC<Props> = ({
     return "solar:document-bold-duotone";
   };
 
-  const handleApiKeySelection = async () => {
-    try {
-      if ((window as any).aistudio) {
-        await (window as any).aistudio.openSelectKey();
-        setHasKey(true);
-      }
-    } catch (e) {
-      logger.error("Failed to select key", e);
-      if ((window as any).aistudio) {
-        const has = await (window as any).aistudio.hasSelectedApiKey();
-        setHasKey(has);
-      }
-    }
-  };
-
+  // Check if API key is set on mount
   useEffect(() => {
-    if (process.env.API_KEY) {
-      setHasKey(true);
-      return;
-    }
-    const checkKey = async () => {
-      if ((window as any).aistudio) {
-        const has = await (window as any).aistudio.hasSelectedApiKey();
-        if (has) {
-          setHasKey(true);
-        }
-      }
-    };
-    checkKey();
-    // Poll briefly in case injection is slow
-    const timer = setInterval(() => {
-      if ((window as any).aistudio) checkKey();
-    }, 1000);
-    return () => clearInterval(timer);
+    setApiKeySet(hasApiKey());
   }, []);
+
+  const handleApiKeySet = () => {
+    setApiKeySet(true);
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -319,188 +294,189 @@ const InputSection: React.FC<Props> = ({
           </p>
         </div>
 
-        {/* Input Container */}
-        <div
-          className={`relative w-full max-w-2xl transition-all duration-700 ease-out ${
-            !hasKey
-              ? "opacity-70 blur-[2px] grayscale"
-              : "opacity-100 blur-0 grayscale-0"
-          }`}
-        >
-          {!hasKey && (
-            <div className="absolute -top-20 left-0 right-0 z-30 flex justify-center">
-              <button
-                onClick={handleApiKeySelection}
-                className="group flex items-center gap-3 bg-yellow-950/90 backdrop-blur-xl border border-yellow-500/50 text-yellow-100 px-6 py-3 rounded-full text-xs font-bold uppercase tracking-wide hover:bg-yellow-900 transition-all shadow-[0_0_40px_rgba(234,179,8,0.25)] hover:scale-105"
-              >
+        {/* API Key Input or Tournament Input */}
+        {!apiKeySet ? (
+          <div className="w-full max-w-2xl space-y-6">
+            <div className="text-center space-y-4">
+              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-yellow-950/40 border border-yellow-500/40">
                 <Icon
-                  icon="solar:key-minimalistic-square-3-broken"
+                  icon="solar:key-bold-duotone"
                   width="16"
-                ></Icon>
-                <span>Initialize System Access</span>
-                <Icon
-                  icon="solar:arrow-right-broken"
-                  class="group-hover:translate-x-1 transition-transform"
-                ></Icon>
-              </button>
+                  className="text-yellow-400"
+                />
+                <span className="text-xs font-mono text-yellow-400 uppercase tracking-widest">
+                  API Key Required
+                </span>
+              </div>
+              <h2 className="text-2xl font-serif text-white">
+                Bring Your Own Key
+              </h2>
+              <p className="text-slate-400 text-sm max-w-md mx-auto">
+                To use Hypothesis Arena, you'll need a Google Gemini API key.
+                Your key is stored in memory only and never saved.
+              </p>
             </div>
-          )}
+            <ApiKeyInput onKeySet={handleApiKeySet} />
+          </div>
+        ) : (
+          <div className="relative w-full max-w-2xl transition-all duration-700 ease-out">
+            {validationError && (
+              <div className="absolute -top-14 left-0 right-0 z-30 flex justify-center animate-in slide-in-from-bottom-2 fade-in duration-300">
+                <div
+                  id="input-error"
+                  role="alert"
+                  aria-live="polite"
+                  className="bg-red-950/90 backdrop-blur-md text-red-200 px-4 py-2 rounded-full text-xs font-mono border border-red-500/50 shadow-lg flex items-center gap-2"
+                >
+                  <Icon
+                    icon="solar:danger-triangle-bold"
+                    width="14"
+                    aria-hidden="true"
+                  ></Icon>
+                  {validationError}
+                </div>
+              </div>
+            )}
 
-          {validationError && (
-            <div className="absolute -top-14 left-0 right-0 z-30 flex justify-center animate-in slide-in-from-bottom-2 fade-in duration-300">
+            <div className="group relative">
+              {/* Hover Glow */}
               <div
-                id="input-error"
-                role="alert"
-                aria-live="polite"
-                className="bg-red-950/90 backdrop-blur-md text-red-200 px-4 py-2 rounded-full text-xs font-mono border border-red-500/50 shadow-lg flex items-center gap-2"
-              >
-                <Icon
-                  icon="solar:danger-triangle-bold"
-                  width="14"
-                  aria-hidden="true"
-                ></Icon>
-                {validationError}
+                className={`absolute -inset-[1px] rounded-2xl bg-gradient-to-r from-transparent via-electric-cyan/60 to-transparent transition-opacity duration-700 ${
+                  isHovered ? "opacity-100" : "opacity-0"
+                }`}
+              ></div>
+
+              {/* Main Wrapper */}
+              <div className="relative bg-black/90 backdrop-blur-xl rounded-2xl border border-white/10 shadow-2xl ring-1 ring-white/5 transition-all duration-300">
+                <form onSubmit={handleSubmit} className="relative">
+                  <textarea
+                    value={input}
+                    onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) =>
+                      setInput(e.target.value)
+                    }
+                    placeholder="State your hypothesis..."
+                    className="w-full bg-transparent text-xl md:text-2xl text-slate-100 placeholder-slate-600 p-8 pb-24 min-h-[240px] resize-none focus:outline-none font-serif italic z-10 relative selection:bg-electric-cyan/30 rounded-2xl"
+                    disabled={isLoading}
+                    onFocus={() => setIsHovered(true)}
+                    onBlur={() => setIsHovered(false)}
+                    aria-label="Research hypothesis input"
+                    aria-describedby={
+                      validationError ? "input-error" : undefined
+                    }
+                    aria-invalid={!!validationError}
+                  />
+
+                  <div className="absolute bottom-4 left-4 right-4 flex justify-between items-center z-20">
+                    {/* Upload with Tooltip */}
+                    <div className="relative group/tooltip">
+                      <div
+                        className={`flex items-center rounded-lg border transition-all duration-300 ${
+                          file
+                            ? "bg-emerald-950/40 border-emerald-500/40"
+                            : "border-transparent hover:bg-white/5 hover:border-white/10"
+                        }`}
+                      >
+                        <label
+                          className={`cursor-pointer flex items-center gap-2 px-3 py-2 ${
+                            file
+                              ? "text-emerald-400"
+                              : "text-slate-500 hover:text-white"
+                          }`}
+                          onMouseEnter={() => setShowTooltip(true)}
+                          onMouseLeave={() => setShowTooltip(false)}
+                        >
+                          <input
+                            type="file"
+                            className="hidden"
+                            accept=".pdf,image/*,.txt"
+                            onChange={handleFileChange}
+                          />
+                          <Icon icon={getFileIcon()} width="18"></Icon>
+                          <span className="text-[10px] font-mono tracking-widest uppercase truncate max-w-[150px]">
+                            {fileName || "Context Data"}
+                          </span>
+                        </label>
+
+                        {file && (
+                          <button
+                            onClick={handleRemoveFile}
+                            className="pr-2 pl-1 text-emerald-500/50 hover:text-red-400 transition-colors"
+                            type="button"
+                            aria-label="Remove file"
+                          >
+                            <Icon
+                              icon="solar:close-circle-bold"
+                              width="16"
+                            ></Icon>
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Tooltip Content */}
+                      <div
+                        className={`absolute bottom-full left-0 mb-3 w-64 p-3 bg-slate-900/95 backdrop-blur border border-slate-700 rounded-xl text-xs text-slate-300 shadow-xl pointer-events-none transition-all duration-300 z-50 ${
+                          showTooltip
+                            ? "opacity-100 translate-y-0"
+                            : "opacity-0 translate-y-2"
+                        }`}
+                      >
+                        <p className="font-semibold text-white mb-1">
+                          Context Data
+                        </p>
+                        <p>
+                          Upload a PDF, Image, or Text file to provide
+                          additional context for the hypothesis.
+                        </p>
+                        <div className="absolute -bottom-1.5 left-4 w-3 h-3 bg-slate-900/95 border-b border-r border-slate-700 rotate-45"></div>
+                      </div>
+                    </div>
+
+                    {/* Submit with Enhanced Loading */}
+                    <button
+                      type="submit"
+                      disabled={!input.trim() || isLoading}
+                      className={`relative overflow-hidden bg-slate-100 text-black px-8 py-3 rounded-xl font-bold text-xs uppercase tracking-widest transition-all shadow-[0_0_20px_rgba(255,255,255,0.1)] hover:shadow-[0_0_30px_rgba(255,255,255,0.3)] min-w-[140px] ${
+                        isLoading
+                          ? "cursor-wait"
+                          : "hover:scale-[1.02] active:scale-[0.98]"
+                      }`}
+                    >
+                      {isLoading && (
+                        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-electric-cyan/20 to-transparent animate-beam"></div>
+                      )}
+
+                      {/* Removed pulsing overlay - beam animation is sufficient */}
+
+                      <span className="relative z-10 flex items-center justify-center gap-2">
+                        {isLoading ? (
+                          <div className="flex items-center gap-2">
+                            <Icon
+                              icon="solar:refresh-circle-broken"
+                              class="animate-spin text-lg text-slate-700"
+                            ></Icon>
+                            <span className="text-slate-800 font-bold">
+                              {loadingStatus || "Processing"}
+                            </span>
+                          </div>
+                        ) : (
+                          <>
+                            <span>Ignite</span>
+                            <Icon
+                              icon="solar:play-circle-bold-duotone"
+                              class="text-lg"
+                            ></Icon>
+                          </>
+                        )}
+                      </span>
+                    </button>
+                  </div>
+                </form>
               </div>
             </div>
-          )}
 
-          <div className="group relative">
-            {/* Hover Glow */}
-            <div
-              className={`absolute -inset-[1px] rounded-2xl bg-gradient-to-r from-transparent via-electric-cyan/60 to-transparent transition-opacity duration-700 ${
-                isHovered ? "opacity-100" : "opacity-0"
-              }`}
-            ></div>
-
-            {/* Main Wrapper */}
-            <div className="relative bg-black/90 backdrop-blur-xl rounded-2xl border border-white/10 shadow-2xl ring-1 ring-white/5 transition-all duration-300">
-              <form onSubmit={handleSubmit} className="relative">
-                <textarea
-                  value={input}
-                  onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) =>
-                    setInput(e.target.value)
-                  }
-                  placeholder="State your hypothesis..."
-                  className="w-full bg-transparent text-xl md:text-2xl text-slate-100 placeholder-slate-600 p-8 pb-24 min-h-[240px] resize-none focus:outline-none font-serif italic z-10 relative selection:bg-electric-cyan/30 rounded-2xl"
-                  disabled={isLoading || !hasKey}
-                  onFocus={() => setIsHovered(true)}
-                  onBlur={() => setIsHovered(false)}
-                  aria-label="Research hypothesis input"
-                  aria-describedby={validationError ? "input-error" : undefined}
-                  aria-invalid={!!validationError}
-                />
-
-                <div className="absolute bottom-4 left-4 right-4 flex justify-between items-center z-20">
-                  {/* Upload with Tooltip */}
-                  <div className="relative group/tooltip">
-                    <div
-                      className={`flex items-center rounded-lg border transition-all duration-300 ${
-                        file
-                          ? "bg-emerald-950/40 border-emerald-500/40"
-                          : "border-transparent hover:bg-white/5 hover:border-white/10"
-                      }`}
-                    >
-                      <label
-                        className={`cursor-pointer flex items-center gap-2 px-3 py-2 ${
-                          file
-                            ? "text-emerald-400"
-                            : "text-slate-500 hover:text-white"
-                        }`}
-                        onMouseEnter={() => setShowTooltip(true)}
-                        onMouseLeave={() => setShowTooltip(false)}
-                      >
-                        <input
-                          type="file"
-                          className="hidden"
-                          accept=".pdf,image/*,.txt"
-                          onChange={handleFileChange}
-                          disabled={!hasKey}
-                        />
-                        <Icon icon={getFileIcon()} width="18"></Icon>
-                        <span className="text-[10px] font-mono tracking-widest uppercase truncate max-w-[150px]">
-                          {fileName || "Context Data"}
-                        </span>
-                      </label>
-
-                      {file && (
-                        <button
-                          onClick={handleRemoveFile}
-                          className="pr-2 pl-1 text-emerald-500/50 hover:text-red-400 transition-colors"
-                          type="button"
-                          aria-label="Remove file"
-                        >
-                          <Icon
-                            icon="solar:close-circle-bold"
-                            width="16"
-                          ></Icon>
-                        </button>
-                      )}
-                    </div>
-
-                    {/* Tooltip Content */}
-                    <div
-                      className={`absolute bottom-full left-0 mb-3 w-64 p-3 bg-slate-900/95 backdrop-blur border border-slate-700 rounded-xl text-xs text-slate-300 shadow-xl pointer-events-none transition-all duration-300 z-50 ${
-                        showTooltip
-                          ? "opacity-100 translate-y-0"
-                          : "opacity-0 translate-y-2"
-                      }`}
-                    >
-                      <p className="font-semibold text-white mb-1">
-                        Context Data
-                      </p>
-                      <p>
-                        Upload a PDF, Image, or Text file to provide additional
-                        context for the hypothesis.
-                      </p>
-                      <div className="absolute -bottom-1.5 left-4 w-3 h-3 bg-slate-900/95 border-b border-r border-slate-700 rotate-45"></div>
-                    </div>
-                  </div>
-
-                  {/* Submit with Enhanced Loading */}
-                  <button
-                    type="submit"
-                    disabled={!input.trim() || isLoading || !hasKey}
-                    className={`relative overflow-hidden bg-slate-100 text-black px-8 py-3 rounded-xl font-bold text-xs uppercase tracking-widest transition-all shadow-[0_0_20px_rgba(255,255,255,0.1)] hover:shadow-[0_0_30px_rgba(255,255,255,0.3)] min-w-[140px] ${
-                      isLoading
-                        ? "cursor-wait"
-                        : "hover:scale-[1.02] active:scale-[0.98]"
-                    }`}
-                  >
-                    {isLoading && (
-                      <div className="absolute inset-0 bg-gradient-to-r from-transparent via-electric-cyan/20 to-transparent animate-beam"></div>
-                    )}
-
-                    {/* Removed pulsing overlay - beam animation is sufficient */}
-
-                    <span className="relative z-10 flex items-center justify-center gap-2">
-                      {isLoading ? (
-                        <div className="flex items-center gap-2">
-                          <Icon
-                            icon="solar:refresh-circle-broken"
-                            class="animate-spin text-lg text-slate-700"
-                          ></Icon>
-                          <span className="text-slate-800 font-bold">
-                            {loadingStatus || "Processing"}
-                          </span>
-                        </div>
-                      ) : (
-                        <>
-                          <span>Ignite</span>
-                          <Icon
-                            icon="solar:play-circle-bold-duotone"
-                            class="text-lg"
-                          ></Icon>
-                        </>
-                      )}
-                    </span>
-                  </button>
-                </div>
-              </form>
-            </div>
+            <div className="absolute -bottom-24 left-1/2 -translate-x-1/2 w-px h-24 bg-gradient-to-b from-white/10 to-transparent"></div>
           </div>
-
-          <div className="absolute -bottom-24 left-1/2 -translate-x-1/2 w-px h-24 bg-gradient-to-b from-white/10 to-transparent"></div>
-        </div>
+        )}
 
         {/* Footer */}
         <div className="mt-40 grid grid-cols-2 md:grid-cols-4 gap-8 border-t border-white/5 pt-10 opacity-60 hover:opacity-100 transition-opacity duration-500">

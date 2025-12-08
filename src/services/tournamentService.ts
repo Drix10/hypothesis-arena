@@ -15,15 +15,19 @@ import { retryWithBackoff } from "./utils/retryUtils";
 import { logger } from "./utils/logger";
 
 /**
- * Initialize Google Gemini AI client with API key from environment
+ * Initialize Google Gemini AI client with API key from memory (BYOK)
  * @returns Configured GoogleGenAI instance
  * @throws Error if API key is not configured
  */
 const getAiClient = () => {
-  const apiKey = process.env.API_KEY;
+  // Import dynamically to avoid circular dependencies
+  const { getApiKey } = require("./apiKeyManager");
+  const apiKey = getApiKey();
+
   if (!apiKey) {
-    throw new Error("API key not configured. Please set up your Gemini API key.");
+    throw new Error("API key not configured. Please provide your Gemini API key.");
   }
+
   return new GoogleGenAI({ apiKey });
 };
 
