@@ -1,4 +1,4 @@
-import React from "react";
+import React, { memo, useMemo } from "react";
 import {
   Radar,
   RadarChart,
@@ -14,18 +14,21 @@ interface Props {
   color?: string;
 }
 
-const ScoreRadar: React.FC<Props> = ({ scores, color = "#22d3ee" }) => {
-  const data = [
-    { subject: "Novelty", A: scores.novelty, fullMark: 10 },
-    { subject: "Feasibility", A: scores.feasibility, fullMark: 10 },
-    { subject: "Impact", A: scores.impact, fullMark: 10 },
-    { subject: "Ethics", A: scores.ethics, fullMark: 10 },
-  ];
+const ScoreRadar: React.FC<Props> = memo(({ scores, color = "#22d3ee" }) => {
+  const data = useMemo(
+    () => [
+      { subject: "Novelty", A: scores.novelty, fullMark: 10 },
+      { subject: "Feasibility", A: scores.feasibility, fullMark: 10 },
+      { subject: "Impact", A: scores.impact, fullMark: 10 },
+      { subject: "Ethics", A: scores.ethics, fullMark: 10 },
+    ],
+    [scores.novelty, scores.feasibility, scores.impact, scores.ethics]
+  );
 
   return (
-    <div className="w-full h-full min-h-[250px]">
+    <div className="w-full h-full">
       <ResponsiveContainer width="100%" height="100%">
-        <RadarChart cx="50%" cy="50%" outerRadius="70%" data={data}>
+        <RadarChart cx="50%" cy="50%" outerRadius="90%" data={data}>
           <PolarGrid stroke="#475569" />
           <PolarAngleAxis
             dataKey="subject"
@@ -49,6 +52,8 @@ const ScoreRadar: React.FC<Props> = ({ scores, color = "#22d3ee" }) => {
       </ResponsiveContainer>
     </div>
   );
-};
+});
+
+ScoreRadar.displayName = "ScoreRadar";
 
 export default ScoreRadar;

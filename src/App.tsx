@@ -102,7 +102,7 @@ const App: React.FC = () => {
         activeHypothesisMapRef.current = null;
       }
 
-      // Note: GoogleGenAI SDK doesn't support AbortSignal
+      // Note: Gemini SDK doesn't support AbortSignal
       // We rely on isMounted checks to prevent state updates after unmount
     };
   }, []);
@@ -216,7 +216,7 @@ const App: React.FC = () => {
 
     setAppState(AppState.GENERATING_AGENTS);
     setError(null);
-    setLoadingStatus("Synthesizing Research Archetypes...");
+    setLoadingStatus("Synthesizing...");
 
     try {
       // 1. Generate Agents

@@ -1,4 +1,4 @@
-import React, { useState, lazy, Suspense } from "react";
+import React, { useState, lazy, Suspense, useCallback } from "react";
 import Icon from "./Icon";
 import { TournamentData, MatchResult, Agent } from "../types";
 import MatchCard from "./MatchCard";
@@ -15,6 +15,11 @@ interface Props {
 const TournamentView: React.FC<Props> = ({ data, onNewTournament }) => {
   const [selectedMatch, setSelectedMatch] = useState<MatchResult | null>(null);
   const [showBrief, setShowBrief] = useState(false);
+
+  // Memoize onClose to prevent MatchModal re-renders
+  const handleCloseModal = useCallback(() => {
+    setSelectedMatch(null);
+  }, []);
 
   // Use refs to avoid recreating keyboard listener on every state change
   const selectedMatchRef = React.useRef(selectedMatch);
@@ -380,7 +385,7 @@ const TournamentView: React.FC<Props> = ({ data, onNewTournament }) => {
       <MatchModal
         match={selectedMatch}
         agents={data.agents}
-        onClose={() => setSelectedMatch(null)}
+        onClose={handleCloseModal}
       />
     </div>
   );

@@ -27,7 +27,8 @@ const InputSection: React.FC<Props> = ({
     { mimeType: string; data: string } | undefined
   >();
   const [fileName, setFileName] = useState<string>("");
-  const [apiKeySet, setApiKeySet] = useState(false);
+  // Initialize with actual state to avoid FOUC
+  const [apiKeySet, setApiKeySet] = useState(() => hasApiKey());
   const [isHovered, setIsHovered] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [showTooltip, setShowTooltip] = useState(false);
@@ -92,7 +93,13 @@ const InputSection: React.FC<Props> = ({
           const headerReader = new FileReader();
           const blob = file.slice(0, 4); // Read first 4 bytes
 
+          // Track this reader for cleanup
+          readersRef.current.add(headerReader);
+
           headerReader.onloadend = () => {
+            // Remove from tracking after completion
+            readersRef.current.delete(headerReader);
+
             const arr = new Uint8Array(headerReader.result as ArrayBuffer);
             let header = "";
             for (let i = 0; i < arr.length; i++) {
@@ -118,7 +125,12 @@ const InputSection: React.FC<Props> = ({
             resolve(validHeaders.some((h) => header.startsWith(h)));
           };
 
-          headerReader.onerror = () => resolve(false);
+          headerReader.onerror = () => {
+            // Remove from tracking on error
+            readersRef.current.delete(headerReader);
+            resolve(false);
+          };
+
           headerReader.readAsArrayBuffer(blob);
         });
       };
@@ -225,6 +237,10 @@ const InputSection: React.FC<Props> = ({
     setApiKeySet(true);
   };
 
+  const handleApiKeyCleared = () => {
+    setApiKeySet(false);
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const trimmedInput = input.trim();
@@ -296,28 +312,10 @@ const InputSection: React.FC<Props> = ({
 
         {/* API Key Input or Tournament Input */}
         {!apiKeySet ? (
-          <div className="w-full max-w-2xl space-y-6">
-            <div className="text-center space-y-4">
-              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-yellow-950/40 border border-yellow-500/40">
-                <Icon
-                  icon="solar:key-bold-duotone"
-                  width="16"
-                  className="text-yellow-400"
-                />
-                <span className="text-xs font-mono text-yellow-400 uppercase tracking-widest">
-                  API Key Required
-                </span>
-              </div>
-              <h2 className="text-2xl font-serif text-white">
-                Bring Your Own Key
-              </h2>
-              <p className="text-slate-400 text-sm max-w-md mx-auto">
-                To use Hypothesis Arena, you'll need a Google Gemini API key.
-                Your key is stored in memory only and never saved.
-              </p>
-            </div>
-            <ApiKeyInput onKeySet={handleApiKeySet} />
-          </div>
+          <ApiKeyInput
+            onKeySet={handleApiKeySet}
+            onKeyCleared={handleApiKeyCleared}
+          />
         ) : (
           <div className="relative w-full max-w-2xl transition-all duration-700 ease-out">
             {validationError && (
@@ -367,67 +365,75 @@ const InputSection: React.FC<Props> = ({
                   />
 
                   <div className="absolute bottom-4 left-4 right-4 flex justify-between items-center z-20">
-                    {/* Upload with Tooltip */}
-                    <div className="relative group/tooltip">
-                      <div
-                        className={`flex items-center rounded-lg border transition-all duration-300 ${
-                          file
-                            ? "bg-emerald-950/40 border-emerald-500/40"
-                            : "border-transparent hover:bg-white/5 hover:border-white/10"
-                        }`}
-                      >
-                        <label
-                          className={`cursor-pointer flex items-center gap-2 px-3 py-2 ${
+                    <div className="flex items-center gap-3">
+                      {/* API Key Indicator */}
+                      <ApiKeyInput
+                        onKeySet={handleApiKeySet}
+                        onKeyCleared={handleApiKeyCleared}
+                      />
+
+                      {/* Upload with Tooltip */}
+                      <div className="relative group/tooltip">
+                        <div
+                          className={`flex items-center rounded-lg border transition-all duration-300 ${
                             file
-                              ? "text-emerald-400"
-                              : "text-slate-500 hover:text-white"
+                              ? "bg-emerald-950/40 border-emerald-500/40"
+                              : "border-transparent hover:bg-white/5 hover:border-white/10"
                           }`}
-                          onMouseEnter={() => setShowTooltip(true)}
-                          onMouseLeave={() => setShowTooltip(false)}
                         >
-                          <input
-                            type="file"
-                            className="hidden"
-                            accept=".pdf,image/*,.txt"
-                            onChange={handleFileChange}
-                          />
-                          <Icon icon={getFileIcon()} width="18"></Icon>
-                          <span className="text-[10px] font-mono tracking-widest uppercase truncate max-w-[150px]">
-                            {fileName || "Context Data"}
-                          </span>
-                        </label>
-
-                        {file && (
-                          <button
-                            onClick={handleRemoveFile}
-                            className="pr-2 pl-1 text-emerald-500/50 hover:text-red-400 transition-colors"
-                            type="button"
-                            aria-label="Remove file"
+                          <label
+                            className={`cursor-pointer flex items-center gap-2 px-3 py-2 ${
+                              file
+                                ? "text-emerald-400"
+                                : "text-slate-500 hover:text-white"
+                            }`}
+                            onMouseEnter={() => setShowTooltip(true)}
+                            onMouseLeave={() => setShowTooltip(false)}
                           >
-                            <Icon
-                              icon="solar:close-circle-bold"
-                              width="16"
-                            ></Icon>
-                          </button>
-                        )}
-                      </div>
+                            <input
+                              type="file"
+                              className="hidden"
+                              accept=".pdf,image/*,.txt"
+                              onChange={handleFileChange}
+                            />
+                            <Icon icon={getFileIcon()} width="18"></Icon>
+                            <span className="text-[10px] font-mono tracking-widest uppercase truncate max-w-[150px]">
+                              {fileName || "Context Data"}
+                            </span>
+                          </label>
 
-                      {/* Tooltip Content */}
-                      <div
-                        className={`absolute bottom-full left-0 mb-3 w-64 p-3 bg-slate-900/95 backdrop-blur border border-slate-700 rounded-xl text-xs text-slate-300 shadow-xl pointer-events-none transition-all duration-300 z-50 ${
-                          showTooltip
-                            ? "opacity-100 translate-y-0"
-                            : "opacity-0 translate-y-2"
-                        }`}
-                      >
-                        <p className="font-semibold text-white mb-1">
-                          Context Data
-                        </p>
-                        <p>
-                          Upload a PDF, Image, or Text file to provide
-                          additional context for the hypothesis.
-                        </p>
-                        <div className="absolute -bottom-1.5 left-4 w-3 h-3 bg-slate-900/95 border-b border-r border-slate-700 rotate-45"></div>
+                          {file && (
+                            <button
+                              onClick={handleRemoveFile}
+                              className="pr-2 pl-1 text-emerald-500/50 hover:text-red-400 transition-colors"
+                              type="button"
+                              aria-label="Remove file"
+                            >
+                              <Icon
+                                icon="solar:close-circle-bold"
+                                width="16"
+                              ></Icon>
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Tooltip Content */}
+                        <div
+                          className={`absolute bottom-full left-0 mb-3 w-64 p-3 bg-slate-900/95 backdrop-blur border border-slate-700 rounded-xl text-xs text-slate-300 shadow-xl pointer-events-none transition-all duration-300 z-50 ${
+                            showTooltip
+                              ? "opacity-100 translate-y-0"
+                              : "opacity-0 translate-y-2"
+                          }`}
+                        >
+                          <p className="font-semibold text-white mb-1">
+                            Context Data
+                          </p>
+                          <p>
+                            Upload a PDF, Image, or Text file to provide
+                            additional context for the hypothesis.
+                          </p>
+                          <div className="absolute -bottom-1.5 left-4 w-3 h-3 bg-slate-900/95 border-b border-r border-slate-700 rotate-45"></div>
+                        </div>
                       </div>
                     </div>
 
@@ -481,8 +487,7 @@ const InputSection: React.FC<Props> = ({
         {/* Footer */}
         <div className="mt-40 grid grid-cols-2 md:grid-cols-4 gap-8 border-t border-white/5 pt-10 opacity-60 hover:opacity-100 transition-opacity duration-500">
           {[
-            { label: "Engine", value: "Gemini 3.0 Pro" },
-            { label: "Visuals", value: "Veo 3.1 Cinema" },
+            { label: "Engine", value: "Gemini 2.0 Flash" },
             { label: "Agents", value: "8 Expert Minds" },
             { label: "Standard", value: "Nature / Science" },
           ].map((stat, i) => (

@@ -194,7 +194,7 @@ export const validateAndRepairTournament = (data: any): TournamentData => {
     throw new Error("Tournament data missing 'winningBrief' object");
   }
 
-  const requiredBriefFields = ["title", "abstract", "oneSentenceTweet", "veoVideoPrompt"];
+  const requiredBriefFields = ["title", "abstract", "oneSentenceTweet"];
   for (const field of requiredBriefFields) {
     if (!data.winningBrief[field] || typeof data.winningBrief[field] !== "string") {
       throw new Error(`winningBrief missing required field: ${field}`);

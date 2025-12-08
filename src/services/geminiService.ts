@@ -4,7 +4,6 @@
  */
 
 export * from './tournamentService';
-export * from './videoService';
 export * from './diagnosticService';
 export * from './utils/validationUtils';
 export * from './utils/jsonUtils';

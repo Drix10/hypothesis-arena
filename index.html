@@ -123,6 +123,50 @@
         background: #333; 
         border-radius: 3px;
       }
+
+      /* Print Styles for PDF Export */
+      @media print {
+        body {
+          background: white;
+          color: black;
+        }
+        
+        /* Hide non-essential UI elements */
+        .bg-noise,
+        nav,
+        button:not(.print-keep) {
+          display: none !important;
+        }
+        
+        main {
+          max-width: 100% !important;
+          padding: 20px !important;
+        }
+        
+        /* Preserve heading hierarchy, only adjust for readability */
+        h1, h2, h3, h4, h5, h6 {
+          color: #000 !important;
+          page-break-after: avoid;
+        }
+        
+        section {
+          page-break-inside: avoid;
+        }
+        
+        /* Only target prose content, not all text */
+        .prose, .prose * {
+          color: black !important;
+        }
+        
+        /* More specific selectors to avoid over-generalization */
+        .bg-surface {
+          background: white !important;
+        }
+        
+        [class*="border-"] {
+          border-color: #ccc !important;
+        }
+      }
     </style>
   <script type="importmap">
 {

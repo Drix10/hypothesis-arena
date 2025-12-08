@@ -1,11 +1,8 @@
 import { Schema, Type } from "@google/genai";
 
 // API Configuration
-export const GEMINI_MODEL = "gemini-3-pro-preview";
-export const VEO_MODEL = "veo-3.1-fast-generate-preview";
+export const GEMINI_MODEL = "gemini-2.0-flash-exp";
 export const MAX_OUTPUT_TOKENS = 8192;
-export const MAX_VEO_POLL_ATTEMPTS = 90;
-export const VEO_POLL_INTERVAL_MS = 5000;
 export const JSON_SIZE_WARNING_THRESHOLD = 500;
 
 // Memory & Storage Configuration
@@ -257,14 +254,6 @@ REQUIREMENTS:
    - Use active voice
    - Adapt tone to domain (professional for business, accessible for science, etc.)
 
-6. VEO VIDEO PROMPT (Required, 50-100 words)
-   - Describe an 8-second cinematic visualization
-   - Focus on visual metaphors and concrete imagery
-   - Specify: camera movement, lighting, subject, mood, color palette
-   - Avoid abstract concepts - use tangible visuals
-   - Represent the core concept visually
-   - Adapt to domain (courtroom for legal, lab for science, office for business, etc.)
-
 Output valid JSON only.
 `;
 
@@ -325,7 +314,6 @@ export const WINNING_BRIEF_SCHEMA: Schema = {
     predictedImpact: { type: Type.STRING },
     costAndTimeline: { type: Type.STRING },
     oneSentenceTweet: { type: Type.STRING },
-    veoVideoPrompt: { type: Type.STRING },
   },
-  required: ["title", "abstract", "veoVideoPrompt", "predictedImpact", "costAndTimeline", "oneSentenceTweet"],
+  required: ["title", "abstract", "predictedImpact", "costAndTimeline", "oneSentenceTweet"],
 };

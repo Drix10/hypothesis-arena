@@ -14,20 +14,22 @@ import { extractCleanJson, safeJsonParse } from "./utils/jsonUtils";
 import { retryWithBackoff } from "./utils/retryUtils";
 import { logger } from "./utils/logger";
 
+import { getApiKey } from "./apiKeyManager";
+
 /**
- * Initialize Google Gemini AI client with API key from memory (BYOK)
- * @returns Configured GoogleGenAI instance
+ * Initialize AI client with API key from memory (BYOK)
+ * @returns Configured AI client instance
  * @throws Error if API key is not configured
  */
 const getAiClient = () => {
-  // Import dynamically to avoid circular dependencies
-  const { getApiKey } = require("./apiKeyManager");
   const apiKey = getApiKey();
 
-  if (!apiKey) {
+  if (!apiKey || apiKey.trim().length === 0) {
     throw new Error("API key not configured. Please provide your Gemini API key.");
   }
 
+  // Create new instance each time to ensure fresh API key is used
+  // This prevents stale key issues if user changes key mid-session
   return new GoogleGenAI({ apiKey });
 };
 
@@ -54,17 +56,32 @@ const SAFETY_SETTINGS = [
  * @throws Error if agent generation fails or doesn't produce exactly 8 agents
  */
 export const generateAgents = async (userInput: string, file?: { mimeType: string; data: string }): Promise<Agent[]> => {
+  // Input validation
+  if (!userInput || typeof userInput !== 'string' || userInput.trim().length === 0) {
+    throw new Error("User input is required and must be a non-empty string");
+  }
+
+  if (userInput.trim().length > 10000) {
+    throw new Error("User input exceeds maximum length of 10,000 characters");
+  }
+
   return retryWithBackoff(async () => {
     const ai = getAiClient();
 
     const inputParts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [
       { text: AGENT_GENERATION_PROMPT },
-      { text: `USER INPUT: "${userInput}"` }
+      { text: `USER INPUT: "${userInput.trim()}"` }
     ];
 
     // Validate file before sending
     if (file && file.data && file.data.length > 0) {
-      inputParts.push({ inlineData: { mimeType: file.mimeType, data: file.data } });
+      // Validate MIME type
+      const validMimeTypes = ['application/pdf', 'text/plain', 'image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp'];
+      if (!validMimeTypes.includes(file.mimeType)) {
+        logger.warn(`Invalid MIME type for file: ${file.mimeType}. Skipping file attachment.`);
+      } else {
+        inputParts.push({ inlineData: { mimeType: file.mimeType, data: file.data } });
+      }
     }
 
     const result = await ai.models.generateContent({
@@ -125,130 +142,158 @@ export const simulateMatch = async (
   round: string,
   file?: { mimeType: string; data: string }
 ): Promise<Partial<MatchResult>> => {
-  const ai = getAiClient();
+  // Input validation
+  if (!topic || typeof topic !== 'string' || topic.trim().length === 0) {
+    throw new Error("Topic is required for match simulation");
+  }
 
-  // Use evolved hypothesis if available, otherwise use initial
-  const agent1Hypothesis = agent1.currentHypothesis || agent1.initialHypothesis;
-  const agent2Hypothesis = agent2.currentHypothesis || agent2.initialHypothesis;
+  if (!agent1 || !agent2) {
+    throw new Error("Both agents are required for match simulation");
+  }
 
-  // Sanitize inputs to prevent prompt injection
-  // Comprehensive sanitization to prevent various injection attacks
-  const sanitize = (text: string): string => {
-    if (!text || typeof text !== 'string') return '';
+  if (!agent1.initialHypothesis || !agent2.initialHypothesis) {
+    throw new Error("Both agents must have initial hypotheses");
+  }
 
-    return text
-      // Break template markers (both {{ and }})
-      .replace(/\{\{/g, '{ {')
-      .replace(/\}\}/g, '} }')
-      // Escape other potential injection vectors
-      .replace(/\$\{/g, '$ {')  // Template literals
-      .replace(/`/g, "'")        // Backticks
-      // Remove control characters (except newlines and tabs)
-      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
-      // Limit consecutive newlines to prevent prompt flooding
-      .replace(/\n{4,}/g, '\n\n\n')
-      .trim();
-  };
+  // Wrap in retry logic for debate quality issues
+  return retryWithBackoff(async () => {
+    const ai = getAiClient();
 
-  const prompt = MATCH_SIMULATION_PROMPT
-    .replace(/\{\{AGENT_A_ID\}\}/g, agent1.id)
-    .replace(/\{\{AGENT_B_ID\}\}/g, agent2.id)
-    .replace('{{TOPIC}}', sanitize(topic))
-    .replace('{{ROUND}}', sanitize(round))
-    .replace('{{AGENT_A_NAME}}', sanitize(agent1.name))
-    .replace('{{AGENT_A_ROLE}}', sanitize(agent1.role))
-    .replace('{{AGENT_A_HYPOTHESIS}}', sanitize(agent1Hypothesis))
-    .replace('{{AGENT_B_NAME}}', sanitize(agent2.name))
-    .replace('{{AGENT_B_ROLE}}', sanitize(agent2.role))
-    .replace('{{AGENT_B_HYPOTHESIS}}', sanitize(agent2Hypothesis));
+    // Use evolved hypothesis if available, otherwise use initial
+    const agent1Hypothesis = agent1.currentHypothesis || agent1.initialHypothesis;
+    const agent2Hypothesis = agent2.currentHypothesis || agent2.initialHypothesis;
 
-  // Build input parts with file context if available
-  const inputParts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [{ text: prompt }];
+    // Sanitize inputs to prevent prompt injection
+    // Comprehensive sanitization to prevent various injection attacks
+    const sanitize = (text: string): string => {
+      if (!text || typeof text !== 'string') return '';
 
-  // Validate file before sending
-  if (file && file.data && file.data.length > 0) {
-    // Add explicit instruction to reference the file
-    inputParts.push({
-      text: "\n\nIMPORTANT: The attached file contains critical context for this debate. " +
-        "Both agents MUST reference specific details, data, figures, or arguments from this document. " +
-        "Debates should cite page numbers, sections, or specific claims from the provided material."
-    });
-    inputParts.push({
-      inlineData: {
-        mimeType: file.mimeType,
-        data: file.data
+      return text
+        // Break template markers (both {{ and }})
+        .replace(/\{\{/g, '{ {')
+        .replace(/\}\}/g, '} }')
+        // Escape other potential injection vectors
+        .replace(/\$\{/g, '$ {')  // Template literals
+        .replace(/`/g, "'")        // Backticks
+        // Remove control characters (except newlines and tabs)
+        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+        // Limit consecutive newlines to prevent prompt flooding
+        .replace(/\n{4,}/g, '\n\n\n')
+        .trim();
+    };
+
+    const prompt = MATCH_SIMULATION_PROMPT
+      .replace(/\{\{AGENT_A_ID\}\}/g, agent1.id)
+      .replace(/\{\{AGENT_B_ID\}\}/g, agent2.id)
+      .replace('{{TOPIC}}', sanitize(topic))
+      .replace('{{ROUND}}', sanitize(round))
+      .replace('{{AGENT_A_NAME}}', sanitize(agent1.name))
+      .replace('{{AGENT_A_ROLE}}', sanitize(agent1.role))
+      .replace('{{AGENT_A_HYPOTHESIS}}', sanitize(agent1Hypothesis))
+      .replace('{{AGENT_B_NAME}}', sanitize(agent2.name))
+      .replace('{{AGENT_B_ROLE}}', sanitize(agent2.role))
+      .replace('{{AGENT_B_HYPOTHESIS}}', sanitize(agent2Hypothesis));
+
+    // Build input parts with file context if available
+    const inputParts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [{ text: prompt }];
+
+    // Validate file before sending
+    if (file && file.data && file.data.length > 0) {
+      // Validate MIME type
+      const validMimeTypes = ['application/pdf', 'text/plain', 'image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp'];
+      if (!validMimeTypes.includes(file.mimeType)) {
+        logger.warn(`Invalid MIME type for file in match: ${file.mimeType}. Skipping file attachment.`);
+      } else {
+        // Add explicit instruction to reference the file
+        inputParts.push({
+          text: "\n\nIMPORTANT: The attached file contains critical context for this debate. " +
+            "Both agents MUST reference specific details, data, figures, or arguments from this document. " +
+            "Debates should cite page numbers, sections, or specific claims from the provided material."
+        });
+        inputParts.push({
+          inlineData: {
+            mimeType: file.mimeType,
+            data: file.data
+          }
+        });
+      }
+    }
+
+    const result = await ai.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: { parts: inputParts },
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: MATCH_RESULT_SCHEMA,
+        temperature: 1.0, // High temperature for dynamic debate
+        maxOutputTokens: MAX_OUTPUT_TOKENS, // Ensure enough length for dialogue
+        safetySettings: SAFETY_SETTINGS,
       }
     });
-  }
 
-  const result = await ai.models.generateContent({
-    model: GEMINI_MODEL,
-    contents: { parts: inputParts },
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: MATCH_RESULT_SCHEMA,
-      temperature: 1.0, // High temperature for dynamic debate
-      maxOutputTokens: MAX_OUTPUT_TOKENS, // Ensure enough length for dialogue
-      safetySettings: SAFETY_SETTINGS,
+    const parsed = safeJsonParse(extractCleanJson(result.text || "{}"), "simulateMatch");
+
+    // Validate debate quality
+    if (!parsed.debateDialogue || typeof parsed.debateDialogue !== 'string') {
+      throw new Error("Match simulation failed: No debate dialogue generated");
     }
-  });
 
-  const parsed = safeJsonParse(extractCleanJson(result.text || "{}"), "simulateMatch");
+    // Check for minimum debate length (rough heuristic: 12 exchanges ≈ 2000+ characters)
+    const DEBATE_MIN_LENGTH = 1500; // Minimum characters for debate quality
+    if (parsed.debateDialogue.length < DEBATE_MIN_LENGTH) {
+      logger.warn(`Match debate seems short (${parsed.debateDialogue.length} chars). Expected 2000+`);
+    }
 
-  // Validate debate quality
-  if (!parsed.debateDialogue || typeof parsed.debateDialogue !== 'string') {
-    throw new Error("Match simulation failed: No debate dialogue generated");
-  }
+    // Validate minimum turn count (12 exchanges = 24 turns minimum)
+    // Count turns by looking for double newlines (turn separators)
+    const turns = (parsed.debateDialogue.match(/\n\n/g) || []).length + 1;
+    const MIN_TURNS = 10; // Reduced from 12 to be more lenient
+    if (turns < MIN_TURNS) {
+      throw new Error(
+        `Debate has only ${turns} exchanges, minimum ${MIN_TURNS} required. ` +
+        `This indicates poor debate quality. Retrying...`
+      );
+    }
 
-  // Check for minimum debate length (rough heuristic: 12 exchanges ≈ 2000+ characters)
-  const DEBATE_MIN_LENGTH = 1500; // Minimum characters for debate quality
-  if (parsed.debateDialogue.length < DEBATE_MIN_LENGTH) {
-    logger.warn(`Match debate seems short (${parsed.debateDialogue.length} chars). Expected 2000+`);
-  }
+    // Warn if debate is short but acceptable
+    if (turns < 12) {
+      logger.warn(`Debate has ${turns} exchanges (recommended: 12+). Proceeding anyway.`);
+    }
 
-  // Validate minimum turn count (12 exchanges = 24 turns minimum)
-  // Count turns by looking for double newlines (turn separators)
-  const turns = (parsed.debateDialogue.match(/\n\n/g) || []).length + 1;
-  if (turns < 12) {
-    throw new Error(
-      `Debate has only ${turns} exchanges, minimum 12 required. ` +
-      `This indicates poor debate quality. Please retry.`
-    );
-  }
+    // Validate required fields
+    if (!parsed.winnerId || !parsed.evolvedHypothesis || !parsed.scores) {
+      throw new Error("Match simulation incomplete: Missing winnerId, evolvedHypothesis, or scores");
+    }
 
-  // Validate required fields
-  if (!parsed.winnerId || !parsed.evolvedHypothesis || !parsed.scores) {
-    throw new Error("Match simulation incomplete: Missing winnerId, evolvedHypothesis, or scores");
-  }
+    // Validate score bounds (0-10 for each dimension)
+    const { novelty, feasibility, impact, ethics } = parsed.scores;
 
-  // Validate score bounds (0-10 for each dimension)
-  const { novelty, feasibility, impact, ethics } = parsed.scores;
+    // Check for NaN or invalid numbers first
+    const isValidNumber = (n: number): boolean => typeof n === 'number' && !isNaN(n) && isFinite(n);
 
-  // Check for NaN or invalid numbers first
-  const isValidNumber = (n: number): boolean => typeof n === 'number' && !isNaN(n) && isFinite(n);
+    if (!isValidNumber(novelty) || !isValidNumber(feasibility) ||
+      !isValidNumber(impact) || !isValidNumber(ethics)) {
+      throw new Error(
+        `Match simulation returned invalid scores (NaN or Infinity): ` +
+        `novelty=${novelty}, feasibility=${feasibility}, impact=${impact}, ethics=${ethics}`
+      );
+    }
 
-  if (!isValidNumber(novelty) || !isValidNumber(feasibility) ||
-    !isValidNumber(impact) || !isValidNumber(ethics)) {
-    throw new Error(
-      `Match simulation returned invalid scores (NaN or Infinity): ` +
-      `novelty=${novelty}, feasibility=${feasibility}, impact=${impact}, ethics=${ethics}`
-    );
-  }
+    // Clamp scores to valid range if out of bounds
+    if (novelty < 0 || novelty > 10 || feasibility < 0 || feasibility > 10 ||
+      impact < 0 || impact > 10 || ethics < 0 || ethics > 10) {
+      logger.warn(`Scores out of bounds: novelty=${novelty}, feasibility=${feasibility}, impact=${impact}, ethics=${ethics}`);
+      parsed.scores.novelty = Math.max(0, Math.min(10, novelty));
+      parsed.scores.feasibility = Math.max(0, Math.min(10, feasibility));
+      parsed.scores.impact = Math.max(0, Math.min(10, impact));
+      parsed.scores.ethics = Math.max(0, Math.min(10, ethics));
+      // Recalculate total
+      parsed.scores.total = parsed.scores.novelty + parsed.scores.feasibility +
+        parsed.scores.impact + parsed.scores.ethics;
+    }
 
-  // Clamp scores to valid range if out of bounds
-  if (novelty < 0 || novelty > 10 || feasibility < 0 || feasibility > 10 ||
-    impact < 0 || impact > 10 || ethics < 0 || ethics > 10) {
-    logger.warn(`Scores out of bounds: novelty=${novelty}, feasibility=${feasibility}, impact=${impact}, ethics=${ethics}`);
-    parsed.scores.novelty = Math.max(0, Math.min(10, novelty));
-    parsed.scores.feasibility = Math.max(0, Math.min(10, feasibility));
-    parsed.scores.impact = Math.max(0, Math.min(10, impact));
-    parsed.scores.ethics = Math.max(0, Math.min(10, ethics));
-    // Recalculate total
-    parsed.scores.total = parsed.scores.novelty + parsed.scores.feasibility +
-      parsed.scores.impact + parsed.scores.ethics;
-  }
-
-  return parsed;
+    return parsed;
+  }, { maxRetries: 2, initialDelay: 1000 }); // Retry up to 2 times with 1s delay
 };
 
 /**
@@ -281,7 +326,6 @@ export interface TournamentContext {
  * - Predicted impact and significance
  * - Cost and timeline estimates
  * - One-sentence tweet summary
- * - AI video generation prompt for visualization
  * 
  * The brief incorporates the full tournament journey, including defeated perspectives
  * and how the hypothesis evolved through each debate round.
@@ -301,6 +345,15 @@ export const generateBrief = async (
   tournamentContext?: TournamentContext,
   file?: { mimeType: string; data: string }
 ): Promise<WinningBrief> => {
+  // Input validation
+  if (!winner || !winner.name || !winner.role) {
+    throw new Error("Valid winner agent is required for brief generation");
+  }
+
+  if (!evolvedHypothesis || typeof evolvedHypothesis !== 'string' || evolvedHypothesis.trim().length === 0) {
+    throw new Error("Evolved hypothesis is required for brief generation");
+  }
+
   return retryWithBackoff(async () => {
     const ai = getAiClient();
 
@@ -340,17 +393,23 @@ export const generateBrief = async (
 
     // Validate file before sending
     if (file && file.data && file.data.length > 0) {
-      inputParts.push({
-        text: "\n\nIMPORTANT: The attached file was the original source material for this tournament. " +
-          "The research brief MUST reference specific data, findings, or claims from this document. " +
-          "Cite page numbers, figures, tables, or sections where relevant."
-      });
-      inputParts.push({
-        inlineData: {
-          mimeType: file.mimeType,
-          data: file.data
-        }
-      });
+      // Validate MIME type
+      const validMimeTypes = ['application/pdf', 'text/plain', 'image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp'];
+      if (!validMimeTypes.includes(file.mimeType)) {
+        logger.warn(`Invalid MIME type for file in brief: ${file.mimeType}. Skipping file attachment.`);
+      } else {
+        inputParts.push({
+          text: "\n\nIMPORTANT: The attached file was the original source material for this tournament. " +
+            "The research brief MUST reference specific data, findings, or claims from this document. " +
+            "Cite page numbers, figures, tables, or sections where relevant."
+        });
+        inputParts.push({
+          inlineData: {
+            mimeType: file.mimeType,
+            data: file.data
+          }
+        });
+      }
     }
 
     const result = await ai.models.generateContent({
@@ -367,7 +426,7 @@ export const generateBrief = async (
     const parsed = safeJsonParse(extractCleanJson(result.text || "{}"), "generateBrief");
 
     // Validate required fields
-    const requiredFields = ['title', 'abstract', 'veoVideoPrompt', 'predictedImpact', 'costAndTimeline', 'oneSentenceTweet'];
+    const requiredFields = ['title', 'abstract', 'predictedImpact', 'costAndTimeline', 'oneSentenceTweet'];
     for (const field of requiredFields) {
       if (!parsed[field] || typeof parsed[field] !== 'string' || parsed[field].trim().length === 0) {
         throw new Error(`Brief generation incomplete: Missing or empty field '${field}'`);

@@ -57,7 +57,6 @@ export interface WinningBrief {
   predictedImpact: string;
   costAndTimeline: string;
   oneSentenceTweet: string;
-  veoVideoPrompt: string;
 }
 
 export interface TournamentData {
