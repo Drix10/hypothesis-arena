@@ -1,4 +1,6 @@
-<div align="center">  
+<div align="center">
+  <br />
+  
   # 🏆 Hypothesis Arena
   
   **Turn your research ideas into publication-ready briefs through AI-powered debate tournaments**
