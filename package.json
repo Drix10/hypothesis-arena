@@ -1,7 +1,7 @@
 {
   "name": "hypothesis-arena",
   "version": "1.0.0",
-  "description": "An elite AI research tournament where 8 specialized researcher archetypes battle to evolve your ideas into publication-ready briefs",
+  "description": "AI-powered stock investment analysis - 8 specialized analyst agents debate to find the best investment decision",
   "author": "Hypothesis Arena Contributors",
   "license": "MIT",
   "repository": {
@@ -14,13 +14,14 @@
   "homepage": "https://github.com/drix10/hypothesis-arena#readme",
   "keywords": [
     "ai",
-    "research",
+    "stock",
+    "investment",
+    "analysis",
     "debate",
-    "tournament",
     "gemini",
-    "hypothesis",
     "react",
-    "typescript"
+    "typescript",
+    "yahoo-finance"
   ],
   "private": true,
   "type": "module",

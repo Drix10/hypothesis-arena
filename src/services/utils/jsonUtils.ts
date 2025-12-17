@@ -1,4 +1,5 @@
-import { JSON_SIZE_WARNING_THRESHOLD } from "../../constants";
+// JSON size warning threshold for error messages
+const JSON_SIZE_WARNING_THRESHOLD = 500;
 
 /**
  * Comprehensive JSON cleaner handling all Gemini edge cases.
@@ -10,6 +11,12 @@ import { JSON_SIZE_WARNING_THRESHOLD } from "../../constants";
 export const extractCleanJson = (text: string): string => {
   if (!text || typeof text !== "string") {
     throw new Error("extractCleanJson: input must be non-empty string");
+  }
+
+  // Guard against extremely large inputs that could cause performance issues
+  const MAX_INPUT_SIZE = 1_000_000; // 1MB
+  if (text.length > MAX_INPUT_SIZE) {
+    throw new Error(`extractCleanJson: input too large (${text.length} chars, max ${MAX_INPUT_SIZE})`);
   }
 
   let cleaned = text.trim();

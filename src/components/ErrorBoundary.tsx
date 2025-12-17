@@ -22,7 +22,16 @@ class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    logger.error("Error caught by boundary:", error, errorInfo);
+    // Sanitize error before logging to avoid exposing sensitive data
+    const sanitizedError = {
+      message: error.message,
+      name: error.name,
+      // Don't log full stack in production
+      stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
+    };
+    logger.error("Error caught by boundary:", sanitizedError, {
+      componentStack: errorInfo.componentStack?.slice(0, 500), // Limit stack size
+    });
   }
 
   render() {

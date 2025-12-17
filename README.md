@@ -3,39 +3,48 @@
   
   # 🏆 Hypothesis Arena
   
-  **Turn your research ideas into publication-ready briefs through AI-powered debate tournaments**
+  **AI-Powered Stock Investment Analysis**
+  
+  *8 AI analysts with different methodologies debate whether to buy, hold, or sell*
   
   [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-blue?logo=typescript)](https://www.typescriptlang.org/)
   [![React](https://img.shields.io/badge/React-19.2-61dafb?logo=react)](https://react.dev/)
   [![Vite](https://img.shields.io/badge/Vite-6.2-646cff?logo=vite)](https://vitejs.dev/)
   
-  [Report Bug](https://github.com/drix10/hypothesis-arena/issues) • [Request Feature](https://github.com/drix10/hypothesis-arena/issues)
 </div>
 
 ---
 
 ## 🎯 What is this?
 
-Eight AI researchers with different expertise debate your idea in a tournament bracket. Each round refines the hypothesis until the strongest version wins. You get a complete research brief at the end.
+Hypothesis Arena is an AI-powered stock analysis platform where 8 specialized analyst agents debate investment decisions. Each analyst has a unique methodology and perspective, creating a comprehensive view of any stock.
 
-**How it works:**
+### The 8 Analysts
 
-1. Enter your research idea (+ optional files)
-2. AI generates 8 specialized researchers
-3. They debate in quarterfinals → semifinals → finals
-4. Winner produces a publication-ready brief
+| Analyst                 | Methodology           | Focus                                                |
+| ----------------------- | --------------------- | ---------------------------------------------------- |
+| 🎩 **Warren**           | Value Investing       | P/E, P/B, FCF yield, moats, margin of safety         |
+| 🚀 **Cathie**           | Growth Investing      | Revenue growth, TAM, disruption, innovation          |
+| 📊 **Jim**              | Technical Analysis    | RSI, MACD, support/resistance, chart patterns        |
+| 🌍 **Ray**              | Macro Strategy        | Interest rates, economic cycles, sector rotation     |
+| 📱 **Elon**             | Sentiment Analysis    | News flow, social sentiment, analyst ratings         |
+| 🛡️ **Karen**            | Risk Management       | Volatility, drawdown, debt, worst-case scenarios     |
+| 🤖 **Quant**            | Quantitative Analysis | Factor exposures, statistics, correlations           |
+| 😈 **Devil's Advocate** | Contrarian            | Consensus challenges, crowded trades, narrative gaps |
 
 ---
 
 ## ✨ Features
 
-- **8 AI Researchers** - Each with unique expertise and debate style
-- **Tournament Bracket** - Quarterfinals → Semifinals → Finals
-- **Multi-Dimensional Scoring** - Novelty, feasibility, impact, ethics
-- **File Upload** - PDFs, images, text (20MB max)
-- **Auto-Save** - Resume anytime after refresh
-- **Publication Brief** - Complete research summary
-- **Dark Mode UI** - Responsive, accessible, smooth animations
+- **Real Market Data** - Live quotes, fundamentals, and technicals from Yahoo Finance (no API key needed)
+- **Technical Indicators** - RSI, MACD, Bollinger Bands, SMA/EMA, support/resistance levels
+- **News Sentiment** - Aggregated news with sentiment scoring
+- **8 AI Perspectives** - Each analyst generates a unique thesis with price targets
+- **Bull vs Bear Debates** - Multi-turn debates with data references and scoring
+- **Consensus Recommendation** - Weighted by debate performance and confidence
+- **Price Targets** - Bull/Base/Bear scenarios with confidence intervals
+- **Risk Assessment** - Portfolio allocation suggestions based on risk level
+- **Dissenting Views** - Minority opinions are preserved and highlighted
 
 ---
 
@@ -50,81 +59,113 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173` and enter your API key when prompted. Your key stays in memory only—never saved to disk.
+Open `http://localhost:5173` and enter your API key when prompted.
 
 ---
 
-## 🛠️ Available Scripts
+## 📊 How It Works
 
-| Command           | Description                              |
-| ----------------- | ---------------------------------------- |
-| `npm run dev`     | Start development server with hot reload |
-| `npm run build`   | Build production bundle                  |
-| `npm run preview` | Preview production build locally         |
+1. **Enter a Stock Ticker** - Search for any publicly traded stock (e.g., AAPL, MSFT, GOOGL)
+
+2. **Data Collection** - The system fetches:
+
+   - Current price and quote data
+   - Company fundamentals (P/E, revenue, margins, etc.)
+   - Technical indicators (RSI, MACD, moving averages)
+   - Recent news and sentiment
+   - Wall Street analyst ratings
+
+3. **Thesis Generation** - Each of the 8 AI analysts generates their investment thesis based on their methodology
+
+4. **Debate Tournament** - Bulls vs Bears debate in a tournament format:
+
+   - Quarterfinals (4 matches)
+   - Semifinals (2 matches)
+   - Final (1 match)
+
+5. **Final Recommendation** - A consensus recommendation is generated, weighted by:
+   - Debate performance
+   - Analyst confidence
+   - Argument strength
 
 ---
 
-## 📖 Usage
+## 🏗️ Architecture
 
-1. Enter your research idea
-2. Upload files (optional)
-3. Watch AI researchers debate
-4. Get your publication brief
-
-**Keyboard shortcuts:** `↑/↓` navigate, `Enter` opens details, `Esc` closes
+```
+src/
+├── services/
+│   ├── data/                   # Market data services
+│   │   ├── yahooFinance.ts     # Yahoo Finance API
+│   │   ├── newsService.ts      # News & sentiment
+│   │   ├── technicalAnalysis.ts # RSI, MACD, etc.
+│   │   └── stockDataAggregator.ts
+│   └── stock/                  # Analysis services
+│       ├── analystService.ts   # AI thesis generation
+│       ├── stockTournamentService.ts # Debate tournament
+│       └── recommendationService.ts  # Final synthesis
+├── components/
+│   └── stock/                  # UI components
+│       ├── StockArena.tsx      # Main orchestration
+│       ├── TickerInput.tsx     # Stock search
+│       ├── StockHeader.tsx     # Price display
+│       ├── AnalystCard.tsx     # Analyst thesis
+│       ├── DebateView.tsx      # Debate visualization
+│       └── RecommendationCard.tsx # Final verdict
+├── constants/
+│   └── analystPrompts.ts       # 8 analyst personalities
+└── types/
+    └── stock.ts                # Type definitions
+```
 
 ---
 
-## 🏗️ Tech Stack
+## 📈 Output
 
-React 19 • TypeScript • Vite • Gemini 2.0 • Tailwind • Recharts
+The final recommendation includes:
+
+- **Verdict** - Strong Buy / Buy / Hold / Sell / Strong Sell
+- **Confidence** - 0-100% based on analyst consensus
+- **Price Targets** - Bull, Base, Bear scenarios (12-month)
+- **Upside/Downside** - Percentage to base case target
+- **Risk Level** - Low / Medium / High / Very High
+- **Suggested Allocation** - Portfolio percentage (0-10%)
+- **Top Arguments** - Key bull and bear points
+- **Key Risks** - Most cited risk factors
+- **Catalysts** - Upcoming events that could move the stock
+- **Dissenting Views** - Analysts who disagreed with consensus
+- **Executive Summary** - 2-3 sentence conclusion
+
+---
+
+## 🛠️ Scripts
+
+| Command           | Description              |
+| ----------------- | ------------------------ |
+| `npm run dev`     | Start development server |
+| `npm run build`   | Build for production     |
+| `npm run preview` | Preview production build |
 
 ---
 
 ## 🔒 Security
 
 - API key stored in memory only (cleared on refresh)
-- All API calls client-side (no backend)
-- Tournament data stays on your device
-- Input sanitization with DOMPurify
-
----
-
----
-
-## 🐛 Troubleshooting
-
-**API key issues?** Get a free key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
-
-**File upload fails?** Max 20MB, supports PDF/PNG/JPG/TXT
-
-**Build fails?** Delete `node_modules` and run `npm install` again
-
----
-
----
-
-## 🤝 Contributing
-
-Fork, create a feature branch, commit, push, and open a PR. Follow TypeScript strict mode and add JSDoc comments.
+- All API calls are client-side (no backend)
+- Market data from public Yahoo Finance endpoints
+- No personal data collected
 
 ---
 
 ## 📜 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
----
-
-## 📞 Support
-
-[GitHub Issues](https://github.com/drix10/hypothesis-arena/issues) • [Email](mailto:ggdrishtant@gmail.com)
+MIT License - see [LICENSE](LICENSE) for details.
 
 ---
 
 <div align="center">
   
-  **Built with React, TypeScript, and Gemini**
+  **Built with React, TypeScript, Gemini 2.0, and Yahoo Finance**
   
   ⭐ Star if you find this useful
   

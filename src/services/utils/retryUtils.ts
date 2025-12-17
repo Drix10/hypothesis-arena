@@ -47,9 +47,9 @@ export async function retryWithBackoff<T>(
             }
 
             // Add random jitter to prevent thundering herd problem
-            // Jitter is ±25% of the delay
+            // Jitter is ±25% of the delay, clamped to minimum of 100ms
             const jitter = delay * 0.25 * (Math.random() * 2 - 1);
-            const delayWithJitter = Math.max(0, delay + jitter);
+            const delayWithJitter = Math.max(100, delay + jitter);
 
             // Wait before retrying
             logger.warn(
