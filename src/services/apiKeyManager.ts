@@ -75,11 +75,24 @@ export const setFmpApiKey = (key: string): boolean => {
 
 /**
  * Get the current Gemini API key
+ * Falls back to environment variable if not set in memory
  * 
  * @returns Gemini API key or null if not set
  */
 export const getApiKey = (): string | null => {
-    return currentGeminiApiKey;
+    // Priority: In-memory key > Environment variable
+    if (currentGeminiApiKey) {
+        return currentGeminiApiKey;
+    }
+
+    // Check environment variable
+    const envKey = import.meta.env.VITE_GEMINI_API_KEY;
+    if (envKey && typeof envKey === 'string' && envKey.trim().length > 0) {
+        return envKey.trim();
+    }
+
+    // No fallback - user must provide key
+    return null;
 };
 
 /**
@@ -89,7 +102,7 @@ export const getApiKey = (): string | null => {
  * @returns FMP API key or null if not set
  */
 export const getFmpApiKey = (): string | null => {
-    // Priority: In-memory key > Environment variable > Hardcoded fallback
+    // Priority: In-memory key > Environment variable
     if (currentFmpApiKey) {
         return currentFmpApiKey;
     }
@@ -100,8 +113,8 @@ export const getFmpApiKey = (): string | null => {
         return envKey.trim();
     }
 
-    // Fallback to hardcoded key (from .env file)
-    return 'demo';
+    // No hardcoded fallback - user must provide key
+    return null;
 };
 
 /**
@@ -114,7 +127,7 @@ export const hasApiKey = (): boolean => {
 };
 
 /**
- * Check if FMP API key is available (in-memory, env, or fallback)
+ * Check if FMP API key is available (in-memory or env)
  * 
  * @returns true if key is available, false otherwise
  */
