@@ -480,17 +480,37 @@ export const StockArena: React.FC<StockArenaProps> = ({ apiKey }) => {
                 {loadingInfo.title}
               </h2>
               <p className="text-slate-400 mb-6">{loadingInfo.subtitle}</p>
-              <div className="w-full max-w-xs mx-auto h-1.5 bg-white/5 rounded-full overflow-hidden mb-4">
-                <motion.div
-                  className="h-full bg-gradient-to-r from-cyan to-cyan-light rounded-full"
-                  initial={{ width: 0 }}
-                  animate={{ width: `${loadingInfo.progress}%` }}
-                  transition={{ duration: 0.5 }}
-                />
+              {/* Enhanced progress bar */}
+              <div className="w-full max-w-md mx-auto mb-4">
+                <div className="relative h-2 bg-gradient-to-r from-arena-deep via-arena-surface to-arena-deep rounded-full overflow-hidden shadow-inner">
+                  <motion.div
+                    className="h-full bg-gradient-to-r from-cyan via-cyan-light to-cyan rounded-full relative"
+                    initial={{ width: 0 }}
+                    animate={{ width: `${loadingInfo.progress}%` }}
+                    transition={{ duration: 0.5, ease: "easeOut" }}
+                  >
+                    {/* Shimmer effect */}
+                    <motion.div
+                      className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent"
+                      animate={{ x: ["-100%", "200%"] }}
+                      transition={{
+                        duration: 1.5,
+                        repeat: Infinity,
+                        ease: "linear",
+                      }}
+                    />
+                    {/* Glow effect */}
+                    <div className="absolute inset-0 bg-cyan/50 blur-sm" />
+                  </motion.div>
+                </div>
+                {/* Progress percentage */}
+                <div className="text-center mt-2 text-xs text-slate-500 font-medium">
+                  {loadingInfo.progress}%
+                </div>
               </div>
               <motion.div
-                className="inline-block px-4 py-2 rounded-full bg-white/5 text-sm text-cyan font-medium"
-                animate={{ opacity: [0.5, 1, 0.5] }}
+                className="inline-block px-5 py-2.5 rounded-full bg-gradient-to-r from-cyan/10 to-cyan/5 border border-cyan/20 text-sm text-cyan font-medium shadow-lg shadow-cyan/10"
+                animate={{ opacity: [0.7, 1, 0.7] }}
                 transition={{ duration: 1.5, repeat: Infinity }}
               >
                 {progress}

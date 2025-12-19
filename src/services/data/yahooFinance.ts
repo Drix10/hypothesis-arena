@@ -99,6 +99,24 @@ async function fetchWithTimeout(url: string, timeout = 10000): Promise<Response>
 }
 
 /**
+ * Safely parse JSON from response with error handling
+ */
+async function safeJsonParse(response: Response, source: string): Promise<any> {
+    try {
+        return await response.json();
+    } catch (jsonError) {
+        // Try to get text preview for debugging
+        try {
+            const text = await response.text();
+            const preview = text.slice(0, 100).replace(/\s+/g, ' ');
+            throw new Error(`${source} returned invalid JSON: ${preview}...`);
+        } catch {
+            throw new Error(`${source} returned invalid JSON`);
+        }
+    }
+}
+
+/**
  * Fetch with rate limiting for FMP API calls
  * Uses a lock to prevent race conditions with concurrent calls
  * FIXED: Proper lock cleanup to prevent race conditions
@@ -145,8 +163,31 @@ async function fetchWithProxy(url: string): Promise<Response | null> {
     for (const proxyFn of CORS_PROXIES) {
         try {
             const response = await fetchWithTimeout(proxyFn(url), 8000);
-            if (response.ok) return response;
-            errors.push(`Proxy returned ${response.status}`);
+            if (!response.ok) {
+                errors.push(`Proxy returned ${response.status}`);
+                continue;
+            }
+
+            // Validate response is JSON before returning
+            const contentType = response.headers.get('content-type');
+            if (contentType && contentType.includes('application/json')) {
+                return response;
+            }
+
+            // Try to parse as JSON anyway (some proxies don't set content-type)
+            const text = await response.text();
+            try {
+                JSON.parse(text);
+                // If parsing succeeds, create a new response with the text
+                return new Response(text, {
+                    status: response.status,
+                    statusText: response.statusText,
+                    headers: response.headers
+                });
+            } catch {
+                errors.push(`Proxy returned non-JSON response`);
+                continue;
+            }
         } catch (error) {
             const msg = error instanceof Error ? error.message : 'Unknown error';
             errors.push(msg);
@@ -200,11 +241,21 @@ async function getQuoteFMP(ticker: string): Promise<StockQuote> {
     const response = await fetchFmpWithRateLimit(url);
 
     if (!response.ok) {
-        const statusText = response.statusText || 'Unknown error';
-        throw new Error(`FMP API HTTP ${response.status}: ${statusText}`);
+        // Try to get error details from response body
+        let errorDetail = response.statusText || 'Unknown error';
+        try {
+            const errorData = await response.json();
+            if (errorData && typeof errorData === 'object') {
+                errorDetail = errorData.message || errorData.error || errorData['Error Message'] || errorDetail;
+            }
+        } catch {
+            // Ignore JSON parse errors for error responses
+        }
+        throw new Error(`FMP API HTTP ${response.status}: ${errorDetail}`);
     }
 
-    const data = await response.json();
+    // Safe JSON parsing
+    const data = await safeJsonParse(response, 'FMP API');
 
     // Check for API error response (FMP returns error messages in various formats)
     if (data && typeof data === 'object') {
@@ -275,7 +326,8 @@ async function getQuoteYahoo(ticker: string): Promise<StockQuote> {
         }
     }
 
-    const data = await response.json();
+    // Safe JSON parsing with error handling
+    const data = await safeJsonParse(response, 'Yahoo Finance');
 
     // Check for API error response
     if (data && typeof data === 'object' && 'chart' in data && data.chart?.error) {
@@ -390,7 +442,7 @@ async function getHistoricalFMP(ticker: string, period: Period): Promise<Histori
         throw new Error(`FMP historical API error: ${response.status}`);
     }
 
-    const data = await response.json();
+    const data = await safeJsonParse(response, 'FMP Historical API');
     const historical = data.historical || [];
 
     if (historical.length === 0) {
@@ -432,7 +484,7 @@ async function getHistoricalYahoo(ticker: string, period: Period): Promise<Histo
         throw new Error('Yahoo Finance unavailable');
     }
 
-    const data = await response.json();
+    const data = await safeJsonParse(response, 'Yahoo Historical');
     const result = data.chart?.result?.[0];
 
     if (!result) {

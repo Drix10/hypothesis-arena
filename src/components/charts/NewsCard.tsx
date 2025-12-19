@@ -183,41 +183,52 @@ export const NewsCard: React.FC<NewsCardProps> = ({ sentiment }) => {
           </motion.div>
         </div>
 
-        <div className="mt-4 h-2 bg-white/5 rounded-full overflow-hidden flex">
-          {sentiment.newsCount > 0 && (
-            <>
-              <motion.div
-                className="bg-bull h-full"
-                initial={{ width: 0 }}
-                animate={{
-                  width: `${
-                    (sentiment.positiveCount / sentiment.newsCount) * 100
-                  }%`,
-                }}
-                transition={{ duration: 0.5, delay: 0.3 }}
-              />
-              <motion.div
-                className="bg-slate-500 h-full"
-                initial={{ width: 0 }}
-                animate={{
-                  width: `${
-                    (sentiment.neutralCount / sentiment.newsCount) * 100
-                  }%`,
-                }}
-                transition={{ duration: 0.5, delay: 0.35 }}
-              />
-              <motion.div
-                className="bg-bear h-full"
-                initial={{ width: 0 }}
-                animate={{
-                  width: `${
-                    (sentiment.negativeCount / sentiment.newsCount) * 100
-                  }%`,
-                }}
-                transition={{ duration: 0.5, delay: 0.4 }}
-              />
-            </>
-          )}
+        {/* Enhanced sentiment distribution bar */}
+        <div className="mt-4 relative">
+          <div className="h-3 bg-gradient-to-r from-arena-deep via-arena-surface to-arena-deep rounded-full overflow-hidden shadow-inner flex">
+            {sentiment.newsCount > 0 && (
+              <>
+                <motion.div
+                  className="bg-gradient-to-r from-bull to-bull-light h-full relative"
+                  initial={{ width: 0 }}
+                  animate={{
+                    width: `${
+                      (sentiment.positiveCount / sentiment.newsCount) * 100
+                    }%`,
+                  }}
+                  transition={{ duration: 0.6, delay: 0.3, ease: "easeOut" }}
+                >
+                  <div className="absolute inset-0 bg-bull/30 blur-sm" />
+                </motion.div>
+                <motion.div
+                  className="bg-gradient-to-r from-slate-600 to-slate-500 h-full relative"
+                  initial={{ width: 0 }}
+                  animate={{
+                    width: `${
+                      (sentiment.neutralCount / sentiment.newsCount) * 100
+                    }%`,
+                  }}
+                  transition={{ duration: 0.6, delay: 0.35, ease: "easeOut" }}
+                >
+                  <div className="absolute inset-0 bg-slate-500/20 blur-sm" />
+                </motion.div>
+                <motion.div
+                  className="bg-gradient-to-r from-bear to-bear-light h-full relative"
+                  initial={{ width: 0 }}
+                  animate={{
+                    width: `${
+                      (sentiment.negativeCount / sentiment.newsCount) * 100
+                    }%`,
+                  }}
+                  transition={{ duration: 0.6, delay: 0.4, ease: "easeOut" }}
+                >
+                  <div className="absolute inset-0 bg-bear/30 blur-sm" />
+                </motion.div>
+              </>
+            )}
+          </div>
+          {/* Subtle glow effect */}
+          <div className="absolute inset-0 bg-gradient-to-r from-bull/5 via-transparent to-bear/5 rounded-full blur-md pointer-events-none" />
         </div>
       </div>
 

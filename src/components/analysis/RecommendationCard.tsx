@@ -144,59 +144,99 @@ export const RecommendationCard: React.FC<RecommendationCardProps> = ({
           />
         </div>
 
-        {/* Price Target Range */}
-        <div className="p-4 rounded-xl bg-white/[0.02] border border-white/[0.06] mb-6">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-xs text-slate-400 font-medium">
+        {/* Price Target Range - Enhanced */}
+        <div className="p-5 rounded-xl bg-gradient-to-br from-white/[0.03] to-white/[0.01] border border-white/[0.08] mb-6 backdrop-blur-sm">
+          <div className="flex items-center justify-between mb-4">
+            <span className="text-xs text-slate-300 font-semibold tracking-wide">
               12-Month Price Target Range
             </span>
-            <span className="text-[10px] text-slate-600">
+            <span className="text-[10px] text-slate-500 bg-white/[0.03] px-2 py-1 rounded-md">
               Current position shown
             </span>
           </div>
-          <div className="flex items-center gap-3">
-            <span className="text-bear-light font-semibold text-xs w-16">
-              ${recommendation.priceTarget.bear.toFixed(0)}
-            </span>
-            <div className="flex-1 relative h-3 bg-arena-deep rounded-full overflow-hidden">
-              <div className="absolute inset-0 bg-gradient-to-r from-bear/30 via-gold/30 to-bull/30" />
+          <div className="flex items-center gap-4">
+            <div className="text-center">
+              <div className="text-[10px] text-bear-light/70 mb-1 font-medium">
+                BEAR
+              </div>
+              <span className="text-bear-light font-bold text-sm">
+                ${recommendation.priceTarget.bear.toFixed(0)}
+              </span>
+            </div>
+            <div
+              className="flex-1 relative"
+              style={{ paddingTop: "0.5rem", paddingBottom: "0.5rem" }}
+            >
+              {/* Bar container with rounded corners */}
+              <div className="relative h-4 bg-gradient-to-r from-arena-deep via-arena-surface to-arena-deep rounded-full shadow-inner overflow-hidden">
+                {/* Gradient background */}
+                <div className="absolute inset-0 bg-gradient-to-r from-bear/20 via-gold/20 to-bull/20" />
+
+                {/* Glow effect */}
+                <div className="absolute inset-0 bg-gradient-to-r from-bear/10 via-transparent to-bull/10 blur-sm" />
+              </div>
+
+              {/* Current price marker - positioned on the bar */}
               <motion.div
-                className="absolute top-1/2 -translate-y-1/2 w-4 h-4 bg-white rounded-full shadow-md border-2 border-arena-deep"
+                className="absolute z-10 w-5 h-5"
                 style={{
                   left: `${calculatePosition(
                     recommendation.currentPrice,
                     recommendation.priceTarget.bear,
                     recommendation.priceTarget.bull
                   )}%`,
+                  top: "0.4rem",
+                  transform: "translate(-50%, -50%)",
                 }}
-                initial={{ scale: 0 }}
-                animate={{ scale: 1 }}
-                transition={{ delay: 0.5, type: "spring" }}
-              />
+                initial={{ scale: 0, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                transition={{ delay: 0.5, type: "spring", stiffness: 200 }}
+              >
+                <div className="relative w-full h-full">
+                  <div className="w-full h-full bg-white rounded-full shadow-lg border-2 border-arena-deep" />
+                  <div className="absolute inset-0 bg-white rounded-full animate-ping opacity-30" />
+                </div>
+              </motion.div>
+
+              {/* Target price marker - positioned on the bar */}
               <motion.div
-                className="absolute top-1/2 -translate-y-1/2 w-2.5 h-2.5 bg-cyan rounded-full"
+                className="absolute z-10 w-3 h-3"
                 style={{
                   left: `${calculatePosition(
                     recommendation.priceTarget.base,
                     recommendation.priceTarget.bear,
                     recommendation.priceTarget.bull
                   )}%`,
+                  top: "0.62.5rem",
+                  transform: "translate(-50%, -50%)",
                 }}
-                initial={{ scale: 0 }}
-                animate={{ scale: 1 }}
-                transition={{ delay: 0.6, type: "spring" }}
-              />
+                initial={{ scale: 0, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                transition={{ delay: 0.6, type: "spring", stiffness: 200 }}
+              >
+                <div className="relative w-full h-full">
+                  <div className="w-full h-full bg-cyan rounded-full shadow-lg shadow-cyan/50" />
+                  <div className="absolute inset-0 bg-cyan rounded-full blur-sm opacity-50" />
+                </div>
+              </motion.div>
             </div>
-            <span className="text-bull-light font-semibold text-xs w-16 text-right">
-              ${recommendation.priceTarget.bull.toFixed(0)}
-            </span>
+            <div className="text-center">
+              <div className="text-[10px] text-bull-light/70 mb-1 font-medium">
+                BULL
+              </div>
+              <span className="text-bull-light font-bold text-sm">
+                ${recommendation.priceTarget.bull.toFixed(0)}
+              </span>
+            </div>
           </div>
-          <div className="flex justify-center mt-2.5 gap-5 text-[10px] text-slate-500">
+          <div className="flex justify-center mt-3 gap-6 text-[10px] text-slate-400">
             <span className="flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 bg-white rounded-full" /> Current
+              <span className="w-3 h-3 bg-white rounded-full shadow-sm" />{" "}
+              Current Price
             </span>
             <span className="flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 bg-cyan rounded-full" /> Target
+              <span className="w-3 h-3 bg-cyan rounded-full shadow-sm shadow-cyan/50" />{" "}
+              Base Target
             </span>
           </div>
         </div>
