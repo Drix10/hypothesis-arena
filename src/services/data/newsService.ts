@@ -16,19 +16,41 @@ const CACHE_TTL = 10 * 60 * 1000; // 10 minutes for news
 const MAX_CACHE_SIZE = 50; // Prevent unbounded growth
 const cache = new Map<string, { data: unknown; timestamp: number }>();
 
-// Sentiment word lists for basic analysis
-const POSITIVE_WORDS = new Set([
-    'surge', 'soar', 'jump', 'gain', 'rise', 'rally', 'boom', 'bullish', 'upgrade',
-    'beat', 'exceed', 'outperform', 'growth', 'profit', 'record', 'high', 'strong',
-    'positive', 'optimistic', 'breakthrough', 'success', 'win', 'expand', 'increase',
-    'buy', 'recommend', 'opportunity', 'momentum', 'recovery', 'innovation', 'leading'
+// Enhanced sentiment word lists with weighted scoring
+const POSITIVE_WORDS = new Map<string, number>([
+    // Strong positive (weight 2)
+    ['surge', 2], ['soar', 2], ['skyrocket', 2], ['breakthrough', 2], ['blockbuster', 2],
+    ['exceptional', 2], ['outstanding', 2], ['remarkable', 2], ['stellar', 2], ['blowout', 2],
+    // Standard positive (weight 1)
+    ['jump', 1], ['gain', 1], ['rise', 1], ['rally', 1], ['boom', 1], ['bullish', 1],
+    ['upgrade', 1], ['beat', 1], ['exceed', 1], ['outperform', 1], ['growth', 1],
+    ['profit', 1], ['record', 1], ['high', 1], ['strong', 1], ['positive', 1],
+    ['optimistic', 1], ['success', 1], ['win', 1], ['expand', 1], ['increase', 1],
+    ['buy', 1], ['recommend', 1], ['opportunity', 1], ['momentum', 1], ['recovery', 1],
+    ['innovation', 1], ['leading', 1], ['upbeat', 1], ['confident', 1], ['robust', 1],
+    ['accelerate', 1], ['improve', 1], ['boost', 1], ['advance', 1], ['upturn', 1],
+    ['promising', 1], ['favorable', 1], ['attractive', 1], ['undervalued', 1], ['dividend', 1]
 ]);
 
-const NEGATIVE_WORDS = new Set([
-    'drop', 'fall', 'plunge', 'decline', 'crash', 'bearish', 'downgrade', 'miss',
-    'loss', 'weak', 'negative', 'concern', 'risk', 'warning', 'cut', 'layoff',
-    'sell', 'avoid', 'trouble', 'struggle', 'fail', 'lawsuit', 'investigation',
-    'recession', 'inflation', 'debt', 'default', 'bankruptcy', 'fraud', 'scandal'
+const NEGATIVE_WORDS = new Map<string, number>([
+    // Strong negative (weight 2)
+    ['crash', 2], ['plunge', 2], ['collapse', 2], ['bankruptcy', 2], ['fraud', 2],
+    ['scandal', 2], ['disaster', 2], ['catastrophe', 2], ['devastating', 2], ['crisis', 2],
+    // Standard negative (weight 1)
+    ['drop', 1], ['fall', 1], ['decline', 1], ['bearish', 1], ['downgrade', 1],
+    ['miss', 1], ['loss', 1], ['weak', 1], ['negative', 1], ['concern', 1],
+    ['risk', 1], ['warning', 1], ['cut', 1], ['layoff', 1], ['sell', 1],
+    ['avoid', 1], ['trouble', 1], ['struggle', 1], ['fail', 1], ['lawsuit', 1],
+    ['investigation', 1], ['recession', 1], ['inflation', 1], ['debt', 1], ['default', 1],
+    ['slump', 1], ['tumble', 1], ['slide', 1], ['plummet', 1], ['sink', 1],
+    ['disappointing', 1], ['underperform', 1], ['overvalued', 1], ['volatile', 1], ['uncertainty', 1],
+    ['headwind', 1], ['pressure', 1], ['slowdown', 1], ['contraction', 1], ['downturn', 1]
+]);
+
+// Negation words that flip sentiment
+const NEGATION_WORDS = new Set([
+    'not', 'no', 'never', 'neither', 'nobody', 'nothing', 'nowhere',
+    'hardly', 'barely', 'scarcely', 'without', 'lack', 'lacking', 'fails'
 ]);
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -64,21 +86,54 @@ export function clearNewsCache(): void {
 /**
  * Calculate sentiment score for a piece of text
  * Returns a score from -1 (very negative) to 1 (very positive)
+ * Uses weighted words and negation detection for better accuracy
  */
 export function calculateTextSentiment(text: string): number {
-    const words = text.toLowerCase().split(/\W+/);
-    let positiveCount = 0;
-    let negativeCount = 0;
+    if (!text || typeof text !== 'string') return 0;
+
+    const words = text.toLowerCase().split(/\W+/).filter(w => w.length > 0);
+    let positiveScore = 0;
+    let negativeScore = 0;
+    let negationWordsRemaining = 0; // Track words remaining under negation effect
 
     for (const word of words) {
-        if (POSITIVE_WORDS.has(word)) positiveCount++;
-        if (NEGATIVE_WORDS.has(word)) negativeCount++;
+        // Check for negation (affects next 3 words)
+        if (NEGATION_WORDS.has(word)) {
+            negationWordsRemaining = 3;
+            continue;
+        }
+
+        const isNegated = negationWordsRemaining > 0;
+        const posWeight = POSITIVE_WORDS.get(word) || 0;
+        const negWeight = NEGATIVE_WORDS.get(word) || 0;
+
+        if (posWeight > 0) {
+            if (isNegated) {
+                negativeScore += posWeight * 0.5; // Negated positive = weak negative
+            } else {
+                positiveScore += posWeight;
+            }
+        }
+
+        if (negWeight > 0) {
+            if (isNegated) {
+                positiveScore += negWeight * 0.5; // Negated negative = weak positive
+            } else {
+                negativeScore += negWeight;
+            }
+        }
+
+        // Decrement negation counter after processing each word
+        if (negationWordsRemaining > 0) {
+            negationWordsRemaining--;
+        }
     }
 
-    const total = positiveCount + negativeCount;
+    const total = positiveScore + negativeScore;
     if (total === 0) return 0;
 
-    return (positiveCount - negativeCount) / total;
+    // Normalize to [-1, 1] range
+    return (positiveScore - negativeScore) / total;
 }
 
 /**
@@ -113,11 +168,16 @@ const CORS_PROXIES = [
     (url: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
 ];
 
-async function fetchWithProxy(url: string): Promise<Response | null> {
+async function fetchWithProxy(url: string, timeout = 8000): Promise<Response | null> {
     for (const proxyFn of CORS_PROXIES) {
         try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), timeout);
+
             const proxyUrl = proxyFn(url);
-            const response = await fetch(proxyUrl);
+            const response = await fetch(proxyUrl, { signal: controller.signal });
+            clearTimeout(timeoutId);
+
             if (response.ok) return response;
         } catch {
             // Continue to next proxy

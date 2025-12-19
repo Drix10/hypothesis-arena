@@ -160,7 +160,95 @@ function getRecommendationScore(rec: InvestmentThesis['recommendation']): number
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Generate a single debate turn
+ * Format key stock data for debate context
+ * Provides analysts with real data to reference in arguments
+ */
+function formatDebateContext(stockData: StockAnalysisData): string {
+    const price = stockData.quote?.price ?? 0;
+    const pe = stockData.fundamentals?.peRatio;
+    const rsi = stockData.technicals?.rsi14 ?? 50;
+    const sentiment = stockData.sentiment?.overallScore ?? 0;
+
+    const lines: string[] = [
+        `Current Price: $${price.toFixed(2)}`,
+    ];
+
+    // Add valuation context
+    if (pe !== null && pe !== undefined) {
+        const peContext = pe < 15 ? '(below market)' : pe > 25 ? '(premium)' : '(market avg)';
+        lines.push(`P/E Ratio: ${pe.toFixed(1)} ${peContext}`);
+    }
+
+    // Add technical context
+    const rsiContext = rsi < 30 ? 'OVERSOLD' : rsi > 70 ? 'OVERBOUGHT' : 'neutral';
+    lines.push(`RSI(14): ${rsi.toFixed(0)} - ${rsiContext}`);
+
+    // Add trend
+    if (stockData.technicals?.trend) {
+        lines.push(`Trend: ${stockData.technicals.trend.toUpperCase()}`);
+    }
+
+    // Add key levels
+    const support = stockData.technicals?.supportLevels?.[0];
+    const resistance = stockData.technicals?.resistanceLevels?.[0];
+    if (support) lines.push(`Key Support: $${support.toFixed(2)}`);
+    if (resistance) lines.push(`Key Resistance: $${resistance.toFixed(2)}`);
+
+    // Add sentiment
+    const sentimentLabel = sentiment > 0.2 ? 'Bullish' : sentiment < -0.2 ? 'Bearish' : 'Neutral';
+    lines.push(`Market Sentiment: ${sentimentLabel} (${sentiment.toFixed(2)})`);
+
+    // Add growth metrics if available
+    if (stockData.fundamentals?.revenueGrowth) {
+        const growth = stockData.fundamentals.revenueGrowth * 100;
+        lines.push(`Revenue Growth: ${growth > 0 ? '+' : ''}${growth.toFixed(1)}%`);
+    }
+
+    return lines.join('\n');
+}
+
+/**
+ * Extract data points referenced in debate content - ENHANCED
+ */
+function extractDataPointsReferenced(content: string): string[] {
+    const dataPoints: string[] = [];
+
+    // Valuation metrics
+    if (/P\/E|PE ratio|price.to.earnings/i.test(content)) dataPoints.push('P/E Ratio');
+    if (/P\/B|price.to.book/i.test(content)) dataPoints.push('P/B Ratio');
+    if (/EV\/EBITDA|enterprise value/i.test(content)) dataPoints.push('EV/EBITDA');
+    if (/PEG ratio/i.test(content)) dataPoints.push('PEG Ratio');
+    if (/FCF|free cash flow/i.test(content)) dataPoints.push('Free Cash Flow');
+
+    // Growth metrics
+    if (/revenue growth|sales growth/i.test(content)) dataPoints.push('Revenue Growth');
+    if (/earnings growth|EPS growth/i.test(content)) dataPoints.push('Earnings Growth');
+    if (/margin|profitability/i.test(content)) dataPoints.push('Margins');
+
+    // Technical indicators
+    if (/RSI|relative strength/i.test(content)) dataPoints.push('RSI');
+    if (/MACD/i.test(content)) dataPoints.push('MACD');
+    if (/moving average|SMA|EMA|50.day|200.day/i.test(content)) dataPoints.push('Moving Averages');
+    if (/support|resistance/i.test(content)) dataPoints.push('Support/Resistance');
+    if (/volume/i.test(content)) dataPoints.push('Volume');
+    if (/bollinger/i.test(content)) dataPoints.push('Bollinger Bands');
+
+    // Sentiment
+    if (/sentiment|news|headlines/i.test(content)) dataPoints.push('Sentiment');
+    if (/analyst|rating|upgrade|downgrade/i.test(content)) dataPoints.push('Analyst Ratings');
+    if (/short interest|shorts/i.test(content)) dataPoints.push('Short Interest');
+
+    // Financial health
+    if (/debt|leverage|D\/E/i.test(content)) dataPoints.push('Debt Levels');
+    if (/ROE|return on equity/i.test(content)) dataPoints.push('ROE');
+    if (/cash|liquidity/i.test(content)) dataPoints.push('Cash Position');
+
+    return [...new Set(dataPoints)]; // Remove duplicates
+}
+
+/**
+ * Generate a single debate turn - ENHANCED
+ * Now includes stock data context for more informed arguments
  */
 async function generateDebateTurn(
     ai: GoogleGenAI,
@@ -169,15 +257,35 @@ async function generateDebateTurn(
     thesis: InvestmentThesis,
     position: 'bull' | 'bear',
     previousTurn: string,
-    // stockData reserved for future use (e.g., injecting real-time data into debates)
-    _stockData: StockAnalysisData
+    stockData: StockAnalysisData
 ): Promise<DebateTurn> {
+    // Build enhanced system prompt with analyst context and data
+    const dataContext = formatDebateContext(stockData);
+    const keyArguments = position === 'bull'
+        ? thesis.bullCase.slice(0, 3).join('; ')
+        : thesis.bearCase.slice(0, 3).join('; ');
+
     const systemPrompt = `${DEBATE_SYSTEM_PROMPT}
 
+═══ YOUR IDENTITY ═══
 You are ${analyst.name}, the ${analyst.title}.
-Your methodology: ${analyst.description}
-Your thesis: ${thesis.summary}
-Key arguments: ${thesis.bullCase.join('; ')}`;
+Methodology: ${analyst.methodology.toUpperCase()}
+Philosophy: ${analyst.description}
+
+═══ YOUR THESIS ═══
+Recommendation: ${thesis.recommendation.toUpperCase().replace('_', ' ')}
+Confidence: ${thesis.confidence}%
+Summary: ${thesis.summary}
+Key Arguments: ${keyArguments}
+
+═══ CURRENT MARKET DATA ═══
+${dataContext}
+
+═══ DEBATE INSTRUCTIONS ═══
+- Reference SPECIFIC numbers from the data above
+- Stay true to your ${analyst.methodology} methodology
+- Be persuasive but acknowledge valid counterpoints
+- Keep response under 150 words`;
 
     const userPrompt = DEBATE_TURN_PROMPT(position, previousTurn);
 
@@ -187,21 +295,13 @@ Key arguments: ${thesis.bullCase.join('; ')}`;
             contents: userPrompt,
             config: {
                 systemInstruction: systemPrompt,
-                temperature: 0.8,
-                maxOutputTokens: 500
+                temperature: 0.75, // Slightly lower for more focused responses
+                maxOutputTokens: 400
             }
         });
 
         const content = response.text || 'No response generated.';
-
-        // Extract data points mentioned (simple heuristic)
-        const dataPoints: string[] = [];
-        if (content.includes('P/E') || content.includes('PE ratio')) dataPoints.push('P/E Ratio');
-        if (content.includes('revenue')) dataPoints.push('Revenue');
-        if (content.includes('growth')) dataPoints.push('Growth');
-        if (content.includes('RSI')) dataPoints.push('RSI');
-        if (content.includes('support') || content.includes('resistance')) dataPoints.push('Technical Levels');
-        if (content.includes('sentiment')) dataPoints.push('Sentiment');
+        const dataPoints = extractDataPointsReferenced(content);
 
         return {
             speakerId: analyst.id,
@@ -213,33 +313,103 @@ Key arguments: ${thesis.bullCase.join('; ')}`;
         };
     } catch (error) {
         logger.error(`Failed to generate debate turn for ${analyst.name}:`, error);
+
+        // Enhanced fallback with thesis content
+        const fallbackContent = position === 'bull'
+            ? `Based on my ${analyst.methodology} analysis, I maintain my bullish stance. ${thesis.bullCase[0] || 'The fundamentals support upside potential.'}`
+            : `My ${analyst.methodology} framework highlights concerns. ${thesis.bearCase[0] || 'Risk factors warrant caution.'}`;
+
         return {
             speakerId: analyst.id,
             position,
-            content: `${analyst.name} maintains their ${position} position based on their ${analyst.methodology} analysis.`,
+            content: fallbackContent,
             dataPointsReferenced: [],
-            argumentStrength: 50,
+            argumentStrength: 45,
             timestamp: Date.now()
         };
     }
 }
 
 /**
- * Calculate argument strength based on content quality
+ * Calculate argument strength based on content quality - ENHANCED
+ * Evaluates: data quality, logic, risk acknowledgment, specificity
  */
 function calculateArgumentStrength(content: string): number {
-    let score = 50; // Base score
+    if (!content || typeof content !== 'string') return 50;
 
-    // Reward specific data references
-    if (/\d+%/.test(content)) score += 10; // Percentages
-    if (/\$\d+/.test(content)) score += 10; // Dollar amounts
-    if (/\d+x/.test(content)) score += 5; // Multiples
-    if (content.length > 100) score += 5; // Substantive response
-    if (content.length > 200) score += 5; // Detailed response
+    let score = 40; // Base score (slightly below neutral)
 
-    // Reward logical structure
-    if (content.includes('because') || content.includes('therefore')) score += 5;
-    if (content.includes('however') || content.includes('but')) score += 5; // Acknowledges nuance
+    // ═══════════════════════════════════════════════════════════════════════════
+    // DATA QUALITY (up to +25 points)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    // Specific numbers
+    const percentMatches = content.match(/\d+\.?\d*%/g) || [];
+    score += Math.min(10, percentMatches.length * 3); // Up to 10 for percentages
+
+    const dollarMatches = content.match(/\$\d+\.?\d*[BMK]?/gi) || [];
+    score += Math.min(8, dollarMatches.length * 2); // Up to 8 for dollar amounts
+
+    // Ratios and multiples
+    if (/\d+\.?\d*x/i.test(content)) score += 3;
+    if (/P\/E|P\/B|EV\/|ROE|ROA/i.test(content)) score += 4;
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // LOGIC & STRUCTURE (up to +20 points)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    // Causal reasoning
+    if (/because|therefore|thus|consequently|as a result/i.test(content)) score += 5;
+
+    // Acknowledges nuance/counterarguments
+    if (/however|although|while|despite|nevertheless|on the other hand/i.test(content)) score += 5;
+
+    // Conditional reasoning
+    if (/if.*then|assuming|given that|provided that/i.test(content)) score += 3;
+
+    // Comparative analysis
+    if (/compared to|relative to|versus|vs\.|higher than|lower than/i.test(content)) score += 4;
+
+    // Structured argument
+    if (/first|second|third|finally|moreover|additionally/i.test(content)) score += 3;
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // RISK ACKNOWLEDGMENT (up to +10 points)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    if (/risk|downside|concern|challenge|threat|weakness/i.test(content)) score += 5;
+    if (/could fail|might not|uncertain|volatile/i.test(content)) score += 3;
+    if (/worst case|bear case|if wrong/i.test(content)) score += 2;
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CATALYST IDENTIFICATION (up to +10 points)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    if (/catalyst|trigger|upcoming|Q[1-4]|earnings|announcement/i.test(content)) score += 5;
+    if (/timeline|within \d+ months|by year end|near term/i.test(content)) score += 3;
+    if (/inflection point|turning point|breakout/i.test(content)) score += 2;
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // PENALTIES
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    // Too short (lacks substance)
+    if (content.length < 50) score -= 10;
+
+    // Too vague
+    if (/maybe|perhaps|possibly|might|could be/i.test(content) &&
+        !(/\d+%|\$\d+/i.test(content))) score -= 5;
+
+    // Repetitive/filler
+    if (/obviously|clearly|everyone knows|it's clear that/i.test(content)) score -= 3;
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // LENGTH BONUS (moderate - quality over quantity)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    if (content.length > 100) score += 2;
+    if (content.length > 150) score += 2;
+    if (content.length > 200) score += 1;
 
     return Math.min(100, Math.max(0, score));
 }
@@ -317,19 +487,35 @@ async function runDebate(
 
     // Calculate final scores
     debate.scores = calculateDebateScores(debate);
-    debate.winner = debate.scores.bullScore > debate.scores.bearScore ? 'bull' : 'bear';
+
+    // Determine winner with tie-breaker logic
+    if (debate.scores.bullScore > debate.scores.bearScore) {
+        debate.winner = 'bull';
+    } else if (debate.scores.bearScore > debate.scores.bullScore) {
+        debate.winner = 'bear';
+    } else {
+        // Tie-breaker: use thesis confidence, then data quality
+        const bullTieBreaker = debate.bullThesis.confidence + debate.scores.dataQuality.bull;
+        const bearTieBreaker = debate.bearThesis.confidence + debate.scores.dataQuality.bear;
+        debate.winner = bullTieBreaker >= bearTieBreaker ? 'bull' : 'bear';
+    }
+
     debate.winningArguments = extractWinningArguments(debate);
 
     return debate;
 }
 
 /**
- * Calculate comprehensive debate scores
+ * Calculate comprehensive debate scores - ENHANCED
+ * More nuanced scoring based on debate quality and thesis strength
  */
 function calculateDebateScores(debate: StockDebate): DebateScores {
     const bullTurns = debate.dialogue.filter(t => t.position === 'bull');
     const bearTurns = debate.dialogue.filter(t => t.position === 'bear');
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ARGUMENT STRENGTH (from calculateArgumentStrength)
+    // ═══════════════════════════════════════════════════════════════════════════
     const avgBullStrength = bullTurns.length > 0
         ? bullTurns.reduce((sum, t) => sum + t.argumentStrength, 0) / bullTurns.length
         : 50;
@@ -337,45 +523,162 @@ function calculateDebateScores(debate: StockDebate): DebateScores {
         ? bearTurns.reduce((sum, t) => sum + t.argumentStrength, 0) / bearTurns.length
         : 50;
 
-    // Data quality based on references
-    const bullDataRefs = bullTurns.reduce((sum, t) => sum + t.dataPointsReferenced.length, 0);
-    const bearDataRefs = bearTurns.reduce((sum, t) => sum + t.dataPointsReferenced.length, 0);
+    // ═══════════════════════════════════════════════════════════════════════════
+    // DATA QUALITY (unique data points referenced)
+    // ═══════════════════════════════════════════════════════════════════════════
+    const bullDataPoints = new Set(bullTurns.flatMap(t => t.dataPointsReferenced));
+    const bearDataPoints = new Set(bearTurns.flatMap(t => t.dataPointsReferenced));
 
-    // Include thesis confidence as a factor
-    const bullConfidenceBonus = debate.bullThesis.confidence / 10;
-    const bearConfidenceBonus = debate.bearThesis.confidence / 10;
+    // Score: 10 points per unique data type, max 100
+    const bullDataQuality = Math.min(100, bullDataPoints.size * 12);
+    const bearDataQuality = Math.min(100, bearDataPoints.size * 12);
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // LOGIC COHERENCE (argument strength + consistency bonus)
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Bonus for consistent argument strength across turns
+    const bullStrengthVariance = bullTurns.length > 1
+        ? Math.sqrt(bullTurns.reduce((sum, t) => sum + Math.pow(t.argumentStrength - avgBullStrength, 2), 0) / bullTurns.length)
+        : 0;
+    const bearStrengthVariance = bearTurns.length > 1
+        ? Math.sqrt(bearTurns.reduce((sum, t) => sum + Math.pow(t.argumentStrength - avgBearStrength, 2), 0) / bearTurns.length)
+        : 0;
+
+    // Lower variance = more consistent = bonus
+    const bullConsistencyBonus = Math.max(0, 10 - bullStrengthVariance / 2);
+    const bearConsistencyBonus = Math.max(0, 10 - bearStrengthVariance / 2);
+
+    const bullLogic = Math.min(100, Math.round(avgBullStrength + bullConsistencyBonus));
+    const bearLogic = Math.min(100, Math.round(avgBearStrength + bearConsistencyBonus));
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // RISK ACKNOWLEDGMENT (from thesis + debate content)
+    // ═══════════════════════════════════════════════════════════════════════════
+    const bullThesisRisks = (debate.bullThesis.bearCase?.length ?? 0) + (debate.bullThesis.risks?.length ?? 0);
+    const bearThesisRisks = (debate.bearThesis.bearCase?.length ?? 0) + (debate.bearThesis.risks?.length ?? 0);
+
+    // Check if debate content acknowledges risks
+    const bullAcknowledgesRisk = bullTurns.some(t =>
+        /risk|concern|however|although|downside|challenge/i.test(t.content)
+    ) ? 15 : 0;
+    const bearAcknowledgesRisk = bearTurns.some(t =>
+        /risk|concern|however|although|downside|challenge/i.test(t.content)
+    ) ? 15 : 0;
+
+    const bullRiskScore = Math.min(100, bullThesisRisks * 15 + bullAcknowledgesRisk);
+    const bearRiskScore = Math.min(100, bearThesisRisks * 15 + bearAcknowledgesRisk);
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CATALYST IDENTIFICATION
+    // ═══════════════════════════════════════════════════════════════════════════
+    const bullCatalysts = debate.bullThesis.catalysts?.length ?? 0;
+    const bearCatalysts = debate.bearThesis.catalysts?.length ?? 0;
+
+    // Check debate content for catalyst mentions
+    const bullMentionsCatalyst = bullTurns.some(t =>
+        /catalyst|trigger|Q[1-4]|earnings|announcement|upcoming|near.term/i.test(t.content)
+    ) ? 20 : 0;
+    const bearMentionsCatalyst = bearTurns.some(t =>
+        /catalyst|trigger|Q[1-4]|earnings|announcement|upcoming|near.term/i.test(t.content)
+    ) ? 20 : 0;
+
+    const bullCatalystScore = Math.min(100, bullCatalysts * 20 + bullMentionsCatalyst);
+    const bearCatalystScore = Math.min(100, bearCatalysts * 20 + bearMentionsCatalyst);
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FINAL SCORE CALCULATION
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Weighted average: Data 25%, Logic 25%, Risk 25%, Catalyst 25%
+    const bullFinalScore = Math.round(
+        (bullDataQuality * 0.25) +
+        (bullLogic * 0.25) +
+        (bullRiskScore * 0.25) +
+        (bullCatalystScore * 0.25) +
+        (debate.bullThesis.confidence / 20) // Small confidence bonus (0-5 points)
+    );
+
+    const bearFinalScore = Math.round(
+        (bearDataQuality * 0.25) +
+        (bearLogic * 0.25) +
+        (bearRiskScore * 0.25) +
+        (bearCatalystScore * 0.25) +
+        (debate.bearThesis.confidence / 20)
+    );
 
     return {
-        bullScore: Math.round(avgBullStrength + bullConfidenceBonus + (bullDataRefs * 2)),
-        bearScore: Math.round(avgBearStrength + bearConfidenceBonus + (bearDataRefs * 2)),
+        bullScore: Math.min(100, bullFinalScore),
+        bearScore: Math.min(100, bearFinalScore),
         dataQuality: {
-            bull: Math.min(100, bullDataRefs * 15),
-            bear: Math.min(100, bearDataRefs * 15)
+            bull: bullDataQuality,
+            bear: bearDataQuality
         },
         logicCoherence: {
-            bull: Math.round(avgBullStrength),
-            bear: Math.round(avgBearStrength)
+            bull: bullLogic,
+            bear: bearLogic
         },
         riskAcknowledgment: {
-            bull: debate.bullThesis.bearCase.length * 20,
-            bear: debate.bearThesis.bearCase.length * 20
+            bull: bullRiskScore,
+            bear: bearRiskScore
         },
         catalystIdentification: {
-            bull: debate.bullThesis.catalysts.length * 25,
-            bear: debate.bearThesis.catalysts.length * 25
+            bull: bullCatalystScore,
+            bear: bearCatalystScore
         }
     };
 }
 
 /**
- * Extract the strongest arguments from the winning side
+ * Extract the strongest arguments from the winning side - ENHANCED
+ * Prioritizes arguments with data points and clear reasoning
  */
 function extractWinningArguments(debate: StockDebate): string[] {
     const winnerTurns = debate.dialogue.filter(t => t.position === debate.winner);
-    return winnerTurns
-        .sort((a, b) => b.argumentStrength - a.argumentStrength)
+
+    if (winnerTurns.length === 0) {
+        // Fallback to thesis arguments
+        const winnerThesis = debate.winner === 'bull' ? debate.bullThesis : debate.bearThesis;
+        return winnerThesis.bullCase.slice(0, 3);
+    }
+
+    // Score each turn for extraction priority
+    const scoredTurns = winnerTurns.map(turn => {
+        let extractionScore = turn.argumentStrength;
+
+        // Bonus for data references
+        extractionScore += turn.dataPointsReferenced.length * 5;
+
+        // Bonus for specific numbers in content
+        const numberMatches = turn.content.match(/\d+\.?\d*%|\$\d+/g) || [];
+        extractionScore += numberMatches.length * 3;
+
+        // Bonus for causal reasoning
+        if (/because|therefore|thus|as a result/i.test(turn.content)) {
+            extractionScore += 5;
+        }
+
+        return { turn, extractionScore };
+    });
+
+    // Sort by extraction score and take top 3
+    return scoredTurns
+        .sort((a, b) => b.extractionScore - a.extractionScore)
         .slice(0, 3)
-        .map(t => t.content.slice(0, 200) + (t.content.length > 200 ? '...' : ''));
+        .map(({ turn }) => {
+            // Clean up the content for display
+            let content = turn.content.trim();
+
+            // Truncate intelligently at sentence boundary if too long
+            if (content.length > 250) {
+                const sentenceEnd = content.slice(0, 250).lastIndexOf('.');
+                if (sentenceEnd > 150) {
+                    content = content.slice(0, sentenceEnd + 1);
+                } else {
+                    content = content.slice(0, 247) + '...';
+                }
+            }
+
+            return content;
+        });
 }
 
 
@@ -408,6 +711,22 @@ export async function runTournament(
     stockData: StockAnalysisData,
     config: TournamentConfig
 ): Promise<TournamentResult> {
+    // Input validation
+    if (!theses || theses.length === 0) {
+        logger.warn('runTournament called with empty theses array');
+        return {
+            quarterfinals: [],
+            semifinals: [],
+            final: null,
+            champion: null,
+            allDebates: []
+        };
+    }
+
+    if (!config.apiKey) {
+        throw new Error('API key is required for tournament');
+    }
+
     const {
         apiKey,
         model = 'gemini-2.0-flash',

@@ -193,8 +193,20 @@ export async function fetchAllStockData(
 
     const normalizedTicker = ticker.toUpperCase().trim();
     const warnings: string[] = [];
+    const MAX_WARNINGS = 20;
 
     logger.info(`Fetching all data for ${normalizedTicker}...`);
+
+    // Helper to add warnings with bounds check
+    let warningsTruncated = false;
+    const addWarning = (msg: string) => {
+        if (warnings.length < MAX_WARNINGS) {
+            warnings.push(msg);
+        } else if (!warningsTruncated) {
+            warnings.push('Additional warnings truncated...');
+            warningsTruncated = true;
+        }
+    };
 
     // Validate ticker first
     const isValid = await validateTicker(normalizedTicker);
@@ -229,13 +241,13 @@ export async function fetchAllStockData(
     const hasNews = sentimentResult.data !== null && (sentimentResult.data.newsCount > 0);
     const hasAnalystRatings = ratingsResult.data !== null && (ratingsResult.data.numberOfAnalysts > 0);
 
-    // Add warnings for missing data
-    if (quoteResult.error) warnings.push(`Quote: ${quoteResult.error}`);
-    if (profileResult.error) warnings.push(`Profile: ${profileResult.error}`);
-    if (fundamentalsResult.error) warnings.push(`Fundamentals: ${fundamentalsResult.error}`);
-    if (historicalResult.error) warnings.push(`Historical: ${historicalResult.error}`);
-    if (ratingsResult.error) warnings.push(`Ratings: ${ratingsResult.error}`);
-    if (sentimentResult.error) warnings.push(`Sentiment: ${sentimentResult.error}`);
+    // Add warnings for missing data (with bounds check)
+    if (quoteResult.error) addWarning(`Quote: ${quoteResult.error}`);
+    if (profileResult.error) addWarning(`Profile: ${profileResult.error}`);
+    if (fundamentalsResult.error) addWarning(`Fundamentals: ${fundamentalsResult.error}`);
+    if (historicalResult.error) addWarning(`Historical: ${historicalResult.error}`);
+    if (ratingsResult.error) addWarning(`Ratings: ${ratingsResult.error}`);
+    if (sentimentResult.error) addWarning(`Sentiment: ${sentimentResult.error}`);
 
     // Calculate technicals from historical data
     let technicals: TechnicalIndicators;
@@ -245,7 +257,7 @@ export async function fetchAllStockData(
         try {
             technicals = calculateTechnicalIndicators(historicalResult.data.data);
         } catch (error) {
-            warnings.push(`Technicals calculation failed`);
+            addWarning(`Technicals calculation failed`);
             technicals = getDefaultTechnicals();
         }
     }

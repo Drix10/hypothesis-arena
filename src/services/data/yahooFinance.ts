@@ -22,8 +22,13 @@ import { logger } from '../utils/logger';
 
 // Financial Modeling Prep - Free tier (250 requests/day)
 // Get your free key at: https://site.financialmodelingprep.com/developer/docs/
-const FMP_API_KEY = 'demo'; // Works for major stocks, get free key for full access
+const FMP_API_KEY = 'demo';
 const FMP_BASE_URL = 'https://financialmodelingprep.com/api/v3';
+
+// Rate limiting - minimum delay between FMP API calls
+const MIN_API_DELAY = 150; // ms
+let lastFmpCallTime = 0;
+let rateLimitLock: Promise<void> | null = null;
 
 // Cache configuration
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
@@ -71,6 +76,31 @@ async function fetchWithTimeout(url: string, timeout = 10000): Promise<Response>
         clearTimeout(timeoutId);
         throw error;
     }
+}
+
+/**
+ * Fetch with rate limiting for FMP API calls
+ * Uses a lock to prevent race conditions with concurrent calls
+ */
+async function fetchFmpWithRateLimit(url: string, timeout = 10000): Promise<Response> {
+    // Wait for any pending rate limit delay
+    if (rateLimitLock) {
+        await rateLimitLock;
+    }
+
+    const now = Date.now();
+    const timeSinceLastCall = now - lastFmpCallTime;
+
+    if (timeSinceLastCall < MIN_API_DELAY) {
+        const delay = MIN_API_DELAY - timeSinceLastCall;
+        // Create a lock that other calls will wait on
+        rateLimitLock = new Promise(resolve => setTimeout(resolve, delay));
+        await rateLimitLock;
+        rateLimitLock = null;
+    }
+
+    lastFmpCallTime = Date.now();
+    return fetchWithTimeout(url, timeout);
 }
 
 // CORS proxies for Yahoo Finance fallback
@@ -128,7 +158,7 @@ export async function getQuote(ticker: string): Promise<StockQuote> {
 
 async function getQuoteFMP(ticker: string): Promise<StockQuote> {
     const url = `${FMP_BASE_URL}/quote/${ticker}?apikey=${FMP_API_KEY}`;
-    const response = await fetchWithTimeout(url);
+    const response = await fetchFmpWithRateLimit(url);
 
     if (!response.ok) {
         throw new Error(`FMP API error: ${response.status}`);
@@ -257,7 +287,7 @@ async function getHistoricalFMP(ticker: string, period: Period): Promise<Histori
     const to = endDate.toISOString().split('T')[0];
 
     const url = `${FMP_BASE_URL}/historical-price-full/${ticker}?from=${from}&to=${to}&apikey=${FMP_API_KEY}`;
-    const response = await fetchWithTimeout(url);
+    const response = await fetchFmpWithRateLimit(url);
 
     if (!response.ok) {
         throw new Error(`FMP historical API error: ${response.status}`);
@@ -365,11 +395,9 @@ export async function getFundamentals(ticker: string): Promise<Fundamentals> {
 }
 
 async function getFundamentalsFMP(ticker: string): Promise<Fundamentals> {
-    // FMP has multiple endpoints for different data
-    const [ratiosRes, profileRes] = await Promise.all([
-        fetchWithTimeout(`${FMP_BASE_URL}/ratios-ttm/${ticker}?apikey=${FMP_API_KEY}`),
-        fetchWithTimeout(`${FMP_BASE_URL}/profile/${ticker}?apikey=${FMP_API_KEY}`)
-    ]);
+    // FMP has multiple endpoints - fetch sequentially with rate limiting
+    const ratiosRes = await fetchFmpWithRateLimit(`${FMP_BASE_URL}/ratios-ttm/${ticker}?apikey=${FMP_API_KEY}`);
+    const profileRes = await fetchFmpWithRateLimit(`${FMP_BASE_URL}/profile/${ticker}?apikey=${FMP_API_KEY}`);
 
     if (!ratiosRes.ok && !profileRes.ok) {
         throw new Error('FMP fundamentals unavailable');
@@ -528,10 +556,9 @@ export async function getAnalystRatings(ticker: string): Promise<AnalystRatings>
 }
 
 async function getAnalystRatingsFMP(ticker: string): Promise<AnalystRatings> {
-    const [gradeRes, targetRes] = await Promise.all([
-        fetchWithTimeout(`${FMP_BASE_URL}/grade/${ticker}?limit=30&apikey=${FMP_API_KEY}`),
-        fetchWithTimeout(`${FMP_BASE_URL}/price-target-consensus/${ticker}?apikey=${FMP_API_KEY}`)
-    ]);
+    // Fetch sequentially with rate limiting
+    const gradeRes = await fetchFmpWithRateLimit(`${FMP_BASE_URL}/grade/${ticker}?limit=30&apikey=${FMP_API_KEY}`);
+    const targetRes = await fetchFmpWithRateLimit(`${FMP_BASE_URL}/price-target-consensus/${ticker}?apikey=${FMP_API_KEY}`);
 
     const grades = gradeRes.ok ? await gradeRes.json() : [];
     const targets = targetRes.ok ? (await targetRes.json())?.[0] : null;
@@ -677,7 +704,7 @@ export async function getCompanyProfile(ticker: string): Promise<CompanyProfile>
 
 async function getCompanyProfileFMP(ticker: string): Promise<CompanyProfile> {
     const url = `${FMP_BASE_URL}/profile/${ticker}?apikey=${FMP_API_KEY}`;
-    const response = await fetchWithTimeout(url);
+    const response = await fetchFmpWithRateLimit(url);
 
     if (!response.ok) {
         throw new Error(`FMP profile API error: ${response.status}`);
@@ -787,7 +814,7 @@ export async function searchTickers(query: string): Promise<Array<{ symbol: stri
     // Try FMP search first
     try {
         const url = `${FMP_BASE_URL}/search?query=${encodeURIComponent(normalizedQuery)}&limit=10&apikey=${FMP_API_KEY}`;
-        const response = await fetchWithTimeout(url, 5000);
+        const response = await fetchFmpWithRateLimit(url, 5000);
 
         if (response.ok) {
             const data = await response.json();

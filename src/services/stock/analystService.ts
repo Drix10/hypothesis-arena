@@ -1,8 +1,13 @@
 /**
- * Analyst Service
+ * Analyst Service - ENHANCED
  * 
  * Generates investment theses from the 8 analyst agents using AI.
  * Each analyst receives relevant data and generates their unique perspective.
+ * 
+ * ENHANCEMENTS:
+ * - Richer data formatting with contextual interpretation
+ * - Better prompt engineering for higher quality outputs
+ * - Improved parsing with validation
  */
 
 import { GoogleGenAI } from '@google/genai';
@@ -44,31 +49,91 @@ interface ParsedThesis {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// DATA FORMATTING
+// ENHANCED DATA FORMATTING FOR LLM CONSUMPTION
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function formatMetric(value: number | null | undefined): string {
+function formatMetric(value: number | null | undefined, decimals: number = 2): string {
     if (value === null || value === undefined || !Number.isFinite(value)) return 'N/A';
-    return value.toFixed(2);
+    return value.toFixed(decimals);
 }
 
-function formatPercent(value: number | null | undefined): string {
+function formatPercent(value: number | null | undefined, isAlreadyPercent: boolean = false): string {
     if (value === null || value === undefined || !Number.isFinite(value)) return 'N/A';
-    return (value * 100).toFixed(1) + '%';
+    const pct = isAlreadyPercent ? value : value * 100;
+    const sign = pct >= 0 ? '+' : '';
+    return `${sign}${pct.toFixed(1)}%`;
 }
 
 function formatLargeNumber(value: number | null | undefined): string {
     if (value === null || value === undefined || !Number.isFinite(value)) return 'N/A';
-    if (value >= 1e12) return (value / 1e12).toFixed(2) + 'T';
-    if (value >= 1e9) return (value / 1e9).toFixed(2) + 'B';
-    if (value >= 1e6) return (value / 1e6).toFixed(2) + 'M';
-    if (value >= 1e3) return (value / 1e3).toFixed(2) + 'K';
-    return value.toFixed(0);
+    if (value >= 1e12) return '$' + (value / 1e12).toFixed(2) + 'T';
+    if (value >= 1e9) return '$' + (value / 1e9).toFixed(2) + 'B';
+    if (value >= 1e6) return '$' + (value / 1e6).toFixed(2) + 'M';
+    if (value >= 1e3) return '$' + (value / 1e3).toFixed(1) + 'K';
+    return '$' + value.toFixed(0);
 }
 
+function formatPrice(value: number | null | undefined): string {
+    if (value === null || value === undefined || !Number.isFinite(value)) return 'N/A';
+    return '$' + value.toFixed(2);
+}
+
+/** Get valuation context */
+function getValuationContext(peRatio: number | null): string {
+    if (peRatio === null) return '';
+    if (peRatio < 0) return '(negative earnings)';
+    if (peRatio < 10) return '(deep value)';
+    if (peRatio < 15) return '(below market avg)';
+    if (peRatio < 20) return '(market avg)';
+    if (peRatio < 30) return '(growth premium)';
+    if (peRatio < 50) return '(high growth)';
+    return '(extreme valuation)';
+}
+
+/** Get RSI interpretation */
+function getRSIContext(rsi: number): string {
+    if (rsi < 20) return 'EXTREMELY OVERSOLD';
+    if (rsi < 30) return 'OVERSOLD';
+    if (rsi < 40) return 'Approaching oversold';
+    if (rsi < 60) return 'Neutral';
+    if (rsi < 70) return 'Approaching overbought';
+    if (rsi < 80) return 'OVERBOUGHT';
+    return 'EXTREMELY OVERBOUGHT';
+}
+
+/** Get trend context */
+function getTrendContext(price: number, sma20: number, sma50: number, sma200: number): string {
+    const contexts: string[] = [];
+
+    // Short-term trend (20-day)
+    if (sma20 > 0) {
+        const pctFrom20 = ((price - sma20) / sma20) * 100;
+        if (Math.abs(pctFrom20) > 3) {
+            contexts.push(price > sma20
+                ? `${pctFrom20.toFixed(1)}% above 20-MA (short-term bullish)`
+                : `${Math.abs(pctFrom20).toFixed(1)}% below 20-MA (short-term bearish)`);
+        }
+    }
+
+    // Long-term trend (200-day)
+    if (sma200 > 0) {
+        const pctFrom200 = ((price - sma200) / sma200) * 100;
+        contexts.push(price > sma200
+            ? `${pctFrom200.toFixed(1)}% above 200-MA (bullish)`
+            : `${Math.abs(pctFrom200).toFixed(1)}% below 200-MA (bearish)`);
+    }
+
+    // Golden/Death Cross
+    if (sma50 > 0 && sma200 > 0) {
+        contexts.push(sma50 > sma200 ? 'Golden Cross active' : 'Death Cross active');
+    }
+
+    return contexts.join(' | ');
+}
 
 /**
  * Format stock data for a specific analyst's focus areas
+ * ENHANCED: More structured, contextual, and actionable data
  */
 function formatDataForAnalyst(
     data: StockAnalysisData,
@@ -76,105 +141,213 @@ function formatDataForAnalyst(
 ): string {
     const focus = ANALYST_DATA_FOCUS[methodology];
     const sections: string[] = [];
-
-    // Always include basic quote info (with safe defaults)
     const price = data.quote?.price ?? 0;
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SECTION 1: PRICE & MARKET DATA (Always included)
+    // ═══════════════════════════════════════════════════════════════════════════
     const changePercent = data.quote?.changePercent ?? 0;
-    const changeSign = changePercent >= 0 ? '+' : '';
+    const volumeRatio = (data.quote?.avgVolume ?? 0) > 0
+        ? ((data.quote?.volume ?? 0) / data.quote.avgVolume).toFixed(2)
+        : 'N/A';
+
     sections.push(
-        `CURRENT PRICE: $${price.toFixed(2)} (${changeSign}${changePercent.toFixed(2)}%)\n` +
-        `Market Cap: ${formatLargeNumber(data.quote?.marketCap)}\n` +
-        `Volume: ${formatLargeNumber(data.quote?.volume)} (Avg: ${formatLargeNumber(data.quote?.avgVolume)})`
+        `═══ CURRENT MARKET DATA ═══
+Price: ${formatPrice(price)} (${formatPercent(changePercent, true)} today)
+Market Cap: ${formatLargeNumber(data.quote?.marketCap)}
+Volume: ${formatLargeNumber(data.quote?.volume)} (${volumeRatio}x avg)
+Day Range: ${formatPrice(data.quote?.dayLow)} - ${formatPrice(data.quote?.dayHigh)}`
     );
 
-    // Company profile
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SECTION 2: COMPANY PROFILE
+    // ═══════════════════════════════════════════════════════════════════════════
     if (focus.primary.includes('profile') || focus.secondary.includes('profile')) {
         const desc = data.profile?.description || '';
+        const truncatedDesc = desc.length > 400 ? desc.slice(0, 400) + '...' : desc;
+
         sections.push(
-            `COMPANY: ${data.profile?.name ?? 'Unknown'}\n` +
-            `Sector: ${data.profile?.sector ?? 'Unknown'} | Industry: ${data.profile?.industry ?? 'Unknown'}\n` +
-            desc.slice(0, 300) + (desc.length > 300 ? '...' : '')
+            `═══ COMPANY PROFILE ═══
+Name: ${data.profile?.name ?? 'Unknown'}
+Sector: ${data.profile?.sector ?? 'Unknown'} | Industry: ${data.profile?.industry ?? 'Unknown'}
+Employees: ${data.profile?.employees?.toLocaleString() ?? 'N/A'}
+Exchange: ${data.profile?.exchange ?? 'Unknown'}
+
+Description: ${truncatedDesc || 'No description available'}`
         );
     }
 
-    // Fundamentals
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SECTION 3: FUNDAMENTALS (Enhanced with context)
+    // ═══════════════════════════════════════════════════════════════════════════
     if (focus.primary.includes('fundamentals') || focus.secondary.includes('fundamentals')) {
         const f = data.fundamentals;
+        const peContext = getValuationContext(f?.peRatio ?? null);
+
+        const fcfYield = (f?.freeCashFlow && data.quote?.marketCap && data.quote.marketCap > 0)
+            ? ((f.freeCashFlow / data.quote.marketCap) * 100).toFixed(2) + '%'
+            : 'N/A';
+
         sections.push(
-            'FUNDAMENTALS:\n' +
-            `P/E Ratio: ${formatMetric(f?.peRatio)} | Forward P/E: ${formatMetric(f?.forwardPE)}\n` +
-            `PEG Ratio: ${formatMetric(f?.pegRatio)} | P/B: ${formatMetric(f?.priceToBook)}\n` +
-            `EPS (TTM): ${formatMetric(f?.eps)} | Forward EPS: ${formatMetric(f?.epsForward)}\n` +
-            `Revenue Growth: ${formatPercent(f?.revenueGrowth)} | Earnings Growth: ${formatPercent(f?.earningsGrowth)}\n` +
-            `Profit Margin: ${formatPercent(f?.profitMargin)} | ROE: ${formatPercent(f?.returnOnEquity)}\n` +
-            `Debt/Equity: ${formatMetric(f?.debtToEquity)} | Current Ratio: ${formatMetric(f?.currentRatio)}\n` +
-            `Free Cash Flow: ${formatLargeNumber(f?.freeCashFlow)}\n` +
-            `Dividend Yield: ${formatPercent(f?.dividendYield)}`
+            `═══ FUNDAMENTAL ANALYSIS ═══
+
+VALUATION:
+• P/E (TTM): ${formatMetric(f?.peRatio)} ${peContext}
+• Forward P/E: ${formatMetric(f?.forwardPE)}
+• PEG Ratio: ${formatMetric(f?.pegRatio)} ${f?.pegRatio && f.pegRatio < 1 ? '(undervalued)' : f?.pegRatio && f.pegRatio > 2 ? '(expensive)' : ''}
+• P/B: ${formatMetric(f?.priceToBook)}
+• EV/EBITDA: ${formatMetric(f?.evToEbitda)}
+
+PROFITABILITY:
+• Gross Margin: ${formatPercent(f?.grossMargin)}
+• Operating Margin: ${formatPercent(f?.operatingMargin)}
+• Net Margin: ${formatPercent(f?.profitMargin)}
+• ROE: ${formatPercent(f?.returnOnEquity)} ${f?.returnOnEquity && f.returnOnEquity > 0.15 ? '(excellent)' : ''}
+• ROA: ${formatPercent(f?.returnOnAssets)}
+
+GROWTH:
+• Revenue Growth: ${formatPercent(f?.revenueGrowth)}
+• Earnings Growth: ${formatPercent(f?.earningsGrowth)}
+
+FINANCIAL HEALTH:
+• Debt/Equity: ${formatMetric(f?.debtToEquity)} ${f?.debtToEquity && f.debtToEquity > 1 ? '(high leverage)' : ''}
+• Current Ratio: ${formatMetric(f?.currentRatio)} ${f?.currentRatio && f.currentRatio < 1 ? '(liquidity risk)' : ''}
+• FCF: ${formatLargeNumber(f?.freeCashFlow)}
+• FCF Yield: ${fcfYield}
+
+PER SHARE:
+• EPS: ${formatPrice(f?.eps)}
+• Book Value: ${formatPrice(f?.bookValue)}
+• Dividend Yield: ${formatPercent(f?.dividendYield)}`
         );
     }
 
-    // Technicals
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SECTION 4: TECHNICAL ANALYSIS
+    // ═══════════════════════════════════════════════════════════════════════════
     if (focus.primary.includes('technicals') || focus.secondary.includes('technicals')) {
         const t = data.technicals;
+        const rsi = t?.rsi14 ?? 50;
+        const sma20 = t?.sma20 ?? 0;
+        const sma50 = t?.sma50 ?? 0;
+        const sma200 = t?.sma200 ?? 0;
+
+        const rsiContext = getRSIContext(rsi);
+        const trendContext = getTrendContext(price, sma20, sma50, sma200);
+
+        const macdSignal = (t?.macd?.histogram ?? 0) > 0 ? 'BULLISH' : 'BEARISH';
+
+        const bbPosition = t?.bollingerBands
+            ? price < t.bollingerBands.lower ? 'BELOW lower band (oversold)'
+                : price > t.bollingerBands.upper ? 'ABOVE upper band (overbought)'
+                    : 'Within bands'
+            : 'N/A';
+
         const supportLevels = t?.supportLevels ?? [];
         const resistanceLevels = t?.resistanceLevels ?? [];
         const signals = t?.signals ?? [];
 
-        const supportStr = supportLevels.length > 0
-            ? supportLevels.map(s => `$${(s ?? 0).toFixed(2)}`).join(', ')
-            : 'N/A';
-        const resistanceStr = resistanceLevels.length > 0
-            ? resistanceLevels.map(r => `$${(r ?? 0).toFixed(2)}`).join(', ')
-            : 'N/A';
-        const signalsStr = signals.length > 0
-            ? signals.map(s => `${s?.indicator ?? 'Unknown'}: ${s?.signal ?? 'neutral'}`).join(', ')
-            : 'None';
-
-        const rsi = t?.rsi14 ?? 50;
-        const macdHistogram = t?.macd?.histogram ?? 0;
-        const sma20 = t?.sma20 ?? 0;
-        const sma50 = t?.sma50 ?? 0;
-        const sma200 = t?.sma200 ?? 0;
-        const bbLower = t?.bollingerBands?.lower ?? 0;
-        const bbUpper = t?.bollingerBands?.upper ?? 0;
-        const volatility = t?.volatility ?? 0;
-
         sections.push(
-            'TECHNICALS:\n' +
-            `Trend: ${(t?.trend ?? 'sideways').toUpperCase()} (Strength: ${t?.trendStrength ?? 50}/100)\n` +
-            `RSI(14): ${rsi.toFixed(1)} | MACD: ${macdHistogram > 0 ? 'Bullish' : 'Bearish'}\n` +
-            `SMA 20/50/200: ${sma20.toFixed(2)} / ${sma50.toFixed(2)} / ${sma200.toFixed(2)}\n` +
-            `Bollinger: ${bbLower.toFixed(2)} - ${bbUpper.toFixed(2)}\n` +
-            `Support: ${supportStr}\n` +
-            `Resistance: ${resistanceStr}\n` +
-            `Volatility: ${volatility.toFixed(1)}%\n` +
-            `Signals: ${signalsStr}`
+            `═══ TECHNICAL ANALYSIS ═══
+
+TREND:
+• Direction: ${(t?.trend ?? 'sideways').toUpperCase().replace('_', ' ')}
+• Strength: ${t?.trendStrength ?? 50}/100
+• ${trendContext}
+
+MOVING AVERAGES:
+• 20-day: ${formatPrice(sma20)} (${price > sma20 ? 'ABOVE' : 'BELOW'})
+• 50-day: ${formatPrice(sma50)} (${price > sma50 ? 'ABOVE' : 'BELOW'})
+• 200-day: ${formatPrice(sma200)} (${price > sma200 ? 'ABOVE' : 'BELOW'})
+
+MOMENTUM:
+• RSI(14): ${rsi.toFixed(1)} - ${rsiContext}
+• MACD: ${macdSignal} (histogram: ${formatMetric(t?.macd?.histogram)})
+• Stochastic: ${formatMetric(t?.stochastic?.k)}/${formatMetric(t?.stochastic?.d)}
+
+VOLATILITY:
+• Historical: ${formatMetric(t?.volatility)}% ${(t?.volatility ?? 0) > 40 ? '(HIGH)' : (t?.volatility ?? 0) < 20 ? '(LOW)' : ''}
+• ATR(14): ${formatPrice(t?.atr14)}
+• Bollinger: ${bbPosition}
+
+KEY LEVELS:
+• Support: ${supportLevels.length > 0 ? supportLevels.map(s => formatPrice(s)).join(', ') : 'None'}
+• Resistance: ${resistanceLevels.length > 0 ? resistanceLevels.map(r => formatPrice(r)).join(', ') : 'None'}
+
+SIGNALS:
+${signals.length > 0 ? signals.map(s => `• ${s.indicator}: ${s.signal.toUpperCase()} (${s.strength}/100)`).join('\n') : '• No strong signals'}`
         );
     }
 
-    // Sentiment
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SECTION 5: SENTIMENT ANALYSIS
+    // ═══════════════════════════════════════════════════════════════════════════
     if (focus.primary.includes('sentiment') || focus.secondary.includes('sentiment')) {
         const s = data.sentiment;
         const recentNews = s?.recentNews ?? [];
-        const headlines = recentNews.slice(0, 5).map(n => `- ${n?.title ?? 'Untitled'} (${n?.sentiment ?? 'neutral'})`).join('\n');
         const overallScore = s?.overallScore ?? 0;
+
+        const sentimentInterpretation = overallScore > 0.3
+            ? 'Strong positive - potential contrarian sell'
+            : overallScore < -0.3
+                ? 'Strong negative - potential contrarian buy'
+                : 'Neutral';
+
+        const newsBreakdown = recentNews.slice(0, 6).map((n, i) => {
+            const icon = n.sentiment === 'positive' ? '📈' : n.sentiment === 'negative' ? '📉' : '➡️';
+            return `${i + 1}. ${icon} ${n.title?.slice(0, 70)}... (${n.source})`;
+        }).join('\n');
+
         sections.push(
-            'SENTIMENT:\n' +
-            `Overall: ${(s?.overallSentiment ?? 'neutral').toUpperCase()} (Score: ${overallScore.toFixed(2)})\n` +
-            `News: ${s?.positiveCount ?? 0} positive, ${s?.negativeCount ?? 0} negative, ${s?.neutralCount ?? 0} neutral\n` +
-            `Recent Headlines:\n${headlines || 'No recent news'}`
+            `═══ SENTIMENT ANALYSIS ═══
+
+OVERALL:
+• Score: ${overallScore.toFixed(2)} (-1 to +1)
+• Classification: ${(s?.overallSentiment ?? 'neutral').toUpperCase().replace('_', ' ')}
+• Interpretation: ${sentimentInterpretation}
+
+NEWS BREAKDOWN:
+• Total: ${s?.newsCount ?? 0} articles
+• Positive: ${s?.positiveCount ?? 0} | Negative: ${s?.negativeCount ?? 0} | Neutral: ${s?.neutralCount ?? 0}
+
+RECENT HEADLINES:
+${newsBreakdown || 'No recent news'}`
         );
     }
 
-    // Analyst Ratings
+    // ═══════════════════════════════════════════════════════════════════════════
+    // SECTION 6: WALL STREET RATINGS
+    // ═══════════════════════════════════════════════════════════════════════════
     if (focus.primary.includes('analystRatings') || focus.secondary.includes('analystRatings')) {
         const r = data.analystRatings;
+        const totalRatings = (r?.strongBuy ?? 0) + (r?.buy ?? 0) + (r?.hold ?? 0) + (r?.sell ?? 0) + (r?.strongSell ?? 0);
+
+        const upside = (r?.targetMean && price > 0)
+            ? (((r.targetMean - price) / price) * 100).toFixed(1) + '%'
+            : 'N/A';
+
         sections.push(
-            'ANALYST RATINGS:\n' +
-            `Consensus: ${(r?.consensus ?? 'hold').toUpperCase()} (${r?.numberOfAnalysts ?? 0} analysts)\n` +
-            `Price Target: ${r?.targetLow ?? 'N/A'} - ${r?.targetHigh ?? 'N/A'} (Mean: ${r?.targetMean ?? 'N/A'})\n` +
-            `Distribution: ${r?.strongBuy ?? 0} Strong Buy, ${r?.buy ?? 0} Buy, ${r?.hold ?? 0} Hold, ${r?.sell ?? 0} Sell, ${r?.strongSell ?? 0} Strong Sell`
+            `═══ WALL STREET RATINGS ═══
+
+CONSENSUS: ${(r?.consensus ?? 'hold').toUpperCase().replace('_', ' ')}
+Coverage: ${r?.numberOfAnalysts ?? 0} analysts (${totalRatings} total ratings)
+
+PRICE TARGETS:
+• Low: ${formatPrice(r?.targetLow)}
+• Mean: ${formatPrice(r?.targetMean)} (${upside} from current)
+• High: ${formatPrice(r?.targetHigh)}
+
+DISTRIBUTION:
+• Strong Buy: ${r?.strongBuy ?? 0} | Buy: ${r?.buy ?? 0}
+• Hold: ${r?.hold ?? 0}
+• Sell: ${r?.sell ?? 0} | Strong Sell: ${r?.strongSell ?? 0}`
         );
+    }
+
+    // Data quality notes
+    const warnings = data.dataQuality?.warnings ?? [];
+    if (warnings.length > 0) {
+        sections.push(`═══ DATA NOTES ═══\n${warnings.slice(0, 3).map(w => `⚠ ${w}`).join('\n')}`);
     }
 
     return sections.join('\n\n');
@@ -182,11 +355,11 @@ function formatDataForAnalyst(
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// THESIS PARSING
+// THESIS PARSING - ENHANCED
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Parse AI response into structured thesis
+ * Parse AI response into structured thesis with validation
  */
 function parseThesisResponse(
     response: string,
@@ -202,26 +375,38 @@ function parseThesisResponse(
             jsonStr = jsonMatch[1];
         }
 
+        // Try to find JSON object if not in code block
+        if (!jsonStr.trim().startsWith('{')) {
+            const jsonStart = response.indexOf('{');
+            const jsonEnd = response.lastIndexOf('}');
+            if (jsonStart !== -1 && jsonEnd !== -1) {
+                jsonStr = response.slice(jsonStart, jsonEnd + 1);
+            }
+        }
+
         const parsed: ParsedThesis = JSON.parse(jsonStr.trim());
 
         // Validate and normalize recommendation
         const recMap: Record<string, InvestmentThesis['recommendation']> = {
             'STRONG_BUY': 'strong_buy',
             'STRONG BUY': 'strong_buy',
+            'STRONGBUY': 'strong_buy',
             'BUY': 'buy',
             'HOLD': 'hold',
             'SELL': 'sell',
             'STRONG_SELL': 'strong_sell',
-            'STRONG SELL': 'strong_sell'
+            'STRONG SELL': 'strong_sell',
+            'STRONGSELL': 'strong_sell'
         };
 
         const recommendation = recMap[parsed.recommendation?.toUpperCase()] || 'hold';
+
+        // Validate confidence (clamp to reasonable range)
         const confidence = Math.max(0, Math.min(100, parsed.confidence || 50));
 
         // Validate price targets with safe defaults
         const safePrice = currentPrice > 0 ? currentPrice : 100;
 
-        // Helper to validate and sanitize price values
         const sanitizePrice = (price: unknown, fallback: number): number => {
             if (typeof price === 'number' && Number.isFinite(price) && price > 0) {
                 return price;
@@ -229,12 +414,33 @@ function parseThesisResponse(
             return fallback;
         };
 
+        // Ensure price targets are logically consistent
+        let bullTarget = sanitizePrice(parsed.priceTarget?.bull, safePrice * 1.3);
+        let baseTarget = sanitizePrice(parsed.priceTarget?.base, safePrice * 1.1);
+        let bearTarget = sanitizePrice(parsed.priceTarget?.bear, safePrice * 0.8);
+
+        // Fix ordering if needed
+        if (bearTarget > baseTarget) [bearTarget, baseTarget] = [baseTarget, bearTarget];
+        if (baseTarget > bullTarget) [baseTarget, bullTarget] = [bullTarget, baseTarget];
+        if (bearTarget > baseTarget) [bearTarget, baseTarget] = [baseTarget, bearTarget];
+
         const priceTarget: PriceTarget = {
-            bull: sanitizePrice(parsed.priceTarget?.bull, safePrice * 1.3),
-            base: sanitizePrice(parsed.priceTarget?.base, safePrice * 1.1),
-            bear: sanitizePrice(parsed.priceTarget?.bear, safePrice * 0.8),
+            bull: bullTarget,
+            base: baseTarget,
+            bear: bearTarget,
             timeframe: '1Y'
         };
+
+        // Validate arrays
+        const bullCase = Array.isArray(parsed.bullCase)
+            ? parsed.bullCase.filter(Boolean).slice(0, 5)
+            : [];
+        const bearCase = Array.isArray(parsed.bearCase)
+            ? parsed.bearCase.filter(Boolean).slice(0, 5)
+            : [];
+        const catalysts = Array.isArray(parsed.catalysts)
+            ? parsed.catalysts.filter(Boolean).slice(0, 3)
+            : [];
 
         return {
             agentId,
@@ -242,11 +448,11 @@ function parseThesisResponse(
             recommendation,
             confidence,
             priceTarget,
-            bullCase: Array.isArray(parsed.bullCase) ? parsed.bullCase.filter(Boolean) : [],
-            bearCase: Array.isArray(parsed.bearCase) ? parsed.bearCase.filter(Boolean) : [],
+            bullCase,
+            bearCase,
             keyMetrics: parsed.keyMetrics || {},
-            catalysts: Array.isArray(parsed.catalysts) ? parsed.catalysts.filter(Boolean) : [],
-            risks: Array.isArray(parsed.bearCase) ? parsed.bearCase.filter(Boolean) : [],
+            catalysts,
+            risks: bearCase, // Use bear case as risks
             summary: parsed.summary || '',
             detailedAnalysis: response
         };
@@ -284,7 +490,7 @@ async function generateSingleThesis(
             config: {
                 systemInstruction: systemPrompt,
                 temperature: 0.7,
-                maxOutputTokens: 2000
+                maxOutputTokens: 2500
             }
         });
 
@@ -432,7 +638,6 @@ export function calculateConsensus(theses: InvestmentThesis[]): {
 
     const { bulls, bears, neutral } = categorizeByRecommendation(theses);
 
-    // Safe division (theses.length is guaranteed > 0 here)
     const avgConfidence = theses.reduce((sum, t) => sum + (t.confidence ?? 0), 0) / theses.length;
     const avgPriceTarget = theses.reduce((sum, t) => sum + (t.priceTarget?.base ?? 0), 0) / theses.length;
 

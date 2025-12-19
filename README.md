@@ -36,12 +36,31 @@ Hypothesis Arena is an AI-powered stock analysis platform where 8 specialized an
 
 ## ✨ Features
 
-- **Real Market Data** - Live quotes, fundamentals, and technicals from Yahoo Finance (no API key needed)
-- **Technical Indicators** - RSI, MACD, Bollinger Bands, SMA/EMA, support/resistance levels
-- **News Sentiment** - Aggregated news with sentiment scoring
+### Core Analysis
+
+- **Real Market Data** - Live quotes, fundamentals, and technicals via Financial Modeling Prep (FMP) with Yahoo Finance fallback
+- **Technical Indicators** - RSI, MACD, Bollinger Bands, SMA/EMA, Stochastic, support/resistance levels
+- **News Sentiment** - Aggregated news with AI-powered sentiment scoring
 - **8 AI Perspectives** - Each analyst generates a unique thesis with price targets
 - **Bull vs Bear Debates** - Multi-turn debates with data references and scoring
 - **Consensus Recommendation** - Weighted by debate performance and confidence
+
+### Visualization
+
+- **📊 Price Charts** - Interactive candlestick and line charts with 1M/3M/6M/1Y time ranges
+- **📉 Technicals Card** - Visual gauges for RSI, MACD, Stochastic, Bollinger Bands, and trend analysis
+- **📰 News Card** - Recent headlines with sentiment indicators and distribution bar
+
+### Portfolio Tools
+
+- **💾 Save Analyses** - Store up to 50 analyses in localStorage with full data
+- **⭐ Watchlist** - Track up to 100 stocks with custom notes
+- **⚖️ Compare Stocks** - Side-by-side comparison of up to 4 saved analyses
+- **🎯 Accuracy Tracker** - Track historical prediction accuracy over time
+- **📥 Export JSON** - Download full analysis data for external use
+
+### Output
+
 - **Price Targets** - Bull/Base/Bear scenarios with confidence intervals
 - **Risk Assessment** - Portfolio allocation suggestions based on risk level
 - **Dissenting Views** - Minority opinions are preserved and highlighted
@@ -60,6 +79,14 @@ npm run dev
 ```
 
 Open `http://localhost:5173` and enter your API key when prompted.
+
+### Optional: FMP API Key
+
+For better rate limits and reliability, get a free [Financial Modeling Prep API key](https://financialmodelingprep.com/developer/docs/) and add it to your environment:
+
+```bash
+VITE_FMP_API_KEY=your_fmp_api_key
+```
 
 ---
 
@@ -95,27 +122,42 @@ Open `http://localhost:5173` and enter your API key when prompted.
 ```
 src/
 ├── services/
-│   ├── data/                   # Market data services
-│   │   ├── yahooFinance.ts     # Yahoo Finance API
-│   │   ├── newsService.ts      # News & sentiment
-│   │   ├── technicalAnalysis.ts # RSI, MACD, etc.
-│   │   └── stockDataAggregator.ts
-│   └── stock/                  # Analysis services
-│       ├── analystService.ts   # AI thesis generation
-│       ├── stockTournamentService.ts # Debate tournament
-│       └── recommendationService.ts  # Final synthesis
+│   ├── data/                      # Market data services
+│   │   ├── yahooFinance.ts        # FMP + Yahoo Finance APIs
+│   │   ├── newsService.ts         # News & sentiment
+│   │   ├── technicalAnalysis.ts   # RSI, MACD, etc.
+│   │   └── stockDataAggregator.ts # Data orchestration
+│   ├── stock/                     # Analysis services
+│   │   ├── analystService.ts      # AI thesis generation
+│   │   ├── stockTournamentService.ts # Debate tournament
+│   │   └── recommendationService.ts  # Final synthesis
+│   ├── utils/                     # Utilities
+│   │   └── logger.ts              # Logging utility
+│   └── storageService.ts          # localStorage operations
 ├── components/
-│   └── stock/                  # UI components
-│       ├── StockArena.tsx      # Main orchestration
-│       ├── TickerInput.tsx     # Stock search
-│       ├── StockHeader.tsx     # Price display
-│       ├── AnalystCard.tsx     # Analyst thesis
-│       ├── DebateView.tsx      # Debate visualization
-│       └── RecommendationCard.tsx # Final verdict
+│   ├── common/                    # Shared components
+│   │   └── ErrorBoundary.tsx      # Error handling
+│   ├── layout/                    # Layout & orchestration
+│   │   ├── StockArena.tsx         # Main orchestration
+│   │   ├── StockHeader.tsx        # Price display
+│   │   ├── TickerInput.tsx        # Stock search
+│   │   └── CompareStocks.tsx      # Side-by-side comparison
+│   ├── analysis/                  # Analysis components
+│   │   ├── AnalystCard.tsx        # Analyst thesis
+│   │   ├── DebateView.tsx         # Debate visualization
+│   │   └── RecommendationCard.tsx # Final verdict
+│   ├── charts/                    # Data visualization
+│   │   ├── PriceChart.tsx         # Candlestick/line charts
+│   │   ├── TechnicalsCard.tsx     # Technical indicators
+│   │   └── NewsCard.tsx           # News & sentiment
+│   └── sidebar/                   # Sidebar widgets
+│       ├── Watchlist.tsx          # Stock watchlist
+│       ├── SavedAnalyses.tsx      # Saved analyses list
+│       └── AccuracyTracker.tsx    # Prediction tracking
 ├── constants/
-│   └── analystPrompts.ts       # 8 analyst personalities
+│   └── analystPrompts.ts          # 8 analyst personalities
 └── types/
-    └── stock.ts                # Type definitions
+    └── stock.ts                   # Type definitions
 ```
 
 ---
@@ -148,12 +190,15 @@ The final recommendation includes:
 
 ---
 
-## 🔒 Security
+## 🔒 Security & Quality
 
 - API key stored in memory only (cleared on refresh)
 - All API calls are client-side (no backend)
-- Market data from public Yahoo Finance endpoints
+- Market data from public FMP/Yahoo Finance endpoints
 - No personal data collected
+- Bounded caches with LRU eviction (prevents memory leaks)
+- Division-by-zero guards throughout
+- Comprehensive error handling with retry logic
 
 ---
 
@@ -165,7 +210,7 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 <div align="center">
   
-  **Built with React, TypeScript, Gemini 2.0, and Yahoo Finance**
+  **Built with React, TypeScript, Gemini 2.0, and Financial Modeling Prep**
   
   ⭐ Star if you find this useful
   
