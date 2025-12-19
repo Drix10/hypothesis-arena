@@ -69,20 +69,28 @@ export const StockHeader: React.FC<StockHeaderProps> = ({ quote, profile }) => {
           >
             {profile.name}
           </motion.p>
-          <motion.div
-            className="flex items-center gap-2 text-xs text-slate-500"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.2 }}
-          >
-            <span className="px-1.5 py-0.5 bg-white/[0.03] rounded">
-              {profile.sector}
-            </span>
-            <span className="w-1 h-1 bg-slate-700 rounded-full" />
-            <span className="px-1.5 py-0.5 bg-white/[0.03] rounded">
-              {profile.industry}
-            </span>
-          </motion.div>
+          {(profile.sector || profile.industry) && (
+            <motion.div
+              className="flex items-center gap-2 text-xs text-slate-500"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.2 }}
+            >
+              {profile.sector && (
+                <span className="px-1.5 py-0.5 bg-white/[0.03] rounded">
+                  {profile.sector}
+                </span>
+              )}
+              {profile.sector && profile.industry && (
+                <span className="w-1 h-1 bg-slate-700 rounded-full" />
+              )}
+              {profile.industry && (
+                <span className="px-1.5 py-0.5 bg-white/[0.03] rounded">
+                  {profile.industry}
+                </span>
+              )}
+            </motion.div>
+          )}
         </div>
 
         <motion.div

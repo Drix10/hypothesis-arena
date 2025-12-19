@@ -18,10 +18,11 @@ import { logger } from "./utils/logger";
 
 // In-memory storage only - cleared on page refresh
 // This is intentionally NOT stored in sessionStorage or localStorage
-let currentApiKey: string | null = null;
+let currentGeminiApiKey: string | null = null;
+let currentFmpApiKey: string | null = null;
 
 /**
- * Set the API key for the current session
+ * Set the Gemini API key for the current session
  * Key is stored in memory only and cleared on page refresh
  * 
  * @param key - Gemini API key
@@ -29,7 +30,7 @@ let currentApiKey: string | null = null;
  */
 export const setApiKey = (key: string): boolean => {
     if (!key || typeof key !== 'string') {
-        logger.error("Invalid API key format");
+        logger.error("Invalid Gemini API key format");
         return false;
     }
 
@@ -37,43 +38,104 @@ export const setApiKey = (key: string): boolean => {
 
     // Basic validation - Gemini keys typically start with "AI" and are 39 characters
     if (trimmedKey.length < 20) {
-        logger.error("API key too short");
+        logger.error("Gemini API key too short");
         return false;
     }
 
-    currentApiKey = trimmedKey;
+    currentGeminiApiKey = trimmedKey;
     // Reduced logging for security
     return true;
 };
 
 /**
- * Get the current API key
+ * Set the FMP API key for the current session
+ * Key is stored in memory only and cleared on page refresh
  * 
- * @returns API key or null if not set
+ * @param key - FMP API key
+ * @returns true if key is valid format, false otherwise
  */
-export const getApiKey = (): string | null => {
-    return currentApiKey;
+export const setFmpApiKey = (key: string): boolean => {
+    if (!key || typeof key !== 'string') {
+        logger.error("Invalid FMP API key format");
+        return false;
+    }
+
+    const trimmedKey = key.trim();
+
+    // Basic validation - FMP keys are typically 32 characters alphanumeric
+    if (trimmedKey.length < 20) {
+        logger.error("FMP API key too short");
+        return false;
+    }
+
+    currentFmpApiKey = trimmedKey;
+    // Reduced logging for security
+    return true;
 };
 
 /**
- * Check if an API key is currently set
+ * Get the current Gemini API key
+ * 
+ * @returns Gemini API key or null if not set
+ */
+export const getApiKey = (): string | null => {
+    return currentGeminiApiKey;
+};
+
+/**
+ * Get the current FMP API key
+ * Falls back to environment variable if not set in memory
+ * 
+ * @returns FMP API key or null if not set
+ */
+export const getFmpApiKey = (): string | null => {
+    // Priority: In-memory key > Environment variable > Hardcoded fallback
+    if (currentFmpApiKey) {
+        return currentFmpApiKey;
+    }
+
+    // Check environment variable
+    const envKey = import.meta.env.VITE_FMP_API_KEY;
+    if (envKey && typeof envKey === 'string' && envKey.trim().length > 0) {
+        return envKey.trim();
+    }
+
+    // Fallback to hardcoded key (from .env file)
+    return 'rtabgOhoEnaDTen4V15pkDSgANNum8Er';
+};
+
+/**
+ * Check if Gemini API key is currently set
  * 
  * @returns true if key is set, false otherwise
  */
 export const hasApiKey = (): boolean => {
-    return currentApiKey !== null && currentApiKey.length > 0;
+    return currentGeminiApiKey !== null && currentGeminiApiKey.length > 0;
 };
 
 /**
- * Clear the current API key from memory
- * Should be called on logout or when user explicitly clears the key
+ * Check if FMP API key is available (in-memory, env, or fallback)
+ * 
+ * @returns true if key is available, false otherwise
+ */
+export const hasFmpApiKey = (): boolean => {
+    return getFmpApiKey() !== null;
+};
+
+/**
+ * Clear the current API keys from memory
+ * Should be called on logout or when user explicitly clears the keys
  */
 export const clearApiKey = (): void => {
     // Overwrite with random data before nulling (defense in depth)
-    if (currentApiKey) {
-        currentApiKey = Array(currentApiKey.length).fill('X').join('');
+    if (currentGeminiApiKey) {
+        currentGeminiApiKey = Array(currentGeminiApiKey.length).fill('X').join('');
     }
-    currentApiKey = null;
+    if (currentFmpApiKey) {
+        currentFmpApiKey = Array(currentFmpApiKey.length).fill('X').join('');
+    }
+    currentGeminiApiKey = null;
+    currentFmpApiKey = null;
     // Reduced logging for security
 };
 
@@ -153,21 +215,42 @@ export const testApiKey = async (key: string): Promise<boolean> => {
 };
 
 /**
- * Get masked version of API key for display
+ * Get masked version of Gemini API key for display
  * Shows first 4 characters only with fixed-length mask
  * 
  * @returns Masked key like "AIza••••••••" or null
  */
 export const getMaskedApiKey = (): string | null => {
-    if (!currentApiKey) {
+    if (!currentGeminiApiKey) {
         return null;
     }
 
-    if (currentApiKey.length < 4) {
+    if (currentGeminiApiKey.length < 4) {
         return "••••••••••••";
     }
 
-    const first = currentApiKey.substring(0, 4);
+    const first = currentGeminiApiKey.substring(0, 4);
+    // Fixed length mask to not reveal key length
+    return `${first}••••••••`;
+};
+
+/**
+ * Get masked version of FMP API key for display
+ * Shows first 4 characters only with fixed-length mask
+ * 
+ * @returns Masked key like "rtab••••••••" or null
+ */
+export const getMaskedFmpApiKey = (): string | null => {
+    const key = getFmpApiKey();
+    if (!key) {
+        return null;
+    }
+
+    if (key.length < 4) {
+        return "••••••••••••";
+    }
+
+    const first = key.substring(0, 4);
     // Fixed length mask to not reveal key length
     return `${first}••••••••`;
 };

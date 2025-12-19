@@ -47,7 +47,6 @@ export interface HistoricalData {
 export interface Fundamentals {
     // Valuation Metrics
     peRatio: number | null;           // Price to Earnings
-    forwardPE: number | null;         // Forward P/E
     pegRatio: number | null;          // PEG Ratio
     priceToBook: number | null;       // Price to Book
     priceToSales: number | null;      // Price to Sales
@@ -65,20 +64,15 @@ export interface Fundamentals {
     // Growth
     revenueGrowth: number | null;     // YoY Revenue Growth
     earningsGrowth: number | null;    // YoY Earnings Growth
-    quarterlyRevenueGrowth: number | null;
-    quarterlyEarningsGrowth: number | null;
 
     // Financial Health
     currentRatio: number | null;      // Current Assets / Current Liabilities
     quickRatio: number | null;        // Quick Ratio
     debtToEquity: number | null;      // Debt to Equity
-    totalDebt: number | null;
-    totalCash: number | null;
     freeCashFlow: number | null;
 
     // Per Share Data
     eps: number | null;               // Earnings Per Share (TTM)
-    epsForward: number | null;        // Forward EPS
     bookValue: number | null;         // Book Value Per Share
     revenuePerShare: number | null;
 
@@ -86,13 +80,10 @@ export interface Fundamentals {
     dividendYield: number | null;
     dividendRate: number | null;
     payoutRatio: number | null;
-    exDividendDate: string | null;
 
     // Shares
     sharesOutstanding: number | null;
     floatShares: number | null;
-    shortRatio: number | null;
-    shortPercentOfFloat: number | null;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

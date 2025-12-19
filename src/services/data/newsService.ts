@@ -67,9 +67,18 @@ function getCached<T>(key: string): T | null {
 }
 
 function setCache(key: string, data: unknown): void {
-    // Evict oldest entries if cache is full
+    // LRU eviction: find and remove the oldest entry by timestamp
     if (cache.size >= MAX_CACHE_SIZE) {
-        const oldestKey = cache.keys().next().value;
+        let oldestKey: string | null = null;
+        let oldestTime = Infinity;
+
+        for (const [k, v] of cache.entries()) {
+            if (v.timestamp < oldestTime) {
+                oldestTime = v.timestamp;
+                oldestKey = k;
+            }
+        }
+
         if (oldestKey) cache.delete(oldestKey);
     }
     cache.set(key, { data, timestamp: Date.now() });
@@ -130,10 +139,12 @@ export function calculateTextSentiment(text: string): number {
     }
 
     const total = positiveScore + negativeScore;
-    if (total === 0) return 0;
+    // Guard against division by zero and very small denominators
+    if (total < 0.001) return 0;
 
-    // Normalize to [-1, 1] range
-    return (positiveScore - negativeScore) / total;
+    // Normalize to [-1, 1] range with safe division
+    const normalized = (positiveScore - negativeScore) / total;
+    return Number.isFinite(normalized) ? normalized : 0;
 }
 
 /**
@@ -170,9 +181,10 @@ const CORS_PROXIES = [
 
 async function fetchWithProxy(url: string, timeout = 8000): Promise<Response | null> {
     for (const proxyFn of CORS_PROXIES) {
+        let timeoutId: ReturnType<typeof setTimeout> | null = null;
         try {
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), timeout);
+            timeoutId = setTimeout(() => controller.abort(), timeout);
 
             const proxyUrl = proxyFn(url);
             const response = await fetch(proxyUrl, { signal: controller.signal });
@@ -181,6 +193,9 @@ async function fetchWithProxy(url: string, timeout = 8000): Promise<Response | n
             if (response.ok) return response;
         } catch {
             // Continue to next proxy
+        } finally {
+            // Ensure timeout is always cleared
+            if (timeoutId) clearTimeout(timeoutId);
         }
     }
     return null;

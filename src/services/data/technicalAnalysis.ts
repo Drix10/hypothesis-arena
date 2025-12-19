@@ -39,20 +39,25 @@ export function calculateEMA(data: number[], period: number): number {
 
 /**
  * Calculate EMA series (for MACD)
+ * FIXED: Added max length check to prevent stack overflow on huge datasets
  */
 function calculateEMASeries(data: number[], period: number): number[] {
     if (data.length === 0) return [];
+
+    // Prevent stack overflow on extremely large datasets (>100k points)
+    const MAX_SAFE_LENGTH = 100000;
+    const safeData = data.length > MAX_SAFE_LENGTH ? data.slice(-MAX_SAFE_LENGTH) : data;
 
     const result: number[] = [];
     const multiplier = 2 / (period + 1);
 
     // Start with SMA for first value
-    let ema = data.slice(0, Math.min(period, data.length))
-        .reduce((sum, val) => sum + val, 0) / Math.min(period, data.length);
+    let ema = safeData.slice(0, Math.min(period, safeData.length))
+        .reduce((sum, val) => sum + val, 0) / Math.min(period, safeData.length);
     result.push(ema);
 
-    for (let i = 1; i < data.length; i++) {
-        ema = (data[i] - ema) * multiplier + ema;
+    for (let i = 1; i < safeData.length; i++) {
+        ema = (safeData[i] - ema) * multiplier + ema;
         result.push(ema);
     }
 

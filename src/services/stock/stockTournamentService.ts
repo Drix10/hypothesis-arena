@@ -87,35 +87,63 @@ export function createSemifinalPairings(
     const winners = validDebates.map(d => d.winner === 'bull' ? d.bullThesis : d.bearThesis);
     const pairings: MatchPairing[] = [];
 
-    // Pair winners: 1v4, 2v3 style
-    if (winners.length >= 2) {
-        const bulls = winners.filter(t =>
-            t.recommendation === 'strong_buy' || t.recommendation === 'buy'
-        );
-        const bears = winners.filter(t =>
-            t.recommendation === 'strong_sell' || t.recommendation === 'sell'
-        );
-        const holds = winners.filter(t => t.recommendation === 'hold');
+    if (winners.length < 2) return pairings;
 
-        // Distribute holds safely
-        while (holds.length > 0) {
-            const hold = holds.pop();
-            if (hold) {
-                if (bulls.length <= bears.length) bulls.push(hold);
-                else bears.push(hold);
-            }
+    // Categorize winners by recommendation
+    const bulls = winners.filter(t =>
+        t.recommendation === 'strong_buy' || t.recommendation === 'buy'
+    );
+    const bears = winners.filter(t =>
+        t.recommendation === 'strong_sell' || t.recommendation === 'sell'
+    );
+    const holds = winners.filter(t => t.recommendation === 'hold');
+
+    // Distribute holds to balance sides
+    while (holds.length > 0) {
+        const hold = holds.pop();
+        if (hold) {
+            if (bulls.length <= bears.length) bulls.push(hold);
+            else bears.push(hold);
         }
+    }
 
-        const numMatches = Math.min(2, Math.min(bulls.length, bears.length));
-        for (let i = 0; i < numMatches; i++) {
-            // Extra safety check for array bounds
-            if (bulls[i] && bears[i]) {
-                pairings.push({
-                    bull: bulls[i],
-                    bear: bears[i],
-                    round: 'semifinal'
-                });
-            }
+    // If we still don't have enough on each side, pair by confidence instead
+    // This handles cases where most/all winners are HOLDs
+    if (bulls.length === 0 || bears.length === 0) {
+        // Sort all winners by confidence and pair 1v4, 2v3 style
+        const sorted = [...winners].sort((a, b) => b.confidence - a.confidence);
+
+        // Create 2 semifinal matches: highest vs lowest confidence pairs
+        if (sorted.length >= 4) {
+            pairings.push({
+                bull: sorted[0], // Highest confidence as "bull"
+                bear: sorted[3], // Lowest confidence as "bear"
+                round: 'semifinal'
+            });
+            pairings.push({
+                bull: sorted[1],
+                bear: sorted[2],
+                round: 'semifinal'
+            });
+        } else if (sorted.length >= 2) {
+            pairings.push({
+                bull: sorted[0],
+                bear: sorted[sorted.length - 1],
+                round: 'semifinal'
+            });
+        }
+        return pairings;
+    }
+
+    // Normal case: pair bulls vs bears
+    const numMatches = Math.min(2, Math.min(bulls.length, bears.length));
+    for (let i = 0; i < numMatches; i++) {
+        if (bulls[i] && bears[i]) {
+            pairings.push({
+                bull: bulls[i],
+                bear: bears[i],
+                round: 'semifinal'
+            });
         }
     }
 
@@ -130,15 +158,41 @@ export function createFinalPairing(
 ): MatchPairing | null {
     // Filter out debates without a winner
     const validDebates = semiResults.filter(d => d.winner !== null);
-    if (validDebates.length < 2) return null;
+
+    if (validDebates.length === 0) return null;
 
     const winners = validDebates.map(d => d.winner === 'bull' ? d.bullThesis : d.bearThesis);
 
-    // Safety check
-    if (winners.length < 2 || !winners[0] || !winners[1]) return null;
+    // If only 1 semifinal, get both participants from that debate for the final
+    if (validDebates.length === 1 && winners.length === 1) {
+        const debate = validDebates[0];
+        const winner = winners[0];
+
+        // Validate debate and winner exist
+        if (!debate || !winner || !debate.winner) return null;
+
+        const loser = debate.winner === 'bull' ? debate.bearThesis : debate.bullThesis;
+
+        const winnerScore = getRecommendationScore(winner.recommendation);
+        const loserScore = getRecommendationScore(loser.recommendation);
+
+        return {
+            bull: winnerScore >= loserScore ? winner : loser,
+            bear: winnerScore >= loserScore ? loser : winner,
+            round: 'final'
+        };
+    }
+
+    // Normal case: 2 semifinal winners - safe array access
+    if (winners.length < 2) return null;
+
+    const first = winners[0];
+    const second = winners[1];
+
+    // Validate both winners exist
+    if (!first || !second) return null;
 
     // Determine which is more bullish
-    const [first, second] = winners;
     const firstScore = getRecommendationScore(first.recommendation);
     const secondScore = getRecommendationScore(second.recommendation);
 
@@ -314,10 +368,13 @@ ${dataContext}
     } catch (error) {
         logger.error(`Failed to generate debate turn for ${analyst.name}:`, error);
 
-        // Enhanced fallback with thesis content
+        // Enhanced fallback with thesis content - safe array access
+        const bullArg = (thesis.bullCase && thesis.bullCase.length > 0) ? thesis.bullCase[0] : 'The fundamentals support upside potential.';
+        const bearArg = (thesis.bearCase && thesis.bearCase.length > 0) ? thesis.bearCase[0] : 'Risk factors warrant caution.';
+
         const fallbackContent = position === 'bull'
-            ? `Based on my ${analyst.methodology} analysis, I maintain my bullish stance. ${thesis.bullCase[0] || 'The fundamentals support upside potential.'}`
-            : `My ${analyst.methodology} framework highlights concerns. ${thesis.bearCase[0] || 'Risk factors warrant caution.'}`;
+            ? `Based on my ${analyst.methodology} analysis, I maintain my bullish stance. ${bullArg}`
+            : `My ${analyst.methodology} framework highlights concerns. ${bearArg}`;
 
         return {
             speakerId: analyst.id,
@@ -802,7 +859,10 @@ export async function runTournament(
             Math.max(d.scores.bullScore, d.scores.bearScore) >
                 Math.max(best.scores.bullScore, best.scores.bearScore) ? d : best
         );
-        result.champion = bestDebate.winner === 'bull' ? bestDebate.bullThesis : bestDebate.bearThesis;
+        // Safe access with null check
+        if (bestDebate && bestDebate.winner) {
+            result.champion = bestDebate.winner === 'bull' ? bestDebate.bullThesis : bestDebate.bearThesis;
+        }
     }
 
     logger.info(`Tournament complete. Champion: ${result.champion?.agentId || 'None'}`);

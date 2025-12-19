@@ -38,7 +38,7 @@ Hypothesis Arena is an AI-powered stock analysis platform where 8 specialized an
 
 ### Core Analysis
 
-- **Real Market Data** - Live quotes, fundamentals, and technicals via Financial Modeling Prep (FMP) with Yahoo Finance fallback
+- **Real Market Data** - Live quotes, fundamentals, and technicals via FMP with Yahoo Finance fallback
 - **Technical Indicators** - RSI, MACD, Bollinger Bands, SMA/EMA, Stochastic, support/resistance levels
 - **News Sentiment** - Aggregated news with AI-powered sentiment scoring
 - **8 AI Perspectives** - Each analyst generates a unique thesis with price targets
@@ -69,7 +69,7 @@ Hypothesis Arena is an AI-powered stock analysis platform where 8 specialized an
 
 ## 🚀 Quick Start
 
-**Prerequisites:** Node.js 18+ and a Gemini API key ([get one free](https://aistudio.google.com/apikey))
+**Prerequisites:** Node.js 18+
 
 ```bash
 git clone https://github.com/drix10/hypothesis-arena.git
@@ -78,15 +78,37 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173` and enter your API key when prompted.
+Open `http://localhost:5173` and you'll see the entry page.
 
-### Optional: FMP API Key
+### API Keys Setup
 
-For better rate limits and reliability, get a free [Financial Modeling Prep API key](https://financialmodelingprep.com/developer/docs/) and add it to your environment:
+You can provide API keys in **two ways**:
 
-```bash
-VITE_FMP_API_KEY=your_fmp_api_key
-```
+#### Option 1: Web UI (Recommended for Users)
+
+1. Open the app
+2. Enter your **Gemini API key** (required) - [Get free key](https://aistudio.google.com/apikey)
+3. Optionally enter your **FMP API key** - [Get free key](https://financialmodelingprep.com/developer/docs/)
+4. Click "Enter the Arena"
+
+Keys are stored in memory only and cleared on page refresh (secure).
+
+#### Option 2: Environment Variables (Recommended for Developers)
+
+1. Create a `.env` file in the project root:
+
+   ```env
+   # Gemini API Key (Required)
+   VITE_GEMINI_API_KEY=your_gemini_key_here
+
+   # FMP API Key (Optional - has fallback)
+   VITE_FMP_API_KEY=your_fmp_key_here
+   ```
+
+2. Restart dev server: `npm run dev`
+3. Keys auto-loaded, no need to enter via UI
+
+**Note:** FMP key is optional - the app includes a fallback key for testing. For production use, get your own free key (250 requests/day).
 
 ---
 
@@ -114,51 +136,6 @@ VITE_FMP_API_KEY=your_fmp_api_key
    - Debate performance
    - Analyst confidence
    - Argument strength
-
----
-
-## 🏗️ Architecture
-
-```
-src/
-├── services/
-│   ├── data/                      # Market data services
-│   │   ├── yahooFinance.ts        # FMP + Yahoo Finance APIs
-│   │   ├── newsService.ts         # News & sentiment
-│   │   ├── technicalAnalysis.ts   # RSI, MACD, etc.
-│   │   └── stockDataAggregator.ts # Data orchestration
-│   ├── stock/                     # Analysis services
-│   │   ├── analystService.ts      # AI thesis generation
-│   │   ├── stockTournamentService.ts # Debate tournament
-│   │   └── recommendationService.ts  # Final synthesis
-│   ├── utils/                     # Utilities
-│   │   └── logger.ts              # Logging utility
-│   └── storageService.ts          # localStorage operations
-├── components/
-│   ├── common/                    # Shared components
-│   │   └── ErrorBoundary.tsx      # Error handling
-│   ├── layout/                    # Layout & orchestration
-│   │   ├── StockArena.tsx         # Main orchestration
-│   │   ├── StockHeader.tsx        # Price display
-│   │   ├── TickerInput.tsx        # Stock search
-│   │   └── CompareStocks.tsx      # Side-by-side comparison
-│   ├── analysis/                  # Analysis components
-│   │   ├── AnalystCard.tsx        # Analyst thesis
-│   │   ├── DebateView.tsx         # Debate visualization
-│   │   └── RecommendationCard.tsx # Final verdict
-│   ├── charts/                    # Data visualization
-│   │   ├── PriceChart.tsx         # Candlestick/line charts
-│   │   ├── TechnicalsCard.tsx     # Technical indicators
-│   │   └── NewsCard.tsx           # News & sentiment
-│   └── sidebar/                   # Sidebar widgets
-│       ├── Watchlist.tsx          # Stock watchlist
-│       ├── SavedAnalyses.tsx      # Saved analyses list
-│       └── AccuracyTracker.tsx    # Prediction tracking
-├── constants/
-│   └── analystPrompts.ts          # 8 analyst personalities
-└── types/
-    └── stock.ts                   # Type definitions
-```
 
 ---
 

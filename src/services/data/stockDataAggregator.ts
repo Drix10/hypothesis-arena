@@ -92,8 +92,8 @@ function getDefaultProfile(ticker: string): CompanyProfile {
         ticker: ticker.toUpperCase(),
         name: ticker.toUpperCase(),
         description: '',
-        sector: 'Unknown',
-        industry: 'Unknown',
+        sector: '',
+        industry: '',
         website: '',
         employees: null,
         headquarters: '',
@@ -101,7 +101,7 @@ function getDefaultProfile(ticker: string): CompanyProfile {
         ceo: null,
         exchange: '',
         currency: 'USD',
-        country: 'Unknown'
+        country: ''
     };
 }
 
@@ -110,17 +110,16 @@ function getDefaultProfile(ticker: string): CompanyProfile {
  */
 function getDefaultFundamentals(): Fundamentals {
     return {
-        peRatio: null, forwardPE: null, pegRatio: null, priceToBook: null,
+        peRatio: null, pegRatio: null, priceToBook: null,
         priceToSales: null, enterpriseValue: null, evToRevenue: null, evToEbitda: null,
         profitMargin: null, operatingMargin: null, grossMargin: null,
         returnOnEquity: null, returnOnAssets: null,
         revenueGrowth: null, earningsGrowth: null,
-        quarterlyRevenueGrowth: null, quarterlyEarningsGrowth: null,
         currentRatio: null, quickRatio: null, debtToEquity: null,
-        totalDebt: null, totalCash: null, freeCashFlow: null,
-        eps: null, epsForward: null, bookValue: null, revenuePerShare: null,
-        dividendYield: null, dividendRate: null, payoutRatio: null, exDividendDate: null,
-        sharesOutstanding: null, floatShares: null, shortRatio: null, shortPercentOfFloat: null
+        freeCashFlow: null,
+        eps: null, bookValue: null, revenuePerShare: null,
+        dividendYield: null, dividendRate: null, payoutRatio: null,
+        sharesOutstanding: null, floatShares: null
     };
 }
 
@@ -208,10 +207,11 @@ export async function fetchAllStockData(
         }
     };
 
-    // Validate ticker first
+    // Validate ticker first (but don't fail if APIs are down)
     const isValid = await validateTicker(normalizedTicker);
     if (!isValid) {
-        throw new Error(`Invalid ticker symbol: ${normalizedTicker}`);
+        logger.warn(`Could not validate ticker ${normalizedTicker} - APIs may be unavailable`);
+        // Don't throw - let the parallel fetch attempt and provide better error context
     }
 
     // Fetch all data in parallel for performance
@@ -241,8 +241,18 @@ export async function fetchAllStockData(
     const hasNews = sentimentResult.data !== null && (sentimentResult.data.newsCount > 0);
     const hasAnalystRatings = ratingsResult.data !== null && (ratingsResult.data.numberOfAnalysts > 0);
 
+    // Critical: Quote data is required for analysis
+    if (!hasQuote) {
+        const errorMsg = quoteResult.error || 'Unknown error';
+        throw new Error(
+            `Unable to fetch quote data for ${normalizedTicker}. ` +
+            `This may be due to: (1) Invalid ticker symbol, (2) API rate limits, ` +
+            `(3) Network issues, or (4) FMP demo key limitations. ` +
+            `Error: ${errorMsg}`
+        );
+    }
+
     // Add warnings for missing data (with bounds check)
-    if (quoteResult.error) addWarning(`Quote: ${quoteResult.error}`);
     if (profileResult.error) addWarning(`Profile: ${profileResult.error}`);
     if (fundamentalsResult.error) addWarning(`Fundamentals: ${fundamentalsResult.error}`);
     if (historicalResult.error) addWarning(`Historical: ${historicalResult.error}`);

@@ -165,13 +165,16 @@ Day Range: ${formatPrice(data.quote?.dayLow)} - ${formatPrice(data.quote?.dayHig
     if (focus.primary.includes('profile') || focus.secondary.includes('profile')) {
         const desc = data.profile?.description || '';
         const truncatedDesc = desc.length > 400 ? desc.slice(0, 400) + '...' : desc;
+        const sector = data.profile?.sector || '(Not available)';
+        const industry = data.profile?.industry || '(Not available)';
+        const exchange = data.profile?.exchange || '(Not available)';
 
         sections.push(
             `═══ COMPANY PROFILE ═══
-Name: ${data.profile?.name ?? 'Unknown'}
-Sector: ${data.profile?.sector ?? 'Unknown'} | Industry: ${data.profile?.industry ?? 'Unknown'}
+Name: ${data.profile?.name ?? data.profile?.ticker ?? 'Unknown'}
+Sector: ${sector} | Industry: ${industry}
 Employees: ${data.profile?.employees?.toLocaleString() ?? 'N/A'}
-Exchange: ${data.profile?.exchange ?? 'Unknown'}
+Exchange: ${exchange}
 
 Description: ${truncatedDesc || 'No description available'}`
         );
@@ -193,7 +196,6 @@ Description: ${truncatedDesc || 'No description available'}`
 
 VALUATION:
 • P/E (TTM): ${formatMetric(f?.peRatio)} ${peContext}
-• Forward P/E: ${formatMetric(f?.forwardPE)}
 • PEG Ratio: ${formatMetric(f?.pegRatio)} ${f?.pegRatio && f.pegRatio < 1 ? '(undervalued)' : f?.pegRatio && f.pegRatio > 2 ? '(expensive)' : ''}
 • P/B: ${formatMetric(f?.priceToBook)}
 • EV/EBITDA: ${formatMetric(f?.evToEbitda)}

@@ -20,10 +20,16 @@ import { logger } from '../utils/logger';
 // CONFIGURATION
 // ═══════════════════════════════════════════════════════════════════════════════
 
+import { getFmpApiKey } from '../apiKeyManager';
+
 // Financial Modeling Prep - Free tier (250 requests/day)
 // Get your free key at: https://site.financialmodelingprep.com/developer/docs/
-const FMP_API_KEY = 'demo';
 const FMP_BASE_URL = 'https://financialmodelingprep.com/api/v3';
+
+// Get FMP API key from: in-memory > env variable > hardcoded fallback
+const getFmpKey = (): string => {
+    return getFmpApiKey() || 'rtabgOhoEnaDTen4V15pkDSgANNum8Er';
+};
 
 // Rate limiting - minimum delay between FMP API calls
 const MIN_API_DELAY = 150; // ms
@@ -49,8 +55,18 @@ function getCached<T>(key: string): T | null {
 }
 
 function setCache(key: string, data: unknown): void {
+    // LRU eviction: find and remove the oldest entry by timestamp
     if (cache.size >= MAX_CACHE_SIZE) {
-        const oldestKey = cache.keys().next().value;
+        let oldestKey: string | null = null;
+        let oldestTime = Infinity;
+
+        for (const [k, v] of cache.entries()) {
+            if (v.timestamp < oldestTime) {
+                oldestTime = v.timestamp;
+                oldestKey = k;
+            }
+        }
+
         if (oldestKey) cache.delete(oldestKey);
     }
     cache.set(key, { data, timestamp: Date.now() });
@@ -73,18 +89,22 @@ async function fetchWithTimeout(url: string, timeout = 10000): Promise<Response>
         clearTimeout(timeoutId);
         return response;
     } catch (error) {
-        clearTimeout(timeoutId);
+        clearTimeout(timeoutId); // Cleanup happens in both paths now
         throw error;
+    } finally {
+        // Defense in depth - ensure cleanup even if return/throw happens
+        clearTimeout(timeoutId);
     }
 }
 
 /**
  * Fetch with rate limiting for FMP API calls
  * Uses a lock to prevent race conditions with concurrent calls
+ * FIXED: Proper lock cleanup to prevent race conditions
  */
 async function fetchFmpWithRateLimit(url: string, timeout = 10000): Promise<Response> {
     // Wait for any pending rate limit delay
-    if (rateLimitLock) {
+    while (rateLimitLock) {
         await rateLimitLock;
     }
 
@@ -94,9 +114,17 @@ async function fetchFmpWithRateLimit(url: string, timeout = 10000): Promise<Resp
     if (timeSinceLastCall < MIN_API_DELAY) {
         const delay = MIN_API_DELAY - timeSinceLastCall;
         // Create a lock that other calls will wait on
-        rateLimitLock = new Promise(resolve => setTimeout(resolve, delay));
-        await rateLimitLock;
-        rateLimitLock = null;
+        const currentLock = new Promise<void>(resolve => setTimeout(resolve, delay));
+        rateLimitLock = currentLock;
+
+        try {
+            await currentLock;
+        } finally {
+            // Only clear if we're still the current lock (prevent race condition)
+            if (rateLimitLock === currentLock) {
+                rateLimitLock = null;
+            }
+        }
     }
 
     lastFmpCallTime = Date.now();
@@ -107,17 +135,25 @@ async function fetchFmpWithRateLimit(url: string, timeout = 10000): Promise<Resp
 const CORS_PROXIES = [
     (url: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
     (url: string) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+    (url: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
 ];
 
 async function fetchWithProxy(url: string): Promise<Response | null> {
+    const errors: string[] = [];
+
     for (const proxyFn of CORS_PROXIES) {
         try {
             const response = await fetchWithTimeout(proxyFn(url), 8000);
             if (response.ok) return response;
-        } catch {
+            errors.push(`Proxy returned ${response.status}`);
+        } catch (error) {
+            const msg = error instanceof Error ? error.message : 'Unknown error';
+            errors.push(msg);
             continue;
         }
     }
+
+    logger.warn(`All CORS proxies failed: ${errors.join(', ')}`);
     return null;
 }
 
@@ -142,7 +178,8 @@ export async function getQuote(ticker: string): Promise<StockQuote> {
         setCache(cacheKey, quote);
         return quote;
     } catch (fmpError) {
-        logger.warn(`FMP quote failed for ${normalizedTicker}, trying Yahoo...`);
+        const fmpMsg = fmpError instanceof Error ? fmpError.message : String(fmpError);
+        logger.warn(`FMP quote failed for ${normalizedTicker}: ${fmpMsg}, trying Yahoo...`);
     }
 
     // Fallback to Yahoo
@@ -151,28 +188,54 @@ export async function getQuote(ticker: string): Promise<StockQuote> {
         setCache(cacheKey, quote);
         return quote;
     } catch (yahooError) {
-        logger.error(`All quote sources failed for ${normalizedTicker}`);
+        const errorMsg = yahooError instanceof Error ? yahooError.message : String(yahooError);
+        logger.error(`All quote sources failed for ${normalizedTicker}`, errorMsg);
         throw new Error(`Unable to fetch quote for ${normalizedTicker}`);
     }
 }
 
 async function getQuoteFMP(ticker: string): Promise<StockQuote> {
-    const url = `${FMP_BASE_URL}/quote/${ticker}?apikey=${FMP_API_KEY}`;
+    const url = `${FMP_BASE_URL}/quote/${ticker}?apikey=${getFmpKey()}`;
     const response = await fetchFmpWithRateLimit(url);
 
     if (!response.ok) {
-        throw new Error(`FMP API error: ${response.status}`);
+        const statusText = response.statusText || 'Unknown error';
+        throw new Error(`FMP API HTTP ${response.status}: ${statusText}`);
     }
 
     const data = await response.json();
 
+    // Check for API error response (FMP returns error messages in various formats)
+    if (data && typeof data === 'object') {
+        if ('Error Message' in data) {
+            throw new Error(`FMP API: ${data['Error Message']}`);
+        }
+        if ('error' in data) {
+            throw new Error(`FMP API: ${data.error}`);
+        }
+        if ('message' in data && typeof data.message === 'string') {
+            throw new Error(`FMP API: ${data.message}`);
+        }
+    }
+
     if (!Array.isArray(data) || data.length === 0) {
-        throw new Error(`No FMP data for ${ticker}`);
+        throw new Error(`No FMP data for ${ticker} (empty response)`);
     }
 
     const q = data[0];
-    const previousClose = q.previousClose || q.price;
-    const change = q.change || (q.price - previousClose);
+
+    // Validate required fields exist
+    if (!q || typeof q !== 'object') {
+        throw new Error(`Invalid FMP response for ${ticker}`);
+    }
+
+    // Guard against missing or invalid price data
+    if (!q.price || !Number.isFinite(q.price) || q.price <= 0) {
+        throw new Error(`Invalid price data for ${q.symbol || ticker}`);
+    }
+
+    const previousClose = (q.previousClose && Number.isFinite(q.previousClose)) ? q.previousClose : q.price;
+    const change = (q.change && Number.isFinite(q.change)) ? q.change : (q.price - previousClose);
     const changePercent = previousClose > 0 ? (change / previousClose) * 100 : (q.changesPercentage || 0);
 
     return {
@@ -180,27 +243,44 @@ async function getQuoteFMP(ticker: string): Promise<StockQuote> {
         name: q.name || q.symbol,
         price: q.price,
         previousClose,
-        open: q.open || q.price,
-        dayHigh: q.dayHigh || q.price,
-        dayLow: q.dayLow || q.price,
-        volume: q.volume || 0,
-        avgVolume: q.avgVolume || 0,
+        open: (q.open && Number.isFinite(q.open)) ? q.open : q.price,
+        dayHigh: (q.dayHigh && Number.isFinite(q.dayHigh)) ? q.dayHigh : q.price,
+        dayLow: (q.dayLow && Number.isFinite(q.dayLow)) ? q.dayLow : q.price,
+        volume: (q.volume && Number.isFinite(q.volume)) ? q.volume : 0,
+        avgVolume: (q.avgVolume && Number.isFinite(q.avgVolume)) ? q.avgVolume : 0,
         change,
-        changePercent,
-        marketCap: q.marketCap || 0,
+        changePercent: Number.isFinite(changePercent) ? changePercent : 0,
+        marketCap: (q.marketCap && Number.isFinite(q.marketCap)) ? q.marketCap : 0,
         timestamp: Date.now()
     };
 }
 
 async function getQuoteYahoo(ticker: string): Promise<StockQuote> {
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=1d`;
-    const response = await fetchWithProxy(url);
 
+    // Try with proxy first
+    let response = await fetchWithProxy(url);
+
+    // If proxy fails, try direct fetch (may work in some environments)
     if (!response) {
-        throw new Error('Yahoo Finance unavailable');
+        try {
+            response = await fetchWithTimeout(url, 5000);
+            if (!response.ok) {
+                throw new Error(`Yahoo API returned ${response.status}`);
+            }
+        } catch (directError) {
+            const msg = directError instanceof Error ? directError.message : 'Unknown error';
+            throw new Error(`Yahoo Finance unavailable (proxy and direct failed): ${msg}`);
+        }
     }
 
     const data = await response.json();
+
+    // Check for API error response
+    if (data && typeof data === 'object' && 'chart' in data && data.chart?.error) {
+        throw new Error(`Yahoo API error: ${data.chart.error.description}`);
+    }
+
     const result = data.chart?.result?.[0];
 
     if (!result) {
@@ -209,7 +289,23 @@ async function getQuoteYahoo(ticker: string): Promise<StockQuote> {
 
     const meta = result.meta;
     const quote = result.indicators?.quote?.[0];
-    const previousClose = meta.previousClose || meta.chartPreviousClose || meta.regularMarketPrice;
+
+    // Validate meta exists
+    if (!meta || typeof meta !== 'object') {
+        throw new Error(`Invalid Yahoo response for ${ticker}`);
+    }
+
+    // Guard against missing or invalid price data
+    if (!meta.regularMarketPrice || !Number.isFinite(meta.regularMarketPrice) || meta.regularMarketPrice <= 0) {
+        throw new Error(`Invalid price data for ${meta.symbol || ticker}`);
+    }
+
+    const previousClose = (meta.previousClose && Number.isFinite(meta.previousClose))
+        ? meta.previousClose
+        : (meta.chartPreviousClose && Number.isFinite(meta.chartPreviousClose))
+            ? meta.chartPreviousClose
+            : meta.regularMarketPrice;
+
     const change = meta.regularMarketPrice - previousClose;
     const changePercent = previousClose > 0 ? (change / previousClose) * 100 : 0;
 
@@ -218,14 +314,14 @@ async function getQuoteYahoo(ticker: string): Promise<StockQuote> {
         name: meta.shortName || meta.longName || meta.symbol,
         price: meta.regularMarketPrice,
         previousClose,
-        open: quote?.open?.[0] ?? meta.regularMarketPrice,
-        dayHigh: meta.regularMarketDayHigh || meta.regularMarketPrice,
-        dayLow: meta.regularMarketDayLow || meta.regularMarketPrice,
-        volume: meta.regularMarketVolume || 0,
-        avgVolume: meta.averageDailyVolume10Day || 0,
-        change,
-        changePercent,
-        marketCap: meta.marketCap || 0,
+        open: (quote?.open?.[0] && Number.isFinite(quote.open[0])) ? quote.open[0] : meta.regularMarketPrice,
+        dayHigh: (meta.regularMarketDayHigh && Number.isFinite(meta.regularMarketDayHigh)) ? meta.regularMarketDayHigh : meta.regularMarketPrice,
+        dayLow: (meta.regularMarketDayLow && Number.isFinite(meta.regularMarketDayLow)) ? meta.regularMarketDayLow : meta.regularMarketPrice,
+        volume: (meta.regularMarketVolume && Number.isFinite(meta.regularMarketVolume)) ? meta.regularMarketVolume : 0,
+        avgVolume: (meta.averageDailyVolume10Day && Number.isFinite(meta.averageDailyVolume10Day)) ? meta.averageDailyVolume10Day : 0,
+        change: Number.isFinite(change) ? change : 0,
+        changePercent: Number.isFinite(changePercent) ? changePercent : 0,
+        marketCap: (meta.marketCap && Number.isFinite(meta.marketCap)) ? meta.marketCap : 0,
         timestamp: Date.now()
     };
 }
@@ -286,7 +382,7 @@ async function getHistoricalFMP(ticker: string, period: Period): Promise<Histori
     const from = startDate.toISOString().split('T')[0];
     const to = endDate.toISOString().split('T')[0];
 
-    const url = `${FMP_BASE_URL}/historical-price-full/${ticker}?from=${from}&to=${to}&apikey=${FMP_API_KEY}`;
+    const url = `${FMP_BASE_URL}/historical-price-full/${ticker}?from=${from}&to=${to}&apikey=${getFmpKey()}`;
     const response = await fetchFmpWithRateLimit(url);
 
     if (!response.ok) {
@@ -303,12 +399,12 @@ async function getHistoricalFMP(ticker: string, period: Period): Promise<Histori
     // FMP returns newest first, reverse for chronological order
     const points: HistoricalDataPoint[] = historical.reverse().map((d: any) => ({
         date: d.date,
-        open: d.open ?? 0,
-        high: d.high ?? 0,
-        low: d.low ?? 0,
-        close: d.close ?? 0,
-        volume: d.volume ?? 0,
-        adjustedClose: d.adjClose ?? d.close ?? 0
+        open: (d.open && Number.isFinite(d.open)) ? d.open : 0,
+        high: (d.high && Number.isFinite(d.high)) ? d.high : 0,
+        low: (d.low && Number.isFinite(d.low)) ? d.low : 0,
+        close: (d.close && Number.isFinite(d.close)) ? d.close : 0,
+        volume: (d.volume && Number.isFinite(d.volume)) ? d.volume : 0,
+        adjustedClose: (d.adjClose && Number.isFinite(d.adjClose)) ? d.adjClose : ((d.close && Number.isFinite(d.close)) ? d.close : 0)
     })).filter((d: HistoricalDataPoint) => d.close > 0);
 
     return { ticker, period, data: points };
@@ -346,15 +442,24 @@ async function getHistoricalYahoo(ticker: string, period: Period): Promise<Histo
     const quote = result.indicators?.quote?.[0] || {};
     const adjClose = result.indicators?.adjclose?.[0]?.adjclose || quote.close || [];
 
-    const points: HistoricalDataPoint[] = timestamps.map((ts: number, i: number) => ({
-        date: new Date(ts * 1000).toISOString().split('T')[0],
-        open: quote.open?.[i] ?? 0,
-        high: quote.high?.[i] ?? 0,
-        low: quote.low?.[i] ?? 0,
-        close: quote.close?.[i] ?? 0,
-        volume: quote.volume?.[i] ?? 0,
-        adjustedClose: adjClose[i] ?? quote.close?.[i] ?? 0
-    })).filter((d: HistoricalDataPoint) => d.close > 0);
+    const points: HistoricalDataPoint[] = timestamps.map((ts: number, i: number) => {
+        const open = quote.open?.[i];
+        const high = quote.high?.[i];
+        const low = quote.low?.[i];
+        const close = quote.close?.[i];
+        const volume = quote.volume?.[i];
+        const adj = adjClose[i];
+
+        return {
+            date: new Date(ts * 1000).toISOString().split('T')[0],
+            open: (open && Number.isFinite(open)) ? open : 0,
+            high: (high && Number.isFinite(high)) ? high : 0,
+            low: (low && Number.isFinite(low)) ? low : 0,
+            close: (close && Number.isFinite(close)) ? close : 0,
+            volume: (volume && Number.isFinite(volume)) ? volume : 0,
+            adjustedClose: (adj && Number.isFinite(adj)) ? adj : ((close && Number.isFinite(close)) ? close : 0)
+        };
+    }).filter((d: HistoricalDataPoint) => d.close > 0);
 
     return { ticker, period, data: points };
 }
@@ -396,8 +501,8 @@ export async function getFundamentals(ticker: string): Promise<Fundamentals> {
 
 async function getFundamentalsFMP(ticker: string): Promise<Fundamentals> {
     // FMP has multiple endpoints - fetch sequentially with rate limiting
-    const ratiosRes = await fetchFmpWithRateLimit(`${FMP_BASE_URL}/ratios-ttm/${ticker}?apikey=${FMP_API_KEY}`);
-    const profileRes = await fetchFmpWithRateLimit(`${FMP_BASE_URL}/profile/${ticker}?apikey=${FMP_API_KEY}`);
+    const ratiosRes = await fetchFmpWithRateLimit(`${FMP_BASE_URL}/ratios-ttm/${ticker}?apikey=${getFmpKey()}`);
+    const profileRes = await fetchFmpWithRateLimit(`${FMP_BASE_URL}/profile/${ticker}?apikey=${getFmpKey()}`);
 
     if (!ratiosRes.ok && !profileRes.ok) {
         throw new Error('FMP fundamentals unavailable');
@@ -406,9 +511,14 @@ async function getFundamentalsFMP(ticker: string): Promise<Fundamentals> {
     const ratios = ratiosRes.ok ? (await ratiosRes.json())?.[0] || {} : {};
     const profile = profileRes.ok ? (await profileRes.json())?.[0] || {} : {};
 
+    // Safe dividend yield calculation - guard against division by zero
+    const dividendYield = ratios.dividendYieldTTM ??
+        (profile.lastDiv && profile.price && profile.price > 0
+            ? profile.lastDiv / profile.price
+            : null);
+
     return {
         peRatio: ratios.peRatioTTM ?? profile.pe ?? null,
-        forwardPE: ratios.priceEarningsToGrowthRatioTTM ?? null,
         pegRatio: ratios.pegRatioTTM ?? null,
         priceToBook: ratios.priceToBookRatioTTM ?? null,
         priceToSales: ratios.priceToSalesRatioTTM ?? null,
@@ -422,26 +532,18 @@ async function getFundamentalsFMP(ticker: string): Promise<Fundamentals> {
         returnOnAssets: ratios.returnOnAssetsTTM ?? null,
         revenueGrowth: ratios.revenueGrowthTTM ?? null,
         earningsGrowth: ratios.netIncomeGrowthTTM ?? null,
-        quarterlyRevenueGrowth: null,
-        quarterlyEarningsGrowth: null,
         currentRatio: ratios.currentRatioTTM ?? null,
         quickRatio: ratios.quickRatioTTM ?? null,
         debtToEquity: ratios.debtEquityRatioTTM ?? null,
-        totalDebt: null,
-        totalCash: null,
         freeCashFlow: ratios.freeCashFlowPerShareTTM ?? null,
         eps: profile.eps ?? null,
-        epsForward: null,
         bookValue: ratios.bookValuePerShareTTM ?? null,
         revenuePerShare: ratios.revenuePerShareTTM ?? null,
-        dividendYield: ratios.dividendYieldTTM ?? (profile.lastDiv ? profile.lastDiv / profile.price : null),
+        dividendYield,
         dividendRate: profile.lastDiv ?? null,
         payoutRatio: ratios.payoutRatioTTM ?? null,
-        exDividendDate: null,
         sharesOutstanding: profile.sharesOutstanding ?? null,
-        floatShares: profile.floatShares ?? null,
-        shortRatio: null,
-        shortPercentOfFloat: null
+        floatShares: profile.floatShares ?? null
     };
 }
 
@@ -468,7 +570,6 @@ async function getFundamentalsYahoo(ticker: string): Promise<Fundamentals> {
 
     return {
         peRatio: raw(summary.trailingPE),
-        forwardPE: raw(summary.forwardPE),
         pegRatio: raw(stats.pegRatio),
         priceToBook: raw(stats.priceToBook),
         priceToSales: raw(summary.priceToSalesTrailing12Months),
@@ -482,42 +583,33 @@ async function getFundamentalsYahoo(ticker: string): Promise<Fundamentals> {
         returnOnAssets: raw(financial.returnOnAssets),
         revenueGrowth: raw(financial.revenueGrowth),
         earningsGrowth: raw(financial.earningsGrowth),
-        quarterlyRevenueGrowth: raw(financial.revenueQuarterlyGrowth),
-        quarterlyEarningsGrowth: raw(financial.earningsQuarterlyGrowth),
         currentRatio: raw(financial.currentRatio),
         quickRatio: raw(financial.quickRatio),
         debtToEquity: raw(financial.debtToEquity),
-        totalDebt: raw(financial.totalDebt),
-        totalCash: raw(financial.totalCash),
         freeCashFlow: raw(financial.freeCashflow),
         eps: raw(stats.trailingEps),
-        epsForward: raw(stats.forwardEps),
         bookValue: raw(stats.bookValue),
         revenuePerShare: raw(financial.revenuePerShare),
         dividendYield: raw(summary.dividendYield),
         dividendRate: raw(summary.dividendRate),
         payoutRatio: raw(summary.payoutRatio),
-        exDividendDate: stats.exDividendDate?.fmt || null,
         sharesOutstanding: raw(stats.sharesOutstanding),
-        floatShares: raw(stats.floatShares),
-        shortRatio: raw(stats.shortRatio),
-        shortPercentOfFloat: raw(stats.shortPercentOfFloat)
+        floatShares: raw(stats.floatShares)
     };
 }
 
 function getDefaultFundamentals(): Fundamentals {
     return {
-        peRatio: null, forwardPE: null, pegRatio: null, priceToBook: null,
+        peRatio: null, pegRatio: null, priceToBook: null,
         priceToSales: null, enterpriseValue: null, evToRevenue: null, evToEbitda: null,
         profitMargin: null, operatingMargin: null, grossMargin: null,
         returnOnEquity: null, returnOnAssets: null,
         revenueGrowth: null, earningsGrowth: null,
-        quarterlyRevenueGrowth: null, quarterlyEarningsGrowth: null,
         currentRatio: null, quickRatio: null, debtToEquity: null,
-        totalDebt: null, totalCash: null, freeCashFlow: null,
-        eps: null, epsForward: null, bookValue: null, revenuePerShare: null,
-        dividendYield: null, dividendRate: null, payoutRatio: null, exDividendDate: null,
-        sharesOutstanding: null, floatShares: null, shortRatio: null, shortPercentOfFloat: null
+        freeCashFlow: null,
+        eps: null, bookValue: null, revenuePerShare: null,
+        dividendYield: null, dividendRate: null, payoutRatio: null,
+        sharesOutstanding: null, floatShares: null
     };
 }
 
@@ -557,8 +649,8 @@ export async function getAnalystRatings(ticker: string): Promise<AnalystRatings>
 
 async function getAnalystRatingsFMP(ticker: string): Promise<AnalystRatings> {
     // Fetch sequentially with rate limiting
-    const gradeRes = await fetchFmpWithRateLimit(`${FMP_BASE_URL}/grade/${ticker}?limit=30&apikey=${FMP_API_KEY}`);
-    const targetRes = await fetchFmpWithRateLimit(`${FMP_BASE_URL}/price-target-consensus/${ticker}?apikey=${FMP_API_KEY}`);
+    const gradeRes = await fetchFmpWithRateLimit(`${FMP_BASE_URL}/grade/${ticker}?limit=30&apikey=${getFmpKey()}`);
+    const targetRes = await fetchFmpWithRateLimit(`${FMP_BASE_URL}/price-target-consensus/${ticker}?apikey=${getFmpKey()}`);
 
     const grades = gradeRes.ok ? await gradeRes.json() : [];
     const targets = targetRes.ok ? (await targetRes.json())?.[0] : null;
@@ -703,7 +795,7 @@ export async function getCompanyProfile(ticker: string): Promise<CompanyProfile>
 }
 
 async function getCompanyProfileFMP(ticker: string): Promise<CompanyProfile> {
-    const url = `${FMP_BASE_URL}/profile/${ticker}?apikey=${FMP_API_KEY}`;
+    const url = `${FMP_BASE_URL}/profile/${ticker}?apikey=${getFmpKey()}`;
     const response = await fetchFmpWithRateLimit(url);
 
     if (!response.ok) {
@@ -722,8 +814,8 @@ async function getCompanyProfileFMP(ticker: string): Promise<CompanyProfile> {
         ticker: p.symbol || ticker,
         name: p.companyName || p.symbol || ticker,
         description: p.description || '',
-        sector: p.sector || 'Unknown',
-        industry: p.industry || 'Unknown',
+        sector: p.sector || '',
+        industry: p.industry || '',
         website: p.website || '',
         employees: p.fullTimeEmployees || null,
         headquarters: [p.city, p.state, p.country].filter(Boolean).join(', '),
@@ -731,7 +823,7 @@ async function getCompanyProfileFMP(ticker: string): Promise<CompanyProfile> {
         ceo: p.ceo || null,
         exchange: p.exchangeShortName || p.exchange || '',
         currency: p.currency || 'USD',
-        country: p.country || 'Unknown'
+        country: p.country || ''
     };
 }
 
@@ -757,8 +849,8 @@ async function getCompanyProfileYahoo(ticker: string): Promise<CompanyProfile> {
         ticker: ticker,
         name: quoteType.longName || quoteType.shortName || ticker,
         description: profile.longBusinessSummary || '',
-        sector: profile.sector || 'Unknown',
-        industry: profile.industry || 'Unknown',
+        sector: profile.sector || '',
+        industry: profile.industry || '',
         website: profile.website || '',
         employees: profile.fullTimeEmployees || null,
         headquarters: [profile.city, profile.state, profile.country].filter(Boolean).join(', '),
@@ -766,7 +858,7 @@ async function getCompanyProfileYahoo(ticker: string): Promise<CompanyProfile> {
         ceo: profile.companyOfficers?.[0]?.name || null,
         exchange: quoteType.exchange || '',
         currency: quoteType.currency || 'USD',
-        country: profile.country || 'Unknown'
+        country: profile.country || ''
     };
 }
 
@@ -775,8 +867,8 @@ function getDefaultProfile(ticker: string): CompanyProfile {
         ticker,
         name: ticker,
         description: '',
-        sector: 'Unknown',
-        industry: 'Unknown',
+        sector: '',
+        industry: '',
         website: '',
         employees: null,
         headquarters: '',
@@ -784,7 +876,7 @@ function getDefaultProfile(ticker: string): CompanyProfile {
         ceo: null,
         exchange: '',
         currency: 'USD',
-        country: 'Unknown'
+        country: ''
     };
 }
 
@@ -813,7 +905,7 @@ export async function searchTickers(query: string): Promise<Array<{ symbol: stri
 
     // Try FMP search first
     try {
-        const url = `${FMP_BASE_URL}/search?query=${encodeURIComponent(normalizedQuery)}&limit=10&apikey=${FMP_API_KEY}`;
+        const url = `${FMP_BASE_URL}/search?query=${encodeURIComponent(normalizedQuery)}&limit=10&apikey=${getFmpKey()}`;
         const response = await fetchFmpWithRateLimit(url, 5000);
 
         if (response.ok) {

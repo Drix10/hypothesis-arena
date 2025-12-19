@@ -336,10 +336,15 @@ function findDissentingViews(
         if ((isBullish && thesisBearish) || (isBearish && thesisBullish)) {
             const analyst = getAnalystById(thesis.agentId);
             if (analyst) {
+                // Safe array access for reasoning
+                const reasoning = thesis.summary
+                    || (thesis.bearCase && thesis.bearCase.length > 0 ? thesis.bearCase[0] : null)
+                    || 'Disagrees with consensus';
+
                 dissenting.push({
                     agentName: analyst.name,
                     position: thesis.recommendation.replace('_', ' ').toUpperCase(),
-                    reasoning: thesis.summary || thesis.bearCase[0] || 'Disagrees with consensus'
+                    reasoning
                 });
             }
         }
@@ -389,8 +394,11 @@ function generateExecutiveSummary(
     if (champion) {
         const analyst = getAnalystById(champion.agentId);
         if (analyst) {
-            const keyArg = champion.bullCase[0] || champion.summary;
-            const truncatedArg = keyArg && keyArg.length > 100 ? keyArg.slice(0, 97) + '...' : (keyArg || 'key fundamentals');
+            // Safe array access with fallback chain
+            const keyArg = (champion.bullCase && champion.bullCase.length > 0 ? champion.bullCase[0] : null)
+                || champion.summary
+                || 'key fundamentals';
+            const truncatedArg = keyArg.length > 100 ? keyArg.slice(0, 97) + '...' : keyArg;
             summary += `\n\nThe ${analyst.title} perspective prevailed in our debate tournament: "${truncatedArg}"`;
         }
     }

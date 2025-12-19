@@ -1,8 +1,16 @@
+/**
+ * Error Boundary Component
+ *
+ * Catches React errors and displays a fallback UI
+ * Prevents the entire app from crashing due to component errors
+ */
+
 import { Component, ErrorInfo, ReactNode } from "react";
 import { logger } from "../../services/utils/logger";
 
 interface Props {
-  children?: ReactNode;
+  children: ReactNode;
+  fallback?: ReactNode;
 }
 
 interface State {
@@ -11,44 +19,68 @@ interface State {
 }
 
 class ErrorBoundary extends Component<Props, State> {
-  public state: State = { hasError: false, error: null };
-
   constructor(props: Props) {
     super(props);
+    this.state = {
+      hasError: false,
+      error: null,
+    };
   }
 
   static getDerivedStateFromError(error: Error): State {
-    return { hasError: true, error };
+    return {
+      hasError: true,
+      error,
+    };
   }
 
-  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    const sanitizedError = {
+  componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
+    // Log error details (sanitized - no sensitive data)
+    logger.error("React Error Boundary caught an error:", {
       message: error.message,
-      name: error.name,
-      stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
-    };
-    logger.error("Error caught by boundary:", sanitizedError, {
+      stack: error.stack?.slice(0, 500), // Truncate stack trace
       componentStack: errorInfo.componentStack?.slice(0, 500),
     });
   }
 
-  render() {
+  handleReset = (): void => {
+    this.setState({
+      hasError: false,
+      error: null,
+    });
+  };
+
+  render(): ReactNode {
     if (this.state.hasError) {
+      // Custom fallback UI
+      if (this.props.fallback) {
+        return this.props.fallback;
+      }
+
+      // Default fallback UI
       return (
-        <div className="min-h-screen bg-slate-950 text-slate-200 flex items-center justify-center p-6">
-          <div className="max-w-md w-full bg-red-950/20 border border-red-900/50 rounded-2xl p-8 text-center space-y-4">
-            <div className="text-6xl mb-4">⚠️</div>
-            <h1 className="text-2xl font-serif font-bold text-white">
-              Something Went Wrong
-            </h1>
-            <p className="text-sm text-slate-400">
+        <div className="min-h-screen flex items-center justify-center p-6">
+          <div className="max-w-md w-full glass-card rounded-2xl p-8 text-center">
+            <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-bear/20 flex items-center justify-center">
+              <span className="text-3xl">⚠️</span>
+            </div>
+            <h2 className="text-xl font-bold text-white mb-2">
+              Something went wrong
+            </h2>
+            <p className="text-slate-400 mb-6">
               {this.state.error?.message || "An unexpected error occurred"}
             </p>
             <button
-              onClick={() => window.location.reload()}
-              className="mt-6 px-6 py-3 bg-white text-black font-bold text-sm rounded-lg hover:bg-slate-200 transition-colors"
+              onClick={this.handleReset}
+              className="btn-primary px-6 py-2.5 rounded-lg font-medium"
             >
-              Reload Application
+              Try Again
+            </button>
+            <button
+              onClick={() => window.location.reload()}
+              className="ml-3 px-6 py-2.5 rounded-lg font-medium text-slate-400 hover:text-white transition-colors"
+            >
+              Reload Page
             </button>
           </div>
         </div>

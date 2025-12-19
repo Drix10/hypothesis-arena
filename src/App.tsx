@@ -5,7 +5,13 @@
 
 import React, { useState, useEffect, lazy, Suspense } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { getApiKey, setApiKey } from "./services/apiKeyManager";
+import {
+  getApiKey,
+  setApiKey,
+  getFmpApiKey,
+  setFmpApiKey,
+} from "./services/apiKeyManager";
+import ErrorBoundary from "./components/common/ErrorBoundary";
 
 const StockArena = lazy(() => import("./components/layout/StockArena"));
 
@@ -39,26 +45,43 @@ const scaleIn = {
 const App: React.FC = () => {
   const [apiKey, setApiKeyState] = useState<string>("");
   const [isKeySet, setIsKeySet] = useState(false);
-  const [inputKey, setInputKey] = useState("");
-  const [isFocused, setIsFocused] = useState(false);
+  const [inputGeminiKey, setInputGeminiKey] = useState("");
+  const [inputFmpKey, setInputFmpKey] = useState("");
+  const [isFocusedGemini, setIsFocusedGemini] = useState(false);
+  const [isFocusedFmp, setIsFocusedFmp] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
-    const savedKey = getApiKey();
-    if (savedKey) {
-      setApiKeyState(savedKey);
+    const savedGeminiKey = getApiKey();
+    const savedFmpKey = getFmpApiKey();
+
+    if (savedGeminiKey) {
+      setApiKeyState(savedGeminiKey);
       setIsKeySet(true);
+    }
+
+    // Pre-fill FMP key if available from env
+    if (savedFmpKey && !inputFmpKey) {
+      setInputFmpKey(savedFmpKey);
     }
   }, []);
 
   const handleSetKey = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (inputKey.trim()) {
+    if (inputGeminiKey.trim()) {
       setIsLoading(true);
       // Small delay for visual feedback
       await new Promise((resolve) => setTimeout(resolve, 400));
-      setApiKey(inputKey.trim());
-      setApiKeyState(inputKey.trim());
+
+      // Set Gemini key (required)
+      setApiKey(inputGeminiKey.trim());
+      setApiKeyState(inputGeminiKey.trim());
+
+      // Set FMP key if provided (optional - falls back to env/hardcoded)
+      if (inputFmpKey.trim()) {
+        setFmpApiKey(inputFmpKey.trim());
+      }
+
       setIsKeySet(true);
       setIsLoading(false);
     }
@@ -101,24 +124,26 @@ const App: React.FC = () => {
             variants={scaleIn}
           >
             <form onSubmit={handleSetKey} className="space-y-5">
+              {/* Gemini API Key (Required) */}
               <div>
                 <label className="block text-xs font-semibold text-slate-400 mb-2.5 tracking-wider uppercase">
-                  Gemini API Key
+                  Gemini API Key <span className="text-bear-light">*</span>
                 </label>
                 <div
                   className={`relative rounded-xl transition-all duration-200 ${
-                    isFocused ? "ring-2 ring-cyan/40" : ""
+                    isFocusedGemini ? "ring-2 ring-cyan/40" : ""
                   }`}
                 >
                   <input
                     type="password"
-                    value={inputKey}
-                    onChange={(e) => setInputKey(e.target.value)}
-                    onFocus={() => setIsFocused(true)}
-                    onBlur={() => setIsFocused(false)}
-                    placeholder="Paste your API key here"
+                    value={inputGeminiKey}
+                    onChange={(e) => setInputGeminiKey(e.target.value)}
+                    onFocus={() => setIsFocusedGemini(true)}
+                    onBlur={() => setIsFocusedGemini(false)}
+                    placeholder="Paste your Gemini API key"
                     className="w-full px-4 py-3.5 bg-arena-deep border border-white/[0.08] rounded-xl text-white placeholder-slate-500 focus:outline-none transition-all"
                     autoComplete="off"
+                    required
                   />
                   <div className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-500">
                     <svg
@@ -138,9 +163,50 @@ const App: React.FC = () => {
                 </div>
               </div>
 
+              {/* FMP API Key (Optional) */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-2.5 tracking-wider uppercase">
+                  FMP API Key{" "}
+                  <span className="text-slate-600 text-[10px] font-normal">
+                    (Optional)
+                  </span>
+                </label>
+                <div
+                  className={`relative rounded-xl transition-all duration-200 ${
+                    isFocusedFmp ? "ring-2 ring-gold/40" : ""
+                  }`}
+                >
+                  <input
+                    type="password"
+                    value={inputFmpKey}
+                    onChange={(e) => setInputFmpKey(e.target.value)}
+                    onFocus={() => setIsFocusedFmp(true)}
+                    onBlur={() => setIsFocusedFmp(false)}
+                    placeholder="Optional - uses env/default if empty"
+                    className="w-full px-4 py-3.5 bg-arena-deep border border-white/[0.08] rounded-xl text-white placeholder-slate-500 focus:outline-none transition-all"
+                    autoComplete="off"
+                  />
+                  <div className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-500">
+                    <svg
+                      className="w-5 h-5"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={1.5}
+                        d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                      />
+                    </svg>
+                  </div>
+                </div>
+              </div>
+
               <motion.button
                 type="submit"
-                disabled={!inputKey.trim() || isLoading}
+                disabled={!inputGeminiKey.trim() || isLoading}
                 className="w-full py-3.5 px-6 rounded-xl font-semibold btn-primary disabled:opacity-30 disabled:cursor-not-allowed"
                 whileTap={{ scale: 0.98 }}
               >
@@ -188,9 +254,9 @@ const App: React.FC = () => {
               </motion.button>
             </form>
 
-            <div className="mt-6 pt-5 border-t border-white/[0.06]">
+            <div className="mt-6 pt-5 border-t border-white/[0.06] space-y-2">
               <p className="text-sm text-slate-500 text-center">
-                Get your free key from{" "}
+                Get your free Gemini key from{" "}
                 <a
                   href="https://aistudio.google.com/app/apikey"
                   target="_blank"
@@ -198,6 +264,17 @@ const App: React.FC = () => {
                   className="text-cyan hover:text-cyan-light transition-colors font-medium"
                 >
                   Google AI Studio →
+                </a>
+              </p>
+              <p className="text-xs text-slate-600 text-center">
+                FMP key from{" "}
+                <a
+                  href="https://financialmodelingprep.com/developer/docs"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-gold hover:text-gold-light transition-colors font-medium"
+                >
+                  Financial Modeling Prep →
                 </a>
               </p>
             </div>
@@ -247,37 +324,41 @@ const App: React.FC = () => {
   }
 
   return (
-    <Suspense
-      fallback={
-        <div className="min-h-screen flex items-center justify-center">
+    <ErrorBoundary>
+      <Suspense
+        fallback={
+          <div className="min-h-screen flex items-center justify-center">
+            <motion.div
+              className="text-center"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+            >
+              <div className="relative inline-block mb-6">
+                <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-arena-card to-arena-surface border border-white/10 flex items-center justify-center shadow-glow-cyan">
+                  <span className="text-4xl animate-pulse">⚔️</span>
+                </div>
+                <div className="absolute -inset-4 border border-cyan/20 rounded-3xl animate-ping opacity-30" />
+              </div>
+              <p className="text-slate-400 font-medium">
+                Preparing the arena...
+              </p>
+            </motion.div>
+          </div>
+        }
+      >
+        <AnimatePresence mode="wait">
           <motion.div
-            className="text-center"
+            key="arena"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.3 }}
           >
-            <div className="relative inline-block mb-6">
-              <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-arena-card to-arena-surface border border-white/10 flex items-center justify-center shadow-glow-cyan">
-                <span className="text-4xl animate-pulse">⚔️</span>
-              </div>
-              <div className="absolute -inset-4 border border-cyan/20 rounded-3xl animate-ping opacity-30" />
-            </div>
-            <p className="text-slate-400 font-medium">Preparing the arena...</p>
+            <StockArena apiKey={apiKey} />
           </motion.div>
-        </div>
-      }
-    >
-      <AnimatePresence mode="wait">
-        <motion.div
-          key="arena"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.3 }}
-        >
-          <StockArena apiKey={apiKey} />
-        </motion.div>
-      </AnimatePresence>
-    </Suspense>
+        </AnimatePresence>
+      </Suspense>
+    </ErrorBoundary>
   );
 };
 
