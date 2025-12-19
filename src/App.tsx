@@ -68,15 +68,19 @@ const App: React.FC = () => {
 
   const handleSetKey = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (inputGeminiKey.trim() && inputFmpKey.trim()) {
+    if (inputGeminiKey.trim()) {
       setIsLoading(true);
       // Small delay for visual feedback
       await new Promise((resolve) => setTimeout(resolve, 400));
 
-      // Set both keys (both required)
+      // Set Gemini key (required)
       setApiKey(inputGeminiKey.trim());
       setApiKeyState(inputGeminiKey.trim());
-      setFmpApiKey(inputFmpKey.trim());
+
+      // Set FMP key only if provided (otherwise uses "demo")
+      if (inputFmpKey.trim()) {
+        setFmpApiKey(inputFmpKey.trim());
+      }
 
       setIsKeySet(true);
       setIsLoading(false);
@@ -159,10 +163,13 @@ const App: React.FC = () => {
                 </div>
               </div>
 
-              {/* FMP API Key (Required) */}
+              {/* FMP API Key (Optional - uses demo if not provided) */}
               <div>
                 <label className="block text-xs font-semibold text-slate-400 mb-2.5 tracking-wider uppercase">
-                  FMP API Key <span className="text-bear-light">*</span>
+                  FMP API Key{" "}
+                  <span className="text-slate-500 text-[10px] font-normal">
+                    (Optional)
+                  </span>
                 </label>
                 <div
                   className={`relative rounded-xl transition-all duration-200 ${
@@ -175,10 +182,9 @@ const App: React.FC = () => {
                     onChange={(e) => setInputFmpKey(e.target.value)}
                     onFocus={() => setIsFocusedFmp(true)}
                     onBlur={() => setIsFocusedFmp(false)}
-                    placeholder="Paste your FMP API key"
+                    placeholder="Optional - uses demo key if empty"
                     className="w-full px-4 py-3.5 bg-arena-deep border border-white/[0.08] rounded-xl text-white placeholder-slate-500 focus:outline-none transition-all"
                     autoComplete="off"
-                    required
                   />
                   <div className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-500">
                     <svg
@@ -200,9 +206,7 @@ const App: React.FC = () => {
 
               <motion.button
                 type="submit"
-                disabled={
-                  !inputGeminiKey.trim() || !inputFmpKey.trim() || isLoading
-                }
+                disabled={!inputGeminiKey.trim() || isLoading}
                 className="w-full py-3.5 px-6 rounded-xl font-semibold btn-primary disabled:opacity-30 disabled:cursor-not-allowed"
                 whileTap={{ scale: 0.98 }}
               >
@@ -263,7 +267,7 @@ const App: React.FC = () => {
                 </a>
               </p>
               <p className="text-xs text-slate-600 text-center">
-                FMP key from{" "}
+                FMP key optional - get yours at{" "}
                 <a
                   href="https://financialmodelingprep.com/developer/docs"
                   target="_blank"
