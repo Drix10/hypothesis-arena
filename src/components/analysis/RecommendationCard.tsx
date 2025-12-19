@@ -207,7 +207,7 @@ export const RecommendationCard: React.FC<RecommendationCardProps> = ({
                     recommendation.priceTarget.bear,
                     recommendation.priceTarget.bull
                   )}%`,
-                  top: "0.62.5rem",
+                  top: "0.4rem",
                   transform: "translate(-50%, -50%)",
                 }}
                 initial={{ scale: 0, opacity: 0 }}

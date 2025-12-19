@@ -56,8 +56,8 @@ function getCached<T>(key: string): T | null {
 }
 
 function setCache(key: string, data: unknown): void {
-    // LRU eviction: find and remove the oldest entry by timestamp
-    if (cache.size >= MAX_CACHE_SIZE) {
+    // LRU eviction: ensure cache doesn't exceed max size
+    while (cache.size >= MAX_CACHE_SIZE) {
         let oldestKey: string | null = null;
         let oldestTime = Infinity;
 
@@ -68,7 +68,12 @@ function setCache(key: string, data: unknown): void {
             }
         }
 
-        if (oldestKey) cache.delete(oldestKey);
+        if (oldestKey) {
+            cache.delete(oldestKey);
+        } else {
+            // Safety: prevent infinite loop if something goes wrong
+            break;
+        }
     }
     cache.set(key, { data, timestamp: Date.now() });
 }
@@ -87,13 +92,11 @@ async function fetchWithTimeout(url: string, timeout = 10000): Promise<Response>
 
     try {
         const response = await fetch(url, { signal: controller.signal });
-        clearTimeout(timeoutId);
         return response;
     } catch (error) {
-        clearTimeout(timeoutId); // Cleanup happens in both paths now
         throw error;
     } finally {
-        // Defense in depth - ensure cleanup even if return/throw happens
+        // Single cleanup point - runs regardless of success/failure
         clearTimeout(timeoutId);
     }
 }
@@ -157,45 +160,72 @@ const CORS_PROXIES = [
     (url: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
 ];
 
-async function fetchWithProxy(url: string): Promise<Response | null> {
+async function fetchWithProxy(url: string, retries = 2): Promise<Response | null> {
     const errors: string[] = [];
 
-    for (const proxyFn of CORS_PROXIES) {
-        try {
-            const response = await fetchWithTimeout(proxyFn(url), 8000);
-            if (!response.ok) {
-                errors.push(`Proxy returned ${response.status}`);
-                continue;
-            }
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        let proxyIndex = 0;  // Reset counter for each attempt
 
-            // Validate response is JSON before returning
-            const contentType = response.headers.get('content-type');
-            if (contentType && contentType.includes('application/json')) {
-                return response;
-            }
-
-            // Try to parse as JSON anyway (some proxies don't set content-type)
-            const text = await response.text();
+        for (const proxyFn of CORS_PROXIES) {
+            proxyIndex++;
             try {
-                JSON.parse(text);
-                // If parsing succeeds, create a new response with the text
-                return new Response(text, {
-                    status: response.status,
-                    statusText: response.statusText,
-                    headers: response.headers
-                });
-            } catch {
-                errors.push(`Proxy returned non-JSON response`);
+                const proxyUrl = proxyFn(url);
+                logger.debug(`Attempting proxy ${proxyIndex}/${CORS_PROXIES.length} (attempt ${attempt + 1}/${retries + 1})`);
+
+                // Increase timeout on retries
+                const timeout = 8000 + (attempt * 2000);
+                const response = await fetchWithTimeout(proxyUrl, timeout);
+                if (!response.ok) {
+                    const errorDetail = `Proxy ${proxyIndex} returned HTTP ${response.status}`;
+                    errors.push(errorDetail);
+                    logger.debug(errorDetail);
+                    continue;
+                }
+
+                // Validate response is JSON before returning
+                const contentType = response.headers.get('content-type');
+                if (contentType && contentType.includes('application/json')) {
+                    logger.debug(`Proxy ${proxyIndex} succeeded`);
+                    return response;
+                }
+
+                // Try to parse as JSON anyway (some proxies don't set content-type)
+                // Note: Response body can only be consumed once, so read as text first
+                const text = await response.text();
+                try {
+                    JSON.parse(text);  // Validate JSON
+                    // Create new Response with text since original body is consumed
+                    logger.debug(`Proxy ${proxyIndex} succeeded (no content-type header)`);
+                    return new Response(text, {
+                        status: response.status,
+                        statusText: response.statusText,
+                        headers: response.headers
+                    });
+                } catch {
+                    const errorDetail = `Proxy ${proxyIndex} returned non-JSON response`;
+                    errors.push(errorDetail);
+                    logger.debug(errorDetail);
+                    continue;
+                }
+            } catch (error) {
+                const msg = error instanceof Error ? error.message : 'Unknown error';
+                const errorDetail = `Proxy ${proxyIndex} failed: ${msg}`;
+                errors.push(errorDetail);
+                logger.debug(errorDetail);
                 continue;
             }
-        } catch (error) {
-            const msg = error instanceof Error ? error.message : 'Unknown error';
-            errors.push(msg);
-            continue;
+        }
+
+        // Exponential backoff before retry
+        if (attempt < retries) {
+            const delay = Math.min(1000 * Math.pow(2, attempt), 3000); // Max 3 seconds
+            logger.debug(`Waiting ${delay}ms before retry ${attempt + 2}/${retries + 1}`);
+            await new Promise(resolve => setTimeout(resolve, delay));
         }
     }
 
-    logger.warn(`All CORS proxies failed: ${errors.join(', ')}`);
+    const errorSummary = `All ${CORS_PROXIES.length} CORS proxies failed after ${retries + 1} attempts. Errors: ${errors.slice(0, 5).join('; ')}`;
+    logger.warn(errorSummary);
     return null;
 }
 
@@ -210,34 +240,67 @@ async function fetchWithProxy(url: string): Promise<Response | null> {
 export async function getQuote(ticker: string): Promise<StockQuote> {
     const cacheKey = `quote:${ticker}`;
     const cached = getCached<StockQuote>(cacheKey);
-    if (cached) return cached;
+    if (cached) {
+        logger.debug(`Using cached quote for ${ticker}`);
+        return cached;
+    }
 
     const normalizedTicker = ticker.toUpperCase().trim();
+    logger.info(`Fetching quote for ${normalizedTicker}...`);
+
+    let fmpError: Error | null = null;
+    let yahooError: Error | null = null;
 
     // Try FMP first (most reliable)
     try {
         const quote = await getQuoteFMP(normalizedTicker);
+        logger.info(`Successfully fetched quote for ${normalizedTicker} from FMP`);
         setCache(cacheKey, quote);
         return quote;
-    } catch (fmpError) {
-        const fmpMsg = fmpError instanceof Error ? fmpError.message : String(fmpError);
-        logger.warn(`FMP quote failed for ${normalizedTicker}: ${fmpMsg}, trying Yahoo...`);
+    } catch (error) {
+        fmpError = error instanceof Error ? error : new Error(String(error));
+        const fmpMsg = fmpError.message;
+        logger.warn(`FMP quote failed for ${normalizedTicker}: ${fmpMsg}`);
     }
 
     // Fallback to Yahoo
+    logger.info(`Attempting Yahoo Finance fallback for ${normalizedTicker}...`);
     try {
         const quote = await getQuoteYahoo(normalizedTicker);
+        logger.info(`Successfully fetched quote for ${normalizedTicker} from Yahoo Finance`);
         setCache(cacheKey, quote);
         return quote;
-    } catch (yahooError) {
-        const errorMsg = yahooError instanceof Error ? yahooError.message : String(yahooError);
-        logger.error(`All quote sources failed for ${normalizedTicker}`, errorMsg);
-        throw new Error(`Unable to fetch quote for ${normalizedTicker}`);
+    } catch (error) {
+        yahooError = error instanceof Error ? error : new Error(String(error));
+        const yahooMsg = yahooError.message;
+        logger.error(`All quote sources failed for ${normalizedTicker}`, { fmpError: fmpError?.message, yahooError: yahooMsg });
+
+        // Build comprehensive error message
+        const errorDetails = [
+            `FMP: ${fmpError?.message || 'Unknown error'}`,
+            `Yahoo: ${yahooMsg}`
+        ].join(' | ');
+
+        // Provide actionable error message
+        throw new Error(
+            `Unable to fetch quote data for ${normalizedTicker}. Both data sources failed.\n\n` +
+            `Possible causes:\n` +
+            `• Invalid ticker symbol (verify on Yahoo Finance or Google)\n` +
+            `• API rate limits exceeded (wait a few minutes)\n` +
+            `• Network connectivity issues\n` +
+            `• Free CORS proxies are down (temporary)\n` +
+            `• FMP demo key limitations (get free key at financialmodelingprep.com)\n\n` +
+            `Technical details: ${errorDetails}`
+        );
     }
 }
 
 async function getQuoteFMP(ticker: string): Promise<StockQuote> {
-    const url = `${FMP_BASE_URL}/quote/${ticker}?apikey=${getFmpKey()}`;
+    const apiKey = getFmpKey();
+    const isDemo = apiKey === 'demo';
+    const url = `${FMP_BASE_URL}/quote/${ticker}?apikey=${apiKey}`;
+
+    logger.debug(`Fetching FMP quote for ${ticker} (using ${isDemo ? 'demo' : 'custom'} key)`);
     const response = await fetchFmpWithRateLimit(url);
 
     if (!response.ok) {
@@ -251,7 +314,13 @@ async function getQuoteFMP(ticker: string): Promise<StockQuote> {
         } catch {
             // Ignore JSON parse errors for error responses
         }
-        throw new Error(`FMP API HTTP ${response.status}: ${errorDetail}`);
+
+        // Provide helpful context for demo key limitations
+        const demoHint = isDemo
+            ? ' (Note: Demo key has limited features. Consider getting a free API key at https://site.financialmodelingprep.com/developer/docs/ for 250 requests/day)'
+            : '';
+
+        throw new Error(`FMP API HTTP ${response.status}: ${errorDetail}${demoHint}`);
     }
 
     // Safe JSON parsing
@@ -310,19 +379,32 @@ async function getQuoteFMP(ticker: string): Promise<StockQuote> {
 async function getQuoteYahoo(ticker: string): Promise<StockQuote> {
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=1d`;
 
-    // Try with proxy first
+    logger.debug(`Fetching Yahoo quote for ${ticker} via CORS proxies`);
+
+    // Try with proxy first (use default retries for better reliability)
     let response = await fetchWithProxy(url);
 
     // If proxy fails, try direct fetch (may work in some environments)
     if (!response) {
+        logger.debug(`All proxies failed, attempting direct fetch to Yahoo Finance`);
         try {
             response = await fetchWithTimeout(url, 5000);
             if (!response.ok) {
-                throw new Error(`Yahoo API returned ${response.status}`);
+                throw new Error(`Yahoo API returned HTTP ${response.status}`);
             }
+            logger.debug(`Direct fetch to Yahoo Finance succeeded`);
         } catch (directError) {
             const msg = directError instanceof Error ? directError.message : 'Unknown error';
-            throw new Error(`Yahoo Finance unavailable (proxy and direct failed): ${msg}`);
+            logger.error(`Yahoo Finance completely unavailable for ${ticker}`, msg);
+            throw new Error(
+                `Yahoo Finance unavailable. All CORS proxies failed and direct access blocked. ` +
+                `This is a known browser limitation. Possible causes: ` +
+                `(1) All free CORS proxies are down/rate-limited, ` +
+                `(2) Network connectivity issues, ` +
+                `(3) Yahoo Finance API temporarily unavailable. ` +
+                `Consider using a valid FMP API key for more reliable data. ` +
+                `Error: ${msg}`
+            );
         }
     }
 
@@ -931,6 +1013,100 @@ function getDefaultProfile(ticker: string): CompanyProfile {
         currency: 'USD',
         country: ''
     };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DIAGNOSTICS & HEALTH CHECK
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Test connectivity to data sources
+ * Useful for debugging API issues
+ */
+export async function testDataSources(): Promise<{
+    fmp: { available: boolean; error: string | null; responseTime: number };
+    yahoo: { available: boolean; error: string | null; responseTime: number };
+    proxies: Array<{ index: number; available: boolean; error: string | null; responseTime: number }>;
+}> {
+    const results = {
+        fmp: { available: false, error: null as string | null, responseTime: 0 },
+        yahoo: { available: false, error: null as string | null, responseTime: 0 },
+        proxies: [] as Array<{ index: number; available: boolean; error: string | null; responseTime: number }>
+    };
+
+    // Test FMP with a known ticker (AAPL)
+    const fmpStart = Date.now();
+    try {
+        const url = `${FMP_BASE_URL}/quote/AAPL?apikey=${getFmpKey()}`;
+        const response = await fetchFmpWithRateLimit(url, 5000);
+        results.fmp.responseTime = Date.now() - fmpStart;
+        if (response.ok) {
+            const data = await response.json();
+            results.fmp.available = Array.isArray(data) && data.length > 0;
+            if (!results.fmp.available) {
+                results.fmp.error = 'Empty response from FMP';
+            }
+        } else {
+            results.fmp.error = `HTTP ${response.status}`;
+        }
+    } catch (error) {
+        results.fmp.responseTime = Date.now() - fmpStart;
+        results.fmp.error = error instanceof Error ? error.message : 'Unknown error';
+    }
+
+    // Test Yahoo Finance direct
+    const yahooStart = Date.now();
+    try {
+        const url = 'https://query1.finance.yahoo.com/v8/finance/chart/AAPL?interval=1d&range=1d';
+        const response = await fetchWithTimeout(url, 5000);
+        results.yahoo.responseTime = Date.now() - yahooStart;
+        if (response.ok) {
+            const data = await response.json();
+            results.yahoo.available = !!data.chart?.result?.[0];
+            if (!results.yahoo.available) {
+                results.yahoo.error = 'Invalid response structure';
+            }
+        } else {
+            results.yahoo.error = `HTTP ${response.status}`;
+        }
+    } catch (error) {
+        results.yahoo.responseTime = Date.now() - yahooStart;
+        results.yahoo.error = error instanceof Error ? error.message : 'Unknown error';
+    }
+
+    // Test each CORS proxy
+    const yahooUrl = 'https://query1.finance.yahoo.com/v8/finance/chart/AAPL?interval=1d&range=1d';
+    for (let i = 0; i < CORS_PROXIES.length; i++) {
+        const proxyFn = CORS_PROXIES[i];
+        const proxyStart = Date.now();
+        const proxyResult = {
+            index: i + 1,
+            available: false,
+            error: null as string | null,
+            responseTime: 0
+        };
+
+        try {
+            const response = await fetchWithTimeout(proxyFn(yahooUrl), 5000);
+            proxyResult.responseTime = Date.now() - proxyStart;
+            if (response.ok) {
+                const data = await response.json();
+                proxyResult.available = !!data.chart?.result?.[0];
+                if (!proxyResult.available) {
+                    proxyResult.error = 'Invalid response';
+                }
+            } else {
+                proxyResult.error = `HTTP ${response.status}`;
+            }
+        } catch (error) {
+            proxyResult.responseTime = Date.now() - proxyStart;
+            proxyResult.error = error instanceof Error ? error.message : 'Unknown error';
+        }
+
+        results.proxies.push(proxyResult);
+    }
+
+    return results;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

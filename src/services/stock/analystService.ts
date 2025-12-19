@@ -530,12 +530,13 @@ export async function generateAllTheses(
         model?: string;
         concurrency?: number;
         onProgress?: (completed: number, total: number, analyst: string) => void;
+        onThesisComplete?: (thesis: InvestmentThesis) => void;
     } = {}
 ): Promise<{
     theses: InvestmentThesis[];
     errors: { analyst: string; error: string }[];
 }> {
-    const { model = 'gemini-2.0-flash', concurrency = 2, onProgress } = options;
+    const { model = 'gemini-2.0-flash', concurrency = 2, onProgress, onThesisComplete } = options;
     const ai = new GoogleGenAI({ apiKey });
     const analysts = getAllAnalysts();
     const results: ThesisGenerationResult[] = [];
@@ -555,6 +556,9 @@ export async function generateAllTheses(
             }
             if (onProgress) {
                 onProgress(results.length, analysts.length, result.analyst.name);
+            }
+            if (onThesisComplete && result.thesis) {
+                onThesisComplete(result.thesis);
             }
         }
 

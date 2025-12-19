@@ -10,6 +10,7 @@ import {
   InvestmentThesis,
   FinalRecommendation,
   StockArenaState,
+  StockDebate,
 } from "../../types/stock";
 import {
   fetchAllStockData,
@@ -28,6 +29,7 @@ import {
 import { TickerInput } from "./TickerInput";
 import { StockHeader } from "./StockHeader";
 import { CompareStocks } from "./CompareStocks";
+import { LiveArena } from "./LiveArena";
 import { AnalystCard, RecommendationCard, DebateView } from "../analysis";
 import { PriceChart, TechnicalsCard, NewsCard } from "../charts";
 import { Watchlist, SavedAnalyses, AccuracyTracker } from "../sidebar";
@@ -104,6 +106,13 @@ export const StockArena: React.FC<StockArenaProps> = ({ apiKey }) => {
   const [inWatchlist, setInWatchlist] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
+  const [liveDebates, setLiveDebates] = useState<StockDebate[]>([]);
+  const [currentDebate, setCurrentDebate] = useState<StockDebate | null>(null);
+  const [tournamentProgress, setTournamentProgress] = useState<{
+    round: string;
+    matchNumber: number;
+    totalMatches: number;
+  } | null>(null);
 
   const isMountedRef = useRef(true);
   const saveMessageTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
@@ -149,6 +158,11 @@ export const StockArena: React.FC<StockArenaProps> = ({ apiKey }) => {
               if (isMountedRef.current)
                 setProgress(`${analyst} (${completed}/${total})`);
             },
+            onThesisComplete: (thesis) => {
+              if (isMountedRef.current) {
+                setTheses((prev) => [...prev, thesis]);
+              }
+            },
           }
         );
 
@@ -156,7 +170,9 @@ export const StockArena: React.FC<StockArenaProps> = ({ apiKey }) => {
         if (generatedTheses.length === 0)
           throw new Error("Failed to generate analyst theses");
 
-        setTheses(generatedTheses);
+        // Don't set theses again - already set incrementally via onThesisComplete
+        // This prevents duplicate entries
+        // setTheses(generatedTheses);
         if (errors.length > 0) console.warn("Analyst errors:", errors);
 
         setState(StockArenaState.RUNNING_TOURNAMENT);
@@ -164,13 +180,20 @@ export const StockArena: React.FC<StockArenaProps> = ({ apiKey }) => {
           apiKey,
           turnsPerDebate: 2,
           onDebateStart: (round, num) => {
-            if (isMountedRef.current)
+            if (isMountedRef.current) {
               setProgress(
                 `${round.charAt(0).toUpperCase() + round.slice(1)} #${num}`
               );
+              // Calculate total matches for this round
+              const totalMatches =
+                round === "quarterfinal" ? 4 : round === "semifinal" ? 2 : 1;
+              setTournamentProgress({ round, matchNumber: num, totalMatches });
+            }
           },
           onDebateComplete: (debate) => {
             if (!isMountedRef.current) return;
+            // Clear current debate when it completes
+            setCurrentDebate(null);
             setTournamentResult((prev) => {
               if (!prev)
                 return {
@@ -196,6 +219,21 @@ export const StockArena: React.FC<StockArenaProps> = ({ apiKey }) => {
               };
             });
           },
+          onTurnComplete: (debate) => {
+            if (!isMountedRef.current) return;
+            // Set as current debate
+            setCurrentDebate(debate);
+            // Update live debates with the new turn
+            setLiveDebates((prev) => {
+              const existing = prev.find((d) => d.matchId === debate.matchId);
+              if (existing) {
+                return prev.map((d) =>
+                  d.matchId === debate.matchId ? debate : d
+                );
+              }
+              return [...prev, debate];
+            });
+          },
         });
         if (!isMountedRef.current) return;
         setTournamentResult(tournament);
@@ -216,6 +254,11 @@ export const StockArena: React.FC<StockArenaProps> = ({ apiKey }) => {
         setError(err instanceof Error ? err.message : "An error occurred");
         setState(StockArenaState.ERROR);
         setProgress("");
+        // Clear all analysis state on error to prevent partial/stale data
+        setTheses([]);
+        setLiveDebates([]);
+        setCurrentDebate(null);
+        setTournamentProgress(null);
       }
     },
     [apiKey]
@@ -231,6 +274,9 @@ export const StockArena: React.FC<StockArenaProps> = ({ apiKey }) => {
     setProgress("");
     setActiveTab("analysis");
     setSaveMessage(null);
+    setLiveDebates([]);
+    setCurrentDebate(null);
+    setTournamentProgress(null);
   };
 
   const showTemporaryMessage = (message: string) => {
@@ -395,9 +441,39 @@ export const StockArena: React.FC<StockArenaProps> = ({ apiKey }) => {
                     <motion.div
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
-                      className="mt-6 p-4 rounded-2xl bg-bear-muted border border-bear/20 text-bear-light text-center"
+                      className="mt-6 p-5 rounded-2xl bg-bear-muted border border-bear/20"
                     >
-                      {error}
+                      <div className="flex items-start gap-3">
+                        <span
+                          className="text-2xl flex-shrink-0"
+                          role="img"
+                          aria-label="Error"
+                        >
+                          ⚠️
+                        </span>
+                        <div className="flex-1 text-left">
+                          <h3 className="text-bear-light font-semibold mb-2">
+                            Unable to Fetch Data
+                          </h3>
+                          <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-line">
+                            {error}
+                          </p>
+                          <div className="mt-4 pt-4 border-t border-bear/20">
+                            <p className="text-xs text-slate-500 mb-2">
+                              Quick troubleshooting:
+                            </p>
+                            <ul className="text-xs text-slate-400 space-y-1 list-disc list-inside">
+                              <li>Verify the ticker symbol is correct</li>
+                              <li>Try again in a few seconds (rate limits)</li>
+                              <li>Check your internet connection</li>
+                              <li>
+                                Consider getting a free FMP API key for better
+                                reliability
+                              </li>
+                            </ul>
+                          </div>
+                        </div>
+                      </div>
                     </motion.div>
                   )}
                   <motion.div
@@ -461,60 +537,20 @@ export const StockArena: React.FC<StockArenaProps> = ({ apiKey }) => {
               initial="hidden"
               animate="visible"
               exit="exit"
-              className="max-w-lg mx-auto pt-24 sm:pt-32 text-center"
+              className="max-w-7xl mx-auto pt-8"
               role="status"
               aria-live="polite"
               aria-label={`${loadingInfo.title}: ${loadingInfo.subtitle}`}
             >
-              <motion.div
-                className="relative inline-block mb-8"
-                animate={{ scale: [1, 1.05, 1] }}
-                transition={{ duration: 2, repeat: Infinity }}
-              >
-                <div className="w-28 h-28 rounded-3xl bg-gradient-to-br from-arena-card to-arena-surface border border-white/10 flex items-center justify-center shadow-glow-cyan">
-                  <span className="text-6xl">{loadingInfo.icon}</span>
-                </div>
-                <div className="absolute -inset-6 border border-cyan/20 rounded-[2rem] animate-ping opacity-20" />
-              </motion.div>
-              <h2 className="text-2xl sm:text-3xl font-serif font-bold text-white mb-3">
-                {loadingInfo.title}
-              </h2>
-              <p className="text-slate-400 mb-6">{loadingInfo.subtitle}</p>
-              {/* Enhanced progress bar */}
-              <div className="w-full max-w-md mx-auto mb-4">
-                <div className="relative h-2 bg-gradient-to-r from-arena-deep via-arena-surface to-arena-deep rounded-full overflow-hidden shadow-inner">
-                  <motion.div
-                    className="h-full bg-gradient-to-r from-cyan via-cyan-light to-cyan rounded-full relative"
-                    initial={{ width: 0 }}
-                    animate={{ width: `${loadingInfo.progress}%` }}
-                    transition={{ duration: 0.5, ease: "easeOut" }}
-                  >
-                    {/* Shimmer effect */}
-                    <motion.div
-                      className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent"
-                      animate={{ x: ["-100%", "200%"] }}
-                      transition={{
-                        duration: 1.5,
-                        repeat: Infinity,
-                        ease: "linear",
-                      }}
-                    />
-                    {/* Glow effect */}
-                    <div className="absolute inset-0 bg-cyan/50 blur-sm" />
-                  </motion.div>
-                </div>
-                {/* Progress percentage */}
-                <div className="text-center mt-2 text-xs text-slate-500 font-medium">
-                  {loadingInfo.progress}%
-                </div>
-              </div>
-              <motion.div
-                className="inline-block px-5 py-2.5 rounded-full bg-gradient-to-r from-cyan/10 to-cyan/5 border border-cyan/20 text-sm text-cyan font-medium shadow-lg shadow-cyan/10"
-                animate={{ opacity: [0.7, 1, 0.7] }}
-                transition={{ duration: 1.5, repeat: Infinity }}
-              >
-                {progress}
-              </motion.div>
+              <LiveArena
+                state={state}
+                theses={theses}
+                liveDebates={liveDebates}
+                currentDebate={currentDebate}
+                progress={progress}
+                totalAnalysts={8}
+                tournamentProgress={tournamentProgress}
+              />
             </motion.div>
           )}
 
