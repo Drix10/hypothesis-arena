@@ -28,7 +28,7 @@ const FMP_BASE_URL = 'https://financialmodelingprep.com/api/v3';
 
 // Get FMP API key from: in-memory > env variable > hardcoded fallback
 const getFmpKey = (): string => {
-    return getFmpApiKey() || 'rtabgOhoEnaDTen4V15pkDSgANNum8Er';
+    return getFmpApiKey() || 'demo';
 };
 
 // Rate limiting - minimum delay between FMP API calls

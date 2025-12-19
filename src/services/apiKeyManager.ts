@@ -101,7 +101,7 @@ export const getFmpApiKey = (): string | null => {
     }
 
     // Fallback to hardcoded key (from .env file)
-    return 'rtabgOhoEnaDTen4V15pkDSgANNum8Er';
+    return 'demo';
 };
 
 /**
