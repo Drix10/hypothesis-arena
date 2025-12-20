@@ -179,7 +179,11 @@ export const LiveArena: React.FC<LiveArenaProps> = ({
                 key={`time-${theses.length}`}
               >
                 Estimated time: ~
-                {Math.max(0, (totalAnalysts - theses.length) * 3)}s remaining
+                {Math.max(
+                  0,
+                  Math.ceil((totalAnalysts - theses.length) / 4) * 3
+                )}
+                s remaining
               </motion.p>
             )}
           </div>
@@ -212,9 +216,11 @@ export const LiveArena: React.FC<LiveArenaProps> = ({
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 max-w-5xl mx-auto">
             {Array.from({ length: totalAnalysts }).map((_, index) => {
               const thesis = theses[index];
-              // Show loading on both cards being generated (concurrency=2)
+              // Calculate how many are currently being generated (concurrency=4)
+              const remainingSlots = totalAnalysts - theses.length;
+              const loadingCount = Math.min(remainingSlots, 4);
               const isActive =
-                index === theses.length || index === theses.length + 1;
+                index >= theses.length && index < theses.length + loadingCount;
               const isEmpty = !thesis;
 
               return (
@@ -223,7 +229,7 @@ export const LiveArena: React.FC<LiveArenaProps> = ({
                   className="relative"
                   initial={{ opacity: 0, scale: 0.8 }}
                   animate={{ opacity: 1, scale: 1 }}
-                  transition={{ delay: index * 0.1 }}
+                  transition={{ duration: 0.3 }}
                 >
                   {isEmpty ? (
                     // Empty Slot
@@ -268,24 +274,16 @@ export const LiveArena: React.FC<LiveArenaProps> = ({
                       )}
                     </div>
                   ) : (
-                    // Filled Slot with Entrance Animation
+                    // Filled Slot with Simple Entrance Animation
                     <motion.div
-                      initial={{ scale: 0, rotate: -180, opacity: 0 }}
-                      animate={{ scale: 1, rotate: 0, opacity: 1 }}
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
                       transition={{
-                        type: "spring",
-                        stiffness: 200,
-                        damping: 15,
+                        duration: 0.4,
+                        ease: "easeOut",
                       }}
                     >
                       <AnalystCard thesis={thesis} isWinner={false} />
-                      {/* Entry Burst Effect */}
-                      <motion.div
-                        className="absolute inset-0 rounded-2xl border-2 border-cyan"
-                        initial={{ opacity: 1, scale: 1 }}
-                        animate={{ opacity: 0, scale: 1.5 }}
-                        transition={{ duration: 0.6 }}
-                      />
                     </motion.div>
                   )}
                 </motion.div>

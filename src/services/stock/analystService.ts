@@ -545,20 +545,36 @@ export async function generateAllTheses(
     // Process in batches to avoid rate limits
     for (let i = 0; i < analysts.length; i += concurrency) {
         const batch = analysts.slice(i, i + concurrency);
+        if (batch.length === 0) continue;  // Skip empty batches
+
         const batchResults = await Promise.all(
             batch.map(analyst => generateSingleThesis(ai, analyst, stockData, model))
         );
 
+        // Push all results first
         for (const result of batchResults) {
             results.push(result);
             if (result.error) {
                 errors.push({ analyst: result.analyst.name, error: result.error });
             }
-            if (onProgress) {
-                onProgress(results.length, analysts.length, result.analyst.name);
-            }
+        }
+
+        // Then call thesis complete callbacks
+        for (const result of batchResults) {
             if (onThesisComplete && result.thesis) {
                 onThesisComplete(result.thesis);
+            }
+        }
+
+        // Finally update progress with only successful analysts
+        if (onProgress) {
+            const successfulAnalysts = batchResults
+                .filter(r => r.thesis !== null)
+                .map(r => r.analyst.name);
+
+            if (successfulAnalysts.length > 0) {
+                const analystNames = successfulAnalysts.join(' & ');
+                onProgress(results.length, analysts.length, analystNames);
             }
         }
 

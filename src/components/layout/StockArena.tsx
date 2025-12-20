@@ -154,9 +154,17 @@ export const StockArena: React.FC<StockArenaProps> = ({ apiKey }) => {
           apiKey,
           data,
           {
+            concurrency: 4, // Generate 4 analysts at once
             onProgress: (completed, total, analyst) => {
-              if (isMountedRef.current)
-                setProgress(`${analyst} (${completed}/${total})`);
+              if (isMountedRef.current) {
+                // Handle long analyst names for better mobile UX
+                const names = analyst.split(" & ");
+                const displayText =
+                  names.length > 2
+                    ? `${names[0]} & ${names.length - 1} others`
+                    : analyst;
+                setProgress(`${displayText} (${completed}/${total})`);
+              }
             },
             onThesisComplete: (thesis) => {
               if (isMountedRef.current) {
