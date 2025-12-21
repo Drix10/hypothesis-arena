@@ -12,7 +12,8 @@ import {
     Position,
     TradingError,
     TradingErrorCode,
-    TradingSystemState
+    TradingSystemState,
+    RiskManagementRules
 } from '../../types/trading';
 import { InvestmentThesis, StockDebate } from '../../types/stock';
 import { marketHoursService } from './marketHoursService';
@@ -71,7 +72,8 @@ export class TradingService {
             systemErrors: 0
         };
 
-        this.saveTradingState(state);
+        // Fire-and-forget save (intentionally not awaited to avoid blocking initialization)
+        void this.saveTradingState(state);
         return state;
     }
 
@@ -188,7 +190,7 @@ export class TradingService {
             }
         } else {
             adjustedConfidence = adjustedConfidence * 0.5;
-            reasoning.push(`Lost debate (-${scoreMargin} points)`);
+            reasoning.push(`Lost debate (margin: ${scoreMargin} points) - reducing confidence`);
         }
 
         if (isCloseDebate) {
@@ -471,7 +473,7 @@ export class TradingService {
                 // Explicitly update portfolio in state
                 state.portfolios[portfolio.agentId] = portfolio;
 
-                this.updatePortfolioMetrics(portfolio);
+                this.updatePortfolioMetrics(portfolio, state.riskManagementRules);
                 await this.saveTradingState(state);
 
                 return trade;
@@ -610,7 +612,7 @@ export class TradingService {
         return hoursSinceLastSnapshot >= 24;
     }
 
-    private updatePortfolioMetrics(portfolio: AgentPortfolio): void {
+    private updatePortfolioMetrics(portfolio: AgentPortfolio, riskRules?: RiskManagementRules): void {
         // Update total value
         const positionsValue = portfolio.positions.reduce((sum, p) => sum + p.marketValue, 0);
         portfolio.totalValue = portfolio.currentCash + positionsValue;
@@ -656,10 +658,14 @@ export class TradingService {
             portfolio.volatility = performanceCalculator.calculateVolatility(returns);
         }
 
-        // Check if portfolio should be paused or liquidated
-        if (portfolio.currentDrawdown >= 0.8) {
+        // Check if portfolio should be paused or liquidated using configured rules
+        // Use provided rules or fall back to defaults
+        const { maxDrawdownBeforePause, maxDrawdownBeforeLiquidate } =
+            riskRules || { maxDrawdownBeforePause: 0.3, maxDrawdownBeforeLiquidate: 0.8 };
+
+        if (portfolio.currentDrawdown >= maxDrawdownBeforeLiquidate) {
             portfolio.status = 'liquidated';
-        } else if (portfolio.currentDrawdown >= 0.3) {
+        } else if (portfolio.currentDrawdown >= maxDrawdownBeforePause) {
             portfolio.status = 'paused';
         }
     }
@@ -738,13 +744,16 @@ export class TradingService {
                 }
             }
 
-            this.updatePortfolioMetrics(portfolio);
-
-            // Save state after price updates
-            const state = this.loadTradingState();
-            if (state) {
-                state.portfolios[portfolio.agentId] = portfolio;
-                await this.saveTradingState(state);
+            // Save state after price updates - use fresh state to avoid stale data
+            // IMPORTANT: We must use the portfolio parameter that was just updated,
+            // but get fresh riskManagementRules from state to avoid stale config
+            const freshState = this.loadTradingState();
+            if (freshState) {
+                // Update metrics using fresh rules but the portfolio we just modified
+                this.updatePortfolioMetrics(portfolio, freshState.riskManagementRules);
+                // Save the updated portfolio back to fresh state
+                freshState.portfolios[portfolio.agentId] = portfolio;
+                await this.saveTradingState(freshState);
             }
         });
     }
@@ -874,7 +883,7 @@ export class TradingService {
         return JSON.stringify(state, null, 2);
     }
 
-    importTradingData(jsonData: string): TradingSystemState | null {
+    async importTradingData(jsonData: string): Promise<TradingSystemState | null> {
         try {
             const state = JSON.parse(jsonData) as TradingSystemState;
 
@@ -908,7 +917,8 @@ export class TradingService {
                 throw new Error('Invalid dates');
             }
 
-            this.saveTradingState(state);
+            // Use await for async save operation
+            await this.saveTradingState(state);
             return state;
         } catch (error) {
             console.error('Failed to import trading data:', error);

@@ -35,6 +35,7 @@ export const useTradingSystem = () => {
             const state = tradingService.loadTradingState();
             if (state) {
                 setTradingState(state);
+                setError(null); // Clear error on successful reload
             }
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Failed to reload trading state');
@@ -61,6 +62,7 @@ export const useTradingSystem = () => {
             const portfolio = freshState.portfolios[thesis.agentId];
             if (!portfolio) continue;
 
+            // Find the debate where this agent participated (as bull or bear)
             const debate = debates.find(d =>
                 d.bullThesis.agentId === thesis.agentId || d.bearThesis.agentId === thesis.agentId
             );
@@ -145,11 +147,12 @@ export const useTradingSystem = () => {
     }, [tradingState]);
 
     // Import data
-    const importData = useCallback((jsonData: string) => {
+    const importData = useCallback(async (jsonData: string) => {
         try {
-            const state = tradingService.importTradingData(jsonData);
+            const state = await tradingService.importTradingData(jsonData);
             if (state) {
                 setTradingState(state);
+                setError(null); // Clear error on successful import
                 return true;
             }
             return false;

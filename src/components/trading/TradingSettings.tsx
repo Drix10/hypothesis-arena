@@ -22,16 +22,35 @@ export const TradingSettings: React.FC<TradingSettingsProps> = ({
   onClose,
 }) => {
   const [localState, setLocalState] = useState(state);
+  const [isSaving, setIsSaving] = useState(false);
 
-  // Sync local state when props change
+  // Sync local state when props change (only if user hasn't made edits)
+  const [hasLocalEdits, setHasLocalEdits] = useState(false);
+
   useEffect(() => {
-    setLocalState(state);
-  }, [state]);
+    if (!hasLocalEdits) {
+      setLocalState(state);
+    }
+  }, [state, hasLocalEdits]);
 
-  const handleSave = () => {
-    tradingService.saveTradingState(localState);
-    onUpdate(localState);
-    onClose();
+  const handleSave = async () => {
+    if (isSaving) return; // Prevent duplicate saves
+    setIsSaving(true);
+    try {
+      const success = await tradingService.saveTradingState(localState);
+      if (success) {
+        setHasLocalEdits(false);
+        onUpdate(localState);
+        onClose();
+      } else {
+        alert("Failed to save settings. Please try again.");
+      }
+    } catch (err) {
+      console.error("Failed to save settings:", err);
+      alert("Failed to save settings. Please try again.");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const parseAndValidateNumber = (
@@ -57,6 +76,7 @@ export const TradingSettings: React.FC<TradingSettingsProps> = ({
   };
 
   const updatePositionSizingRule = (key: string, value: number) => {
+    setHasLocalEdits(true);
     setLocalState({
       ...localState,
       positionSizingRules: {
@@ -67,6 +87,7 @@ export const TradingSettings: React.FC<TradingSettingsProps> = ({
   };
 
   const updateRiskManagementRule = (key: string, value: number | boolean) => {
+    setHasLocalEdits(true);
     setLocalState({
       ...localState,
       riskManagementRules: {
@@ -75,6 +96,18 @@ export const TradingSettings: React.FC<TradingSettingsProps> = ({
       },
     });
   };
+
+  // Validate drawdown thresholds relationship
+  const validateDrawdownThresholds = (): string | null => {
+    const { maxDrawdownBeforePause, maxDrawdownBeforeLiquidate } =
+      localState.riskManagementRules;
+    if (maxDrawdownBeforePause >= maxDrawdownBeforeLiquidate) {
+      return "Pause threshold must be less than liquidate threshold";
+    }
+    return null;
+  };
+
+  const drawdownError = validateDrawdownThresholds();
 
   return (
     <motion.div
@@ -224,8 +257,12 @@ export const TradingSettings: React.FC<TradingSettingsProps> = ({
 
           <div className="space-y-4">
             <div>
-              <label className="flex items-center cursor-pointer">
+              <label
+                htmlFor="enableStopLoss"
+                className="flex items-center cursor-pointer"
+              >
                 <input
+                  id="enableStopLoss"
                   type="checkbox"
                   checked={localState.riskManagementRules.enableStopLoss}
                   onChange={(e) =>
@@ -241,10 +278,14 @@ export const TradingSettings: React.FC<TradingSettingsProps> = ({
 
             {localState.riskManagementRules.enableStopLoss && (
               <div>
-                <label className="block text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider">
+                <label
+                  htmlFor="stopLossPercent"
+                  className="block text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider"
+                >
                   Stop Loss (%)
                 </label>
                 <input
+                  id="stopLossPercent"
                   type="number"
                   min="1"
                   max="50"
@@ -264,8 +305,12 @@ export const TradingSettings: React.FC<TradingSettingsProps> = ({
             )}
 
             <div>
-              <label className="flex items-center cursor-pointer">
+              <label
+                htmlFor="enableTakeProfit"
+                className="flex items-center cursor-pointer"
+              >
                 <input
+                  id="enableTakeProfit"
                   type="checkbox"
                   checked={localState.riskManagementRules.enableTakeProfit}
                   onChange={(e) =>
@@ -284,10 +329,14 @@ export const TradingSettings: React.FC<TradingSettingsProps> = ({
 
             {localState.riskManagementRules.enableTakeProfit && (
               <div>
-                <label className="block text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider">
+                <label
+                  htmlFor="takeProfitPercent"
+                  className="block text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider"
+                >
                   Take Profit (%)
                 </label>
                 <input
+                  id="takeProfitPercent"
                   type="number"
                   min="1"
                   max="100"
@@ -307,10 +356,14 @@ export const TradingSettings: React.FC<TradingSettingsProps> = ({
             )}
 
             <div>
-              <label className="block text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider">
+              <label
+                htmlFor="maxDrawdownBeforePause"
+                className="block text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider"
+              >
                 Max Drawdown Before Pause (%)
               </label>
               <input
+                id="maxDrawdownBeforePause"
                 type="number"
                 min="1"
                 max="100"
@@ -323,7 +376,9 @@ export const TradingSettings: React.FC<TradingSettingsProps> = ({
                     parseAndValidateNumber(e.target.value, 1, 100, 30) / 100
                   )
                 }
-                className="w-full px-3 py-2 bg-white/[0.03] border border-white/[0.08] rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-cyan/50"
+                className={`w-full px-3 py-2 bg-white/[0.03] border rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-cyan/50 ${
+                  drawdownError ? "border-bear/50" : "border-white/[0.08]"
+                }`}
               />
               <p className="text-[10px] text-slate-500 mt-1.5">
                 Pause trading at this drawdown
@@ -331,10 +386,14 @@ export const TradingSettings: React.FC<TradingSettingsProps> = ({
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider">
+              <label
+                htmlFor="maxDrawdownBeforeLiquidate"
+                className="block text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider"
+              >
                 Max Drawdown Before Liquidate (%)
               </label>
               <input
+                id="maxDrawdownBeforeLiquidate"
                 type="number"
                 min="1"
                 max="100"
@@ -348,11 +407,18 @@ export const TradingSettings: React.FC<TradingSettingsProps> = ({
                     parseAndValidateNumber(e.target.value, 1, 100, 80) / 100
                   )
                 }
-                className="w-full px-3 py-2 bg-white/[0.03] border border-white/[0.08] rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-cyan/50"
+                className={`w-full px-3 py-2 bg-white/[0.03] border rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-cyan/50 ${
+                  drawdownError ? "border-bear/50" : "border-white/[0.08]"
+                }`}
               />
               <p className="text-[10px] text-slate-500 mt-1.5">
                 Liquidate portfolio at this drawdown
               </p>
+              {drawdownError && (
+                <p className="text-[10px] text-bear-light mt-1">
+                  {drawdownError}
+                </p>
+              )}
             </div>
           </div>
         </div>
@@ -361,7 +427,15 @@ export const TradingSettings: React.FC<TradingSettingsProps> = ({
       {/* Actions */}
       <div className="mt-6 flex items-center justify-between pt-6 border-t border-white/[0.08]">
         <motion.button
-          onClick={onReset}
+          onClick={() => {
+            if (
+              confirm(
+                "Are you sure you want to reset all portfolios? This action cannot be undone."
+              )
+            ) {
+              onReset();
+            }
+          }}
           className="px-4 py-2 bg-gradient-to-r from-bear/20 to-bear/10 hover:from-bear/30 hover:to-bear/20 border border-bear/30 rounded-lg text-bear-light transition-all font-medium text-sm"
           whileHover={{ scale: 1.02 }}
           whileTap={{ scale: 0.98 }}
@@ -370,7 +444,11 @@ export const TradingSettings: React.FC<TradingSettingsProps> = ({
         </motion.button>
         <div className="flex gap-2">
           <motion.button
-            onClick={onClose}
+            onClick={() => {
+              setHasLocalEdits(false);
+              setLocalState(state);
+              onClose();
+            }}
             className="px-4 py-2 bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.08] rounded-lg text-slate-300 transition-all font-medium text-sm"
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
@@ -379,11 +457,14 @@ export const TradingSettings: React.FC<TradingSettingsProps> = ({
           </motion.button>
           <motion.button
             onClick={handleSave}
-            className="px-4 py-2 bg-gradient-to-r from-cyan/20 to-cyan/10 hover:from-cyan/30 hover:to-cyan/20 border border-cyan/30 rounded-lg text-cyan transition-all font-medium text-sm"
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
+            disabled={!!drawdownError || isSaving}
+            className={`px-4 py-2 bg-gradient-to-r from-cyan/20 to-cyan/10 hover:from-cyan/30 hover:to-cyan/20 border border-cyan/30 rounded-lg text-cyan transition-all font-medium text-sm ${
+              drawdownError || isSaving ? "opacity-50 cursor-not-allowed" : ""
+            }`}
+            whileHover={drawdownError || isSaving ? {} : { scale: 1.02 }}
+            whileTap={drawdownError || isSaving ? {} : { scale: 0.98 }}
           >
-            Save Settings
+            {isSaving ? "Saving..." : "Save Settings"}
           </motion.button>
         </div>
       </div>

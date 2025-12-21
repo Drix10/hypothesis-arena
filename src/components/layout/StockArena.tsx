@@ -47,6 +47,7 @@ import ErrorBoundary from "../common/ErrorBoundary";
 
 interface StockArenaProps {
   apiKey: string;
+  onShowSettings?: () => void;
 }
 
 type ActiveTab = "analysis" | "charts" | "technicals" | "news" | "trading";
@@ -102,7 +103,10 @@ const staggerItem = {
   },
 };
 
-export const StockArena: React.FC<StockArenaProps> = ({ apiKey }) => {
+export const StockArena: React.FC<StockArenaProps> = ({
+  apiKey,
+  onShowSettings,
+}) => {
   const [state, setState] = useState<StockArenaState>(StockArenaState.IDLE);
   const [stockData, setStockData] = useState<StockAnalysisData | null>(null);
   const [theses, setTheses] = useState<InvestmentThesis[]>([]);
@@ -494,6 +498,14 @@ export const StockArena: React.FC<StockArenaProps> = ({ apiKey }) => {
                     variant="ghost"
                   />
                 </>
+              )}
+              {onShowSettings && (
+                <HeaderButton
+                  onClick={onShowSettings}
+                  icon="🔑"
+                  label="Keys"
+                  variant="ghost"
+                />
               )}
             </div>
           </div>

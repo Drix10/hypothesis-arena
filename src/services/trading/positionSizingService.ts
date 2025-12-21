@@ -77,13 +77,16 @@ export class PositionSizingService {
             }
         }
 
-        // Calculate available cash (excluding reserved)
-        const availableCash = Math.max(0, portfolio.currentCash - portfolio.reservedCash);
+        // Calculate available cash for trading
+        // Reserve is calculated as a percentage of total portfolio value (not just cash)
+        // This ensures we always maintain a cash buffer regardless of position sizes
+        const reserveAmount = portfolio.totalValue * rules.reserveCashPercent;
+        const availableCash = Math.max(0, portfolio.currentCash - portfolio.reservedCash - reserveAmount);
         if (availableCash < rules.minTradeValue) {
             return {
                 shares: 0,
                 value: 0,
-                warnings: [`Insufficient cash (min $${rules.minTradeValue})`],
+                warnings: [`Insufficient cash (min ${rules.minTradeValue})`],
                 isValid: false
             };
         }
@@ -92,28 +95,49 @@ export class PositionSizingService {
         const targetPercent = (confidence / 100) * rules.maxPositionPercent;
         const targetValue = portfolio.totalValue * targetPercent;
 
-        // Limit to available cash (keep reserve)
-        const maxValue = Math.min(targetValue, availableCash * (1 - rules.reserveCashPercent));
+        // Calculate max value based on available cash (reserve is already excluded)
+        const maxValue = Math.min(targetValue, availableCash);
 
         // Calculate whole shares (no fractional shares)
-        const shares = Math.max(0, Math.floor(maxValue / currentPrice));
-        const actualValue = shares * currentPrice;
+        let shares = Math.max(0, Math.floor(maxValue / currentPrice));
+        let actualValue = shares * currentPrice;
 
         // Validate minimum trade size
         if (actualValue < rules.minTradeValue) {
             return {
                 shares: 0,
                 value: 0,
-                warnings: [`Trade size too small (min $${rules.minTradeValue})`],
+                warnings: [`Trade size too small (min ${rules.minTradeValue})`],
                 isValid: false
             };
         }
 
-        // Check total invested limit
+        // Check total invested limit - enforce it
         const totalInvested = portfolio.positions.reduce((sum, p) => sum + p.marketValue, 0);
         const newTotalInvested = totalInvested + actualValue;
         if (portfolio.totalValue > 0 && newTotalInvested > portfolio.totalValue * rules.maxTotalInvested) {
-            warnings.push(`Approaching max invested limit (${(rules.maxTotalInvested * 100).toFixed(0)}%)`);
+            // Calculate how much we can actually invest
+            const maxAllowedInvestment = (portfolio.totalValue * rules.maxTotalInvested) - totalInvested;
+            if (maxAllowedInvestment < rules.minTradeValue) {
+                return {
+                    shares: 0,
+                    value: 0,
+                    warnings: [`Max invested limit reached (${(rules.maxTotalInvested * 100).toFixed(0)}%)`],
+                    isValid: false
+                };
+            }
+            // Reduce shares to fit within limit
+            shares = Math.floor(maxAllowedInvestment / currentPrice);
+            actualValue = shares * currentPrice;
+            if (actualValue < rules.minTradeValue) {
+                return {
+                    shares: 0,
+                    value: 0,
+                    warnings: [`Max invested limit reached (${(rules.maxTotalInvested * 100).toFixed(0)}%)`],
+                    isValid: false
+                };
+            }
+            warnings.push(`Reduced to fit max invested limit (${(rules.maxTotalInvested * 100).toFixed(0)}%)`);
         }
 
         // Check position count limit

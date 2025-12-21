@@ -9,6 +9,11 @@ import { AgentPortfolio, CorporateAction, SplitDetails, DividendDetails } from '
 
 export class CorporateActionsService {
     processSplit(portfolio: AgentPortfolio, ticker: string, ratio: number): CorporateAction | null {
+        // Portfolio validation
+        if (!portfolio || !portfolio.positions || !Array.isArray(portfolio.positions)) {
+            console.error('Invalid portfolio for split');
+            return null;
+        }
         // Input validation
         if (!ticker || typeof ticker !== 'string') {
             console.error('Invalid ticker for split');
@@ -79,6 +84,8 @@ export class CorporateActionsService {
             affectedPositions: [ticker]
         };
 
+        // Ensure corporateActions array exists
+        portfolio.corporateActions = portfolio.corporateActions || [];
         portfolio.corporateActions.push(action);
 
         console.log(`Processed ${ratio}:1 split for ${ticker}: ${oldShares} → ${position.shares} shares`);
@@ -87,6 +94,11 @@ export class CorporateActionsService {
     }
 
     processDividend(portfolio: AgentPortfolio, ticker: string, amountPerShare: number): CorporateAction | null {
+        // Portfolio validation
+        if (!portfolio || !portfolio.positions || !Array.isArray(portfolio.positions)) {
+            console.error('Invalid portfolio for dividend');
+            return null;
+        }
         // Input validation
         if (!ticker || typeof ticker !== 'string') {
             console.error('Invalid ticker for dividend');
@@ -124,6 +136,8 @@ export class CorporateActionsService {
             affectedPositions: [ticker]
         };
 
+        // Ensure corporateActions array exists
+        portfolio.corporateActions = portfolio.corporateActions || [];
         portfolio.corporateActions.push(action);
 
         console.log(`Processed dividend for ${ticker}: ${totalDividend.toFixed(2)} (${position.shares} shares × ${amountPerShare})`);
@@ -132,6 +146,11 @@ export class CorporateActionsService {
     }
 
     processTickerChange(portfolio: AgentPortfolio, oldTicker: string, newTicker: string): CorporateAction | null {
+        // Portfolio validation
+        if (!portfolio || !portfolio.positions || !Array.isArray(portfolio.positions)) {
+            console.error('Invalid portfolio for ticker change');
+            return null;
+        }
         // Input validation
         if (!oldTicker || typeof oldTicker !== 'string') {
             console.error('Invalid old ticker for ticker change');
@@ -143,6 +162,13 @@ export class CorporateActionsService {
         }
         if (oldTicker === newTicker) {
             console.error('Old and new ticker are the same');
+            return null;
+        }
+
+        // Check for existing ticker conflicts
+        const existingNewPosition = portfolio.positions.find(p => p.ticker === newTicker);
+        if (existingNewPosition) {
+            console.error(`Cannot change ticker: position already exists for ${newTicker}`);
             return null;
         }
 
@@ -172,9 +198,11 @@ export class CorporateActionsService {
             },
             processed: true,
             processedAt: Date.now(),
-            affectedPositions: [oldTicker]
+            affectedPositions: [newTicker]
         };
 
+        // Ensure corporateActions array exists
+        portfolio.corporateActions = portfolio.corporateActions || [];
         portfolio.corporateActions.push(action);
 
         console.log(`Processed ticker change: ${oldTicker} → ${newTicker}`);

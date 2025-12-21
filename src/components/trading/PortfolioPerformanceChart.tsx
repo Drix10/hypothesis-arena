@@ -3,7 +3,7 @@
  * Premium chart visualization matching analysis aesthetic
  */
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   LineChart,
   Line,
@@ -27,6 +27,22 @@ export const PortfolioPerformanceChart: React.FC<
   const [selectedAgents, setSelectedAgents] = useState<Set<string>>(
     new Set(portfolios.map((p) => p.agentId))
   );
+
+  // Update selected agents when portfolios prop changes
+  useEffect(() => {
+    setSelectedAgents((prev) => {
+      const newAgentIds = new Set(portfolios.map((p) => p.agentId));
+      // Keep existing selections that are still valid, add new ones
+      const updated = new Set<string>();
+      portfolios.forEach((p) => {
+        if (prev.has(p.agentId) || !prev.size) {
+          updated.add(p.agentId);
+        }
+      });
+      // If no selections remain, select all
+      return updated.size > 0 ? updated : newAgentIds;
+    });
+  }, [portfolios]);
 
   const colors: Record<string, string> = {
     warren: "#8B4513",

@@ -11,8 +11,12 @@ import {
   getFmpApiKey,
   setFmpApiKey,
   testApiKey,
+  loadSavedKeys,
+  isPersistenceEnabled,
+  setPersistenceEnabled,
 } from "./services/apiKeyManager";
 import ErrorBoundary from "./components/common/ErrorBoundary";
+import { ApiKeySettings } from "./components/common/ApiKeySettings";
 
 const StockArena = lazy(() => import("./components/layout/StockArena"));
 
@@ -51,23 +55,42 @@ const App: React.FC = () => {
   const [isFocusedGemini, setIsFocusedGemini] = useState(false);
   const [isFocusedFmp, setIsFocusedFmp] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isInitializing, setIsInitializing] = useState(true);
   const [showGeminiKey, setShowGeminiKey] = useState(false);
   const [showFmpKey, setShowFmpKey] = useState(false);
   const [error, setError] = useState<string>("");
+  const [rememberKeys, setRememberKeys] = useState(isPersistenceEnabled());
+  const [showSettings, setShowSettings] = useState(false);
 
   useEffect(() => {
-    const savedGeminiKey = getApiKey();
-    const savedFmpKey = getFmpApiKey();
+    // Try to load saved keys on startup
+    const { geminiKey, fmpKey } = loadSavedKeys();
 
-    if (savedGeminiKey) {
-      setApiKeyState(savedGeminiKey);
+    if (geminiKey) {
+      setApiKeyState(geminiKey);
       setIsKeySet(true);
     }
 
-    // Pre-fill FMP key if available from env
-    if (savedFmpKey && !inputFmpKey) {
-      setInputFmpKey(savedFmpKey);
+    // Pre-fill FMP key from saved keys first
+    if (fmpKey) {
+      setInputFmpKey(fmpKey);
     }
+
+    // Also check env variables as fallback
+    const envGeminiKey = getApiKey();
+    const envFmpKey = getFmpApiKey();
+
+    if (envGeminiKey && !geminiKey) {
+      setApiKeyState(envGeminiKey);
+      setIsKeySet(true);
+    }
+
+    // Pre-fill FMP key from env if not already set from saved keys
+    if (envFmpKey && !fmpKey) {
+      setInputFmpKey(envFmpKey);
+    }
+
+    setIsInitializing(false);
   }, []);
 
   const handleSetKey = async (e: React.FormEvent) => {
@@ -79,6 +102,9 @@ const App: React.FC = () => {
       try {
         // Verify Gemini API key before proceeding
         await testApiKey(inputGeminiKey.trim());
+
+        // Set persistence based on user preference
+        setPersistenceEnabled(rememberKeys);
 
         // Set Gemini key (required)
         setApiKey(inputGeminiKey.trim());
@@ -98,6 +124,32 @@ const App: React.FC = () => {
       }
     }
   };
+
+  const handleKeysCleared = () => {
+    setIsKeySet(false);
+    setApiKeyState("");
+    setInputGeminiKey("");
+    setInputFmpKey("");
+    setShowSettings(false);
+  };
+
+  // Show loading while checking for saved keys
+  if (isInitializing) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <motion.div
+          className="text-center"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+        >
+          <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-arena-card to-arena-surface border border-white/10 flex items-center justify-center mx-auto mb-4">
+            <span className="text-3xl animate-pulse">⚔️</span>
+          </div>
+          <p className="text-slate-500 text-sm">Loading...</p>
+        </motion.div>
+      </div>
+    );
+  }
 
   if (!isKeySet) {
     return (
@@ -326,6 +378,38 @@ const App: React.FC = () => {
                 </motion.div>
               )}
 
+              {/* Remember Keys Checkbox */}
+              <label className="flex items-center gap-3 cursor-pointer group">
+                <div className="relative">
+                  <input
+                    type="checkbox"
+                    checked={rememberKeys}
+                    onChange={(e) => setRememberKeys(e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-5 h-5 rounded-md border border-white/20 bg-arena-deep peer-checked:bg-cyan/20 peer-checked:border-cyan/50 transition-all flex items-center justify-center">
+                    {rememberKeys && (
+                      <svg
+                        className="w-3 h-3 text-cyan"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={3}
+                          d="M5 13l4 4L19 7"
+                        />
+                      </svg>
+                    )}
+                  </div>
+                </div>
+                <span className="text-sm text-slate-400 group-hover:text-slate-300 transition-colors">
+                  Remember my keys for next time
+                </span>
+              </label>
+
               <motion.button
                 type="submit"
                 disabled={!inputGeminiKey.trim() || isLoading}
@@ -476,10 +560,20 @@ const App: React.FC = () => {
             exit={{ opacity: 0 }}
             transition={{ duration: 0.3 }}
           >
-            <StockArena apiKey={apiKey} />
+            <StockArena
+              apiKey={apiKey}
+              onShowSettings={() => setShowSettings(true)}
+            />
           </motion.div>
         </AnimatePresence>
       </Suspense>
+
+      {/* API Key Settings Modal */}
+      <ApiKeySettings
+        isOpen={showSettings}
+        onClose={() => setShowSettings(false)}
+        onKeysCleared={handleKeysCleared}
+      />
     </ErrorBoundary>
   );
 };

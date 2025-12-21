@@ -80,7 +80,11 @@ export class PerformanceCalculator {
                 .reduce((sum, p) => sum + p.realizedPnL, 0)
         );
 
-        return totalLosses > 0 ? totalWins / totalLosses : 0;
+        // If no losses, return Infinity for all-winning strategies (or a large number)
+        if (totalLosses === 0) {
+            return totalWins > 0 ? Infinity : 0;
+        }
+        return totalWins / totalLosses;
     }
 
     calculateTradeStatistics(trades: Trade[]): {

@@ -75,14 +75,21 @@ export const TradingDashboard: React.FC = () => {
     return generateLeaderboard(tradingState);
   }, [tradingState]);
 
-  const handleReset = () => {
+  const handleReset = async () => {
     if (
       confirm(
         "Are you sure you want to reset all portfolios? This cannot be undone."
       )
     ) {
-      const state = tradingService.initializeTradingSystem();
-      setTradingState(state);
+      try {
+        const state = tradingService.initializeTradingSystem();
+        setTradingState(state);
+      } catch (err) {
+        console.error("Failed to reset portfolios:", err);
+        setError(
+          err instanceof Error ? err.message : "Failed to reset portfolios"
+        );
+      }
     }
   };
 
@@ -113,17 +120,20 @@ export const TradingDashboard: React.FC = () => {
     if (!file) return;
 
     const reader = new FileReader();
+    let isAborted = false;
 
     const cleanup = () => {
       reader.onload = null;
       reader.onerror = null;
+      reader.onabort = null;
     };
 
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
+      if (isAborted) return;
       cleanup();
       try {
         const jsonData = e.target?.result as string;
-        const state = tradingService.importTradingData(jsonData);
+        const state = await tradingService.importTradingData(jsonData);
         if (state) {
           setTradingState(state);
         } else {
@@ -135,8 +145,13 @@ export const TradingDashboard: React.FC = () => {
       }
     };
     reader.onerror = () => {
+      if (isAborted) return;
       cleanup();
       alert("Failed to read file. Please try again.");
+    };
+    reader.onabort = () => {
+      isAborted = true;
+      cleanup();
     };
     reader.readAsText(file);
 

@@ -3,9 +3,9 @@
   
   # 🏆 Hypothesis Arena
   
-  **AI-Powered Stock Investment Analysis & Agent Trading System**
+  **AI-Powered Stock Investment Analysis & Simulated Trading System**
   
-  *8 AI analysts debate investment decisions, then compete with real portfolios*
+  *8 AI analysts debate investment decisions, then compete with simulated portfolios (no real money)*
   
   [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-blue?logo=typescript)](https://www.typescriptlang.org/)
   [![React](https://img.shields.io/badge/React-19.2-61dafb?logo=react)](https://react.dev/)
@@ -26,9 +26,9 @@ Hypothesis Arena is a sophisticated AI-powered platform that combines **investme
 
 8 AI analysts with different methodologies analyze any stock, generate investment theses, and debate in a tournament format to reach consensus.
 
-#### 2. **Trading System** - Agent Competition Arena
+#### 2. **Trading System** - Agent Competition Arena (Simulation)
 
-Each analyst manages a $100,000 portfolio, executing trades based on their debate performance. Track rankings, performance metrics, and see who's the best investor.
+Each analyst manages a simulated $100,000 portfolio with paper trading (no real money). Trades are recorded based on debate performance. Track rankings, performance metrics, and see who's the best virtual investor.
 
 ---
 

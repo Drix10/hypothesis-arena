@@ -195,24 +195,27 @@ export const AccuracyTracker: React.FC = () => {
               verifying...
             </motion.span>
           )}
-          {verifyMessage && (
-            <motion.span
-              className="text-[10px] text-bull-light"
-              initial={{ opacity: 0, x: -10 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0 }}
-            >
-              ✓ {verifyMessage}
-            </motion.span>
-          )}
+          <AnimatePresence>
+            {verifyMessage && (
+              <motion.span
+                className="text-[10px] text-bull-light"
+                initial={{ opacity: 0, x: -10 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0 }}
+              >
+                ✓ {verifyMessage}
+              </motion.span>
+            )}
+          </AnimatePresence>
           {stats.total > 0 && !isVerifying && !verifyMessage && (
             <motion.span
-              className={`text-[10px] font-medium px-1.5 py-0.5 rounded-md ${stats.rate >= 60
+              className={`text-[10px] font-medium px-1.5 py-0.5 rounded-md ${
+                stats.rate >= 60
                   ? "bg-bull/[0.12] text-bull-light border border-bull/25"
                   : stats.rate >= 40
-                    ? "bg-gold/[0.12] text-gold-light border border-gold/25"
-                    : "bg-bear/[0.12] text-bear-light border border-bear/25"
-                }`}
+                  ? "bg-gold/[0.12] text-gold-light border border-gold/25"
+                  : "bg-bear/[0.12] text-bear-light border border-bear/25"
+              }`}
               initial={{ scale: 0.8 }}
               animate={{ scale: 1 }}
             >
@@ -269,12 +272,13 @@ export const AccuracyTracker: React.FC = () => {
                 transition={{ delay: 0.2 }}
               >
                 <div
-                  className={`text-xl font-bold ${stats.rate >= 60
+                  className={`text-xl font-bold ${
+                    stats.rate >= 60
                       ? "text-bull-light"
                       : stats.rate >= 40
-                        ? "text-gold-light"
-                        : "text-bear-light"
-                    }`}
+                      ? "text-gold-light"
+                      : "text-bear-light"
+                  }`}
                 >
                   {stats.total > 0 ? `${stats.rate.toFixed(0)}%` : "—"}
                 </div>
@@ -291,11 +295,11 @@ export const AccuracyTracker: React.FC = () => {
                   {checkedHistory.slice(0, 10).map((record, index) => {
                     const priceChange =
                       record.priceAtCheck !== undefined &&
-                        record.priceAtCheck !== null &&
-                        record.priceAtAnalysis > 0
+                      record.priceAtCheck !== null &&
+                      record.priceAtAnalysis > 0
                         ? ((record.priceAtCheck - record.priceAtAnalysis) /
-                          record.priceAtAnalysis) *
-                        100
+                            record.priceAtAnalysis) *
+                          100
                         : 0;
                     return (
                       <motion.div
@@ -326,10 +330,11 @@ export const AccuracyTracker: React.FC = () => {
                         </div>
                         <div className="text-right">
                           <div
-                            className={`text-xs font-medium ${priceChange >= 0
+                            className={`text-xs font-medium ${
+                              priceChange >= 0
                                 ? "text-bull-light"
                                 : "text-bear-light"
-                              }`}
+                            }`}
                           >
                             {priceChange >= 0 ? "+" : ""}
                             {priceChange.toFixed(1)}%

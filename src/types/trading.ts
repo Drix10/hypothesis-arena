@@ -22,7 +22,7 @@ export interface AgentPortfolio {
     reservedCash: number;
     totalValue: number;
 
-    // Performance metrics
+    // Performance metrics (sharpeRatio is nullable - null means not yet calculated, requires 30+ data points)
     totalReturn: number;
     totalReturnDollar: number;
     winRate: number;
@@ -185,7 +185,7 @@ export interface PerformanceSnapshot {
     totalReturn: number;
     dailyReturn: number;
     volatility: number;
-    sharpeRatio: number;
+    sharpeRatio: number | null;  // Nullable to match AgentPortfolio.sharpeRatio
     maxDrawdown: number;
     currentDrawdown: number;
     spyPrice?: number;
@@ -295,14 +295,14 @@ export interface LeaderboardEntry {
     totalValue: number;
     winRate: number;
     tradesCount: number;
-    sharpeRatio: number;
+    sharpeRatio: number | null;
     maxDrawdown: number;
     rank: number;
     rankChange: number;
 }
 
 export interface TradeDecision {
-    action: 'BUY' | 'SELL' | 'HOLD' | 'REDUCE';
+    action: 'BUY' | 'SELL' | 'HOLD';
     ticker: string;
     shares: number;
     estimatedPrice: number;

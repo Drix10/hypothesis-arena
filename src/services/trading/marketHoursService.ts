@@ -174,12 +174,15 @@ export class MarketHoursService {
         if (timeInMinutes < marketOpen && etDate.getDay() >= 1 && etDate.getDay() <= 5) {
             const todayString = this.formatDateString(etDate);
             if (!this.NYSE_HOLIDAYS.includes(todayString)) {
-                etDate.setHours(9, 30, 0, 0);
-                return etDate.getTime();
+                // Return approximate timestamp for today at 9:30 AM ET
+                // Calculate offset from current ET time to 9:30 AM
+                const minutesUntilOpen = marketOpen - timeInMinutes;
+                return timestamp + (minutesUntilOpen * 60 * 1000);
             }
         }
 
         // Otherwise, find next trading day at 9:30 AM
+        // Start from the current ET date and iterate forward
         let nextDay = new Date(etDate);
         nextDay.setDate(nextDay.getDate() + 1);
         nextDay.setHours(9, 30, 0, 0);
@@ -190,7 +193,9 @@ export class MarketHoursService {
             nextDay.setDate(nextDay.getDate() + 1);
         }
 
-        return nextDay.getTime();
+        // Convert the ET date back to a UTC timestamp
+        // Use Intl to get the correct offset for that specific date (handles DST)
+        return this.etDateToTimestamp(nextDay, 9, 30);
     }
 
     private getNextMarketClose(timestamp: number): number {
@@ -204,12 +209,14 @@ export class MarketHoursService {
         if (timeInMinutes < marketClose && etDate.getDay() >= 1 && etDate.getDay() <= 5) {
             const todayString = this.formatDateString(etDate);
             if (!this.NYSE_HOLIDAYS.includes(todayString)) {
-                etDate.setHours(16, 0, 0, 0);
-                return etDate.getTime();
+                // Return approximate timestamp for today at 4:00 PM ET
+                const minutesUntilClose = marketClose - timeInMinutes;
+                return timestamp + (minutesUntilClose * 60 * 1000);
             }
         }
 
         // Otherwise, find next trading day at 4:00 PM
+        // Start from the current ET date and iterate forward
         let nextDay = new Date(etDate);
         nextDay.setDate(nextDay.getDate() + 1);
         nextDay.setHours(16, 0, 0, 0);
@@ -220,7 +227,59 @@ export class MarketHoursService {
             nextDay.setDate(nextDay.getDate() + 1);
         }
 
-        return nextDay.getTime();
+        // Convert the ET date back to a UTC timestamp
+        // Use Intl to get the correct offset for that specific date (handles DST)
+        return this.etDateToTimestamp(nextDay, 16, 0);
+    }
+
+    /**
+     * Convert an ET date (year, month, day) with specific hour/minute to UTC timestamp
+     * Properly handles DST by using the timezone offset for that specific date
+     */
+    private etDateToTimestamp(etDate: Date, hour: number, minute: number): number {
+        try {
+            // Create a date string in ISO format for the target ET date/time
+            const year = etDate.getFullYear();
+            const month = String(etDate.getMonth() + 1).padStart(2, '0');
+            const day = String(etDate.getDate()).padStart(2, '0');
+            const hourStr = String(hour).padStart(2, '0');
+            const minuteStr = String(minute).padStart(2, '0');
+
+            // Create a formatter that will give us the UTC offset for this specific date in ET
+            const formatter = new Intl.DateTimeFormat('en-US', {
+                timeZone: 'America/New_York',
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: false,
+                timeZoneName: 'shortOffset'
+            });
+
+            // Create a test date at the target time to determine the offset
+            // We need to find what UTC time corresponds to this ET time
+            // Start with a rough estimate (ET is UTC-5 or UTC-4)
+            const roughUtc = new Date(`${year}-${month}-${day}T${hourStr}:${minuteStr}:00Z`);
+            roughUtc.setHours(roughUtc.getHours() + 5); // Assume EST first
+
+            // Format to get the actual ET time this represents
+            const parts = formatter.formatToParts(roughUtc);
+            const actualHour = parseInt(parts.find(p => p.type === 'hour')?.value || '0', 10);
+
+            // Adjust based on the difference
+            const hourDiff = hour - actualHour;
+            roughUtc.setHours(roughUtc.getHours() + hourDiff);
+
+            return roughUtc.getTime();
+        } catch (error) {
+            // Fallback: assume EST (UTC-5)
+            const year = etDate.getFullYear();
+            const month = etDate.getMonth();
+            const day = etDate.getDate();
+            return Date.UTC(year, month, day, hour + 5, minute, 0);
+        }
     }
 
     private getHolidayName(dateString: string): string {

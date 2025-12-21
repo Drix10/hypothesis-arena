@@ -49,9 +49,9 @@ export class TradingSystemLock {
             return true;
         }
 
-        // Safeguard: if owner is provided, it must match
-        if (owner !== undefined && this.lockOwner !== null && owner !== this.lockOwner) {
-            console.warn('Attempted to release lock with incorrect owner');
+        // Strict ownership enforcement: if owner is provided, it must match exactly
+        if (owner !== undefined && owner !== this.lockOwner) {
+            console.warn(`Lock release rejected: owner mismatch (expected: ${this.lockOwner}, got: ${owner})`);
             return false;
         }
 
@@ -88,21 +88,19 @@ export class TradingSystemLock {
 
     /**
      * Force release the lock (use with caution - only for error recovery)
-     * This will reject all pending lock requests with an error
+     * Clears all state and pending requests will timeout naturally
      */
     forceRelease(): void {
-        // Reject all pending promises by calling them (they will get the lock briefly then release)
-        // But since we're force releasing, we need to handle this differently
-        const pendingCallbacks = [...this.queue];
+        const pendingCount = this.queue.length;
 
-        // Clear state first
+        // Clear all state
         this.locked = false;
         this.lockOwner = null;
         this.queue = [];
 
         // Log warning if there were pending requests
-        if (pendingCallbacks.length > 0) {
-            console.warn(`Force released lock with ${pendingCallbacks.length} pending requests - they will timeout`);
+        if (pendingCount > 0) {
+            console.warn(`Force released lock with ${pendingCount} pending requests - they will timeout`);
         }
     }
 }

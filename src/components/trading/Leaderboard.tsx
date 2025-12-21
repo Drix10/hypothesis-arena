@@ -40,6 +40,21 @@ export const Leaderboard: React.FC<LeaderboardProps> = ({
   const sortedEntries = [...entries].sort((a, b) => {
     const aVal = a[sortField];
     const bVal = b[sortField];
+
+    // Handle null/undefined values consistently:
+    // - null means "not yet calculated" (e.g., sharpeRatio needs 30+ data points)
+    // - These should sort to the end regardless of sort direction
+    const aIsNull = aVal === null || aVal === undefined;
+    const bIsNull = bVal === null || bVal === undefined;
+
+    // Both null - equal
+    if (aIsNull && bIsNull) return 0;
+    // Only a is null - always sort to end
+    if (aIsNull) return 1;
+    // Only b is null - always sort to end
+    if (bIsNull) return -1;
+
+    // Both have values - normal comparison
     if (aVal === bVal) return 0;
     const multiplier = sortDirection === "asc" ? 1 : -1;
     return (aVal > bVal ? 1 : -1) * multiplier;
@@ -260,7 +275,14 @@ export const Leaderboard: React.FC<LeaderboardProps> = ({
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: index * 0.05 }}
                 onClick={() => onAgentClick?.(entry.agentId)}
-                className="hover:bg-white/[0.03] cursor-pointer transition-colors"
+                onKeyDown={(e) =>
+                  (e.key === "Enter" || e.key === " ") &&
+                  onAgentClick?.(entry.agentId)
+                }
+                tabIndex={0}
+                role="button"
+                aria-label={`View ${entry.agentName} portfolio details`}
+                className="hover:bg-white/[0.03] cursor-pointer transition-colors focus:outline-none focus:ring-2 focus:ring-cyan/50"
               >
                 <td className="px-4 py-4 whitespace-nowrap">
                   <span className="text-2xl">{getRankBadge(entry.rank)}</span>
@@ -307,8 +329,14 @@ export const Leaderboard: React.FC<LeaderboardProps> = ({
                   </div>
                 </td>
                 <td className="px-4 py-4 whitespace-nowrap">
-                  <div className="text-sm text-slate-300">
-                    {entry.sharpeRatio > 0
+                  <div
+                    className={`text-sm ${
+                      entry.sharpeRatio !== null && entry.sharpeRatio < 0
+                        ? "text-bear-light"
+                        : "text-slate-300"
+                    }`}
+                  >
+                    {entry.tradesCount > 0 && entry.sharpeRatio !== null
                       ? entry.sharpeRatio.toFixed(2)
                       : "N/A"}
                   </div>

@@ -474,7 +474,9 @@ export const AgentPortfolioView: React.FC<AgentPortfolioViewProps> = ({
                           Volatility
                         </div>
                         <div className="text-xl font-bold text-gray-900">
-                          {portfolio.volatility > 0
+                          {portfolio.performanceHistory.length >= 2 &&
+                          portfolio.volatility !== null &&
+                          portfolio.volatility !== undefined
                             ? `${(portfolio.volatility * 100).toFixed(1)}%`
                             : "N/A"}
                         </div>
@@ -484,7 +486,10 @@ export const AgentPortfolioView: React.FC<AgentPortfolioViewProps> = ({
                           Profit Factor
                         </div>
                         <div className="text-xl font-bold text-gray-900">
-                          {portfolio.profitFactor > 0
+                          {portfolio.totalTrades > 0 &&
+                          portfolio.profitFactor !== null &&
+                          portfolio.profitFactor !== undefined &&
+                          Number.isFinite(portfolio.profitFactor)
                             ? portfolio.profitFactor.toFixed(2)
                             : "N/A"}
                         </div>
