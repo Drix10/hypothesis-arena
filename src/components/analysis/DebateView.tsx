@@ -1,10 +1,10 @@
 /**
- * Debate View Component - Strategic Arena Theme
- * Premium debate visualization with chat-style interface
+ * Debate View Component - Cinematic Command Center
+ * Epic battle visualization with dramatic chat interface
  */
 
 import React, { useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import { StockDebate } from "../../types/stock";
 
 interface DebateViewProps {
@@ -12,270 +12,388 @@ interface DebateViewProps {
   expanded?: boolean;
 }
 
+const ROUND_CONFIG: Record<
+  string,
+  { label: string; icon: string; color: string }
+> = {
+  quarterfinal: { label: "QUARTER FINAL", icon: "⚔️", color: "#64748b" },
+  semifinal: { label: "SEMI FINAL", icon: "🔥", color: "#f59e0b" },
+  final: { label: "CHAMPIONSHIP", icon: "👑", color: "#ffd700" },
+};
+
 export const DebateView: React.FC<DebateViewProps> = ({
   debate,
   expanded = false,
 }) => {
   const [isExpanded, setIsExpanded] = useState(expanded);
   const bullWon = debate.winner === "bull";
+  const roundConfig = ROUND_CONFIG[debate.round] || ROUND_CONFIG.quarterfinal;
 
-  const roundLabels: Record<string, { label: string; icon: string }> = {
-    quarterfinal: { label: "Quarter Final", icon: "🏟️" },
-    semifinal: { label: "Semi Final", icon: "⚔️" },
-    final: { label: "Championship", icon: "🏆" },
+  // Safe access to nested properties with defaults
+  const bullAnalyst = debate.bullAnalyst || { avatarEmoji: "🐂", name: "Bull" };
+  const bearAnalyst = debate.bearAnalyst || { avatarEmoji: "🐻", name: "Bear" };
+  const scores = debate.scores || {
+    bullScore: 0,
+    bearScore: 0,
+    dataQuality: { bull: 0, bear: 0 },
+    logicCoherence: { bull: 0, bear: 0 },
+    riskAcknowledgment: { bull: 0, bear: 0 },
+    catalystIdentification: { bull: 0, bear: 0 },
   };
-
-  const roundInfo = roundLabels[debate.round] || {
-    label: debate.round,
-    icon: "🎯",
-  };
+  const dialogue = debate.dialogue || [];
+  const winningArguments = debate.winningArguments || [];
 
   return (
-    <motion.div
-      className="glass-card rounded-xl overflow-hidden"
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      layout
-    >
-      {/* Header */}
-      <button
-        onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full px-4 py-3 flex items-center justify-between hover:bg-white/[0.02] transition-colors"
-        aria-expanded={isExpanded}
-        aria-controls={`debate-content-${debate.matchId}`}
+    <div className="relative group">
+      {/* Main container */}
+      <div
+        className="relative rounded-xl"
+        style={{
+          background: "linear-gradient(165deg, #0d1117 0%, #080b0f 100%)",
+          border: "1px solid rgba(255,255,255,0.06)",
+          boxShadow:
+            "0 8px 32px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.03)",
+        }}
       >
-        <div className="flex items-center gap-3 sm:gap-5">
-          {/* Bull Analyst */}
-          <div
-            className={`flex items-center gap-2.5 ${
-              bullWon ? "opacity-100" : "opacity-50"
-            }`}
-          >
-            <div className="relative">
-              <div className="w-10 h-10 rounded-lg bg-bull/[0.12] flex items-center justify-center text-lg border border-bull/20">
-                {debate.bullAnalyst.avatarEmoji}
-              </div>
-              {bullWon && (
-                <motion.div
-                  className="absolute -top-1 -right-1 text-xs"
-                  initial={{ scale: 0 }}
-                  animate={{ scale: 1 }}
-                  transition={{ type: "spring" }}
+        {/* Diagonal battle stripe */}
+        <div
+          className="absolute inset-0 opacity-10 rounded-xl overflow-hidden pointer-events-none"
+          style={{
+            background: `linear-gradient(135deg, #22c55e 0%, transparent 50%, #ef4444 100%)`,
+          }}
+        />
+
+        {/* Scanlines */}
+        <div
+          className="absolute inset-0 opacity-[0.02] pointer-events-none rounded-xl overflow-hidden"
+          style={{
+            backgroundImage:
+              "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.03) 2px, rgba(255,255,255,0.03) 4px)",
+          }}
+        />
+
+        {/* Header - Battle Card */}
+        <button
+          onClick={() => setIsExpanded(!isExpanded)}
+          className="w-full relative z-10"
+          aria-expanded={isExpanded}
+        >
+          <div className="p-4 pb-6 grid grid-cols-[1fr_auto_1fr] items-center gap-4">
+            {/* Bull Fighter */}
+            <div
+              className={`flex items-center gap-3 ${
+                bullWon ? "opacity-100" : "opacity-50"
+              }`}
+            >
+              <div className="relative">
+                <div
+                  className="w-14 h-14 rounded-xl flex items-center justify-center text-2xl"
+                  style={{
+                    background:
+                      "linear-gradient(145deg, rgba(34,197,94,0.2) 0%, rgba(34,197,94,0.05) 100%)",
+                    border: "1px solid rgba(34,197,94,0.3)",
+                    boxShadow: bullWon
+                      ? "0 0 30px rgba(34,197,94,0.3)"
+                      : "none",
+                  }}
                 >
-                  🏆
-                </motion.div>
-              )}
-            </div>
-            <div className="text-left hidden sm:block">
-              <div className="font-semibold text-bull-light text-xs">
-                {debate.bullAnalyst.name}
+                  {bullAnalyst.avatarEmoji}
+                </div>
+                {bullWon && (
+                  <div className="absolute -top-2 -right-2 text-lg">🏆</div>
+                )}
               </div>
-              <div className="text-[10px] text-slate-500">
-                {debate.scores.bullScore} pts
-              </div>
-            </div>
-          </div>
-
-          {/* VS Badge */}
-          <div className="px-2 py-1 rounded-md bg-white/[0.04] border border-white/[0.06]">
-            <span className="text-[10px] font-bold text-slate-500">VS</span>
-          </div>
-
-          {/* Bear Analyst */}
-          <div
-            className={`flex items-center gap-2.5 ${
-              !bullWon ? "opacity-100" : "opacity-50"
-            }`}
-          >
-            <div className="relative">
-              <div className="w-10 h-10 rounded-lg bg-bear/[0.12] flex items-center justify-center text-lg border border-bear/20">
-                {debate.bearAnalyst.avatarEmoji}
-              </div>
-              {!bullWon && (
-                <motion.div
-                  className="absolute -top-1 -right-1 text-xs"
-                  initial={{ scale: 0 }}
-                  animate={{ scale: 1 }}
-                  transition={{ type: "spring" }}
+              <div className="text-left">
+                <div
+                  className="text-sm font-bold text-green-400"
+                  style={{ fontFamily: "'Space Grotesk', sans-serif" }}
                 >
-                  🏆
-                </motion.div>
-              )}
-            </div>
-            <div className="text-left hidden sm:block">
-              <div className="font-semibold text-bear-light text-xs">
-                {debate.bearAnalyst.name}
-              </div>
-              <div className="text-[10px] text-slate-500">
-                {debate.scores.bearScore} pts
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <span className="px-2 py-1 rounded-md bg-white/[0.04] text-[10px] text-slate-400 font-medium flex items-center gap-1.5">
-            <span>{roundInfo.icon}</span>
-            <span className="hidden sm:inline">{roundInfo.label}</span>
-          </span>
-          <motion.svg
-            className="w-4 h-4 text-slate-500"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            animate={{ rotate: isExpanded ? 180 : 0 }}
-            transition={{ duration: 0.2 }}
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M19 9l-7 7-7-7"
-            />
-          </motion.svg>
-        </div>
-      </button>
-
-      {/* Expanded Content */}
-      <AnimatePresence>
-        {isExpanded && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.3 }}
-            className="border-t border-white/[0.05] overflow-hidden"
-            id={`debate-content-${debate.matchId}`}
-          >
-            {/* Dialogue */}
-            <div className="p-4 space-y-3 max-h-80 overflow-y-auto">
-              {debate.dialogue.map((turn, index) => {
-                const isBull = turn.position === "bull";
-                return (
-                  <motion.div
-                    key={index}
-                    className={`flex ${
-                      isBull ? "justify-start" : "justify-end"
-                    }`}
-                    initial={{ opacity: 0, x: isBull ? -20 : 20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: index * 0.08 }}
+                  {bullAnalyst.name}
+                </div>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="text-xs text-green-400/60">BULL</span>
+                  <span
+                    className="px-2 py-0.5 rounded text-[10px] font-bold"
+                    style={{
+                      background: "rgba(34,197,94,0.15)",
+                      color: "#22c55e",
+                    }}
                   >
-                    <div className="max-w-[85%]">
+                    {scores.bullScore} PTS
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* VS Badge */}
+            <div className="flex flex-col items-center gap-2">
+              <div
+                className="px-4 py-2 rounded-lg hover:scale-105 transition-transform"
+                style={{
+                  background: `${roundConfig.color}15`,
+                  border: `1px solid ${roundConfig.color}40`,
+                }}
+              >
+                <div className="flex items-center gap-2">
+                  <span>{roundConfig.icon}</span>
+                  <span
+                    className="text-[10px] font-black tracking-widest"
+                    style={{ color: roundConfig.color }}
+                  >
+                    {roundConfig.label}
+                  </span>
+                </div>
+              </div>
+              <div
+                className="text-2xl font-black"
+                style={{
+                  fontFamily: "'Space Grotesk', sans-serif",
+                  background:
+                    "linear-gradient(135deg, #22c55e 0%, #ef4444 100%)",
+                  WebkitBackgroundClip: "text",
+                  WebkitTextFillColor: "transparent",
+                }}
+              >
+                VS
+              </div>
+            </div>
+
+            {/* Bear Fighter */}
+            <div
+              className={`flex items-center gap-3 flex-row-reverse justify-start ${
+                !bullWon ? "opacity-100" : "opacity-50"
+              }`}
+            >
+              <div className="relative">
+                <div
+                  className="w-14 h-14 rounded-xl flex items-center justify-center text-2xl"
+                  style={{
+                    background:
+                      "linear-gradient(145deg, rgba(239,68,68,0.2) 0%, rgba(239,68,68,0.05) 100%)",
+                    border: "1px solid rgba(239,68,68,0.3)",
+                    boxShadow: !bullWon
+                      ? "0 0 30px rgba(239,68,68,0.3)"
+                      : "none",
+                  }}
+                >
+                  {bearAnalyst.avatarEmoji}
+                </div>
+                {!bullWon && (
+                  <div className="absolute -top-2 -left-2 text-lg">🏆</div>
+                )}
+              </div>
+              <div className="text-right">
+                <div
+                  className="text-sm font-bold text-red-400"
+                  style={{ fontFamily: "'Space Grotesk', sans-serif" }}
+                >
+                  {bearAnalyst.name}
+                </div>
+                <div className="flex items-center gap-2 mt-1 justify-end">
+                  <span
+                    className="px-2 py-0.5 rounded text-[10px] font-bold"
+                    style={{
+                      background: "rgba(239,68,68,0.15)",
+                      color: "#ef4444",
+                    }}
+                  >
+                    {scores.bearScore} PTS
+                  </span>
+                  <span className="text-xs text-red-400/60">BEAR</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Expand indicator - centered at bottom */}
+            <div
+              className="absolute left-1/2 bottom-1 transition-transform duration-200"
+              style={{
+                transform: `translateX(-50%) ${
+                  isExpanded ? "rotate(180deg)" : "rotate(0deg)"
+                }`,
+              }}
+            >
+              <svg
+                className="w-5 h-5 text-slate-500"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M19 9l-7 7-7-7"
+                />
+              </svg>
+            </div>
+          </div>
+        </button>
+
+        {/* Expanded Content */}
+        <AnimatePresence>
+          {isExpanded && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              style={{ overflow: "hidden" }}
+            >
+              <div className="border-t border-white/5">
+                {/* Dialogue */}
+                <div
+                  className="p-4 space-y-3 max-h-80 overflow-y-auto scrollbar-thin"
+                  style={{
+                    scrollbarWidth: "thin",
+                    scrollbarColor: "rgba(255,255,255,0.2) transparent",
+                  }}
+                >
+                  {dialogue.map((turn, index) => {
+                    const isBull = turn.position === "bull";
+                    return (
                       <div
-                        className={`rounded-xl px-3.5 py-2.5 ${
-                          isBull
-                            ? "bg-bull/[0.08] border border-bull/15 rounded-tl-sm"
-                            : "bg-bear/[0.08] border border-bear/15 rounded-tr-sm"
+                        key={index}
+                        className={`flex ${
+                          isBull ? "justify-start" : "justify-end"
                         }`}
                       >
-                        <div className="flex items-center gap-2 mb-1.5">
-                          <span
-                            className={`text-[11px] font-semibold ${
-                              isBull ? "text-bull-light" : "text-bear-light"
+                        <div
+                          className="max-w-[80%] p-4 rounded-xl"
+                          style={{
+                            background: isBull
+                              ? "linear-gradient(135deg, rgba(34,197,94,0.1) 0%, rgba(34,197,94,0.02) 100%)"
+                              : "linear-gradient(135deg, rgba(239,68,68,0.1) 0%, rgba(239,68,68,0.02) 100%)",
+                            border: `1px solid ${
+                              isBull
+                                ? "rgba(34,197,94,0.2)"
+                                : "rgba(239,68,68,0.2)"
+                            }`,
+                            borderRadius: isBull
+                              ? "4px 16px 16px 16px"
+                              : "16px 4px 16px 16px",
+                          }}
+                        >
+                          <div className="flex items-center gap-2 mb-2">
+                            <span
+                              className={`text-xs font-bold ${
+                                isBull ? "text-green-400" : "text-red-400"
+                              }`}
+                            >
+                              {isBull ? bullAnalyst.name : bearAnalyst.name}
+                            </span>
+                            <span
+                              className="px-1.5 py-0.5 rounded text-[9px] font-mono"
+                              style={{
+                                background: "rgba(255,255,255,0.05)",
+                                color: "#64748b",
+                              }}
+                            >
+                              STR: {turn.argumentStrength}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-300 leading-relaxed">
+                            {turn.content}
+                          </p>
+                          {turn.dataPointsReferenced &&
+                            turn.dataPointsReferenced.length > 0 && (
+                              <div className="mt-2 flex flex-wrap gap-1">
+                                {turn.dataPointsReferenced.map((dp, i) => (
+                                  <span
+                                    key={i}
+                                    className="px-1.5 py-0.5 rounded text-[9px] font-mono"
+                                    style={{
+                                      background: "rgba(0,240,255,0.1)",
+                                      color: "#00f0ff",
+                                      border: "1px solid rgba(0,240,255,0.2)",
+                                    }}
+                                  >
+                                    {dp}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Score Breakdown */}
+                <div className="p-4 border-t border-white/5">
+                  <div className="text-[10px] text-slate-500 font-bold tracking-widest uppercase mb-3">
+                    SCORE BREAKDOWN
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <ScoreBar
+                      label="Data Quality"
+                      bull={scores.dataQuality?.bull ?? 0}
+                      bear={scores.dataQuality?.bear ?? 0}
+                    />
+                    <ScoreBar
+                      label="Logic"
+                      bull={scores.logicCoherence?.bull ?? 0}
+                      bear={scores.logicCoherence?.bear ?? 0}
+                    />
+                    <ScoreBar
+                      label="Risk Awareness"
+                      bull={scores.riskAcknowledgment?.bull ?? 0}
+                      bear={scores.riskAcknowledgment?.bear ?? 0}
+                    />
+                    <ScoreBar
+                      label="Catalysts"
+                      bull={scores.catalystIdentification?.bull ?? 0}
+                      bear={scores.catalystIdentification?.bear ?? 0}
+                    />
+                  </div>
+                </div>
+
+                {/* Winning Arguments */}
+                {winningArguments.length > 0 && (
+                  <div className="p-4 border-t border-white/5">
+                    <div className="text-[10px] text-slate-500 font-bold tracking-widest uppercase mb-3">
+                      KEY WINNING ARGUMENTS
+                    </div>
+                    <div className="space-y-2">
+                      {winningArguments.map((arg, i) => (
+                        <div
+                          key={i}
+                          className="flex gap-3 p-3 rounded-lg"
+                          style={{
+                            background: bullWon
+                              ? "rgba(34,197,94,0.05)"
+                              : "rgba(239,68,68,0.05)",
+                            border: `1px solid ${
+                              bullWon
+                                ? "rgba(34,197,94,0.15)"
+                                : "rgba(239,68,68,0.15)"
+                            }`,
+                          }}
+                        >
+                          <div
+                            className="w-1 rounded-full flex-shrink-0"
+                            style={{
+                              background: bullWon ? "#22c55e" : "#ef4444",
+                            }}
+                          />
+                          <p
+                            className={`text-xs leading-relaxed ${
+                              bullWon ? "text-green-300" : "text-red-300"
                             }`}
                           >
-                            {isBull
-                              ? debate.bullAnalyst.name
-                              : debate.bearAnalyst.name}
-                          </span>
-                          <span className="text-[9px] text-slate-600 px-1.5 py-0.5 bg-white/[0.04] rounded">
-                            Strength: {turn.argumentStrength}
-                          </span>
+                            {arg}
+                          </p>
                         </div>
-                        <p className="text-xs text-slate-300 leading-relaxed">
-                          {turn.content}
-                        </p>
-                        {turn.dataPointsReferenced.length > 0 && (
-                          <div className="mt-2 flex flex-wrap gap-1">
-                            {turn.dataPointsReferenced.map((dp, i) => (
-                              <span
-                                key={i}
-                                className="px-1.5 py-0.5 text-[9px] bg-white/[0.04] rounded text-slate-500 font-medium"
-                              >
-                                {dp}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                      </div>
+                      ))}
                     </div>
-                  </motion.div>
-                );
-              })}
-            </div>
-
-            {/* Score Breakdown */}
-            <div className="px-4 pb-4">
-              <div className="p-3 rounded-lg bg-white/[0.02] border border-white/[0.05]">
-                <div className="text-[10px] text-slate-500 font-semibold mb-3 tracking-wider uppercase">
-                  Score Breakdown
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <ScoreBar
-                    label="Data Quality"
-                    bull={debate.scores.dataQuality.bull}
-                    bear={debate.scores.dataQuality.bear}
-                  />
-                  <ScoreBar
-                    label="Logic"
-                    bull={debate.scores.logicCoherence.bull}
-                    bear={debate.scores.logicCoherence.bear}
-                  />
-                  <ScoreBar
-                    label="Risk Awareness"
-                    bull={debate.scores.riskAcknowledgment.bull}
-                    bear={debate.scores.riskAcknowledgment.bear}
-                  />
-                  <ScoreBar
-                    label="Catalysts"
-                    bull={debate.scores.catalystIdentification.bull}
-                    bear={debate.scores.catalystIdentification.bear}
-                  />
-                </div>
+                  </div>
+                )}
               </div>
-            </div>
-
-            {/* Winning Arguments */}
-            {debate.winningArguments.length > 0 && (
-              <div className="px-4 pb-4">
-                <div className="text-[10px] text-slate-500 font-semibold mb-2 tracking-wider uppercase">
-                  Key Winning Arguments
-                </div>
-                <div className="space-y-1.5">
-                  {debate.winningArguments.map((arg, i) => (
-                    <motion.div
-                      key={i}
-                      className={`flex gap-2.5 p-2.5 rounded-lg ${
-                        bullWon
-                          ? "bg-bull/[0.06] border border-bull/10"
-                          : "bg-bear/[0.06] border border-bear/10"
-                      }`}
-                      initial={{ opacity: 0, x: -10 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: i * 0.08 }}
-                    >
-                      <span
-                        className={`w-0.5 rounded-full flex-shrink-0 ${
-                          bullWon ? "bg-bull" : "bg-bear"
-                        }`}
-                      />
-                      <p
-                        className={`text-xs leading-relaxed ${
-                          bullWon ? "text-bull-light" : "text-bear-light"
-                        }`}
-                      >
-                        {arg}
-                      </p>
-                    </motion.div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    </div>
   );
 };
 
@@ -289,20 +407,21 @@ const ScoreBar: React.FC<{ label: string; bull: number; bear: number }> = ({
 
   return (
     <div>
-      <div className="text-[9px] text-slate-500 mb-1.5 font-medium">
+      <div className="text-[9px] text-slate-500 mb-1.5 font-medium uppercase tracking-wider">
         {label}
       </div>
-      <div className="h-1.5 bg-bear/25 rounded-full overflow-hidden">
-        <motion.div
-          className="h-full bg-bull rounded-full"
-          initial={{ width: 0 }}
-          animate={{ width: `${bullPercent}%` }}
-          transition={{ duration: 0.5, delay: 0.2 }}
+      <div className="h-2 rounded-full overflow-hidden bg-slate-900/50 border border-white/5">
+        <div
+          className="h-full rounded-full transition-all duration-300"
+          style={{
+            background: "linear-gradient(90deg, #22c55e 0%, #22c55e 100%)",
+            width: `${bullPercent}%`,
+          }}
         />
       </div>
-      <div className="flex justify-between mt-1 text-[9px] font-medium">
-        <span className="text-bull-light">{bull}</span>
-        <span className="text-bear-light">{bear}</span>
+      <div className="flex justify-between mt-1 text-[9px] font-mono">
+        <span className="text-green-400">{bull}</span>
+        <span className="text-red-400">{bear}</span>
       </div>
     </div>
   );

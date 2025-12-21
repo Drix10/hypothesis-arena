@@ -1,10 +1,9 @@
 /**
- * Price Chart Component - Strategic Arena Theme
- * Candlestick and line chart visualization for stock prices
+ * Price Chart - Cinematic Command Center
+ * Dramatic data visualization with glowing effects
  */
 
 import React, { useState, useMemo } from "react";
-import { motion } from "framer-motion";
 import { HistoricalData } from "../../types/stock";
 
 interface PriceChartProps {
@@ -25,7 +24,6 @@ export const PriceChart: React.FC<PriceChartProps> = ({
   const filteredData = useMemo(() => {
     const now = new Date();
     const cutoff = new Date();
-
     switch (timeRange) {
       case "1M":
         cutoff.setMonth(now.getMonth() - 1);
@@ -40,30 +38,30 @@ export const PriceChart: React.FC<PriceChartProps> = ({
         cutoff.setFullYear(now.getFullYear() - 1);
         break;
     }
-
     return data.data.filter((d) => new Date(d.date) >= cutoff);
   }, [data.data, timeRange]);
 
   const { minPrice, maxPrice, priceRange } = useMemo(() => {
     if (filteredData.length === 0)
       return { minPrice: 0, maxPrice: 100, priceRange: 100 };
-
     const lows = filteredData.map((d) => d.low).filter((v) => v > 0);
     const highs = filteredData.map((d) => d.high).filter((v) => v > 0);
-
-    if (lows.length === 0 || highs.length === 0) {
+    if (lows.length === 0 || highs.length === 0)
       return { minPrice: 0, maxPrice: 100, priceRange: 100 };
-    }
-
     const min = Math.min(...lows) * 0.98;
     const max = Math.max(...highs) * 1.02;
     const range = max - min;
-
     return { minPrice: min, maxPrice: max, priceRange: range > 0 ? range : 1 };
   }, [filteredData]);
 
   const priceToY = (price: number): number => {
-    if (priceRange === 0) return 50;
+    if (
+      priceRange === 0 ||
+      !isFinite(price) ||
+      !isFinite(minPrice) ||
+      !isFinite(priceRange)
+    )
+      return 50;
     return 100 - ((price - minPrice) / priceRange) * 100;
   };
 
@@ -84,229 +82,313 @@ export const PriceChart: React.FC<PriceChartProps> = ({
       ? (priceChange / filteredData[0].close) * 100
       : 0;
   const isPositive = priceChange >= 0;
+  const accentColor = isPositive ? "#00ff88" : "#ef4444";
 
   return (
-    <motion.div
-      className="glass-card rounded-2xl p-5"
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4 }}
-    >
-      <div className="flex items-center justify-between mb-5">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <span className="text-lg">📊</span>
-            <h3 className="text-base font-semibold text-white">Price Chart</h3>
-          </div>
-          <div className="flex items-center gap-2">
-            <motion.span
-              className="text-xl font-bold text-white"
-              key={currentPrice}
-              initial={{ opacity: 0, y: -10 }}
-              animate={{ opacity: 1, y: 0 }}
-            >
-              ${currentPrice.toFixed(2)}
-            </motion.span>
-            <motion.span
-              className={`px-1.5 py-0.5 rounded-md text-xs font-medium ${
-                isPositive
-                  ? "bg-bull/[0.12] text-bull-light"
-                  : "bg-bear/[0.12] text-bear-light"
-              }`}
-              initial={{ scale: 0.8 }}
-              animate={{ scale: 1 }}
-            >
-              {isPositive ? "▲" : "▼"} {Math.abs(priceChangePercent).toFixed(2)}
-              %
-            </motion.span>
-          </div>
-        </div>
+    <div className="relative">
+      {/* Outer glow */}
+      <div
+        className="absolute -inset-1 rounded-2xl opacity-30 blur-xl"
+        style={{
+          background: `linear-gradient(135deg, ${accentColor}40, transparent)`,
+        }}
+      />
 
-        <div className="flex gap-1.5">
-          <div
-            className="flex bg-arena-deep/50 rounded-lg p-0.5 border border-white/[0.05]"
-            role="group"
-            aria-label="Chart type"
-          >
-            {(["candlestick", "line"] as ChartType[]).map((type) => (
-              <motion.button
-                key={type}
-                onClick={() => setChartType(type)}
-                className={`px-2.5 py-1 text-[10px] rounded-md transition-all ${
-                  chartType === type
-                    ? "bg-cyan/15 text-cyan"
-                    : "text-slate-500 hover:text-slate-300"
-                }`}
-                whileTap={{ scale: 0.95 }}
-                aria-pressed={chartType === type}
-                aria-label={`${
-                  type === "candlestick" ? "Candlestick" : "Line"
-                } chart`}
+      <div
+        className="relative overflow-hidden rounded-xl"
+        style={{
+          background: "linear-gradient(165deg, #0d1117 0%, #080b0f 100%)",
+          border: "1px solid rgba(255,255,255,0.06)",
+          boxShadow:
+            "0 8px 32px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.03)",
+        }}
+      >
+        {/* Scanlines */}
+        <div
+          className="absolute inset-0 opacity-[0.02] pointer-events-none"
+          style={{
+            backgroundImage:
+              "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.03) 2px, rgba(255,255,255,0.03) 4px)",
+          }}
+        />
+
+        <div className="relative p-5">
+          {/* Header */}
+          <div className="flex items-center justify-between mb-6">
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-xl">📊</span>
+                <h3
+                  className="text-base font-bold text-white"
+                  style={{ fontFamily: "'Space Grotesk', sans-serif" }}
+                >
+                  Price Chart
+                </h3>
+              </div>
+              <div className="flex items-center gap-3">
+                <span
+                  className="text-2xl font-black"
+                  style={{
+                    fontFamily: "'Space Grotesk', sans-serif",
+                    color: "#ffffff",
+                  }}
+                >
+                  ${currentPrice.toFixed(2)}
+                </span>
+                <span
+                  className="px-2 py-1 rounded-lg text-xs font-bold"
+                  style={{
+                    background: `${accentColor}15`,
+                    color: accentColor,
+                    border: `1px solid ${accentColor}30`,
+                  }}
+                >
+                  {isPositive ? "▲" : "▼"}{" "}
+                  {Math.abs(priceChangePercent).toFixed(2)}%
+                </span>
+              </div>
+            </div>
+
+            <div className="flex gap-2">
+              {/* Chart type toggle */}
+              <div
+                className="flex p-1 rounded-lg"
+                role="group"
+                aria-label="Chart type selection"
+                style={{
+                  background: "rgba(255,255,255,0.03)",
+                  border: "1px solid rgba(255,255,255,0.06)",
+                }}
               >
-                {type === "candlestick" ? "Candles" : "Line"}
-              </motion.button>
-            ))}
-          </div>
+                {(["candlestick", "line"] as ChartType[]).map((type) => (
+                  <button
+                    key={type}
+                    onClick={() => setChartType(type)}
+                    aria-label={`${type} chart`}
+                    aria-pressed={chartType === type}
+                    className="px-3 py-1.5 text-[10px] font-bold rounded-md transition-all active:scale-95"
+                    style={{
+                      background:
+                        chartType === type
+                          ? "rgba(0,240,255,0.15)"
+                          : "transparent",
+                      color: chartType === type ? "#00f0ff" : "#64748b",
+                      border:
+                        chartType === type
+                          ? "1px solid rgba(0,240,255,0.3)"
+                          : "1px solid transparent",
+                    }}
+                  >
+                    {type === "candlestick" ? "CANDLES" : "LINE"}
+                  </button>
+                ))}
+              </div>
 
-          <div
-            className="flex bg-arena-deep/50 rounded-lg p-0.5 border border-white/[0.05]"
-            role="group"
-            aria-label="Time range"
-          >
-            {(["1M", "3M", "6M", "1Y"] as TimeRange[]).map((range) => (
-              <motion.button
-                key={range}
-                onClick={() => setTimeRange(range)}
-                className={`px-2 py-1 text-[10px] rounded-md transition-all ${
-                  timeRange === range
-                    ? "bg-cyan/15 text-cyan"
-                    : "text-slate-500 hover:text-slate-300"
-                }`}
-                whileTap={{ scale: 0.95 }}
-                aria-pressed={timeRange === range}
-                aria-label={`${
-                  range === "1M"
-                    ? "1 month"
-                    : range === "3M"
-                    ? "3 months"
-                    : range === "6M"
-                    ? "6 months"
-                    : "1 year"
-                } range`}
+              {/* Time range toggle */}
+              <div
+                className="flex p-1 rounded-lg"
+                role="group"
+                aria-label="Time range selection"
+                style={{
+                  background: "rgba(255,255,255,0.03)",
+                  border: "1px solid rgba(255,255,255,0.06)",
+                }}
               >
-                {range}
-              </motion.button>
-            ))}
+                {(["1M", "3M", "6M", "1Y"] as TimeRange[]).map((range) => (
+                  <button
+                    key={range}
+                    onClick={() => setTimeRange(range)}
+                    aria-label={`${range} time range`}
+                    aria-pressed={timeRange === range}
+                    className="px-2.5 py-1.5 text-[10px] font-bold rounded-md transition-all active:scale-95"
+                    style={{
+                      background:
+                        timeRange === range
+                          ? "rgba(0,240,255,0.15)"
+                          : "transparent",
+                      color: timeRange === range ? "#00f0ff" : "#64748b",
+                      border:
+                        timeRange === range
+                          ? "1px solid rgba(0,240,255,0.3)"
+                          : "1px solid transparent",
+                    }}
+                  >
+                    {range}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
-        </div>
-      </div>
 
-      <div className="relative h-64 w-full">
-        {filteredData.length === 0 ? (
-          <div className="absolute inset-0 flex items-center justify-center text-slate-500">
-            No data available
-          </div>
-        ) : (
-          <svg
-            viewBox="0 0 100 100"
-            preserveAspectRatio="none"
-            className="w-full h-full"
-            role="img"
-            aria-label={`Price chart showing ${timeRange} of data. Current price ${currentPrice.toFixed(
-              2
-            )}, ${isPositive ? "up" : "down"} ${Math.abs(
-              priceChangePercent
-            ).toFixed(2)}%`}
-          >
-            <title>Stock Price Chart</title>
-            {[0, 25, 50, 75, 100].map((y) => (
-              <line
-                key={y}
-                x1="0"
-                y1={y}
-                x2="100"
-                y2={y}
-                stroke="rgba(255,255,255,0.05)"
-                strokeWidth="0.2"
-              />
-            ))}
-
-            {chartType === "line" ? (
-              <path
-                d={filteredData
-                  .map((d, i) => {
-                    const x =
-                      filteredData.length > 1
-                        ? (i / (filteredData.length - 1)) * 100
-                        : 50;
-                    const y = priceToY(d.close);
-                    return `${i === 0 ? "M" : "L"} ${x} ${y}`;
-                  })
-                  .join(" ")}
-                fill="none"
-                stroke={isPositive ? "#10b981" : "#ef4444"}
-                strokeWidth="0.5"
-              />
+          {/* Chart */}
+          <div className="relative h-64 w-full">
+            {filteredData.length === 0 ? (
+              <div className="absolute inset-0 flex items-center justify-center text-slate-500">
+                No data available
+              </div>
             ) : (
-              filteredData.map((d, i) => {
-                const x = i * gap + gap / 2;
-                const isUp = d.close >= d.open;
-                const color = isUp ? "#10b981" : "#ef4444";
-                const bodyTop = priceToY(Math.max(d.open, d.close));
-                const bodyBottom = priceToY(Math.min(d.open, d.close));
-                const bodyHeight = Math.max(0.5, bodyBottom - bodyTop);
+              <svg
+                viewBox="0 0 100 100"
+                preserveAspectRatio="none"
+                className="w-full h-full"
+                role="img"
+                aria-label={`Price chart showing ${chartType} view for ${timeRange} time range`}
+              >
+                {/* Grid lines */}
+                {[0, 25, 50, 75, 100].map((y) => (
+                  <line
+                    key={y}
+                    x1="0"
+                    y1={y}
+                    x2="100"
+                    y2={y}
+                    stroke="rgba(255,255,255,0.03)"
+                    strokeWidth="0.2"
+                  />
+                ))}
 
-                return (
-                  <g key={i}>
-                    <line
-                      x1={x}
-                      y1={priceToY(d.high)}
-                      x2={x}
-                      y2={priceToY(d.low)}
-                      stroke={color}
-                      strokeWidth="0.15"
+                {/* Gradient fill under line */}
+                {chartType === "line" && (
+                  <>
+                    <defs>
+                      <linearGradient
+                        id="lineGradient"
+                        x1="0"
+                        y1="0"
+                        x2="0"
+                        y2="1"
+                      >
+                        <stop
+                          offset="0%"
+                          stopColor={accentColor}
+                          stopOpacity="0.3"
+                        />
+                        <stop
+                          offset="100%"
+                          stopColor={accentColor}
+                          stopOpacity="0"
+                        />
+                      </linearGradient>
+                    </defs>
+                    <path
+                      d={`${filteredData
+                        .map((d, i) => {
+                          const x =
+                            filteredData.length > 1
+                              ? (i / (filteredData.length - 1)) * 100
+                              : 50;
+                          const y = priceToY(d.close);
+                          return `${i === 0 ? "M" : "L"} ${x} ${y}`;
+                        })
+                        .join(" ")} L 100 100 L 0 100 Z`}
+                      fill="url(#lineGradient)"
                     />
-                    <rect
-                      x={x - candleWidth / 2}
-                      y={bodyTop}
-                      width={candleWidth}
-                      height={bodyHeight}
-                      fill={color}
-                      stroke={color}
-                      strokeWidth="0.1"
-                    />
-                  </g>
-                );
-              })
+                  </>
+                )}
+
+                {chartType === "line" ? (
+                  <path
+                    d={filteredData
+                      .map((d, i) => {
+                        const x =
+                          filteredData.length > 1
+                            ? (i / (filteredData.length - 1)) * 100
+                            : 50;
+                        const y = priceToY(d.close);
+                        return `${i === 0 ? "M" : "L"} ${x} ${y}`;
+                      })
+                      .join(" ")}
+                    fill="none"
+                    stroke={accentColor}
+                    strokeWidth="0.5"
+                    style={{ filter: `drop-shadow(0 0 3px ${accentColor})` }}
+                  />
+                ) : (
+                  filteredData.map((d, i) => {
+                    const x = i * gap + gap / 2;
+                    const isUp = d.close >= d.open;
+                    const color = isUp ? "#00ff88" : "#ef4444";
+                    const bodyTop = priceToY(Math.max(d.open, d.close));
+                    const bodyBottom = priceToY(Math.min(d.open, d.close));
+                    const bodyHeight = Math.max(0.5, bodyBottom - bodyTop);
+
+                    return (
+                      <g key={i}>
+                        <line
+                          x1={x}
+                          y1={priceToY(d.high)}
+                          x2={x}
+                          y2={priceToY(d.low)}
+                          stroke={color}
+                          strokeWidth="0.15"
+                        />
+                        <rect
+                          x={x - candleWidth / 2}
+                          y={bodyTop}
+                          width={candleWidth}
+                          height={bodyHeight}
+                          fill={color}
+                          stroke={color}
+                          strokeWidth="0.1"
+                          style={{ filter: `drop-shadow(0 0 2px ${color}60)` }}
+                        />
+                      </g>
+                    );
+                  })
+                )}
+              </svg>
             )}
-          </svg>
-        )}
 
-        <div className="absolute right-0 top-0 bottom-0 w-16 flex flex-col justify-between text-right pr-2 py-1">
-          <span className="text-xs text-slate-500">${maxPrice.toFixed(0)}</span>
-          <span className="text-xs text-slate-500">
-            ${((maxPrice + minPrice) / 2).toFixed(0)}
-          </span>
-          <span className="text-xs text-slate-500">${minPrice.toFixed(0)}</span>
+            {/* Price labels */}
+            <div className="absolute right-0 top-0 bottom-0 w-16 flex flex-col justify-between text-right pr-2 py-1">
+              <span className="text-[10px] text-slate-500 font-mono">
+                ${maxPrice.toFixed(0)}
+              </span>
+              <span className="text-[10px] text-slate-500 font-mono">
+                ${((maxPrice + minPrice) / 2).toFixed(0)}
+              </span>
+              <span className="text-[10px] text-slate-500 font-mono">
+                ${minPrice.toFixed(0)}
+              </span>
+            </div>
+          </div>
+
+          {/* Volume bars */}
+          <div className="h-12 mt-3">
+            <svg
+              viewBox="0 0 100 100"
+              preserveAspectRatio="none"
+              className="w-full h-full"
+            >
+              {(() => {
+                const volumes = filteredData.map((p) => p.volume);
+                const maxVol = volumes.length > 0 ? Math.max(...volumes) : 0;
+                return filteredData.map((d, i) => {
+                  const volHeight = maxVol > 0 ? (d.volume / maxVol) * 100 : 0;
+                  const x = i * gap;
+                  const isUp = d.close >= d.open;
+                  return (
+                    <rect
+                      key={i}
+                      x={x}
+                      y={100 - volHeight}
+                      width={gap * 0.8}
+                      height={volHeight}
+                      fill={
+                        isUp ? "rgba(0,255,136,0.3)" : "rgba(239,68,68,0.3)"
+                      }
+                    />
+                  );
+                });
+              })()}
+            </svg>
+          </div>
+          <div className="text-[10px] text-slate-600 text-center mt-1 font-bold tracking-wider">
+            VOLUME
+          </div>
         </div>
       </div>
-
-      <div className="h-12 mt-2">
-        <svg
-          viewBox="0 0 100 100"
-          preserveAspectRatio="none"
-          className="w-full h-full"
-        >
-          {(() => {
-            const volumes = filteredData.map((p) => p.volume);
-            const maxVol = volumes.length > 0 ? Math.max(...volumes) : 0;
-
-            return filteredData.map((d, i) => {
-              const volHeight = maxVol > 0 ? (d.volume / maxVol) * 100 : 0;
-              const x = i * gap;
-              const isUp = d.close >= d.open;
-
-              return (
-                <motion.rect
-                  key={i}
-                  x={x}
-                  y={100 - volHeight}
-                  width={gap * 0.8}
-                  height={volHeight}
-                  fill={
-                    isUp ? "rgba(16, 185, 129, 0.3)" : "rgba(239, 68, 68, 0.3)"
-                  }
-                  initial={{ height: 0, y: 100 }}
-                  animate={{ height: volHeight, y: 100 - volHeight }}
-                  transition={{ duration: 0.3, delay: i * 0.002 }}
-                />
-              );
-            });
-          })()}
-        </svg>
-      </div>
-      <div className="text-xs text-slate-500 text-center mt-1">Volume</div>
-    </motion.div>
+    </div>
   );
 };
 

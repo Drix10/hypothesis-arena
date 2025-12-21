@@ -1,9 +1,10 @@
 /**
- * Saved Analyses Component - Strategic Arena Theme
+ * Saved Analyses Component - Cinematic Command Center
+ * Bold asymmetric design with dramatic lighting effects
  */
 
 import React, { useState, useEffect } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   SavedAnalysis,
   getSavedAnalyses,
@@ -53,185 +54,239 @@ export const SavedAnalyses: React.FC<SavedAnalysesProps> = ({
       minute: "2-digit",
     });
 
-  const getRecommendationColor = (rec: string): string => {
-    switch (rec) {
-      case "strong_buy":
-        return "text-bull-light bg-bull/[0.12] border border-bull/25";
-      case "buy":
-        return "text-bull-light bg-bull/[0.10] border border-bull/20";
-      case "hold":
-        return "text-gold-light bg-gold/[0.10] border border-gold/20";
-      case "sell":
-        return "text-bear-light bg-bear/[0.10] border border-bear/20";
-      case "strong_sell":
-        return "text-bear-light bg-bear/[0.12] border border-bear/25";
-      default:
-        return "text-slate-400 bg-slate-500/15 border border-slate-500/20";
-    }
+  const getRecConfig = (rec: string) => {
+    const configs: Record<
+      string,
+      { bg: string; border: string; color: string }
+    > = {
+      strong_buy: {
+        bg: "rgba(0,255,136,0.12)",
+        border: "rgba(0,255,136,0.3)",
+        color: "#00ff88",
+      },
+      buy: {
+        bg: "rgba(34,197,94,0.12)",
+        border: "rgba(34,197,94,0.3)",
+        color: "#22c55e",
+      },
+      hold: {
+        bg: "rgba(255,215,0,0.12)",
+        border: "rgba(255,215,0,0.3)",
+        color: "#ffd700",
+      },
+      sell: {
+        bg: "rgba(239,68,68,0.12)",
+        border: "rgba(239,68,68,0.3)",
+        color: "#ef4444",
+      },
+      strong_sell: {
+        bg: "rgba(220,38,38,0.12)",
+        border: "rgba(220,38,38,0.3)",
+        color: "#dc2626",
+      },
+    };
+    return configs[rec] || configs.hold;
   };
 
   if (analyses.length === 0) return null;
 
   return (
-    <motion.div
-      className="glass-card rounded-xl overflow-hidden"
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4 }}
+    <div
+      className="relative overflow-hidden rounded-xl"
+      style={{
+        background: "linear-gradient(165deg, #0d1117 0%, #080b0f 100%)",
+        border: "1px solid rgba(255,255,255,0.06)",
+        boxShadow:
+          "0 8px 32px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.03)",
+      }}
     >
-      <motion.button
+      {/* Diagonal accent */}
+      <div
+        className="absolute top-0 right-0 w-20 h-20 opacity-20"
+        style={{
+          background: "linear-gradient(135deg, #00f0ff 0%, transparent 60%)",
+          clipPath: "polygon(100% 0, 0 0, 100% 100%)",
+        }}
+      />
+      {/* Scanlines */}
+      <div
+        className="absolute inset-0 opacity-[0.03] pointer-events-none"
+        style={{
+          backgroundImage:
+            "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.03) 2px, rgba(255,255,255,0.03) 4px)",
+        }}
+      />
+
+      <button
         onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full px-4 py-3 flex items-center justify-between hover:bg-white/[0.02] transition-colors"
-        whileTap={{ scale: 0.99 }}
+        className="w-full px-4 py-3.5 flex items-center justify-between transition-colors relative z-10 hover:bg-white/[0.02] active:scale-[0.99]"
         aria-expanded={isExpanded}
-        aria-controls="saved-analyses-list"
       >
-        <div className="flex items-center gap-2">
-          <span className="text-base" aria-hidden="true">
+        <div className="flex items-center gap-3">
+          <div
+            className="w-9 h-9 rounded-lg flex items-center justify-center text-lg"
+            style={{
+              background:
+                "linear-gradient(145deg, rgba(0,240,255,0.15) 0%, rgba(0,240,255,0.05) 100%)",
+              border: "1px solid rgba(0,240,255,0.3)",
+            }}
+          >
             💾
-          </span>
-          <h3 className="text-sm font-semibold text-white">Saved Analyses</h3>
-          <motion.span
-            className="text-[10px] text-slate-500 bg-white/[0.05] px-1.5 py-0.5 rounded-md"
-            key={analyses.length}
-            initial={{ scale: 0.8 }}
-            animate={{ scale: 1 }}
+          </div>
+          <h3
+            className="text-sm font-black text-white"
+            style={{ fontFamily: "'Space Grotesk', sans-serif" }}
+          >
+            Saved Analyses
+          </h3>
+          <span
+            className="text-[10px] font-bold px-2 py-0.5 rounded-md"
+            style={{
+              background: "rgba(0,240,255,0.1)",
+              color: "#00f0ff",
+              border: "1px solid rgba(0,240,255,0.2)",
+            }}
           >
             {analyses.length}
-          </motion.span>
+          </span>
         </div>
-        <motion.span
-          className="text-slate-500 text-xs"
-          animate={{ rotate: isExpanded ? 180 : 0 }}
-          transition={{ duration: 0.2 }}
+        <span
+          className="text-slate-500 text-xs transition-transform duration-200"
+          style={{ transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)" }}
         >
           ▼
-        </motion.span>
-      </motion.button>
+        </span>
+      </button>
 
       <AnimatePresence>
         {isExpanded && (
           <motion.div
-            id="saved-analyses-list"
-            className="border-t border-white/[0.05] divide-y divide-white/[0.04] max-h-72 overflow-y-auto"
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
+            className="border-t border-white/[0.06] max-h-72 overflow-y-auto scrollbar-thin relative z-10"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
           >
-            {analyses.map((analysis, index) => (
-              <motion.div
-                key={analysis.id}
-                className="px-4 py-3 hover:bg-white/[0.02] transition-colors cursor-pointer"
-                onClick={() => onLoadAnalysis(analysis)}
-                initial={{ opacity: 0, x: -20 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: index * 0.04 }}
-                whileHover={{ x: 2 }}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-white font-semibold text-sm">
-                        {analysis.ticker}
-                      </span>
-                      <motion.span
-                        className={`px-1.5 py-0.5 text-[9px] rounded ${getRecommendationColor(
-                          analysis.recommendation.recommendation
-                        )}`}
-                      >
-                        {analysis.recommendation.recommendation
-                          .replace("_", " ")
-                          .toUpperCase()}
-                      </motion.span>
-                    </div>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <span className="text-[10px] text-slate-500">
-                        {analysis.companyName}
-                      </span>
-                      <span className="text-[10px] text-slate-600">•</span>
-                      <span className="text-[10px] text-slate-600">
-                        {formatDate(analysis.savedAt)}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-3 mt-1.5 text-[10px] text-slate-500">
-                      <span>
-                        Price: $
-                        {analysis.recommendation.currentPrice.toFixed(2)}
-                      </span>
-                      <span>
-                        Target: $
-                        {analysis.recommendation.priceTarget.base.toFixed(2)}
-                      </span>
-                      <span
-                        className={
-                          analysis.recommendation.upside >= 0
-                            ? "text-bull-light"
-                            : "text-bear-light"
-                        }
-                      >
-                        {analysis.recommendation.upside >= 0 ? "+" : ""}
-                        {analysis.recommendation.upside.toFixed(1)}%
-                      </span>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    {confirmDeleteId === analysis.id ? (
-                      <motion.div
-                        className="flex items-center gap-1"
-                        initial={{ opacity: 0, scale: 0.9 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                      >
-                        <span className="text-[10px] text-slate-400 mr-1">
-                          Delete?
+            {analyses.map((analysis) => {
+              const recConfig = getRecConfig(
+                analysis.recommendation.recommendation
+              );
+              return (
+                <div
+                  key={analysis.id}
+                  className="px-4 py-3 cursor-pointer relative overflow-hidden group hover:translate-x-1 hover:bg-white/[0.02]"
+                  style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}
+                  onClick={() => onLoadAnalysis(analysis)}
+                >
+                  {/* Hover glow */}
+                  <div
+                    className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                    style={{
+                      background:
+                        "linear-gradient(90deg, rgba(0,240,255,0.03) 0%, transparent 60%)",
+                    }}
+                  />
+
+                  <div className="flex items-center justify-between relative z-10">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-white font-bold text-sm">
+                          {analysis.ticker}
                         </span>
-                        <motion.button
-                          onClick={(e) => handleConfirmDelete(analysis.id, e)}
-                          className="px-1.5 py-0.5 text-[10px] bg-bear/20 text-bear-light rounded hover:bg-bear/30"
-                          whileTap={{ scale: 0.95 }}
-                          aria-label="Confirm delete"
+                        <span
+                          className="px-1.5 py-0.5 text-[9px] rounded font-black uppercase tracking-wider"
+                          style={{
+                            background: recConfig.bg,
+                            border: `1px solid ${recConfig.border}`,
+                            color: recConfig.color,
+                          }}
                         >
-                          Yes
-                        </motion.button>
-                        <motion.button
-                          onClick={handleCancelDelete}
-                          className="px-1.5 py-0.5 text-[10px] text-slate-400 hover:text-white"
-                          whileTap={{ scale: 0.95 }}
-                          aria-label="Cancel delete"
+                          {analysis.recommendation.recommendation.replaceAll(
+                            "_",
+                            " "
+                          )}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <span className="text-[10px] text-slate-500 truncate max-w-[120px]">
+                          {analysis.companyName}
+                        </span>
+                        <span className="text-[10px] text-slate-600">•</span>
+                        <span className="text-[10px] text-slate-600 font-mono">
+                          {formatDate(analysis.savedAt)}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3 mt-1.5 text-[10px] text-slate-500 font-mono">
+                        <span>
+                          Price: $
+                          {analysis.recommendation.currentPrice.toFixed(2)}
+                        </span>
+                        <span>
+                          Target: $
+                          {analysis.recommendation.priceTarget.base.toFixed(2)}
+                        </span>
+                        <span
+                          style={{
+                            color:
+                              analysis.recommendation.upside >= 0
+                                ? "#00ff88"
+                                : "#ef4444",
+                          }}
                         >
-                          No
-                        </motion.button>
-                      </motion.div>
-                    ) : (
-                      <>
-                        <motion.button
-                          onClick={(e) => handleDownload(analysis, e)}
-                          className="p-1.5 text-slate-500 hover:text-cyan transition-colors text-xs"
-                          title="Download JSON"
-                          aria-label={`Download ${analysis.ticker} analysis as JSON`}
-                          whileTap={{ scale: 0.9 }}
-                        >
-                          📥
-                        </motion.button>
-                        <motion.button
-                          onClick={(e) => handleDeleteClick(analysis.id, e)}
-                          className="p-1.5 text-slate-500 hover:text-bear-light transition-colors text-xs"
-                          title="Delete"
-                          aria-label={`Delete ${analysis.ticker} analysis`}
-                          whileTap={{ scale: 0.9 }}
-                        >
-                          🗑️
-                        </motion.button>
-                      </>
-                    )}
+                          {analysis.recommendation.upside >= 0 ? "+" : ""}
+                          {analysis.recommendation.upside.toFixed(1)}%
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      {confirmDeleteId === analysis.id ? (
+                        <div className="flex items-center gap-1">
+                          <span className="text-[10px] text-slate-400 mr-1">
+                            Delete?
+                          </span>
+                          <button
+                            onClick={(e) => handleConfirmDelete(analysis.id, e)}
+                            className="px-1.5 py-0.5 text-[10px] rounded font-bold active:scale-95"
+                            style={{
+                              background: "rgba(239,68,68,0.2)",
+                              color: "#ef4444",
+                              border: "1px solid rgba(239,68,68,0.3)",
+                            }}
+                          >
+                            Yes
+                          </button>
+                          <button
+                            onClick={handleCancelDelete}
+                            className="px-1.5 py-0.5 text-[10px] text-slate-400 hover:text-white active:scale-95"
+                          >
+                            No
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          <button
+                            onClick={(e) => handleDownload(analysis, e)}
+                            className="p-1.5 text-slate-500 hover:text-cyan transition-colors text-xs active:scale-90"
+                          >
+                            📥
+                          </button>
+                          <button
+                            onClick={(e) => handleDeleteClick(analysis.id, e)}
+                            className="p-1.5 text-slate-500 hover:text-red-400 transition-colors text-xs active:scale-90"
+                          >
+                            🗑️
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </motion.div>
-            ))}
+              );
+            })}
           </motion.div>
         )}
       </AnimatePresence>
-    </motion.div>
+    </div>
   );
 };
 

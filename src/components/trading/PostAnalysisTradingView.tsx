@@ -5,7 +5,6 @@
  */
 
 import React, { useState, useEffect } from "react";
-import { motion } from "framer-motion";
 import { InvestmentThesis, StockDebate } from "../../types/stock";
 import { TradingSystemState, TradeDecision } from "../../types/trading";
 import { tradingService } from "../../services/trading";
@@ -205,11 +204,7 @@ export const PostAnalysisTradingView: React.FC<
   );
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="bg-white rounded-lg shadow-lg p-6"
-    >
+    <div className="bg-white rounded-lg shadow-lg p-6">
       <div className="mb-6">
         <h2
           id="trading-modal-title"
@@ -488,6 +483,6 @@ export const PostAnalysisTradingView: React.FC<
           </button>
         </div>
       </div>
-    </motion.div>
+    </div>
   );
 };

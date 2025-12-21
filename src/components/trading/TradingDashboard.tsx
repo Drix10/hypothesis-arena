@@ -1,10 +1,10 @@
 /**
- * Trading Dashboard - Strategic Arena Theme
- * Premium trading interface matching analysis aesthetic
+ * Trading Dashboard - Cinematic Command Center
+ * Bold asymmetric design with dramatic lighting effects
  */
 
 import React, { useState, useEffect, useMemo } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import { TradingSystemState, LeaderboardEntry } from "../../types/trading";
 import { tradingService } from "../../services/trading";
 import { Leaderboard } from "./Leaderboard";
@@ -29,11 +29,7 @@ export const TradingDashboard: React.FC = () => {
     setError(null);
     try {
       let state = tradingService.loadTradingState();
-
-      if (!state) {
-        state = tradingService.initializeTradingSystem();
-      }
-
+      if (!state) state = tradingService.initializeTradingSystem();
       setTradingState(state);
     } catch (err) {
       console.error("Failed to load trading state:", err);
@@ -61,12 +57,10 @@ export const TradingDashboard: React.FC = () => {
       rank: 0,
       rankChange: 0,
     }));
-
     entries.sort((a, b) => b.totalReturn - a.totalReturn);
     entries.forEach((entry, index) => {
       entry.rank = index + 1;
     });
-
     return entries;
   };
 
@@ -95,11 +89,11 @@ export const TradingDashboard: React.FC = () => {
 
   const handleExport = () => {
     if (!tradingState) return;
-
+    let url: string | null = null;
     try {
       const jsonData = tradingService.exportTradingData(tradingState);
       const blob = new Blob([jsonData], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
+      url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
       a.download = `trading-data-${
@@ -108,37 +102,32 @@ export const TradingDashboard: React.FC = () => {
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      URL.revokeObjectURL(url);
     } catch (err) {
       console.error("Failed to export trading data:", err);
       alert("Failed to export data. Please try again.");
+    } finally {
+      if (url) URL.revokeObjectURL(url);
     }
   };
 
   const handleImport = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
-
     const reader = new FileReader();
     let isAborted = false;
-
     const cleanup = () => {
       reader.onload = null;
       reader.onerror = null;
       reader.onabort = null;
     };
-
     reader.onload = async (e) => {
       if (isAborted) return;
       cleanup();
       try {
         const jsonData = e.target?.result as string;
         const state = await tradingService.importTradingData(jsonData);
-        if (state) {
-          setTradingState(state);
-        } else {
-          alert("Failed to import data. Please check the file format.");
-        }
+        if (state) setTradingState(state);
+        else alert("Failed to import data. Please check the file format.");
       } catch (err) {
         console.error("Failed to import trading data:", err);
         alert("Failed to import data. The file may be corrupted or invalid.");
@@ -154,8 +143,6 @@ export const TradingDashboard: React.FC = () => {
       cleanup();
     };
     reader.readAsText(file);
-
-    // Reset input so same file can be selected again
     event.target.value = "";
   };
 
@@ -163,43 +150,51 @@ export const TradingDashboard: React.FC = () => {
     return (
       <div className="flex items-center justify-center py-20">
         <div className="text-center">
-          <motion.div
-            className="w-16 h-16 rounded-full border-2 border-cyan/30 border-t-cyan mx-auto mb-4"
-            animate={{ rotate: 360 }}
-            transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-          />
-          <p className="text-slate-400">Loading trading arena...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="flex items-center justify-center py-20">
-        <div className="glass-card rounded-xl p-8 text-center">
-          <p className="text-bear-light mb-4 font-semibold">{error}</p>
-          <button
-            onClick={loadTradingState}
-            className="px-4 py-2 bg-gradient-to-r from-cyan/20 to-cyan/10 hover:from-cyan/30 hover:to-cyan/20 border border-cyan/30 rounded-lg text-white transition-all"
+          <div
+            className="w-20 h-20 rounded-2xl mx-auto mb-6 flex items-center justify-center animate-spin"
+            style={{
+              background:
+                "linear-gradient(145deg, rgba(0,240,255,0.15) 0%, rgba(0,240,255,0.05) 100%)",
+              border: "1px solid rgba(0,240,255,0.3)",
+              boxShadow: "0 0 40px rgba(0,240,255,0.2)",
+            }}
           >
-            Retry
-          </button>
+            <span className="text-3xl">🏆</span>
+          </div>
+          <p
+            className="text-slate-400"
+            style={{ fontFamily: "'Space Grotesk', sans-serif" }}
+          >
+            Initializing Trading Arena...
+          </p>
         </div>
       </div>
     );
   }
 
-  if (!tradingState) {
+  if (error || !tradingState) {
     return (
       <div className="flex items-center justify-center py-20">
-        <div className="glass-card rounded-xl p-8 text-center">
-          <p className="text-bear-light mb-4 font-semibold">
-            Failed to load trading system
+        <div
+          className="p-8 text-center rounded-xl"
+          style={{
+            background: "linear-gradient(165deg, #0d1117 0%, #080b0f 100%)",
+            border: "1px solid rgba(239,68,68,0.3)",
+            boxShadow: "0 0 40px rgba(239,68,68,0.1)",
+          }}
+        >
+          <p className="text-red-400 mb-4 font-semibold">
+            {error || "Failed to load trading system"}
           </p>
           <button
             onClick={loadTradingState}
-            className="px-4 py-2 bg-gradient-to-r from-cyan/20 to-cyan/10 hover:from-cyan/30 hover:to-cyan/20 border border-cyan/30 rounded-lg text-white transition-all"
+            className="px-6 py-3 rounded-lg font-bold text-sm hover:scale-105 active:scale-95 transition-transform"
+            style={{
+              background:
+                "linear-gradient(135deg, rgba(0,240,255,0.2) 0%, rgba(0,240,255,0.05) 100%)",
+              border: "1px solid rgba(0,240,255,0.4)",
+              color: "#00f0ff",
+            }}
           >
             Retry
           </button>
@@ -209,58 +204,86 @@ export const TradingDashboard: React.FC = () => {
   }
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="space-y-6"
-    >
+    <div className="space-y-6">
       {/* Header */}
-      <div className="glass-card rounded-xl p-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-serif font-bold text-white mb-2 flex items-center gap-2">
-              <span className="text-3xl">🏆</span>
-              Agent Trading Arena
-            </h1>
-            <p className="text-slate-400 text-sm">
-              8 AI strategists competing with $100,000 each •{" "}
-              <span className="text-cyan">{tradingState.totalTrades}</span>{" "}
-              total trades
-            </p>
+      <div
+        className="relative overflow-hidden rounded-xl p-6"
+        style={{
+          background: "linear-gradient(165deg, #0d1117 0%, #080b0f 100%)",
+          border: "1px solid rgba(255,255,255,0.06)",
+          boxShadow:
+            "0 8px 32px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.03)",
+        }}
+      >
+        {/* Diagonal accent */}
+        <div
+          className="absolute top-0 right-0 w-40 h-40 opacity-20"
+          style={{
+            background: "linear-gradient(135deg, #ffd700 0%, transparent 60%)",
+            clipPath: "polygon(100% 0, 0 0, 100% 100%)",
+          }}
+        />
+        {/* Scanlines */}
+        <div
+          className="absolute inset-0 opacity-[0.03] pointer-events-none"
+          style={{
+            backgroundImage:
+              "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.03) 2px, rgba(255,255,255,0.03) 4px)",
+          }}
+        />
+
+        <div className="flex items-center justify-between relative z-10">
+          <div className="flex items-center gap-4">
+            <div
+              className="w-14 h-14 rounded-xl flex items-center justify-center text-3xl"
+              style={{
+                background:
+                  "linear-gradient(145deg, rgba(255,215,0,0.15) 0%, rgba(255,215,0,0.05) 100%)",
+                border: "1px solid rgba(255,215,0,0.3)",
+                boxShadow: "0 0 30px rgba(255,215,0,0.15)",
+              }}
+            >
+              🏆
+            </div>
+            <div>
+              <h1
+                className="text-2xl font-black text-white tracking-tight"
+                style={{ fontFamily: "'Space Grotesk', sans-serif" }}
+              >
+                Agent Trading Arena
+              </h1>
+              <p className="text-slate-500 text-sm mt-1">
+                8 AI strategists competing with{" "}
+                <span className="text-gold font-bold">$100,000</span> each •{" "}
+                <span className="text-cyan font-bold">
+                  {tradingState.totalTrades}
+                </span>{" "}
+                total trades
+              </p>
+            </div>
           </div>
           <div className="flex gap-2">
-            <motion.button
+            <ActionButton
+              icon="📥"
+              label="Export"
               onClick={handleExport}
-              className="px-3 py-2 text-xs font-medium rounded-lg bg-gradient-to-r from-bull/20 to-bull/10 hover:from-bull/30 hover:to-bull/20 border border-bull/30 text-bull-light transition-all flex items-center gap-1.5"
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
-            >
-              <span>📥</span>
-              <span className="hidden sm:inline">Export</span>
-            </motion.button>
-            <motion.label
-              className="px-3 py-2 text-xs font-medium rounded-lg bg-gradient-to-r from-cyan/20 to-cyan/10 hover:from-cyan/30 hover:to-cyan/20 border border-cyan/30 text-cyan cursor-pointer transition-all flex items-center gap-1.5"
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
-            >
-              <span>📤</span>
-              <span className="hidden sm:inline">Import</span>
+              color="#22c55e"
+            />
+            <label>
+              <ActionButton icon="📤" label="Import" color="#00f0ff" />
               <input
                 type="file"
                 accept=".json"
                 onChange={handleImport}
                 className="hidden"
               />
-            </motion.label>
-            <motion.button
+            </label>
+            <ActionButton
+              icon="⚙️"
+              label="Settings"
               onClick={() => setShowSettings(!showSettings)}
-              className="px-3 py-2 text-xs font-medium rounded-lg bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.08] text-slate-300 transition-all flex items-center gap-1.5"
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.98 }}
-            >
-              <span>⚙️</span>
-              <span className="hidden sm:inline">Settings</span>
-            </motion.button>
+              color="#94a3b8"
+            />
           </div>
         </div>
       </div>
@@ -283,38 +306,51 @@ export const TradingDashboard: React.FC = () => {
         )}
       </AnimatePresence>
 
-      {/* Leaderboard */}
       <Leaderboard
         entries={leaderboard}
         onAgentClick={(agentId) => {
           window.location.hash = `#/trading/agent/${agentId}`;
         }}
       />
-
-      {/* Portfolio Performance Chart */}
       <PortfolioPerformanceChart
         portfolios={Object.values(tradingState.portfolios)}
       />
-
-      {/* Recent Trades */}
       <RecentTrades
         portfolios={Object.values(tradingState.portfolios)}
         limit={20}
       />
 
       {/* Disclaimer */}
-      <motion.div
-        className="glass-card rounded-xl p-4 border-l-4 border-gold"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 0.5 }}
+      <div
+        className="relative overflow-hidden rounded-xl p-4"
+        style={{
+          background: "linear-gradient(165deg, #0d1117 0%, #080b0f 100%)",
+          borderLeft: "3px solid #ffd700",
+          border: "1px solid rgba(255,215,0,0.2)",
+        }}
       >
         <p className="text-xs text-slate-400 leading-relaxed">
-          <span className="text-gold font-semibold">⚠️ Disclaimer:</span> This
-          is a simulation for educational purposes only. Past performance does
-          not guarantee future results. Not financial advice.
+          <span className="text-gold font-bold">⚠️ DISCLAIMER:</span> This is a
+          simulation for educational purposes only. Past performance does not
+          guarantee future results. Not financial advice.
         </p>
-      </motion.div>
-    </motion.div>
+      </div>
+    </div>
   );
 };
+
+const ActionButton: React.FC<{
+  icon: string;
+  label: string;
+  onClick?: () => void;
+  color: string;
+}> = ({ icon, label, onClick, color }) => (
+  <button
+    onClick={onClick}
+    className="px-3 py-2 text-xs font-bold rounded-lg flex items-center gap-1.5 hover:scale-[1.02] active:scale-[0.98] transition-transform"
+    style={{ background: `${color}15`, border: `1px solid ${color}40`, color }}
+  >
+    <span>{icon}</span>
+    <span className="hidden sm:inline">{label}</span>
+  </button>
+);

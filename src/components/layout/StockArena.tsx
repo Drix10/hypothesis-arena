@@ -446,7 +446,12 @@ export const StockArena: React.FC<StockArenaProps> = ({
 
   return (
     <div className="min-h-screen">
-      <header className="sticky top-0 z-50 border-b border-white/[0.06] bg-arena-deep/90 backdrop-blur-xl">
+      <header
+        className="sticky top-0 z-50 bg-arena-deep/90 backdrop-blur-xl"
+        style={{ borderBottom: "1px solid rgba(0, 240, 255, 0.1)" }}
+      >
+        {/* Header glow accent */}
+        <div className="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-cyan/20 to-transparent" />
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-14">
             <motion.div
@@ -527,24 +532,91 @@ export const StockArena: React.FC<StockArenaProps> = ({
               exit="exit"
               className="relative"
             >
-              {/* Subtle Background */}
+              {/* Cinematic Background - Golden/Cyan Command Center */}
               <div className="fixed inset-0 overflow-hidden pointer-events-none -z-10">
+                {/* Base gradient */}
                 <div
-                  className="absolute w-[800px] h-[800px] rounded-full opacity-25"
+                  className="absolute inset-0"
                   style={{
                     background:
-                      "radial-gradient(circle, rgba(6, 182, 212, 0.12) 0%, transparent 60%)",
-                    left: "5%",
-                    top: "-25%",
+                      "linear-gradient(135deg, #080b0f 0%, #0d1117 50%, #080b0f 100%)",
+                  }}
+                />
+
+                {/* Cyan glow - top left */}
+                <div
+                  className="absolute w-[800px] h-[800px] rounded-full"
+                  style={{
+                    background:
+                      "radial-gradient(circle, rgba(0, 240, 255, 0.15) 0%, transparent 60%)",
+                    left: "-10%",
+                    top: "-30%",
+                    filter: "blur(60px)",
+                  }}
+                />
+
+                {/* Gold glow - bottom right */}
+                <div
+                  className="absolute w-[600px] h-[600px] rounded-full"
+                  style={{
+                    background:
+                      "radial-gradient(circle, rgba(255, 215, 0, 0.12) 0%, transparent 60%)",
+                    right: "-5%",
+                    bottom: "-10%",
+                    filter: "blur(50px)",
+                  }}
+                />
+
+                {/* Diagonal accent lines */}
+                <div
+                  className="absolute top-0 right-0 w-[400px] h-[2px] opacity-30"
+                  style={{
+                    background:
+                      "linear-gradient(90deg, transparent, #00f0ff 50%, transparent)",
+                    transform:
+                      "rotate(-45deg) translateX(100px) translateY(150px)",
                   }}
                 />
                 <div
-                  className="absolute w-[500px] h-[500px] rounded-full opacity-15"
+                  className="absolute bottom-0 left-0 w-[300px] h-[1px] opacity-20"
                   style={{
                     background:
-                      "radial-gradient(circle, rgba(245, 184, 0, 0.1) 0%, transparent 60%)",
-                    right: "0%",
-                    bottom: "5%",
+                      "linear-gradient(90deg, transparent, #ffd700 50%, transparent)",
+                    transform:
+                      "rotate(-45deg) translateX(-50px) translateY(-100px)",
+                  }}
+                />
+
+                {/* Scanline overlay */}
+                <div
+                  className="absolute inset-0 opacity-[0.03]"
+                  style={{
+                    backgroundImage:
+                      "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.03) 2px, rgba(255,255,255,0.03) 4px)",
+                  }}
+                />
+
+                {/* Noise texture */}
+                <div
+                  className="absolute inset-0 opacity-[0.015]"
+                  style={{
+                    backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E")`,
+                  }}
+                />
+
+                {/* Corner accents */}
+                <div
+                  className="absolute top-0 left-0 w-32 h-32"
+                  style={{
+                    background:
+                      "linear-gradient(135deg, rgba(0, 240, 255, 0.08) 0%, transparent 50%)",
+                  }}
+                />
+                <div
+                  className="absolute bottom-0 right-0 w-48 h-48"
+                  style={{
+                    background:
+                      "linear-gradient(-45deg, rgba(255, 215, 0, 0.06) 0%, transparent 50%)",
                   }}
                 />
               </div>
@@ -557,8 +629,10 @@ export const StockArena: React.FC<StockArenaProps> = ({
                     className="inline-flex items-center gap-2.5 px-4 py-2 rounded-full mb-8 w-fit"
                     style={{
                       background:
-                        "linear-gradient(135deg, rgba(6, 182, 212, 0.1) 0%, rgba(6, 182, 212, 0.05) 100%)",
-                      border: "1px solid rgba(6, 182, 212, 0.25)",
+                        "linear-gradient(135deg, rgba(0, 240, 255, 0.15) 0%, rgba(0, 240, 255, 0.05) 100%)",
+                      border: "1px solid rgba(0, 240, 255, 0.3)",
+                      boxShadow:
+                        "0 0 20px rgba(0, 240, 255, 0.15), inset 0 1px 0 rgba(255,255,255,0.1)",
                     }}
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -567,7 +641,7 @@ export const StockArena: React.FC<StockArenaProps> = ({
                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan opacity-75"></span>
                       <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-cyan shadow-lg shadow-cyan/50"></span>
                     </span>
-                    <span className="text-sm font-medium text-cyan">
+                    <span className="text-sm font-medium text-cyan tracking-wide">
                       Live AI Analysis
                     </span>
                   </motion.div>
@@ -577,9 +651,17 @@ export const StockArena: React.FC<StockArenaProps> = ({
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: 0.05 }}
+                    style={{ textShadow: "0 0 40px rgba(0, 240, 255, 0.15)" }}
                   >
                     <span className="block mb-2">8 AI Analysts.</span>
-                    <span className="bg-gradient-to-r from-cyan via-cyan-light to-gold bg-clip-text text-transparent">
+                    <span
+                      className="bg-clip-text text-transparent"
+                      style={{
+                        backgroundImage:
+                          "linear-gradient(135deg, #00f0ff 0%, #00d4e8 30%, #ffd700 70%, #ffb800 100%)",
+                        textShadow: "none",
+                      }}
+                    >
                       One Verdict.
                     </span>
                   </motion.h1>
@@ -622,7 +704,7 @@ export const StockArena: React.FC<StockArenaProps> = ({
                         <button
                           key={t}
                           onClick={() => handleTickerSelect(t)}
-                          className="px-4 py-1.5 text-sm font-medium text-slate-400 hover:text-white bg-white/[0.03] hover:bg-white/[0.08] border border-white/[0.08] hover:border-cyan/40 rounded-full transition-all"
+                          className="px-4 py-1.5 text-sm font-medium text-slate-400 hover:text-cyan bg-white/[0.03] hover:bg-cyan/[0.08] border border-white/[0.08] hover:border-cyan/40 rounded-full transition-all hover:shadow-[0_0_15px_rgba(0,240,255,0.15)]"
                         >
                           {t}
                         </button>
@@ -656,13 +738,26 @@ export const StockArena: React.FC<StockArenaProps> = ({
                     transition={{ delay: 0.25 }}
                   >
                     {[
-                      { icon: "⚔️", text: "Live Debates", color: "cyan" },
-                      { icon: "📊", text: "Technical Analysis", color: "gold" },
-                      { icon: "🏆", text: "Portfolio Tracking", color: "bull" },
+                      { icon: "⚔️", text: "Live Debates", color: "#00f0ff" },
+                      {
+                        icon: "📊",
+                        text: "Technical Analysis",
+                        color: "#ffd700",
+                      },
+                      {
+                        icon: "🏆",
+                        text: "Portfolio Tracking",
+                        color: "#22c55e",
+                      },
                     ].map((f) => (
                       <div
                         key={f.text}
-                        className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white/[0.02] border border-white/[0.06]"
+                        className="flex items-center gap-2 px-3 py-2 rounded-lg"
+                        style={{
+                          background: "rgba(255,255,255,0.02)",
+                          border: `1px solid ${f.color}20`,
+                          boxShadow: `0 0 15px ${f.color}08`,
+                        }}
                       >
                         <span className="text-base">{f.icon}</span>
                         <span className="text-sm text-slate-400">{f.text}</span>

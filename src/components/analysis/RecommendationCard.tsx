@@ -1,10 +1,10 @@
 /**
- * Recommendation Card Component - Strategic Arena Theme
- * Premium verdict display with confidence visualization
+ * Recommendation Card - Cinematic Command Center
+ * Epic verdict display with dramatic visual hierarchy
  */
 
 import React from "react";
-import { motion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import { FinalRecommendation } from "../../types/stock";
 
 interface RecommendationCardProps {
@@ -19,44 +19,50 @@ interface RecommendationCardProps {
   };
 }
 
-const REC_STYLES: Record<
+const REC_CONFIG: Record<
   string,
-  { gradient: string; text: string; label: string; icon: string; bg: string }
+  {
+    gradient: string;
+    accent: string;
+    glow: string;
+    label: string;
+    icon: string;
+  }
 > = {
   strong_buy: {
-    gradient: "from-bull to-bull-light",
-    text: "text-bull-light",
+    gradient: "linear-gradient(135deg, #00ff88 0%, #00cc6a 100%)",
+    accent: "#00ff88",
+    glow: "0 0 60px rgba(0,255,136,0.4)",
     label: "STRONG BUY",
-    icon: "🚀",
-    bg: "bg-bull/[0.08]",
+    icon: "⚡",
   },
   buy: {
-    gradient: "from-bull to-bull-dark",
-    text: "text-bull-light",
+    gradient: "linear-gradient(135deg, #22c55e 0%, #16a34a 100%)",
+    accent: "#22c55e",
+    glow: "0 0 40px rgba(34,197,94,0.3)",
     label: "BUY",
-    icon: "📈",
-    bg: "bg-bull/[0.06]",
+    icon: "↗",
   },
   hold: {
-    gradient: "from-gold to-gold-dark",
-    text: "text-gold-light",
+    gradient: "linear-gradient(135deg, #ffd700 0%, #f59e0b 100%)",
+    accent: "#ffd700",
+    glow: "0 0 40px rgba(255,215,0,0.3)",
     label: "HOLD",
-    icon: "⏸️",
-    bg: "bg-gold/[0.06]",
+    icon: "◆",
   },
   sell: {
-    gradient: "from-bear to-bear-dark",
-    text: "text-bear-light",
+    gradient: "linear-gradient(135deg, #ef4444 0%, #dc2626 100%)",
+    accent: "#ef4444",
+    glow: "0 0 40px rgba(239,68,68,0.3)",
     label: "SELL",
-    icon: "📉",
-    bg: "bg-bear/[0.06]",
+    icon: "↘",
   },
   strong_sell: {
-    gradient: "from-bear-dark to-crimson",
-    text: "text-bear-light",
+    gradient: "linear-gradient(135deg, #dc2626 0%, #991b1b 100%)",
+    accent: "#dc2626",
+    glow: "0 0 60px rgba(220,38,38,0.4)",
     label: "STRONG SELL",
-    icon: "🛑",
-    bg: "bg-bear/[0.08]",
+    icon: "⚠",
   },
 };
 
@@ -65,367 +71,476 @@ export const RecommendationCard: React.FC<RecommendationCardProps> = ({
   onExecuteTrades,
   tradingPreview,
 }) => {
-  const style = REC_STYLES[recommendation.recommendation] || REC_STYLES.hold;
+  const config = REC_CONFIG[recommendation.recommendation] || REC_CONFIG.hold;
   const isPositive = recommendation.upside >= 0;
   const hasTradingActivity =
     tradingPreview &&
     (tradingPreview.buyCount > 0 || tradingPreview.sellCount > 0);
 
   return (
-    <motion.div
-      className="glass-card rounded-2xl overflow-hidden relative"
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.5 }}
-    >
-      {/* Top gradient accent */}
+    <div className="relative">
+      {/* Outer glow */}
       <div
-        className={`absolute top-0 left-0 right-0 h-1 bg-gradient-to-r ${style.gradient}`}
+        className="absolute -inset-2 rounded-3xl opacity-50 blur-xl"
+        style={{ background: config.gradient }}
       />
 
-      {/* Background glow */}
+      {/* Main card */}
       <div
-        className={`absolute top-0 left-1/2 -translate-x-1/2 w-80 h-80 rounded-full blur-[100px] pointer-events-none ${style.bg} opacity-50`}
-      />
+        role="article"
+        aria-label={`Investment recommendation: ${config.label}`}
+        className="relative overflow-hidden rounded-2xl"
+        style={{
+          background: "linear-gradient(165deg, #0d1117 0%, #080b0f 100%)",
+          border: "1px solid rgba(255,255,255,0.08)",
+          boxShadow: `${config.glow}, 0 20px 60px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.05)`,
+        }}
+      >
+        {/* Top accent bar */}
+        <div className="h-1" style={{ background: config.gradient }} />
 
-      <div className="relative p-5 sm:p-6">
-        {/* Main Verdict Section */}
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6 mb-8">
-          <div className="flex items-center gap-4">
-            <motion.div
-              className={`w-16 h-16 rounded-xl bg-gradient-to-br ${style.gradient} flex items-center justify-center text-3xl`}
-              initial={{ scale: 0, rotate: -180 }}
-              animate={{ scale: 1, rotate: 0 }}
-              transition={{ type: "spring", stiffness: 200, delay: 0.2 }}
-            >
-              {style.icon}
-            </motion.div>
-            <div>
-              <div className="text-[10px] text-slate-500 mb-1 font-semibold tracking-wider uppercase">
-                Investment Verdict
-              </div>
-              <motion.div
-                className={`text-3xl sm:text-4xl font-bold ${style.text} font-serif`}
-                initial={{ opacity: 0, x: -20 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: 0.3 }}
-              >
-                {style.label}
-              </motion.div>
-            </div>
-          </div>
+        {/* Diagonal accent */}
+        <div
+          className="absolute top-0 right-0 w-96 h-96 opacity-10"
+          style={{
+            background: `linear-gradient(135deg, ${config.accent} 0%, transparent 50%)`,
+            clipPath: "polygon(100% 0, 0 0, 100% 100%)",
+          }}
+        />
 
-          <div className="flex gap-8">
-            <MetricDisplay
-              label="Confidence"
-              value={`${recommendation.confidence.toFixed(0)}%`}
-            />
-            <MetricDisplay
-              label="Consensus"
-              value={`${recommendation.consensusStrength.toFixed(0)}%`}
-            />
-          </div>
-        </div>
+        {/* Scanlines */}
+        <div
+          className="absolute inset-0 opacity-[0.02] pointer-events-none"
+          style={{
+            backgroundImage:
+              "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.03) 2px, rgba(255,255,255,0.03) 4px)",
+          }}
+        />
 
-        {/* Metrics Grid */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-8">
-          <MetricCard
-            label="Current Price"
-            value={`${recommendation.currentPrice.toFixed(2)}`}
-          />
-          <MetricCard
-            label="Target Price"
-            value={`${recommendation.priceTarget.base.toFixed(2)}`}
-          />
-          <MetricCard
-            label="Upside"
-            value={`${isPositive ? "+" : ""}${recommendation.upside.toFixed(
-              1
-            )}%`}
-            variant={isPositive ? "bull" : "bear"}
-          />
-          <MetricCard
-            label="Risk Level"
-            value={recommendation.riskLevel.replace("_", " ").toUpperCase()}
-            variant={
-              recommendation.riskLevel.includes("high")
-                ? "bear"
-                : recommendation.riskLevel === "medium"
-                ? "gold"
-                : "bull"
-            }
-          />
-        </div>
-
-        {/* Price Target Range - Enhanced */}
-        <div className="p-5 rounded-xl bg-gradient-to-br from-white/[0.03] to-white/[0.01] border border-white/[0.08] mb-6 backdrop-blur-sm">
-          <div className="flex items-center justify-between mb-4">
-            <span className="text-xs text-slate-300 font-semibold tracking-wide">
-              12-Month Price Target Range
-            </span>
-            <span className="text-[10px] text-slate-500 bg-white/[0.03] px-2 py-1 rounded-md">
-              Current position shown
-            </span>
-          </div>
-          <div className="flex items-center gap-4">
-            <div className="text-center">
-              <div className="text-[10px] text-bear-light/70 mb-1 font-medium">
-                BEAR
-              </div>
-              <span className="text-bear-light font-bold text-sm">
-                ${recommendation.priceTarget.bear.toFixed(0)}
-              </span>
-            </div>
-            <div
-              className="flex-1 relative"
-              style={{ paddingTop: "0.5rem", paddingBottom: "0.5rem" }}
-            >
-              {/* Bar container with rounded corners */}
-              <div className="relative h-4 bg-gradient-to-r from-arena-deep via-arena-surface to-arena-deep rounded-full shadow-inner overflow-hidden">
-                {/* Gradient background */}
-                <div className="absolute inset-0 bg-gradient-to-r from-bear/20 via-gold/20 to-bull/20" />
-
-                {/* Glow effect */}
-                <div className="absolute inset-0 bg-gradient-to-r from-bear/10 via-transparent to-bull/10 blur-sm" />
-              </div>
-
-              {/* Current price marker - positioned on the bar */}
-              <motion.div
-                className="absolute z-10 w-5 h-5"
-                style={{
-                  left: `${calculatePosition(
-                    recommendation.currentPrice,
-                    recommendation.priceTarget.bear,
-                    recommendation.priceTarget.bull
-                  )}%`,
-                  top: "0.4rem",
-                  transform: "translate(-50%, -50%)",
-                }}
-                initial={{ scale: 0, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                transition={{ delay: 0.5, type: "spring", stiffness: 200 }}
-              >
-                <div className="relative w-full h-full">
-                  <div className="w-full h-full bg-white rounded-full shadow-lg border-2 border-arena-deep" />
-                  <div className="absolute inset-0 bg-white rounded-full animate-ping opacity-30" />
+        <div className="relative p-6 sm:p-8">
+          {/* Hero Section */}
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-8 mb-10">
+            <div className="flex items-center gap-5">
+              <div className="relative">
+                <div
+                  className="w-20 h-20 rounded-2xl flex items-center justify-center text-4xl"
+                  style={{
+                    background: config.gradient,
+                    boxShadow: config.glow,
+                  }}
+                >
+                  {config.icon}
                 </div>
-              </motion.div>
-
-              {/* Target price marker - positioned on the bar */}
-              <motion.div
-                className="absolute z-10 w-3 h-3"
-                style={{
-                  left: `${calculatePosition(
-                    recommendation.priceTarget.base,
-                    recommendation.priceTarget.bear,
-                    recommendation.priceTarget.bull
-                  )}%`,
-                  top: "0.6rem",
-                  transform: "translate(-50%, -50%)",
-                }}
-                initial={{ scale: 0, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                transition={{ delay: 0.6, type: "spring", stiffness: 200 }}
-              >
-                <div className="relative w-full h-full">
-                  <div className="w-full h-full bg-cyan rounded-full shadow-lg shadow-cyan/50" />
-                  <div className="absolute inset-0 bg-cyan rounded-full blur-sm opacity-50" />
-                </div>
-              </motion.div>
-            </div>
-            <div className="text-center">
-              <div className="text-[10px] text-bull-light/70 mb-1 font-medium">
-                BULL
               </div>
-              <span className="text-bull-light font-bold text-sm">
-                ${recommendation.priceTarget.bull.toFixed(0)}
-              </span>
+
+              <div>
+                <div className="text-[10px] text-slate-500 font-bold tracking-[0.2em] uppercase mb-2">
+                  INVESTMENT VERDICT
+                </div>
+                <h1
+                  className="text-4xl sm:text-5xl font-black"
+                  style={{
+                    fontFamily: "'Space Grotesk', sans-serif",
+                    color: config.accent,
+                    textShadow: `0 0 40px ${config.accent}60`,
+                  }}
+                >
+                  {config.label}
+                </h1>
+              </div>
+            </div>
+
+            {/* Confidence meters */}
+            <div className="flex gap-8">
+              <CircularMeter
+                label="CONFIDENCE"
+                value={recommendation.confidence}
+                color={config.accent}
+              />
+              <CircularMeter
+                label="CONSENSUS"
+                value={recommendation.consensusStrength}
+                color="#00f0ff"
+              />
             </div>
           </div>
-          <div className="flex justify-center mt-3 gap-6 text-[10px] text-slate-400">
-            <span className="flex items-center gap-1.5">
-              <span className="w-3 h-3 bg-white rounded-full shadow-sm" />{" "}
-              Current Price
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="w-3 h-3 bg-cyan rounded-full shadow-sm shadow-cyan/50" />{" "}
-              Base Target
-            </span>
-          </div>
-        </div>
 
-        {/* Trading Preview Section */}
-        {tradingPreview && (
-          <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.7 }}
-            className="mb-6 p-5 rounded-xl bg-gradient-to-br from-gold/10 to-cyan/10 border border-gold/30"
+          {/* Metrics Grid */}
+          <div
+            className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8"
+            role="list"
+            aria-label="Key metrics"
+          >
+            <div role="listitem">
+              <MetricCard
+                label="CURRENT PRICE"
+                value={`${recommendation.currentPrice.toFixed(2)}`}
+              />
+            </div>
+            <div role="listitem">
+              <MetricCard
+                label="TARGET PRICE"
+                value={`${recommendation.priceTarget.base.toFixed(2)}`}
+                accent="#00f0ff"
+              />
+            </div>
+            <div role="listitem">
+              <MetricCard
+                label="UPSIDE"
+                value={`${isPositive ? "+" : ""}${recommendation.upside.toFixed(
+                  1
+                )}%`}
+                accent={isPositive ? "#22c55e" : "#ef4444"}
+              />
+            </div>
+            <div role="listitem">
+              <MetricCard
+                label="RISK LEVEL"
+                value={recommendation.riskLevel.replace("_", " ").toUpperCase()}
+                accent={
+                  recommendation.riskLevel.includes("high")
+                    ? "#ef4444"
+                    : recommendation.riskLevel === "medium"
+                    ? "#ffd700"
+                    : "#22c55e"
+                }
+              />
+            </div>
+          </div>
+
+          {/* Price Target Range */}
+          <div
+            className="p-5 rounded-xl mb-8"
+            style={{
+              background: "rgba(255,255,255,0.02)",
+              border: "1px solid rgba(255,255,255,0.06)",
+            }}
           >
             <div className="flex items-center justify-between mb-4">
-              <div>
-                <div className="text-xs text-slate-300 font-semibold mb-1 flex items-center gap-2">
-                  <span className="text-lg">⚔️</span>
-                  Agent Trading Decisions
+              <span className="text-xs text-slate-400 font-bold tracking-wider">
+                12-MONTH PRICE TARGET RANGE
+              </span>
+              <span className="text-[10px] text-slate-600 px-2 py-1 rounded bg-white/5">
+                Current position shown
+              </span>
+            </div>
+
+            <div className="flex items-center gap-4">
+              <div className="text-center">
+                <div className="text-[9px] text-red-400/70 mb-1 font-bold tracking-wider">
+                  BEAR
                 </div>
-                <div className="text-[10px] text-slate-500">
-                  Based on debate tournament results
-                </div>
+                <span className="text-red-400 font-bold font-mono">
+                  ${recommendation.priceTarget.bear.toFixed(0)}
+                </span>
               </div>
-              {hasTradingActivity && onExecuteTrades && (
-                <motion.button
-                  onClick={onExecuteTrades}
-                  className="px-4 py-2 bg-gradient-to-r from-gold/20 to-cyan/20 hover:from-gold/30 hover:to-cyan/30 border border-gold/40 rounded-lg text-white text-sm font-semibold transition-all flex items-center gap-2 shadow-lg"
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
+
+              <div className="flex-1 relative py-4">
+                <div className="h-3 rounded-full overflow-hidden bg-slate-900/50 border border-white/5">
+                  <div
+                    className="h-full"
+                    style={{
+                      background:
+                        "linear-gradient(90deg, #ef4444 0%, #ffd700 50%, #22c55e 100%)",
+                    }}
+                  />
+                </div>
+
+                {/* Current price marker */}
+                <div
+                  className="absolute top-1/2 -translate-y-1/2 z-10"
+                  style={{
+                    left: `${calculatePosition(
+                      recommendation.currentPrice,
+                      recommendation.priceTarget.bear,
+                      recommendation.priceTarget.bull
+                    )}%`,
+                  }}
                 >
-                  <span>💰</span>
-                  Execute Trades
-                </motion.button>
-              )}
-            </div>
+                  <div className="w-5 h-5 bg-white rounded-full shadow-lg border-2 border-slate-900" />
+                </div>
 
-            <div className="grid grid-cols-3 gap-3 mb-3">
-              <div className="p-3 rounded-lg bg-green-500/10 border border-green-500/20">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs text-green-400 font-medium">
-                    BUY
-                  </span>
-                  <span className="text-lg">📈</span>
+                {/* Target marker */}
+                <div
+                  className="absolute top-1/2 -translate-y-1/2 z-10"
+                  style={{
+                    left: `${calculatePosition(
+                      recommendation.priceTarget.base,
+                      recommendation.priceTarget.bear,
+                      recommendation.priceTarget.bull
+                    )}%`,
+                  }}
+                >
+                  <div
+                    className="w-4 h-4 rounded-full"
+                    style={{
+                      background: "#00f0ff",
+                      boxShadow: "0 0 20px rgba(0,240,255,0.5)",
+                    }}
+                  />
                 </div>
-                <div className="text-2xl font-bold text-green-400">
-                  {tradingPreview.buyCount}
-                </div>
-                <div className="text-[10px] text-green-400/60">agents</div>
               </div>
 
-              <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs text-red-400 font-medium">SELL</span>
-                  <span className="text-lg">📉</span>
+              <div className="text-center">
+                <div className="text-[9px] text-green-400/70 mb-1 font-bold tracking-wider">
+                  BULL
                 </div>
-                <div className="text-2xl font-bold text-red-400">
-                  {tradingPreview.sellCount}
-                </div>
-                <div className="text-[10px] text-red-400/60">agents</div>
-              </div>
-
-              <div className="p-3 rounded-lg bg-gray-500/10 border border-gray-500/20">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs text-gray-400 font-medium">
-                    HOLD
-                  </span>
-                  <span className="text-lg">⏸️</span>
-                </div>
-                <div className="text-2xl font-bold text-gray-400">
-                  {tradingPreview.holdCount}
-                </div>
-                <div className="text-[10px] text-gray-400/60">agents</div>
+                <span className="text-green-400 font-bold font-mono">
+                  ${recommendation.priceTarget.bull.toFixed(0)}
+                </span>
               </div>
             </div>
 
-            {hasTradingActivity && (
-              <div className="flex items-center justify-between text-xs">
-                <div className="text-slate-400">
-                  <span className="text-slate-300 font-semibold">
-                    Est. Total Value:
-                  </span>{" "}
-                  ${tradingPreview.totalValue.toLocaleString()}
-                </div>
-                <div className="text-slate-400">
-                  <span className="text-slate-300 font-semibold">
-                    Avg. Confidence:
-                  </span>{" "}
-                  {tradingPreview.avgConfidence.toFixed(0)}%
-                </div>
-              </div>
-            )}
-
-            {!hasTradingActivity && (
-              <div className="text-center text-sm text-slate-400 py-2">
-                All agents decided to hold — no trades to execute
-              </div>
-            )}
-          </motion.div>
-        )}
-
-        {/* Allocation & Summary */}
-        <div className="grid lg:grid-cols-3 gap-3">
-          <div className="p-4 rounded-xl bg-cyan/[0.08] border border-cyan/20">
-            <div className="text-[10px] text-slate-500 mb-1.5 font-semibold tracking-wider uppercase">
-              Suggested Allocation
-            </div>
-            <div className="text-2xl font-bold text-cyan">
-              {recommendation.suggestedAllocation.toFixed(1)}%
-            </div>
-            <div className="text-[10px] text-slate-500 mt-0.5">
-              of portfolio
+            <div className="flex justify-center gap-6 mt-3 text-[10px] text-slate-500">
+              <span className="flex items-center gap-1.5">
+                <span className="w-3 h-3 bg-white rounded-full" /> Current
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span
+                  className="w-3 h-3 rounded-full"
+                  style={{ background: "#00f0ff" }}
+                />{" "}
+                Target
+              </span>
             </div>
           </div>
 
-          <div className="lg:col-span-2 p-4 rounded-xl bg-white/[0.02] border border-white/[0.06]">
-            <div className="text-[10px] text-slate-500 mb-2 font-semibold tracking-wider uppercase">
-              Executive Summary
+          {/* Trading Preview */}
+          <AnimatePresence>
+            {tradingPreview && (
+              <motion.div
+                className="p-5 rounded-xl mb-8"
+                style={{
+                  background:
+                    "linear-gradient(135deg, rgba(255,215,0,0.05) 0%, rgba(0,240,255,0.05) 100%)",
+                  border: "1px solid rgba(255,215,0,0.2)",
+                }}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.2 }}
+              >
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <div className="flex items-center gap-2 text-sm font-bold text-white">
+                      <span className="text-xl">⚔️</span>
+                      Agent Trading Decisions
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-1">
+                      Based on debate tournament results
+                    </div>
+                  </div>
+                  {hasTradingActivity && onExecuteTrades && (
+                    <button
+                      onClick={onExecuteTrades}
+                      className="px-5 py-2.5 rounded-lg text-sm font-bold flex items-center gap-2 hover:scale-[1.02] active:scale-[0.98] transition-transform"
+                      style={{
+                        background:
+                          "linear-gradient(135deg, rgba(255,215,0,0.2) 0%, rgba(0,240,255,0.2) 100%)",
+                        border: "1px solid rgba(255,215,0,0.4)",
+                        color: "#ffd700",
+                      }}
+                    >
+                      💰 Execute Trades
+                    </button>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-3 gap-3">
+                  <TradingBox
+                    type="BUY"
+                    count={tradingPreview.buyCount}
+                    color="#22c55e"
+                    icon="📈"
+                  />
+                  <TradingBox
+                    type="SELL"
+                    count={tradingPreview.sellCount}
+                    color="#ef4444"
+                    icon="📉"
+                  />
+                  <TradingBox
+                    type="HOLD"
+                    count={tradingPreview.holdCount}
+                    color="#64748b"
+                    icon="⏸️"
+                  />
+                </div>
+
+                {hasTradingActivity && (
+                  <div className="flex justify-between mt-4 text-xs text-slate-400">
+                    <span>
+                      Est. Total:{" "}
+                      <span className="text-white font-bold">
+                        ${tradingPreview.totalValue.toLocaleString()}
+                      </span>
+                    </span>
+                    <span>
+                      Avg. Confidence:{" "}
+                      <span className="text-white font-bold">
+                        {tradingPreview.avgConfidence.toFixed(0)}%
+                      </span>
+                    </span>
+                  </div>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Allocation & Summary */}
+          <div className="grid lg:grid-cols-3 gap-4">
+            <div
+              className="p-5 rounded-xl"
+              style={{
+                background: "rgba(0,240,255,0.05)",
+                border: "1px solid rgba(0,240,255,0.2)",
+              }}
+            >
+              <div className="text-[10px] text-slate-500 font-bold tracking-widest uppercase mb-2">
+                SUGGESTED ALLOCATION
+              </div>
+              <div
+                className="text-3xl font-black"
+                style={{
+                  fontFamily: "'Space Grotesk', sans-serif",
+                  color: "#00f0ff",
+                  textShadow: "0 0 30px rgba(0,240,255,0.4)",
+                }}
+              >
+                {recommendation.suggestedAllocation.toFixed(1)}%
+              </div>
+              <div className="text-[10px] text-slate-500 mt-1">
+                of portfolio
+              </div>
             </div>
-            <p className="text-sm text-slate-300 leading-relaxed">
-              {recommendation.executiveSummary}
-            </p>
+
+            <div
+              className="lg:col-span-2 p-5 rounded-xl"
+              style={{
+                background: "rgba(255,255,255,0.02)",
+                border: "1px solid rgba(255,255,255,0.06)",
+              }}
+            >
+              <div className="text-[10px] text-slate-500 font-bold tracking-widest uppercase mb-2">
+                EXECUTIVE SUMMARY
+              </div>
+              <p className="text-sm text-slate-300 leading-relaxed">
+                {recommendation.executiveSummary}
+              </p>
+            </div>
           </div>
         </div>
       </div>
-    </motion.div>
+    </div>
   );
 };
 
-const MetricDisplay: React.FC<{ label: string; value: string }> = ({
-  label,
-  value,
-}) => (
+const CircularMeter: React.FC<{
+  label: string;
+  value: number;
+  color: string;
+}> = ({ label, value, color }) => (
   <div className="text-center">
-    <div className="text-[10px] text-slate-500 mb-1 font-semibold tracking-wider uppercase">
+    <div className="text-[9px] text-slate-500 font-bold tracking-widest uppercase mb-2">
       {label}
     </div>
-    <motion.div
-      className="text-2xl sm:text-3xl font-bold text-white"
-      initial={{ opacity: 0, scale: 0.5 }}
-      animate={{ opacity: 1, scale: 1 }}
-      transition={{ delay: 0.4, type: "spring" }}
+    <div
+      className="text-3xl font-black"
+      style={{
+        fontFamily: "'Space Grotesk', sans-serif",
+        color,
+        textShadow: `0 0 30px ${color}60`,
+      }}
     >
-      {value}
-    </motion.div>
+      {value.toFixed(0)}%
+    </div>
   </div>
 );
 
 const MetricCard: React.FC<{
   label: string;
   value: string;
-  variant?: "bull" | "bear" | "gold";
-}> = ({ label, value, variant }) => (
-  <motion.div
-    className="p-3.5 rounded-xl bg-white/[0.03] border border-white/[0.06] text-center"
-    whileHover={{ backgroundColor: "rgba(255,255,255,0.04)" }}
+  accent?: string;
+}> = ({ label, value, accent = "#ffffff" }) => (
+  <div
+    className="p-4 rounded-xl hover:bg-white/[0.04] transition-colors"
+    style={{
+      background: "rgba(255,255,255,0.02)",
+      border: "1px solid rgba(255,255,255,0.06)",
+    }}
   >
-    <div className="text-[10px] text-slate-500 mb-1.5 font-semibold tracking-wider uppercase">
+    <div className="text-[9px] text-slate-500 font-bold tracking-widest uppercase mb-2">
       {label}
     </div>
     <div
-      className={`text-lg font-bold ${
-        variant === "bull"
-          ? "text-bull-light"
-          : variant === "bear"
-          ? "text-bear-light"
-          : variant === "gold"
-          ? "text-gold-light"
-          : "text-white"
-      }`}
+      className="text-xl font-bold"
+      style={{
+        fontFamily: "'Space Grotesk', sans-serif",
+        color: accent,
+        textShadow: accent !== "#ffffff" ? `0 0 20px ${accent}40` : "none",
+      }}
     >
       {value}
     </div>
-  </motion.div>
+  </div>
+);
+
+const TradingBox: React.FC<{
+  type: string;
+  count: number;
+  color: string;
+  icon: string;
+}> = ({ type, count, color, icon }) => (
+  <div
+    className="p-4 rounded-lg text-center"
+    style={{ background: `${color}10`, border: `1px solid ${color}30` }}
+  >
+    <div className="flex items-center justify-between mb-2">
+      <span className="text-xs font-bold" style={{ color }}>
+        {type}
+      </span>
+      <span className="text-lg">{icon}</span>
+    </div>
+    <div
+      className="text-2xl font-black"
+      style={{ color, fontFamily: "'Space Grotesk', sans-serif" }}
+    >
+      {count}
+    </div>
+    <div className="text-[10px]" style={{ color: `${color}80` }}>
+      agents
+    </div>
+  </div>
 );
 
 function calculatePosition(current: number, min: number, max: number): number {
+  // Handle edge cases
+  if (!isFinite(current) || !isFinite(min) || !isFinite(max)) {
+    console.warn("calculatePosition: Invalid input values", {
+      current,
+      min,
+      max,
+    });
+    return 50;
+  }
   if (max === min) return 50;
+
+  // Handle negative prices - this shouldn't happen in stock prices but handle gracefully
+  if (current < 0 || min < 0 || max < 0) {
+    console.warn("calculatePosition: Negative price detected", {
+      current,
+      min,
+      max,
+    });
+    // Use absolute values as fallback
+    const absMin = Math.abs(min);
+    const absMax = Math.abs(max);
+    const absCurrent = Math.abs(current);
+    if (absMax === absMin) return 50;
+    const position = ((absCurrent - absMin) / (absMax - absMin)) * 100;
+    return Math.max(5, Math.min(95, position));
+  }
+
   const position = ((current - min) / (max - min)) * 100;
   return Math.max(5, Math.min(95, position));
 }

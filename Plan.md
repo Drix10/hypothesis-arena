@@ -502,13 +502,321 @@ interface AutonomousTradingConfig {
 
 ---
 
-## ⚠️ Risk Considerations
+## ⚠️ Risk Considerations & Mitigations
 
-1. **API Rate Limits**: Queue system prevents hitting Gemini/FMP limits
-2. **Runaway Trading**: Daily trade/volume limits prevent excessive activity
-3. **Bad Agent Performance**: Auto-pause agents with >30% drawdown
-4. **Data Staleness**: Validate price freshness before every trade
-5. **User Control**: Master kill switch to disable all autonomous activity
+### Risk Matrix with Phase Mapping
+
+| Risk                  | Severity | Mitigation                                                | Implementation Phase          |
+| --------------------- | -------- | --------------------------------------------------------- | ----------------------------- |
+| API Rate Limits       | High     | Queue system with exponential backoff, request throttling | Phase 3 (AnalysisScheduler)   |
+| Runaway Trading       | Critical | Daily trade/volume limits, circuit breakers               | Phase 1 (AutoTradeExecutor)   |
+| Bad Agent Performance | Medium   | Auto-pause agents with >30% drawdown                      | Phase 4 (Feedback Loop)       |
+| Data Staleness        | High     | Validate price freshness (<5 min) before every trade      | Phase 1 (AutoTradeExecutor)   |
+| User Control          | Critical | Master kill switch, pause on app close                    | Phase 1 (Settings)            |
+| Flash Crashes         | High     | Price sanity checks (reject >10% moves in 1 min)          | Phase 2 (ExitStrategyService) |
+| Infinite Loops        | Medium   | Max retries per analysis, circuit breaker pattern         | Phase 3 (AnalysisScheduler)   |
+| LocalStorage Limits   | Medium   | Data pruning, compression, IndexedDB migration path       | Phase 5 (Dashboard)           |
+
+### Detailed Risk Mitigations by Phase
+
+**Phase 1 - Auto-Execute:**
+
+- Circuit breaker: Halt all trading if 3+ consecutive losses
+- Price validation: Reject trades if price moved >5% since analysis
+- Confidence floor: Only execute if confidence > configurable threshold (default 60%)
+- Market hours check: No trades outside regular trading hours
+
+**Phase 2 - Position Management:**
+
+- Stop-loss validation: Ensure stop price is within reasonable range (not >25% from entry)
+- Take-profit sanity: Targets must be achievable within historical volatility
+- Position size limits: No single position >20% of portfolio
+- Cooldown period: No re-entry within 24h of stop-loss exit
+
+**Phase 3 - Scheduled Analysis:**
+
+- Rate limiting: Max 1 analysis per 5 minutes, 20 per day
+- Queue overflow protection: Max 50 items in queue, FIFO eviction
+- API failure handling: Exponential backoff (1s, 2s, 4s, 8s, max 60s)
+- Stale queue cleanup: Remove items older than 24h
+
+**Phase 4 - Feedback Loop:**
+
+- Cold start protection: Minimum 10 trades before confidence adjustment
+- Adjustment caps: Confidence multiplier clamped to 0.5-1.5 range
+- Decay factor: Recent performance weighted higher than old
+- Manual override: User can reset agent confidence to baseline
+
+---
+
+## 🔍 Critical Analysis & Comprehensive Critique
+
+### Strengths of This Plan ✅
+
+1. **Well-Structured Phased Approach** - Decomposing into 5 phases allows iterative testing and validation. Each phase delivers incremental value while building toward the complete vision.
+
+2. **Tournament Debate Mechanism** - Forcing agents to defend theses against opposition mimics adversarial testing. Superior to simple majority voting because it surfaces _why_ perspectives win, not just how many agree.
+
+3. **Agent Diversity** - Modeling agents after real investment philosophies (value, growth, technical, etc.) creates natural checks and balances. Quant and Karen will inherently oppose Elon, preventing groupthink.
+
+4. **Performance-Based Confidence Adjustment** - Dynamic position sizing based on historical performance implements adaptive learning. The clamping (0.5-1.5) prevents premature convergence.
+
+5. **Paper Trading Foundation** - Simulated $800K portfolio eliminates catastrophic financial risk during development.
+
+---
+
+### Critical Weaknesses & Flaws ⚠️
+
+#### 1. Browser-Based Architecture vs "Full Autonomy" — CRITICAL
+
+**The Problem:**
+
+```
+User enables autonomous trading at 9 AM
+System schedules watchlist scan for 2 PM
+User closes browser tab at 1 PM
+At 2 PM: Scheduled task never executes (tab closed)
+User reopens at 4 PM: Analysis missed, trades lost
+```
+
+**Reality Check:** Service Workers have strict limitations—they can't execute long-running computations (AI analysis, debates). The "true 24/7 autonomy requires backend server" admission is buried, but this isn't optional—it's architectural bedrock.
+
+**Impact:** Creates fundamental disconnect between "fully autonomous" vision and actual capabilities. Users expect "set it and forget it" but discover their "autonomous" system died when they closed their laptop.
+
+**Mitigation Options:**
+
+- **Option A:** Reframe as "semi-autonomous" (runs while browser open)
+- **Option B:** Use serverless edge functions (Vercel/Cloudflare Workers) for critical scheduled tasks
+- **Option C:** Accept limitation, focus on "assisted trading" not "autonomous trading"
+
+---
+
+#### 2. Confidence Adjustment Formula Lacks Statistical Rigor — HIGH
+
+**Current Formula Issues:**
+
+```typescript
+multiplier += (agent.predictionAccuracy - 50) / 250; // ±0.2
+multiplier += (agent.tradingWinRate - 50) / 333; // ±0.15
+```
+
+**Problems:**
+
+- **Arbitrary Denominators:** Why 250, 333, 500? No statistical justification
+- **No Confidence Intervals:** 60% win rate over 10 trades (CI: 40-80%) is statistically indistinguishable from 50%
+- **Survivorship Bias:** Agents with fewer trades may have artificially high win rates
+
+**Better Approach:** Use Bayesian confidence with Beta distribution:
+
+```typescript
+interface BayesianAgentModel {
+  alpha: number; // successes + prior
+  beta: number; // failures + prior
+  sampleConfidence(): number; // Sample from posterior
+  update(success: boolean): void;
+}
+```
+
+---
+
+#### 3. Exit Strategy Rules Are Oversimplified — HIGH
+
+**Current Rules:**
+
+- Stop-loss at -15%
+- Take profit: 50% at +25%, remaining at +40%
+
+**Problems:**
+
+- **Ignores Volatility:** -15% in TSLA (60% volatility) is normal noise. Same move in a utility stock signals disaster
+- **Premature Profit-Taking:** Selling 50% at +25% means missing potential 10x returns
+- **Strategy Conflict:** Warren's "hold forever" philosophy incompatible with +25% exits
+
+**Solution:** Agent-specific exit strategies:
+
+```typescript
+interface ExitStrategy {
+  shouldExit(position: Position, marketData: MarketData): ExitDecision;
+}
+
+// Warren: Wide stops, thesis-based exits only
+// Quant: Tight ATR-based trailing stops
+// Cathie: Long horizons, no premature profit-taking
+```
+
+---
+
+#### 4. Debate Tournament May Amplify Errors — MEDIUM
+
+**Risks:**
+
+- **Persuasiveness ≠ Correctness:** Winning agent may just generate convincing-sounding arguments, not accurate predictions
+- **Information Cascades:** If Warren wins first debate convincingly, later agents may anchor to his thesis
+- **Homogenization:** Over time, losing strategies penalized so heavily all agents converge to similar approaches
+
+**Missing:** No post-hoc analysis of debate quality. Did winning thesis actually predict price movement?
+
+---
+
+#### 5. LocalStorage Architecture Issues — MEDIUM
+
+**Problems:**
+
+- **No Transaction Safety:** Crash mid-trade = inconsistent state
+- **No Audit Trail:** Users can manually edit localStorage, corrupting data
+- **Storage Limits:** 5-10MB fills quickly with 8 agents × 90 days × trades × thesis texts
+- **Data Loss Risk:** Clearing browser cache wipes everything
+
+---
+
+#### 6. No Black Swan Event Detection — HIGH
+
+**Scenario:** March 2020 COVID crash—market drops 30% in 3 weeks.
+
+**Current circuit breaker:** "Pause if AUM drops >15% in 24h"
+
+**Problem:** In sustained crash, this triggers, resumes, triggers again—whipsawing the portfolio. Agents optimized for normal markets continue applying -15% stop-losses, crystallizing losses at the bottom.
+
+**Missing:** Regime change detection (bull → bear transitions). Need VIX thresholds or volatility clustering detection.
+
+---
+
+#### 7. Agent Philosophy Conflicts With Execution Rules — MEDIUM
+
+**Contradiction:**
+
+- Warren Buffett: "Our favorite holding period is forever"
+- System: Daily reviews, 30-day time-based exits, -15% stop-losses
+
+This creates ontological mismatch. True Warren-style agent should hold through -50% drawdowns, but system forces behavior inconsistent with value investing.
+
+**Similar issues:**
+
+- Ray Dalio needs multi-year rebalancing, not daily scans
+- Cathie Wood needs 5-10 year horizons, not +25% profit-taking
+
+---
+
+### Edge Cases & Solutions
+
+| Edge Case           | Problem                      | Solution                                                                             |
+| ------------------- | ---------------------------- | ------------------------------------------------------------------------------------ |
+| Browser Tab Closure | Scheduled tasks die          | Persist queue to localStorage, resume on reopen, show "missed analyses" notification |
+| 4v4 Agent Split     | Equal BUY/SELL votes         | Karen (risk manager) gets tie-breaker, or no trade on true ties                      |
+| Stale Analysis      | 9am analysis, 2pm execution  | Re-fetch price, reject if >5% moved, 4-hour freshness expiry                         |
+| API Failure         | Gemini down mid-analysis     | Graceful degradation, exponential backoff, queue for retry                           |
+| Position Drift      | Agent has 80% in one stock   | Hard limit 25% per position, auto-trim oversized                                     |
+| Wash Sales          | Sell then immediately re-buy | 24h cooldown before re-entering exited position                                      |
+| Market Crash        | All agents in drawdown       | Global circuit breaker at -15% AUM/24h, defensive mode                               |
+| Storage Full        | localStorage quota exceeded  | Prune to 90 days, archive to JSON, migrate to IndexedDB                              |
+| Timezone Issues     | Market hours check fails     | Always use ET, store UTC, display local                                              |
+| Partial Execution   | 3/5 trades execute then fail | Validate all first, rollback mechanism, clear status per trade                       |
+
+---
+
+### What This Plan Does NOT Solve
+
+1. **Real Money Trading** — Paper trading only. Real brokerage needs:
+
+   - Broker API OAuth (Alpaca, etc.)
+   - Regulatory compliance
+   - Slippage/commission modeling
+
+2. **True 24/7 Autonomy** — Browser can't run when closed. Would need backend server.
+
+3. **Advanced Order Types** — Market orders only. Could add limit, stop-limit, trailing stops.
+
+---
+
+### Opportunities for Enhancement 🎯
+
+#### 1. Market Regime Detection
+
+```typescript
+class MarketRegimeDetector {
+  detectRegime(): "CRISIS" | "BULL" | "BEAR" | "NEUTRAL" {
+    const vix = fetchVIX();
+    const spyReturns = calculate200DayReturn("SPY");
+    if (vix > 30) return "CRISIS";
+    if (vix < 15 && spyReturns > 0.15) return "BULL";
+    // ...
+  }
+
+  adjustAgentWeights(regime: MarketRegime): AgentWeights {
+    // CRISIS: Karen 2.0x, Warren 1.5x, Cathie 0.3x
+    // BULL: Cathie 1.5x, Elon 1.3x, Karen 0.5x
+  }
+}
+```
+
+#### 2. Ensemble Meta-Agent
+
+Create 9th "Meta" agent that:
+
+- Reviews consensus from 8 agents
+- Flags when diversity drops (all agree → suspicious)
+- Predicts which agent types perform best in current regime
+
+#### 3. Agent-Specific Exit Strategies
+
+```typescript
+class WarrenExit implements ExitStrategy {
+  // Never exit on price, only thesis invalidation
+  shouldExit(pos: Position): ExitDecision {
+    if (pos.fundamentalsChanged) return "EXIT_FULL";
+    return "HOLD"; // Ignore volatility
+  }
+}
+
+class QuantExit implements ExitStrategy {
+  // Tight ATR-based trailing stops
+  shouldExit(pos: Position): ExitDecision {
+    const atr = calculateATR(pos.ticker);
+    const trailingStop = pos.highWaterMark - 2 * atr;
+    if (pos.currentPrice < trailingStop) return "EXIT_FULL";
+  }
+}
+```
+
+---
+
+### Recommended Simplifications (Ship Faster)
+
+1. **Skip Phase 3 initially** — Manual analysis trigger is fine, scheduled analysis adds complexity
+2. **Simplify Phase 4** — Start with simple win rate tracking, add Bayesian adjustment later
+3. **Phase 2 MVP** — Implement stop-loss only, skip take-profit tiers initially
+4. **Defer Web Workers** — Run analysis in main thread with loading states
+
+---
+
+### Revised Roadmap Recommendation
+
+**Phase 0 (Add 2 weeks): Validation & Foundation**
+
+- [ ] Collect 50-100 manual analyses
+- [ ] Measure: debate winner accuracy vs subsequent price movements
+- [ ] Implement basic logging and dry-run mode
+- [ ] Validate LLM predictions have signal before building autonomy
+
+**Phase 1-5:** Keep as-is, but with Phase 0 validation first
+
+---
+
+### Success Probability Assessment
+
+| Scenario                   | Probability                                                  |
+| -------------------------- | ------------------------------------------------------------ |
+| As currently written       | 40% (browser limitations likely cause abandonment)           |
+| With recommended revisions | 75% (addresses critical flaws)                               |
+| Best case                  | Leading AI trading education platform                        |
+| Worst case                 | Technical debt accumulates, becomes "interesting experiment" |
+
+**Key Success Factors:**
+
+1. Validate debate winners outperform random before building autonomy
+2. Accept browser limitations or adopt lightweight backend early
+3. Resist urge to add all features at once
+4. Test with 5-10 users after each phase
 
 ---
 

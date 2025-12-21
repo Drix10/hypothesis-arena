@@ -5,7 +5,6 @@
  */
 
 import React, { useState } from "react";
-import { motion } from "framer-motion";
 import { AgentPortfolio } from "../../types/trading";
 import {
   LineChart,
@@ -82,11 +81,7 @@ export const AgentPortfolioView: React.FC<AgentPortfolioViewProps> = ({
 
   return (
     <div className="min-h-screen bg-gray-50 p-6">
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="max-w-7xl mx-auto"
-      >
+      <div className="max-w-7xl mx-auto">
         {/* Header */}
         <div className="mb-6">
           <button
@@ -520,7 +515,7 @@ export const AgentPortfolioView: React.FC<AgentPortfolioViewProps> = ({
             )}
           </div>
         </div>
-      </motion.div>
+      </div>
     </div>
   );
 };

@@ -4,7 +4,6 @@
  */
 
 import React, { useState, useEffect } from "react";
-import { motion } from "framer-motion";
 import { TradingSystemState } from "../../types/trading";
 import { tradingService } from "../../services/trading";
 
@@ -110,11 +109,7 @@ export const TradingSettings: React.FC<TradingSettingsProps> = ({
   const drawdownError = validateDrawdownThresholds();
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: -20 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="glass-card rounded-xl p-6"
-    >
+    <div className="glass-card rounded-xl p-6">
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-xl font-serif font-bold text-white flex items-center gap-2">
           <span className="text-2xl">⚙️</span>
@@ -426,7 +421,7 @@ export const TradingSettings: React.FC<TradingSettingsProps> = ({
 
       {/* Actions */}
       <div className="mt-6 flex items-center justify-between pt-6 border-t border-white/[0.08]">
-        <motion.button
+        <button
           onClick={() => {
             if (
               confirm(
@@ -436,38 +431,47 @@ export const TradingSettings: React.FC<TradingSettingsProps> = ({
               onReset();
             }
           }}
-          className="px-4 py-2 bg-gradient-to-r from-bear/20 to-bear/10 hover:from-bear/30 hover:to-bear/20 border border-bear/30 rounded-lg text-bear-light transition-all font-medium text-sm"
-          whileHover={{ scale: 1.02 }}
-          whileTap={{ scale: 0.98 }}
+          className="px-4 py-2 rounded-lg text-bear-light transition-all font-medium text-sm hover:scale-[1.02] active:scale-[0.98]"
+          style={{
+            background:
+              "linear-gradient(to right, rgba(239,68,68,0.2), rgba(239,68,68,0.1))",
+            border: "1px solid rgba(239,68,68,0.3)",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background =
+              "linear-gradient(to right, rgba(239,68,68,0.3), rgba(239,68,68,0.2))";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background =
+              "linear-gradient(to right, rgba(239,68,68,0.2), rgba(239,68,68,0.1))";
+          }}
         >
           🔄 Reset All Portfolios
-        </motion.button>
+        </button>
         <div className="flex gap-2">
-          <motion.button
+          <button
             onClick={() => {
               setHasLocalEdits(false);
               setLocalState(state);
               onClose();
             }}
-            className="px-4 py-2 bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.08] rounded-lg text-slate-300 transition-all font-medium text-sm"
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
+            className="px-4 py-2 bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.08] rounded-lg text-slate-300 transition-all font-medium text-sm hover:scale-[1.02] active:scale-[0.98]"
           >
             Cancel
-          </motion.button>
-          <motion.button
+          </button>
+          <button
             onClick={handleSave}
             disabled={!!drawdownError || isSaving}
             className={`px-4 py-2 bg-gradient-to-r from-cyan/20 to-cyan/10 hover:from-cyan/30 hover:to-cyan/20 border border-cyan/30 rounded-lg text-cyan transition-all font-medium text-sm ${
-              drawdownError || isSaving ? "opacity-50 cursor-not-allowed" : ""
+              drawdownError || isSaving
+                ? "opacity-50 cursor-not-allowed"
+                : "hover:scale-[1.02] active:scale-[0.98]"
             }`}
-            whileHover={drawdownError || isSaving ? {} : { scale: 1.02 }}
-            whileTap={drawdownError || isSaving ? {} : { scale: 0.98 }}
           >
             {isSaving ? "Saving..." : "Save Settings"}
-          </motion.button>
+          </button>
         </div>
       </div>
-    </motion.div>
+    </div>
   );
 };

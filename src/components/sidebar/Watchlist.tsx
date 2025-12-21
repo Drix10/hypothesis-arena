@@ -1,9 +1,10 @@
 /**
- * Watchlist Component - Strategic Arena Theme
+ * Watchlist Component - Cinematic Command Center
+ * Bold asymmetric design with dramatic lighting effects
  */
 
 import React, { useState, useEffect } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   WatchlistItem,
   getWatchlist,
@@ -31,7 +32,13 @@ export const Watchlist: React.FC<WatchlistProps> = ({
 
   const handleRemove = (ticker: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (removeFromWatchlist(ticker)) setItems(getWatchlist());
+    if (removeFromWatchlist(ticker)) {
+      setItems(getWatchlist());
+      if (editingNotes === ticker) {
+        setEditingNotes(null);
+        setNoteText("");
+      }
+    }
   };
 
   const handleSaveNotes = (ticker: string) => {
@@ -51,148 +58,189 @@ export const Watchlist: React.FC<WatchlistProps> = ({
   if (items.length === 0) return null;
 
   return (
-    <motion.div
-      className="glass-card rounded-xl overflow-hidden"
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4 }}
+    <div
+      className="relative overflow-hidden rounded-xl"
+      style={{
+        background: "linear-gradient(165deg, #0d1117 0%, #080b0f 100%)",
+        border: "1px solid rgba(255,255,255,0.06)",
+        boxShadow:
+          "0 8px 32px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.03)",
+      }}
     >
-      <motion.button
+      {/* Diagonal accent */}
+      <div
+        className="absolute top-0 right-0 w-20 h-20 opacity-20"
+        style={{
+          background: "linear-gradient(135deg, #ffd700 0%, transparent 60%)",
+          clipPath: "polygon(100% 0, 0 0, 100% 100%)",
+        }}
+      />
+      {/* Scanlines */}
+      <div
+        className="absolute inset-0 opacity-[0.03] pointer-events-none"
+        style={{
+          backgroundImage:
+            "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.03) 2px, rgba(255,255,255,0.03) 4px)",
+        }}
+      />
+
+      <button
         onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full px-4 py-3 flex items-center justify-between hover:bg-white/[0.02] transition-colors"
-        whileTap={{ scale: 0.99 }}
+        className="w-full px-4 py-3.5 flex items-center justify-between transition-colors relative z-10 hover:bg-white/[0.02] active:scale-[0.99]"
         aria-expanded={isExpanded}
-        aria-controls="watchlist-items"
       >
-        <div className="flex items-center gap-2">
-          <span className="text-base" aria-hidden="true">
+        <div className="flex items-center gap-3">
+          <div
+            className="w-9 h-9 rounded-lg flex items-center justify-center text-lg"
+            style={{
+              background:
+                "linear-gradient(145deg, rgba(255,215,0,0.15) 0%, rgba(255,215,0,0.05) 100%)",
+              border: "1px solid rgba(255,215,0,0.3)",
+            }}
+          >
             ⭐
-          </span>
-          <h3 className="text-sm font-semibold text-white">Watchlist</h3>
-          <motion.span
-            className="text-[10px] text-slate-500 bg-white/[0.05] px-1.5 py-0.5 rounded-md"
-            key={items.length}
-            initial={{ scale: 0.8 }}
-            animate={{ scale: 1 }}
+          </div>
+          <h3
+            className="text-sm font-black text-white"
+            style={{ fontFamily: "'Space Grotesk', sans-serif" }}
+          >
+            Watchlist
+          </h3>
+          <span
+            className="text-[10px] font-bold px-2 py-0.5 rounded-md"
+            style={{
+              background: "rgba(255,215,0,0.1)",
+              color: "#ffd700",
+              border: "1px solid rgba(255,215,0,0.2)",
+            }}
           >
             {items.length}
-          </motion.span>
+          </span>
         </div>
-        <motion.span
-          className="text-slate-500 text-xs"
-          animate={{ rotate: isExpanded ? 180 : 0 }}
-          transition={{ duration: 0.2 }}
+        <span
+          className="text-slate-500 text-xs transition-transform duration-200"
+          style={{ transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)" }}
         >
           ▼
-        </motion.span>
-      </motion.button>
+        </span>
+      </button>
 
       <AnimatePresence>
         {isExpanded && (
           <motion.div
-            id="watchlist-items"
-            className="border-t border-white/[0.05] divide-y divide-white/[0.04]"
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
+            className="border-t border-white/[0.06] relative z-10"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
           >
-            {items.map((item, index) => (
-              <motion.div
+            {items.map((item) => (
+              <div
                 key={item.ticker}
-                className={`px-4 py-2.5 hover:bg-white/[0.02] transition-colors cursor-pointer ${
-                  currentTicker === item.ticker
-                    ? "bg-cyan/[0.06] border-l-2 border-cyan"
-                    : ""
-                }`}
+                className="px-4 py-3 transition-all cursor-pointer relative overflow-hidden group hover:translate-x-1 hover:bg-white/[0.02] focus-within:ring-2 focus-within:ring-cyan/50"
+                style={{
+                  borderBottom: "1px solid rgba(255,255,255,0.04)",
+                  background:
+                    currentTicker === item.ticker
+                      ? "rgba(0,240,255,0.06)"
+                      : "transparent",
+                  borderLeft:
+                    currentTicker === item.ticker
+                      ? "2px solid #00f0ff"
+                      : "2px solid transparent",
+                }}
                 onClick={() => onSelectTicker(item.ticker)}
-                initial={{ opacity: 0, x: -20 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: index * 0.04 }}
-                whileHover={{ x: 2 }}
               >
-                <div className="flex items-center justify-between">
+                {/* Hover glow */}
+                <div
+                  className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                  style={{
+                    background:
+                      "linear-gradient(90deg, rgba(0,240,255,0.03) 0%, transparent 60%)",
+                  }}
+                />
+
+                <div className="flex items-center justify-between relative z-10">
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
-                      <span className="text-white font-medium text-sm">
+                      <span className="text-white font-bold text-sm">
                         {item.ticker}
                       </span>
-                      <span className="text-[10px] text-slate-500">
+                      <span className="text-[10px] text-slate-500 truncate max-w-[100px]">
                         {item.name}
                       </span>
                     </div>
                     {item.notes && editingNotes !== item.ticker && (
-                      <p className="text-[10px] text-slate-500 mt-0.5 truncate max-w-[200px]">
-                        {item.notes}
+                      <p className="text-[10px] text-slate-500 mt-0.5 truncate max-w-[200px] italic">
+                        "{item.notes}"
                       </p>
                     )}
                     {editingNotes === item.ticker && (
-                      <motion.div
-                        className="mt-1.5 flex gap-1.5"
+                      <div
+                        className="mt-2 flex gap-1.5"
                         onClick={(e) => e.stopPropagation()}
-                        initial={{ opacity: 0, y: -10 }}
-                        animate={{ opacity: 1, y: 0 }}
                       >
                         <input
                           type="text"
                           value={noteText}
                           onChange={(e) => setNoteText(e.target.value)}
                           placeholder="Add notes..."
-                          className="flex-1 px-2 py-1 text-[10px] bg-arena-deep/50 border border-white/[0.08] rounded text-white placeholder-slate-600 focus:outline-none focus:border-cyan/50"
+                          className="flex-1 px-2 py-1 text-[10px] rounded text-white placeholder-slate-600 focus:outline-none"
+                          style={{
+                            background: "rgba(0,0,0,0.3)",
+                            border: "1px solid rgba(0,240,255,0.3)",
+                          }}
                           autoFocus
                         />
-                        <motion.button
+                        <button
                           onClick={() => handleSaveNotes(item.ticker)}
-                          className="px-2 py-1 text-[10px] bg-cyan/20 text-cyan rounded hover:bg-cyan/30"
-                          whileTap={{ scale: 0.95 }}
+                          className="px-2 py-1 text-[10px] rounded font-bold active:scale-95"
+                          style={{
+                            background: "rgba(0,240,255,0.2)",
+                            color: "#00f0ff",
+                            border: "1px solid rgba(0,240,255,0.3)",
+                          }}
                         >
                           Save
-                        </motion.button>
-                        <motion.button
+                        </button>
+                        <button
                           onClick={() => setEditingNotes(null)}
-                          className="px-2 py-1 text-[10px] text-slate-500 hover:text-white"
-                          whileTap={{ scale: 0.95 }}
+                          className="px-2 py-1 text-[10px] text-slate-500 hover:text-white active:scale-95"
                         >
-                          Cancel
-                        </motion.button>
-                      </motion.div>
+                          ✕
+                        </button>
+                      </div>
                     )}
                   </div>
                   <div className="flex items-center gap-1.5">
-                    <span className="text-[10px] text-slate-600">
+                    <span className="text-[10px] text-slate-600 font-mono">
                       {formatDate(item.addedAt)}
                     </span>
-                    <motion.button
+                    <button
                       onClick={(e) => {
                         e.stopPropagation();
                         if (editingNotes !== item.ticker)
                           setNoteText(item.notes || "");
                         setEditingNotes(item.ticker);
                       }}
-                      className="p-1 text-slate-500 hover:text-white transition-colors text-xs"
-                      title="Edit notes"
-                      aria-label={`Edit notes for ${item.ticker}`}
-                      whileTap={{ scale: 0.9 }}
+                      className="p-1.5 text-slate-500 hover:text-cyan transition-colors text-xs active:scale-90"
                     >
                       ✏️
-                    </motion.button>
-                    <motion.button
+                    </button>
+                    <button
                       onClick={(e) => handleRemove(item.ticker, e)}
-                      className="p-1 text-slate-500 hover:text-bear-light transition-colors text-xs"
-                      title="Remove from watchlist"
-                      aria-label={`Remove ${item.ticker} from watchlist`}
-                      whileTap={{ scale: 0.9 }}
+                      className="p-1.5 text-slate-500 hover:text-red-400 transition-colors text-xs active:scale-90"
                     >
                       ✕
-                    </motion.button>
+                    </button>
                   </div>
                 </div>
-              </motion.div>
+              </div>
             ))}
           </motion.div>
         )}
       </AnimatePresence>
-    </motion.div>
+    </div>
   );
 };
 
