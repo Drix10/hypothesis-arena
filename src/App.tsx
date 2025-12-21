@@ -95,33 +95,38 @@ const App: React.FC = () => {
 
   const handleSetKey = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (inputGeminiKey.trim()) {
-      setIsLoading(true);
-      setError("");
 
-      try {
-        // Verify Gemini API key before proceeding
-        await testApiKey(inputGeminiKey.trim());
+    // Prevent duplicate submissions
+    if (isLoading || !inputGeminiKey.trim()) {
+      console.warn("Key validation already in progress or empty key");
+      return;
+    }
 
-        // Set persistence based on user preference
-        setPersistenceEnabled(rememberKeys);
+    setIsLoading(true);
+    setError("");
 
-        // Set Gemini key (required)
-        setApiKey(inputGeminiKey.trim());
-        setApiKeyState(inputGeminiKey.trim());
+    try {
+      // Verify Gemini API key before proceeding
+      await testApiKey(inputGeminiKey.trim());
 
-        // Set FMP key only if provided (otherwise uses "demo")
-        if (inputFmpKey.trim()) {
-          setFmpApiKey(inputFmpKey.trim());
-        }
+      // Set persistence based on user preference
+      setPersistenceEnabled(rememberKeys);
 
-        setIsKeySet(true);
-      } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : "Invalid API key";
-        setError(errorMsg);
-      } finally {
-        setIsLoading(false);
+      // Set Gemini key (required)
+      setApiKey(inputGeminiKey.trim());
+      setApiKeyState(inputGeminiKey.trim());
+
+      // Set FMP key only if provided (otherwise uses "demo")
+      if (inputFmpKey.trim()) {
+        setFmpApiKey(inputFmpKey.trim());
       }
+
+      setIsKeySet(true);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : "Invalid API key";
+      setError(errorMsg);
+    } finally {
+      setIsLoading(false);
     }
   };
 

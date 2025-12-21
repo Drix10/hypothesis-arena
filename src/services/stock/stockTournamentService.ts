@@ -308,11 +308,13 @@ async function generateDebateTurn(
     ai: GoogleGenAI,
     model: string,
     analyst: AnalystAgent,
-    thesis: InvestmentThesis,
+    analysis: InvestmentThesis,
     position: 'bull' | 'bear',
     previousTurn: string,
-    stockData: StockAnalysisData
+    stockData: StockAnalysisData,
+    round: number
 ): Promise<DebateTurn> {
+    const thesis = analysis;
     // Build enhanced system prompt with analyst context and data
     const dataContext = formatDebateContext(stockData);
     const keyArguments = position === 'bull'
@@ -341,7 +343,7 @@ ${dataContext}
 - Be persuasive but acknowledge valid counterpoints
 - Keep response under 150 words`;
 
-    const userPrompt = DEBATE_TURN_PROMPT(position, previousTurn);
+    const userPrompt = DEBATE_TURN_PROMPT(position, previousTurn, round);
 
     try {
         const response = await ai.models.generateContent({
@@ -362,7 +364,7 @@ ${dataContext}
             position,
             content,
             dataPointsReferenced: dataPoints,
-            argumentStrength: calculateArgumentStrength(content),
+            argumentStrength: calculateArgumentStrength(content, analyst.methodology),
             timestamp: Date.now()
         };
     } catch (error) {
@@ -388,10 +390,10 @@ ${dataContext}
 }
 
 /**
- * Calculate argument strength based on content quality - ENHANCED
+ * Calculate argument strength based on content quality - ENHANCED & METHODOLOGY AWARE
  * Evaluates: data quality, logic, risk acknowledgment, specificity
  */
-function calculateArgumentStrength(content: string): number {
+function calculateArgumentStrength(content: string, methodology: string = 'value'): number {
     if (!content || typeof content !== 'string') return 50;
 
     let score = 40; // Base score (slightly below neutral)
@@ -410,6 +412,26 @@ function calculateArgumentStrength(content: string): number {
     // Ratios and multiples
     if (/\d+\.?\d*x/i.test(content)) score += 3;
     if (/P\/E|P\/B|EV\/|ROE|ROA/i.test(content)) score += 4;
+
+    // ═══════════════════════════════════════
+    // METHODOLOGY-SPECIFIC BONUSES (+10 points)
+    // ═══════════════════════════════════════
+
+    if (methodology === 'quant') {
+        if (/factor|statistically|probability|backtest|standard deviation/i.test(content)) score += 10;
+    } else if (methodology === 'technical') {
+        if (/trend|support|resistance|volume|breakout|MA|RSI/i.test(content)) score += 10;
+    } else if (methodology === 'macro') {
+        if (/cycle|fed|interest rates|inflation|liquidity|policy/i.test(content)) score += 10;
+    } else if (methodology === 'sentiment') {
+        if (/narrative|fomo|crowd|social volume|fear|greed/i.test(content)) score += 10;
+    } else if (methodology === 'value') {
+        if (/intrinsic|moat|safety|undervalued|cash flow/i.test(content)) score += 10;
+    } else if (methodology === 'growth') {
+        if (/TAM|acceleration|scaling|innovation|recurring/i.test(content)) score += 10;
+    } else if (methodology === 'risk') {
+        if (/leverage|protection|drawdown|worst-case|limit/i.test(content)) score += 10;
+    }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // LOGIC & STRUCTURE (up to +20 points)
@@ -517,25 +539,33 @@ async function runDebate(
         // Bull turn
         const bullTurn = await generateDebateTurn(
             ai, config.model, bullAnalyst, pairing.bull, 'bull',
-            lastBearStatement, stockData
+            lastBearStatement, stockData, turn + 1
         );
         debate.dialogue.push(bullTurn);
         lastBullStatement = bullTurn.content;
 
         if (config.onTurnComplete) {
-            config.onTurnComplete(debate, bullTurn);
+            try {
+                config.onTurnComplete(debate, bullTurn);
+            } catch (e) {
+                logger.error('Error in onTurnComplete callback (bull):', e);
+            }
         }
 
         // Bear turn
         const bearTurn = await generateDebateTurn(
             ai, config.model, bearAnalyst, pairing.bear, 'bear',
-            lastBullStatement, stockData
+            lastBullStatement, stockData, turn + 1
         );
         debate.dialogue.push(bearTurn);
         lastBearStatement = bearTurn.content;
 
         if (config.onTurnComplete) {
-            config.onTurnComplete(debate, bearTurn);
+            try {
+                config.onTurnComplete(debate, bearTurn);
+            } catch (e) {
+                logger.error('Error in onTurnComplete callback (bear):', e);
+            }
         }
 
         // Small delay to avoid rate limits

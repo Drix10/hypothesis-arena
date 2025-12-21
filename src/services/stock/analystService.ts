@@ -131,6 +131,256 @@ function getTrendContext(price: number, sma20: number, sma50: number, sma200: nu
     return contexts.join(' | ');
 }
 
+/** Safely get state from localStorage if in browser */
+function getTradingState(): Record<string, any> | null {
+    if (typeof window === 'undefined') return null;
+    try {
+        const state = localStorage.getItem('tradingSystemState');
+        if (!state) return null;
+
+        // FIX: Validate JSON structure before returning
+        const parsed = JSON.parse(state);
+
+        // Basic validation - ensure it's an object
+        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+            logger.warn('Invalid trading state structure in localStorage');
+            return null;
+        }
+
+        return parsed;
+    } catch (e) {
+        // FIX: Log the error for debugging
+        logger.warn('Failed to parse trading state from localStorage:', e);
+        return null;
+    }
+}
+
+/** Format analyst's personal performance for the prompt */
+function formatPerformanceContext(methodology: string): string {
+    const state = getTradingState();
+    if (!state) return '';
+
+    const stats = state.stats?.[methodology];
+    if (!stats) return '';
+
+    // FIX: Validate all stats values before using them
+    const winRate = typeof stats.winRate === 'number' && Number.isFinite(stats.winRate) ? stats.winRate : null;
+    const wins = typeof stats.wins === 'number' && Number.isFinite(stats.wins) ? stats.wins : 0;
+    const losses = typeof stats.losses === 'number' && Number.isFinite(stats.losses) ? stats.losses : 0;
+    const avgReturn = typeof stats.avgReturn === 'number' && Number.isFinite(stats.avgReturn) ? stats.avgReturn : null;
+    const sharpe = typeof stats.sharpe === 'number' && Number.isFinite(stats.sharpe) ? stats.sharpe : null;
+    const totalTrades = typeof stats.totalTrades === 'number' && Number.isFinite(stats.totalTrades) ? stats.totalTrades : 0;
+
+    // FIX: Safely find ranking
+    let rank: string | number = 'N/A';
+    if (Array.isArray(state.rankings)) {
+        const rankEntry = state.rankings.find((r: any) => r?.methodology === methodology);
+        if (rankEntry && typeof rankEntry.rank === 'number' && Number.isFinite(rankEntry.rank)) {
+            rank = rankEntry.rank;
+        }
+    }
+
+    return `═══ YOUR PERFORMANCE TRACK RECORD ═══
+• WIN RATE: ${winRate !== null ? formatPercent(winRate, true) : 'N/A'} (${wins} wins / ${losses} losses)
+• AVG RETURN: ${avgReturn !== null ? formatPercent(avgReturn, true) : 'N/A'}
+• SHARPE RATIO: ${sharpe !== null ? formatMetric(sharpe) : 'N/A'}
+• TOTAL TRADES: ${totalTrades}
+• RANKING: ${rank} among 8 analysts
+`;
+}
+
+/** Format current portfolio holdings for the prompt */
+function formatPortfolioContext(methodology: string): string {
+    const state = getTradingState();
+    if (!state) return '';
+
+    // Try to get analyst-specific portfolio first
+    const analystPortfolio = state.portfolios?.[methodology];
+    const portfolio = analystPortfolio || state.portfolio;
+
+    if (!portfolio) return '';
+
+    const holdings = portfolio.holdings || portfolio.positions || [];
+
+    // FIX: Validate holdings is actually an array
+    if (!Array.isArray(holdings) || holdings.length === 0) {
+        return '• CURRENT PORTFOLIO: Cash Only (100% liquidity)';
+    }
+
+    // FIX: Filter out invalid holdings and safely access properties
+    const validHoldings = holdings.filter((h: any) => h && typeof h.ticker === 'string');
+    if (validHoldings.length === 0) {
+        return '• CURRENT PORTFOLIO: Cash Only (100% liquidity)';
+    }
+
+    const totalValue = typeof portfolio.totalValue === 'number' && Number.isFinite(portfolio.totalValue) && portfolio.totalValue > 0
+        ? portfolio.totalValue
+        : null;
+
+    const list = validHoldings.slice(0, 5).map((h: any) => {
+        let weight = 0;
+        if (typeof h.weight === 'number' && Number.isFinite(h.weight)) {
+            weight = h.weight;
+        } else if (typeof h.marketValue === 'number' && Number.isFinite(h.marketValue) && totalValue) {
+            weight = h.marketValue / totalValue;
+        }
+        return `${h.ticker} (${formatPercent(weight, true)})`;
+    }).join(', ');
+
+    // FIX: Safely get cash and drawdown values
+    const cash = portfolio.cash ?? portfolio.currentCash;
+    const safeCash = typeof cash === 'number' && Number.isFinite(cash) ? cash : 0;
+    const safeDrawdown = typeof portfolio.currentDrawdown === 'number' && Number.isFinite(portfolio.currentDrawdown)
+        ? portfolio.currentDrawdown
+        : 0;
+
+    return `═══ YOUR PORTFOLIO STATUS ═══
+• CURRENT TOP HOLDINGS: ${list}${validHoldings.length > 5 ? '...' : ''}
+• PORTFOLIO CONCENTRATION: ${validHoldings.length} tickers
+• CASH BALANCE: ${formatLargeNumber(safeCash)}
+• TOTAL VALUE: ${totalValue ? formatLargeNumber(totalValue) : 'N/A'}
+• CURRENT DRAWDOWN: ${formatPercent(safeDrawdown, true)}`;
+}
+
+/** Format historical price performance summary */
+function formatHistoricalSummary(data: StockAnalysisData): string {
+    const hist = data.historicalData?.data ?? [];
+    if (hist.length < 5) return '';
+
+    const currentPrice = data.quote?.price ?? 0;
+    if (currentPrice <= 0) return '';
+
+    // Calculate returns over different periods
+    // FIX: Handle edge case where hist.length - 1 - idx could be negative
+    const getReturn = (daysAgo: number): string => {
+        const targetIdx = hist.length - 1 - daysAgo;
+        if (targetIdx < 0 || targetIdx >= hist.length) return 'N/A';
+        const dataPoint = hist[targetIdx];
+        if (!dataPoint || typeof dataPoint.close !== 'number') return 'N/A';
+        const oldPrice = dataPoint.close;
+        if (oldPrice <= 0 || !Number.isFinite(oldPrice)) return 'N/A';
+        const ret = ((currentPrice - oldPrice) / oldPrice) * 100;
+        if (!Number.isFinite(ret)) return 'N/A';
+        return `${ret >= 0 ? '+' : ''}${ret.toFixed(1)}%`;
+    };
+
+    // Calculate 52-week high/low from available data
+    // FIX: Handle empty prices array to avoid Math.max/min returning Infinity/-Infinity
+    const prices = hist
+        .map(d => d?.close)
+        .filter((p): p is number => typeof p === 'number' && p > 0 && Number.isFinite(p));
+
+    if (prices.length === 0) return '';
+
+    const high52w = Math.max(...prices);
+    const low52w = Math.min(...prices);
+
+    // FIX: Validate high/low are finite before calculations
+    const fromHigh = Number.isFinite(high52w) && high52w > 0
+        ? ((currentPrice - high52w) / high52w * 100).toFixed(1)
+        : 'N/A';
+    const fromLow = Number.isFinite(low52w) && low52w > 0
+        ? ((currentPrice - low52w) / low52w * 100).toFixed(1)
+        : 'N/A';
+
+    // Calculate average volume trend
+    // FIX: Handle case where slice returns empty array (division by actual count, not fixed number)
+    const recentSlice = hist.slice(-20);
+    const olderSlice = hist.slice(-60, -20);
+
+    const recentVolSum = recentSlice.reduce((sum, d) => sum + (d?.volume || 0), 0);
+    const olderVolSum = olderSlice.reduce((sum, d) => sum + (d?.volume || 0), 0);
+
+    const recentVol = recentSlice.length > 0 ? recentVolSum / recentSlice.length : 0;
+    const olderVol = olderSlice.length > 0 ? olderVolSum / olderSlice.length : 0;
+
+    const volTrend = olderVol > 0 && Number.isFinite(recentVol) && Number.isFinite(olderVol)
+        ? ((recentVol - olderVol) / olderVol * 100).toFixed(0)
+        : 'N/A';
+
+    return `═══ HISTORICAL PRICE PERFORMANCE ═══
+• 1-WEEK RETURN: ${getReturn(5)}
+• 1-MONTH RETURN: ${getReturn(21)}
+• 3-MONTH RETURN: ${getReturn(63)}
+• 6-MONTH RETURN: ${getReturn(126)}
+• 52-WEEK RANGE: ${formatPrice(low52w)} - ${formatPrice(high52w)}
+• FROM 52W HIGH: ${fromHigh}% | FROM 52W LOW: +${fromLow}%
+• VOLUME TREND (20d vs 60d): ${volTrend}%
+`;
+}
+
+/** Format risk management context */
+function formatRiskContext(methodology: string, ticker: string): string {
+    const state = getTradingState();
+    if (!state) return '';
+
+    const portfolio = state.portfolios?.[methodology];
+    if (!portfolio) return '';
+
+    const position = portfolio.positions?.find((p: any) => p?.ticker === ticker);
+    const rules = state.riskManagementRules;
+    const sizingRules = state.positionSizingRules;
+
+    if (!position) {
+        // FIX: Validate all values before using them
+        const maxPosPercent = typeof sizingRules?.maxPositionPercent === 'number' && Number.isFinite(sizingRules.maxPositionPercent)
+            ? (sizingRules.maxPositionPercent * 100).toFixed(0)
+            : '20';
+        const maxInvested = typeof sizingRules?.maxTotalInvested === 'number' && Number.isFinite(sizingRules.maxTotalInvested)
+            ? (sizingRules.maxTotalInvested * 100).toFixed(0)
+            : '80';
+        const stopLossPercent = typeof rules?.stopLossPercent === 'number' && Number.isFinite(rules.stopLossPercent)
+            ? (rules.stopLossPercent * 100).toFixed(0)
+            : '15';
+        const takeProfitPercent = typeof rules?.takeProfitPercent === 'number' && Number.isFinite(rules.takeProfitPercent)
+            ? (rules.takeProfitPercent * 100).toFixed(0)
+            : '25';
+
+        return `═══ RISK MANAGEMENT RULES ═══
+• MAX POSITION SIZE: ${maxPosPercent}% of portfolio
+• MAX TOTAL INVESTED: ${maxInvested}%
+• STOP-LOSS: ${rules?.enableStopLoss ? `${stopLossPercent}%` : 'DISABLED'}
+• TAKE-PROFIT: ${rules?.enableTakeProfit ? `${takeProfitPercent}%` : 'DISABLED'}
+`;
+    }
+
+    // FIX: Validate position data before calculations
+    const avgCostBasis = typeof position.avgCostBasis === 'number' && Number.isFinite(position.avgCostBasis) && position.avgCostBasis > 0
+        ? position.avgCostBasis
+        : null;
+
+    const stopLossPercent = typeof rules?.stopLossPercent === 'number' && Number.isFinite(rules.stopLossPercent)
+        ? rules.stopLossPercent
+        : 0.15;
+    const takeProfitPercent = typeof rules?.takeProfitPercent === 'number' && Number.isFinite(rules.takeProfitPercent)
+        ? rules.takeProfitPercent
+        : 0.25;
+
+    const stopPrice = rules?.enableStopLoss && avgCostBasis
+        ? avgCostBasis * (1 - stopLossPercent)
+        : null;
+    const targetPrice = rules?.enableTakeProfit && avgCostBasis
+        ? avgCostBasis * (1 + takeProfitPercent)
+        : null;
+
+    // FIX: Safely format position values
+    const shares = typeof position.shares === 'number' && Number.isFinite(position.shares) ? position.shares : 0;
+    const unrealizedPnL = typeof position.unrealizedPnL === 'number' && Number.isFinite(position.unrealizedPnL)
+        ? position.unrealizedPnL : 0;
+    const unrealizedPnLPercent = typeof position.unrealizedPnLPercent === 'number' && Number.isFinite(position.unrealizedPnLPercent)
+        ? position.unrealizedPnLPercent : 0;
+    const drawdownFromHigh = typeof position.drawdownFromHigh === 'number' && Number.isFinite(position.drawdownFromHigh)
+        ? position.drawdownFromHigh : 0;
+
+    return `═══ EXISTING POSITION RISK ═══
+• CURRENT POSITION: ${shares} shares @ ${avgCostBasis ? formatPrice(avgCostBasis) : 'N/A'} avg
+• UNREALIZED P&L: ${formatLargeNumber(unrealizedPnL)} (${formatPercent(unrealizedPnLPercent, true)})
+• DRAWDOWN FROM HIGH: ${formatPercent(drawdownFromHigh, true)}
+• STOP-LOSS LEVEL: ${stopPrice ? formatPrice(stopPrice) : 'DISABLED'}
+• TAKE-PROFIT LEVEL: ${targetPrice ? formatPrice(targetPrice) : 'DISABLED'}
+`;
+}
+
 /**
  * Format stock data for a specific analyst's focus areas
  * ENHANCED: More structured, contextual, and actionable data
@@ -142,6 +392,159 @@ function formatDataForAnalyst(
     const focus = ANALYST_DATA_FOCUS[methodology];
     const sections: string[] = [];
     const price = data.quote?.price ?? 0;
+
+    // Helper for Quant Factors
+    const getQuantFactors = () => {
+        const f = data.fundamentals;
+        const t = data.technicals;
+
+        // Value
+        const pe = f?.peRatio ?? 0;
+        const valueSignal = (pe > 0 && pe < 15) ? 'BULLISH' : (pe > 50) ? 'BEARISH' : 'NEUTRAL';
+
+        // Quality
+        const roe = f?.returnOnEquity ?? 0;
+        const qualSignal = (roe > 0.15) ? 'BULLISH' : (roe < 0.05) ? 'BEARISH' : 'NEUTRAL';
+
+        // Momentum
+        const momSignal = (t?.trend === 'uptrend' || t?.trend === 'strong_uptrend') ? 'BULLISH' : 'BEARISH';
+
+        // FIX: Safe calculation for vs SMA200 - avoid division by zero
+        const sma200 = t?.sma200 ?? 0;
+        const vsSma200 = sma200 > 0 && Number.isFinite(price) && Number.isFinite(sma200)
+            ? formatPercent((price - sma200) / sma200)
+            : 'N/A';
+
+        // FIX: Safe volatility display
+        const volatility = typeof t?.volatility === 'number' && Number.isFinite(t.volatility)
+            ? t.volatility.toFixed(1)
+            : 'N/A';
+        const volRank = (t?.volatility ?? 0) > 40 ? 'High' : 'Low';
+
+        return `═══ QUANT FACTOR MODEL ═══
+• VALUE: ${valueSignal} (P/E: ${formatMetric(pe)}, P/B: ${formatMetric(f?.priceToBook)})
+• QUALITY: ${qualSignal} (ROE: ${formatPercent(roe)}, Net Margin: ${formatPercent(f?.profitMargin)})
+• MOMENTUM: ${momSignal} (RSI: ${t?.rsi14?.toFixed(1) ?? 'N/A'}, vs SMA200: ${vsSma200})
+• VOLATILITY: ${volatility}% (Rank: ${volRank})
+• STATISTICAL EDGE: ${(valueSignal === 'BULLISH' && momSignal === 'BULLISH') ? 'STRONG (Value + Momentum)' : 'NEUTRAL'}
+`;
+    };
+
+    // Helper for Macro Context
+    const getMacroContext = () => {
+        const sector = data.profile?.sector || 'Unknown';
+        const isCyclical = ['Technology', 'Consumer Cyclical', 'Financial Services', 'Basic Materials', 'Industrials'].includes(sector);
+        const isDefensive = ['Utilities', 'Consumer Defensive', 'Healthcare'].includes(sector);
+        const isRateSensitive = ['Utilities', 'Real Estate', 'Financial Services'].includes(sector);
+
+        return `═══ MACRO & SECTOR CONTEXT ═══
+• SECTOR: ${sector}
+• CYCLICALITY: ${isCyclical ? 'Cyclical (Economy Dependent)' : isDefensive ? 'Defensive (Resilient)' : 'Neutral'}
+• INFLATION SENSITIVITY: ${['Energy', 'Basic Materials', 'Real Estate'].includes(sector) ? 'HIGH (Real Asset)' : 'LOW'}
+• RATE SENSITIVITY: ${isRateSensitive ? 'HIGH (Bond Proxy/Financial)' : 'MODERATE'}
+• SUPPLY CHAIN EXPOSURE: ${['Technology', 'Industrials', 'Consumer Cyclical'].includes(sector) ? 'HIGH' : 'LOW'}
+`;
+    };
+
+    // Helper for Value Context
+    const getValueContext = () => {
+        const f = data.fundamentals;
+        const eps = f?.eps ?? 0;
+        const bv = f?.bookValue ?? 0;
+        const grahamNumber = (eps > 0 && bv > 0) ? Math.sqrt(22.5 * eps * bv) : 0;
+        const priceToGraham = (grahamNumber > 0 && Number.isFinite(price)) ? price / grahamNumber : 0;
+
+        // FIX: Safe FCF Yield calculation
+        const fcf = f?.freeCashFlow ?? 0;
+        const marketCap = data.quote?.marketCap ?? 0;
+        const fcfYield = (marketCap > 0 && Number.isFinite(fcf) && Number.isFinite(marketCap))
+            ? ((fcf / marketCap) * 100).toFixed(2) + '%'
+            : 'N/A';
+
+        return `═══ VALUE INVESTOR CONTEXT ═══
+• INTRINSIC VALUE INPUTS:
+  - EPS: ${formatPrice(eps)} | Book Value: ${formatPrice(bv)}
+  - Graham Number (Rough Fair Value): ${grahamNumber > 0 ? formatPrice(grahamNumber) : 'N/A (Negative Earnings/Equity)'}
+  - Price/Graham: ${grahamNumber > 0 ? priceToGraham.toFixed(2) + 'x' : 'N/A'} ${priceToGraham < 1 && priceToGraham > 0 ? '(UNDERVALUED)' : ''}
+• MOAT INDICATORS:
+  - Gross Margin: ${formatPercent(f?.grossMargin)} (${(f?.grossMargin ?? 0) > 0.5 ? 'WIDE MOAT Potential' : 'Review durability'})
+  - ROE: ${formatPercent(f?.returnOnEquity)} (${(f?.returnOnEquity ?? 0) > 0.15 ? 'Excellent Returns' : 'Average'})
+• SAFETY:
+  - Debt/Equity: ${formatMetric(f?.debtToEquity)} (${(f?.debtToEquity ?? 0) < 0.5 ? 'Fortress Balance Sheet' : 'Leveraged'})
+  - FCF Yield: ${fcfYield}
+`;
+    };
+
+    // Helper for Growth Context
+    const getGrowthContext = () => {
+        const f = data.fundamentals;
+        const revGrowth = (f?.revenueGrowth ?? 0) * 100;
+        const netMargin = (f?.profitMargin ?? 0) * 100;
+        const ruleOf40 = revGrowth + netMargin;
+
+        return `═══ GROWTH INVESTOR CONTEXT ═══
+• GROWTH TRAJECTORY:
+  - Revenue Growth: ${revGrowth.toFixed(1)}% ${(revGrowth > 30) ? '(HYPERGROWTH 🚀)' : (revGrowth > 15) ? '(Solid Growth)' : '(Slowing/Mature)'}
+  - PEG Ratio: ${formatMetric(f?.pegRatio)} ${(f?.pegRatio ?? 0) < 1.5 ? '(Growth at Reasonable Price)' : 'Premium Valuation'}
+• RULE OF 40 SCORE: ${ruleOf40.toFixed(1)}
+  - Status: ${ruleOf40 > 40 ? 'PASS (Efficient Growth)' : 'FAIL (Burn/Inefficient)'}
+• INNOVATION FUNDAMENTALS:
+  - R&D Intensity: Check income statement (High R&D = Innovation Investment)
+  - Gross Margin Profile: ${formatPercent(f?.grossMargin)} (Software-like margins = >70%)
+`;
+    };
+
+    // Helper for Technical Context
+    const getTechnicalContext = () => {
+        const t = data.technicals;
+        const trend = (t?.trend ?? 'sideways').toUpperCase();
+        const rsi = t?.rsi14 ?? 50;
+
+        return `═══ TECHNICAL ANALYST CONTEXT ═══
+• TREND DISCIPLINE: ${trend} (Strength: ${t?.trendStrength}/100)
+• MOMENTUM CHECK:
+  - RSI: ${rsi.toFixed(1)} (${getRSIContext(rsi)})
+  - MACD Histogram: ${formatMetric(t?.macd?.histogram)} (${(t?.macd?.histogram ?? 0) > 0 ? 'Bullish Expansion' : 'Bearish Contraction'})
+• VOLATILITY: ATR: ${formatPrice(t?.atr14)} | Volatility: ${formatMetric(t?.volatility)}%
+• KEY LEVELS TO WATCH:
+  - Support: ${t?.supportLevels?.[0] ? formatPrice(t.supportLevels[0]) : 'N/A'}
+  - Resistance: ${t?.resistanceLevels?.[0] ? formatPrice(t.resistanceLevels[0]) : 'N/A'}
+`;
+    };
+
+    // Helper for Sentiment Context
+    const getSentimentContext = () => {
+        const s = data.sentiment;
+        const score = s?.overallScore ?? 0;
+
+        // Defensive checks for extended properties
+        const socialVolume = (s as any)?.socialVolume ?? 'Average';
+        const buzzScore = (s as any)?.buzzScore ?? 'Normal';
+
+        return `═══ SENTIMENT & PSYCHOLOGY CONTEXT ═══
+• MARKET VIBE: ${score > 0.3 ? 'EUPHORIC' : score < -0.3 ? 'PANIC' : 'NEUTRAL'} (Score: ${score.toFixed(2)})
+• ATTENTION ATTRIBUTE:
+  - Social Volume: ${socialVolume}
+  - Mention Buzz: ${buzzScore}
+• CONTRARIAN SIGNAL: ${Math.abs(score) > 0.6 ? 'EXTREME (High reversal probability)' : 'MODERATE (Follow the trend)'}
+`;
+    };
+
+    // Helper for Risk Context
+    const getRiskContext = () => {
+        const f = data.fundamentals;
+        const t = data.technicals;
+        const beta = (f as any)?.beta ?? 1.0;
+
+        return `═══ RISK OFFICER CONTEXT ═══
+• DOWNSIDE PROTECTION:
+  - Debt/Equity: ${formatMetric(f?.debtToEquity)} (${(f?.debtToEquity ?? 0) > 1.5 ? 'WARNING: High Leverage' : 'Safety: Controlled Debt'})
+  - Current Ratio: ${formatMetric(f?.currentRatio)} (${(f?.currentRatio ?? 0) < 1.0 ? 'LIQUIDITY CRUNCH RISK' : 'Healthy Liquidity'})
+• VOLATILITY RISK:
+  - Beta: ${formatMetric(beta)} (${beta > 1.5 ? 'Aggressive/Volatile' : 'Defensive/Stable'})
+  - Max Expected Drawdown (Est): ${((t?.volatility ?? 0) * 0.5).toFixed(1)}% (1-std deviation event)
+`;
+    };
 
     // ═══════════════════════════════════════════════════════════════════════════
     // SECTION 1: PRICE & MARKET DATA (Always included)
@@ -281,6 +684,61 @@ ${signals.length > 0 ? signals.map(s => `• ${s.indicator}: ${s.signal.toUpperC
         );
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // SPECIALIZED SECTIONS (QUANT & MACRO)
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    if (methodology === 'quant') {
+        sections.push(getQuantFactors());
+    }
+
+    if (methodology === 'macro' || methodology === 'risk') {
+        sections.push(getMacroContext());
+    }
+
+    if (methodology === 'value') {
+        sections.push(getValueContext());
+    }
+
+    if (methodology === 'growth') {
+        sections.push(getGrowthContext());
+    }
+
+    if (methodology === 'technical') {
+        sections.push(getTechnicalContext());
+    }
+
+    if (methodology === 'sentiment' || methodology === 'contrarian') {
+        sections.push(getSentimentContext());
+    }
+
+    if (methodology === 'risk') {
+        sections.push(getRiskContext());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // HISTORICAL PRICE PERFORMANCE (All analysts benefit from this context)
+    // ═══════════════════════════════════════════════════════════════════════════════
+    const historicalSummary = formatHistoricalSummary(data);
+    if (historicalSummary) {
+        sections.push(historicalSummary);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // RISK MANAGEMENT & POSITION CONTEXT
+    // ═══════════════════════════════════════════════════════════════════════════════
+    const riskMgmtContext = formatRiskContext(methodology, data.ticker);
+    if (riskMgmtContext) {
+        sections.push(riskMgmtContext);
+    }
+
+    // Performance context (Personal record)
+    sections.push(formatPerformanceContext(methodology));
+
+    // Portfolio context (Current exposures)
+    // Use the ID if possible (methodology maps typically to ID)
+    sections.push(formatPortfolioContext(methodology));
+
     // ═══════════════════════════════════════════════════════════════════════════
     // SECTION 5: SENTIMENT ANALYSIS
     // ═══════════════════════════════════════════════════════════════════════════
@@ -346,10 +804,22 @@ DISTRIBUTION:
         );
     }
 
-    // Data quality notes
+    // Data quality notes - Enhanced with actionable context
     const warnings = data.dataQuality?.warnings ?? [];
-    if (warnings.length > 0) {
-        sections.push(`═══ DATA NOTES ═══\n${warnings.slice(0, 3).map(w => `⚠ ${w}`).join('\n')}`);
+    const dq = data.dataQuality;
+
+    const qualityItems: string[] = [];
+    if (dq) {
+        if (!dq.hasQuote) qualityItems.push('⚠ CRITICAL: No quote data - analysis unreliable');
+        if (!dq.hasFundamentals) qualityItems.push('⚠ Missing fundamentals - value metrics unavailable');
+        if (!dq.hasTechnicals) qualityItems.push('⚠ Missing technicals - momentum signals unavailable');
+        if (!dq.hasNews) qualityItems.push('ℹ No recent news - sentiment may be stale');
+        if (!dq.hasAnalystRatings) qualityItems.push('ℹ No Wall Street coverage');
+    }
+
+    if (qualityItems.length > 0 || warnings.length > 0) {
+        const allNotes = [...qualityItems, ...warnings.slice(0, 3).map(w => `⚠ ${w}`)];
+        sections.push(`═══ DATA QUALITY NOTES ═══\n${allNotes.join('\n')}`);
     }
 
     return sections.join('\n\n');
@@ -480,10 +950,15 @@ async function generateSingleThesis(
     try {
         const systemPrompt = THESIS_SYSTEM_PROMPTS[analyst.methodology];
         const dataContext = formatDataForAnalyst(stockData, analyst.methodology);
+        const portfolioContext = formatPortfolioContext(analyst.methodology);
+        const performanceContext = formatPerformanceContext(analyst.methodology);
+
         const userPrompt = buildThesisPrompt(
             stockData.ticker,
             stockData.profile?.name ?? stockData.ticker,
-            dataContext
+            dataContext,
+            portfolioContext,
+            performanceContext
         );
 
         const response = await ai.models.generateContent({
@@ -591,9 +1066,6 @@ export async function generateAllTheses(
     return { theses, errors };
 }
 
-/**
- * Generate thesis for a specific analyst
- */
 export async function generateThesisForAnalyst(
     apiKey: string,
     methodology: AnalystMethodology,

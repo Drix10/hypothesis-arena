@@ -80,11 +80,18 @@ export const TickerInput: React.FC<TickerInputProps> = ({
     const value = e.target.value.toUpperCase();
     setQuery(value);
     setError(null);
+
+    // Clear previous timeout
     if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
-    searchTimeoutRef.current = setTimeout(() => handleSearch(value), 300);
+
+    // Debounce search - wait 500ms after user stops typing
+    searchTimeoutRef.current = setTimeout(() => handleSearch(value), 500);
   };
 
   const handleSelectTicker = async (ticker: string) => {
+    // Prevent duplicate selections while validating or disabled
+    if (disabled || isValidating) return;
+
     setQuery(ticker);
     setShowDropdown(false);
     setIsValidating(true);
@@ -106,7 +113,16 @@ export const TickerInput: React.FC<TickerInputProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (query.trim()) handleSelectTicker(query.trim());
+    // Prevent submission if disabled or already validating
+    if (disabled || isValidating || !query.trim()) return;
+
+    // Clear any pending search
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+      searchTimeoutRef.current = null;
+    }
+
+    handleSelectTicker(query.trim());
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -237,12 +253,17 @@ export const TickerInput: React.FC<TickerInputProps> = ({
             {results.map((result, index) => (
               <motion.div
                 key={result.symbol}
-                onClick={() => handleSelectTicker(result.symbol)}
-                className={`px-4 py-3 cursor-pointer transition-all border-b border-white/[0.04] last:border-0 ${
-                  index === selectedIndex
-                    ? "bg-cyan/10"
-                    : "hover:bg-white/[0.03]"
-                }`}
+                onClick={() => {
+                  // Prevent selection if disabled or validating
+                  if (!disabled && !isValidating) {
+                    handleSelectTicker(result.symbol);
+                  }
+                }}
+                className={`px-4 py-3 transition-all border-b border-white/[0.04] last:border-0 ${
+                  disabled || isValidating
+                    ? "cursor-not-allowed opacity-50"
+                    : "cursor-pointer hover:bg-white/[0.03]"
+                } ${index === selectedIndex ? "bg-cyan/10" : ""}`}
                 role="option"
                 aria-selected={index === selectedIndex}
                 initial={{ opacity: 0, x: -10 }}

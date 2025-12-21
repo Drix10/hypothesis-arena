@@ -128,7 +128,11 @@ export const ApiKeySettings: React.FC<ApiKeySettingsProps> = ({
   }, [persistKeys, showSuccessMessage]);
 
   const handleUpdateGeminiKey = async () => {
-    if (!newGeminiKey.trim() || isTestingGemini) return;
+    // Prevent concurrent API tests
+    if (!newGeminiKey.trim() || isTestingGemini) {
+      console.warn("API key test already in progress or empty key");
+      return;
+    }
 
     setIsTestingGemini(true);
     setError(null);
