@@ -525,169 +525,184 @@ export const StockArena: React.FC<StockArenaProps> = ({
               initial="hidden"
               animate="visible"
               exit="exit"
+              className="relative"
             >
-              {/* Hero Section */}
-              <motion.div
-                className="text-center pt-8 pb-12"
-                variants={staggerContainer}
-                initial="hidden"
-                animate="visible"
-              >
-                <motion.div
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-gradient-to-r from-gold/10 to-cyan/10 border border-gold/20 mb-6"
-                  variants={staggerItem}
-                >
-                  <span className="text-lg">⚔️</span>
-                  <span className="text-sm font-medium text-gold-light">
-                    AI-Powered Stock Analysis Arena
-                  </span>
-                </motion.div>
-                <motion.h1
-                  className="font-serif text-4xl sm:text-5xl lg:text-6xl font-bold text-white mb-4 tracking-tight"
-                  variants={staggerItem}
-                >
-                  Analyze. Debate. Trade.
-                </motion.h1>
-                <motion.p
-                  className="text-lg text-slate-400 max-w-2xl mx-auto mb-8"
-                  variants={staggerItem}
-                >
-                  8 AI strategists analyze stocks, debate their positions, and
-                  compete in a live trading arena with $100K each
-                </motion.p>
-                <motion.div className="max-w-xl mx-auto" variants={staggerItem}>
-                  <TickerInput
-                    onSelect={handleTickerSelect}
-                    disabled={isLoading}
-                  />
-                </motion.div>
-                {error && (
+              {/* Subtle Background */}
+              <div className="fixed inset-0 overflow-hidden pointer-events-none -z-10">
+                <div
+                  className="absolute w-[800px] h-[800px] rounded-full opacity-25"
+                  style={{
+                    background:
+                      "radial-gradient(circle, rgba(6, 182, 212, 0.12) 0%, transparent 60%)",
+                    left: "5%",
+                    top: "-25%",
+                  }}
+                />
+                <div
+                  className="absolute w-[500px] h-[500px] rounded-full opacity-15"
+                  style={{
+                    background:
+                      "radial-gradient(circle, rgba(245, 184, 0, 0.1) 0%, transparent 60%)",
+                    right: "0%",
+                    bottom: "5%",
+                  }}
+                />
+              </div>
+
+              {/* Two Column Layout - Centered Vertically */}
+              <div className="grid lg:grid-cols-2 gap-10 lg:gap-16 items-center min-h-[calc(100vh-140px)]">
+                {/* Left - Hero */}
+                <div className="flex flex-col justify-center py-8">
                   <motion.div
+                    className="inline-flex items-center gap-2.5 px-4 py-2 rounded-full mb-8 w-fit"
+                    style={{
+                      background:
+                        "linear-gradient(135deg, rgba(6, 182, 212, 0.1) 0%, rgba(6, 182, 212, 0.05) 100%)",
+                      border: "1px solid rgba(6, 182, 212, 0.25)",
+                    }}
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
-                    className="mt-6 max-w-xl mx-auto p-5 rounded-2xl bg-bear-muted border border-bear/20 text-left"
                   >
-                    <div className="flex items-start gap-3">
-                      <span className="text-2xl flex-shrink-0">⚠️</span>
-                      <div className="flex-1">
-                        <h3 className="text-bear-light font-semibold mb-2">
-                          Unable to Fetch Data
-                        </h3>
-                        <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-line">
-                          {error}
-                        </p>
-                      </div>
-                    </div>
+                    <span className="relative flex h-2.5 w-2.5">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-cyan shadow-lg shadow-cyan/50"></span>
+                    </span>
+                    <span className="text-sm font-medium text-cyan">
+                      Live AI Analysis
+                    </span>
                   </motion.div>
-                )}
-                <motion.div className="mt-8" variants={staggerItem}>
-                  <p className="text-xs text-slate-600 mb-3 font-medium tracking-wider uppercase">
-                    Quick Start
-                  </p>
-                  <div className="flex justify-center gap-2 flex-wrap">
-                    {["AAPL", "NVDA", "TSLA", "MSFT", "GOOGL", "AMZN"].map(
-                      (t, i) => (
-                        <motion.button
+
+                  <motion.h1
+                    className="font-serif text-5xl sm:text-6xl lg:text-7xl font-bold text-white mb-6 leading-[1.05]"
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.05 }}
+                  >
+                    <span className="block mb-2">8 AI Analysts.</span>
+                    <span className="bg-gradient-to-r from-cyan via-cyan-light to-gold bg-clip-text text-transparent">
+                      One Verdict.
+                    </span>
+                  </motion.h1>
+
+                  <motion.p
+                    className="text-lg sm:text-xl text-slate-400 mb-10 max-w-lg leading-relaxed"
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.1 }}
+                  >
+                    Watch AI strategists with unique methodologies debate any
+                    stock in real-time. Each manages a{" "}
+                    <span className="text-gold font-semibold">
+                      $100K portfolio
+                    </span>
+                    . The best thesis wins.
+                  </motion.p>
+
+                  <motion.div
+                    className="mb-5"
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.15 }}
+                  >
+                    <TickerInput
+                      onSelect={handleTickerSelect}
+                      disabled={isLoading}
+                    />
+                  </motion.div>
+
+                  <motion.div
+                    className="flex flex-wrap items-center gap-2 mb-8"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ delay: 0.2 }}
+                  >
+                    <span className="text-sm text-slate-600 mr-1">Try:</span>
+                    {["NVDA", "AAPL", "TSLA", "MSFT", "GOOGL", "META"].map(
+                      (t) => (
+                        <button
                           key={t}
                           onClick={() => handleTickerSelect(t)}
-                          className="px-4 py-2 text-sm text-slate-400 bg-white/[0.02] hover:bg-cyan/10 border border-white/5 hover:border-cyan/30 rounded-lg transition-all font-medium"
-                          whileHover={{ scale: 1.05, y: -2 }}
-                          whileTap={{ scale: 0.95 }}
-                          initial={{ opacity: 0, y: 10 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={{ delay: i * 0.05 }}
+                          className="px-4 py-1.5 text-sm font-medium text-slate-400 hover:text-white bg-white/[0.03] hover:bg-white/[0.08] border border-white/[0.08] hover:border-cyan/40 rounded-full transition-all"
                         >
                           {t}
-                        </motion.button>
+                        </button>
                       )
                     )}
-                  </div>
-                </motion.div>
-              </motion.div>
+                  </motion.div>
 
-              {/* Features Grid - Unified Design */}
-              <motion.div
-                className="grid md:grid-cols-3 gap-4 mb-8"
-                variants={staggerContainer}
-                initial="hidden"
-                animate="visible"
-              >
-                <motion.div
-                  className="glass-card rounded-xl p-6 border-t-2 border-cyan"
-                  variants={staggerItem}
-                  whileHover={{ y: -4 }}
-                >
-                  <div className="w-12 h-12 rounded-lg bg-cyan/10 flex items-center justify-center text-2xl mb-4">
-                    🎯
-                  </div>
-                  <h3 className="text-white font-semibold mb-2">
-                    Deep Analysis
-                  </h3>
-                  <p className="text-slate-400 text-sm leading-relaxed">
-                    8 unique AI analysts with different methodologies examine
-                    fundamentals, technicals, and sentiment
-                  </p>
-                </motion.div>
+                  {error && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="p-4 rounded-xl bg-bear/[0.1] border border-bear/20 mb-6"
+                    >
+                      <div className="flex items-start gap-3">
+                        <span className="text-lg">⚠️</span>
+                        <div>
+                          <p className="text-sm text-bear-light font-semibold">
+                            Error
+                          </p>
+                          <p className="text-sm text-slate-400">{error}</p>
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
 
-                <motion.div
-                  className="glass-card rounded-xl p-6 border-t-2 border-gold"
-                  variants={staggerItem}
-                  whileHover={{ y: -4 }}
-                >
-                  <div className="w-12 h-12 rounded-lg bg-gold/10 flex items-center justify-center text-2xl mb-4">
-                    ⚔️
-                  </div>
-                  <h3 className="text-white font-semibold mb-2">
-                    Live Debates
-                  </h3>
-                  <p className="text-slate-400 text-sm leading-relaxed">
-                    Bulls vs Bears clash in tournament-style debates to
-                    determine the strongest thesis
-                  </p>
-                </motion.div>
+                  {/* Feature highlights */}
+                  <motion.div
+                    className="flex flex-wrap gap-4"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ delay: 0.25 }}
+                  >
+                    {[
+                      { icon: "⚔️", text: "Live Debates", color: "cyan" },
+                      { icon: "📊", text: "Technical Analysis", color: "gold" },
+                      { icon: "🏆", text: "Portfolio Tracking", color: "bull" },
+                    ].map((f) => (
+                      <div
+                        key={f.text}
+                        className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white/[0.02] border border-white/[0.06]"
+                      >
+                        <span className="text-base">{f.icon}</span>
+                        <span className="text-sm text-slate-400">{f.text}</span>
+                      </div>
+                    ))}
+                  </motion.div>
+                </div>
 
-                <motion.div
-                  className="glass-card rounded-xl p-6 border-t-2 border-bull"
-                  variants={staggerItem}
-                  whileHover={{ y: -4 }}
-                >
-                  <div className="w-12 h-12 rounded-lg bg-bull/10 flex items-center justify-center text-2xl mb-4">
-                    🏆
-                  </div>
-                  <h3 className="text-white font-semibold mb-2">
-                    Trading Arena
-                  </h3>
-                  <p className="text-slate-400 text-sm leading-relaxed">
-                    Agents compete with $100K portfolios, auto-executing trades
-                    based on debate outcomes
-                  </p>
-                </motion.div>
-              </motion.div>
-
-              {/* Dashboard Grid - Watchlist, Saved, Accuracy */}
-              <motion.div
-                className="grid md:grid-cols-3 gap-4"
-                variants={staggerContainer}
-                initial="hidden"
-                animate="visible"
-              >
-                <motion.div variants={staggerItem}>
-                  <Watchlist
-                    key={`watchlist-${sidebarRefreshKey}`}
-                    onSelectTicker={handleTickerSelect}
-                    currentTicker={stockData?.ticker}
-                  />
-                </motion.div>
-                <motion.div variants={staggerItem}>
-                  <SavedAnalyses
-                    key={`saved-${sidebarRefreshKey}`}
-                    onLoadAnalysis={handleLoadAnalysis}
-                  />
-                </motion.div>
-                <motion.div variants={staggerItem}>
-                  <AccuracyTracker key={`accuracy-${sidebarRefreshKey}`} />
-                </motion.div>
-              </motion.div>
+                {/* Right - Dashboard */}
+                <div className="space-y-4">
+                  <motion.div
+                    initial={{ opacity: 0, x: 20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: 0.2 }}
+                  >
+                    <Watchlist
+                      key={`watchlist-${sidebarRefreshKey}`}
+                      onSelectTicker={handleTickerSelect}
+                      currentTicker={stockData?.ticker}
+                    />
+                  </motion.div>
+                  <motion.div
+                    initial={{ opacity: 0, x: 20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: 0.3 }}
+                  >
+                    <SavedAnalyses
+                      key={`saved-${sidebarRefreshKey}`}
+                      onLoadAnalysis={handleLoadAnalysis}
+                    />
+                  </motion.div>
+                  <motion.div
+                    initial={{ opacity: 0, x: 20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: 0.4 }}
+                  >
+                    <AccuracyTracker key={`accuracy-${sidebarRefreshKey}`} />
+                  </motion.div>
+                </div>
+              </div>
             </motion.div>
           )}
 
