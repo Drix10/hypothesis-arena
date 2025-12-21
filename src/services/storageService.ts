@@ -251,8 +251,9 @@ export function updateAccuracyCheck(id: string, currentPrice: number): boolean {
     if (index === -1) return false;
 
     const record = history[index];
-    // Guard against division by zero
+    // Guard against division by zero and invalid prices
     if (record.priceAtAnalysis <= 0) return false;
+    if (!currentPrice || currentPrice <= 0 || !Number.isFinite(currentPrice)) return false;
 
     const priceChange = (currentPrice - record.priceAtAnalysis) / record.priceAtAnalysis;
 
@@ -285,6 +286,53 @@ export function getAccuracyStats(): { total: number; accurate: number; rate: num
         accurate,
         rate: history.length > 0 ? (accurate / history.length) * 100 : 0
     };
+}
+
+/**
+ * Auto-verify predictions that are older than the verification period (default 7 days)
+ * This simulates checking if the prediction was accurate based on price movement
+ */
+export async function autoVerifyPendingPredictions(
+    fetchCurrentPrice: (ticker: string) => Promise<number | null>,
+    verificationDays: number = 7
+): Promise<number> {
+    const history = getAccuracyHistory();
+    const now = Date.now();
+    const verificationPeriod = verificationDays * 24 * 60 * 60 * 1000;
+    let verifiedCount = 0;
+
+    const pendingRecords = history.filter(
+        h => h.wasAccurate === undefined && (now - h.analysisDate) >= verificationPeriod
+    );
+
+    for (const record of pendingRecords) {
+        try {
+            const currentPrice = await fetchCurrentPrice(record.ticker);
+            if (currentPrice !== null && currentPrice > 0) {
+                const success = updateAccuracyCheck(record.id, currentPrice);
+                if (success) {
+                    verifiedCount++;
+                }
+            }
+        } catch (error) {
+            console.warn(`Failed to verify ${record.ticker}:`, error);
+        }
+    }
+
+    return verifiedCount;
+}
+
+/**
+ * Get pending predictions that are ready for verification
+ */
+export function getPendingVerifications(verificationDays: number = 7): HistoricalAccuracy[] {
+    const history = getAccuracyHistory();
+    const now = Date.now();
+    const verificationPeriod = verificationDays * 24 * 60 * 60 * 1000;
+
+    return history.filter(
+        h => h.wasAccurate === undefined && (now - h.analysisDate) >= verificationPeriod
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

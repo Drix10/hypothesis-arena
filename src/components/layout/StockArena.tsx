@@ -3,7 +3,13 @@
  * Strategic Arena Theme - Premium UI/UX
  */
 
-import React, { useState, useCallback, useRef, useEffect } from "react";
+import React, {
+  useState,
+  useCallback,
+  useRef,
+  useEffect,
+  useMemo,
+} from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   StockAnalysisData,
@@ -33,12 +39,17 @@ import { LiveArena } from "./LiveArena";
 import { AnalystCard, RecommendationCard, DebateView } from "../analysis";
 import { PriceChart, TechnicalsCard, NewsCard } from "../charts";
 import { Watchlist, SavedAnalyses, AccuracyTracker } from "../sidebar";
+import { TradingDashboard } from "../trading/TradingDashboard";
+import { PostAnalysisTradingView } from "../trading/PostAnalysisTradingView";
+import { tradingService } from "../../services/trading";
+import { TradeDecision } from "../../types/trading";
+import ErrorBoundary from "../common/ErrorBoundary";
 
 interface StockArenaProps {
   apiKey: string;
 }
 
-type ActiveTab = "analysis" | "charts" | "technicals" | "news";
+type ActiveTab = "analysis" | "charts" | "technicals" | "news" | "trading";
 
 const LOADING_STATES = {
   [StockArenaState.FETCHING_DATA]: {
@@ -103,6 +114,10 @@ export const StockArena: React.FC<StockArenaProps> = ({ apiKey }) => {
   const [progress, setProgress] = useState<string>("");
   const [activeTab, setActiveTab] = useState<ActiveTab>("analysis");
   const [showCompare, setShowCompare] = useState(false);
+  const [showTradingView, setShowTradingView] = useState(false);
+  const [tradingDecisions, setTradingDecisions] = useState<
+    Map<string, TradeDecision>
+  >(new Map());
   const [inWatchlist, setInWatchlist] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
@@ -257,9 +272,15 @@ export const StockArena: React.FC<StockArenaProps> = ({ apiKey }) => {
         setRecommendation(finalRec);
         setState(StockArenaState.COMPLETE);
         setProgress("");
+
+        // Generate trading decisions for preview (don't await to avoid blocking)
+        generateTradingPreview(generatedTheses, tournament, data);
       } catch (err) {
         if (!isMountedRef.current) return;
-        setError(err instanceof Error ? err.message : "An error occurred");
+        const errorMessage =
+          err instanceof Error ? err.message : "An error occurred";
+        setError(errorMessage);
+        console.error("Analysis error:", errorMessage);
         setState(StockArenaState.ERROR);
         setProgress("");
         // Clear all analysis state on error to prevent partial/stale data
@@ -270,6 +291,56 @@ export const StockArena: React.FC<StockArenaProps> = ({ apiKey }) => {
       }
     },
     [apiKey]
+  );
+
+  const generateTradingPreview = useCallback(
+    async (
+      theses: InvestmentThesis[],
+      tournament: TournamentResult,
+      data: StockAnalysisData
+    ) => {
+      // Validate tournament has debates
+      if (!tournament.allDebates || tournament.allDebates.length === 0) {
+        console.warn("No debates found, skipping trading preview");
+        return;
+      }
+
+      try {
+        // Import statically to avoid dynamic import warning
+        const state =
+          tradingService.loadTradingState() ||
+          tradingService.initializeTradingSystem();
+
+        const decisions = new Map();
+        for (const thesis of theses) {
+          const portfolio = state.portfolios[thesis.agentId];
+          if (!portfolio) continue;
+
+          const debate = tournament.allDebates.find(
+            (d) =>
+              d.bullThesis.agentId === thesis.agentId ||
+              d.bearThesis.agentId === thesis.agentId
+          );
+          if (!debate) continue;
+
+          const decision = await tradingService.determineTradeDecision(
+            thesis,
+            debate,
+            portfolio,
+            data.quote.price,
+            data.quote.timestamp || Date.now()
+          );
+          decisions.set(thesis.agentId, decision);
+        }
+
+        setTradingDecisions(decisions);
+      } catch (error) {
+        console.error("Failed to generate trading preview:", error);
+        // Set empty map so UI knows preview failed
+        setTradingDecisions(new Map());
+      }
+    },
+    []
   );
 
   const handleReset = () => {
@@ -285,7 +356,33 @@ export const StockArena: React.FC<StockArenaProps> = ({ apiKey }) => {
     setLiveDebates([]);
     setCurrentDebate(null);
     setTournamentProgress(null);
+    setTradingDecisions(new Map());
   };
+
+  // Memoize trading preview to avoid recalculating on every render
+  const tradingPreview = useMemo(() => {
+    if (tradingDecisions.size === 0) return undefined;
+
+    const decisionsArray = Array.from(tradingDecisions.values());
+    const validTrades = decisionsArray.filter(
+      (d) => d.isValid && d.action !== "HOLD"
+    );
+
+    return {
+      buyCount: decisionsArray.filter((d) => d.action === "BUY" && d.isValid)
+        .length,
+      sellCount: decisionsArray.filter((d) => d.action === "SELL" && d.isValid)
+        .length,
+      holdCount: decisionsArray.filter((d) => d.action === "HOLD" || !d.isValid)
+        .length,
+      totalValue: validTrades.reduce((sum, d) => sum + d.estimatedValue, 0),
+      avgConfidence:
+        validTrades.length > 0
+          ? validTrades.reduce((sum, d) => sum + d.confidence, 0) /
+            validTrades.length
+          : 0,
+    };
+  }, [tradingDecisions]);
 
   const showTemporaryMessage = (message: string) => {
     if (saveMessageTimeoutRef.current)
@@ -340,6 +437,7 @@ export const StockArena: React.FC<StockArenaProps> = ({ apiKey }) => {
     { id: "charts" as ActiveTab, label: "Charts", icon: "📊" },
     { id: "technicals" as ActiveTab, label: "Technicals", icon: "📉" },
     { id: "news" as ActiveTab, label: "News", icon: "📰" },
+    { id: "trading" as ActiveTab, label: "Trading", icon: "🏆" },
   ];
 
   return (
@@ -415,105 +513,148 @@ export const StockArena: React.FC<StockArenaProps> = ({ apiKey }) => {
               initial="hidden"
               animate="visible"
               exit="exit"
-              className="grid lg:grid-cols-[1fr_340px] gap-8"
             >
-              <div className="pt-8 lg:pt-16">
+              {/* Hero Section */}
+              <motion.div
+                className="text-center pt-8 pb-12"
+                variants={staggerContainer}
+                initial="hidden"
+                animate="visible"
+              >
                 <motion.div
-                  className="text-center mb-12"
-                  variants={staggerContainer}
-                  initial="hidden"
-                  animate="visible"
-                >
-                  <motion.h1
-                    className="font-serif text-4xl sm:text-5xl lg:text-6xl font-bold text-white mb-4 tracking-tight"
-                    variants={staggerItem}
-                  >
-                    Analyze Any Stock
-                  </motion.h1>
-                  <motion.p
-                    className="text-lg sm:text-xl text-slate-400 max-w-xl mx-auto"
-                    variants={staggerItem}
-                  >
-                    8 AI strategists will debate and deliver their verdict
-                  </motion.p>
-                </motion.div>
-                <motion.div
-                  className="max-w-2xl mx-auto"
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-gradient-to-r from-gold/10 to-cyan/10 border border-gold/20 mb-6"
                   variants={staggerItem}
                 >
+                  <span className="text-lg">⚔️</span>
+                  <span className="text-sm font-medium text-gold-light">
+                    AI-Powered Stock Analysis Arena
+                  </span>
+                </motion.div>
+                <motion.h1
+                  className="font-serif text-4xl sm:text-5xl lg:text-6xl font-bold text-white mb-4 tracking-tight"
+                  variants={staggerItem}
+                >
+                  Analyze. Debate. Trade.
+                </motion.h1>
+                <motion.p
+                  className="text-lg text-slate-400 max-w-2xl mx-auto mb-8"
+                  variants={staggerItem}
+                >
+                  8 AI strategists analyze stocks, debate their positions, and
+                  compete in a live trading arena with $100K each
+                </motion.p>
+                <motion.div className="max-w-xl mx-auto" variants={staggerItem}>
                   <TickerInput
                     onSelect={handleTickerSelect}
                     disabled={isLoading}
                   />
-                  {error && (
-                    <motion.div
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className="mt-6 p-5 rounded-2xl bg-bear-muted border border-bear/20"
-                    >
-                      <div className="flex items-start gap-3">
-                        <span
-                          className="text-2xl flex-shrink-0"
-                          role="img"
-                          aria-label="Error"
-                        >
-                          ⚠️
-                        </span>
-                        <div className="flex-1 text-left">
-                          <h3 className="text-bear-light font-semibold mb-2">
-                            Unable to Fetch Data
-                          </h3>
-                          <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-line">
-                            {error}
-                          </p>
-                          <div className="mt-4 pt-4 border-t border-bear/20">
-                            <p className="text-xs text-slate-500 mb-2">
-                              Quick troubleshooting:
-                            </p>
-                            <ul className="text-xs text-slate-400 space-y-1 list-disc list-inside">
-                              <li>Verify the ticker symbol is correct</li>
-                              <li>Try again in a few seconds (rate limits)</li>
-                              <li>Check your internet connection</li>
-                              <li>
-                                Consider getting a free FMP API key for better
-                                reliability
-                              </li>
-                            </ul>
-                          </div>
-                        </div>
-                      </div>
-                    </motion.div>
-                  )}
+                </motion.div>
+                {error && (
                   <motion.div
-                    className="mt-12 text-center"
-                    variants={staggerItem}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="mt-6 max-w-xl mx-auto p-5 rounded-2xl bg-bear-muted border border-bear/20 text-left"
                   >
-                    <p className="text-sm text-slate-500 mb-4 font-medium tracking-wide">
-                      POPULAR PICKS
-                    </p>
-                    <div className="flex justify-center gap-2 sm:gap-3 flex-wrap">
-                      {["AAPL", "NVDA", "TSLA", "MSFT", "GOOGL", "AMZN"].map(
-                        (t, i) => (
-                          <motion.button
-                            key={t}
-                            onClick={() => handleTickerSelect(t)}
-                            className="px-4 py-2 text-sm text-slate-400 bg-white/[0.02] hover:bg-white/[0.05] border border-white/5 hover:border-white/10 rounded-xl transition-all font-medium"
-                            whileHover={{ scale: 1.05 }}
-                            whileTap={{ scale: 0.95 }}
-                            initial={{ opacity: 0, y: 10 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ delay: i * 0.05 }}
-                          >
-                            {t}
-                          </motion.button>
-                        )
-                      )}
+                    <div className="flex items-start gap-3">
+                      <span className="text-2xl flex-shrink-0">⚠️</span>
+                      <div className="flex-1">
+                        <h3 className="text-bear-light font-semibold mb-2">
+                          Unable to Fetch Data
+                        </h3>
+                        <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-line">
+                          {error}
+                        </p>
+                      </div>
                     </div>
                   </motion.div>
+                )}
+                <motion.div className="mt-8" variants={staggerItem}>
+                  <p className="text-xs text-slate-600 mb-3 font-medium tracking-wider uppercase">
+                    Quick Start
+                  </p>
+                  <div className="flex justify-center gap-2 flex-wrap">
+                    {["AAPL", "NVDA", "TSLA", "MSFT", "GOOGL", "AMZN"].map(
+                      (t, i) => (
+                        <motion.button
+                          key={t}
+                          onClick={() => handleTickerSelect(t)}
+                          className="px-4 py-2 text-sm text-slate-400 bg-white/[0.02] hover:bg-cyan/10 border border-white/5 hover:border-cyan/30 rounded-lg transition-all font-medium"
+                          whileHover={{ scale: 1.05, y: -2 }}
+                          whileTap={{ scale: 0.95 }}
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ delay: i * 0.05 }}
+                        >
+                          {t}
+                        </motion.button>
+                      )
+                    )}
+                  </div>
                 </motion.div>
-              </div>
+              </motion.div>
+
+              {/* Features Grid - Unified Design */}
               <motion.div
-                className="space-y-4"
+                className="grid md:grid-cols-3 gap-4 mb-8"
+                variants={staggerContainer}
+                initial="hidden"
+                animate="visible"
+              >
+                <motion.div
+                  className="glass-card rounded-xl p-6 border-t-2 border-cyan"
+                  variants={staggerItem}
+                  whileHover={{ y: -4 }}
+                >
+                  <div className="w-12 h-12 rounded-lg bg-cyan/10 flex items-center justify-center text-2xl mb-4">
+                    🎯
+                  </div>
+                  <h3 className="text-white font-semibold mb-2">
+                    Deep Analysis
+                  </h3>
+                  <p className="text-slate-400 text-sm leading-relaxed">
+                    8 unique AI analysts with different methodologies examine
+                    fundamentals, technicals, and sentiment
+                  </p>
+                </motion.div>
+
+                <motion.div
+                  className="glass-card rounded-xl p-6 border-t-2 border-gold"
+                  variants={staggerItem}
+                  whileHover={{ y: -4 }}
+                >
+                  <div className="w-12 h-12 rounded-lg bg-gold/10 flex items-center justify-center text-2xl mb-4">
+                    ⚔️
+                  </div>
+                  <h3 className="text-white font-semibold mb-2">
+                    Live Debates
+                  </h3>
+                  <p className="text-slate-400 text-sm leading-relaxed">
+                    Bulls vs Bears clash in tournament-style debates to
+                    determine the strongest thesis
+                  </p>
+                </motion.div>
+
+                <motion.div
+                  className="glass-card rounded-xl p-6 border-t-2 border-bull"
+                  variants={staggerItem}
+                  whileHover={{ y: -4 }}
+                >
+                  <div className="w-12 h-12 rounded-lg bg-bull/10 flex items-center justify-center text-2xl mb-4">
+                    🏆
+                  </div>
+                  <h3 className="text-white font-semibold mb-2">
+                    Trading Arena
+                  </h3>
+                  <p className="text-slate-400 text-sm leading-relaxed">
+                    Agents compete with $100K portfolios, auto-executing trades
+                    based on debate outcomes
+                  </p>
+                </motion.div>
+              </motion.div>
+
+              {/* Dashboard Grid - Watchlist, Saved, Accuracy */}
+              <motion.div
+                className="grid md:grid-cols-3 gap-4"
                 variants={staggerContainer}
                 initial="hidden"
                 animate="visible"
@@ -577,6 +718,7 @@ export const StockArena: React.FC<StockArenaProps> = ({ apiKey }) => {
                   quote={stockData.quote}
                   profile={stockData.profile}
                 />
+
                 <div
                   className="flex gap-1 p-1 bg-arena-card/50 rounded-xl border border-white/[0.06] overflow-x-auto"
                   role="tablist"
@@ -615,7 +757,11 @@ export const StockArena: React.FC<StockArenaProps> = ({ apiKey }) => {
                       exit="exit"
                       className="space-y-8"
                     >
-                      <RecommendationCard recommendation={recommendation} />
+                      <RecommendationCard
+                        recommendation={recommendation}
+                        onExecuteTrades={() => setShowTradingView(true)}
+                        tradingPreview={tradingPreview}
+                      />
                       <div className="grid md:grid-cols-2 gap-6">
                         <ArgumentsPanel
                           title="Bull Case"
@@ -746,13 +892,76 @@ export const StockArena: React.FC<StockArenaProps> = ({ apiKey }) => {
                       <NewsCard sentiment={stockData.sentiment} />
                     </motion.div>
                   )}
+                  {activeTab === "trading" && (
+                    <motion.div
+                      key="trading-tab"
+                      id="trading-panel"
+                      role="tabpanel"
+                      aria-labelledby="trading-tab"
+                      variants={pageTransition}
+                      initial="hidden"
+                      animate="visible"
+                      exit="exit"
+                    >
+                      <TradingDashboard />
+                    </motion.div>
+                  )}
                 </AnimatePresence>
               </motion.div>
             )}
         </AnimatePresence>
+
+        {/* Modals */}
         <AnimatePresence>
           {showCompare && (
             <CompareStocks onClose={() => setShowCompare(false)} />
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {showTradingView && stockData && tournamentResult && (
+            <ErrorBoundary>
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+                onClick={(e) => {
+                  // Use data attribute for more robust detection
+                  const target = e.target as HTMLElement;
+                  if (target.dataset.modalBackdrop === "true") {
+                    setShowTradingView(false);
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    setShowTradingView(false);
+                  }
+                }}
+                tabIndex={-1}
+                data-modal-backdrop="true"
+              >
+                <motion.div
+                  initial={{ scale: 0.95, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  exit={{ scale: 0.95, opacity: 0 }}
+                  className="max-w-6xl w-full max-h-[90vh] overflow-y-auto"
+                  onClick={(e) => e.stopPropagation()}
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="trading-modal-title"
+                >
+                  <PostAnalysisTradingView
+                    ticker={stockData.ticker}
+                    currentPrice={stockData.quote.price}
+                    priceTimestamp={stockData.quote.timestamp || Date.now()}
+                    theses={theses}
+                    debates={tournamentResult.allDebates}
+                    onContinue={() => setShowTradingView(false)}
+                  />
+                </motion.div>
+              </motion.div>
+            </ErrorBoundary>
           )}
         </AnimatePresence>
       </main>
