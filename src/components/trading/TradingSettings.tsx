@@ -33,11 +33,8 @@ export const TradingSettings: React.FC<TradingSettingsProps> = ({
   }, [state, hasLocalEdits]);
 
   const handleSave = async () => {
-    // Prevent duplicate saves
-    if (isSaving) {
-      console.warn("Save already in progress");
-      return;
-    }
+    // Silently prevent duplicate saves
+    if (isSaving) return;
 
     setIsSaving(true);
     try {

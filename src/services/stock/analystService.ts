@@ -304,7 +304,7 @@ function formatHistoricalSummary(data: StockAnalysisData): string {
 • 3-MONTH RETURN: ${getReturn(63)}
 • 6-MONTH RETURN: ${getReturn(126)}
 • 52-WEEK RANGE: ${formatPrice(low52w)} - ${formatPrice(high52w)}
-• FROM 52W HIGH: ${fromHigh}% | FROM 52W LOW: +${fromLow}%
+• FROM 52W HIGH: ${fromHigh}% | FROM 52W LOW: ${fromLow === 'N/A' ? 'N/A' : (parseFloat(fromLow) >= 0 ? '+' + fromLow : fromLow)}%
 • VOLUME TREND (20d vs 60d): ${volTrend}%
 `;
 }
@@ -732,12 +732,8 @@ ${signals.length > 0 ? signals.map(s => `• ${s.indicator}: ${s.signal.toUpperC
         sections.push(riskMgmtContext);
     }
 
-    // Performance context (Personal record)
-    sections.push(formatPerformanceContext(methodology));
-
-    // Portfolio context (Current exposures)
-    // Use the ID if possible (methodology maps typically to ID)
-    sections.push(formatPortfolioContext(methodology));
+    // NOTE: Performance and portfolio context are NOT appended here to avoid duplication.
+    // They are computed separately and passed to buildThesisPrompt by generateSingleThesis.
 
     // ═══════════════════════════════════════════════════════════════════════════
     // SECTION 5: SENTIMENT ANALYSIS

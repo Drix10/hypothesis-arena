@@ -514,24 +514,24 @@ const TradingBox: React.FC<{
 );
 
 function calculatePosition(current: number, min: number, max: number): number {
-  // Handle edge cases
   if (!isFinite(current) || !isFinite(min) || !isFinite(max)) {
-    console.warn("calculatePosition: Invalid input values", {
-      current,
-      min,
-      max,
-    });
+    if (process.env.NODE_ENV === "development") {
+      console.warn("calculatePosition: Non-finite values detected", {
+        current,
+        min,
+        max,
+      });
+    }
     return 50;
   }
-  if (max === min) return 50;
-
+  if (max === min) {
+    if (process.env.NODE_ENV === "development") {
+      console.warn("calculatePosition: min equals max", { min, max });
+    }
+    return 50;
+  }
   // Handle negative prices - this shouldn't happen in stock prices but handle gracefully
   if (current < 0 || min < 0 || max < 0) {
-    console.warn("calculatePosition: Negative price detected", {
-      current,
-      min,
-      max,
-    });
     // Use absolute values as fallback
     const absMin = Math.abs(min);
     const absMax = Math.abs(max);

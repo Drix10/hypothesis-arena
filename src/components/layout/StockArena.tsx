@@ -155,11 +155,8 @@ export const StockArena: React.FC<StockArenaProps> = ({
 
   const handleTickerSelect = useCallback(
     async (ticker: string) => {
-      // Prevent duplicate analysis if already running
-      if (isAnalyzingRef.current) {
-        console.warn("Analysis already in progress, ignoring duplicate request");
-        return;
-      }
+      // Silently prevent duplicate analysis if already running
+      if (isAnalyzingRef.current) return;
 
       isAnalyzingRef.current = true;
 
@@ -182,7 +179,7 @@ export const StockArena: React.FC<StockArenaProps> = ({
         setStockData(data);
 
         setState(StockArenaState.GENERATING_ANALYSTS);
-        const { theses: generatedTheses, errors } = await generateAllTheses(
+        const { theses: generatedTheses } = await generateAllTheses(
           apiKey,
           data,
           {
@@ -212,8 +209,6 @@ export const StockArena: React.FC<StockArenaProps> = ({
 
         // Don't set theses again - already set incrementally via onThesisComplete
         // This prevents duplicate entries
-        // setTheses(generatedTheses);
-        if (errors.length > 0) console.warn("Analyst errors:", errors);
 
         setState(StockArenaState.RUNNING_TOURNAMENT);
         const tournament = await runTournament(generatedTheses, data, {
@@ -289,7 +284,7 @@ export const StockArena: React.FC<StockArenaProps> = ({
         setRecommendation(finalRec);
         setState(StockArenaState.COMPLETE);
         setProgress("");
-        isAnalyzingRef.current = false;
+        // Note: isAnalyzingRef.current is cleared in finally block
 
         // Generate trading decisions for preview (don't await to avoid blocking)
         generateTradingPreview(generatedTheses, tournament, data);
@@ -321,7 +316,7 @@ export const StockArena: React.FC<StockArenaProps> = ({
     ) => {
       // Validate tournament has debates
       if (!tournament.allDebates || tournament.allDebates.length === 0) {
-        console.warn("No debates found, skipping trading preview");
+        // No debates found - silently skip trading preview
         return;
       }
 
@@ -399,7 +394,7 @@ export const StockArena: React.FC<StockArenaProps> = ({
       avgConfidence:
         validTrades.length > 0
           ? validTrades.reduce((sum, d) => sum + d.confidence, 0) /
-          validTrades.length
+            validTrades.length
           : 0,
     };
   }, [tradingDecisions]);
@@ -540,282 +535,286 @@ export const StockArena: React.FC<StockArenaProps> = ({
         <AnimatePresence mode="wait">
           {(state === StockArenaState.IDLE ||
             state === StockArenaState.ERROR) && (
-              <motion.div
-                key="idle"
-                variants={pageTransition}
-                initial="hidden"
-                animate="visible"
-                exit="exit"
-                className="relative"
-              >
-                {/* Cinematic Background - Golden/Cyan Command Center */}
-                <div className="fixed inset-0 overflow-hidden pointer-events-none -z-10">
-                  {/* Base gradient */}
-                  <div
-                    className="absolute inset-0"
+            <motion.div
+              key="idle"
+              variants={pageTransition}
+              initial="hidden"
+              animate="visible"
+              exit="exit"
+              className="relative"
+            >
+              {/* Cinematic Background - Golden/Cyan Command Center */}
+              <div className="fixed inset-0 overflow-hidden pointer-events-none -z-10">
+                {/* Base gradient */}
+                <div
+                  className="absolute inset-0"
+                  style={{
+                    background:
+                      "linear-gradient(135deg, #080b0f 0%, #0d1117 50%, #080b0f 100%)",
+                  }}
+                />
+
+                {/* Cyan glow - top left */}
+                <div
+                  className="absolute w-[800px] h-[800px] rounded-full"
+                  style={{
+                    background:
+                      "radial-gradient(circle, rgba(0, 240, 255, 0.15) 0%, transparent 60%)",
+                    left: "-10%",
+                    top: "-30%",
+                    filter: "blur(60px)",
+                  }}
+                />
+
+                {/* Gold glow - bottom right */}
+                <div
+                  className="absolute w-[600px] h-[600px] rounded-full"
+                  style={{
+                    background:
+                      "radial-gradient(circle, rgba(255, 215, 0, 0.12) 0%, transparent 60%)",
+                    right: "-5%",
+                    bottom: "-10%",
+                    filter: "blur(50px)",
+                  }}
+                />
+
+                {/* Diagonal accent lines */}
+                <div
+                  className="absolute top-0 right-0 w-[400px] h-[2px] opacity-30"
+                  style={{
+                    background:
+                      "linear-gradient(90deg, transparent, #00f0ff 50%, transparent)",
+                    transform:
+                      "rotate(-45deg) translateX(100px) translateY(150px)",
+                  }}
+                />
+                <div
+                  className="absolute bottom-0 left-0 w-[300px] h-[1px] opacity-20"
+                  style={{
+                    background:
+                      "linear-gradient(90deg, transparent, #ffd700 50%, transparent)",
+                    transform:
+                      "rotate(-45deg) translateX(-50px) translateY(-100px)",
+                  }}
+                />
+
+                {/* Scanline overlay */}
+                <div
+                  className="absolute inset-0 opacity-[0.03]"
+                  style={{
+                    backgroundImage:
+                      "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.03) 2px, rgba(255,255,255,0.03) 4px)",
+                  }}
+                />
+
+                {/* Noise texture */}
+                <div
+                  className="absolute inset-0 opacity-[0.015]"
+                  style={{
+                    backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E")`,
+                  }}
+                />
+
+                {/* Corner accents */}
+                <div
+                  className="absolute top-0 left-0 w-32 h-32"
+                  style={{
+                    background:
+                      "linear-gradient(135deg, rgba(0, 240, 255, 0.08) 0%, transparent 50%)",
+                  }}
+                />
+                <div
+                  className="absolute bottom-0 right-0 w-48 h-48"
+                  style={{
+                    background:
+                      "linear-gradient(-45deg, rgba(255, 215, 0, 0.06) 0%, transparent 50%)",
+                  }}
+                />
+              </div>
+
+              {/* Two Column Layout - Centered Vertically */}
+              <div className="grid lg:grid-cols-2 gap-10 lg:gap-16 items-center min-h-[calc(100vh-140px)]">
+                {/* Left - Hero */}
+                <div className="flex flex-col justify-center py-8">
+                  <motion.div
+                    className="inline-flex items-center gap-2.5 px-4 py-2 rounded-full mb-8 w-fit"
                     style={{
                       background:
-                        "linear-gradient(135deg, #080b0f 0%, #0d1117 50%, #080b0f 100%)",
+                        "linear-gradient(135deg, rgba(0, 240, 255, 0.15) 0%, rgba(0, 240, 255, 0.05) 100%)",
+                      border: "1px solid rgba(0, 240, 255, 0.3)",
+                      boxShadow:
+                        "0 0 20px rgba(0, 240, 255, 0.15), inset 0 1px 0 rgba(255,255,255,0.1)",
                     }}
-                  />
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                  >
+                    <span className="relative flex h-2.5 w-2.5">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-cyan shadow-lg shadow-cyan/50"></span>
+                    </span>
+                    <span className="text-sm font-medium text-cyan tracking-wide">
+                      Live AI Analysis
+                    </span>
+                  </motion.div>
 
-                  {/* Cyan glow - top left */}
-                  <div
-                    className="absolute w-[800px] h-[800px] rounded-full"
-                    style={{
-                      background:
-                        "radial-gradient(circle, rgba(0, 240, 255, 0.15) 0%, transparent 60%)",
-                      left: "-10%",
-                      top: "-30%",
-                      filter: "blur(60px)",
-                    }}
-                  />
-
-                  {/* Gold glow - bottom right */}
-                  <div
-                    className="absolute w-[600px] h-[600px] rounded-full"
-                    style={{
-                      background:
-                        "radial-gradient(circle, rgba(255, 215, 0, 0.12) 0%, transparent 60%)",
-                      right: "-5%",
-                      bottom: "-10%",
-                      filter: "blur(50px)",
-                    }}
-                  />
-
-                  {/* Diagonal accent lines */}
-                  <div
-                    className="absolute top-0 right-0 w-[400px] h-[2px] opacity-30"
-                    style={{
-                      background:
-                        "linear-gradient(90deg, transparent, #00f0ff 50%, transparent)",
-                      transform:
-                        "rotate(-45deg) translateX(100px) translateY(150px)",
-                    }}
-                  />
-                  <div
-                    className="absolute bottom-0 left-0 w-[300px] h-[1px] opacity-20"
-                    style={{
-                      background:
-                        "linear-gradient(90deg, transparent, #ffd700 50%, transparent)",
-                      transform:
-                        "rotate(-45deg) translateX(-50px) translateY(-100px)",
-                    }}
-                  />
-
-                  {/* Scanline overlay */}
-                  <div
-                    className="absolute inset-0 opacity-[0.03]"
-                    style={{
-                      backgroundImage:
-                        "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.03) 2px, rgba(255,255,255,0.03) 4px)",
-                    }}
-                  />
-
-                  {/* Noise texture */}
-                  <div
-                    className="absolute inset-0 opacity-[0.015]"
-                    style={{
-                      backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E")`,
-                    }}
-                  />
-
-                  {/* Corner accents */}
-                  <div
-                    className="absolute top-0 left-0 w-32 h-32"
-                    style={{
-                      background:
-                        "linear-gradient(135deg, rgba(0, 240, 255, 0.08) 0%, transparent 50%)",
-                    }}
-                  />
-                  <div
-                    className="absolute bottom-0 right-0 w-48 h-48"
-                    style={{
-                      background:
-                        "linear-gradient(-45deg, rgba(255, 215, 0, 0.06) 0%, transparent 50%)",
-                    }}
-                  />
-                </div>
-
-                {/* Two Column Layout - Centered Vertically */}
-                <div className="grid lg:grid-cols-2 gap-10 lg:gap-16 items-center min-h-[calc(100vh-140px)]">
-                  {/* Left - Hero */}
-                  <div className="flex flex-col justify-center py-8">
-                    <motion.div
-                      className="inline-flex items-center gap-2.5 px-4 py-2 rounded-full mb-8 w-fit"
+                  <motion.h1
+                    className="font-serif text-5xl sm:text-6xl lg:text-7xl font-bold text-white mb-6 leading-[1.05]"
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.05 }}
+                    style={{ textShadow: "0 0 40px rgba(0, 240, 255, 0.15)" }}
+                  >
+                    <span className="block mb-2">8 AI Analysts.</span>
+                    <span
+                      className="bg-clip-text text-transparent"
                       style={{
-                        background:
-                          "linear-gradient(135deg, rgba(0, 240, 255, 0.15) 0%, rgba(0, 240, 255, 0.05) 100%)",
-                        border: "1px solid rgba(0, 240, 255, 0.3)",
-                        boxShadow:
-                          "0 0 20px rgba(0, 240, 255, 0.15), inset 0 1px 0 rgba(255,255,255,0.1)",
+                        backgroundImage:
+                          "linear-gradient(135deg, #00f0ff 0%, #00d4e8 30%, #ffd700 70%, #ffb800 100%)",
+                        textShadow: "none",
                       }}
+                    >
+                      One Verdict.
+                    </span>
+                  </motion.h1>
+
+                  <motion.p
+                    className="text-lg sm:text-xl text-slate-400 mb-10 max-w-lg leading-relaxed"
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.1 }}
+                  >
+                    Watch AI strategists with unique methodologies debate any
+                    stock in real-time. Each manages a{" "}
+                    <span className="text-gold font-semibold">
+                      $100K portfolio
+                    </span>
+                    . The best thesis wins.
+                  </motion.p>
+
+                  <motion.div
+                    className="mb-5"
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.15 }}
+                  >
+                    <TickerInput
+                      onSelect={handleTickerSelect}
+                      disabled={isLoading}
+                    />
+                  </motion.div>
+
+                  <motion.div
+                    className="flex flex-wrap items-center gap-2 mb-8"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ delay: 0.2 }}
+                  >
+                    <span className="text-sm text-slate-600 mr-1">Try:</span>
+                    {["NVDA", "AAPL", "TSLA", "MSFT", "GOOGL", "META"].map(
+                      (t) => (
+                        <button
+                          key={t}
+                          onClick={() => handleTickerSelect(t)}
+                          disabled={isLoading}
+                          className={`px-4 py-1.5 text-sm font-medium rounded-full transition-all border ${
+                            isLoading
+                              ? "text-slate-600 bg-white/[0.02] border-white/[0.04] cursor-not-allowed"
+                              : "text-slate-400 hover:text-cyan bg-white/[0.03] hover:bg-cyan/[0.08] border-white/[0.08] hover:border-cyan/40 hover:shadow-[0_0_15px_rgba(0,240,255,0.15)]"
+                          }`}
+                        >
+                          {t}
+                        </button>
+                      )
+                    )}
+                  </motion.div>
+                  {error && (
+                    <motion.div
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
+                      className="p-4 rounded-xl bg-bear/[0.1] border border-bear/20 mb-6"
                     >
-                      <span className="relative flex h-2.5 w-2.5">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan opacity-75"></span>
-                        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-cyan shadow-lg shadow-cyan/50"></span>
-                      </span>
-                      <span className="text-sm font-medium text-cyan tracking-wide">
-                        Live AI Analysis
-                      </span>
+                      <div className="flex items-start gap-3">
+                        <span className="text-lg">⚠️</span>
+                        <div>
+                          <p className="text-sm text-bear-light font-semibold">
+                            Error
+                          </p>
+                          <p className="text-sm text-slate-400">{error}</p>
+                        </div>
+                      </div>
                     </motion.div>
+                  )}
 
-                    <motion.h1
-                      className="font-serif text-5xl sm:text-6xl lg:text-7xl font-bold text-white mb-6 leading-[1.05]"
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: 0.05 }}
-                      style={{ textShadow: "0 0 40px rgba(0, 240, 255, 0.15)" }}
-                    >
-                      <span className="block mb-2">8 AI Analysts.</span>
-                      <span
-                        className="bg-clip-text text-transparent"
+                  {/* Feature highlights */}
+                  <motion.div
+                    className="flex flex-wrap gap-4"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ delay: 0.25 }}
+                  >
+                    {[
+                      { icon: "⚔️", text: "Live Debates", color: "#00f0ff" },
+                      {
+                        icon: "📊",
+                        text: "Technical Analysis",
+                        color: "#ffd700",
+                      },
+                      {
+                        icon: "🏆",
+                        text: "Portfolio Tracking",
+                        color: "#22c55e",
+                      },
+                    ].map((f) => (
+                      <div
+                        key={f.text}
+                        className="flex items-center gap-2 px-3 py-2 rounded-lg"
                         style={{
-                          backgroundImage:
-                            "linear-gradient(135deg, #00f0ff 0%, #00d4e8 30%, #ffd700 70%, #ffb800 100%)",
-                          textShadow: "none",
+                          background: "rgba(255,255,255,0.02)",
+                          border: `1px solid ${f.color}20`,
+                          boxShadow: `0 0 15px ${f.color}08`,
                         }}
                       >
-                        One Verdict.
-                      </span>
-                    </motion.h1>
-
-                    <motion.p
-                      className="text-lg sm:text-xl text-slate-400 mb-10 max-w-lg leading-relaxed"
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: 0.1 }}
-                    >
-                      Watch AI strategists with unique methodologies debate any
-                      stock in real-time. Each manages a{" "}
-                      <span className="text-gold font-semibold">
-                        $100K portfolio
-                      </span>
-                      . The best thesis wins.
-                    </motion.p>
-
-                    <motion.div
-                      className="mb-5"
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: 0.15 }}
-                    >
-                      <TickerInput
-                        onSelect={handleTickerSelect}
-                        disabled={isLoading}
-                      />
-                    </motion.div>
-
-                    <motion.div
-                      className="flex flex-wrap items-center gap-2 mb-8"
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      transition={{ delay: 0.2 }}
-                    >
-                      <span className="text-sm text-slate-600 mr-1">Try:</span>
-                      {["NVDA", "AAPL", "TSLA", "MSFT", "GOOGL", "META"].map(
-                        (t) => (
-                          <button
-                            key={t}
-                            onClick={() => handleTickerSelect(t)}
-                            className="px-4 py-1.5 text-sm font-medium text-slate-400 hover:text-cyan bg-white/[0.03] hover:bg-cyan/[0.08] border border-white/[0.08] hover:border-cyan/40 rounded-full transition-all hover:shadow-[0_0_15px_rgba(0,240,255,0.15)]"
-                          >
-                            {t}
-                          </button>
-                        )
-                      )}
-                    </motion.div>
-
-                    {error && (
-                      <motion.div
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        className="p-4 rounded-xl bg-bear/[0.1] border border-bear/20 mb-6"
-                      >
-                        <div className="flex items-start gap-3">
-                          <span className="text-lg">⚠️</span>
-                          <div>
-                            <p className="text-sm text-bear-light font-semibold">
-                              Error
-                            </p>
-                            <p className="text-sm text-slate-400">{error}</p>
-                          </div>
-                        </div>
-                      </motion.div>
-                    )}
-
-                    {/* Feature highlights */}
-                    <motion.div
-                      className="flex flex-wrap gap-4"
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      transition={{ delay: 0.25 }}
-                    >
-                      {[
-                        { icon: "⚔️", text: "Live Debates", color: "#00f0ff" },
-                        {
-                          icon: "📊",
-                          text: "Technical Analysis",
-                          color: "#ffd700",
-                        },
-                        {
-                          icon: "🏆",
-                          text: "Portfolio Tracking",
-                          color: "#22c55e",
-                        },
-                      ].map((f) => (
-                        <div
-                          key={f.text}
-                          className="flex items-center gap-2 px-3 py-2 rounded-lg"
-                          style={{
-                            background: "rgba(255,255,255,0.02)",
-                            border: `1px solid ${f.color}20`,
-                            boxShadow: `0 0 15px ${f.color}08`,
-                          }}
-                        >
-                          <span className="text-base">{f.icon}</span>
-                          <span className="text-sm text-slate-400">{f.text}</span>
-                        </div>
-                      ))}
-                    </motion.div>
-                  </div>
-
-                  {/* Right - Dashboard */}
-                  <div className="space-y-4">
-                    <motion.div
-                      initial={{ opacity: 0, x: 20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: 0.2 }}
-                    >
-                      <Watchlist
-                        key={`watchlist-${sidebarRefreshKey}`}
-                        onSelectTicker={handleTickerSelect}
-                        currentTicker={stockData?.ticker}
-                      />
-                    </motion.div>
-                    <motion.div
-                      initial={{ opacity: 0, x: 20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: 0.3 }}
-                    >
-                      <SavedAnalyses
-                        key={`saved-${sidebarRefreshKey}`}
-                        onLoadAnalysis={handleLoadAnalysis}
-                      />
-                    </motion.div>
-                    <motion.div
-                      initial={{ opacity: 0, x: 20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: 0.4 }}
-                    >
-                      <AccuracyTracker key={`accuracy-${sidebarRefreshKey}`} />
-                    </motion.div>
-                  </div>
+                        <span className="text-base">{f.icon}</span>
+                        <span className="text-sm text-slate-400">{f.text}</span>
+                      </div>
+                    ))}
+                  </motion.div>
                 </div>
-              </motion.div>
-            )}
+
+                {/* Right - Dashboard */}
+                <div className="space-y-4">
+                  <motion.div
+                    initial={{ opacity: 0, x: 20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: 0.2 }}
+                  >
+                    <Watchlist
+                      key={`watchlist-${sidebarRefreshKey}`}
+                      onSelectTicker={handleTickerSelect}
+                      currentTicker={stockData?.ticker}
+                    />
+                  </motion.div>
+                  <motion.div
+                    initial={{ opacity: 0, x: 20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: 0.3 }}
+                  >
+                    <SavedAnalyses
+                      key={`saved-${sidebarRefreshKey}`}
+                      onLoadAnalysis={handleLoadAnalysis}
+                    />
+                  </motion.div>
+                  <motion.div
+                    initial={{ opacity: 0, x: 20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: 0.4 }}
+                  >
+                    <AccuracyTracker key={`accuracy-${sidebarRefreshKey}`} />
+                  </motion.div>
+                </div>
+              </div>
+            </motion.div>
+          )}
 
           {isLoading && loadingInfo && (
             <motion.div
@@ -862,24 +861,31 @@ export const StockArena: React.FC<StockArenaProps> = ({
                   role="tablist"
                   aria-label="Analysis sections"
                 >
-                  {tabs.map((tab) => (
-                    <button
-                      key={tab.id}
-                      onClick={() => setActiveTab(tab.id)}
-                      role="tab"
-                      aria-selected={activeTab === tab.id}
-                      aria-controls={`${tab.id}-panel`}
-                      className={`flex-1 min-w-[90px] px-3 py-2.5 text-xs font-semibold rounded-lg transition-all whitespace-nowrap ${activeTab === tab.id
-                          ? "bg-cyan/15 text-cyan border border-cyan/20"
-                          : "text-slate-400 hover:text-white hover:bg-white/[0.04]"
-                        }`}
-                    >
-                      <span className="mr-1.5" aria-hidden="true">
-                        {tab.icon}
-                      </span>
-                      {tab.label}
-                    </button>
-                  ))}
+                  {tabs.map((tab) => {
+                    const isActive = activeTab === tab.id;
+                    const tabClasses = [
+                      "flex-1 min-w-[90px] px-3 py-2.5 text-xs font-semibold rounded-lg transition-all whitespace-nowrap",
+                      isActive
+                        ? "bg-cyan/15 text-cyan border border-cyan/20"
+                        : "text-slate-400 hover:text-white hover:bg-white/[0.04]",
+                    ].join(" ");
+
+                    return (
+                      <button
+                        key={tab.id}
+                        onClick={() => setActiveTab(tab.id)}
+                        role="tab"
+                        aria-selected={isActive}
+                        aria-controls={`${tab.id}-panel`}
+                        className={tabClasses}
+                      >
+                        <span className="mr-1.5" aria-hidden="true">
+                          {tab.icon}
+                        </span>
+                        {tab.label}
+                      </button>
+                    );
+                  })}
                 </div>
                 <AnimatePresence mode="wait">
                   {activeTab === "analysis" && (
@@ -1115,10 +1121,11 @@ const HeaderButton: React.FC<{
   <motion.button
     onClick={onClick}
     aria-label={label}
-    className={`px-2.5 sm:px-3 py-1.5 text-xs font-medium rounded-lg transition-all flex items-center gap-1.5 ${variant === "ghost"
+    className={`px-2.5 sm:px-3 py-1.5 text-xs font-medium rounded-lg transition-all flex items-center gap-1.5 ${
+      variant === "ghost"
         ? "text-slate-400 hover:text-white hover:bg-white/[0.06]"
         : "text-slate-300 hover:text-white border border-white/[0.08] hover:border-white/[0.15] bg-white/[0.03]"
-      }`}
+    }`}
     whileHover={{ scale: 1.02 }}
     whileTap={{ scale: 0.98 }}
   >

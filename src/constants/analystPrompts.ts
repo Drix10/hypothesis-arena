@@ -3075,11 +3075,24 @@ Reinforce why judges should score for you. End strong.
 // DEBATE TURN-SPECIFIC PROMPTS (ENHANCED)
 // ═══════════════════════════════════════════════════════════════════════════════
 
+type DebateRound = 1 | 2 | 3;
+
+const ROUND_TITLES: Record<DebateRound, string> = {
+    1: 'OPENING STATEMENT',
+    2: 'REBUTTAL',
+    3: 'CLOSING ARGUMENT'
+};
+
 export const DEBATE_TURN_PROMPT = (
     position: 'bull' | 'bear',
     opponentArgument: string,
     round: number
-): string => `## 🎯 ROUND ${round} OF 3: ${round === 1 ? 'OPENING STATEMENT' : round === 2 ? 'REBUTTAL' : 'CLOSING ARGUMENT'}
+): string => {
+    // Validate and normalize round to 1, 2, or 3
+    const validRound: DebateRound = (round >= 1 && round <= 3) ? (round as DebateRound) : 1;
+    const roundTitle = ROUND_TITLES[validRound];
+
+    return `## 🎯 ROUND ${validRound} OF 3: ${roundTitle}
 
 **Your Position:** ${position.toUpperCase()} CASE
 **Word Limit:** 150 words maximum
@@ -3092,7 +3105,7 @@ ${opponentArgument ? `
 ═══════════════════════════════════════════════════════════════════════════════
 ` : ''}
 
-${round === 1 ? `
+${validRound === 1 ? `
 ## ROUND 1 OBJECTIVES: OPENING STATEMENT
 
 **Your Mission:**
@@ -3121,7 +3134,7 @@ ${round === 1 ? `
 - Being vague ("strong growth" vs "35% YoY growth")
 ` : ''}
 
-${round === 2 ? `
+${validRound === 2 ? `
 ## ROUND 2 OBJECTIVES: REBUTTAL
 
 **Your Mission:**
@@ -3156,7 +3169,7 @@ ${round === 2 ? `
 - "Historical precedent contradicts you—in [year], [what happened]"
 ` : ''}
 
-${round === 3 ? `
+${validRound === 3 ? `
 ## ROUND 3 OBJECTIVES: CLOSING ARGUMENT
 
 **Your Mission:**
@@ -3209,6 +3222,7 @@ ${round === 3 ? `
 ✗ Logical fallacies (strawman, ad hominem, false dichotomy)
 
 ## 📝 YOUR RESPONSE (Under 150 words):`;
+};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // JUDGE EVALUATION SYSTEM (ENHANCED - Comprehensive Scoring Rubric)

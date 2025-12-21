@@ -136,7 +136,6 @@ export const PortfolioPerformanceChart: React.FC<
 
   const formatCurrency = (value: number) => {
     if (!isFinite(value) || isNaN(value)) {
-      console.warn("formatCurrency: Invalid value detected", value);
       return "$0";
     }
     return new Intl.NumberFormat("en-US", {

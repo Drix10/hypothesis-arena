@@ -24,6 +24,42 @@ import { AnalystMethodology } from "../../types/stock";
 const VERIFICATION_DAYS = 3;
 const TOTAL_AGENTS = getAllAnalysts().length;
 
+/** Color configuration for recommendation badges */
+interface RecBadgeColorConfig {
+  bg: string;
+  border: string;
+  color: string;
+}
+
+export const RECOMMENDATION_COLOR_CONFIG: Record<string, RecBadgeColorConfig> =
+  {
+    strong_buy: {
+      bg: "rgba(0,255,136,0.12)",
+      border: "rgba(0,255,136,0.3)",
+      color: "#00ff88",
+    },
+    buy: {
+      bg: "rgba(34,197,94,0.12)",
+      border: "rgba(34,197,94,0.3)",
+      color: "#22c55e",
+    },
+    hold: {
+      bg: "rgba(255,215,0,0.12)",
+      border: "rgba(255,215,0,0.3)",
+      color: "#ffd700",
+    },
+    sell: {
+      bg: "rgba(239,68,68,0.12)",
+      border: "rgba(239,68,68,0.3)",
+      color: "#ef4444",
+    },
+    strong_sell: {
+      bg: "rgba(220,38,38,0.12)",
+      border: "rgba(220,38,38,0.3)",
+      color: "#dc2626",
+    },
+  };
+
 const getAgentIcon = (
   methodology: AnalystMethodology | string | undefined
 ): string => {
@@ -62,35 +98,8 @@ const StatItem: React.FC<{ label: string; value: string; color: string }> = ({
 );
 
 const RecBadge: React.FC<{ rec: string }> = ({ rec }) => {
-  const config: Record<string, { bg: string; border: string; color: string }> =
-  {
-    strong_buy: {
-      bg: "rgba(0,255,136,0.12)",
-      border: "rgba(0,255,136,0.3)",
-      color: "#00ff88",
-    },
-    buy: {
-      bg: "rgba(34,197,94,0.12)",
-      border: "rgba(34,197,94,0.3)",
-      color: "#22c55e",
-    },
-    hold: {
-      bg: "rgba(255,215,0,0.12)",
-      border: "rgba(255,215,0,0.3)",
-      color: "#ffd700",
-    },
-    sell: {
-      bg: "rgba(239,68,68,0.12)",
-      border: "rgba(239,68,68,0.3)",
-      color: "#ef4444",
-    },
-    strong_sell: {
-      bg: "rgba(220,38,38,0.12)",
-      border: "rgba(220,38,38,0.3)",
-      color: "#dc2626",
-    },
-  };
-  const c = config[rec] || config.hold;
+  const c =
+    RECOMMENDATION_COLOR_CONFIG[rec] || RECOMMENDATION_COLOR_CONFIG.hold;
   return (
     <span
       className="px-1.5 py-0.5 text-[9px] rounded font-black uppercase tracking-wider"
@@ -138,8 +147,8 @@ export const AccuracyTracker: React.FC = () => {
         if (!isMountedRef.current) return false;
         if (quote?.price > 0)
           return updateAccuracyCheck(record.id, quote.price);
-      } catch (error) {
-        console.warn(`Failed to verify ${record.ticker}:`, error);
+      } catch {
+        // Silently fail - verification will be retried later
       } finally {
         if (isMountedRef.current) setVerifyingTicker(null);
       }
@@ -176,10 +185,8 @@ export const AccuracyTracker: React.FC = () => {
 
   const handleManualVerify = useCallback(async () => {
     if (!isMountedRef.current) return;
-    if (isVerifyingRef.current) {
-      console.warn("Verification already in progress");
-      return;
-    }
+    // Silently return if verification already in progress
+    if (isVerifyingRef.current) return;
 
     const freshHistory = getAccuracyHistory();
     const allPending = freshHistory.filter((h) => h.wasAccurate === undefined);
@@ -225,8 +232,8 @@ export const AccuracyTracker: React.FC = () => {
     v >= 1e6
       ? `${(v / 1e6).toFixed(1)}M`
       : v >= 1e3
-        ? `${(v / 1e3).toFixed(0)}K`
-        : `${v.toFixed(0)}`;
+      ? `${(v / 1e3).toFixed(0)}K`
+      : `${v.toFixed(0)}`;
   const fmtPct = (v: number) => `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}%`;
 
   const checked = history.filter((h) => h.wasAccurate !== undefined);
@@ -413,8 +420,9 @@ export const AccuracyTracker: React.FC = () => {
       {/* Predictions Section */}
       {history.length > 0 && (
         <div
-          className={`p-5 relative z-10 ${portfolios.length > 0 ? "border-t border-white/[0.06]" : ""
-            }`}
+          className={`p-5 relative z-10 ${
+            portfolios.length > 0 ? "border-t border-white/[0.06]" : ""
+          }`}
         >
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-3">
@@ -445,20 +453,21 @@ export const AccuracyTracker: React.FC = () => {
                           stats.rate >= 60
                             ? "rgba(0,255,136,0.15)"
                             : stats.rate >= 40
-                              ? "rgba(255,215,0,0.15)"
-                              : "rgba(239,68,68,0.15)",
+                            ? "rgba(255,215,0,0.15)"
+                            : "rgba(239,68,68,0.15)",
                         color:
                           stats.rate >= 60
                             ? "#00ff88"
                             : stats.rate >= 40
-                              ? "#ffd700"
-                              : "#ef4444",
-                        border: `1px solid ${stats.rate >= 60
+                            ? "#ffd700"
+                            : "#ef4444",
+                        border: `1px solid ${
+                          stats.rate >= 60
                             ? "rgba(0,255,136,0.3)"
                             : stats.rate >= 40
-                              ? "rgba(255,215,0,0.3)"
-                              : "rgba(239,68,68,0.3)"
-                          }`,
+                            ? "rgba(255,215,0,0.3)"
+                            : "rgba(239,68,68,0.3)"
+                        }`,
                       }}
                     >
                       {stats.rate.toFixed(0)}%
@@ -512,7 +521,7 @@ export const AccuracyTracker: React.FC = () => {
               const change =
                 r.priceAtCheck && r.priceAtAnalysis > 0
                   ? ((r.priceAtCheck - r.priceAtAnalysis) / r.priceAtAnalysis) *
-                  100
+                    100
                   : 0;
               return (
                 <div
@@ -530,10 +539,11 @@ export const AccuracyTracker: React.FC = () => {
                         ? "rgba(0,255,136,0.15)"
                         : "rgba(239,68,68,0.15)",
                       color: r.wasAccurate ? "#00ff88" : "#ef4444",
-                      border: `1px solid ${r.wasAccurate
+                      border: `1px solid ${
+                        r.wasAccurate
                           ? "rgba(0,255,136,0.3)"
                           : "rgba(239,68,68,0.3)"
-                        }`,
+                      }`,
                     }}
                   >
                     {r.wasAccurate ? "✓" : "✗"}
@@ -552,10 +562,11 @@ export const AccuracyTracker: React.FC = () => {
                     className="text-base font-black"
                     style={{
                       color: change >= 0 ? "#00ff88" : "#ef4444",
-                      textShadow: `0 0 10px ${change >= 0
+                      textShadow: `0 0 10px ${
+                        change >= 0
                           ? "rgba(0,255,136,0.3)"
                           : "rgba(239,68,68,0.3)"
-                        }`,
+                      }`,
                     }}
                   >
                     {change >= 0 ? "+" : ""}
@@ -571,7 +582,7 @@ export const AccuracyTracker: React.FC = () => {
               const targetPct =
                 r.priceAtAnalysis > 0
                   ? ((r.targetPrice - r.priceAtAnalysis) / r.priceAtAnalysis) *
-                  100
+                    100
                   : 0;
               return (
                 <div

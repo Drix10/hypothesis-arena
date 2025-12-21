@@ -18,6 +18,9 @@ interface SearchResult {
   exchange: string;
 }
 
+/** Debounce delay for search input in milliseconds */
+const SEARCH_DEBOUNCE_MS = 300;
+
 export const TickerInput: React.FC<TickerInputProps> = ({
   onSelect,
   disabled = false,
@@ -84,16 +87,20 @@ export const TickerInput: React.FC<TickerInputProps> = ({
     // Clear previous timeout
     if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
 
-    // Debounce search - wait 500ms after user stops typing
-    searchTimeoutRef.current = setTimeout(() => handleSearch(value), 500);
+    // Debounce search
+    searchTimeoutRef.current = setTimeout(
+      () => handleSearch(value),
+      SEARCH_DEBOUNCE_MS
+    );
   };
 
   const handleSelectTicker = async (ticker: string) => {
     // Prevent duplicate selections while validating or disabled
     if (disabled || isValidating) return;
 
-    setQuery(ticker);
+    // Close dropdown immediately on selection
     setShowDropdown(false);
+    setQuery(ticker);
     setIsValidating(true);
     setError(null);
     try {

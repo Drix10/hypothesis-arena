@@ -8,6 +8,7 @@
 import { GoogleGenAI } from '@google/genai';
 import {
     AnalystAgent,
+    AnalystMethodology,
     InvestmentThesis,
     StockDebate,
     DebateTurn,
@@ -308,13 +309,12 @@ async function generateDebateTurn(
     ai: GoogleGenAI,
     model: string,
     analyst: AnalystAgent,
-    analysis: InvestmentThesis,
+    thesis: InvestmentThesis,
     position: 'bull' | 'bear',
     previousTurn: string,
     stockData: StockAnalysisData,
     round: number
 ): Promise<DebateTurn> {
-    const thesis = analysis;
     // Build enhanced system prompt with analyst context and data
     const dataContext = formatDebateContext(stockData);
     const keyArguments = position === 'bull'
@@ -393,7 +393,7 @@ ${dataContext}
  * Calculate argument strength based on content quality - ENHANCED & METHODOLOGY AWARE
  * Evaluates: data quality, logic, risk acknowledgment, specificity
  */
-function calculateArgumentStrength(content: string, methodology: string = 'value'): number {
+function calculateArgumentStrength(content: string, methodology: AnalystMethodology = 'value'): number {
     if (!content || typeof content !== 'string') return 50;
 
     let score = 40; // Base score (slightly below neutral)

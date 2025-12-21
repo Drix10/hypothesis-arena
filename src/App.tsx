@@ -96,11 +96,8 @@ const App: React.FC = () => {
   const handleSetKey = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // Prevent duplicate submissions
-    if (isLoading || !inputGeminiKey.trim()) {
-      console.warn("Key validation already in progress or empty key");
-      return;
-    }
+    // Silently prevent duplicate submissions
+    if (isLoading || !inputGeminiKey.trim()) return;
 
     setIsLoading(true);
     setError("");
