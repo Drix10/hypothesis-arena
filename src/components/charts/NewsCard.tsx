@@ -10,30 +10,32 @@ interface NewsCardProps {
   sentiment: SentimentAnalysis;
 }
 
+// Move config outside component for type safety and performance
+const SENTIMENT_BADGE_CONFIG = {
+  positive: {
+    bg: "rgba(0,255,136,0.12)",
+    border: "rgba(0,255,136,0.3)",
+    text: "#00ff88",
+    icon: "▲",
+  },
+  negative: {
+    bg: "rgba(239,68,68,0.12)",
+    border: "rgba(239,68,68,0.3)",
+    text: "#ef4444",
+    icon: "▼",
+  },
+  neutral: {
+    bg: "rgba(255,215,0,0.12)",
+    border: "rgba(255,215,0,0.3)",
+    text: "#ffd700",
+    icon: "◆",
+  },
+} as const;
+
 const SentimentBadge: React.FC<{
   sentiment: "positive" | "negative" | "neutral";
 }> = ({ sentiment }) => {
-  const config = {
-    positive: {
-      bg: "rgba(0,255,136,0.12)",
-      border: "rgba(0,255,136,0.3)",
-      text: "#00ff88",
-      icon: "▲",
-    },
-    negative: {
-      bg: "rgba(239,68,68,0.12)",
-      border: "rgba(239,68,68,0.3)",
-      text: "#ef4444",
-      icon: "▼",
-    },
-    neutral: {
-      bg: "rgba(255,215,0,0.12)",
-      border: "rgba(255,215,0,0.3)",
-      text: "#ffd700",
-      icon: "◆",
-    },
-  };
-  const c = config[sentiment];
+  const c = SENTIMENT_BADGE_CONFIG[sentiment];
 
   return (
     <span
@@ -116,41 +118,42 @@ const NewsItemRow: React.FC<{ item: NewsItem }> = ({ item }) => {
   );
 };
 
-export const NewsCard: React.FC<NewsCardProps> = ({ sentiment }) => {
-  const sentimentConfig = {
-    very_bullish: {
-      color: "#00ff88",
-      glow: "0 0 30px rgba(0,255,136,0.3)",
-      label: "VERY BULLISH",
-      icon: "⚡",
-    },
-    bullish: {
-      color: "#22c55e",
-      glow: "0 0 20px rgba(34,197,94,0.3)",
-      label: "BULLISH",
-      icon: "↗",
-    },
-    neutral: {
-      color: "#ffd700",
-      glow: "0 0 20px rgba(255,215,0,0.3)",
-      label: "NEUTRAL",
-      icon: "◆",
-    },
-    bearish: {
-      color: "#ef4444",
-      glow: "0 0 20px rgba(239,68,68,0.3)",
-      label: "BEARISH",
-      icon: "↘",
-    },
-    very_bearish: {
-      color: "#dc2626",
-      glow: "0 0 30px rgba(220,38,38,0.4)",
-      label: "VERY BEARISH",
-      icon: "⚠",
-    },
-  };
+// Move sentiment config outside component for type safety
+const OVERALL_SENTIMENT_CONFIG = {
+  very_bullish: {
+    color: "#00ff88",
+    glow: "0 0 30px rgba(0,255,136,0.3)",
+    label: "VERY BULLISH",
+    icon: "⚡",
+  },
+  bullish: {
+    color: "#22c55e",
+    glow: "0 0 20px rgba(34,197,94,0.3)",
+    label: "BULLISH",
+    icon: "↗",
+  },
+  neutral: {
+    color: "#ffd700",
+    glow: "0 0 20px rgba(255,215,0,0.3)",
+    label: "NEUTRAL",
+    icon: "◆",
+  },
+  bearish: {
+    color: "#ef4444",
+    glow: "0 0 20px rgba(239,68,68,0.3)",
+    label: "BEARISH",
+    icon: "↘",
+  },
+  very_bearish: {
+    color: "#dc2626",
+    glow: "0 0 30px rgba(220,38,38,0.4)",
+    label: "VERY BEARISH",
+    icon: "⚠",
+  },
+} as const;
 
-  const config = sentimentConfig[sentiment.overallSentiment];
+export const NewsCard: React.FC<NewsCardProps> = ({ sentiment }) => {
+  const config = OVERALL_SENTIMENT_CONFIG[sentiment.overallSentiment];
   const scoreColor =
     sentiment.overallScore > 0.2
       ? "#00ff88"

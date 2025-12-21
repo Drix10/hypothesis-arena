@@ -83,17 +83,18 @@ export const PortfolioPerformanceChart: React.FC<
   useEffect(() => {
     setSelectedAgents((prev) => {
       const newAgentIds = new Set(portfolios.map((p) => p.agentId));
-      // On first render or if prev is empty, select all
-      if (!isInitializedRef.current || prev.size === 0) {
+      // On first render, select all
+      if (!isInitializedRef.current) {
         isInitializedRef.current = true;
         return newAgentIds;
       }
-      // Keep existing selections that are still valid
+      // Keep existing selections that are still valid, even if empty (user deselected all)
       const updated = new Set<string>();
       portfolios.forEach((p) => {
         if (prev.has(p.agentId)) updated.add(p.agentId);
       });
-      return updated.size > 0 ? updated : newAgentIds;
+      // Only auto-select all if no valid selections remain (agents were removed)
+      return updated.size > 0 || prev.size === 0 ? updated : newAgentIds;
     });
   }, [portfolios]);
 
@@ -380,29 +381,55 @@ const StatCard: React.FC<{
   value: string;
   color: string;
   icon: string;
-}> = ({ label, value, color, icon }) => (
-  <div
-    className="p-4 rounded-xl hover:scale-[1.02] transition-transform"
-    style={{
-      background: `linear-gradient(135deg, ${color}08 0%, ${color}03 100%)`,
-      border: `1px solid ${color}20`,
-    }}
-  >
-    <div className="flex items-center gap-2 mb-2">
-      <span className="text-lg">{icon}</span>
-      <span className="text-[9px] text-slate-500 uppercase tracking-widest font-black">
-        {label}
-      </span>
-    </div>
+}> = ({ label, value, color, icon }) => {
+  const [prefersReducedMotion, setPrefersReducedMotion] = React.useState(
+    typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const mediaQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const handleChange = (e: MediaQueryListEvent | MediaQueryList) => {
+      setPrefersReducedMotion(e.matches);
+    };
+    if (mediaQuery.addEventListener) {
+      mediaQuery.addEventListener("change", handleChange);
+      return () => mediaQuery.removeEventListener("change", handleChange);
+    } else if (mediaQuery.addListener) {
+      const legacyHandler = (e: any) => handleChange(e);
+      mediaQuery.addListener(legacyHandler);
+      return () => mediaQuery.removeListener(legacyHandler);
+    }
+    return undefined;
+  }, []);
+
+  return (
     <div
-      className="text-base font-black"
+      className={`p-4 rounded-xl ${
+        prefersReducedMotion ? "" : "hover:scale-[1.02] transition-transform"
+      }`}
       style={{
-        color,
-        fontFamily: "'Space Grotesk', sans-serif",
-        textShadow: `0 0 15px ${color}30`,
+        background: `linear-gradient(135deg, ${color}08 0%, ${color}03 100%)`,
+        border: `1px solid ${color}20`,
       }}
     >
-      {value}
+      <div className="flex items-center gap-2 mb-2">
+        <span className="text-lg">{icon}</span>
+        <span className="text-[9px] text-slate-500 uppercase tracking-widest font-black">
+          {label}
+        </span>
+      </div>
+      <div
+        className="text-base font-black"
+        style={{
+          color,
+          fontFamily: "'Space Grotesk', sans-serif",
+          textShadow: `0 0 15px ${color}30`,
+        }}
+      >
+        {value}
+      </div>
     </div>
-  </div>
-);
+  );
+};

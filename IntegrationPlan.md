@@ -466,6 +466,13 @@ Phase 1 (Auto-Execute)
 
 ## 🧪 Testing Checklist
 
+### Phase 0 Tests (Validation - RECOMMENDED)
+
+- [ ] Collect 50-100 manual analyses
+- [ ] Measure debate winner accuracy vs subsequent price movements
+- [ ] Validate LLM predictions have signal before building autonomy
+- [ ] Implement basic logging and dry-run mode
+
 ### Phase 1 Tests
 
 - [ ] Auto-execute toggle persists across sessions
@@ -486,6 +493,7 @@ Phase 1 (Auto-Execute)
 - [ ] Rate limiting works (max 20/day)
 - [ ] Queue persists across sessions
 - [ ] Watchlist scan triggers correctly
+- [ ] Browser tab closure mitigation: Queue persists, shows "missed analyses" on reopen
 
 ### Phase 4 Tests
 
@@ -498,6 +506,26 @@ Phase 1 (Auto-Execute)
 - [ ] Dashboard loads without errors
 - [ ] Leaderboard sorts correctly
 - [ ] Recent trades show real-time updates
+
+---
+
+## 🔗 Alignment with Plan.md
+
+This integration plan implements the vision outlined in `Plan.md` with the following key alignments:
+
+- **Phase 0 Validation** (from Plan.md Critical Analysis): Added recommendation to validate debate winner accuracy before building full autonomy
+- **Browser Limitations** (from Plan.md): Acknowledged in Phase 3 with mitigation strategy for tab closure
+- **Agent-Specific Exit Strategies** (from Plan.md): Noted as Phase 2 enhancement to respect agent philosophies
+- **Confidence Adjustment** (from Plan.md): Implements Bayesian approach recommended in critical analysis
+
+### Key Architectural Decisions
+
+| Decision                      | Rationale                                                                 | Source         |
+| ----------------------------- | ------------------------------------------------------------------------- | -------------- |
+| Use Gemini only (no multi-AI) | Simplicity, user request                                                  | User feedback  |
+| Browser-based (no backend)    | MVP scope, can add later                                                  | Plan.md        |
+| localStorage for persistence  | Simple, no auth needed                                                    | Plan.md        |
+| Phase 0 validation first      | Validate signal before building autonomy (from Plan.md critical analysis) | Plan.md review |
 
 ---
 

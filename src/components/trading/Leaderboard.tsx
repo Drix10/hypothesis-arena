@@ -212,7 +212,7 @@ export const Leaderboard: React.FC<LeaderboardProps> = ({
                   }
                   className={`px-4 py-3 text-left text-[10px] font-black text-slate-500 uppercase tracking-widest ${
                     col.key
-                      ? "cursor-pointer hover:bg-white/[0.03] transition-colors focus:outline-none focus:ring-2 focus:ring-cyan/50"
+                      ? "cursor-pointer hover:bg-white/[0.03] transition-colors focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
                       : ""
                   }`}
                 >
@@ -241,7 +241,7 @@ export const Leaderboard: React.FC<LeaderboardProps> = ({
                   role="button"
                   tabIndex={0}
                   aria-label={`View ${entry.agentName} portfolio details`}
-                  className="cursor-pointer transition-colors group hover:bg-white/[0.03] focus:outline-none focus:ring-2 focus:ring-cyan/50"
+                  className="cursor-pointer transition-colors group hover:bg-white/[0.03] focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
                   style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}
                 >
                   <td className="px-4 py-4 whitespace-nowrap">

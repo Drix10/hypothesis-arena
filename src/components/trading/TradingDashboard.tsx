@@ -232,10 +232,15 @@ export const TradingDashboard: React.FC = () => {
           }}
         />
 
-        <div className="flex items-center justify-between relative z-10">
+        <div
+          className="flex items-center justify-between relative z-10"
+          role="banner"
+          aria-label="Trading Arena Header"
+        >
           <div className="flex items-center gap-4">
             <div
               className="w-14 h-14 rounded-xl flex items-center justify-center text-3xl"
+              aria-hidden="true"
               style={{
                 background:
                   "linear-gradient(145deg, rgba(255,215,0,0.15) 0%, rgba(255,215,0,0.05) 100%)",

@@ -87,30 +87,50 @@ export const TechnicalsCard: React.FC<TechnicalsCardProps> = ({
           <Section title="MOMENTUM">
             <div className="space-y-4">
               <GaugeBar label="RSI (14)" value={technicals.rsi14} />
-              <GaugeBar label="Stochastic %K" value={technicals.stochastic.k} />
-              <GaugeBar label="Stochastic %D" value={technicals.stochastic.d} />
+              {technicals.stochastic ? (
+                <>
+                  <GaugeBar
+                    label="Stochastic %K"
+                    value={technicals.stochastic.k}
+                  />
+                  <GaugeBar
+                    label="Stochastic %D"
+                    value={technicals.stochastic.d}
+                  />
+                </>
+              ) : (
+                <div className="text-sm text-slate-500 px-3 py-2">
+                  Stochastic data unavailable
+                </div>
+              )}
             </div>
           </Section>
 
           {/* MACD Section */}
           <Section title="MACD">
-            <div className="grid grid-cols-3 gap-3">
-              <MetricBox
-                label="LINE"
-                value={technicals.macd.macdLine.toFixed(2)}
-                color={technicals.macd.macdLine >= 0 ? "#22c55e" : "#ef4444"}
-              />
-              <MetricBox
-                label="SIGNAL"
-                value={technicals.macd.signalLine.toFixed(2)}
-                color="#ffffff"
-              />
-              <MetricBox
-                label="HISTOGRAM"
-                value={technicals.macd.histogram.toFixed(2)}
-                color={technicals.macd.histogram >= 0 ? "#22c55e" : "#ef4444"}
-              />
-            </div>
+            {technicals.macd ? (
+              <div className="grid grid-cols-3 gap-3">
+                <MetricBox
+                  label="LINE"
+                  value={technicals.macd.macdLine.toFixed(2)}
+                  color={technicals.macd.macdLine >= 0 ? "#22c55e" : "#ef4444"}
+                />
+                <MetricBox
+                  label="SIGNAL"
+                  value={technicals.macd.signalLine.toFixed(2)}
+                  color="#ffffff"
+                />
+                <MetricBox
+                  label="HISTOGRAM"
+                  value={technicals.macd.histogram.toFixed(2)}
+                  color={technicals.macd.histogram >= 0 ? "#22c55e" : "#ef4444"}
+                />
+              </div>
+            ) : (
+              <div className="text-sm text-slate-500 px-3 py-2">
+                MACD data unavailable
+              </div>
+            )}
           </Section>
 
           {/* Moving Averages */}

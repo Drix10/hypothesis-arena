@@ -791,7 +791,7 @@ class QuantExit implements ExitStrategy {
 
 ### Revised Roadmap Recommendation
 
-**Phase 0 (Add 2 weeks): Validation & Foundation**
+**Phase 0 (Add 2 weeks): Validation & Foundation** ⚠️ RECOMMENDED
 
 - [ ] Collect 50-100 manual analyses
 - [ ] Measure: debate winner accuracy vs subsequent price movements
@@ -799,6 +799,8 @@ class QuantExit implements ExitStrategy {
 - [ ] Validate LLM predictions have signal before building autonomy
 
 **Phase 1-5:** Keep as-is, but with Phase 0 validation first
+
+**Note:** This Phase 0 recommendation is now reflected in `IntegrationPlan.md` for implementation tracking.
 
 ---
 

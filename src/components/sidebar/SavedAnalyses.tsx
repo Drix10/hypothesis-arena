@@ -103,6 +103,7 @@ export const SavedAnalyses: React.FC<SavedAnalysesProps> = ({
       {/* Diagonal accent */}
       <div
         className="absolute top-0 right-0 w-20 h-20 opacity-20"
+        aria-hidden="true"
         style={{
           background: "linear-gradient(135deg, #00f0ff 0%, transparent 60%)",
           clipPath: "polygon(100% 0, 0 0, 100% 100%)",
@@ -111,6 +112,7 @@ export const SavedAnalyses: React.FC<SavedAnalysesProps> = ({
       {/* Scanlines */}
       <div
         className="absolute inset-0 opacity-[0.03] pointer-events-none"
+        aria-hidden="true"
         style={{
           backgroundImage:
             "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,0.03) 2px, rgba(255,255,255,0.03) 4px)",
@@ -166,6 +168,8 @@ export const SavedAnalyses: React.FC<SavedAnalysesProps> = ({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
+            role="list"
+            aria-label="Saved analyses"
           >
             {analyses.map((analysis) => {
               const recConfig = getRecConfig(
@@ -177,10 +181,12 @@ export const SavedAnalyses: React.FC<SavedAnalysesProps> = ({
                   className="px-4 py-3 cursor-pointer relative overflow-hidden group hover:translate-x-1 hover:bg-white/[0.02]"
                   style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}
                   onClick={() => onLoadAnalysis(analysis)}
+                  role="listitem"
                 >
                   {/* Hover glow */}
                   <div
                     className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                    aria-hidden="true"
                     style={{
                       background:
                         "linear-gradient(90deg, rgba(0,240,255,0.03) 0%, transparent 60%)",
