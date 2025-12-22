@@ -57,6 +57,8 @@ export const PostAnalysisTradingView: React.FC<
     total: 0,
   });
   const [showConfirmation, setShowConfirmation] = useState(false);
+  const [loadError, setLoadError] = useState<Error | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
 
   // Ref to track if component is mounted for async cleanup
   const isMountedRef = useRef(true);
@@ -70,6 +72,9 @@ export const PostAnalysisTradingView: React.FC<
 
   useEffect(() => {
     const loadAndAnalyze = async () => {
+      // Clear any previous error before attempting load
+      setLoadError(null);
+
       try {
         if (!isMountedRef.current) return;
 
@@ -110,21 +115,36 @@ export const PostAnalysisTradingView: React.FC<
 
             if (!isMountedRef.current) return;
             newDecisions.set(thesis.agentId, decision);
-          } catch {
-            // Failed to determine trade decision - skip this agent
+          } catch (error) {
+            // Failed to determine trade decision - log and skip this agent
+            console.error(
+              `[PostAnalysisTradingView] Failed to determine trade decision for ${thesis.agentId}:`,
+              error
+            );
           }
         }
 
         if (isMountedRef.current) {
           setDecisions(newDecisions);
         }
-      } catch {
-        // Failed to generate trading decisions - state will remain empty
+      } catch (error) {
+        // Failed to generate trading decisions - set error state
+        console.error(
+          "[PostAnalysisTradingView] Failed to load and analyze trading state:",
+          error
+        );
+        if (isMountedRef.current) {
+          setLoadError(
+            error instanceof Error
+              ? error
+              : new Error("Failed to load trading data")
+          );
+        }
       }
     };
 
     loadAndAnalyze();
-  }, [ticker, currentPrice, priceTimestamp, theses, debates]);
+  }, [ticker, currentPrice, priceTimestamp, theses, debates, retryCount]);
 
   const executeAllTrades = useCallback(async () => {
     if (!tradingState) return;
@@ -159,8 +179,12 @@ export const PostAnalysisTradingView: React.FC<
         if (trade) {
           newExecuted.add(agentId);
         }
-      } catch {
-        // Trade execution failed - silently continue to next trade
+      } catch (error) {
+        // Trade execution failed - log error and continue to next trade
+        console.error(
+          `[PostAnalysisTradingView] Trade execution failed for ${agentId}:`,
+          error
+        );
       }
 
       if (!isMountedRef.current) return;
@@ -231,6 +255,45 @@ export const PostAnalysisTradingView: React.FC<
     () => buyDecisions.length > 0 || sellDecisions.length > 0,
     [buyDecisions, sellDecisions]
   );
+
+  // Retry handler to clear error and trigger reload
+  const handleRetry = useCallback(() => {
+    setLoadError(null);
+    setTradingState(null);
+    setDecisions(new Map());
+    // Increment retry count to trigger useEffect re-run
+    setRetryCount((c) => c + 1);
+  }, []);
+
+  // Show error state if loading failed
+  if (loadError) {
+    return (
+      <div className="flex flex-col items-center justify-center p-12 text-center">
+        <AlertCircle className="w-12 h-12 text-red-500 mb-4" />
+        <h3 className="text-lg font-semibold text-gray-900 mb-2">
+          Failed to Load Trading Data
+        </h3>
+        <p className="text-sm text-gray-600 mb-4 max-w-md">
+          {loadError.message ||
+            "An unexpected error occurred while loading trading decisions."}
+        </p>
+        <div className="flex gap-3">
+          <button
+            onClick={handleRetry}
+            className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors font-medium text-sm"
+          >
+            Try Again
+          </button>
+          <button
+            onClick={onContinue}
+            className="px-4 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors font-medium text-sm"
+          >
+            Skip Trading
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (!tradingState) {
     return (

@@ -998,7 +998,8 @@ function parseStructuredThesisResponse(
         const recommendation = recMap[parsed.recommendation] || 'hold';
 
         // Validate confidence (clamp to reasonable range)
-        const confidence = Math.max(0, Math.min(100, parsed.confidence || 50));
+        // Use nullish coalescing to allow confidence of 0 (|| would treat 0 as falsy)
+        const confidence = Math.max(0, Math.min(100, parsed.confidence ?? 50));
 
         // Validate price targets with safe defaults
         const safePrice = currentPrice > 0 ? currentPrice : 100;

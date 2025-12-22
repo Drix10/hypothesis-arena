@@ -68,10 +68,12 @@ export const TickerInput: React.FC<TickerInputProps> = ({
     setError(null);
     try {
       const searchResults = await searchTickers(searchQuery);
+      // Only update state if this search is still relevant (query hasn't changed)
       setResults(searchResults);
       setShowDropdown(searchResults.length > 0);
       setSelectedIndex(-1);
-    } catch {
+    } catch (error) {
+      console.error("[TickerInput] Search failed:", error);
       setResults([]);
     } finally {
       setIsSearching(false);
@@ -99,7 +101,6 @@ export const TickerInput: React.FC<TickerInputProps> = ({
 
     // Close dropdown immediately on selection
     setShowDropdown(false);
-    setQuery(ticker);
 
     // Basic format validation (no API call needed)
     const normalizedTicker = ticker.toUpperCase().trim();
@@ -115,13 +116,16 @@ export const TickerInput: React.FC<TickerInputProps> = ({
       return;
     }
 
+    // Set query AFTER validation passes (shows selected ticker in input)
+    setQuery(normalizedTicker);
+
     // Clear error only after validation passes, just before calling onSelect
     setError(null);
 
     // Skip API validation - let the main analysis handle errors
     // This prevents blocking valid tickers when APIs are temporarily down
     onSelect(normalizedTicker);
-    setQuery("");
+    // Don't clear query immediately - let user see what was selected
   };
 
   const handleSubmit = (e: React.FormEvent) => {

@@ -163,7 +163,8 @@ function determineRecommendation(
         // NEW: Champion should influence HOLD consensus toward their direction
         // If consensus is HOLD but champion has a directional view with decent confidence,
         // the final recommendation should lean toward the champion's view
-        if (rec === 'hold' && champConfidence >= 60) {
+        // Raised threshold from 60 to 70 to prevent premature HOLD override
+        if (rec === 'hold' && champConfidence >= 70) {
             if (champRec === 'strong_buy' || champRec === 'buy') {
                 // Champion is bullish - move from HOLD toward BUY
                 rec = 'buy';
@@ -304,6 +305,9 @@ function extractTopArguments(
 
     for (const debate of tournamentResult.allDebates) {
         const winningArgs = debate.winningArguments ?? [];
+        // Skip if no winner or no winning arguments
+        if (!debate.winner || winningArgs.length === 0) continue;
+
         for (const arg of winningArgs) {
             if (!arg) continue;
             const target = debate.winner === 'bull' ? bullArgs : bearArgs;

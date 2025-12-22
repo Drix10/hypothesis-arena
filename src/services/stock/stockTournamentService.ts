@@ -193,8 +193,9 @@ export function createMatchPairings(theses: InvestmentThesis[]): MatchPairing[] 
 }
 
 function getRecommendationScore(rec: InvestmentThesis['recommendation']): number {
-    const scores = { strong_buy: 5, buy: 4, hold: 3, sell: 2, strong_sell: 1 };
-    return scores[rec];
+    const scores: Record<string, number> = { strong_buy: 5, buy: 4, hold: 3, sell: 2, strong_sell: 1 };
+    // Fallback to 3 (hold) for invalid/unknown recommendation values
+    return scores[rec] ?? 3;
 }
 
 /**
