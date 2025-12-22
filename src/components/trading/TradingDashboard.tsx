@@ -3,7 +3,13 @@
  * Bold asymmetric design with dramatic lighting effects
  */
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, {
+  useState,
+  useEffect,
+  useMemo,
+  useCallback,
+  useRef,
+} from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { TradingSystemState, LeaderboardEntry } from "../../types/trading";
 import { tradingService } from "../../services/trading";
@@ -11,6 +17,7 @@ import { Leaderboard } from "./Leaderboard";
 import { PortfolioPerformanceChart } from "./PortfolioPerformanceChart";
 import { RecentTrades } from "./RecentTrades";
 import { TradingSettings } from "./TradingSettings";
+import AgentPortfolioView from "./AgentPortfolioView";
 
 export const TradingDashboard: React.FC = () => {
   const [tradingState, setTradingState] = useState<TradingSystemState | null>(
@@ -19,6 +26,37 @@ export const TradingDashboard: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+
+  // Ref to track if component is mounted for async cleanup
+  const isMountedRef = useRef(true);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  // Handle hash-based routing for agent portfolio view
+  useEffect(() => {
+    const handleHashChange = () => {
+      const hash = window.location.hash;
+      const match = hash.match(/#\/trading\/agent\/(.+)/);
+      if (match && match[1]) {
+        setSelectedAgentId(match[1]);
+      } else {
+        setSelectedAgentId(null);
+      }
+    };
+
+    // Check initial hash
+    handleHashChange();
+
+    // Listen for hash changes
+    window.addEventListener("hashchange", handleHashChange);
+    return () => window.removeEventListener("hashchange", handleHashChange);
+  }, []);
 
   useEffect(() => {
     loadTradingState();
@@ -32,7 +70,6 @@ export const TradingDashboard: React.FC = () => {
       if (!state) state = tradingService.initializeTradingSystem();
       setTradingState(state);
     } catch (err) {
-      console.error("Failed to load trading state:", err);
       setError(
         err instanceof Error ? err.message : "Failed to load trading data"
       );
@@ -41,28 +78,29 @@ export const TradingDashboard: React.FC = () => {
     }
   };
 
-  const generateLeaderboard = (
-    state: TradingSystemState
-  ): LeaderboardEntry[] => {
-    const entries = Object.values(state.portfolios).map((portfolio) => ({
-      agentId: portfolio.agentId,
-      agentName: portfolio.agentName,
-      methodology: portfolio.methodology,
-      totalReturn: portfolio.totalReturn,
-      totalValue: portfolio.totalValue,
-      winRate: portfolio.winRate,
-      tradesCount: portfolio.totalTrades,
-      sharpeRatio: portfolio.sharpeRatio || 0,
-      maxDrawdown: portfolio.maxDrawdown,
-      rank: 0,
-      rankChange: 0,
-    }));
-    entries.sort((a, b) => b.totalReturn - a.totalReturn);
-    entries.forEach((entry, index) => {
-      entry.rank = index + 1;
-    });
-    return entries;
-  };
+  const generateLeaderboard = useCallback(
+    (state: TradingSystemState): LeaderboardEntry[] => {
+      const entries = Object.values(state.portfolios).map((portfolio) => ({
+        agentId: portfolio.agentId,
+        agentName: portfolio.agentName,
+        methodology: portfolio.methodology,
+        totalReturn: portfolio.totalReturn,
+        totalValue: portfolio.totalValue,
+        winRate: portfolio.winRate,
+        tradesCount: portfolio.totalTrades,
+        sharpeRatio: portfolio.sharpeRatio || 0,
+        maxDrawdown: portfolio.maxDrawdown,
+        rank: 0,
+        rankChange: 0,
+      }));
+      entries.sort((a, b) => b.totalReturn - a.totalReturn);
+      entries.forEach((entry, index) => {
+        entry.rank = index + 1;
+      });
+      return entries;
+    },
+    []
+  );
 
   const leaderboard = useMemo(() => {
     if (!tradingState) return [];
@@ -79,7 +117,6 @@ export const TradingDashboard: React.FC = () => {
         const state = tradingService.initializeTradingSystem();
         setTradingState(state);
       } catch (err) {
-        console.error("Failed to reset portfolios:", err);
         setError(
           err instanceof Error ? err.message : "Failed to reset portfolios"
         );
@@ -102,8 +139,7 @@ export const TradingDashboard: React.FC = () => {
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-    } catch (err) {
-      console.error("Failed to export trading data:", err);
+    } catch {
       alert("Failed to export data. Please try again.");
     } finally {
       if (url) URL.revokeObjectURL(url);
@@ -121,20 +157,21 @@ export const TradingDashboard: React.FC = () => {
       reader.onabort = null;
     };
     reader.onload = async (e) => {
-      if (isAborted) return;
+      if (isAborted || !isMountedRef.current) return;
       cleanup();
       try {
         const jsonData = e.target?.result as string;
         const state = await tradingService.importTradingData(jsonData);
+        if (!isMountedRef.current) return;
         if (state) setTradingState(state);
         else alert("Failed to import data. Please check the file format.");
-      } catch (err) {
-        console.error("Failed to import trading data:", err);
+      } catch {
+        if (!isMountedRef.current) return;
         alert("Failed to import data. The file may be corrupted or invalid.");
       }
     };
     reader.onerror = () => {
-      if (isAborted) return;
+      if (isAborted || !isMountedRef.current) return;
       cleanup();
       alert("Failed to read file. Please try again.");
     };
@@ -145,6 +182,99 @@ export const TradingDashboard: React.FC = () => {
     reader.readAsText(file);
     event.target.value = "";
   };
+
+  const handleAgentClick = useCallback((agentId: string) => {
+    window.location.hash = `/trading/agent/${agentId}`;
+  }, []);
+
+  const handleBackFromAgent = useCallback(() => {
+    window.location.hash = "/trading";
+    setSelectedAgentId(null);
+  }, []);
+
+  // Get selected agent's portfolio
+  const selectedPortfolio = useMemo(() => {
+    if (!selectedAgentId || !tradingState) return null;
+    return tradingState.portfolios[selectedAgentId] || null;
+  }, [selectedAgentId, tradingState]);
+
+  // If an agent is selected and we're still loading, show loading state
+  if (selectedAgentId && isLoading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <div className="text-center">
+          <div
+            className="w-20 h-20 rounded-2xl mx-auto mb-6 flex items-center justify-center animate-spin"
+            style={{
+              background:
+                "linear-gradient(145deg, rgba(0,240,255,0.15) 0%, rgba(0,240,255,0.05) 100%)",
+              border: "1px solid rgba(0,240,255,0.3)",
+              boxShadow: "0 0 40px rgba(0,240,255,0.2)",
+            }}
+          >
+            <span className="text-3xl">📊</span>
+          </div>
+          <p
+            className="text-slate-400"
+            style={{ fontFamily: "'Space Grotesk', sans-serif" }}
+          >
+            Loading portfolio...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // If an agent is selected but portfolio not found, show error
+  if (selectedAgentId && tradingState && !selectedPortfolio) {
+    return (
+      <div className="space-y-6">
+        <button
+          onClick={handleBackFromAgent}
+          className="flex items-center gap-2 text-cyan hover:text-cyan-light transition-colors font-medium text-sm"
+        >
+          <span>←</span>
+          <span>Back to Leaderboard</span>
+        </button>
+        <div className="flex items-center justify-center py-20">
+          <div
+            className="p-8 text-center rounded-xl"
+            style={{
+              background: "linear-gradient(165deg, #0d1117 0%, #080b0f 100%)",
+              border: "1px solid rgba(239,68,68,0.3)",
+              boxShadow: "0 0 40px rgba(239,68,68,0.1)",
+            }}
+          >
+            <p className="text-red-400 mb-4 font-semibold">
+              Portfolio not found for agent: {selectedAgentId}
+            </p>
+            <button
+              onClick={handleBackFromAgent}
+              className="px-6 py-3 rounded-lg font-bold text-sm hover:scale-105 active:scale-95 transition-transform"
+              style={{
+                background:
+                  "linear-gradient(135deg, rgba(0,240,255,0.2) 0%, rgba(0,240,255,0.05) 100%)",
+                border: "1px solid rgba(0,240,255,0.4)",
+                color: "#00f0ff",
+              }}
+            >
+              Back to Leaderboard
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // If an agent is selected, show their portfolio view
+  if (selectedAgentId && selectedPortfolio) {
+    return (
+      <AgentPortfolioView
+        portfolio={selectedPortfolio}
+        onBack={handleBackFromAgent}
+      />
+    );
+  }
 
   if (isLoading) {
     return (
@@ -311,12 +441,7 @@ export const TradingDashboard: React.FC = () => {
         )}
       </AnimatePresence>
 
-      <Leaderboard
-        entries={leaderboard}
-        onAgentClick={(agentId) => {
-          window.location.hash = `#/trading/agent/${agentId}`;
-        }}
-      />
+      <Leaderboard entries={leaderboard} onAgentClick={handleAgentClick} />
       <PortfolioPerformanceChart
         portfolios={Object.values(tradingState.portfolios)}
       />

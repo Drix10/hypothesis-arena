@@ -4,7 +4,13 @@
  * Shows trading decisions after debate tournament completes
  */
 
-import React, { useState, useEffect } from "react";
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+} from "react";
 import { InvestmentThesis, StockDebate } from "../../types/stock";
 import { TradingSystemState, TradeDecision } from "../../types/trading";
 import { tradingService } from "../../services/trading";
@@ -24,11 +30,20 @@ interface PostAnalysisTradingViewProps {
   theses: InvestmentThesis[];
   debates: StockDebate[];
   onContinue: () => void;
+  onViewPortfolios?: () => void;
 }
 
 export const PostAnalysisTradingView: React.FC<
   PostAnalysisTradingViewProps
-> = ({ ticker, currentPrice, priceTimestamp, theses, debates, onContinue }) => {
+> = ({
+  ticker,
+  currentPrice,
+  priceTimestamp,
+  theses,
+  debates,
+  onContinue,
+  onViewPortfolios,
+}) => {
   const [tradingState, setTradingState] = useState<TradingSystemState | null>(
     null
   );
@@ -43,26 +58,34 @@ export const PostAnalysisTradingView: React.FC<
   });
   const [showConfirmation, setShowConfirmation] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
+  // Ref to track if component is mounted for async cleanup
+  const isMountedRef = useRef(true);
 
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
     const loadAndAnalyze = async () => {
       try {
-        if (cancelled) return;
+        if (!isMountedRef.current) return;
 
         let state = tradingService.loadTradingState();
         if (!state) {
           state = tradingService.initializeTradingSystem();
         }
 
-        if (cancelled) return;
+        if (!isMountedRef.current) return;
         setTradingState(state);
 
         // Generate trade decisions for each agent
         const newDecisions = new Map<string, TradeDecision>();
 
         for (const thesis of theses) {
-          if (cancelled) return;
+          if (!isMountedRef.current) return;
 
           const portfolio = state.portfolios[thesis.agentId];
           if (!portfolio) continue;
@@ -85,45 +108,39 @@ export const PostAnalysisTradingView: React.FC<
               priceTimestamp
             );
 
-            if (cancelled) return;
+            if (!isMountedRef.current) return;
             newDecisions.set(thesis.agentId, decision);
-          } catch (err) {
-            console.error(
-              `Failed to determine trade decision for ${thesis.agentId}:`,
-              err
-            );
+          } catch {
+            // Failed to determine trade decision - skip this agent
           }
         }
 
-        if (!cancelled) {
+        if (isMountedRef.current) {
           setDecisions(newDecisions);
         }
-      } catch (error) {
-        if (!cancelled) {
-          console.error("Failed to generate trading decisions:", error);
-        }
+      } catch {
+        // Failed to generate trading decisions - state will remain empty
       }
     };
 
     loadAndAnalyze();
-
-    return () => {
-      cancelled = true;
-    };
   }, [ticker, currentPrice, priceTimestamp, theses, debates]);
 
-  const executeAllTrades = async () => {
+  const executeAllTrades = useCallback(async () => {
     if (!tradingState) return;
 
     setIsExecuting(true);
     const newExecuted = new Set<string>();
     const tradesToExecute = Array.from(decisions.entries()).filter(
-      ([_, decision]) => decision.action !== "HOLD" && decision.isValid
+      ([, decision]) => decision.action !== "HOLD" && decision.isValid
     );
 
     setExecutionProgress({ current: 0, total: tradesToExecute.length });
 
     for (let i = 0; i < tradesToExecute.length; i++) {
+      // Check if component is still mounted before continuing
+      if (!isMountedRef.current) return;
+
       const [agentId, decision] = tradesToExecute[i];
 
       // Reload fresh state for each trade to avoid race conditions
@@ -142,12 +159,15 @@ export const PostAnalysisTradingView: React.FC<
         if (trade) {
           newExecuted.add(agentId);
         }
-      } catch (error) {
-        console.error(`Failed to execute trade for ${agentId}:`, error);
+      } catch {
+        // Trade execution failed - silently continue to next trade
       }
 
+      if (!isMountedRef.current) return;
       setExecutionProgress({ current: i + 1, total: tradesToExecute.length });
     }
+
+    if (!isMountedRef.current) return;
 
     setExecutedTrades(newExecuted);
     setIsExecuting(false);
@@ -158,11 +178,11 @@ export const PostAnalysisTradingView: React.FC<
     if (updatedState) {
       setTradingState(updatedState);
     }
-  };
+  }, [tradingState, decisions]);
 
   const marketStatus = marketHoursService.getMarketStatus();
 
-  const getMethodologyEmoji = (methodology: string) => {
+  const getMethodologyEmoji = useCallback((methodology: string) => {
     const emojis: Record<string, string> = {
       value: "🎩",
       growth: "🚀",
@@ -174,16 +194,43 @@ export const PostAnalysisTradingView: React.FC<
       contrarian: "😈",
     };
     return emojis[methodology] || "📈";
-  };
+  }, []);
 
-  const formatCurrency = (value: number) => {
+  const formatCurrency = useCallback((value: number) => {
     return new Intl.NumberFormat("en-US", {
       style: "currency",
       currency: "USD",
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     }).format(value);
-  };
+  }, []);
+
+  const buyDecisions = useMemo(
+    () =>
+      Array.from(decisions.values()).filter(
+        (d) => d.action === "BUY" && d.isValid
+      ),
+    [decisions]
+  );
+  const sellDecisions = useMemo(
+    () =>
+      Array.from(decisions.values()).filter(
+        (d) => d.action === "SELL" && d.isValid
+      ),
+    [decisions]
+  );
+  const holdDecisions = useMemo(
+    () =>
+      Array.from(decisions.values()).filter(
+        (d) => d.action === "HOLD" || !d.isValid
+      ),
+    [decisions]
+  );
+
+  const hasExecutableTrades = useMemo(
+    () => buyDecisions.length > 0 || sellDecisions.length > 0,
+    [buyDecisions, sellDecisions]
+  );
 
   if (!tradingState) {
     return (
@@ -192,16 +239,6 @@ export const PostAnalysisTradingView: React.FC<
       </div>
     );
   }
-
-  const buyDecisions = Array.from(decisions.values()).filter(
-    (d) => d.action === "BUY" && d.isValid
-  );
-  const sellDecisions = Array.from(decisions.values()).filter(
-    (d) => d.action === "SELL" && d.isValid
-  );
-  const holdDecisions = Array.from(decisions.values()).filter(
-    (d) => d.action === "HOLD" || !d.isValid
-  );
 
   return (
     <div className="bg-white rounded-lg shadow-lg p-6">
@@ -452,7 +489,13 @@ export const PostAnalysisTradingView: React.FC<
       {/* Actions */}
       <div className="flex items-center justify-between pt-6 border-t border-gray-200">
         <button
-          onClick={() => (window.location.hash = "#/trading")}
+          onClick={() => {
+            if (onViewPortfolios) {
+              onViewPortfolios();
+            } else {
+              onContinue();
+            }
+          }}
           className="px-4 py-2 text-blue-600 hover:text-blue-700 font-medium transition-colors"
         >
           View All Portfolios
@@ -467,10 +510,16 @@ export const PostAnalysisTradingView: React.FC<
           <button
             onClick={() => setShowConfirmation(true)}
             disabled={
-              isExecuting || executedTrades.size > 0 || showConfirmation
+              isExecuting ||
+              executedTrades.size > 0 ||
+              showConfirmation ||
+              !hasExecutableTrades
             }
             className={`px-6 py-2 rounded-lg font-medium transition-colors ${
-              isExecuting || executedTrades.size > 0 || showConfirmation
+              isExecuting ||
+              executedTrades.size > 0 ||
+              showConfirmation ||
+              !hasExecutableTrades
                 ? "bg-gray-300 text-gray-500 cursor-not-allowed"
                 : "bg-blue-500 text-white hover:bg-blue-600"
             }`}
@@ -479,6 +528,8 @@ export const PostAnalysisTradingView: React.FC<
               ? "Executing..."
               : executedTrades.size > 0
               ? "Trades Executed"
+              : !hasExecutableTrades
+              ? "No Trades Available"
               : "Execute Trades"}
           </button>
         </div>

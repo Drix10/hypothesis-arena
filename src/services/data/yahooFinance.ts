@@ -27,7 +27,7 @@ import { getFmpApiKey } from '../apiKeyManager';
 const FMP_BASE_URL = 'https://financialmodelingprep.com/api/v3';
 
 // Get FMP API key from: in-memory > env variable > demo
-// FMP provides a "demo" key that works without registration (limited features)
+// FMP provides a "demo" key that works for basic quotes (limited features)
 const getFmpKey = (): string => {
     return getFmpApiKey() || 'demo';
 };
@@ -57,7 +57,12 @@ function getCached<T>(key: string): T | null {
 
 function setCache(key: string, data: unknown): void {
     // LRU eviction: ensure cache doesn't exceed max size
-    while (cache.size >= MAX_CACHE_SIZE) {
+    // Safety: limit iterations to prevent infinite loop
+    let evictionAttempts = 0;
+    const maxEvictionAttempts = MAX_CACHE_SIZE;
+
+    while (cache.size >= MAX_CACHE_SIZE && evictionAttempts < maxEvictionAttempts) {
+        evictionAttempts++;
         let oldestKey: string | null = null;
         let oldestTime = Infinity;
 
@@ -71,7 +76,9 @@ function setCache(key: string, data: unknown): void {
         if (oldestKey) {
             cache.delete(oldestKey);
         } else {
-            // Safety: prevent infinite loop if something goes wrong
+            // No oldest key found - clear entire cache as fallback
+            logger.warn('Cache eviction failed to find oldest entry, clearing cache');
+            cache.clear();
             break;
         }
     }
@@ -154,29 +161,53 @@ async function fetchFmpWithRateLimit(url: string, timeout = 10000): Promise<Resp
 }
 
 // CORS proxies for Yahoo Finance fallback
+// These are free public proxies - availability varies
 const CORS_PROXIES = [
+    // Most reliable proxies first
     (url: string) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
     (url: string) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+    (url: string) => `https://proxy.cors.sh/${url}`,
     (url: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
+    (url: string) => `https://thingproxy.freeboard.io/fetch/${url}`,
 ];
 
-async function fetchWithProxy(url: string, retries = 2): Promise<Response | null> {
+// Cache the last working proxy index to try it first next time
+let lastWorkingProxyIndex: number | null = null;
+const PROXY_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+let lastProxySuccessTime = 0;
+
+async function fetchWithProxy(url: string, retries = 1): Promise<Response | null> {
     const errors: string[] = [];
 
-    for (let attempt = 0; attempt <= retries; attempt++) {
-        let proxyIndex = 0;  // Reset counter for each attempt
+    // Build proxy order: try last working proxy first if recent
+    const now = Date.now();
+    const proxyOrder: number[] = [];
 
-        for (const proxyFn of CORS_PROXIES) {
-            proxyIndex++;
+    if (lastWorkingProxyIndex !== null && (now - lastProxySuccessTime) < PROXY_CACHE_TTL) {
+        // Start with the last working proxy
+        proxyOrder.push(lastWorkingProxyIndex);
+        for (let i = 0; i < CORS_PROXIES.length; i++) {
+            if (i !== lastWorkingProxyIndex) proxyOrder.push(i);
+        }
+    } else {
+        // No cached proxy, try in default order
+        for (let i = 0; i < CORS_PROXIES.length; i++) {
+            proxyOrder.push(i);
+        }
+    }
+
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        for (const proxyIndex of proxyOrder) {
+            const proxyFn = CORS_PROXIES[proxyIndex];
             try {
                 const proxyUrl = proxyFn(url);
-                logger.debug(`Attempting proxy ${proxyIndex}/${CORS_PROXIES.length} (attempt ${attempt + 1}/${retries + 1})`);
+                logger.debug(`Trying proxy ${proxyIndex + 1}/${CORS_PROXIES.length} (attempt ${attempt + 1}/${retries + 1})`);
 
-                // Increase timeout on retries
-                const timeout = 8000 + (attempt * 2000);
+                // Shorter timeout since we're trying multiple proxies
+                const timeout = 6000 + (attempt * 2000);
                 const response = await fetchWithTimeout(proxyUrl, timeout);
                 if (!response.ok) {
-                    const errorDetail = `Proxy ${proxyIndex} returned HTTP ${response.status}`;
+                    const errorDetail = `Proxy ${proxyIndex + 1} returned HTTP ${response.status}`;
                     errors.push(errorDetail);
                     logger.debug(errorDetail);
                     continue;
@@ -185,7 +216,10 @@ async function fetchWithProxy(url: string, retries = 2): Promise<Response | null
                 // Validate response is JSON before returning
                 const contentType = response.headers.get('content-type');
                 if (contentType && contentType.includes('application/json')) {
-                    logger.debug(`Proxy ${proxyIndex} succeeded`);
+                    logger.debug(`Proxy ${proxyIndex + 1} succeeded`);
+                    // Cache this working proxy
+                    lastWorkingProxyIndex = proxyIndex;
+                    lastProxySuccessTime = Date.now();
                     return response;
                 }
 
@@ -195,36 +229,42 @@ async function fetchWithProxy(url: string, retries = 2): Promise<Response | null
                 try {
                     JSON.parse(text);  // Validate JSON
                     // Create new Response with text since original body is consumed
-                    logger.debug(`Proxy ${proxyIndex} succeeded (no content-type header)`);
+                    logger.debug(`Proxy ${proxyIndex + 1} succeeded (no content-type header)`);
+                    // Cache this working proxy
+                    lastWorkingProxyIndex = proxyIndex;
+                    lastProxySuccessTime = Date.now();
                     return new Response(text, {
                         status: response.status,
                         statusText: response.statusText,
                         headers: response.headers
                     });
                 } catch {
-                    const errorDetail = `Proxy ${proxyIndex} returned non-JSON response`;
+                    const errorDetail = `Proxy ${proxyIndex + 1} returned non-JSON response`;
                     errors.push(errorDetail);
                     logger.debug(errorDetail);
                     continue;
                 }
             } catch (error) {
                 const msg = error instanceof Error ? error.message : 'Unknown error';
-                const errorDetail = `Proxy ${proxyIndex} failed: ${msg}`;
+                const errorDetail = `Proxy ${proxyIndex + 1} failed: ${msg}`;
                 errors.push(errorDetail);
                 logger.debug(errorDetail);
                 continue;
             }
         }
 
-        // Exponential backoff before retry
+        // Exponential backoff before retry (only if we have more retries)
         if (attempt < retries) {
-            const delay = Math.min(1000 * Math.pow(2, attempt), 3000); // Max 3 seconds
+            const delay = Math.min(500 * Math.pow(2, attempt), 2000); // Max 2 seconds
             logger.debug(`Waiting ${delay}ms before retry ${attempt + 2}/${retries + 1}`);
             await new Promise(resolve => setTimeout(resolve, delay));
         }
     }
 
-    const errorSummary = `All ${CORS_PROXIES.length} CORS proxies failed after ${retries + 1} attempts. Errors: ${errors.slice(0, 5).join('; ')}`;
+    // Clear cached proxy since all failed
+    lastWorkingProxyIndex = null;
+
+    const errorSummary = `All ${CORS_PROXIES.length} CORS proxies failed after ${retries + 1} attempts. Errors: ${errors.slice(0, 3).join('; ')}`;
     logger.warn(errorSummary);
     return null;
 }
@@ -691,7 +731,7 @@ async function getFundamentalsYahoo(ticker: string): Promise<Fundamentals> {
         throw new Error('Yahoo Finance unavailable');
     }
 
-    const data = await response.json();
+    const data = await safeJsonParse(response, 'Yahoo Fundamentals');
     const result = data.quoteSummary?.result?.[0];
 
     if (!result) {

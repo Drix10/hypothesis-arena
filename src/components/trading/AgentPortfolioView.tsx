@@ -1,10 +1,10 @@
 /**
- * Agent Portfolio View
+ * Agent Portfolio View - Cinematic Dark Theme
  *
  * Detailed view of a single agent's portfolio with positions, trades, and performance
  */
 
-import React, { useState } from "react";
+import React, { useState, useCallback, useRef } from "react";
 import { AgentPortfolio } from "../../types/trading";
 import {
   LineChart,
@@ -15,12 +15,22 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
-import { TrendingUp, TrendingDown, ArrowLeft } from "lucide-react";
 
 interface AgentPortfolioViewProps {
   portfolio: AgentPortfolio;
   onBack: () => void;
 }
+
+const METHODOLOGY_EMOJIS: Record<string, string> = {
+  value: "🎩",
+  growth: "🚀",
+  technical: "📊",
+  macro: "🌍",
+  sentiment: "📱",
+  risk: "🛡️",
+  quant: "🤖",
+  contrarian: "😈",
+};
 
 export const AgentPortfolioView: React.FC<AgentPortfolioViewProps> = ({
   portfolio,
@@ -30,488 +40,301 @@ export const AgentPortfolioView: React.FC<AgentPortfolioViewProps> = ({
     "positions" | "trades" | "performance"
   >("positions");
 
-  const getMethodologyEmoji = (methodology: string) => {
-    const emojis: Record<string, string> = {
-      value: "🎩",
-      growth: "🚀",
-      technical: "📊",
-      macro: "🌍",
-      sentiment: "📱",
-      risk: "🛡️",
-      quant: "🤖",
-      contrarian: "😈",
-    };
-    return emojis[methodology] || "📈";
-  };
+  // Refs for tab buttons to manage focus
+  const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({
+    positions: null,
+    trades: null,
+    performance: null,
+  });
 
-  const formatCurrency = (value: number) => {
+  const formatCurrency = useCallback((value: number) => {
+    if (!Number.isFinite(value)) return "$0";
     return new Intl.NumberFormat("en-US", {
       style: "currency",
       currency: "USD",
       minimumFractionDigits: 0,
       maximumFractionDigits: 0,
     }).format(value);
-  };
+  }, []);
 
-  const formatPercent = (value: number) => {
+  const formatPercent = useCallback((value: number) => {
+    if (!Number.isFinite(value)) return "0.00%";
     const sign = value >= 0 ? "+" : "";
     return `${sign}${(value * 100).toFixed(2)}%`;
-  };
+  }, []);
 
-  const formatDateTime = (timestamp: number) => {
+  const formatDateTime = useCallback((timestamp: number) => {
     return new Date(timestamp).toLocaleString("en-US", {
       month: "short",
       day: "numeric",
       hour: "numeric",
       minute: "2-digit",
     });
-  };
+  }, []);
 
-  const getStatusColor = (status: string) => {
-    if (status === "active") return "text-green-600";
-    if (status === "paused") return "text-yellow-600";
-    return "text-red-600";
-  };
+  const getStatusConfig = useCallback((status: string) => {
+    const config: Record<string, { text: string; color: string; bg: string }> =
+      {
+        active: {
+          text: "✓ Active",
+          color: "#00ff88",
+          bg: "rgba(0,255,136,0.15)",
+        },
+        paused: {
+          text: "⏸ Paused",
+          color: "#ffd700",
+          bg: "rgba(255,215,0,0.15)",
+        },
+        liquidated: {
+          text: "⚠ Liquidated",
+          color: "#ef4444",
+          bg: "rgba(239,68,68,0.15)",
+        },
+      };
+    return config[status] || config.active;
+  }, []);
 
-  const getStatusBadge = (status: string) => {
-    if (status === "active") return "✓ Active";
-    if (status === "paused") return "⏸ Paused";
-    return "⚠ Liquidated";
-  };
+  const getReturnColor = useCallback(
+    (value: number) => (value >= 0 ? "#00ff88" : "#ef4444"),
+    []
+  );
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
-      <div className="max-w-7xl mx-auto">
-        {/* Header */}
-        <div className="mb-6">
-          <button
-            onClick={onBack}
-            className="flex items-center text-blue-600 hover:text-blue-700 mb-4 transition-colors"
-          >
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            Back to Dashboard
-          </button>
+    <div className="space-y-6">
+      {/* Back Button */}
+      <button
+        onClick={onBack}
+        className="flex items-center gap-2 text-cyan hover:text-cyan-light transition-colors font-medium text-sm"
+      >
+        <span>←</span>
+        <span>Back to Leaderboard</span>
+      </button>
 
-          <div className="bg-white rounded-lg shadow-lg p-6">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center">
-                <span className="text-6xl mr-4">
-                  {getMethodologyEmoji(portfolio.methodology)}
-                </span>
-                <div>
-                  <h1 className="text-3xl font-bold text-gray-900">
-                    {portfolio.agentName}
-                  </h1>
-                  <p className="text-gray-600 capitalize">
-                    {portfolio.methodology} Investor
-                  </p>
-                </div>
-              </div>
-              <div className="text-right">
-                <div
-                  className={`text-sm font-medium ${getStatusColor(
-                    portfolio.status
-                  )}`}
-                >
-                  {getStatusBadge(portfolio.status)}
-                </div>
-                <div className="text-xs text-gray-500 mt-1">
-                  Last trade:{" "}
-                  {portfolio.lastTradeAt
-                    ? formatDateTime(portfolio.lastTradeAt)
-                    : "Never"}
-                </div>
-              </div>
+      {/* Header Card */}
+      <div
+        className="relative overflow-hidden rounded-xl p-6"
+        style={{
+          background: "linear-gradient(165deg, #0d1117 0%, #080b0f 100%)",
+          border: "1px solid rgba(255,255,255,0.06)",
+          boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
+        }}
+      >
+        <div
+          className="absolute top-0 right-0 w-32 h-32 opacity-20"
+          style={{
+            background: "linear-gradient(135deg, #ffd700 0%, transparent 60%)",
+            clipPath: "polygon(100% 0, 0 0, 100% 100%)",
+          }}
+        />
+        <div className="flex items-center justify-between relative z-10">
+          <div className="flex items-center gap-4">
+            <div
+              className="w-16 h-16 rounded-xl flex items-center justify-center text-4xl"
+              style={{
+                background:
+                  "linear-gradient(145deg, rgba(255,215,0,0.15) 0%, rgba(255,215,0,0.05) 100%)",
+                border: "1px solid rgba(255,215,0,0.3)",
+                boxShadow: "0 0 30px rgba(255,215,0,0.15)",
+              }}
+            >
+              {METHODOLOGY_EMOJIS[portfolio.methodology] || "📈"}
             </div>
-
-            {/* Key Metrics */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
-              <div className="bg-gray-50 rounded-lg p-4">
-                <div className="text-sm text-gray-600 mb-1">Total Value</div>
-                <div className="text-2xl font-bold text-gray-900">
-                  {formatCurrency(portfolio.totalValue)}
-                </div>
-                <div
-                  className={`text-sm font-medium ${
-                    portfolio.totalReturn >= 0
-                      ? "text-green-600"
-                      : "text-red-600"
-                  }`}
+            <div>
+              <h1
+                className="text-2xl font-black text-white tracking-tight"
+                style={{ fontFamily: "'Space Grotesk', sans-serif" }}
+              >
+                {portfolio.agentName}
+              </h1>
+              <p className="text-slate-500 text-sm capitalize">
+                {portfolio.methodology} Investor
+              </p>
+            </div>
+          </div>
+          <div className="text-right">
+            {(() => {
+              const statusConfig = getStatusConfig(portfolio.status);
+              return (
+                <span
+                  className="px-2 py-1 rounded-lg text-xs font-bold"
+                  style={{
+                    background: statusConfig.bg,
+                    color: statusConfig.color,
+                    border: `1px solid ${statusConfig.color}40`,
+                  }}
                 >
-                  {formatPercent(portfolio.totalReturn)}
-                </div>
-              </div>
-              <div className="bg-gray-50 rounded-lg p-4">
-                <div className="text-sm text-gray-600 mb-1">Cash</div>
-                <div className="text-2xl font-bold text-gray-900">
-                  {formatCurrency(portfolio.currentCash)}
-                </div>
-                <div className="text-xs text-gray-500">
-                  {portfolio.totalValue > 0
-                    ? `${(
-                        (portfolio.currentCash / portfolio.totalValue) *
-                        100
-                      ).toFixed(1)}%`
-                    : "0%"}{" "}
-                  of portfolio
-                </div>
-              </div>
-              <div className="bg-gray-50 rounded-lg p-4">
-                <div className="text-sm text-gray-600 mb-1">Win Rate</div>
-                <div className="text-2xl font-bold text-gray-900">
-                  {portfolio.totalTrades > 0
-                    ? `${(portfolio.winRate * 100).toFixed(1)}%`
-                    : "N/A"}
-                </div>
-                <div className="text-xs text-gray-500">
-                  {portfolio.winningTrades}W / {portfolio.losingTrades}L
-                </div>
-              </div>
-              <div className="bg-gray-50 rounded-lg p-4">
-                <div className="text-sm text-gray-600 mb-1">Max Drawdown</div>
-                <div className="text-2xl font-bold text-red-600">
-                  {portfolio.maxDrawdown > 0
-                    ? `-${(portfolio.maxDrawdown * 100).toFixed(1)}%`
-                    : "0%"}
-                </div>
-                <div className="text-xs text-gray-500">
-                  Current:{" "}
-                  {portfolio.currentDrawdown > 0
-                    ? `-${(portfolio.currentDrawdown * 100).toFixed(1)}%`
-                    : "0%"}
-                </div>
-              </div>
+                  {statusConfig.text}
+                </span>
+              );
+            })()}
+            <div className="text-xs text-slate-500 mt-2">
+              Last trade:{" "}
+              {portfolio.lastTradeAt
+                ? formatDateTime(portfolio.lastTradeAt)
+                : "Never"}
             </div>
           </div>
         </div>
 
-        {/* Tabs */}
-        <div className="bg-white rounded-lg shadow-lg overflow-hidden">
-          <div className="border-b border-gray-200">
-            <div className="flex">
-              <button
-                onClick={() => setSelectedTab("positions")}
-                className={`px-6 py-3 font-medium transition-colors ${
-                  selectedTab === "positions"
-                    ? "text-blue-600 border-b-2 border-blue-600"
-                    : "text-gray-600 hover:text-gray-900"
-                }`}
-              >
-                Positions ({portfolio.positions.length})
-              </button>
-              <button
-                onClick={() => setSelectedTab("trades")}
-                className={`px-6 py-3 font-medium transition-colors ${
-                  selectedTab === "trades"
-                    ? "text-blue-600 border-b-2 border-blue-600"
-                    : "text-gray-600 hover:text-gray-900"
-                }`}
-              >
-                Trade History ({portfolio.trades.length})
-              </button>
-              <button
-                onClick={() => setSelectedTab("performance")}
-                className={`px-6 py-3 font-medium transition-colors ${
-                  selectedTab === "performance"
-                    ? "text-blue-600 border-b-2 border-blue-600"
-                    : "text-gray-600 hover:text-gray-900"
-                }`}
-              >
-                Performance
-              </button>
-            </div>
-          </div>
+        {/* Key Metrics */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
+          <MetricCard
+            label="Total Value"
+            value={formatCurrency(portfolio.totalValue)}
+            subValue={formatPercent(portfolio.totalReturn)}
+            subColor={getReturnColor(portfolio.totalReturn)}
+          />
+          <MetricCard
+            label="Cash"
+            value={formatCurrency(portfolio.currentCash)}
+            subValue={
+              portfolio.totalValue > 0
+                ? `${(
+                    (portfolio.currentCash / portfolio.totalValue) *
+                    100
+                  ).toFixed(1)}% of portfolio`
+                : "0%"
+            }
+          />
+          <MetricCard
+            label="Win Rate"
+            value={
+              portfolio.totalTrades > 0
+                ? `${(portfolio.winRate * 100).toFixed(1)}%`
+                : "N/A"
+            }
+            subValue={`${portfolio.winningTrades}W / ${portfolio.losingTrades}L`}
+          />
+          <MetricCard
+            label="Max Drawdown"
+            value={
+              portfolio.maxDrawdown > 0
+                ? `-${(portfolio.maxDrawdown * 100).toFixed(1)}%`
+                : "0%"
+            }
+            subValue={`Current: ${
+              portfolio.currentDrawdown > 0
+                ? `-${(portfolio.currentDrawdown * 100).toFixed(1)}%`
+                : "0%"
+            }`}
+            valueColor="#ef4444"
+          />
+        </div>
+      </div>
 
-          <div className="p-6">
-            {/* Positions Tab */}
+      {/* Tabs */}
+      <div
+        className="relative overflow-hidden rounded-xl"
+        style={{
+          background: "linear-gradient(165deg, #0d1117 0%, #080b0f 100%)",
+          border: "1px solid rgba(255,255,255,0.06)",
+        }}
+      >
+        <div
+          className="flex border-b border-white/[0.06]"
+          role="tablist"
+          aria-label="Portfolio sections"
+          onKeyDown={(e) => {
+            const tabs = ["positions", "trades", "performance"] as const;
+            const currentIndex = tabs.indexOf(selectedTab);
+            let newIndex = currentIndex;
+
+            if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+              e.preventDefault();
+              newIndex = (currentIndex + 1) % tabs.length;
+            } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+              e.preventDefault();
+              newIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+            } else if (e.key === "Home") {
+              e.preventDefault();
+              newIndex = 0;
+            } else if (e.key === "End") {
+              e.preventDefault();
+              newIndex = tabs.length - 1;
+            }
+
+            if (newIndex !== currentIndex) {
+              setSelectedTab(tabs[newIndex]);
+              // Move focus to the new tab
+              tabRefs.current[tabs[newIndex]]?.focus();
+            }
+          }}
+        >
+          {[
+            {
+              id: "positions",
+              label: `Positions (${portfolio.positions.length})`,
+            },
+            {
+              id: "trades",
+              label: `Trade History (${portfolio.trades.length})`,
+            },
+            { id: "performance", label: "Performance" },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              ref={(el) => {
+                tabRefs.current[tab.id] = el;
+              }}
+              id={`tab-${tab.id}`}
+              role="tab"
+              aria-selected={selectedTab === tab.id}
+              aria-controls={`panel-${tab.id}`}
+              tabIndex={selectedTab === tab.id ? 0 : -1}
+              onClick={() => setSelectedTab(tab.id as typeof selectedTab)}
+              className={`px-6 py-4 font-medium text-sm transition-colors ${
+                selectedTab === tab.id
+                  ? "text-cyan border-b-2 border-cyan"
+                  : "text-slate-400 hover:text-white"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="p-6">
+          <div
+            id="panel-positions"
+            role="tabpanel"
+            aria-labelledby="tab-positions"
+            hidden={selectedTab !== "positions"}
+          >
             {selectedTab === "positions" && (
-              <div>
-                {portfolio.positions.length > 0 ? (
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead className="bg-gray-50">
-                        <tr>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                            Ticker
-                          </th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                            Shares
-                          </th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                            Avg Cost
-                          </th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                            Current Price
-                          </th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                            Market Value
-                          </th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                            Unrealized P&L
-                          </th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                            % of Portfolio
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-200">
-                        {portfolio.positions.map((position) => (
-                          <tr
-                            key={position.ticker}
-                            className="hover:bg-gray-50"
-                          >
-                            <td className="px-4 py-3 font-semibold text-gray-900">
-                              {position.ticker}
-                            </td>
-                            <td className="px-4 py-3 text-gray-900">
-                              {position.shares}
-                            </td>
-                            <td className="px-4 py-3 text-gray-900">
-                              {formatCurrency(position.avgCostBasis)}
-                            </td>
-                            <td className="px-4 py-3 text-gray-900">
-                              {formatCurrency(position.currentPrice)}
-                            </td>
-                            <td className="px-4 py-3 font-medium text-gray-900">
-                              {formatCurrency(position.marketValue)}
-                            </td>
-                            <td
-                              className={`px-4 py-3 font-semibold ${
-                                position.unrealizedPnL >= 0
-                                  ? "text-green-600"
-                                  : "text-red-600"
-                              }`}
-                            >
-                              {position.unrealizedPnL >= 0 ? "+" : ""}
-                              {formatCurrency(position.unrealizedPnL)}
-                              <div className="text-xs">
-                                ({formatPercent(position.unrealizedPnLPercent)})
-                              </div>
-                            </td>
-                            <td className="px-4 py-3 text-gray-900">
-                              {portfolio.totalValue > 0
-                                ? `${(
-                                    (position.marketValue /
-                                      portfolio.totalValue) *
-                                    100
-                                  ).toFixed(1)}%`
-                                : "0%"}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <div className="text-center py-12 text-gray-500">
-                    <p>No open positions</p>
-                  </div>
-                )}
-              </div>
+              <PositionsTab
+                portfolio={portfolio}
+                formatCurrency={formatCurrency}
+                formatPercent={formatPercent}
+                getReturnColor={getReturnColor}
+              />
             )}
-
-            {/* Trades Tab */}
+          </div>
+          <div
+            id="panel-trades"
+            role="tabpanel"
+            aria-labelledby="tab-trades"
+            hidden={selectedTab !== "trades"}
+          >
             {selectedTab === "trades" && (
-              <div>
-                {portfolio.trades.length > 0 ? (
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead className="bg-gray-50">
-                        <tr>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                            Date
-                          </th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                            Type
-                          </th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                            Ticker
-                          </th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                            Shares
-                          </th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                            Price
-                          </th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                            Total
-                          </th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                            P&L
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-200">
-                        {portfolio.trades
-                          .slice()
-                          .reverse()
-                          .map((trade) => (
-                            <tr key={trade.id} className="hover:bg-gray-50">
-                              <td className="px-4 py-3 text-sm text-gray-600">
-                                {formatDateTime(trade.timestamp)}
-                              </td>
-                              <td className="px-4 py-3">
-                                <span
-                                  className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
-                                    trade.type === "BUY"
-                                      ? "bg-green-100 text-green-800"
-                                      : "bg-red-100 text-red-800"
-                                  }`}
-                                >
-                                  {trade.type === "BUY" ? (
-                                    <TrendingUp className="w-3 h-3 mr-1" />
-                                  ) : (
-                                    <TrendingDown className="w-3 h-3 mr-1" />
-                                  )}
-                                  {trade.type}
-                                </span>
-                              </td>
-                              <td className="px-4 py-3 font-semibold text-gray-900">
-                                {trade.ticker}
-                              </td>
-                              <td className="px-4 py-3 text-gray-900">
-                                {trade.shares}
-                              </td>
-                              <td className="px-4 py-3 text-gray-900">
-                                {formatCurrency(trade.price)}
-                              </td>
-                              <td className="px-4 py-3 font-medium text-gray-900">
-                                {formatCurrency(trade.totalValue)}
-                              </td>
-                              <td className="px-4 py-3">
-                                {trade.realizedPnL !== undefined ? (
-                                  <span
-                                    className={`font-semibold ${
-                                      trade.realizedPnL >= 0
-                                        ? "text-green-600"
-                                        : "text-red-600"
-                                    }`}
-                                  >
-                                    {trade.realizedPnL >= 0 ? "+" : ""}
-                                    {formatCurrency(trade.realizedPnL)}
-                                  </span>
-                                ) : (
-                                  <span className="text-gray-400">-</span>
-                                )}
-                              </td>
-                            </tr>
-                          ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <div className="text-center py-12 text-gray-500">
-                    <p>No trades yet</p>
-                  </div>
-                )}
-              </div>
+              <TradesTab
+                portfolio={portfolio}
+                formatCurrency={formatCurrency}
+                formatDateTime={formatDateTime}
+                getReturnColor={getReturnColor}
+              />
             )}
-
-            {/* Performance Tab */}
+          </div>
+          <div
+            id="panel-performance"
+            role="tabpanel"
+            aria-labelledby="tab-performance"
+            hidden={selectedTab !== "performance"}
+          >
             {selectedTab === "performance" && (
-              <div>
-                {portfolio.performanceHistory.length > 0 ? (
-                  <div>
-                    <ResponsiveContainer width="100%" height={400}>
-                      <LineChart data={portfolio.performanceHistory}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                        <XAxis
-                          dataKey="timestamp"
-                          tickFormatter={(ts) =>
-                            new Date(ts).toLocaleDateString("en-US", {
-                              month: "short",
-                              day: "numeric",
-                            })
-                          }
-                          stroke="#6b7280"
-                          style={{ fontSize: "12px" }}
-                        />
-                        <YAxis
-                          stroke="#6b7280"
-                          style={{ fontSize: "12px" }}
-                          tickFormatter={formatCurrency}
-                        />
-                        <Tooltip
-                          contentStyle={{
-                            backgroundColor: "white",
-                            border: "1px solid #e5e7eb",
-                            borderRadius: "8px",
-                            padding: "12px",
-                          }}
-                          formatter={(value: number) => formatCurrency(value)}
-                        />
-                        <Line
-                          type="monotone"
-                          dataKey="totalValue"
-                          name="Portfolio Value"
-                          stroke="#3B82F6"
-                          strokeWidth={2}
-                          dot={false}
-                          activeDot={{ r: 6 }}
-                        />
-                      </LineChart>
-                    </ResponsiveContainer>
-
-                    {/* Performance Stats */}
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
-                      <div className="bg-gray-50 rounded-lg p-4">
-                        <div className="text-sm text-gray-600 mb-1">
-                          Sharpe Ratio
-                        </div>
-                        <div className="text-xl font-bold text-gray-900">
-                          {portfolio.sharpeRatio !== null
-                            ? portfolio.sharpeRatio.toFixed(2)
-                            : "N/A"}
-                        </div>
-                      </div>
-                      <div className="bg-gray-50 rounded-lg p-4">
-                        <div className="text-sm text-gray-600 mb-1">
-                          Volatility
-                        </div>
-                        <div className="text-xl font-bold text-gray-900">
-                          {portfolio.performanceHistory.length >= 2 &&
-                          portfolio.volatility !== null &&
-                          portfolio.volatility !== undefined
-                            ? `${(portfolio.volatility * 100).toFixed(1)}%`
-                            : "N/A"}
-                        </div>
-                      </div>
-                      <div className="bg-gray-50 rounded-lg p-4">
-                        <div className="text-sm text-gray-600 mb-1">
-                          Profit Factor
-                        </div>
-                        <div className="text-xl font-bold text-gray-900">
-                          {portfolio.totalTrades > 0 &&
-                          portfolio.profitFactor !== null &&
-                          portfolio.profitFactor !== undefined &&
-                          Number.isFinite(portfolio.profitFactor)
-                            ? portfolio.profitFactor.toFixed(2)
-                            : "N/A"}
-                        </div>
-                      </div>
-                      <div className="bg-gray-50 rounded-lg p-4">
-                        <div className="text-sm text-gray-600 mb-1">
-                          Avg Win / Loss
-                        </div>
-                        <div className="text-xl font-bold text-gray-900">
-                          {portfolio.avgWin > 0
-                            ? formatCurrency(portfolio.avgWin)
-                            : "N/A"}
-                        </div>
-                        <div className="text-xs text-gray-500">
-                          {portfolio.avgLoss < 0
-                            ? formatCurrency(portfolio.avgLoss)
-                            : "N/A"}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="text-center py-12 text-gray-500">
-                    <p>No performance data yet</p>
-                  </div>
-                )}
-              </div>
+              <PerformanceTab
+                portfolio={portfolio}
+                formatCurrency={formatCurrency}
+              />
             )}
           </div>
         </div>
@@ -519,3 +342,307 @@ export const AgentPortfolioView: React.FC<AgentPortfolioViewProps> = ({
     </div>
   );
 };
+
+// Sub-components
+const PositionsTab: React.FC<{
+  portfolio: AgentPortfolio;
+  formatCurrency: (v: number) => string;
+  formatPercent: (v: number) => string;
+  getReturnColor: (v: number) => string;
+}> = ({ portfolio, formatCurrency, formatPercent, getReturnColor }) => {
+  if (portfolio.positions.length === 0) {
+    return <EmptyState icon="📊" message="No open positions" />;
+  }
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full">
+        <thead>
+          <tr style={{ background: "rgba(255,255,255,0.02)" }}>
+            {[
+              "Ticker",
+              "Shares",
+              "Avg Cost",
+              "Current",
+              "Value",
+              "P&L",
+              "% Port",
+            ].map((h) => (
+              <th
+                key={h}
+                className="px-4 py-3 text-left text-[10px] font-black text-slate-500 uppercase tracking-widest"
+              >
+                {h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {portfolio.positions.map((pos) => (
+            <tr
+              key={pos.ticker}
+              className="border-b border-white/[0.04] hover:bg-white/[0.02]"
+            >
+              <td className="px-4 py-3 font-bold text-white">{pos.ticker}</td>
+              <td className="px-4 py-3 text-slate-300">{pos.shares}</td>
+              <td className="px-4 py-3 text-slate-300">
+                {formatCurrency(pos.avgCostBasis)}
+              </td>
+              <td className="px-4 py-3 text-slate-300">
+                {formatCurrency(pos.currentPrice)}
+              </td>
+              <td className="px-4 py-3 text-white font-medium">
+                {formatCurrency(pos.marketValue)}
+              </td>
+              <td className="px-4 py-3">
+                <span
+                  style={{ color: getReturnColor(pos.unrealizedPnL) }}
+                  className="font-bold"
+                >
+                  {formatCurrency(pos.unrealizedPnL)}
+                </span>
+                <div className="text-xs text-slate-500">
+                  {formatPercent(pos.unrealizedPnLPercent)}
+                </div>
+              </td>
+              <td className="px-4 py-3 text-slate-300">
+                {portfolio.totalValue > 0
+                  ? `${((pos.marketValue / portfolio.totalValue) * 100).toFixed(
+                      1
+                    )}%`
+                  : "0%"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+const TradesTab: React.FC<{
+  portfolio: AgentPortfolio;
+  formatCurrency: (v: number) => string;
+  formatDateTime: (v: number) => string;
+  getReturnColor: (v: number) => string;
+}> = ({ portfolio, formatCurrency, formatDateTime, getReturnColor }) => {
+  if (portfolio.trades.length === 0) {
+    return <EmptyState icon="📜" message="No trades yet" />;
+  }
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full">
+        <thead>
+          <tr style={{ background: "rgba(255,255,255,0.02)" }}>
+            {["Date", "Type", "Ticker", "Shares", "Price", "Total", "P&L"].map(
+              (h) => (
+                <th
+                  key={h}
+                  className="px-4 py-3 text-left text-[10px] font-black text-slate-500 uppercase tracking-widest"
+                >
+                  {h}
+                </th>
+              )
+            )}
+          </tr>
+        </thead>
+        <tbody>
+          {portfolio.trades
+            .slice()
+            .reverse()
+            .map((trade) => (
+              <tr
+                key={trade.id}
+                className="border-b border-white/[0.04] hover:bg-white/[0.02]"
+              >
+                <td className="px-4 py-3 text-sm text-slate-400">
+                  {formatDateTime(trade.timestamp)}
+                </td>
+                <td className="px-4 py-3">
+                  <span
+                    className="inline-flex items-center px-2 py-1 rounded-lg text-xs font-bold"
+                    style={{
+                      background:
+                        trade.type === "BUY"
+                          ? "rgba(0,255,136,0.15)"
+                          : "rgba(239,68,68,0.15)",
+                      color: trade.type === "BUY" ? "#00ff88" : "#ef4444",
+                      border: `1px solid ${
+                        trade.type === "BUY"
+                          ? "rgba(0,255,136,0.3)"
+                          : "rgba(239,68,68,0.3)"
+                      }`,
+                    }}
+                  >
+                    {trade.type === "BUY" ? "↑" : "↓"} {trade.type}
+                  </span>
+                </td>
+                <td className="px-4 py-3 font-bold text-white">
+                  {trade.ticker}
+                </td>
+                <td className="px-4 py-3 text-slate-300">{trade.shares}</td>
+                <td className="px-4 py-3 text-slate-300">
+                  {formatCurrency(trade.price)}
+                </td>
+                <td className="px-4 py-3 text-white font-medium">
+                  {formatCurrency(trade.totalValue)}
+                </td>
+                <td className="px-4 py-3">
+                  {trade.realizedPnL !== undefined ? (
+                    <span
+                      style={{ color: getReturnColor(trade.realizedPnL) }}
+                      className="font-bold"
+                    >
+                      {formatCurrency(trade.realizedPnL)}
+                    </span>
+                  ) : (
+                    <span className="text-slate-500">—</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+const PerformanceTab: React.FC<{
+  portfolio: AgentPortfolio;
+  formatCurrency: (v: number) => string;
+}> = ({ portfolio, formatCurrency }) => {
+  if (portfolio.performanceHistory.length === 0) {
+    return <EmptyState icon="📈" message="No performance data yet" />;
+  }
+  return (
+    <div>
+      <ResponsiveContainer width="100%" height={400}>
+        <LineChart data={portfolio.performanceHistory}>
+          <CartesianGrid
+            strokeDasharray="3 3"
+            stroke="rgba(255,255,255,0.06)"
+          />
+          <XAxis
+            dataKey="timestamp"
+            tickFormatter={(ts) =>
+              new Date(ts).toLocaleDateString("en-US", {
+                month: "short",
+                day: "numeric",
+              })
+            }
+            stroke="#64748b"
+            style={{ fontSize: "11px" }}
+          />
+          <YAxis
+            stroke="#64748b"
+            style={{ fontSize: "11px" }}
+            tickFormatter={formatCurrency}
+          />
+          <Tooltip
+            contentStyle={{
+              backgroundColor: "#0d1117",
+              border: "1px solid rgba(255,255,255,0.1)",
+              borderRadius: "8px",
+              padding: "12px",
+            }}
+            labelStyle={{ color: "#94a3b8" }}
+            formatter={(value: number) => [
+              formatCurrency(value),
+              "Portfolio Value",
+            ]}
+          />
+          <Line
+            type="monotone"
+            dataKey="totalValue"
+            name="Portfolio Value"
+            stroke="#00f0ff"
+            strokeWidth={2}
+            dot={false}
+            activeDot={{ r: 6, fill: "#00f0ff" }}
+          />
+        </LineChart>
+      </ResponsiveContainer>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
+        <MetricCard
+          label="Sharpe Ratio"
+          value={
+            portfolio.sharpeRatio !== null
+              ? portfolio.sharpeRatio.toFixed(2)
+              : "N/A"
+          }
+        />
+        <MetricCard
+          label="Volatility"
+          value={
+            portfolio.volatility != null
+              ? `${(portfolio.volatility * 100).toFixed(1)}%`
+              : "N/A"
+          }
+        />
+        <MetricCard
+          label="Profit Factor"
+          value={
+            portfolio.profitFactor != null &&
+            Number.isFinite(portfolio.profitFactor)
+              ? portfolio.profitFactor.toFixed(2)
+              : "N/A"
+          }
+        />
+        <MetricCard
+          label="Avg Win / Loss"
+          value={
+            portfolio.avgWin > 0 ? formatCurrency(portfolio.avgWin) : "N/A"
+          }
+          subValue={
+            portfolio.avgLoss < 0 ? formatCurrency(portfolio.avgLoss) : "N/A"
+          }
+        />
+      </div>
+    </div>
+  );
+};
+
+const MetricCard: React.FC<{
+  label: string;
+  value: string;
+  subValue?: string;
+  subColor?: string;
+  valueColor?: string;
+}> = ({ label, value, subValue, subColor, valueColor }) => (
+  <div
+    className="p-4 rounded-xl"
+    style={{
+      background: "rgba(255,255,255,0.02)",
+      border: "1px solid rgba(255,255,255,0.05)",
+    }}
+  >
+    <div className="text-[10px] text-slate-500 uppercase tracking-widest mb-1">
+      {label}
+    </div>
+    <div
+      className="text-xl font-black"
+      style={{
+        color: valueColor || "#fff",
+        fontFamily: "'Space Grotesk', sans-serif",
+      }}
+    >
+      {value}
+    </div>
+    {subValue && (
+      <div className="text-xs mt-1" style={{ color: subColor || "#64748b" }}>
+        {subValue}
+      </div>
+    )}
+  </div>
+);
+
+const EmptyState: React.FC<{ icon: string; message: string }> = ({
+  icon,
+  message,
+}) => (
+  <div className="text-center py-16 text-slate-400">
+    <div className="text-4xl mb-3 opacity-30">{icon}</div>
+    <p className="text-sm">{message}</p>
+  </div>
+);
+
+export default AgentPortfolioView;

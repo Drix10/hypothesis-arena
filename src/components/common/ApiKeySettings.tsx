@@ -1,6 +1,6 @@
 /**
- * API Key Settings Modal
- * Allows users to view, update, and delete their saved API keys
+ * Settings Modal
+ * Allows users to manage API keys and app data
  */
 
 import React, {
@@ -24,6 +24,7 @@ import {
   setPersistenceEnabled,
   testApiKey,
 } from "../../services/apiKeyManager";
+import { clearAllAppData } from "../../services/storageService";
 
 interface ApiKeySettingsProps {
   isOpen: boolean;
@@ -182,19 +183,6 @@ export const ApiKeySettings: React.FC<ApiKeySettingsProps> = ({
     }
   };
 
-  const handleDeleteAllKeys = () => {
-    if (
-      confirm(
-        "Delete all API keys? You'll need to re-enter them to use the app."
-      )
-    ) {
-      clearGeminiKey();
-      clearFmpKey();
-      setKeyVersion((v) => v + 1); // Force refresh before callback
-      onKeysCleared();
-    }
-  };
-
   // Handle keyboard for toggle switch
   const handleToggleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" || e.key === " ") {
@@ -231,8 +219,8 @@ export const ApiKeySettings: React.FC<ApiKeySettingsProps> = ({
                 id="api-key-settings-title"
                 className="text-xl font-serif font-bold text-white flex items-center gap-2"
               >
-                <span className="text-2xl">🔑</span>
-                API Key Settings
+                <span className="text-2xl">⚙️</span>
+                Settings
               </h2>
               <button
                 onClick={onClose}
@@ -449,16 +437,37 @@ export const ApiKeySettings: React.FC<ApiKeySettingsProps> = ({
               )}
             </div>
 
-            {/* Delete All */}
+            {/* Danger Zone */}
             <div className="pt-4 border-t border-white/[0.06]">
               <button
-                onClick={handleDeleteAllKeys}
+                onClick={() => {
+                  if (
+                    confirm(
+                      "Delete all data and sign out?\n\nThis will remove everything:\n• API keys\n• Saved analyses\n• Watchlist\n• History\n\nYou'll need to re-enter your API key."
+                    )
+                  ) {
+                    try {
+                      // Clear app data (analyses, watchlist, history, settings)
+                      clearAllAppData();
+                      // Clear API keys (stored separately)
+                      clearGeminiKey();
+                      clearFmpKey();
+                      // Force UI refresh before callback
+                      setKeyVersion((v) => v + 1);
+                      // Return to login screen
+                      onKeysCleared();
+                    } catch (e) {
+                      console.error("Failed to clear all data:", e);
+                      setError("Failed to clear data. Please try again.");
+                    }
+                  }
+                }}
                 className="w-full px-4 py-2.5 bg-bear/10 hover:bg-bear/20 border border-bear/20 rounded-lg text-bear-light text-sm font-medium transition-colors"
               >
-                🗑️ Delete All Keys & Sign Out
+                🗑️ Delete All Data & Sign Out
               </button>
               <p className="text-[10px] text-slate-600 text-center mt-2">
-                This will remove all saved keys and return to the login screen
+                Clears everything and returns to login
               </p>
             </div>
 

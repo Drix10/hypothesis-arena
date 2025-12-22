@@ -5,7 +5,7 @@
 
 import React, { useState, useCallback, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { searchTickers, validateTicker } from "../../services/stock";
+import { searchTickers } from "../../services/stock";
 
 interface TickerInputProps {
   onSelect: (ticker: string) => void;
@@ -28,7 +28,6 @@ export const TickerInput: React.FC<TickerInputProps> = ({
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
-  const [isValidating, setIsValidating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showDropdown, setShowDropdown] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(-1);
@@ -94,34 +93,41 @@ export const TickerInput: React.FC<TickerInputProps> = ({
     );
   };
 
-  const handleSelectTicker = async (ticker: string) => {
-    // Prevent duplicate selections while validating or disabled
-    if (disabled || isValidating) return;
+  const handleSelectTicker = (ticker: string) => {
+    // Prevent duplicate selections while disabled
+    if (disabled) return;
 
     // Close dropdown immediately on selection
     setShowDropdown(false);
     setQuery(ticker);
-    setIsValidating(true);
-    setError(null);
-    try {
-      const isValid = await validateTicker(ticker);
-      if (isValid) {
-        onSelect(ticker);
-        setQuery("");
-      } else {
-        setError(`Invalid ticker: ${ticker}`);
-      }
-    } catch {
-      setError("Failed to validate ticker");
-    } finally {
-      setIsValidating(false);
+
+    // Basic format validation (no API call needed)
+    const normalizedTicker = ticker.toUpperCase().trim();
+
+    // Relaxed validation: allow letters, numbers, dots, dashes, colons (for exchange prefixes like TSX:)
+    // Max length 15 to accommodate exchange:ticker format
+    if (
+      !normalizedTicker ||
+      normalizedTicker.length > 15 ||
+      !/^[A-Z0-9.:\-^]+$/.test(normalizedTicker)
+    ) {
+      setError(`Invalid ticker format: ${ticker}`);
+      return;
     }
+
+    // Clear error only after validation passes, just before calling onSelect
+    setError(null);
+
+    // Skip API validation - let the main analysis handle errors
+    // This prevents blocking valid tickers when APIs are temporarily down
+    onSelect(normalizedTicker);
+    setQuery("");
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    // Prevent submission if disabled or already validating
-    if (disabled || isValidating || !query.trim()) return;
+    // Prevent submission if disabled
+    if (disabled || !query.trim()) return;
 
     // Clear any pending search
     if (searchTimeoutRef.current) {
@@ -197,7 +203,7 @@ export const TickerInput: React.FC<TickerInputProps> = ({
                 }}
                 onBlur={() => setIsFocused(false)}
                 placeholder="Search ticker or company name..."
-                disabled={disabled || isValidating}
+                disabled={disabled}
                 className="w-full px-2 py-3 bg-transparent text-white placeholder-slate-500 focus:outline-none disabled:opacity-50 font-medium"
                 autoComplete="off"
                 aria-label="Stock ticker search"
@@ -215,31 +221,27 @@ export const TickerInput: React.FC<TickerInputProps> = ({
 
             <motion.button
               type="submit"
-              disabled={disabled || isValidating || !query.trim()}
+              disabled={disabled || !query.trim()}
               className="px-5 sm:px-6 py-3 rounded-lg font-semibold btn-primary disabled:opacity-30 disabled:cursor-not-allowed text-sm"
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
             >
-              {isValidating ? (
-                <div className="w-4 h-4 border-2 border-arena-deep/30 border-t-arena-deep rounded-full animate-spin" />
-              ) : (
-                <span className="flex items-center gap-1.5">
-                  <span>Analyze</span>
-                  <svg
-                    className="w-4 h-4 hidden sm:block"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M13 7l5 5m0 0l-5 5m5-5H6"
-                    />
-                  </svg>
-                </span>
-              )}
+              <span className="flex items-center gap-1.5">
+                <span>Analyze</span>
+                <svg
+                  className="w-4 h-4 hidden sm:block"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M13 7l5 5m0 0l-5 5m5-5H6"
+                  />
+                </svg>
+              </span>
             </motion.button>
           </div>
         </div>
@@ -261,13 +263,13 @@ export const TickerInput: React.FC<TickerInputProps> = ({
               <motion.div
                 key={result.symbol}
                 onClick={() => {
-                  // Prevent selection if disabled or validating
-                  if (!disabled && !isValidating) {
+                  // Prevent selection if disabled
+                  if (!disabled) {
                     handleSelectTicker(result.symbol);
                   }
                 }}
                 className={`px-4 py-3 transition-all border-b border-white/[0.04] last:border-0 ${
-                  disabled || isValidating
+                  disabled
                     ? "cursor-not-allowed opacity-50"
                     : "cursor-pointer hover:bg-white/[0.03]"
                 } ${index === selectedIndex ? "bg-cyan/10" : ""}`}

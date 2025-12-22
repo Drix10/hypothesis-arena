@@ -10,7 +10,7 @@
  * - Improved parsing with validation
  */
 
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, Type } from '@google/genai';
 import {
     AnalystAgent,
     AnalystMethodology,
@@ -43,10 +43,66 @@ interface ParsedThesis {
     priceTarget: { bull: number; base: number; bear: number };
     bullCase: string[];
     bearCase: string[];
-    keyMetrics: Record<string, string>;
+    keyMetrics: string[];  // Changed from Record<string, string> to string[]
     catalysts: string[];
     summary: string;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STRUCTURED OUTPUT SCHEMAS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * JSON Schema for thesis generation - ensures structured, parseable output
+ */
+const THESIS_SCHEMA = {
+    type: Type.OBJECT,
+    properties: {
+        recommendation: {
+            type: Type.STRING,
+            description: 'Investment recommendation',
+            enum: ['STRONG_BUY', 'BUY', 'HOLD', 'SELL', 'STRONG_SELL']
+        },
+        confidence: {
+            type: Type.NUMBER,
+            description: 'Confidence level from 0 to 100'
+        },
+        priceTarget: {
+            type: Type.OBJECT,
+            properties: {
+                bull: { type: Type.NUMBER, description: 'Optimistic price target' },
+                base: { type: Type.NUMBER, description: 'Base case price target' },
+                bear: { type: Type.NUMBER, description: 'Pessimistic price target' }
+            },
+            required: ['bull', 'base', 'bear']
+        },
+        bullCase: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+            description: 'Key bullish arguments (3-5 points)'
+        },
+        bearCase: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+            description: 'Key bearish arguments/risks (3-5 points)'
+        },
+        keyMetrics: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+            description: 'Key metrics supporting the thesis as "metric: value" strings (e.g., "P/E: 25.3", "Revenue Growth: 15%")'
+        },
+        catalysts: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+            description: 'Upcoming catalysts that could move the stock (1-3 points)'
+        },
+        summary: {
+            type: Type.STRING,
+            description: '2-3 sentence thesis summary'
+        }
+    },
+    required: ['recommendation', 'confidence', 'priceTarget', 'bullCase', 'bearCase', 'summary']
+};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ENHANCED DATA FORMATTING FOR LLM CONSUMPTION
@@ -823,51 +879,123 @@ DISTRIBUTION:
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// THESIS PARSING - ENHANCED
+// THESIS GENERATION
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Parse AI response into structured thesis with validation
+ * Generate thesis for a single analyst
  */
-function parseThesisResponse(
-    response: string,
+async function generateSingleThesis(
+    ai: GoogleGenAI,
+    analyst: AnalystAgent,
+    stockData: StockAnalysisData,
+    model: string = 'gemini-2.0-flash',
+    maxRetries: number = 2
+): Promise<ThesisGenerationResult> {
+    let lastError: string = 'Unknown error';
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+            const systemPrompt = THESIS_SYSTEM_PROMPTS[analyst.methodology];
+            const dataContext = formatDataForAnalyst(stockData, analyst.methodology);
+            const portfolioContext = formatPortfolioContext(analyst.methodology);
+            const performanceContext = formatPerformanceContext(analyst.methodology);
+
+            const userPrompt = buildThesisPrompt(
+                stockData.ticker,
+                stockData.profile?.name ?? stockData.ticker,
+                dataContext,
+                portfolioContext,
+                performanceContext
+            );
+
+            // Use structured output with JSON schema for reliable parsing
+            const response = await ai.models.generateContent({
+                model,
+                contents: userPrompt,
+                config: {
+                    systemInstruction: systemPrompt,
+                    temperature: 0.7,
+                    maxOutputTokens: 2500,
+                    responseMimeType: 'application/json',
+                    responseSchema: THESIS_SCHEMA
+                }
+            });
+
+            const text = response.text || '';
+
+            // Parse the structured JSON response
+            const thesis = parseStructuredThesisResponse(
+                text,
+                analyst.id,
+                stockData.ticker,
+                stockData.quote?.price ?? 0
+            );
+
+            if (!thesis) {
+                lastError = 'Failed to parse thesis response';
+                if (attempt < maxRetries) {
+                    logger.warn(`Thesis parsing failed for ${analyst.name}, retrying (${attempt + 1}/${maxRetries})...`);
+                    await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
+                    continue;
+                }
+                return {
+                    analyst,
+                    thesis: null,
+                    error: lastError
+                };
+            }
+
+            return { analyst, thesis, error: null };
+        } catch (error) {
+            lastError = error instanceof Error ? error.message : 'Unknown error';
+            logger.error(`Thesis generation failed for ${analyst.name} (attempt ${attempt + 1}/${maxRetries + 1}):`, error);
+
+            if (attempt < maxRetries) {
+                // Exponential backoff
+                await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+                continue;
+            }
+        }
+    }
+
+    return { analyst, thesis: null, error: lastError };
+}
+
+/**
+ * Parse structured JSON thesis response from Gemini
+ * Much simpler than the old text parsing since we get clean JSON
+ */
+function parseStructuredThesisResponse(
+    jsonText: string,
     agentId: string,
     ticker: string,
     currentPrice: number
 ): InvestmentThesis | null {
     try {
-        // Extract JSON from response (handle markdown code blocks)
-        let jsonStr = response;
-        const jsonMatch = response.match(/```(?:json)?\s*([\s\S]*?)```/);
-        if (jsonMatch) {
-            jsonStr = jsonMatch[1];
+        // Handle empty or invalid input
+        if (!jsonText || jsonText.trim() === '' || jsonText.trim() === '{}') {
+            logger.warn(`Empty or invalid thesis response for ${agentId}`);
+            return null;
         }
 
-        // Try to find JSON object if not in code block
-        if (!jsonStr.trim().startsWith('{')) {
-            const jsonStart = response.indexOf('{');
-            const jsonEnd = response.lastIndexOf('}');
-            if (jsonStart !== -1 && jsonEnd !== -1) {
-                jsonStr = response.slice(jsonStart, jsonEnd + 1);
-            }
+        const parsed: ParsedThesis = JSON.parse(jsonText);
+
+        // Validate that we got actual data
+        if (!parsed || typeof parsed !== 'object') {
+            logger.warn(`Invalid parsed thesis for ${agentId}: not an object`);
+            return null;
         }
 
-        const parsed: ParsedThesis = JSON.parse(jsonStr.trim());
-
-        // Validate and normalize recommendation
+        // Normalize recommendation
         const recMap: Record<string, InvestmentThesis['recommendation']> = {
             'STRONG_BUY': 'strong_buy',
-            'STRONG BUY': 'strong_buy',
-            'STRONGBUY': 'strong_buy',
             'BUY': 'buy',
             'HOLD': 'hold',
             'SELL': 'sell',
-            'STRONG_SELL': 'strong_sell',
-            'STRONG SELL': 'strong_sell',
-            'STRONGSELL': 'strong_sell'
+            'STRONG_SELL': 'strong_sell'
         };
-
-        const recommendation = recMap[parsed.recommendation?.toUpperCase()] || 'hold';
+        const recommendation = recMap[parsed.recommendation] || 'hold';
 
         // Validate confidence (clamp to reasonable range)
         const confidence = Math.max(0, Math.min(100, parsed.confidence || 50));
@@ -910,6 +1038,22 @@ function parseThesisResponse(
             ? parsed.catalysts.filter(Boolean).slice(0, 3)
             : [];
 
+        // Convert keyMetrics array to Record<string, string>
+        // Format: ["P/E: 25.3", "Revenue Growth: 15%"] -> { "P/E": "25.3", "Revenue Growth": "15%" }
+        const keyMetrics: Record<string, string> = {};
+        if (Array.isArray(parsed.keyMetrics)) {
+            for (const metric of parsed.keyMetrics) {
+                if (typeof metric === 'string' && metric.includes(':')) {
+                    const colonIndex = metric.indexOf(':');
+                    const key = metric.slice(0, colonIndex).trim();
+                    const value = metric.slice(colonIndex + 1).trim();
+                    if (key && value) {
+                        keyMetrics[key] = value;
+                    }
+                }
+            }
+        }
+
         return {
             agentId,
             ticker,
@@ -918,76 +1062,15 @@ function parseThesisResponse(
             priceTarget,
             bullCase,
             bearCase,
-            keyMetrics: parsed.keyMetrics || {},
+            keyMetrics,
             catalysts,
             risks: bearCase, // Use bear case as risks
             summary: parsed.summary || '',
-            detailedAnalysis: response
+            detailedAnalysis: jsonText
         };
     } catch (error) {
-        logger.error(`Failed to parse thesis response for ${agentId}:`, error);
+        logger.error(`Failed to parse structured thesis response for ${agentId}:`, error);
         return null;
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// THESIS GENERATION
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Generate thesis for a single analyst
- */
-async function generateSingleThesis(
-    ai: GoogleGenAI,
-    analyst: AnalystAgent,
-    stockData: StockAnalysisData,
-    model: string = 'gemini-2.0-flash'
-): Promise<ThesisGenerationResult> {
-    try {
-        const systemPrompt = THESIS_SYSTEM_PROMPTS[analyst.methodology];
-        const dataContext = formatDataForAnalyst(stockData, analyst.methodology);
-        const portfolioContext = formatPortfolioContext(analyst.methodology);
-        const performanceContext = formatPerformanceContext(analyst.methodology);
-
-        const userPrompt = buildThesisPrompt(
-            stockData.ticker,
-            stockData.profile?.name ?? stockData.ticker,
-            dataContext,
-            portfolioContext,
-            performanceContext
-        );
-
-        const response = await ai.models.generateContent({
-            model,
-            contents: userPrompt,
-            config: {
-                systemInstruction: systemPrompt,
-                temperature: 0.7,
-                maxOutputTokens: 2500
-            }
-        });
-
-        const text = response.text || '';
-        const thesis = parseThesisResponse(
-            text,
-            analyst.id,
-            stockData.ticker,
-            stockData.quote?.price ?? 0
-        );
-
-        if (!thesis) {
-            return {
-                analyst,
-                thesis: null,
-                error: 'Failed to parse thesis response'
-            };
-        }
-
-        return { analyst, thesis, error: null };
-    } catch (error) {
-        const message = error instanceof Error ? error.message : 'Unknown error';
-        logger.error(`Thesis generation failed for ${analyst.name}:`, error);
-        return { analyst, thesis: null, error: message };
     }
 }
 

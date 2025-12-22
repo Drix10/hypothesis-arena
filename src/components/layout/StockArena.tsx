@@ -132,6 +132,7 @@ export const StockArena: React.FC<StockArenaProps> = ({
     matchNumber: number;
     totalMatches: number;
   } | null>(null);
+  const [tradingPreviewError, setTradingPreviewError] = useState(false);
 
   const isMountedRef = useRef(true);
   const saveMessageTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
@@ -152,6 +153,67 @@ export const StockArena: React.FC<StockArenaProps> = ({
   }, [stockData]);
 
   const isAnalyzingRef = useRef(false);
+
+  const generateTradingPreview = useCallback(
+    async (
+      theses: InvestmentThesis[],
+      tournament: TournamentResult,
+      data: StockAnalysisData
+    ) => {
+      // Reset error state at the start, before any async operations
+      setTradingPreviewError(false);
+
+      // Validate tournament has debates
+      if (!tournament.allDebates || tournament.allDebates.length === 0) {
+        // No debates found - silently skip trading preview
+        return;
+      }
+
+      try {
+        // Import statically to avoid dynamic import warning
+        const state =
+          tradingService.loadTradingState() ||
+          tradingService.initializeTradingSystem();
+
+        const decisions = new Map<string, TradeDecision>();
+        for (const thesis of theses) {
+          if (!isMountedRef.current) return;
+
+          const portfolio = state.portfolios[thesis.agentId];
+          if (!portfolio) continue;
+
+          const debate = tournament.allDebates.find(
+            (d) =>
+              d.bullThesis.agentId === thesis.agentId ||
+              d.bearThesis.agentId === thesis.agentId
+          );
+          if (!debate) continue;
+
+          const decision = await tradingService.determineTradeDecision(
+            thesis,
+            debate,
+            portfolio,
+            data.quote.price,
+            data.quote.timestamp || Date.now()
+          );
+          decisions.set(thesis.agentId, decision);
+        }
+
+        if (isMountedRef.current) {
+          setTradingDecisions(decisions);
+        }
+      } catch (err) {
+        if (process.env.NODE_ENV === "development") {
+          console.error("Trading preview generation failed:", err);
+        }
+        if (isMountedRef.current) {
+          setTradingPreviewError(true);
+          setTradingDecisions(new Map());
+        }
+      }
+    },
+    []
+  );
 
   const handleTickerSelect = useCallback(
     async (ticker: string) => {
@@ -179,10 +241,8 @@ export const StockArena: React.FC<StockArenaProps> = ({
         setStockData(data);
 
         setState(StockArenaState.GENERATING_ANALYSTS);
-        const { theses: generatedTheses } = await generateAllTheses(
-          apiKey,
-          data,
-          {
+        const { theses: generatedTheses, errors: thesisErrors } =
+          await generateAllTheses(apiKey, data, {
             concurrency: 4, // Generate 4 analysts at once
             onProgress: (completed, total, analyst) => {
               if (isMountedRef.current) {
@@ -200,8 +260,15 @@ export const StockArena: React.FC<StockArenaProps> = ({
                 setTheses((prev) => [...prev, thesis]);
               }
             },
-          }
-        );
+          });
+
+        // Log any thesis generation errors in development
+        if (thesisErrors.length > 0 && process.env.NODE_ENV === "development") {
+          console.warn(
+            `[StockArena] ${thesisErrors.length} analyst(s) failed to generate theses:`,
+            thesisErrors.map((e) => `${e.analyst}: ${e.error}`).join(", ")
+          );
+        }
 
         if (!isMountedRef.current) return;
         if (generatedTheses.length === 0)
@@ -286,14 +353,20 @@ export const StockArena: React.FC<StockArenaProps> = ({
         setProgress("");
         // Note: isAnalyzingRef.current is cleared in finally block
 
-        // Generate trading decisions for preview (don't await to avoid blocking)
-        generateTradingPreview(generatedTheses, tournament, data);
+        // Generate trading decisions for preview (fire and forget with error handling)
+        generateTradingPreview(generatedTheses, tournament, data).catch(
+          (err) => {
+            // Error is already handled inside generateTradingPreview, this is just a safety net
+            if (process.env.NODE_ENV === "development") {
+              console.error("Unhandled trading preview error:", err);
+            }
+          }
+        );
       } catch (err) {
         if (!isMountedRef.current) return;
         const errorMessage =
           err instanceof Error ? err.message : "An error occurred";
         setError(errorMessage);
-        console.error("Analysis error:", errorMessage);
         setState(StockArenaState.ERROR);
         setProgress("");
         // Clear all analysis state on error to prevent partial/stale data
@@ -305,57 +378,7 @@ export const StockArena: React.FC<StockArenaProps> = ({
         isAnalyzingRef.current = false;
       }
     },
-    [apiKey]
-  );
-
-  const generateTradingPreview = useCallback(
-    async (
-      theses: InvestmentThesis[],
-      tournament: TournamentResult,
-      data: StockAnalysisData
-    ) => {
-      // Validate tournament has debates
-      if (!tournament.allDebates || tournament.allDebates.length === 0) {
-        // No debates found - silently skip trading preview
-        return;
-      }
-
-      try {
-        // Import statically to avoid dynamic import warning
-        const state =
-          tradingService.loadTradingState() ||
-          tradingService.initializeTradingSystem();
-
-        const decisions = new Map();
-        for (const thesis of theses) {
-          const portfolio = state.portfolios[thesis.agentId];
-          if (!portfolio) continue;
-
-          const debate = tournament.allDebates.find(
-            (d) =>
-              d.bullThesis.agentId === thesis.agentId ||
-              d.bearThesis.agentId === thesis.agentId
-          );
-          if (!debate) continue;
-
-          const decision = await tradingService.determineTradeDecision(
-            thesis,
-            debate,
-            portfolio,
-            data.quote.price,
-            data.quote.timestamp || Date.now()
-          );
-          decisions.set(thesis.agentId, decision);
-        }
-
-        setTradingDecisions(decisions);
-      } catch (error) {
-        console.error("Failed to generate trading preview:", error);
-        // Set empty map so UI knows preview failed
-        setTradingDecisions(new Map());
-      }
-    },
-    []
+    [apiKey, generateTradingPreview]
   );
 
   const handleReset = () => {
@@ -372,6 +395,7 @@ export const StockArena: React.FC<StockArenaProps> = ({
     setCurrentDebate(null);
     setTournamentProgress(null);
     setTradingDecisions(new Map());
+    setTradingPreviewError(false);
   };
 
   // Memoize trading preview to avoid recalculating on every render
@@ -440,6 +464,12 @@ export const StockArena: React.FC<StockArenaProps> = ({
     setRecommendation(analysis.recommendation);
     setState(StockArenaState.COMPLETE);
     setActiveTab("analysis");
+    setTradingDecisions(new Map()); // Reset trading decisions for loaded analysis
+    setTradingPreviewError(false);
+    // Clear live state from previous analysis
+    setLiveDebates([]);
+    setCurrentDebate(null);
+    setTournamentProgress(null);
   };
 
   const isLoading =
@@ -518,8 +548,8 @@ export const StockArena: React.FC<StockArenaProps> = ({
               {onShowSettings && (
                 <HeaderButton
                   onClick={onShowSettings}
-                  icon="🔑"
-                  label="Keys"
+                  icon="⚙️"
+                  label="Settings"
                   variant="ghost"
                 />
               )}
@@ -528,10 +558,7 @@ export const StockArena: React.FC<StockArenaProps> = ({
         </div>
       </header>
 
-      <main
-        id="main-content"
-        className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8"
-      >
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <AnimatePresence mode="wait">
           {(state === StockArenaState.IDLE ||
             state === StockArenaState.ERROR) && (
@@ -904,6 +931,7 @@ export const StockArena: React.FC<StockArenaProps> = ({
                         recommendation={recommendation}
                         onExecuteTrades={() => setShowTradingView(true)}
                         tradingPreview={tradingPreview}
+                        tradingPreviewError={tradingPreviewError}
                       />
                       <div className="grid md:grid-cols-2 gap-6">
                         <ArgumentsPanel
@@ -1101,6 +1129,10 @@ export const StockArena: React.FC<StockArenaProps> = ({
                     theses={theses}
                     debates={tournamentResult.allDebates}
                     onContinue={() => setShowTradingView(false)}
+                    onViewPortfolios={() => {
+                      setShowTradingView(false);
+                      setActiveTab("trading");
+                    }}
                   />
                 </motion.div>
               </motion.div>

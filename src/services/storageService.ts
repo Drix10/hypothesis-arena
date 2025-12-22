@@ -355,3 +355,24 @@ export function downloadAnalysisJSON(analysis: SavedAnalysis): void {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CLEAR ALL DATA
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Clear all application data from localStorage
+ * This removes saved analyses, watchlist, accuracy history, and settings
+ */
+export function clearAllAppData(): boolean {
+    try {
+        localStorage.removeItem(STORAGE_KEYS.SAVED_ANALYSES);
+        localStorage.removeItem(STORAGE_KEYS.WATCHLIST);
+        localStorage.removeItem(STORAGE_KEYS.ACCURACY_HISTORY);
+        localStorage.removeItem(STORAGE_KEYS.SETTINGS);
+        return true;
+    } catch (e) {
+        console.error('Failed to clear all app data:', e);
+        return false;
+    }
+}

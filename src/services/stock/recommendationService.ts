@@ -82,8 +82,9 @@ function calculateWeightedPriceTarget(
     tournamentResult: TournamentResult,
     currentPrice: number = 0
 ): PriceTarget {
+    const safePrice = currentPrice > 0 ? currentPrice : 100;
+
     if (theses.length === 0) {
-        const safePrice = currentPrice > 0 ? currentPrice : 100;
         return { bull: safePrice * 1.2, base: safePrice, bear: safePrice * 0.8, timeframe: '1Y' };
     }
 
@@ -91,6 +92,11 @@ function calculateWeightedPriceTarget(
     let bullSum = 0, baseSum = 0, bearSum = 0;
 
     for (const thesis of theses) {
+        // Skip theses with invalid price targets
+        if (!thesis.priceTarget || !Number.isFinite(thesis.priceTarget.base)) {
+            continue;
+        }
+
         let weight = Math.max(thesis.confidence, 1) / 100;
 
         if (tournamentResult.champion?.agentId === thesis.agentId) {
@@ -104,17 +110,20 @@ function calculateWeightedPriceTarget(
         weight *= (1 + debateWins * 0.1);
 
         totalWeight += weight;
-        bullSum += thesis.priceTarget.bull * weight;
-        baseSum += thesis.priceTarget.base * weight;
-        bearSum += thesis.priceTarget.bear * weight;
+        bullSum += (thesis.priceTarget.bull ?? safePrice * 1.2) * weight;
+        baseSum += (thesis.priceTarget.base ?? safePrice) * weight;
+        bearSum += (thesis.priceTarget.bear ?? safePrice * 0.8) * weight;
     }
 
-    const safeDivide = (sum: number) => totalWeight > 0 ? sum / totalWeight : 0;
+    // Fallback if no valid theses contributed
+    if (totalWeight <= 0) {
+        return { bull: safePrice * 1.2, base: safePrice, bear: safePrice * 0.8, timeframe: '1Y' };
+    }
 
     return {
-        bull: safeDivide(bullSum),
-        base: safeDivide(baseSum),
-        bear: safeDivide(bearSum),
+        bull: bullSum / totalWeight,
+        base: baseSum / totalWeight,
+        bear: bearSum / totalWeight,
         timeframe: '1Y'
     };
 }
@@ -126,22 +135,51 @@ function determineRecommendation(
 ): FinalRecommendation['recommendation'] {
     let rec = consensus.consensusRecommendation;
 
+    // Upside-based adjustments
     if (upside > 30 && rec === 'hold') rec = 'buy';
     if (upside > 50 && rec === 'buy') rec = 'strong_buy';
     if (upside < -20 && rec === 'hold') rec = 'sell';
     if (upside < -30 && rec === 'sell') rec = 'strong_sell';
 
+    // Champion influence - the tournament winner should have significant weight
     if (champion) {
         const champRec = champion.recommendation;
+        const champConfidence = champion.confidence;
+
+        // If champion strongly disagrees with consensus, move toward neutral
         if (
             (champRec === 'strong_sell' && (rec === 'buy' || rec === 'strong_buy')) ||
             (champRec === 'strong_buy' && (rec === 'sell' || rec === 'strong_sell'))
         ) {
             rec = 'hold';
         }
-        if (champion.confidence > 75) {
+
+        // Champion with high confidence can upgrade recommendations
+        if (champConfidence > 75) {
             if (champRec === 'strong_buy' && rec === 'buy') rec = 'strong_buy';
             if (champRec === 'strong_sell' && rec === 'sell') rec = 'strong_sell';
+        }
+
+        // NEW: Champion should influence HOLD consensus toward their direction
+        // If consensus is HOLD but champion has a directional view with decent confidence,
+        // the final recommendation should lean toward the champion's view
+        if (rec === 'hold' && champConfidence >= 60) {
+            if (champRec === 'strong_buy' || champRec === 'buy') {
+                // Champion is bullish - move from HOLD toward BUY
+                rec = 'buy';
+            } else if (champRec === 'strong_sell' || champRec === 'sell') {
+                // Champion is bearish - move from HOLD toward SELL
+                rec = 'sell';
+            }
+        }
+
+        // If champion has very high confidence (>80%), they can override moderate consensus
+        if (champConfidence > 80) {
+            if (champRec === 'strong_buy' && rec !== 'sell' && rec !== 'strong_sell') {
+                rec = 'strong_buy';
+            } else if (champRec === 'strong_sell' && rec !== 'buy' && rec !== 'strong_buy') {
+                rec = 'strong_sell';
+            }
         }
     }
 

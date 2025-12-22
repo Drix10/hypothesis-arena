@@ -1,10 +1,12 @@
 /**
  * Live Arena Component - Cinematic Live Streaming Experience
  * Premium real-time visualization of thesis generation and debates
+ *
+ * PERFORMANCE OPTIMIZED: Reduced animations for smoother experience
  */
 
-import React, { useEffect, useRef } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import React, { useEffect, useRef, useMemo, memo } from "react";
+import { motion } from "framer-motion";
 import {
   InvestmentThesis,
   StockDebate,
@@ -26,6 +28,14 @@ interface LiveArenaProps {
   } | null;
 }
 
+// Simplified animation variants for better performance
+const fadeIn = {
+  initial: { opacity: 0 },
+  animate: { opacity: 1 },
+  exit: { opacity: 0 },
+  transition: { duration: 0.2 },
+};
+
 export const LiveArena: React.FC<LiveArenaProps> = ({
   state,
   theses,
@@ -38,11 +48,6 @@ export const LiveArena: React.FC<LiveArenaProps> = ({
   const debateRef = useRef<HTMLDivElement>(null);
   const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isMountedRef = useRef(true);
-
-  // Detect reduced motion preference
-  const prefersReducedMotion =
-    typeof window !== "undefined" &&
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   // Cleanup on unmount
   useEffect(() => {
@@ -79,15 +84,19 @@ export const LiveArena: React.FC<LiveArenaProps> = ({
     // Clear any pending scroll
     if (scrollTimeoutRef.current) {
       clearTimeout(scrollTimeoutRef.current);
+      scrollTimeoutRef.current = null;
     }
 
     // Debounce scroll to avoid excessive scrolling
     if (debateRef.current && currentDebate) {
       scrollTimeoutRef.current = setTimeout(() => {
-        debateRef.current?.scrollIntoView({
-          behavior: "smooth",
-          block: "center",
-        });
+        if (isMountedRef.current && debateRef.current) {
+          debateRef.current.scrollIntoView({
+            behavior: "smooth",
+            block: "center",
+          });
+        }
+        scrollTimeoutRef.current = null;
       }, 300);
     }
 
@@ -95,6 +104,7 @@ export const LiveArena: React.FC<LiveArenaProps> = ({
     return () => {
       if (scrollTimeoutRef.current) {
         clearTimeout(scrollTimeoutRef.current);
+        scrollTimeoutRef.current = null;
       }
     };
   }, [currentDebate?.matchId]);
@@ -104,60 +114,35 @@ export const LiveArena: React.FC<LiveArenaProps> = ({
       {/* Phase 0: Data Fetching */}
       {state === StockArenaState.FETCHING_DATA && (
         <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
+          {...fadeIn}
           className="max-w-lg mx-auto pt-24 sm:pt-32 text-center"
         >
-          <motion.div
-            className="relative inline-block mb-8"
-            animate={{ scale: [1, 1.05, 1] }}
-            transition={{ duration: 2, repeat: Infinity }}
-          >
+          <div className="relative inline-block mb-8">
             <div className="w-28 h-28 rounded-3xl bg-gradient-to-br from-arena-card to-arena-surface border border-white/10 flex items-center justify-center shadow-glow-cyan">
               <span className="text-6xl" role="img" aria-label="Satellite">
                 📡
               </span>
             </div>
-            <div className="absolute -inset-6 border border-cyan/20 rounded-[2rem] animate-ping opacity-20" />
-          </motion.div>
+            <div className="absolute -inset-6 border border-cyan/20 rounded-[2rem] opacity-20 animate-pulse" />
+          </div>
           <h2 className="text-2xl sm:text-3xl font-serif font-bold text-white mb-3">
             Gathering Intelligence
           </h2>
           <p className="text-slate-400 mb-6">
             Connecting to market data sources...
           </p>
-          <motion.div
-            className="inline-block px-5 py-2.5 rounded-full bg-gradient-to-r from-cyan/10 to-cyan/5 border border-cyan/20 text-sm text-cyan font-medium shadow-lg shadow-cyan/10"
-            animate={{ opacity: [0.7, 1, 0.7] }}
-            transition={{ duration: 1.5, repeat: Infinity }}
-          >
+          <div className="inline-block px-5 py-2.5 rounded-full bg-gradient-to-r from-cyan/10 to-cyan/5 border border-cyan/20 text-sm text-cyan font-medium shadow-lg shadow-cyan/10 animate-pulse">
             {progress || "Fetching stock data..."}
-          </motion.div>
+          </div>
         </motion.div>
       )}
 
       {/* Phase 1: Analyst Generation Stage */}
       {state === StockArenaState.GENERATING_ANALYSTS && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          className="space-y-8"
-        >
+        <motion.div {...fadeIn} className="space-y-8">
           {/* Stage Header */}
           <div className="text-center">
-            <motion.div
-              className="inline-flex items-center gap-3 px-6 py-3 rounded-2xl bg-gradient-to-r from-cyan/10 via-cyan/5 to-cyan/10 border border-cyan/20 mb-4"
-              animate={{
-                boxShadow: [
-                  "0 0 20px rgba(6, 182, 212, 0.2)",
-                  "0 0 40px rgba(6, 182, 212, 0.4)",
-                  "0 0 20px rgba(6, 182, 212, 0.2)",
-                ],
-              }}
-              transition={{ duration: 2, repeat: Infinity }}
-            >
+            <div className="inline-flex items-center gap-3 px-6 py-3 rounded-2xl bg-gradient-to-r from-cyan/10 via-cyan/5 to-cyan/10 border border-cyan/20 mb-4 shadow-lg shadow-cyan/10">
               <span className="text-2xl" role="img" aria-label="Brain">
                 🧠
               </span>
@@ -169,34 +154,24 @@ export const LiveArena: React.FC<LiveArenaProps> = ({
                   {theses.length} of {totalAnalysts} strategists ready
                 </div>
               </div>
-            </motion.div>
+            </div>
             {/* Estimated time remaining */}
             {theses.length > 0 && theses.length < totalAnalysts && (
-              <motion.p
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                className="text-xs text-slate-500 mt-2"
-                key={`time-${theses.length}`}
-              >
+              <p className="text-xs text-slate-500 mt-2">
                 Estimated time: ~
                 {Math.max(
                   0,
                   Math.ceil((totalAnalysts - theses.length) / 4) * 3
                 )}
                 s remaining
-              </motion.p>
+              </p>
             )}
           </div>
 
           {/* Completion message - only show briefly before tournament starts */}
           {theses.length === totalAnalysts &&
             state === StockArenaState.GENERATING_ANALYSTS && (
-              <motion.div
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.9 }}
-                className="text-center mb-4"
-              >
+              <div className="text-center mb-4">
                 <div
                   className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-bull/10 border border-bull/20"
                   role="status"
@@ -209,7 +184,7 @@ export const LiveArena: React.FC<LiveArenaProps> = ({
                     All analysts ready! Starting tournament...
                   </span>
                 </div>
-              </motion.div>
+              </div>
             )}
 
           {/* Analyst Grid - 8 Slots */}
@@ -224,15 +199,9 @@ export const LiveArena: React.FC<LiveArenaProps> = ({
               const isEmpty = !thesis;
 
               return (
-                <motion.div
-                  key={index}
-                  className="relative"
-                  initial={{ opacity: 0, scale: 0.8 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  transition={{ duration: 0.3 }}
-                >
+                <div key={index} className="relative">
                   {isEmpty ? (
-                    // Empty Slot
+                    // Empty Slot - simplified animation
                     <div
                       className={`aspect-square rounded-2xl border-2 border-dashed flex items-center justify-center relative overflow-hidden ${
                         isActive
@@ -242,25 +211,10 @@ export const LiveArena: React.FC<LiveArenaProps> = ({
                     >
                       {isActive && (
                         <>
-                          {/* Pulsing Spotlight */}
-                          <motion.div
-                            className="absolute inset-0 bg-gradient-radial from-cyan/20 to-transparent"
-                            animate={{
-                              opacity: [0.3, 0.6, 0.3],
-                              scale: [0.8, 1.2, 0.8],
-                            }}
-                            transition={{ duration: 2, repeat: Infinity }}
-                          />
-                          {/* Loading Ring */}
-                          <motion.div
-                            className="w-16 h-16 rounded-full border-4 border-cyan/20 border-t-cyan"
-                            animate={{ rotate: 360 }}
-                            transition={{
-                              duration: 1,
-                              repeat: Infinity,
-                              ease: "linear",
-                            }}
-                          />
+                          {/* Simple pulsing background */}
+                          <div className="absolute inset-0 bg-gradient-radial from-cyan/10 to-transparent animate-pulse" />
+                          {/* Loading spinner - CSS only */}
+                          <div className="w-16 h-16 rounded-full border-4 border-cyan/20 border-t-cyan animate-spin" />
                         </>
                       )}
                       {!isActive && (
@@ -274,45 +228,30 @@ export const LiveArena: React.FC<LiveArenaProps> = ({
                       )}
                     </div>
                   ) : (
-                    // Filled Slot with Simple Entrance Animation
+                    // Filled Slot - simple fade in
                     <motion.div
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{
-                        duration: 0.4,
-                        ease: "easeOut",
-                      }}
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      transition={{ duration: 0.3 }}
                     >
                       <AnalystCard thesis={thesis} isWinner={false} />
                     </motion.div>
                   )}
-                </motion.div>
+                </div>
               );
             })}
           </div>
 
           {/* Current Analyst Being Generated */}
           {progress && (
-            <motion.div
-              className="text-center space-y-3"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-            >
+            <div className="text-center space-y-3">
               <div
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white/[0.03] border border-white/10"
                 role="status"
                 aria-live="polite"
                 aria-atomic="true"
               >
-                <motion.div
-                  className="w-2 h-2 bg-cyan rounded-full"
-                  animate={
-                    prefersReducedMotion
-                      ? {}
-                      : { scale: [1, 1.5, 1], opacity: [1, 0.5, 1] }
-                  }
-                  transition={{ duration: 1, repeat: Infinity }}
-                />
+                <div className="w-2 h-2 bg-cyan rounded-full animate-pulse" />
                 <span className="text-sm text-slate-300">{progress}</span>
               </div>
               {/* Helpful tip */}
@@ -320,33 +259,18 @@ export const LiveArena: React.FC<LiveArenaProps> = ({
                 Each analyst is analyzing market data, fundamentals, and
                 technicals to form their unique perspective
               </p>
-            </motion.div>
+            </div>
           )}
         </motion.div>
       )}
 
       {/* Phase 2 & 3: Tournament Bracket + Live Debate */}
       {state === StockArenaState.RUNNING_TOURNAMENT && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          className="space-y-8"
-        >
+        <motion.div {...fadeIn} className="space-y-8">
           {/* Tournament Progress Header */}
           {tournamentProgress && (
             <div className="text-center">
-              <motion.div
-                className="inline-flex items-center gap-3 px-6 py-3 rounded-2xl bg-gradient-to-r from-bear/10 via-gold/10 to-bull/10 border border-gold/30 mb-4"
-                animate={{
-                  boxShadow: [
-                    "0 0 20px rgba(251, 191, 36, 0.2)",
-                    "0 0 40px rgba(251, 191, 36, 0.4)",
-                    "0 0 20px rgba(251, 191, 36, 0.2)",
-                  ],
-                }}
-                transition={{ duration: 2, repeat: Infinity }}
-              >
+              <div className="inline-flex items-center gap-3 px-6 py-3 rounded-2xl bg-gradient-to-r from-bear/10 via-gold/10 to-bull/10 border border-gold/30 mb-4 shadow-lg shadow-gold/10">
                 <span
                   className="text-2xl"
                   role="img"
@@ -365,8 +289,8 @@ export const LiveArena: React.FC<LiveArenaProps> = ({
                     Battle in progress...
                   </div>
                 </div>
-              </motion.div>
-              {/* Progress indicator */}
+              </div>
+              {/* Progress indicator - CSS only */}
               <div
                 className="flex justify-center gap-2 mt-3"
                 role="progressbar"
@@ -404,10 +328,9 @@ export const LiveArena: React.FC<LiveArenaProps> = ({
           {currentDebate && (
             <motion.div
               ref={debateRef}
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: -20 }}
-              transition={{ duration: 0.5 }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.3 }}
               className="max-w-4xl mx-auto"
             >
               <LiveDebateCard debate={currentDebate} />
@@ -416,12 +339,7 @@ export const LiveArena: React.FC<LiveArenaProps> = ({
 
           {/* Completed Debates - Minimized */}
           {liveDebates.length > 1 && currentDebate && (
-            <motion.div
-              className="max-w-4xl mx-auto"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 0.3 }}
-            >
+            <div className="max-w-4xl mx-auto">
               <div className="text-xs text-slate-500 font-semibold mb-3 text-center flex items-center justify-center gap-2">
                 <span>COMPLETED MATCHES</span>
                 <span className="px-2 py-0.5 rounded-full bg-white/[0.05] text-[10px]">
@@ -439,7 +357,7 @@ export const LiveArena: React.FC<LiveArenaProps> = ({
                     <CompletedDebateCard key={debate.matchId} debate={debate} />
                   ))}
               </div>
-            </motion.div>
+            </div>
           )}
         </motion.div>
       )}
@@ -447,14 +365,23 @@ export const LiveArena: React.FC<LiveArenaProps> = ({
   );
 };
 
-// Tournament Bracket Visualization
+// Tournament Bracket Visualization - Memoized for performance
 const TournamentBracket: React.FC<{
   debates: StockDebate[];
   currentDebate: StockDebate | null;
-}> = ({ debates, currentDebate }) => {
-  const quarters = debates.filter((d) => d.round === "quarterfinal");
-  const semis = debates.filter((d) => d.round === "semifinal");
-  const final = debates.find((d) => d.round === "final");
+}> = memo(({ debates, currentDebate }) => {
+  const quarters = useMemo(
+    () => debates.filter((d) => d.round === "quarterfinal"),
+    [debates]
+  );
+  const semis = useMemo(
+    () => debates.filter((d) => d.round === "semifinal"),
+    [debates]
+  );
+  const final = useMemo(
+    () => debates.find((d) => d.round === "final"),
+    [debates]
+  );
 
   // Don't render bracket if no debates yet
   if (debates.length === 0) {
@@ -462,12 +389,7 @@ const TournamentBracket: React.FC<{
   }
 
   return (
-    <motion.div
-      className="max-w-6xl mx-auto mb-8"
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.5 }}
-    >
+    <div className="max-w-6xl mx-auto mb-8">
       <div className="glass-card rounded-2xl p-6 border border-white/10">
         <div className="text-center mb-6">
           <h3 className="text-lg font-serif font-bold text-white mb-1">
@@ -578,122 +500,121 @@ const TournamentBracket: React.FC<{
           </div>
         </div>
       </div>
-    </motion.div>
+    </div>
   );
-};
+});
 
-// Bracket Match Card
+TournamentBracket.displayName = "TournamentBracket";
+
+// Bracket Match Card - Simplified animations
 const BracketMatch: React.FC<{
   debate: StockDebate;
   isActive: boolean;
   size: "sm" | "md" | "lg";
-}> = ({ debate, isActive, size }) => {
+}> = memo(({ debate, isActive, size }) => {
   const sizeClasses = {
     sm: "p-2 text-[10px]",
     md: "p-2.5 text-xs",
     lg: "p-3 text-sm",
   };
 
+  const hasWinner = debate.winner !== null;
   const bullWon = debate.winner === "bull";
+  const bearWon = debate.winner === "bear";
 
   return (
-    <motion.div
-      className={`rounded-lg border ${sizeClasses[size]} ${
+    <div
+      className={`rounded-lg border ${
+        sizeClasses[size]
+      } transition-all duration-200 ${
         isActive
           ? "border-cyan bg-cyan/10 shadow-lg shadow-cyan/20"
           : "border-white/10 bg-white/[0.02]"
       }`}
-      animate={
-        isActive
-          ? {
-              boxShadow: [
-                "0 0 10px rgba(6, 182, 212, 0.3)",
-                "0 0 20px rgba(6, 182, 212, 0.5)",
-                "0 0 10px rgba(6, 182, 212, 0.3)",
-              ],
-            }
-          : {}
-      }
-      transition={{ duration: 1.5, repeat: Infinity }}
     >
       <div className="flex items-center justify-between gap-2">
         <div
           className={`flex items-center gap-1 ${
-            bullWon ? "opacity-100" : "opacity-40"
+            hasWinner ? (bullWon ? "opacity-100" : "opacity-40") : "opacity-100"
           }`}
         >
           <span>{debate.bullAnalyst.avatarEmoji}</span>
-          {bullWon && <span className="text-[8px]">🏆</span>}
+          {hasWinner && bullWon && <span className="text-[8px]">🏆</span>}
         </div>
         <span className="text-[8px] text-slate-600">VS</span>
         <div
           className={`flex items-center gap-1 ${
-            !bullWon ? "opacity-100" : "opacity-40"
+            hasWinner ? (bearWon ? "opacity-100" : "opacity-40") : "opacity-100"
           }`}
         >
-          {!bullWon && <span className="text-[8px]">🏆</span>}
+          {hasWinner && bearWon && <span className="text-[8px]">🏆</span>}
           <span>{debate.bearAnalyst.avatarEmoji}</span>
         </div>
       </div>
-    </motion.div>
+    </div>
   );
-};
+});
 
-// Live Debate Card - Full Featured
-const LiveDebateCard: React.FC<{ debate: StockDebate }> = ({ debate }) => {
+BracketMatch.displayName = "BracketMatch";
+
+// Live Debate Card - Performance Optimized
+const LiveDebateCard: React.FC<{ debate: StockDebate }> = memo(({ debate }) => {
   const bullWon = debate.winner === "bull";
+  const bearWon = debate.winner === "bear";
+  const hasWinner = debate.winner !== null;
   const dialogueRef = useRef<HTMLDivElement>(null);
-  const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastLengthRef = useRef(0);
+  const lastMatchIdRef = useRef<string | null>(null);
+  const rafIdRef = useRef<number | null>(null);
 
-  // Auto-scroll to latest message with debounce
+  // Auto-scroll to latest message - optimized with proper cleanup
+  // Reset length tracking when debate changes
   useEffect(() => {
-    // Clear pending scroll
-    if (scrollTimeoutRef.current) {
-      clearTimeout(scrollTimeoutRef.current);
+    if (lastMatchIdRef.current !== debate.matchId) {
+      lastMatchIdRef.current = debate.matchId;
+      lastLengthRef.current = 0;
     }
 
-    // Debounce to avoid excessive scrolling during rapid updates
-    scrollTimeoutRef.current = setTimeout(() => {
-      if (dialogueRef.current) {
-        dialogueRef.current.scrollTop = dialogueRef.current.scrollHeight;
-      }
-    }, 100);
+    // Only scroll if new messages were added
+    if (debate.dialogue.length > lastLengthRef.current) {
+      lastLengthRef.current = debate.dialogue.length;
 
-    // Cleanup
+      // Cancel any pending animation frame
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current);
+      }
+
+      // Use requestAnimationFrame for smoother scrolling
+      rafIdRef.current = requestAnimationFrame(() => {
+        if (dialogueRef.current) {
+          dialogueRef.current.scrollTop = dialogueRef.current.scrollHeight;
+        }
+        rafIdRef.current = null;
+      });
+    }
+
+    // Cleanup on unmount or before next effect
     return () => {
-      if (scrollTimeoutRef.current) {
-        clearTimeout(scrollTimeoutRef.current);
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
       }
     };
-  }, [debate.dialogue.length]);
+  }, [debate.matchId, debate.dialogue.length]);
 
   return (
-    <motion.div
-      className="glass-card rounded-2xl overflow-hidden border-2 border-cyan/30"
-      layout
-    >
-      {/* Debate Header */}
+    <div className="glass-card rounded-2xl overflow-hidden border-2 border-cyan/30">
+      {/* Debate Header - Static, no animations */}
       <div className="bg-gradient-to-r from-cyan/10 via-cyan/5 to-cyan/10 border-b border-cyan/20 p-4">
         <div className="flex items-center justify-between">
           {/* Bull Side */}
           <div className="flex items-center gap-3">
-            <motion.div
-              className="w-14 h-14 rounded-xl bg-bull/20 border-2 border-bull/40 flex items-center justify-center text-2xl relative"
-              animate={{ scale: [1, 1.05, 1] }}
-              transition={{ duration: 2, repeat: Infinity }}
-            >
+            <div className="w-14 h-14 rounded-xl bg-bull/20 border-2 border-bull/40 flex items-center justify-center text-2xl relative">
               {debate.bullAnalyst.avatarEmoji}
-              {bullWon && (
-                <motion.div
-                  className="absolute -top-2 -right-2 text-lg"
-                  initial={{ scale: 0, rotate: -180 }}
-                  animate={{ scale: 1, rotate: 0 }}
-                  transition={{ type: "spring" }}
-                >
-                  🏆
-                </motion.div>
+              {hasWinner && bullWon && (
+                <div className="absolute -top-2 -right-2 text-lg">🏆</div>
               )}
-            </motion.div>
+            </div>
             <div>
               <div className="font-bold text-bull-light">
                 {debate.bullAnalyst.name}
@@ -704,14 +625,10 @@ const LiveDebateCard: React.FC<{ debate: StockDebate }> = ({ debate }) => {
             </div>
           </div>
 
-          {/* VS Badge */}
-          <motion.div
-            className="px-4 py-2 rounded-xl bg-gradient-to-r from-bear/20 via-gold/20 to-bull/20 border border-gold/30"
-            animate={{ scale: [1, 1.1, 1] }}
-            transition={{ duration: 1.5, repeat: Infinity }}
-          >
+          {/* VS Badge - Static */}
+          <div className="px-4 py-2 rounded-xl bg-gradient-to-r from-bear/20 via-gold/20 to-bull/20 border border-gold/30">
             <span className="text-sm font-bold text-gold-light">VS</span>
-          </motion.div>
+          </div>
 
           {/* Bear Side */}
           <div className="flex items-center gap-3">
@@ -723,138 +640,150 @@ const LiveDebateCard: React.FC<{ debate: StockDebate }> = ({ debate }) => {
                 {debate.scores.bearScore} points
               </div>
             </div>
-            <motion.div
-              className="w-14 h-14 rounded-xl bg-bear/20 border-2 border-bear/40 flex items-center justify-center text-2xl relative"
-              animate={{ scale: [1, 1.05, 1] }}
-              transition={{ duration: 2, repeat: Infinity, delay: 0.5 }}
-            >
+            <div className="w-14 h-14 rounded-xl bg-bear/20 border-2 border-bear/40 flex items-center justify-center text-2xl relative">
               {debate.bearAnalyst.avatarEmoji}
-              {!bullWon && (
-                <motion.div
-                  className="absolute -top-2 -right-2 text-lg"
-                  initial={{ scale: 0, rotate: -180 }}
-                  animate={{ scale: 1, rotate: 0 }}
-                  transition={{ type: "spring" }}
-                >
-                  🏆
-                </motion.div>
+              {hasWinner && bearWon && (
+                <div className="absolute -top-2 -right-2 text-lg">🏆</div>
               )}
-            </motion.div>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Live Dialogue Stream */}
+      {/* Live Dialogue Stream - Optimized scrolling */}
       <div
         ref={dialogueRef}
-        className="p-4 space-y-3 max-h-96 overflow-y-auto bg-gradient-to-b from-transparent to-white/[0.01] scroll-smooth"
-        style={{ scrollBehavior: "smooth" }}
+        className="p-4 space-y-3 max-h-96 overflow-y-auto bg-gradient-to-b from-transparent to-white/[0.01]"
       >
-        <AnimatePresence mode="popLayout">
-          {debate.dialogue.map((turn, index) => {
-            const isBull = turn.position === "bull";
+        {debate.dialogue.map((turn, index) => {
+          const isBull = turn.position === "bull";
+          return (
+            <div
+              key={`${debate.matchId}-${index}`}
+              className={`flex ${isBull ? "justify-start" : "justify-end"}`}
+            >
+              <div className="max-w-[80%]">
+                <div
+                  className={`rounded-2xl px-4 py-3 ${
+                    isBull
+                      ? "bg-bull/10 border border-bull/20 rounded-tl-sm"
+                      : "bg-bear/10 border border-bear/20 rounded-tr-sm"
+                  }`}
+                >
+                  <div className="flex items-center gap-2 mb-2 flex-wrap">
+                    <span
+                      className="text-lg"
+                      role="img"
+                      aria-label={
+                        isBull
+                          ? debate.bullAnalyst.name
+                          : debate.bearAnalyst.name
+                      }
+                    >
+                      {isBull
+                        ? debate.bullAnalyst.avatarEmoji
+                        : debate.bearAnalyst.avatarEmoji}
+                    </span>
+                    <span
+                      className={`text-xs font-bold ${
+                        isBull ? "text-bull-light" : "text-bear-light"
+                      }`}
+                    >
+                      {isBull
+                        ? debate.bullAnalyst.name
+                        : debate.bearAnalyst.name}
+                    </span>
+                    <span
+                      className="text-[10px] text-slate-600 px-2 py-0.5 bg-white/[0.05] rounded"
+                      title="Argument strength"
+                    >
+                      💪 {turn.argumentStrength}
+                    </span>
+                    <span className="text-[9px] text-slate-700">
+                      Turn {index + 1}
+                    </span>
+                  </div>
+                  <p className="text-sm text-slate-300 leading-relaxed">
+                    {turn.content}
+                  </p>
+                  {turn.dataPointsReferenced.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {turn.dataPointsReferenced.map((dp, i) => (
+                        <span
+                          key={i}
+                          className="px-2 py-0.5 text-[10px] bg-white/[0.06] rounded-md text-slate-500 font-medium"
+                        >
+                          📊 {dp}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+
+        {/* Typing Indicator (if debate is ongoing) - CSS only animation */}
+        {/* Show typing indicator when debate is in progress and not all turns complete */}
+        {/* Final round has 3 turns (6 dialogue entries), regular rounds have 2 turns (4 entries) */}
+        {!hasWinner &&
+          (() => {
+            // Determine expected dialogue count based on round
+            const expectedTurns = debate.round === "final" ? 6 : 4;
+            const isStillDebating = debate.dialogue.length < expectedTurns;
+
+            if (!isStillDebating) return null;
+
+            const isWaitingForBull = debate.dialogue.length % 2 === 0;
+            const thinkingAnalyst = isWaitingForBull
+              ? debate.bullAnalyst
+              : debate.bearAnalyst;
+            const totalTurns = debate.round === "final" ? 6 : 4;
+
             return (
-              <motion.div
-                key={`${debate.matchId}-${index}`}
-                className={`flex ${isBull ? "justify-start" : "justify-end"}`}
-                initial={{ opacity: 0, y: 20, scale: 0.9 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.9 }}
-                transition={{
-                  type: "spring",
-                  stiffness: 200,
-                  damping: 20,
-                }}
-              >
-                <div className="max-w-[80%]">
-                  <div
-                    className={`rounded-2xl px-4 py-3 ${
-                      isBull
-                        ? "bg-bull/10 border border-bull/20 rounded-tl-sm"
-                        : "bg-bear/10 border border-bear/20 rounded-tr-sm"
+              <div className="flex flex-col items-center gap-2">
+                <div
+                  className={`flex items-center gap-2 px-4 py-2 rounded-full border ${
+                    isWaitingForBull
+                      ? "bg-bull/5 border-bull/20"
+                      : "bg-bear/5 border-bear/20"
+                  }`}
+                >
+                  <span className="text-lg">{thinkingAnalyst.avatarEmoji}</span>
+                  <div className="flex gap-1">
+                    <div
+                      className={`w-2 h-2 rounded-full animate-pulse ${
+                        isWaitingForBull ? "bg-bull" : "bg-bear"
+                      }`}
+                    />
+                    <div
+                      className={`w-2 h-2 rounded-full animate-pulse ${
+                        isWaitingForBull ? "bg-bull" : "bg-bear"
+                      }`}
+                      style={{ animationDelay: "0.2s" }}
+                    />
+                    <div
+                      className={`w-2 h-2 rounded-full animate-pulse ${
+                        isWaitingForBull ? "bg-bull" : "bg-bear"
+                      }`}
+                      style={{ animationDelay: "0.4s" }}
+                    />
+                  </div>
+                  <span
+                    className={`text-xs ${
+                      isWaitingForBull ? "text-bull-light" : "text-bear-light"
                     }`}
                   >
-                    <div className="flex items-center gap-2 mb-2 flex-wrap">
-                      <span
-                        className="text-lg"
-                        role="img"
-                        aria-label={
-                          isBull
-                            ? debate.bullAnalyst.name
-                            : debate.bearAnalyst.name
-                        }
-                      >
-                        {isBull
-                          ? debate.bullAnalyst.avatarEmoji
-                          : debate.bearAnalyst.avatarEmoji}
-                      </span>
-                      <span
-                        className={`text-xs font-bold ${
-                          isBull ? "text-bull-light" : "text-bear-light"
-                        }`}
-                      >
-                        {isBull
-                          ? debate.bullAnalyst.name
-                          : debate.bearAnalyst.name}
-                      </span>
-                      <span
-                        className="text-[10px] text-slate-600 px-2 py-0.5 bg-white/[0.05] rounded"
-                        title="Argument strength"
-                      >
-                        💪 {turn.argumentStrength}
-                      </span>
-                      <span className="text-[9px] text-slate-700">
-                        Turn {index + 1}
-                      </span>
-                    </div>
-                    <p className="text-sm text-slate-300 leading-relaxed">
-                      {turn.content}
-                    </p>
-                    {turn.dataPointsReferenced.length > 0 && (
-                      <div className="mt-2 flex flex-wrap gap-1">
-                        {turn.dataPointsReferenced.map((dp, i) => (
-                          <span
-                            key={i}
-                            className="px-2 py-0.5 text-[10px] bg-white/[0.06] rounded-md text-slate-500 font-medium"
-                          >
-                            📊 {dp}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                    {thinkingAnalyst.name} is thinking...
+                  </span>
                 </div>
-              </motion.div>
+                <p className="text-[10px] text-slate-600">
+                  Turn {debate.dialogue.length + 1} of {totalTurns}
+                </p>
+              </div>
             );
-          })}
-        </AnimatePresence>
-
-        {/* Typing Indicator (if debate is ongoing) */}
-        {debate.dialogue.length < 4 && (
-          <motion.div
-            className="flex flex-col items-center gap-2"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-          >
-            <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-white/[0.03] border border-white/10">
-              <motion.div
-                className="flex gap-1"
-                animate={{ opacity: [0.3, 1, 0.3] }}
-                transition={{ duration: 1.5, repeat: Infinity }}
-              >
-                <div className="w-2 h-2 bg-cyan rounded-full" />
-                <div className="w-2 h-2 bg-cyan rounded-full" />
-                <div className="w-2 h-2 bg-cyan rounded-full" />
-              </motion.div>
-              <span className="text-xs text-slate-500">
-                Analysts thinking...
-              </span>
-            </div>
-            <p className="text-[10px] text-slate-600">
-              Turn {debate.dialogue.length + 1} of 4
-            </p>
-          </motion.div>
-        )}
+          })()}
       </div>
 
       {/* Score Breakdown */}
@@ -882,28 +811,28 @@ const LiveDebateCard: React.FC<{ debate: StockDebate }> = ({ debate }) => {
           />
         </div>
       </div>
-    </motion.div>
+    </div>
   );
-};
+});
 
-// Score Meter Component
+LiveDebateCard.displayName = "LiveDebateCard";
+
+// Score Meter Component - CSS transitions only
 const ScoreMeter: React.FC<{
   label: string;
   bull: number;
   bear: number;
-}> = ({ label, bull, bear }) => {
+}> = memo(({ label, bull, bear }) => {
   // Safe calculation with explicit zero handling
   const total = bull + bear;
-  const bullPercent =
-    total > 0 ? (bull / total) * 100 : bull === 0 && bear === 0 ? 50 : 0;
-  const winner =
-    bull > bear ? "bull" : bear > bull ? "bear" : total === 0 ? "none" : "tie";
+  const bullPercent = total > 0 ? (bull / total) * 100 : 50; // Default to 50% when no scores
+  const winner = bull > bear ? "bull" : bear > bull ? "bear" : "tie";
 
   return (
     <div>
       <div className="flex items-center justify-between mb-2">
         <div className="text-[10px] text-slate-500 font-bold">{label}</div>
-        {winner !== "tie" && winner !== "none" && (
+        {winner !== "tie" && (
           <span
             className="text-[8px]"
             role="img"
@@ -914,17 +843,15 @@ const ScoreMeter: React.FC<{
         )}
       </div>
       <div className="h-2 bg-bear/30 rounded-full overflow-hidden relative">
-        <motion.div
-          className="h-full bg-gradient-to-r from-bull to-bull-light rounded-full relative"
-          initial={{ width: 0 }}
-          animate={{ width: `${bullPercent}%` }}
-          transition={{ duration: 0.8, ease: "easeOut" }}
+        <div
+          className="h-full bg-gradient-to-r from-bull to-bull-light rounded-full relative transition-all duration-500 ease-out"
+          style={{ width: `${bullPercent}%` }}
         >
           {/* Glow effect for winner */}
           {winner === "bull" && (
             <div className="absolute inset-0 bg-bull/30 blur-sm" />
           )}
-        </motion.div>
+        </div>
         {/* Center line */}
         <div className="absolute left-1/2 top-0 bottom-0 w-px bg-white/20" />
       </div>
@@ -946,64 +873,67 @@ const ScoreMeter: React.FC<{
       </div>
     </div>
   );
-};
+});
 
-// Completed Debate Card - Minimized
-const CompletedDebateCard: React.FC<{ debate: StockDebate }> = ({ debate }) => {
-  const bullWon = debate.winner === "bull";
+ScoreMeter.displayName = "ScoreMeter";
 
-  return (
-    <motion.div
-      className="glass-card rounded-lg p-3 border border-white/5 opacity-60 hover:opacity-100 transition-all cursor-pointer hover:border-white/10"
-      initial={{ opacity: 0, height: 0 }}
-      animate={{ opacity: 0.6, height: "auto" }}
-      transition={{ duration: 0.3 }}
-      whileHover={{ scale: 1.01 }}
-      title="Click to view full debate details"
-    >
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <span
-            className="text-lg opacity-50"
-            role="img"
-            aria-label={debate.bullAnalyst.name}
-          >
-            {debate.bullAnalyst.avatarEmoji}
-          </span>
-          <span className="text-xs text-slate-600">vs</span>
-          <span
-            className="text-lg opacity-50"
-            role="img"
-            aria-label={debate.bearAnalyst.name}
-          >
-            {debate.bearAnalyst.avatarEmoji}
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-500">
-            {debate.round === "quarterfinal"
-              ? "Quarter"
-              : debate.round === "semifinal"
-              ? "Semi"
-              : "Final"}
-          </span>
-          <div className="flex items-center gap-1">
-            <span className="text-sm">
-              {bullWon
-                ? debate.bullAnalyst.avatarEmoji
-                : debate.bearAnalyst.avatarEmoji}
+// Completed Debate Card - Minimized, no animations
+const CompletedDebateCard: React.FC<{ debate: StockDebate }> = memo(
+  ({ debate }) => {
+    const hasWinner = debate.winner !== null;
+    const bullWon = debate.winner === "bull";
+    const winnerAnalyst = hasWinner
+      ? bullWon
+        ? debate.bullAnalyst
+        : debate.bearAnalyst
+      : null;
+
+    return (
+      <div className="glass-card rounded-lg p-3 border border-white/5 opacity-60 hover:opacity-100 transition-opacity hover:border-white/10">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <span
+              className="text-lg opacity-50"
+              role="img"
+              aria-label={debate.bullAnalyst.name}
+            >
+              {debate.bullAnalyst.avatarEmoji}
             </span>
-            <span className="text-xs" role="img" aria-label="Winner">
-              🏆
+            <span className="text-xs text-slate-600">vs</span>
+            <span
+              className="text-lg opacity-50"
+              role="img"
+              aria-label={debate.bearAnalyst.name}
+            >
+              {debate.bearAnalyst.avatarEmoji}
             </span>
           </div>
-          <span className="text-[10px] text-slate-600 bg-white/[0.03] px-1.5 py-0.5 rounded">
-            {debate.scores.bullScore}-{debate.scores.bearScore}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-500">
+              {debate.round === "quarterfinal"
+                ? "Quarter"
+                : debate.round === "semifinal"
+                ? "Semi"
+                : "Final"}
+            </span>
+            {winnerAnalyst && (
+              <div className="flex items-center gap-1">
+                <span className="text-sm">{winnerAnalyst.avatarEmoji}</span>
+                <span className="text-xs" role="img" aria-label="Winner">
+                  🏆
+                </span>
+              </div>
+            )}
+            <span className="text-[10px] text-slate-600 bg-white/[0.03] px-1.5 py-0.5 rounded">
+              {debate.scores.bullScore}-{debate.scores.bearScore}
+            </span>
+          </div>
         </div>
       </div>
-    </motion.div>
-  );
-};
+    );
+  }
+);
+
+CompletedDebateCard.displayName = "CompletedDebateCard";
 
 export default LiveArena;

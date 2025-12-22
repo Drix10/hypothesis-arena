@@ -17,6 +17,7 @@ interface RecommendationCardProps {
     totalValue: number;
     avgConfidence: number;
   };
+  tradingPreviewError?: boolean;
 }
 
 const REC_CONFIG: Record<
@@ -70,6 +71,7 @@ export const RecommendationCard: React.FC<RecommendationCardProps> = ({
   recommendation,
   onExecuteTrades,
   tradingPreview,
+  tradingPreviewError,
 }) => {
   const config = REC_CONFIG[recommendation.recommendation] || REC_CONFIG.hold;
   const isPositive = recommendation.upside >= 0;
@@ -307,7 +309,25 @@ export const RecommendationCard: React.FC<RecommendationCardProps> = ({
 
           {/* Trading Preview */}
           <AnimatePresence>
-            {tradingPreview && (
+            {tradingPreviewError && (
+              <motion.div
+                className="p-4 rounded-xl mb-8"
+                style={{
+                  background: "rgba(239,68,68,0.05)",
+                  border: "1px solid rgba(239,68,68,0.2)",
+                }}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.2 }}
+              >
+                <div className="flex items-center gap-2 text-sm text-red-400">
+                  <span>⚠️</span>
+                  <span>Unable to generate trading preview</span>
+                </div>
+              </motion.div>
+            )}
+            {tradingPreview && !tradingPreviewError && (
               <motion.div
                 className="p-5 rounded-xl mb-8"
                 style={{
@@ -514,31 +534,16 @@ const TradingBox: React.FC<{
 );
 
 function calculatePosition(current: number, min: number, max: number): number {
+  // Return midpoint for invalid inputs
   if (!isFinite(current) || !isFinite(min) || !isFinite(max)) {
-    if (process.env.NODE_ENV === "development") {
-      console.warn("calculatePosition: Non-finite values detected", {
-        current,
-        min,
-        max,
-      });
-    }
     return 50;
   }
   if (max === min) {
-    if (process.env.NODE_ENV === "development") {
-      console.warn("calculatePosition: min equals max", { min, max });
-    }
     return 50;
   }
-  // Handle negative prices - this shouldn't happen in stock prices but handle gracefully
+  // Return midpoint for any negative values (shouldn't happen with stock prices)
   if (current < 0 || min < 0 || max < 0) {
-    // Use absolute values as fallback
-    const absMin = Math.abs(min);
-    const absMax = Math.abs(max);
-    const absCurrent = Math.abs(current);
-    if (absMax === absMin) return 50;
-    const position = ((absCurrent - absMin) / (absMax - absMin)) * 100;
-    return Math.max(5, Math.min(95, position));
+    return 50;
   }
 
   const position = ((current - min) / (max - min)) * 100;

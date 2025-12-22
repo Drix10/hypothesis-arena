@@ -46,8 +46,7 @@ export const TradingSettings: React.FC<TradingSettingsProps> = ({
       } else {
         alert("Failed to save settings. Please try again.");
       }
-    } catch (err) {
-      console.error("Failed to save settings:", err);
+    } catch {
       alert("Failed to save settings. Please try again.");
     } finally {
       setIsSaving(false);
@@ -433,20 +432,7 @@ export const TradingSettings: React.FC<TradingSettingsProps> = ({
               onReset();
             }
           }}
-          className="px-4 py-2 rounded-lg text-bear-light transition-all font-medium text-sm hover:scale-[1.02] active:scale-[0.98]"
-          style={{
-            background:
-              "linear-gradient(to right, rgba(239,68,68,0.2), rgba(239,68,68,0.1))",
-            border: "1px solid rgba(239,68,68,0.3)",
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background =
-              "linear-gradient(to right, rgba(239,68,68,0.3), rgba(239,68,68,0.2))";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background =
-              "linear-gradient(to right, rgba(239,68,68,0.2), rgba(239,68,68,0.1))";
-          }}
+          className="px-4 py-2 rounded-lg text-bear-light transition-all font-medium text-sm hover:scale-[1.02] active:scale-[0.98] bg-gradient-to-r from-red-500/20 to-red-500/10 hover:from-red-500/30 hover:to-red-500/20 border border-red-500/30"
         >
           🔄 Reset All Portfolios
         </button>

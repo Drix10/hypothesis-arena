@@ -5,7 +5,7 @@
  * Pairs bulls vs bears and runs multi-turn debates.
  */
 
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, Type } from '@google/genai';
 import {
     AnalystAgent,
     AnalystMethodology,
@@ -22,6 +22,33 @@ import {
 } from '../../constants/analystPrompts';
 import { categorizeByRecommendation } from './analystService';
 import { logger } from '../utils/logger';
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STRUCTURED OUTPUT SCHEMAS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * JSON Schema for debate turn - ensures structured, parseable output
+ */
+const DEBATE_TURN_SCHEMA = {
+    type: Type.OBJECT,
+    properties: {
+        argument: {
+            type: Type.STRING,
+            description: 'The debate argument (100-150 words)'
+        },
+        dataPointsReferenced: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+            description: 'List of data points/metrics referenced in the argument'
+        },
+        keyPoint: {
+            type: Type.STRING,
+            description: 'The single most important point in this argument'
+        }
+    },
+    required: ['argument', 'dataPointsReferenced', 'keyPoint']
+};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -45,11 +72,15 @@ interface DebateConfig {
 
 /**
  * Create debate pairings from theses
- * Pairs bulls against bears for maximum conflict
+ * Pairs bulls against bears for maximum conflict.
+ * Falls back to confidence-based pairing when bull/bear distribution is imbalanced.
+ * Handles odd numbers by reusing the highest-confidence analyst if needed.
  */
 export function createMatchPairings(theses: InvestmentThesis[]): MatchPairing[] {
     const { bulls, bears, neutral } = categorizeByRecommendation(theses);
     const pairings: MatchPairing[] = [];
+
+    logger.info(`Creating match pairings: ${theses.length} theses (${bulls.length} bulls, ${bears.length} bears, ${neutral.length} neutral)`);
 
     // Sort by confidence (strongest convictions first)
     const sortedBulls = [...bulls].sort((a, b) => b.confidence - a.confidence);
@@ -64,9 +95,38 @@ export function createMatchPairings(theses: InvestmentThesis[]): MatchPairing[] 
         }
     }
 
-    // Create quarterfinal pairings (up to 4 matches)
-    const numMatches = Math.min(4, Math.min(sortedBulls.length, sortedBears.length));
-    for (let i = 0; i < numMatches; i++) {
+    // Calculate how many bull vs bear matches we can make
+    const bullBearMatches = Math.min(sortedBulls.length, sortedBears.length);
+
+    // If we can make at least 4 bull vs bear matches, use traditional pairing
+    if (bullBearMatches >= 4) {
+        logger.info(`Using traditional bull vs bear pairing (${bullBearMatches} possible matches)`);
+        for (let i = 0; i < 4; i++) {
+            pairings.push({
+                bull: sortedBulls[i],
+                bear: sortedBears[i],
+                round: 'quarterfinal'
+            });
+        }
+        return pairings;
+    }
+
+    // Otherwise, use confidence-based pairing to ensure 4 quarterfinal matches
+    // This handles cases where most analysts agree (all bullish/bearish)
+    logger.info(`Imbalanced distribution detected, using confidence-based fallback pairing`);
+
+    // Target 4 matches for proper bracket, but need at least 4 theses
+    // With 7 theses, we can still make 4 matches by having one analyst debate twice
+    const targetMatches = theses.length >= 4 ? 4 : Math.floor(theses.length / 2);
+
+    if (targetMatches < 2) {
+        // Not enough theses for meaningful tournament
+        logger.warn(`Not enough theses for tournament: ${theses.length} theses, need at least 4`);
+        return pairings;
+    }
+
+    // First, create as many bull vs bear matches as possible
+    for (let i = 0; i < bullBearMatches; i++) {
         pairings.push({
             bull: sortedBulls[i],
             bear: sortedBears[i],
@@ -74,7 +134,67 @@ export function createMatchPairings(theses: InvestmentThesis[]): MatchPairing[] 
         });
     }
 
+    // Track which theses have been used
+    const usedIds = new Set<string>();
+    for (const p of pairings) {
+        usedIds.add(p.bull.agentId);
+        usedIds.add(p.bear.agentId);
+    }
+
+    // Get remaining theses sorted by confidence
+    const remaining = theses
+        .filter(t => !usedIds.has(t.agentId))
+        .sort((a, b) => b.confidence - a.confidence);
+
+    logger.info(`Created ${pairings.length} bull/bear matches, ${remaining.length} analysts remaining for confidence-based pairing`);
+
+    // Pair remaining by confidence (highest vs lowest) to create contrast
+    while (pairings.length < targetMatches && remaining.length >= 2) {
+        const high = remaining.shift();
+        const low = remaining.pop();
+
+        // Defensive check - should never happen due to while condition
+        if (!high || !low) break;
+
+        // Assign bull/bear based on recommendation score
+        const highScore = getRecommendationScore(high.recommendation);
+        const lowScore = getRecommendationScore(low.recommendation);
+
+        pairings.push({
+            bull: highScore >= lowScore ? high : low,
+            bear: highScore >= lowScore ? low : high,
+            round: 'quarterfinal'
+        });
+    }
+
+    // Handle odd number of analysts: if we still need matches and have 1 remaining,
+    // pair them with the highest-confidence analyst from existing pairings
+    if (pairings.length < targetMatches && remaining.length === 1) {
+        const oddAnalyst = remaining[0];
+        // Find the highest confidence analyst already in a pairing to debate again
+        const allPaired = pairings.flatMap(p => [p.bull, p.bear]);
+        const highestPaired = [...allPaired].sort((a, b) => b.confidence - a.confidence)[0];
+
+        if (highestPaired && oddAnalyst) {
+            const oddScore = getRecommendationScore(oddAnalyst.recommendation);
+            const pairedScore = getRecommendationScore(highestPaired.recommendation);
+
+            pairings.push({
+                bull: oddScore >= pairedScore ? oddAnalyst : highestPaired,
+                bear: oddScore >= pairedScore ? highestPaired : oddAnalyst,
+                round: 'quarterfinal'
+            });
+            logger.info(`Added extra match for odd analyst: ${oddAnalyst.agentId} vs ${highestPaired.agentId}`);
+        }
+    }
+    logger.info(`Final quarterfinal pairings: ${pairings.length} matches`);
+
     return pairings;
+}
+
+function getRecommendationScore(rec: InvestmentThesis['recommendation']): number {
+    const scores = { strong_buy: 5, buy: 4, hold: 3, sell: 2, strong_sell: 1 };
+    return scores[rec];
 }
 
 /**
@@ -204,11 +324,6 @@ export function createFinalPairing(
     };
 }
 
-function getRecommendationScore(rec: InvestmentThesis['recommendation']): number {
-    const scores = { strong_buy: 5, buy: 4, hold: 3, sell: 2, strong_sell: 1 };
-    return scores[rec];
-}
-
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // DEBATE SIMULATION
@@ -302,8 +417,8 @@ function extractDataPointsReferenced(content: string): string[] {
 }
 
 /**
- * Generate a single debate turn - ENHANCED
- * Now includes stock data context for more informed arguments
+ * Generate a single debate turn - ENHANCED with Structured Output
+ * Uses Gemini's JSON schema for reliable, structured responses
  */
 async function generateDebateTurn(
     ai: GoogleGenAI,
@@ -341,23 +456,49 @@ ${dataContext}
 - Reference SPECIFIC numbers from the data above
 - Stay true to your ${analyst.methodology} methodology
 - Be persuasive but acknowledge valid counterpoints
-- Keep response under 150 words`;
+- Keep your argument between 100-150 words`;
 
     const userPrompt = DEBATE_TURN_PROMPT(position, previousTurn, round);
 
     try {
+        // Use structured output with JSON schema for reliable parsing
         const response = await ai.models.generateContent({
             model,
             contents: userPrompt,
             config: {
                 systemInstruction: systemPrompt,
-                temperature: 0.75, // Slightly lower for more focused responses
-                maxOutputTokens: 400
+                temperature: 0.75,
+                maxOutputTokens: 500,
+                responseMimeType: 'application/json',
+                responseSchema: DEBATE_TURN_SCHEMA
             }
         });
 
-        const content = response.text || 'No response generated.';
-        const dataPoints = extractDataPointsReferenced(content);
+        const jsonText = response.text || '{}';
+
+        // Parse the structured JSON response
+        let parsed: {
+            argument: string;
+            dataPointsReferenced: string[];
+            keyPoint: string;
+        };
+
+        try {
+            parsed = JSON.parse(jsonText);
+        } catch (parseError) {
+            logger.warn(`Failed to parse debate turn JSON for ${analyst.name}, using raw text`);
+            // If JSON parsing fails, use the raw text as the argument
+            parsed = {
+                argument: jsonText,
+                dataPointsReferenced: [],
+                keyPoint: ''
+            };
+        }
+
+        const content = parsed.argument || 'No response generated.';
+        const dataPoints = Array.isArray(parsed.dataPointsReferenced)
+            ? parsed.dataPointsReferenced.filter(Boolean)
+            : extractDataPointsReferenced(content);
 
         return {
             speakerId: analyst.id,
@@ -505,8 +646,11 @@ async function runDebate(
     const bullAnalyst = getAnalystById(pairing.bull.agentId);
     const bearAnalyst = getAnalystById(pairing.bear.agentId);
 
-    if (!bullAnalyst || !bearAnalyst) {
-        throw new Error('Could not find analyst profiles');
+    if (!bullAnalyst) {
+        throw new Error(`Could not find bull analyst profile for ID: ${pairing.bull.agentId}`);
+    }
+    if (!bearAnalyst) {
+        throw new Error(`Could not find bear analyst profile for ID: ${pairing.bear.agentId}`);
     }
 
     const debate: StockDebate = {
@@ -544,9 +688,18 @@ async function runDebate(
         debate.dialogue.push(bullTurn);
         lastBullStatement = bullTurn.content;
 
+        // Calculate live scores after each turn for UI feedback
+        debate.scores = calculateDebateScores(debate);
+
         if (config.onTurnComplete) {
             try {
-                config.onTurnComplete(debate, bullTurn);
+                // Create a shallow copy with new dialogue array to trigger React re-render
+                const debateSnapshot = {
+                    ...debate,
+                    dialogue: [...debate.dialogue],
+                    scores: { ...debate.scores }
+                };
+                config.onTurnComplete(debateSnapshot, bullTurn);
             } catch (e) {
                 logger.error('Error in onTurnComplete callback (bull):', e);
             }
@@ -560,9 +713,18 @@ async function runDebate(
         debate.dialogue.push(bearTurn);
         lastBearStatement = bearTurn.content;
 
+        // Calculate live scores after each turn for UI feedback
+        debate.scores = calculateDebateScores(debate);
+
         if (config.onTurnComplete) {
             try {
-                config.onTurnComplete(debate, bearTurn);
+                // Create a shallow copy with new dialogue array to trigger React re-render
+                const debateSnapshot = {
+                    ...debate,
+                    dialogue: [...debate.dialogue],
+                    scores: { ...debate.scores }
+                };
+                config.onTurnComplete(debateSnapshot, bearTurn);
             } catch (e) {
                 logger.error('Error in onTurnComplete callback (bear):', e);
             }
@@ -572,7 +734,7 @@ async function runDebate(
         await new Promise(resolve => setTimeout(resolve, 300));
     }
 
-    // Calculate final scores
+    // Final score calculation (already done, but ensure consistency)
     debate.scores = calculateDebateScores(debate);
 
     // Determine winner with tie-breaker logic
@@ -624,11 +786,12 @@ function calculateDebateScores(debate: StockDebate): DebateScores {
     // LOGIC COHERENCE (argument strength + consistency bonus)
     // ═══════════════════════════════════════════════════════════════════════════
     // Bonus for consistent argument strength across turns
+    // Only calculate variance if we have multiple turns to compare
     const bullStrengthVariance = bullTurns.length > 1
-        ? Math.sqrt(bullTurns.reduce((sum, t) => sum + Math.pow(t.argumentStrength - avgBullStrength, 2), 0) / bullTurns.length)
+        ? Math.sqrt(bullTurns.reduce((sum, t) => sum + Math.pow((t.argumentStrength ?? 0) - avgBullStrength, 2), 0) / bullTurns.length)
         : 0;
     const bearStrengthVariance = bearTurns.length > 1
-        ? Math.sqrt(bearTurns.reduce((sum, t) => sum + Math.pow(t.argumentStrength - avgBearStrength, 2), 0) / bearTurns.length)
+        ? Math.sqrt(bearTurns.reduce((sum, t) => sum + Math.pow((t.argumentStrength ?? 0) - avgBearStrength, 2), 0) / bearTurns.length)
         : 0;
 
     // Lower variance = more consistent = bonus
@@ -646,10 +809,10 @@ function calculateDebateScores(debate: StockDebate): DebateScores {
 
     // Check if debate content acknowledges risks
     const bullAcknowledgesRisk = bullTurns.some(t =>
-        /risk|concern|however|although|downside|challenge/i.test(t.content)
+        t.content && /risk|concern|however|although|downside|challenge/i.test(t.content)
     ) ? 15 : 0;
     const bearAcknowledgesRisk = bearTurns.some(t =>
-        /risk|concern|however|although|downside|challenge/i.test(t.content)
+        t.content && /risk|concern|however|although|downside|challenge/i.test(t.content)
     ) ? 15 : 0;
 
     const bullRiskScore = Math.min(100, bullThesisRisks * 15 + bullAcknowledgesRisk);
@@ -663,10 +826,10 @@ function calculateDebateScores(debate: StockDebate): DebateScores {
 
     // Check debate content for catalyst mentions
     const bullMentionsCatalyst = bullTurns.some(t =>
-        /catalyst|trigger|Q[1-4]|earnings|announcement|upcoming|near.term/i.test(t.content)
+        t.content && /catalyst|trigger|Q[1-4]|earnings|announcement|upcoming|near.term/i.test(t.content)
     ) ? 20 : 0;
     const bearMentionsCatalyst = bearTurns.some(t =>
-        /catalyst|trigger|Q[1-4]|earnings|announcement|upcoming|near.term/i.test(t.content)
+        t.content && /catalyst|trigger|Q[1-4]|earnings|announcement|upcoming|near.term/i.test(t.content)
     ) ? 20 : 0;
 
     const bullCatalystScore = Math.min(100, bullCatalysts * 20 + bullMentionsCatalyst);
@@ -719,32 +882,44 @@ function calculateDebateScores(debate: StockDebate): DebateScores {
  * Prioritizes arguments with data points and clear reasoning
  */
 function extractWinningArguments(debate: StockDebate): string[] {
+    // Handle case where winner is null
+    if (!debate.winner) {
+        // Return empty array or fallback to bull thesis
+        return debate.bullThesis?.bullCase?.slice(0, 3) ?? [];
+    }
+
     const winnerTurns = debate.dialogue.filter(t => t.position === debate.winner);
 
     if (winnerTurns.length === 0) {
         // Fallback to thesis arguments
         const winnerThesis = debate.winner === 'bull' ? debate.bullThesis : debate.bearThesis;
-        return winnerThesis.bullCase.slice(0, 3);
+        const thesisArgs = debate.winner === 'bull'
+            ? winnerThesis?.bullCase
+            : winnerThesis?.bearCase;
+        return thesisArgs?.slice(0, 3) ?? [];
     }
-
     // Score each turn for extraction priority
-    const scoredTurns = winnerTurns.map(turn => {
-        let extractionScore = turn.argumentStrength;
+    const scoredTurns = winnerTurns
+        .filter(turn => turn && turn.content) // Filter out invalid turns
+        .map(turn => {
+            let extractionScore = turn.argumentStrength ?? 0;
 
-        // Bonus for data references
-        extractionScore += turn.dataPointsReferenced.length * 5;
+            // Bonus for data references
+            const dataPoints = turn.dataPointsReferenced;
+            extractionScore += (Array.isArray(dataPoints) ? dataPoints.length : 0) * 5;
 
-        // Bonus for specific numbers in content
-        const numberMatches = turn.content.match(/\d+\.?\d*%|\$\d+/g) || [];
-        extractionScore += numberMatches.length * 3;
+            // Bonus for specific numbers in content
+            const content = turn.content ?? '';
+            const numberMatches = content.match(/\d+\.?\d*%|\$\d+/g) || [];
+            extractionScore += numberMatches.length * 3;
 
-        // Bonus for causal reasoning
-        if (/because|therefore|thus|as a result/i.test(turn.content)) {
-            extractionScore += 5;
-        }
+            // Bonus for causal reasoning
+            if (/because|therefore|thus|as a result/i.test(content)) {
+                extractionScore += 5;
+            }
 
-        return { turn, extractionScore };
-    });
+            return { turn, extractionScore };
+        });
 
     // Sort by extraction score and take top 3
     return scoredTurns
@@ -752,7 +927,10 @@ function extractWinningArguments(debate: StockDebate): string[] {
         .slice(0, 3)
         .map(({ turn }) => {
             // Clean up the content for display
-            let content = turn.content.trim();
+            let content = (turn.content ?? '').trim();
+
+            // Skip empty content
+            if (!content) return '';
 
             // Truncate intelligently at sentence boundary if too long
             if (content.length > 250) {
@@ -765,7 +943,8 @@ function extractWinningArguments(debate: StockDebate): string[] {
             }
 
             return content;
-        });
+        })
+        .filter(Boolean); // Remove any empty strings
 }
 
 
