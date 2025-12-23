@@ -1,5 +1,24 @@
 import dotenv from 'dotenv';
-dotenv.config({ path: '../../.env' });
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+// Load .env from project root - handle both ESM and CJS
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Try multiple paths to find .env
+const envPaths = [
+    path.resolve(__dirname, '../../../../.env'),  // From dist
+    path.resolve(__dirname, '../../../.env'),     // From src
+    path.resolve(process.cwd(), '.env'),          // From project root
+];
+
+for (const envPath of envPaths) {
+    const result = dotenv.config({ path: envPath });
+    if (!result.error) {
+        break;
+    }
+}
 
 export const config = {
     // Server

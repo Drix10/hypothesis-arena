@@ -7,8 +7,11 @@ const poolConfig: PoolConfig = {
     max: 20,
     min: 2,
     idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 5000,
-    ssl: config.nodeEnv === 'production' ? { rejectUnauthorized: false } : undefined,
+    connectionTimeoutMillis: 10000,
+    // Neon requires SSL
+    ssl: config.databaseUrl.includes('neon.tech') || config.nodeEnv === 'production'
+        ? { rejectUnauthorized: false }
+        : undefined,
     // Validate connections before use
     allowExitOnIdle: false,
 };
