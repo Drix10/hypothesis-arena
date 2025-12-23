@@ -1,33 +1,49 @@
 import dotenv from 'dotenv';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import fs from 'fs';
 
-// Load .env from project root - handle both ESM and CJS
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Try multiple paths to find .env
+// Load .env from project root using reliable path resolution
+// Uses __dirname which is reliable in CommonJS (backend uses CommonJS)
 const envPaths = [
-    path.resolve(__dirname, '../../../../.env'),  // From dist
-    path.resolve(__dirname, '../../../.env'),     // From src
-    path.resolve(process.cwd(), '.env'),          // From project root
+    path.resolve(__dirname, '../../../../.env'),  // From packages/backend/dist/config
+    path.resolve(__dirname, '../../../.env'),     // From packages/backend/src/config (ts-node)
+    path.resolve(__dirname, '../../.env'),        // From packages/backend/dist
+    path.resolve(process.cwd(), '.env'),          // From cwd (fallback)
 ];
 
+let envLoaded = false;
 for (const envPath of envPaths) {
-    const result = dotenv.config({ path: envPath });
-    if (!result.error) {
-        break;
+    if (fs.existsSync(envPath)) {
+        const result = dotenv.config({ path: envPath });
+        if (!result.error) {
+            envLoaded = true;
+            break;
+        }
     }
 }
 
+// Safe parseInt with fallback
+const safeParseInt = (value: string | undefined, fallback: number): number => {
+    if (!value) return fallback;
+    const parsed = parseInt(value, 10);
+    return isNaN(parsed) ? fallback : parsed;
+};
+
+// Safe parseFloat with fallback
+const safeParseFloat = (value: string | undefined, fallback: number): number => {
+    if (!value) return fallback;
+    const parsed = parseFloat(value);
+    return isNaN(parsed) ? fallback : parsed;
+};
+
 export const config = {
     // Server
-    port: parseInt(process.env.PORT || '3000', 10),
+    port: safeParseInt(process.env.PORT, 3000),
     nodeEnv: process.env.NODE_ENV || 'development',
     logLevel: process.env.LOG_LEVEL || 'info',
 
     // CORS
-    corsOrigins: process.env.CORS_ORIGINS?.split(',') || ['http://localhost:3000', 'http://localhost:5173'],
+    corsOrigins: process.env.CORS_ORIGINS?.split(',').map(s => s.trim()).filter(Boolean) || ['http://localhost:3000', 'http://localhost:5173'],
 
     // Database
     databaseUrl: process.env.DATABASE_URL || 'postgresql://localhost:5432/hypothesis_arena',
@@ -54,11 +70,11 @@ export const config = {
 
     // Trading
     trading: {
-        maxPositionSize: parseFloat(process.env.MAX_POSITION_SIZE || '0.2'),
-        maxTotalInvested: parseFloat(process.env.MAX_TOTAL_INVESTED || '0.8'),
-        maxDailyTrades: parseInt(process.env.MAX_DAILY_TRADES || '20', 10),
-        drawdownPauseThreshold: parseFloat(process.env.DRAWDOWN_PAUSE_THRESHOLD || '0.3'),
-        drawdownLiquidateThreshold: parseFloat(process.env.DRAWDOWN_LIQUIDATE_THRESHOLD || '0.8'),
+        maxPositionSize: safeParseFloat(process.env.MAX_POSITION_SIZE, 0.2),
+        maxTotalInvested: safeParseFloat(process.env.MAX_TOTAL_INVESTED, 0.8),
+        maxDailyTrades: safeParseInt(process.env.MAX_DAILY_TRADES, 20),
+        drawdownPauseThreshold: safeParseFloat(process.env.DRAWDOWN_PAUSE_THRESHOLD, 0.3),
+        drawdownLiquidateThreshold: safeParseFloat(process.env.DRAWDOWN_LIQUIDATE_THRESHOLD, 0.8),
     },
 
     // Compliance

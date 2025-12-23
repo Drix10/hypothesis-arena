@@ -24,7 +24,7 @@
     "db:migrate": "tsx packages/backend/src/scripts/migrate.ts",
     "test": "npm run test --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present",
+    "tsc": "npm run typecheck --workspaces --if-present",
     "clean": "rimraf node_modules packages/*/node_modules packages/*/dist"
   },
   "devDependencies": {

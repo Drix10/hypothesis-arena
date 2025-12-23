@@ -4,20 +4,10 @@
  */
 
 import React from "react";
-import { AnimatePresence, motion } from "framer-motion";
 import { FinalRecommendation } from "../../types/stock";
 
 interface RecommendationCardProps {
   recommendation: FinalRecommendation;
-  onExecuteTrades?: () => void;
-  tradingPreview?: {
-    buyCount: number;
-    sellCount: number;
-    holdCount: number;
-    totalValue: number;
-    avgConfidence: number;
-  };
-  tradingPreviewError?: boolean;
 }
 
 const REC_CONFIG: Record<
@@ -69,15 +59,9 @@ const REC_CONFIG: Record<
 
 export const RecommendationCard: React.FC<RecommendationCardProps> = ({
   recommendation,
-  onExecuteTrades,
-  tradingPreview,
-  tradingPreviewError,
 }) => {
   const config = REC_CONFIG[recommendation.recommendation] || REC_CONFIG.hold;
   const isPositive = recommendation.upside >= 0;
-  const hasTradingActivity =
-    tradingPreview &&
-    (tradingPreview.buyCount > 0 || tradingPreview.sellCount > 0);
 
   return (
     <div className="relative">
@@ -307,106 +291,6 @@ export const RecommendationCard: React.FC<RecommendationCardProps> = ({
             </div>
           </div>
 
-          {/* Trading Preview */}
-          <AnimatePresence>
-            {tradingPreviewError && (
-              <motion.div
-                className="p-4 rounded-xl mb-8"
-                style={{
-                  background: "rgba(239,68,68,0.05)",
-                  border: "1px solid rgba(239,68,68,0.2)",
-                }}
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.2 }}
-              >
-                <div className="flex items-center gap-2 text-sm text-red-400">
-                  <span>⚠️</span>
-                  <span>Unable to generate trading preview</span>
-                </div>
-              </motion.div>
-            )}
-            {tradingPreview && !tradingPreviewError && (
-              <motion.div
-                className="p-5 rounded-xl mb-8"
-                style={{
-                  background:
-                    "linear-gradient(135deg, rgba(255,215,0,0.05) 0%, rgba(0,240,255,0.05) 100%)",
-                  border: "1px solid rgba(255,215,0,0.2)",
-                }}
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.2 }}
-              >
-                <div className="flex items-center justify-between mb-4">
-                  <div>
-                    <div className="flex items-center gap-2 text-sm font-bold text-white">
-                      <span className="text-xl">⚔️</span>
-                      Agent Trading Decisions
-                    </div>
-                    <div className="text-[10px] text-slate-500 mt-1">
-                      Based on debate tournament results
-                    </div>
-                  </div>
-                  {hasTradingActivity && onExecuteTrades && (
-                    <button
-                      onClick={onExecuteTrades}
-                      className="px-5 py-2.5 rounded-lg text-sm font-bold flex items-center gap-2 hover:scale-[1.02] active:scale-[0.98] transition-transform"
-                      style={{
-                        background:
-                          "linear-gradient(135deg, rgba(255,215,0,0.2) 0%, rgba(0,240,255,0.2) 100%)",
-                        border: "1px solid rgba(255,215,0,0.4)",
-                        color: "#ffd700",
-                      }}
-                    >
-                      💰 Execute Trades
-                    </button>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-3 gap-3">
-                  <TradingBox
-                    type="BUY"
-                    count={tradingPreview.buyCount}
-                    color="#22c55e"
-                    icon="📈"
-                  />
-                  <TradingBox
-                    type="SELL"
-                    count={tradingPreview.sellCount}
-                    color="#ef4444"
-                    icon="📉"
-                  />
-                  <TradingBox
-                    type="HOLD"
-                    count={tradingPreview.holdCount}
-                    color="#64748b"
-                    icon="⏸️"
-                  />
-                </div>
-
-                {hasTradingActivity && (
-                  <div className="flex justify-between mt-4 text-xs text-slate-400">
-                    <span>
-                      Est. Total:{" "}
-                      <span className="text-white font-bold">
-                        ${tradingPreview.totalValue.toLocaleString()}
-                      </span>
-                    </span>
-                    <span>
-                      Avg. Confidence:{" "}
-                      <span className="text-white font-bold">
-                        {tradingPreview.avgConfidence.toFixed(0)}%
-                      </span>
-                    </span>
-                  </div>
-                )}
-              </motion.div>
-            )}
-          </AnimatePresence>
-
           {/* Allocation & Summary */}
           <div className="grid lg:grid-cols-3 gap-4">
             <div
@@ -501,34 +385,6 @@ const MetricCard: React.FC<{
       }}
     >
       {value}
-    </div>
-  </div>
-);
-
-const TradingBox: React.FC<{
-  type: string;
-  count: number;
-  color: string;
-  icon: string;
-}> = ({ type, count, color, icon }) => (
-  <div
-    className="p-4 rounded-lg text-center"
-    style={{ background: `${color}10`, border: `1px solid ${color}30` }}
-  >
-    <div className="flex items-center justify-between mb-2">
-      <span className="text-xs font-bold" style={{ color }}>
-        {type}
-      </span>
-      <span className="text-lg">{icon}</span>
-    </div>
-    <div
-      className="text-2xl font-black"
-      style={{ color, fontFamily: "'Space Grotesk', sans-serif" }}
-    >
-      {count}
-    </div>
-    <div className="text-[10px]" style={{ color: `${color}80` }}>
-      agents
     </div>
   </div>
 );

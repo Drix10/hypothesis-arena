@@ -7,6 +7,11 @@ import { v4 as uuid } from 'uuid';
 
 const router = Router();
 
+// Helper to validate agentId format (alphanumeric, underscore, hyphen, 1-50 chars)
+const isValidAgentId = (agentId: string): boolean => {
+    return /^[a-zA-Z0-9_-]{1,50}$/.test(agentId);
+};
+
 // GET /api/portfolio/summary
 router.get('/summary', authenticate, async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -29,11 +34,10 @@ router.get('/summary', authenticate, async (req: Request, res: Response, next: N
                 id: p.id,
                 agentId: p.agent_name,
                 agentName: p.agent_name,
-                initialBalance: parseFloat(p.initial_balance),
-                currentBalance: parseFloat(p.current_balance),
+                initialBalance: parseFloat(p.initial_balance) || 0,
+                currentBalance: parseFloat(p.current_balance) || 0,
                 totalReturn: parseFloat(p.total_return) || 0,
                 winRate: parseFloat(p.win_rate) || 0,
-                tradingMode: p.trading_mode,
                 status: p.is_active ? 'active' : 'paused',
             })),
             summary: {
@@ -50,9 +54,16 @@ router.get('/summary', authenticate, async (req: Request, res: Response, next: N
 // GET /api/portfolio/:agentId
 router.get('/:agentId', authenticate, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
+        const { agentId } = req.params;
+
+        if (!isValidAgentId(agentId)) {
+            res.status(400).json({ error: 'Invalid agent ID format' });
+            return;
+        }
+
         const portfolio = await queryOne<any>(
             `SELECT * FROM portfolios WHERE agent_name = $1 AND user_id = $2`,
-            [req.params.agentId, req.userId]
+            [agentId, req.userId]
         );
 
         if (!portfolio) {
@@ -76,22 +87,21 @@ router.get('/:agentId', authenticate, async (req: Request, res: Response, next: 
             id: portfolio.id,
             agentId: portfolio.agent_name,
             agentName: portfolio.agent_name,
-            initialBalance: parseFloat(portfolio.initial_balance),
-            currentBalance: parseFloat(portfolio.current_balance),
-            totalValue: parseFloat(portfolio.current_balance),
+            initialBalance: parseFloat(portfolio.initial_balance) || 0,
+            currentBalance: parseFloat(portfolio.current_balance) || 0,
+            totalValue: parseFloat(portfolio.current_balance) || 0,
             totalReturn: parseFloat(portfolio.total_return) || 0,
             winRate: parseFloat(portfolio.win_rate) || 0,
-            sharpeRatio: parseFloat(portfolio.sharpe_ratio) || null,
+            sharpeRatio: portfolio.sharpe_ratio ? parseFloat(portfolio.sharpe_ratio) : null,
             maxDrawdown: parseFloat(portfolio.max_drawdown) || 0,
-            tradingMode: portfolio.trading_mode,
             status: portfolio.is_active ? 'active' : 'paused',
             positions: positions.map((p: any) => ({
                 id: p.id,
                 symbol: p.symbol,
                 side: p.side,
-                size: parseFloat(p.size),
-                entryPrice: parseFloat(p.entry_price),
-                currentPrice: parseFloat(p.current_price),
+                size: parseFloat(p.size) || 0,
+                entryPrice: parseFloat(p.entry_price) || 0,
+                currentPrice: parseFloat(p.current_price) || 0,
                 unrealizedPnL: parseFloat(p.unrealized_pnl) || 0,
                 leverage: parseFloat(p.leverage) || 1,
             })),
@@ -99,10 +109,10 @@ router.get('/:agentId', authenticate, async (req: Request, res: Response, next: 
                 id: t.id,
                 symbol: t.symbol,
                 side: t.side,
-                size: parseFloat(t.size),
-                price: parseFloat(t.price),
+                size: parseFloat(t.size) || 0,
+                price: parseFloat(t.price) || 0,
                 status: t.status,
-                createdAt: new Date(t.created_at).getTime(),
+                createdAt: t.created_at ? new Date(t.created_at).getTime() : Date.now(),
             })),
         });
     } catch (error) {
@@ -113,9 +123,16 @@ router.get('/:agentId', authenticate, async (req: Request, res: Response, next: 
 // GET /api/portfolio/:agentId/positions
 router.get('/:agentId/positions', authenticate, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
+        const { agentId } = req.params;
+
+        if (!isValidAgentId(agentId)) {
+            res.status(400).json({ error: 'Invalid agent ID format' });
+            return;
+        }
+
         const portfolio = await queryOne<any>(
-            `SELECT id, trading_mode FROM portfolios WHERE agent_name = $1 AND user_id = $2`,
-            [req.params.agentId, req.userId]
+            `SELECT id, agent_name FROM portfolios WHERE agent_name = $1 AND user_id = $2`,
+            [agentId, req.userId]
         );
 
         if (!portfolio) {
@@ -123,53 +140,56 @@ router.get('/:agentId/positions', authenticate, async (req: Request, res: Respon
             return;
         }
 
-        // If live mode, fetch from WEEX
-        if (portfolio.trading_mode === 'live') {
-            const cacheKey = `positions:${req.userId}:${req.params.agentId}`;
-            const cached = await cacheGet<any[]>(cacheKey);
+        // Fetch positions from WEEX
+        const cacheKey = `positions:${req.userId}:${agentId}`;
+        const cached = await cacheGet<any[]>(cacheKey);
 
-            if (cached) {
-                res.json({ positions: cached });
-                return;
-            }
-
-            const weexClient = getWeexClient();
-            const weexPositions = await weexClient.getPositions();
-
-            const positions = weexPositions.map(p => ({
-                symbol: p.symbol,
-                side: p.side.toUpperCase(),
-                size: parseFloat(p.size),
-                entryPrice: parseFloat(p.openValue) / parseFloat(p.size),
-                currentPrice: parseFloat(p.markPrice),
-                unrealizedPnL: parseFloat(p.unrealizePnl),
-                leverage: parseFloat(p.leverage),
-                liquidationPrice: parseFloat(p.liquidationPrice),
-            }));
-
-            await cacheSet(cacheKey, positions, 5);
-            res.json({ positions });
+        if (cached) {
+            res.json({ positions: cached });
             return;
         }
 
-        // Paper mode - fetch from DB
-        const positions = await query<any>(
-            `SELECT * FROM positions WHERE portfolio_id = $1 AND is_open = true`,
-            [portfolio.id]
-        );
+        let weexPositions: any[] = [];
+        try {
+            const weexClient = getWeexClient();
+            weexPositions = await weexClient.getPositions();
+        } catch (error: any) {
+            // Log error but return empty positions instead of failing
+            console.error('WEEX API error fetching positions:', error.message);
+            res.json({ positions: [], error: 'Unable to fetch positions from exchange' });
+            return;
+        }
 
-        res.json({
-            positions: positions.map((p: any) => ({
-                id: p.id,
-                symbol: p.symbol,
-                side: p.side,
-                size: parseFloat(p.size),
-                entryPrice: parseFloat(p.entry_price),
-                currentPrice: parseFloat(p.current_price),
-                unrealizedPnL: parseFloat(p.unrealized_pnl) || 0,
-                leverage: parseFloat(p.leverage) || 1,
-            })),
-        });
+        // Validate response is an array
+        if (!Array.isArray(weexPositions)) {
+            res.json({ positions: [], error: 'Invalid response from exchange' });
+            return;
+        }
+
+        // Filter and map positions with proper null safety
+        const positions = weexPositions
+            .filter(p => p && typeof p === 'object' && p.symbol && p.size)
+            .map(p => {
+                const size = parseFloat(p.size) || 0;
+                const openValue = parseFloat(p.openValue) || 0;
+                // Prevent division by zero
+                const entryPrice = size !== 0 ? openValue / Math.abs(size) : 0;
+
+                return {
+                    symbol: String(p.symbol || ''),
+                    side: String(p.side || 'long').toUpperCase(),
+                    size: Math.abs(size),
+                    entryPrice,
+                    currentPrice: parseFloat(p.markPrice) || 0,
+                    unrealizedPnL: parseFloat(p.unrealizePnl) || 0,
+                    leverage: parseFloat(p.leverage) || 1,
+                    liquidationPrice: parseFloat(p.liquidationPrice) || 0,
+                    portfolioId: portfolio.id,
+                };
+            });
+
+        await cacheSet(cacheKey, positions, 5);
+        res.json({ positions });
     } catch (error) {
         next(error);
     }
@@ -178,10 +198,21 @@ router.get('/:agentId/positions', authenticate, async (req: Request, res: Respon
 // POST /api/portfolio/create
 router.post('/create', authenticate, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-        const { agentName, initialBalance = 100000, tradingMode = 'paper' } = req.body;
+        const { agentName, initialBalance = 100000 } = req.body;
 
-        if (!agentName) {
+        if (!agentName || typeof agentName !== 'string') {
             res.status(400).json({ error: 'Agent name required' });
+            return;
+        }
+
+        if (!isValidAgentId(agentName)) {
+            res.status(400).json({ error: 'Invalid agent name format (alphanumeric, underscore, hyphen, 1-50 chars)' });
+            return;
+        }
+
+        const balance = Number(initialBalance);
+        if (isNaN(balance) || balance < 0 || balance > 1000000000) {
+            res.status(400).json({ error: 'Invalid initial balance (0 - 1,000,000,000)' });
             return;
         }
 
@@ -198,46 +229,17 @@ router.post('/create', authenticate, async (req: Request, res: Response, next: N
 
         const id = uuid();
         await query(
-            `INSERT INTO portfolios (id, user_id, agent_name, initial_balance, current_balance, trading_mode, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $4, $5, NOW(), NOW())`,
-            [id, req.userId, agentName, initialBalance, tradingMode]
+            `INSERT INTO portfolios (id, user_id, agent_name, initial_balance, current_balance, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $4, NOW(), NOW())`,
+            [id, req.userId, agentName, balance]
         );
 
         res.status(201).json({
             id,
             agentName,
-            initialBalance,
-            currentBalance: initialBalance,
-            tradingMode,
+            initialBalance: balance,
+            currentBalance: balance,
         });
-    } catch (error) {
-        next(error);
-    }
-});
-
-// PUT /api/portfolio/:agentId/mode
-router.put('/:agentId/mode', authenticate, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    try {
-        const { mode } = req.body;
-
-        if (!['paper', 'live'].includes(mode)) {
-            res.status(400).json({ error: 'Invalid mode. Must be "paper" or "live"' });
-            return;
-        }
-
-        const result = await query(
-            `UPDATE portfolios SET trading_mode = $1, updated_at = NOW() 
-       WHERE agent_name = $2 AND user_id = $3
-       RETURNING id`,
-            [mode, req.params.agentId, req.userId]
-        );
-
-        if (result.length === 0) {
-            res.status(404).json({ error: 'Portfolio not found' });
-            return;
-        }
-
-        res.json({ message: `Trading mode set to ${mode}` });
     } catch (error) {
         next(error);
     }

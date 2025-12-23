@@ -70,17 +70,49 @@ class ApiClient {
                 clearTimeout(timeoutId);
 
                 if (response.status === 401 && this.token) {
-                    await this.refreshToken();
-                    config.headers = {
-                        ...config.headers as Record<string, string>,
-                        Authorization: `Bearer ${this.token}`,
-                    };
-                    const retryResponse = await fetch(`${API_BASE}${endpoint}`, config);
-                    if (!retryResponse.ok) {
-                        this.setToken(null);
-                        throw new ApiError(retryResponse.status, 'Session expired');
+                    // Check if caller already aborted before attempting refresh
+                    if (signal?.aborted) {
+                        throw new ApiError(408, 'Request aborted');
                     }
-                    return retryResponse.json();
+
+                    // Create new timeout for retry request, respecting caller's signal
+                    const retryController = new AbortController();
+                    const retryTimeoutId = setTimeout(() => retryController.abort(), timeout);
+
+                    // Abort retry if caller's signal fires
+                    const abortHandler = () => retryController.abort();
+                    signal?.addEventListener('abort', abortHandler, { once: true });
+
+                    try {
+                        await this.refreshToken();
+                        const retryConfig: RequestInit = {
+                            ...config,
+                            signal: retryController.signal,
+                            headers: {
+                                ...config.headers as Record<string, string>,
+                                Authorization: `Bearer ${this.token}`,
+                            },
+                        };
+                        const retryResponse = await fetch(`${API_BASE}${endpoint}`, retryConfig);
+                        clearTimeout(retryTimeoutId);
+                        signal?.removeEventListener('abort', abortHandler);
+
+                        if (!retryResponse.ok) {
+                            this.setToken(null);
+                            const retryError = await retryResponse.json().catch(() => ({}));
+                            throw new ApiError(retryResponse.status, retryError.error || 'Session expired', retryError.code);
+                        }
+                        return this.parseResponse<T>(retryResponse);
+                    } catch (refreshError: any) {
+                        clearTimeout(retryTimeoutId);
+                        signal?.removeEventListener('abort', abortHandler);
+                        this.setToken(null);
+                        // Preserve original error details if it's already an ApiError
+                        if (refreshError instanceof ApiError) {
+                            throw refreshError;
+                        }
+                        throw new ApiError(401, refreshError.message || 'Session expired');
+                    }
                 }
 
                 if (!response.ok) {
@@ -88,8 +120,7 @@ class ApiClient {
                     throw new ApiError(response.status, error.error || 'Request failed', error.code);
                 }
 
-                const text = await response.text();
-                return text ? JSON.parse(text) : null as T;
+                return this.parseResponse<T>(response);
 
             } catch (error: any) {
                 clearTimeout(timeoutId);
@@ -110,6 +141,23 @@ class ApiClient {
         }
 
         throw new ApiError(0, lastError?.message || 'Network error');
+    }
+
+    private async parseResponse<T>(response: Response): Promise<T> {
+        const contentType = response.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+            // Non-JSON response - return undefined cast (safer than null for generic T)
+            return undefined as unknown as T;
+        }
+        const text = await response.text();
+        if (!text || text.trim() === '') {
+            return undefined as unknown as T;
+        }
+        try {
+            return JSON.parse(text) as T;
+        } catch {
+            return undefined as unknown as T;
+        }
     }
 
     private combineSignals(...signals: AbortSignal[]): AbortSignal {

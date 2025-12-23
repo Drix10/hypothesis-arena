@@ -3,13 +3,7 @@
  * Strategic Arena Theme - Premium UI/UX
  */
 
-import React, {
-  useState,
-  useCallback,
-  useRef,
-  useEffect,
-  useMemo,
-} from "react";
+import React, { useState, useCallback, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   StockAnalysisData,
@@ -39,18 +33,13 @@ import { LiveArena } from "./LiveArena";
 import { AnalystCard, RecommendationCard, DebateView } from "../analysis";
 import { PriceChart, TechnicalsCard, NewsCard } from "../charts";
 import { Watchlist, SavedAnalyses, AccuracyTracker } from "../sidebar";
-import { TradingDashboard } from "../trading/TradingDashboard";
-import { PostAnalysisTradingView } from "../trading/PostAnalysisTradingView";
-import { tradingService } from "../../services/trading";
-import { TradeDecision } from "../../types/trading";
-import ErrorBoundary from "../common/ErrorBoundary";
 
 interface StockArenaProps {
   apiKey: string;
   onShowSettings?: () => void;
 }
 
-type ActiveTab = "analysis" | "charts" | "technicals" | "news" | "trading";
+type ActiveTab = "analysis" | "charts" | "technicals" | "news";
 
 const LOADING_STATES = {
   [StockArenaState.FETCHING_DATA]: {
@@ -118,10 +107,6 @@ export const StockArena: React.FC<StockArenaProps> = ({
   const [progress, setProgress] = useState<string>("");
   const [activeTab, setActiveTab] = useState<ActiveTab>("analysis");
   const [showCompare, setShowCompare] = useState(false);
-  const [showTradingView, setShowTradingView] = useState(false);
-  const [tradingDecisions, setTradingDecisions] = useState<
-    Map<string, TradeDecision>
-  >(new Map());
   const [inWatchlist, setInWatchlist] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
@@ -132,7 +117,6 @@ export const StockArena: React.FC<StockArenaProps> = ({
     matchNumber: number;
     totalMatches: number;
   } | null>(null);
-  const [tradingPreviewError, setTradingPreviewError] = useState(false);
 
   const isMountedRef = useRef(true);
   const saveMessageTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
@@ -153,67 +137,6 @@ export const StockArena: React.FC<StockArenaProps> = ({
   }, [stockData]);
 
   const isAnalyzingRef = useRef(false);
-
-  const generateTradingPreview = useCallback(
-    async (
-      theses: InvestmentThesis[],
-      tournament: TournamentResult,
-      data: StockAnalysisData
-    ) => {
-      // Reset error state at the start, before any async operations
-      setTradingPreviewError(false);
-
-      // Validate tournament has debates
-      if (!tournament.allDebates || tournament.allDebates.length === 0) {
-        // No debates found - silently skip trading preview
-        return;
-      }
-
-      try {
-        // Import statically to avoid dynamic import warning
-        const state =
-          tradingService.loadTradingState() ||
-          tradingService.initializeTradingSystem();
-
-        const decisions = new Map<string, TradeDecision>();
-        for (const thesis of theses) {
-          if (!isMountedRef.current) return;
-
-          const portfolio = state.portfolios[thesis.agentId];
-          if (!portfolio) continue;
-
-          const debate = tournament.allDebates.find(
-            (d) =>
-              d.bullThesis.agentId === thesis.agentId ||
-              d.bearThesis.agentId === thesis.agentId
-          );
-          if (!debate) continue;
-
-          const decision = await tradingService.determineTradeDecision(
-            thesis,
-            debate,
-            portfolio,
-            data.quote.price,
-            data.quote.timestamp || Date.now()
-          );
-          decisions.set(thesis.agentId, decision);
-        }
-
-        if (isMountedRef.current) {
-          setTradingDecisions(decisions);
-        }
-      } catch (err) {
-        if (process.env.NODE_ENV === "development") {
-          console.error("Trading preview generation failed:", err);
-        }
-        if (isMountedRef.current) {
-          setTradingPreviewError(true);
-          setTradingDecisions(new Map());
-        }
-      }
-    },
-    []
-  );
 
   const handleTickerSelect = useCallback(
     async (ticker: string) => {
@@ -352,16 +275,6 @@ export const StockArena: React.FC<StockArenaProps> = ({
         setState(StockArenaState.COMPLETE);
         setProgress("");
         // Note: isAnalyzingRef.current is cleared in finally block
-
-        // Generate trading decisions for preview (fire and forget with error handling)
-        generateTradingPreview(generatedTheses, tournament, data).catch(
-          (err) => {
-            // Error is already handled inside generateTradingPreview, this is just a safety net
-            if (process.env.NODE_ENV === "development") {
-              console.error("Unhandled trading preview error:", err);
-            }
-          }
-        );
       } catch (err) {
         if (!isMountedRef.current) return;
         const errorMessage =
@@ -378,7 +291,7 @@ export const StockArena: React.FC<StockArenaProps> = ({
         isAnalyzingRef.current = false;
       }
     },
-    [apiKey, generateTradingPreview]
+    [apiKey]
   );
 
   const handleReset = () => {
@@ -394,34 +307,7 @@ export const StockArena: React.FC<StockArenaProps> = ({
     setLiveDebates([]);
     setCurrentDebate(null);
     setTournamentProgress(null);
-    setTradingDecisions(new Map());
-    setTradingPreviewError(false);
   };
-
-  // Memoize trading preview to avoid recalculating on every render
-  const tradingPreview = useMemo(() => {
-    if (tradingDecisions.size === 0) return undefined;
-
-    const decisionsArray = Array.from(tradingDecisions.values());
-    const validTrades = decisionsArray.filter(
-      (d) => d.isValid && d.action !== "HOLD"
-    );
-
-    return {
-      buyCount: decisionsArray.filter((d) => d.action === "BUY" && d.isValid)
-        .length,
-      sellCount: decisionsArray.filter((d) => d.action === "SELL" && d.isValid)
-        .length,
-      holdCount: decisionsArray.filter((d) => d.action === "HOLD" || !d.isValid)
-        .length,
-      totalValue: validTrades.reduce((sum, d) => sum + d.estimatedValue, 0),
-      avgConfidence:
-        validTrades.length > 0
-          ? validTrades.reduce((sum, d) => sum + d.confidence, 0) /
-            validTrades.length
-          : 0,
-    };
-  }, [tradingDecisions]);
 
   const showTemporaryMessage = (message: string) => {
     if (saveMessageTimeoutRef.current)
@@ -464,8 +350,6 @@ export const StockArena: React.FC<StockArenaProps> = ({
     setRecommendation(analysis.recommendation);
     setState(StockArenaState.COMPLETE);
     setActiveTab("analysis");
-    setTradingDecisions(new Map()); // Reset trading decisions for loaded analysis
-    setTradingPreviewError(false);
     // Clear live state from previous analysis
     setLiveDebates([]);
     setCurrentDebate(null);
@@ -482,7 +366,6 @@ export const StockArena: React.FC<StockArenaProps> = ({
     { id: "charts" as ActiveTab, label: "Charts", icon: "📊" },
     { id: "technicals" as ActiveTab, label: "Technicals", icon: "📉" },
     { id: "news" as ActiveTab, label: "News", icon: "📰" },
-    { id: "trading" as ActiveTab, label: "Trading", icon: "🏆" },
   ];
 
   return (
@@ -927,12 +810,7 @@ export const StockArena: React.FC<StockArenaProps> = ({
                       exit="exit"
                       className="space-y-8"
                     >
-                      <RecommendationCard
-                        recommendation={recommendation}
-                        onExecuteTrades={() => setShowTradingView(true)}
-                        tradingPreview={tradingPreview}
-                        tradingPreviewError={tradingPreviewError}
-                      />
+                      <RecommendationCard recommendation={recommendation} />
                       <div className="grid md:grid-cols-2 gap-6">
                         <ArgumentsPanel
                           title="Bull Case"
@@ -1063,20 +941,6 @@ export const StockArena: React.FC<StockArenaProps> = ({
                       <NewsCard sentiment={stockData.sentiment} />
                     </motion.div>
                   )}
-                  {activeTab === "trading" && (
-                    <motion.div
-                      key="trading-tab"
-                      id="trading-panel"
-                      role="tabpanel"
-                      aria-labelledby="trading-tab"
-                      variants={pageTransition}
-                      initial="hidden"
-                      animate="visible"
-                      exit="exit"
-                    >
-                      <TradingDashboard />
-                    </motion.div>
-                  )}
                 </AnimatePresence>
               </motion.div>
             )}
@@ -1086,57 +950,6 @@ export const StockArena: React.FC<StockArenaProps> = ({
         <AnimatePresence>
           {showCompare && (
             <CompareStocks onClose={() => setShowCompare(false)} />
-          )}
-        </AnimatePresence>
-
-        <AnimatePresence>
-          {showTradingView && stockData && tournamentResult && (
-            <ErrorBoundary>
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
-                onClick={(e) => {
-                  // Use data attribute for more robust detection
-                  const target = e.target as HTMLElement;
-                  if (target.dataset.modalBackdrop === "true") {
-                    setShowTradingView(false);
-                  }
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Escape") {
-                    setShowTradingView(false);
-                  }
-                }}
-                tabIndex={-1}
-                data-modal-backdrop="true"
-              >
-                <motion.div
-                  initial={{ scale: 0.95, opacity: 0 }}
-                  animate={{ scale: 1, opacity: 1 }}
-                  exit={{ scale: 0.95, opacity: 0 }}
-                  className="max-w-6xl w-full max-h-[90vh] overflow-y-auto"
-                  onClick={(e) => e.stopPropagation()}
-                  role="dialog"
-                  aria-modal="true"
-                  aria-labelledby="trading-modal-title"
-                >
-                  <PostAnalysisTradingView
-                    ticker={stockData.ticker}
-                    currentPrice={stockData.quote.price}
-                    priceTimestamp={stockData.quote.timestamp || Date.now()}
-                    theses={theses}
-                    debates={tournamentResult.allDebates}
-                    onContinue={() => setShowTradingView(false)}
-                    onViewPortfolios={() => {
-                      setShowTradingView(false);
-                      setActiveTab("trading");
-                    }}
-                  />
-                </motion.div>
-              </motion.div>
-            </ErrorBoundary>
           )}
         </AnimatePresence>
       </main>

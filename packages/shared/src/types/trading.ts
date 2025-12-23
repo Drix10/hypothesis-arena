@@ -1,6 +1,5 @@
 // Trading Types - Shared between frontend and backend
 
-export type TradingMode = 'paper' | 'live';
 export type OrderSide = 'BUY' | 'SELL';
 export type OrderType = 'MARKET' | 'LIMIT' | 'TRIGGER';
 export type OrderStatus = 'PENDING' | 'OPEN' | 'FILLED' | 'PARTIALLY_FILLED' | 'CANCELED' | 'FAILED';
@@ -83,7 +82,6 @@ export interface Portfolio {
     trades: Trade[];
     createdAt: number;
     updatedAt: number;
-    tradingMode: TradingMode;
     status: 'active' | 'paused' | 'liquidated';
 }
 

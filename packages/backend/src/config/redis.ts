@@ -4,8 +4,14 @@ import { config } from './index';
 
 let redisClient: RedisClientType | null = null;
 let connectionPromise: Promise<RedisClientType> | null = null;
+let isShuttingDown = false;
 
 export async function getRedisClient(): Promise<RedisClientType> {
+    // Don't create new connections during shutdown
+    if (isShuttingDown) {
+        throw new Error('Redis is shutting down');
+    }
+
     // Return existing open client
     if (redisClient?.isOpen) {
         return redisClient;
@@ -14,6 +20,11 @@ export async function getRedisClient(): Promise<RedisClientType> {
     // If connection is in progress, wait for it
     if (connectionPromise) {
         return connectionPromise;
+    }
+
+    // Clear stale client reference
+    if (redisClient && !redisClient.isOpen) {
+        redisClient = null;
     }
 
     // Start new connection
@@ -58,9 +69,16 @@ async function connectRedis(): Promise<RedisClientType> {
 }
 
 export async function closeRedis(): Promise<void> {
+    isShuttingDown = true;
     if (redisClient?.isOpen) {
         logger.info('Closing Redis connection...');
-        await redisClient.quit();
+        try {
+            await redisClient.quit();
+        } catch (error) {
+            logger.error('Error closing Redis:', error);
+            // Force disconnect if quit fails
+            redisClient.disconnect();
+        }
         redisClient = null;
         logger.info('Redis connection closed');
     }

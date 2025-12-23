@@ -276,7 +276,6 @@ export class TradingService {
             trades,
             createdAt: new Date(row.created_at).getTime(),
             updatedAt: new Date(row.updated_at).getTime(),
-            tradingMode: row.trading_mode || 'live',
             status: row.status || 'active',
         };
     }

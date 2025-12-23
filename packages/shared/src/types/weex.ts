@@ -88,6 +88,88 @@ export interface WeexFundingRate {
     nextFundingTime: number;
 }
 
+export interface WeexTrade {
+    tradeId: string;
+    symbol: string;
+    price: string;
+    size: string;
+    side: 'buy' | 'sell';
+    timestamp: string;
+}
+
+export interface WeexCandle {
+    timestamp: string;
+    open: string;
+    high: string;
+    low: string;
+    close: string;
+    volume: string;
+}
+
+export interface WeexContract {
+    symbol: string;
+    baseCoin: string;
+    quoteCoin: string;
+    minTradeNum: string;
+    maxTradeNum: string;
+    takerFeeRate: string;
+    makerFeeRate: string;
+    pricePlace: number;
+    volumePlace: number;
+    minLeverage: string;
+    maxLeverage: string;
+}
+
+export interface WeexAccountAssets {
+    marginCoin: string;
+    locked: string;
+    available: string;
+    crossMaxAvailable: string;
+    fixedMaxAvailable: string;
+    maxTransferOut: string;
+    equity: string;
+    usdtEquity: string;
+    btcEquity: string;
+}
+
+export interface WeexOrderDetail {
+    symbol: string;
+    size: string;
+    orderId: string;
+    clientOid: string;
+    filledQty: string;
+    fee: string;
+    price: string;
+    priceAvg: string;
+    status: 'pending' | 'open' | 'filled' | 'canceling' | 'canceled' | 'untriggered';
+    type: string;
+    orderType: string;
+    side: string;
+    createTime: string;
+    totalProfits: string;
+}
+
+export interface WeexFill {
+    tradeId: string;
+    symbol: string;
+    orderId: string;
+    price: string;
+    size: string;
+    side: string;
+    fee: string;
+    feeCoin: string;
+    timestamp: string;
+}
+
+export interface WeexBatchOrderResponse {
+    code: string;
+    msg: string;
+    data: {
+        successList: { orderId: string; clientOid: string }[];
+        failureList: { clientOid: string; errorCode: string; errorMsg: string }[];
+    };
+}
+
 export interface WeexError {
     code: string;
     msg: string;

@@ -1,5 +1,8 @@
 /**
  * Components Index - Organized Structure
+ * 
+ * Note: Test components (WeexTest, AuthTest) are NOT exported here.
+ * Import them directly from "./common/WeexTest" or "./common/AuthTest" when needed.
  */
 
 // Common

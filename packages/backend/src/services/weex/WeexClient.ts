@@ -9,10 +9,17 @@ import {
     WeexOrderResponse,
     WeexPosition,
     WeexAccount,
+    WeexAccountAssets,
     WeexTicker,
     WeexDepth,
     WeexServerTime,
     WeexFundingRate,
+    WeexTrade,
+    WeexCandle,
+    WeexContract,
+    WeexOrderDetail,
+    WeexFill,
+    WeexBatchOrderResponse,
     ENDPOINT_WEIGHTS,
     DEFAULT_RATE_LIMITS,
 } from '@hypothesis-arena/shared';
@@ -43,6 +50,7 @@ export class WeexClient {
             timeout: 30000,
             headers: {
                 'Content-Type': 'application/json',
+                'User-Agent': 'HypothesisArena/1.0',
             },
         });
 
@@ -68,7 +76,11 @@ export class WeexClient {
                     throw new WeexApiError(data.code, data.msg || 'WEEX API error');
                 }
 
-                throw error;
+                // Create a clean error without circular references
+                const cleanError = new Error(error.message);
+                (cleanError as any).status = error.response?.status;
+                (cleanError as any).code = data?.code;
+                throw cleanError;
             }
         );
     }
@@ -93,26 +105,47 @@ export class WeexClient {
     }
 
     private async getTimestamp(): Promise<string> {
-        // Sync time if needed (every 60 seconds)
-        if (Date.now() - this.lastTimeSync > 60000) {
+        // Always sync time before private requests (every 10 seconds max)
+        if (this.lastTimeSync === 0 || Date.now() - this.lastTimeSync > 10000) {
             await this.syncServerTime();
         }
-        return String(Date.now() + this.serverTimeOffset);
+        const ts = Math.round(Date.now() + this.serverTimeOffset);
+        return String(ts);
     }
 
     private async syncServerTime(): Promise<void> {
         try {
             const localBefore = Date.now();
-            const response = await this.client.get<WeexServerTime>('/capi/v2/market/time');
+            const response = await this.client.get<{ timestamp: number }>('/capi/v2/market/time');
             const localAfter = Date.now();
-            const latency = (localAfter - localBefore) / 2;
+            const latency = Math.round((localAfter - localBefore) / 2);
 
-            this.serverTimeOffset = response.data.timestamp - localBefore - latency;
-            this.lastTimeSync = Date.now();
-
-            logger.debug(`Server time synced, offset: ${this.serverTimeOffset}ms`);
-        } catch (error) {
-            logger.error('Failed to sync server time:', error);
+            const serverTime = response.data?.timestamp;
+            if (typeof serverTime === 'number' && serverTime > 0) {
+                // Calculate offset: serverTime = localTime + offset
+                // So offset = serverTime - localTime (accounting for latency)
+                const newOffset = serverTime - (localBefore + latency);
+                // Verify the offset is reasonable (within 30 seconds)
+                if (Math.abs(newOffset) <= 30000) {
+                    this.serverTimeOffset = newOffset;
+                    this.lastTimeSync = Date.now(); // Only update on successful sync
+                } else {
+                    logger.warn(`Rejecting unreasonable time offset: ${newOffset}ms`);
+                    // Don't update lastTimeSync - will retry on next request
+                }
+            } else {
+                logger.warn('Invalid server time response:', response.data);
+                // Don't update lastTimeSync - will retry on next request
+            }
+        } catch (error: any) {
+            // Log but don't throw - use local time if sync fails
+            logger.error('Failed to sync server time:', {
+                status: error.status,
+                message: error.message
+            });
+            // Don't update lastTimeSync on error - will retry on next request
+            // But set a short delay to prevent spam (5 seconds)
+            this.lastTimeSync = Date.now() - 5000;
         }
     }
 
@@ -207,9 +240,22 @@ export class WeexClient {
                 : await this.client.post<T>(endpoint, body, { headers });
 
             return response.data;
-        } catch (error) {
-            logger.error(`WEEX API error: ${method} ${endpoint}`, error);
-            throw error;
+        } catch (error: any) {
+            // Extract useful error info without circular references
+            const errorInfo = {
+                method,
+                endpoint,
+                status: error.response?.status,
+                code: error.response?.data?.code,
+                message: error.response?.data?.msg || error.message,
+            };
+            logger.error(`WEEX API error:`, errorInfo);
+
+            // Re-throw with clean error
+            if (error.response?.data?.code) {
+                throw new WeexApiError(error.response.data.code, error.response.data.msg || 'WEEX API error');
+            }
+            throw new Error(errorInfo.message);
         }
     }
 
@@ -219,27 +265,32 @@ export class WeexClient {
     }
 
     async getTicker(symbol: string): Promise<WeexTicker> {
-        const response = await this.request<{ data: WeexTicker }>(
+        const response = await this.request<{ data: WeexTicker } | WeexTicker>(
             'GET',
             '/capi/v2/market/ticker',
             { symbol }
         );
-        return response.data;
+        // Handle both response formats
+        return (response as any).data || response;
     }
 
     async getAllTickers(): Promise<WeexTicker[]> {
-        const response = await this.request<{ data: WeexTicker[] }>(
+        const response = await this.request<{ data: WeexTicker[] } | WeexTicker[]>(
             'GET',
             '/capi/v2/market/tickers'
         );
-        return response.data;
+        // Handle both response formats
+        return (response as any).data || response || [];
     }
 
     async getDepth(symbol: string, limit: number = 15): Promise<WeexDepth> {
+        // WEEX API only accepts specific limit values: 15 or 200
+        const actualLimit = limit > 15 ? 200 : 15;
+
         const response = await this.request<WeexDepth>(
             'GET',
             '/capi/v2/market/depth',
-            { symbol, limit: String(limit) }
+            { symbol, limit: String(actualLimit) }
         );
         return response;
     }
@@ -253,16 +304,82 @@ export class WeexClient {
         return response.data;
     }
 
+    async getTrades(symbol: string, limit: number = 100): Promise<WeexTrade[]> {
+        const response = await this.request<{ data: WeexTrade[] }>(
+            'GET',
+            '/capi/v2/market/trades',
+            { symbol, limit: String(limit) }
+        );
+        return response.data || [];
+    }
+
+    async getCandles(symbol: string, interval: string = '1m', limit: number = 100): Promise<WeexCandle[]> {
+        const response = await this.request<{ data: WeexCandle[] }>(
+            'GET',
+            '/capi/v2/market/candles',
+            { symbol, granularity: interval, limit: String(limit) }
+        );
+        return response.data || [];
+    }
+
+    async getContracts(): Promise<WeexContract[]> {
+        const response = await this.request<{ data: WeexContract[] }>(
+            'GET',
+            '/capi/v2/market/contracts'
+        );
+        return response.data || [];
+    }
+
     // Private endpoints
     async getAccount(): Promise<WeexAccount[]> {
-        const response = await this.request<{ data: WeexAccount[] }>(
+        const response = await this.request<any>(
             'GET',
             '/capi/v2/account/accounts',
             undefined,
             undefined,
             true
         );
-        return response.data;
+        // Response format: { account: {...}, collateral: [...], position: [...] }
+        if (response?.account) {
+            return [response.account];
+        }
+        return response?.data || [];
+    }
+
+    async getAccountAssets(): Promise<WeexAccountAssets> {
+        const response = await this.request<any>(
+            'GET',
+            '/capi/v2/account/assets',
+            undefined,
+            undefined,
+            true
+        );
+        // Response is an array of assets, convert to expected format
+        if (Array.isArray(response)) {
+            const usdt = response.find((a: any) => a.coinName === 'USDT') || response[0] || {};
+            return {
+                marginCoin: usdt.coinName || 'USDT',
+                locked: usdt.frozen || '0',
+                available: usdt.available || '0',
+                crossMaxAvailable: usdt.available || '0',
+                fixedMaxAvailable: usdt.available || '0',
+                maxTransferOut: usdt.available || '0',
+                equity: usdt.equity || '0',
+                usdtEquity: usdt.equity || '0',
+                btcEquity: '0',
+            };
+        }
+        return response?.data || response || {} as WeexAccountAssets;
+    }
+
+    async changeLeverage(symbol: string, leverage: number, marginMode: '1' | '3' = '1'): Promise<any> {
+        return this.request(
+            'POST',
+            '/capi/v2/account/leverage',
+            undefined,
+            { symbol, marginMode, longLeverage: String(leverage), shortLeverage: String(leverage) },
+            true
+        );
     }
 
     async getPositions(): Promise<WeexPosition[]> {
@@ -301,20 +418,88 @@ export class WeexClient {
     async cancelOrder(symbol: string, orderId: string): Promise<any> {
         return this.request(
             'POST',
-            '/capi/v2/order/cancelOrder',
+            '/capi/v2/order/cancel_order',
             undefined,
-            { symbol, orderId },
+            { orderId },
             true,
             true
         );
     }
 
-    async getOrder(symbol: string, orderId: string): Promise<any> {
-        return this.request(
+    async getOrder(orderId: string): Promise<WeexOrderDetail> {
+        const response = await this.request<{ data: WeexOrderDetail }>(
             'GET',
             '/capi/v2/order/detail',
-            { symbol, orderId },
+            { orderId },
             undefined,
+            true
+        );
+        return response.data;
+    }
+
+    async getCurrentOrders(symbol?: string): Promise<WeexOrderDetail[]> {
+        const params = symbol ? { symbol } : undefined;
+        const response = await this.request<{ data: WeexOrderDetail[] }>(
+            'GET',
+            '/capi/v2/order/current',
+            params,
+            undefined,
+            true
+        );
+        return response.data || [];
+    }
+
+    async getHistoryOrders(symbol: string, limit: number = 50): Promise<WeexOrderDetail[]> {
+        const response = await this.request<{ data: WeexOrderDetail[] }>(
+            'GET',
+            '/capi/v2/order/history',
+            { symbol, pageSize: String(limit) },
+            undefined,
+            true
+        );
+        return response.data || [];
+    }
+
+    async getFills(symbol: string, limit: number = 50): Promise<WeexFill[]> {
+        const response = await this.request<{ data: WeexFill[] }>(
+            'GET',
+            '/capi/v2/order/fills',
+            { symbol, pageSize: String(limit) },
+            undefined,
+            true
+        );
+        return response.data || [];
+    }
+
+    async batchOrders(orders: WeexOrderRequest[]): Promise<WeexBatchOrderResponse> {
+        return this.request<WeexBatchOrderResponse>(
+            'POST',
+            '/capi/v2/order/batchOrders',
+            undefined,
+            { orderList: orders },
+            true,
+            true
+        );
+    }
+
+    async batchCancelOrders(symbol: string, orderIds: string[]): Promise<any> {
+        return this.request(
+            'POST',
+            '/capi/v2/order/batchCancelOrders',
+            undefined,
+            { symbol, orderIds },
+            true,
+            true
+        );
+    }
+
+    async closeAllPositions(symbol: string): Promise<any> {
+        return this.request(
+            'POST',
+            '/capi/v2/order/closeAllPositions',
+            undefined,
+            { symbol },
+            true,
             true
         );
     }
@@ -337,9 +522,9 @@ export class WeexClient {
     }
 }
 
-// Singleton instance with proper locking
+// Singleton instance with proper async locking
 let weexClientInstance: WeexClient | null = null;
-let isCreating = false;
+let creationPromise: Promise<WeexClient> | null = null;
 
 export function getWeexClient(credentials?: WeexCredentials): WeexClient {
     // If new credentials provided, always create new instance
@@ -353,21 +538,42 @@ export function getWeexClient(credentials?: WeexCredentials): WeexClient {
         return weexClientInstance;
     }
 
-    // Prevent race condition during creation
-    if (isCreating) {
-        // Wait and retry - simple spinlock for sync context
-        throw new Error('WeexClient is being initialized, please retry');
+    // Create new instance synchronously (safe since constructor is sync)
+    weexClientInstance = new WeexClient();
+    return weexClientInstance;
+}
+
+export async function getWeexClientAsync(credentials?: WeexCredentials): Promise<WeexClient> {
+    // If new credentials provided, always create new instance
+    if (credentials) {
+        weexClientInstance = new WeexClient(credentials);
+        return weexClientInstance;
     }
 
-    isCreating = true;
-    try {
+    // Return existing instance
+    if (weexClientInstance) {
+        return weexClientInstance;
+    }
+
+    // If creation is in progress, wait for it
+    if (creationPromise) {
+        return creationPromise;
+    }
+
+    // Create new instance
+    creationPromise = Promise.resolve().then(() => {
         weexClientInstance = new WeexClient();
         return weexClientInstance;
+    });
+
+    try {
+        return await creationPromise;
     } finally {
-        isCreating = false;
+        creationPromise = null;
     }
 }
 
 export function resetWeexClient(): void {
     weexClientInstance = null;
+    creationPromise = null;
 }

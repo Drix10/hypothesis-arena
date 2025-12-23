@@ -10,6 +10,14 @@ import { isApprovedSymbol, APPROVED_SYMBOLS } from '@hypothesis-arena/shared';
 
 const router = Router();
 
+// Valid trade statuses
+const VALID_TRADE_STATUSES = ['PENDING', 'OPEN', 'FILLED', 'CANCELED', 'FAILED'];
+
+// UUID validation helper
+const isValidUUID = (id: string): boolean => {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
+};
+
 const executeTradeSchema = z.object({
     symbol: z.string(),
     side: z.enum(['BUY', 'SELL']),
@@ -42,10 +50,6 @@ router.post('/execute', authenticate, async (req: Request, res: Response, next: 
             throw new ValidationError('Portfolio not found');
         }
 
-        if (portfolio.trading_mode !== 'live') {
-            throw new TradingError('Portfolio is not in live trading mode', 'NOT_LIVE_MODE');
-        }
-
         // Generate client order ID
         const clientOrderId = `${Date.now()}_${uuid().substring(0, 8)}`;
 
@@ -56,7 +60,7 @@ router.post('/execute', authenticate, async (req: Request, res: Response, next: 
 
             await client.query(
                 `INSERT INTO trades (id, portfolio_id, symbol, side, type, size, price, status, client_order_id, confidence, reason, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())`,
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())`,
                 [
                     tradeId,
                     data.portfolioId,
@@ -86,7 +90,7 @@ router.post('/execute', authenticate, async (req: Request, res: Response, next: 
 
             // Update trade with WEEX order ID
             await client.query(
-                `UPDATE trades SET weex_order_id = $1, status = $2 WHERE id = $3`,
+                'UPDATE trades SET weex_order_id = $1, status = $2 WHERE id = $3',
                 [orderResponse.data.orderId, 'FILLED', tradeId]
             );
 
@@ -106,30 +110,44 @@ router.post('/execute', authenticate, async (req: Request, res: Response, next: 
     }
 });
 
+
 // GET /api/trading/orders
-router.get('/orders', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+router.get('/orders', authenticate, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
         const { portfolioId, status, limit = 50 } = req.query;
 
-        let sql = `
-      SELECT t.* FROM trades t
-      JOIN portfolios p ON t.portfolio_id = p.id
-      WHERE p.user_id = $1
-    `;
+        // Build query with proper parameterized placeholders
+        const conditions: string[] = ['p.user_id = $1'];
         const params: any[] = [req.userId];
 
         if (portfolioId) {
+            if (typeof portfolioId !== 'string' || !isValidUUID(portfolioId)) {
+                res.status(400).json({ error: 'Invalid portfolioId format' });
+                return;
+            }
             params.push(portfolioId);
-            sql += ` AND t.portfolio_id = $${params.length}`;
+            conditions.push(`t.portfolio_id = $${params.length}`);
         }
 
         if (status) {
-            params.push(status);
-            sql += ` AND t.status = $${params.length}`;
+            if (typeof status !== 'string' || !VALID_TRADE_STATUSES.includes(status.toUpperCase())) {
+                res.status(400).json({ error: `Invalid status. Valid: ${VALID_TRADE_STATUSES.join(', ')}` });
+                return;
+            }
+            params.push(status.toUpperCase());
+            conditions.push(`t.status = $${params.length}`);
         }
 
-        params.push(Number(limit));
-        sql += ` ORDER BY t.created_at DESC LIMIT $${params.length}`;
+        const limitNum = Math.min(Math.max(1, Number(limit) || 50), 500);
+        params.push(limitNum);
+
+        const sql = `
+            SELECT t.* FROM trades t
+            JOIN portfolios p ON t.portfolio_id = p.id
+            WHERE ${conditions.join(' AND ')}
+            ORDER BY t.created_at DESC
+            LIMIT $${params.length}
+        `;
 
         const trades = await query(sql, params);
         res.json({ trades });
@@ -141,11 +159,18 @@ router.get('/orders', authenticate, async (req: Request, res: Response, next: Ne
 // GET /api/trading/order/:id
 router.get('/order/:id', authenticate, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
+        const { id } = req.params;
+
+        if (!isValidUUID(id)) {
+            res.status(400).json({ error: 'Invalid trade ID format' });
+            return;
+        }
+
         const trade = await queryOne<any>(
             `SELECT t.* FROM trades t
-       JOIN portfolios p ON t.portfolio_id = p.id
-       WHERE t.id = $1 AND p.user_id = $2`,
-            [req.params.id, req.userId]
+             JOIN portfolios p ON t.portfolio_id = p.id
+             WHERE t.id = $1 AND p.user_id = $2`,
+            [id, req.userId]
         );
 
         if (!trade) {
@@ -164,10 +189,15 @@ router.post('/cancel', authenticate, async (req: Request, res: Response, next: N
     try {
         const { tradeId } = req.body;
 
+        if (!tradeId || typeof tradeId !== 'string' || !isValidUUID(tradeId)) {
+            res.status(400).json({ error: 'Invalid tradeId format' });
+            return;
+        }
+
         const trade = await queryOne<any>(
             `SELECT t.* FROM trades t
-       JOIN portfolios p ON t.portfolio_id = p.id
-       WHERE t.id = $1 AND p.user_id = $2`,
+             JOIN portfolios p ON t.portfolio_id = p.id
+             WHERE t.id = $1 AND p.user_id = $2`,
             [tradeId, req.userId]
         );
 
@@ -180,13 +210,17 @@ router.post('/cancel', authenticate, async (req: Request, res: Response, next: N
             throw new TradingError('Cannot cancel trade in current status', 'INVALID_STATUS');
         }
 
+        if (!trade.weex_order_id) {
+            throw new TradingError('Trade has no associated exchange order', 'NO_ORDER_ID');
+        }
+
         // Cancel on WEEX
         const weexClient = getWeexClient();
         await weexClient.cancelOrder(trade.symbol, trade.weex_order_id);
 
         // Update status
         await query(
-            'UPDATE trades SET status = $1 WHERE id = $2',
+            'UPDATE trades SET status = $1, updated_at = NOW() WHERE id = $2',
             ['CANCELED', tradeId]
         );
 
