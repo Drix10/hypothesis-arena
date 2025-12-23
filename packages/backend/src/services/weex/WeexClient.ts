@@ -131,11 +131,13 @@ export class WeexClient {
                     this.lastTimeSync = Date.now(); // Only update on successful sync
                 } else {
                     logger.warn(`Rejecting unreasonable time offset: ${newOffset}ms`);
-                    // Don't update lastTimeSync - will retry on next request
+                    // Apply short delay to prevent spam on persistent bad responses
+                    this.lastTimeSync = Date.now() - 5000;
                 }
             } else {
                 logger.warn('Invalid server time response:', response.data);
-                // Don't update lastTimeSync - will retry on next request
+                // Apply short delay to prevent spam on persistent bad responses
+                this.lastTimeSync = Date.now() - 5000;
             }
         } catch (error: any) {
             // Log but don't throw - use local time if sync fails
