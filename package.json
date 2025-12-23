@@ -1,35 +1,40 @@
 {
   "name": "hypothesis-arena",
-  "version": "1.0.0",
-  "description": "AI-powered stock investment analysis - 8 specialized analyst agents debate to find the best investment decision",
+  "version": "2.0.0",
+  "description": "AI-powered investment analysis with 8 AI agents - now with real WEEX futures trading",
   "author": "Hypothesis Arena Contributors",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/drix10/hypothesis-arena.git"
   },
-  "bugs": {
-    "url": "https://github.com/drix10/hypothesis-arena/issues"
-  },
-  "homepage": "https://github.com/drix10/hypothesis-arena#readme",
-  "keywords": [
-    "ai",
-    "stock",
-    "investment",
-    "analysis",
-    "debate",
-    "gemini",
-    "react",
-    "typescript",
-    "yahoo-finance"
-  ],
   "private": true,
-  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "dev": "concurrently -n backend,frontend -c blue,green \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:frontend": "npm run dev -w @hypothesis-arena/frontend",
+    "dev:backend": "npm run dev -w @hypothesis-arena/backend",
+    "build": "npm run build -w @hypothesis-arena/shared && npm run build -w @hypothesis-arena/backend && npm run build -w @hypothesis-arena/frontend",
+    "build:shared": "npm run build -w @hypothesis-arena/shared",
+    "build:backend": "npm run build -w @hypothesis-arena/backend",
+    "build:frontend": "npm run build -w @hypothesis-arena/frontend",
+    "start": "node packages/backend/dist/server.js",
+    "db:migrate": "tsx packages/backend/src/scripts/migrate.ts",
+    "test": "npm run test --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "clean": "rimraf node_modules packages/*/node_modules packages/*/dist"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.0",
+    "rimraf": "^5.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.8.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
   },
   "dependencies": {
     "@google/genai": "^1.31.0",
@@ -39,14 +44,11 @@
     "lucide-react": "^0.556.0",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
-    "recharts": "^3.5.1"
-  },
-  "devDependencies": {
+    "recharts": "^3.5.1",
     "@types/node": "^22.14.0",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.0.0",
-    "typescript": "~5.8.2",
     "vite": "^6.2.0"
   }
 }

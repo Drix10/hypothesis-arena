@@ -32,6 +32,36 @@ Each analyst manages a simulated $100,000 portfolio with paper trading (no real 
 
 ---
 
+## 🚀 Quick Start
+
+```bash
+# Install dependencies
+npm install
+
+# Set up environment variables
+cp .env.example .env
+# Edit .env with your API keys (Gemini, WEEX, database URLs)
+
+# Run database migrations (requires DATABASE_URL)
+npm run db:migrate
+
+# Development (runs both frontend and backend)
+npm run dev
+
+# Production build
+npm run build
+npm start
+```
+
+### Environment Setup
+
+1. **PostgreSQL** - Get free database at [Neon](https://neon.tech)
+2. **Redis** - Get free Redis at [Upstash](https://upstash.com)
+3. **Gemini API** - Get key at [Google AI Studio](https://aistudio.google.com/apikey)
+4. **WEEX API** (optional, for live trading) - Get at [WEEX](https://www.weex.com/api)
+
+---
+
 ## 🤖 The 8 AI Analysts
 
 | Analyst                 | Methodology        | Focus                           | Trading Style                 |

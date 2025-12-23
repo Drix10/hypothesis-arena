@@ -1,0 +1,51 @@
+# Dockerfile
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+COPY packages/shared/package*.json ./packages/shared/
+COPY packages/backend/package*.json ./packages/backend/
+COPY packages/frontend/package*.json ./packages/frontend/
+
+# Install dependencies
+RUN npm ci
+
+# Copy source
+COPY . .
+
+# Build all packages
+RUN npm run build
+
+# Production image
+FROM node:20-alpine AS runner
+
+WORKDIR /app
+
+# Copy package files for production install
+COPY package*.json ./
+COPY packages/shared/package.json ./packages/shared/
+COPY packages/backend/package.json ./packages/backend/
+
+# Copy built artifacts
+COPY --from=builder /app/packages/shared/dist ./packages/shared/dist
+COPY --from=builder /app/packages/backend/dist ./packages/backend/dist
+COPY --from=builder /app/packages/frontend/dist ./packages/frontend/dist
+
+# Install production dependencies
+RUN npm ci --omit=dev -w @hypothesis-arena/shared -w @hypothesis-arena/backend
+
+# Security: Run as non-root user
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 appuser
+USER appuser
+
+ENV NODE_ENV=production
+EXPOSE 3000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
+
+CMD ["npm", "start"]
