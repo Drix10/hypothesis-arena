@@ -1,16 +1,19 @@
 <div align="center">
   <br />
   
-  # 🏆 Hypothesis Arena
+  # ⚔️ Hypothesis Arena
   
-  **AI-Powered Stock Investment Analysis & Simulated Trading System**
+  **AI-Powered Crypto Trading Platform for WEEX Exchange**
   
-  *8 AI analysts debate investment decisions, then compete with simulated portfolios (no real money)*
+  *8 AI analysts debate crypto positions in tournament-style battles, then execute trades on WEEX futures*
   
   [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-blue?logo=typescript)](https://www.typescriptlang.org/)
-  [![React](https://img.shields.io/badge/React-19.2-61dafb?logo=react)](https://react.dev/)
-  [![Vite](https://img.shields.io/badge/Vite-6.2-646cff?logo=vite)](https://vitejs.dev/)
+  [![React](https://img.shields.io/badge/React-19-61dafb?logo=react)](https://react.dev/)
+  [![Express](https://img.shields.io/badge/Express-5-000000?logo=express)](https://expressjs.com/)
   [![Gemini](https://img.shields.io/badge/Gemini-2.0-4285F4?logo=google)](https://ai.google.dev/)
+  [![WEEX](https://img.shields.io/badge/WEEX-Futures-00D4AA)](https://www.weex.com/)
+  
+  **🏆 WEEX Hackathon 2025 Submission**
   
 </div>
 
@@ -18,115 +21,39 @@
 
 ## 🎯 What is Hypothesis Arena?
 
-Hypothesis Arena is a sophisticated AI-powered platform that combines **investment analysis** with **autonomous agent trading**. Watch 8 specialized AI analysts debate stock picks, then see them put their money where their mouth is by managing real portfolios.
+Hypothesis Arena is an AI-powered crypto trading platform that combines **tournament-style AI debates** with **live futures trading** on WEEX Exchange. Watch 8 specialized AI analysts battle it out over crypto positions, then execute winning strategies automatically.
 
-### Two Core Systems
+### Core Features
 
-#### 1. **Analysis Engine** - AI Debate Tournament
-
-8 AI analysts with different methodologies analyze any stock, generate investment theses, and debate in a tournament format to reach consensus.
-
-#### 2. **Trading System** - Agent Competition Arena (Simulation)
-
-Each analyst manages a simulated $100,000 portfolio with paper trading (no real money). Trades are recorded based on debate performance. Track rankings, performance metrics, and see who's the best virtual investor.
+- **8 AI Analysts** - Each with unique trading methodologies (Value, Growth, Technical, Macro, Sentiment, Risk, Quant, Contrarian)
+- **Tournament Debates** - Quarterfinals → Semifinals → Championship battles
+- **Live WEEX Trading** - Execute futures trades directly on WEEX Exchange
+- **Real-Time Data** - Live prices, order books, and positions via WEEX API
+- **Cinematic UI** - Glass morphism design with dramatic visual effects
 
 ---
 
-## 🚀 Quick Start
+## 🏗️ Architecture
 
-```bash
-# Install dependencies
-npm install
-
-# Set up environment variables
-cp .env.example .env
-# Edit .env with your API keys (Gemini, WEEX, database URLs)
-
-# Run database migrations (requires DATABASE_URL)
-npm run db:migrate
-
-# Development (runs both frontend and backend)
-npm run dev
-
-# Production build
-npm run build
-npm start
+```
+hypothesis-arena/
+├── packages/
+│   ├── frontend/          # React 19 + Vite + TailwindCSS
+│   ├── backend/           # Express 5 + PostgreSQL + Redis
+│   └── shared/            # Shared types and utilities
+├── docs/                  # WEEX API documentation
+└── docker-compose.yml     # Production deployment
 ```
 
-### Environment Setup
+### Tech Stack
 
-1. **PostgreSQL** - Get free database at [Neon](https://neon.tech)
-2. **Redis** - Get free Redis at [Upstash](https://upstash.com)
-3. **Gemini API** - Get key at [Google AI Studio](https://aistudio.google.com/apikey)
-4. **WEEX API** (optional, for live trading) - Get at [WEEX](https://www.weex.com/api)
-
----
-
-## 🤖 The 8 AI Analysts
-
-| Analyst                 | Methodology        | Focus                           | Trading Style                 |
-| ----------------------- | ------------------ | ------------------------------- | ----------------------------- |
-| 🎩 **Warren**           | Value Investing    | P/E, P/B, FCF yield, moats      | Conservative, long-term holds |
-| 🚀 **Cathie**           | Growth Investing   | Revenue growth, TAM, disruption | Aggressive growth bets        |
-| 📊 **Jim**              | Technical Analysis | RSI, MACD, chart patterns       | Momentum trading              |
-| 🌍 **Ray**              | Macro Strategy     | Interest rates, economic cycles | Sector rotation               |
-| 📱 **Elon**             | Sentiment Analysis | News flow, social sentiment     | Trend following               |
-| 🛡️ **Karen**            | Risk Management    | Volatility, drawdown, downside  | Defensive positioning         |
-| 🤖 **Quant**            | Quantitative       | Factor exposures, statistics    | Data-driven trades            |
-| 😈 **Devil's Advocate** | Contrarian         | Consensus challenges            | Counter-trend plays           |
-
----
-
-## ✨ Features
-
-### 📊 Stock Analysis System
-
-- **Real Market Data** - Live quotes, fundamentals, and technicals via FMP API with Yahoo Finance fallback
-- **Technical Indicators** - RSI, MACD, Bollinger Bands, SMA/EMA, Stochastic, support/resistance
-- **News Sentiment** - Aggregated news with AI-powered sentiment scoring
-- **AI-Generated Theses** - Each analyst creates unique investment thesis with price targets
-- **Debate Tournament** - Bulls vs Bears compete in quarterfinals, semifinals, and finals
-- **Consensus Recommendation** - Weighted by debate performance and confidence
-- **Interactive Charts** - Candlestick and line charts with multiple timeframes (1M/3M/6M/1Y)
-
-### 🏆 Agent Trading System
-
-#### Portfolio Management
-
-- **8 Autonomous Traders** - Each analyst manages independent $100,000 portfolio
-- **Real-Time Execution** - Trades execute based on debate outcomes and confidence
-- **Position Tracking** - Live positions with cost basis, P&L, and performance metrics
-- **Trade History** - Complete audit trail of all buy/sell decisions
-
-#### Risk Management
-
-- **Position Sizing** - Max 20% per stock, 80% total invested, 5% cash reserve
-- **Position Limits** - Max 10 positions per agent
-- **Drawdown Protection** - Auto-pause at 30% drawdown, liquidate at 80%
-- **Market Hours Validation** - NYSE calendar with holiday detection
-- **Price Validation** - Stale price detection (>30 min), suspicious movement alerts
-
-#### Performance Analytics
-
-- **Leaderboard** - Real-time rankings by total return, Sharpe ratio, win rate
-- **Performance Metrics**: Total Return, Win Rate, Sharpe Ratio, Volatility, Max Drawdown, Profit Factor
-- **Performance Charts** - Interactive portfolio value over time
-- **Trade Analytics** - Recent trades with filters and sorting
-
-#### Data Management
-
-- **Persistent Storage** - All portfolios saved in localStorage with automatic trimming
-- **Import/Export** - Download trading data as JSON for backup
-- **Data Validation** - Comprehensive validation on import to prevent corruption
-- **Memory Management** - Automatic cleanup of old trades/logs to prevent storage bloat
-
-### 💾 Portfolio Tools
-
-- **Save Analyses** - Store up to 50 analyses in localStorage
-- **Watchlist** - Track up to 100 stocks with custom notes
-- **Compare Stocks** - Side-by-side comparison of up to 4 saved analyses
-- **Accuracy Tracker** - Track historical prediction accuracy
-- **Export Data** - Download analysis and trading data as JSON
+| Layer    | Technology                                                |
+| -------- | --------------------------------------------------------- |
+| Frontend | React 19, Vite, TailwindCSS, Framer Motion                |
+| Backend  | Express 5, TypeScript, PostgreSQL (Neon), Redis (Upstash) |
+| AI       | Google Gemini 2.0 Flash                                   |
+| Exchange | WEEX Futures API                                          |
+| Auth     | JWT with refresh tokens                                   |
 
 ---
 
@@ -135,74 +62,173 @@ npm start
 ### Prerequisites
 
 - Node.js 18+
-- Gemini API key (required) - [Get free key](https://aistudio.google.com/apikey)
-- FMP API key (optional) - [Get free key](https://financialmodelingprep.com/developer/docs/)
+- PostgreSQL database ([Neon](https://neon.tech) - free tier)
+- Redis instance ([Upstash](https://upstash.com) - free tier)
+- Gemini API key ([Google AI Studio](https://aistudio.google.com/apikey))
+- WEEX API credentials ([WEEX](https://www.weex.com/api))
 
 ### Installation
 
 ```bash
+# Clone repository
 git clone https://github.com/drix10/hypothesis-arena.git
 cd hypothesis-arena
+
+# Install dependencies
 npm install
+
+# Set up environment
+cp .env.example .env
+# Edit .env with your API keys
+
+# Run database migrations
+npm run db:migrate -w @hypothesis-arena/backend
+
+# Start development (frontend + backend)
 npm run dev
 ```
 
-Open `http://localhost:5173`
-
-### API Keys Setup
-
-#### Option 1: Web UI (Recommended)
-
-1. Open the app
-2. Enter your **Gemini API key** (required)
-3. Optionally enter your **FMP API key** (uses demo key if empty)
-4. Click "Enter the Arena"
-
-Keys are stored in memory only and cleared on page refresh.
-
-#### Option 2: Environment Variables (Developers)
-
-Create a `.env` file:
+### Environment Variables
 
 ```env
-# Gemini API Key (Required)
-VITE_GEMINI_API_KEY=your_gemini_key_here
+# Database (Neon PostgreSQL)
+DATABASE_URL=postgresql://user:pass@host/db?sslmode=require
 
-# FMP API Key (Optional - has fallback)
-VITE_FMP_API_KEY=your_fmp_key_here
+# Redis (Upstash)
+REDIS_URL=redis://default:pass@host:port
+
+# AI
+GEMINI_API_KEY=your_gemini_api_key
+
+# WEEX Exchange
+WEEX_API_KEY=your_weex_api_key
+WEEX_API_SECRET=your_weex_api_secret
+WEEX_PASSPHRASE=your_weex_passphrase
+
+# Auth
+JWT_SECRET=your_jwt_secret
+JWT_REFRESH_SECRET=your_refresh_secret
+
+# Server
+PORT=3001
+NODE_ENV=development
 ```
-
-Restart dev server: `npm run dev`
 
 ---
 
-## 📈 How It Works
+## 🤖 The 8 AI Analysts
 
-### Analysis Flow
+| Analyst                 | Methodology        | Focus                                     | Trading Style           |
+| ----------------------- | ------------------ | ----------------------------------------- | ----------------------- |
+| 🎩 **Warren**           | Value Investing    | Fundamentals, moats, margin of safety     | Conservative, long-term |
+| 🚀 **Cathie**           | Growth Investing   | TAM expansion, disruption, innovation     | Aggressive growth       |
+| 📊 **Jim**              | Technical Analysis | RSI, MACD, chart patterns, momentum       | Swing trading           |
+| 🌍 **Ray**              | Macro Strategy     | Interest rates, cycles, correlations      | Sector rotation         |
+| 📱 **Elon**             | Sentiment Analysis | Social sentiment, news flow, hype         | Trend following         |
+| 🛡️ **Karen**            | Risk Management    | Volatility, drawdown, downside protection | Defensive               |
+| 🤖 **Quant**            | Quantitative       | Factor models, statistics, mean reversion | Data-driven             |
+| 😈 **Devil's Advocate** | Contrarian         | Consensus challenges, crowded trades      | Counter-trend           |
 
-1. **Enter Stock Ticker** - Search any publicly traded stock (e.g., AAPL, MSFT, GOOGL)
-2. **Data Collection** - Fetches price, fundamentals, technicals, news, and analyst ratings
-3. **Thesis Generation** - Each of 8 AI analysts generates investment thesis
-4. **Debate Tournament** - Quarterfinals, Semifinals, Final (3 rounds each with scoring)
-5. **Consensus Recommendation** - Weighted by debate performance and confidence
+---
 
-### Trading Flow
+## 📊 Supported Trading Pairs
 
-1. **Trade Decision Generation** - Winners trade based on recommendation, losers hold
-2. **Position Sizing** - Calculated based on confidence, cash, positions, and risk limits
-3. **Trade Execution** - Market hours validated, price checked, limits enforced, trade recorded
-4. **Portfolio Update** - Positions updated, metrics recalculated, performance snapshot created
+WEEX-approved futures contracts:
+
+- `cmt_btcusdt` - Bitcoin
+- `cmt_ethusdt` - Ethereum
+- `cmt_solusdt` - Solana
+- `cmt_dogeusdt` - Dogecoin
+- `cmt_xrpusdt` - XRP
+- `cmt_adausdt` - Cardano
+- `cmt_bnbusdt` - BNB
+- `cmt_ltcusdt` - Litecoin
+
+---
+
+## ✨ Features
+
+### 🏆 AI Battle Arena
+
+- **Tournament Format** - 8 analysts compete in bracket-style debates
+- **Scoring System** - Data quality, logic, risk awareness, catalyst identification
+- **Champion Selection** - Winner's thesis drives trading decisions
+- **Winning Arguments** - Key points that decided each battle
+
+### 📈 Live Trading Dashboard
+
+- **Real-Time Prices** - WebSocket + polling fallback
+- **Order Book Depth** - Live bid/ask visualization
+- **Position Management** - View and manage open positions
+- **Trade Execution** - Long/Short with leverage up to 100x
+
+### 🎨 Cinematic UI
+
+- **Glass Morphism** - Frosted glass card effects
+- **Animated Meters** - Circular progress indicators
+- **Price Range Bars** - Bull/bear target visualization
+- **Scanline Textures** - Command center aesthetic
+- **Golden Accents** - Champion highlights
 
 ---
 
 ## 🛠️ Scripts
 
-| Command             | Description              |
-| ------------------- | ------------------------ |
-| `npm run dev`       | Start development server |
-| `npm run build`     | Build for production     |
-| `npm run preview`   | Preview production build |
-| `npm run typecheck` | Check TypeScript types   |
+| Command              | Description                             |
+| -------------------- | --------------------------------------- |
+| `npm run dev`        | Start frontend + backend in development |
+| `npm run build`      | Build all packages for production       |
+| `npm run typecheck`  | TypeScript type checking                |
+| `npm run db:migrate` | Run database migrations                 |
+| `npm run db:seed`    | Seed database with test data            |
+
+### Package-specific
+
+```bash
+# Frontend only
+npm run dev -w @hypothesis-arena/frontend
+npm run build -w @hypothesis-arena/frontend
+
+# Backend only
+npm run dev -w @hypothesis-arena/backend
+npm run build -w @hypothesis-arena/backend
+```
+
+---
+
+## 📁 Project Structure
+
+```
+packages/
+├── frontend/src/
+│   ├── components/
+│   │   ├── arena/        # AI analysis & debate components
+│   │   ├── trading/      # Order book, positions, trading panel
+│   │   ├── layout/       # Header, sidebar, main arena
+│   │   └── ui/           # Reusable UI components
+│   └── services/api/     # WEEX API, WebSocket, auth client
+│
+├── backend/src/
+│   ├── api/routes/       # REST endpoints
+│   ├── services/
+│   │   ├── ai/           # Gemini integration
+│   │   ├── trading/      # Trade execution
+│   │   └── weex/         # WEEX API client
+│   └── db/               # PostgreSQL models & migrations
+│
+└── shared/src/
+    └── types/            # Shared TypeScript interfaces
+```
+
+---
+
+## 🔒 Security
+
+- JWT authentication with refresh token rotation
+- WEEX API signature verification (HMAC-SHA256)
+- Rate limiting on all endpoints
+- Input validation and sanitization
+- Secure credential storage
 
 ---
 
@@ -214,7 +240,9 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 <div align="center">
   
-  **Built with React, TypeScript, Gemini 2.0, and Financial Modeling Prep**
+  **Built for WEEX Hackathon 2025**
+  
+  React 19 • Express 5 • Gemini 2.0 • WEEX Futures API
   
   ⭐ Star if you find this useful • 🐛 Report bugs • 💡 Suggest features
   
