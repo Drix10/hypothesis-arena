@@ -19,6 +19,8 @@ export interface TradeDecision {
     thesisId: string;
     debateId?: string;
     recommendation: Recommendation;
+    leverage?: number;
+    methodology?: string;
 }
 
 export interface Trade {

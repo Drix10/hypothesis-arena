@@ -4,6 +4,7 @@ import { getRedisClient } from '../../config/redis';
 import { logger } from '../../utils/logger';
 import { getWeexClient } from '../weex/WeexClient';
 import { TradingError } from '../../utils/errors';
+import { GLOBAL_RISK_LIMITS } from '../../constants/analystPrompts';
 import type {
     Trade,
     TradeDecision,
@@ -12,6 +13,9 @@ import type {
     OrderSide,
     OrderStatus,
 } from '@hypothesis-arena/shared';
+
+// Trading constants
+const MIN_ACCOUNT_BALANCE_USDT = 10; // Minimum balance required to execute trades
 
 export class TradingService {
     private weexClient = getWeexClient();
@@ -32,12 +36,71 @@ export class TradingService {
             throw new TradingError('Missing thesisId (portfolioId)', 'INVALID_THESIS_ID');
         }
 
+        // VALIDATE LEVERAGE (NEW)
+        if (decision.leverage && decision.leverage > GLOBAL_RISK_LIMITS.MAX_SAFE_LEVERAGE) {
+            throw new TradingError(
+                `Leverage ${decision.leverage}x exceeds maximum safe leverage of ${GLOBAL_RISK_LIMITS.MAX_SAFE_LEVERAGE}x`,
+                'EXCESSIVE_LEVERAGE'
+            );
+        }
+
+        // Get portfolio to check balance
+        const portfolioResult = await pool.query(
+            `SELECT current_balance FROM portfolios WHERE id = $1`,
+            [decision.thesisId]
+        );
+
+        if (portfolioResult.rows.length === 0) {
+            throw new TradingError('Portfolio not found', 'INVALID_PORTFOLIO');
+        }
+
+        const accountBalance = parseFloat(portfolioResult.rows[0].current_balance);
+
+        // Validate account balance
+        if (!Number.isFinite(accountBalance) || accountBalance < 0) {
+            throw new TradingError(
+                `Invalid account balance: ${accountBalance}`,
+                'INVALID_BALANCE'
+            );
+        }
+
+        if (accountBalance < MIN_ACCOUNT_BALANCE_USDT) {
+            throw new TradingError(
+                `Insufficient account balance: ${accountBalance.toFixed(2)} USDT (minimum ${MIN_ACCOUNT_BALANCE_USDT} USDT required)`,
+                'INSUFFICIENT_BALANCE'
+            );
+        }
+
         // Get current price from WEEX
         const ticker = await this.weexClient.getTicker(this.toWeexSymbol(decision.symbol));
         const currentPrice = parseFloat(ticker.last);
 
         if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
             throw new TradingError('Unable to fetch valid market price', 'INVALID_PRICE');
+        }
+
+        // VALIDATE POSITION SIZE (NEW)
+        const positionValue = decision.size * currentPrice;
+        const positionSizePercent = (positionValue / accountBalance) * 100;
+
+        if (positionSizePercent > GLOBAL_RISK_LIMITS.MAX_POSITION_SIZE) {
+            throw new TradingError(
+                `Position size ${positionSizePercent.toFixed(1)}% exceeds maximum of ${GLOBAL_RISK_LIMITS.MAX_POSITION_SIZE}%`,
+                'EXCESSIVE_POSITION_SIZE'
+            );
+        }
+
+        // VALIDATE STOP LOSS (NEW)
+        if (decision.stopLoss && decision.methodology) {
+            const stopLossPercent = Math.abs((decision.stopLoss - currentPrice) / currentPrice * 100);
+            const methodologyKey = decision.methodology.toUpperCase() as keyof typeof GLOBAL_RISK_LIMITS.STOP_LOSS_REQUIREMENTS;
+            const requiredStopLoss = GLOBAL_RISK_LIMITS.STOP_LOSS_REQUIREMENTS[methodologyKey] || 15;
+
+            if (stopLossPercent > requiredStopLoss * 1.5) {
+                logger.warn(
+                    `Stop loss ${stopLossPercent.toFixed(1)}% is wider than recommended ${requiredStopLoss}% for ${decision.methodology}`
+                );
+            }
         }
 
         // Create trade record
@@ -239,13 +302,19 @@ export class TradingService {
     private async updatePortfolioAfterTrade(userId: string, trade: Trade): Promise<void> {
         const tradeValue = trade.size * trade.price;
 
+        // Validate trade value
+        if (!Number.isFinite(tradeValue) || tradeValue <= 0) {
+            logger.warn('Invalid trade value, skipping portfolio update:', { tradeValue, trade });
+            return;
+        }
+
         if (trade.side === 'BUY') {
             await pool.query(
                 `UPDATE portfolios 
                  SET current_balance = current_balance - $1,
                      total_trades = total_trades + 1,
                      updated_at = NOW()
-                 WHERE user_id = $2 AND agent_id = $3`,
+                 WHERE user_id = $2 AND id = $3`,
                 [tradeValue, userId, trade.portfolioId]
             );
         } else {
@@ -254,14 +323,18 @@ export class TradingService {
                  SET current_balance = current_balance + $1,
                      total_trades = total_trades + 1,
                      updated_at = NOW()
-                 WHERE user_id = $2 AND agent_id = $3`,
+                 WHERE user_id = $2 AND id = $3`,
                 [tradeValue, userId, trade.portfolioId]
             );
         }
 
-        // Invalidate cache
-        const redis = await getRedisClient();
-        await redis.del(`portfolio:${userId}:${trade.portfolioId}`);
+        // Invalidate cache - handle Redis errors gracefully
+        try {
+            const redis = await getRedisClient();
+            await redis.del(`portfolio:${userId}:${trade.portfolioId}`);
+        } catch (error) {
+            logger.warn('Failed to invalidate portfolio cache:', error);
+        }
     }
 
     private toWeexSymbol(symbol: string): string {

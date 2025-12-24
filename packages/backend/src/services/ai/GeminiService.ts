@@ -14,7 +14,12 @@ import { GoogleGenerativeAI, GenerativeModel } from '@google/generative-ai';
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
 import { aiLogService } from '../compliance/AILogService';
-import { ANALYST_PROFILES, THESIS_SYSTEM_PROMPTS, AnalystMethodology } from '../../constants/analystPrompts';
+import { ANALYST_PROFILES, THESIS_SYSTEM_PROMPTS, GLOBAL_RISK_LIMITS, AnalystMethodology } from '../../constants/analystPrompts';
+import { arenaContextBuilder, FullArenaContext } from './ArenaContext';
+import { circuitBreakerService, CircuitBreakerStatus } from '../risk/CircuitBreakerService';
+
+// Re-export arena context types for external use
+export type { FullArenaContext } from './ArenaContext';
 
 // Constants
 const AI_REQUEST_TIMEOUT = 90000; // 90 seconds for detailed analysis
@@ -252,8 +257,12 @@ class GeminiService {
     /**
      * Generate analysis from a specific analyst persona using enhanced prompts
      * Uses the exact JSON format from the prompts file
+     * 
+     * @param request - Analysis request with market data
+     * @param _userId - Optional user ID for logging
+     * @param arenaContext - Optional full arena context for autonomous trading
      */
-    async generateAnalysis(request: AnalysisRequest, _userId?: string): Promise<AnalysisResult> {
+    async generateAnalysis(request: AnalysisRequest, _userId?: string, arenaContext?: FullArenaContext): Promise<AnalysisResult> {
         const model = this.getModel();
 
         // Determine which analyst to use
@@ -274,9 +283,14 @@ class GeminiService {
         }
         if (!Number.isFinite(change24h)) change24h = 0;
 
+        // Build arena context section if provided
+        const arenaContextSection = arenaContext ? `
+${arenaContext.contextString}
+` : '';
+
         // Prompt matches the exact format from analystPrompts.ts
         const prompt = `${systemPrompt}
-
+${arenaContextSection}
 ═══════════════════════════════════════════════════════════════════════════════
 ANALYZE THIS CRYPTO ASSET: ${displaySymbol}/USDT
 ═══════════════════════════════════════════════════════════════════════════════
@@ -293,7 +307,14 @@ ${profile.focusAreas.map(f => `- ${f}`).join('\n')}
 
 Acknowledge your biases:
 ${profile.biases.map(b => `- ${b}`).join('\n')}
-
+${arenaContext ? `
+IMPORTANT: You are competing in the Hypothesis Arena. Consider:
+- Your current rank (#${arenaContext.myPortfolio.rank}) and performance (${arenaContext.myPortfolio.totalReturn >= 0 ? '+' : ''}${arenaContext.myPortfolio.totalReturn.toFixed(2)}%)
+- Your available balance: $${arenaContext.myPortfolio.balance.toFixed(2)}
+- The trading rules: Max ${arenaContext.tradingRules.maxPositionSizePercent}% position, ${arenaContext.tradingRules.maxLeverage}x max leverage
+- Your competitors' performance and strategies
+- Risk management: ${arenaContext.tradingRules.stopLossPercent}% stop loss, ${arenaContext.tradingRules.takeProfitPercent}% take profit
+` : ''}
 Respond with valid JSON in this EXACT structure:
 {
     "recommendation": "STRONG_BUY" | "BUY" | "HOLD" | "SELL" | "STRONG_SELL",
@@ -407,8 +428,16 @@ Respond ONLY with valid JSON.`;
 
     /**
      * Generate analyses from all 8 analysts with high-quality prompts
+     * 
+     * @param request - Analysis request with market data
+     * @param userId - Optional user ID for logging
+     * @param arenaContexts - Optional map of analyst ID to their arena context
      */
-    async generateAllAnalyses(request: AnalysisRequest, userId?: string): Promise<AnalysisResult[]> {
+    async generateAllAnalyses(
+        request: AnalysisRequest,
+        userId?: string,
+        arenaContexts?: Map<string, FullArenaContext>
+    ): Promise<AnalysisResult[]> {
         const results: AnalysisResult[] = [];
 
         // Run in batches of 2 for rate limiting (more conservative for detailed prompts)
@@ -418,7 +447,9 @@ Respond ONLY with valid JSON.`;
                 batch.map(async methodology => {
                     const profile = ANALYST_PROFILES[methodology];
                     try {
-                        return await this.generateAnalysis({ ...request, analystId: profile.id }, userId);
+                        // Get arena context for this specific analyst if available
+                        const arenaContext = arenaContexts?.get(profile.id);
+                        return await this.generateAnalysis({ ...request, analystId: profile.id }, userId, arenaContext);
                     } catch (err: any) {
                         logger.warn(`Analysis failed for ${profile.name}:`, err.message);
                         return null;
@@ -840,19 +871,109 @@ Respond ONLY with valid JSON.`;
     /**
      * Generate a complete trading decision with executable order
      * This is the main method for live trading integration
+     * 
+     * Enhanced: Now builds full arena context for each analyst and checks circuit breakers
      */
     async generateTradingDecision(
         marketData: ExtendedMarketData,
         accountBalance: number,
         existingPosition?: { side: 'LONG' | 'SHORT'; size: number },
-        userId?: string
+        userId?: string,
+        analystId?: string // Optional: generate decision for specific analyst
     ): Promise<TradingDecision> {
         // Validate symbol is approved for trading
         if (!this.isApprovedPair(marketData.symbol)) {
             throw new Error(`Symbol ${marketData.symbol} is not an approved WEEX trading pair. Approved pairs: ${WEEX_APPROVED_PAIRS.join(', ')}`);
         }
 
-        // Generate all analyses
+        // CHECK CIRCUIT BREAKERS FIRST
+        const circuitBreakerStatus = await circuitBreakerService.checkCircuitBreakers(userId);
+
+        // RED ALERT: Emergency exit - close all positions
+        if (circuitBreakerStatus.level === 'RED') {
+            logger.error(`🚨 RED ALERT: ${circuitBreakerStatus.reason}`);
+            logger.error(`Action: ${circuitBreakerService.getRecommendedAction('RED')}`);
+
+            // Generate close order if position exists
+            if (existingPosition) {
+                const closeOrder = this.generateCloseOrder(marketData, existingPosition);
+
+                return {
+                    shouldTrade: true, // Yes, trade to close
+                    order: closeOrder,
+                    aiLog: this.generateCircuitBreakerLog(circuitBreakerStatus, 'EMERGENCY_CLOSE'),
+                    analysis: {
+                        champion: null,
+                        consensus: { bulls: 0, bears: 0, neutral: 0 },
+                        confidence: 0,
+                    },
+                    riskManagement: {
+                        positionSizePercent: 0,
+                        leverage: 1,
+                        takeProfitPrice: marketData.currentPrice,
+                        stopLossPrice: marketData.currentPrice,
+                        riskRewardRatio: 0,
+                    },
+                };
+            } else {
+                // No position to close, just halt trading
+                return {
+                    shouldTrade: false,
+                    aiLog: this.generateCircuitBreakerLog(circuitBreakerStatus, 'HALT_TRADING'),
+                    analysis: {
+                        champion: null,
+                        consensus: { bulls: 0, bears: 0, neutral: 0 },
+                        confidence: 0,
+                    },
+                    riskManagement: {
+                        positionSizePercent: 0,
+                        leverage: 1,
+                        takeProfitPrice: marketData.currentPrice,
+                        stopLossPrice: marketData.currentPrice,
+                        riskRewardRatio: 0,
+                    },
+                };
+            }
+        }
+
+        // ORANGE/YELLOW ALERT: Continue but with reduced leverage (handled in calculateRiskManagement)
+        if (circuitBreakerStatus.level === 'ORANGE' || circuitBreakerStatus.level === 'YELLOW') {
+            logger.warn(`⚠️ ${circuitBreakerStatus.level} ALERT: ${circuitBreakerStatus.reason}`);
+            logger.warn(`Action: ${circuitBreakerService.getRecommendedAction(circuitBreakerStatus.level)}`);
+        }
+
+        // Build arena contexts for all analysts (or just one if specified)
+        const arenaContexts = new Map<string, FullArenaContext>();
+        const analystIds = analystId
+            ? [analystId]
+            : METHODOLOGY_ORDER.map(m => ANALYST_PROFILES[m].id);
+
+        // Build context for each analyst in parallel
+        const contextPromises = analystIds.map(async (id) => {
+            try {
+                const context = await arenaContextBuilder.buildContext(id, marketData.symbol, {
+                    price: marketData.currentPrice,
+                    change24h: marketData.change24h,
+                    volume24h: marketData.volume24h,
+                    high24h: marketData.high24h,
+                    low24h: marketData.low24h,
+                    fundingRate: marketData.fundingRate,
+                });
+                return { id, context };
+            } catch (err: any) {
+                logger.warn(`Failed to build arena context for ${id}:`, err.message);
+                return null;
+            }
+        });
+
+        const contextResults = await Promise.all(contextPromises);
+        for (const result of contextResults) {
+            if (result) {
+                arenaContexts.set(result.id, result.context);
+            }
+        }
+
+        // Generate all analyses with arena context
         const analyses = await this.generateAllAnalyses({
             symbol: marketData.symbol,
             currentPrice: marketData.currentPrice,
@@ -860,7 +981,7 @@ Respond ONLY with valid JSON.`;
             low24h: marketData.low24h,
             volume24h: marketData.volume24h,
             change24h: marketData.change24h,
-        }, userId);
+        }, userId, arenaContexts);
 
         // Run tournament to determine champion
         const tournament = await this.runTournament(
@@ -884,8 +1005,8 @@ Respond ONLY with valid JSON.`;
         const champion = tournament.champion;
         const shouldTrade = this.shouldExecuteTrade(champion, bulls, bears, neutral, avgConfidence, existingPosition);
 
-        // Calculate risk management parameters
-        const riskManagement = this.calculateRiskManagement(
+        // Calculate risk management parameters using config values (now includes circuit breaker checks)
+        const riskManagement = await this.calculateRiskManagement(
             marketData,
             champion,
             accountBalance,
@@ -903,14 +1024,16 @@ Respond ONLY with valid JSON.`;
             );
         }
 
-        // Generate AI log for WEEX compliance
+        // Generate AI log for WEEX compliance (include arena context summary and circuit breaker status)
         const aiLog = this.generateAILog(
             marketData,
             analyses,
             tournament,
             champion,
             shouldTrade,
-            order
+            order,
+            arenaContexts.get(champion?.analystId || ''),
+            circuitBreakerStatus
         );
 
         return {
@@ -928,6 +1051,7 @@ Respond ONLY with valid JSON.`;
 
     /**
      * Determine if we should execute a trade based on analysis
+     * Uses config values for thresholds
      */
     private shouldExecuteTrade(
         champion: AnalysisResult | null,
@@ -943,19 +1067,19 @@ Respond ONLY with valid JSON.`;
         // HOLD recommendation = no new trade
         if (champion.recommendation === 'hold') return false;
 
-        // Low confidence = no trade
-        if (avgConfidence < 55) return false;
+        // Low confidence = no trade (use config threshold)
+        if (avgConfidence < config.autonomous.minConfidenceToTrade) return false;
 
         // Check if champion has sufficient confidence
-        if (champion.confidence < 60) return false;
+        if (champion.confidence < config.autonomous.minConfidenceToTrade) return false;
 
-        // Check consensus alignment
+        // Check consensus alignment (use config threshold)
         const isBullish = ['strong_buy', 'buy'].includes(champion.recommendation);
         const isBearish = ['strong_sell', 'sell'].includes(champion.recommendation);
 
-        // Champion should align with at least some consensus
-        if (isBullish && bulls < 2) return false;
-        if (isBearish && bears < 2) return false;
+        // Champion should align with at least minConsensusToTrade analysts
+        if (isBullish && bulls < config.autonomous.minConsensusToTrade) return false;
+        if (isBearish && bears < config.autonomous.minConsensusToTrade) return false;
 
         // Don't open opposite position if already positioned
         if (existingPosition) {
@@ -975,52 +1099,138 @@ Respond ONLY with valid JSON.`;
     }
 
     /**
-     * Calculate risk management parameters
+     * Calculate risk management parameters using config values
+     * ENHANCED: Now enforces GLOBAL_RISK_LIMITS and circuit breakers
      */
-    private calculateRiskManagement(
+    private async calculateRiskManagement(
         marketData: ExtendedMarketData,
         champion: AnalysisResult | null,
         accountBalance: number,
-        avgConfidence: number
-    ): TradingDecision['riskManagement'] {
+        avgConfidence: number,
+        circuitBreakerStatus?: CircuitBreakerStatus // Pass as parameter to avoid double-check
+    ): Promise<TradingDecision['riskManagement']> {
         const price = marketData.currentPrice;
 
-        // Default conservative values
-        let positionSizePercent = 2; // 2% of portfolio
-        let leverage = 5;
-        let takeProfitPrice = price * 1.05;
-        let stopLossPrice = price * 0.97;
+        // GUARD: Validate price
+        if (!Number.isFinite(price) || price <= 0) {
+            throw new Error(`Invalid market price: ${price}`);
+        }
+
+        // CHECK CIRCUIT BREAKERS (use passed status or fetch)
+        const cbStatus = circuitBreakerStatus || await circuitBreakerService.checkCircuitBreakers();
+        const maxLeverageFromCircuitBreaker = circuitBreakerService.getMaxLeverage(cbStatus.level);
+
+        // Log circuit breaker status if not NONE
+        if (cbStatus.level !== 'NONE') {
+            logger.warn(`⚠️ Circuit Breaker ${cbStatus.level}: ${cbStatus.reason}`);
+            logger.warn(`Max leverage reduced to ${maxLeverageFromCircuitBreaker}x`);
+        }
+
+        // Default values from config
+        let positionSizePercent = config.autonomous.maxPositionSizePercent / 3; // Start conservative
+        let leverage = config.autonomous.defaultLeverage;
+        let takeProfitPrice = price * (1 + config.autonomous.takeProfitPercent / 100);
+        let stopLossPrice = price * (1 - config.autonomous.stopLossPercent / 100);
 
         if (champion) {
             // Position size based on champion's positionSize (1-10 scale)
-            // 1-2 = 1%, 3-4 = 2%, 5-6 = 3%, 7-8 = 4%, 9-10 = 5%
-            positionSizePercent = Math.min(5, Math.max(1, Math.ceil(champion.positionSize / 2)));
+            const sizeMultiplier = champion.positionSize / 10;
+            let calculatedSize = config.autonomous.maxPositionSizePercent * sizeMultiplier;
 
-            // Adjust for confidence
-            if (avgConfidence < 60) positionSizePercent = Math.max(1, positionSizePercent - 1);
-            if (avgConfidence > 80) positionSizePercent = Math.min(5, positionSizePercent + 1);
-
-            // Leverage based on risk level
-            switch (champion.riskLevel) {
-                case 'low': leverage = 10; break;
-                case 'medium': leverage = 5; break;
-                case 'high': leverage = 3; break;
-                case 'very_high': leverage = 2; break;
+            // Adjust for confidence BEFORE applying min
+            if (avgConfidence < config.autonomous.minConfidenceToTrade + 10) {
+                calculatedSize = calculatedSize * 0.7;
             }
+            if (avgConfidence > 80) {
+                calculatedSize = calculatedSize * 1.2;
+            }
+
+            // Apply min/max AFTER all multipliers
+            positionSizePercent = Math.min(
+                GLOBAL_RISK_LIMITS.MAX_POSITION_SIZE,
+                Math.max(5, calculatedSize) // Ensure minimum 5%
+            );
+
+            // ENFORCE ABSOLUTE MAX LEVERAGE FROM GLOBAL_RISK_LIMITS
+            const ABSOLUTE_MAX_LEVERAGE = Math.min(
+                GLOBAL_RISK_LIMITS.MAX_SAFE_LEVERAGE, // 5x from prompts
+                maxLeverageFromCircuitBreaker // Reduced during alerts
+            );
+
+            // Leverage based on risk level (FIXED: never exceeds 5x)
+            switch (champion.riskLevel) {
+                case 'low':
+                    leverage = Math.min(ABSOLUTE_MAX_LEVERAGE, 5);
+                    break;
+                case 'medium':
+                    leverage = Math.min(ABSOLUTE_MAX_LEVERAGE, 4);
+                    break;
+                case 'high':
+                    leverage = Math.min(ABSOLUTE_MAX_LEVERAGE, 3);
+                    break;
+                case 'very_high':
+                    leverage = Math.min(ABSOLUTE_MAX_LEVERAGE, 2);
+                    break;
+            }
+
+            // Also cap by config (in case config is more conservative)
+            leverage = Math.min(leverage, config.autonomous.maxLeverage);
 
             // TP/SL from champion's price targets
             const isBullish = ['strong_buy', 'buy'].includes(champion.recommendation);
+
+            // FIXED: Correct logic for both LONG and SHORT positions
             if (isBullish) {
+                // LONG position: TP above, SL below
                 takeProfitPrice = champion.priceTarget.base;
                 stopLossPrice = champion.priceTarget.bear;
             } else {
-                // For bearish, invert the targets
+                // SHORT position: TP below, SL above
                 takeProfitPrice = champion.priceTarget.bear;
                 stopLossPrice = champion.priceTarget.bull;
             }
+
+            // Validate TP/SL are sensible
+            if (isBullish) {
+                // For LONG: TP must be > price, SL must be < price
+                if (takeProfitPrice <= price) takeProfitPrice = price * 1.15;
+                if (stopLossPrice >= price) stopLossPrice = price * 0.90;
+            } else {
+                // For SHORT: TP must be < price, SL must be > price
+                if (takeProfitPrice >= price) takeProfitPrice = price * 0.85;
+                if (stopLossPrice <= price) stopLossPrice = price * 1.10;
+            }
+
+            // Ensure TP/SL are within config bounds
+            const maxTpDistance = price * (config.autonomous.takeProfitPercent / 100);
+            const maxSlDistance = price * (config.autonomous.stopLossPercent / 100);
+
+            if (Math.abs(takeProfitPrice - price) > maxTpDistance * 2) {
+                takeProfitPrice = isBullish
+                    ? price + maxTpDistance
+                    : price - maxTpDistance;
+            }
+            if (Math.abs(stopLossPrice - price) > maxSlDistance * 2) {
+                stopLossPrice = isBullish
+                    ? price - maxSlDistance
+                    : price + maxSlDistance;
+            }
+
+            // VALIDATE STOP LOSS AGAINST METHODOLOGY REQUIREMENTS
+            const methodologyKey = champion.methodology.toUpperCase() as keyof typeof GLOBAL_RISK_LIMITS.STOP_LOSS_REQUIREMENTS;
+            const requiredStopLoss = GLOBAL_RISK_LIMITS.STOP_LOSS_REQUIREMENTS[methodologyKey] || 15;
+            const actualStopLossPercent = Math.abs((stopLossPrice - price) / price * 100);
+
+            if (actualStopLossPercent > requiredStopLoss * 1.5) {
+                logger.warn(`Stop loss ${actualStopLossPercent.toFixed(1)}% is wider than recommended ${requiredStopLoss}% for ${champion.methodology}`);
+                // Tighten stop loss to methodology requirement
+                stopLossPrice = isBullish
+                    ? price * (1 - requiredStopLoss / 100)
+                    : price * (1 + requiredStopLoss / 100);
+            }
         }
 
-        // Calculate risk/reward ratio
+        // Calculate risk/reward ratio (guard against division by zero)
         const potentialProfit = Math.abs(takeProfitPrice - price);
         const potentialLoss = Math.abs(price - stopLossPrice);
         const riskRewardRatio = potentialLoss > 0 ? potentialProfit / potentialLoss : 1;
@@ -1088,6 +1298,7 @@ Respond ONLY with valid JSON.`;
 
     /**
      * Generate AI log for WEEX compliance
+     * Enhanced: Includes arena context summary and circuit breaker status
      */
     private generateAILog(
         marketData: ExtendedMarketData,
@@ -1095,7 +1306,9 @@ Respond ONLY with valid JSON.`;
         tournament: TournamentBracket,
         champion: AnalysisResult | null,
         shouldTrade: boolean,
-        order?: TradeOrder
+        order?: TradeOrder,
+        arenaContext?: FullArenaContext,
+        circuitBreakerStatus?: { level: string; reason: string }
     ): WeexAILog {
         const displaySymbol = marketData.symbol.replace('cmt_', '').replace('usdt', '').toUpperCase();
 
@@ -1121,7 +1334,28 @@ Respond ONLY with valid JSON.`;
                 finalPlayed: tournament.final !== null,
                 champion: champion ? champion.analystName : 'None',
             },
+            tradingRules: {
+                maxPositionSizePercent: config.autonomous.maxPositionSizePercent,
+                maxLeverage: config.autonomous.maxLeverage,
+                stopLossPercent: config.autonomous.stopLossPercent,
+                takeProfitPercent: config.autonomous.takeProfitPercent,
+                minConfidenceToTrade: config.autonomous.minConfidenceToTrade,
+            },
         };
+
+        // Add arena context if available
+        if (arenaContext) {
+            input.arenaState = {
+                analystRank: arenaContext.myPortfolio.rank,
+                analystBalance: arenaContext.myPortfolio.balance,
+                analystReturn: arenaContext.myPortfolio.totalReturn,
+                leaderboardTop3: arenaContext.arenaState.leaderboard.slice(0, 3).map(l => ({
+                    name: l.analystName,
+                    return: l.totalReturn,
+                })),
+                marketSentiment: arenaContext.arenaState.marketSentiment,
+            };
+        }
 
         // Build output data
         const output: Record<string, any> = {
@@ -1171,6 +1405,17 @@ Respond ONLY with valid JSON.`;
             }
         }
 
+        // Add arena context to explanation
+        if (arenaContext) {
+            explanation += `Arena context: Analyst ranked #${arenaContext.myPortfolio.rank} with ${arenaContext.myPortfolio.totalReturn >= 0 ? '+' : ''}${arenaContext.myPortfolio.totalReturn.toFixed(2)}% return. `;
+            explanation += `Market sentiment: ${arenaContext.arenaState.marketSentiment}. `;
+        }
+
+        // Add circuit breaker status
+        if (circuitBreakerStatus && circuitBreakerStatus.level !== 'NONE') {
+            explanation += `Circuit Breaker ${circuitBreakerStatus.level}: ${circuitBreakerStatus.reason}. `;
+        }
+
         if (shouldTrade && order) {
             const orderAction = order.type === '1' ? 'opening long' : order.type === '2' ? 'opening short' : order.type === '3' ? 'closing long' : 'closing short';
             explanation += `Decision: ${orderAction} position with TP at ${order.presetTakeProfitPrice} and SL at ${order.presetStopLossPrice}.`;
@@ -1195,6 +1440,50 @@ Respond ONLY with valid JSON.`;
         const words = text.split(/\s+/).filter(w => w.length > 0);
         if (words.length <= maxWords) return text;
         return words.slice(0, maxWords).join(' ') + '...';
+    }
+
+    /**
+     * Generate close order for existing position (used during circuit breaker RED alert)
+     */
+    private generateCloseOrder(
+        marketData: ExtendedMarketData,
+        existingPosition: { side: 'LONG' | 'SHORT'; size: number }
+    ): TradeOrder {
+        const clientOid = `ha_emergency_close_${Date.now()}`;
+        const orderType: WeexOrderType = existingPosition.side === 'LONG' ? '3' : '4'; // 3=Close long, 4=Close short
+
+        return {
+            symbol: marketData.symbol,
+            client_oid: clientOid.slice(0, 40),
+            size: existingPosition.size.toString(),
+            type: orderType,
+            order_type: '0', // Normal limit order
+            match_price: '1', // Market price for immediate execution
+            price: marketData.currentPrice.toString(),
+            marginMode: 1, // Cross mode
+        };
+    }
+
+    /**
+     * Generate AI log for circuit breaker events
+     */
+    private generateCircuitBreakerLog(
+        circuitBreakerStatus: { level: string; reason: string },
+        action: 'EMERGENCY_CLOSE' | 'HALT_TRADING'
+    ): WeexAILog {
+        return {
+            stage: 'Risk Assessment',
+            model: 'Circuit Breaker System + Hypothesis Arena',
+            input: {
+                circuitBreakerLevel: circuitBreakerStatus.level,
+                reason: circuitBreakerStatus.reason,
+            },
+            output: {
+                action,
+                decision: action === 'EMERGENCY_CLOSE' ? 'Close all positions immediately' : 'Halt all trading',
+            },
+            explanation: `Circuit Breaker ${circuitBreakerStatus.level} triggered: ${circuitBreakerStatus.reason}. ${action === 'EMERGENCY_CLOSE' ? 'Closing all leveraged positions to prevent catastrophic losses.' : 'Halting all trading operations until conditions improve.'}`,
+        };
     }
 
     /**
@@ -1299,6 +1588,43 @@ Respond ONLY with valid JSON.`;
             logger.error('Gemini extended analysis failed:', { error: error.message, analyst: profile.id });
             throw new Error(`AI analysis failed: ${error.message}`);
         }
+    }
+
+    /**
+     * Generate analysis for a single analyst with full arena context
+     * This is the primary method for autonomous trading
+     * 
+     * @param analystId - The analyst ID (warren, cathie, jim, etc.)
+     * @param symbol - Trading symbol (e.g., cmt_btcusdt)
+     * @param marketData - Market data for the symbol
+     * @param userId - Optional user ID for logging
+     */
+    async generateAnalysisForAutonomousTrading(
+        analystId: string,
+        symbol: string,
+        marketData: {
+            price: number;
+            change24h: number;
+            volume24h: number;
+            high24h: number;
+            low24h: number;
+            fundingRate?: number;
+        },
+        userId?: string
+    ): Promise<AnalysisResult> {
+        // Build arena context for this analyst
+        const arenaContext = await arenaContextBuilder.buildContext(analystId, symbol, marketData);
+
+        // Generate analysis with full context
+        return this.generateAnalysis({
+            symbol,
+            currentPrice: marketData.price,
+            high24h: marketData.high24h,
+            low24h: marketData.low24h,
+            volume24h: marketData.volume24h,
+            change24h: marketData.change24h,
+            analystId,
+        }, userId, arenaContext);
     }
 }
 

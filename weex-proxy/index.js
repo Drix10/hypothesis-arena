@@ -160,16 +160,30 @@ const server = http.createServer((req, res) => {
         let data = "";
         ipRes.on("data", (chunk) => (data += chunk));
         ipRes.on("end", () => {
-          sender.send(200, {
-            status: "ok",
-            outboundIP: data,
-            message: "This is the IP that WEEX sees from this server",
-          });
+          try {
+            // Parse the JSON response from ipify
+            const ipData = JSON.parse(data);
+            sender.send(200, {
+              status: "ok",
+              outboundIP: ipData.ip || ipData,
+              message: "This is the IP that WEEX sees from this server",
+            });
+          } catch (parseError) {
+            sender.send(200, {
+              status: "error",
+              error: "Failed to parse IP response",
+              raw: data,
+            });
+          }
         });
       }
     );
     ipReq.on("error", (e) => {
       sender.send(200, { status: "error", error: e.message });
+    });
+    ipReq.on("timeout", () => {
+      ipReq.destroy();
+      sender.send(200, { status: "error", error: "Request timeout" });
     });
     ipReq.end();
     return;
@@ -350,6 +364,14 @@ const server = http.createServer((req, res) => {
           error: "Gateway timeout",
           message: "Request to WEEX API timed out",
         });
+      });
+
+      // Handle client disconnect during buffered request
+      req.on("close", () => {
+        if (!sender.isSent()) {
+          proxyReq.destroy();
+          console.log(`[${timestamp}] Client disconnected during request`);
+        }
       });
 
       // Write buffered body and end

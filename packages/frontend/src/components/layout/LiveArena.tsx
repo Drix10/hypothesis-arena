@@ -229,6 +229,32 @@ export const LiveArena: React.FC = () => {
     <div className="min-h-screen bg-arena-pattern text-white flex flex-col">
       <div className="bg-noise" />
 
+      {/* Cinematic Background Glows */}
+      <div className="fixed inset-0 overflow-hidden pointer-events-none -z-10">
+        {/* Cyan glow - top left */}
+        <div
+          className="absolute w-[800px] h-[800px] rounded-full"
+          style={{
+            background:
+              "radial-gradient(circle, rgba(0, 240, 255, 0.15) 0%, transparent 60%)",
+            left: "-10%",
+            top: "-30%",
+            filter: "blur(60px)",
+          }}
+        />
+        {/* Gold glow - bottom right */}
+        <div
+          className="absolute w-[600px] h-[600px] rounded-full"
+          style={{
+            background:
+              "radial-gradient(circle, rgba(255, 215, 0, 0.12) 0%, transparent 60%)",
+            right: "-5%",
+            bottom: "-10%",
+            filter: "blur(50px)",
+          }}
+        />
+      </div>
+
       <Header
         wsConnected={wsConnected}
         isAuthenticated={isAuthenticated}
@@ -260,38 +286,44 @@ export const LiveArena: React.FC = () => {
           )}
 
           {/* Tabs */}
-          <div className="border-b border-white/10 px-4 bg-grid">
-            <div className="flex gap-1">
-              {tabs.map((tab) => (
-                <button
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
-                  disabled={tab.auth && !isAuthenticated}
-                  className={`px-4 py-3 text-sm font-medium transition-all relative ${
-                    activeTab === tab.id
-                      ? "text-cyan-400 border-b-2 border-cyan-400"
-                      : tab.auth && !isAuthenticated
-                      ? "text-slate-600 cursor-not-allowed"
-                      : "text-slate-400 hover:text-white"
-                  }`}
-                >
-                  <span className="mr-1.5">{tab.icon}</span>
-                  {tab.label}
-                  {tab.badge ? (
-                    <span className="ml-1.5 badge badge-cyan !py-0 !px-1.5 !text-[9px]">
-                      {tab.badge}
-                    </span>
-                  ) : null}
-                  {tab.auth && !isAuthenticated && (
-                    <span className="ml-1 text-[10px]">🔒</span>
-                  )}
-                </button>
-              ))}
+          <div className="px-4 py-3 border-b border-white/[0.06]">
+            <div className="flex gap-1 p-1 arena-card rounded-xl overflow-x-auto">
+              {tabs.map((tab) => {
+                const isActive = activeTab === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    onClick={() => setActiveTab(tab.id)}
+                    disabled={tab.auth && !isAuthenticated}
+                    className={`
+                      flex-1 min-w-[120px] px-4 py-3 text-sm font-semibold rounded-lg transition-all whitespace-nowrap
+                      ${
+                        isActive
+                          ? "bg-cyan/15 text-cyan border border-cyan/20 shadow-[0_0_15px_rgba(0,240,255,0.1)]"
+                          : tab.auth && !isAuthenticated
+                          ? "text-slate-600 cursor-not-allowed opacity-50"
+                          : "text-slate-400 hover:text-white hover:bg-white/[0.04]"
+                      }
+                    `}
+                  >
+                    <span className="text-lg mr-2">{tab.icon}</span>
+                    {tab.label}
+                    {tab.badge ? (
+                      <span className="ml-2 badge badge-cyan !py-0.5 !px-2 !text-xs">
+                        {tab.badge}
+                      </span>
+                    ) : null}
+                    {tab.auth && !isAuthenticated && (
+                      <span className="ml-2 text-sm opacity-50">🔒</span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
           {/* Tab Content */}
-          <div className="flex-1 overflow-y-auto p-4">
+          <div className="flex-1 overflow-y-auto p-6">
             <AnimatePresence mode="wait">
               {activeTab === "market" && (
                 <TabContent key="market">
@@ -309,9 +341,9 @@ export const LiveArena: React.FC = () => {
                       action={
                         <button
                           onClick={() => setShowAuthModal(true)}
-                          className="btn-primary px-4 py-2 rounded-lg"
+                          className="btn-primary px-6 py-3 rounded-lg font-bold"
                         >
-                          Connect
+                          Connect Account
                         </button>
                       }
                     />
@@ -339,7 +371,7 @@ export const LiveArena: React.FC = () => {
                       action={
                         <button
                           onClick={runAIAnalysis}
-                          className="btn-primary px-4 py-2 rounded-lg"
+                          className="btn-primary px-6 py-3 rounded-lg font-bold"
                         >
                           Try Again
                         </button>
@@ -353,9 +385,10 @@ export const LiveArena: React.FC = () => {
                       action={
                         <button
                           onClick={runAIAnalysis}
-                          className="btn-primary px-4 py-2 rounded-lg"
+                          className="btn-primary px-6 py-3 rounded-lg font-bold"
                         >
-                          Run Analysis
+                          <span className="text-xl mr-2">🤖</span>
+                          Run AI Analysis
                         </button>
                       }
                     />
@@ -397,7 +430,7 @@ export const LiveArena: React.FC = () => {
                         <button
                           onClick={runAIAnalysis}
                           disabled={analysisLoading}
-                          className="btn-primary px-4 py-2 rounded-lg disabled:opacity-50"
+                          className="btn-primary px-6 py-3 rounded-lg font-bold disabled:opacity-50"
                         >
                           {analysisLoading ? "Analyzing..." : "Start Battle"}
                         </button>
@@ -419,9 +452,9 @@ export const LiveArena: React.FC = () => {
                       action={
                         <button
                           onClick={() => setShowAuthModal(true)}
-                          className="btn-primary px-4 py-2 rounded-lg"
+                          className="btn-primary px-6 py-3 rounded-lg font-bold"
                         >
-                          Connect
+                          Connect Account
                         </button>
                       }
                     />
@@ -583,20 +616,20 @@ const SymbolHeader: React.FC<{
       : v.toFixed(2);
 
   return (
-    <div className="p-4 border-b border-white/10 glass-card rounded-none">
-      <div className="flex items-center justify-between flex-wrap gap-4">
-        <div className="flex items-center gap-4">
+    <div className="p-6 border-b border-white/[0.06] glass-card rounded-none">
+      <div className="flex items-center justify-between flex-wrap gap-6">
+        <div className="flex items-center gap-6">
           <button
             onClick={onToggleSidebar}
-            className="p-2 rounded-lg hover:bg-white/10 transition-colors lg:hidden"
+            className="p-2 rounded-lg hover:bg-white/[0.06] transition-colors lg:hidden"
           >
             ☰
           </button>
           <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-2xl font-bold">
+            <div className="flex items-center gap-3 mb-2">
+              <h2 className="text-3xl font-bold text-white">
                 {displaySymbol}
-                <span className="text-slate-500 text-lg ml-1">/USDT</span>
+                <span className="text-slate-500 text-xl ml-2">/USDT</span>
               </h2>
               <span
                 className={`badge ${isPositive ? "badge-bull" : "badge-bear"}`}
@@ -605,57 +638,78 @@ const SymbolHeader: React.FC<{
                 {change.toFixed(2)}%
               </span>
             </div>
-            <p className="font-mono text-3xl font-bold mt-1">
+            <p className="font-mono text-4xl font-bold text-gradient-cyan">
               ${formatPrice(price)}
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-6 text-sm">
+        <div className="flex items-center gap-8 text-sm">
           <div>
-            <p className="text-slate-500 text-xs">24h High</p>
-            <p className="font-mono text-green-400">
+            <p className="text-slate-500 text-xs font-semibold mb-1">
+              24h High
+            </p>
+            <p className="font-mono text-lg text-bull-light font-bold">
               ${formatPrice(parseFloat(ticker.high_24h) || 0)}
             </p>
           </div>
           <div>
-            <p className="text-slate-500 text-xs">24h Low</p>
-            <p className="font-mono text-rose-400">
+            <p className="text-slate-500 text-xs font-semibold mb-1">24h Low</p>
+            <p className="font-mono text-lg text-bear-light font-bold">
               ${formatPrice(parseFloat(ticker.low_24h) || 0)}
             </p>
           </div>
           <div>
-            <p className="text-slate-500 text-xs">24h Volume</p>
-            <p className="font-mono">
+            <p className="text-slate-500 text-xs font-semibold mb-1">
+              24h Volume
+            </p>
+            <p className="font-mono text-lg text-white font-bold">
               {formatVolume(parseFloat(ticker.volume_24h) || 0)}
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
           <button
             onClick={onRunAnalysis}
             disabled={analysisLoading}
-            className="btn-primary btn-lift px-4 py-2 rounded-lg flex items-center gap-2 disabled:opacity-50"
+            className="btn-primary btn-lift px-6 py-3 rounded-lg flex items-center gap-2 disabled:opacity-50 text-base font-bold"
           >
             {analysisLoading ? (
               <>
-                <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                <span className="w-5 h-5 border-3 border-white/30 border-t-white rounded-full animate-spin" />
                 Analyzing...
               </>
             ) : (
-              <>🤖 AI Analysis</>
+              <>
+                <span className="text-xl">🤖</span>
+                AI Analysis
+              </>
             )}
           </button>
           {isAuthenticated && (
-            <button className="px-4 py-2 rounded-lg font-semibold bg-green-500 text-white hover:bg-green-600 transition-all">
-              Long
-            </button>
-          )}
-          {isAuthenticated && (
-            <button className="px-4 py-2 rounded-lg font-semibold bg-rose-500 text-white hover:bg-rose-600 transition-all">
-              Short
-            </button>
+            <>
+              <button
+                onClick={() => {
+                  // TODO: Implement manual long trade
+                  console.log("Long trade clicked - implementation pending");
+                }}
+                className="px-6 py-3 rounded-lg font-bold text-base bg-bull text-white hover:bg-bull-light transition-all btn-lift border-2 border-bull-light shadow-[0_0_20px_rgba(34,197,94,0.3)]"
+              >
+                <span className="text-xl mr-2">📈</span>
+                Long
+              </button>
+              <button
+                onClick={() => {
+                  // TODO: Implement manual short trade
+                  console.log("Short trade clicked - implementation pending");
+                }}
+                className="px-6 py-3 rounded-lg font-bold text-base bg-bear text-white hover:bg-bear-light transition-all btn-lift border-2 border-bear-light shadow-[0_0_20px_rgba(239,68,68,0.3)]"
+              >
+                <span className="text-xl mr-2">📉</span>
+                Short
+              </button>
+            </>
           )}
         </div>
       </div>

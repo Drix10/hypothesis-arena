@@ -10,6 +10,7 @@ import { config } from './config';
 import { apiRouter } from './api/routes';
 import { errorHandler, notFoundHandler } from './api/middleware/errorHandler';
 import { WebSocketManager } from './services/weex/WebSocketManager';
+import { getAutonomousTradingEngine } from './services/autonomous/AutonomousTradingEngine';
 import { pool, closeDatabasePool, checkDatabaseHealth } from './config/database';
 import { closeRedis, getRedisClient, checkRedisHealth } from './config/redis';
 import { logger } from './utils/logger';
@@ -139,6 +140,15 @@ const shutdown = async (signal: string) => {
     server.close(() => {
         logger.info('HTTP server closed');
     });
+
+    // Stop autonomous trading engine
+    try {
+        const engine = getAutonomousTradingEngine();
+        await engine.cleanup();
+        logger.info('Autonomous trading engine stopped');
+    } catch (error) {
+        logger.warn('Error stopping autonomous engine:', error);
+    }
 
     // Close WebSocket connections
     wsManager.closeAll();
