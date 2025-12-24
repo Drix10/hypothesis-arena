@@ -34,8 +34,10 @@ const HOP_BY_HOP_HEADERS = new Set([
   "upgrade",
   "host",
   "x-proxy-token",
-  "content-length", // Will be recalculated
 ]);
+
+// Methods that can have a request body
+const METHODS_WITH_BODY = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 if (!PROXY_TOKEN) {
   console.log("⚠️  WARNING: No PROXY_TOKEN set. Set it for security!");
@@ -47,20 +49,69 @@ if (!PROXY_TOKEN) {
  */
 function createResponseSender(res) {
   let sent = false;
+  let cleaned = false;
+
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+  };
+
   return {
     isSent: () => sent,
     send: (statusCode, data) => {
       if (sent) return false;
       sent = true;
-      res.writeHead(statusCode, { "Content-Type": "application/json" });
-      res.end(typeof data === "string" ? data : JSON.stringify(data));
+      try {
+        res.writeHead(statusCode, { "Content-Type": "application/json" });
+        res.end(typeof data === "string" ? data : JSON.stringify(data));
+      } catch (e) {
+        // Response already ended or destroyed
+      }
+      cleanup();
       return true;
     },
-    pipe: (statusCode, headers, stream) => {
+    pipe: (statusCode, headers, sourceStream) => {
       if (sent) return false;
       sent = true;
-      res.writeHead(statusCode, headers);
-      stream.pipe(res);
+
+      try {
+        res.writeHead(statusCode, headers);
+      } catch (e) {
+        cleanup();
+        return false;
+      }
+
+      // Handle source stream errors
+      const onSourceError = (err) => {
+        sourceStream.unpipe(res);
+        try {
+          res.destroy(err);
+        } catch (e) {
+          // Ignore
+        }
+        cleanup();
+      };
+
+      // Handle response errors/close
+      const onResError = () => {
+        sourceStream.unpipe(res);
+        sourceStream.destroy();
+        cleanup();
+      };
+
+      const onEnd = () => {
+        sourceStream.removeListener("error", onSourceError);
+        res.removeListener("error", onResError);
+        res.removeListener("close", onResError);
+        cleanup();
+      };
+
+      sourceStream.on("error", onSourceError);
+      sourceStream.on("end", onEnd);
+      res.on("error", onResError);
+      res.on("close", onResError);
+
+      sourceStream.pipe(res);
       return true;
     },
   };
@@ -95,6 +146,35 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // Check outbound IP
+  if (req.url === "/my-ip") {
+    const ipReq = https.request(
+      {
+        hostname: "api.ipify.org",
+        port: 443,
+        path: "/?format=json",
+        method: "GET",
+        timeout: 10000,
+      },
+      (ipRes) => {
+        let data = "";
+        ipRes.on("data", (chunk) => (data += chunk));
+        ipRes.on("end", () => {
+          sender.send(200, {
+            status: "ok",
+            outboundIP: data,
+            message: "This is the IP that WEEX sees from this server",
+          });
+        });
+      }
+    );
+    ipReq.on("error", (e) => {
+      sender.send(200, { status: "error", error: e.message });
+    });
+    ipReq.end();
+    return;
+  }
+
   // Test outbound connectivity to WEEX
   if (req.url === "/test-weex") {
     let testResponseSent = false;
@@ -114,7 +194,6 @@ const server = http.createServer((req, res) => {
         let data = "";
         testRes.on("data", (chunk) => {
           data += chunk;
-          // Limit response size
           if (data.length > 10000) {
             data = data.substring(0, 10000);
             testRes.destroy();
@@ -182,7 +261,7 @@ const server = http.createServer((req, res) => {
     }
   }
 
-  // Check content length
+  // Check content length header upfront
   const contentLength = parseInt(req.headers["content-length"] || "0", 10);
   if (contentLength > MAX_REQUEST_SIZE) {
     sender.send(413, {
@@ -201,68 +280,135 @@ const server = http.createServer((req, res) => {
   }
   forwardHeaders["host"] = WEEX_HOST;
 
-  const options = {
-    hostname: WEEX_HOST,
-    port: 443,
-    path: req.url,
-    method: req.method,
-    headers: forwardHeaders,
-    timeout: 30000,
-  };
-
   console.log(`[${timestamp}] ${req.method} ${req.url} from ${clientIP}`);
 
-  const proxyReq = https.request(options, (proxyRes) => {
-    if (sender.isSent()) return;
+  // For methods with body, buffer first then forward
+  // For methods without body, forward immediately
+  const hasBody = METHODS_WITH_BODY.has(req.method);
 
-    // Filter hop-by-hop headers from response too
-    const responseHeaders = {};
-    for (const [key, value] of Object.entries(proxyRes.headers)) {
-      if (!HOP_BY_HOP_HEADERS.has(key.toLowerCase())) {
-        responseHeaders[key] = value;
+  if (hasBody) {
+    // Buffer the request body with size limit
+    const chunks = [];
+    let bodySize = 0;
+    let overflow = false;
+
+    req.on("data", (chunk) => {
+      if (overflow || sender.isSent()) return;
+
+      bodySize += chunk.length;
+      if (bodySize > MAX_REQUEST_SIZE) {
+        overflow = true;
+        req.destroy();
+        sender.send(413, {
+          error: "Payload too large",
+          message: "Request body too large",
+        });
+        return;
       }
-    }
-    responseHeaders["access-control-allow-origin"] = "*";
-
-    sender.pipe(proxyRes.statusCode, responseHeaders, proxyRes);
-  });
-
-  proxyReq.on("error", (e) => {
-    console.error(`[${timestamp}] ERROR: ${e.message}`);
-    sender.send(502, { error: "Proxy error", message: e.message });
-  });
-
-  proxyReq.on("timeout", () => {
-    proxyReq.destroy();
-    sender.send(504, {
-      error: "Gateway timeout",
-      message: "Request to WEEX API timed out",
+      chunks.push(chunk);
     });
-  });
 
-  // Handle client disconnect - cleanup proxy request
-  req.on("close", () => {
-    if (!sender.isSent()) {
-      proxyReq.destroy();
-    }
-  });
+    req.on("end", () => {
+      if (overflow || sender.isSent()) return;
 
-  // Handle request body with size limit
-  let bodySize = 0;
-  req.on("data", (chunk) => {
-    bodySize += chunk.length;
-    if (bodySize > MAX_REQUEST_SIZE) {
-      req.destroy();
-      proxyReq.destroy();
-      sender.send(413, {
-        error: "Payload too large",
-        message: "Request body too large",
+      const body = Buffer.concat(chunks);
+
+      // Update content-length to actual body size
+      forwardHeaders["content-length"] = body.length.toString();
+
+      const options = {
+        hostname: WEEX_HOST,
+        port: 443,
+        path: req.url,
+        method: req.method,
+        headers: forwardHeaders,
+        timeout: 30000,
+      };
+
+      const proxyReq = https.request(options, (proxyRes) => {
+        if (sender.isSent()) return;
+
+        const responseHeaders = {};
+        for (const [key, value] of Object.entries(proxyRes.headers)) {
+          if (!HOP_BY_HOP_HEADERS.has(key.toLowerCase())) {
+            responseHeaders[key] = value;
+          }
+        }
+        responseHeaders["access-control-allow-origin"] = "*";
+
+        sender.pipe(proxyRes.statusCode, responseHeaders, proxyRes);
       });
-    }
-  });
 
-  // Forward request body
-  req.pipe(proxyReq);
+      proxyReq.on("error", (e) => {
+        console.error(`[${timestamp}] ERROR: ${e.message}`);
+        sender.send(502, { error: "Proxy error", message: e.message });
+      });
+
+      proxyReq.on("timeout", () => {
+        proxyReq.destroy();
+        sender.send(504, {
+          error: "Gateway timeout",
+          message: "Request to WEEX API timed out",
+        });
+      });
+
+      // Write buffered body and end
+      proxyReq.write(body);
+      proxyReq.end();
+    });
+
+    req.on("error", (e) => {
+      if (!sender.isSent()) {
+        sender.send(400, { error: "Request error", message: e.message });
+      }
+    });
+  } else {
+    // GET/HEAD - no body, forward immediately
+    const options = {
+      hostname: WEEX_HOST,
+      port: 443,
+      path: req.url,
+      method: req.method,
+      headers: forwardHeaders,
+      timeout: 30000,
+    };
+
+    const proxyReq = https.request(options, (proxyRes) => {
+      if (sender.isSent()) return;
+
+      const responseHeaders = {};
+      for (const [key, value] of Object.entries(proxyRes.headers)) {
+        if (!HOP_BY_HOP_HEADERS.has(key.toLowerCase())) {
+          responseHeaders[key] = value;
+        }
+      }
+      responseHeaders["access-control-allow-origin"] = "*";
+
+      sender.pipe(proxyRes.statusCode, responseHeaders, proxyRes);
+    });
+
+    proxyReq.on("error", (e) => {
+      console.error(`[${timestamp}] ERROR: ${e.message}`);
+      sender.send(502, { error: "Proxy error", message: e.message });
+    });
+
+    proxyReq.on("timeout", () => {
+      proxyReq.destroy();
+      sender.send(504, {
+        error: "Gateway timeout",
+        message: "Request to WEEX API timed out",
+      });
+    });
+
+    // Handle client disconnect
+    req.on("close", () => {
+      if (!sender.isSent()) {
+        proxyReq.destroy();
+      }
+    });
+
+    proxyReq.end();
+  }
 });
 
 // Handle server errors
