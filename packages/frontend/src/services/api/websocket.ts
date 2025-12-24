@@ -7,6 +7,14 @@ interface WebSocketMessage {
     data?: any;
 }
 
+// Simple logger that respects production mode
+const isDev = import.meta.env.DEV;
+const wsLog = {
+    info: (msg: string) => isDev && console.log(`[WS] ${msg}`),
+    warn: (msg: string) => console.warn(`[WS] ${msg}`),
+    error: (msg: string, err?: unknown) => console.error(`[WS] ${msg}`, err || ''),
+};
+
 class WebSocketClient {
     private ws: WebSocket | null = null;
     private url: string;
@@ -41,7 +49,7 @@ class WebSocketClient {
             this.ws = new WebSocket(this.url);
 
             this.ws.onopen = () => {
-                console.log('WebSocket connected');
+                wsLog.info('Connected');
                 this.reconnectAttempts = 0;
                 this.startPing();
                 this.resubscribe();
@@ -53,23 +61,23 @@ class WebSocketClient {
                     const message: WebSocketMessage = JSON.parse(event.data);
                     this.handleMessage(message);
                 } catch (error) {
-                    console.error('Failed to parse WebSocket message:', error);
+                    wsLog.error('Failed to parse message', error);
                 }
             };
 
             this.ws.onclose = () => {
-                console.log('WebSocket disconnected');
+                wsLog.info('Disconnected');
                 this.stopPing();
                 this.onDisconnectHandlers.forEach(handler => handler());
                 this.attemptReconnect();
             };
 
             this.ws.onerror = (error) => {
-                console.error('WebSocket error:', error);
+                wsLog.error('Connection error', error);
             };
 
         } catch (error) {
-            console.error('Failed to create WebSocket:', error);
+            wsLog.error('Failed to create connection', error);
             this.attemptReconnect();
         }
     }
@@ -167,7 +175,7 @@ class WebSocketClient {
                 try {
                     handler(data);
                 } catch (error) {
-                    console.error(`Handler error for channel ${targetChannel}:`, error);
+                    wsLog.error(`Handler error for ${targetChannel}`, error);
                 }
             });
         }
@@ -179,7 +187,7 @@ class WebSocketClient {
                 try {
                     handler({ type, channel, data });
                 } catch (error) {
-                    console.error('Global handler error:', error);
+                    wsLog.error('Global handler error', error);
                 }
             });
         }
@@ -189,14 +197,14 @@ class WebSocketClient {
         if (this.isDestroyed) return;
 
         if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-            console.error('Max reconnection attempts reached');
+            wsLog.error('Max reconnection attempts reached');
             return;
         }
 
         this.reconnectAttempts++;
         const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
 
-        console.log(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
+        wsLog.info(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
 
         this.clearReconnectTimeout();
         this.reconnectTimeout = window.setTimeout(() => {
@@ -222,7 +230,7 @@ class WebSocketClient {
             this.clearPongTimeout();
             this.pongTimeout = window.setTimeout(() => {
                 // No pong received - connection may be dead
-                console.warn('WebSocket pong timeout - reconnecting');
+                wsLog.warn('Pong timeout - reconnecting');
                 if (this.ws) {
                     this.ws.close();
                 }

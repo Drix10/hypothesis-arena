@@ -91,8 +91,8 @@ export class AuthService {
             [data.email.toLowerCase()]
         );
 
-        // Always hash to prevent timing attacks
-        const dummyHash = '$2a$12$dummy.hash.to.prevent.timing.attacks';
+        // Always hash to prevent timing attacks - use a valid bcrypt hash format
+        const dummyHash = '$2a$12$K4Iqk0Yz5Yz5Yz5Yz5YzOK4Iqk0Yz5Yz5Yz5Yz5YzOK4Iqk0Yz5Y';
         const passwordToCompare = row?.password_hash || dummyHash;
         const validPassword = await bcrypt.compare(data.password, passwordToCompare);
 

@@ -1,4 +1,5 @@
 import { WebSocketServer, WebSocket } from 'ws';
+import { randomUUID } from 'crypto';
 import { logger } from '../../utils/logger';
 
 interface Client {
@@ -15,6 +16,7 @@ export class WebSocketManager {
     private readonly HEARTBEAT_INTERVAL = 30000;
     private readonly CLIENT_TIMEOUT = 60000;
     private readonly MAX_MESSAGE_SIZE = 64 * 1024; // 64KB max message size
+    private readonly MAX_CLIENTS = 10000; // Prevent unbounded growth
 
     constructor(private wss: WebSocketServer) {
         this.setupServer();
@@ -23,6 +25,13 @@ export class WebSocketManager {
 
     private setupServer() {
         this.wss.on('connection', (ws: WebSocket) => {
+            // Reject if at max capacity
+            if (this.clients.size >= this.MAX_CLIENTS) {
+                logger.warn('WebSocket connection rejected: max clients reached');
+                ws.close(1013, 'Server at capacity');
+                return;
+            }
+
             const clientId = this.generateClientId();
 
             const client: Client = {
@@ -98,14 +107,30 @@ export class WebSocketManager {
         const client = this.clients.get(clientId);
         if (!client) return;
 
+        // Validate message type
+        if (typeof message.type !== 'string') {
+            logger.warn(`Invalid message type from ${clientId}`);
+            return;
+        }
+
         switch (message.type) {
             case 'auth':
-                client.userId = message.userId;
-                client.ws.send(JSON.stringify({ type: 'auth_success' }));
+                // Validate userId is a non-empty string of reasonable length
+                if (typeof message.userId === 'string' &&
+                    message.userId.trim().length > 0 &&
+                    message.userId.length <= 100) {
+                    client.userId = message.userId;
+                    client.ws.send(JSON.stringify({ type: 'auth_success' }));
+                } else {
+                    client.ws.send(JSON.stringify({ type: 'error', message: 'Invalid userId' }));
+                }
                 break;
 
             case 'subscribe':
-                if (message.channel) {
+                // Validate channel and limit subscriptions
+                if (typeof message.channel === 'string' &&
+                    message.channel.length <= 100 &&
+                    client.subscriptions.size < 50) {
                     client.subscriptions.add(message.channel);
                     client.ws.send(JSON.stringify({
                         type: 'subscribed',
@@ -115,7 +140,7 @@ export class WebSocketManager {
                 break;
 
             case 'unsubscribe':
-                if (message.channel) {
+                if (typeof message.channel === 'string') {
                     client.subscriptions.delete(message.channel);
                     client.ws.send(JSON.stringify({
                         type: 'unsubscribed',
@@ -129,7 +154,8 @@ export class WebSocketManager {
                 break;
 
             default:
-                logger.warn(`Unknown message type: ${message.type}`);
+                // Don't log unknown types to prevent log spam attacks
+                break;
         }
     }
 
@@ -193,6 +219,6 @@ export class WebSocketManager {
     }
 
     private generateClientId(): string {
-        return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        return randomUUID();
     }
 }

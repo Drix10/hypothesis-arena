@@ -3,6 +3,7 @@ import { authenticate } from '../middleware/auth';
 import { query, queryOne } from '../../config/database';
 import { getWeexClient } from '../../services/weex/WeexClient';
 import { cacheGet, cacheSet } from '../../config/redis';
+import { logger } from '../../utils/logger';
 import { v4 as uuid } from 'uuid';
 
 const router = Router();
@@ -155,7 +156,7 @@ router.get('/:agentId/positions', authenticate, async (req: Request, res: Respon
             weexPositions = await weexClient.getPositions();
         } catch (error: any) {
             // Log error but return empty positions instead of failing
-            console.error('WEEX API error fetching positions:', error.message);
+            logger.error('WEEX API error fetching positions:', { message: error.message });
             res.json({ positions: [], error: 'Unable to fetch positions from exchange' });
             return;
         }
