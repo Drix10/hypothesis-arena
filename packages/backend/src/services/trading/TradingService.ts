@@ -24,13 +24,21 @@ export class TradingService {
             throw new TradingError('Cannot execute HOLD action', 'INVALID_ACTION');
         }
 
-        if (decision.size <= 0) {
+        if (!decision.size || decision.size <= 0 || !Number.isFinite(decision.size)) {
             throw new TradingError('Invalid trade size', 'INVALID_SIZE');
+        }
+
+        if (!decision.thesisId) {
+            throw new TradingError('Missing thesisId (portfolioId)', 'INVALID_THESIS_ID');
         }
 
         // Get current price from WEEX
         const ticker = await this.weexClient.getTicker(this.toWeexSymbol(decision.symbol));
         const currentPrice = parseFloat(ticker.last);
+
+        if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
+            throw new TradingError('Unable to fetch valid market price', 'INVALID_PRICE');
+        }
 
         // Create trade record
         const trade: Trade = {
@@ -52,14 +60,20 @@ export class TradingService {
             // Place order on WEEX
             const response = await this.weexClient.placeOrder({
                 symbol: this.toWeexSymbol(decision.symbol),
-                side: decision.action === 'BUY' ? 'buy' : 'sell',
-                type: '2', // Market order
-                orderType: '0',
+                client_oid: clientOrderId,
+                type: decision.action === 'BUY' ? '1' : '2', // 1=Open long, 2=Open short
+                order_type: '0', // Normal order
+                match_price: '1', // Market price
                 size: String(decision.size),
-                clientOrderId,
+                price: String(currentPrice),
             });
 
-            trade.weexOrderId = response.data.orderId;
+            // Validate response
+            if (!response.order_id) {
+                throw new TradingError('WEEX did not return an order ID', 'NO_ORDER_ID');
+            }
+
+            trade.weexOrderId = response.order_id;
             trade.status = 'FILLED';
             trade.executedAt = Date.now();
 

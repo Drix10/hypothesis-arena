@@ -41,13 +41,6 @@ class ApiClient {
             signal
         } = options;
 
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), timeout);
-
-        const combinedSignal = signal
-            ? this.combineSignals(signal, controller.signal)
-            : controller.signal;
-
         const config: RequestInit = {
             method,
             headers: {
@@ -55,7 +48,6 @@ class ApiClient {
                 ...(this.getToken() && { Authorization: `Bearer ${this.getToken()}` }),
                 ...headers,
             },
-            signal: combinedSignal,
         };
 
         if (body) {
@@ -65,9 +57,22 @@ class ApiClient {
         let lastError: Error | null = null;
 
         for (let attempt = 0; attempt <= retries; attempt++) {
+            // Create fresh controller for each attempt
+            const attemptController = new AbortController();
+            const attemptTimeoutId = setTimeout(() => attemptController.abort(), timeout);
+
+            const attemptSignal = signal
+                ? this.combineSignals(signal, attemptController.signal)
+                : attemptController.signal;
+
             try {
-                const response = await fetch(`${API_BASE}${endpoint}`, config);
-                clearTimeout(timeoutId);
+                const attemptConfig: RequestInit = {
+                    ...config,
+                    signal: attemptSignal,
+                };
+
+                const response = await fetch(`${API_BASE}${endpoint}`, attemptConfig);
+                clearTimeout(attemptTimeoutId);
 
                 if (response.status === 401 && this.token) {
                     // Check if caller already aborted before attempting refresh
@@ -123,12 +128,23 @@ class ApiClient {
                 return this.parseResponse<T>(response);
 
             } catch (error: any) {
-                clearTimeout(timeoutId);
+                clearTimeout(attemptTimeoutId);
 
                 if (error instanceof ApiError) throw error;
 
                 if (error.name === 'AbortError') {
-                    throw new ApiError(408, 'Request timeout');
+                    // Check if it was the caller's signal that aborted (user cancelled)
+                    if (signal?.aborted) {
+                        throw new ApiError(408, 'Request aborted');
+                    }
+                    // Timeout - this is retryable for GET requests
+                    lastError = new ApiError(408, 'Request timeout');
+
+                    if (attempt < retries) {
+                        await this.delay(Math.pow(2, attempt) * 1000);
+                        continue;
+                    }
+                    throw lastError;
                 }
 
                 lastError = error;
@@ -162,13 +178,35 @@ class ApiClient {
 
     private combineSignals(...signals: AbortSignal[]): AbortSignal {
         const controller = new AbortController();
+
+        // Check if any signal is already aborted
         for (const signal of signals) {
             if (signal.aborted) {
                 controller.abort();
-                break;
+                return controller.signal;
             }
-            signal.addEventListener('abort', () => controller.abort(), { once: true });
         }
+
+        // Create handlers that will be cleaned up
+        const cleanup = () => {
+            for (let i = 0; i < signals.length; i++) {
+                signals[i].removeEventListener('abort', handleAbort);
+            }
+        };
+
+        const handleAbort = () => {
+            cleanup();
+            controller.abort();
+        };
+
+        // Add listeners to all signals
+        for (const signal of signals) {
+            signal.addEventListener('abort', handleAbort, { once: true });
+        }
+
+        // Also cleanup when the combined controller aborts (e.g., from timeout)
+        controller.signal.addEventListener('abort', cleanup, { once: true });
+
         return controller.signal;
     }
 
@@ -194,7 +232,8 @@ class ApiClient {
     }
 
     private async doRefreshToken(): Promise<string> {
-        const refreshToken = localStorage.getItem('refresh_token');
+        // Use sessionStorage for refresh tokens (more secure than localStorage)
+        const refreshToken = sessionStorage.getItem('refresh_token');
         if (!refreshToken) {
             throw new Error('No refresh token');
         }
@@ -211,7 +250,7 @@ class ApiClient {
 
         const data = await response.json();
         if (data.refreshToken) {
-            localStorage.setItem('refresh_token', data.refreshToken);
+            sessionStorage.setItem('refresh_token', data.refreshToken);
         }
         return data.accessToken;
     }
@@ -238,7 +277,7 @@ class ApiClient {
 
     logout() {
         this.setToken(null);
-        localStorage.removeItem('refresh_token');
+        sessionStorage.removeItem('refresh_token');
     }
 }
 

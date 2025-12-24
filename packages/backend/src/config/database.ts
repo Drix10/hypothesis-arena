@@ -2,33 +2,42 @@ import { Pool, PoolConfig, PoolClient } from 'pg';
 import { logger } from '../utils/logger';
 import { config } from './index';
 
+const isNeon = config.databaseUrl.includes('neon.tech');
+
 const poolConfig: PoolConfig = {
     connectionString: config.databaseUrl,
-    max: 20,
-    min: 2,
-    idleTimeoutMillis: 30000,
+    // Neon free tier: use fewer connections, shorter timeouts
+    max: isNeon ? 5 : 20,
+    min: 0, // Don't keep idle connections (Neon terminates them)
+    idleTimeoutMillis: isNeon ? 10000 : 30000, // Release idle connections faster for Neon
     connectionTimeoutMillis: 10000,
-    // Neon requires SSL
-    ssl: config.databaseUrl.includes('neon.tech') || config.nodeEnv === 'production'
-        ? { rejectUnauthorized: false }
+    // SSL configuration - Neon requires SSL
+    // Note: rejectUnauthorized: true is more secure but Neon's pooler uses a different cert
+    // For production with sensitive data, consider using direct connection with proper CA cert
+    ssl: isNeon || config.nodeEnv === 'production'
+        ? {
+            rejectUnauthorized: config.nodeEnv === 'production' && !isNeon,
+            // Neon pooler requires rejectUnauthorized: false due to cert chain
+            // Direct Neon connections can use rejectUnauthorized: true
+        }
         : undefined,
-    // Validate connections before use
-    allowExitOnIdle: false,
+    // Allow pool to fully drain when idle
+    allowExitOnIdle: true,
 };
 
 export const pool = new Pool(poolConfig);
-
-// Validate connection on checkout
-pool.on('acquire', (client) => {
-    // Connection acquired from pool
-});
 
 pool.on('remove', () => {
     logger.debug('Database connection removed from pool');
 });
 
-pool.on('error', (err) => {
-    logger.error('Unexpected database pool error:', err);
+pool.on('error', (err, client) => {
+    // Neon terminates idle connections - this is expected behavior
+    if (err.message.includes('Connection terminated unexpectedly')) {
+        logger.debug('Database connection terminated (Neon idle timeout)');
+    } else {
+        logger.error('Unexpected database pool error:', { message: err.message });
+    }
 });
 
 pool.on('connect', () => {

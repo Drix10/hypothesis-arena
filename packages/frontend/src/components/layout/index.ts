@@ -1,5 +1,8 @@
-export { StockArena } from "./StockArena";
-export { StockHeader } from "./StockHeader";
-export { TickerInput } from "./TickerInput";
-export { CompareStocks } from "./CompareStocks";
+/**
+ * Layout Components
+ */
+
 export { LiveArena } from "./LiveArena";
+export { Header } from "./Header";
+export { MarketSidebar } from "./MarketSidebar";
+export { AuthModal } from "./AuthModal";

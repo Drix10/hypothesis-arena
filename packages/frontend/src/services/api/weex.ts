@@ -14,15 +14,23 @@ export interface WeexStatus {
     error?: string;
 }
 
+/**
+ * WEEX Ticker Response
+ * Matches /capi/v2/market/ticker response exactly
+ */
 export interface WeexTicker {
     symbol: string;
     last: string;
-    bestAsk: string;
-    bestBid: string;
-    high24h: string;
-    low24h: string;
-    volume24h: string;
-    timestamp: string;
+    best_ask: string;      // Ask price
+    best_bid: string;      // Bid price
+    high_24h: string;      // Highest price in last 24h
+    low_24h: string;       // Lowest price in last 24h
+    volume_24h: string;    // Trading volume of quote currency
+    timestamp: string;     // Unix millisecond timestamp
+    priceChangePercent?: string;  // Price change percent (24h)
+    base_volume?: string;  // Trading volume of base currency
+    markPrice?: string;    // Mark price
+    indexPrice?: string;   // Index price
 }
 
 export interface WeexDepth {

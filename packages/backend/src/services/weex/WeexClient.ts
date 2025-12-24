@@ -194,11 +194,11 @@ export class WeexClient {
             return this.consumeTokens(endpoint, isOrderRequest, depth + 1);
         }
 
-        // Consume tokens
-        this.ipBucket.tokens -= weight;
-        this.uidBucket.tokens -= weight;
+        // Consume tokens (ensure we don't go negative)
+        this.ipBucket.tokens = Math.max(0, this.ipBucket.tokens - weight);
+        this.uidBucket.tokens = Math.max(0, this.uidBucket.tokens - weight);
         if (isOrderRequest) {
-            this.orderBucket.tokens -= 1;
+            this.orderBucket.tokens = Math.max(0, this.orderBucket.tokens - 1);
         }
     }
 

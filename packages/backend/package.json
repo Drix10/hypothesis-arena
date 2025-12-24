@@ -16,7 +16,7 @@
         "typecheck": "tsc --noEmit"
     },
     "dependencies": {
-        "@google/genai": "^1.0.0",
+        "@google/generative-ai": "^0.21.0",
         "@hypothesis-arena/shared": "*",
         "axios": "^1.6.0",
         "bcryptjs": "^2.4.3",

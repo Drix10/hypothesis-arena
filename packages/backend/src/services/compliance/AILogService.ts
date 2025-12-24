@@ -1,7 +1,7 @@
 import { v4 as uuid } from 'uuid';
 import { pool } from '../../config/database';
 import { logger } from '../../utils/logger';
-import { getWeexClient } from '../weex/WeexClient';
+import { getWeexClient, WeexClient } from '../weex/WeexClient';
 
 export interface AILogEntry {
     id: string;
@@ -18,7 +18,14 @@ export interface AILogEntry {
 }
 
 export class AILogService {
-    private weexClient = getWeexClient();
+    private weexClient: WeexClient | null = null;
+
+    private getWeexClient(): WeexClient {
+        if (!this.weexClient) {
+            this.weexClient = getWeexClient();
+        }
+        return this.weexClient;
+    }
 
     async createLog(
         userId: string,
@@ -66,7 +73,7 @@ export class AILogService {
 
     async uploadToWeex(log: AILogEntry): Promise<void> {
         try {
-            const response = await this.weexClient.uploadAILog({
+            const response = await this.getWeexClient().uploadAILog({
                 orderId: log.orderId,
                 stage: log.stage,
                 model: log.model,
@@ -99,7 +106,7 @@ export class AILogService {
             [orderId]
         );
 
-        return result.rows.map(this.mapRowToLog);
+        return (result.rows || []).map(this.mapRowToLog);
     }
 
     async getLogsForUser(userId: string, limit: number = 100): Promise<AILogEntry[]> {
@@ -111,7 +118,7 @@ export class AILogService {
             [userId, limit]
         );
 
-        return result.rows.map(this.mapRowToLog);
+        return (result.rows || []).map(this.mapRowToLog);
     }
 
     async getPendingUploads(): Promise<AILogEntry[]> {
@@ -122,7 +129,7 @@ export class AILogService {
              LIMIT 100`
         );
 
-        return result.rows.map(this.mapRowToLog);
+        return (result.rows || []).map(this.mapRowToLog);
     }
 
     async retryPendingUploads(): Promise<number> {
@@ -142,14 +149,43 @@ export class AILogService {
     }
 
     private mapRowToLog(row: any): AILogEntry {
+        let input = row.input;
+        let output = row.output;
+
+        // Safely parse JSON fields - keep original string if parse fails
+        if (typeof input === 'string') {
+            try {
+                input = JSON.parse(input);
+            } catch (parseError) {
+                logger.warn('Failed to parse AI log input JSON', {
+                    logId: row.id,
+                    error: parseError instanceof Error ? parseError.message : 'Unknown parse error',
+                    valuePreview: input.substring(0, 100)
+                });
+                // Keep as original string - don't wrap in { raw }
+            }
+        }
+        if (typeof output === 'string') {
+            try {
+                output = JSON.parse(output);
+            } catch (parseError) {
+                logger.warn('Failed to parse AI log output JSON', {
+                    logId: row.id,
+                    error: parseError instanceof Error ? parseError.message : 'Unknown parse error',
+                    valuePreview: output.substring(0, 100)
+                });
+                // Keep as original string - don't wrap in { raw }
+            }
+        }
+
         return {
             id: row.id,
             userId: row.user_id,
             orderId: row.order_id,
             stage: row.stage,
             model: row.model,
-            input: typeof row.input === 'string' ? JSON.parse(row.input) : row.input,
-            output: typeof row.output === 'string' ? JSON.parse(row.output) : row.output,
+            input,
+            output,
             explanation: row.explanation,
             timestamp: new Date(row.timestamp).getTime(),
             uploadedToWeex: row.uploaded_to_weex,

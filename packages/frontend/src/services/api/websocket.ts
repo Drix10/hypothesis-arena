@@ -17,9 +17,11 @@ class WebSocketClient {
     private onConnectHandlers: Set<ConnectionHandler> = new Set();
     private onDisconnectHandlers: Set<ConnectionHandler> = new Set();
     private pingInterval: number | null = null;
+    private pongTimeout: number | null = null;
     private reconnectTimeout: number | null = null;
     private subscriptions: Set<string> = new Set();
     private isDestroyed = false;
+    private lastPongTime: number = 0;
 
     constructor() {
         const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -142,11 +144,19 @@ class WebSocketClient {
         return this.ws?.readyState === WebSocket.OPEN;
     }
 
+    getLastPongTime(): number {
+        return this.lastPongTime;
+    }
+
     private handleMessage(message: WebSocketMessage): void {
         const { type, channel, data } = message;
 
-        // Handle pong
-        if (type === 'pong') return;
+        // Handle pong - update last pong time
+        if (type === 'pong') {
+            this.lastPongTime = Date.now();
+            this.clearPongTimeout();
+            return;
+        }
 
         // Route to channel handlers
         const targetChannel = channel || type;
@@ -197,14 +207,26 @@ class WebSocketClient {
     }
 
     private resubscribe(): void {
+        if (this.ws?.readyState !== WebSocket.OPEN) return;
         this.subscriptions.forEach(channel => {
             this.send({ type: 'subscribe', channel });
         });
     }
 
     private startPing(): void {
+        this.lastPongTime = Date.now();
         this.pingInterval = window.setInterval(() => {
             this.send({ type: 'ping' });
+
+            // Set timeout for pong response (10 seconds)
+            this.clearPongTimeout();
+            this.pongTimeout = window.setTimeout(() => {
+                // No pong received - connection may be dead
+                console.warn('WebSocket pong timeout - reconnecting');
+                if (this.ws) {
+                    this.ws.close();
+                }
+            }, 10000);
         }, 30000);
     }
 
@@ -213,13 +235,35 @@ class WebSocketClient {
             clearInterval(this.pingInterval);
             this.pingInterval = null;
         }
+        this.clearPongTimeout();
+    }
+
+    private clearPongTimeout(): void {
+        if (this.pongTimeout) {
+            clearTimeout(this.pongTimeout);
+            this.pongTimeout = null;
+        }
     }
 }
 
 export const wsClient = new WebSocketClient();
 
-// Auto-connect when module loads (in browser)
-if (typeof window !== 'undefined') {
+// Auto-connect when module loads (in browser only)
+if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     // Delay connection to allow app to initialize
-    setTimeout(() => wsClient.connect(), 100);
+    // Use requestIdleCallback if available for better performance
+    const scheduleConnect = () => {
+        if ('requestIdleCallback' in window) {
+            (window as any).requestIdleCallback(() => wsClient.connect(), { timeout: 1000 });
+        } else {
+            setTimeout(() => wsClient.connect(), 100);
+        }
+    };
+
+    // Only connect after DOM is ready
+    if (document.readyState === 'complete') {
+        scheduleConnect();
+    } else {
+        window.addEventListener('load', scheduleConnect, { once: true });
+    }
 }

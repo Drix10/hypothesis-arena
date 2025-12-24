@@ -1,21 +1,18 @@
 /**
- * Components Index - Organized Structure
- * 
- * Note: Test components (WeexTest, AuthTest) are NOT exported here.
- * Import them directly from "./common/WeexTest" or "./common/AuthTest" when needed.
+ * Components Index
  */
 
 // Common
 export { ErrorBoundary } from "./common";
 
-// Analysis components
-export { AnalystCard, DebateView, RecommendationCard } from "./analysis";
+// UI
+export * from "./ui";
 
-// Chart components
-export { PriceChart, TechnicalsCard, NewsCard } from "./charts";
+// Arena
+export * from "./arena";
 
-// Sidebar widgets
-export { Watchlist, SavedAnalyses, AccuracyTracker } from "./sidebar";
+// Trading
+export * from "./trading";
 
-// Layout components
-export { StockArena, StockHeader, TickerInput, CompareStocks } from "./layout";
+// Layout
+export { LiveArena, Header, MarketSidebar, AuthModal } from "./layout";

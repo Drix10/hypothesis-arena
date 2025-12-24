@@ -80,25 +80,30 @@ router.post('/execute', authenticate, async (req: Request, res: Response, next: 
             const weexClient = getWeexClient();
             const orderResponse = await weexClient.placeOrder({
                 symbol,
-                side: data.side.toLowerCase() as 'buy' | 'sell',
-                type: data.type === 'MARKET' ? '2' : '1',
-                orderType: '0',
+                client_oid: clientOrderId,
+                type: data.side.toLowerCase() === 'buy' ? '1' : '2', // 1=Open long, 2=Open short
+                order_type: '0', // Normal order
+                match_price: data.type === 'MARKET' ? '1' : '0', // 1=Market, 0=Limit
                 size: String(data.size),
-                price: data.price ? String(data.price) : undefined,
-                clientOrderId,
+                price: data.price ? String(data.price) : '0',
             });
+
+            // Validate response
+            if (!orderResponse.order_id) {
+                throw new TradingError('WEEX did not return an order ID', 'NO_ORDER_ID');
+            }
 
             // Update trade with WEEX order ID
             await client.query(
                 'UPDATE trades SET weex_order_id = $1, status = $2 WHERE id = $3',
-                [orderResponse.data.orderId, 'FILLED', tradeId]
+                [orderResponse.order_id, 'FILLED', tradeId]
             );
 
             logger.info(`Trade executed: ${tradeId}`, { symbol, side: data.side, size: data.size });
 
             return {
                 id: tradeId,
-                weexOrderId: orderResponse.data.orderId,
+                weexOrderId: orderResponse.order_id,
                 clientOrderId,
                 status: 'FILLED',
             };

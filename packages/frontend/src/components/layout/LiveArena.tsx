@@ -1,939 +1,666 @@
 /**
- * Live Arena Component - Cinematic Live Streaming Experience
- * Premium real-time visualization of thesis generation and debates
- *
- * PERFORMANCE OPTIMIZED: Reduced animations for smoother experience
+ * Live Arena - Main Crypto Trading Dashboard
+ * Cinematic Command Center with glass morphism design
  */
 
-import React, { useEffect, useRef, useMemo, memo } from "react";
-import { motion } from "framer-motion";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import {
-  InvestmentThesis,
-  StockDebate,
-  StockArenaState,
-} from "../../types/stock";
-import { AnalystCard } from "../analysis";
+  weexApi,
+  WeexTicker,
+  WeexAssets,
+  WeexPosition,
+} from "../../services/api/weex";
+import { apiClient } from "../../services/api/client";
+import { wsClient } from "../../services/api/websocket";
 
-interface LiveArenaProps {
-  state: StockArenaState;
-  theses: InvestmentThesis[];
-  liveDebates: StockDebate[];
-  currentDebate: StockDebate | null;
-  progress: string;
-  totalAnalysts: number;
-  tournamentProgress: {
-    round: string;
-    matchNumber: number;
-    totalMatches: number;
-  } | null;
-}
+// Components
+import { EmptyState } from "../ui";
+import {
+  AnalystCard,
+  ChampionCard,
+  DebateCard,
+  AnalysisSummary,
+  AIAnalysis,
+  DebateMatch,
+} from "../arena";
+import { OrderBook, PositionsPanel, TradingPanel } from "../trading";
+import { AuthModal } from "./AuthModal";
+import { MarketSidebar } from "./MarketSidebar";
+import { Header } from "./Header";
 
-// Simplified animation variants for better performance
-const fadeIn = {
-  initial: { opacity: 0 },
-  animate: { opacity: 1 },
-  exit: { opacity: 0 },
-  transition: { duration: 0.2 },
-};
+type TabType = "market" | "positions" | "analysis" | "debate" | "trade";
 
-export const LiveArena: React.FC<LiveArenaProps> = ({
-  state,
-  theses,
-  liveDebates,
-  currentDebate,
-  progress,
-  totalAnalysts,
-  tournamentProgress,
-}) => {
-  const debateRef = useRef<HTMLDivElement>(null);
-  const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isMountedRef = useRef(true);
+export const LiveArena: React.FC = () => {
+  // Market State
+  const [tickers, setTickers] = useState<WeexTicker[]>([]);
+  const [marketLoading, setMarketLoading] = useState(true);
+  const [selectedSymbol, setSelectedSymbol] = useState("cmt_btcusdt");
 
-  // Cleanup on unmount
+  // Account State
+  const [assets, setAssets] = useState<WeexAssets | null>(null);
+  const [positions, setPositions] = useState<WeexPosition[]>([]);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+
+  // UI State
+  const [activeTab, setActiveTab] = useState<TabType>("market");
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [wsConnected, setWsConnected] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+
+  // Analysis State
+  const [analyses, setAnalyses] = useState<AIAnalysis[]>([]);
+  const [debates, setDebates] = useState<DebateMatch[]>([]);
+  const [champion, setChampion] = useState<AIAnalysis | null>(null);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+
+  const selectedTicker = useMemo(
+    () => tickers.find((t) => t.symbol === selectedSymbol),
+    [tickers, selectedSymbol]
+  );
+
+  // Auth handlers
+  const checkAuth = useCallback(() => {
+    const authed = apiClient.isAuthenticated();
+    setIsAuthenticated(authed);
+    return authed;
+  }, []);
+
+  const handleLogout = useCallback(() => {
+    apiClient.logout();
+    setIsAuthenticated(false);
+    setAssets(null);
+    setPositions([]);
+  }, []);
+
+  // WebSocket connection
   useEffect(() => {
-    isMountedRef.current = true;
+    setWsConnected(wsClient.isConnected());
+    const unsubConnect = wsClient.onConnect(() => setWsConnected(true));
+    const unsubDisconnect = wsClient.onDisconnect(() => setWsConnected(false));
     return () => {
-      isMountedRef.current = false;
-      if (scrollTimeoutRef.current) {
-        clearTimeout(scrollTimeoutRef.current);
-      }
+      unsubConnect();
+      unsubDisconnect();
     };
   }, []);
 
-  // Keyboard shortcuts - memoized to avoid re-creating on every render
+  // Auth check
   useEffect(() => {
-    // Only add listener if we're in tournament phase
-    if (state !== StockArenaState.RUNNING_TOURNAMENT) {
-      return;
-    }
-
-    const handleKeyPress = (e: KeyboardEvent) => {
-      // Space to pause/resume auto-scroll (future enhancement)
-      if (e.code === "Space" && currentDebate) {
-        e.preventDefault();
-        // Could add pause functionality here
-      }
+    checkAuth();
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === "auth_token") checkAuth();
     };
-
-    window.addEventListener("keydown", handleKeyPress);
-    return () => window.removeEventListener("keydown", handleKeyPress);
-  }, [state, currentDebate]);
-
-  // Auto-scroll to current debate with debounce
-  useEffect(() => {
-    // Clear any pending scroll
-    if (scrollTimeoutRef.current) {
-      clearTimeout(scrollTimeoutRef.current);
-      scrollTimeoutRef.current = null;
-    }
-
-    // Debounce scroll to avoid excessive scrolling
-    if (debateRef.current && currentDebate) {
-      scrollTimeoutRef.current = setTimeout(() => {
-        if (isMountedRef.current && debateRef.current) {
-          debateRef.current.scrollIntoView({
-            behavior: "smooth",
-            block: "center",
-          });
-        }
-        scrollTimeoutRef.current = null;
-      }, 300);
-    }
-
-    // Cleanup
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") checkAuth();
+    };
+    window.addEventListener("storage", handleStorage);
+    document.addEventListener("visibilitychange", handleVisibility);
     return () => {
-      if (scrollTimeoutRef.current) {
-        clearTimeout(scrollTimeoutRef.current);
-        scrollTimeoutRef.current = null;
+      window.removeEventListener("storage", handleStorage);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [checkAuth]);
+
+  // Fetch market data
+  useEffect(() => {
+    let cancelled = false;
+    const fetchMarket = async () => {
+      try {
+        const data = await weexApi.getTickers();
+        if (!cancelled) {
+          setTickers(data);
+          setMarketLoading(false);
+        }
+      } catch {
+        if (!cancelled) setMarketLoading(false);
       }
     };
-  }, [currentDebate?.matchId]);
+    fetchMarket();
+    const unsubscribe = wsClient.subscribe("tickers", (data: WeexTicker[]) => {
+      if (!cancelled && Array.isArray(data)) setTickers(data);
+    });
+    const pollInterval = setInterval(() => {
+      if (!wsClient.isConnected()) fetchMarket();
+    }, 10000);
+    return () => {
+      cancelled = true;
+      unsubscribe();
+      clearInterval(pollInterval);
+    };
+  }, []);
+
+  // Fetch account data
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    let cancelled = false;
+    const fetchAccount = async () => {
+      try {
+        const [assetsData, positionsData] = await Promise.all([
+          weexApi.getAssets().catch(() => null),
+          weexApi.getPositions().catch(() => []),
+        ]);
+        if (!cancelled) {
+          setAssets(assetsData);
+          setPositions(positionsData);
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+    fetchAccount();
+    const interval = setInterval(fetchAccount, 30000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [isAuthenticated]);
+
+  // AI Analysis
+  const analysisAbortRef = React.useRef<AbortController | null>(null);
+
+  const runAIAnalysis = useCallback(async () => {
+    if (!selectedSymbol) return;
+    if (analysisAbortRef.current) analysisAbortRef.current.abort();
+
+    const controller = new AbortController();
+    analysisAbortRef.current = controller;
+    setAnalysisLoading(true);
+    setAnalyses([]);
+    setDebates([]);
+    setChampion(null);
+    setAnalysisError(null);
+
+    try {
+      const result = await apiClient.post<{
+        analyses: AIAnalysis[];
+        debates?: DebateMatch[];
+        champion?: AIAnalysis;
+      }>(
+        `/analysis/generate-all`,
+        { symbol: selectedSymbol },
+        { timeout: 120000, signal: controller.signal }
+      );
+      if (!controller.signal.aborted) {
+        setAnalyses(result.analyses || []);
+        setDebates(result.debates || []);
+        setChampion(result.champion || null);
+        setActiveTab("analysis");
+      }
+    } catch (err: unknown) {
+      if (!controller.signal.aborted) {
+        setAnalysisError(
+          err instanceof Error ? err.message : "Analysis failed"
+        );
+      }
+    } finally {
+      if (!controller.signal.aborted) setAnalysisLoading(false);
+      if (analysisAbortRef.current === controller)
+        analysisAbortRef.current = null;
+    }
+  }, [selectedSymbol]);
+
+  useEffect(
+    () => () => {
+      analysisAbortRef.current?.abort();
+    },
+    []
+  );
+
+  const tabs = [
+    { id: "market" as TabType, label: "Order Book", icon: "📊" },
+    { id: "positions" as TabType, label: "Positions", icon: "📈", auth: true },
+    {
+      id: "analysis" as TabType,
+      label: "AI Analysis",
+      icon: "🤖",
+      badge: analyses.length,
+    },
+    {
+      id: "debate" as TabType,
+      label: "Battle Arena",
+      icon: "⚔️",
+      badge: debates.length,
+    },
+    { id: "trade" as TabType, label: "Trade", icon: "⚡", auth: true },
+  ];
 
   return (
-    <div className="relative" role="region" aria-label="Live Analysis Arena">
-      {/* Phase 0: Data Fetching */}
-      {state === StockArenaState.FETCHING_DATA && (
-        <motion.div
-          {...fadeIn}
-          className="max-w-lg mx-auto pt-24 sm:pt-32 text-center"
-        >
-          <div className="relative inline-block mb-8">
-            <div className="w-28 h-28 rounded-3xl bg-gradient-to-br from-arena-card to-arena-surface border border-white/10 flex items-center justify-center shadow-glow-cyan">
-              <span className="text-6xl" role="img" aria-label="Satellite">
-                📡
-              </span>
-            </div>
-            <div className="absolute -inset-6 border border-cyan/20 rounded-[2rem] opacity-20 animate-pulse" />
-          </div>
-          <h2 className="text-2xl sm:text-3xl font-serif font-bold text-white mb-3">
-            Gathering Intelligence
-          </h2>
-          <p className="text-slate-400 mb-6">
-            Connecting to market data sources...
-          </p>
-          <div className="inline-block px-5 py-2.5 rounded-full bg-gradient-to-r from-cyan/10 to-cyan/5 border border-cyan/20 text-sm text-cyan font-medium shadow-lg shadow-cyan/10 animate-pulse">
-            {progress || "Fetching stock data..."}
-          </div>
-        </motion.div>
-      )}
+    <div className="min-h-screen bg-arena-pattern text-white flex flex-col">
+      <div className="bg-noise" />
 
-      {/* Phase 1: Analyst Generation Stage */}
-      {state === StockArenaState.GENERATING_ANALYSTS && (
-        <motion.div {...fadeIn} className="space-y-8">
-          {/* Stage Header */}
-          <div className="text-center">
-            <div className="inline-flex items-center gap-3 px-6 py-3 rounded-2xl bg-gradient-to-r from-cyan/10 via-cyan/5 to-cyan/10 border border-cyan/20 mb-4 shadow-lg shadow-cyan/10">
-              <span className="text-2xl" role="img" aria-label="Brain">
-                🧠
-              </span>
-              <div className="text-left">
-                <div className="text-sm font-bold text-cyan">
-                  Analysts Entering Arena
-                </div>
-                <div className="text-xs text-slate-400">
-                  {theses.length} of {totalAnalysts} strategists ready
-                </div>
-              </div>
-            </div>
-            {/* Estimated time remaining */}
-            {theses.length > 0 && theses.length < totalAnalysts && (
-              <p className="text-xs text-slate-500 mt-2">
-                Estimated time: ~
-                {Math.max(
-                  0,
-                  Math.ceil((totalAnalysts - theses.length) / 4) * 3
-                )}
-                s remaining
-              </p>
-            )}
-          </div>
+      <Header
+        wsConnected={wsConnected}
+        isAuthenticated={isAuthenticated}
+        assets={assets}
+        onLogin={() => setShowAuthModal(true)}
+        onLogout={handleLogout}
+      />
 
-          {/* Completion message - only show briefly before tournament starts */}
-          {theses.length === totalAnalysts &&
-            state === StockArenaState.GENERATING_ANALYSTS && (
-              <div className="text-center mb-4">
-                <div
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-bull/10 border border-bull/20"
-                  role="status"
-                  aria-live="polite"
+      <div className="flex-1 flex overflow-hidden">
+        <MarketSidebar
+          tickers={tickers}
+          loading={marketLoading}
+          selectedSymbol={selectedSymbol}
+          onSelectSymbol={setSelectedSymbol}
+          isOpen={sidebarOpen}
+        />
+
+        <main className="flex-1 flex flex-col overflow-hidden">
+          {/* Symbol Header */}
+          {selectedTicker && (
+            <SymbolHeader
+              ticker={selectedTicker}
+              symbol={selectedSymbol}
+              onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
+              onRunAnalysis={runAIAnalysis}
+              analysisLoading={analysisLoading}
+              isAuthenticated={isAuthenticated}
+            />
+          )}
+
+          {/* Tabs */}
+          <div className="border-b border-white/10 px-4 bg-grid">
+            <div className="flex gap-1">
+              {tabs.map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  disabled={tab.auth && !isAuthenticated}
+                  className={`px-4 py-3 text-sm font-medium transition-all relative ${
+                    activeTab === tab.id
+                      ? "text-cyan-400 border-b-2 border-cyan-400"
+                      : tab.auth && !isAuthenticated
+                      ? "text-slate-600 cursor-not-allowed"
+                      : "text-slate-400 hover:text-white"
+                  }`}
                 >
-                  <span className="text-lg" role="img" aria-label="Check mark">
-                    ✅
-                  </span>
-                  <span className="text-sm font-semibold text-bull-light">
-                    All analysts ready! Starting tournament...
-                  </span>
-                </div>
-              </div>
-            )}
-
-          {/* Analyst Grid - 8 Slots */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 max-w-5xl mx-auto">
-            {Array.from({ length: totalAnalysts }).map((_, index) => {
-              const thesis = theses[index];
-              // Calculate how many are currently being generated (concurrency=4)
-              const remainingSlots = totalAnalysts - theses.length;
-              const loadingCount = Math.min(remainingSlots, 4);
-              const isActive =
-                index >= theses.length && index < theses.length + loadingCount;
-              const isEmpty = !thesis;
-
-              return (
-                <div key={index} className="relative">
-                  {isEmpty ? (
-                    // Empty Slot - simplified animation
-                    <div
-                      className={`aspect-square rounded-2xl border-2 border-dashed flex items-center justify-center relative overflow-hidden ${
-                        isActive
-                          ? "border-cyan/40 bg-cyan/5"
-                          : "border-white/10 bg-white/[0.02]"
-                      }`}
-                    >
-                      {isActive && (
-                        <>
-                          {/* Simple pulsing background */}
-                          <div className="absolute inset-0 bg-gradient-radial from-cyan/10 to-transparent animate-pulse" />
-                          {/* Loading spinner - CSS only */}
-                          <div className="w-16 h-16 rounded-full border-4 border-cyan/20 border-t-cyan animate-spin" />
-                        </>
-                      )}
-                      {!isActive && (
-                        <div
-                          className="text-4xl opacity-20"
-                          role="img"
-                          aria-label="Waiting"
-                        >
-                          💭
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    // Filled Slot - simple fade in
-                    <motion.div
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      transition={{ duration: 0.3 }}
-                    >
-                      <AnalystCard thesis={thesis} isWinner={false} />
-                    </motion.div>
+                  <span className="mr-1.5">{tab.icon}</span>
+                  {tab.label}
+                  {tab.badge ? (
+                    <span className="ml-1.5 badge badge-cyan !py-0 !px-1.5 !text-[9px]">
+                      {tab.badge}
+                    </span>
+                  ) : null}
+                  {tab.auth && !isAuthenticated && (
+                    <span className="ml-1 text-[10px]">🔒</span>
                   )}
-                </div>
-              );
-            })}
+                </button>
+              ))}
+            </div>
           </div>
 
-          {/* Current Analyst Being Generated */}
-          {progress && (
-            <div className="text-center space-y-3">
-              <div
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white/[0.03] border border-white/10"
-                role="status"
-                aria-live="polite"
-                aria-atomic="true"
-              >
-                <div className="w-2 h-2 bg-cyan rounded-full animate-pulse" />
-                <span className="text-sm text-slate-300">{progress}</span>
-              </div>
-              {/* Helpful tip */}
-              <p className="text-xs text-slate-600 max-w-md mx-auto">
-                Each analyst is analyzing market data, fundamentals, and
-                technicals to form their unique perspective
-              </p>
-            </div>
-          )}
-        </motion.div>
-      )}
+          {/* Tab Content */}
+          <div className="flex-1 overflow-y-auto p-4">
+            <AnimatePresence mode="wait">
+              {activeTab === "market" && (
+                <TabContent key="market">
+                  <OrderBook symbol={selectedSymbol} />
+                </TabContent>
+              )}
 
-      {/* Phase 2 & 3: Tournament Bracket + Live Debate */}
-      {state === StockArenaState.RUNNING_TOURNAMENT && (
-        <motion.div {...fadeIn} className="space-y-8">
-          {/* Tournament Progress Header */}
-          {tournamentProgress && (
-            <div className="text-center">
-              <div className="inline-flex items-center gap-3 px-6 py-3 rounded-2xl bg-gradient-to-r from-bear/10 via-gold/10 to-bull/10 border border-gold/30 mb-4 shadow-lg shadow-gold/10">
-                <span
-                  className="text-2xl"
-                  role="img"
-                  aria-label="Crossed swords"
-                >
-                  ⚔️
-                </span>
-                <div className="text-left">
-                  <div className="text-sm font-bold text-gold-light">
-                    {tournamentProgress.round.charAt(0).toUpperCase() +
-                      tournamentProgress.round.slice(1)}{" "}
-                    - Match {tournamentProgress.matchNumber}/
-                    {tournamentProgress.totalMatches}
-                  </div>
-                  <div className="text-xs text-slate-400">
-                    Battle in progress...
-                  </div>
-                </div>
-              </div>
-              {/* Progress indicator - CSS only */}
-              <div
-                className="flex justify-center gap-2 mt-3"
-                role="progressbar"
-                aria-valuenow={tournamentProgress.matchNumber}
-                aria-valuemin={1}
-                aria-valuemax={tournamentProgress.totalMatches}
-                aria-label={`Match ${tournamentProgress.matchNumber} of ${tournamentProgress.totalMatches}`}
-              >
-                {Array.from({ length: tournamentProgress.totalMatches }).map(
-                  (_, i) => (
-                    <div
-                      key={i}
-                      className={`h-1 rounded-full transition-all duration-300 ${
-                        i < tournamentProgress.matchNumber
-                          ? "w-8 bg-gold"
-                          : i === tournamentProgress.matchNumber - 1
-                          ? "w-12 bg-gold animate-pulse"
-                          : "w-6 bg-white/20"
-                      }`}
-                      aria-hidden="true"
+              {activeTab === "positions" && (
+                <TabContent key="positions">
+                  {!isAuthenticated ? (
+                    <EmptyState
+                      icon="🔐"
+                      title="Login Required"
+                      description="Connect your account to view positions"
+                      action={
+                        <button
+                          onClick={() => setShowAuthModal(true)}
+                          className="btn-primary px-4 py-2 rounded-lg"
+                        >
+                          Connect
+                        </button>
+                      }
                     />
-                  )
-                )}
-              </div>
-            </div>
-          )}
+                  ) : positions.length === 0 ? (
+                    <EmptyState
+                      icon="📭"
+                      title="No Open Positions"
+                      description="You don't have any open positions yet"
+                    />
+                  ) : (
+                    <PositionsPanel positions={positions} />
+                  )}
+                </TabContent>
+              )}
 
-          {/* Tournament Bracket Visualization */}
-          <TournamentBracket
-            debates={liveDebates}
-            currentDebate={currentDebate}
+              {activeTab === "analysis" && (
+                <TabContent key="analysis">
+                  {analysisLoading ? (
+                    <AnalysisLoading symbol={selectedSymbol} />
+                  ) : analysisError ? (
+                    <EmptyState
+                      icon="⚠️"
+                      title="Analysis Failed"
+                      description={analysisError}
+                      action={
+                        <button
+                          onClick={runAIAnalysis}
+                          className="btn-primary px-4 py-2 rounded-lg"
+                        >
+                          Try Again
+                        </button>
+                      }
+                    />
+                  ) : analyses.length === 0 ? (
+                    <EmptyState
+                      icon="🤖"
+                      title="No Analysis Yet"
+                      description="Click 'AI Analysis' to get insights from 8 AI analysts"
+                      action={
+                        <button
+                          onClick={runAIAnalysis}
+                          className="btn-primary px-4 py-2 rounded-lg"
+                        >
+                          Run Analysis
+                        </button>
+                      }
+                    />
+                  ) : (
+                    <div className="space-y-6">
+                      {champion && <ChampionCard champion={champion} />}
+                      <AnalysisSummary
+                        analyses={analyses}
+                        symbol={selectedSymbol}
+                      />
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {analyses.map((a, i) => (
+                          <motion.div
+                            key={a.analystId}
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ delay: i * 0.05 }}
+                          >
+                            <AnalystCard
+                              analysis={a}
+                              isChampion={champion?.analystId === a.analystId}
+                            />
+                          </motion.div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </TabContent>
+              )}
+
+              {activeTab === "debate" && (
+                <TabContent key="debate">
+                  {debates.length === 0 ? (
+                    <EmptyState
+                      icon="⚔️"
+                      title="No Debates Yet"
+                      description="Run AI Analysis to see analysts battle it out"
+                      action={
+                        <button
+                          onClick={runAIAnalysis}
+                          disabled={analysisLoading}
+                          className="btn-primary px-4 py-2 rounded-lg disabled:opacity-50"
+                        >
+                          {analysisLoading ? "Analyzing..." : "Start Battle"}
+                        </button>
+                      }
+                    />
+                  ) : (
+                    <DebateArena debates={debates} />
+                  )}
+                </TabContent>
+              )}
+
+              {activeTab === "trade" && (
+                <TabContent key="trade">
+                  {!isAuthenticated ? (
+                    <EmptyState
+                      icon="🔐"
+                      title="Login Required"
+                      description="Connect your account to trade"
+                      action={
+                        <button
+                          onClick={() => setShowAuthModal(true)}
+                          className="btn-primary px-4 py-2 rounded-lg"
+                        >
+                          Connect
+                        </button>
+                      }
+                    />
+                  ) : (
+                    <TradingPanel
+                      symbol={selectedSymbol}
+                      ticker={selectedTicker}
+                      balance={assets?.available || "0"}
+                    />
+                  )}
+                </TabContent>
+              )}
+            </AnimatePresence>
+          </div>
+        </main>
+      </div>
+
+      <AnimatePresence>
+        {showAuthModal && (
+          <AuthModal
+            onClose={() => setShowAuthModal(false)}
+            onSuccess={() => {
+              setShowAuthModal(false);
+              checkAuth();
+            }}
           />
+        )}
+      </AnimatePresence>
+    </div>
+  );
+};
 
-          {/* Live Debate Arena - Full Focus */}
-          {currentDebate && (
-            <motion.div
-              ref={debateRef}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ duration: 0.3 }}
-              className="max-w-4xl mx-auto"
-            >
-              <LiveDebateCard debate={currentDebate} />
-            </motion.div>
-          )}
+// Sub-components
+const TabContent: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <motion.div
+    initial={{ opacity: 0, y: 10 }}
+    animate={{ opacity: 1, y: 0 }}
+    exit={{ opacity: 0, y: -10 }}
+  >
+    {children}
+  </motion.div>
+);
 
-          {/* Completed Debates - Minimized */}
-          {liveDebates.length > 1 && currentDebate && (
-            <div className="max-w-4xl mx-auto">
-              <div className="text-xs text-slate-500 font-semibold mb-3 text-center flex items-center justify-center gap-2">
-                <span>COMPLETED MATCHES</span>
-                <span className="px-2 py-0.5 rounded-full bg-white/[0.05] text-[10px]">
-                  {
-                    liveDebates.filter(
-                      (d) => d.matchId !== currentDebate.matchId
-                    ).length
-                  }
-                </span>
-              </div>
-              <div className="space-y-2">
-                {liveDebates
-                  .filter((d) => d.matchId !== currentDebate.matchId)
-                  .map((debate) => (
-                    <CompletedDebateCard key={debate.matchId} debate={debate} />
-                  ))}
-              </div>
-            </div>
-          )}
-        </motion.div>
+const AnalysisLoading: React.FC<{ symbol: string }> = ({ symbol }) => (
+  <div className="flex flex-col items-center justify-center py-16">
+    <div className="w-16 h-16 rounded-full border-4 border-cyan-400/30 border-t-cyan-400 animate-spin mb-4" />
+    <p className="text-slate-400">
+      8 AI analysts are reviewing{" "}
+      {symbol.replace("cmt_", "").replace("usdt", "").toUpperCase()}...
+    </p>
+    <p className="text-xs text-slate-600 mt-2">
+      This may take up to 60 seconds
+    </p>
+  </div>
+);
+
+const DebateArena: React.FC<{ debates: DebateMatch[] }> = ({ debates }) => {
+  const quarterfinals = debates.filter((d) => d.round === "quarterfinal");
+  const semifinals = debates.filter((d) => d.round === "semifinal");
+  const finals = debates.filter((d) => d.round === "final");
+
+  return (
+    <div className="space-y-8">
+      <div className="text-center">
+        <h2 className="text-2xl font-bold mb-2">
+          <span className="text-gradient-cyan">⚔️ ANALYST BATTLE ARENA ⚔️</span>
+        </h2>
+        <p className="text-slate-500 text-sm">
+          8 AI analysts compete in tournament-style debates
+        </p>
+      </div>
+
+      {finals.length > 0 && (
+        <RoundSection
+          title="CHAMPIONSHIP FINAL"
+          icon="👑"
+          color="text-yellow-400"
+          debates={finals}
+        />
+      )}
+      {semifinals.length > 0 && (
+        <RoundSection
+          title="SEMI FINALS"
+          icon="🔥"
+          color="text-amber-400"
+          debates={semifinals}
+        />
+      )}
+      {quarterfinals.length > 0 && (
+        <RoundSection
+          title="QUARTER FINALS"
+          icon="⚔️"
+          color="text-slate-400"
+          debates={quarterfinals}
+        />
       )}
     </div>
   );
 };
 
-// Tournament Bracket Visualization - Memoized for performance
-const TournamentBracket: React.FC<{
-  debates: StockDebate[];
-  currentDebate: StockDebate | null;
-}> = memo(({ debates, currentDebate }) => {
-  const quarters = useMemo(
-    () => debates.filter((d) => d.round === "quarterfinal"),
-    [debates]
-  );
-  const semis = useMemo(
-    () => debates.filter((d) => d.round === "semifinal"),
-    [debates]
-  );
-  const final = useMemo(
-    () => debates.find((d) => d.round === "final"),
-    [debates]
-  );
-
-  // Don't render bracket if no debates yet
-  if (debates.length === 0) {
-    return null;
-  }
-
-  return (
-    <div className="max-w-6xl mx-auto mb-8">
-      <div className="glass-card rounded-2xl p-6 border border-white/10">
-        <div className="text-center mb-6">
-          <h3 className="text-lg font-serif font-bold text-white mb-1">
-            Tournament Bracket
-          </h3>
-          <p className="text-xs text-slate-500 mb-2">
-            Live progression through the arena
-          </p>
-          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/[0.02] border border-white/[0.06]">
-            <span className="text-[10px] text-slate-600">
-              💡 Active match is highlighted in cyan
-            </span>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-[1fr_auto_1fr_auto_1fr] gap-4 items-center">
-          {/* Quarterfinals */}
-          <div className="space-y-2">
-            <div className="text-[10px] text-slate-500 font-bold text-center mb-2">
-              QUARTERS
-            </div>
-            {quarters.length > 0 ? (
-              quarters.map((debate) => (
-                <BracketMatch
-                  key={debate.matchId}
-                  debate={debate}
-                  isActive={currentDebate?.matchId === debate.matchId}
-                  size="sm"
-                />
-              ))
-            ) : (
-              <div className="text-xs text-slate-600 text-center py-4">
-                Waiting for matches...
-              </div>
-            )}
-          </div>
-
-          {/* Connector Lines */}
-          <div className="flex flex-col gap-8 items-center">
-            {quarters.length >= 2 &&
-              [0, 1].map((i) => (
-                <svg
-                  key={i}
-                  width="40"
-                  height="60"
-                  className="text-white/20"
-                  viewBox="0 0 40 60"
-                >
-                  <path
-                    d="M 0 15 L 20 15 L 20 45 L 40 45"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    fill="none"
-                  />
-                </svg>
-              ))}
-          </div>
-
-          {/* Semifinals */}
-          <div className="space-y-8">
-            <div className="text-[10px] text-slate-500 font-bold text-center mb-2">
-              SEMIS
-            </div>
-            {semis.length > 0 ? (
-              semis.map((debate) => (
-                <BracketMatch
-                  key={debate.matchId}
-                  debate={debate}
-                  isActive={currentDebate?.matchId === debate.matchId}
-                  size="md"
-                />
-              ))
-            ) : (
-              <div className="h-20 rounded-lg border-2 border-dashed border-white/10 flex items-center justify-center">
-                <span className="text-xs text-slate-600">TBD</span>
-              </div>
-            )}
-          </div>
-
-          {/* Connector to Final */}
-          <div className="flex items-center">
-            <svg width="40" height="100" className="text-white/20">
-              <path
-                d="M 0 25 L 20 25 L 20 75 L 40 75"
-                stroke="currentColor"
-                strokeWidth="2"
-                fill="none"
-              />
-            </svg>
-          </div>
-
-          {/* Final */}
-          <div className="space-y-2">
-            <div className="text-[10px] text-gold font-bold text-center mb-2">
-              🏆 FINAL
-            </div>
-            {final ? (
-              <BracketMatch
-                debate={final}
-                isActive={currentDebate?.matchId === final.matchId}
-                size="lg"
-              />
-            ) : (
-              <div className="h-20 rounded-lg border-2 border-dashed border-white/10 flex items-center justify-center">
-                <span className="text-xs text-slate-600">TBD</span>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
+const RoundSection: React.FC<{
+  title: string;
+  icon: string;
+  color: string;
+  debates: DebateMatch[];
+}> = ({ title, icon, color, debates }) => (
+  <div className="space-y-4">
+    <div className="flex items-center gap-3">
+      <span className="text-2xl">{icon}</span>
+      <h3 className={`text-lg font-bold ${color}`}>{title}</h3>
     </div>
-  );
-});
-
-TournamentBracket.displayName = "TournamentBracket";
-
-// Bracket Match Card - Simplified animations
-const BracketMatch: React.FC<{
-  debate: StockDebate;
-  isActive: boolean;
-  size: "sm" | "md" | "lg";
-}> = memo(({ debate, isActive, size }) => {
-  const sizeClasses = {
-    sm: "p-2 text-[10px]",
-    md: "p-2.5 text-xs",
-    lg: "p-3 text-sm",
-  };
-
-  const hasWinner = debate.winner !== null;
-  const bullWon = debate.winner === "bull";
-  const bearWon = debate.winner === "bear";
-
-  return (
-    <div
-      className={`rounded-lg border ${
-        sizeClasses[size]
-      } transition-all duration-200 ${
-        isActive
-          ? "border-cyan bg-cyan/10 shadow-lg shadow-cyan/20"
-          : "border-white/10 bg-white/[0.02]"
-      }`}
-    >
-      <div className="flex items-center justify-between gap-2">
-        <div
-          className={`flex items-center gap-1 ${
-            hasWinner ? (bullWon ? "opacity-100" : "opacity-40") : "opacity-100"
-          }`}
-        >
-          <span>{debate.bullAnalyst.avatarEmoji}</span>
-          {hasWinner && bullWon && <span className="text-[8px]">🏆</span>}
-        </div>
-        <span className="text-[8px] text-slate-600">VS</span>
-        <div
-          className={`flex items-center gap-1 ${
-            hasWinner ? (bearWon ? "opacity-100" : "opacity-40") : "opacity-100"
-          }`}
-        >
-          {hasWinner && bearWon && <span className="text-[8px]">🏆</span>}
-          <span>{debate.bearAnalyst.avatarEmoji}</span>
-        </div>
-      </div>
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      {debates.map((debate) => (
+        <DebateCard key={debate.id} debate={debate} />
+      ))}
     </div>
-  );
-});
-
-BracketMatch.displayName = "BracketMatch";
-
-// Live Debate Card - Performance Optimized
-const LiveDebateCard: React.FC<{ debate: StockDebate }> = memo(({ debate }) => {
-  const bullWon = debate.winner === "bull";
-  const bearWon = debate.winner === "bear";
-  const hasWinner = debate.winner !== null;
-  const dialogueRef = useRef<HTMLDivElement>(null);
-  const lastLengthRef = useRef(0);
-  const lastMatchIdRef = useRef<string | null>(null);
-  const rafIdRef = useRef<number | null>(null);
-
-  // Auto-scroll to latest message - optimized with proper cleanup
-  // Reset length tracking when debate changes
-  useEffect(() => {
-    if (lastMatchIdRef.current !== debate.matchId) {
-      lastMatchIdRef.current = debate.matchId;
-      lastLengthRef.current = 0;
-    }
-
-    // Only scroll if new messages were added
-    if (debate.dialogue.length > lastLengthRef.current) {
-      lastLengthRef.current = debate.dialogue.length;
-
-      // Cancel any pending animation frame
-      if (rafIdRef.current !== null) {
-        cancelAnimationFrame(rafIdRef.current);
-      }
-
-      // Use requestAnimationFrame for smoother scrolling
-      rafIdRef.current = requestAnimationFrame(() => {
-        if (dialogueRef.current) {
-          dialogueRef.current.scrollTop = dialogueRef.current.scrollHeight;
-        }
-        rafIdRef.current = null;
-      });
-    }
-
-    // Cleanup on unmount or before next effect
-    return () => {
-      if (rafIdRef.current !== null) {
-        cancelAnimationFrame(rafIdRef.current);
-        rafIdRef.current = null;
-      }
-    };
-  }, [debate.matchId, debate.dialogue.length]);
-
-  return (
-    <div className="glass-card rounded-2xl overflow-hidden border-2 border-cyan/30">
-      {/* Debate Header - Static, no animations */}
-      <div className="bg-gradient-to-r from-cyan/10 via-cyan/5 to-cyan/10 border-b border-cyan/20 p-4">
-        <div className="flex items-center justify-between">
-          {/* Bull Side */}
-          <div className="flex items-center gap-3">
-            <div className="w-14 h-14 rounded-xl bg-bull/20 border-2 border-bull/40 flex items-center justify-center text-2xl relative">
-              {debate.bullAnalyst.avatarEmoji}
-              {hasWinner && bullWon && (
-                <div className="absolute -top-2 -right-2 text-lg">🏆</div>
-              )}
-            </div>
-            <div>
-              <div className="font-bold text-bull-light">
-                {debate.bullAnalyst.name}
-              </div>
-              <div className="text-xs text-slate-500">
-                {debate.scores.bullScore} points
-              </div>
-            </div>
-          </div>
-
-          {/* VS Badge - Static */}
-          <div className="px-4 py-2 rounded-xl bg-gradient-to-r from-bear/20 via-gold/20 to-bull/20 border border-gold/30">
-            <span className="text-sm font-bold text-gold-light">VS</span>
-          </div>
-
-          {/* Bear Side */}
-          <div className="flex items-center gap-3">
-            <div className="text-right">
-              <div className="font-bold text-bear-light">
-                {debate.bearAnalyst.name}
-              </div>
-              <div className="text-xs text-slate-500">
-                {debate.scores.bearScore} points
-              </div>
-            </div>
-            <div className="w-14 h-14 rounded-xl bg-bear/20 border-2 border-bear/40 flex items-center justify-center text-2xl relative">
-              {debate.bearAnalyst.avatarEmoji}
-              {hasWinner && bearWon && (
-                <div className="absolute -top-2 -right-2 text-lg">🏆</div>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Live Dialogue Stream - Optimized scrolling */}
-      <div
-        ref={dialogueRef}
-        className="p-4 space-y-3 max-h-96 overflow-y-auto bg-gradient-to-b from-transparent to-white/[0.01]"
-      >
-        {debate.dialogue.map((turn, index) => {
-          const isBull = turn.position === "bull";
-          return (
-            <div
-              key={`${debate.matchId}-${index}`}
-              className={`flex ${isBull ? "justify-start" : "justify-end"}`}
-            >
-              <div className="max-w-[80%]">
-                <div
-                  className={`rounded-2xl px-4 py-3 ${
-                    isBull
-                      ? "bg-bull/10 border border-bull/20 rounded-tl-sm"
-                      : "bg-bear/10 border border-bear/20 rounded-tr-sm"
-                  }`}
-                >
-                  <div className="flex items-center gap-2 mb-2 flex-wrap">
-                    <span
-                      className="text-lg"
-                      role="img"
-                      aria-label={
-                        isBull
-                          ? debate.bullAnalyst.name
-                          : debate.bearAnalyst.name
-                      }
-                    >
-                      {isBull
-                        ? debate.bullAnalyst.avatarEmoji
-                        : debate.bearAnalyst.avatarEmoji}
-                    </span>
-                    <span
-                      className={`text-xs font-bold ${
-                        isBull ? "text-bull-light" : "text-bear-light"
-                      }`}
-                    >
-                      {isBull
-                        ? debate.bullAnalyst.name
-                        : debate.bearAnalyst.name}
-                    </span>
-                    <span
-                      className="text-[10px] text-slate-600 px-2 py-0.5 bg-white/[0.05] rounded"
-                      title="Argument strength"
-                    >
-                      💪 {turn.argumentStrength}
-                    </span>
-                    <span className="text-[9px] text-slate-700">
-                      Turn {index + 1}
-                    </span>
-                  </div>
-                  <p className="text-sm text-slate-300 leading-relaxed">
-                    {turn.content}
-                  </p>
-                  {turn.dataPointsReferenced.length > 0 && (
-                    <div className="mt-2 flex flex-wrap gap-1">
-                      {turn.dataPointsReferenced.map((dp, i) => (
-                        <span
-                          key={i}
-                          className="px-2 py-0.5 text-[10px] bg-white/[0.06] rounded-md text-slate-500 font-medium"
-                        >
-                          📊 {dp}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          );
-        })}
-
-        {/* Typing Indicator (if debate is ongoing) - CSS only animation */}
-        {/* Show typing indicator when debate is in progress and not all turns complete */}
-        {/* Final round has 3 turns (6 dialogue entries), regular rounds have 2 turns (4 entries) */}
-        {!hasWinner &&
-          (() => {
-            // Determine expected dialogue count based on round
-            const expectedTurns = debate.round === "final" ? 6 : 4;
-            const isStillDebating = debate.dialogue.length < expectedTurns;
-
-            if (!isStillDebating) return null;
-
-            const isWaitingForBull = debate.dialogue.length % 2 === 0;
-            const thinkingAnalyst = isWaitingForBull
-              ? debate.bullAnalyst
-              : debate.bearAnalyst;
-            const totalTurns = debate.round === "final" ? 6 : 4;
-
-            return (
-              <div className="flex flex-col items-center gap-2">
-                <div
-                  className={`flex items-center gap-2 px-4 py-2 rounded-full border ${
-                    isWaitingForBull
-                      ? "bg-bull/5 border-bull/20"
-                      : "bg-bear/5 border-bear/20"
-                  }`}
-                >
-                  <span className="text-lg">{thinkingAnalyst.avatarEmoji}</span>
-                  <div className="flex gap-1">
-                    <div
-                      className={`w-2 h-2 rounded-full animate-pulse ${
-                        isWaitingForBull ? "bg-bull" : "bg-bear"
-                      }`}
-                    />
-                    <div
-                      className={`w-2 h-2 rounded-full animate-pulse ${
-                        isWaitingForBull ? "bg-bull" : "bg-bear"
-                      }`}
-                      style={{ animationDelay: "0.2s" }}
-                    />
-                    <div
-                      className={`w-2 h-2 rounded-full animate-pulse ${
-                        isWaitingForBull ? "bg-bull" : "bg-bear"
-                      }`}
-                      style={{ animationDelay: "0.4s" }}
-                    />
-                  </div>
-                  <span
-                    className={`text-xs ${
-                      isWaitingForBull ? "text-bull-light" : "text-bear-light"
-                    }`}
-                  >
-                    {thinkingAnalyst.name} is thinking...
-                  </span>
-                </div>
-                <p className="text-[10px] text-slate-600">
-                  Turn {debate.dialogue.length + 1} of {totalTurns}
-                </p>
-              </div>
-            );
-          })()}
-      </div>
-
-      {/* Score Breakdown */}
-      <div className="p-4 border-t border-white/10 bg-white/[0.02]">
-        <div className="grid grid-cols-4 gap-3">
-          <ScoreMeter
-            label="Data"
-            bull={debate.scores.dataQuality.bull}
-            bear={debate.scores.dataQuality.bear}
-          />
-          <ScoreMeter
-            label="Logic"
-            bull={debate.scores.logicCoherence.bull}
-            bear={debate.scores.logicCoherence.bear}
-          />
-          <ScoreMeter
-            label="Risk"
-            bull={debate.scores.riskAcknowledgment.bull}
-            bear={debate.scores.riskAcknowledgment.bear}
-          />
-          <ScoreMeter
-            label="Catalysts"
-            bull={debate.scores.catalystIdentification.bull}
-            bear={debate.scores.catalystIdentification.bear}
-          />
-        </div>
-      </div>
-    </div>
-  );
-});
-
-LiveDebateCard.displayName = "LiveDebateCard";
-
-// Score Meter Component - CSS transitions only
-const ScoreMeter: React.FC<{
-  label: string;
-  bull: number;
-  bear: number;
-}> = memo(({ label, bull, bear }) => {
-  // Safe calculation with explicit zero handling
-  const total = bull + bear;
-  const bullPercent = total > 0 ? (bull / total) * 100 : 50; // Default to 50% when no scores
-  const winner = bull > bear ? "bull" : bear > bull ? "bear" : "tie";
-
-  return (
-    <div>
-      <div className="flex items-center justify-between mb-2">
-        <div className="text-[10px] text-slate-500 font-bold">{label}</div>
-        {winner !== "tie" && (
-          <span
-            className="text-[8px]"
-            role="img"
-            aria-label={`${winner} winning`}
-          >
-            {winner === "bull" ? "📈" : "📉"}
-          </span>
-        )}
-      </div>
-      <div className="h-2 bg-bear/30 rounded-full overflow-hidden relative">
-        <div
-          className="h-full bg-gradient-to-r from-bull to-bull-light rounded-full relative transition-all duration-500 ease-out"
-          style={{ width: `${bullPercent}%` }}
-        >
-          {/* Glow effect for winner */}
-          {winner === "bull" && (
-            <div className="absolute inset-0 bg-bull/30 blur-sm" />
-          )}
-        </div>
-        {/* Center line */}
-        <div className="absolute left-1/2 top-0 bottom-0 w-px bg-white/20" />
-      </div>
-      <div className="flex justify-between mt-1 text-[10px] font-bold">
-        <span
-          className={`${
-            bull > bear ? "text-bull-light" : "text-bull-light/50"
-          }`}
-        >
-          {bull}
-        </span>
-        <span
-          className={`${
-            bear > bull ? "text-bear-light" : "text-bear-light/50"
-          }`}
-        >
-          {bear}
-        </span>
-      </div>
-    </div>
-  );
-});
-
-ScoreMeter.displayName = "ScoreMeter";
-
-// Completed Debate Card - Minimized, no animations
-const CompletedDebateCard: React.FC<{ debate: StockDebate }> = memo(
-  ({ debate }) => {
-    const hasWinner = debate.winner !== null;
-    const bullWon = debate.winner === "bull";
-    const winnerAnalyst = hasWinner
-      ? bullWon
-        ? debate.bullAnalyst
-        : debate.bearAnalyst
-      : null;
-
-    return (
-      <div className="glass-card rounded-lg p-3 border border-white/5 opacity-60 hover:opacity-100 transition-opacity hover:border-white/10">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <span
-              className="text-lg opacity-50"
-              role="img"
-              aria-label={debate.bullAnalyst.name}
-            >
-              {debate.bullAnalyst.avatarEmoji}
-            </span>
-            <span className="text-xs text-slate-600">vs</span>
-            <span
-              className="text-lg opacity-50"
-              role="img"
-              aria-label={debate.bearAnalyst.name}
-            >
-              {debate.bearAnalyst.avatarEmoji}
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-500">
-              {debate.round === "quarterfinal"
-                ? "Quarter"
-                : debate.round === "semifinal"
-                ? "Semi"
-                : "Final"}
-            </span>
-            {winnerAnalyst && (
-              <div className="flex items-center gap-1">
-                <span className="text-sm">{winnerAnalyst.avatarEmoji}</span>
-                <span className="text-xs" role="img" aria-label="Winner">
-                  🏆
-                </span>
-              </div>
-            )}
-            <span className="text-[10px] text-slate-600 bg-white/[0.03] px-1.5 py-0.5 rounded">
-              {debate.scores.bullScore}-{debate.scores.bearScore}
-            </span>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  </div>
 );
 
-CompletedDebateCard.displayName = "CompletedDebateCard";
+const SymbolHeader: React.FC<{
+  ticker: WeexTicker;
+  symbol: string;
+  onToggleSidebar: () => void;
+  onRunAnalysis: () => void;
+  analysisLoading: boolean;
+  isAuthenticated: boolean;
+}> = ({
+  ticker,
+  symbol,
+  onToggleSidebar,
+  onRunAnalysis,
+  analysisLoading,
+  isAuthenticated,
+}) => {
+  const displaySymbol = symbol
+    .replace("cmt_", "")
+    .replace("usdt", "")
+    .toUpperCase();
+  const price = parseFloat(ticker.last) || 0;
+  const change = parseFloat(ticker.priceChangePercent || "0") * 100;
+  const isPositive = change >= 0;
+
+  const formatPrice = (p: number) =>
+    p >= 1000
+      ? p.toLocaleString(undefined, {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })
+      : p >= 1
+      ? p.toFixed(2)
+      : p.toFixed(4);
+  const formatVolume = (v: number) =>
+    v >= 1e9
+      ? `${(v / 1e9).toFixed(2)}B`
+      : v >= 1e6
+      ? `${(v / 1e6).toFixed(2)}M`
+      : v >= 1e3
+      ? `${(v / 1e3).toFixed(2)}K`
+      : v.toFixed(2);
+
+  return (
+    <div className="p-4 border-b border-white/10 glass-card rounded-none">
+      <div className="flex items-center justify-between flex-wrap gap-4">
+        <div className="flex items-center gap-4">
+          <button
+            onClick={onToggleSidebar}
+            className="p-2 rounded-lg hover:bg-white/10 transition-colors lg:hidden"
+          >
+            ☰
+          </button>
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-2xl font-bold">
+                {displaySymbol}
+                <span className="text-slate-500 text-lg ml-1">/USDT</span>
+              </h2>
+              <span
+                className={`badge ${isPositive ? "badge-bull" : "badge-bear"}`}
+              >
+                {isPositive ? "+" : ""}
+                {change.toFixed(2)}%
+              </span>
+            </div>
+            <p className="font-mono text-3xl font-bold mt-1">
+              ${formatPrice(price)}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-6 text-sm">
+          <div>
+            <p className="text-slate-500 text-xs">24h High</p>
+            <p className="font-mono text-green-400">
+              ${formatPrice(parseFloat(ticker.high_24h) || 0)}
+            </p>
+          </div>
+          <div>
+            <p className="text-slate-500 text-xs">24h Low</p>
+            <p className="font-mono text-rose-400">
+              ${formatPrice(parseFloat(ticker.low_24h) || 0)}
+            </p>
+          </div>
+          <div>
+            <p className="text-slate-500 text-xs">24h Volume</p>
+            <p className="font-mono">
+              {formatVolume(parseFloat(ticker.volume_24h) || 0)}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onRunAnalysis}
+            disabled={analysisLoading}
+            className="btn-primary btn-lift px-4 py-2 rounded-lg flex items-center gap-2 disabled:opacity-50"
+          >
+            {analysisLoading ? (
+              <>
+                <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                Analyzing...
+              </>
+            ) : (
+              <>🤖 AI Analysis</>
+            )}
+          </button>
+          {isAuthenticated && (
+            <button className="px-4 py-2 rounded-lg font-semibold bg-green-500 text-white hover:bg-green-600 transition-all">
+              Long
+            </button>
+          )}
+          {isAuthenticated && (
+            <button className="px-4 py-2 rounded-lg font-semibold bg-rose-500 text-white hover:bg-rose-600 transition-all">
+              Short
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
 
 export default LiveArena;

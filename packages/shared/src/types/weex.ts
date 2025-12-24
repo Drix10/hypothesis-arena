@@ -19,24 +19,30 @@ export interface WeexCredentials {
     passphrase: string;
 }
 
+/**
+ * WEEX Order Request
+ * Matches /capi/v2/order/placeOrder parameters exactly
+ */
 export interface WeexOrderRequest {
-    symbol: string;
-    side: 'buy' | 'sell';
-    type: '1' | '2'; // 1=limit, 2=market
-    orderType: '0' | '1'; // 0=normal, 1=post-only
-    size: string;
-    price?: string;
-    clientOrderId: string;
-    marginMode?: '1' | '3'; // 1=cross, 3=isolated
+    symbol: string;                    // Trading pair (e.g., "cmt_btcusdt")
+    client_oid: string;                // Custom order ID (max 40 chars)
+    size: string;                      // Order quantity
+    type: '1' | '2' | '3' | '4';       // 1=Open long, 2=Open short, 3=Close long, 4=Close short
+    order_type: '0' | '1' | '2' | '3'; // 0=Normal, 1=Post-Only, 2=FOK, 3=IOC
+    match_price: '0' | '1';            // 0=Limit price, 1=Market price
+    price: string;                     // Order price (required for limit orders)
+    presetTakeProfitPrice?: string;    // Optional TP price
+    presetStopLossPrice?: string;      // Optional SL price
+    marginMode?: 1 | 3;                // 1=Cross, 3=Isolated (default: 1)
 }
 
+/**
+ * WEEX Order Response
+ * Response from /capi/v2/order/placeOrder
+ */
 export interface WeexOrderResponse {
-    code: string;
-    msg: string;
-    data: {
-        orderId: string;
-        clientOrderId: string;
-    };
+    client_oid: string | null;         // Client-generated order identifier
+    order_id: string;                  // Order ID
 }
 
 export interface WeexPosition {
@@ -59,15 +65,23 @@ export interface WeexAccount {
     unrealizedPL: string;
 }
 
+/**
+ * WEEX Ticker Response
+ * Matches /capi/v2/market/ticker response exactly
+ */
 export interface WeexTicker {
     symbol: string;
     last: string;
-    bestAsk: string;
-    bestBid: string;
-    high24h: string;
-    low24h: string;
-    volume24h: string;
-    timestamp: string;
+    best_ask: string;      // Ask price
+    best_bid: string;      // Bid price
+    high_24h: string;      // Highest price in last 24h
+    low_24h: string;       // Lowest price in last 24h
+    volume_24h: string;    // Trading volume of quote currency
+    timestamp: string;     // Unix millisecond timestamp
+    priceChangePercent?: string;  // Price change percent (24h)
+    base_volume?: string;  // Trading volume of base currency
+    markPrice?: string;    // Mark price
+    indexPrice?: string;   // Index price
 }
 
 export interface WeexDepth {
@@ -82,10 +96,15 @@ export interface WeexServerTime {
     timestamp: number;
 }
 
+/**
+ * WEEX Funding Rate Response
+ * Matches /capi/v2/market/currentFundRate response
+ */
 export interface WeexFundingRate {
     symbol: string;
-    fundingRate: string;
-    nextFundingTime: number;
+    fundingRate: string;       // Current funding rate
+    collectCycle: number;      // Settlement cycle in minutes
+    timestamp: number;         // Settlement time (Unix ms)
 }
 
 export interface WeexTrade {
