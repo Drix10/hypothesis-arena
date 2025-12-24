@@ -198,10 +198,17 @@ export class WebSocketManager {
             this.heartbeatInterval = null;
         }
 
-        this.clients.forEach((client, clientId) => {
-            client.ws.close(1000, 'Server shutting down');
-            this.clients.delete(clientId);
-        });
+        // Collect client IDs first to avoid modifying Map during iteration
+        const clientIds = Array.from(this.clients.keys());
+
+        for (const clientId of clientIds) {
+            const client = this.clients.get(clientId);
+            if (client) {
+                client.subscriptions.clear(); // Clear subscriptions to free memory
+                client.ws.close(1000, 'Server shutting down');
+                this.clients.delete(clientId);
+            }
+        }
 
         logger.info('All WebSocket connections closed');
     }

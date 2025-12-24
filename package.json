@@ -28,11 +28,10 @@
     "test": "npm run test --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "tsc": "npm run typecheck --workspaces --if-present",
-    "clean": "rimraf node_modules packages/*/node_modules packages/*/dist"
+    "clean": "node -e \"const fs=require('fs');const rm=p=>{try{fs.rmSync(p,{recursive:true,force:true})}catch(e){console.error('Failed to remove '+p+':',e.message)}};['node_modules','packages/frontend/node_modules','packages/backend/node_modules','packages/shared/node_modules','packages/frontend/dist','packages/backend/dist','packages/shared/dist'].forEach(rm)\""
   },
   "devDependencies": {
     "concurrently": "^8.2.0",
-    "rimraf": "^5.0.0",
     "tsx": "^4.7.0",
     "typescript": "^5.8.0"
   },

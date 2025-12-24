@@ -78,9 +78,8 @@ export async function closeRedis(): Promise<void> {
     if (pendingConnection) {
         try {
             // Wait for pending connection to complete so we can close it
-            const pendingClient = await pendingConnection;
-            // If this created a new client, it will be in redisClient now
-            // Fall through to close it below
+            // The awaited client will be assigned to redisClient, so we close it below
+            await pendingConnection;
         } catch {
             // Connection failed, nothing to close from it
         }
@@ -88,22 +87,26 @@ export async function closeRedis(): Promise<void> {
 
     if (redisClient?.isOpen) {
         logger.info('Closing Redis connection...');
+        const clientToClose = redisClient;
+        redisClient = null; // Clear reference first to prevent reuse
+
         try {
             await Promise.race([
-                redisClient.quit(),
+                clientToClose.quit(),
                 new Promise((_, reject) => setTimeout(() => reject(new Error('Redis quit timeout')), 5000))
             ]);
+            logger.info('Redis connection closed');
         } catch (error) {
             logger.error('Error closing Redis:', error);
             // Force disconnect if quit fails or times out
             try {
-                redisClient.disconnect();
+                clientToClose.disconnect();
             } catch {
                 // Ignore disconnect errors
             }
         }
+    } else {
         redisClient = null;
-        logger.info('Redis connection closed');
     }
 }
 

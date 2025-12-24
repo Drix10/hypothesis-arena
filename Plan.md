@@ -2,9 +2,11 @@
 
 ## Overview
 
-Monorepo with backend + frontend for AI-powered investment analysis with real WEEX futures trading.
+Monorepo with backend + frontend for AI-powered crypto trading analysis with real WEEX futures trading.
+**8 AI analysts debate tournament-style, then execute trades on WEEX Exchange.**
 
-**Last Updated:** December 23, 2025
+**Last Updated:** December 24, 2025  
+**WEEX Hackathon Deadline:** January 5, 2025
 
 ---
 
@@ -12,33 +14,38 @@ Monorepo with backend + frontend for AI-powered investment analysis with real WE
 
 ### Completed Features
 
-| Component             | Status      | Notes                                 |
-| --------------------- | ----------- | ------------------------------------- |
-| Monorepo Structure    | ✅ Complete | npm workspaces configured             |
-| Shared Package        | ✅ Complete | Types, utils, constants               |
-| Backend Server        | ✅ Complete | Express with graceful shutdown        |
-| Frontend App          | ✅ Complete | Vite + React 19                       |
-| Database Config       | ✅ Complete | PostgreSQL with pool management       |
-| Redis Config          | ✅ Complete | Caching with reconnection             |
-| Auth System           | ✅ Complete | JWT with refresh tokens               |
-| WEEX Client           | ✅ Complete | Signature, rate limiting              |
-| Trading Service       | ✅ Complete | Order execution, portfolio management |
-| WebSocket Manager     | ✅ Complete | Heartbeat, client management          |
-| API Client (Frontend) | ✅ Complete | Timeout, retry, abort support         |
-| Trading API           | ✅ Complete | Backend-only (paper trading removed)  |
-| Database Migrations   | ✅ Complete | Initial schema                        |
+| Component              | Status      | Notes                                         |
+| ---------------------- | ----------- | --------------------------------------------- |
+| Monorepo Structure     | ✅ Complete | npm workspaces configured                     |
+| Shared Package         | ✅ Complete | Types, utils, constants                       |
+| Backend Server         | ✅ Complete | Express 5 with graceful shutdown              |
+| Frontend App           | ✅ Complete | Vite + React 19 + Cinematic UI                |
+| Database Config        | ✅ Complete | PostgreSQL (Neon) with pool management        |
+| Redis Config           | ✅ Complete | Caching with reconnection (Upstash)           |
+| Auth System            | ✅ Complete | JWT with refresh tokens                       |
+| WEEX Client            | ✅ Complete | Signature, rate limiting, all endpoints       |
+| WebSocket Manager      | ✅ Complete | Heartbeat, client management, security        |
+| API Client (Frontend)  | ✅ Complete | Timeout, retry, abort support                 |
+| Trading API            | ✅ Complete | Order execution, portfolio management         |
+| Analysis API           | ✅ Complete | 8 analysts, debates, tournaments, signals     |
+| AI Service (Gemini)    | ✅ Complete | Full tournament system with trading decisions |
+| Database Migrations    | ✅ Complete | Initial schema                                |
+| Frontend UI Components | ✅ Complete | Glass morphism, cinematic command center      |
 
-### Recent Changes (December 23, 2025)
+### Recent Changes (December 24, 2025)
 
-**Paper Trading Removal:**
+**Frontend Modularization:**
 
-- Removed all localStorage-based paper trading from frontend
-- Frontend now only communicates with backend for trading operations
-- Deleted: `packages/frontend/src/services/trading/` folder
-- Deleted: `packages/frontend/src/hooks/useTradingSystem.ts`
-- Deleted: `packages/frontend/src/types/trading.ts`
-- Deleted: `packages/frontend/src/components/trading/` folder
-- Simplified `tradingApi` to match actual backend endpoints
+- Reorganized into `arena/`, `trading/`, `layout/`, `ui/` component folders
+- Cinematic command center styling with glass morphism
+- Removed all stock-related files (now crypto-only)
+
+**Code Quality Fixes:**
+
+- Added NaN/null guards throughout frontend components
+- Fixed WebSocket security (UUID client IDs, input validation, max clients)
+- Fixed Redis race condition in shutdown
+- Improved logging (proper logger usage, dev/prod modes)
 
 ---
 
@@ -56,22 +63,19 @@ hypothesis-arena/
 │   ├── frontend/             # Vite React App
 │   │   ├── package.json
 │   │   ├── vite.config.ts
-│   │   ├── index.html
 │   │   └── src/
 │   │       ├── App.tsx
+│   │       ├── index.css         # Cinematic styles
 │   │       ├── components/
-│   │       │   ├── analysis/     # RecommendationCard, AnalystCard, DebateView
-│   │       │   ├── charts/       # PriceChart, TechnicalsCard, NewsCard
-│   │       │   ├── common/       # ErrorBoundary
-│   │       │   ├── layout/       # StockArena, TickerInput, StockHeader, etc.
-│   │       │   └── sidebar/      # Watchlist, SavedAnalyses, AccuracyTracker
+│   │       │   ├── arena/        # AnalystCard, ChampionCard, DebateCard, AnalysisSummary
+│   │       │   ├── trading/      # OrderBook, PositionsPanel, TradingPanel
+│   │       │   ├── layout/       # LiveArena, Header, MarketSidebar, AuthModal
+│   │       │   ├── ui/           # CircularMeter, PriceRangeBar, ScoreBar, GlassCard
+│   │       │   └── common/       # ErrorBoundary
 │   │       ├── services/
-│   │       │   ├── api/          # client.ts, trading.ts, websocket.ts
-│   │       │   ├── data/         # yahooFinance.ts
-│   │       │   ├── stock/        # Analysis services
-│   │       │   └── utils/
-│   │       ├── types/
-│   │       └── constants/
+│   │       │   ├── api/          # client, weex, trading, analysis, websocket
+│   │       │   └── utils/        # logger
+│   │       └── types/
 │   │
 │   ├── backend/              # Express Server
 │   │   ├── package.json
@@ -79,68 +83,130 @@ hypothesis-arena/
 │   │   ├── migrations/
 │   │   │   └── 001_initial.sql
 │   │   └── src/
-│   │       ├── server.ts         # Main entry with graceful shutdown
+│   │       ├── server.ts
 │   │       ├── api/
-│   │       │   ├── routes/       # auth, trading, portfolio
-│   │       │   ├── middleware/   # auth, errorHandler
-│   │       │   └── controllers/
+│   │       │   ├── routes/       # auth, trading, portfolio, weex, analysis
+│   │       │   └── middleware/   # auth, errorHandler
 │   │       ├── services/
+│   │       │   ├── ai/           # GeminiService (full tournament system)
 │   │       │   ├── auth/         # AuthService
 │   │       │   ├── trading/      # TradingService
 │   │       │   ├── weex/         # WeexClient, WebSocketManager
 │   │       │   ├── analysis/     # AnalysisService
 │   │       │   └── compliance/   # AILogService
 │   │       ├── config/           # database, redis, index
-│   │       ├── utils/            # errors, logger
-│   │       └── scripts/          # migrate.ts
+│   │       ├── constants/        # analystPrompts (8 analysts)
+│   │       └── utils/            # errors, logger
 │   │
 │   └── shared/               # Shared Types & Utils
 │       ├── package.json
 │       └── src/
-│           ├── index.ts
-│           ├── types/
-│           │   ├── trading.ts    # Trade, Portfolio, Position, etc.
-│           │   ├── analysis.ts
-│           │   ├── auth.ts
-│           │   └── weex.ts
-│           └── utils/
-│               ├── constants.ts  # APPROVED_SYMBOLS
-│               └── validation.ts # isApprovedSymbol
+│           ├── types/            # trading, analysis, auth, weex
+│           └── utils/            # constants, validation
 ```
 
 ---
 
-## API Routes (Implemented)
+## API Routes (All Implemented)
 
-| Method | Endpoint                          | Description                | Status |
-| ------ | --------------------------------- | -------------------------- | ------ |
-| POST   | /api/auth/register                | Register user              | ✅     |
-| POST   | /api/auth/login                   | Login                      | ✅     |
-| POST   | /api/auth/refresh                 | Refresh token              | ✅     |
-| GET    | /api/auth/me                      | Get current user           | ✅     |
-| POST   | /api/auth/logout                  | Logout                     | ✅     |
-| GET    | /api/portfolio/summary            | Get all portfolios summary | ✅     |
-| GET    | /api/portfolio/:agentId           | Get single portfolio       | ✅     |
-| GET    | /api/portfolio/:agentId/positions | Get positions (from WEEX)  | ✅     |
-| POST   | /api/portfolio/create             | Create portfolio           | ✅     |
-| POST   | /api/trading/execute              | Execute trade              | ✅     |
-| GET    | /api/trading/orders               | Get orders                 | ✅     |
-| GET    | /api/trading/order/:id            | Get single order           | ✅     |
-| POST   | /api/trading/cancel               | Cancel order               | ✅     |
+### Auth Routes
+
+| Method | Endpoint           | Auth | Description      |
+| ------ | ------------------ | ---- | ---------------- |
+| POST   | /api/auth/register | No   | Register user    |
+| POST   | /api/auth/login    | No   | Login            |
+| POST   | /api/auth/refresh  | No   | Refresh token    |
+| GET    | /api/auth/me       | Yes  | Get current user |
+| POST   | /api/auth/logout   | Yes  | Logout           |
+
+### Portfolio Routes
+
+| Method | Endpoint                          | Auth | Description             |
+| ------ | --------------------------------- | ---- | ----------------------- |
+| GET    | /api/portfolio/summary            | Yes  | Get all portfolios      |
+| GET    | /api/portfolio/:agentId           | Yes  | Get single portfolio    |
+| GET    | /api/portfolio/:agentId/positions | Yes  | Get positions from WEEX |
+| POST   | /api/portfolio/create             | Yes  | Create portfolio        |
+
+### Trading Routes
+
+| Method | Endpoint               | Auth | Description      |
+| ------ | ---------------------- | ---- | ---------------- |
+| POST   | /api/trading/execute   | Yes  | Execute trade    |
+| GET    | /api/trading/orders    | Yes  | Get orders       |
+| GET    | /api/trading/order/:id | Yes  | Get single order |
+| POST   | /api/trading/cancel    | Yes  | Cancel order     |
+
+### WEEX Routes (Public)
+
+| Method | Endpoint                  | Auth | Description          |
+| ------ | ------------------------- | ---- | -------------------- |
+| GET    | /api/weex/status          | No   | Test WEEX connection |
+| GET    | /api/weex/tickers         | No   | Get all tickers      |
+| GET    | /api/weex/ticker/:symbol  | No   | Get single ticker    |
+| GET    | /api/weex/depth/:symbol   | No   | Get orderbook        |
+| GET    | /api/weex/candles/:symbol | No   | Get candlesticks     |
+| GET    | /api/weex/contracts       | No   | Get contract info    |
+
+### WEEX Routes (Private)
+
+| Method | Endpoint                         | Auth | Description         |
+| ------ | -------------------------------- | ---- | ------------------- |
+| GET    | /api/weex/account                | Yes  | Get account info    |
+| GET    | /api/weex/assets                 | Yes  | Get account assets  |
+| GET    | /api/weex/positions              | Yes  | Get all positions   |
+| GET    | /api/weex/position/:symbol       | Yes  | Get single position |
+| GET    | /api/weex/orders                 | Yes  | Get current orders  |
+| GET    | /api/weex/orders/history/:symbol | Yes  | Get order history   |
+| GET    | /api/weex/fills/:symbol          | Yes  | Get trade fills     |
+| POST   | /api/weex/leverage               | Yes  | Change leverage     |
+| POST   | /api/weex/test-auth              | Yes  | Test full auth      |
+
+### Analysis Routes (AI-Powered)
+
+| Method | Endpoint                       | Auth     | Description                 |
+| ------ | ------------------------------ | -------- | --------------------------- |
+| GET    | /api/analysis/analysts         | No       | Get all 8 analyst personas  |
+| GET    | /api/analysis/status           | No       | Check AI service status     |
+| POST   | /api/analysis/generate         | Optional | Generate single analysis    |
+| POST   | /api/analysis/generate-all     | Optional | Generate all 8 analyses     |
+| POST   | /api/analysis/debate           | Optional | Generate debate between 2   |
+| POST   | /api/analysis/signal           | Yes      | Generate trading signal     |
+| POST   | /api/analysis/tournament       | Optional | Run full tournament         |
+| GET    | /api/analysis/history          | Yes      | Get analysis history        |
+| POST   | /api/analysis/trading-decision | Yes      | Generate executable order   |
+| POST   | /api/analysis/extended         | Optional | Analysis with extended data |
 
 ---
 
-## Frontend API Client
+## The 8 AI Analysts
+
+| Analyst   | ID     | Methodology        | Focus                          |
+| --------- | ------ | ------------------ | ------------------------------ |
+| 🎩 Warren | warren | Value Investing    | Fundamentals, margin of safety |
+| 🚀 Cathie | cathie | Growth Investing   | TAM expansion, disruption      |
+| 📊 Jim    | jim    | Technical Analysis | RSI, MACD, chart patterns      |
+| 🌍 Ray    | ray    | Macro Strategy     | Interest rates, correlations   |
+| 📱 Elon   | elon   | Sentiment Analysis | Social sentiment, hype         |
+| 🛡️ Karen  | karen  | Risk Management    | Volatility, drawdown           |
+| 🤖 Quant  | quant  | Quantitative       | Factor models, statistics      |
+| 😈 Devil  | devil  | Contrarian         | Consensus challenges           |
+
+---
+
+## Approved Trading Pairs (WEEX)
 
 ```typescript
-// packages/frontend/src/services/api/trading.ts
-export const tradingApi = {
-    executeTrade(decision: TradeDecision): Promise<Trade>
-    getPortfolio(agentId: string): Promise<Portfolio>
-    getPortfolioSummary(): Promise<PortfolioSummaryResponse>
-    getPositions(agentId: string): Promise<Position[]>
-    createPortfolio(agentName: string, initialBalance?: number): Promise<Portfolio>
-};
+export const APPROVED_SYMBOLS = [
+  "cmt_btcusdt", // Bitcoin
+  "cmt_ethusdt", // Ethereum
+  "cmt_solusdt", // Solana
+  "cmt_dogeusdt", // Dogecoin
+  "cmt_xrpusdt", // XRP
+  "cmt_adausdt", // Cardano
+  "cmt_bnbusdt", // BNB
+  "cmt_ltcusdt", // Litecoin
+] as const;
 ```
 
 ---
@@ -148,18 +214,24 @@ export const tradingApi = {
 ## Quick Start Commands
 
 ```bash
-# Development
+# Install dependencies
 npm install
+
+# Run database migrations
 npm run db:migrate
+
+# Development (frontend + backend)
 npm run dev
 
-# Production
+# Production build
 npm run build
 npm start
 
-# Docker
-docker build -t hypothesis-arena .
-docker run -p 3000:3000 --env-file .env hypothesis-arena
+# Type checking
+npm run typecheck
+
+# Clean all node_modules and dist
+npm run clean
 ```
 
 ---
@@ -172,15 +244,16 @@ NODE_ENV=development
 PORT=3000
 LOG_LEVEL=info
 
-# Database (Neon recommended)
+# Database (Neon PostgreSQL)
 DATABASE_URL=postgresql://user:pass@host/db?sslmode=require
 
-# Redis (Upstash recommended)
+# Redis (Upstash)
 REDIS_URL=rediss://default:xxx@xxx.upstash.io:6379
 
 # JWT
 JWT_SECRET=your-secret-key
 JWT_EXPIRY=7d
+JWT_REFRESH_EXPIRY=30d
 
 # WEEX API
 WEEX_API_KEY=
@@ -199,305 +272,48 @@ VITE_WS_URL=/ws
 
 ---
 
-## Database Schema (001_initial.sql)
+## Frontend Features
 
-```sql
--- Users
-CREATE TABLE users (
-    id UUID PRIMARY KEY,
-    email VARCHAR(255) UNIQUE NOT NULL,
-    username VARCHAR(100) UNIQUE NOT NULL,
-    password_hash VARCHAR(255) NOT NULL,
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
-);
+### UI Components
 
--- Portfolios
-CREATE TABLE portfolios (
-    id UUID PRIMARY KEY,
-    user_id UUID REFERENCES users(id),
-    agent_name VARCHAR(100) NOT NULL,
-    initial_balance DECIMAL(20,8) DEFAULT 100000,
-    current_balance DECIMAL(20,8) DEFAULT 100000,
-    total_return DECIMAL(10,4) DEFAULT 0,
-    win_rate DECIMAL(5,2) DEFAULT 0,
-    sharpe_ratio DECIMAL(10,4),
-    max_drawdown DECIMAL(10,4) DEFAULT 0,
-    total_trades INTEGER DEFAULT 0,
-    winning_trades INTEGER DEFAULT 0,
-    losing_trades INTEGER DEFAULT 0,
-    is_active BOOLEAN DEFAULT true,
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
-);
+- **Glass morphism** cards with backdrop blur
+- **Animated circular meters** for confidence/upside
+- **Price range bars** with bull/bear/current markers
+- **Score bars** for debate breakdowns
+- **Scanline textures** for command center aesthetic
+- **Golden accents** for champions
 
--- Positions
-CREATE TABLE positions (
-    id UUID PRIMARY KEY,
-    portfolio_id UUID REFERENCES portfolios(id),
-    symbol VARCHAR(50) NOT NULL,
-    side VARCHAR(10) NOT NULL,
-    size DECIMAL(20,8) NOT NULL,
-    entry_price DECIMAL(20,8) NOT NULL,
-    current_price DECIMAL(20,8),
-    margin_mode VARCHAR(20) DEFAULT 'CROSS',
-    leverage INTEGER DEFAULT 1,
-    unrealized_pnl DECIMAL(20,8) DEFAULT 0,
-    realized_pnl DECIMAL(20,8) DEFAULT 0,
-    is_open BOOLEAN DEFAULT true,
-    weex_position_id VARCHAR(100),
-    opened_at TIMESTAMP DEFAULT NOW(),
-    closed_at TIMESTAMP
-);
+### Main Views
 
--- Trades
-CREATE TABLE trades (
-    id UUID PRIMARY KEY,
-    portfolio_id UUID REFERENCES portfolios(id),
-    position_id UUID REFERENCES positions(id),
-    symbol VARCHAR(50) NOT NULL,
-    side VARCHAR(10) NOT NULL,
-    type VARCHAR(20) NOT NULL,
-    size DECIMAL(20,8) NOT NULL,
-    price DECIMAL(20,8) NOT NULL,
-    fee DECIMAL(20,8) DEFAULT 0,
-    status VARCHAR(20) NOT NULL,
-    reason TEXT,
-    confidence DECIMAL(5,2),
-    client_order_id VARCHAR(100),
-    weex_order_id VARCHAR(100),
-    executed_at TIMESTAMP,
-    created_at TIMESTAMP DEFAULT NOW()
-);
-```
-
----
-
-## Shared Types (Key Interfaces)
-
-```typescript
-// packages/shared/src/types/trading.ts
-export interface Portfolio {
-  id: string;
-  agentId: string;
-  agentName: string;
-  userId?: string;
-  initialBalance: number;
-  currentBalance: number;
-  totalValue: number;
-  totalReturn: number;
-  totalReturnDollar: number;
-  winRate: number;
-  sharpeRatio: number | null;
-  maxDrawdown: number;
-  currentDrawdown: number;
-  totalTrades: number;
-  winningTrades: number;
-  losingTrades: number;
-  positions: Position[];
-  trades: Trade[];
-  createdAt: number;
-  updatedAt: number;
-  status: "active" | "paused" | "liquidated";
-}
-
-export interface Trade {
-  id: string;
-  portfolioId: string;
-  symbol: string;
-  side: OrderSide;
-  type: OrderType;
-  size: number;
-  price: number;
-  status: OrderStatus;
-  // ... more fields
-}
-
-export interface Position {
-  id: string;
-  portfolioId: string;
-  symbol: string;
-  side: PositionSide;
-  size: number;
-  entryPrice: number;
-  currentPrice: number;
-  unrealizedPnL: number;
-  leverage: number;
-  // ... more fields
-}
-```
-
----
-
-## Approved Trading Symbols
-
-```typescript
-// packages/shared/src/utils/constants.ts
-export const APPROVED_SYMBOLS = [
-  "btcusdt",
-  "ethusdt",
-  "solusdt",
-  "bnbusdt",
-  "xrpusdt",
-  "dogeusdt",
-  "adausdt",
-  "avaxusdt",
-  "dotusdt",
-  "linkusdt",
-  "maticusdt",
-  "ltcusdt",
-];
-```
-
----
-
-## Key Implementation Details
-
-### Backend Server (server.ts)
-
-- Express with helmet, compression, CORS
-- Rate limiting (100 req/15min)
-- WebSocket on `/ws` path
-- Graceful shutdown with 30s timeout
-- Health check endpoint with DB/Redis status
-
-### API Client (client.ts)
-
-- 30s default timeout
-- Retry with exponential backoff (GET only)
-- AbortController support
-- Token refresh on 401
-- Proper error handling with ApiError class
-
-### WebSocket Manager
-
-- Heartbeat every 30s
-- Client timeout after 60s
-- Subscription-based channels
-- Proper cleanup on shutdown
-
-### Database
-
-- Connection pool (max 20, min 2)
-- Idle timeout 30s
-- Query logging for slow queries (>1s)
-- Transaction helper with automatic rollback
-
-### Redis
-
-- Reconnection strategy (max 10 retries)
-- Cache helpers (get, set, delete)
-- Default TTL 300s
-
----
-
-## WEEX API Implementation Status
-
-### ✅ Implemented Endpoints
-
-| Category              | Endpoint                                   | Method | Description |
-| --------------------- | ------------------------------------------ | ------ | ----------- |
-| **Market (Public)**   |                                            |        |             |
-| Server Time           | `/capi/v2/market/time`                     | GET    | ✅          |
-| Single Ticker         | `/capi/v2/market/ticker`                   | GET    | ✅          |
-| All Tickers           | `/capi/v2/market/tickers`                  | GET    | ✅          |
-| Orderbook Depth       | `/capi/v2/market/depth`                    | GET    | ✅          |
-| Funding Rate          | `/capi/v2/market/fundingRate`              | GET    | ✅          |
-| Trades                | `/capi/v2/market/trades`                   | GET    | ✅ NEW      |
-| Candlesticks          | `/capi/v2/market/candles`                  | GET    | ✅ NEW      |
-| Contracts Info        | `/capi/v2/market/contracts`                | GET    | ✅ NEW      |
-| **Account (Private)** |                                            |        |             |
-| Account List          | `/capi/v2/account/accounts`                | GET    | ✅          |
-| Account Assets        | `/capi/v2/account/assets`                  | GET    | ✅ NEW      |
-| All Positions         | `/capi/v2/account/position/allPosition`    | GET    | ✅          |
-| Single Position       | `/capi/v2/account/position/singlePosition` | GET    | ✅          |
-| Change Leverage       | `/capi/v2/account/leverage`                | POST   | ✅ NEW      |
-| **Trading (Private)** |                                            |        |             |
-| Place Order           | `/capi/v2/order/placeOrder`                | POST   | ✅          |
-| Cancel Order          | `/capi/v2/order/cancel_order`              | POST   | ✅          |
-| Get Order             | `/capi/v2/order/detail`                    | GET    | ✅          |
-| Current Orders        | `/capi/v2/order/current`                   | GET    | ✅ NEW      |
-| Order History         | `/capi/v2/order/history`                   | GET    | ✅ NEW      |
-| Get Fills             | `/capi/v2/order/fills`                     | GET    | ✅ NEW      |
-| Batch Orders          | `/capi/v2/order/batchOrders`               | POST   | ✅ NEW      |
-| Batch Cancel          | `/capi/v2/order/batchCancelOrders`         | POST   | ✅ NEW      |
-| Close All Positions   | `/capi/v2/order/closeAllPositions`         | POST   | ✅ NEW      |
-| Upload AI Log         | `/capi/v2/order/uploadAiLog`               | POST   | ✅          |
-
-### Backend Routes (NEW)
-
-| Route                              | Method | Auth | Description              |
-| ---------------------------------- | ------ | ---- | ------------------------ |
-| `/api/weex/status`                 | GET    | No   | Test WEEX connection     |
-| `/api/weex/tickers`                | GET    | No   | Get all approved tickers |
-| `/api/weex/ticker/:symbol`         | GET    | No   | Get single ticker        |
-| `/api/weex/depth/:symbol`          | GET    | No   | Get orderbook            |
-| `/api/weex/candles/:symbol`        | GET    | No   | Get candlestick data     |
-| `/api/weex/contracts`              | GET    | No   | Get contract info        |
-| `/api/weex/account`                | GET    | Yes  | Get account info         |
-| `/api/weex/assets`                 | GET    | Yes  | Get account assets       |
-| `/api/weex/positions`              | GET    | Yes  | Get all positions        |
-| `/api/weex/position/:symbol`       | GET    | Yes  | Get single position      |
-| `/api/weex/orders`                 | GET    | Yes  | Get current orders       |
-| `/api/weex/orders/history/:symbol` | GET    | Yes  | Get order history        |
-| `/api/weex/fills/:symbol`          | GET    | Yes  | Get trade fills          |
-| `/api/weex/leverage`               | POST   | Yes  | Change leverage          |
-| `/api/weex/test-auth`              | POST   | Yes  | Test full auth flow      |
-
-### Frontend Services (NEW)
-
-```typescript
-// packages/frontend/src/services/api/weex.ts
-export const weexApi = {
-    // Public
-    getStatus(): Promise<WeexStatus>
-    getTickers(): Promise<WeexTicker[]>
-    getTicker(symbol): Promise<WeexTicker>
-    getDepth(symbol, limit): Promise<WeexDepth>
-    getCandles(symbol, interval, limit): Promise<WeexCandle[]>
-    getContracts(): Promise<WeexContract[]>
-
-    // Private (auth required)
-    getAccount(): Promise<any[]>
-    getAssets(): Promise<WeexAssets>
-    getPositions(): Promise<WeexPosition[]>
-    getPosition(symbol): Promise<WeexPosition>
-    getCurrentOrders(symbol?): Promise<any[]>
-    getOrderHistory(symbol, limit): Promise<any[]>
-    getFills(symbol, limit): Promise<any[]>
-    changeLeverage(symbol, leverage, marginMode?): Promise<any>
-    testAuth(): Promise<WeexAuthTestResult>
-};
-```
+- **LiveArena** - Main dashboard with tabs
+- **Market tab** - Order book visualization
+- **Positions tab** - Open positions from WEEX
+- **Analysis tab** - 8 AI analyst cards + champion
+- **Debate tab** - Tournament bracket visualization
+- **Trade tab** - Order entry form
 
 ---
 
 ## Architecture Notes
 
-1. **Live Trading Only**: Paper trading has been removed. All trading goes through backend → WEEX.
-
-2. **Authentication**: JWT-based with refresh tokens. Frontend stores tokens in localStorage.
-
-3. **Database**: PostgreSQL for persistence, Redis for caching and rate limiting.
-
-4. **WebSocket**: Used for real-time updates from WEEX and broadcasting to clients.
-
-5. **Error Handling**: Centralized error handler with proper HTTP status codes.
+1. **Live Trading Only**: All trading goes through backend → WEEX API
+2. **Tournament System**: 8 analysts → quarterfinals → semifinals → final → champion
+3. **AI Compliance**: All AI decisions logged for WEEX compliance
+4. **Real-time Data**: WebSocket + polling fallback for market data
+5. **Security**: JWT auth, rate limiting, input validation, HMAC signatures
 
 ---
-
-**Status:** Production Ready (Core Features)  
-**Version:** 2.0.0
 
 ## TODO / Future Work
 
-- [ ] Analysis service routes (POST /api/analysis/create, GET /api/analysis/:id)
+- [ ] WEEX WebSocket integration (real-time price streaming from exchange)
 - [ ] Leaderboard endpoint (GET /api/leaderboard)
-- [ ] WEEX WebSocket integration (real-time price streaming)
-- [ ] Job scheduling (BullMQ)
-- [ ] Frontend auth UI (login/register forms)
-- [ ] Trading UI components
-- [ ] Performance monitoring
+- [ ] Job scheduling (BullMQ for scheduled analysis)
+- [ ] Performance monitoring (metrics endpoint)
 - [ ] E2E tests
+- [ ] Mobile responsive improvements
 
 ---
+
+**Status:** Production Ready  
+**Version:** 2.0.0

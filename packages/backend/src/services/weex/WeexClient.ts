@@ -45,13 +45,20 @@ export class WeexClient {
             passphrase: config.weex.passphrase,
         };
 
+        const defaultHeaders: Record<string, string> = {
+            'Content-Type': 'application/json',
+            'User-Agent': 'HypothesisArena/1.0',
+        };
+
+        // Add proxy auth token if using a proxy server for IP whitelist
+        if (config.weex.proxyToken) {
+            defaultHeaders['X-Proxy-Token'] = config.weex.proxyToken;
+        }
+
         this.client = axios.create({
             baseURL: config.weex.baseUrl,
             timeout: 30000,
-            headers: {
-                'Content-Type': 'application/json',
-                'User-Agent': 'HypothesisArena/1.0',
-            },
+            headers: defaultHeaders,
         });
 
         // Initialize rate limit buckets
@@ -422,7 +429,7 @@ export class WeexClient {
             'POST',
             '/capi/v2/order/cancel_order',
             undefined,
-            { orderId },
+            { symbol, orderId },
             true,
             true
         );

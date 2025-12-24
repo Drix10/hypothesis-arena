@@ -63,6 +63,7 @@ export const config = {
         passphrase: process.env.WEEX_PASSPHRASE || '',
         baseUrl: process.env.WEEX_BASE_URL || 'https://api-contract.weex.com',
         wsUrl: process.env.WEEX_WS_URL || 'wss://ws-contract.weex.com/v2/ws',
+        proxyToken: process.env.WEEX_PROXY_TOKEN || '', // Token for proxy auth if using IP whitelist proxy
     },
 
     // Gemini
