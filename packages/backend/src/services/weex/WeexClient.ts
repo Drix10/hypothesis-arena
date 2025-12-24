@@ -47,7 +47,8 @@ export class WeexClient {
 
         const defaultHeaders: Record<string, string> = {
             'Content-Type': 'application/json',
-            'User-Agent': 'HypothesisArena/1.0',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json',
         };
 
         // Add proxy auth token if using a proxy server for IP whitelist
@@ -57,7 +58,7 @@ export class WeexClient {
 
         this.client = axios.create({
             baseURL: config.weex.baseUrl,
-            timeout: 30000,
+            timeout: 120000, // Increased to 120 seconds for slow proxy/WEEX responses
             headers: defaultHeaders,
         });
 
@@ -99,9 +100,9 @@ export class WeexClient {
         queryString: string = '',
         body: string = ''
     ): string {
-        const message = queryString
-            ? `${timestamp}${method.toUpperCase()}${requestPath}?${queryString}${body}`
-            : `${timestamp}${method.toUpperCase()}${requestPath}${body}`;
+        // queryString should already include "?" if present (e.g., "?symbol=cmt_btcusdt")
+        // For POST with no query params, queryString is empty ""
+        const message = `${timestamp}${method.toUpperCase()}${requestPath}${queryString}${body}`;
 
         const signature = crypto
             .createHmac('sha256', this.credentials.secretKey)
@@ -220,7 +221,8 @@ export class WeexClient {
         await this.consumeTokens(endpoint, isOrderRequest);
 
         const timestamp = await this.getTimestamp();
-        const queryString = params ? new URLSearchParams(params).toString() : '';
+        // For signature: include "?" in queryString if params exist
+        const queryString = params ? `?${new URLSearchParams(params).toString()}` : '';
         const bodyString = body ? JSON.stringify(body) : '';
 
         const headers: Record<string, string> = {
@@ -239,14 +241,27 @@ export class WeexClient {
                 queryString,
                 bodyString
             );
+
+            // Log authentication details for debugging
+            console.log(`[WEEX] ${method} ${endpoint}${queryString}`);
+            console.log(`[WEEX] Timestamp: ${timestamp}`);
+            console.log(`[WEEX] Body: ${bodyString.substring(0, 200)}`);
+            console.log(`[WEEX] Signature message: ${timestamp}${method.toUpperCase()}${endpoint}${queryString}${bodyString}`);
         }
 
-        const url = queryString ? `${endpoint}?${queryString}` : endpoint;
+        // For URL: queryString already has "?" if present
+        const url = queryString ? `${endpoint}${queryString}` : endpoint;
 
         try {
             const response = method === 'GET'
-                ? await this.client.get<T>(url, { headers })
-                : await this.client.post<T>(endpoint, body, { headers });
+                ? await this.client.get<T>(url, {
+                    headers,
+                    timeout: 120000, // Explicit 120s timeout per request (matches client default)
+                })
+                : await this.client.post<T>(endpoint, body, {
+                    headers,
+                    timeout: 120000, // Explicit 120s timeout per request (matches client default)
+                });
 
             return response.data;
         } catch (error: any) {
@@ -257,6 +272,7 @@ export class WeexClient {
                 status: error.response?.status,
                 code: error.response?.data?.code,
                 message: error.response?.data?.msg || error.message,
+                isPrivate,
             };
             logger.error(`WEEX API error:`, errorInfo);
 

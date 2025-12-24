@@ -336,7 +336,7 @@ const server = http.createServer((req, res) => {
         path: req.url,
         method: req.method,
         headers: forwardHeaders,
-        timeout: 30000,
+        timeout: 90000, // Increased to 90 seconds for slow WEEX responses
       };
 
       const proxyReq = https.request(options, (proxyRes) => {
@@ -392,7 +392,7 @@ const server = http.createServer((req, res) => {
       path: req.url,
       method: req.method,
       headers: forwardHeaders,
-      timeout: 30000,
+      timeout: 90000, // Increased to 90 seconds for slow WEEX responses
     };
 
     const proxyReq = https.request(options, (proxyRes) => {

@@ -25,6 +25,7 @@
     "start:frontend": "npm run preview -w @hypothesis-arena/frontend",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "db:migrate": "tsx packages/backend/src/scripts/migrate.ts",
+    "weex-test": "tsx weex-api-test.ts",
     "test": "npm run test --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "tsc": "npm run typecheck --workspaces --if-present",
