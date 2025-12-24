@@ -10,7 +10,7 @@
  * - Price targets: bull/base/bear structure
  */
 
-import { GoogleGenerativeAI, GenerativeModel } from '@google/generative-ai';
+import { GoogleGenerativeAI, GenerativeModel, SchemaType } from '@google/generative-ai';
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
 import { aiLogService } from '../compliance/AILogService';
@@ -26,6 +26,186 @@ const AI_REQUEST_TIMEOUT = 90000; // 90 seconds for detailed analysis
 const VALID_RECOMMENDATIONS = ['strong_buy', 'buy', 'hold', 'sell', 'strong_sell'] as const;
 const VALID_RISK_LEVELS = ['low', 'medium', 'high', 'very_high'] as const;
 const VALID_WINNERS = ['bull', 'bear', 'draw'] as const;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STRUCTURED OUTPUT SCHEMAS - Gemini 2.0 JSON Schema Support
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Schema for analysis response - ensures structured, validated output from Gemini
+ */
+const ANALYSIS_RESPONSE_SCHEMA = {
+    type: SchemaType.OBJECT,
+    properties: {
+        recommendation: {
+            type: SchemaType.STRING,
+            description: "Trading recommendation",
+            enum: ["STRONG_BUY", "BUY", "HOLD", "SELL", "STRONG_SELL"]
+        },
+        confidence: {
+            type: SchemaType.NUMBER,
+            description: "Confidence level 0-100",
+        },
+        priceTarget: {
+            type: SchemaType.OBJECT,
+            properties: {
+                bull: { type: SchemaType.NUMBER, description: "Bull case price target" },
+                base: { type: SchemaType.NUMBER, description: "Base case price target" },
+                bear: { type: SchemaType.NUMBER, description: "Bear case price target" }
+            },
+            required: ["bull", "base", "bear"]
+        },
+        timeHorizon: {
+            type: SchemaType.STRING,
+            description: "Time horizon for analysis (e.g., '6 months', '12 months')"
+        },
+        positionSize: {
+            type: SchemaType.NUMBER,
+            description: "Position size recommendation 1-10 scale"
+        },
+        bullCase: {
+            type: SchemaType.ARRAY,
+            items: { type: SchemaType.STRING },
+            description: "Bull case arguments with data"
+        },
+        bearCase: {
+            type: SchemaType.ARRAY,
+            items: { type: SchemaType.STRING },
+            description: "Bear case arguments and risks"
+        },
+        keyMetrics: {
+            type: SchemaType.OBJECT,
+            description: "Key metrics with values and context"
+        },
+        catalysts: {
+            type: SchemaType.ARRAY,
+            items: { type: SchemaType.STRING },
+            description: "Catalysts with dates and expected impact"
+        },
+        summary: {
+            type: SchemaType.STRING,
+            description: "One sentence thesis summary"
+        }
+    },
+    required: ["recommendation", "confidence", "priceTarget", "timeHorizon", "positionSize", "bullCase", "bearCase", "keyMetrics", "catalysts", "summary"]
+};
+
+/**
+ * Schema for debate response
+ */
+const DEBATE_RESPONSE_SCHEMA = {
+    type: SchemaType.OBJECT,
+    properties: {
+        turns: {
+            type: SchemaType.ARRAY,
+            items: {
+                type: SchemaType.OBJECT,
+                properties: {
+                    speaker: {
+                        type: SchemaType.STRING,
+                        enum: ["bull", "bear"]
+                    },
+                    analystName: {
+                        type: SchemaType.STRING,
+                        description: "Name of the analyst speaking"
+                    },
+                    argument: { type: SchemaType.STRING },
+                    strength: { type: SchemaType.NUMBER },
+                    dataPointsReferenced: {
+                        type: SchemaType.ARRAY,
+                        items: { type: SchemaType.STRING }
+                    }
+                },
+                required: ["speaker", "analystName", "argument", "strength", "dataPointsReferenced"]
+            }
+        },
+        winner: {
+            type: SchemaType.STRING,
+            enum: ["bull", "bear", "draw"]
+        },
+        scores: {
+            type: SchemaType.OBJECT,
+            properties: {
+                bullScore: { type: SchemaType.NUMBER },
+                bearScore: { type: SchemaType.NUMBER },
+                dataQuality: {
+                    type: SchemaType.OBJECT,
+                    properties: {
+                        bull: { type: SchemaType.NUMBER },
+                        bear: { type: SchemaType.NUMBER }
+                    },
+                    required: ["bull", "bear"]
+                },
+                logicCoherence: {
+                    type: SchemaType.OBJECT,
+                    properties: {
+                        bull: { type: SchemaType.NUMBER },
+                        bear: { type: SchemaType.NUMBER }
+                    },
+                    required: ["bull", "bear"]
+                },
+                riskAcknowledgment: {
+                    type: SchemaType.OBJECT,
+                    properties: {
+                        bull: { type: SchemaType.NUMBER },
+                        bear: { type: SchemaType.NUMBER }
+                    },
+                    required: ["bull", "bear"]
+                },
+                catalystIdentification: {
+                    type: SchemaType.OBJECT,
+                    properties: {
+                        bull: { type: SchemaType.NUMBER },
+                        bear: { type: SchemaType.NUMBER }
+                    },
+                    required: ["bull", "bear"]
+                }
+            },
+            required: ["bullScore", "bearScore", "dataQuality", "logicCoherence", "riskAcknowledgment", "catalystIdentification"]
+        },
+        winningArguments: {
+            type: SchemaType.ARRAY,
+            items: { type: SchemaType.STRING }
+        },
+        summary: { type: SchemaType.STRING }
+    },
+    required: ["turns", "winner", "scores", "winningArguments", "summary"]
+};
+
+/**
+ * Schema for trading decision response
+ */
+const TRADING_DECISION_SCHEMA = {
+    type: SchemaType.OBJECT,
+    properties: {
+        shouldTrade: { type: SchemaType.BOOLEAN },
+        action: {
+            type: SchemaType.STRING,
+            enum: ["LONG", "SHORT", "HOLD", "CLOSE"]
+        },
+        confidence: { type: SchemaType.NUMBER },
+        reasoning: { type: SchemaType.STRING },
+        riskAssessment: {
+            type: SchemaType.OBJECT,
+            properties: {
+                level: {
+                    type: SchemaType.STRING,
+                    enum: ["LOW", "MEDIUM", "HIGH", "VERY_HIGH"]
+                },
+                factors: {
+                    type: SchemaType.ARRAY,
+                    items: { type: SchemaType.STRING }
+                }
+            },
+            required: ["level", "factors"]
+        },
+        positionSizePercent: { type: SchemaType.NUMBER },
+        leverage: { type: SchemaType.NUMBER },
+        stopLossPrice: { type: SchemaType.NUMBER },
+        takeProfitPrice: { type: SchemaType.NUMBER }
+    },
+    required: ["shouldTrade", "action", "confidence", "reasoning", "riskAssessment", "positionSizePercent", "leverage", "stopLossPrice", "takeProfitPrice"]
+};
 
 // WEEX Approved Trading Pairs (from TRADING_RULES.md)
 const WEEX_APPROVED_PAIRS = [
@@ -146,7 +326,7 @@ export interface ExtendedMarketData {
     indexPrice?: number;
     bestBid?: number;
     bestAsk?: number;
-    fundingRate?: number;
+    fundingRate?: number; // Optional: undefined means unavailable, 0 means zero funding
     openInterest?: number;
     // Candlestick data (optional)
     candles?: {
@@ -240,7 +420,13 @@ class GeminiService {
                 throw new Error('GEMINI_API_KEY not configured');
             }
             const genAI = new GoogleGenerativeAI(config.geminiApiKey);
-            this.model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
+            // Use Gemini 2.0 Flash with JSON mode for structured outputs
+            this.model = genAI.getGenerativeModel({
+                model: 'gemini-2.0-flash-exp',
+                generationConfig: {
+                    responseMimeType: "application/json",
+                }
+            });
         }
         return this.model;
     }
@@ -333,27 +519,36 @@ Respond with valid JSON in this EXACT structure:
     "summary": "One sentence thesis that could stand alone"
 }
 
-Respond ONLY with valid JSON.`;
+Respond ONLY with valid JSON matching this exact structure.`;
 
+        let timeoutId: NodeJS.Timeout | null = null;
         try {
             const timeoutPromise = new Promise<never>((_, reject) => {
-                setTimeout(() => reject(new Error('AI request timeout')), AI_REQUEST_TIMEOUT);
+                timeoutId = setTimeout(() => reject(new Error('AI request timeout')), AI_REQUEST_TIMEOUT);
             });
 
+            // Use structured output with schema
             const result = await Promise.race([
-                model.generateContent(prompt),
+                model.generateContent({
+                    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                    generationConfig: {
+                        responseMimeType: "application/json",
+                        responseSchema: ANALYSIS_RESPONSE_SCHEMA
+                    }
+                }),
                 timeoutPromise
             ]);
 
             const text = result.response.text();
-            const jsonMatch = text.match(/\{[\s\S]*\}/);
-            if (!jsonMatch) throw new Error('No JSON found in response');
+            const parsed = JSON.parse(text); // Gemini guarantees valid JSON with schema
 
-            const parsed = JSON.parse(jsonMatch[0]);
             return this.parseAnalysisResponse(parsed, profile, methodology, request.currentPrice);
         } catch (error: any) {
             logger.error('Gemini analysis failed:', { error: error.message, analyst: profile.id });
             throw new Error(`AI analysis failed: ${error.message}`);
+        } finally {
+            // Clear timeout to prevent memory leak
+            if (timeoutId) clearTimeout(timeoutId);
         }
     }
 
@@ -549,27 +744,36 @@ Respond in JSON format:
     "summary": "One paragraph summary of the debate outcome and why the winner prevailed"
 }
 
-Respond ONLY with valid JSON.`;
+Respond ONLY with valid JSON matching this exact structure.`;
 
+        let timeoutId: NodeJS.Timeout | null = null;
         try {
             const timeoutPromise = new Promise<never>((_, reject) => {
-                setTimeout(() => reject(new Error('AI request timeout')), AI_REQUEST_TIMEOUT);
+                timeoutId = setTimeout(() => reject(new Error('AI request timeout')), AI_REQUEST_TIMEOUT);
             });
 
+            // Use structured output with schema
             const result = await Promise.race([
-                model.generateContent(prompt),
+                model.generateContent({
+                    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                    generationConfig: {
+                        responseMimeType: "application/json",
+                        responseSchema: DEBATE_RESPONSE_SCHEMA
+                    }
+                }),
                 timeoutPromise
             ]);
 
             const text = result.response.text();
-            const jsonMatch = text.match(/\{[\s\S]*\}/);
-            if (!jsonMatch) throw new Error('No JSON found in response');
+            const parsed = JSON.parse(text); // Gemini guarantees valid JSON with schema
 
-            const parsed = JSON.parse(jsonMatch[0]);
             return this.parseDebateResponse(parsed, request);
         } catch (error: any) {
             logger.error('Gemini debate failed:', { error: error.message });
             throw new Error(`AI debate failed: ${error.message}`);
+        } finally {
+            // Clear timeout to prevent memory leak
+            if (timeoutId) clearTimeout(timeoutId);
         }
     }
 
@@ -751,11 +955,13 @@ Respond ONLY with valid JSON.`;
 
         // Log tournament result
         if (userId && bracket.champion) {
+            // Destructure to avoid null access issues
+            const { analystId, analystName, recommendation } = bracket.champion;
             await aiLogService.createLog(
                 userId, 'decision', 'tournament',
                 { symbol, debates: bracket.quarterfinals.length + bracket.semifinals.length + (bracket.final ? 1 : 0) },
-                { champion: bracket.champion.analystId, recommendation: bracket.champion.recommendation },
-                `Tournament champion: ${bracket.champion.analystName} (${bracket.champion.recommendation})`
+                { champion: analystId, recommendation },
+                `Tournament champion: ${analystName} (${recommendation})`
             );
         }
 
@@ -957,7 +1163,7 @@ Respond ONLY with valid JSON.`;
                     volume24h: marketData.volume24h,
                     high24h: marketData.high24h,
                     low24h: marketData.low24h,
-                    fundingRate: marketData.fundingRate,
+                    fundingRate: marketData.fundingRate ?? 0, // Default to 0 if unavailable for context building
                 });
                 return { id, context };
             } catch (err: any) {
@@ -982,6 +1188,33 @@ Respond ONLY with valid JSON.`;
             volume24h: marketData.volume24h,
             change24h: marketData.change24h,
         }, userId, arenaContexts);
+
+        // GUARD: If no analyses generated, fail fast
+        if (analyses.length === 0) {
+            logger.error('No analyses generated - all analysts failed');
+            return {
+                shouldTrade: false,
+                aiLog: {
+                    stage: 'Decision Making',
+                    model: 'Gemini-2.0-Flash + Hypothesis Arena Multi-Agent System',
+                    input: { symbol: marketData.symbol, error: 'No analyses generated' },
+                    output: { decision: 'NO_TRADE', reason: 'All analysts failed to generate analysis' },
+                    explanation: 'Unable to generate trading decision: all analyst analyses failed. This could indicate API issues or invalid market data.',
+                },
+                analysis: {
+                    champion: null,
+                    consensus: { bulls: 0, bears: 0, neutral: 0 },
+                    confidence: 0,
+                },
+                riskManagement: {
+                    positionSizePercent: 0,
+                    leverage: 1,
+                    takeProfitPrice: marketData.currentPrice,
+                    stopLossPrice: marketData.currentPrice,
+                    riskRewardRatio: 0,
+                },
+            };
+        }
 
         // Run tournament to determine champion
         const tournament = await this.runTournament(
@@ -1020,7 +1253,8 @@ Respond ONLY with valid JSON.`;
                 marketData,
                 champion,
                 riskManagement,
-                existingPosition
+                existingPosition,
+                accountBalance // Pass account balance for size calculation
             );
         }
 
@@ -1246,12 +1480,19 @@ Respond ONLY with valid JSON.`;
 
     /**
      * Generate WEEX-compatible order
+     * 
+     * @param marketData - Market data including current price
+     * @param champion - Winning analyst's analysis
+     * @param riskManagement - Risk management parameters including position size
+     * @param existingPosition - Optional existing position to close
+     * @param accountBalance - Account balance for size calculation (REQUIRED for new positions)
      */
     private generateOrder(
         marketData: ExtendedMarketData,
         champion: AnalysisResult,
         riskManagement: TradingDecision['riskManagement'],
-        existingPosition?: { side: 'LONG' | 'SHORT'; size: number }
+        existingPosition?: { side: 'LONG' | 'SHORT'; size: number },
+        accountBalance?: number
     ): TradeOrder {
         const isBullish = ['strong_buy', 'buy'].includes(champion.recommendation);
 
@@ -1273,14 +1514,78 @@ Respond ONLY with valid JSON.`;
                 size = 0.01; // Minimum size
             }
         } else {
-            // Open new position
+            // Open new position - REQUIRE accountBalance for proper sizing
             orderType = isBullish ? '1' : '2'; // 1=Open long, 2=Open short
-            // Calculate size based on position size percent (simplified)
-            size = 0.01; // Will be calculated properly by the trading service
+
+            // CRITICAL: Fail fast if accountBalance is missing for new positions
+            if (!accountBalance || accountBalance <= 0) {
+                throw new Error(
+                    `Cannot create new position without valid account balance. ` +
+                    `Analyst: ${champion.analystId}, Symbol: ${marketData.symbol}, ` +
+                    `Position Size: ${riskManagement.positionSizePercent}%, ` +
+                    `Leverage: ${riskManagement.leverage}x, ` +
+                    `Balance provided: ${accountBalance}`
+                );
+            }
+
+            if (!marketData.currentPrice || marketData.currentPrice <= 0) {
+                throw new Error(
+                    `Cannot create new position without valid market price. ` +
+                    `Symbol: ${marketData.symbol}, Price: ${marketData.currentPrice}`
+                );
+            }
+
+            // Calculate actual size from position size percent and account balance
+            const positionValue = accountBalance * (riskManagement.positionSizePercent / 100);
+            size = positionValue / marketData.currentPrice;
+
+            // Ensure minimum size (0.001 for most pairs)
+            if (size < 0.001) {
+                logger.warn(
+                    `Calculated size ${size} is below minimum for ${marketData.symbol}, using 0.001. ` +
+                    `Balance: ${accountBalance}, Position %: ${riskManagement.positionSizePercent}%, ` +
+                    `Price: ${marketData.currentPrice}`
+                );
+                size = 0.001;
+            }
         }
 
         // Generate unique client order ID
         const clientOid = `ha_${champion.analystId}_${Date.now()}`;
+
+        // Determine position direction for TP/SL fallback logic
+        const isLongPosition = isBullish;
+
+        // Validate TP/SL prices before converting to string, with direction-aware fallbacks
+        let validTpPrice: number;
+        let validSlPrice: number;
+
+        if (Number.isFinite(riskManagement.takeProfitPrice) && riskManagement.takeProfitPrice > 0) {
+            validTpPrice = riskManagement.takeProfitPrice;
+        } else {
+            // Fallback: For LONG, TP is above current; for SHORT, TP is below current
+            validTpPrice = isLongPosition
+                ? marketData.currentPrice * 1.15  // LONG: 15% above
+                : marketData.currentPrice * 0.85; // SHORT: 15% below
+        }
+
+        if (Number.isFinite(riskManagement.stopLossPrice) && riskManagement.stopLossPrice > 0) {
+            validSlPrice = riskManagement.stopLossPrice;
+        } else {
+            // Fallback: For LONG, SL is below current; for SHORT, SL is above current
+            validSlPrice = isLongPosition
+                ? marketData.currentPrice * 0.90  // LONG: 10% below
+                : marketData.currentPrice * 1.10; // SHORT: 10% above
+        }
+
+        // Log if we had to use fallback prices
+        if (validTpPrice !== riskManagement.takeProfitPrice || validSlPrice !== riskManagement.stopLossPrice) {
+            const direction = isLongPosition ? 'LONG' : 'SHORT';
+            logger.warn(
+                `Invalid TP/SL prices detected for ${direction} position, using direction-aware fallbacks: ` +
+                `TP=${validTpPrice.toFixed(2)}, SL=${validSlPrice.toFixed(2)}, Current=${marketData.currentPrice.toFixed(2)}`
+            );
+        }
 
         return {
             symbol: marketData.symbol,
@@ -1290,8 +1595,8 @@ Respond ONLY with valid JSON.`;
             order_type: '0', // Normal limit order
             match_price: '1', // Market price for immediate execution
             price: marketData.currentPrice.toString(),
-            presetTakeProfitPrice: riskManagement.takeProfitPrice.toString(),
-            presetStopLossPrice: riskManagement.stopLossPrice.toString(),
+            presetTakeProfitPrice: validTpPrice.toString(),
+            presetStopLossPrice: validSlPrice.toString(),
             marginMode: 1, // Cross mode
         };
     }
@@ -1568,9 +1873,10 @@ Respond with valid JSON in this EXACT structure:
 
 Respond ONLY with valid JSON.`;
 
+        let timeoutId: NodeJS.Timeout | null = null;
         try {
             const timeoutPromise = new Promise<never>((_, reject) => {
-                setTimeout(() => reject(new Error('AI request timeout')), AI_REQUEST_TIMEOUT);
+                timeoutId = setTimeout(() => reject(new Error('AI request timeout')), AI_REQUEST_TIMEOUT);
             });
 
             const result = await Promise.race([
@@ -1587,6 +1893,9 @@ Respond ONLY with valid JSON.`;
         } catch (error: any) {
             logger.error('Gemini extended analysis failed:', { error: error.message, analyst: profile.id });
             throw new Error(`AI analysis failed: ${error.message}`);
+        } finally {
+            // Clear timeout to prevent memory leak
+            if (timeoutId) clearTimeout(timeoutId);
         }
     }
 

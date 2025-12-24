@@ -51,6 +51,7 @@ interface AnalystState {
         side: 'LONG' | 'SHORT';
         size: number;
         entryPrice: number;
+        leverage?: number; // Actual leverage from WEEX (optional for backward compatibility)
     }>;
     lastTradeTime: number;
     totalTrades: number;
@@ -414,10 +415,18 @@ export class AutonomousTradingEngine extends EventEmitter {
                 const low24h = parseFloat(ticker.low_24h);
                 const volume24h = parseFloat(ticker.volume_24h);
                 const change24h = parseFloat(ticker.priceChangePercent || '0') * 100;
+                const parsedFundingRate = parseFloat(fundingRate.fundingRate || '0');
 
                 // Validate all numbers
                 if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
                     throw new Error(`Invalid price for ${symbol}: ${currentPrice}`);
+                }
+
+                // Validate funding rate is present (optional but important for futures trading)
+                // undefined means unavailable, 0 means zero funding
+                const validFundingRate = Number.isFinite(parsedFundingRate) ? parsedFundingRate : undefined;
+                if (validFundingRate === undefined) {
+                    logger.warn(`Funding rate unavailable for ${symbol}, will be treated as missing data`);
                 }
 
                 const marketData: ExtendedMarketData = {
@@ -431,7 +440,7 @@ export class AutonomousTradingEngine extends EventEmitter {
                     indexPrice: parseFloat(ticker.indexPrice || ticker.last),
                     bestBid: parseFloat(ticker.best_bid || '0'),
                     bestAsk: parseFloat(ticker.best_ask || '0'),
-                    fundingRate: parseFloat(fundingRate.fundingRate || '0'),
+                    fundingRate: validFundingRate, // undefined if unavailable, number (including 0) if available
                 };
 
                 marketDataMap.set(symbol, marketData);
@@ -519,21 +528,51 @@ export class AutonomousTradingEngine extends EventEmitter {
                 const marginRequired = positionValue / leverage;
 
                 // Calculate margin already used by existing positions
-                // LIMITATION: Using assumed average leverage since per-position leverage is not persisted.
-                // TODO: Store actual leverage per position in database for accurate margin tracking.
+                // IMPROVED: Now uses actual leverage from WEEX when available
+                // Fallback to ASSUMED_AVERAGE_LEVERAGE only when leverage is not provided
                 const existingMarginUsed = state.positions.reduce((sum, p) => {
                     // Estimate margin used: (position size * entry price) / leverage
-                    // Using ASSUMED_AVERAGE_LEVERAGE as fallback when actual leverage unavailable
                     const positionNotional = p.size * p.entryPrice;
-                    return sum + (positionNotional / ASSUMED_AVERAGE_LEVERAGE);
+
+                    // Use actual leverage from WEEX if available, otherwise fallback to assumption
+                    const effectiveLeverage = p.leverage && p.leverage > 0
+                        ? p.leverage
+                        : ASSUMED_AVERAGE_LEVERAGE;
+
+                    const marginUsed = positionNotional / effectiveLeverage;
+
+                    // Log when using assumed leverage for monitoring
+                    if (!p.leverage || p.leverage <= 0) {
+                        logger.debug(`${analystId}: Using assumed ${ASSUMED_AVERAGE_LEVERAGE}x leverage for ${p.symbol} (actual leverage unavailable)`);
+                    }
+
+                    return sum + marginUsed;
                 }, 0);
 
                 // Available balance for new positions = total balance - existing margin
                 const availableBalance = Math.max(0, state.balance - existingMarginUsed);
 
+                // Log margin usage for monitoring
+                if (existingMarginUsed > 0) {
+                    const marginUtilization = (existingMarginUsed / state.balance) * 100;
+                    logger.debug(`${analystId}: Margin utilization: ${marginUtilization.toFixed(1)}% (${existingMarginUsed.toFixed(2)} / ${state.balance.toFixed(2)})`);
+                }
+
                 // Ensure we have enough available balance for margin
                 if (marginRequired > availableBalance * 0.95) {
                     logger.warn(`${analystId}: Insufficient available margin for ${symbol} (need ${marginRequired.toFixed(2)}, available ${availableBalance.toFixed(2)}, ${existingMarginUsed.toFixed(2)} already used)`);
+
+                    // Track margin rejection for monitoring
+                    this.emit('marginRejection', {
+                        analystId,
+                        symbol,
+                        marginRequired,
+                        availableBalance,
+                        existingMarginUsed,
+                        totalBalance: state.balance,
+                        reason: 'insufficient_available_margin'
+                    });
+
                     return;
                 }
 
@@ -767,6 +806,7 @@ export class AutonomousTradingEngine extends EventEmitter {
                 const openValue = parseFloat(p.openValue);
                 const size = parseFloat(p.size);
                 const markPrice = parseFloat(p.markPrice);
+                const leverage = parseFloat(p.leverage); // WEEX provides actual leverage!
 
                 // Validate values
                 if (!Number.isFinite(openValue) || !Number.isFinite(size) || !Number.isFinite(markPrice)) {
@@ -781,6 +821,7 @@ export class AutonomousTradingEngine extends EventEmitter {
                     side: p.side === 'long' ? 'LONG' as const : 'SHORT' as const,
                     size,
                     entryPrice: Number.isFinite(entryPrice) ? entryPrice : markPrice,
+                    leverage: Number.isFinite(leverage) && leverage > 0 ? leverage : ASSUMED_AVERAGE_LEVERAGE, // Use actual leverage from WEEX
                 };
             }).filter((p): p is NonNullable<typeof p> => p !== null);
         } catch (error) {

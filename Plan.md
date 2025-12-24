@@ -351,15 +351,20 @@ VITE_WS_URL=/ws
 
 #### Database & Persistence
 
-- [ ] Store actual leverage per position in database for accurate margin tracking
-  - Current: Uses assumed 3x average leverage as fallback
-  - Location: `packages/backend/src/services/autonomous/AutonomousTradingEngine.ts:523`
+- [x] **Use actual leverage from WEEX API** ✅
+  - WEEX positions endpoint returns actual leverage per position
+  - Now using real leverage instead of assumed 3x
+  - Fallback to ASSUMED_AVERAGE_LEVERAGE only when unavailable
+  - Added monitoring for margin rejections and utilization tracking
+  - Location: `packages/backend/src/services/autonomous/AutonomousTradingEngine.ts:522-560`
+- [ ] Persist leverage in database for historical tracking
+  - Current: Fetches from WEEX on each cycle (accurate but not persisted)
+  - Add `leverage` column to positions table for historical analysis
+  - Track leverage changes over time
 - [ ] Improve balance management after trades
   - Current: Simplified estimation, doesn't fetch actual balance from WEEX
   - Should: Fetch actual account balance, track margin used vs available, handle partial fills, account for fees
   - Location: `packages/backend/src/services/autonomous/AutonomousTradingEngine.ts:584`
-- [ ] Add database schema for per-position leverage tracking
-  - Add `leverage` column to positions table
 
 #### Multi-Tenancy & Scalability
 
@@ -491,6 +496,12 @@ VITE_WS_URL=/ws
 - [x] Risk management validation ✅
 - [x] Documentation improvements ✅
 - [x] Magic number extraction ✅
+- [x] **Structured AI Outputs with JSON Schemas** ✅
+  - All Gemini API calls now use structured outputs
+  - JSON schemas for analysis, debates, and trading decisions
+  - Eliminates regex parsing and guarantees valid responses
+  - Enhanced WEEX compliance with validated AI logs
+  - Location: `packages/backend/src/services/ai/GeminiService.ts:26-165`
 
 ---
 

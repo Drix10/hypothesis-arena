@@ -545,7 +545,7 @@ router.post('/trading-decision', authenticate, async (req: Request, res: Respons
             indexPrice: ticker.indexPrice ? safeParseFloat(ticker.indexPrice) : undefined,
             bestBid: ticker.best_bid ? safeParseFloat(ticker.best_bid) : undefined,
             bestAsk: ticker.best_ask ? safeParseFloat(ticker.best_ask) : undefined,
-            fundingRate: fundingRate ? safeParseFloat(fundingRate.fundingRate) : undefined,
+            fundingRate: fundingRate ? safeParseFloat(fundingRate.fundingRate) : undefined, // undefined = unavailable, 0 = zero funding
         };
 
         // Generate trading decision
@@ -634,7 +634,7 @@ router.post('/extended', optionalAuth, async (req: Request, res: Response, next:
             indexPrice: ticker.indexPrice ? safeParseFloat(ticker.indexPrice) : undefined,
             bestBid: ticker.best_bid ? safeParseFloat(ticker.best_bid) : undefined,
             bestAsk: ticker.best_ask ? safeParseFloat(ticker.best_ask) : undefined,
-            fundingRate: fundingRate ? safeParseFloat(fundingRate.fundingRate) : undefined,
+            fundingRate: fundingRate ? safeParseFloat(fundingRate.fundingRate) : undefined, // undefined = unavailable, 0 = zero funding
         };
 
         const analysis = await geminiService.generateAnalysisWithExtendedData(
