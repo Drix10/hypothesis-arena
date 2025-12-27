@@ -46,7 +46,7 @@ const calculateChange24h = (price: number, high: number, low: number, priceChang
 };
 
 // GET /api/analysis/analysts - Get all analyst personas
-router.get('/analysts', (req: Request, res: Response) => {
+router.get('/analysts', (_req: Request, res: Response) => {
     const analysts = Object.entries(ANALYST_PROFILES).map(([methodology, a]) => ({
         id: a.id,
         name: a.name,
@@ -61,7 +61,7 @@ router.get('/analysts', (req: Request, res: Response) => {
 });
 
 // GET /api/analysis/status - Check if AI service is configured
-router.get('/status', (req: Request, res: Response) => {
+router.get('/status', (_req: Request, res: Response) => {
     res.json({
         configured: geminiService.isConfigured(),
         analystsAvailable: ANALYST_IDS.length,

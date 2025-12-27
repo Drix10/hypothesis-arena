@@ -336,7 +336,12 @@ const server = http.createServer((req, res) => {
         path: req.url,
         method: req.method,
         headers: forwardHeaders,
-        timeout: 90000, // Increased to 90 seconds for slow WEEX responses
+        // 90 second timeout - WEEX API can be slow, especially for:
+        // - Order placement during high volatility
+        // - Account queries with many positions
+        // - Initial connection establishment
+        // Adjust if experiencing frequent timeouts
+        timeout: 90000,
       };
 
       const proxyReq = https.request(options, (proxyRes) => {
@@ -392,7 +397,11 @@ const server = http.createServer((req, res) => {
       path: req.url,
       method: req.method,
       headers: forwardHeaders,
-      timeout: 90000, // Increased to 90 seconds for slow WEEX responses
+      // 90 second timeout - WEEX API can be slow, especially for:
+      // - Market data during high traffic
+      // - Initial connection establishment
+      // Adjust if experiencing frequent timeouts
+      timeout: 90000,
     };
 
     const proxyReq = https.request(options, (proxyRes) => {

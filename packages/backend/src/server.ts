@@ -11,7 +11,7 @@ import { apiRouter } from './api/routes';
 import { errorHandler, notFoundHandler } from './api/middleware/errorHandler';
 import { WebSocketManager } from './services/weex/WebSocketManager';
 import { getAutonomousTradingEngine } from './services/autonomous/AutonomousTradingEngine';
-import { pool, closeDatabasePool, checkDatabaseHealth } from './config/database';
+import { closeDatabasePool, checkDatabaseHealth } from './config/database';
 import { closeRedis, getRedisClient, checkRedisHealth } from './config/redis';
 import { logger } from './utils/logger';
 
@@ -58,7 +58,7 @@ app.use((req, res, next) => {
 app.use('/api', apiRouter);
 
 // Health check
-app.get('/health', async (req, res) => {
+app.get('/health', async (_req, res) => {
     const dbHealthy = await checkDatabaseHealth();
     const redisHealthy = await checkRedisHealth();
 

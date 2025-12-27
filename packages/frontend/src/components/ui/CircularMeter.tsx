@@ -6,23 +6,28 @@ import React from "react";
 
 interface CircularMeterProps {
   value: number;
-  label: string;
+  label?: string;
   color?: string;
   size?: number;
 }
 
 export const CircularMeter: React.FC<CircularMeterProps> = ({
   value,
-  label,
+  label = "",
   color = "#06B6D4",
   size = 80,
 }) => {
-  const radius = (size - 8) / 2;
+  const strokeWidth = size < 60 ? 3 : 4;
+  const radius = (size - strokeWidth * 2) / 2;
   const circumference = 2 * Math.PI * radius;
   // Safe value handling - ensure it's a valid number between 0-100
   const safeValue = Number.isFinite(value) ? value : 0;
   const progress = Math.min(100, Math.max(0, safeValue));
   const offset = circumference - (progress / 100) * circumference;
+
+  // Dynamic font size based on meter size
+  const fontSize =
+    size < 50 ? "text-[10px]" : size < 70 ? "text-sm" : "text-xl";
 
   return (
     <div className="text-center">
@@ -38,7 +43,7 @@ export const CircularMeter: React.FC<CircularMeterProps> = ({
             r={radius}
             fill="none"
             stroke="rgba(255,255,255,0.1)"
-            strokeWidth="4"
+            strokeWidth={strokeWidth}
           />
           {/* Progress circle */}
           <circle
@@ -47,7 +52,7 @@ export const CircularMeter: React.FC<CircularMeterProps> = ({
             r={radius}
             fill="none"
             stroke={color}
-            strokeWidth="4"
+            strokeWidth={strokeWidth}
             strokeLinecap="round"
             strokeDasharray={circumference}
             strokeDashoffset={offset}
@@ -60,16 +65,18 @@ export const CircularMeter: React.FC<CircularMeterProps> = ({
         {/* Center value */}
         <div className="absolute inset-0 flex items-center justify-center">
           <span
-            className="text-xl font-bold"
+            className={`${fontSize} font-bold`}
             style={{ color, textShadow: `0 0 20px ${color}60` }}
           >
             {progress.toFixed(0)}%
           </span>
         </div>
       </div>
-      <div className="text-[9px] text-slate-500 font-bold tracking-widest uppercase mt-2">
-        {label}
-      </div>
+      {label && (
+        <div className="text-[9px] text-slate-500 font-bold tracking-widest uppercase mt-2">
+          {label}
+        </div>
+      )}
     </div>
   );
 };

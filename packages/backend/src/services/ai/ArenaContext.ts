@@ -52,9 +52,6 @@ export interface MarketConditions {
 
 export interface ArenaState {
     // Overall arena stats
-    totalCapital: number;
-    aiDivisionCapital: number;
-    userCapital: number;
     totalTrades: number;
     activeBattles: number;
     currentChampion: string | null;
@@ -200,13 +197,17 @@ class ArenaContextBuilder {
                 [row.id]
             );
 
+            // Validate rank - could be NaN if no rows or invalid data
+            const parsedRank = parseInt(row.rank, 10);
+            const safeRank = Number.isFinite(parsedRank) && parsedRank > 0 ? parsedRank : 1;
+
             return {
                 analystId: row.agent_id,
                 analystName: row.agent_name,
-                balance: parseFloat(row.current_balance) || config.autonomous.aiAnalystBudget,
-                totalValue: parseFloat(row.total_value) || config.autonomous.aiAnalystBudget,
+                balance: parseFloat(row.current_balance) || 0,
+                totalValue: parseFloat(row.total_value) || 0,
                 totalReturn: parseFloat(row.total_return) || 0,
-                totalTrades: parseInt(row.total_trades) || 0,
+                totalTrades: parseInt(row.total_trades, 10) || 0,
                 winRate: parseFloat(row.win_rate) || 0,
                 positions: [], // Would fetch from WEEX
                 recentTrades: tradesResult.rows.map(t => ({
@@ -216,7 +217,7 @@ class ArenaContextBuilder {
                     pnl: parseFloat(t.realized_pnl) || 0,
                     timestamp: new Date(t.created_at).getTime(),
                 })),
-                rank: parseInt(row.rank) || 1,
+                rank: safeRank,
             };
         } catch (error) {
             logger.warn(`Failed to get portfolio for ${analystId}:`, error);
@@ -240,18 +241,24 @@ class ArenaContextBuilder {
                 return [];
             }
 
-            return result.rows.map(row => ({
-                analystId: row.agent_id || 'unknown',
-                analystName: row.agent_name || row.agent_id || 'Unknown',
-                balance: parseFloat(row.current_balance) || config.autonomous.aiAnalystBudget,
-                totalValue: parseFloat(row.total_value) || config.autonomous.aiAnalystBudget,
-                totalReturn: parseFloat(row.total_return) || 0,
-                totalTrades: parseInt(row.total_trades) || 0,
-                winRate: parseFloat(row.win_rate) || 0,
-                positions: [],
-                recentTrades: [],
-                rank: parseInt(row.rank) || 1,
-            }));
+            return result.rows.map(row => {
+                // Validate rank - could be NaN if invalid data
+                const parsedRank = parseInt(row.rank, 10);
+                const safeRank = Number.isFinite(parsedRank) && parsedRank > 0 ? parsedRank : 1;
+
+                return {
+                    analystId: row.agent_id || 'unknown',
+                    analystName: row.agent_name || row.agent_id || 'Unknown',
+                    balance: parseFloat(row.current_balance) || 0,
+                    totalValue: parseFloat(row.total_value) || 0,
+                    totalReturn: parseFloat(row.total_return) || 0,
+                    totalTrades: parseInt(row.total_trades, 10) || 0,
+                    winRate: parseFloat(row.win_rate) || 0,
+                    positions: [],
+                    recentTrades: [],
+                    rank: safeRank,
+                };
+            });
         } catch (error) {
             logger.warn('Failed to get all portfolios:', error);
             return [];
@@ -298,7 +305,6 @@ class ArenaContextBuilder {
         portfolios: AnalystPortfolio[],
         recentTrades: Array<{ analystId: string; symbol: string; side: string; price: number; timestamp: number }>
     ): ArenaState {
-        const aiCapital = portfolios.reduce((sum, p) => sum + p.totalValue, 0);
         const totalTrades = portfolios.reduce((sum, p) => sum + p.totalTrades, 0);
         const champion = portfolios.length > 0 ? portfolios[0] : null;
 
@@ -310,9 +316,6 @@ class ArenaContextBuilder {
                 : 'neutral';
 
         return {
-            totalCapital: config.autonomous.totalCapital,
-            aiDivisionCapital: aiCapital,
-            userCapital: config.autonomous.userTradingBudget,
             totalTrades,
             activeBattles: 0, // Would track from debate system
             currentChampion: champion?.analystId || null,
@@ -344,11 +347,16 @@ class ArenaContextBuilder {
             fundingRate?: number;
         }
     ): MarketConditions {
-        // Guard against division by zero
-        const safePrice = data.price > 0 ? data.price : 1;
+        // Guard against invalid/non-finite values
+        const safePrice = Number.isFinite(data.price) && data.price > 0 ? data.price : 1;
+        const safeChange24h = Number.isFinite(data.change24h) ? data.change24h : 0;
+        const safeVolume24h = Number.isFinite(data.volume24h) ? data.volume24h : 0;
+        const safeHigh24h = Number.isFinite(data.high24h) && data.high24h > 0 ? data.high24h : safePrice;
+        const safeLow24h = Number.isFinite(data.low24h) && data.low24h > 0 ? data.low24h : safePrice;
+        const safeFundingRate = (Number.isFinite(data.fundingRate) ? data.fundingRate : 0) as number;
 
         // Calculate volatility from high/low range
-        const range = data.high24h - data.low24h;
+        const range = safeHigh24h - safeLow24h;
         const rangePercent = (range / safePrice) * 100;
         const volatility = rangePercent > 10 ? 'extreme'
             : rangePercent > 5 ? 'high'
@@ -356,20 +364,20 @@ class ArenaContextBuilder {
                     : 'low';
 
         // Determine trend from 24h change
-        const trend = data.change24h > 5 ? 'strong_bull'
-            : data.change24h > 2 ? 'bull'
-                : data.change24h < -5 ? 'strong_bear'
-                    : data.change24h < -2 ? 'bear'
+        const trend = safeChange24h > 5 ? 'strong_bull'
+            : safeChange24h > 2 ? 'bull'
+                : safeChange24h < -5 ? 'strong_bear'
+                    : safeChange24h < -2 ? 'bear'
                         : 'neutral';
 
         return {
             symbol,
-            price: data.price,
-            change24h: data.change24h,
-            volume24h: data.volume24h,
-            high24h: data.high24h,
-            low24h: data.low24h,
-            fundingRate: data.fundingRate || 0,
+            price: safePrice,
+            change24h: safeChange24h,
+            volume24h: safeVolume24h,
+            high24h: safeHigh24h,
+            low24h: safeLow24h,
+            fundingRate: safeFundingRate,
             volatility,
             trend,
         };
@@ -433,14 +441,14 @@ ${myPortfolio.recentTrades.slice(0, 5).map(t => `  • ${t.symbol} ${t.side} @ $
 
 🏆 ARENA LEADERBOARD
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-${arenaState.leaderboard.map(l => {
+${arenaState.leaderboard.length > 0 ? arenaState.leaderboard.map(l => {
             const isMe = l.analystId === myPortfolio.analystId;
             const marker = isMe ? '👉' : '  ';
             const crown = l.rank === 1 ? '👑' : `#${l.rank}`;
             return `${marker} ${crown} ${l.analystName}: ${l.totalReturn >= 0 ? '+' : ''}${l.totalReturn.toFixed(2)}% (${(l.winRate * 100).toFixed(0)}% win rate)`;
-        }).join('\n')}
+        }).join('\n') : 'No leaderboard data available yet.'}
 
-Current Champion: ${arenaState.currentChampion || 'None'}
+Current Champion: ${arenaState.leaderboard.length > 0 && arenaState.leaderboard[0] ? arenaState.leaderboard[0].analystName : 'None'}
 Total Arena Trades: ${arenaState.totalTrades}
 Market Sentiment: ${arenaState.marketSentiment.toUpperCase()}
 
@@ -507,8 +515,8 @@ Consider:
         return {
             analystId,
             analystName: names[analystId] || analystId,
-            balance: config.autonomous.aiAnalystBudget,
-            totalValue: config.autonomous.aiAnalystBudget,
+            balance: 0,
+            totalValue: 0,
             totalReturn: 0,
             totalTrades: 0,
             winRate: 0,

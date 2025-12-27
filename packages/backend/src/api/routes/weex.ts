@@ -20,7 +20,7 @@ const isApprovedSymbolCheck = (symbol: string): boolean => {
 };
 
 // GET /api/weex/status - Test WEEX connection (public)
-router.get('/status', async (req: Request, res: Response, next: NextFunction) => {
+router.get('/status', async (_req: Request, res: Response, _next: NextFunction) => {
     try {
         const weex = getWeexClient();
         const serverTime = await weex.getServerTime();
@@ -41,7 +41,7 @@ router.get('/status', async (req: Request, res: Response, next: NextFunction) =>
 });
 
 // GET /api/weex/tickers - Get all tickers (public)
-router.get('/tickers', async (req: Request, res: Response, next: NextFunction) => {
+router.get('/tickers', async (_req: Request, res: Response, next: NextFunction) => {
     try {
         const weex = getWeexClient();
         const tickers = await weex.getAllTickers();
@@ -150,7 +150,7 @@ router.get('/candles/:symbol', async (req: Request, res: Response, next: NextFun
 });
 
 // GET /api/weex/contracts - Get all contracts info (public)
-router.get('/contracts', async (req: Request, res: Response, next: NextFunction) => {
+router.get('/contracts', async (_req: Request, res: Response, next: NextFunction) => {
     try {
         const weex = getWeexClient();
         const contracts = await weex.getContracts();
@@ -167,7 +167,7 @@ router.get('/contracts', async (req: Request, res: Response, next: NextFunction)
 // ============ PRIVATE ENDPOINTS (require auth) ============
 
 // GET /api/weex/account - Get account info
-router.get('/account', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+router.get('/account', authenticate, async (_req: Request, res: Response, next: NextFunction) => {
     try {
         const weex = getWeexClient();
         const accounts = await weex.getAccount();
@@ -179,7 +179,7 @@ router.get('/account', authenticate, async (req: Request, res: Response, next: N
 });
 
 // GET /api/weex/assets - Get account assets
-router.get('/assets', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+router.get('/assets', authenticate, async (_req: Request, res: Response, next: NextFunction) => {
     try {
         const weex = getWeexClient();
         const assets = await weex.getAccountAssets();
@@ -191,7 +191,7 @@ router.get('/assets', authenticate, async (req: Request, res: Response, next: Ne
 });
 
 // GET /api/weex/positions - Get all positions
-router.get('/positions', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+router.get('/positions', authenticate, async (_req: Request, res: Response, next: NextFunction) => {
     try {
         const weex = getWeexClient();
         const positions = await weex.getPositions();
@@ -330,7 +330,7 @@ router.post('/leverage', authenticate, async (req: Request, res: Response, next:
 });
 
 // POST /api/weex/test-auth - Test WEEX authentication
-router.post('/test-auth', authenticate, async (req: Request, res: Response, next: NextFunction) => {
+router.post('/test-auth', authenticate, async (_req: Request, res: Response, next: NextFunction) => {
     try {
         const weex = getWeexClient();
 

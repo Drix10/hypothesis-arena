@@ -5,8 +5,8 @@
 Monorepo with backend + frontend for AI-powered crypto trading analysis with real WEEX futures trading.
 **8 AI analysts debate tournament-style, then execute trades on WEEX Exchange.**
 
-**Last Updated:** December 24, 2025  
-**WEEX Hackathon Deadline:** January 5, 2025
+**Last Updated:** December 26, 2025  
+**WEEX Hackathon Deadline:** January 5, 2026
 
 ---
 
@@ -69,6 +69,42 @@ Monorepo with backend + frontend for AI-powered crypto trading analysis with rea
 - Fixed WebSocket security (UUID client IDs, input validation, max clients)
 - Fixed Redis race condition in shutdown
 - Improved logging (proper logger usage, dev/prod modes)
+
+### Recent Changes (December 25, 2025)
+
+**Deep Code Review v2 - Edge Cases & Memory Leaks:**
+
+- ✅ **ArenaContext.ts**: Added `Number.isFinite()` guards for `change24h`, `volume24h`, `high24h`, `low24h`, `fundingRate` in `buildMarketConditions()`
+- ✅ **ArenaContext.ts**: Fixed potential crash when `arenaState.leaderboard[0]` is undefined in `buildContextString()`
+- ✅ **ArenaContext.ts**: Added validation for `row.rank` in `getAnalystPortfolio()` and `getAllPortfolios()` to handle NaN values
+- ✅ **CollaborativeFlow.ts**: Fixed `aggregateCoinScores()` to handle empty results gracefully - returns default with `totalScore: 0`
+- ✅ **CollaborativeFlow.ts**: Added `Number.isFinite()` guards on price targets in `parseSpecialistResponse()`
+- ✅ **CollaborativeFlow.ts**: Added validation that `parsed.picks` is an array before processing in `runCoinSelection()`
+- ✅ **CollaborativeFlow.ts**: Improved error logging in `runDebateMatch()` to show actual error message
+- ✅ **AILogService.ts**: Fixed `mapRowToLog()` - added null/undefined check before calling `substring()` on input/output
+- ✅ **AILogService.ts**: Added validation on `limit` parameter in `getLogsForUser()` - sanitizes to 1-1000 range
+- ✅ **WeexClient.ts**: Increased recursive depth limit from 10 to 20 in `consumeTokens()` with exponential backoff
+- ✅ **WeexClient.ts**: Added validation that credentials (`apiKey`, `secretKey`, `passphrase`) are non-empty strings with warning logs
+- ✅ **WeexClient.ts**: Fixed `getCandles()` - added bounds checking for array elements and filters out invalid candles
+- ✅ **AutonomousTradingEngine.ts**: Fixed `executeCollaborativeTrade()` - added guard for division by zero when calculating `marginRequired`
+- ✅ **AutonomousTradingEngine.ts**: Added validation that `marginRequired` is finite and positive
+- ✅ **AutonomousTradingEngine.ts**: Fixed `emergencyCloseAllPositions()` - was modifying `state.positions` while iterating (now collects symbols first)
+- ✅ **AutonomousTradingEngine.ts**: Fixed `cleanup()` - timeout in `Promise.race` was creating orphaned timeout handle (memory leak)
+- ✅ **CircuitBreakerService.ts**: Added `Array.isArray()` check before accessing candles in `checkBtcDrop()`
+- ✅ **CircuitBreakerService.ts**: Added validation that sorted candles array is not empty after sort
+
+### Recent Changes (December 26, 2025)
+
+**Deep Code Review v3 - Prompt Enhancement & Final Fixes:**
+
+- ✅ **CollaborativeFlow.ts**: Added `SPECIALIST_ANALYSIS_SCHEMA` for Stage 3 specialist analysis (was missing schema)
+- ✅ **CollaborativeFlow.ts**: Enhanced `buildMarketSummary()` with `Number.isFinite()` guards on all values
+- ✅ **CollaborativeFlow.ts**: Enhanced `buildCoinSelectionPrompt()` with detailed scoring system, selection criteria, and conviction scale
+- ✅ **GeminiService.ts**: Fixed `generateAnalysisWithExtendedData()` to use `ANALYSIS_RESPONSE_SCHEMA` (was using raw generateContent)
+- ✅ **AutonomousTradingEngine.ts**: Added `MIN_BALANCE_TO_TRADE` check in `executeCollaborativeTrade()` (was declared but unused)
+- ✅ **FLOW.md**: Completely rewritten to reflect actual implemented 7-stage pipeline
+- ✅ **FLOW.md**: Added Structured Output Schemas section documenting all 7 AI schemas
+- ✅ All AI outputs now use Gemini JSON Schema enforcement for reliable, validated responses
 
 ---
 
@@ -343,9 +379,12 @@ VITE_WS_URL=/ws
 
 ### Priority 1 - Sprint 1: 12/26 - 01/02
 
-- [ ] **Frontend Arena UI - Live visualization of AI battles**
+- [x] **Frontend Arena UI - Live visualization of AI battles** ✅
   - Acceptance: Live battle feed with player controls and match replay
-  - Implementation: Manual Long/Short trade buttons (currently console.log placeholders)
+  - Implementation: Manual Long/Short trade buttons connected to TradingPanel
+  - Location: `packages/frontend/src/components/layout/LiveArena.tsx` (SymbolHeader buttons)
+  - Location: `packages/frontend/src/components/trading/TradingPanel.tsx` (trade execution)
+  - Location: `packages/frontend/src/services/api/trading.ts` (executeTrade wrapper)
 
 ### Priority 2 - Technical Debt & Improvements
 
@@ -354,7 +393,7 @@ VITE_WS_URL=/ws
 - [x] **Use actual leverage from WEEX API** ✅
   - WEEX positions endpoint returns actual leverage per position
   - Now using real leverage instead of assumed 3x
-  - Fallback to ASSUMED_AVERAGE_LEVERAGE only when unavailable
+  - Fallback to ASSUMED_AVERAGE_LEVERAGE (3x - conservative default) only when unavailable
   - Added monitoring for margin rejections and utilization tracking
   - Location: `packages/backend/src/services/autonomous/AutonomousTradingEngine.ts:522-560`
 - [ ] Persist leverage in database for historical tracking
@@ -422,19 +461,6 @@ VITE_WS_URL=/ws
   - Better handling of partial fills
   - Real-time order status updates via WebSocket
 
-#### Testing & Quality
-
-- [ ] E2E tests
-  - Test full trading flow: analysis → decision → execution
-  - Test autonomous engine lifecycle
-  - Test circuit breaker triggers
-- [ ] Integration tests for WEEX API
-  - Mock WEEX responses for testing
-  - Test error handling and retries
-- [ ] Load testing for autonomous engine
-  - Test with multiple concurrent analysts
-  - Verify no race conditions under load
-
 #### UI/UX Improvements
 
 - [ ] Mobile responsive improvements
@@ -465,20 +491,6 @@ VITE_WS_URL=/ws
   - Stricter validation for trade parameters
   - Sanitization for user inputs
 
-#### Documentation
-
-- [ ] API documentation (OpenAPI/Swagger)
-  - Auto-generated from route definitions
-  - Interactive API explorer
-- [ ] Deployment guide
-  - Production deployment checklist
-  - Environment setup guide
-  - Monitoring setup
-- [ ] Architecture diagrams
-  - System architecture overview
-  - Data flow diagrams
-  - Sequence diagrams for key flows
-
 ### Known Limitations (Documented)
 
 1. **Shared WEEX Account**: All analysts use same API key, positions are shared
@@ -497,11 +509,6 @@ VITE_WS_URL=/ws
 - [x] Documentation improvements ✅
 - [x] Magic number extraction ✅
 - [x] **Structured AI Outputs with JSON Schemas** ✅
-  - All Gemini API calls now use structured outputs
-  - JSON schemas for analysis, debates, and trading decisions
-  - Eliminates regex parsing and guarantees valid responses
-  - Enhanced WEEX compliance with validated AI logs
-  - Location: `packages/backend/src/services/ai/GeminiService.ts:26-165`
 
 ---
 
@@ -564,4 +571,4 @@ DEBATE_FREQUENCY = 3; // Debates every 3 cycles
 ---
 
 **Status:** Production Ready + Autonomous Trading  
-**Version:** 2.1.0
+**Version:** 2.3.0

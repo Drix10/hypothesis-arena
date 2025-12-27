@@ -24,7 +24,6 @@ export type { FullArenaContext } from './ArenaContext';
 // Constants
 const AI_REQUEST_TIMEOUT = 90000; // 90 seconds for detailed analysis
 const VALID_RECOMMENDATIONS = ['strong_buy', 'buy', 'hold', 'sell', 'strong_sell'] as const;
-const VALID_RISK_LEVELS = ['low', 'medium', 'high', 'very_high'] as const;
 const VALID_WINNERS = ['bull', 'bear', 'draw'] as const;
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -73,10 +72,6 @@ const ANALYSIS_RESPONSE_SCHEMA = {
             items: { type: SchemaType.STRING },
             description: "Bear case arguments and risks"
         },
-        keyMetrics: {
-            type: SchemaType.OBJECT,
-            description: "Key metrics with values and context"
-        },
         catalysts: {
             type: SchemaType.ARRAY,
             items: { type: SchemaType.STRING },
@@ -87,7 +82,7 @@ const ANALYSIS_RESPONSE_SCHEMA = {
             description: "One sentence thesis summary"
         }
     },
-    required: ["recommendation", "confidence", "priceTarget", "timeHorizon", "positionSize", "bullCase", "bearCase", "keyMetrics", "catalysts", "summary"]
+    required: ["recommendation", "confidence", "priceTarget", "timeHorizon", "positionSize", "bullCase", "bearCase", "catalysts", "summary"]
 };
 
 /**
@@ -172,41 +167,6 @@ const DEBATE_RESPONSE_SCHEMA = {
     required: ["turns", "winner", "scores", "winningArguments", "summary"]
 };
 
-/**
- * Schema for trading decision response
- */
-const TRADING_DECISION_SCHEMA = {
-    type: SchemaType.OBJECT,
-    properties: {
-        shouldTrade: { type: SchemaType.BOOLEAN },
-        action: {
-            type: SchemaType.STRING,
-            enum: ["LONG", "SHORT", "HOLD", "CLOSE"]
-        },
-        confidence: { type: SchemaType.NUMBER },
-        reasoning: { type: SchemaType.STRING },
-        riskAssessment: {
-            type: SchemaType.OBJECT,
-            properties: {
-                level: {
-                    type: SchemaType.STRING,
-                    enum: ["LOW", "MEDIUM", "HIGH", "VERY_HIGH"]
-                },
-                factors: {
-                    type: SchemaType.ARRAY,
-                    items: { type: SchemaType.STRING }
-                }
-            },
-            required: ["level", "factors"]
-        },
-        positionSizePercent: { type: SchemaType.NUMBER },
-        leverage: { type: SchemaType.NUMBER },
-        stopLossPrice: { type: SchemaType.NUMBER },
-        takeProfitPrice: { type: SchemaType.NUMBER }
-    },
-    required: ["shouldTrade", "action", "confidence", "reasoning", "riskAssessment", "positionSizePercent", "leverage", "stopLossPrice", "takeProfitPrice"]
-};
-
 // WEEX Approved Trading Pairs (from TRADING_RULES.md)
 const WEEX_APPROVED_PAIRS = [
     'cmt_btcusdt',
@@ -254,7 +214,7 @@ export interface AnalysisResult {
     timeHorizon: string;
     positionSize: number;  // 1-10 scale
     riskLevel: 'low' | 'medium' | 'high' | 'very_high';
-    keyMetrics: Record<string, string>;
+    keyMetrics: Record<string, string>;  // Object of key metrics like {"RSI": "65", "Volume": "1.2M"}
     catalysts: string[];
     risks: string[];
 }
@@ -420,9 +380,10 @@ class GeminiService {
                 throw new Error('GEMINI_API_KEY not configured');
             }
             const genAI = new GoogleGenerativeAI(config.geminiApiKey);
-            // Use Gemini 2.0 Flash with JSON mode for structured outputs
+            // Use Gemini 2.5 Flash with JSON mode for structured outputs
+            // Stable 2.5 Flash model - best price-performance
             this.model = genAI.getGenerativeModel({
-                model: 'gemini-2.0-flash-exp',
+                model: 'gemini-2.5-flash',
                 generationConfig: {
                     responseMimeType: "application/json",
                 }
@@ -624,6 +585,10 @@ Respond ONLY with valid JSON matching this exact structure.`;
     /**
      * Generate analyses from all 8 analysts with high-quality prompts
      * 
+     * PERFORMANCE FIX: Process in parallel batches instead of sequentially.
+     * Gemini 2.5 Flash has 1000 RPM limit, so we can safely run 4 concurrent requests.
+     * This reduces latency from ~8x to ~2x compared to sequential processing.
+     * 
      * @param request - Analysis request with market data
      * @param userId - Optional user ID for logging
      * @param arenaContexts - Optional map of analyst ID to their arena context
@@ -634,28 +599,35 @@ Respond ONLY with valid JSON matching this exact structure.`;
         arenaContexts?: Map<string, FullArenaContext>
     ): Promise<AnalysisResult[]> {
         const results: AnalysisResult[] = [];
+        const BATCH_SIZE = 4; // Process 4 analysts concurrently
 
-        // Run in batches of 2 for rate limiting (more conservative for detailed prompts)
-        for (let i = 0; i < METHODOLOGY_ORDER.length; i += 2) {
-            const batch = METHODOLOGY_ORDER.slice(i, i + 2);
-            const batchResults = await Promise.all(
-                batch.map(async methodology => {
-                    const profile = ANALYST_PROFILES[methodology];
-                    try {
-                        // Get arena context for this specific analyst if available
-                        const arenaContext = arenaContexts?.get(profile.id);
-                        return await this.generateAnalysis({ ...request, analystId: profile.id }, userId, arenaContext);
-                    } catch (err: any) {
-                        logger.warn(`Analysis failed for ${profile.name}:`, err.message);
-                        return null;
-                    }
-                })
-            );
-            results.push(...batchResults.filter((r): r is AnalysisResult => r !== null));
+        // Process in batches of 4 for controlled parallelism
+        for (let i = 0; i < METHODOLOGY_ORDER.length; i += BATCH_SIZE) {
+            const batch = METHODOLOGY_ORDER.slice(i, i + BATCH_SIZE);
 
-            // Delay between batches
-            if (i + 2 < METHODOLOGY_ORDER.length) {
-                await new Promise(resolve => setTimeout(resolve, 800));
+            const batchPromises = batch.map(async (methodology) => {
+                const profile = ANALYST_PROFILES[methodology];
+                try {
+                    const arenaContext = arenaContexts?.get(profile.id);
+                    return await this.generateAnalysisWithRetry(
+                        { ...request, analystId: profile.id },
+                        userId,
+                        arenaContext
+                    );
+                } catch (err: any) {
+                    logger.warn(`Analysis failed for ${profile.name}:`, err.message);
+                    return null;
+                }
+            });
+
+            const batchResults = await Promise.all(batchPromises);
+            for (const result of batchResults) {
+                if (result) results.push(result);
+            }
+
+            // Small delay between batches to avoid rate limit bursts
+            if (i + BATCH_SIZE < METHODOLOGY_ORDER.length) {
+                await new Promise(resolve => setTimeout(resolve, 500));
             }
         }
 
@@ -670,6 +642,36 @@ Respond ONLY with valid JSON matching this exact structure.`;
         }
 
         return results;
+    }
+
+    /**
+     * Generate analysis with retry logic for rate limiting
+     */
+    private async generateAnalysisWithRetry(
+        request: AnalysisRequest,
+        userId?: string,
+        arenaContext?: FullArenaContext,
+        maxRetries: number = 3
+    ): Promise<AnalysisResult | null> {
+        for (let attempt = 0; attempt < maxRetries; attempt++) {
+            try {
+                return await this.generateAnalysis(request, userId, arenaContext);
+            } catch (err: any) {
+                const isRateLimit = err.message?.includes('429') || err.message?.includes('quota');
+
+                if (isRateLimit && attempt < maxRetries - 1) {
+                    // Extract retry delay from error or use exponential backoff
+                    const retryMatch = err.message?.match(/retryDelay.*?(\d+)s/);
+                    const retryDelay = retryMatch ? parseInt(retryMatch[1]) * 1000 : (attempt + 1) * 15000;
+
+                    logger.warn(`Rate limited, waiting ${retryDelay / 1000}s before retry ${attempt + 2}/${maxRetries}`);
+                    await new Promise(resolve => setTimeout(resolve, retryDelay));
+                } else {
+                    throw err;
+                }
+            }
+        }
+        return null;
     }
 
     /**
@@ -1291,7 +1293,7 @@ Respond ONLY with valid JSON matching this exact structure.`;
         champion: AnalysisResult | null,
         bulls: number,
         bears: number,
-        neutral: number,
+        _neutral: number,
         avgConfidence: number,
         existingPosition?: { side: 'LONG' | 'SHORT'; size: number }
     ): boolean {
@@ -1339,7 +1341,7 @@ Respond ONLY with valid JSON matching this exact structure.`;
     private async calculateRiskManagement(
         marketData: ExtendedMarketData,
         champion: AnalysisResult | null,
-        accountBalance: number,
+        _accountBalance: number,
         avgConfidence: number,
         circuitBreakerStatus?: CircuitBreakerStatus // Pass as parameter to avoid double-check
     ): Promise<TradingDecision['riskManagement']> {
@@ -1381,7 +1383,7 @@ Respond ONLY with valid JSON matching this exact structure.`;
 
             // Apply min/max AFTER all multipliers
             positionSizePercent = Math.min(
-                GLOBAL_RISK_LIMITS.MAX_POSITION_SIZE,
+                GLOBAL_RISK_LIMITS.MAX_POSITION_SIZE_PERCENT,
                 Math.max(5, calculatedSize) // Ensure minimum 5%
             );
 
@@ -1797,7 +1799,7 @@ Respond ONLY with valid JSON matching this exact structure.`;
     async generateAnalysisWithExtendedData(
         marketData: ExtendedMarketData,
         analystId?: string,
-        userId?: string
+        _userId?: string
     ): Promise<AnalysisResult> {
         const model = this.getModel();
 
@@ -1879,8 +1881,15 @@ Respond ONLY with valid JSON.`;
                 timeoutId = setTimeout(() => reject(new Error('AI request timeout')), AI_REQUEST_TIMEOUT);
             });
 
+            // Use structured output with schema
             const result = await Promise.race([
-                model.generateContent(prompt),
+                model.generateContent({
+                    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                    generationConfig: {
+                        responseMimeType: "application/json",
+                        responseSchema: ANALYSIS_RESPONSE_SCHEMA
+                    }
+                }),
                 timeoutPromise
             ]);
 
@@ -1897,43 +1906,6 @@ Respond ONLY with valid JSON.`;
             // Clear timeout to prevent memory leak
             if (timeoutId) clearTimeout(timeoutId);
         }
-    }
-
-    /**
-     * Generate analysis for a single analyst with full arena context
-     * This is the primary method for autonomous trading
-     * 
-     * @param analystId - The analyst ID (warren, cathie, jim, etc.)
-     * @param symbol - Trading symbol (e.g., cmt_btcusdt)
-     * @param marketData - Market data for the symbol
-     * @param userId - Optional user ID for logging
-     */
-    async generateAnalysisForAutonomousTrading(
-        analystId: string,
-        symbol: string,
-        marketData: {
-            price: number;
-            change24h: number;
-            volume24h: number;
-            high24h: number;
-            low24h: number;
-            fundingRate?: number;
-        },
-        userId?: string
-    ): Promise<AnalysisResult> {
-        // Build arena context for this analyst
-        const arenaContext = await arenaContextBuilder.buildContext(analystId, symbol, marketData);
-
-        // Generate analysis with full context
-        return this.generateAnalysis({
-            symbol,
-            currentPrice: marketData.price,
-            high24h: marketData.high24h,
-            low24h: marketData.low24h,
-            volume24h: marketData.volume24h,
-            change24h: marketData.change24h,
-            analystId,
-        }, userId, arenaContext);
     }
 }
 

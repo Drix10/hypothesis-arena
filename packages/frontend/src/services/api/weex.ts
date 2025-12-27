@@ -5,6 +5,10 @@
  */
 
 import { apiClient, ApiError } from './client';
+import type { WeexPosition } from '@hypothesis-arena/shared';
+
+// Re-export WeexPosition from shared package for consistency
+export type { WeexPosition } from '@hypothesis-arena/shared';
 
 export interface WeexStatus {
     connected: boolean;
@@ -56,18 +60,6 @@ export interface WeexContract {
     maxTradeNum: string;
     minLeverage: string;
     maxLeverage: string;
-}
-
-export interface WeexPosition {
-    symbol: string;
-    side: 'long' | 'short';
-    size: string;
-    leverage: string;
-    openValue: string;
-    markPrice: string;
-    unrealizePnl: string;
-    marginMode: string;
-    liquidationPrice: string;
 }
 
 export interface WeexAssets {

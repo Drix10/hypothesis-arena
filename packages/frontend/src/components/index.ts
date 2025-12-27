@@ -11,8 +11,5 @@ export * from "./ui";
 // Arena
 export * from "./arena";
 
-// Trading
-export * from "./trading";
-
 // Layout
-export { LiveArena, Header, MarketSidebar, AuthModal } from "./layout";
+export { LiveArena, Header, AuthModal } from "./layout";

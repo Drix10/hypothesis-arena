@@ -85,12 +85,6 @@ export const config = {
 
     // Autonomous Trading Engine
     autonomous: {
-        // Capital allocation
-        numAiAnalysts: safeParseInt(process.env.NUM_AI_ANALYSTS, 8),                // Number of AI analysts
-        aiAnalystBudget: safeParseFloat(process.env.AI_ANALYST_BUDGET, 100),        // $100 per AI analyst
-        userTradingBudget: safeParseFloat(process.env.USER_TRADING_BUDGET, 200),    // $200 for user
-        totalCapital: safeParseFloat(process.env.TOTAL_CAPITAL, 1000),              // $1000 total
-
         // Timing
         cycleIntervalMs: safeParseInt(process.env.CYCLE_INTERVAL_MS, 5 * 60 * 1000),           // 5 min between cycles
         minTradeIntervalMs: safeParseInt(process.env.MIN_TRADE_INTERVAL_MS, 15 * 60 * 1000),   // 15 min cooldown per analyst
@@ -149,12 +143,18 @@ if (config.nodeEnv === 'production') {
     if (config.jwtSecret === 'change-this-in-production') {
         throw new Error('JWT_SECRET must be changed in production');
     }
-}
 
-// Validate capital allocation constraints
-const totalAiCapital = config.autonomous.numAiAnalysts * config.autonomous.aiAnalystBudget;
-if (totalAiCapital + config.autonomous.userTradingBudget > config.autonomous.totalCapital) {
-    throw new Error(
-        `Capital allocation exceeds total capital: ${totalAiCapital} (AI) + ${config.autonomous.userTradingBudget} (User) > ${config.autonomous.totalCapital} (Total)`
-    );
+    // Validate WEEX credentials if autonomous trading is enabled
+    if (!config.autonomous.dryRun) {
+        const weexRequired = ['WEEX_API_KEY', 'WEEX_SECRET_KEY', 'WEEX_PASSPHRASE'];
+        const weexMissing = weexRequired.filter(key => !process.env[key]);
+        if (weexMissing.length > 0) {
+            console.warn(`⚠️ WEEX credentials missing: ${weexMissing.join(', ')}. Autonomous trading will fail.`);
+        }
+    }
+
+    // Validate Gemini API key
+    if (!config.geminiApiKey) {
+        console.warn('⚠️ GEMINI_API_KEY not set. AI analysis will fail.');
+    }
 }

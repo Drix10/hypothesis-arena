@@ -154,14 +154,25 @@ export class CircuitBreakerService {
             // Fetch 4-hour candles for BTC
             const candles = await this.weexClient.getCandles('cmt_btcusdt', '1h', 5);
 
-            if (candles.length < 4) {
+            if (!Array.isArray(candles) || candles.length < 4) {
                 logger.warn('Insufficient BTC candle data for circuit breaker check');
                 return { level: 'NONE', reason: '' };
             }
 
+            // Sort candles by timestamp to ensure correct order (oldest first)
+            const sortedCandles = [...candles].sort((a, b) =>
+                parseInt(a.timestamp) - parseInt(b.timestamp)
+            );
+
+            // Validate we still have candles after sort
+            if (sortedCandles.length === 0) {
+                logger.warn('No valid BTC candles after sorting');
+                return { level: 'NONE', reason: '' };
+            }
+
             // Calculate price drop from 4 hours ago to now
-            const price4hAgo = parseFloat(candles[0].open);
-            const priceNow = parseFloat(candles[candles.length - 1].close);
+            const price4hAgo = parseFloat(sortedCandles[0].open);
+            const priceNow = parseFloat(sortedCandles[sortedCandles.length - 1].close);
 
             if (!Number.isFinite(price4hAgo) || !Number.isFinite(priceNow) || price4hAgo <= 0) {
                 logger.warn('Invalid BTC price data');
@@ -262,67 +273,64 @@ export class CircuitBreakerService {
     }
 
     /**
-     * Check portfolio drawdown (FIXED: SQL query logic - now properly gets 24h snapshot)
+     * Check portfolio drawdown using actual WEEX wallet balance
+     * Compares current wallet balance against 24h snapshot
+     * 
+     * FAIL-CLOSED: Returns YELLOW alert if wallet balance unavailable
+     * to prevent trading without knowing account state
      */
     private async checkPortfolioDrawdown(userId: string): Promise<Partial<CircuitBreakerStatus>> {
         try {
-            // Get current portfolio values
-            const currentResult = await pool.query(
-                `SELECT 
-                    SUM(total_value) as total_current
-                 FROM portfolios 
-                 WHERE user_id = $1`,
+            // Get ACTUAL wallet balance from WEEX (source of truth)
+            let totalCurrent: number;
+            try {
+                const assets = await this.weexClient.getAccountAssets();
+                totalCurrent = parseFloat(assets.available || '0');
+                if (!Number.isFinite(totalCurrent) || totalCurrent < 0) {
+                    logger.warn('Invalid wallet balance from WEEX for circuit breaker check');
+                    // FAIL-CLOSED: Can't verify account state, trigger caution
+                    return {
+                        level: 'YELLOW',
+                        reason: 'Unable to verify wallet balance - trading with caution'
+                    };
+                }
+            } catch (error) {
+                logger.error('Failed to fetch wallet balance for circuit breaker:', error);
+                // FAIL-CLOSED: Can't verify account state, trigger caution
+                return {
+                    level: 'YELLOW',
+                    reason: 'Wallet balance unavailable - trading with caution'
+                };
+            }
+
+            // Get portfolio value from 24 hours ago from snapshots
+            const dayAgoResult = await pool.query(
+                `SELECT total_value
+                 FROM performance_snapshots 
+                 WHERE user_id = $1 
+                   AND timestamp >= NOW() - INTERVAL '24 hours'
+                   AND timestamp <= NOW() - INTERVAL '23 hours'
+                 ORDER BY timestamp ASC
+                 LIMIT 1`,
                 [userId]
             );
 
-            if (currentResult.rows.length === 0 || !currentResult.rows[0].total_current) {
+            // If no 24h snapshot, we can't calculate drawdown
+            // This is acceptable for new accounts - log and continue
+            if (dayAgoResult.rows.length === 0 || !dayAgoResult.rows[0].total_value) {
+                logger.debug('No 24h snapshot available for drawdown calculation - new account or missing data');
                 return { level: 'NONE', reason: '' };
             }
 
-            const totalCurrent = parseFloat(currentResult.rows[0].total_current);
+            const total24hAgo = parseFloat(dayAgoResult.rows[0].total_value);
 
-            // FIXED SQL LOGIC: Get portfolio value from 24 hours ago
-            // Previous query had LIMIT 1 with aggregation which is incorrect
-            // Now we get the earliest snapshot within the 23-24h window
-            const dayAgoResult = await pool.query(
-                `WITH snapshots_24h AS (
-                    SELECT 
-                        user_id,
-                        total_value,
-                        timestamp,
-                        ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY timestamp ASC) as rn
-                    FROM performance_snapshots 
-                    WHERE user_id = $1 
-                      AND timestamp >= NOW() - INTERVAL '24 hours'
-                      AND timestamp <= NOW() - INTERVAL '23 hours'
-                )
-                SELECT 
-                    SUM(total_value) as total_24h_ago
-                FROM snapshots_24h
-                WHERE rn = 1`,
-                [userId]
-            );
-
-            // If no 24h data, use initial balance as fallback
-            let total24hAgo: number;
-            if (dayAgoResult.rows.length === 0 || !dayAgoResult.rows[0].total_24h_ago) {
-                const initialResult = await pool.query(
-                    `SELECT SUM(initial_balance) as total_initial FROM portfolios WHERE user_id = $1`,
-                    [userId]
-                );
-                total24hAgo = parseFloat(initialResult.rows[0]?.total_initial || '0');
-            } else {
-                total24hAgo = parseFloat(dayAgoResult.rows[0].total_24h_ago);
-            }
-
-            if (total24hAgo <= 0) {
+            if (!Number.isFinite(total24hAgo) || total24hAgo <= 0) {
                 return { level: 'NONE', reason: '' };
             }
 
             // Calculate 24h drawdown (only if portfolio is down)
             const drawdownPercent = Math.max(0, ((total24hAgo - totalCurrent) / total24hAgo) * 100);
 
-            // Guard against invalid values
             if (!Number.isFinite(drawdownPercent)) {
                 return { level: 'NONE', reason: '' };
             }

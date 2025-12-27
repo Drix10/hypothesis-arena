@@ -37,6 +37,11 @@ export function validatePositionSize(
         return { valid: false, error: 'Position size must be positive' };
     }
 
+    // Guard against division by zero
+    if (portfolioValue <= 0) {
+        return { valid: false, error: 'Portfolio value must be positive' };
+    }
+
     const positionPercent = size / portfolioValue;
     if (positionPercent > maxPositionPercent) {
         return {

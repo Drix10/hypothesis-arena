@@ -1,26 +1,29 @@
 /**
- * Autonomous Trading Engine
+ * Autonomous Trading Engine - COLLABORATIVE MODE
  * 
- * Keeps 8 AI analysts alive, trading, and debating 24/7.
- * Each analyst manages their own portfolio autonomously.
+ * 8 AI analysts collaborate on ONE shared portfolio.
+ * Debates are the core decision mechanism.
  * 
- * Core Loop:
- * 1. Fetch market data for all approved symbols
- * 2. Each AI analyst analyzes and decides
- * 3. Execute trades on WEEX
- * 4. Run debates between top performers
- * 5. Update portfolios and leaderboard
- * 6. Sleep and repeat
+ * 7-Stage Pipeline (from FLOW.md):
+ * 1. Market Scan - Fetch data for all 8 coins
+ * 2. Coin Selection - Ray, Jim, Quant pick best opportunity
+ * 3. Specialist Analysis - Deep dive by assigned specialists
+ * 4. Tournament - Bracket-style debates determine winner
+ * 5. Risk Council - Karen approves/vetoes/adjusts
+ * 6. Execution - Place trade on WEEX with TP/SL
+ * 7. Position Management - Monitor and adjust positions
  */
 
 import { EventEmitter } from 'events';
-import { geminiService, type ExtendedMarketData } from '../ai/GeminiService';
+import { type ExtendedMarketData, type AnalysisResult } from '../ai/GeminiService';
+import { collaborativeFlowService, type CoinSelectionResult, type RiskCouncilDecision } from '../ai/CollaborativeFlow';
 import { getWeexClient } from '../weex/WeexClient';
 import { tradingScheduler } from './TradingScheduler';
 import { circuitBreakerService } from '../risk/CircuitBreakerService';
 import { pool } from '../../config/database';
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
+import { ANALYST_PROFILES } from '../../constants/analystPrompts';
 
 const APPROVED_SYMBOLS = [
     'cmt_btcusdt',
@@ -77,11 +80,9 @@ export class AutonomousTradingEngine extends EventEmitter {
     private currentCycle: TradingCycle | null = null;
     private mainLoopPromise: Promise<void> | null = null;
     private sleepTimeout: NodeJS.Timeout | null = null;
-    private tradingLocks = new Set<string>(); // Prevent concurrent trades per analyst
 
     // Configuration from environment
     private readonly CYCLE_INTERVAL_MS = config.autonomous.cycleIntervalMs;
-    private readonly INITIAL_BALANCE = config.autonomous.aiAnalystBudget;
     private readonly MIN_TRADE_INTERVAL_MS = config.autonomous.minTradeIntervalMs;
     private readonly MAX_POSITION_SIZE_PERCENT = config.autonomous.maxPositionSizePercent;
     private readonly DEBATE_FREQUENCY = config.autonomous.debateFrequency;
@@ -98,7 +99,6 @@ export class AutonomousTradingEngine extends EventEmitter {
         // Log configuration on startup
         logger.info('Autonomous Trading Engine Configuration:', {
             cycleIntervalMs: this.CYCLE_INTERVAL_MS,
-            initialBalance: this.INITIAL_BALANCE,
             minTradeIntervalMs: this.MIN_TRADE_INTERVAL_MS,
             maxPositionSizePercent: this.MAX_POSITION_SIZE_PERCENT,
             debateFrequency: this.DEBATE_FREQUENCY,
@@ -124,7 +124,7 @@ export class AutonomousTradingEngine extends EventEmitter {
         this.isStarting = true;
 
         try {
-            logger.info('🏟️ Starting Autonomous Trading Engine...');
+            logger.info('🏟️ Starting Autonomous Trading Engine (Collaborative Mode)...');
 
             // Initialize analyst portfolios
             await this.initializeAnalysts(userId);
@@ -166,9 +166,6 @@ export class AutonomousTradingEngine extends EventEmitter {
             this.sleepTimeout = null;
         }
 
-        // Clear trading locks
-        this.tradingLocks.clear();
-
         this.emit('stopped');
     }
 
@@ -176,104 +173,142 @@ export class AutonomousTradingEngine extends EventEmitter {
      * Get current status
      */
     getStatus() {
+        // COLLABORATIVE MODE: All analysts share ONE portfolio
+        // Use first analyst's state as the shared portfolio reference
+        const firstAnalyst = this.analystStates.values().next().value;
+        const sharedBalance = firstAnalyst?.balance || 0;
+        const sharedPositions = firstAnalyst?.positions || [];
+        const sharedTotalTrades = firstAnalyst?.totalTrades || 0;
+
+        // Build analyst display data - all share same balance in collaborative mode
+        const analysts = Array.from(this.analystStates.values()).map(state => ({
+            ...state,
+            balance: sharedBalance,
+            totalValue: sharedBalance,
+        }));
+
         return {
             isRunning: this.isRunning,
             cycleCount: this.cycleCount,
-            analysts: Array.from(this.analystStates.values()),
+            analysts,
             currentCycle: this.currentCycle,
+            sharedPortfolio: {
+                balance: sharedBalance,
+                totalTrades: sharedTotalTrades,
+                positionCount: sharedPositions.length,
+            },
+            stats: {
+                totalTrades: sharedTotalTrades,
+                tradesThisCycle: this.currentCycle?.tradesExecuted || 0,
+                avgCycleTime: this.CYCLE_INTERVAL_MS,
+            },
+            nextCycleIn: this.currentCycle
+                ? Math.max(0, this.CYCLE_INTERVAL_MS - (Date.now() - this.currentCycle.startTime))
+                : this.CYCLE_INTERVAL_MS,
         };
     }
 
     /**
-     * Initialize all 8 analyst portfolios
+     * Initialize ONE shared collaborative portfolio for all 8 analysts
+     * COLLABORATIVE MODE: All analysts share a single portfolio per FLOW.md
+     * Balance is ALWAYS fetched from WEEX wallet, not stored in database
      */
     private async initializeAnalysts(userId: string): Promise<void> {
-        logger.info('Initializing 8 AI analysts...');
+        logger.info('Initializing collaborative portfolio (8 analysts, 1 shared portfolio)...');
 
-        const initPromises = ANALYST_IDS.map(async (analystId) => {
+        try {
+            // Get actual wallet balance from WEEX
+            let walletBalance: number;
             try {
-                // Check if portfolio exists
-                const existing = await pool.query(
-                    `SELECT id, current_balance, total_trades, win_rate 
-                     FROM portfolios 
-                     WHERE user_id = $1 AND agent_id = $2`,
-                    [userId, analystId]
+                const assets = await this.weexClient.getAccountAssets();
+                walletBalance = parseFloat(assets.available || '0');
+                if (!Number.isFinite(walletBalance) || walletBalance < 0) {
+                    logger.warn(`Invalid wallet balance from WEEX: ${walletBalance}, using 0`);
+                    walletBalance = 0;
+                }
+            } catch (error) {
+                logger.error('Failed to fetch wallet balance from WEEX:', error);
+                walletBalance = 0;
+            }
+
+            // Check if collaborative portfolio record exists (for tracking trades/stats only)
+            const existing = await pool.query(
+                `SELECT id, total_trades, win_rate 
+                 FROM portfolios 
+                 WHERE user_id = $1 AND agent_id = 'collaborative'`,
+                [userId]
+            );
+
+            let portfolioId: string;
+            let totalTrades: number;
+            let winRate: number;
+
+            if (existing.rows.length > 0) {
+                const row = existing.rows[0];
+                portfolioId = row.id;
+                totalTrades = parseInt(row.total_trades || '0', 10);
+                winRate = parseFloat(row.win_rate || '0');
+
+                // Update the database balance to match wallet (for display purposes only)
+                await pool.query(
+                    `UPDATE portfolios SET current_balance = $1, updated_at = NOW() WHERE id = $2`,
+                    [walletBalance, portfolioId]
                 );
 
-                let portfolioId: string;
-                let balance: number;
-                let totalTrades: number;
-                let winRate: number;
+                logger.info(`📊 Collaborative Portfolio: Existing (${walletBalance.toFixed(2)} USDT from wallet, ${totalTrades} trades)`);
+            } else {
+                const result = await pool.query(
+                    `INSERT INTO portfolios (
+                        user_id, agent_id, agent_name, initial_balance, current_balance, status
+                    ) VALUES ($1, 'collaborative', 'Collaborative AI Team', $2, $3, 'active') RETURNING id`,
+                    [userId, walletBalance, walletBalance]
+                );
 
-                if (existing.rows.length > 0) {
-                    // Use existing portfolio
-                    const row = existing.rows[0];
-                    portfolioId = row.id;
-                    balance = parseFloat(row.current_balance);
-                    totalTrades = parseInt(row.total_trades || '0', 10);
-                    winRate = parseFloat(row.win_rate || '0');
+                portfolioId = result.rows[0].id;
+                totalTrades = 0;
+                winRate = 0;
+                logger.info(`📊 Collaborative Portfolio: Created new (${walletBalance.toFixed(2)} USDT from wallet)`);
+            }
 
-                    // Validate balance
-                    if (!Number.isFinite(balance) || balance < 0) {
-                        logger.warn(`${analystId}: Invalid balance ${balance}, resetting to ${this.INITIAL_BALANCE}`);
-                        balance = this.INITIAL_BALANCE;
-                    }
-
-                    logger.info(`✓ ${analystId}: Existing portfolio ($${balance.toFixed(2)} USDT)`);
-                } else {
-                    // Create new portfolio
-                    const profile = geminiService.getAnalysts().find(a => a.id === analystId);
-                    if (!profile) {
-                        logger.error(`Unknown analyst: ${analystId}`);
-                        return;
-                    }
-
-                    const result = await pool.query(
-                        `INSERT INTO portfolios (
-                            user_id, agent_id, agent_name, initial_balance, current_balance, status
-                        ) VALUES ($1, $2, $3, $4, $5, 'active') RETURNING id`,
-                        [userId, analystId, profile.name, this.INITIAL_BALANCE, this.INITIAL_BALANCE]
-                    );
-
-                    portfolioId = result.rows[0].id;
-                    balance = this.INITIAL_BALANCE;
-                    totalTrades = 0;
-                    winRate = 0;
-                    logger.info(`✓ ${analystId}: New portfolio created ($${balance.toFixed(2)} USDT)`);
-                }
-
-                // Get current positions from WEEX (with retry)
-                let positions: AnalystState['positions'] = [];
-                for (let retry = 0; retry < this.MAX_RETRIES; retry++) {
-                    try {
-                        positions = await this.getAnalystPositions();
-                        break;
-                    } catch (error) {
-                        if (retry === this.MAX_RETRIES - 1) {
-                            logger.warn(`${analystId}: Failed to fetch positions after ${this.MAX_RETRIES} retries`);
-                        } else {
-                            await this.sleep(1000 * (retry + 1)); // Exponential backoff
-                        }
+            // Get current positions from WEEX (shared across all analysts)
+            let positions: AnalystState['positions'] = [];
+            for (let retry = 0; retry < this.MAX_RETRIES; retry++) {
+                try {
+                    positions = await this.getAnalystPositions();
+                    break;
+                } catch (error) {
+                    if (retry === this.MAX_RETRIES - 1) {
+                        logger.warn(`Collaborative portfolio: Failed to fetch positions after ${this.MAX_RETRIES} retries`);
+                    } else {
+                        await this.sleep(1000 * (retry + 1));
                     }
                 }
+            }
+
+            // Initialize all 8 analysts with the SAME shared portfolio
+            // Balance comes from WEEX wallet, not database
+            for (const analystId of ANALYST_IDS) {
+                const profile = Object.values(ANALYST_PROFILES).find(a => a.id === analystId);
 
                 this.analystStates.set(analystId, {
                     analystId,
                     portfolioId,
-                    balance,
+                    balance: walletBalance, // Always from WEEX wallet
                     positions,
                     lastTradeTime: 0,
                     totalTrades,
                     winRate,
                 });
-            } catch (error) {
-                logger.error(`Failed to initialize ${analystId}:`, error);
+
+                logger.info(`  📈 ${analystId}: ${profile?.name || analystId} (collaborative)`);
             }
-        });
 
-        await Promise.allSettled(initPromises);
+            logger.info(`📊 Collaborative portfolio initialized: 8 analysts sharing ${walletBalance.toFixed(2)} USDT`);
 
-        logger.info(`✅ Initialized ${this.analystStates.size}/8 analysts`);
+        } catch (error) {
+            logger.error('Failed to initialize collaborative portfolio:', error);
+            throw error;
+        }
     }
 
     /**
@@ -301,10 +336,20 @@ export class AutonomousTradingEngine extends EventEmitter {
             this.emit('cycleStart', this.cycleCount);
 
             try {
-                // 1. Fetch market data for all symbols
+                // =================================================================
+                // STAGE 1: MARKET SCAN - Fetch data for all 8 coins
+                // =================================================================
                 const marketDataMap = await this.fetchAllMarketData();
 
-                // 2. CHECK CIRCUIT BREAKERS (NEW)
+                if (marketDataMap.size === 0) {
+                    logger.warn('No market data available, skipping cycle');
+                    this.currentCycle.errors.push('No market data available');
+                    continue;
+                }
+
+                // =================================================================
+                // CIRCUIT BREAKER CHECK
+                // =================================================================
                 const btcData = marketDataMap.get('cmt_btcusdt');
                 if (btcData) {
                     const circuitBreakerStatus = await circuitBreakerService.checkCircuitBreakers(userId);
@@ -315,17 +360,12 @@ export class AutonomousTradingEngine extends EventEmitter {
                         await this.emergencyCloseAllPositions(userId);
                         this.currentCycle.errors.push(`RED ALERT: ${circuitBreakerStatus.reason} - All positions closed`);
 
-                        // RED ALERT: Stop trading and wait for next cycle
-                        // This ensures we don't bypass the sleep interval
-                        logger.error('🚨 RED ALERT: Skipping trading for this cycle, will check again next cycle');
-
-                        // Mark cycle as complete
+                        // Mark cycle as complete and sleep
                         this.currentCycle.endTime = Date.now();
                         const cycleDuration = this.currentCycle.endTime - cycleStart;
                         logger.info(`✅ Cycle #${this.cycleCount} complete (RED ALERT): 0 trades, 0 debates (${(cycleDuration / 1000).toFixed(1)}s)`);
                         this.emit('cycleComplete', this.currentCycle);
 
-                        // Sleep until next cycle
                         const elapsed = Date.now() - cycleStart;
                         const dynamicInterval = tradingScheduler.getDynamicCycleInterval(this.CYCLE_INTERVAL_MS);
                         const sleepTime = Math.max(0, dynamicInterval - elapsed);
@@ -334,40 +374,137 @@ export class AutonomousTradingEngine extends EventEmitter {
                             logger.info(`💤 Sleeping for ${(sleepTime / 1000).toFixed(0)}s until next cycle...`);
                             await this.sleep(sleepTime);
                         }
-
-                        // Skip to next iteration
                         continue;
                     }
 
                     if (circuitBreakerStatus.level === 'ORANGE') {
                         logger.warn(`⚠️ ORANGE ALERT: ${circuitBreakerStatus.reason}`);
                         logger.warn(`Action: ${circuitBreakerService.getRecommendedAction('ORANGE')}`);
-                        // Continue but analysts will see reduced leverage limits (handled in GeminiService)
                     }
 
                     if (circuitBreakerStatus.level === 'YELLOW') {
                         logger.warn(`⚠️ YELLOW ALERT: ${circuitBreakerStatus.reason}`);
                         logger.warn(`Action: ${circuitBreakerService.getRecommendedAction('YELLOW')}`);
-                        // Continue but analysts will see reduced leverage limits (handled in GeminiService)
                     }
                 }
 
-                // 3. Each analyst analyzes and potentially trades
-                for (const [analystId, state] of this.analystStates) {
-                    try {
-                        await this.runAnalystCycle(userId, analystId, state, marketDataMap);
-                    } catch (error: any) {
-                        logger.error(`Analyst ${analystId} cycle failed:`, error);
-                        this.currentCycle.errors.push(`${analystId}: ${error.message}`);
-                    }
+                // =================================================================
+                // STAGE 2: COIN SELECTION - Ray, Jim, Quant pick best opportunity
+                // =================================================================
+                logger.info('🎯 Stage 2: Coin Selection Debate...');
+                const { results: coinSelectionResults, topCoin } = await collaborativeFlowService.runCoinSelection(marketDataMap);
+
+                if (!topCoin || topCoin.totalScore === 0) {
+                    logger.warn('No coin selected, skipping cycle');
+                    this.currentCycle.errors.push('Coin selection failed - no consensus');
+                    await this.updateLeaderboard();
+                    continue;
                 }
 
-                // 4. Run debates every N cycles
-                if (this.cycleCount % this.DEBATE_FREQUENCY === 0) {
-                    await this.runDebates(userId, marketDataMap);
+                logger.info(`🏆 Top Coin: ${topCoin.symbol} (${topCoin.direction}) - Score: ${topCoin.totalScore}`);
+                this.emit('coinSelected', { topCoin, selectors: coinSelectionResults });
+
+                const selectedMarketData = marketDataMap.get(topCoin.symbol);
+                if (!selectedMarketData) {
+                    logger.error(`Market data not found for selected coin: ${topCoin.symbol}`);
+                    this.currentCycle.errors.push(`Market data missing for ${topCoin.symbol}`);
+                    continue;
                 }
 
-                // 5. Update leaderboard
+                // =================================================================
+                // STAGE 3: SPECIALIST ANALYSIS - Deep dive by assigned specialists
+                // =================================================================
+                logger.info(`🔬 Stage 3: Specialist Analysis for ${topCoin.symbol}...`);
+                const specialists = await collaborativeFlowService.runSpecialistAnalysis(
+                    topCoin.symbol,
+                    selectedMarketData,
+                    topCoin.direction
+                );
+
+                if (specialists.length < 2) {
+                    logger.warn('Not enough specialist analyses, skipping cycle');
+                    this.currentCycle.errors.push('Specialist analysis failed - insufficient responses');
+                    await this.updateLeaderboard();
+                    continue;
+                }
+
+                logger.info(`📊 ${specialists.length} specialists analyzed ${topCoin.symbol}`);
+                this.emit('specialistAnalysis', { symbol: topCoin.symbol, specialists });
+
+                // =================================================================
+                // STAGE 4: TOURNAMENT - Bracket-style debates determine winner
+                // =================================================================
+                logger.info('⚔️ Stage 4: Championship Tournament...');
+                const { matches, champion } = await collaborativeFlowService.runTournament(specialists, selectedMarketData);
+
+                this.currentCycle.debatesRun = matches.length;
+
+                if (!champion) {
+                    logger.warn('No tournament champion, skipping trade');
+                    this.currentCycle.errors.push('Tournament failed - no champion');
+                    await this.updateLeaderboard();
+                    continue;
+                }
+
+                logger.info(`🏆 Champion: ${champion.analystName} (${champion.confidence}% confidence)`);
+                this.emit('tournamentComplete', { matches, champion });
+
+                // Check minimum confidence threshold
+                if (champion.confidence < this.MIN_CONFIDENCE_TO_TRADE) {
+                    logger.info(`Champion confidence ${champion.confidence}% below threshold ${this.MIN_CONFIDENCE_TO_TRADE}%, skipping trade`);
+                    await this.updateLeaderboard();
+                    continue;
+                }
+
+                // =================================================================
+                // STAGE 5: RISK COUNCIL - Karen approves/vetoes/adjusts
+                // =================================================================
+                logger.info('🛡️ Stage 5: Risk Council Review...');
+
+                // Get account state for risk assessment (fresh from WEEX)
+                const accountBalance = await this.getWalletBalance();
+                const currentPositions = this.getAllPositions();
+                const recentPnL = await this.getRecentPnL(userId);
+
+                const riskDecision = await collaborativeFlowService.runRiskCouncil(
+                    champion,
+                    selectedMarketData,
+                    accountBalance,
+                    currentPositions,
+                    recentPnL
+                );
+
+                if (riskDecision.warnings.length > 0) {
+                    logger.warn(`⚠️ Risk warnings: ${riskDecision.warnings.join(', ')}`);
+                }
+
+                this.emit('riskCouncilDecision', riskDecision);
+
+                if (!riskDecision.approved) {
+                    logger.info(`🚫 Trade VETOED by Risk Council: ${riskDecision.vetoReason}`);
+                    await this.updateLeaderboard();
+                    continue;
+                }
+
+                logger.info('✅ Trade APPROVED by Risk Council');
+
+                // =================================================================
+                // STAGE 6: EXECUTION - Place trade on WEEX with TP/SL
+                // =================================================================
+                logger.info('🚀 Stage 6: Executing Trade...');
+
+                await this.executeCollaborativeTrade(
+                    userId,
+                    topCoin.symbol,
+                    selectedMarketData,
+                    champion,
+                    riskDecision,
+                    coinSelectionResults
+                );
+
+                // =================================================================
+                // STAGE 7: POSITION MANAGEMENT - Update leaderboard
+                // =================================================================
                 await this.updateLeaderboard();
 
                 this.currentCycle.endTime = Date.now();
@@ -455,373 +592,333 @@ export class AutonomousTradingEngine extends EventEmitter {
         return marketDataMap;
     }
 
+    // =========================================================================
+    // COLLABORATIVE FLOW HELPER METHODS
+    // =========================================================================
+
     /**
-     * Run one analyst's trading cycle
+     * Get the shared balance for collaborative trading
+     * ALWAYS fetches from WEEX wallet - this is the source of truth
      */
-    private async runAnalystCycle(
-        userId: string,
-        analystId: string,
-        state: AnalystState,
-        marketDataMap: Map<string, ExtendedMarketData>
-    ): Promise<void> {
-        // Check if analyst is already trading (prevent concurrent trades)
-        if (this.tradingLocks.has(analystId)) {
-            logger.debug(`${analystId}: Already trading, skipping`);
-            return;
-        }
-
-        // Check if analyst can trade (cooldown)
-        const timeSinceLastTrade = Date.now() - state.lastTradeTime;
-        if (timeSinceLastTrade < this.MIN_TRADE_INTERVAL_MS) {
-            logger.debug(`${analystId}: Cooldown (${((this.MIN_TRADE_INTERVAL_MS - timeSinceLastTrade) / 1000).toFixed(0)}s remaining)`);
-            return;
-        }
-
-        // Check if balance is sufficient
-        if (state.balance < this.MIN_BALANCE_TO_TRADE) {
-            logger.warn(`${analystId}: Insufficient balance ($${state.balance.toFixed(2)}), skipping`);
-            return;
-        }
-
-        // Pick a random symbol to analyze
-        const symbols = Array.from(marketDataMap.keys());
-        if (symbols.length === 0) {
-            logger.warn(`${analystId}: No market data available`);
-            return;
-        }
-
-        const symbol = symbols[Math.floor(Math.random() * symbols.length)];
-        const marketData = marketDataMap.get(symbol);
-        if (!marketData) return;
-
-        logger.info(`🤖 ${analystId}: Analyzing ${symbol} with full arena context...`);
-
-        // Lock this analyst for trading
-        this.tradingLocks.add(analystId);
-
+    private async getWalletBalance(): Promise<number> {
         try {
-            // Check if already has position in this symbol
-            const existingPosition = state.positions.find(p => p.symbol === symbol);
-
-            // Generate trading decision with arena context
-            // This now builds full context including leaderboard, other analysts, etc.
-            const decision = await geminiService.generateTradingDecision(
-                marketData,
-                state.balance,
-                existingPosition,
-                userId,
-                analystId // Pass analyst ID for context building
-            );
-
-            logger.info(`${analystId}: ${decision.shouldTrade ? '✅ TRADE' : '⏸️ HOLD'} (confidence: ${decision.analysis.confidence}%, champion: ${decision.analysis.champion?.analystName || 'none'})`);
-
-            // Execute trade if recommended
-            if (decision.shouldTrade && decision.order) {
-                // Calculate actual position size accounting for leverage
-                const positionSizePercent = decision.riskManagement.positionSizePercent;
-                const leverage = decision.riskManagement.leverage;
-
-                // Position value is the notional value (size * price)
-                const positionValue = state.balance * (positionSizePercent / 100);
-
-                // Margin required is position value / leverage
-                const marginRequired = positionValue / leverage;
-
-                // Calculate margin already used by existing positions
-                // IMPROVED: Now uses actual leverage from WEEX when available
-                // Fallback to ASSUMED_AVERAGE_LEVERAGE only when leverage is not provided
-                const existingMarginUsed = state.positions.reduce((sum, p) => {
-                    // Estimate margin used: (position size * entry price) / leverage
-                    const positionNotional = p.size * p.entryPrice;
-
-                    // Use actual leverage from WEEX if available, otherwise fallback to assumption
-                    const effectiveLeverage = p.leverage && p.leverage > 0
-                        ? p.leverage
-                        : ASSUMED_AVERAGE_LEVERAGE;
-
-                    const marginUsed = positionNotional / effectiveLeverage;
-
-                    // Log when using assumed leverage for monitoring
-                    if (!p.leverage || p.leverage <= 0) {
-                        logger.debug(`${analystId}: Using assumed ${ASSUMED_AVERAGE_LEVERAGE}x leverage for ${p.symbol} (actual leverage unavailable)`);
-                    }
-
-                    return sum + marginUsed;
-                }, 0);
-
-                // Available balance for new positions = total balance - existing margin
-                const availableBalance = Math.max(0, state.balance - existingMarginUsed);
-
-                // Log margin usage for monitoring
-                if (existingMarginUsed > 0) {
-                    const marginUtilization = (existingMarginUsed / state.balance) * 100;
-                    logger.debug(`${analystId}: Margin utilization: ${marginUtilization.toFixed(1)}% (${existingMarginUsed.toFixed(2)} / ${state.balance.toFixed(2)})`);
-                }
-
-                // Ensure we have enough available balance for margin
-                if (marginRequired > availableBalance * 0.95) {
-                    logger.warn(`${analystId}: Insufficient available margin for ${symbol} (need ${marginRequired.toFixed(2)}, available ${availableBalance.toFixed(2)}, ${existingMarginUsed.toFixed(2)} already used)`);
-
-                    // Track margin rejection for monitoring
-                    this.emit('marginRejection', {
-                        analystId,
-                        symbol,
-                        marginRequired,
-                        availableBalance,
-                        existingMarginUsed,
-                        totalBalance: state.balance,
-                        reason: 'insufficient_available_margin'
-                    });
-
-                    return;
-                }
-
-                // Calculate size
-                const size = positionValue / marketData.currentPrice;
-
-                // Validate size
-                if (!Number.isFinite(size) || size <= 0) {
-                    throw new Error(`Invalid position size: ${size}`);
-                }
-
-                // Update order with calculated size
-                decision.order.size = size.toFixed(8);
-
-                if (this.DRY_RUN) {
-                    // Dry run mode - log but don't execute
-                    logger.info(`🧪 ${analystId}: DRY RUN - Would execute ${decision.order.type === '1' ? 'LONG' : 'SHORT'} on ${symbol}, size: ${decision.order.size}`);
-                } else {
-                    // Place order on WEEX
-                    const response = await this.weexClient.placeOrder(decision.order);
-
-                    // Upload AI log for compliance
-                    await this.weexClient.uploadAILog({
-                        ...decision.aiLog,
-                        orderId: response.order_id,
-                    });
-
-                    // Save trade to database
-                    await this.saveTrade(userId, state.portfolioId, {
-                        symbol,
-                        side: decision.order.type === '1' || decision.order.type === '3' ? 'LONG' : 'SHORT',
-                        size: parseFloat(decision.order.size),
-                        price: marketData.currentPrice,
-                        orderId: parseInt(String(response.order_id), 10),
-                        clientOrderId: decision.order.client_oid,
-                        reason: decision.analysis.champion?.thesis || 'Autonomous decision',
-                        confidence: decision.analysis.confidence,
-                    });
-
-                    logger.info(`✅ ${analystId}: Trade executed on ${symbol} (Order ID: ${response.order_id})`);
-                }
-
-                // Update state
-                state.lastTradeTime = Date.now();
-                state.totalTrades++;
-
-                // Update balance
-                // NOTE: Balance management is simplified here. In production:
-                // 1. Fetch actual account balance from WEEX after trade
-                // 2. Track margin used vs available
-                // 3. Handle partial fills
-                // 4. Account for fees
-                // 
-                // For now, we estimate based on position value
-                const isClosing = decision.order.type === '3' || decision.order.type === '4';
-                if (!isClosing) {
-                    // Opening position - deduct margin (position value / leverage)
-                    state.balance = Math.max(0, state.balance - marginRequired);
-                }
-                // For closing positions, P&L will be reflected in next balance update
-
-                if (this.currentCycle) {
-                    this.currentCycle.tradesExecuted++;
-                }
-
-                this.emit('tradeExecuted', { analystId, symbol, order: decision.order, dryRun: this.DRY_RUN });
+            const assets = await this.weexClient.getAccountAssets();
+            const balance = parseFloat(assets.available || '0');
+            if (!Number.isFinite(balance) || balance < 0) {
+                logger.warn(`Invalid wallet balance from WEEX: ${balance}`);
+                return 0;
             }
+            return balance;
         } catch (error) {
-            logger.error(`${analystId}: Trade execution failed:`, error);
-            this.currentCycle?.errors.push(`${analystId} trade failed: ${error instanceof Error ? error.message : String(error)}`);
-        } finally {
-            // Always unlock
-            this.tradingLocks.delete(analystId);
+            logger.error('Failed to fetch wallet balance:', error);
+            // Return cached balance as fallback
+            const firstAnalyst = this.analystStates.values().next().value;
+            return firstAnalyst?.balance ?? 0;
         }
     }
 
     /**
-     * Run debates between top analysts
+     * Get all current positions (shared in collaborative mode)
      */
-    private async runDebates(
-        userId: string,
-        marketDataMap: Map<string, ExtendedMarketData>
-    ): Promise<void> {
-        logger.info('⚔️ Running debates...');
+    private getAllPositions(): Array<{ symbol: string; side: string; size: number }> {
+        const firstAnalyst = this.analystStates.values().next().value;
+        if (!firstAnalyst) return [];
 
-        // Pick a random symbol for debate
-        const symbols = Array.from(marketDataMap.keys());
-        if (symbols.length === 0) {
-            logger.warn('No market data available for debates');
+        return firstAnalyst.positions.map(pos => ({
+            symbol: pos.symbol,
+            side: pos.side,
+            size: pos.size
+        }));
+    }
+
+    /**
+     * Get recent P&L for risk assessment
+     * Uses realized_pnl column from trades table
+     */
+    private async getRecentPnL(userId: string): Promise<{ day: number; week: number }> {
+        try {
+            const dayResult = await pool.query(
+                `SELECT COALESCE(SUM(realized_pnl), 0) as total_pnl, COALESCE(SUM(ABS(size * price)), 1) as total_volume
+                 FROM trades 
+                 WHERE user_id = $1 AND executed_at > NOW() - INTERVAL '24 hours' AND status = 'FILLED'`,
+                [userId]
+            );
+
+            const weekResult = await pool.query(
+                `SELECT COALESCE(SUM(realized_pnl), 0) as total_pnl, COALESCE(SUM(ABS(size * price)), 1) as total_volume
+                 FROM trades 
+                 WHERE user_id = $1 AND executed_at > NOW() - INTERVAL '7 days' AND status = 'FILLED'`,
+                [userId]
+            );
+
+            const dayPnL = parseFloat(dayResult.rows[0]?.total_pnl || '0');
+            const dayVolume = parseFloat(dayResult.rows[0]?.total_volume || '1');
+            const weekPnL = parseFloat(weekResult.rows[0]?.total_pnl || '0');
+            const weekVolume = parseFloat(weekResult.rows[0]?.total_volume || '1');
+
+            return {
+                day: dayVolume > 0 ? (dayPnL / dayVolume) * 100 : 0,
+                week: weekVolume > 0 ? (weekPnL / weekVolume) * 100 : 0
+            };
+        } catch (error) {
+            logger.warn('Failed to fetch recent P&L:', error);
+            return { day: 0, week: 0 };
+        }
+    }
+
+    /**
+     * Execute a collaborative trade (Stage 6)
+     * Places the trade on WEEX with TP/SL orders
+     */
+    private async executeCollaborativeTrade(
+        userId: string,
+        symbol: string,
+        marketData: ExtendedMarketData,
+        champion: AnalysisResult,
+        riskDecision: RiskCouncilDecision,
+        coinSelectors: CoinSelectionResult[]
+    ): Promise<void> {
+        const isBullish = ['strong_buy', 'buy'].includes(champion.recommendation);
+        const direction = isBullish ? 'LONG' : 'SHORT';
+
+        const positionSize = riskDecision.adjustments?.positionSize ?? champion.positionSize;
+        const leverage = Math.min(5, riskDecision.adjustments?.leverage ?? 3);
+        const stopLoss = riskDecision.adjustments?.stopLoss ?? champion.priceTarget.bear;
+
+        // Get fresh balance from WEEX wallet
+        const accountBalance = await this.getWalletBalance();
+
+        // Check minimum balance to trade
+        if (accountBalance < this.MIN_BALANCE_TO_TRADE) {
+            logger.warn(`Account balance ${accountBalance.toFixed(2)} below minimum ${this.MIN_BALANCE_TO_TRADE} to trade`);
+            this.currentCycle?.errors.push(`Insufficient balance: ${accountBalance.toFixed(2)} < ${this.MIN_BALANCE_TO_TRADE}`);
             return;
         }
 
-        const symbol = symbols[Math.floor(Math.random() * symbols.length)];
-        const marketData = marketDataMap.get(symbol);
-        if (!marketData) return;
+        const positionPercent = Math.min(this.MAX_POSITION_SIZE_PERCENT, (positionSize / 10) * this.MAX_POSITION_SIZE_PERCENT);
+        const positionValue = accountBalance * (positionPercent / 100);
+        const marginRequired = leverage > 0 ? positionValue / leverage : positionValue;
+
+        // Guard against division by zero
+        if (!Number.isFinite(marketData.currentPrice) || marketData.currentPrice <= 0) {
+            logger.error(`Invalid market price: ${marketData.currentPrice}`);
+            this.currentCycle?.errors.push('Invalid market price');
+            return;
+        }
+
+        const size = positionValue / marketData.currentPrice;
+
+        if (!Number.isFinite(size) || size <= 0) {
+            logger.error(`Invalid position size calculated: ${size}`);
+            this.currentCycle?.errors.push('Invalid position size');
+            return;
+        }
+
+        // Validate marginRequired
+        if (!Number.isFinite(marginRequired) || marginRequired <= 0) {
+            logger.error(`Invalid margin required: ${marginRequired}`);
+            this.currentCycle?.errors.push('Invalid margin calculation');
+            return;
+        }
+
+        const clientOrderId = `collab_${champion.analystId}_${Date.now()}`;
+        const orderType = direction === 'LONG' ? '1' : '2';
+
+        const order = {
+            symbol,
+            type: orderType as '1' | '2' | '3' | '4',
+            size: size.toFixed(8),
+            client_oid: clientOrderId,
+            order_type: '2' as '0' | '1' | '2' | '3', // FOK
+            match_price: '1' as '0' | '1', // Market price
+            price: marketData.currentPrice.toFixed(2), // Required but ignored for market orders
+            presetTakeProfitPrice: champion.priceTarget.base.toFixed(2),
+            presetStopLossPrice: stopLoss.toFixed(2),
+        };
+
+        const firstAnalyst = this.analystStates.values().next().value;
+        if (!firstAnalyst) {
+            logger.error('No analyst state available for trade execution');
+            return;
+        }
+
+        if (this.DRY_RUN) {
+            logger.info(`[DRY RUN] Would execute ${direction} on ${symbol}`);
+            logger.info(`  Champion: ${champion.analystName} (${champion.confidence}%)`);
+            logger.info(`  Size: ${size.toFixed(6)} (${positionPercent.toFixed(1)}% of account)`);
+            logger.info(`  Leverage: ${leverage}x`);
+            logger.info(`  Entry: ${marketData.currentPrice.toFixed(2)}`);
+            logger.info(`  Take Profit: ${champion.priceTarget.base.toFixed(2)}`);
+            logger.info(`  Stop Loss: ${stopLoss.toFixed(2)}`);
+
+            if (this.currentCycle) {
+                this.currentCycle.tradesExecuted++;
+            }
+
+            this.emit('tradeExecuted', { symbol, direction, champion: champion.analystName, dryRun: true });
+            return;
+        }
 
         try {
-            // Generate analyses from all analysts
-            const analyses = await geminiService.generateAllAnalyses({
-                symbol,
-                currentPrice: marketData.currentPrice,
-                high24h: marketData.high24h,
-                low24h: marketData.low24h,
-                volume24h: marketData.volume24h,
-                change24h: marketData.change24h,
-            }, userId);
+            const response = await this.weexClient.placeOrder(order);
+            logger.info(`✅ Order placed: ${direction} ${symbol} (Order ID: ${response.order_id})`);
 
-            if (analyses.length < 2) {
-                logger.warn('Not enough analyses for debates');
-                return;
-            }
-
-            // Run tournament
-            const tournament = await geminiService.runTournament(
-                analyses,
-                {
-                    price: marketData.currentPrice,
-                    change24h: marketData.change24h,
-                    volume24h: marketData.volume24h,
+            // Build AI log for WEEX compliance
+            const aiLog = {
+                stage: 'collaborative_trade',
+                model: 'gemini-2.5-flash',
+                input: {
+                    symbol,
+                    direction,
+                    champion: champion.analystName,
+                    confidence: champion.confidence,
+                    coinSelectors: coinSelectors.map(cs => cs.analystId)
                 },
-                symbol,
-                userId
-            );
+                output: {
+                    orderId: response.order_id,
+                    size: size.toFixed(8),
+                    leverage,
+                    priceTargets: champion.priceTarget
+                },
+                explanation: `[${champion.analystName}] ${champion.thesis}`,
+                orderId: response.order_id
+            };
 
-            const debatesRun = tournament.quarterfinals.length + tournament.semifinals.length + (tournament.final ? 1 : 0);
-            if (this.currentCycle) {
-                this.currentCycle.debatesRun = debatesRun;
+            await this.weexClient.uploadAILog(aiLog);
+
+            await this.saveTrade(userId, firstAnalyst.portfolioId, {
+                symbol,
+                side: direction,
+                size,
+                price: marketData.currentPrice,
+                orderId: parseInt(String(response.order_id), 10),
+                clientOrderId,
+                reason: `[${champion.analystName}] ${champion.thesis}`,
+                confidence: champion.confidence,
+            });
+
+            // Update trade stats (balance will be refreshed from WEEX on next cycle)
+            const now = Date.now();
+            for (const state of this.analystStates.values()) {
+                state.lastTradeTime = now;
+                state.totalTrades++;
             }
 
-            logger.info(`⚔️ Debates complete: ${debatesRun} battles, Champion: ${tournament.champion?.analystName || 'None'}`);
-            this.emit('debatesComplete', { symbol, tournament });
+            if (this.currentCycle) {
+                this.currentCycle.tradesExecuted++;
+            }
+
+            this.emit('tradeExecuted', {
+                symbol, direction, champion: champion.analystName,
+                orderId: response.order_id, size, leverage, dryRun: false
+            });
+
+            logger.info(`🎯 Trade complete: ${direction} ${symbol} by ${champion.analystName}`);
 
         } catch (error) {
-            logger.error('Debates failed:', error);
-            this.currentCycle?.errors.push(`Debates failed: ${error instanceof Error ? error.message : String(error)}`);
+            logger.error('Trade execution failed:', error);
+            this.currentCycle?.errors.push(`Trade execution failed: ${error instanceof Error ? error.message : String(error)}`);
+            throw error;
         }
     }
 
     /**
      * Update leaderboard and portfolio values
+     * Balance is ALWAYS fetched from WEEX wallet (source of truth)
      */
     private async updateLeaderboard(): Promise<void> {
-        const updatePromises = Array.from(this.analystStates.entries()).map(async ([analystId, state]) => {
-            try {
-                // Get current positions from WEEX
-                const positions = await this.getAnalystPositions();
-                state.positions = positions;
+        try {
+            // Get actual wallet balance from WEEX (source of truth)
+            const walletBalance = await this.getWalletBalance();
 
-                // Calculate unrealized P&L from positions
-                // Fetch current market prices for all positions
-                const unrealizedPnL = await Promise.all(
-                    positions.map(async (p) => {
-                        try {
-                            // Fetch current market price
-                            const ticker = await this.weexClient.getTicker(p.symbol);
-                            const currentPrice = parseFloat(ticker.last);
+            // Get all positions from WEEX
+            const positions = await this.getAnalystPositions();
 
-                            if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
-                                logger.warn(`${analystId}: Invalid current price for ${p.symbol}: ${currentPrice}`);
-                                return 0;
-                            }
+            // Batch fetch all unique tickers needed for P&L calculation
+            const uniqueSymbols = [...new Set(positions.map(p => p.symbol))];
+            const tickerCache = new Map<string, number>();
 
-                            // Calculate P&L based on position side
-                            // For LONG: (currentPrice - entryPrice) * size
-                            // For SHORT: (entryPrice - currentPrice) * size
-                            const pnl = p.side === 'LONG'
-                                ? (currentPrice - p.entryPrice) * p.size
-                                : (p.entryPrice - currentPrice) * p.size;
-
-                            // Validate P&L
-                            if (!Number.isFinite(pnl)) {
-                                logger.warn(`${analystId}: Invalid P&L for ${p.symbol}: ${pnl}`);
-                                return 0;
-                            }
-
-                            return pnl;
-                        } catch (error) {
-                            logger.warn(`${analystId}: Failed to calculate P&L for ${p.symbol}:`, error instanceof Error ? error.message : String(error));
-                            return 0;
+            await Promise.all(
+                uniqueSymbols.map(async (symbol) => {
+                    try {
+                        const ticker = await this.weexClient.getTicker(symbol);
+                        const currentPrice = parseFloat(ticker.last);
+                        if (Number.isFinite(currentPrice) && currentPrice > 0) {
+                            tickerCache.set(symbol, currentPrice);
                         }
-                    })
-                ).then(pnls => pnls.reduce((sum, pnl) => sum + pnl, 0));
+                    } catch {
+                        // Ignore ticker fetch errors
+                    }
+                })
+            );
 
-                const totalValue = state.balance + unrealizedPnL;
-                const totalReturn = this.INITIAL_BALANCE > 0
-                    ? ((totalValue - this.INITIAL_BALANCE) / this.INITIAL_BALANCE) * 100
-                    : 0;
+            // Calculate unrealized P&L
+            const unrealizedPnL = positions.reduce((sum, p) => {
+                const currentPrice = tickerCache.get(p.symbol);
+                if (!currentPrice) return sum;
 
-                // Validate values
-                if (!Number.isFinite(totalValue) || !Number.isFinite(totalReturn)) {
-                    logger.warn(`${analystId}: Invalid portfolio values, skipping update`);
-                    return;
-                }
+                const pnl = p.side === 'LONG'
+                    ? (currentPrice - p.entryPrice) * p.size
+                    : (p.entryPrice - currentPrice) * p.size;
+                return sum + (Number.isFinite(pnl) ? pnl : 0);
+            }, 0);
 
-                // Update database
-                await pool.query(
-                    `UPDATE portfolios 
-                     SET total_value = $1, total_return = $2, updated_at = NOW()
-                     WHERE id = $3`,
-                    [totalValue, totalReturn, state.portfolioId]
-                );
+            // Total value = wallet balance + unrealized P&L from positions
+            const totalValue = walletBalance + unrealizedPnL;
 
-            } catch (error) {
-                logger.warn(`Failed to update ${analystId} portfolio:`, error instanceof Error ? error.message : String(error));
+            // Get first analyst to access portfolioId
+            const firstAnalyst = this.analystStates.values().next().value;
+            if (!firstAnalyst) return;
+
+            // Update all analysts with the same values (collaborative mode)
+            for (const state of this.analystStates.values()) {
+                state.positions = positions;
+                state.balance = walletBalance; // Always from WEEX wallet
             }
-        });
 
-        await Promise.allSettled(updatePromises);
+            // Update database for display purposes
+            if (Number.isFinite(totalValue)) {
+                await pool.query(
+                    `UPDATE portfolios SET current_balance = $1, total_value = $2, updated_at = NOW() WHERE id = $3`,
+                    [walletBalance, totalValue, firstAnalyst.portfolioId]
+                );
+            }
+        } catch (error) {
+            logger.warn('Failed to update leaderboard:', error instanceof Error ? error.message : String(error));
+        }
     }
 
     /**
      * Get analyst's current positions from WEEX
-     * 
-     * NOTE: In the current implementation, all analysts share the same WEEX account
-     * and therefore see the same positions. This is a limitation of using a single
-     * API key for all analysts.
-     * 
-     * In production, you would either:
-     * 1. Use separate WEEX sub-accounts for each analyst
-     * 2. Track positions in the database and filter by portfolio_id
-     * 3. Use position metadata (client_oid) to identify which analyst owns which position
-     * 
-     * For the hackathon/demo, we return all positions for simplicity.
      */
     private async getAnalystPositions(): Promise<AnalystState['positions']> {
         try {
             const weexPositions = await this.weexClient.getPositions();
-            // Filter positions for this portfolio (would need portfolio-specific API keys in production)
             return weexPositions.map(p => {
-                // Calculate entry price from openValue and size
-                const openValue = parseFloat(p.openValue);
+                // Positions are now normalized by WeexClient - use camelCase properties
+                const openValue = parseFloat(p.openValue || '0');
                 const size = parseFloat(p.size);
-                const markPrice = parseFloat(p.markPrice);
-                const leverage = parseFloat(p.leverage); // WEEX provides actual leverage!
+                const leverage = parseFloat(p.leverage);
 
-                // Validate values
-                if (!Number.isFinite(openValue) || !Number.isFinite(size) || !Number.isFinite(markPrice)) {
-                    logger.warn(`Invalid position data for ${p.symbol}`);
+                if (!Number.isFinite(size) || size === 0) return null;
+
+                // Calculate entry price: openValue / size
+                // Note: markPrice is not available from position endpoint, would need separate ticker call
+                let entryPrice: number;
+                if (Number.isFinite(openValue) && openValue > 0 && size > 0) {
+                    entryPrice = openValue / size;
+                } else {
+                    // Skip positions with no valid price data
+                    logger.warn(`Position ${p.symbol} has no valid price data (openValue: ${openValue}, size: ${size}), skipping`);
                     return null;
                 }
 
-                const entryPrice = size > 0 ? openValue / size : markPrice;
-
                 return {
                     symbol: p.symbol,
-                    side: p.side === 'long' ? 'LONG' as const : 'SHORT' as const,
+                    side: p.side, // Already normalized to 'LONG' | 'SHORT' by normalizeWeexPosition
                     size,
-                    entryPrice: Number.isFinite(entryPrice) ? entryPrice : markPrice,
-                    leverage: Number.isFinite(leverage) && leverage > 0 ? leverage : ASSUMED_AVERAGE_LEVERAGE, // Use actual leverage from WEEX
+                    entryPrice,
+                    leverage: Number.isFinite(leverage) && leverage > 0 ? leverage : ASSUMED_AVERAGE_LEVERAGE,
                 };
             }).filter((p): p is NonNullable<typeof p> => p !== null);
         } catch (error) {
@@ -836,168 +933,93 @@ export class AutonomousTradingEngine extends EventEmitter {
     private async saveTrade(
         userId: string,
         portfolioId: string,
-        trade: {
-            symbol: string;
-            side: 'LONG' | 'SHORT';
-            size: number;
-            price: number;
-            orderId: number;
-            clientOrderId: string;
-            reason: string;
-            confidence: number;
-        }
+        trade: { symbol: string; side: 'LONG' | 'SHORT'; size: number; price: number; orderId: number; clientOrderId: string; reason: string; confidence: number; }
     ): Promise<void> {
         try {
             await pool.query(
-                `INSERT INTO trades (
-                    user_id, portfolio_id, symbol, side, type, size, price,
-                    status, reason, confidence, client_order_id, weex_order_id,
-                    executed_at, created_at
-                ) VALUES ($1, $2, $3, $4, 'MARKET', $5, $6, 'FILLED', $7, $8, $9, $10, NOW(), NOW())`,
-                [
-                    userId,
-                    portfolioId,
-                    trade.symbol,
-                    trade.side,
-                    trade.size,
-                    trade.price,
-                    trade.reason,
-                    trade.confidence,
-                    trade.clientOrderId,
-                    trade.orderId,
-                ]
+                `INSERT INTO trades (user_id, portfolio_id, symbol, side, type, size, price, status, reason, confidence, client_order_id, weex_order_id, executed_at, created_at)
+                 VALUES ($1, $2, $3, $4, 'MARKET', $5, $6, 'FILLED', $7, $8, $9, $10, NOW(), NOW())`,
+                [userId, portfolioId, trade.symbol, trade.side, trade.size, trade.price, trade.reason, trade.confidence, trade.clientOrderId, trade.orderId]
             );
         } catch (error) {
             logger.error('Failed to save trade to database:', error);
-            throw error;
+            // Don't throw - trade was already executed on WEEX, just log the DB failure
         }
     }
 
     /**
-     * Emergency close all positions (RED ALERT)
-     * FIXED: Added proper error handling, retry logic, and database persistence
+     * Emergency close all positions
+     * FIXED: Collect positions to close first, then iterate to avoid modifying while iterating
      */
     private async emergencyCloseAllPositions(userId: string): Promise<void> {
-        logger.error('🚨 EMERGENCY: Closing all leveraged positions');
+        logger.error('🚨 EMERGENCY: Closing all positions');
 
-        const closedPositions: Array<{ analystId: string; symbol: string; success: boolean }> = [];
+        // Collect all unique symbols to close first
+        const symbolsToClose = new Set<string>();
+        for (const [, state] of this.analystStates) {
+            for (const position of state.positions) {
+                symbolsToClose.add(position.symbol);
+            }
+        }
 
-        for (const [analystId, state] of this.analystStates) {
-            if (state.positions.length > 0) {
-                for (const position of state.positions) {
-                    let success = false;
-                    let lastError: Error | null = null;
+        // Close positions by symbol
+        for (const symbol of symbolsToClose) {
+            try {
+                await this.weexClient.closeAllPositions(symbol);
+                logger.info(`Closed positions for ${symbol}`);
+            } catch (error) {
+                logger.error(`Failed to close ${symbol}:`, error);
+            }
+        }
 
-                    // Retry up to 3 times
-                    for (let retry = 0; retry < 3; retry++) {
-                        try {
-                            await this.weexClient.closeAllPositions(position.symbol);
-                            logger.info(`✅ Closed ${position.symbol} position for ${analystId} (attempt ${retry + 1})`);
-                            success = true;
-                            break;
-                        } catch (error) {
-                            lastError = error instanceof Error ? error : new Error(String(error));
-                            logger.warn(`Failed to close ${position.symbol} for ${analystId} (attempt ${retry + 1}):`, lastError.message);
+        // Clear all analyst positions after closing
+        for (const [, state] of this.analystStates) {
+            state.positions = [];
+        }
 
-                            // Wait before retry (exponential backoff)
-                            if (retry < 2) {
-                                await new Promise(resolve => setTimeout(resolve, 1000 * (retry + 1)));
-                            }
-                        }
-                    }
+        this.emit('emergencyClose', { userId, timestamp: Date.now() });
+    }
 
-                    if (success) {
-                        // Clear position from state
-                        state.positions = state.positions.filter(p => p.symbol !== position.symbol);
+    private sleep(ms: number): Promise<void> {
+        return new Promise((resolve) => {
+            this.sleepTimeout = setTimeout(() => { this.sleepTimeout = null; resolve(); }, ms);
+        });
+    }
 
-                        // Update database to reflect closed position
-                        try {
-                            await pool.query(
-                                `INSERT INTO trades (
-                                    user_id, portfolio_id, symbol, side, type, size, price,
-                                    status, reason, confidence, client_order_id, executed_at, created_at
-                                ) VALUES ($1, $2, $3, $4, 'MARKET', $5, $6, 'FILLED', $7, 100, $8, NOW(), NOW())`,
-                                [
-                                    userId,
-                                    state.portfolioId,
-                                    position.symbol,
-                                    position.side === 'LONG' ? 'SHORT' : 'LONG', // Opposite side to close
-                                    position.size,
-                                    0, // Price will be filled by WEEX
-                                    'EMERGENCY CLOSE - Circuit Breaker RED ALERT',
-                                    `emergency_close_${Date.now()}`
-                                ]
-                            );
-                        } catch (dbError) {
-                            logger.error(`Failed to save emergency close to database for ${position.symbol}:`, dbError);
-                        }
-                    } else {
-                        logger.error(`❌ FAILED to close ${position.symbol} for ${analystId} after 3 attempts: ${lastError?.message}`);
-                    }
+    async cleanup(): Promise<void> {
+        this.stop();
+        if (this.mainLoopPromise) {
+            // Create a timeout that we can clean up
+            let cleanupTimeoutId: NodeJS.Timeout | null = null;
+            const timeoutPromise = new Promise<void>((_, reject) => {
+                cleanupTimeoutId = setTimeout(() => reject(new Error('cleanup timeout')), 5000);
+            });
 
-                    closedPositions.push({ analystId, symbol: position.symbol, success });
+            try {
+                await Promise.race([this.mainLoopPromise, timeoutPromise]);
+            } catch {
+                logger.warn('Cleanup timeout or error');
+            } finally {
+                // Always clear the timeout to prevent memory leak
+                if (cleanupTimeoutId) {
+                    clearTimeout(cleanupTimeoutId);
                 }
             }
         }
 
-        // Log summary
-        const successCount = closedPositions.filter(p => p.success).length;
-        const failCount = closedPositions.filter(p => !p.success).length;
-        logger.error(`🚨 Emergency close complete: ${successCount} positions closed, ${failCount} failed`);
+        // Clear state to prevent stale data on restart
+        this.analystStates.clear();
+        this.currentCycle = null;
+        this.cycleCount = 0;
+        this.mainLoopPromise = null;
 
-        // Emit event with details
-        this.emit('emergencyClose', {
-            userId,
-            timestamp: Date.now(),
-            closedPositions,
-            successCount,
-            failCount
-        });
-    }
-
-    /**
-     * Sleep utility with cancellation support
-     */
-    private sleep(ms: number): Promise<void> {
-        return new Promise((resolve) => {
-            this.sleepTimeout = setTimeout(() => {
-                this.sleepTimeout = null;
-                resolve();
-            }, ms);
-        });
-    }
-
-    /**
-     * Cleanup method for graceful shutdown
-     */
-    async cleanup(): Promise<void> {
-        this.stop();
-
-        // Wait for main loop to finish
-        if (this.mainLoopPromise) {
-            try {
-                await Promise.race([
-                    this.mainLoopPromise,
-                    new Promise((_, reject) => setTimeout(() => reject(new Error('Cleanup timeout')), 5000))
-                ]);
-            } catch (error) {
-                logger.warn('Main loop cleanup timeout');
-            }
-        }
-
-        // Remove all listeners to prevent memory leaks
         this.removeAllListeners();
-
-        logger.info('Autonomous engine cleanup complete');
     }
 }
 
-// Singleton instance
 let engineInstance: AutonomousTradingEngine | null = null;
-
 export function getAutonomousTradingEngine(): AutonomousTradingEngine {
-    if (!engineInstance) {
-        engineInstance = new AutonomousTradingEngine();
-    }
+    if (!engineInstance) engineInstance = new AutonomousTradingEngine();
     return engineInstance;
 }
+

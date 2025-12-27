@@ -90,10 +90,13 @@ export async function closeRedis(): Promise<void> {
         const clientToClose = redisClient;
         redisClient = null; // Clear reference first to prevent reuse
 
+        let timeoutId: NodeJS.Timeout | null = null;
         try {
             await Promise.race([
                 clientToClose.quit(),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('Redis quit timeout')), 5000))
+                new Promise((_, reject) => {
+                    timeoutId = setTimeout(() => reject(new Error('Redis quit timeout')), 5000);
+                })
             ]);
             logger.info('Redis connection closed');
         } catch (error) {
@@ -104,6 +107,8 @@ export async function closeRedis(): Promise<void> {
             } catch {
                 // Ignore disconnect errors
             }
+        } finally {
+            if (timeoutId) clearTimeout(timeoutId);
         }
     } else {
         redisClient = null;

@@ -5,26 +5,14 @@
  * - Time zones (US, Europe, Asia trading hours)
  * - Market activity patterns
  * - Crypto market volatility cycles
- * - Analyst-specific cooldowns and budgets
  */
 
 import { logger } from '../../utils/logger';
 
 export interface MarketActivity {
-    region: 'US' | 'EUROPE' | 'ASIA';
+    region: 'US' | 'EUROPE' | 'ASIA' | 'TRANSITION';
     activityLevel: 'low' | 'medium' | 'high' | 'peak';
     tradingMultiplier: number; // 0.5 - 2.0
-}
-
-export interface AnalystBudgetStatus {
-    analystId: string;
-    currentBalance: number;
-    initialBalance: number;
-    percentRemaining: number;
-    isLowBalance: boolean;
-    isCriticalBalance: boolean;
-    canTrade: boolean;
-    recommendedPositionSize: number;
 }
 
 export class TradingScheduler {
@@ -59,9 +47,6 @@ export class TradingScheduler {
         const utcHour = now.getUTCHours();
         const utcMinutes = now.getUTCMinutes();
 
-        // Use integer comparison for exact boundaries, decimal for ranges
-        const timeDecimal = utcHour + (utcMinutes / 60);
-
         // Asia trading hours (0:00 - 6:00 UTC)
         // Use >= 0 and < 6 to avoid floating point issues
         if (utcHour >= 0 && utcHour < 6) {
@@ -70,6 +55,16 @@ export class TradingScheduler {
                 region: 'ASIA',
                 activityLevel,
                 tradingMultiplier: activityLevel === 'high' ? 1.5 : 1.2,
+            };
+        }
+
+        // TRANSITION period (6:00 - 8:00 UTC) - Asia closing, pre-Europe open
+        // Low-activity window between major trading sessions
+        if (utcHour >= 6 && utcHour < 8) {
+            return {
+                region: 'TRANSITION',
+                activityLevel: 'low',
+                tradingMultiplier: 0.7,
             };
         }
 
@@ -132,77 +127,6 @@ export class TradingScheduler {
             shouldTrade: true,
             reason: `${activity.activityLevel} activity (${activity.region} hours)`,
             multiplier: activity.tradingMultiplier,
-        };
-    }
-
-    /**
-     * Get analyst budget status with warnings
-     * 
-     * EDGE CASES HANDLED:
-     * - Division by zero (initialBalance = 0)
-     * - Negative balances
-     * - Negative open positions
-     * - Integer overflow in position size
-     */
-    getAnalystBudgetStatus(
-        analystId: string,
-        currentBalance: number,
-        initialBalance: number,
-        openPositions: number
-    ): AnalystBudgetStatus {
-        // Validate inputs
-        if (!Number.isFinite(currentBalance) || currentBalance < 0) {
-            logger.warn(`Invalid currentBalance for ${analystId}: ${currentBalance}, using 0`);
-            currentBalance = 0;
-        }
-
-        if (!Number.isFinite(initialBalance) || initialBalance <= 0) {
-            logger.warn(`Invalid initialBalance for ${analystId}: ${initialBalance}, using default`);
-            initialBalance = 100; // Default to config value
-        }
-
-        if (!Number.isFinite(openPositions) || openPositions < 0) {
-            logger.warn(`Invalid openPositions for ${analystId}: ${openPositions}, using 0`);
-            openPositions = 0;
-        }
-
-        // Safe division with guard
-        const percentRemaining = initialBalance > 0
-            ? Math.min(100, Math.max(0, (currentBalance / initialBalance) * 100))
-            : 0;
-
-        const isLowBalance = percentRemaining < 30; // Less than 30% remaining
-        const isCriticalBalance = percentRemaining < 10; // Less than 10% remaining
-
-        // Calculate recommended position size based on remaining balance
-        let recommendedPositionSize = 5; // Default 5% of portfolio
-
-        if (isCriticalBalance) {
-            recommendedPositionSize = 1; // Only 1% positions when critical
-        } else if (isLowBalance) {
-            recommendedPositionSize = 2; // Only 2% positions when low
-        } else if (percentRemaining > 80) {
-            recommendedPositionSize = 8; // Can take larger positions when healthy
-        }
-
-        // Reduce position size if already have open positions
-        // Cap reduction to prevent going below 1%
-        if (openPositions > 0) {
-            const reduction = Math.min(openPositions, recommendedPositionSize - 1);
-            recommendedPositionSize = Math.max(1, recommendedPositionSize - reduction);
-        }
-
-        const canTrade = currentBalance >= 10 && !isCriticalBalance;
-
-        return {
-            analystId,
-            currentBalance,
-            initialBalance,
-            percentRemaining,
-            isLowBalance,
-            isCriticalBalance,
-            canTrade,
-            recommendedPositionSize,
         };
     }
 
@@ -314,67 +238,6 @@ export class TradingScheduler {
             reason: tradingStatus.reason,
             nextPeakIn: `${nextPeak.hours}h ${nextPeak.minutes}m (${nextPeak.nextRegion})`,
         });
-    }
-
-    /**
-     * Check if analyst should skip this cycle based on budget
-     * 
-     * EDGE CASES HANDLED:
-     * - Negative lastTradeTime
-     * - Future lastTradeTime (clock skew)
-     * - Integer overflow in time calculations
-     */
-    shouldAnalystSkipCycle(budgetStatus: AnalystBudgetStatus, lastTradeTime: number): {
-        shouldSkip: boolean;
-        reason: string;
-    } {
-        // Critical balance - pause trading
-        if (budgetStatus.isCriticalBalance) {
-            return {
-                shouldSkip: true,
-                reason: `Critical balance (${budgetStatus.percentRemaining.toFixed(1)}% remaining) - trading paused`,
-            };
-        }
-
-        // Can't trade due to insufficient balance
-        if (!budgetStatus.canTrade) {
-            return {
-                shouldSkip: true,
-                reason: `Insufficient balance ($${budgetStatus.currentBalance.toFixed(2)})`,
-            };
-        }
-
-        // Low balance - trade less frequently
-        if (budgetStatus.isLowBalance) {
-            const now = Date.now();
-
-            // Validate lastTradeTime
-            if (!Number.isFinite(lastTradeTime) || lastTradeTime < 0) {
-                lastTradeTime = 0; // Never traded
-            }
-
-            // Handle clock skew (future timestamp)
-            if (lastTradeTime > now) {
-                logger.warn(`Future lastTradeTime detected for ${budgetStatus.analystId}, resetting`);
-                lastTradeTime = now;
-            }
-
-            const timeSinceLastTrade = now - lastTradeTime;
-            const minInterval = 30 * 60 * 1000; // 30 minutes for low balance
-
-            if (timeSinceLastTrade < minInterval) {
-                const remainingCooldown = Math.ceil((minInterval - timeSinceLastTrade) / 1000);
-                return {
-                    shouldSkip: true,
-                    reason: `Low balance (${budgetStatus.percentRemaining.toFixed(1)}%) - extended cooldown (${remainingCooldown}s remaining)`,
-                };
-            }
-        }
-
-        return {
-            shouldSkip: false,
-            reason: 'OK to trade',
-        };
     }
 }
 

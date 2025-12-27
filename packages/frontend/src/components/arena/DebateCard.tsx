@@ -15,13 +15,27 @@ interface DebateCardProps {
 export const DebateCard: React.FC<DebateCardProps> = ({ debate }) => {
   const [expanded, setExpanded] = useState(false);
 
-  // Guard against missing data
-  if (!debate || !debate.bullAnalyst || !debate.bearAnalyst) return null;
+  // Guard against missing data - comprehensive null checks
+  if (
+    !debate ||
+    !debate.bullAnalyst ||
+    !debate.bearAnalyst ||
+    typeof debate.bullAnalyst !== "object" ||
+    typeof debate.bearAnalyst !== "object"
+  ) {
+    return null;
+  }
 
   const bullWon = debate.winner === "bull";
   const roundConfig = ROUND_CONFIG[debate.round] || ROUND_CONFIG.quarterfinal;
-  const bullScore = debate.bullScore || 0;
-  const bearScore = debate.bearScore || 0;
+  // Safe number handling
+  const bullScore = Number.isFinite(debate.bullScore) ? debate.bullScore : 0;
+  const bearScore = Number.isFinite(debate.bearScore) ? debate.bearScore : 0;
+  // Safe string access with fallbacks
+  const bullEmoji = debate.bullAnalyst.analystEmoji || "🐂";
+  const bearEmoji = debate.bearAnalyst.analystEmoji || "🐻";
+  const bullName = debate.bullAnalyst.analystName || "Bull Analyst";
+  const bearName = debate.bearAnalyst.analystName || "Bear Analyst";
 
   return (
     <div className="relative group">
@@ -79,7 +93,7 @@ export const DebateCard: React.FC<DebateCardProps> = ({ debate }) => {
                       : "none",
                   }}
                 >
-                  {debate.bullAnalyst.analystEmoji}
+                  {bullEmoji}
                 </div>
                 {bullWon && (
                   <div className="absolute -top-2 -right-2 text-lg drop-shadow-lg">
@@ -89,7 +103,7 @@ export const DebateCard: React.FC<DebateCardProps> = ({ debate }) => {
               </div>
               <div>
                 <div className="text-sm font-bold text-green-400">
-                  {debate.bullAnalyst.analystName}
+                  {bullName}
                 </div>
                 <div className="flex items-center gap-2 mt-1">
                   <span className="text-xs text-green-400/60">BULL</span>
@@ -156,7 +170,7 @@ export const DebateCard: React.FC<DebateCardProps> = ({ debate }) => {
                       : "none",
                   }}
                 >
-                  {debate.bearAnalyst.analystEmoji}
+                  {bearEmoji}
                 </div>
                 {!bullWon && (
                   <div className="absolute -top-2 -left-2 text-lg drop-shadow-lg">
@@ -166,7 +180,7 @@ export const DebateCard: React.FC<DebateCardProps> = ({ debate }) => {
               </div>
               <div className="text-right">
                 <div className="text-sm font-bold text-rose-400">
-                  {debate.bearAnalyst.analystName}
+                  {bearName}
                 </div>
                 <div className="flex items-center gap-2 mt-1 justify-end">
                   <span

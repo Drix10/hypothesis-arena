@@ -6,8 +6,10 @@ const isNeon = config.databaseUrl.includes('neon.tech');
 
 const poolConfig: PoolConfig = {
     connectionString: config.databaseUrl,
-    // Neon free tier: use fewer connections, shorter timeouts
-    max: isNeon ? 5 : 20,
+    // Application-level pool limit (not Neon's max_connections).
+    // 10 is sufficient for 8 analysts + overhead; increase Neon branch pooler
+    // to 20 if you need more concurrent queries. Non-Neon uses 20 by default.
+    max: isNeon ? 10 : 20,
     min: 0, // Don't keep idle connections (Neon terminates them)
     idleTimeoutMillis: isNeon ? 10000 : 30000, // Release idle connections faster for Neon
     connectionTimeoutMillis: 10000,
@@ -31,7 +33,7 @@ pool.on('remove', () => {
     logger.debug('Database connection removed from pool');
 });
 
-pool.on('error', (err, client) => {
+pool.on('error', (err, _client) => {
     // Neon terminates idle connections - this is expected behavior
     if (err.message.includes('Connection terminated unexpectedly')) {
         logger.debug('Database connection terminated (Neon idle timeout)');

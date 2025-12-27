@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { authenticate } from '../middleware/auth';
 import { getWeexClient } from '../../services/weex/WeexClient';
 import { query, queryOne, withTransaction } from '../../config/database';
+import { getRedisClient } from '../../config/redis';
 import { logger } from '../../utils/logger';
 import { TradingError, ValidationError } from '../../utils/errors';
 import { v4 as uuid } from 'uuid';
@@ -18,6 +19,46 @@ const isValidUUID = (id: string): boolean => {
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
 };
 
+// Per-user rate limiting constants
+const TRADES_PER_MINUTE = 10;
+const RATE_LIMIT_WINDOW_SECONDS = 60;
+
+/**
+ * Check per-user rate limit using Redis for multi-instance support
+ * Uses atomic Lua script to prevent race condition where INCR creates key without TTL
+ * 
+ * FIXED: Race condition where INCR could create key without TTL if EXPIRE failed
+ * FIXED: Fail-closed on Redis errors for trading safety
+ */
+async function checkUserRateLimit(userId: string): Promise<boolean> {
+    try {
+        const redis = await getRedisClient();
+        const key = `rate_limit:trading:${userId}`;
+
+        // Atomic Lua script: INCR and set EXPIRE atomically when count is 1
+        // This prevents race condition where key exists without TTL
+        const luaScript = `
+            local count = redis.call('INCR', KEYS[1])
+            if count == 1 then
+                redis.call('EXPIRE', KEYS[1], ARGV[1])
+            end
+            return count
+        `;
+
+        const count = await redis.eval(luaScript, {
+            keys: [key],
+            arguments: [String(RATE_LIMIT_WINDOW_SECONDS)]
+        }) as number;
+
+        return count <= TRADES_PER_MINUTE;
+    } catch (error) {
+        // FAIL-CLOSED: Reject requests on Redis failure for trading safety
+        // This prevents potential abuse if Redis is down
+        logger.error('CRITICAL: Rate limit check failed, rejecting request for safety:', error);
+        return false;
+    }
+}
+
 const executeTradeSchema = z.object({
     symbol: z.string(),
     side: z.enum(['BUY', 'SELL']),
@@ -32,6 +73,16 @@ const executeTradeSchema = z.object({
 // POST /api/trading/execute
 router.post('/execute', authenticate, async (req: Request, res: Response, next: NextFunction) => {
     try {
+        // Per-user rate limiting (async Redis-based)
+        const withinLimit = await checkUserRateLimit(req.userId!);
+        if (!withinLimit) {
+            res.status(429).json({
+                error: `Rate limit exceeded. Maximum ${TRADES_PER_MINUTE} trades per minute.`,
+                code: 'RATE_LIMIT_EXCEEDED'
+            });
+            return;
+        }
+
         const data = executeTradeSchema.parse(req.body);
 
         // Validate symbol
@@ -40,7 +91,7 @@ router.post('/execute', authenticate, async (req: Request, res: Response, next: 
             throw new ValidationError(`Symbol not approved. Allowed: ${APPROVED_SYMBOLS.join(', ')}`);
         }
 
-        // Get portfolio
+        // Get portfolio (quick check, no lock)
         const portfolio = await queryOne<any>(
             'SELECT * FROM portfolios WHERE id = $1 AND user_id = $2',
             [data.portfolioId, req.userId]
@@ -52,33 +103,14 @@ router.post('/execute', authenticate, async (req: Request, res: Response, next: 
 
         // Generate client order ID
         const clientOrderId = `${Date.now()}_${uuid().substring(0, 8)}`;
+        const tradeId = uuid();
 
-        // Execute trade
-        const result = await withTransaction(async (client) => {
-            // Create trade record
-            const tradeId = uuid();
+        // PHASE 1: Place order on WEEX OUTSIDE transaction (no DB lock held)
+        const weexClient = getWeexClient();
+        let orderResponse: { order_id: string };
 
-            await client.query(
-                `INSERT INTO trades (id, portfolio_id, symbol, side, type, size, price, status, client_order_id, confidence, reason, created_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())`,
-                [
-                    tradeId,
-                    data.portfolioId,
-                    symbol,
-                    data.side,
-                    data.type,
-                    data.size,
-                    data.price || 0,
-                    'PENDING',
-                    clientOrderId,
-                    data.confidence,
-                    data.reason,
-                ]
-            );
-
-            // Place order on WEEX
-            const weexClient = getWeexClient();
-            const orderResponse = await weexClient.placeOrder({
+        try {
+            orderResponse = await weexClient.placeOrder({
                 symbol,
                 client_oid: clientOrderId,
                 type: data.side.toLowerCase() === 'buy' ? '1' : '2', // 1=Open long, 2=Open short
@@ -88,28 +120,81 @@ router.post('/execute', authenticate, async (req: Request, res: Response, next: 
                 price: data.price ? String(data.price) : '0',
             });
 
-            // Validate response
             if (!orderResponse.order_id) {
                 throw new TradingError('WEEX did not return an order ID', 'NO_ORDER_ID');
             }
+        } catch (error: any) {
+            // WEEX order failed - save failed trade record for audit trail
+            try {
+                await query(
+                    `INSERT INTO trades (id, portfolio_id, symbol, side, type, size, price, status, client_order_id, confidence, reason, created_at)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, 'FAILED', $8, $9, $10, NOW())`,
+                    [tradeId, data.portfolioId, symbol, data.side, data.type, data.size, data.price || 0, clientOrderId, data.confidence, data.reason]
+                );
+                logger.info(`Failed trade recorded for audit: ${tradeId}`, { clientOrderId, error: error.message });
+            } catch (dbError: any) {
+                // CRITICAL: Even audit trail insert failed - log for manual investigation
+                logger.error('CRITICAL: Failed to save failed trade audit record', {
+                    tradeId,
+                    clientOrderId,
+                    originalError: error.message,
+                    dbError: dbError.message,
+                });
+            }
+            throw new TradingError(error.message || 'Failed to place order on WEEX', error.code || 'WEEX_ORDER_FAILED');
+        }
 
-            // Update trade with WEEX order ID
-            await client.query(
-                'UPDATE trades SET weex_order_id = $1, status = $2 WHERE id = $3',
-                [orderResponse.order_id, 'FILLED', tradeId]
-            );
+        // PHASE 2: Persist to DB in transaction (short, no network I/O)
+        // NOTE: Market orders are assumed FILLED on WEEX success, but this is not guaranteed.
+        // For production, implement order status polling or webhook to confirm fill.
+        // Limit orders should always be marked PENDING until confirmed.
+        const initialStatus = data.type === 'MARKET' ? 'FILLED' : 'PENDING';
+        try {
+            await withTransaction(async (client) => {
+                // Insert trade record
+                await client.query(
+                    `INSERT INTO trades (id, portfolio_id, symbol, side, type, size, price, status, client_order_id, weex_order_id, confidence, reason, executed_at, created_at)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, ${data.type === 'MARKET' ? 'NOW()' : 'NULL'}, NOW())`,
+                    [tradeId, data.portfolioId, symbol, data.side, data.type, data.size, data.price || 0, initialStatus, clientOrderId, orderResponse.order_id, data.confidence, data.reason]
+                );
 
-            logger.info(`Trade executed: ${tradeId}`, { symbol, side: data.side, size: data.size });
+                // Update portfolio total_trades
+                await client.query(
+                    'UPDATE portfolios SET total_trades = total_trades + 1, updated_at = NOW() WHERE id = $1',
+                    [data.portfolioId]
+                );
+            });
 
-            return {
+            logger.info(`Trade executed: ${tradeId}`, { symbol, side: data.side, size: data.size, status: initialStatus });
+
+            res.json({
                 id: tradeId,
                 weexOrderId: orderResponse.order_id,
                 clientOrderId,
-                status: 'FILLED',
-            };
-        });
+                status: initialStatus,
+            });
+        } catch (dbError: any) {
+            // CRITICAL: WEEX order succeeded but DB persist failed
+            logger.error('CRITICAL: Trade placed on WEEX but DB update failed', {
+                clientOrderId,
+                weexOrderId: orderResponse.order_id,
+                tradeId,
+                error: dbError.message,
+            });
 
-        res.json(result);
+            // Try to save a failed record for manual reconciliation
+            await query(
+                `INSERT INTO trades (id, portfolio_id, symbol, side, type, size, price, status, client_order_id, weex_order_id, confidence, reason, created_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, 'FAILED', $8, $9, $10, $11, NOW())
+                 ON CONFLICT (id) DO NOTHING`,
+                [tradeId, data.portfolioId, symbol, data.side, data.type, data.size, data.price || 0, clientOrderId, orderResponse.order_id, data.confidence, data.reason]
+            ).catch(e => logger.error('Failed to save failed trade record:', e));
+
+            throw new TradingError(
+                `Trade executed on WEEX (${orderResponse.order_id}) but DB update failed. Manual reconciliation required.`,
+                'DB_PERSIST_FAILED'
+            );
+        }
     } catch (error) {
         next(error);
     }
@@ -221,7 +306,7 @@ router.post('/cancel', authenticate, async (req: Request, res: Response, next: N
 
         // Cancel on WEEX
         const weexClient = getWeexClient();
-        await weexClient.cancelOrder(trade.symbol, trade.weex_order_id);
+        await weexClient.cancelOrder(trade.weex_order_id);
 
         // Update status
         await query(

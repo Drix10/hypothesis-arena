@@ -8,6 +8,8 @@ import {
     WeexOrderRequest,
     WeexOrderResponse,
     WeexPosition,
+    WeexPositionRaw,
+    normalizeWeexPosition,
     WeexAccount,
     WeexAccountAssets,
     WeexTicker,
@@ -44,6 +46,17 @@ export class WeexClient {
             secretKey: config.weex.secretKey,
             passphrase: config.weex.passphrase,
         };
+
+        // Validate credentials are non-empty strings
+        if (!this.credentials.apiKey || typeof this.credentials.apiKey !== 'string' || this.credentials.apiKey.trim() === '') {
+            logger.warn('WeexClient: apiKey is missing or empty - API calls will fail');
+        }
+        if (!this.credentials.secretKey || typeof this.credentials.secretKey !== 'string' || this.credentials.secretKey.trim() === '') {
+            logger.warn('WeexClient: secretKey is missing or empty - API calls will fail');
+        }
+        if (!this.credentials.passphrase || typeof this.credentials.passphrase !== 'string' || this.credentials.passphrase.trim() === '') {
+            logger.warn('WeexClient: passphrase is missing or empty - API calls will fail');
+        }
 
         const defaultHeaders: Record<string, string> = {
             'Content-Type': 'application/json',
@@ -169,9 +182,10 @@ export class WeexClient {
     }
 
     private async consumeTokens(endpoint: string, isOrderRequest: boolean, depth: number = 0): Promise<void> {
-        // Prevent infinite recursion
-        if (depth > 10) {
-            throw new RateLimitError('Rate limit retry exceeded');
+        // Prevent infinite recursion - increased limit for high-load scenarios
+        // but with exponential backoff to prevent tight loops
+        if (depth > 20) {
+            throw new RateLimitError('Rate limit retry exceeded after 20 attempts');
         }
 
         const weight = ENDPOINT_WEIGHTS[endpoint] || 1;
@@ -186,19 +200,24 @@ export class WeexClient {
 
         // Check if we have enough tokens
         if (this.ipBucket.tokens < weight || this.uidBucket.tokens < weight) {
-            const waitTime = Math.min(
+            // Exponential backoff: base wait time increases with depth
+            const baseWaitTime = Math.min(
                 Math.max(
                     (weight - this.ipBucket.tokens) / DEFAULT_RATE_LIMITS.ipLimit * DEFAULT_RATE_LIMITS.windowMs,
                     (weight - this.uidBucket.tokens) / DEFAULT_RATE_LIMITS.uidLimit * DEFAULT_RATE_LIMITS.windowMs
                 ),
-                5000 // Max wait 5 seconds
+                5000 // Max base wait 5 seconds
             );
+            // Add exponential backoff factor
+            const waitTime = Math.min(baseWaitTime * Math.pow(1.5, depth), 30000); // Cap at 30 seconds
             await new Promise(resolve => setTimeout(resolve, waitTime));
             return this.consumeTokens(endpoint, isOrderRequest, depth + 1);
         }
 
         if (isOrderRequest && this.orderBucket.tokens < 1) {
-            await new Promise(resolve => setTimeout(resolve, 100));
+            // Exponential backoff for order rate limiting too
+            const waitTime = Math.min(100 * Math.pow(1.5, depth), 5000);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
             return this.consumeTokens(endpoint, isOrderRequest, depth + 1);
         }
 
@@ -225,8 +244,11 @@ export class WeexClient {
         const queryString = params ? `?${new URLSearchParams(params).toString()}` : '';
         const bodyString = body ? JSON.stringify(body) : '';
 
+        // IMPORTANT: Always include User-Agent - WEEX requires it
         const headers: Record<string, string> = {
             'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'locale': 'en-US',
         };
 
@@ -242,11 +264,11 @@ export class WeexClient {
                 bodyString
             );
 
-            // Log authentication details for debugging
-            console.log(`[WEEX] ${method} ${endpoint}${queryString}`);
-            console.log(`[WEEX] Timestamp: ${timestamp}`);
-            console.log(`[WEEX] Body: ${bodyString.substring(0, 200)}`);
-            console.log(`[WEEX] Signature message: ${timestamp}${method.toUpperCase()}${endpoint}${queryString}${bodyString}`);
+            // Debug logging - only in development
+            if (process.env.NODE_ENV === 'development' && process.env.DEBUG_WEEX === 'true') {
+                logger.debug(`[WEEX] ${method} ${endpoint}${queryString}`);
+                logger.debug(`[WEEX] Timestamp: ${timestamp}`);
+            }
         }
 
         // For URL: queryString already has "?" if present
@@ -321,38 +343,75 @@ export class WeexClient {
     }
 
     async getFundingRate(symbol: string): Promise<WeexFundingRate> {
-        const response = await this.request<{ data: WeexFundingRate }>(
+        const response = await this.request<WeexFundingRate[]>(
             'GET',
-            '/capi/v2/market/fundingRate',
+            '/capi/v2/market/currentFundRate',
             { symbol }
         );
-        return response.data;
+        // Response is an array, find the matching symbol
+        const rates = Array.isArray(response) ? response : [];
+        // Prefer exact symbol match, warn if falling back to first item
+        const exactMatch = rates.find(r => r.symbol === symbol);
+        if (exactMatch) {
+            return exactMatch;
+        }
+        if (rates.length > 0) {
+            logger.warn(`getFundingRate: No exact match for ${symbol}, using first result: ${rates[0].symbol}`);
+            return rates[0];
+        }
+        // Return default if no rates available
+        return { symbol, fundingRate: '0', collectCycle: 480, timestamp: Date.now() };
     }
 
     async getTrades(symbol: string, limit: number = 100): Promise<WeexTrade[]> {
-        const response = await this.request<{ data: WeexTrade[] }>(
+        // Response is array directly
+        const response = await this.request<WeexTrade[] | { data: WeexTrade[] }>(
             'GET',
             '/capi/v2/market/trades',
             { symbol, limit: String(limit) }
         );
-        return response.data || [];
+        return Array.isArray(response) ? response : (response as any).data || [];
     }
 
     async getCandles(symbol: string, interval: string = '1m', limit: number = 100): Promise<WeexCandle[]> {
-        const response = await this.request<{ data: WeexCandle[] }>(
+        // Response is array of arrays: [[timestamp, open, high, low, close, baseVol, quoteVol], ...]
+        const response = await this.request<string[][]>(
             'GET',
             '/capi/v2/market/candles',
             { symbol, granularity: interval, limit: String(limit) }
         );
-        return response.data || [];
+        // Convert array format to object format with bounds checking
+        const candles = Array.isArray(response) ? response : [];
+        return candles.map(c => {
+            // Ensure c is an array with at least 7 elements
+            if (!Array.isArray(c) || c.length < 7) {
+                return {
+                    timestamp: '0',
+                    open: '0',
+                    high: '0',
+                    low: '0',
+                    close: '0',
+                    volume: '0',
+                };
+            }
+            return {
+                timestamp: c[0] || '0',
+                open: c[1] || '0',
+                high: c[2] || '0',
+                low: c[3] || '0',
+                close: c[4] || '0',
+                volume: c[6] || '0', // quoteVol (USDT volume)
+            };
+        }).filter(c => c.timestamp !== '0'); // Filter out invalid candles
     }
 
     async getContracts(): Promise<WeexContract[]> {
-        const response = await this.request<{ data: WeexContract[] }>(
+        // Response is array directly
+        const response = await this.request<WeexContract[] | { data: WeexContract[] }>(
             'GET',
             '/capi/v2/market/contracts'
         );
-        return response.data || [];
+        return Array.isArray(response) ? response : (response as any).data || [];
     }
 
     // Private endpoints
@@ -408,25 +467,48 @@ export class WeexClient {
     }
 
     async getPositions(): Promise<WeexPosition[]> {
-        const response = await this.request<{ data: WeexPosition[] }>(
+        // Response is array directly, not wrapped in { data: [...] }
+        const response = await this.request<WeexPositionRaw[] | { data: WeexPositionRaw[] }>(
             'GET',
             '/capi/v2/account/position/allPosition',
             undefined,
             undefined,
             true
         );
-        return response.data || [];
+        // Handle both response formats and normalize to canonical camelCase shape
+        const rawPositions = Array.isArray(response) ? response : (response as any).data || [];
+
+        // Filter and normalize positions, skipping invalid ones
+        const positions: WeexPosition[] = [];
+        for (const raw of rawPositions) {
+            try {
+                positions.push(normalizeWeexPosition(raw));
+            } catch (error) {
+                logger.warn('Skipping invalid position:', { symbol: raw?.symbol, error: (error as Error).message });
+            }
+        }
+        return positions;
     }
 
     async getPosition(symbol: string): Promise<WeexPosition | null> {
-        const response = await this.request<{ data: WeexPosition }>(
+        // Response is array directly (can have multiple positions for same symbol in hedge mode)
+        const response = await this.request<WeexPositionRaw[] | { data: WeexPositionRaw[] }>(
             'GET',
             '/capi/v2/account/position/singlePosition',
             { symbol },
             undefined,
             true
         );
-        return response.data || null;
+        const rawPositions = Array.isArray(response) ? response : (response as any).data || [];
+
+        if (!rawPositions[0]) return null;
+
+        try {
+            return normalizeWeexPosition(rawPositions[0]);
+        } catch (error) {
+            logger.warn('Invalid position data:', { symbol, error: (error as Error).message });
+            return null;
+        }
     }
 
     async placeOrder(order: WeexOrderRequest): Promise<WeexOrderResponse> {
@@ -440,60 +522,69 @@ export class WeexClient {
         );
     }
 
-    async cancelOrder(symbol: string, orderId: string): Promise<any> {
+    /**
+     * Cancel an order by orderId
+     * @param orderId - The order ID to cancel
+     * @deprecated symbol parameter removed - it was never used by the API
+     */
+    async cancelOrder(orderId: string): Promise<any> {
         return this.request(
             'POST',
             '/capi/v2/order/cancel_order',
             undefined,
-            { symbol, orderId },
+            { orderId },
             true,
             true
         );
     }
 
     async getOrder(orderId: string): Promise<WeexOrderDetail> {
-        const response = await this.request<{ data: WeexOrderDetail }>(
+        // Response is object directly, not wrapped in { data: {...} }
+        const response = await this.request<WeexOrderDetail | { data: WeexOrderDetail }>(
             'GET',
             '/capi/v2/order/detail',
             { orderId },
             undefined,
             true
         );
-        return response.data;
+        return (response as any).data || response;
     }
 
     async getCurrentOrders(symbol?: string): Promise<WeexOrderDetail[]> {
         const params = symbol ? { symbol } : undefined;
-        const response = await this.request<{ data: WeexOrderDetail[] }>(
+        // Response is array directly
+        const response = await this.request<WeexOrderDetail[] | { data: WeexOrderDetail[] }>(
             'GET',
             '/capi/v2/order/current',
             params,
             undefined,
             true
         );
-        return response.data || [];
+        return Array.isArray(response) ? response : (response as any).data || [];
     }
 
     async getHistoryOrders(symbol: string, limit: number = 50): Promise<WeexOrderDetail[]> {
-        const response = await this.request<{ data: WeexOrderDetail[] }>(
+        // Response is array directly
+        const response = await this.request<WeexOrderDetail[] | { data: WeexOrderDetail[] }>(
             'GET',
             '/capi/v2/order/history',
             { symbol, pageSize: String(limit) },
             undefined,
             true
         );
-        return response.data || [];
+        return Array.isArray(response) ? response : (response as any).data || [];
     }
 
     async getFills(symbol: string, limit: number = 50): Promise<WeexFill[]> {
-        const response = await this.request<{ data: WeexFill[] }>(
+        // Response format: { list: [...], nextFlag: boolean, totals: number }
+        const response = await this.request<{ list: WeexFill[] } | { data: WeexFill[] }>(
             'GET',
             '/capi/v2/order/fills',
-            { symbol, pageSize: String(limit) },
+            { symbol, limit: String(limit) },
             undefined,
             true
         );
-        return response.data || [];
+        return (response as any).list || (response as any).data || [];
     }
 
     async batchOrders(orders: WeexOrderRequest[]): Promise<WeexBatchOrderResponse> {
@@ -518,12 +609,15 @@ export class WeexClient {
         );
     }
 
-    async closeAllPositions(symbol: string): Promise<any> {
+    async closeAllPositions(symbol?: string): Promise<any> {
+        // Correct endpoint is /capi/v2/order/closePositions (not closeAllPositions)
+        // symbol is optional - if not provided, closes all positions
+        const body = symbol ? { symbol } : {};
         return this.request(
             'POST',
-            '/capi/v2/order/closeAllPositions',
+            '/capi/v2/order/closePositions',
             undefined,
-            { symbol },
+            body,
             true,
             true
         );
@@ -547,9 +641,8 @@ export class WeexClient {
     }
 }
 
-// Singleton instance with proper async locking
+// Singleton instance
 let weexClientInstance: WeexClient | null = null;
-let creationPromise: Promise<WeexClient> | null = null;
 
 export function getWeexClient(credentials?: WeexCredentials): WeexClient {
     // If new credentials provided, always create new instance
@@ -566,39 +659,4 @@ export function getWeexClient(credentials?: WeexCredentials): WeexClient {
     // Create new instance synchronously (safe since constructor is sync)
     weexClientInstance = new WeexClient();
     return weexClientInstance;
-}
-
-export async function getWeexClientAsync(credentials?: WeexCredentials): Promise<WeexClient> {
-    // If new credentials provided, always create new instance
-    if (credentials) {
-        weexClientInstance = new WeexClient(credentials);
-        return weexClientInstance;
-    }
-
-    // Return existing instance
-    if (weexClientInstance) {
-        return weexClientInstance;
-    }
-
-    // If creation is in progress, wait for it
-    if (creationPromise) {
-        return creationPromise;
-    }
-
-    // Create new instance
-    creationPromise = Promise.resolve().then(() => {
-        weexClientInstance = new WeexClient();
-        return weexClientInstance;
-    });
-
-    try {
-        return await creationPromise;
-    } finally {
-        creationPromise = null;
-    }
-}
-
-export function resetWeexClient(): void {
-    weexClientInstance = null;
-    creationPromise = null;
 }

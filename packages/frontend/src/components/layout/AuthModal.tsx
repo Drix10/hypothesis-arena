@@ -124,11 +124,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm text-slate-400 mb-1">Email</label>
+            <label
+              htmlFor="auth-email"
+              className="block text-sm text-slate-400 mb-1"
+            >
+              Email
+            </label>
             <input
+              id="auth-email"
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
+              autoComplete="email"
               className="w-full px-4 py-3 rounded-lg bg-white/5 border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400/50"
               placeholder="you@example.com"
             />
@@ -136,13 +143,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
 
           {mode === "register" && (
             <div>
-              <label className="block text-sm text-slate-400 mb-1">
+              <label
+                htmlFor="auth-username"
+                className="block text-sm text-slate-400 mb-1"
+              >
                 Username
               </label>
               <input
+                id="auth-username"
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
+                autoComplete="username"
                 className="w-full px-4 py-3 rounded-lg bg-white/5 border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400/50"
                 placeholder="your_username"
               />
@@ -150,13 +162,20 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
           )}
 
           <div>
-            <label className="block text-sm text-slate-400 mb-1">
+            <label
+              htmlFor="auth-password"
+              className="block text-sm text-slate-400 mb-1"
+            >
               Password
             </label>
             <input
+              id="auth-password"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              autoComplete={
+                mode === "login" ? "current-password" : "new-password"
+              }
               className="w-full px-4 py-3 rounded-lg bg-white/5 border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400/50"
               placeholder="••••••••"
             />
@@ -164,13 +183,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onClose, onSuccess }) => {
 
           {mode === "register" && (
             <div>
-              <label className="block text-sm text-slate-400 mb-1">
+              <label
+                htmlFor="auth-confirm-password"
+                className="block text-sm text-slate-400 mb-1"
+              >
                 Confirm Password
               </label>
               <input
+                id="auth-confirm-password"
                 type="password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
+                autoComplete="new-password"
                 className="w-full px-4 py-3 rounded-lg bg-white/5 border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400/50"
                 placeholder="••••••••"
               />

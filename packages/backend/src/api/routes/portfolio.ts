@@ -168,6 +168,7 @@ router.get('/:agentId/positions', authenticate, async (req: Request, res: Respon
         }
 
         // Filter and map positions with proper null safety
+        // Positions are normalized by WeexClient - use camelCase properties
         const positions = weexPositions
             .filter(p => p && typeof p === 'object' && p.symbol && p.size)
             .map(p => {
@@ -178,7 +179,7 @@ router.get('/:agentId/positions', authenticate, async (req: Request, res: Respon
 
                 return {
                     symbol: String(p.symbol || ''),
-                    side: String(p.side || 'long').toUpperCase(),
+                    side: p.side, // Already normalized to 'LONG' | 'SHORT'
                     size: Math.abs(size),
                     entryPrice,
                     currentPrice: parseFloat(p.markPrice) || 0,

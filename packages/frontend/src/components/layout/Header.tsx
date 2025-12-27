@@ -59,8 +59,9 @@ export const Header: React.FC<HeaderProps> = ({
               </p>
               <p className="font-mono font-bold text-green-400">
                 $
-                {parseFloat(assets.equity || "0").toLocaleString(undefined, {
+                {(Number(assets.equity) || 0).toLocaleString(undefined, {
                   minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
                 })}
               </p>
             </div>
@@ -71,8 +72,9 @@ export const Header: React.FC<HeaderProps> = ({
               </p>
               <p className="font-mono text-sm text-white">
                 $
-                {parseFloat(assets.available || "0").toLocaleString(undefined, {
+                {(Number(assets.available) || 0).toLocaleString(undefined, {
                   minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
                 })}
               </p>
             </div>

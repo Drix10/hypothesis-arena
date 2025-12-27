@@ -45,16 +45,83 @@ export interface WeexOrderResponse {
     order_id: string;                  // Order ID
 }
 
+/**
+ * WEEX Position - Canonical camelCase interface
+ * Based on official WEEX API docs: /capi/v2/account/position/singlePosition
+ * 
+ * Use `normalizeWeexPosition()` to convert API responses to this canonical shape.
+ */
 export interface WeexPosition {
-    symbol: string;
-    side: 'long' | 'short';
-    size: string;
-    leverage: string;
-    openValue: string;
-    markPrice: string;
-    unrealizePnl: string;
-    marginMode: '1' | '3';
-    liquidationPrice: string;
+    id?: number;                       // Position ID
+    symbol: string;                    // Trading pair (required)
+    side: 'LONG' | 'SHORT';            // Position direction (required, normalized to uppercase)
+    size: string;                      // Current position size (required)
+    leverage: string;                  // Position leverage (required)
+    openValue?: string;                // Initial value at position opening
+    marginMode?: string;               // 'SHARED' (cross) or 'ISOLATED'
+    marginSize?: string;               // Margin amount
+    unrealizePnl?: string;             // Unrealized PnL
+    liquidationPrice?: string;         // Estimated liquidation price
+}
+
+/**
+ * Raw WEEX Position from API
+ * Based on official WEEX API docs: /capi/v2/account/position/singlePosition
+ * Internal type - use normalizeWeexPosition() to convert to WeexPosition
+ */
+export interface WeexPositionRaw {
+    id?: number;                       // Position ID
+    symbol: string;                    // Trading pair (required)
+    side: string;                      // 'LONG' | 'SHORT' (required, uppercase from API)
+    size: string;                      // Current position size (required)
+    leverage: string;                  // Position leverage (required)
+    open_value?: string;               // Initial value at position opening
+    margin_mode?: string;              // 'SHARED' (cross) or 'ISOLATED'
+    marginSize?: string;               // Margin amount (note: camelCase in API response)
+    unrealizePnl?: string;             // Unrealized PnL (note: camelCase in API response)
+    liquidatePrice?: string;           // Estimated liquidation price (note: camelCase in API response)
+}
+
+/**
+ * Normalize a raw WEEX position response to the canonical camelCase shape
+ * Handles the official WEEX API response format
+ * 
+ * @throws Error if required fields (symbol, size, leverage, side) are missing or invalid
+ */
+export function normalizeWeexPosition(raw: WeexPositionRaw): WeexPosition {
+    // Validate required fields
+    if (!raw.symbol || typeof raw.symbol !== 'string') {
+        throw new Error(`WeexPosition missing required field: symbol (got: ${JSON.stringify(raw.symbol)})`);
+    }
+    if (!raw.size || typeof raw.size !== 'string') {
+        throw new Error(`WeexPosition missing required field: size for ${raw.symbol} (got: ${JSON.stringify(raw.size)})`);
+    }
+    if (!raw.leverage || typeof raw.leverage !== 'string') {
+        throw new Error(`WeexPosition missing required field: leverage for ${raw.symbol} (got: ${JSON.stringify(raw.leverage)})`);
+    }
+
+    // Validate side - MUST be present and valid, no silent defaults
+    if (!raw.side || typeof raw.side !== 'string') {
+        throw new Error(`WeexPosition missing required field: side for ${raw.symbol} (got: ${JSON.stringify(raw.side)})`);
+    }
+    const normalizedSide = raw.side.toUpperCase();
+    if (normalizedSide !== 'LONG' && normalizedSide !== 'SHORT') {
+        throw new Error(`WeexPosition invalid side value for ${raw.symbol}: expected 'LONG' or 'SHORT', got '${raw.side}'`);
+    }
+    const side: 'LONG' | 'SHORT' = normalizedSide as 'LONG' | 'SHORT';
+
+    return {
+        id: raw.id,
+        symbol: raw.symbol,
+        side,
+        size: raw.size,
+        leverage: raw.leverage,
+        openValue: raw.open_value,
+        marginMode: raw.margin_mode,
+        marginSize: raw.marginSize,
+        unrealizePnl: raw.unrealizePnl,
+        liquidationPrice: raw.liquidatePrice,
+    };
 }
 
 export interface WeexAccount {
@@ -216,20 +283,24 @@ export const ENDPOINT_WEIGHTS: Record<string, number> = {
     '/capi/v2/market/depth': 1,
     '/capi/v2/market/tickers': 40,
     '/capi/v2/market/ticker': 1,
-    '/capi/v2/market/trades': 1,
+    '/capi/v2/market/trades': 5,
     '/capi/v2/market/candles': 1,
+    '/capi/v2/market/currentFundRate': 1,
     '/capi/v2/account/accounts': 5,
+    '/capi/v2/account/getAccounts': 5,
     '/capi/v2/account/account': 5,
     '/capi/v2/account/assets': 5,
-    '/capi/v2/account/position/allPosition': 5,
-    '/capi/v2/account/position/singlePosition': 5,
+    '/capi/v2/account/leverage': 10,
+    '/capi/v2/account/position/allPosition': 10,
+    '/capi/v2/account/position/singlePosition': 2,
     '/capi/v2/order/placeOrder': 2,
     '/capi/v2/order/batchOrders': 5,
-    '/capi/v2/order/cancelOrder': 2,
+    '/capi/v2/order/cancel_order': 2,
     '/capi/v2/order/batchCancelOrders': 5,
-    '/capi/v2/order/detail': 1,
-    '/capi/v2/order/history': 5,
-    '/capi/v2/order/current': 1,
+    '/capi/v2/order/closePositions': 40,
+    '/capi/v2/order/detail': 2,
+    '/capi/v2/order/history': 10,
+    '/capi/v2/order/current': 2,
     '/capi/v2/order/fills': 5,
     '/capi/v2/order/uploadAiLog': 1,
 };

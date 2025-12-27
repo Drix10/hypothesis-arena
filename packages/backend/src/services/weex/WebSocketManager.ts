@@ -178,21 +178,13 @@ export class WebSocketManager {
         logger.debug(`Broadcast to ${sent} clients on channel: ${channel}`);
     }
 
-    sendToUser(userId: string, data: any) {
-        const message = JSON.stringify({
-            type: 'message',
-            data,
-            timestamp: Date.now()
-        });
-
-        this.clients.forEach((client) => {
-            if (client.userId === userId && client.ws.readyState === WebSocket.OPEN) {
-                client.ws.send(message);
-            }
-        });
-    }
-
-    closeAll() {
+    /**
+     * Close all WebSocket connections gracefully
+     * 
+     * FIXED: Now async with timeout to ensure proper cleanup
+     * FIXED: Removes event listeners on timeout to prevent race conditions
+     */
+    async closeAll(timeoutMs: number = 5000): Promise<void> {
         if (this.heartbeatInterval) {
             clearInterval(this.heartbeatInterval);
             this.heartbeatInterval = null;
@@ -201,28 +193,87 @@ export class WebSocketManager {
         // Collect client IDs first to avoid modifying Map during iteration
         const clientIds = Array.from(this.clients.keys());
 
-        for (const clientId of clientIds) {
-            const client = this.clients.get(clientId);
-            if (client) {
-                client.subscriptions.clear(); // Clear subscriptions to free memory
-                client.ws.close(1000, 'Server shutting down');
-                this.clients.delete(clientId);
-            }
+        if (clientIds.length === 0) {
+            logger.info('No WebSocket connections to close');
+            return;
         }
 
-        logger.info('All WebSocket connections closed');
+        // Track cleanup functions to call on timeout
+        const cleanupFunctions: Array<() => void> = [];
+
+        // Create close promises for all clients
+        const closePromises = clientIds.map(clientId => {
+            return new Promise<void>((resolve) => {
+                const client = this.clients.get(clientId);
+                if (!client) {
+                    resolve();
+                    return;
+                }
+
+                // Track if onClose has already been called (guard for once-like behavior)
+                let hasResolved = false;
+
+                // Set up close handler
+                const onClose = () => {
+                    if (hasResolved) return; // Guard against multiple calls
+                    hasResolved = true;
+                    client.subscriptions.clear();
+                    this.clients.delete(clientId);
+                    resolve();
+                };
+
+                // Handle already closed connections
+                if (client.ws.readyState === WebSocket.CLOSED || client.ws.readyState === WebSocket.CLOSING) {
+                    onClose();
+                    return;
+                }
+
+                // Listen for close event (use 'on' so we can properly removeListener)
+                client.ws.on('close', onClose);
+
+                // Track cleanup function to remove listener on timeout
+                cleanupFunctions.push(() => {
+                    client.ws.removeListener('close', onClose);
+                });
+
+                // Initiate close
+                client.ws.close(1000, 'Server shutting down');
+            });
+        });
+
+        // Wait for all connections to close with timeout
+        let timeoutId: NodeJS.Timeout | null = null;
+        try {
+            await Promise.race([
+                Promise.all(closePromises),
+                new Promise<void>((_, reject) => {
+                    timeoutId = setTimeout(() => reject(new Error('WebSocket close timeout')), timeoutMs);
+                })
+            ]);
+            logger.info(`All ${clientIds.length} WebSocket connections closed gracefully`);
+        } catch (error) {
+            // Remove event listeners to prevent race conditions
+            cleanupFunctions.forEach(cleanup => cleanup());
+
+            // Force terminate remaining connections
+            logger.warn('WebSocket close timeout, force terminating remaining connections');
+            for (const clientId of clientIds) {
+                const client = this.clients.get(clientId);
+                if (client) {
+                    client.ws.terminate();
+                    client.subscriptions.clear();
+                    this.clients.delete(clientId);
+                }
+            }
+            logger.info('All WebSocket connections terminated');
+        } finally {
+            // Always clear the timeout to prevent memory leak
+            if (timeoutId) clearTimeout(timeoutId);
+        }
     }
 
     getClientCount(): number {
         return this.clients.size;
-    }
-
-    getAuthenticatedCount(): number {
-        let count = 0;
-        this.clients.forEach((client) => {
-            if (client.userId) count++;
-        });
-        return count;
     }
 
     private generateClientId(): string {
