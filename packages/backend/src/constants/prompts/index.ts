@@ -11,8 +11,8 @@ import { growthPrompt } from './growth';
 import { technicalPrompt } from './technical';
 import { macroPrompt } from './macro';
 import { sentimentPrompt } from './sentiment';
-import { riskPrompt } from './quant';
-import { quantPrompt } from './risk';
+import { riskPrompt } from './risk';
+import { quantPrompt } from './quant';
 import { contrarianPrompt } from './contrarian';
 import {
     buildCoinSelectionPrompt,

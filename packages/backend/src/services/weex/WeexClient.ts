@@ -16,12 +16,10 @@ import {
     WeexDepth,
     WeexServerTime,
     WeexFundingRate,
-    WeexTrade,
     WeexCandle,
     WeexContract,
     WeexOrderDetail,
     WeexFill,
-    WeexBatchOrderResponse,
     ENDPOINT_WEIGHTS,
     DEFAULT_RATE_LIMITS,
 } from '../../shared/types/weex';

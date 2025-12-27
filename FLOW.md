@@ -249,7 +249,7 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 │                                                                  │
 │  EDGE CASE HANDLING:                                            │
 │  ✓ Sorts specialists by confidence before bracket              │
-│  ✓ Falls back to highest confidence if debate fails            │
+│  ✓ Single-judge fallback if debate fails; last resort confidence│
 │  ✓ Improved error logging shows actual error message           │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
@@ -654,6 +654,17 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## 🧭 Stage-to-Service Ownership
+
+- Stage 1 — Market Scan: `WeexClient.getTicker`, `getFundingRate` (owner: Exchange data)
+- Stage 2 — Coin Selection: `CollaborativeFlow.runCoinSelection` (owners: Ray, Jim, Quant)
+- Stage 3 — Specialist Analysis: `CollaborativeFlow.runSpecialistAnalysis` (owners per `COIN_TYPE_MAP`; uses Gemini)
+- Stage 4 — Tournament: `CollaborativeFlow.runTournament` + `runDebateMatch` (judged by Gemini; fallback `runSingleJudgeFallback`, then highest confidence)
+- Stage 5 — Risk Council: `CollaborativeFlow.runRiskCouncil` + `CircuitBreakerService.checkAll` (owner: Karen; respects `GLOBAL_RISK_LIMITS`)
+- Stage 6 — Execution: `AutonomousTradingEngine.executeCollaborativeTrade` + `WeexClient.placeOrder` + compliance logging via `AILogService.createLog`/`weexClient.uploadAILog`
 
 ---
 
