@@ -14,7 +14,14 @@
 import { GoogleGenerativeAI, GenerativeModel, SchemaType } from '@google/generative-ai';
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
-import { ANALYST_PROFILES, AnalystMethodology } from '../../constants/analystPrompts';
+import { ANALYST_PROFILES, type AnalystMethodology } from '../../constants/analyst';
+import {
+    buildCoinSelectionPrompt,
+    buildSpecialistPrompt,
+    buildRiskCouncilPrompt,
+    buildSingleJudgeFallbackPrompt,
+    buildTournamentDebatePrompt
+} from '../../constants/prompts/builders';
 import type { ExtendedMarketData, AnalysisResult, TradeOrder, WeexAILog } from './GeminiService';
 
 // =============================================================================
@@ -228,15 +235,34 @@ const AI_REQUEST_TIMEOUT = 60000; // 60 seconds
 /**
  * Helper to create a timeout promise that can be cancelled
  * Prevents memory leaks from orphaned setTimeout handles
+ * 
+ * EDGE CASES HANDLED:
+ * - Invalid timeout values (negative, zero, NaN, Infinity)
+ * - Timeout cancellation in all code paths
+ * - Promise rejection with proper error type
  */
 function createTimeoutPromise(ms: number): { promise: Promise<never>; cancel: () => void } {
-    let timeoutId: NodeJS.Timeout;
+    // Validate timeout value
+    if (!Number.isFinite(ms) || ms <= 0) {
+        logger.warn(`Invalid timeout value: ${ms}, using default ${AI_REQUEST_TIMEOUT}ms`);
+        ms = AI_REQUEST_TIMEOUT;
+    }
+
+    let timeoutId: NodeJS.Timeout | null = null;
     const promise = new Promise<never>((_, reject) => {
-        timeoutId = setTimeout(() => reject(new Error('Timeout')), ms);
+        timeoutId = setTimeout(() => {
+            reject(new Error(`AI request timeout after ${ms}ms`));
+        }, ms);
     });
+
     return {
         promise,
-        cancel: () => clearTimeout(timeoutId)
+        cancel: () => {
+            if (timeoutId !== null) {
+                clearTimeout(timeoutId);
+                timeoutId = null; // Prevent double-clear
+            }
+        }
     };
 }
 
@@ -283,7 +309,7 @@ export class CollaborativeFlowService {
             const profile = Object.values(ANALYST_PROFILES).find(p => p.id === analystId);
             if (!profile) return null;
 
-            const prompt = this.buildCoinSelectionPrompt(profile, marketSummary);
+            const prompt = buildCoinSelectionPrompt(profile, marketSummary);
 
             try {
                 const timeout = createTimeoutPromise(AI_REQUEST_TIMEOUT);
@@ -376,7 +402,7 @@ export class CollaborativeFlowService {
             if (!methodology) return null;
             const profile = ANALYST_PROFILES[methodology];
 
-            const prompt = this.buildSpecialistPrompt(profile, marketData, direction);
+            const prompt = buildSpecialistPrompt(profile, marketData, direction);
 
             try {
                 const timeout = createTimeoutPromise(AI_REQUEST_TIMEOUT);
@@ -528,45 +554,7 @@ export class CollaborativeFlowService {
 
         const displaySymbol = marketData.symbol.replace('cmt_', '').replace('usdt', '').toUpperCase();
 
-        // Build comparison prompt for all specialists
-        const analystSummaries = specialists.map((s, i) => `
-ANALYST ${i + 1}: ${s.analystName} (${s.analystTitle})
-- Recommendation: ${s.recommendation.toUpperCase().replace('_', ' ')}
-- Confidence: ${s.confidence}%
-- Position Size: ${s.positionSize}/10
-- Thesis: ${s.thesis}
-- Bull Case: ${s.bullCase?.slice(0, 2).join('; ') || 'N/A'}
-- Bear Case: ${s.bearCase?.slice(0, 2).join('; ') || 'N/A'}
-- Price Targets: Bull ${s.priceTarget.bull.toFixed(2)}, Base ${s.priceTarget.base.toFixed(2)}, Bear ${s.priceTarget.bear.toFixed(2)}
-`).join('\n');
-
-        const prompt = `You are a hedge fund CIO making a FINAL DECISION on ${displaySymbol}/USDT.
-
-MARKET CONTEXT:
-- Current Price: ${marketData.currentPrice.toFixed(2)}
-- 24h Change: ${marketData.change24h >= 0 ? '+' : ''}${marketData.change24h.toFixed(2)}%
-${marketData.fundingRate !== undefined ? `- Funding Rate: ${(marketData.fundingRate * 100).toFixed(4)}%` : ''}
-
-COMPETING THESES:
-${analystSummaries}
-
-JUDGING CRITERIA (score each 0-25):
-1. DATA QUALITY: Uses specific numbers, not vague claims
-2. LOGIC: Reasoning follows from data
-3. RISK AWARENESS: Acknowledges what could go wrong
-4. CATALYST: Clear price driver with timeline
-
-Select the SINGLE BEST thesis. The winner's recommendation will be EXECUTED as a real trade.
-
-Respond with JSON:
-{
-    "winner": "${specialists[0].analystId}" (analyst ID of winner - must be one of: ${specialists.map(s => `"${s.analystId}"`).join(', ')}),
-    "reasoning": "Why this thesis is strongest",
-    "scores": {
-        "${specialists[0].analystId}": { "data": 0-25, "logic": 0-25, "risk": 0-25, "catalyst": 0-25, "total": 0-100 }
-        // ... scores for each analyst
-    }
-}`;
+        const prompt = buildSingleJudgeFallbackPrompt(displaySymbol, specialists, marketData);
 
         const timeout = createTimeoutPromise(AI_REQUEST_TIMEOUT);
         try {
@@ -626,7 +614,7 @@ Respond with JSON:
         const model = this.getModel();
         const karenProfile = ANALYST_PROFILES.risk;
 
-        const prompt = this.buildRiskCouncilPrompt(
+        const prompt = buildRiskCouncilPrompt(
             karenProfile, champion, marketData, accountBalance, currentPositions, recentPnL
         );
 
@@ -718,228 +706,6 @@ Respond with JSON:
         return lines.join('\n');
     }
 
-    private buildCoinSelectionPrompt(
-        profile: typeof ANALYST_PROFILES[AnalystMethodology],
-        marketSummary: string
-    ): string {
-        return `You are ${profile.name}, ${profile.title}.
-
-${profile.description}
-
-YOUR METHODOLOGY & FOCUS AREAS:
-${profile.focusAreas.map(f => `• ${f}`).join('\n')}
-
-═══════════════════════════════════════════════════════════════════════════════
-${marketSummary}
-═══════════════════════════════════════════════════════════════════════════════
-
-TASK: Select your TOP 3 trading opportunities from these 8 coins.
-
-SCORING SYSTEM (your picks compete against other analysts):
-• #1 pick = 3 points × conviction
-• #2 pick = 2 points × conviction  
-• #3 pick = 1 point × conviction
-
-The coin with the highest TOTAL score across all analysts will be selected for deep analysis and potential execution.
-
-SELECTION CRITERIA (apply your ${profile.title} methodology):
-1. MOMENTUM: Which coins show the strongest directional moves?
-2. VOLUME: Is there conviction behind the price action?
-3. FUNDING: Are traders positioned for a squeeze? (positive = crowded longs, negative = crowded shorts)
-4. RELATIVE STRENGTH: Which coins are outperforming/underperforming the group?
-5. YOUR EDGE: What does YOUR methodology see that others might miss?
-
-OUTPUT REQUIREMENTS:
-• symbol: Exact WEEX symbol (e.g., "cmt_btcusdt", "cmt_solusdt")
-• direction: "LONG" (expecting price increase) or "SHORT" (expecting price decrease)
-• conviction: 1-10 scale (BE HONEST - low conviction picks hurt your score)
-  - 1-3: Speculative, weak signal
-  - 4-6: Moderate confidence, some supporting data
-  - 7-8: High confidence, strong signal alignment
-  - 9-10: Exceptional setup, multiple confirming factors
-• reason: ONE sentence with SPECIFIC data (e.g., "+5.2% with 2x avg volume" not "looks bullish")
-
-Respond with JSON:
-{
-    "picks": [
-        { "symbol": "cmt_solusdt", "direction": "LONG", "conviction": 8, "reason": "+4.2% outperforming BTC with negative funding suggesting short squeeze potential" },
-        { "symbol": "cmt_btcusdt", "direction": "LONG", "conviction": 6, "reason": "Holding above 95k support with declining sell volume" },
-        { "symbol": "cmt_dogeusdt", "direction": "SHORT", "conviction": 5, "reason": "Lagging the rally with extreme positive funding (0.08%) indicating crowded longs" }
-    ]
-}`;
-    }
-
-
-    private buildSpecialistPrompt(
-        profile: typeof ANALYST_PROFILES[AnalystMethodology],
-        marketData: ExtendedMarketData,
-        direction: 'LONG' | 'SHORT'
-    ): string {
-        const displaySymbol = marketData.symbol.replace('cmt_', '').replace('usdt', '').toUpperCase();
-        const change = marketData.change24h >= 0 ? `+${marketData.change24h.toFixed(2)}%` : `${marketData.change24h.toFixed(2)}%`;
-
-        // Guard against division by zero in range calculations
-        // Validate all numeric values before division
-        const low24h = Number.isFinite(marketData.low24h) ? marketData.low24h : 0;
-        const high24h = Number.isFinite(marketData.high24h) ? marketData.high24h : 0;
-        const currentPrice = Number.isFinite(marketData.currentPrice) ? marketData.currentPrice : 0;
-
-        // For range percentage: use low24h if > 0, else currentPrice if > 0, else fallback to 1
-        const rangeDenom = low24h > 0 ? low24h : (currentPrice > 0 ? currentPrice : 1);
-        const range24h = ((high24h - low24h) / rangeDenom * 100).toFixed(2);
-
-        // For price position in range: ensure denominator > 0
-        const priceRangeDenom = high24h - low24h;
-        const priceInRange = (Number.isFinite(priceRangeDenom) && priceRangeDenom > 0 && Number.isFinite(currentPrice))
-            ? ((currentPrice - low24h) / priceRangeDenom * 100).toFixed(1)
-            : '50.0'; // Default to middle if range is zero or invalid
-
-        const fundingDirection = marketData.fundingRate !== undefined
-            ? (marketData.fundingRate > 0 ? 'longs paying shorts' : 'shorts paying longs')
-            : 'N/A';
-
-        return `You are ${profile.name}, ${profile.title}.
-
-${profile.description}
-
-YOUR KNOWN BIASES (acknowledge these in your analysis):
-${profile.focusAreas.map(f => `- ${f}`).join('\n')}
-
-ANALYZE: ${displaySymbol}/USDT for a potential ${direction} position
-
-MARKET DATA:
-- Current Price: $${marketData.currentPrice.toFixed(2)}
-- 24h High: $${marketData.high24h.toFixed(2)}
-- 24h Low: $${marketData.low24h.toFixed(2)}
-- 24h Range: ${range24h}% (price at ${priceInRange}% of range)
-- 24h Change: ${change}
-- 24h Volume: $${(marketData.volume24h / 1e6).toFixed(1)}M
-${marketData.fundingRate !== undefined ? `- Funding Rate: ${(marketData.fundingRate * 100).toFixed(4)}% (${fundingDirection})` : ''}
-
-YOUR THESIS WILL BE JUDGED ON:
-1. DATA QUALITY (25%): Use specific numbers, not vague claims
-2. LOGIC (25%): Reasoning must follow from the data
-3. RISK AWARENESS (25%): Acknowledge what could go wrong
-4. CATALYST (25%): Clear price driver with timeline
-
-Apply your ${profile.title} methodology rigorously.
-
-Respond with JSON:
-{
-    "recommendation": "STRONG_BUY" | "BUY" | "HOLD" | "SELL" | "STRONG_SELL",
-    "confidence": 0-100,
-    "entry": number (suggested entry price),
-    "targets": { "bull": number, "base": number, "bear": number },
-    "stopLoss": number,
-    "leverage": 1-5,
-    "positionSize": 1-10,
-    "thesis": "Your main argument in 2-3 sentences with SPECIFIC numbers",
-    "bullCase": ["Point 1 with data", "Point 2 with data", "Point 3 with data"],
-    "bearCase": ["Risk 1 - what invalidates thesis", "Risk 2", "Risk 3"],
-    "keyMetrics": ["RSI: 65", "Volume: 1.2M", "Funding: 0.01%"],
-    "catalyst": "What will trigger the move and WHEN",
-    "timeframe": "Expected duration (e.g., '2-5 days')"
-}`;
-    }
-
-    private buildRiskCouncilPrompt(
-        profile: typeof ANALYST_PROFILES[AnalystMethodology],
-        champion: AnalysisResult,
-        marketData: ExtendedMarketData,
-        accountBalance: number,
-        currentPositions: Array<{ symbol: string; side: string; size: number }>,
-        recentPnL: { day: number; week: number }
-    ): string {
-        const displaySymbol = marketData.symbol.replace('cmt_', '').replace('usdt', '').toUpperCase();
-        const isBullish = ['strong_buy', 'buy'].includes(champion.recommendation);
-        const direction = isBullish ? 'LONG' : 'SHORT';
-
-        // Calculate key risk metrics with division by zero guards
-        const currentPrice = marketData.currentPrice > 0 ? marketData.currentPrice : 1;
-        const stopLossDistance = Math.abs((champion.priceTarget.bear - currentPrice) / currentPrice * 100);
-        const takeProfitDistance = Math.abs((champion.priceTarget.base - currentPrice) / currentPrice * 100);
-        // Guard against division by zero in risk/reward calculation
-        const riskRewardRatio = stopLossDistance > 0 ? takeProfitDistance / stopLossDistance : 0;
-        const positionPercent = (champion.positionSize / 10) * 30; // Max 30% at size 10
-
-        // Check for correlation with existing positions
-        const sameDirectionPositions = currentPositions.filter(p =>
-            (direction === 'LONG' && p.side.toLowerCase().includes('long')) ||
-            (direction === 'SHORT' && p.side.toLowerCase().includes('short'))
-        );
-        const correlationWarning = sameDirectionPositions.length > 0
-            ? `WARNING: ${sameDirectionPositions.length} existing ${direction} position(s): ${sameDirectionPositions.map(p => p.symbol).join(', ')}`
-            : 'OK - No correlation with existing positions';
-
-        // Funding rate analysis
-        const fundingRate = marketData.fundingRate ?? 0;
-        const fundingAgainstUs = marketData.fundingRate !== undefined && (
-            (direction === 'LONG' && fundingRate > 0) ||
-            (direction === 'SHORT' && fundingRate < 0)
-        );
-        const fundingWarning = fundingAgainstUs && Math.abs(fundingRate) > 0.0005
-            ? `WARNING - FUNDING AGAINST US: ${(fundingRate * 100).toFixed(4)}%`
-            : marketData.fundingRate !== undefined
-                ? `OK - Funding rate acceptable: ${(fundingRate * 100).toFixed(4)}%`
-                : '- Funding rate: N/A';
-
-        return `You are ${profile.name}, ${profile.title} - THE RISK MANAGER.
-
-You have VETO POWER over all trades. Your job is to PROTECT THE PORTFOLIO.
-
-PROPOSED TRADE:
-- Symbol: ${displaySymbol}/USDT
-- Direction: ${direction}
-- Champion: ${champion.analystName} (${champion.confidence}% confidence)
-- Thesis: ${champion.thesis}
-
-TRADE PARAMETERS:
-- Entry: $${marketData.currentPrice.toFixed(2)}
-- Take Profit: $${champion.priceTarget.base.toFixed(2)} (+${takeProfitDistance.toFixed(2)}%)
-- Stop Loss: $${champion.priceTarget.bear.toFixed(2)} (-${stopLossDistance.toFixed(2)}%)
-- Risk/Reward: 1:${riskRewardRatio.toFixed(2)}
-- Position Size: ${champion.positionSize}/10 (${positionPercent.toFixed(1)}% of account)
-
-ACCOUNT STATE:
-- Balance: $${accountBalance.toFixed(2)}
-- Current Positions: ${currentPositions.length > 0 ? currentPositions.map(p => `${p.symbol} ${p.side}`).join(', ') : 'None'}
-- 24h P&L: ${recentPnL.day >= 0 ? '+' : ''}${recentPnL.day.toFixed(2)}%
-- 7d P&L: ${recentPnL.week >= 0 ? '+' : ''}${recentPnL.week.toFixed(2)}%
-
-MARKET CONDITIONS:
-- ${displaySymbol} 24h Change: ${marketData.change24h >= 0 ? '+' : ''}${marketData.change24h.toFixed(2)}%
-- ${fundingWarning}
-- ${correlationWarning}
-
-YOUR CHECKLIST (from FLOW.md):
-[ ] Position size <=30% of account? (Currently: ${positionPercent.toFixed(1)}%)
-[ ] Stop loss <=10% from entry? (Currently: ${stopLossDistance.toFixed(2)}%)
-[ ] Leverage <=5x? (Max allowed)
-[ ] Not overexposed to one direction? (${sameDirectionPositions.length} same-direction positions)
-[ ] Funding rate acceptable? (<=0.05% against us)
-[ ] Recent drawdown acceptable? (7d: ${recentPnL.week.toFixed(2)}%)
-
-VETO TRIGGERS (MUST veto if ANY are true):
-X Stop loss >10% from entry
-X Position would exceed 30% of account
-X Already have 3+ positions open
-X 7d drawdown >10% (reduce risk, no new trades)
-X Funding rate >0.05% against position direction
-
-Respond with JSON:
-{
-    "approved": true/false,
-    "adjustments": {
-        "positionSize": number (1-10, reduce if needed),
-        "leverage": number (1-5, reduce if volatility high),
-        "stopLoss": number (tighter stop loss price if needed)
-    },
-    "warnings": ["Warning 1", "Warning 2"],
-    "vetoReason": "Only if approved=false, explain which rule was violated"
-}`;
-    }
-
-
     private async runDebateMatch(
         model: GenerativeModel,
         analystA: AnalysisResult,
@@ -950,95 +716,7 @@ Respond with JSON:
         const displaySymbol = marketData.symbol.replace('cmt_', '').replace('usdt', '').toUpperCase();
         const roundLabel = round === 'final' ? 'CHAMPIONSHIP FINAL' : 'SEMIFINAL';
 
-        const prompt = `You are a hedge fund CIO judging a ${roundLabel} debate about ${displaySymbol}/USDT.
-
-===============================================================================
-${roundLabel}: ${analystA.analystName} vs ${analystB.analystName}
-===============================================================================
-
-MARKET CONTEXT:
-- Current Price: $${marketData.currentPrice.toFixed(2)}
-- 24h Change: ${marketData.change24h >= 0 ? '+' : ''}${marketData.change24h.toFixed(2)}%
-${marketData.fundingRate !== undefined ? `- Funding Rate: ${(marketData.fundingRate * 100).toFixed(4)}%` : ''}
-
--------------------------------------------------------------------------------
-ANALYST A: ${analystA.analystName} ${analystA.analystEmoji} (${analystA.analystTitle})
--------------------------------------------------------------------------------
-Recommendation: ${analystA.recommendation.toUpperCase().replace('_', ' ')}
-Confidence: ${analystA.confidence}%
-Position Size: ${analystA.positionSize}/10
-
-THESIS: ${analystA.thesis}
-
-BULL CASE:
-${analystA.bullCase?.slice(0, 3).map(b => `- ${b}`).join('\n') || '- N/A'}
-
-BEAR CASE (Risks Acknowledged):
-${analystA.bearCase?.slice(0, 3).map(b => `- ${b}`).join('\n') || '- N/A'}
-
-PRICE TARGETS:
-- Bull: $${analystA.priceTarget.bull.toFixed(2)}
-- Base: $${analystA.priceTarget.base.toFixed(2)}
-- Bear: $${analystA.priceTarget.bear.toFixed(2)}
-
-CATALYST: ${analystA.catalysts?.[0] || 'Not specified'}
-
--------------------------------------------------------------------------------
-ANALYST B: ${analystB.analystName} ${analystB.analystEmoji} (${analystB.analystTitle})
--------------------------------------------------------------------------------
-Recommendation: ${analystB.recommendation.toUpperCase().replace('_', ' ')}
-Confidence: ${analystB.confidence}%
-Position Size: ${analystB.positionSize}/10
-
-THESIS: ${analystB.thesis}
-
-BULL CASE:
-${analystB.bullCase?.slice(0, 3).map(b => `- ${b}`).join('\n') || '- N/A'}
-
-BEAR CASE (Risks Acknowledged):
-${analystB.bearCase?.slice(0, 3).map(b => `- ${b}`).join('\n') || '- N/A'}
-
-PRICE TARGETS:
-- Bull: $${analystB.priceTarget.bull.toFixed(2)}
-- Base: $${analystB.priceTarget.base.toFixed(2)}
-- Bear: $${analystB.priceTarget.bear.toFixed(2)}
-
-CATALYST: ${analystB.catalysts?.[0] || 'Not specified'}
-
-===============================================================================
-JUDGING CRITERIA (from FLOW.md)
-===============================================================================
-
-Score each analyst on these criteria (0-25 points each):
-
-1. DATA QUALITY (25%): 
-   - Uses specific numbers, not vague claims
-   - References actual market data
-   - Quantifies risks and targets
-
-2. LOGIC (25%):
-   - Reasoning is sound and follows from data
-   - Arguments are internally consistent
-   - Conclusions match the evidence
-
-3. RISK AWARENESS (25%):
-   - Acknowledges what could go wrong
-   - Has realistic bear case
-   - Stop loss is reasonable
-
-4. CATALYST (25%):
-   - Clear price driver identified
-   - Timeline specified
-   - Expected impact quantified
-
-The winner's thesis will be EXECUTED as a real trade. Choose wisely.
-
-Respond with JSON containing:
-- winner: The analyst ID who won ("${analystA.analystId}" or "${analystB.analystId}")
-- winnerScore: Scores for the winner { data, logic, risk, catalyst, total }
-- loserScore: Scores for the loser { data, logic, risk, catalyst, total }
-- reasoning: Why the winner won
-- keyDifferentiator: The single most important factor`;
+        const prompt = buildTournamentDebatePrompt(roundLabel, displaySymbol, analystA, analystB, marketData);
 
         const timeout = createTimeoutPromise(AI_REQUEST_TIMEOUT);
         try {

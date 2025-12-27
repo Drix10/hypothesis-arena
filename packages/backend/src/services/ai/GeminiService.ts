@@ -14,12 +14,12 @@ import { GoogleGenerativeAI, GenerativeModel, SchemaType } from '@google/generat
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
 import { aiLogService } from '../compliance/AILogService';
-import { ANALYST_PROFILES, THESIS_SYSTEM_PROMPTS, GLOBAL_RISK_LIMITS, AnalystMethodology } from '../../constants/analystPrompts';
-import { arenaContextBuilder, FullArenaContext } from './ArenaContext';
+import { ANALYST_PROFILES, THESIS_SYSTEM_PROMPTS, GLOBAL_RISK_LIMITS, type AnalystMethodology, buildDebatePrompt } from '../../constants/analyst';
+import { arenaContextBuilder, FullArenaContext } from '../../constants/ArenaContext';
 import { circuitBreakerService, CircuitBreakerStatus } from '../risk/CircuitBreakerService';
 
 // Re-export arena context types for external use
-export type { FullArenaContext } from './ArenaContext';
+export type { FullArenaContext } from '../../constants/ArenaContext';
 
 // Constants
 const AI_REQUEST_TIMEOUT = 90000; // 90 seconds for detailed analysis
@@ -683,70 +683,13 @@ Respond ONLY with valid JSON matching this exact structure.`;
         const displaySymbol = request.symbol.replace('cmt_', '').replace('usdt', '').toUpperCase();
         const roundLabel = request.round.toUpperCase().replace('FINAL', 'CHAMPIONSHIP');
 
-        const prompt = `You are moderating a ${roundLabel} debate between two elite crypto analysts about ${displaySymbol}/USDT.
-
-═══════════════════════════════════════════════════════════════════════════════
-BULL ANALYST: ${request.bullAnalysis.analystName} ${request.bullAnalysis.analystEmoji} (${request.bullAnalysis.analystTitle})
-═══════════════════════════════════════════════════════════════════════════════
-Recommendation: ${request.bullAnalysis.recommendation.toUpperCase().replace('_', ' ')}
-Confidence: ${request.bullAnalysis.confidence}%
-Thesis: ${request.bullAnalysis.thesis}
-Bull Case: ${request.bullAnalysis.bullCase?.slice(0, 3).join(' | ') || 'N/A'}
-Key Metrics: ${JSON.stringify(request.bullAnalysis.keyMetrics || {})}
-
-═══════════════════════════════════════════════════════════════════════════════
-BEAR ANALYST: ${request.bearAnalysis.analystName} ${request.bearAnalysis.analystEmoji} (${request.bearAnalysis.analystTitle})
-═══════════════════════════════════════════════════════════════════════════════
-Recommendation: ${request.bearAnalysis.recommendation.toUpperCase().replace('_', ' ')}
-Confidence: ${request.bearAnalysis.confidence}%
-Thesis: ${request.bearAnalysis.thesis}
-Bear Case: ${request.bearAnalysis.bearCase?.slice(0, 3).join(' | ') || 'N/A'}
-Key Metrics: ${JSON.stringify(request.bearAnalysis.keyMetrics || {})}
-
-═══════════════════════════════════════════════════════════════════════════════
-MARKET DATA
-═══════════════════════════════════════════════════════════════════════════════
-Current Price: ${request.marketData.price.toFixed(request.marketData.price < 1 ? 6 : 2)}
-24h Change: ${request.marketData.change24h >= 0 ? '+' : ''}${request.marketData.change24h.toFixed(2)}%
-${request.marketData.volume24h ? `24h Volume: ${request.marketData.volume24h.toLocaleString()}` : ''}
-
-═══════════════════════════════════════════════════════════════════════════════
-DEBATE INSTRUCTIONS
-═══════════════════════════════════════════════════════════════════════════════
-Generate a 4-turn debate (2 turns each, alternating). Each turn should:
-1. Reference SPECIFIC data points and metrics
-2. Counter the opponent's previous argument
-3. Stay true to the analyst's methodology
-4. Be 80-120 words per turn
-
-Score each analyst on (from prompts judging criteria):
-- Data Quality (0-100): How well they use specific numbers and metrics
-- Logic Coherence (0-100): How well-structured and reasoned their arguments are
-- Risk Acknowledgment (0-100): How well they acknowledge counterarguments
-- Catalyst Identification (0-100): How well they identify price catalysts
-
-Respond in JSON format:
-{
-    "turns": [
-        {"speaker": "bull", "analystName": "${request.bullAnalysis.analystName}", "argument": "Opening argument with data", "strength": 1-10, "dataPointsReferenced": ["metric1", "metric2"]},
-        {"speaker": "bear", "analystName": "${request.bearAnalysis.analystName}", "argument": "Rebuttal with counter-data", "strength": 1-10, "dataPointsReferenced": ["metric1"]},
-        {"speaker": "bull", "analystName": "${request.bullAnalysis.analystName}", "argument": "Counter-argument", "strength": 1-10, "dataPointsReferenced": ["metric1"]},
-        {"speaker": "bear", "analystName": "${request.bearAnalysis.analystName}", "argument": "Final point", "strength": 1-10, "dataPointsReferenced": ["metric1"]}
-    ],
-    "winner": "bull" | "bear" | "draw",
-    "scores": {
-        "bullScore": 0-100,
-        "bearScore": 0-100,
-        "dataQuality": {"bull": 0-100, "bear": 0-100},
-        "logicCoherence": {"bull": 0-100, "bear": 0-100},
-        "riskAcknowledgment": {"bull": 0-100, "bear": 0-100},
-        "catalystIdentification": {"bull": 0-100, "bear": 0-100}
-    },
-    "winningArguments": ["Key winning point 1", "Key winning point 2", "Key winning point 3"],
-    "summary": "One paragraph summary of the debate outcome and why the winner prevailed"
-}
-
-Respond ONLY with valid JSON matching this exact structure.`;
+        const prompt = buildDebatePrompt(
+            roundLabel,
+            displaySymbol,
+            request.bullAnalysis,
+            request.bearAnalysis,
+            request.marketData
+        );
 
         let timeoutId: NodeJS.Timeout | null = null;
         try {

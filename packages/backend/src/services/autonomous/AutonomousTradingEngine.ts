@@ -23,7 +23,7 @@ import { circuitBreakerService } from '../risk/CircuitBreakerService';
 import { pool } from '../../config/database';
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
-import { ANALYST_PROFILES } from '../../constants/analystPrompts';
+import { ANALYST_PROFILES } from '../../constants/analyst';
 
 const APPROVED_SYMBOLS = [
     'cmt_btcusdt',
@@ -344,6 +344,22 @@ export class AutonomousTradingEngine extends EventEmitter {
                 if (marketDataMap.size === 0) {
                     logger.warn('No market data available, skipping cycle');
                     this.currentCycle.errors.push('No market data available');
+
+                    // Mark cycle as complete before skipping
+                    this.currentCycle.endTime = Date.now();
+                    const cycleDuration = this.currentCycle.endTime - cycleStart;
+                    logger.info(`✅ Cycle #${this.cycleCount} complete (no data): 0 trades, 0 debates (${(cycleDuration / 1000).toFixed(1)}s)`);
+                    this.emit('cycleComplete', this.currentCycle);
+
+                    // Sleep before next cycle
+                    const elapsed = Date.now() - cycleStart;
+                    const dynamicInterval = tradingScheduler.getDynamicCycleInterval(this.CYCLE_INTERVAL_MS);
+                    const sleepTime = Math.max(0, dynamicInterval - elapsed);
+
+                    if (sleepTime > 0 && this.isRunning) {
+                        logger.info(`💤 Sleeping for ${(sleepTime / 1000).toFixed(0)}s until next cycle...`);
+                        await this.sleep(sleepTime);
+                    }
                     continue;
                 }
 

@@ -7,7 +7,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { authenticate, optionalAuth } from '../middleware/auth';
 import { geminiService, ExtendedMarketData } from '../../services/ai/GeminiService';
-import { ANALYST_PROFILES } from '../../constants/analystPrompts';
+import { ANALYST_PROFILES } from '../../constants/analyst';
 import { getWeexClient } from '../../services/weex/WeexClient';
 import { analysisService } from '../../services/analysis/AnalysisService';
 import { APPROVED_SYMBOLS } from '@hypothesis-arena/shared';

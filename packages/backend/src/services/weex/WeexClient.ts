@@ -363,16 +363,6 @@ export class WeexClient {
         return { symbol, fundingRate: '0', collectCycle: 480, timestamp: Date.now() };
     }
 
-    async getTrades(symbol: string, limit: number = 100): Promise<WeexTrade[]> {
-        // Response is array directly
-        const response = await this.request<WeexTrade[] | { data: WeexTrade[] }>(
-            'GET',
-            '/capi/v2/market/trades',
-            { symbol, limit: String(limit) }
-        );
-        return Array.isArray(response) ? response : (response as any).data || [];
-    }
-
     async getCandles(symbol: string, interval: string = '1m', limit: number = 100): Promise<WeexCandle[]> {
         // Response is array of arrays: [[timestamp, open, high, low, close, baseVol, quoteVol], ...]
         const response = await this.request<string[][]>(
@@ -585,28 +575,6 @@ export class WeexClient {
             true
         );
         return (response as any).list || (response as any).data || [];
-    }
-
-    async batchOrders(orders: WeexOrderRequest[]): Promise<WeexBatchOrderResponse> {
-        return this.request<WeexBatchOrderResponse>(
-            'POST',
-            '/capi/v2/order/batchOrders',
-            undefined,
-            { orderList: orders },
-            true,
-            true
-        );
-    }
-
-    async batchCancelOrders(symbol: string, orderIds: string[]): Promise<any> {
-        return this.request(
-            'POST',
-            '/capi/v2/order/batchCancelOrders',
-            undefined,
-            { symbol, orderIds },
-            true,
-            true
-        );
     }
 
     async closeAllPositions(symbol?: string): Promise<any> {

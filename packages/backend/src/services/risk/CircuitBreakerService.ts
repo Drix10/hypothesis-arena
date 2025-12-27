@@ -12,7 +12,7 @@
 import { logger } from '../../utils/logger';
 import { getWeexClient } from '../weex/WeexClient';
 import { pool } from '../../config/database';
-import { GLOBAL_RISK_LIMITS } from '../../constants/analystPrompts';
+import { GLOBAL_RISK_LIMITS } from '../../constants/analyst';
 
 export type CircuitBreakerLevel = 'NONE' | 'YELLOW' | 'ORANGE' | 'RED';
 

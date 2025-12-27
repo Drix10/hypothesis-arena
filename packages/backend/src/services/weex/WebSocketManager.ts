@@ -236,8 +236,14 @@ export class WebSocketManager {
                     client.ws.removeListener('close', onClose);
                 });
 
-                // Initiate close
-                client.ws.close(1000, 'Server shutting down');
+                // Initiate close with error handling
+                try {
+                    client.ws.close(1000, 'Server shutting down');
+                } catch (error) {
+                    logger.warn(`Error closing WebSocket for ${client.userId}:`, error);
+                    // Resolve anyway since we're shutting down
+                    resolve();
+                }
             });
         });
 

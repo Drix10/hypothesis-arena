@@ -9,9 +9,9 @@
  * - Recent trades and debates
  */
 
-import { config } from '../../config';
-import { pool } from '../../config/database';
-import { logger } from '../../utils/logger';
+import { config } from '../config';
+import { pool } from '../config/database';
+import { logger } from '../utils/logger';
 
 export interface AnalystPortfolio {
     analystId: string;
