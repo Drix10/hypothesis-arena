@@ -5,7 +5,6 @@ WORKDIR /app
 
 # Copy package files
 COPY package*.json ./
-COPY packages/shared/package*.json ./packages/shared/
 COPY packages/backend/package*.json ./packages/backend/
 COPY packages/frontend/package*.json ./packages/frontend/
 
@@ -25,16 +24,14 @@ WORKDIR /app
 
 # Copy package files for production install
 COPY package*.json ./
-COPY packages/shared/package.json ./packages/shared/
 COPY packages/backend/package.json ./packages/backend/
 
 # Copy built artifacts
-COPY --from=builder /app/packages/shared/dist ./packages/shared/dist
 COPY --from=builder /app/packages/backend/dist ./packages/backend/dist
 COPY --from=builder /app/packages/frontend/dist ./packages/frontend/dist
 
-# Install production dependencies
-RUN npm ci --omit=dev -w @hypothesis-arena/shared -w @hypothesis-arena/backend
+# Install production dependencies (backend only - frontend is static)
+RUN npm ci --omit=dev -w @hypothesis-arena/backend
 
 # Security: Run as non-root user
 RUN addgroup --system --gid 1001 nodejs

@@ -9,7 +9,7 @@ export default defineConfig({
     resolve: {
         alias: {
             '@': path.resolve(__dirname, 'src'),
-            '@shared': path.resolve(__dirname, '../shared/src'),
+            // Removed @shared alias - shared code is now in src/shared/
         },
     },
     server: {
@@ -39,6 +39,6 @@ export default defineConfig({
         },
     },
     optimizeDeps: {
-        include: ['@hypothesis-arena/shared'],
+        // Removed @hypothesis-arena/shared - now using local shared code
     },
 });
