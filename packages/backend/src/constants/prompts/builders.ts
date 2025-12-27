@@ -50,9 +50,7 @@ ${description}
 YOUR METHODOLOGY & FOCUS AREAS:
 ${focusAreas}
 
-═══════════════════════════════════════════════════════════════════════════════
 ${marketSummary}
-═══════════════════════════════════════════════════════════════════════════════
 
 TASK: Select your TOP 3 trading opportunities from these 8 coins.
 
@@ -354,34 +352,26 @@ export function buildDebatePrompt(
 
     return `You are moderating a ${roundLabel} debate between two elite crypto analysts about ${displaySymbol}/USDT.
 
-═══════════════════════════════════════════════════════════════════════════════
 BULL ANALYST: ${bullName} ${bullAnalysis.analystEmoji} (${bullAnalysis.analystTitle})
-═══════════════════════════════════════════════════════════════════════════════
 Recommendation: ${bullAnalysis.recommendation.toUpperCase().replace('_', ' ')}
 Confidence: ${safeNumber(bullAnalysis.confidence, 0)}%
 Thesis: ${bullThesis}
 Bull Case: ${bullBullCase}
 Key Metrics: ${bullMetrics}
 
-═══════════════════════════════════════════════════════════════════════════════
 BEAR ANALYST: ${bearName} ${bearAnalysis.analystEmoji} (${bearAnalysis.analystTitle})
-═══════════════════════════════════════════════════════════════════════════════
 Recommendation: ${bearAnalysis.recommendation.toUpperCase().replace('_', ' ')}
 Confidence: ${safeNumber(bearAnalysis.confidence, 0)}%
 Thesis: ${bearThesis}
 Bear Case: ${bearBearCase}
 Key Metrics: ${bearMetrics}
 
-═══════════════════════════════════════════════════════════════════════════════
 MARKET DATA
-═══════════════════════════════════════════════════════════════════════════════
 Current Price: ${priceStr}
 24h Change: ${changeStr}
 ${volumeStr}
 
-═══════════════════════════════════════════════════════════════════════════════
 DEBATE INSTRUCTIONS
-═══════════════════════════════════════════════════════════════════════════════
 Generate a 4-turn debate (2 turns each, alternating). Each turn should:
 1. Reference SPECIFIC data points and metrics
 2. Counter the opponent's previous argument
@@ -563,18 +553,18 @@ export function buildTournamentDebatePrompt(
 
     return `You are a hedge fund CIO judging a ${roundLabel} debate about ${displaySymbol}/USDT.
 
-===============================================================================
-${roundLabel}: ${nameA} vs ${nameB}
-===============================================================================
+
+    ${roundLabel}: ${nameA} vs ${nameB}
+
 
 MARKET CONTEXT:
 - Current Price: ${priceStr}
 - 24h Change: ${changeStr}
 ${fundingStr}
 
--------------------------------------------------------------------------------
+
 ANALYST A: ${nameA} ${analystA.analystEmoji} (${titleA})
--------------------------------------------------------------------------------
+
 Recommendation: ${analystA.recommendation.toUpperCase().replace('_', ' ')}
 Confidence: ${safeNumber(analystA.confidence, 0)}%
 Position Size: ${safeNumber(analystA.positionSize, 0)}/10
@@ -594,9 +584,9 @@ PRICE TARGETS:
 
 CATALYST: ${catalystA}
 
--------------------------------------------------------------------------------
+
 ANALYST B: ${nameB} ${analystB.analystEmoji} (${titleB})
--------------------------------------------------------------------------------
+
 Recommendation: ${analystB.recommendation.toUpperCase().replace('_', ' ')}
 Confidence: ${safeNumber(analystB.confidence, 0)}%
 Position Size: ${safeNumber(analystB.positionSize, 0)}/10
@@ -616,9 +606,8 @@ PRICE TARGETS:
 
 CATALYST: ${catalystB}
 
-===============================================================================
+
 JUDGING CRITERIA (from FLOW.md)
-===============================================================================
 
 Score each analyst on these criteria (0-25 points each):
 

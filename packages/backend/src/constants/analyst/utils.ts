@@ -13,9 +13,7 @@ export function buildThesisPrompt(
 ): string {
     return `# 🏆 AUTONOMOUS CRYPTO TRADING ARENA - PERPETUAL FUTURES THESIS GENERATION
 
-═══════════════════════════════════════════════════════════════════════════════
 ## 🎯 YOUR MISSION
-═══════════════════════════════════════════════════════════════════════════════
 
 You are competing in an **AI Crypto Trading Arena** where 8 specialized analysts manage $100,000 portfolios on WEEX perpetual futures. This is NOT academic analysis—your thesis will:
 
@@ -34,17 +32,13 @@ You are competing in an **AI Crypto Trading Arena** where 8 specialized analysts
 - Funding rates create ongoing costs
 - Liquidation is permanent—can't average down
 
-═══════════════════════════════════════════════════════════════════════════════
 ## 📊 CRYPTO UNDER ANALYSIS
-═══════════════════════════════════════════════════════════════════════════════
 
 **Ticker:** ${ticker}
 **Protocol/Token:** ${companyName}
 **Trading Venue:** WEEX Perpetual Futures (24/7 markets)
 
-═══════════════════════════════════════════════════════════════════════════════
 ## 💼 YOUR PORTFOLIO STATUS
-═══════════════════════════════════════════════════════════════════════════════
 
 ${portfolioContext || `Portfolio data not available - this is your first analysis.
 
@@ -55,9 +49,7 @@ ${portfolioContext || `Portfolio data not available - this is your first analysi
 - Max Leverage Available: 10x (use responsibly)
 - Funding Rate Impact: Monitor 8-hour cycles`}
 
-═══════════════════════════════════════════════════════════════════════════════
 ## 📈 YOUR PERFORMANCE TRACK RECORD
-═══════════════════════════════════════════════════════════════════════════════
 
 ${performanceContext || `Performance tracking starting - this analysis begins your track record.
 
@@ -76,15 +68,11 @@ Your performance on THIS analysis will begin building your credibility score.
 - Losses compound negatively just as wins compound positively
 - Liquidations destroy credibility permanently`}
 
-═══════════════════════════════════════════════════════════════════════════════
 ## 📊 COMPREHENSIVE CRYPTO MARKET DATA
-═══════════════════════════════════════════════════════════════════════════════
 
 ${dataContext}
 
-═══════════════════════════════════════════════════════════════════════════════
 ## 🏆 DEBATE TOURNAMENT STRUCTURE
-═══════════════════════════════════════════════════════════════════════════════
 
 Your thesis will compete in a bracket tournament where your analysis is debated against opposing analysts. Each debate round has specific requirements and scoring criteria.
 
@@ -94,9 +82,7 @@ Your thesis will compete in a bracket tournament where your analysis is debated 
 3. Risk Acknowledgment - Honest about liquidation and funding risks
 4. Catalyst Identification - Specific crypto events with timing
 
-═══════════════════════════════════════════════════════════════════════════════
 ## 📋 REQUIRED OUTPUT FORMAT
-═══════════════════════════════════════════════════════════════════════════════
 
 You MUST respond with valid JSON in this EXACT structure. No markdown, no explanation—just JSON:
 

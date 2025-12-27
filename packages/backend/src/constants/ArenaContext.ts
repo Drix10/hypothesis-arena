@@ -415,12 +415,10 @@ class ArenaContextBuilder {
         const displaySymbol = marketConditions.symbol.replace('cmt_', '').replace('usdt', '').toUpperCase();
 
         return `
-═══════════════════════════════════════════════════════════════════════════════
 🏟️ HYPOTHESIS ARENA - LIVE TRADING CONTEXT
-═══════════════════════════════════════════════════════════════════════════════
 
 📊 YOUR PORTFOLIO STATUS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 Analyst: ${myPortfolio.analystName} (${myPortfolio.analystId})
 Current Rank: #${myPortfolio.rank} of 8
 Balance: $${myPortfolio.balance.toFixed(2)} USDT
@@ -440,7 +438,7 @@ ${myPortfolio.recentTrades.slice(0, 5).map(t => `  • ${t.symbol} ${t.side} @ $
 ` : ''}
 
 🏆 ARENA LEADERBOARD
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 ${arenaState.leaderboard.length > 0 ? arenaState.leaderboard.map(l => {
             const isMe = l.analystId === myPortfolio.analystId;
             const marker = isMe ? '👉' : '  ';
@@ -453,14 +451,14 @@ Total Arena Trades: ${arenaState.totalTrades}
 Market Sentiment: ${arenaState.marketSentiment.toUpperCase()}
 
 🎯 COMPETITOR ANALYSIS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 ${otherAnalysts.slice(0, 5).map(a => {
             const status = a.totalReturn > myPortfolio.totalReturn ? '⬆️ AHEAD' : '⬇️ BEHIND';
             return `${a.analystName}: $${a.totalValue.toFixed(2)} (${a.totalReturn >= 0 ? '+' : ''}${a.totalReturn.toFixed(2)}%) ${status}`;
         }).join('\n')}
 
 📈 MARKET CONDITIONS: ${displaySymbol}/USDT
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 Current Price: $${marketConditions.price.toFixed(marketConditions.price < 1 ? 6 : 2)}
 24h Change: ${marketConditions.change24h >= 0 ? '+' : ''}${marketConditions.change24h.toFixed(2)}%
 24h High: $${marketConditions.high24h.toFixed(marketConditions.high24h < 1 ? 6 : 2)}
@@ -471,7 +469,7 @@ Volatility: ${marketConditions.volatility.toUpperCase()}
 Trend: ${marketConditions.trend.replace('_', ' ').toUpperCase()}
 
 ⚠️ TRADING RULES & CONSTRAINTS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 • Max Position Size: ${tradingRules.maxPositionSizePercent}% of portfolio ($${(myPortfolio.balance * tradingRules.maxPositionSizePercent / 100).toFixed(2)})
 • Max Leverage: ${tradingRules.maxLeverage}x
 • Default Leverage: ${tradingRules.defaultLeverage}x
@@ -481,7 +479,7 @@ Trend: ${marketConditions.trend.replace('_', ' ').toUpperCase()}
 • Min Balance Required: $${tradingRules.minBalanceToTrade}
 
 🎯 YOUR OBJECTIVE
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 You are competing against 7 other AI analysts in the Hypothesis Arena.
 Your goal is to maximize returns while managing risk.
 ${myPortfolio.rank === 1 ? '🏆 You are the CHAMPION! Defend your position!' : `You need to beat ${arenaState.leaderboard[0]?.analystName || 'the leader'} to become champion.`}
@@ -493,7 +491,6 @@ Consider:
 4. Your available capital and risk tolerance
 5. The trading rules and constraints above
 
-═══════════════════════════════════════════════════════════════════════════════
 `;
     }
 
