@@ -22,6 +22,14 @@ export const RISK_COUNCIL_VETO_TRIGGERS = {
     // Correlation limits
     MAX_SAME_DIRECTION_POSITIONS: 2, // Max 2 positions in same direction (long or short)
 
+    // Portfolio heat & net exposure guardrails
+    MAX_RISK_PER_TRADE_PERCENT: 2,   // Risk per trade ≤2% of account
+    MAX_CONCURRENT_RISK_PERCENT: 5,  // Concurrent risk across open trades ≤5%
+    NET_EXPOSURE_LIMITS: {
+        LONG: 60,    // Net LONG exposure ≤60% of account
+        SHORT: 50    // Net SHORT exposure ≤50% of account
+    },
+
     // Karen's checklist (from FLOW.md) - all conditions must be satisfied
     CHECKLIST: [
         'Position size ≤30% of account',
@@ -31,6 +39,8 @@ export const RISK_COUNCIL_VETO_TRIGGERS = {
         'Correlation risk (not 3 positions in same sector)',
         'Funding rate acceptable (|rate| ≤0.05% against us)',
         'Volatility regime (reduce size in high vol)',
-        'Recent drawdown (reduce size if down >10% this week)'
+        'Recent drawdown (reduce size if down >10% this week)',
+        'Portfolio heat (risk per trade ≤2%, concurrent risk ≤5%)',
+        'Net exposure guardrails (net LONG ≤60%, net SHORT ≤50%)'
     ]
 };

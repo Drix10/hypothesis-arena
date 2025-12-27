@@ -16,7 +16,7 @@ export { GLOBAL_RISK_LIMITS, MAX_POSITION_SIZE, MAX_TOTAL_LEVERAGE_EXPOSURE } fr
 export { RISK_COUNCIL_VETO_TRIGGERS } from './riskCouncil';
 
 // Tournament & Coin Selection
-export { TOURNAMENT_JUDGING_CRITERIA } from './tournament';
+export { TOURNAMENT_JUDGING_CRITERIA, CRYPTO_JUDGING_REMINDERS, JUDGING_PITFALLS } from './tournament';
 export { COIN_SELECTION_SCORING, COIN_TYPE_SPECIALISTS } from './coinSelection';
 
 // Prompts

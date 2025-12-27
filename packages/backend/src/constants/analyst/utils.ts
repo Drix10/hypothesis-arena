@@ -18,7 +18,7 @@ export function buildThesisPrompt(
 You are competing in an **AI Crypto Trading Arena** where 8 specialized analysts manage $100,000 portfolios on WEEX perpetual futures. This is NOT academic analysis—your thesis will:
 
 1. **Be debated** in a tournament bracket against opposing analysts
-2. **Trigger real leveraged trades** if you win your debate matches (up to 10x leverage)
+2. **Trigger real leveraged trades** if you win your debate matches (up to 5x leverage)
 3. **Impact your permanent track record** (affects future position sizing)
 4. **Be judged** on crypto data quality, logic, risk awareness, and catalyst identification
 
@@ -27,7 +27,7 @@ You are competing in an **AI Crypto Trading Arena** where 8 specialized analysts
 - Losers sit out and lose credibility
 - Your track record compounds over time
 - Position sizing scales with your win rate
-- Leverage amplifies both wins and losses (10x = 10x gains OR liquidation)
+- Leverage amplifies both wins and losses (5x = amplified gains AND tighter liquidation risk)
 - Crypto volatility is 5-10x higher than stocks
 - Funding rates create ongoing costs
 - Liquidation is permanent—can't average down
@@ -46,7 +46,7 @@ ${portfolioContext || `Portfolio data not available - this is your first analysi
 - Cash: $100,000 USDT
 - Holdings: None
 - Available for new positions: 100%
-- Max Leverage Available: 10x (use responsibly)
+- Max Leverage Available: 5x (use responsibly)
 - Funding Rate Impact: Monitor 8-hour cycles`}
 
 ## 📈 YOUR PERFORMANCE TRACK RECORD
@@ -71,6 +71,26 @@ Your performance on THIS analysis will begin building your credibility score.
 ## 📊 COMPREHENSIVE CRYPTO MARKET DATA
 
 ${dataContext}
+
+## 📚 Trade Templates (use one or combine thoughtfully)
+
+1) Breakout Continuation: Structure intact, momentum strong, catalyst near-term. Define invalidation below structure.
+2) Mean Reversion: Extended move + funding/OI extreme; fade with tight stop and defined target.
+3) Narrative Momentum: Fresh story + rising on-chain usage; scale in with catalyst timing.
+4) Basis/Funding Carry: Positive carry with delta-hedge or reduced direction; monitor regime shifts.
+
+## ✅ Signal Stack Checklist (must reference multiple layers)
+- Structure: HH/HL or LL/LH, key levels, volume profile nodes.
+- Momentum: 4H/1D trend, RSI/MACD, breakout conditions.
+- Microstructure: Funding %, OI change, liquidation clusters, basis.
+- On-chain: TVL, MVRV, active addresses, exchange flows.
+- Risk: Stop distance, position size, leverage ≤5x, invalidation.
+
+## ❌ Forbidden / Penalized
+- Price-only arguments without data.
+- Ignoring crowding risk (extreme funding/OI) or regime context.
+- Timeframe mismatch between thesis, targets, and catalysts.
+- No invalidation level or stop-loss math.
 
 ## 🏆 DEBATE TOURNAMENT STRUCTURE
 
@@ -97,7 +117,7 @@ You MUST respond with valid JSON in this EXACT structure. No markdown, no explan
   },
   "timeHorizon": "string (e.g., '2 weeks', '1 month', '3 months')",
   "positionSize": 1-10,
-  "leverage": 1-10,
+  "leverage": 1-5,
   "bullCase": [
     "Specific argument 1 with ON-CHAIN DATA",
     "Specific argument 2 with ON-CHAIN DATA",

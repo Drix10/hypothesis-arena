@@ -491,6 +491,23 @@ Consider:
 4. Your available capital and risk tolerance
 5. The trading rules and constraints above
 
+📌 Directive Hints
+• Use specific numbers (funding %, OI change, volume vs avg, key levels).
+• Reference on-chain OR microstructure metrics; avoid price-only arguments.
+• Align timeframe: thesis, targets, and catalysts must match horizon.
+• Define invalidation and stop-loss distance; keep leverage ≤5x.
+• Watch crowding risk: extreme funding/OI and correlated positions.
+
+✅ Do
+• Quantify conviction and risk; show liquidation math for leverage.
+• Include near-term catalysts (7–14 days) with expected impact.
+• Respect portfolio heat and net exposure guardrails.
+
+❌ Don’t
+• Hand-wave with vague statements or narrative-only claims.
+• Propose trades without stop, size, and risk calculations.
+• Stack correlated longs/shorts beyond guardrails.
+
 `;
     }
 

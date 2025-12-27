@@ -34,6 +34,7 @@ export const ANALYST_PROFILES: Record<AnalystMethodology, AnalystAgent> = {
             'Developer activity and commits',
             'Token economics and supply dynamics',
             'Protocol revenue and fees',
+            'Fee burn and supply unlock schedule',
             'Competitive moat in crypto ecosystem'
         ],
         biases: [
@@ -94,7 +95,9 @@ export const ANALYST_PROFILES: Record<AnalystMethodology, AnalystAgent> = {
             'RSI divergences and MACD signals',
             'Volume profile and CVD',
             'Liquidation levels and clusters',
-            'Funding rate extremes'
+            'Funding rate extremes',
+            'Market structure (HH/HL or LL/LH)',
+            'Perp–spot basis and time-of-day flows'
         ],
         biases: [
             'Ignores on-chain fundamentals',
@@ -124,7 +127,9 @@ export const ANALYST_PROFILES: Record<AnalystMethodology, AnalystAgent> = {
             'Risk-on/risk-off regime',
             'Crypto market cycle (accumulation/markup/distribution)',
             'Regulatory environment shifts',
-            'Institutional flow data'
+            'Institutional flow data',
+            'BTC beta and correlation structure by sector',
+            'Stablecoin liquidity and exchange flows'
         ],
         biases: [
             'May miss coin-specific catalysts',
@@ -186,7 +191,8 @@ export const ANALYST_PROFILES: Record<AnalystMethodology, AnalystAgent> = {
             'Smart contract risks',
             'Black swan scenarios (hacks, depegs)',
             'Position sizing and leverage limits',
-            'Portfolio correlation and concentration'
+            'Portfolio correlation and concentration',
+            'Portfolio heat and net exposure guardrails'
         ],
         biases: [
             'May be overly cautious in bull markets',
@@ -216,7 +222,8 @@ export const ANALYST_PROFILES: Record<AnalystMethodology, AnalystAgent> = {
             'Correlation with BTC/ETH',
             'Mean reversion z-scores',
             'Order flow imbalance',
-            'Liquidation heatmaps'
+            'Liquidation heatmaps',
+            'Options delta/skew for directional bias'
         ],
         biases: [
             'Models break in new market regimes',

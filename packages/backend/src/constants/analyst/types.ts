@@ -20,11 +20,16 @@ export interface AnalystAgent {
     title: string;
     methodology: AnalystMethodology;
     avatarEmoji: string;
+    /** Concise summary of the analyst’s methodology and perspective */
     description: string;
+    /** Topics and metrics the analyst prioritizes (e.g., funding %, TVL) */
     focusAreas: string[];
+    /** Known blind spots or tendencies to watch for in debates */
     biases: string[];
-    // New fields for collaborative flow (FLOW.md)
+    /** Collaborative pipeline role as defined in FLOW.md */
     pipelineRole: 'coin_selector' | 'specialist' | 'risk_council';
+    /** Coin categories where the analyst is most effective */
     coinTypeSpecialty: ('blue_chip' | 'l1_growth' | 'momentum_meme' | 'utility')[];
-    tournamentStrengths: string[];  // What they excel at in debates
+    /** Strengths aligned to judging criteria (DATA, LOGIC, RISK, CATALYST) */
+    tournamentStrengths: string[];
 }

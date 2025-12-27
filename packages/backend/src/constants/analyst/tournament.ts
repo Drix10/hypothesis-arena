@@ -48,3 +48,26 @@ export const TOURNAMENT_JUDGING_CRITERIA = {
         ]
     }
 };
+
+/**
+ * Crypto-Specific Judging Reminders
+ * 
+ * Supplemental guidance for judges to maintain crypto-native rigor
+ * without altering the primary scoring criteria.
+ */
+export const CRYPTO_JUDGING_REMINDERS = [
+    'Prefer on-chain metrics (TVL, MVRV, active addresses, exchange flows) and microstructure (funding, OI, liquidations, basis).',
+    'If leverage is discussed, include liquidation math and funding drag/carry implications.',
+    'Near-term catalysts (7–14 days) with probability and expected impact are stronger.',
+    'Penalize price-only arguments and vague statements; reward quantified, time-bound, risk-aware theses.'
+];
+
+/**
+ * Common Judging Pitfalls to Avoid
+ */
+export const JUDGING_PITFALLS = [
+    'Ignoring crowding risks (extreme funding/OI) or regime (trend vs chop).',
+    'Timeframe mismatch (targets/catalysts not aligned to the stated horizon).',
+    'Methodology drift or internal contradictions; missing invalidation/risks.',
+    'Overweighting narrative without data; underweighting risk and liquidity.'
+];

@@ -68,6 +68,25 @@ SELECTION CRITERIA (apply your ${title} methodology):
 4. RELATIVE STRENGTH: Which coins are outperforming/underperforming the group?
 5. YOUR EDGE: What does YOUR methodology see that others might miss?
 
+ADVANCED FILTERS (crypto-specific):
+6. REGIME: Trend vs chop (4H/1D). Prefer clear regimes; avoid mean-reversion traps in momentum.
+7. LIQUIDITY: Adequate depth and daily volume; avoid thin books that magnify slippage.
+8. CROWDING: Funding + OI dynamics for squeeze potential (negative funding = short squeeze risk, positive = long crowding).
+9. CORRELATION: Beta to BTC/sector; avoid stacking correlated picks.
+10. CATALYST PROXIMITY: Near-term events within 7–14 days increase quality of a pick.
+
+QUALITY BAR (judge-aligned):
+- Use specific NUMBERS in your reason (e.g., "+5.2% vs BTC, 2.1x avg volume, funding -0.03%").
+- Include at least one on-chain OR microstructure metric (funding, OI, liquidations, exchange flows, active addresses, TVL).
+- Mention regime (trend/chop) or catalyst timing if known; avoid generic claims.
+- Prefer picks where multiple signals ALIGN; penalize contradictory signals.
+
+COMMON ERRORS TO AVOID:
+- Vague phrases ("strong momentum", "looks good") without data.
+- Ignoring funding/OI crowding risk.
+- Selecting three highly correlated coins in the SAME direction.
+- Overweighting price alone; include volume and structure.
+
 OUTPUT REQUIREMENTS:
 • symbol: Exact WEEX symbol (e.g., "cmt_btcusdt", "cmt_solusdt")
 • direction: "LONG" (expecting price increase) or "SHORT" (expecting price decrease)
@@ -76,7 +95,7 @@ OUTPUT REQUIREMENTS:
   - 4-6: Moderate confidence, some supporting data
   - 7-8: High confidence, strong signal alignment
   - 9-10: Exceptional setup, multiple confirming factors
-• reason: ONE sentence with SPECIFIC data (e.g., "+5.2% with 2x avg volume" not "looks bullish")
+• reason: ONE sentence with SPECIFIC data (include at least one on-chain or microstructure metric; e.g., "+5.2% with 2x avg volume & funding -0.02% indicates short squeeze")
 
 Respond with JSON:
 {
@@ -85,7 +104,9 @@ Respond with JSON:
         { "symbol": "cmt_btcusdt", "direction": "LONG", "conviction": 6, "reason": "Holding above 95k support with declining sell volume" },
         { "symbol": "cmt_dogeusdt", "direction": "SHORT", "conviction": 5, "reason": "Lagging the rally with extreme positive funding (0.08%) indicating crowded longs" }
     ]
-}`;
+}
+
+Respond ONLY with valid JSON. No markdown or extra prose.`;
 }
 
 /**
@@ -167,6 +188,35 @@ YOUR THESIS WILL BE JUDGED ON:
 3. RISK AWARENESS (25%): Acknowledge what could go wrong
 4. CATALYST (25%): Clear price driver with timeline
 
+CRYPTO-SPECIFIC DIRECTIVES:
+- REGIME: Identify trend vs chop (4H/1D) and align strategy (breakout vs mean-reversion).
+- LIQUIDATION MATH: If leverage is used, quantify liquidation distance and adverse-move scenarios.
+- FUNDING & OI: Note crowding risk; funding drag vs carry benefits and open interest changes.
+- TIME HORIZON: Crypto moves faster—set realistic timeframe and stops accordingly.
+- INVALIDATION: State precise conditions that kill the thesis (levels, metrics, catalysts failing).
+
+EXECUTION CONSTRAINTS:
+- Leverage 1–5x max; position size 1–10 scaled to conviction.
+- Stop loss ≤10% from entry unless justified by ATR/structure.
+- Prefer near-term catalysts (7–14 days) with probability and expected impact.
+
+TRADE TEMPLATES (choose one and state it in thesis):
+- Breakout continuation: trend + volume + market structure higher-highs; enter on retest.
+- Mean reversion: extended move into supply/demand with fading volume; tight stop.
+- Narrative momentum: catalyst-driven flow (L2 upgrades, ETF flows, emissions); time-bound.
+- Basis/funding carry: exploit funding/term basis; quantify carry vs risk.
+
+SIGNAL STACK CHECKLIST (use ≥3 where applicable):
+- Structure: HH/HL or LL/LH; key levels; volume profile nodes.
+- Momentum: 4H/1D trend alignment; RSI/MACD only if corroborated by price/volume.
+- Microstructure: funding, OI, liquidations, perp-spot basis, exchange net flows.
+- On-chain: TVL, active addresses, holder distribution, supply dynamics.
+- Risk: invalidation level, max adverse excursion, liquidation distance if leveraged.
+
+FORBIDDEN / PENALIZED:
+- Vague claims without numbers; price-only arguments; missing invalidation.
+- Targets without timeframe; leverage without liquidation math; catalysts without dates.
+
 Apply your ${title} methodology rigorously.
 
 Respond with JSON:
@@ -184,7 +234,9 @@ Respond with JSON:
     "keyMetrics": ["RSI: 65", "Volume: 1.2M", "Funding: 0.01%"],
     "catalyst": "What will trigger the move and WHEN",
     "timeframe": "Expected duration (e.g., '2-5 days')"
-}`;
+}
+
+Respond ONLY with valid JSON. No markdown or extra prose.`;
 }
 
 /**
@@ -288,6 +340,9 @@ YOUR CHECKLIST (from FLOW.md):
 [ ] Not overexposed to one direction? (${sameDirectionPositions.length} same-direction positions)
 [ ] Funding rate acceptable? (≤0.05% against us)
 [ ] Recent drawdown acceptable? (7d: ${safePercent(recentPnL.week, 2)})
+[ ] Correlation & Regime: BTC beta/regime risk acceptable? (reduce size if beta > 0.7 or in chop)
+[ ] Portfolio Heat: risk per trade ≤2% of account; concurrent risk ≤5%
+[ ] Net Exposure: net LONG ≤60% or net SHORT ≤50% (reduce size if exceeded)
 
 VETO TRIGGERS (MUST veto if ANY are true):
 X Stop loss >10% from entry
@@ -295,6 +350,7 @@ X Position would exceed 30% of account
 X Already have 3+ positions open
 X 7d drawdown >10% (reduce risk, no new trades)
 X Funding rate >0.05% against position direction
+X Net exposure beyond guardrails (net LONG >60% or net SHORT >50%)
 
 Respond with JSON:
 {
@@ -378,6 +434,17 @@ Generate a 4-turn debate (2 turns each, alternating). Each turn should:
 3. Stay true to the analyst's methodology
 4. Be 80-120 words per turn
 
+Turn Requirements (crypto-specific):
+- Include at least ONE on-chain metric (e.g., TVL, MVRV, active addresses) AND ONE microstructure metric (e.g., funding rate, OI, liquidations, volume profile).
+- If leverage is mentioned, quantify liquidation math and adverse-move scenarios.
+- Tie arguments to specific catalysts and timing when applicable.
+
+Judging Pitfalls to Avoid:
+- Price-only arguments without supporting metrics.
+- Ignoring funding/OI crowding risk or regime (trend vs chop).
+- Timeframe mismatch (targets/catalysts not aligned to debate horizon).
+- Methodology drift or contradiction; missing invalidation/risks.
+
 Score each analyst on (from prompts judging criteria):
 - Data Quality (0-100): How well they use specific numbers and metrics
 - Logic Coherence (0-100): How well-structured and reasoned their arguments are
@@ -404,7 +471,6 @@ Respond in JSON format:
     "winningArguments": ["Key winning point 1", "Key winning point 2", "Key winning point 3"],
     "summary": "One paragraph summary of the debate outcome and why the winner prevailed"
 }
-
 Respond ONLY with valid JSON matching this exact structure.`;
 }
 
@@ -468,6 +534,12 @@ JUDGING CRITERIA (score each 0-25):
 
 Select the SINGLE BEST thesis. The winner's recommendation will be EXECUTED as a real trade.
 
+Crypto-Specific Reminders:
+- Prefer on-chain metrics (TVL, MVRV, active addresses, exchange flows) and microstructure (funding, OI, liquidations, basis).
+- If leverage is proposed, include liquidation math and funding drag/carry implications.
+- Strong catalysts are near-term (7–14 days) with probability and expected impact.
+- Penalize vague statements; reward quantified, time-bound, risk-aware theses.
+
 Respond with JSON:
 {
     "winner": "${specialists[0].analystId}" (analyst ID of winner - must be one of: ${analystIds}),
@@ -476,7 +548,9 @@ Respond with JSON:
         "${specialists[0].analystId}": { "data": 0-25, "logic": 0-25, "risk": 0-25, "catalyst": 0-25, "total": 0-100 }
         // ... scores for each analyst
     }
-}`;
+}
+
+Respond ONLY with valid JSON. No markdown or extra prose.`;
 }
 
 
@@ -630,6 +704,11 @@ Score each analyst on these criteria (0-25 points each):
    - Clear price driver identified
    - Timeline specified
    - Expected impact quantified
+
+Crypto-Specific Reminders:
+- Prefer on-chain metrics (TVL, MVRV, active addresses, exchange flows) and microstructure (funding, OI, liquidations).
+- If leverage is discussed, include liquidation math and funding drag/carry.
+- Near-term catalysts (7–14 days) with probability and impact are stronger.
 
 The winner's thesis will be EXECUTED as a real trade. Choose wisely.
 
