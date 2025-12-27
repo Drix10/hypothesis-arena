@@ -36,17 +36,32 @@ export function safePercent(value: number | undefined | null, decimals: number =
 /**
  * Sanitize string for safe inclusion in prompts
  * Removes control characters and limits length
+ * 
+ * EDGE CASES HANDLED:
+ * - Negative or zero maxLength normalized to 0
+ * - maxLength <= 3: truncate without ellipsis
+ * - maxLength > 3: truncate with '...' appended
  */
 export function sanitizeString(value: string | undefined | null, maxLength: number = 1000): string {
     if (!value) return '';
+
+    // Normalize maxLength to non-negative integer
+    maxLength = Math.max(0, Math.floor(maxLength));
 
     // Remove control characters except newlines and tabs
     let sanitized = value.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
 
     // Trim and limit length
     sanitized = sanitized.trim();
+
     if (sanitized.length > maxLength) {
-        sanitized = sanitized.substring(0, maxLength - 3) + '...';
+        // For very small maxLength, truncate without ellipsis
+        if (maxLength <= 3) {
+            sanitized = sanitized.substring(0, maxLength);
+        } else {
+            // For larger maxLength, add ellipsis
+            sanitized = sanitized.substring(0, maxLength - 3) + '...';
+        }
     }
 
     return sanitized;
@@ -93,19 +108,26 @@ export function validateNumber(value: number | undefined | null, fieldName: stri
 
 /**
  * Safely access nested object property with fallback
+ * Returns fallback if any part of the path is null, undefined, or not an object
+ * 
+ * EDGE CASES HANDLED:
+ * - Null values are treated the same as undefined
+ * - Non-object values in the path return fallback
+ * - Missing keys return fallback
  */
 export function safeGet<T>(obj: any, path: string, fallback: T): T {
     const keys = path.split('.');
     let current = obj;
 
     for (const key of keys) {
-        if (current === null || current === undefined || typeof current !== 'object') {
+        if (current == null || typeof current !== 'object') {
             return fallback;
         }
         current = current[key];
     }
 
-    return current !== undefined ? current : fallback;
+    // Return fallback if final value is null or undefined
+    return current != null ? current : fallback;
 }
 
 /**
@@ -123,4 +145,44 @@ export function formatPriceTargets(
         base: safePrice(priceTarget.base),
         bear: safePrice(priceTarget.bear)
     };
+}
+
+/**
+ * Get canonical price from PromptMarketData
+ * Handles backward compatibility between 'currentPrice' (canonical) and 'price' (deprecated)
+ * 
+ * EDGE CASES HANDLED:
+ * - If both currentPrice and price are present, currentPrice takes precedence
+ * - If values differ, logs a warning
+ * - Returns undefined if neither is present
+ */
+export function getCanonicalPrice(marketData: { currentPrice?: number; price?: number }): number | undefined {
+    const { currentPrice, price } = marketData;
+
+    // If only one is present, use it
+    if (currentPrice !== undefined && price === undefined) {
+        return currentPrice;
+    }
+    if (price !== undefined && currentPrice === undefined) {
+        // Log deprecation warning
+        if (typeof console !== 'undefined' && console.warn) {
+            console.warn('PromptMarketData: "price" field is deprecated, use "currentPrice" instead');
+        }
+        return price;
+    }
+
+    // If both are present, prefer currentPrice and warn if they differ
+    if (currentPrice !== undefined && price !== undefined) {
+        if (Math.abs(currentPrice - price) > 0.0001) {
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn(
+                    `PromptMarketData: Both "currentPrice" (${currentPrice}) and "price" (${price}) are present with different values. Using canonical "currentPrice".`
+                );
+            }
+        }
+        return currentPrice;
+    }
+
+    // Neither is present
+    return undefined;
 }

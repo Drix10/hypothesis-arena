@@ -23,17 +23,24 @@ export interface PromptAnalysisResult {
         bear: number;
     };
     catalysts?: string[];
-    keyMetrics?: Record<string, any> | string[];
+    keyMetrics?: Record<string, unknown> | string[]; // Changed from 'any' to 'unknown' for type safety
 }
 
 /**
  * Market data for use in prompts
+ * 
+ * CANONICAL FIELD: Use `currentPrice` for all new code.
+ * The `price` field is deprecated and maintained only for backward compatibility.
  */
 export interface PromptMarketData {
-    currentPrice?: number;
+    currentPrice?: number; // CANONICAL: Use this field
     change24h: number;
     fundingRate?: number;
-    price?: number; // Alias for currentPrice (used in some contexts)
+    /**
+     * @deprecated Use `currentPrice` instead. This field is maintained for backward compatibility only.
+     * If both are present, `currentPrice` takes precedence.
+     */
+    price?: number;
     volume24h?: number;
 }
 

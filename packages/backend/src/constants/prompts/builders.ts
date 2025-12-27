@@ -21,7 +21,8 @@ import {
     sanitizeString,
     safeArrayJoin,
     validateRequired,
-    formatPriceTargets
+    formatPriceTargets,
+    getCanonicalPrice
 } from './promptHelpers';
 
 /**
@@ -159,7 +160,7 @@ MARKET DATA:
 - 24h Low: ${safePrice(marketData.low24h)}
 - 24h Range: ${range24h}% (price at ${priceInRange}% of range)
 - 24h Change: ${change}
-- 24h Volume: ${safeNumber(marketData.volume24h / 1e6, 1)}M
+- 24h Volume: ${safeNumber((marketData.volume24h ?? 0) / 1e6, 1)}M
 ${fundingRateStr}
 
 YOUR THESIS WILL BE JUDGED ON:
@@ -226,7 +227,10 @@ export function buildRiskCouncilPrompt(
     const stopLossDistance = Math.abs((bearTarget - currentPrice) / currentPrice * 100);
     const takeProfitDistance = Math.abs((baseTarget - currentPrice) / currentPrice * 100);
     const riskRewardRatio = stopLossDistance > 0 ? takeProfitDistance / stopLossDistance : 0;
-    const positionPercent = (champion.positionSize / 10) * 30; // Max 30% at size 10
+
+    // Validate and clamp positionSize to expected range (0-10)
+    const validatedPositionSize = Math.max(0, Math.min(10, Number(champion.positionSize) || 0));
+    const positionPercent = (validatedPositionSize / 10) * 30; // Max 30% at size 10
 
     // Check for correlation with existing positions
     const sameDirectionPositions = currentPositions.filter(p =>
@@ -266,7 +270,7 @@ TRADE PARAMETERS:
 - Take Profit: ${priceTargets.base} (+${safeNumber(takeProfitDistance, 2)}%)
 - Stop Loss: ${priceTargets.bear} (-${safeNumber(stopLossDistance, 2)}%)
 - Risk/Reward: 1:${safeNumber(riskRewardRatio, 2)}
-- Position Size: ${safeNumber(champion.positionSize, 0)}/10 (${safeNumber(positionPercent, 1)}% of account)
+- Position Size: ${safeNumber(validatedPositionSize, 0)}/10 (${safeNumber(positionPercent, 1)}% of account)
 
 ACCOUNT STATE:
 - Balance: ${safeNumber(accountBalance, 2)}
@@ -332,7 +336,7 @@ export function buildDebatePrompt(
     const bullBullCase = safeArrayJoin(bullAnalysis.bullCase, ' | ', 3);
     const bearBearCase = safeArrayJoin(bearAnalysis.bearCase, ' | ', 3);
 
-    // Handle keyMetrics which can be Record<string, any> or string[]
+    // Handle keyMetrics which can be Record<string, unknown> or string[]
     const bullMetrics = Array.isArray(bullAnalysis.keyMetrics)
         ? JSON.stringify(bullAnalysis.keyMetrics)
         : JSON.stringify(bullAnalysis.keyMetrics || {});
@@ -340,7 +344,8 @@ export function buildDebatePrompt(
         ? JSON.stringify(bearAnalysis.keyMetrics)
         : JSON.stringify(bearAnalysis.keyMetrics || {});
 
-    const price = marketData.price ?? marketData.currentPrice ?? 0;
+    // Use canonical price field with backward compatibility
+    const price = getCanonicalPrice(marketData) ?? 0;
     const priceStr = safePrice(price, price > 0 && price < 1 ? 6 : 2);
     const changeStr = safePercent(marketData.change24h, 2, true);
     const volumeStr = marketData.volume24h
