@@ -14,7 +14,7 @@ import { Router, Request, Response } from 'express';
 import { authenticate, authenticateSSE, generateSSEToken } from '../middleware/auth';
 import { getAutonomousTradingEngine } from '../../services/autonomous/AutonomousTradingEngine';
 import { logger } from '../../utils/logger';
-import { JWTPayload } from '@hypothesis-arena/shared';
+import { JWTPayload } from '../../shared/types/auth';
 
 const router = Router();
 const engine = getAutonomousTradingEngine();

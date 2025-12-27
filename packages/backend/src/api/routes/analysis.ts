@@ -10,7 +10,7 @@ import { geminiService, ExtendedMarketData } from '../../services/ai/GeminiServi
 import { ANALYST_PROFILES } from '../../constants/analyst';
 import { getWeexClient } from '../../services/weex/WeexClient';
 import { analysisService } from '../../services/analysis/AnalysisService';
-import { APPROVED_SYMBOLS } from '@hypothesis-arena/shared';
+import { APPROVED_SYMBOLS } from '../../shared/types/weex';
 
 // Get all analyst IDs for validation
 const ANALYST_IDS = Object.values(ANALYST_PROFILES).map(a => a.id);

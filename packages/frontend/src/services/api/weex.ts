@@ -5,10 +5,10 @@
  */
 
 import { apiClient, ApiError } from './client';
-import type { WeexPosition } from '@hypothesis-arena/shared';
+import type { WeexPosition } from '../../shared/types/weex';
 
 // Re-export WeexPosition from shared package for consistency
-export type { WeexPosition } from '@hypothesis-arena/shared';
+export type { WeexPosition } from '../../shared/types/weex';
 
 export interface WeexStatus {
     connected: boolean;

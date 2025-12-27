@@ -7,7 +7,7 @@ export type AnalysisStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED';
 export interface InvestmentThesis {
     agentId: string;
     agentName: string;
-    ticker: string;
+    symbol: string;              // Renamed from 'ticker' for consistency with other types
     recommendation: Recommendation;
     confidence: number;
     targetPrice: number;

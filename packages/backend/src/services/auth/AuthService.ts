@@ -17,8 +17,8 @@ import {
     LoginRequest,
     RegisterRequest,
     AuthResponse
-} from '@hypothesis-arena/shared';
-import { validateEmail, validatePassword } from '@hypothesis-arena/shared';
+} from '../../shared/types/auth';
+import { validateEmail, validatePassword } from '../../shared/utils/validation';
 
 const SALT_ROUNDS = 12;
 

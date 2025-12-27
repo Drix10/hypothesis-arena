@@ -1,7 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import { authService } from '../../services/auth/AuthService';
 import { AuthenticationError } from '../../utils/errors';
-import { JWTPayload } from '@hypothesis-arena/shared';
+import { JWTPayload } from '../../shared/types/auth';
+import { logger } from '../../utils/logger';
 
 // Extend Express Request type
 declare global {
@@ -25,13 +26,30 @@ let cleanupInterval: NodeJS.Timeout | null = null;
 function startTokenCleanup(): void {
     if (cleanupInterval) return; // Already running
     cleanupInterval = setInterval(() => {
-        const now = Date.now();
-        for (const [token, data] of sseTokens.entries()) {
-            if (data.expiresAt < now) {
-                sseTokens.delete(token);
+        try {
+            const now = Date.now();
+            let deletedCount = 0;
+
+            for (const [token, data] of sseTokens.entries()) {
+                if (data.expiresAt < now) {
+                    sseTokens.delete(token);
+                    deletedCount++;
+                }
             }
+
+            // Log warning if map is growing too large
+            if (sseTokens.size > MAX_SSE_TOKENS * 0.8) {
+                logger.warn(`SSE token map is ${Math.round(sseTokens.size / MAX_SSE_TOKENS * 100)}% full (${sseTokens.size}/${MAX_SSE_TOKENS})`);
+            }
+
+            if (deletedCount > 0) {
+                logger.debug(`Cleaned up ${deletedCount} expired SSE tokens, ${sseTokens.size} remaining`);
+            }
+        } catch (error) {
+            logger.error('Error in SSE token cleanup:', error);
+            // Don't throw - keep cleanup running
         }
-    }, 60000); // Clean every minute
+    }, 30000); // Run every 30s (half of token lifetime for better cleanup)
 }
 
 // Stop cleanup interval (call on server shutdown)
@@ -174,7 +192,7 @@ export function authenticateSSE(req: Request, _res: Response, next: NextFunction
             req.userId = userId;
             req.user = {
                 userId,
-                email: '', // SSE tokens don't carry email
+                // Note: email removed from JWTPayload per security review
                 iat: Math.floor(Date.now() / 1000),
                 exp: Math.floor(Date.now() / 1000) + 60
             };

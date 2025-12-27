@@ -6,7 +6,7 @@
 
 import { apiClient, ApiError } from './client';
 import { logger } from '../utils/logger';
-import type { TradeDecision, Trade, Portfolio, Position } from '@hypothesis-arena/shared';
+import type { TradeDecision, Trade, Portfolio, Position } from '../../shared/types/trading';
 
 interface PortfolioSummaryResponse {
     portfolios: Portfolio[];
@@ -35,7 +35,7 @@ interface ManualTradeResponse {
     symbol: string;
     side: string;
     amount: number;
-    price: number;
+    price: number | undefined;  // Optional for MARKET orders
     status: string;
 }
 
@@ -107,10 +107,21 @@ export async function executeTrade(request: ManualTradeRequest): Promise<ManualT
         throw new Error('Limit orders require a valid price');
     }
 
-    // Validate leverage - must be a positive finite number between 1 and 5
-    const leverage = request.leverage ?? 1;
+    // Validate and normalize leverage
+    let leverage = request.leverage ?? 1;
+
+    // Round to nearest integer for clarity and API compatibility
+    // Note: Rounding may alter user's intended risk exposure
+    // Consider logging or warning users about the rounding
+    const originalLeverage = leverage;
+    leverage = Math.round(leverage);
+
+    if (originalLeverage !== leverage) {
+        logger.info(`Leverage rounded from ${originalLeverage}x to ${leverage}x for API compatibility`);
+    }
+
     if (!Number.isFinite(leverage) || leverage < 1 || leverage > 5) {
-        throw new Error('Leverage must be between 1x and 5x');
+        throw new Error('Leverage must be an integer between 1x and 5x');
     }
 
     // Execute trade with portfolioId and leverage
@@ -134,7 +145,7 @@ export async function executeTrade(request: ManualTradeRequest): Promise<ManualT
         symbol: trade.symbol,
         side: trade.side,
         amount: trade.size,
-        price: trade.price,
+        price: trade.executedPrice ?? trade.price,  // Use executedPrice if available, fallback to requested price
         status: trade.status,
     };
 }

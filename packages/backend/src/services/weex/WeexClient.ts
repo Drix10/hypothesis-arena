@@ -24,7 +24,7 @@ import {
     WeexBatchOrderResponse,
     ENDPOINT_WEIGHTS,
     DEFAULT_RATE_LIMITS,
-} from '@hypothesis-arena/shared';
+} from '../../shared/types/weex';
 
 interface TokenBucket {
     tokens: number;
@@ -175,58 +175,68 @@ export class WeexClient {
     private refillBucket(bucket: TokenBucket, limit: number, windowMs: number): void {
         const now = Date.now();
         const elapsed = now - bucket.lastRefill;
-        const refillAmount = (elapsed / windowMs) * limit;
 
+        // Reset if elapsed time is unreasonably large (> 1 hour) or negative (clock skew)
+        // This prevents overflow and handles system clock changes
+        if (elapsed > 3600000 || elapsed < 0) {
+            bucket.tokens = limit;
+            bucket.lastRefill = now;
+            return;
+        }
+
+        const refillAmount = (elapsed / windowMs) * limit;
         bucket.tokens = Math.min(limit, bucket.tokens + refillAmount);
         bucket.lastRefill = now;
     }
 
-    private async consumeTokens(endpoint: string, isOrderRequest: boolean, depth: number = 0): Promise<void> {
-        // Prevent infinite recursion - increased limit for high-load scenarios
-        // but with exponential backoff to prevent tight loops
-        if (depth > 20) {
-            throw new RateLimitError('Rate limit retry exceeded after 20 attempts');
-        }
-
+    private async consumeTokens(endpoint: string, isOrderRequest: boolean): Promise<void> {
         const weight = ENDPOINT_WEIGHTS[endpoint] || 1;
+        let attempts = 0;
+        const MAX_ATTEMPTS = 20;
 
-        // Refill buckets
-        this.refillBucket(this.ipBucket, DEFAULT_RATE_LIMITS.ipLimit, DEFAULT_RATE_LIMITS.windowMs);
-        this.refillBucket(this.uidBucket, DEFAULT_RATE_LIMITS.uidLimit, DEFAULT_RATE_LIMITS.windowMs);
+        while (attempts < MAX_ATTEMPTS) {
+            // Refill buckets
+            this.refillBucket(this.ipBucket, DEFAULT_RATE_LIMITS.ipLimit, DEFAULT_RATE_LIMITS.ipWindowMs);
+            this.refillBucket(this.uidBucket, DEFAULT_RATE_LIMITS.uidLimit, DEFAULT_RATE_LIMITS.uidWindowMs);
 
-        if (isOrderRequest) {
-            this.refillBucket(this.orderBucket, DEFAULT_RATE_LIMITS.orderLimit, 1000);
-        }
+            if (isOrderRequest) {
+                this.refillBucket(this.orderBucket, DEFAULT_RATE_LIMITS.orderLimit, DEFAULT_RATE_LIMITS.orderWindowMs);
+            }
 
-        // Check if we have enough tokens
-        if (this.ipBucket.tokens < weight || this.uidBucket.tokens < weight) {
-            // Exponential backoff: base wait time increases with depth
+            // Check if we have enough tokens
+            const hasIPTokens = this.ipBucket.tokens >= weight;
+            const hasUIDTokens = this.uidBucket.tokens >= weight;
+            const hasOrderTokens = !isOrderRequest || this.orderBucket.tokens >= 1;
+
+            if (hasIPTokens && hasUIDTokens && hasOrderTokens) {
+                // Consume tokens (ensure we don't go negative)
+                this.ipBucket.tokens = Math.max(0, this.ipBucket.tokens - weight);
+                this.uidBucket.tokens = Math.max(0, this.uidBucket.tokens - weight);
+                if (isOrderRequest) {
+                    this.orderBucket.tokens = Math.max(0, this.orderBucket.tokens - 1);
+                }
+                return;
+            }
+
+            // Calculate wait time with exponential backoff
+            // Include order bucket in wait time calculation to prevent tight retry loops
+            const ipWaitTime = (weight - this.ipBucket.tokens) / DEFAULT_RATE_LIMITS.ipLimit * DEFAULT_RATE_LIMITS.ipWindowMs;
+            const uidWaitTime = (weight - this.uidBucket.tokens) / DEFAULT_RATE_LIMITS.uidLimit * DEFAULT_RATE_LIMITS.uidWindowMs;
+            const orderWaitTime = isOrderRequest && this.orderBucket.tokens < 1
+                ? (1 - this.orderBucket.tokens) / DEFAULT_RATE_LIMITS.orderLimit * DEFAULT_RATE_LIMITS.orderWindowMs
+                : 0;
+
             const baseWaitTime = Math.min(
-                Math.max(
-                    (weight - this.ipBucket.tokens) / DEFAULT_RATE_LIMITS.ipLimit * DEFAULT_RATE_LIMITS.windowMs,
-                    (weight - this.uidBucket.tokens) / DEFAULT_RATE_LIMITS.uidLimit * DEFAULT_RATE_LIMITS.windowMs
-                ),
+                Math.max(ipWaitTime, uidWaitTime, orderWaitTime),
                 5000 // Max base wait 5 seconds
             );
             // Add exponential backoff factor
-            const waitTime = Math.min(baseWaitTime * Math.pow(1.5, depth), 30000); // Cap at 30 seconds
+            const waitTime = Math.min(baseWaitTime * Math.pow(1.5, attempts), 30000); // Cap at 30 seconds
             await new Promise(resolve => setTimeout(resolve, waitTime));
-            return this.consumeTokens(endpoint, isOrderRequest, depth + 1);
+            attempts++;
         }
 
-        if (isOrderRequest && this.orderBucket.tokens < 1) {
-            // Exponential backoff for order rate limiting too
-            const waitTime = Math.min(100 * Math.pow(1.5, depth), 5000);
-            await new Promise(resolve => setTimeout(resolve, waitTime));
-            return this.consumeTokens(endpoint, isOrderRequest, depth + 1);
-        }
-
-        // Consume tokens (ensure we don't go negative)
-        this.ipBucket.tokens = Math.max(0, this.ipBucket.tokens - weight);
-        this.uidBucket.tokens = Math.max(0, this.uidBucket.tokens - weight);
-        if (isOrderRequest) {
-            this.orderBucket.tokens = Math.max(0, this.orderBucket.tokens - 1);
-        }
+        throw new RateLimitError('Rate limit retry exceeded after 20 attempts');
     }
 
     private async request<T>(

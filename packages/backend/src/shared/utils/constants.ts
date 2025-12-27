@@ -6,14 +6,16 @@ export const WEEX_WS_URL = 'wss://ws-contract.weex.com/v2/ws';
 // Funding settlement times (UTC)
 export const FUNDING_SETTLEMENT_HOURS = [0, 8, 16];
 
-// Default risk limits
+// Default risk limits - Conservative system-wide defaults
+// These can be overridden per-strategy via environment config or strategy params
+// Source: FLOW.md specifies MAX_SAFE_LEVERAGE = 5x for crypto futures
 export const DEFAULT_RISK_LIMITS = {
     maxPositionSize: 0.2,       // 20% per position
     maxTotalInvested: 0.8,      // 80% max invested
     maxDailyTrades: 20,
-    maxLeverage: 100,
+    maxLeverage: 5,             // 5x max (WEEX supports up to 100x but 5x is safe default per FLOW.md)
     drawdownPauseThreshold: 0.3,    // 30% drawdown = pause
-    drawdownLiquidateThreshold: 0.8, // 80% drawdown = liquidate
+    drawdownLiquidateThreshold: 0.5, // 50% drawdown = liquidate (reduced from 80% for safety)
     circuitBreakerThreshold: 0.15,   // 15% loss in 24h = stop
 };
 

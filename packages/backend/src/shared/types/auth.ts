@@ -44,7 +44,8 @@ export interface AuthResponse {
 
 export interface JWTPayload {
     userId: string;
-    email: string;
+    // Note: email removed from token payload to avoid storing PII in JWT
+    // Fetch email from user service/database when needed using userId
     iat: number;
     exp: number;
 }

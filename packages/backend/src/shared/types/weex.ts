@@ -89,15 +89,27 @@ export interface WeexPositionRaw {
  * @throws Error if required fields (symbol, size, leverage, side) are missing or invalid
  */
 export function normalizeWeexPosition(raw: WeexPositionRaw): WeexPosition {
-    // Validate required fields
+    // Validate required fields exist and are strings
     if (!raw.symbol || typeof raw.symbol !== 'string') {
         throw new Error(`WeexPosition missing required field: symbol (got: ${JSON.stringify(raw.symbol)})`);
     }
+
+    // Validate size is a valid positive number string
     if (!raw.size || typeof raw.size !== 'string') {
         throw new Error(`WeexPosition missing required field: size for ${raw.symbol} (got: ${JSON.stringify(raw.size)})`);
     }
+    const sizeNum = parseFloat(raw.size);
+    if (!Number.isFinite(sizeNum) || sizeNum <= 0) {
+        throw new Error(`WeexPosition invalid size for ${raw.symbol}: must be a positive number, got '${raw.size}'`);
+    }
+
+    // Validate leverage is a valid positive number string
     if (!raw.leverage || typeof raw.leverage !== 'string') {
         throw new Error(`WeexPosition missing required field: leverage for ${raw.symbol} (got: ${JSON.stringify(raw.leverage)})`);
+    }
+    const leverageNum = parseFloat(raw.leverage);
+    if (!Number.isFinite(leverageNum) || leverageNum <= 0) {
+        throw new Error(`WeexPosition invalid leverage for ${raw.symbol}: must be a positive number, got '${raw.leverage}'`);
     }
 
     // Validate side - MUST be present and valid, no silent defaults
@@ -261,19 +273,23 @@ export interface WeexError {
     msg: string;
 }
 
-// Rate limit config
+// Rate limit config with explicit time windows
 export interface RateLimitConfig {
-    ipLimit: number;      // 1000 per 10s
-    uidLimit: number;     // 1000 per 10s
-    orderLimit: number;   // 10 per second
-    windowMs: number;     // 10000ms
+    ipLimit: number;           // IP-based limit
+    ipWindowMs: number;        // Time window for IP limit (default: 10000ms)
+    uidLimit: number;          // UID-based limit
+    uidWindowMs: number;       // Time window for UID limit (default: 10000ms)
+    orderLimit: number;        // Order placement limit
+    orderWindowMs: number;     // Time window for order limit (default: 1000ms = 1 second)
 }
 
 export const DEFAULT_RATE_LIMITS: RateLimitConfig = {
     ipLimit: 1000,
+    ipWindowMs: 10000,         // 1000 requests per 10 seconds
     uidLimit: 1000,
+    uidWindowMs: 10000,        // 1000 requests per 10 seconds
     orderLimit: 10,
-    windowMs: 10000,
+    orderWindowMs: 1000,       // 10 orders per second
 };
 
 // Endpoint weights

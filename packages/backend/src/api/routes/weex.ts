@@ -2,7 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { authenticate } from '../middleware/auth';
 import { getWeexClient } from '../../services/weex/WeexClient';
 import { logger } from '../../utils/logger';
-import { APPROVED_SYMBOLS } from '@hypothesis-arena/shared';
+import { APPROVED_SYMBOLS } from '../../shared/types/weex';
 
 const router = Router();
 

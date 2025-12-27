@@ -10,7 +10,6 @@
         "typecheck": "tsc --noEmit"
     },
     "dependencies": {
-        "@hypothesis-arena/shared": "*",
         "@google/genai": "^1.31.0",
         "dompurify": "^3.3.0",
         "framer-motion": "^12.23.0",

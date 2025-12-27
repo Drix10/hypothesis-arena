@@ -7,7 +7,8 @@ import { getRedisClient } from '../../config/redis';
 import { logger } from '../../utils/logger';
 import { TradingError, ValidationError } from '../../utils/errors';
 import { v4 as uuid } from 'uuid';
-import { isApprovedSymbol, APPROVED_SYMBOLS } from '@hypothesis-arena/shared';
+import { APPROVED_SYMBOLS } from '../../shared/types/weex';
+import { isApprovedSymbol } from '../../shared/utils/validation';
 
 const router = Router();
 

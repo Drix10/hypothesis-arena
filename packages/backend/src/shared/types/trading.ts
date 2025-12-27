@@ -5,7 +5,7 @@ export type OrderType = 'MARKET' | 'LIMIT' | 'TRIGGER';
 export type OrderStatus = 'PENDING' | 'OPEN' | 'FILLED' | 'PARTIALLY_FILLED' | 'CANCELED' | 'FAILED';
 export type PositionSide = 'LONG' | 'SHORT';
 export type MarginMode = 'CROSS' | 'ISOLATED';
-export type Recommendation = 'strong_buy' | 'buy' | 'hold' | 'sell' | 'strong_sell';
+export type Recommendation = 'STRONG_BUY' | 'BUY' | 'HOLD' | 'SELL' | 'STRONG_SELL';
 
 export interface TradeDecision {
     symbol: string;
@@ -31,7 +31,8 @@ export interface Trade {
     side: OrderSide;
     type: OrderType;
     size: number;
-    price: number;
+    price?: number;              // Requested price (optional for MARKET orders)
+    executedPrice?: number;      // Actual execution price (filled after order executes)
     fee?: number;
     status: OrderStatus;
     reason?: string;
