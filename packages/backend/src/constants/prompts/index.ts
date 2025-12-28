@@ -15,12 +15,9 @@ import { riskPrompt } from './risk';
 import { quantPrompt } from './quant';
 import { contrarianPrompt } from './contrarian';
 import {
-    buildCoinSelectionPrompt,
     buildSpecialistPrompt,
     buildRiskCouncilPrompt,
-    buildDebatePrompt,
-    buildSingleJudgeFallbackPrompt,
-    buildTournamentDebatePrompt
+    buildDebatePrompt
 } from './builders';
 
 export const THESIS_SYSTEM_PROMPTS: Record<AnalystMethodology, string> = {
@@ -36,14 +33,21 @@ export const THESIS_SYSTEM_PROMPTS: Record<AnalystMethodology, string> = {
 
 export { valuePrompt, growthPrompt, technicalPrompt, macroPrompt, sentimentPrompt, riskPrompt, quantPrompt, contrarianPrompt };
 export {
-    buildCoinSelectionPrompt,
     buildSpecialistPrompt,
     buildRiskCouncilPrompt,
-    buildDebatePrompt,
-    buildSingleJudgeFallbackPrompt,
-    buildTournamentDebatePrompt
+    buildDebatePrompt
 };
 
 // Export helper functions and types
 export * from './promptHelpers';
 export * from './promptTypes';
+
+// Export debate contexts and helpers
+export { DEBATE_CONTEXTS, DEBATE_TURN_INSTRUCTIONS } from './debateContexts';
+export {
+    buildCoinSelectionContext,
+    buildAnalysisApproachContext,
+    buildRiskAssessmentContext,
+    buildChampionshipContext,
+    buildDebateTurnPrompt
+} from './debateHelpers';

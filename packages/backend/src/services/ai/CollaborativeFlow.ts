@@ -1,14 +1,18 @@
 /**
- * Collaborative Trading Flow
+ * Collaborative Trading Flow v3.1.0
  * 
- * Implements the 7-stage pipeline from FLOW.md:
+ * Implements the 8-stage pipeline with TURN-BY-TURN debates:
  * 1. Market Scan - Fetch data for all coins
- * 2. Coin Selection - Ray, Jim, Quant pick best opportunity
- * 3. Specialist Analysis - Deep dive by assigned specialists
- * 4. Tournament - Bracket-style debates
- * 5. Risk Council - Karen approves/vetoes
- * 6. Execution - Place trade on WEEX
- * 7. Position Management - Monitor and adjust
+ * 2. Coin Selection Debate - 4 analysts
+ * 3. Analysis Approach Debate - 4 analysts
+ * 4. Risk Assessment Debate - 4 analysts
+ * 5. Championship Debate - 8 analysts
+ * 6. Risk Council - Karen approves/vetoes
+ * 7. Execution - Place trade on WEEX
+ * 8. Position Management - Monitor and adjust
+ * 
+ * Turn counts configurable via config.debate.turnsPerAnalyst
+ * Default: 2 turns/analyst = 40 total turns (8+8+8+16)
  */
 
 import { GoogleGenerativeAI, GenerativeModel, SchemaType } from '@google/generative-ai';
@@ -16,13 +20,22 @@ import { config } from '../../config';
 import { logger } from '../../utils/logger';
 import { ANALYST_PROFILES, type AnalystMethodology } from '../../constants/analyst';
 import {
-    buildCoinSelectionPrompt,
     buildSpecialistPrompt,
-    buildRiskCouncilPrompt,
-    buildSingleJudgeFallbackPrompt,
-    buildTournamentDebatePrompt
+    buildRiskCouncilPrompt
 } from '../../constants/prompts/builders';
-import type { ExtendedMarketData, AnalysisResult, TradeOrder, WeexAILog } from './GeminiService';
+import {
+    safePrice,
+    safePercent,
+    formatPriceTargets
+} from '../../constants/prompts/promptHelpers';
+import {
+    buildCoinSelectionContext,
+    buildAnalysisApproachContext,
+    buildRiskAssessmentContext,
+    buildChampionshipContext,
+    buildDebateTurnPrompt
+} from '../../constants/prompts/debateHelpers';
+import type { ExtendedMarketData, AnalysisResult } from './GeminiService';
 
 // =============================================================================
 // TYPES
@@ -31,44 +44,13 @@ import type { ExtendedMarketData, AnalysisResult, TradeOrder, WeexAILog } from '
 export interface CoinPick {
     symbol: string;
     direction: 'LONG' | 'SHORT';
-    conviction: number; // 1-10
+    conviction: number;
     reason: string;
 }
 
 export interface CoinSelectionResult {
     analystId: string;
     picks: CoinPick[];
-}
-
-export interface AggregatedCoinScore {
-    symbol: string;
-    totalScore: number;
-    direction: 'LONG' | 'SHORT';
-    votes: { analystId: string; rank: number; conviction: number }[];
-}
-
-export interface SpecialistAssignment {
-    symbol: string;
-    specialists: string[]; // analyst IDs
-    coinType: 'blue_chip' | 'l1_growth' | 'momentum_meme' | 'utility';
-}
-
-export interface TournamentMatch {
-    matchId: string;
-    round: 'semifinal' | 'final';
-    analystA: AnalysisResult;
-    analystB: AnalysisResult;
-    winner: string; // analyst ID
-    scores: {
-        [analystId: string]: {
-            data: number;
-            logic: number;
-            risk: number;
-            catalyst: number;
-            total: number;
-        };
-    };
-    reasoning: string;
 }
 
 export interface RiskCouncilDecision {
@@ -82,72 +64,65 @@ export interface RiskCouncilDecision {
     vetoReason?: string;
 }
 
-export interface CollaborativeDecision {
-    stage: string;
-    selectedCoin: string;
-    coinSelectors: CoinSelectionResult[];
-    specialists: AnalysisResult[];
-    tournament: TournamentMatch[];
-    champion: AnalysisResult | null;
-    riskDecision: RiskCouncilDecision;
-    finalOrder?: TradeOrder;
-    aiLog: WeexAILog;
+export interface DebateTurn {
+    speaker: string;
+    analystName: string;
+    argument: string;
+    strength: number;
+    dataPointsReferenced?: string[];
+}
+
+export interface AnalystScore {
+    data: number;
+    logic: number;
+    risk: number;
+    catalyst: number;
+    total: number;
+}
+
+export interface FourWayDebateResult {
+    turns: DebateTurn[];
+    winner: string;
+    scores: Record<string, AnalystScore>;
+    reasoning: string;
+    winningArguments: string[];
+}
+
+export interface ChampionshipDebateResult {
+    turns: DebateTurn[];
+    winner: string;
+    scores: Record<string, AnalystScore>;
+    reasoning: string;
+    winningArguments: string[];
+    summary: string;
 }
 
 // =============================================================================
 // SCHEMAS
 // =============================================================================
 
-const COIN_SELECTION_SCHEMA = {
+const DEBATE_TURN_SCHEMA = {
     type: SchemaType.OBJECT,
     properties: {
-        picks: {
+        argument: {
+            type: SchemaType.STRING,
+            description: 'Your complete debate argument. MUST be 150-200 words minimum.'
+        },
+        dataPointsReferenced: {
             type: SchemaType.ARRAY,
-            items: {
-                type: SchemaType.OBJECT,
-                properties: {
-                    symbol: { type: SchemaType.STRING },
-                    direction: { type: SchemaType.STRING, enum: ['LONG', 'SHORT'] },
-                    conviction: { type: SchemaType.NUMBER },
-                    reason: { type: SchemaType.STRING }
-                },
-                required: ['symbol', 'direction', 'conviction', 'reason']
-            }
+            items: { type: SchemaType.STRING },
+            description: 'List of specific data points referenced'
+        },
+        keyPoint: {
+            type: SchemaType.STRING,
+            description: 'The single most important point in your argument'
+        },
+        strength: {
+            type: SchemaType.NUMBER,
+            description: 'Self-assessed argument strength (1-10)'
         }
     },
-    required: ['picks']
-};
-
-const TOURNAMENT_JUDGE_SCHEMA = {
-    type: SchemaType.OBJECT,
-    properties: {
-        winner: { type: SchemaType.STRING },
-        winnerScore: {
-            type: SchemaType.OBJECT,
-            properties: {
-                data: { type: SchemaType.NUMBER },
-                logic: { type: SchemaType.NUMBER },
-                risk: { type: SchemaType.NUMBER },
-                catalyst: { type: SchemaType.NUMBER },
-                total: { type: SchemaType.NUMBER }
-            },
-            required: ['data', 'logic', 'risk', 'catalyst', 'total']
-        },
-        loserScore: {
-            type: SchemaType.OBJECT,
-            properties: {
-                data: { type: SchemaType.NUMBER },
-                logic: { type: SchemaType.NUMBER },
-                risk: { type: SchemaType.NUMBER },
-                catalyst: { type: SchemaType.NUMBER },
-                total: { type: SchemaType.NUMBER }
-            },
-            required: ['data', 'logic', 'risk', 'catalyst', 'total']
-        },
-        reasoning: { type: SchemaType.STRING },
-        keyDifferentiator: { type: SchemaType.STRING }
-    },
-    required: ['winner', 'winnerScore', 'loserScore', 'reasoning']
+    required: ['argument', 'dataPointsReferenced', 'keyPoint', 'strength']
 };
 
 const RISK_COUNCIL_SCHEMA = {
@@ -160,7 +135,8 @@ const RISK_COUNCIL_SCHEMA = {
                 positionSize: { type: SchemaType.NUMBER },
                 leverage: { type: SchemaType.NUMBER },
                 stopLoss: { type: SchemaType.NUMBER }
-            }
+            },
+            required: ['positionSize', 'leverage', 'stopLoss']
         },
         warnings: {
             type: SchemaType.ARRAY,
@@ -168,7 +144,7 @@ const RISK_COUNCIL_SCHEMA = {
         },
         vetoReason: { type: SchemaType.STRING }
     },
-    required: ['approved', 'warnings']
+    required: ['approved', 'warnings', 'adjustments']
 };
 
 const SPECIALIST_ANALYSIS_SCHEMA = {
@@ -203,43 +179,763 @@ const SPECIALIST_ANALYSIS_SCHEMA = {
         },
         keyMetrics: {
             type: SchemaType.ARRAY,
-            items: { type: SchemaType.STRING },
-            description: 'Key metrics as string array, e.g. ["RSI: 65", "Volume: 1.2M"]'
+            items: { type: SchemaType.STRING }
         },
         catalyst: { type: SchemaType.STRING },
         timeframe: { type: SchemaType.STRING }
     },
-    required: ['recommendation', 'confidence', 'targets', 'thesis', 'positionSize']
+    required: ['recommendation', 'confidence', 'entry', 'targets', 'stopLoss', 'leverage', 'positionSize', 'thesis']
 };
 
+const AI_REQUEST_TIMEOUT = config.ai.requestTimeoutMs;
+const MAX_DEBATE_TURN_RETRIES = config.ai.maxRetries;
+
+// Validate config at module load
+if (config.debate.turnsPerAnalyst < 1) {
+    throw new Error(`Invalid DEBATE_TURNS_PER_ANALYST: ${config.debate.turnsPerAnalyst}. Must be >= 1`);
+}
+
+// Validate score weights are positive and sum to 100 (should be normalized by config/index.ts)
+const weights = config.debate.scoreWeights;
+if (weights.data < 0 || weights.logic < 0 || weights.risk < 0 || weights.catalyst < 0) {
+    throw new Error(`Invalid score weights: all must be >= 0. Got data=${weights.data}, logic=${weights.logic}, risk=${weights.risk}, catalyst=${weights.catalyst}`);
+}
+const scoreWeightSum = weights.data + weights.logic + weights.risk + weights.catalyst;
+if (scoreWeightSum !== 100) {
+    throw new Error(`Score weights must sum to 100 after normalization. Got ${scoreWeightSum}. This indicates a bug in config normalization.`);
+}
+
 // =============================================================================
-// COIN TYPE MAPPING (from FLOW.md)
+// DEBATE HELPER FUNCTIONS (Turn-by-Turn Generation)
 // =============================================================================
-
-const COIN_TYPE_MAP: Record<string, { type: SpecialistAssignment['coinType']; specialists: string[] }> = {
-    'cmt_btcusdt': { type: 'blue_chip', specialists: ['warren', 'ray', 'karen'] },
-    'cmt_ethusdt': { type: 'blue_chip', specialists: ['warren', 'ray', 'karen'] },
-    'cmt_solusdt': { type: 'l1_growth', specialists: ['cathie', 'quant', 'jim'] },
-    'cmt_adausdt': { type: 'l1_growth', specialists: ['cathie', 'quant', 'jim'] },
-    'cmt_dogeusdt': { type: 'momentum_meme', specialists: ['elon', 'devil', 'jim'] },
-    'cmt_xrpusdt': { type: 'momentum_meme', specialists: ['elon', 'devil', 'jim'] },
-    'cmt_bnbusdt': { type: 'utility', specialists: ['warren', 'quant', 'karen'] },
-    'cmt_ltcusdt': { type: 'utility', specialists: ['warren', 'quant', 'karen'] },
-};
-
-// Coin selectors (Stage 2)
-const COIN_SELECTORS = ['ray', 'jim', 'quant'];
-
-const AI_REQUEST_TIMEOUT = 60000; // 60 seconds
 
 /**
- * Helper to create a timeout promise that can be cancelled
- * Prevents memory leaks from orphaned setTimeout handles
+ * Attempt to repair truncated/malformed JSON
+ * Handles common issues like unterminated strings, missing brackets
+ */
+function repairJSON(text: string): string {
+    if (!text || typeof text !== 'string') return '{}';
+
+    let repaired = text.trim();
+
+    // Remove any markdown code blocks
+    repaired = repaired.replace(/^```json?\s*/i, '').replace(/\s*```$/i, '');
+
+    // Remove any trailing commas before closing brackets/braces
+    repaired = repaired.replace(/,(\s*[}\]])/g, '$1');
+
+    // Count brackets to check balance
+    let openBraces = 0;
+    let closeBraces = 0;
+    let openBrackets = 0;
+    let closeBrackets = 0;
+    let inString = false;
+    let escapeNext = false;
+
+    for (let i = 0; i < repaired.length; i++) {
+        const char = repaired[i];
+
+        if (escapeNext) {
+            escapeNext = false;
+            continue;
+        }
+
+        if (char === '\\') {
+            escapeNext = true;
+            continue;
+        }
+
+        if (char === '"') {
+            inString = !inString;
+            continue;
+        }
+
+        if (!inString) {
+            if (char === '{') openBraces++;
+            else if (char === '}') closeBraces++;
+            else if (char === '[') openBrackets++;
+            else if (char === ']') closeBrackets++;
+        }
+    }
+
+    // If we ended inside a string, close it properly
+    if (inString) {
+        // Simply append a closing quote to terminate the string
+        repaired += '"';
+    }
+
+    // Add missing closing brackets
+    for (let i = 0; i < openBrackets - closeBrackets; i++) {
+        repaired += ']';
+    }
+
+    // Add missing closing braces
+    for (let i = 0; i < openBraces - closeBraces; i++) {
+        repaired += '}';
+    }
+
+    return repaired;
+}
+
+/**
+ * Parse JSON with repair attempt on failure
+ */
+function parseJSONWithRepair(text: string): any {
+    try {
+        return JSON.parse(text);
+    } catch (firstError) {
+        // Try to repair and parse again
+        const repaired = repairJSON(text);
+        try {
+            return JSON.parse(repaired);
+        } catch (secondError) {
+            // Log both attempts for debugging
+            logger.warn('JSON repair failed. Original error:', firstError);
+            logger.warn('Repaired text:', repaired.slice(0, 200));
+            throw firstError; // Throw original error
+        }
+    }
+}
+
+/**
+ * Generate a single debate turn with retry logic
+ * Uses Gemini's JSON schema for reliable, structured responses
  * 
- * EDGE CASES HANDLED:
- * - Invalid timeout values (negative, zero, NaN, Infinity)
- * - Timeout cancellation in all code paths
- * - Promise rejection with proper error type
+ * IMPORTANT: maxOutputTokens set to 4096 to ensure full 150-200 word arguments
+ * are not truncated. The JSON structure adds overhead beyond just the argument text.
+ * 
+ * ENHANCED: Now passes ALL previous turns for summary generation
+ */
+async function generateDebateTurn(
+    model: GenerativeModel,
+    analystId: string,
+    analystName: string,
+    analystMethodology: string,
+    previousTurns: DebateTurn[],
+    context: string,
+    turnNumber: number,
+    totalTurns: number = 12
+): Promise<DebateTurn> {
+    // Validate inputs
+    if (!model) {
+        throw new Error('Model is required for debate turn generation');
+    }
+    if (!analystId || !analystName || !analystMethodology) {
+        throw new Error('Analyst information is required');
+    }
+    if (!context || context.length === 0) {
+        throw new Error('Context is required for debate turn');
+    }
+    if (totalTurns <= 0) {
+        throw new Error(`Invalid totalTurns: ${totalTurns}. Must be > 0`);
+    }
+    if (turnNumber <= 0 || turnNumber > totalTurns) {
+        throw new Error(`Invalid turnNumber: ${turnNumber}. Must be 1-${totalTurns}`);
+    }
+
+    // Include last 3 turns with FULL arguments for better context
+    const previousArguments = previousTurns.slice(-3).map(t =>
+        `${t.analystName}: ${t.argument || ''}`
+    ).join('\n\n');
+
+    // Build structured data from LAST 20 previous turns for summary (prevent unbounded growth)
+    // FIXED: Added null checks, negation handling, and better extraction
+    const allPreviousTurnsData = previousTurns
+        .slice(-20) // Limit to last 20 turns to prevent memory issues
+        .filter(t => t && t.argument) // Filter out null/undefined turns
+        .map(t => {
+            const arg = t.argument || '';
+
+            // Extract direction from argument with negation handling
+            let direction: 'LONG' | 'SHORT' | undefined;
+
+            // Check for negations first
+            const hasNegatedLong = /(?:NOT|don't|wouldn't|shouldn't|avoid)\s+(?:go\s+)?LONG/i.test(arg);
+            const hasNegatedShort = /(?:NOT|don't|wouldn't|shouldn't|avoid)\s+(?:go\s+)?SHORT/i.test(arg);
+
+            // Look for explicit recommendations
+            const recommendMatch = arg.match(/I\s+recommend\s+(LONG|SHORT)/i) ||
+                arg.match(/recommend(?:ing)?\s+(LONG|SHORT)/i) ||
+                arg.match(/position[:\s]+(LONG|SHORT)/i);
+
+            if (recommendMatch) {
+                const extracted = recommendMatch[1].toUpperCase() as 'LONG' | 'SHORT';
+                // Only use if not negated
+                if ((extracted === 'LONG' && !hasNegatedLong) ||
+                    (extracted === 'SHORT' && !hasNegatedShort)) {
+                    direction = extracted;
+                }
+            }
+
+            // Fallback: count occurrences minus negations
+            if (!direction) {
+                const longCount = (arg.match(/\bLONG\b/gi) || []).length - (hasNegatedLong ? 1 : 0);
+                const shortCount = (arg.match(/\bSHORT\b/gi) || []).length - (hasNegatedShort ? 1 : 0);
+                if (longCount > shortCount && longCount > 0) direction = 'LONG';
+                else if (shortCount > longCount && shortCount > 0) direction = 'SHORT';
+            }
+
+            // Extract stop-loss from argument with multiple patterns
+            let stopLoss: number | undefined;
+            const slPatterns = [
+                /stop[- ]?loss[:\s]+\$?([\d,.]+)/i,
+                /\bSL[:\s]+\$?([\d,.]+)/i,
+                /\bSL\s+at\s+\$?([\d,.]+)/i,
+                /stop\s+at\s+\$?([\d,.]+)/i
+            ];
+            for (const pattern of slPatterns) {
+                const slMatch = arg.match(pattern);
+                if (slMatch) {
+                    const parsed = parseFloat(slMatch[1].replace(/,/g, ''));
+                    if (Number.isFinite(parsed) && parsed > 0) {
+                        stopLoss = parsed;
+                        break;
+                    }
+                }
+            }
+
+            // Get key point - prefer keyPoint from dataPointsReferenced, but extract from argument if missing
+            let keyPoint = t.dataPointsReferenced?.[0];
+            if (!keyPoint && arg.length > 50) {
+                // Extract first sentence as key point if no data points
+                const firstSentence = arg.match(/^[^.!?]+[.!?]/);
+                if (firstSentence) {
+                    keyPoint = firstSentence[0].slice(0, 100);
+                }
+            }
+
+            return {
+                analystName: t.analystName,
+                argument: arg,
+                direction,
+                stopLoss,
+                keyPoint
+            };
+        });
+
+    const prompt = `${context}
+
+${buildDebateTurnPrompt(analystName, analystMethodology, previousArguments, turnNumber, totalTurns, allPreviousTurnsData)}`;
+
+    // Log prompt length for debugging
+    logger.info(`[Turn ${turnNumber}] Prompt length: ${prompt.length} chars (~${Math.ceil(prompt.length / 4)} tokens)`);
+
+    let lastError: Error | null = null;
+    let timeout: ReturnType<typeof createTimeoutPromise> | null = null;
+
+    for (let attempt = 0; attempt <= MAX_DEBATE_TURN_RETRIES; attempt++) {
+        try {
+            timeout = createTimeoutPromise(AI_REQUEST_TIMEOUT);
+            const result = await Promise.race([
+                model.generateContent({
+                    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                    generationConfig: {
+                        responseMimeType: "application/json",
+                        responseSchema: DEBATE_TURN_SCHEMA,
+                        temperature: config.ai.temperature,
+                        maxOutputTokens: config.ai.debateMaxTokens
+                    }
+                }),
+                timeout.promise
+            ]);
+
+            const responseText = result.response.text().trim();
+
+            // Check finish reason
+            const candidates = result.response.candidates;
+            let finishReason = 'UNKNOWN';
+            if (candidates && candidates.length > 0) {
+                finishReason = candidates[0].finishReason || 'UNKNOWN';
+                if (finishReason !== 'STOP') {
+                    logger.warn(`⚠️ Gemini finish reason: ${finishReason} (expected STOP)`);
+                }
+            }
+
+            // LOG FULL RAW AI RESPONSE
+            logger.info(`\n${'─'.repeat(60)}`);
+            logger.info(`📡 RAW AI RESPONSE for ${analystName} (Turn ${turnNumber}):`);
+            logger.info(`📊 Response length: ${responseText.length} chars | Finish reason: ${finishReason}`);
+            logger.info(responseText);
+            logger.info(`${'─'.repeat(60)}\n`);
+
+            // Parse JSON response
+            const parsed = parseJSONWithRepair(responseText);
+
+            // Validate and extract argument with strict checks
+            if (!parsed.argument || typeof parsed.argument !== 'string' || parsed.argument.trim().length === 0) {
+                throw new Error(`Invalid or missing argument in response. Got: ${typeof parsed.argument}`);
+            }
+            const argument = parsed.argument.trim();
+
+            // Validate and extract strength
+            const strength = typeof parsed.strength === 'number' && Number.isFinite(parsed.strength)
+                ? Math.min(10, Math.max(1, parsed.strength))
+                : 7;
+
+            // Validate and extract dataPointsReferenced
+            const dataPointsReferenced = Array.isArray(parsed.dataPointsReferenced)
+                ? parsed.dataPointsReferenced.filter((dp: any) => dp && typeof dp === 'string' && dp.trim().length > 0)
+                : [];
+
+            // Validate argument length
+            if (argument.length < config.debate.minArgumentLength) {
+                throw new Error(`Generated argument too short: ${argument.length} chars (expected ${config.debate.minArgumentLength}+)`);
+            }
+
+            return {
+                speaker: analystId,
+                analystName,
+                argument,
+                strength,
+                dataPointsReferenced
+            };
+        } catch (error) {
+            lastError = error instanceof Error ? error : new Error(String(error));
+            logger.warn(`Debate turn attempt ${attempt + 1} failed for ${analystName}: ${lastError.message}`);
+            if (attempt < MAX_DEBATE_TURN_RETRIES) {
+                await new Promise(resolve => setTimeout(resolve, 1500 * (attempt + 1))); // Longer backoff
+            }
+        } finally {
+            // CRITICAL: Always cancel timeout to prevent memory leak
+            if (timeout) {
+                timeout.cancel();
+                timeout = null;
+            }
+        }
+    }
+
+    // All retries failed - generate a methodology-specific fallback
+    logger.error(`All ${MAX_DEBATE_TURN_RETRIES + 1} attempts failed for ${analystName}:`, lastError);
+
+    // Create meaningful fallback arguments that meet the 150-200 word requirement
+    const fallbackArguments: Record<string, string> = {
+        'macro': `From a macro perspective, current market conditions require careful analysis of cross-asset correlations and global liquidity flows. Interest rate expectations remain a key driver, with central bank policy decisions creating significant volatility across risk assets including crypto. The correlation between Bitcoin and traditional risk assets like the S&P 500 has been elevated, suggesting that macro factors are dominating price action. Global M2 money supply trends indicate potential headwinds for speculative assets in the near term. However, the relative strength of the US dollar index and Treasury yields will be critical factors to monitor. My recommendation is to maintain a cautious stance with reduced position sizing until clearer directional signals emerge from the macro environment. Risk management should be prioritized with tight stop-losses given the elevated uncertainty.`,
+        'technical': `Technical analysis reveals a complex picture with multiple timeframes showing conflicting signals. On the daily chart, price action is consolidating near key support and resistance levels that have been tested multiple times. Volume patterns suggest accumulation may be occurring, but confirmation is needed before taking a directional position. The RSI indicator is hovering in neutral territory around 50, neither overbought nor oversold, which limits conviction for aggressive entries. MACD histogram shows diminishing momentum, suggesting the current trend may be losing steam. Key Fibonacci retracement levels align with horizontal support zones, creating potential confluence areas for entries. My technical framework suggests waiting for a clear breakout with volume confirmation before committing capital. Stop-loss placement should be below the recent swing low for longs or above swing high for shorts, with position sizing adjusted for current volatility.`,
+        'quant': `Quantitative analysis of current market conditions reveals elevated volatility metrics across multiple timeframes. Statistical models indicate mean reversion potential based on z-score analysis showing price deviation from the 20-day moving average. Factor exposures suggest maintaining disciplined position sizing given the current risk environment. Sharpe ratio calculations for recent trades indicate suboptimal risk-adjusted returns, warranting a more conservative approach. Correlation matrices show increased co-movement among major crypto assets, reducing diversification benefits. My models incorporate funding rate data, open interest changes, and liquidation levels to identify potential inflection points. The current setup shows mixed signals with some indicators suggesting bullish momentum while others point to exhaustion. Position sizing algorithms recommend reducing exposure until clearer statistical edges emerge. Risk management protocols dictate strict adherence to predetermined stop-loss levels.`,
+        'sentiment': `Social sentiment analysis reveals divergence between price action and community engagement metrics. Twitter mention volume and sentiment scores show mixed signals, with bullish narratives competing against cautionary voices. Reddit activity in crypto-focused communities indicates elevated interest but also increased skepticism about near-term price targets. Fear and Greed Index readings suggest the market is transitioning between emotional states, creating potential for sharp reversals. Influencer sentiment has shifted recently, with several prominent voices adjusting their outlooks. On-chain metrics related to holder behavior show some accumulation patterns among long-term holders, while short-term speculators appear to be reducing exposure. My sentiment methodology suggests that narrative momentum is a key driver, and current narratives lack the conviction needed for sustained directional moves. Caution is warranted until clearer sentiment trends emerge.`,
+        'value': `Fundamental valuation analysis suggests patience is required in the current market environment. Network value metrics relative to transaction volume and active addresses indicate potential overvaluation in some assets while others show reasonable value. Long-term value creation potential exists for projects with strong fundamentals, but entry timing remains critical for optimizing risk-adjusted returns. Margin of safety calculations suggest waiting for better entry points rather than chasing current prices. Token economics and supply dynamics vary significantly across assets, requiring careful analysis of inflation schedules and unlock events. Revenue-generating protocols offer more tangible valuation frameworks, though most crypto assets lack traditional cash flow metrics. My value methodology emphasizes capital preservation and avoiding permanent loss of capital. Current market conditions warrant a defensive posture with selective exposure to highest-conviction opportunities only.`,
+        'growth': `Growth trajectory analysis shows potential but execution risk remains elevated across the crypto ecosystem. Adoption metrics including active addresses, transaction counts, and developer activity show mixed trends depending on the specific asset and blockchain. Ecosystem development continues with new protocols and applications launching, though user retention and sustainable growth remain challenges. Innovation catalysts including Layer 2 scaling solutions and cross-chain interoperability could drive significant upside for well-positioned projects. Total addressable market expansion continues as institutional adoption gradually increases, though regulatory uncertainty creates headwinds. My growth methodology focuses on identifying assets with sustainable competitive advantages and network effects. Position sizing should reflect the inherent uncertainty in growth projections, with smaller positions allowing for averaging into winners over time. Risk management remains critical given the volatility inherent in growth-oriented investments.`,
+        'risk': `Risk assessment indicates elevated uncertainty across multiple dimensions requiring conservative positioning. Position sizing should be reduced from normal levels given current market conditions and volatility metrics. Stop-loss discipline must be maintained without exception, as capital preservation is the primary objective during uncertain periods. Portfolio correlation effects need careful consideration, as concentrated positions in correlated assets amplify drawdown risk. Funding rate analysis shows potential costs for maintaining leveraged positions that could erode returns over time. Liquidation cascade risk remains present given elevated open interest and leverage in the system. My risk methodology prioritizes survival over returns, recognizing that avoiding large losses is more important than capturing every opportunity. Current conditions warrant maximum caution with minimal new position initiation until risk metrics improve. Existing positions should be reviewed for appropriate sizing and stop-loss placement.`,
+        'contrarian': `Contrarian analysis suggests consensus positioning may be creating opportunities for those willing to take the other side. Crowded trades identified through funding rates, positioning data, and sentiment indicators often reverse sharply when the narrative shifts. The market appears to be overlooking several key risks that could materialize and catch the majority off-guard. Alternative scenarios deserve serious consideration, as the crowd is historically wrong at emotional extremes. Current positioning data shows elevated concentration in popular trades, creating potential for violent unwinds. My contrarian methodology seeks opportunities where the risk-reward is skewed by excessive consensus. However, being contrarian for its own sake is not a strategy - there must be a fundamental or technical catalyst to trigger the reversal. Current conditions show some contrarian setups developing, but patience is required to wait for optimal entry points with defined risk parameters.`
+    };
+
+    const fallbackArg = fallbackArguments[analystMethodology] ||
+        `Analysis using ${analystMethodology} methodology suggests careful evaluation of current market conditions is warranted before taking significant positions. Multiple factors including price action, volume patterns, and broader market sentiment need to align before high-conviction trades can be identified. Risk management and position sizing remain critical factors in any trading decision, particularly during periods of elevated uncertainty. My methodology emphasizes waiting for clear setups with favorable risk-reward ratios rather than forcing trades in ambiguous conditions. Current market structure shows mixed signals that require patience and discipline to navigate successfully. Capital preservation should be prioritized until clearer opportunities emerge with defined entry, target, and stop-loss levels.`;
+
+    return {
+        speaker: analystId,
+        analystName,
+        argument: fallbackArg,
+        strength: 4, // Lower strength for fallback
+        dataPointsReferenced: ['market conditions', 'risk management', 'position sizing', 'volatility']
+    };
+}
+
+/**
+ * SCORING METHODOLOGY (Documented for Transparency)
+ * ================================================
+ * 
+ * Each analyst is scored on 4 equally-weighted dimensions (25 points each, 100 total):
+ * 
+ * 1. DATA QUALITY (0-25 points)
+ *    - Formula: min(25, uniqueDataPoints * 3)
+ *    - Measures: Number of unique data points referenced across all turns
+ *    - Examples: "BTC $94,500", "funding rate -0.02%", "24h volume $2.1B"
+ *    - Rationale: More specific data = more rigorous analysis
+ * 
+ * 2. LOGIC/ARGUMENT STRENGTH (0-25 points)
+ *    - Formula: min(25, round(avgSelfAssessedStrength * 2.5))
+ *    - Measures: Average of self-assessed strength scores (1-10) across turns
+ *    - Rationale: Self-assessment calibrated by prompt instructions
+ * 
+ * 3. RISK AWARENESS (0-25 points)
+ *    - Formula: min(25, turnsWithRiskKeywords * 8)
+ *    - Keywords: risk, concern, downside, challenge, worst-case, invalidation, stop-loss, drawdown
+ *    - Rationale: Good analysts acknowledge risks, not just upside
+ * 
+ * 4. CATALYST IDENTIFICATION (0-25 points)
+ *    - Formula: min(25, turnsWithCatalystKeywords * 8)
+ *    - Keywords: catalyst, trigger, timeline, Q1-Q4, earnings, announcement, near-term, upcoming, event
+ *    - Rationale: Actionable trades need timing catalysts
+ * 
+ * TIE-BREAKER ORDER (when total scores are equal):
+ *    1. Most unique data points referenced
+ *    2. Highest average argument strength
+ *    3. First in analyst order (deterministic fallback)
+ */
+
+/**
+ * Calculate debate scores from turns
+ * Handles edge cases: empty turns, missing data, invalid values
+ * 
+ * IMPORTANT: This function logs detailed scoring breakdown for transparency
+ * 
+ * CRITICAL FIXES:
+ * - Validates turns array is not null/undefined before filtering
+ * - Validates analystIds array elements are valid strings
+ * - Handles empty/null dataPointsReferenced arrays safely
+ */
+function calculateDebateScores(
+    turns: DebateTurn[],
+    analystIds: string[],
+    logDetails: boolean = true
+): Record<string, AnalystScore> {
+    const scores: Record<string, AnalystScore> = {};
+    const scoringDetails: Array<{
+        analystId: string;
+        turnCount: number;
+        uniqueDataPoints: number;
+        dataPointsList: string[];
+        avgStrength: number;
+        strengthValues: number[];
+        riskTurns: number;
+        catalystTurns: number;
+        breakdown: { data: number; logic: number; risk: number; catalyst: number; total: number };
+    }> = [];
+
+    // Validate analystIds array
+    if (!analystIds || !Array.isArray(analystIds) || analystIds.length === 0) {
+        logger.warn('calculateDebateScores called with invalid or empty analystIds');
+        return scores;
+    }
+
+    // Validate turns array
+    if (!turns || !Array.isArray(turns) || turns.length === 0) {
+        logger.warn('calculateDebateScores called with invalid or empty turns');
+        for (const analystId of analystIds) {
+            if (analystId && typeof analystId === 'string') {
+                scores[analystId] = { data: 0, logic: 0, risk: 0, catalyst: 0, total: 0 };
+            }
+        }
+        return scores;
+    }
+
+    for (const analystId of analystIds) {
+        // Validate analystId is a non-empty string
+        if (!analystId || typeof analystId !== 'string' || analystId.trim().length === 0) {
+            logger.warn(`Skipping invalid analystId: ${analystId}`);
+            continue;
+        }
+
+        // Filter turns with null safety
+        const analystTurns = turns.filter(t => t && typeof t === 'object' && t.speaker === analystId);
+
+        if (analystTurns.length === 0) {
+            scores[analystId] = { data: 0, logic: 0, risk: 0, catalyst: 0, total: 0 };
+            scoringDetails.push({
+                analystId,
+                turnCount: 0,
+                uniqueDataPoints: 0,
+                dataPointsList: [],
+                avgStrength: 0,
+                strengthValues: [],
+                riskTurns: 0,
+                catalystTurns: 0,
+                breakdown: { data: 0, logic: 0, risk: 0, catalyst: 0, total: 0 }
+            });
+            continue;
+        }
+
+        // Get weights from config
+        const weights = config.debate.scoreWeights;
+
+        // Data Quality: unique data points referenced
+        const dataPoints = new Set<string>();
+        for (const t of analystTurns) {
+            // Validate dataPointsReferenced exists and is an array
+            if (t.dataPointsReferenced && Array.isArray(t.dataPointsReferenced)) {
+                for (const dp of t.dataPointsReferenced) {
+                    // Filter out empty strings, null, undefined, and non-string values
+                    if (dp && typeof dp === 'string' && dp.trim().length > 0) {
+                        dataPoints.add(dp.trim());
+                    }
+                }
+            }
+        }
+        const dataPointsList = Array.from(dataPoints);
+        // Scale: 8+ data points = max score
+        const dataScore = Math.min(weights.data, Math.round(dataPoints.size * (weights.data / 8)));
+
+        // Logic: average argument strength (with safe division)
+        const validStrengths = analystTurns
+            .map(t => Number(t.strength))
+            .filter(s => Number.isFinite(s) && s >= 1 && s <= 10);
+        const avgStrength = validStrengths.length > 0
+            ? validStrengths.reduce((sum, s) => sum + s, 0) / validStrengths.length
+            : 5;
+        // Scale: strength 10 = max score
+        const logicScore = Math.min(weights.logic, Math.round(avgStrength * (weights.logic / 10)));
+
+        // Risk Awareness: risk-related keywords
+        const riskPattern = /risk|concern|downside|challenge|worst.case|invalidation|stop.?loss|drawdown/i;
+        const riskTurns = analystTurns.filter(t =>
+            t && t.argument && typeof t.argument === 'string' && t.argument.trim().length > 0 && riskPattern.test(t.argument)
+        ).length;
+        // Scale: 3+ turns with risk = max score
+        const riskScore = Math.min(weights.risk, Math.round(riskTurns * (weights.risk / 3)));
+
+        // Catalyst: catalyst-related keywords
+        const catalystPattern = /catalyst|trigger|timeline|Q[1-4]|earnings|announcement|near.term|upcoming|event/i;
+        const catalystTurns = analystTurns.filter(t =>
+            t && t.argument && typeof t.argument === 'string' && t.argument.trim().length > 0 && catalystPattern.test(t.argument)
+        ).length;
+        // Scale: 3+ turns with catalyst = max score
+        const catalystScore = Math.min(weights.catalyst, Math.round(catalystTurns * (weights.catalyst / 3)));
+
+        const total = dataScore + logicScore + riskScore + catalystScore;
+
+        scores[analystId] = { data: dataScore, logic: logicScore, risk: riskScore, catalyst: catalystScore, total };
+
+        scoringDetails.push({
+            analystId,
+            turnCount: analystTurns.length,
+            uniqueDataPoints: dataPoints.size,
+            dataPointsList: dataPointsList.slice(0, 5), // First 5 for logging
+            avgStrength: Math.round(avgStrength * 100) / 100,
+            strengthValues: validStrengths,
+            riskTurns,
+            catalystTurns,
+            breakdown: { data: dataScore, logic: logicScore, risk: riskScore, catalyst: catalystScore, total }
+        });
+    }
+
+    // Log detailed scoring breakdown for transparency
+    if (logDetails && scoringDetails.length > 0) {
+        const weights = config.debate.scoreWeights;
+        logger.info(`\n${'═'.repeat(80)}`);
+        logger.info(`📊 SCORING BREAKDOWN (Weights: Data ${weights.data} + Logic ${weights.logic} + Risk ${weights.risk} + Catalyst ${weights.catalyst} = ${weights.data + weights.logic + weights.risk + weights.catalyst})`);
+        logger.info(`${'═'.repeat(80)}`);
+
+        // Sort by total score for display
+        scoringDetails.sort((a, b) => b.breakdown.total - a.breakdown.total);
+
+        for (const detail of scoringDetails) {
+            const maxScore = weights.data + weights.logic + weights.risk + weights.catalyst;
+            logger.info(`\n${detail.analystId.toUpperCase()} - Total: ${detail.breakdown.total}/${maxScore}`);
+            logger.info(`  ├─ Data Quality:    ${detail.breakdown.data}/${weights.data} (${detail.uniqueDataPoints} data points, 8+ = max)`);
+            if (detail.dataPointsList.length > 0) {
+                logger.info(`  │    └─ Examples: ${detail.dataPointsList.slice(0, 3).join(', ')}${detail.dataPointsList.length > 3 ? '...' : ''}`);
+            }
+            logger.info(`  ├─ Logic/Strength:  ${detail.breakdown.logic}/${weights.logic} (avg strength ${detail.avgStrength}/10)`);
+            logger.info(`  │    └─ Turn strengths: [${detail.strengthValues.join(', ')}]`);
+            logger.info(`  ├─ Risk Awareness:  ${detail.breakdown.risk}/${weights.risk} (${detail.riskTurns} turns with risk keywords, 3+ = max)`);
+            logger.info(`  └─ Catalyst ID:     ${detail.breakdown.catalyst}/${weights.catalyst} (${detail.catalystTurns} turns with catalyst keywords, 3+ = max)`);
+        }
+        logger.info(`${'═'.repeat(80)}\n`);
+    }
+
+    return scores;
+}
+
+/**
+ * Determine debate winner from scores with tie-breaker logic
+ * Handles edge cases: empty scores, ties, missing data
+ * 
+ * TIE-BREAKER ORDER:
+ * 1. Highest total score
+ * 2. Most unique data points referenced
+ * 3. Highest average argument strength
+ * 4. First in analyst order (deterministic fallback)
+ * 
+ * IMPORTANT: Logs tie-breaker decisions for transparency
+ * 
+ * CRITICAL FIXES:
+ * - Validates scores object is not null/undefined
+ * - Validates turns array before accessing
+ * - Returns empty string if no valid winner can be determined (caller must handle)
+ */
+function determineDebateWinner(
+    scores: Record<string, AnalystScore>,
+    turns: DebateTurn[]
+): string {
+    // Validate scores object
+    if (!scores || typeof scores !== 'object') {
+        logger.error('Invalid scores object provided to determineDebateWinner');
+        if (turns && Array.isArray(turns) && turns.length > 0 && turns[0] && turns[0].speaker) {
+            logger.warn('Using first speaker as fallback winner');
+            return turns[0].speaker;
+        }
+        return '';
+    }
+
+    const entries = Object.entries(scores);
+
+    if (entries.length === 0) {
+        logger.error('No scores calculated');
+        if (turns && Array.isArray(turns) && turns.length > 0 && turns[0] && turns[0].speaker) {
+            logger.warn('Using first speaker as fallback winner');
+            return turns[0].speaker;
+        }
+        logger.error('No scores and no valid turns - cannot determine winner');
+        return '';
+    }
+
+    // Sort by total score descending
+    entries.sort((a, b) => b[1].total - a[1].total);
+
+    const topScore = entries[0][1].total;
+    const winners = entries.filter(e => e[1].total === topScore);
+
+    if (winners.length === 1) {
+        logger.info(`🏆 Winner determined by score: ${winners[0][0]} (${topScore}/100) - no tie-breaker needed`);
+        return winners[0][0];
+    }
+
+    // TIE DETECTED - Log and apply tie-breakers
+    logger.info(`\n${'─'.repeat(60)}`);
+    logger.info(`⚖️ TIE DETECTED: ${winners.length} analysts with score ${topScore}/100`);
+    logger.info(`   Tied analysts: ${winners.map(w => w[0]).join(', ')}`);
+
+    // Tie-breaker 1: most unique data points
+    const dataPointCounts = winners.map(([id]) => {
+        // Validate turns array before filtering
+        const analystTurns = turns && Array.isArray(turns)
+            ? turns.filter(t => t && typeof t === 'object' && t.speaker === id)
+            : [];
+        const dataPoints = new Set<string>();
+        for (const t of analystTurns) {
+            // Validate dataPointsReferenced exists and is an array
+            if (t.dataPointsReferenced && Array.isArray(t.dataPointsReferenced)) {
+                for (const dp of t.dataPointsReferenced) {
+                    // Filter out empty strings and non-string values
+                    if (dp && typeof dp === 'string' && dp.trim().length > 0) {
+                        dataPoints.add(dp.trim());
+                    }
+                }
+            }
+        }
+        return { id, count: dataPoints.size };
+    });
+    dataPointCounts.sort((a, b) => b.count - a.count);
+
+    logger.info(`   Tie-breaker #1 (data points): ${dataPointCounts.map(d => `${d.id}=${d.count}`).join(', ')}`);
+
+    const topDataPoints = dataPointCounts[0].count;
+    const dataPointWinners = dataPointCounts.filter(d => d.count === topDataPoints);
+
+    if (dataPointWinners.length === 1) {
+        logger.info(`🏆 Winner by tie-breaker #1 (most data points): ${dataPointWinners[0].id} (${topDataPoints} data points)`);
+        logger.info(`${'─'.repeat(60)}\n`);
+        return dataPointWinners[0].id;
+    }
+
+    // Tie-breaker 2: highest average argument strength
+    const strengthScores = dataPointWinners.map(({ id }) => {
+        // Validate turns array before filtering
+        const analystTurns = turns && Array.isArray(turns)
+            ? turns.filter(t => t && typeof t === 'object' && t.speaker === id)
+            : [];
+        if (analystTurns.length === 0) return { id, avgStrength: 0 };
+        const validStrengths = analystTurns
+            .map(t => t && t.strength !== undefined ? Number(t.strength) : NaN)
+            .filter(s => Number.isFinite(s) && s >= 1 && s <= 10);
+        const avgStrength = validStrengths.length > 0
+            ? validStrengths.reduce((sum, s) => sum + s, 0) / validStrengths.length
+            : 0;
+        return { id, avgStrength: Math.round(avgStrength * 100) / 100 };
+    });
+    strengthScores.sort((a, b) => b.avgStrength - a.avgStrength);
+
+    logger.info(`   Tie-breaker #2 (avg strength): ${strengthScores.map(s => `${s.id}=${s.avgStrength}`).join(', ')}`);
+
+    const topStrength = strengthScores[0].avgStrength;
+    const strengthWinners = strengthScores.filter(s => s.avgStrength === topStrength);
+
+    if (strengthWinners.length === 1) {
+        logger.info(`🏆 Winner by tie-breaker #2 (highest avg strength): ${strengthWinners[0].id} (${topStrength}/10)`);
+        logger.info(`${'─'.repeat(60)}\n`);
+        return strengthWinners[0].id;
+    }
+
+    // Tie-breaker 3: First in analyst order (deterministic fallback)
+    logger.info(`   Tie-breaker #3 (analyst order): Using first analyst in order`);
+    logger.info(`🏆 Winner by tie-breaker #3 (deterministic): ${strengthScores[0].id}`);
+    logger.info(`${'─'.repeat(60)}\n`);
+    return strengthScores[0].id;
+}
+
+/**
+ * Extract winning arguments from debate turns
+ * Returns top 3 arguments by strength, with safe truncation
+ * 
+ * Better handling of empty/missing arguments:
+ * - Returns fallback arguments if winner has no strong arguments
+ * - Validates argument content before including
+ */
+function extractWinningArguments(winnerId: string, turns: DebateTurn[]): string[] {
+    if (!winnerId || typeof winnerId !== 'string') {
+        logger.warn('extractWinningArguments called with invalid winnerId');
+        return ['No winning arguments available'];
+    }
+    if (!turns || !Array.isArray(turns) || turns.length === 0) {
+        logger.warn('extractWinningArguments called with empty turns');
+        return ['No debate turns available'];
+    }
+
+    const winnerTurns = turns.filter(t => t && t.speaker === winnerId);
+    if (winnerTurns.length === 0) {
+        logger.warn(`No turns found for winner ${winnerId}`);
+        // Fallback: return strongest arguments from any speaker
+        const sortedTurns = [...turns]
+            .filter(t => t && t.argument && t.argument.trim().length > 50)
+            .sort((a, b) => {
+                const strengthA = Number.isFinite(a.strength) ? a.strength : 0;
+                const strengthB = Number.isFinite(b.strength) ? b.strength : 0;
+                return strengthB - strengthA;
+            });
+        if (sortedTurns.length > 0) {
+            return [sortedTurns[0].argument.slice(0, 250)];
+        }
+        return ['Winner arguments not available'];
+    }
+
+    const validTurns = winnerTurns.filter(t =>
+        t.argument &&
+        typeof t.argument === 'string' &&
+        t.argument.trim().length > 50
+    );
+
+    if (validTurns.length === 0) {
+        logger.warn(`Winner ${winnerId} has no valid arguments (all too short or empty)`);
+        return ['Winner provided no substantive arguments'];
+    }
+
+    return validTurns
+        .sort((a, b) => {
+            const strengthA = Number.isFinite(a.strength) ? a.strength : 0;
+            const strengthB = Number.isFinite(b.strength) ? b.strength : 0;
+            return strengthB - strengthA;
+        })
+        .slice(0, 3)
+        .map(t => {
+            const arg = (t.argument || '').trim();
+            if (!arg) return '';
+            if (arg.length > 250) {
+                // Try to truncate at sentence boundary
+                const sentenceEnd = arg.slice(0, 250).lastIndexOf('.');
+                if (sentenceEnd > 150) {
+                    return arg.slice(0, sentenceEnd + 1);
+                }
+                // Fall back to word boundary
+                const wordEnd = arg.slice(0, 247).lastIndexOf(' ');
+                if (wordEnd > 150) {
+                    return arg.slice(0, wordEnd) + '...';
+                }
+                return arg.slice(0, 247) + '...';
+            }
+            return arg;
+        })
+        .filter(Boolean);
+}
+
+/**
+ * Helper to create a cancellable timeout promise
+ * IMPORTANT: Always call cancel() after Promise.race resolves to prevent memory leaks
+ * 
+ * CRITICAL FIXES:
+ * - Validates ms is a positive finite number
+ * - Ensures timeout is always cleared to prevent memory leaks
+ * - Thread-safe cancellation with isResolved flag
  */
 function createTimeoutPromise(ms: number): { promise: Promise<never>; cancel: () => void } {
     // Validate timeout value
@@ -248,430 +944,64 @@ function createTimeoutPromise(ms: number): { promise: Promise<never>; cancel: ()
         ms = AI_REQUEST_TIMEOUT;
     }
 
+    // Cap maximum timeout to prevent indefinite hangs
+    const MAX_TIMEOUT = 300000; // 5 minutes
+    if (ms > MAX_TIMEOUT) {
+        logger.warn(`Timeout ${ms}ms exceeds maximum ${MAX_TIMEOUT}ms, capping`);
+        ms = MAX_TIMEOUT;
+    }
+
     let timeoutId: NodeJS.Timeout | null = null;
+    let isResolved = false;
+
     const promise = new Promise<never>((_, reject) => {
         timeoutId = setTimeout(() => {
-            reject(new Error(`AI request timeout after ${ms}ms`));
+            if (!isResolved) {
+                isResolved = true;
+                reject(new Error(`AI request timeout after ${ms}ms`));
+            }
         }, ms);
     });
 
     return {
         promise,
         cancel: () => {
+            isResolved = true;
             if (timeoutId !== null) {
                 clearTimeout(timeoutId);
-                timeoutId = null; // Prevent double-clear
+                timeoutId = null;
             }
         }
     };
 }
+
 
 // =============================================================================
 // COLLABORATIVE FLOW SERVICE
 // =============================================================================
 
 export class CollaborativeFlowService {
-    private model: GenerativeModel | null = null;
+    private jsonModel: GenerativeModel | null = null;  // For all structured JSON outputs
 
-    private getModel(): GenerativeModel {
-        if (!this.model) {
+    /**
+     * Get model configured for JSON structured output
+     * Used for: ALL AI calls (debates, specialist analysis, risk council)
+     */
+    private getJsonModel(): GenerativeModel {
+        if (!this.jsonModel) {
             if (!config.geminiApiKey) {
                 throw new Error('GEMINI_API_KEY not configured');
             }
             const genAI = new GoogleGenerativeAI(config.geminiApiKey);
-            this.model = genAI.getGenerativeModel({
-                model: 'gemini-2.5-flash',
+            this.jsonModel = genAI.getGenerativeModel({
+                model: config.ai.model,
                 generationConfig: {
                     responseMimeType: "application/json",
+                    maxOutputTokens: config.ai.maxOutputTokens
                 }
             });
         }
-        return this.model;
-    }
-
-    /**
-     * Stage 2: Coin Selection Debate
-     * Ray, Jim, and Quant each pick their top 3 coins
-     */
-    async runCoinSelection(
-        marketDataMap: Map<string, ExtendedMarketData>
-    ): Promise<{ results: CoinSelectionResult[]; topCoin: AggregatedCoinScore }> {
-        logger.info('Stage 2: Coin Selection Debate starting...');
-
-        const results: CoinSelectionResult[] = [];
-        const model = this.getModel();
-
-        // Build market summary for prompt
-        const marketSummary = this.buildMarketSummary(marketDataMap);
-
-        // Run coin selection for each selector in parallel
-        const selectionPromises = COIN_SELECTORS.map(async (analystId) => {
-            const profile = Object.values(ANALYST_PROFILES).find(p => p.id === analystId);
-            if (!profile) return null;
-
-            const prompt = buildCoinSelectionPrompt(profile, marketSummary);
-
-            try {
-                const timeout = createTimeoutPromise(AI_REQUEST_TIMEOUT);
-                try {
-                    const result = await Promise.race([
-                        model.generateContent({
-                            contents: [{ role: 'user', parts: [{ text: prompt }] }],
-                            generationConfig: {
-                                responseMimeType: "application/json",
-                                responseSchema: COIN_SELECTION_SCHEMA
-                            }
-                        }),
-                        timeout.promise
-                    ]);
-                    timeout.cancel(); // Clean up timeout
-
-                    const responseText = result.response.text();
-                    const parsed = JSON.parse(responseText);
-
-                    // LOG LLM OUTPUT: Coin Selection
-                    logger.info(`\n${'='.repeat(60)}`);
-                    logger.info(`🤖 LLM OUTPUT - Coin Selection (${profile.name})`);
-                    logger.info(`${'='.repeat(60)}`);
-                    logger.info(`Picks: ${JSON.stringify(parsed.picks, null, 2)}`);
-                    logger.info(`${'='.repeat(60)}\n`);
-
-                    // Validate parsed.picks is an array before processing
-                    if (!Array.isArray(parsed.picks)) {
-                        logger.warn(`Invalid picks response for ${analystId}: not an array`);
-                        return null;
-                    }
-
-                    return {
-                        analystId,
-                        picks: parsed.picks.slice(0, 3).map((p: any) => ({
-                            symbol: typeof p.symbol === 'string' ? p.symbol : 'cmt_btcusdt',
-                            direction: p.direction === 'SHORT' ? 'SHORT' : 'LONG',
-                            conviction: Math.min(10, Math.max(1, Number(p.conviction) || 5)),
-                            reason: typeof p.reason === 'string' ? p.reason.slice(0, 200) : ''
-                        }))
-                    };
-                } catch (error) {
-                    timeout.cancel(); // Clean up timeout on error too
-                    throw error;
-                }
-            } catch (error) {
-                logger.warn(`Coin selection failed for ${analystId}:`, error);
-                return null;
-            }
-        });
-
-        const selectionResults = await Promise.all(selectionPromises);
-        for (const r of selectionResults) {
-            if (r) results.push(r);
-        }
-
-        // Aggregate scores
-        const topCoin = this.aggregateCoinScores(results);
-
-        logger.info(`Stage 2 complete: Top coin is ${topCoin.symbol} (score: ${topCoin.totalScore})`);
-        return { results, topCoin };
-    }
-
-    /**
-     * Stage 3: Specialist Deep Analysis
-     * Assign specialists based on coin type and get detailed analysis
-     */
-    async runSpecialistAnalysis(
-        symbol: string,
-        marketData: ExtendedMarketData,
-        direction: 'LONG' | 'SHORT'
-    ): Promise<AnalysisResult[]> {
-        logger.info(`Stage 3: Specialist Analysis for ${symbol}...`);
-
-        const assignment = COIN_TYPE_MAP[symbol.toLowerCase()];
-        if (!assignment) {
-            logger.warn(`No specialist mapping for ${symbol}, using defaults`);
-            return [];
-        }
-
-        const model = this.getModel();
-        const results: AnalysisResult[] = [];
-
-        // Run specialist analysis in parallel
-        const analysisPromises = assignment.specialists.map(async (analystId) => {
-            const methodology = Object.keys(ANALYST_PROFILES).find(
-                m => ANALYST_PROFILES[m as AnalystMethodology].id === analystId
-            ) as AnalystMethodology | undefined;
-
-            if (!methodology) return null;
-            const profile = ANALYST_PROFILES[methodology];
-
-            const prompt = buildSpecialistPrompt(profile, marketData, direction);
-
-            try {
-                const timeout = createTimeoutPromise(AI_REQUEST_TIMEOUT);
-                try {
-                    const result = await Promise.race([
-                        model.generateContent({
-                            contents: [{ role: 'user', parts: [{ text: prompt }] }],
-                            generationConfig: {
-                                responseMimeType: "application/json",
-                                responseSchema: SPECIALIST_ANALYSIS_SCHEMA
-                            }
-                        }),
-                        timeout.promise
-                    ]);
-                    timeout.cancel();
-
-                    const responseText = result.response.text();
-                    const parsed = JSON.parse(responseText);
-
-                    // LOG LLM OUTPUT: Specialist Analysis
-                    logger.info(`\n${'='.repeat(60)}`);
-                    logger.info(`🔬 LLM OUTPUT - Specialist Analysis (${profile.name})`);
-                    logger.info(`${'='.repeat(60)}`);
-                    logger.info(`Recommendation: ${parsed.recommendation}`);
-                    logger.info(`Confidence: ${parsed.confidence}%`);
-                    logger.info(`Thesis: ${parsed.thesis}`);
-                    logger.info(`Targets: ${JSON.stringify(parsed.targets)}`);
-                    logger.info(`Position Size: ${parsed.positionSize}/10`);
-                    logger.info(`${'='.repeat(60)}\n`);
-
-                    return this.parseSpecialistResponse(parsed, profile, methodology, marketData.currentPrice);
-                } catch (error) {
-                    timeout.cancel();
-                    throw error;
-                }
-            } catch (error) {
-                logger.warn(`Specialist analysis failed for ${analystId}:`, error);
-                return null;
-            }
-        });
-
-        const analysisResults = await Promise.all(analysisPromises);
-        for (const r of analysisResults) {
-            if (r) results.push(r);
-        }
-
-        logger.info(`Stage 3 complete: ${results.length} specialist analyses`);
-        return results;
-    }
-
-    /**
-     * Stage 4: Championship Tournament
-     * Bracket-style debates between specialists
-     * 
-     * Tournament structure:
-     * - 1 specialist: No debate, auto-champion
-     * - 2 specialists: Single final match (#1 vs #2)
-     * - 3+ specialists: Semifinal (#1 vs #3), then Final (winner vs #2)
-     * 
-     * Core philosophy: "Every decision is a debate. Every debate has a winner. Winners trade."
-     * If individual debates fail, we fall back to a single-judge comparison of all theses.
-     */
-    async runTournament(
-        specialists: AnalysisResult[],
-        marketData: ExtendedMarketData
-    ): Promise<{ matches: TournamentMatch[]; champion: AnalysisResult | null }> {
-        logger.info('Stage 4: Championship Tournament starting...');
-
-        if (specialists.length < 2) {
-            return { matches: [], champion: specialists[0] || null };
-        }
-
-        const matches: TournamentMatch[] = [];
-        const model = this.getModel();
-
-        // Sort by confidence
-        const sorted = [...specialists].sort((a, b) => b.confidence - a.confidence);
-
-        // Handle 2 specialists: single final match (no semifinal needed)
-        if (sorted.length === 2) {
-            const final = await this.runDebateMatch(
-                model, sorted[0], sorted[1], 'final', marketData
-            );
-            if (final) {
-                matches.push(final);
-                const champion = specialists.find(s => s.analystId === final.winner) || sorted[0];
-                logger.info(`Stage 4 complete: Champion is ${champion?.analystName || 'none'}`);
-                return { matches, champion };
-            }
-
-            // Debate failed - use single-judge fallback (never skip debate entirely)
-            logger.warn('Final debate failed, using single-judge fallback...');
-            const fallbackChampion = await this.runSingleJudgeFallback(model, sorted, marketData);
-            logger.info(`Stage 4 complete (fallback): Champion is ${fallbackChampion?.analystName || 'none'}`);
-            return { matches, champion: fallbackChampion };
-        }
-
-        // 3+ specialists: Semifinal (#1 vs #3), then Final (winner vs #2)
-        const semifinal = await this.runDebateMatch(
-            model, sorted[0], sorted[sorted.length - 1], 'semifinal', marketData
-        );
-        if (semifinal) matches.push(semifinal);
-
-        // Determine semifinal winner
-        let semifinalWinner: AnalysisResult;
-        if (semifinal) {
-            semifinalWinner = semifinal.winner === sorted[0].analystId
-                ? sorted[0]
-                : sorted[sorted.length - 1];
-        } else {
-            // Semifinal failed - use single-judge fallback for entire tournament
-            logger.warn('Semifinal debate failed, using single-judge fallback for all specialists...');
-            const fallbackChampion = await this.runSingleJudgeFallback(model, sorted, marketData);
-            logger.info(`Stage 4 complete (fallback): Champion is ${fallbackChampion?.analystName || 'none'}`);
-            return { matches, champion: fallbackChampion };
-        }
-
-        // Final: Semifinal winner vs #2
-        const final = await this.runDebateMatch(
-            model, semifinalWinner, sorted[1], 'final', marketData
-        );
-        if (final) {
-            matches.push(final);
-            const champion = specialists.find(s => s.analystId === final.winner) || null;
-            logger.info(`Stage 4 complete: Champion is ${champion?.analystName || 'none'}`);
-            return { matches, champion };
-        }
-
-        // Final failed - use single-judge fallback between finalists
-        logger.warn('Final debate failed, using single-judge fallback for finalists...');
-        const finalists = [semifinalWinner, sorted[1]];
-        const fallbackChampion = await this.runSingleJudgeFallback(model, finalists, marketData);
-        logger.info(`Stage 4 complete (fallback): Champion is ${fallbackChampion?.analystName || 'none'}`);
-        return { matches, champion: fallbackChampion };
-    }
-
-    /**
-     * Single-judge fallback when debate matches fail
-     * Gemini scores all theses against each other in one prompt
-     * Ensures we never skip the debate process entirely
-     */
-    private async runSingleJudgeFallback(
-        model: GenerativeModel,
-        specialists: AnalysisResult[],
-        marketData: ExtendedMarketData
-    ): Promise<AnalysisResult | null> {
-        if (specialists.length === 0) return null;
-        if (specialists.length === 1) return specialists[0];
-
-        const displaySymbol = marketData.symbol.replace('cmt_', '').replace('usdt', '').toUpperCase();
-
-        const prompt = buildSingleJudgeFallbackPrompt(displaySymbol, specialists, marketData);
-
-        const timeout = createTimeoutPromise(AI_REQUEST_TIMEOUT);
-        try {
-            const result = await Promise.race([
-                model.generateContent({
-                    contents: [{ role: 'user', parts: [{ text: prompt }] }],
-                    generationConfig: {
-                        responseMimeType: "application/json"
-                    }
-                }),
-                timeout.promise
-            ]);
-            timeout.cancel();
-
-            const parsed = JSON.parse(result.response.text());
-
-            // LOG LLM OUTPUT: Single-Judge Fallback
-            logger.info(`\n${'='.repeat(60)}`);
-            logger.info(`[FALLBACK] LLM OUTPUT - Single-Judge Comparison`);
-            logger.info(`${'='.repeat(60)}`);
-            logger.info(`Winner: ${parsed.winner}`);
-            logger.info(`Reasoning: ${parsed.reasoning}`);
-            logger.info(`Scores: ${JSON.stringify(parsed.scores, null, 2)}`);
-            logger.info(`${'='.repeat(60)}\n`);
-
-            // Find the winning specialist
-            const winner = specialists.find(s => s.analystId === parsed.winner);
-            if (winner) {
-                return winner;
-            }
-
-            // If winner ID doesn't match, fall back to highest scored
-            logger.warn(`Single-judge winner ID "${parsed.winner}" not found, using highest confidence`);
-            return specialists[0]; // Already sorted by confidence
-        } catch (error) {
-            timeout.cancel();
-            logger.error('Single-judge fallback failed:', error instanceof Error ? error.message : String(error));
-            // Ultimate fallback: highest confidence (but this should be rare)
-            logger.warn('All debate mechanisms failed, using highest confidence as last resort');
-            return specialists[0];
-        }
-    }
-
-    /**
-     * Stage 5: Risk Council
-     * Karen reviews and approves/vetoes the trade
-     */
-    async runRiskCouncil(
-        champion: AnalysisResult,
-        marketData: ExtendedMarketData,
-        accountBalance: number,
-        currentPositions: Array<{ symbol: string; side: string; size: number }>,
-        recentPnL: { day: number; week: number }
-    ): Promise<RiskCouncilDecision> {
-        logger.info('Stage 5: Risk Council review...');
-
-        const model = this.getModel();
-        const karenProfile = ANALYST_PROFILES.risk;
-
-        const prompt = buildRiskCouncilPrompt(
-            karenProfile, champion, marketData, accountBalance, currentPositions, recentPnL
-        );
-
-        try {
-            const timeout = createTimeoutPromise(AI_REQUEST_TIMEOUT);
-            try {
-                const result = await Promise.race([
-                    model.generateContent({
-                        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-                        generationConfig: {
-                            responseMimeType: "application/json",
-                            responseSchema: RISK_COUNCIL_SCHEMA
-                        }
-                    }),
-                    timeout.promise
-                ]);
-                timeout.cancel();
-
-                const responseText = result.response.text();
-                const parsed = JSON.parse(responseText);
-
-                // LOG LLM OUTPUT: Risk Council Decision
-                logger.info(`\n${'='.repeat(60)}`);
-                logger.info(`🛡️ LLM OUTPUT - Risk Council (Karen)`);
-                logger.info(`${'='.repeat(60)}`);
-                logger.info(`Approved: ${parsed.approved}`);
-                logger.info(`Warnings: ${JSON.stringify(parsed.warnings)}`);
-                if (parsed.vetoReason) logger.info(`Veto Reason: ${parsed.vetoReason}`);
-                if (parsed.adjustments) logger.info(`Adjustments: ${JSON.stringify(parsed.adjustments)}`);
-                logger.info(`${'='.repeat(60)}\n`);
-
-                const decision: RiskCouncilDecision = {
-                    approved: parsed.approved === true,
-                    warnings: Array.isArray(parsed.warnings) ? parsed.warnings : [],
-                    vetoReason: parsed.vetoReason || undefined,
-                    adjustments: parsed.adjustments ? {
-                        positionSize: parsed.adjustments.positionSize,
-                        leverage: parsed.adjustments.leverage,
-                        stopLoss: parsed.adjustments.stopLoss
-                    } : undefined
-                };
-
-                logger.info(`Stage 5 complete: ${decision.approved ? 'APPROVED' : 'VETOED'}`);
-                return decision;
-            } catch (error) {
-                timeout.cancel();
-                throw error;
-            }
-        } catch (error) {
-            logger.error('Risk council failed:', error);
-            // Default to conservative veto on error
-            return {
-                approved: false,
-                warnings: ['Risk council analysis failed'],
-                vetoReason: 'Unable to complete risk assessment'
-            };
-        }
+        return this.jsonModel;
     }
 
     // =========================================================================
@@ -697,161 +1027,13 @@ export class CollaborativeFlowService {
                 ? data.currentPrice.toFixed(data.currentPrice < 1 ? 6 : 2)
                 : 'N/A';
 
-            lines.push(`${displaySymbol.padEnd(5)}: $${price.padStart(10)} (${change.padStart(8)}) | Vol: ${volume.padStart(8)} | Funding: ${funding}`);
+            lines.push(`${displaySymbol.padEnd(5)}: ${price.padStart(10)} (${change.padStart(8)}) | Vol: ${volume.padStart(8)} | Funding: ${funding}`);
         }
 
         lines.push('');
         lines.push('NOTE: Positive funding = longs pay shorts (bearish signal). Negative = shorts pay longs (bullish signal).');
 
         return lines.join('\n');
-    }
-
-    private async runDebateMatch(
-        model: GenerativeModel,
-        analystA: AnalysisResult,
-        analystB: AnalysisResult,
-        round: 'semifinal' | 'final',
-        marketData: ExtendedMarketData
-    ): Promise<TournamentMatch | null> {
-        const displaySymbol = marketData.symbol.replace('cmt_', '').replace('usdt', '').toUpperCase();
-        const roundLabel = round === 'final' ? 'CHAMPIONSHIP FINAL' : 'SEMIFINAL';
-
-        const prompt = buildTournamentDebatePrompt(roundLabel, displaySymbol, analystA, analystB, marketData);
-
-        const timeout = createTimeoutPromise(AI_REQUEST_TIMEOUT);
-        try {
-            const result = await Promise.race([
-                model.generateContent({
-                    contents: [{ role: 'user', parts: [{ text: prompt }] }],
-                    generationConfig: {
-                        responseMimeType: "application/json",
-                        responseSchema: TOURNAMENT_JUDGE_SCHEMA
-                    }
-                }),
-                timeout.promise
-            ]);
-            timeout.cancel();
-
-            const parsed = JSON.parse(result.response.text());
-
-            // LOG LLM OUTPUT: Tournament Battle
-            logger.info(`\n${'='.repeat(60)}`);
-            logger.info(`⚔️ LLM OUTPUT - Tournament ${roundLabel}`);
-            logger.info(`${'='.repeat(60)}`);
-            logger.info(`${analystA.analystName} ${analystA.analystEmoji} vs ${analystB.analystName} ${analystB.analystEmoji}`);
-            logger.info(`Winner: ${parsed.winner}`);
-            logger.info(`Winner Score: ${JSON.stringify(parsed.winnerScore)}`);
-            logger.info(`Loser Score: ${JSON.stringify(parsed.loserScore)}`);
-            logger.info(`Reasoning: ${parsed.reasoning}`);
-            if (parsed.keyDifferentiator) logger.info(`Key Differentiator: ${parsed.keyDifferentiator}`);
-            logger.info(`${'='.repeat(60)}\n`);
-
-            // Validate winner is one of the expected analyst IDs
-            const validWinner = parsed.winner === analystB.analystId ? analystB.analystId : analystA.analystId;
-            const isAWinner = validWinner === analystA.analystId;
-
-            // Convert new schema format to expected scores format
-            const scores: Record<string, { data: number; logic: number; risk: number; catalyst: number; total: number }> = {};
-            scores[analystA.analystId] = isAWinner ? parsed.winnerScore : parsed.loserScore;
-            scores[analystB.analystId] = isAWinner ? parsed.loserScore : parsed.winnerScore;
-
-            return {
-                matchId: `${round}_${Date.now()}`,
-                round,
-                analystA,
-                analystB,
-                winner: validWinner,
-                scores,
-                reasoning: typeof parsed.reasoning === 'string' ? parsed.reasoning : ''
-            };
-        } catch (error) {
-            timeout.cancel();
-            logger.warn(`Debate match failed:`, error instanceof Error ? error.message : String(error));
-            // Default to higher confidence analyst on failure
-            return {
-                matchId: `${round}_${Date.now()}`,
-                round,
-                analystA,
-                analystB,
-                winner: analystA.confidence >= analystB.confidence ? analystA.analystId : analystB.analystId,
-                scores: {},
-                reasoning: 'Debate failed, defaulting to higher confidence'
-            };
-        }
-    }
-
-    private aggregateCoinScores(results: CoinSelectionResult[]): AggregatedCoinScore {
-        const scores = new Map<string, AggregatedCoinScore>();
-
-        for (const result of results) {
-            for (let i = 0; i < result.picks.length; i++) {
-                const pick = result.picks[i];
-                const rank = i + 1; // 1, 2, 3
-                const points = (4 - rank) * pick.conviction; // #1=3x, #2=2x, #3=1x
-
-                if (!scores.has(pick.symbol)) {
-                    scores.set(pick.symbol, {
-                        symbol: pick.symbol,
-                        totalScore: 0,
-                        direction: pick.direction,
-                        votes: []
-                    });
-                }
-
-                const score = scores.get(pick.symbol)!;
-                score.totalScore += points;
-                score.votes.push({
-                    analystId: result.analystId,
-                    rank,
-                    conviction: pick.conviction
-                });
-            }
-        }
-
-        // Determine direction for each coin based on highest conviction vote
-        for (const score of scores.values()) {
-            if (score.votes.length > 0) {
-                // Find the vote with highest conviction to determine direction
-                const highestConvictionVote = score.votes.reduce((max, vote) =>
-                    vote.conviction > max.conviction ? vote : max
-                    , score.votes[0]);
-
-                // Find the original pick to get its direction
-                for (const result of results) {
-                    const pick = result.picks.find(p =>
-                        p.symbol === score.symbol &&
-                        result.analystId === highestConvictionVote.analystId
-                    );
-                    if (pick) {
-                        score.direction = pick.direction;
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Find top coin - handle empty results gracefully
-        let topCoin: AggregatedCoinScore | null = null;
-
-        for (const score of scores.values()) {
-            if (!topCoin || score.totalScore > topCoin.totalScore) {
-                topCoin = score;
-            }
-        }
-
-        // If no scores at all, return a safe default with zero score
-        // This signals to the caller that no valid selection was made
-        if (!topCoin) {
-            logger.warn('No coin scores aggregated - all selectors may have failed');
-            return {
-                symbol: 'cmt_btcusdt',
-                totalScore: 0, // Zero score indicates no valid selection
-                direction: 'LONG',
-                votes: []
-            };
-        }
-
-        return topCoin;
     }
 
     private parseSpecialistResponse(
@@ -868,20 +1050,43 @@ export class CollaborativeFlowService {
         const confidence = Math.min(100, Math.max(0, Number(parsed.confidence) || 50));
         const positionSize = Math.min(10, Math.max(1, Number(parsed.positionSize) || 5));
 
-        // Parse price targets with Number.isFinite guards
-        const safePrice = Number.isFinite(currentPrice) && currentPrice > 0 ? currentPrice : 100;
+        const safePriceVal = Number.isFinite(currentPrice) && currentPrice > 0 ? currentPrice : 100;
 
         const parseBullTarget = Number(parsed.targets?.bull);
         const parseBaseTarget = Number(parsed.targets?.base);
         const parseBearTarget = Number(parsed.targets?.bear);
 
         const priceTarget = {
-            bull: Number.isFinite(parseBullTarget) && parseBullTarget > 0 ? parseBullTarget : safePrice * 1.15,
-            base: Number.isFinite(parseBaseTarget) && parseBaseTarget > 0 ? parseBaseTarget : safePrice * 1.08,
-            bear: Number.isFinite(parseBearTarget) && parseBearTarget > 0 ? parseBearTarget : safePrice * 0.92
+            bull: Number.isFinite(parseBullTarget) && parseBullTarget > 0 ? parseBullTarget : safePriceVal * 1.15,
+            base: Number.isFinite(parseBaseTarget) && parseBaseTarget > 0 ? parseBaseTarget : safePriceVal * 1.08,
+            bear: Number.isFinite(parseBearTarget) && parseBearTarget > 0 ? parseBearTarget : safePriceVal * 0.92
         };
 
-        // Determine risk level
+        // Validate entry price field
+        // Log validation for debugging - entry price is validated but execution uses current market price
+        const parseEntry = Number(parsed.entry);
+        const validatedEntry = Number.isFinite(parseEntry) && parseEntry > 0 ? parseEntry : safePriceVal;
+        if (parseEntry !== validatedEntry) {
+            logger.debug(`Specialist entry price validated: ${parseEntry} → ${validatedEntry}`);
+        }
+
+        // Validate stopLoss field
+        // Log validation for debugging - stopLoss is validated but priceTarget.bear is used in execution
+        const parseStopLoss = Number(parsed.stopLoss);
+        const validatedStopLoss = Number.isFinite(parseStopLoss) && parseStopLoss > 0 ? parseStopLoss : priceTarget.bear;
+        if (parseStopLoss !== validatedStopLoss) {
+            logger.debug(`Specialist stopLoss validated: ${parseStopLoss} → ${validatedStopLoss}`);
+        }
+
+        // Validate leverage field (max 5x per FLOW.md)
+        // Log validation for debugging - leverage is validated but handled separately in execution
+        const parseLeverage = Number(parsed.leverage);
+        const validatedLeverage = Number.isFinite(parseLeverage) && parseLeverage >= 1 && parseLeverage <= 5
+            ? parseLeverage : 3;
+        if (parseLeverage !== validatedLeverage) {
+            logger.debug(`Specialist leverage validated: ${parseLeverage} → ${validatedLeverage}`);
+        }
+
         let riskLevel: 'low' | 'medium' | 'high' | 'very_high' = 'medium';
         if (positionSize <= 2 || confidence < 40) riskLevel = 'very_high';
         else if (positionSize <= 4 || confidence < 55) riskLevel = 'high';
@@ -906,6 +1111,917 @@ export class CollaborativeFlowService {
             keyMetrics: Array.isArray(parsed.keyMetrics) ? parsed.keyMetrics : [],
             catalysts: parsed.catalyst ? [parsed.catalyst] : [],
             risks: Array.isArray(parsed.bearCase) ? parsed.bearCase.slice(0, 3) : []
+        };
+    }
+
+    /**
+     * Generate a specialist analysis for a specific analyst
+     * Includes retry logic for resilience
+     */
+    private async generateSpecialistAnalysis(
+        analystId: string,
+        marketData: ExtendedMarketData,
+        direction: 'LONG' | 'SHORT'
+    ): Promise<AnalysisResult | null> {
+        // Validate inputs
+        if (!analystId) {
+            throw new Error('Analyst ID is required');
+        }
+        if (!marketData || !Number.isFinite(marketData.currentPrice) || marketData.currentPrice <= 0) {
+            throw new Error(`Invalid market data: currentPrice=${marketData?.currentPrice}`);
+        }
+        if (direction !== 'LONG' && direction !== 'SHORT') {
+            throw new Error(`Invalid direction: ${direction}`);
+        }
+
+        const methodology = Object.keys(ANALYST_PROFILES).find(
+            m => ANALYST_PROFILES[m as AnalystMethodology].id === analystId
+        ) as AnalystMethodology | undefined;
+
+        if (!methodology) {
+            logger.warn(`No methodology found for analyst ${analystId}`);
+            return null;
+        }
+
+        const profile = ANALYST_PROFILES[methodology];
+        const model = this.getJsonModel(); // Use JSON model for structured output
+        const prompt = buildSpecialistPrompt(profile, marketData, direction);
+
+        let lastError: Error | null = null;
+        let timeout: ReturnType<typeof createTimeoutPromise> | null = null;
+
+        // Retry up to config.ai.maxRetries times
+        for (let attempt = 0; attempt <= config.ai.maxRetries; attempt++) {
+            try {
+                timeout = createTimeoutPromise(AI_REQUEST_TIMEOUT);
+                const result = await Promise.race([
+                    model.generateContent({
+                        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                        generationConfig: {
+                            responseMimeType: "application/json",
+                            responseSchema: SPECIALIST_ANALYSIS_SCHEMA,
+                            maxOutputTokens: config.ai.specialistMaxTokens
+                        }
+                    }),
+                    timeout.promise
+                ]);
+
+                const responseText = result.response.text();
+
+                // Check finish reason
+                const candidates = result.response.candidates;
+                let finishReason = 'UNKNOWN';
+                if (candidates && candidates.length > 0) {
+                    finishReason = candidates[0].finishReason || 'UNKNOWN';
+                    if (finishReason !== 'STOP') {
+                        logger.warn(`⚠️ Specialist ${analystId} finish reason: ${finishReason}`);
+                    }
+                }
+
+                // LOG FULL RAW AI RESPONSE with metadata
+                logger.info(`\n${'─'.repeat(60)}`);
+                logger.info(`📡 RAW AI RESPONSE for Specialist ${analystId}:`);
+                logger.info(`📊 Response length: ${responseText.length} chars | Finish reason: ${finishReason}`);
+                // Log in chunks to avoid terminal buffer issues
+                const chunkSize = 2000;
+                for (let i = 0; i < responseText.length; i += chunkSize) {
+                    const chunk = responseText.slice(i, i + chunkSize);
+                    const chunkNum = Math.floor(i / chunkSize) + 1;
+                    const totalChunks = Math.ceil(responseText.length / chunkSize);
+                    if (totalChunks > 1) {
+                        logger.info(`[Chunk ${chunkNum}/${totalChunks}] ${chunk}`);
+                    } else {
+                        logger.info(chunk);
+                    }
+                }
+                logger.info(`${'─'.repeat(60)}\n`);
+
+                // Check if response appears truncated
+                if (!responseText.trim().endsWith('}')) {
+                    throw new Error(`Specialist response truncated - does not end with }. Last 100 chars: "${responseText.slice(-100)}"`);
+                }
+
+                const parsed = parseJSONWithRepair(responseText);
+
+                // Validate thesis is not truncated
+                if (parsed.thesis && typeof parsed.thesis === 'string' && parsed.thesis.length < 20) {
+                    logger.warn(`⚠️ Specialist thesis appears truncated: "${parsed.thesis}"`);
+                }
+
+                return this.parseSpecialistResponse(parsed, profile, methodology, marketData.currentPrice);
+            } catch (error) {
+                lastError = error instanceof Error ? error : new Error(String(error));
+                if (attempt < config.ai.maxRetries) {
+                    logger.warn(`Specialist analysis attempt ${attempt + 1} failed for ${analystId}, retrying...`);
+                    await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
+                }
+            } finally {
+                // CRITICAL: Always cancel timeout to prevent memory leak
+                if (timeout) {
+                    timeout.cancel();
+                    timeout = null;
+                }
+            }
+        }
+
+        logger.warn(`Failed to generate specialist analysis for ${analystId} after ${config.ai.maxRetries + 1} attempts:`, lastError);
+        return null;
+    }
+
+    // =========================================================================
+    // STAGE 2: COIN SELECTION DEBATE
+    // =========================================================================
+
+    /**
+     * Stage 2: Coin Selection Debate
+     * 4 analysts (Ray, Jim, Quant, Elon) debate which coin to trade
+     * TURN-BY-TURN generation, 8 total turns
+     */
+    async runCoinSelectionDebate(
+        marketDataMap: Map<string, ExtendedMarketData>
+    ): Promise<{ winner: string; coinSymbol: string; direction: 'LONG' | 'SHORT'; debate: FourWayDebateResult }> {
+        logger.info(`Stage 2: Coin Selection Debate starting (${4 * config.debate.turnsPerAnalyst} turns)...`);
+
+        if (!marketDataMap || marketDataMap.size === 0) {
+            throw new Error('Market data map is empty or invalid');
+        }
+
+        const model = this.getJsonModel(); // Use JSON model with structured outputs
+        const marketSummary = this.buildMarketSummary(marketDataMap);
+
+        // Build funding analysis for each coin
+        const fundingAnalysis: Array<{
+            symbol: string;
+            fundingRate: number;
+            fundingDirection: 'bullish' | 'bearish' | 'neutral';
+        }> = [];
+        for (const [symbol, data] of marketDataMap) {
+            if (data.fundingRate !== undefined && Number.isFinite(data.fundingRate)) {
+                const displaySymbol = symbol.replace('cmt_', '').replace('usdt', '').toUpperCase();
+                let fundingDirection: 'bullish' | 'bearish' | 'neutral' = 'neutral';
+                if (data.fundingRate < -0.0001) fundingDirection = 'bullish';
+                else if (data.fundingRate > 0.0001) fundingDirection = 'bearish';
+                fundingAnalysis.push({
+                    symbol: displaySymbol,
+                    fundingRate: data.fundingRate,
+                    fundingDirection
+                });
+            }
+        }
+
+        const context = buildCoinSelectionContext(marketSummary, fundingAnalysis);
+
+        // 4 analysts for coin selection
+        const analystIds = ['ray', 'jim', 'quant', 'elon'];
+        const analysts = analystIds.map(id => {
+            const methodology = Object.keys(ANALYST_PROFILES).find(
+                m => ANALYST_PROFILES[m as AnalystMethodology].id === id
+            ) as AnalystMethodology | undefined;
+            return methodology ? ANALYST_PROFILES[methodology] : null;
+        }).filter((a): a is typeof ANALYST_PROFILES[AnalystMethodology] => a !== null);
+
+        if (analysts.length !== 4) {
+            throw new Error(`Failed to load all 4 coin selection analysts. Got ${analysts.length}`);
+        }
+
+        const turns: DebateTurn[] = [];
+        const turnsPerAnalyst = config.debate.turnsPerAnalyst;
+        const totalTurns = analysts.length * turnsPerAnalyst;
+
+        // Generate turns round-robin style
+        for (let round = 0; round < turnsPerAnalyst; round++) {
+            for (const analyst of analysts) {
+                const turnNumber = turns.length + 1;
+                logger.info(`[Turn ${turnNumber}/${totalTurns}] ${analyst.name} speaking...`);
+
+                const turn = await generateDebateTurn(
+                    model, analyst.id, analyst.name, analyst.methodology,
+                    turns, context, turnNumber, totalTurns
+                );
+
+                turns.push(turn);
+                // Log full argument - no truncation
+                logger.info(`[Turn ${turnNumber}/${totalTurns}] ${analyst.name} (strength: ${turn.strength}/10):`);
+                logger.info(`  ${turn.argument}`);
+
+                await new Promise(resolve => setTimeout(resolve, config.debate.turnDelayMs));
+            }
+        }
+
+        // Calculate scores and determine winner
+        const scores = calculateDebateScores(turns, analystIds);
+        const winner = determineDebateWinner(scores, turns);
+
+        // Validate winner was determined
+        if (!winner) {
+            logger.error('Failed to determine coin selection debate winner');
+            throw new Error('Could not determine debate winner');
+        }
+
+        const winningArguments = extractWinningArguments(winner, turns);
+
+        const winnerScore = scores[winner];
+        const winnerAnalyst = analysts.find(a => a.id === winner);
+        const reasoning = `${winnerAnalyst?.name || winner} won with total score ${winnerScore?.total || 0}/100`;
+
+        logger.info(`\n${'='.repeat(60)}`);
+        logger.info(`🎯 COIN SELECTION DEBATE COMPLETE`);
+        logger.info(`Winner: ${winner} | Score: ${winnerScore?.total || 0}/100`);
+        logger.info(`${'='.repeat(60)}\n`);
+
+        // Extract coin and direction from winner's arguments
+        const winnerTurns = turns.filter(t => t.speaker === winner);
+        let coinSymbol = '';
+        let direction: 'LONG' | 'SHORT' = 'LONG';
+        let directionFound = false;
+
+        const availableCoins = Array.from(marketDataMap.keys());
+        const coinNames = availableCoins.map(c => c.replace('cmt_', '').replace('usdt', '').toUpperCase());
+
+        // Validate we have coins to search for
+        if (availableCoins.length === 0) {
+            logger.error('No available coins in market data map');
+            throw new Error('No available coins for coin extraction');
+        }
+
+        for (const turn of winnerTurns) {
+            const arg = turn.argument || '';
+
+            // Extract coin symbol
+            if (!coinSymbol) {
+                // First try exact cmt_xxxusdt format
+                const cmt_match = arg.match(/cmt_(\w+)usdt/i);
+                if (cmt_match) {
+                    const extractedSymbol = `cmt_${cmt_match[1].toLowerCase()}usdt`;
+                    // Validate extracted coin is in available coins
+                    if (availableCoins.includes(extractedSymbol)) {
+                        coinSymbol = extractedSymbol;
+                    }
+                }
+
+                // If no exact match, try coin name matching with word boundaries
+                if (!coinSymbol) {
+                    for (let i = 0; i < coinNames.length; i++) {
+                        // Use word boundary to avoid partial matches (e.g., "BTC" in "BTCUSDT")
+                        const coinRegex = new RegExp(`\\b${coinNames[i]}\\b`, 'i');
+                        if (coinRegex.test(arg.toUpperCase())) {
+                            coinSymbol = availableCoins[i];
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Extract direction using robust patterns (same as championship debate)
+            if (!directionFound) {
+                const recommendPatterns = [
+                    /I\s+recommend\s+(LONG|SHORT)/i,
+                    /recommend(?:ing)?\s+(LONG|SHORT)/i,
+                    /position[:\s]+(LONG|SHORT)/i,
+                    /go(?:ing)?\s+(LONG|SHORT)/i
+                ];
+
+                for (const pattern of recommendPatterns) {
+                    const match = arg.match(pattern);
+                    if (match) {
+                        direction = match[1].toUpperCase() as 'LONG' | 'SHORT';
+                        directionFound = true;
+                        break;
+                    }
+                }
+
+                // Fallback: look for direction keywords
+                if (!directionFound) {
+                    const directionMatch = arg.match(/\b(LONG|SHORT|BUY|SELL|BULLISH|BEARISH)\b/i);
+                    if (directionMatch) {
+                        const dirWord = directionMatch[1].toUpperCase();
+                        direction = (dirWord === 'SHORT' || dirWord === 'SELL' || dirWord === 'BEARISH') ? 'SHORT' : 'LONG';
+                        directionFound = true;
+                    }
+                }
+            }
+
+            if (coinSymbol && directionFound) break;
+        }
+
+        if (!coinSymbol) {
+            logger.warn('Could not extract coin from winner arguments, using BTC as fallback');
+            // Verify BTC is in available coins before using as fallback
+            if (availableCoins.includes('cmt_btcusdt')) {
+                coinSymbol = 'cmt_btcusdt';
+            } else if (availableCoins.length > 0) {
+                // Use first available coin as last resort
+                coinSymbol = availableCoins[0];
+                logger.warn(`BTC not available, using ${coinSymbol} as fallback`);
+            } else {
+                throw new Error('No coins available for fallback');
+            }
+        }
+
+        logger.info(`Stage 2 complete: ${winner} won → ${coinSymbol} ${direction}`);
+
+        return {
+            winner,
+            coinSymbol,
+            direction,
+            debate: { turns, winner, scores, reasoning, winningArguments }
+        };
+    }
+
+
+    // =========================================================================
+    // STAGE 3: ANALYSIS APPROACH DEBATE
+    // =========================================================================
+
+    /**
+     * Stage 3: Analysis Approach Debate
+     * 4 analysts (Warren, Cathie, Jim, Quant) debate HOW to analyze the coin
+     * TURN-BY-TURN generation, 8 total turns
+     */
+    async runAnalysisApproachDebate(
+        coinSymbol: string,
+        marketData: ExtendedMarketData,
+        direction: 'LONG' | 'SHORT'
+    ): Promise<{ winner: string; approach: AnalysisResult; debate: FourWayDebateResult }> {
+        logger.info(`Stage 3: Analysis Approach Debate for ${coinSymbol} (${4 * config.debate.turnsPerAnalyst} turns)...`);
+
+        if (!marketData || !Number.isFinite(marketData.currentPrice)) {
+            throw new Error('Invalid market data provided');
+        }
+
+        const model = this.getJsonModel(); // Use JSON model with structured outputs
+
+        // 4 analysts for analysis approach
+        const analystIds = ['warren', 'cathie', 'jim', 'quant'];
+        const analysts = analystIds.map(id => {
+            const methodology = Object.keys(ANALYST_PROFILES).find(
+                m => ANALYST_PROFILES[m as AnalystMethodology].id === id
+            ) as AnalystMethodology | undefined;
+            return methodology ? ANALYST_PROFILES[methodology] : null;
+        }).filter((a): a is typeof ANALYST_PROFILES[AnalystMethodology] => a !== null);
+
+        if (analysts.length !== 4) {
+            throw new Error(`Failed to load all 4 analysis approach analysts. Got ${analysts.length}`);
+        }
+
+        const displaySymbol = coinSymbol.replace('cmt_', '').replace('usdt', '').toUpperCase();
+        const priceStr = safePrice(marketData.currentPrice);
+        const changeStr = safePercent(marketData.change24h, 2, true);
+
+        // Pass full market data to context builder
+        const context = buildAnalysisApproachContext(displaySymbol, direction, priceStr, changeStr, {
+            volume24h: marketData.volume24h,
+            fundingRate: marketData.fundingRate,
+            high24h: marketData.high24h,
+            low24h: marketData.low24h
+        });
+        const turns: DebateTurn[] = [];
+        const turnsPerAnalyst = config.debate.turnsPerAnalyst;
+        const totalTurns = analysts.length * turnsPerAnalyst;
+
+        for (let round = 0; round < turnsPerAnalyst; round++) {
+            for (const analyst of analysts) {
+                const turnNumber = turns.length + 1;
+                logger.info(`[Turn ${turnNumber}/${totalTurns}] ${analyst.name} speaking...`);
+
+                const turn = await generateDebateTurn(
+                    model, analyst.id, analyst.name, analyst.methodology,
+                    turns, context, turnNumber, totalTurns
+                );
+
+                turns.push(turn);
+                // Log full argument - no truncation
+                logger.info(`[Turn ${turnNumber}/${totalTurns}] ${analyst.name} (strength: ${turn.strength}/10):`);
+                logger.info(`  ${turn.argument}`);
+
+                await new Promise(resolve => setTimeout(resolve, config.debate.turnDelayMs));
+            }
+        }
+
+        const scores = calculateDebateScores(turns, analystIds);
+        const winner = determineDebateWinner(scores, turns);
+
+        // Validate winner was determined
+        if (!winner) {
+            logger.error('Failed to determine analysis approach debate winner');
+            throw new Error('Could not determine debate winner');
+        }
+
+        const winningArguments = extractWinningArguments(winner, turns);
+
+        const winnerScore = scores[winner];
+        const winnerAnalyst = analysts.find(a => a.id === winner);
+        const reasoning = `${winnerAnalyst?.name || winner} won with total score ${winnerScore?.total || 0}/100`;
+
+        logger.info(`\n${'='.repeat(60)}`);
+        logger.info(`🔬 ANALYSIS APPROACH DEBATE COMPLETE`);
+        logger.info(`Winner: ${winner} | Score: ${winnerScore?.total || 0}/100`);
+        logger.info(`${'='.repeat(60)}\n`);
+
+        // Generate winner's full analysis
+        const winnerAnalysis = await this.generateSpecialistAnalysis(winner, marketData, direction);
+
+        if (!winnerAnalysis) {
+            throw new Error(`Could not generate analysis for winner ${winner}`);
+        }
+
+        logger.info(`Stage 3 complete: ${winner} won with their analytical approach`);
+
+        return {
+            winner,
+            approach: winnerAnalysis,
+            debate: { turns, winner, scores, reasoning, winningArguments }
+        };
+    }
+
+    // =========================================================================
+    // STAGE 4: RISK ASSESSMENT DEBATE
+    // =========================================================================
+
+    /**
+     * Stage 4: Risk Assessment Debate
+     * 4 analysts (Karen, Warren, Devil, Ray) debate position sizing & risk
+     * TURN-BY-TURN generation, 8 total turns
+     */
+    async runRiskAssessmentDebate(
+        coinSymbol: string,
+        proposedThesis: AnalysisResult,
+        marketData: ExtendedMarketData
+    ): Promise<{ winner: string; riskFramework: AnalysisResult; debate: FourWayDebateResult }> {
+        logger.info(`Stage 4: Risk Assessment Debate for ${coinSymbol} (${4 * config.debate.turnsPerAnalyst} turns)...`);
+
+        if (!marketData || !Number.isFinite(marketData.currentPrice)) {
+            throw new Error('Invalid market data provided');
+        }
+        if (!proposedThesis) {
+            throw new Error('Proposed thesis is required');
+        }
+        if (!proposedThesis.priceTarget) {
+            throw new Error('Proposed thesis must have price targets');
+        }
+
+        const model = this.getJsonModel(); // Use JSON model with structured outputs
+
+        // 4 analysts for risk assessment
+        const analystIds = ['karen', 'warren', 'devil', 'ray'];
+        const analysts = analystIds.map(id => {
+            const methodology = Object.keys(ANALYST_PROFILES).find(
+                m => ANALYST_PROFILES[m as AnalystMethodology].id === id
+            ) as AnalystMethodology | undefined;
+            return methodology ? ANALYST_PROFILES[methodology] : null;
+        }).filter((a): a is typeof ANALYST_PROFILES[AnalystMethodology] => a !== null);
+
+        if (analysts.length !== 4) {
+            throw new Error(`Failed to load all 4 risk assessment analysts. Got ${analysts.length}`);
+        }
+
+        const displaySymbol = coinSymbol.replace('cmt_', '').replace('usdt', '').toUpperCase();
+        const priceStr = safePrice(marketData.currentPrice);
+        const priceTargets = formatPriceTargets(proposedThesis.priceTarget);
+
+        // Determine direction from recommendation
+        const direction: 'LONG' | 'SHORT' =
+            proposedThesis.recommendation === 'strong_sell' || proposedThesis.recommendation === 'sell'
+                ? 'SHORT' : 'LONG';
+
+        // Pass full market data and direction to context builder
+        const context = buildRiskAssessmentContext(
+            displaySymbol,
+            { ...proposedThesis, direction },
+            priceStr,
+            priceTargets,
+            {
+                volume24h: marketData.volume24h,
+                fundingRate: marketData.fundingRate,
+                high24h: marketData.high24h,
+                low24h: marketData.low24h,
+                change24h: marketData.change24h
+            }
+        );
+        const turns: DebateTurn[] = [];
+        const turnsPerAnalyst = config.debate.turnsPerAnalyst;
+        const totalTurns = analysts.length * turnsPerAnalyst;
+
+        for (let round = 0; round < turnsPerAnalyst; round++) {
+            for (const analyst of analysts) {
+                const turnNumber = turns.length + 1;
+                logger.info(`[Turn ${turnNumber}/${totalTurns}] ${analyst.name} speaking...`);
+
+                const turn = await generateDebateTurn(
+                    model, analyst.id, analyst.name, analyst.methodology,
+                    turns, context, turnNumber, totalTurns
+                );
+
+                turns.push(turn);
+                // Log full argument - no truncation
+                logger.info(`[Turn ${turnNumber}/${totalTurns}] ${analyst.name} (strength: ${turn.strength}/10):`);
+                logger.info(`  ${turn.argument}`);
+
+                await new Promise(resolve => setTimeout(resolve, config.debate.turnDelayMs));
+            }
+        }
+
+        const scores = calculateDebateScores(turns, analystIds);
+        const winner = determineDebateWinner(scores, turns);
+
+        // Validate winner was determined
+        if (!winner) {
+            logger.error('Failed to determine risk assessment debate winner');
+            throw new Error('Could not determine debate winner');
+        }
+
+        const winningArguments = extractWinningArguments(winner, turns);
+
+        const winnerScore = scores[winner];
+        const winnerAnalyst = analysts.find(a => a.id === winner);
+        const reasoning = `${winnerAnalyst?.name || winner} won with total score ${winnerScore?.total || 0}/100`;
+
+        logger.info(`\n${'='.repeat(60)}`);
+        logger.info(`🛡️ RISK ASSESSMENT DEBATE COMPLETE`);
+        logger.info(`Winner: ${winner} | Score: ${winnerScore?.total || 0}/100`);
+        logger.info(`${'='.repeat(60)}\n`);
+
+        // Extract risk adjustments from winner's arguments
+        const winnerTurns = turns.filter(t => t.speaker === winner);
+        let adjustedPositionSize = proposedThesis.positionSize;
+        let adjustedRiskLevel = proposedThesis.riskLevel;
+
+        for (const turn of winnerTurns) {
+            const sizeMatch = turn.argument.match(/position\s*(?:size)?[:\s]*(\d+)(?:\/10)?/i);
+            if (sizeMatch) {
+                const suggestedSize = parseInt(sizeMatch[1], 10);
+                if (suggestedSize >= 1 && suggestedSize <= 10) {
+                    adjustedPositionSize = suggestedSize;
+                }
+            }
+
+            if (winner === 'karen') {
+                if (adjustedPositionSize > 7) adjustedPositionSize = 7;
+                adjustedRiskLevel = 'medium';
+            } else if (winner === 'devil') {
+                if (turn.argument.toLowerCase().includes('aggressive')) {
+                    adjustedRiskLevel = 'high';
+                }
+            }
+        }
+
+        const riskFramework: AnalysisResult = {
+            ...proposedThesis,
+            analystId: winner,
+            analystName: analysts.find(a => a.id === winner)?.name || proposedThesis.analystName,
+            positionSize: adjustedPositionSize,
+            riskLevel: adjustedRiskLevel
+        };
+
+        logger.info(`Stage 4 complete: ${winner} won (position: ${adjustedPositionSize}/10, risk: ${adjustedRiskLevel})`);
+
+        return {
+            winner,
+            riskFramework,
+            debate: { turns, winner, scores, reasoning, winningArguments }
+        };
+    }
+
+
+    // =========================================================================
+    // STAGE 5: CHAMPIONSHIP DEBATE
+    // =========================================================================
+
+    /**
+     * Stage 5: Championship Debate
+     * ALL 8 analysts compete in a championship debate
+     * TURN-BY-TURN generation, 16 total turns
+     * Winner's thesis gets executed as a real trade
+     * 
+     * ENHANCED: Now accepts winning arguments from previous stages
+     */
+    async runChampionshipDebate(
+        coinSymbol: string,
+        marketData: ExtendedMarketData,
+        previousWinners: {
+            coinSelector: string;
+            analysisApproach: string;
+            riskAssessment: string;
+            coinSelectorArgument?: string;
+            analysisApproachArgument?: string;
+            riskAssessmentArgument?: string;
+        }
+    ): Promise<{ champion: AnalysisResult; debate: ChampionshipDebateResult }> {
+        logger.info(`Stage 5: Championship Debate for ${coinSymbol} (${8 * config.debate.turnsPerAnalyst} turns - ALL 8 analysts)...`);
+
+        // Validate inputs
+        if (!coinSymbol || typeof coinSymbol !== 'string') {
+            throw new Error('Invalid coin symbol provided to championship debate');
+        }
+        if (!marketData || !Number.isFinite(marketData.currentPrice) || marketData.currentPrice <= 0) {
+            throw new Error('Invalid market data provided to championship debate');
+        }
+        if (!previousWinners) {
+            throw new Error('Previous winners object is required for championship debate');
+        }
+
+        // Provide defaults for missing previous winners
+        const safeWinners = {
+            coinSelector: previousWinners.coinSelector || 'Unknown',
+            analysisApproach: previousWinners.analysisApproach || 'Unknown',
+            riskAssessment: previousWinners.riskAssessment || 'Unknown',
+            coinSelectorArgument: previousWinners.coinSelectorArgument,
+            analysisApproachArgument: previousWinners.analysisApproachArgument,
+            riskAssessmentArgument: previousWinners.riskAssessmentArgument
+        };
+
+        const model = this.getJsonModel(); // Use JSON model with structured outputs
+
+        // Get ALL 8 analysts
+        const allAnalysts = Object.values(ANALYST_PROFILES);
+        if (allAnalysts.length !== 8) {
+            throw new Error(`Expected 8 analysts, got ${allAnalysts.length}`);
+        }
+
+        const displaySymbol = coinSymbol.replace('cmt_', '').replace('usdt', '').toUpperCase();
+        const priceStr = safePrice(marketData.currentPrice);
+        const changeStr = safePercent(marketData.change24h, 2, true);
+
+        // Pass full market data to championship context
+        const context = buildChampionshipContext(
+            displaySymbol,
+            priceStr,
+            changeStr,
+            safeWinners,
+            {
+                volume24h: marketData.volume24h,
+                fundingRate: marketData.fundingRate,
+                high24h: marketData.high24h,
+                low24h: marketData.low24h,
+                openInterest: marketData.openInterest
+            }
+        );
+        const turns: DebateTurn[] = [];
+        const turnsPerAnalyst = config.debate.turnsPerAnalyst;
+        const totalTurns = allAnalysts.length * turnsPerAnalyst;
+        const analystIds = allAnalysts.map(a => a.id);
+
+        for (let round = 0; round < turnsPerAnalyst; round++) {
+            for (const analyst of allAnalysts) {
+                const turnNumber = turns.length + 1;
+                logger.info(`[Turn ${turnNumber}/${totalTurns}] ${analyst.name} speaking...`);
+
+                const turn = await generateDebateTurn(
+                    model, analyst.id, analyst.name, analyst.methodology,
+                    turns, context, turnNumber, totalTurns
+                );
+
+                turns.push(turn);
+                // Log full argument - no truncation
+                logger.info(`[Turn ${turnNumber}/${totalTurns}] ${analyst.name} (strength: ${turn.strength}/10):`);
+                logger.info(`  ${turn.argument}`);
+
+                await new Promise(resolve => setTimeout(resolve, config.debate.turnDelayMs));
+            }
+        }
+
+        const scores = calculateDebateScores(turns, analystIds);
+        const winner = determineDebateWinner(scores, turns);
+
+        // Validate winner was determined
+        if (!winner) {
+            logger.error('Failed to determine championship debate winner');
+            throw new Error('Could not determine debate winner');
+        }
+
+        const winningArguments = extractWinningArguments(winner, turns);
+
+        const winnerScore = scores[winner];
+        const winnerAnalyst = allAnalysts.find(a => a.id === winner);
+        const reasoning = `${winnerAnalyst?.name || winner} won with total score ${winnerScore?.total || 0}/100`;
+        const summary = `Championship debate completed with ${turns.length} turns. ${winnerAnalyst?.name || winner} emerged as champion.`;
+
+        logger.info(`\n${'='.repeat(60)}`);
+        logger.info(`🏆🏆🏆 CHAMPIONSHIP DEBATE COMPLETE 🏆🏆🏆`);
+        logger.info(`CHAMPION: ${winner} | Score: ${winnerScore?.total || 0}/100`);
+        logger.info(`${'='.repeat(60)}\n`);
+
+        // Extract direction from winner's arguments using robust patterns
+        // Avoid false positives from negations like "I would NOT go LONG"
+        const winnerTurns = turns.filter(t => t.speaker === winner);
+        let direction: 'LONG' | 'SHORT' = 'LONG';
+        let directionFound = false;
+
+        // Priority 1: Look for explicit "I recommend LONG/SHORT" patterns
+        const recommendPatterns = [
+            /I\s+recommend\s+(LONG|SHORT)/i,
+            /recommend(?:ing)?\s+(LONG|SHORT)/i,
+            /my\s+recommendation\s+is\s+(LONG|SHORT)/i,
+            /position[:\s]+(LONG|SHORT)/i,
+            /go(?:ing)?\s+(LONG|SHORT)/i,
+            /open(?:ing)?\s+(?:a\s+)?(LONG|SHORT)/i
+        ];
+
+        // Priority 2: Avoid negation patterns
+        const negationPatterns = [
+            /(?:NOT|don't|wouldn't|shouldn't|avoid)\s+(?:go\s+)?(LONG|SHORT)/i,
+            /(?:against|oppose)\s+(?:a\s+)?(LONG|SHORT)/i
+        ];
+
+        for (const turn of winnerTurns) {
+            if (directionFound) break;
+
+            const arg = turn.argument || '';
+
+            // First check for negations to exclude them
+            let hasNegation = false;
+            for (const negPattern of negationPatterns) {
+                if (negPattern.test(arg)) {
+                    hasNegation = true;
+                    break;
+                }
+            }
+
+            // Look for positive recommendation patterns
+            for (const pattern of recommendPatterns) {
+                const match = arg.match(pattern);
+                if (match && !hasNegation) {
+                    direction = match[1].toUpperCase() as 'LONG' | 'SHORT';
+                    directionFound = true;
+                    break;
+                }
+            }
+
+            // Fallback: simple LONG/SHORT detection if no explicit recommendation found
+            if (!directionFound) {
+                // Count occurrences, excluding negated ones
+                const longMatches = (arg.match(/\bLONG\b/gi) || []).length;
+                const shortMatches = (arg.match(/\bSHORT\b/gi) || []).length;
+                const negatedLong = (arg.match(/(?:NOT|don't|wouldn't)\s+(?:go\s+)?LONG/gi) || []).length;
+                const negatedShort = (arg.match(/(?:NOT|don't|wouldn't)\s+(?:go\s+)?SHORT/gi) || []).length;
+
+                const effectiveLong = longMatches - negatedLong;
+                const effectiveShort = shortMatches - negatedShort;
+
+                if (effectiveLong > effectiveShort && effectiveLong > 0) {
+                    direction = 'LONG';
+                    directionFound = true;
+                } else if (effectiveShort > effectiveLong && effectiveShort > 0) {
+                    direction = 'SHORT';
+                    directionFound = true;
+                }
+            }
+        }
+
+        if (!directionFound) {
+            logger.warn(`Could not extract direction from ${winner}'s arguments, defaulting to LONG`);
+        }
+
+        // Generate champion's full analysis
+        const championAnalysis = await this.generateSpecialistAnalysis(winner, marketData, direction);
+
+        if (!championAnalysis) {
+            throw new Error(`Could not generate analysis for champion ${winner}`);
+        }
+
+        logger.info(`Stage 5 complete: ${winner} is the CHAMPION! 🏆`);
+
+        return {
+            champion: championAnalysis,
+            debate: { turns, winner, scores, reasoning, winningArguments, summary }
+        };
+    }
+
+    // =========================================================================
+    // STAGE 6: RISK COUNCIL (Karen's Final Review)
+    // =========================================================================
+
+    /**
+     * Stage 6: Risk Council
+     * Karen reviews and approves/vetoes the trade
+     * 
+     * Updated signature to accept entryPrice and unrealizedPnl for positions
+     */
+    async runRiskCouncil(
+        champion: AnalysisResult,
+        marketData: ExtendedMarketData,
+        accountBalance: number,
+        currentPositions: Array<{ symbol: string; side: string; size: number; entryPrice?: number; unrealizedPnl?: number }>,
+        recentPnL: { day: number; week: number }
+    ): Promise<RiskCouncilDecision> {
+        logger.info('Stage 6: Risk Council review...');
+
+        // Validate inputs
+        if (!champion) {
+            throw new Error('Champion analysis is required for risk council');
+        }
+        if (!marketData || !Number.isFinite(marketData.currentPrice) || marketData.currentPrice <= 0) {
+            throw new Error(`Invalid market data: currentPrice=${marketData?.currentPrice}`);
+        }
+        if (!Number.isFinite(accountBalance) || accountBalance < 0) {
+            throw new Error(`Invalid account balance: ${accountBalance}`);
+        }
+
+        const model = this.getJsonModel(); // Use JSON model for structured output
+        const karenProfile = ANALYST_PROFILES.risk;
+
+        const prompt = buildRiskCouncilPrompt(
+            karenProfile, champion, marketData, accountBalance, currentPositions, recentPnL
+        );
+
+        let lastError: Error | null = null;
+        let timeout: ReturnType<typeof createTimeoutPromise> | null = null;
+
+        // Retry up to config.ai.maxRetries times
+        for (let attempt = 0; attempt <= config.ai.maxRetries; attempt++) {
+            try {
+                timeout = createTimeoutPromise(AI_REQUEST_TIMEOUT);
+                const result = await Promise.race([
+                    model.generateContent({
+                        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                        generationConfig: {
+                            responseMimeType: "application/json",
+                            responseSchema: RISK_COUNCIL_SCHEMA,
+                            maxOutputTokens: config.ai.specialistMaxTokens
+                        }
+                    }),
+                    timeout.promise
+                ]);
+
+                const responseText = result.response.text();
+
+                // Check finish reason
+                const candidates = result.response.candidates;
+                let finishReason = 'UNKNOWN';
+                if (candidates && candidates.length > 0) {
+                    finishReason = candidates[0].finishReason || 'UNKNOWN';
+                    if (finishReason !== 'STOP') {
+                        logger.warn(`⚠️ Risk Council finish reason: ${finishReason}`);
+                    }
+                }
+
+                // LOG FULL RAW AI RESPONSE with metadata
+                logger.info(`\n${'─'.repeat(60)}`);
+                logger.info(`📡 RAW AI RESPONSE for Risk Council (Karen):`);
+                logger.info(`📊 Response length: ${responseText.length} chars | Finish reason: ${finishReason}`);
+                // Log in chunks to avoid terminal buffer issues
+                const chunkSize = 2000;
+                for (let i = 0; i < responseText.length; i += chunkSize) {
+                    const chunk = responseText.slice(i, i + chunkSize);
+                    const chunkNum = Math.floor(i / chunkSize) + 1;
+                    const totalChunks = Math.ceil(responseText.length / chunkSize);
+                    if (totalChunks > 1) {
+                        logger.info(`[Chunk ${chunkNum}/${totalChunks}] ${chunk}`);
+                    } else {
+                        logger.info(chunk);
+                    }
+                }
+                logger.info(`${'─'.repeat(60)}\n`);
+
+                // Check if response appears truncated
+                if (!responseText.trim().endsWith('}')) {
+                    throw new Error(`Risk Council response truncated - does not end with }. Last 100 chars: "${responseText.slice(-100)}"`);
+                }
+
+                const parsed = parseJSONWithRepair(responseText);
+
+                logger.info(`\n${'='.repeat(60)}`);
+                logger.info(`🛡️ RISK COUNCIL DECISION (Karen)`);
+                logger.info(`${'='.repeat(60)}`);
+                logger.info(`Approved: ${parsed.approved}`);
+                logger.info(`Warnings: ${JSON.stringify(parsed.warnings)}`);
+                if (parsed.vetoReason) logger.info(`Veto Reason: ${parsed.vetoReason}`);
+                if (parsed.adjustments) logger.info(`Adjustments: ${JSON.stringify(parsed.adjustments)}`);
+                logger.info(`${'='.repeat(60)}\n`);
+
+                const decision: RiskCouncilDecision = {
+                    approved: parsed.approved === true,
+                    warnings: Array.isArray(parsed.warnings) ? parsed.warnings : [],
+                    vetoReason: parsed.vetoReason || undefined,
+                    adjustments: parsed.adjustments ? {
+                        positionSize: parsed.adjustments.positionSize,
+                        leverage: parsed.adjustments.leverage,
+                        stopLoss: parsed.adjustments.stopLoss
+                    } : undefined
+                };
+
+                logger.info(`Stage 6 complete: ${decision.approved ? 'APPROVED ✅' : 'VETOED ❌'}`);
+                return decision;
+            } catch (error) {
+                lastError = error instanceof Error ? error : new Error(String(error));
+                if (attempt < config.ai.maxRetries) {
+                    logger.warn(`Risk council attempt ${attempt + 1} failed, retrying...`);
+                    await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
+                }
+            } finally {
+                // CRITICAL: Always cancel timeout to prevent memory leak
+                if (timeout) {
+                    timeout.cancel();
+                    timeout = null;
+                }
+            }
+        }
+
+        logger.error('Risk council failed after 3 attempts:', lastError);
+        return {
+            approved: false,
+            warnings: ['Risk council analysis failed after multiple attempts'],
+            vetoReason: 'Unable to complete risk assessment'
         };
     }
 }

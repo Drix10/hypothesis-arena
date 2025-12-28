@@ -161,7 +161,7 @@ export class CircuitBreakerService {
 
             // Sort candles by timestamp to ensure correct order (oldest first)
             const sortedCandles = [...candles].sort((a, b) =>
-                parseInt(a.timestamp) - parseInt(b.timestamp)
+                parseInt(a.timestamp, 10) - parseInt(b.timestamp, 10)
             );
 
             // Validate we still have candles after sort
@@ -280,6 +280,12 @@ export class CircuitBreakerService {
      * to prevent trading without knowing account state
      */
     private async checkPortfolioDrawdown(userId: string): Promise<Partial<CircuitBreakerStatus>> {
+        // Validate userId to prevent SQL injection and invalid queries
+        if (!userId || typeof userId !== 'string' || userId.trim().length === 0) {
+            logger.warn('Invalid userId provided to checkPortfolioDrawdown');
+            return { level: 'NONE', reason: '' };
+        }
+
         try {
             // Get ACTUAL wallet balance from WEEX (source of truth)
             let totalCurrent: number;

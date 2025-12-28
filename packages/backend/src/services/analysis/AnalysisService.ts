@@ -21,16 +21,21 @@ export interface Analysis {
 
 export class AnalysisService {
     async getRecentAnalyses(userId: string, symbol?: string, limit: number = 20): Promise<Analysis[]> {
+        // Validate and sanitize limit to prevent injection
+        const safeLimit = Math.max(1, Math.min(100, Math.floor(Number(limit) || 20)));
+
         let query = `SELECT * FROM analyses WHERE user_id = $1`;
         const params: any[] = [userId];
+        let paramIndex = 2;
 
         if (symbol) {
-            query += ` AND symbol = $2`;
+            query += ` AND symbol = $${paramIndex}`;
             params.push(symbol);
+            paramIndex++;
         }
 
-        query += ` ORDER BY created_at DESC LIMIT $${params.length + 1}`;
-        params.push(limit);
+        query += ` ORDER BY created_at DESC LIMIT $${paramIndex}`;
+        params.push(safeLimit);
 
         const result = await pool.query(query, params);
         return result.rows.map(this.mapRowToAnalysis);

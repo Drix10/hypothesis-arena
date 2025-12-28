@@ -14,6 +14,7 @@
 import type { AnalystAgent } from '../analyst/types';
 import type { ExtendedMarketData } from '../../services/ai/GeminiService';
 import type { PromptAnalysisResult, PromptMarketData, PromptSpecialist } from './promptTypes';
+import { THESIS_SYSTEM_PROMPTS } from './index';
 import {
     safeNumber,
     safePrice,
@@ -22,7 +23,8 @@ import {
     safeArrayJoin,
     validateRequired,
     formatPriceTargets,
-    getCanonicalPrice
+    getCanonicalPrice,
+    getSystemPrompt
 } from './promptHelpers';
 
 /**
@@ -39,16 +41,26 @@ export function buildCoinSelectionPrompt(
     validateRequired(marketSummary, 'marketSummary');
 
     const name = sanitizeString(profile.name, 100);
-    const title = sanitizeString(profile.title, 200);
-    const description = sanitizeString(profile.description, 500);
-    const focusAreas = safeArrayJoin(profile.focusAreas, '\n', 10, '• No focus areas specified');
 
-    return `You are ${name}, ${title}.
+    // GET THE FULL SYSTEM PROMPT FOR THIS ANALYST
+    // This is the 800+ line detailed methodology prompt
+    // Validates that the methodology exists and throws clear error if not
+    const fullSystemPrompt = getSystemPrompt(profile.methodology, THESIS_SYSTEM_PROMPTS);
 
-${description}
+    return `${fullSystemPrompt}
 
-YOUR METHODOLOGY & FOCUS AREAS:
-${focusAreas}
+═══════════════════════════════════════════════════════════════════════════════
+COLLABORATIVE FLOW - STAGE 2: COIN SELECTION
+═══════════════════════════════════════════════════════════════════════════════
+
+You are one of 3 analysts (Ray, Jim, Quant) selecting the BEST trading opportunity from 8 coins.
+
+This is Stage 2 of the Hypothesis Arena collaborative pipeline:
+- Stage 1 (Market Conditions): Assessed trading environment
+- Stage 2 (YOU ARE HERE): Select top 3 coins using YOUR methodology
+- Stage 3 (Specialist Analysis): 3 specialists will analyze the winning coin
+- Stage 4 (Tournament): Specialists compete in debates
+- Stage 5 (Risk Council): Karen reviews the winner
 
 ${marketSummary}
 
@@ -61,31 +73,25 @@ SCORING SYSTEM (your picks compete against other analysts):
 
 The coin with the highest TOTAL score across all analysts will be selected for deep analysis and potential execution.
 
-SELECTION CRITERIA (apply your ${title} methodology):
-1. MOMENTUM: Which coins show the strongest directional moves?
-2. VOLUME: Is there conviction behind the price action?
-3. FUNDING: Are traders positioned for a squeeze? (positive = crowded longs, negative = crowded shorts)
-4. RELATIVE STRENGTH: Which coins are outperforming/underperforming the group?
-5. YOUR EDGE: What does YOUR methodology see that others might miss?
-
-ADVANCED FILTERS (crypto-specific):
-6. REGIME: Trend vs chop (4H/1D). Prefer clear regimes; avoid mean-reversion traps in momentum.
-7. LIQUIDITY: Adequate depth and daily volume; avoid thin books that magnify slippage.
-8. CROWDING: Funding + OI dynamics for squeeze potential (negative funding = short squeeze risk, positive = long crowding).
-9. CORRELATION: Beta to BTC/sector; avoid stacking correlated picks.
-10. CATALYST PROXIMITY: Near-term events within 7–14 days increase quality of a pick.
+SELECTION CRITERIA (apply YOUR FULL METHODOLOGY from above):
+1. Use YOUR analytical frameworks, scorecards, and checklists
+2. Apply YOUR specific metrics and evaluation criteria
+3. Leverage YOUR unique edge and perspective
+4. Consider YOUR known biases and blind spots
 
 QUALITY BAR (judge-aligned):
-- Use specific NUMBERS in your reason (e.g., "+5.2% vs BTC, 2.1x avg volume, funding -0.03%").
-- Include at least one on-chain OR microstructure metric (funding, OI, liquidations, exchange flows, active addresses, TVL).
-- Mention regime (trend/chop) or catalyst timing if known; avoid generic claims.
-- Prefer picks where multiple signals ALIGN; penalize contradictory signals.
+- Use specific NUMBERS in your reason (e.g., "+5.2% vs BTC, 2.1x avg volume, funding -0.03%")
+- Include at least one on-chain OR microstructure metric (funding, OI, liquidations, exchange flows, active addresses, TVL)
+- Mention regime (trend/chop) or catalyst timing if known
+- Prefer picks where multiple signals ALIGN from YOUR methodology
+- Avoid generic claims—cite specific data points
 
 COMMON ERRORS TO AVOID:
-- Vague phrases ("strong momentum", "looks good") without data.
-- Ignoring funding/OI crowding risk.
-- Selecting three highly correlated coins in the SAME direction.
-- Overweighting price alone; include volume and structure.
+- Vague phrases ("strong momentum", "looks good") without data
+- Ignoring funding/OI crowding risk
+- Selecting three highly correlated coins in the SAME direction
+- Overweighting price alone; include volume and structure
+- Not applying YOUR specific methodology
 
 OUTPUT REQUIREMENTS:
 • symbol: Exact WEEX symbol (e.g., "cmt_btcusdt", "cmt_solusdt")
@@ -95,14 +101,16 @@ OUTPUT REQUIREMENTS:
   - 4-6: Moderate confidence, some supporting data
   - 7-8: High confidence, strong signal alignment
   - 9-10: Exceptional setup, multiple confirming factors
-• reason: ONE sentence with SPECIFIC data (include at least one on-chain or microstructure metric; e.g., "+5.2% with 2x avg volume & funding -0.02% indicates short squeeze")
+• reason: ONE sentence with SPECIFIC data from YOUR methodology (include numbers and metrics)
+
+Apply your ${name} methodology rigorously. This is YOUR chance to identify the best opportunity.
 
 Respond with JSON:
 {
     "picks": [
-        { "symbol": "cmt_solusdt", "direction": "LONG", "conviction": 8, "reason": "+4.2% outperforming BTC with negative funding suggesting short squeeze potential" },
-        { "symbol": "cmt_btcusdt", "direction": "LONG", "conviction": 6, "reason": "Holding above 95k support with declining sell volume" },
-        { "symbol": "cmt_dogeusdt", "direction": "SHORT", "conviction": 5, "reason": "Lagging the rally with extreme positive funding (0.08%) indicating crowded longs" }
+        { "symbol": "cmt_solusdt", "direction": "LONG", "conviction": 8, "reason": "+4.2% outperforming BTC with negative funding -0.02% suggesting short squeeze potential and 2.1x average volume" },
+        { "symbol": "cmt_btcusdt", "direction": "LONG", "conviction": 6, "reason": "Holding above 95k support with declining sell volume and positive exchange outflows indicating accumulation" },
+        { "symbol": "cmt_dogeusdt", "direction": "SHORT", "conviction": 5, "reason": "Lagging the rally with extreme positive funding 0.08% indicating crowded longs vulnerable to squeeze" }
     ]
 }
 
@@ -124,10 +132,6 @@ export function buildSpecialistPrompt(
     validateRequired(marketData.symbol, 'marketData.symbol');
 
     const name = sanitizeString(profile.name, 100);
-    const title = sanitizeString(profile.title, 200);
-    const description = sanitizeString(profile.description, 500);
-    const focusAreas = safeArrayJoin(profile.focusAreas, '\n', 10, '- No focus areas specified');
-
     const displaySymbol = marketData.symbol.replace('cmt_', '').replace('usdt', '').toUpperCase();
     const change = safePercent(marketData.change24h, 2, true);
 
@@ -164,14 +168,44 @@ export function buildSpecialistPrompt(
         ? `- Funding Rate: ${safeNumber(marketData.fundingRate * 100, 4)}% (${fundingDirection})`
         : '';
 
-    return `You are ${name}, ${title}.
+    // Add prominent funding warning when against proposed direction
+    // Threshold: 0.01% (0.0001) is considered significant
+    let fundingWarningStr = '';
+    if (marketData.fundingRate !== undefined && Number.isFinite(marketData.fundingRate)) {
+        const fundingAgainstDirection = (direction === 'LONG' && marketData.fundingRate > 0.0001) ||
+            (direction === 'SHORT' && marketData.fundingRate < -0.0001);
+        if (fundingAgainstDirection) {
+            const fundingCost = Math.abs(marketData.fundingRate * 100);
+            fundingWarningStr = `
+⚠️ FUNDING RATE WARNING ⚠️
+The funding rate is AGAINST your ${direction} position!
+- Current funding: ${safeNumber(fundingCost, 4)}% per 8 hours
+- Daily cost: ~${safeNumber(fundingCost * 3, 4)}% (3 funding periods)
+- This will ERODE your profits over time
+- Consider this cost in your risk/reward calculation
+`;
+        }
+    }
 
-${description}
+    // GET THE FULL SYSTEM PROMPT FOR THIS ANALYST
+    // This is the 800+ line detailed methodology prompt
+    // Validates that the methodology exists and throws clear error if not
+    const fullSystemPrompt = getSystemPrompt(profile.methodology, THESIS_SYSTEM_PROMPTS);
 
-YOUR KNOWN BIASES (acknowledge these in your analysis):
-${focusAreas}
+    // Build the specialist analysis request using the FULL analyst prompt
+    return `${fullSystemPrompt}
 
-ANALYZE: ${displaySymbol}/USDT for a potential ${direction} position
+═══════════════════════════════════════════════════════════════════════════════
+COLLABORATIVE FLOW - STAGE 3: SPECIALIST ANALYSIS
+═══════════════════════════════════════════════════════════════════════════════
+
+You have been selected as a SPECIALIST to analyze ${displaySymbol}/USDT for a potential ${direction} position.
+
+This is Stage 3 of the Hypothesis Arena collaborative pipeline:
+- Stage 2 (Coin Selection): Ray, Jim, and Quant selected ${displaySymbol} as the top opportunity
+- Stage 3 (YOU ARE HERE): You and 2 other specialists provide deep analysis
+- Stage 4 (Tournament): Your thesis will compete in bracket-style debates
+- Stage 5 (Risk Council): Karen will review the winning thesis
 
 MARKET DATA:
 - Current Price: ${safePrice(marketData.currentPrice)}
@@ -180,44 +214,52 @@ MARKET DATA:
 - 24h Range: ${range24h}% (price at ${priceInRange}% of range)
 - 24h Change: ${change}
 - 24h Volume: ${safeNumber((marketData.volume24h ?? 0) / 1e6, 1)}M
-${fundingRateStr}
+${fundingRateStr}${fundingWarningStr}
 
-YOUR THESIS WILL BE JUDGED ON:
+TOURNAMENT JUDGING CRITERIA (Your thesis will be scored on):
 1. DATA QUALITY (25%): Use specific numbers, not vague claims
+   - Reference actual market data (price, volume, funding, OI)
+   - Quantify risks and targets with specific numbers
+   - Use on-chain metrics where relevant (TVL, MVRV, active addresses)
+   - Avoid vague language like "could", "might", "possibly"
+
 2. LOGIC (25%): Reasoning must follow from the data
+   - Arguments are internally consistent
+   - Conclusions match the evidence presented
+   - Cause-effect relationships are clear
+   - No logical fallacies or contradictions
+
 3. RISK AWARENESS (25%): Acknowledge what could go wrong
+   - Has realistic bear case with specific scenarios
+   - Stop loss is reasonable (≤10% from entry)
+   - Identifies thesis invalidation triggers
+   - Acknowledges own biases and blind spots
+
 4. CATALYST (25%): Clear price driver with timeline
+   - Specific catalyst identified (not just "will go up")
+   - Timeline specified (when will catalyst occur)
+   - Expected impact quantified (how much move)
+   - Explains why catalyst will move price
 
-CRYPTO-SPECIFIC DIRECTIVES:
-- REGIME: Identify trend vs chop (4H/1D) and align strategy (breakout vs mean-reversion).
-- LIQUIDATION MATH: If leverage is used, quantify liquidation distance and adverse-move scenarios.
-- FUNDING & OI: Note crowding risk; funding drag vs carry benefits and open interest changes.
-- TIME HORIZON: Crypto moves faster—set realistic timeframe and stops accordingly.
-- INVALIDATION: State precise conditions that kill the thesis (levels, metrics, catalysts failing).
+EXECUTION REQUIREMENTS:
+- Apply YOUR FULL METHODOLOGY from your system prompt above
+- Use your analytical frameworks, scorecards, and checklists
+- Cite specific metrics relevant to your methodology
+- Build a complete thesis that will win debates in Stage 4
+- Leverage: 1-5x max (crypto volatility requires tight risk management)
+- Position size: 1-10 scale (scaled to conviction and risk)
+- Stop loss: ≤10% from entry unless justified by volatility/structure
+- Time horizon: Crypto moves fast—set realistic timeframe (2-14 days typical)
 
-EXECUTION CONSTRAINTS:
-- Leverage 1–5x max; position size 1–10 scaled to conviction.
-- Stop loss ≤10% from entry unless justified by ATR/structure.
-- Prefer near-term catalysts (7–14 days) with probability and expected impact.
+DEBATE PREPARATION:
+Your thesis will compete against 2 other specialists in Stage 4. To win:
+- Lead with your strongest data points (cite specific numbers)
+- Quantify your edge (why is this opportunity mispriced?)
+- Acknowledge counterarguments preemptively (shows risk awareness)
+- Provide clear invalidation triggers (what proves you wrong?)
+- Tie to near-term catalysts with probability estimates
 
-TRADE TEMPLATES (choose one and state it in thesis):
-- Breakout continuation: trend + volume + market structure higher-highs; enter on retest.
-- Mean reversion: extended move into supply/demand with fading volume; tight stop.
-- Narrative momentum: catalyst-driven flow (L2 upgrades, ETF flows, emissions); time-bound.
-- Basis/funding carry: exploit funding/term basis; quantify carry vs risk.
-
-SIGNAL STACK CHECKLIST (use ≥3 where applicable):
-- Structure: HH/HL or LL/LH; key levels; volume profile nodes.
-- Momentum: 4H/1D trend alignment; RSI/MACD only if corroborated by price/volume.
-- Microstructure: funding, OI, liquidations, perp-spot basis, exchange net flows.
-- On-chain: TVL, active addresses, holder distribution, supply dynamics.
-- Risk: invalidation level, max adverse excursion, liquidation distance if leveraged.
-
-FORBIDDEN / PENALIZED:
-- Vague claims without numbers; price-only arguments; missing invalidation.
-- Targets without timeframe; leverage without liquidation math; catalysts without dates.
-
-Apply your ${title} methodology rigorously.
+Apply your ${name} methodology rigorously. This is a DEEP analysis, not a quick take.
 
 Respond with JSON:
 {
@@ -228,12 +270,12 @@ Respond with JSON:
     "stopLoss": number,
     "leverage": 1-5,
     "positionSize": 1-10,
-    "thesis": "Your main argument in 2-3 sentences with SPECIFIC numbers",
+    "thesis": "Your main argument in 2-3 sentences with SPECIFIC numbers and methodology",
     "bullCase": ["Point 1 with data", "Point 2 with data", "Point 3 with data"],
     "bearCase": ["Risk 1 - what invalidates thesis", "Risk 2", "Risk 3"],
-    "keyMetrics": ["RSI: 65", "Volume: 1.2M", "Funding: 0.01%"],
-    "catalyst": "What will trigger the move and WHEN",
-    "timeframe": "Expected duration (e.g., '2-5 days')"
+    "keyMetrics": ["Metric 1: value", "Metric 2: value", "Metric 3: value"],
+    "catalyst": "What will trigger the move and WHEN (be specific)",
+    "timeframe": "Expected duration (e.g., '2-5 days', '1-2 weeks')"
 }
 
 Respond ONLY with valid JSON. No markdown or extra prose.`;
@@ -242,13 +284,15 @@ Respond ONLY with valid JSON. No markdown or extra prose.`;
 /**
  * Build the risk council prompt for Stage 5
  * Used by: CollaborativeFlow.ts → runRiskCouncil()
+ * 
+ * Includes unrealized PnL from open positions
  */
 export function buildRiskCouncilPrompt(
     profile: AnalystAgent,
     champion: PromptAnalysisResult,
     marketData: ExtendedMarketData,
     accountBalance: number,
-    currentPositions: Array<{ symbol: string; side: string; size: number }>,
+    currentPositions: Array<{ symbol: string; side: string; size: number; entryPrice?: number; unrealizedPnl?: number }>,
     recentPnL: { day: number; week: number }
 ): string {
     // Validate required fields
@@ -258,7 +302,6 @@ export function buildRiskCouncilPrompt(
     validateRequired(marketData.symbol, 'marketData.symbol');
 
     const name = sanitizeString(profile.name, 100);
-    const title = sanitizeString(profile.title, 200);
     const championName = sanitizeString(champion.analystName, 100);
     const thesis = sanitizeString(champion.thesis, 500);
 
@@ -291,6 +334,20 @@ export function buildRiskCouncilPrompt(
         ? `WARNING: ${sameDirectionPositions.length} existing ${direction} position(s): ${sameDirectionPositions.map(p => p.symbol).join(', ')}`
         : 'OK - No correlation with existing positions';
 
+    // Calculate total unrealized PnL from open positions
+    let unrealizedPnLSection = '';
+    const positionsWithPnL = currentPositions.filter(p => p.unrealizedPnl !== undefined && Number.isFinite(p.unrealizedPnl));
+    if (positionsWithPnL.length > 0) {
+        const totalUnrealizedPnL = positionsWithPnL.reduce((sum, p) => sum + (p.unrealizedPnl || 0), 0);
+        const unrealizedPercent = accountBalance > 0 ? (totalUnrealizedPnL / accountBalance) * 100 : 0;
+        unrealizedPnLSection = `- Unrealized P&L: ${safeNumber(totalUnrealizedPnL, 2)} USDT (${safePercent(unrealizedPercent, 2, true)})`;
+
+        // Add warning if unrealized loss is significant
+        if (unrealizedPercent < -5) {
+            unrealizedPnLSection += `\n  ⚠️ WARNING: Significant unrealized loss - consider reducing new position size`;
+        }
+    }
+
     // Funding rate analysis with safety checks
     const fundingRate = marketData.fundingRate ?? 0;
     const fundingAgainstUs = marketData.fundingRate !== undefined && Number.isFinite(marketData.fundingRate) && (
@@ -305,9 +362,26 @@ export function buildRiskCouncilPrompt(
 
     const priceTargets = formatPriceTargets(champion.priceTarget);
 
-    return `You are ${name}, ${title} - THE RISK MANAGER.
+    // GET THE FULL SYSTEM PROMPT FOR KAREN (RISK MANAGER)
+    // This is the 800+ line detailed risk management methodology
+    // Validates that the methodology exists and throws clear error if not
+    const fullSystemPrompt = getSystemPrompt(profile.methodology, THESIS_SYSTEM_PROMPTS);
 
-You have VETO POWER over all trades. Your job is to PROTECT THE PORTFOLIO.
+    return `${fullSystemPrompt}
+
+═══════════════════════════════════════════════════════════════════════════════
+COLLABORATIVE FLOW - STAGE 5: RISK COUNCIL REVIEW
+═══════════════════════════════════════════════════════════════════════════════
+
+You are ${name} - THE RISK MANAGER with VETO POWER over all trades.
+
+This is Stage 5 of the Hypothesis Arena collaborative pipeline:
+- Stage 2 (Coin Selection): Ray, Jim, Quant selected ${displaySymbol}
+- Stage 3 (Specialist Analysis): 3 specialists analyzed the opportunity
+- Stage 4 (Tournament): ${championName} won the championship debate
+- Stage 5 (YOU ARE HERE): You review the winning thesis and APPROVE or VETO
+
+Your job is to PROTECT THE PORTFOLIO using your full risk management methodology above.
 
 PROPOSED TRADE:
 - Symbol: ${displaySymbol}/USDT
@@ -325,7 +399,7 @@ TRADE PARAMETERS:
 ACCOUNT STATE:
 - Balance: ${safeNumber(accountBalance, 2)}
 - Current Positions: ${currentPositions.length > 0 ? currentPositions.map(p => `${p.symbol} ${p.side}`).join(', ') : 'None'}
-- 24h P&L: ${safePercent(recentPnL.day, 2, true)}
+${unrealizedPnLSection ? unrealizedPnLSection + '\n' : ''}- 24h P&L: ${safePercent(recentPnL.day, 2, true)}
 - 7d P&L: ${safePercent(recentPnL.week, 2, true)}
 
 MARKET CONDITIONS:
@@ -428,22 +502,34 @@ Current Price: ${priceStr}
 ${volumeStr}
 
 DEBATE INSTRUCTIONS
-Generate a 4-turn debate (2 turns each, alternating). Each turn should:
-1. Reference SPECIFIC data points and metrics
-2. Counter the opponent's previous argument
-3. Stay true to the analyst's methodology
-4. Be 80-120 words per turn
+Generate an 8-turn debate (4 turns each, alternating). This is a DEEP, SUBSTANTIVE debate between elite analysts.
+
+TURN STRUCTURE:
+- Turns 1-2: Opening statements with full thesis and key data
+- Turns 3-4: Risk cases, invalidation triggers, and bear/bull scenarios
+- Turns 5-8: Deep dive into contentious points - attack opponent's assumptions with data
+- Turns 9-10: Address opponent's strongest arguments with counter-evidence
+- Turns 11-12: Closing arguments summarizing why your thesis wins
+
+Each turn should:
+1. Reference SPECIFIC data points and metrics (cite numbers, not vague claims)
+2. Directly counter the opponent's previous argument (engage, don't ignore)
+3. Stay true to the analyst's methodology and personality
+4. Be 120-180 words per turn (substantive, not superficial)
 
 Turn Requirements (crypto-specific):
-- Include at least ONE on-chain metric (e.g., TVL, MVRV, active addresses) AND ONE microstructure metric (e.g., funding rate, OI, liquidations, volume profile).
-- If leverage is mentioned, quantify liquidation math and adverse-move scenarios.
-- Tie arguments to specific catalysts and timing when applicable.
+- Include at least ONE on-chain metric (e.g., TVL, MVRV, active addresses, realized cap) AND ONE microstructure metric (e.g., funding rate, OI, liquidations, volume profile, basis).
+- If leverage is mentioned, quantify liquidation math and adverse-move scenarios with specific numbers.
+- Tie arguments to specific catalysts with probability estimates and timing.
+- Challenge opponent's assumptions with data, not just assertions.
+- Acknowledge strong counter-arguments before refuting them.
 
 Judging Pitfalls to Avoid:
 - Price-only arguments without supporting metrics.
 - Ignoring funding/OI crowding risk or regime (trend vs chop).
 - Timeframe mismatch (targets/catalysts not aligned to debate horizon).
 - Methodology drift or contradiction; missing invalidation/risks.
+- Talking past opponent instead of engaging their points.
 
 Score each analyst on (from prompts judging criteria):
 - Data Quality (0-100): How well they use specific numbers and metrics
@@ -454,10 +540,18 @@ Score each analyst on (from prompts judging criteria):
 Respond in JSON format:
 {
     "turns": [
-        {"speaker": "bull", "analystName": "${bullName}", "argument": "Opening argument with data", "strength": 1-10, "dataPointsReferenced": ["metric1", "metric2"]},
-        {"speaker": "bear", "analystName": "${bearName}", "argument": "Rebuttal with counter-data", "strength": 1-10, "dataPointsReferenced": ["metric1"]},
-        {"speaker": "bull", "analystName": "${bullName}", "argument": "Counter-argument", "strength": 1-10, "dataPointsReferenced": ["metric1"]},
-        {"speaker": "bear", "analystName": "${bearName}", "argument": "Final point", "strength": 1-10, "dataPointsReferenced": ["metric1"]}
+        {"speaker": "bull", "analystName": "${bullName}", "argument": "Opening statement with thesis and data", "strength": 1-10, "dataPointsReferenced": ["metric1", "metric2", "metric3"]},
+        {"speaker": "bear", "analystName": "${bearName}", "argument": "Opening counter-thesis with data", "strength": 1-10, "dataPointsReferenced": ["metric1", "metric2"]},
+        {"speaker": "bull", "analystName": "${bullName}", "argument": "Risk case and invalidation triggers", "strength": 1-10, "dataPointsReferenced": ["metric1"]},
+        {"speaker": "bear", "analystName": "${bearName}", "argument": "Risk case and thesis defense", "strength": 1-10, "dataPointsReferenced": ["metric1"]},
+        {"speaker": "bull", "analystName": "${bullName}", "argument": "Attack bear's key assumption with data", "strength": 1-10, "dataPointsReferenced": ["metric1", "metric2"]},
+        {"speaker": "bear", "analystName": "${bearName}", "argument": "Defend assumption and counter-attack", "strength": 1-10, "dataPointsReferenced": ["metric1", "metric2"]},
+        {"speaker": "bull", "analystName": "${bullName}", "argument": "Deep dive into contentious metric", "strength": 1-10, "dataPointsReferenced": ["metric1"]},
+        {"speaker": "bear", "analystName": "${bearName}", "argument": "Challenge bull's interpretation with data", "strength": 1-10, "dataPointsReferenced": ["metric1"]},
+        {"speaker": "bull", "analystName": "${bullName}", "argument": "Address bear's strongest point", "strength": 1-10, "dataPointsReferenced": ["metric1"]},
+        {"speaker": "bear", "analystName": "${bearName}", "argument": "Address bull's strongest point", "strength": 1-10, "dataPointsReferenced": ["metric1"]},
+        {"speaker": "bull", "analystName": "${bullName}", "argument": "Closing argument - why thesis wins", "strength": 1-10, "dataPointsReferenced": ["metric1", "metric2"]},
+        {"speaker": "bear", "analystName": "${bearName}", "argument": "Closing argument - why thesis wins", "strength": 1-10, "dataPointsReferenced": ["metric1", "metric2"]}
     ],
     "winner": "bull" | "bear" | "draw",
     "scores": {
@@ -491,6 +585,11 @@ export function buildSingleJudgeFallbackPrompt(
         throw new Error('specialists array must be non-empty');
     }
 
+    // GET KAREN'S (RISK MANAGER) FULL SYSTEM PROMPT
+    // She's the one judging when tournament debates fail
+    // Validates that the methodology exists and throws clear error if not
+    const karenPrompt = getSystemPrompt('risk', THESIS_SYSTEM_PROMPTS);
+
     const analystSummaries = specialists.map((s, i) => {
         const name = sanitizeString(s.analystName, 100);
         const title = sanitizeString(s.analystTitle, 200);
@@ -516,9 +615,18 @@ ANALYST ${i + 1}: ${name} (${title})
         ? `- Funding Rate: ${safeNumber(marketData.fundingRate * 100, 4)}%`
         : '';
 
-    return `You are a hedge fund CIO making a FINAL DECISION on ${displaySymbol}/USDT.
+    return `${karenPrompt}
+
+═══════════════════════════════════════════════════════════════════════════════
+COLLABORATIVE FLOW - STAGE 4: SINGLE-JUDGE FALLBACK (Tournament Failed)
+═══════════════════════════════════════════════════════════════════════════════
+
+The tournament debates failed, so YOU (Karen, Risk Manager) must make the FINAL DECISION.
+
+Apply your FULL RISK MANAGEMENT METHODOLOGY from above to select the SINGLE BEST thesis.
 
 MARKET CONTEXT:
+- Symbol: ${displaySymbol}/USDT
 - Current Price: ${safePrice(marketData.currentPrice)}
 - 24h Change: ${safePercent(marketData.change24h, 2, true)}
 ${fundingStr}
@@ -529,21 +637,29 @@ ${analystSummaries}
 JUDGING CRITERIA (score each 0-25):
 1. DATA QUALITY: Uses specific numbers, not vague claims
 2. LOGIC: Reasoning follows from data
-3. RISK AWARENESS: Acknowledges what could go wrong
+3. RISK AWARENESS: Acknowledges what could go wrong (YOUR PRIMARY STRENGTH)
 4. CATALYST: Clear price driver with timeline
 
 Select the SINGLE BEST thesis. The winner's recommendation will be EXECUTED as a real trade.
 
+Apply YOUR RISK MANAGEMENT FRAMEWORK:
+- Evaluate liquidation risk at proposed leverage
+- Calculate funding rate drag
+- Assess downside scenarios and tail risks
+- Check position sizing against portfolio limits
+- Verify stop loss distances are acceptable
+- Consider volatility regime and market conditions
+
 Crypto-Specific Reminders:
-- Prefer on-chain metrics (TVL, MVRV, active addresses, exchange flows) and microstructure (funding, OI, liquidations, basis).
-- If leverage is proposed, include liquidation math and funding drag/carry implications.
-- Strong catalysts are near-term (7–14 days) with probability and expected impact.
-- Penalize vague statements; reward quantified, time-bound, risk-aware theses.
+- Prefer on-chain metrics (TVL, MVRV, active addresses, exchange flows) and microstructure (funding, OI, liquidations, basis)
+- If leverage is proposed, include liquidation math and funding drag/carry implications
+- Strong catalysts are near-term (7–14 days) with probability and expected impact
+- Penalize vague statements; reward quantified, time-bound, risk-aware theses
 
 Respond with JSON:
 {
     "winner": "${specialists[0].analystId}" (analyst ID of winner - must be one of: ${analystIds}),
-    "reasoning": "Why this thesis is strongest",
+    "reasoning": "Why this thesis is strongest from a RISK-ADJUSTED perspective",
     "scores": {
         "${specialists[0].analystId}": { "data": 0-25, "logic": 0-25, "risk": 0-25, "catalyst": 0-25, "total": 0-100 }
         // ... scores for each analyst
@@ -600,6 +716,11 @@ export function buildTournamentDebatePrompt(
     validateRequired(analystB.analystId, 'analystB.analystId');
     validateRequired(analystB.analystName, 'analystB.analystName');
 
+    // GET KAREN'S (RISK MANAGER) FULL SYSTEM PROMPT
+    // She's the one judging the tournament debates
+    // Validates that the methodology exists and throws clear error if not
+    const karenPrompt = getSystemPrompt('risk', THESIS_SYSTEM_PROMPTS);
+
     // Sanitize analyst A data
     const nameA = sanitizeString(analystA.analystName, 100);
     const titleA = sanitizeString(analystA.analystTitle, 200);
@@ -625,17 +746,22 @@ export function buildTournamentDebatePrompt(
         ? `- Funding Rate: ${safeNumber(marketData.fundingRate * 100, 4)}%`
         : '';
 
-    return `You are a hedge fund CIO judging a ${roundLabel} debate about ${displaySymbol}/USDT.
+    return `${karenPrompt}
 
+═══════════════════════════════════════════════════════════════════════════════
+COLLABORATIVE FLOW - STAGE 4: TOURNAMENT JUDGING (${roundLabel})
+═══════════════════════════════════════════════════════════════════════════════
 
-    ${roundLabel}: ${nameA} vs ${nameB}
+You are Karen, the Risk Manager, judging a ${roundLabel} debate about ${displaySymbol}/USDT.
 
+Apply your FULL RISK MANAGEMENT METHODOLOGY from above to judge this debate.
+
+${roundLabel}: ${nameA} vs ${nameB}
 
 MARKET CONTEXT:
 - Current Price: ${priceStr}
 - 24h Change: ${changeStr}
 ${fundingStr}
-
 
 ANALYST A: ${nameA} ${analystA.analystEmoji} (${titleA})
 
@@ -658,7 +784,6 @@ PRICE TARGETS:
 
 CATALYST: ${catalystA}
 
-
 ANALYST B: ${nameB} ${analystB.analystEmoji} (${titleB})
 
 Recommendation: ${analystB.recommendation.toUpperCase().replace('_', ' ')}
@@ -680,7 +805,6 @@ PRICE TARGETS:
 
 CATALYST: ${catalystB}
 
-
 JUDGING CRITERIA (from FLOW.md)
 
 Score each analyst on these criteria (0-25 points each):
@@ -698,17 +822,26 @@ Score each analyst on these criteria (0-25 points each):
 3. RISK AWARENESS (25%):
    - Acknowledges what could go wrong
    - Has realistic bear case
-   - Stop loss is reasonable
+   - Stop loss is reasonable (≤10% from entry)
+   - Considers liquidation risk and funding drag
 
 4. CATALYST (25%):
    - Clear price driver identified
-   - Timeline specified
+   - Timeline specified (prefer 7-14 days)
    - Expected impact quantified
 
+Apply YOUR RISK MANAGEMENT FRAMEWORK:
+- Evaluate liquidation risk at proposed leverage
+- Calculate funding rate drag
+- Assess downside scenarios and tail risks
+- Check position sizing against portfolio limits
+- Verify stop loss distances are acceptable
+- Consider volatility regime and market conditions
+
 Crypto-Specific Reminders:
-- Prefer on-chain metrics (TVL, MVRV, active addresses, exchange flows) and microstructure (funding, OI, liquidations).
-- If leverage is discussed, include liquidation math and funding drag/carry.
-- Near-term catalysts (7–14 days) with probability and impact are stronger.
+- Prefer on-chain metrics (TVL, MVRV, active addresses, exchange flows) and microstructure (funding, OI, liquidations)
+- If leverage is discussed, include liquidation math and funding drag/carry
+- Near-term catalysts (7–14 days) with probability and impact are stronger
 
 The winner's thesis will be EXECUTED as a real trade. Choose wisely.
 
@@ -716,6 +849,7 @@ Respond with JSON containing:
 - winner: The analyst ID who won ("${analystA.analystId}" or "${analystB.analystId}")
 - winnerScore: Scores for the winner { data, logic, risk, catalyst, total }
 - loserScore: Scores for the loser { data, logic, risk, catalyst, total }
-- reasoning: Why the winner won
+- reasoning: Why the winner won from a RISK-ADJUSTED perspective
 - keyDifferentiator: The single most important factor`;
 }
+

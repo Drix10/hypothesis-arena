@@ -137,41 +137,46 @@ export class TradingScheduler {
      * - Zero or negative baseIntervalMs
      * - NaN or Infinity values
      * - Bounds checking on result
+     * - Unknown activity levels default to 1.0 multiplier
      * 
      * @param baseIntervalMs - Base cycle interval (e.g., 5 minutes)
-     * @returns Adjusted interval in milliseconds (always >= 1000ms)
+     * @returns Adjusted interval in milliseconds (always >= 1000ms, <= 3600000ms)
      */
     getDynamicCycleInterval(baseIntervalMs: number): number {
         // Validate input
         if (!Number.isFinite(baseIntervalMs) || baseIntervalMs <= 0) {
-            logger.warn(`Invalid baseIntervalMs: ${baseIntervalMs}, using default 300000`);
-            baseIntervalMs = 300000; // 5 minutes default
+            logger.warn(`Invalid baseIntervalMs: ${baseIntervalMs}, using default 600000`);
+            baseIntervalMs = 600000; // 10 minutes default
         }
 
         const activity = this.getCurrentMarketActivity();
 
         // Adjust cycle frequency based on market activity
+        // Using explicit type guard to ensure all cases are handled
         let multiplier: number;
-        switch (activity.activityLevel) {
-            case 'peak':
-                multiplier = 0.5; // 2x faster (2.5 min)
-                break;
-            case 'high':
-                multiplier = 0.75; // 1.33x faster (3.75 min)
-                break;
-            case 'medium':
-                multiplier = 1.0; // Normal speed (5 min)
-                break;
-            case 'low':
-                multiplier = 2.0; // 2x slower (10 min)
-                break;
-            default:
-                multiplier = 1.0;
+        const level = activity.activityLevel;
+        if (level === 'peak') {
+            multiplier = 0.5; // 2x faster (2.5 min)
+        } else if (level === 'high') {
+            multiplier = 0.75; // 1.33x faster (3.75 min)
+        } else if (level === 'medium') {
+            multiplier = 1.0; // Normal speed (5 min)
+        } else if (level === 'low') {
+            multiplier = 2.0; // 2x slower (10 min)
+        } else {
+            // Exhaustive check - should never reach here with current types
+            logger.warn(`Unknown activity level: ${level}, using default multiplier`);
+            multiplier = 1.0;
         }
 
         const result = baseIntervalMs * multiplier;
 
-        // Ensure result is valid and has minimum of 1 second
+        // Ensure result is valid and within bounds
+        if (!Number.isFinite(result)) {
+            logger.warn(`Invalid cycle interval calculated: ${result}, using base interval`);
+            return Math.max(1000, Math.min(3600000, baseIntervalMs));
+        }
+
         return Math.max(1000, Math.min(3600000, result)); // Min 1s, Max 1 hour
     }
 

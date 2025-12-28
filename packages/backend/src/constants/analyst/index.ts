@@ -22,12 +22,9 @@ export { COIN_SELECTION_SCORING, COIN_TYPE_SPECIALISTS } from './coinSelection';
 // Prompts
 export {
     THESIS_SYSTEM_PROMPTS,
-    buildCoinSelectionPrompt,
     buildSpecialistPrompt,
     buildRiskCouncilPrompt,
-    buildDebatePrompt,
-    buildSingleJudgeFallbackPrompt,
-    buildTournamentDebatePrompt
+    buildDebatePrompt
 } from '../prompts';
 
 // Utilities

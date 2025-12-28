@@ -150,6 +150,15 @@ const shutdown = async (signal: string) => {
         logger.warn('Error stopping autonomous engine:', error);
     }
 
+    // Stop SSE token cleanup interval
+    try {
+        const { stopTokenCleanup } = await import('./api/middleware/auth');
+        stopTokenCleanup();
+        logger.info('SSE token cleanup stopped');
+    } catch (error) {
+        logger.warn('Error stopping SSE token cleanup:', error);
+    }
+
     // Close WebSocket connections
     wsManager.closeAll();
     wss.close();

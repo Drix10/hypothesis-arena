@@ -4,6 +4,52 @@
  * Utility functions for safe prompt building with proper validation and formatting.
  */
 
+import type { AnalystMethodology } from '../analyst/types';
+
+/**
+ * Safely get a system prompt for an analyst methodology
+ * Validates that the methodology exists and returns a valid prompt
+ * 
+ * @param methodology - The analyst methodology to get the prompt for
+ * @param promptsMap - Map of methodologies to system prompts
+ * @returns The system prompt string
+ * @throws Error if methodology is invalid or prompt is not found
+ */
+export function getSystemPrompt(
+    methodology: string | undefined,
+    promptsMap: Record<AnalystMethodology, string>
+): string {
+    // Validate methodology is provided
+    if (!methodology || typeof methodology !== 'string') {
+        throw new Error(
+            `Invalid methodology: ${methodology}. ` +
+            `Must be a non-empty string. ` +
+            `Valid methodologies: ${Object.keys(promptsMap).join(', ')}`
+        );
+    }
+
+    // Check if methodology exists in the map
+    if (!Object.prototype.hasOwnProperty.call(promptsMap, methodology)) {
+        throw new Error(
+            `Unknown methodology: "${methodology}". ` +
+            `Valid methodologies: ${Object.keys(promptsMap).join(', ')}`
+        );
+    }
+
+    // Get the prompt (TypeScript now knows it exists)
+    const prompt = promptsMap[methodology as AnalystMethodology];
+
+    // Final safety check - ensure prompt is not undefined/empty
+    if (!prompt || typeof prompt !== 'string' || prompt.trim().length === 0) {
+        throw new Error(
+            `System prompt for methodology "${methodology}" is empty or invalid. ` +
+            `This indicates a configuration error in THESIS_SYSTEM_PROMPTS.`
+        );
+    }
+
+    return prompt;
+}
+
 /**
  * Safely format a number for display in prompts
  * Handles NaN, Infinity, and undefined values
@@ -114,16 +160,38 @@ export function validateNumber(value: number | undefined | null, fieldName: stri
  * - Null values are treated the same as undefined
  * - Non-object values in the path return fallback
  * - Missing keys return fallback
+ * - Empty path returns the object itself (or fallback if null/undefined)
+ * - Array indices are supported (e.g., "items.0.name")
  */
 export function safeGet<T>(obj: any, path: string, fallback: T): T {
+    // Handle empty path - return obj if valid, fallback otherwise
+    if (!path || path.length === 0) {
+        return obj != null ? obj : fallback;
+    }
+
     const keys = path.split('.');
     let current = obj;
 
     for (const key of keys) {
-        if (current == null || typeof current !== 'object') {
+        // Check if current is null/undefined or not an object/array
+        if (current == null || (typeof current !== 'object' && !Array.isArray(current))) {
             return fallback;
         }
-        current = current[key];
+
+        // Handle array index access
+        if (Array.isArray(current)) {
+            const index = parseInt(key, 10);
+            if (!Number.isFinite(index) || index < 0 || index >= current.length) {
+                return fallback;
+            }
+            current = current[index];
+        } else {
+            // Object property access
+            if (!Object.prototype.hasOwnProperty.call(current, key)) {
+                return fallback;
+            }
+            current = current[key];
+        }
     }
 
     // Return fallback if final value is null or undefined

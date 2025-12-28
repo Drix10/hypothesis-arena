@@ -3,14 +3,14 @@
   
   # ⚔️ Hypothesis Arena
   
-  **AI-Powered Crypto Trading Platform for WEEX Exchange**
+  **AI-Powered Collaborative Crypto Trading Platform for WEEX Exchange**
   
-  *8 AI analysts debate crypto positions in tournament-style battles, then execute trades on WEEX futures*
+  *8 AI analysts collaborate through turn-by-turn debates on ONE shared portfolio, then execute trades on WEEX futures*
   
   [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-blue?logo=typescript)](https://www.typescriptlang.org/)
   [![React](https://img.shields.io/badge/React-19-61dafb?logo=react)](https://react.dev/)
   [![Express](https://img.shields.io/badge/Express-5-000000?logo=express)](https://expressjs.com/)
-  [![Gemini](https://img.shields.io/badge/Gemini-2.0-4285F4?logo=google)](https://ai.google.dev/)
+  [![Gemini](https://img.shields.io/badge/Gemini-2.5_Flash-4285F4?logo=google)](https://ai.google.dev/)
   [![WEEX](https://img.shields.io/badge/WEEX-Futures-00D4AA)](https://www.weex.com/)
   
   **🏆 WEEX Hackathon 2025 Submission**
@@ -21,19 +21,55 @@
 
 ## 🎯 What is Hypothesis Arena?
 
-Hypothesis Arena is an AI-powered crypto trading platform that combines **tournament-style AI debates** with **live futures trading** on WEEX Exchange. Watch 8 specialized AI analysts battle it out over crypto positions, then execute winning strategies automatically.
+Hypothesis Arena is an AI-powered crypto trading platform where **8 specialized AI analysts collaborate through turn-by-turn debates** to make trading decisions on a **single shared portfolio**. The winning thesis from each debate cycle gets executed automatically on WEEX Exchange.
 
-### Core Features
+### Core Philosophy
 
-- **8 AI Analysts** - Each with unique trading methodologies (Value, Growth, Technical, Macro, Sentiment, Risk, Quant, Contrarian)
-- **Tournament Debates** - Quarterfinals → Semifinals → Championship battles
-- **Live WEEX Trading** - Execute futures trades directly on WEEX Exchange
-- **Real-Time Data** - Live prices, order books, and positions via WEEX API
-- **Cinematic UI** - Glass morphism design with dramatic visual effects
+> **Every decision is a debate. Every debate has a winner. Winners trade.**
+
+### Key Features
+
+- **8 AI Analysts** - Each with 800+ line methodology prompts (Value, Growth, Technical, Macro, Sentiment, Risk, Quant, Contrarian)
+- **Turn-by-Turn Debates** - 60 debate turns per cycle across 4 debate stages
+- **Collaborative Portfolio** - All analysts share ONE portfolio (not 8 separate ones)
+- **Live WEEX Trading** - Execute futures trades with TP/SL directly on WEEX Exchange
+- **3-Tier Circuit Breakers** - Yellow/Orange/Red alerts based on BTC drops, funding rates, and drawdowns
+- **Risk Council Veto** - Karen (Risk Manager) has final approval/veto power on all trades
 
 ---
 
-## 🏗️ Architecture
+## 🏗️ System Architecture
+
+### The 8-Stage Decision Pipeline
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                   THE 8-STAGE DECISION PIPELINE                  │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│   STAGE 1: MARKET SCAN          "What's happening?"             │
+│      ↓ (WeexClient.ts)          Fetch data for 8 coins          │
+│   STAGE 2: COIN SELECTION       "Which coin to trade?"          │
+│      ↓ (CollaborativeFlow.ts)   4-way debate, 12 turns          │
+│   STAGE 3: ANALYSIS APPROACH    "How to analyze it?"            │
+│      ↓ (CollaborativeFlow.ts)   4-way debate, 12 turns          │
+│   STAGE 4: RISK ASSESSMENT      "Position size & risk?"         │
+│      ↓ (CollaborativeFlow.ts)   4-way debate, 12 turns          │
+│   STAGE 5: CHAMPIONSHIP         "Best thesis wins"              │
+│      ↓ (CollaborativeFlow.ts)   8-way debate, 24 turns          │
+│   STAGE 6: RISK COUNCIL         "Final safety check"            │
+│      ↓ (CollaborativeFlow.ts)   Karen's veto power              │
+│   STAGE 7: EXECUTION            "Pull the trigger"              │
+│      ↓ (AutonomousTradingEngine.ts)                             │
+│   STAGE 8: POSITION MANAGEMENT  "Monitor until exit"            │
+│      (AutonomousTradingEngine.ts)                               │
+│                                                                  │
+│   TOTAL: 60 debate turns per cycle | ~63 Gemini API calls       │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Project Structure
 
 ```
 hypothesis-arena/
@@ -42,6 +78,7 @@ hypothesis-arena/
 │   ├── backend/           # Express 5 + PostgreSQL + Redis
 │   └── shared/            # Shared types and utilities
 ├── docs/                  # WEEX API documentation
+├── FLOW.md               # Detailed system architecture docs
 └── docker-compose.yml     # Production deployment
 ```
 
@@ -51,7 +88,7 @@ hypothesis-arena/
 | -------- | --------------------------------------------------------- |
 | Frontend | React 19, Vite, TailwindCSS, Framer Motion                |
 | Backend  | Express 5, TypeScript, PostgreSQL (Neon), Redis (Upstash) |
-| AI       | Google Gemini 2.0 Flash                                   |
+| AI       | Google Gemini 2.5 Flash                                   |
 | Exchange | WEEX Futures API                                          |
 | Auth     | JWT with refresh tokens                                   |
 
@@ -118,16 +155,56 @@ NODE_ENV=development
 
 ## 🤖 The 8 AI Analysts
 
-| Analyst                 | Methodology        | Focus                                     | Trading Style           |
-| ----------------------- | ------------------ | ----------------------------------------- | ----------------------- |
-| 🎩 **Warren**           | Value Investing    | Fundamentals, moats, margin of safety     | Conservative, long-term |
-| 🚀 **Cathie**           | Growth Investing   | TAM expansion, disruption, innovation     | Aggressive growth       |
-| 📊 **Jim**              | Technical Analysis | RSI, MACD, chart patterns, momentum       | Swing trading           |
-| 🌍 **Ray**              | Macro Strategy     | Interest rates, cycles, correlations      | Sector rotation         |
-| 📱 **Elon**             | Sentiment Analysis | Social sentiment, news flow, hype         | Trend following         |
-| 🛡️ **Karen**            | Risk Management    | Volatility, drawdown, downside protection | Defensive               |
-| 🤖 **Quant**            | Quantitative       | Factor models, statistics, mean reversion | Data-driven             |
-| 😈 **Devil's Advocate** | Contrarian         | Consensus challenges, crowded trades      | Counter-trend           |
+| Analyst   | ID     | Methodology        | Focus                          | Debate Role                     |
+| --------- | ------ | ------------------ | ------------------------------ | ------------------------------- |
+| 🎩 Warren | warren | Value Investing    | Fundamentals, margin of safety | Stage 3 & 4, Championship       |
+| 🚀 Cathie | cathie | Growth Investing   | TAM expansion, disruption      | Stage 3, Championship           |
+| 📊 Jim    | jim    | Technical Analysis | RSI, MACD, chart patterns      | Stage 2, 3, Championship        |
+| 🌍 Ray    | ray    | Macro Strategy     | Interest rates, correlations   | Stage 2, 4, Championship        |
+| 📱 Elon   | elon   | Sentiment Analysis | Social sentiment, hype         | Stage 2, Championship           |
+| 🛡️ Karen  | karen  | Risk Management    | Volatility, drawdown, vetoes   | Stage 4, 6 (Veto), Championship |
+| 🤖 Quant  | quant  | Quantitative       | Factor models, statistics      | Stage 2, 3, Championship        |
+| 😈 Devil  | devil  | Contrarian         | Consensus challenges           | Stage 4, Championship           |
+
+### Debate Participation by Stage
+
+- **Stage 2 (Coin Selection):** Ray, Jim, Quant, Elon (4 analysts, 12 turns)
+- **Stage 3 (Analysis Approach):** Warren, Cathie, Jim, Quant (4 analysts, 12 turns)
+- **Stage 4 (Risk Assessment):** Karen, Warren, Devil, Ray (4 analysts, 12 turns)
+- **Stage 5 (Championship):** ALL 8 analysts (24 turns)
+- **Stage 6 (Risk Council):** Karen only (final veto power)
+
+---
+
+## 🛡️ Risk Management
+
+### Global Risk Limits
+
+| Parameter                | Limit |
+| ------------------------ | ----- |
+| Max Leverage             | 5x    |
+| Max Position Size        | 30%   |
+| Max Stop Loss Distance   | 10%   |
+| Drawdown Liquidation     | 50%   |
+| Max Concurrent Positions | 3     |
+
+### 3-Tier Circuit Breakers
+
+| Alert     | BTC Drop (4h) | Portfolio Drawdown (24h) | Funding Rate | Action                |
+| --------- | ------------- | ------------------------ | ------------ | --------------------- |
+| 🟡 Yellow | -10%          | -5%                      | ±0.03%       | Reduce leverage to 3x |
+| 🟠 Orange | -15%          | -10%                     | ±0.05%       | Reduce leverage to 2x |
+| 🔴 Red    | -20%          | -15%                     | -            | Close ALL positions   |
+
+### Risk Council Veto Triggers
+
+Karen will automatically VETO trades if:
+
+- Stop loss >10% from entry
+- Position would exceed 30% of account
+- Already have 3+ positions open
+- 7-day drawdown >10%
+- Funding rate >0.05% against position direction
 
 ---
 
@@ -135,32 +212,34 @@ NODE_ENV=development
 
 WEEX-approved futures contracts:
 
-- `cmt_btcusdt` - Bitcoin
-- `cmt_ethusdt` - Ethereum
-- `cmt_solusdt` - Solana
-- `cmt_dogeusdt` - Dogecoin
-- `cmt_xrpusdt` - XRP
-- `cmt_adausdt` - Cardano
-- `cmt_bnbusdt` - BNB
-- `cmt_ltcusdt` - Litecoin
+| Symbol         | Asset    |
+| -------------- | -------- |
+| `cmt_btcusdt`  | Bitcoin  |
+| `cmt_ethusdt`  | Ethereum |
+| `cmt_solusdt`  | Solana   |
+| `cmt_dogeusdt` | Dogecoin |
+| `cmt_xrpusdt`  | XRP      |
+| `cmt_adausdt`  | Cardano  |
+| `cmt_bnbusdt`  | BNB      |
+| `cmt_ltcusdt`  | Litecoin |
 
 ---
 
 ## ✨ Features
 
-### 🏆 AI Battle Arena
+### 🏆 Turn-by-Turn AI Debates
 
-- **Tournament Format** - 8 analysts compete in bracket-style debates
-- **Scoring System** - Data quality, logic, risk awareness, catalyst identification
-- **Champion Selection** - Winner's thesis drives trading decisions
-- **Winning Arguments** - Key points that decided each battle
+- **60 Turns Per Cycle** - Real debates, not parallel API calls
+- **4-Dimension Scoring** - Data Quality, Logic, Risk Awareness, Catalyst
+- **Methodology-Specific Arguments** - Each analyst uses their full 800+ line prompt
+- **Full Logging** - Every argument logged without truncation
 
-### 📈 Live Trading Dashboard
+### 📈 Autonomous Trading Engine
 
-- **Real-Time Prices** - WebSocket + polling fallback
-- **Order Book Depth** - Live bid/ask visualization
-- **Position Management** - View and manage open positions
-- **Trade Execution** - Long/Short with leverage up to 100x
+- **10-Minute Cycles** - Configurable via environment
+- **Dynamic Scheduling** - Faster during peak market hours (US-Europe overlap)
+- **Exponential Backoff** - On consecutive failures
+- **Dry Run Mode** - Test without executing real trades
 
 ### 🎨 Cinematic UI
 
@@ -196,28 +275,31 @@ npm run build -w @hypothesis-arena/backend
 
 ---
 
-## 📁 Project Structure
+## 📁 Backend Structure
 
 ```
-packages/
-├── frontend/src/
-│   ├── components/
-│   │   ├── arena/        # AI analysis & debate components
-│   │   ├── trading/      # Order book, positions, trading panel
-│   │   ├── layout/       # Header, sidebar, main arena
-│   │   └── ui/           # Reusable UI components
-│   └── services/api/     # WEEX API, WebSocket, auth client
-│
-├── backend/src/
-│   ├── api/routes/       # REST endpoints
-│   ├── services/
-│   │   ├── ai/           # Gemini integration
-│   │   ├── trading/      # Trade execution
-│   │   └── weex/         # WEEX API client
-│   └── db/               # PostgreSQL models & migrations
-│
-└── shared/src/
-    └── types/            # Shared TypeScript interfaces
+packages/backend/src/
+├── api/routes/              # REST endpoints
+├── config/                  # Database, Redis, environment
+├── constants/
+│   ├── analyst/             # Analyst profiles, risk limits
+│   └── prompts/             # 800+ line methodology prompts
+│       ├── builders.ts      # Prompt builder functions
+│       ├── debateContexts.ts
+│       ├── debateHelpers.ts
+│       └── promptHelpers.ts
+├── services/
+│   ├── ai/
+│   │   ├── CollaborativeFlow.ts  # Turn-by-turn debate engine
+│   │   └── GeminiService.ts      # Gemini API client
+│   ├── autonomous/
+│   │   ├── AutonomousTradingEngine.ts  # Main orchestration
+│   │   └── TradingScheduler.ts         # Market-aware scheduling
+│   ├── risk/
+│   │   └── CircuitBreakerService.ts    # 3-tier circuit breakers
+│   └── weex/
+│       └── WeexClient.ts               # WEEX API client
+└── utils/                   # Logger, helpers
 ```
 
 ---
@@ -229,6 +311,19 @@ packages/
 - Rate limiting on all endpoints
 - Input validation and sanitization
 - Secure credential storage
+- userId validation on all database queries
+
+---
+
+## 📋 Version History
+
+| Version | Date       | Changes                                                   |
+| ------- | ---------- | --------------------------------------------------------- |
+| 3.1.2   | 2025-12-28 | Input validation, improved type guards, JSON repair fixes |
+| 3.1.1   | 2025-12-28 | Retry logic, backoff, cycle completion fixes              |
+| 3.1.0   | 2025-12-28 | Turn-by-turn debates, 8-stage pipeline                    |
+
+See [FLOW.md](FLOW.md) for detailed architecture documentation.
 
 ---
 
@@ -242,7 +337,7 @@ MIT License - see [LICENSE](LICENSE) for details.
   
   **Built for WEEX Hackathon 2025**
   
-  React 19 • Express 5 • Gemini 2.0 • WEEX Futures API
+  React 19 • Express 5 • Gemini 2.5 Flash • WEEX Futures API
   
   ⭐ Star if you find this useful • 🐛 Report bugs • 💡 Suggest features
   

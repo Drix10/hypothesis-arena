@@ -380,12 +380,11 @@ class GeminiService {
                 throw new Error('GEMINI_API_KEY not configured');
             }
             const genAI = new GoogleGenerativeAI(config.geminiApiKey);
-            // Use Gemini 2.5 Flash with JSON mode for structured outputs
-            // Stable 2.5 Flash model - best price-performance
             this.model = genAI.getGenerativeModel({
-                model: 'gemini-2.5-flash',
+                model: config.ai.model,
                 generationConfig: {
                     responseMimeType: "application/json",
+                    maxOutputTokens: config.ai.maxOutputTokens
                 }
             });
         }
@@ -501,6 +500,35 @@ Respond ONLY with valid JSON matching this exact structure.`;
             ]);
 
             const text = result.response.text();
+
+            // Check finish reason
+            const candidates = result.response.candidates;
+            let finishReason = 'UNKNOWN';
+            if (candidates && candidates.length > 0) {
+                finishReason = candidates[0].finishReason || 'UNKNOWN';
+                if (finishReason !== 'STOP') {
+                    logger.warn(`⚠️ Analysis finish reason: ${finishReason} (expected STOP)`);
+                }
+            }
+
+            // LOG FULL RAW AI RESPONSE with metadata
+            logger.info(`\n${'─'.repeat(60)}`);
+            logger.info(`📡 RAW AI RESPONSE for ${profile.name} Analysis:`);
+            logger.info(`📊 Response length: ${text.length} chars | Finish reason: ${finishReason}`);
+            // Log in chunks to avoid terminal buffer issues
+            const chunkSize = 2000;
+            for (let i = 0; i < text.length; i += chunkSize) {
+                const chunk = text.slice(i, i + chunkSize);
+                const chunkNum = Math.floor(i / chunkSize) + 1;
+                const totalChunks = Math.ceil(text.length / chunkSize);
+                if (totalChunks > 1) {
+                    logger.info(`[Chunk ${chunkNum}/${totalChunks}] ${chunk}`);
+                } else {
+                    logger.info(chunk);
+                }
+            }
+            logger.info(`${'─'.repeat(60)}\n`);
+
             const parsed = JSON.parse(text); // Gemini guarantees valid JSON with schema
 
             return this.parseAnalysisResponse(parsed, profile, methodology, request.currentPrice);
@@ -662,7 +690,7 @@ Respond ONLY with valid JSON matching this exact structure.`;
                 if (isRateLimit && attempt < maxRetries - 1) {
                     // Extract retry delay from error or use exponential backoff
                     const retryMatch = err.message?.match(/retryDelay.*?(\d+)s/);
-                    const retryDelay = retryMatch ? parseInt(retryMatch[1]) * 1000 : (attempt + 1) * 15000;
+                    const retryDelay = retryMatch ? parseInt(retryMatch[1], 10) * 1000 : (attempt + 1) * 15000;
 
                     logger.warn(`Rate limited, waiting ${retryDelay / 1000}s before retry ${attempt + 2}/${maxRetries}`);
                     await new Promise(resolve => setTimeout(resolve, retryDelay));
@@ -710,6 +738,35 @@ Respond ONLY with valid JSON matching this exact structure.`;
             ]);
 
             const text = result.response.text();
+
+            // Check finish reason
+            const candidates = result.response.candidates;
+            let finishReason = 'UNKNOWN';
+            if (candidates && candidates.length > 0) {
+                finishReason = candidates[0].finishReason || 'UNKNOWN';
+                if (finishReason !== 'STOP') {
+                    logger.warn(`⚠️ Debate finish reason: ${finishReason} (expected STOP)`);
+                }
+            }
+
+            // LOG FULL RAW AI RESPONSE with metadata
+            logger.info(`\n${'─'.repeat(60)}`);
+            logger.info(`📡 RAW AI RESPONSE for Debate (${request.round}):`);
+            logger.info(`📊 Response length: ${text.length} chars | Finish reason: ${finishReason}`);
+            // Log in chunks to avoid terminal buffer issues
+            const chunkSize = 2000;
+            for (let i = 0; i < text.length; i += chunkSize) {
+                const chunk = text.slice(i, i + chunkSize);
+                const chunkNum = Math.floor(i / chunkSize) + 1;
+                const totalChunks = Math.ceil(text.length / chunkSize);
+                if (totalChunks > 1) {
+                    logger.info(`[Chunk ${chunkNum}/${totalChunks}] ${chunk}`);
+                } else {
+                    logger.info(chunk);
+                }
+            }
+            logger.info(`${'─'.repeat(60)}\n`);
+
             const parsed = JSON.parse(text); // Gemini guarantees valid JSON with schema
 
             return this.parseDebateResponse(parsed, request);
@@ -729,7 +786,7 @@ Respond ONLY with valid JSON matching this exact structure.`;
         const winner = VALID_WINNERS.includes(parsed.winner) ? parsed.winner : 'draw';
 
         const turns: DebateTurn[] = Array.isArray(parsed.turns)
-            ? parsed.turns.slice(0, 10).map((t: any) => ({
+            ? parsed.turns.slice(0, 12).map((t: any) => ({
                 speaker: t.speaker === 'bull' || t.speaker === 'bear' ? t.speaker : 'bull',
                 analystId: t.speaker === 'bull' ? request.bullAnalysis.analystId : request.bearAnalysis.analystId,
                 analystName: typeof t.analystName === 'string' ? t.analystName.slice(0, 50) : 'Unknown',
@@ -1837,6 +1894,35 @@ Respond ONLY with valid JSON.`;
             ]);
 
             const text = result.response.text();
+
+            // Check finish reason
+            const candidates = result.response.candidates;
+            let finishReason = 'UNKNOWN';
+            if (candidates && candidates.length > 0) {
+                finishReason = candidates[0].finishReason || 'UNKNOWN';
+                if (finishReason !== 'STOP') {
+                    logger.warn(`⚠️ Extended Analysis finish reason: ${finishReason} (expected STOP)`);
+                }
+            }
+
+            // LOG FULL RAW AI RESPONSE with metadata
+            logger.info(`\n${'─'.repeat(60)}`);
+            logger.info(`📡 RAW AI RESPONSE for Extended Analysis (${profile.name}):`);
+            logger.info(`📊 Response length: ${text.length} chars | Finish reason: ${finishReason}`);
+            // Log in chunks to avoid terminal buffer issues
+            const chunkSize = 2000;
+            for (let i = 0; i < text.length; i += chunkSize) {
+                const chunk = text.slice(i, i + chunkSize);
+                const chunkNum = Math.floor(i / chunkSize) + 1;
+                const totalChunks = Math.ceil(text.length / chunkSize);
+                if (totalChunks > 1) {
+                    logger.info(`[Chunk ${chunkNum}/${totalChunks}] ${chunk}`);
+                } else {
+                    logger.info(chunk);
+                }
+            }
+            logger.info(`${'─'.repeat(60)}\n`);
+
             const jsonMatch = text.match(/\{[\s\S]*\}/);
             if (!jsonMatch) throw new Error('No JSON found in response');
 
