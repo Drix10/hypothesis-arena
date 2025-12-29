@@ -6,41 +6,75 @@
  * Used in CollaborativeFlow.ts buildRiskCouncilPrompt()
  */
 
+import { config } from '../../config';
+import { GLOBAL_RISK_LIMITS } from './riskLimits';
+import { logger } from '../../utils/logger';
+import { z } from 'zod';
+
+const AutonomousConfigSchema = z.object({
+    maxPositionSizePercent: z.number().min(1).max(100),
+    stopLossPercent: z.number().min(0.1).max(100),
+    maxLeverage: z.number().min(1).max(GLOBAL_RISK_LIMITS.MAX_SAFE_LEVERAGE),
+    maxConcurrentPositions: z.number().min(1).max(100),
+    weeklyDrawdownLimitPercent: z.number().min(0).max(100),
+    maxFundingAgainstPercent: z.number().min(0).max(100),
+    maxSameDirectionPositions: z.number().min(1).max(100),
+    maxSectorPositions: z.number().min(1).max(100),
+    maxRiskPerTradePercent: z.number().min(0).max(100),
+    maxConcurrentRiskPercent: z.number().min(0).max(100),
+    netExposureLimits: z.object({
+        LONG: z.number().min(0).max(100),
+        SHORT: z.number().min(0).max(100)
+    })
+});
+
+const validated = AutonomousConfigSchema.safeParse(config.autonomous);
+if (!validated.success) {
+    logger.error('Invalid autonomous config', { issues: validated.error.issues });
+}
+
+const safeAuto: z.infer<typeof AutonomousConfigSchema> = validated.success ? validated.data : {
+    maxPositionSizePercent: 10,
+    stopLossPercent: 10,
+    maxLeverage: Math.min(GLOBAL_RISK_LIMITS.MAX_SAFE_LEVERAGE, 5),
+    maxConcurrentPositions: 3,
+    weeklyDrawdownLimitPercent: 10,
+    maxFundingAgainstPercent: 0.05,
+    maxSameDirectionPositions: 2,
+    maxSectorPositions: 3,
+    maxRiskPerTradePercent: 2,
+    maxConcurrentRiskPercent: 5,
+    netExposureLimits: {
+        LONG: 60,
+        SHORT: 50
+    }
+};
+
 export const RISK_COUNCIL_VETO_TRIGGERS = {
-    // Position sizing limits
-    MAX_POSITION_PERCENT: 30,        // Position cannot exceed 30% of account
-    MAX_STOP_LOSS_DISTANCE: 10,      // Stop loss cannot be >10% from entry
-    MAX_LEVERAGE: 5,                 // Never exceed 5x leverage
-    MAX_CONCURRENT_POSITIONS: 3,     // No more than 3 positions open
-
-    // Drawdown limits
-    MAX_WEEKLY_DRAWDOWN: 10,         // If 7d P&L < -10%, no new trades
-
-    // Funding rate limits (absolute value, applies to both positive and negative)
-    MAX_FUNDING_AGAINST: 0.05,       // If |funding rate| >0.05% against position, veto
-
-    // Correlation limits
-    MAX_SAME_DIRECTION_POSITIONS: 2, // Max 2 positions in same direction (long or short)
-
-    // Portfolio heat & net exposure guardrails
-    MAX_RISK_PER_TRADE_PERCENT: 2,   // Risk per trade ≤2% of account
-    MAX_CONCURRENT_RISK_PERCENT: 5,  // Concurrent risk across open trades ≤5%
+    MAX_POSITION_PERCENT: safeAuto.maxPositionSizePercent,
+    MAX_STOP_LOSS_DISTANCE: safeAuto.stopLossPercent,
+    MAX_LEVERAGE: safeAuto.maxLeverage,
+    MAX_CONCURRENT_POSITIONS: safeAuto.maxConcurrentPositions,
+    MAX_WEEKLY_DRAWDOWN: safeAuto.weeklyDrawdownLimitPercent,
+    MAX_FUNDING_AGAINST: safeAuto.maxFundingAgainstPercent,
+    MAX_SAME_DIRECTION_POSITIONS: safeAuto.maxSameDirectionPositions,
+    MAX_SECTOR_POSITIONS: safeAuto.maxSectorPositions,
+    MAX_RISK_PER_TRADE_PERCENT: safeAuto.maxRiskPerTradePercent,
+    MAX_CONCURRENT_RISK_PERCENT: safeAuto.maxConcurrentRiskPercent,
     NET_EXPOSURE_LIMITS: {
-        LONG: 60,    // Net LONG exposure ≤60% of account
-        SHORT: 50    // Net SHORT exposure ≤50% of account
+        LONG: safeAuto.netExposureLimits.LONG,
+        SHORT: safeAuto.netExposureLimits.SHORT
     },
-
-    // Karen's checklist (from FLOW.md) - all conditions must be satisfied
     CHECKLIST: [
-        'Position size ≤30% of account',
-        'Stop loss ≤10% from entry',
-        'Leverage ≤5x',
-        'Not overexposed to one direction (max 2 same-direction positions)',
-        'Correlation risk (not 3 positions in same sector)',
-        'Funding rate acceptable (|rate| ≤0.05% against us)',
-        'Volatility regime (reduce size in high vol)',
-        'Recent drawdown (reduce size if down >10% this week)',
-        'Portfolio heat (risk per trade ≤2%, concurrent risk ≤5%)',
-        'Net exposure guardrails (net LONG ≤60%, net SHORT ≤50%)'
+        `Position size ≤ ${safeAuto.maxPositionSizePercent}% of account`,
+        `Stop loss ≤ ${safeAuto.stopLossPercent}% from entry`,
+        `Leverage ≤ ${safeAuto.maxLeverage}x`,
+        `Directional concentration: ≤ ${safeAuto.maxSameDirectionPositions} same-direction positions`,
+        `Sector concentration: ≤ ${safeAuto.maxSectorPositions} positions in the same sector`,
+        `Funding rate acceptable: |rate| ≤ ${safeAuto.maxFundingAgainstPercent}% against us`,
+        `Volatility regime: reduce size in high volatility`,
+        `Recent drawdown: reduce size if down > ${safeAuto.weeklyDrawdownLimitPercent}% this week`,
+        `Portfolio heat: risk/trade ≤ ${safeAuto.maxRiskPerTradePercent}%, concurrent risk ≤ ${safeAuto.maxConcurrentRiskPercent}%`,
+        `Net exposure guardrails: net LONG ≤ ${safeAuto.netExposureLimits.LONG}%, net SHORT ≤ ${safeAuto.netExposureLimits.SHORT}%`
     ]
 };

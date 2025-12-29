@@ -58,14 +58,8 @@ export class WeexClient {
 
         const defaultHeaders: Record<string, string> = {
             'Content-Type': 'application/json',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Accept': 'application/json',
         };
-
-        // Add proxy auth token if using a proxy server for IP whitelist
-        if (config.weex.proxyToken) {
-            defaultHeaders['X-Proxy-Token'] = config.weex.proxyToken;
-        }
 
         this.client = axios.create({
             baseURL: config.weex.baseUrl,
@@ -288,7 +282,7 @@ export class WeexClient {
                     headers,
                     timeout: 120000, // Explicit 120s timeout per request (matches client default)
                 })
-                : await this.client.post<T>(endpoint, body, {
+                : await this.client.post<T>(url, body, {
                     headers,
                     timeout: 120000, // Explicit 120s timeout per request (matches client default)
                 });

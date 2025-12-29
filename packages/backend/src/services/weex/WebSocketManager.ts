@@ -257,7 +257,7 @@ export class WebSocketManager {
                 })
             ]);
             logger.info(`All ${clientIds.length} WebSocket connections closed gracefully`);
-        } catch (error) {
+        } catch (_error) {
             // Remove event listeners to prevent race conditions
             cleanupFunctions.forEach(cleanup => cleanup());
 

@@ -14,7 +14,8 @@ import { GoogleGenerativeAI, GenerativeModel, SchemaType } from '@google/generat
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
 import { aiLogService } from '../compliance/AILogService';
-import { ANALYST_PROFILES, THESIS_SYSTEM_PROMPTS, GLOBAL_RISK_LIMITS, type AnalystMethodology, buildDebatePrompt } from '../../constants/analyst';
+import { ANALYST_PROFILES, THESIS_SYSTEM_PROMPTS, type AnalystMethodology, buildDebatePrompt } from '../../constants/analyst';
+import { getSystemPrompt } from '../../constants/prompts/promptHelpers';
 import { arenaContextBuilder, FullArenaContext } from '../../constants/ArenaContext';
 import { circuitBreakerService, CircuitBreakerStatus } from '../risk/CircuitBreakerService';
 
@@ -396,7 +397,7 @@ class GeminiService {
      */
     private getAnalystWithPrompt(methodology: AnalystMethodology) {
         const profile = ANALYST_PROFILES[methodology];
-        const systemPrompt = THESIS_SYSTEM_PROMPTS[methodology];
+        const systemPrompt = getSystemPrompt(methodology, THESIS_SYSTEM_PROMPTS);
         return { profile, systemPrompt };
     }
 
@@ -1383,14 +1384,14 @@ Respond ONLY with valid JSON matching this exact structure.`;
 
             // Apply min/max AFTER all multipliers
             positionSizePercent = Math.min(
-                GLOBAL_RISK_LIMITS.MAX_POSITION_SIZE_PERCENT,
-                Math.max(5, calculatedSize) // Ensure minimum 5%
+                config.autonomous.maxPositionSizePercent,
+                Math.max(5, calculatedSize)
             );
 
             // ENFORCE ABSOLUTE MAX LEVERAGE FROM GLOBAL_RISK_LIMITS
             const ABSOLUTE_MAX_LEVERAGE = Math.min(
-                GLOBAL_RISK_LIMITS.MAX_SAFE_LEVERAGE, // 5x from prompts
-                maxLeverageFromCircuitBreaker // Reduced during alerts
+                config.autonomous.maxLeverage,
+                maxLeverageFromCircuitBreaker
             );
 
             // Leverage based on risk level (FIXED: never exceeds 5x)
@@ -1446,23 +1447,45 @@ Respond ONLY with valid JSON matching this exact structure.`;
                     ? price + maxTpDistance
                     : price - maxTpDistance;
             }
-            if (Math.abs(stopLossPrice - price) > maxSlDistance * 2) {
+            const rawSlMult = (config.autonomous.stopLossEnforcementMultiplier as any);
+            let slMultiplier = Number(rawSlMult);
+            if (!Number.isFinite(slMultiplier) || slMultiplier <= 0) {
+                slMultiplier = 1;
+            }
+            if (Math.abs(stopLossPrice - price) > maxSlDistance * slMultiplier) {
                 stopLossPrice = isBullish
-                    ? price - maxSlDistance
-                    : price + maxSlDistance;
+                    ? price - (maxSlDistance * slMultiplier)
+                    : price + (maxSlDistance * slMultiplier);
             }
 
             // VALIDATE STOP LOSS AGAINST METHODOLOGY REQUIREMENTS
-            const methodologyKey = champion.methodology.toUpperCase() as keyof typeof GLOBAL_RISK_LIMITS.STOP_LOSS_REQUIREMENTS;
-            const requiredStopLoss = GLOBAL_RISK_LIMITS.STOP_LOSS_REQUIREMENTS[methodologyKey] || 15;
+            const METHOD_MAP: Record<string, keyof typeof config.autonomous.stopLossRequirements> = {
+                value: 'VALUE',
+                growth: 'GROWTH',
+                technical: 'TECHNICAL',
+                macro: 'MACRO',
+                sentiment: 'SENTIMENT',
+                risk: 'RISK',
+                quant: 'QUANT',
+                contrarian: 'CONTRARIAN',
+            };
+            const methodologyKey = METHOD_MAP[champion.methodology];
+            let candidateRequired: any = methodologyKey
+                ? config.autonomous.stopLossRequirements?.[methodologyKey]
+                : undefined;
+            let requiredStopLoss = Number(candidateRequired);
+            if (!Number.isFinite(requiredStopLoss) || requiredStopLoss <= 0) {
+                logger.warn(`Missing or invalid stop-loss requirement for methodology "${champion.methodology}". Using default ${config.autonomous.stopLossPercent}%.`);
+                requiredStopLoss = config.autonomous.stopLossPercent;
+            }
             const actualStopLossPercent = Math.abs((stopLossPrice - price) / price * 100);
 
-            if (actualStopLossPercent > requiredStopLoss * 1.5) {
-                logger.warn(`Stop loss ${actualStopLossPercent.toFixed(1)}% is wider than recommended ${requiredStopLoss}% for ${champion.methodology}`);
-                // Tighten stop loss to methodology requirement
+            const maxAllowedStopLossPercent = Math.min(config.autonomous.stopLossPercent, requiredStopLoss);
+            if (actualStopLossPercent > maxAllowedStopLossPercent) {
+                logger.warn(`Stop loss ${actualStopLossPercent.toFixed(1)}% exceeds maximum allowed ${maxAllowedStopLossPercent}% (${champion.methodology})`);
                 stopLossPrice = isBullish
-                    ? price * (1 - requiredStopLoss / 100)
-                    : price * (1 + requiredStopLoss / 100);
+                    ? price * (1 - maxAllowedStopLossPercent / 100)
+                    : price * (1 + maxAllowedStopLossPercent / 100);
             }
         }
 

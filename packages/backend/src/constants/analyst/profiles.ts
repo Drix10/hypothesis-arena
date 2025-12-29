@@ -147,8 +147,8 @@ export const ANALYST_PROFILES: Record<AnalystMethodology, AnalystAgent> = {
 
     sentiment: {
         id: 'elon',
-        name: 'Elon',
-        title: 'Crypto Sentiment Analyst',
+        name: 'Sentiment Strategist',
+        title: 'Crypto Sentiment Strategist',
         methodology: 'sentiment',
         avatarEmoji: '📱',
         description: 'Tracks crypto market psychology, social sentiment, and crowd behavior. Believes CT (Crypto Twitter) can be both signal and noise.',

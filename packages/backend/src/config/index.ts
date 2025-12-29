@@ -41,6 +41,134 @@ const safeParseFloat = (value: string | undefined, fallback: number): number => 
     return isNaN(parsed) ? fallback : parsed;
 };
 
+// Configurable concentration threshold for debate score weights
+const CONCENTRATION_THRESHOLD_PCT = safeParseInt(process.env.DEBATE_WEIGHT_CONCENTRATION_THRESHOLD_PCT, 70);
+
+// =============================================================================
+// SCORE WEIGHT NORMALIZATION
+// =============================================================================
+
+interface ScoreWeights {
+    data: number;
+    logic: number;
+    risk: number;
+    catalyst: number;
+}
+
+/**
+ * Normalize score weights to always sum to exactly 100
+ * 
+ * Handles edge cases:
+ * - Negative weights → reset to defaults with error
+ * - Zero sum → reset to defaults with error
+ * - Non-100 sum → normalize proportionally
+ * - Rounding errors → adjust largest weight
+ * 
+ * @param weights - Input weights (may be invalid)
+ * @returns Normalized weights that sum to exactly 100
+ * @throws Error if normalization fails (should never happen)
+ */
+function normalizeScoreWeights(weights: ScoreWeights): ScoreWeights {
+    const WEIGHT_KEYS: (keyof ScoreWeights)[] = ['data', 'logic', 'risk', 'catalyst'];
+    const TARGET_SUM = 100;
+    const DEFAULT_WEIGHT = 25; // Equal distribution
+
+    // Calculate sum
+    const sum = weights.data + weights.logic + weights.risk + weights.catalyst;
+
+    // Validate weights are non-negative
+    const hasNegative = WEIGHT_KEYS.some(key => weights[key] < 0);
+    if (hasNegative) {
+        console.error(
+            `❌ ERROR: Debate score weights contain negative values. ` +
+            `Weights: data=${weights.data}, logic=${weights.logic}, ` +
+            `risk=${weights.risk}, catalyst=${weights.catalyst}. ` +
+            `Resetting to default ${DEFAULT_WEIGHT}/${DEFAULT_WEIGHT}/${DEFAULT_WEIGHT}/${DEFAULT_WEIGHT}.`
+        );
+        return {
+            data: DEFAULT_WEIGHT,
+            logic: DEFAULT_WEIGHT,
+            risk: DEFAULT_WEIGHT,
+            catalyst: DEFAULT_WEIGHT
+        };
+    }
+
+    // Handle zero sum
+    if (sum === 0) {
+        console.error(
+            `❌ ERROR: All debate score weights are 0. ` +
+            `Resetting to default ${DEFAULT_WEIGHT}/${DEFAULT_WEIGHT}/${DEFAULT_WEIGHT}/${DEFAULT_WEIGHT}.`
+        );
+        return {
+            data: DEFAULT_WEIGHT,
+            logic: DEFAULT_WEIGHT,
+            risk: DEFAULT_WEIGHT,
+            catalyst: DEFAULT_WEIGHT
+        };
+    }
+
+    // If already 100, return as-is
+    if (sum === TARGET_SUM) {
+        // Warn on extreme concentration even when sum is already TARGET_SUM
+        for (const key of WEIGHT_KEYS) {
+            if (weights[key] > CONCENTRATION_THRESHOLD_PCT) {
+                console.warn(
+                    `⚠️ Extreme concentration detected in debate weights: ${key}=${weights[key]}% (> ${CONCENTRATION_THRESHOLD_PCT}%). ` +
+                    `Single-dimension domination may skew judging outcomes.`
+                );
+            }
+        }
+        return { ...weights };
+    }
+
+    // Normalize to sum to 100
+    console.warn(
+        `⚠️ Debate score weights sum to ${sum}, not ${TARGET_SUM}. ` +
+        `Weights: data=${weights.data}, logic=${weights.logic}, ` +
+        `risk=${weights.risk}, catalyst=${weights.catalyst}`
+    );
+
+    const normalized: ScoreWeights = {
+        data: Math.round((weights.data / sum) * TARGET_SUM),
+        logic: Math.round((weights.logic / sum) * TARGET_SUM),
+        risk: Math.round((weights.risk / sum) * TARGET_SUM),
+        catalyst: Math.round((weights.catalyst / sum) * TARGET_SUM)
+    };
+
+    // Handle rounding errors - adjust the largest weight to ensure exact sum of 100
+    const normalizedSum = normalized.data + normalized.logic + normalized.risk + normalized.catalyst;
+
+    if (normalizedSum !== TARGET_SUM) {
+        const diff = TARGET_SUM - normalizedSum;
+        // Find the largest weight and adjust it
+        const weightEntries = WEIGHT_KEYS.map(key => ({ key, value: normalized[key] }));
+        weightEntries.sort((a, b) => b.value - a.value);
+        const largestKey = weightEntries[0].key;
+        normalized[largestKey] += diff;
+    }
+
+    // Warn on extreme concentration after normalization
+    for (const key of WEIGHT_KEYS) {
+        if (normalized[key] > CONCENTRATION_THRESHOLD_PCT) {
+            console.warn(
+                `⚠️ Extreme concentration detected in normalized debate weights: ${key}=${normalized[key]}% (> ${CONCENTRATION_THRESHOLD_PCT}%). ` +
+                `Single-dimension domination may skew judging outcomes.`
+            );
+        }
+    }
+
+    console.warn(
+        `✓ Normalized weights: data=${normalized.data}, logic=${normalized.logic}, ` +
+        `risk=${normalized.risk}, catalyst=${normalized.catalyst} (sum=${TARGET_SUM})`
+    );
+
+    return normalized;
+}
+
+// =============================================================================
+// CONFIGURATION
+// =============================================================================
+
 export const config = {
     // Server
     port: safeParseInt(process.env.PORT, 3000),
@@ -68,7 +196,6 @@ export const config = {
         passphrase: process.env.WEEX_PASSPHRASE || '',
         baseUrl: process.env.WEEX_BASE_URL || 'https://api-contract.weex.com',
         wsUrl: process.env.WEEX_WS_URL || 'wss://ws-contract.weex.com/v2/ws',
-        proxyToken: process.env.WEEX_PROXY_TOKEN || '', // Token for proxy auth if using IP whitelist proxy
     },
 
     // Gemini / AI
@@ -78,6 +205,7 @@ export const config = {
         maxOutputTokens: safeParseInt(process.env.AI_MAX_OUTPUT_TOKENS, 8192),
         debateMaxTokens: safeParseInt(process.env.AI_DEBATE_MAX_TOKENS, 8192),
         specialistMaxTokens: safeParseInt(process.env.AI_SPECIALIST_MAX_TOKENS, 8192),
+        maxPromptLines: safeParseInt(process.env.AI_MAX_PROMPT_LINES, 250),
         temperature: safeParseFloat(process.env.AI_TEMPERATURE, 0.8),
         requestTimeoutMs: safeParseInt(process.env.AI_REQUEST_TIMEOUT_MS, 60000),
         maxRetries: safeParseInt(process.env.AI_MAX_RETRIES, 3),
@@ -129,6 +257,29 @@ export const config = {
         defaultLeverage: 0, // Will be set below to ensure it never exceeds maxLeverage
         stopLossPercent: Math.min(100, Math.max(0.1, safeParseFloat(process.env.STOP_LOSS_PERCENT, 10))),                  // 10% stop loss (conservative)
         takeProfitPercent: Math.min(1000, Math.max(0.1, safeParseFloat(process.env.TAKE_PROFIT_PERCENT, 15))),             // 15% take profit
+        stopLossRequirements: {
+            VALUE: Math.min(100, Math.max(0.1, safeParseFloat(process.env.STOP_LOSS_VALUE, 10))),
+            GROWTH: Math.min(100, Math.max(0.1, safeParseFloat(process.env.STOP_LOSS_GROWTH, 10))),
+            TECHNICAL: Math.min(100, Math.max(0.1, safeParseFloat(process.env.STOP_LOSS_TECHNICAL, 8))),
+            MACRO: Math.min(100, Math.max(0.1, safeParseFloat(process.env.STOP_LOSS_MACRO, 10))),
+            SENTIMENT: Math.min(100, Math.max(0.1, safeParseFloat(process.env.STOP_LOSS_SENTIMENT, 10))),
+            RISK: Math.min(100, Math.max(0.1, safeParseFloat(process.env.STOP_LOSS_RISK, 8))),
+            QUANT: Math.min(100, Math.max(0.1, safeParseFloat(process.env.STOP_LOSS_QUANT, 10))),
+            CONTRARIAN: Math.min(100, Math.max(0.1, safeParseFloat(process.env.STOP_LOSS_CONTRARIAN, 8)))
+        },
+        stopLossEnforcementMultiplier: Math.max(1, safeParseFloat(process.env.STOP_LOSS_ENFORCEMENT_MULTIPLIER, 1)),
+        maxConcurrentPositions: Math.max(1, safeParseInt(process.env.MAX_CONCURRENT_POSITIONS, 3)),
+        weeklyDrawdownLimitPercent: Math.max(0, safeParseFloat(process.env.WEEKLY_DRAWDOWN_LIMIT_PERCENT, 10)),
+        maxFundingAgainstPercent: Math.max(0, safeParseFloat(process.env.MAX_FUNDING_AGAINST_PERCENT, 0.05)),
+        maxSameDirectionPositions: Math.max(1, safeParseInt(process.env.MAX_SAME_DIRECTION_POSITIONS, 2)),
+        maxRiskPerTradePercent: Math.max(0, safeParseFloat(process.env.MAX_RISK_PER_TRADE_PERCENT, 2)),
+        maxConcurrentRiskPercent: Math.max(0, safeParseFloat(process.env.MAX_CONCURRENT_RISK_PERCENT, 5)),
+        netExposureLimits: {
+            LONG: Math.max(0, safeParseFloat(process.env.NET_EXPOSURE_LONG_PERCENT, 60)),
+            SHORT: Math.max(0, safeParseFloat(process.env.NET_EXPOSURE_SHORT_PERCENT, 50))
+        },
+        fundingWarnThresholdPercent: Math.max(0, safeParseFloat(process.env.FUNDING_WARN_THRESHOLD_PERCENT, 0.01)),
+        maxSectorPositions: Math.max(1, safeParseInt(process.env.MAX_SECTOR_POSITIONS, 3)),
 
         // Circuit breakers (NEW)
         enableCircuitBreakers: process.env.ENABLE_CIRCUIT_BREAKERS !== 'false',                // Enabled by default
@@ -162,71 +313,7 @@ if (requestedDefaultLeverage > config.autonomous.maxLeverage) {
 }
 
 // CRITICAL FIX: Normalize debate score weights to always sum to 100
-const scoreWeightsSum = config.debate.scoreWeights.data +
-    config.debate.scoreWeights.logic +
-    config.debate.scoreWeights.risk +
-    config.debate.scoreWeights.catalyst;
-
-// Validate weights are non-negative
-if (config.debate.scoreWeights.data < 0 || config.debate.scoreWeights.logic < 0 ||
-    config.debate.scoreWeights.risk < 0 || config.debate.scoreWeights.catalyst < 0) {
-    console.error(
-        `❌ ERROR: Debate score weights contain negative values. ` +
-        `Weights: data=${config.debate.scoreWeights.data}, logic=${config.debate.scoreWeights.logic}, ` +
-        `risk=${config.debate.scoreWeights.risk}, catalyst=${config.debate.scoreWeights.catalyst}. ` +
-        `Resetting to default 25/25/25/25.`
-    );
-    config.debate.scoreWeights.data = 25;
-    config.debate.scoreWeights.logic = 25;
-    config.debate.scoreWeights.risk = 25;
-    config.debate.scoreWeights.catalyst = 25;
-} else if (scoreWeightsSum !== 100) {
-    console.warn(
-        `⚠️ Debate score weights sum to ${scoreWeightsSum}, not 100. ` +
-        `Weights: data=${config.debate.scoreWeights.data}, logic=${config.debate.scoreWeights.logic}, ` +
-        `risk=${config.debate.scoreWeights.risk}, catalyst=${config.debate.scoreWeights.catalyst}`
-    );
-
-    if (scoreWeightsSum === 0) {
-        // Reset to defaults if all weights are 0
-        console.error('❌ ERROR: All weights are 0. Resetting to default 25/25/25/25.');
-        config.debate.scoreWeights.data = 25;
-        config.debate.scoreWeights.logic = 25;
-        config.debate.scoreWeights.risk = 25;
-        config.debate.scoreWeights.catalyst = 25;
-    } else {
-        // Normalize weights to sum to 100
-        config.debate.scoreWeights.data = Math.round((config.debate.scoreWeights.data / scoreWeightsSum) * 100);
-        config.debate.scoreWeights.logic = Math.round((config.debate.scoreWeights.logic / scoreWeightsSum) * 100);
-        config.debate.scoreWeights.risk = Math.round((config.debate.scoreWeights.risk / scoreWeightsSum) * 100);
-        config.debate.scoreWeights.catalyst = Math.round((config.debate.scoreWeights.catalyst / scoreWeightsSum) * 100);
-
-        // Handle rounding errors - adjust the largest weight to ensure exact sum of 100
-        const normalizedSum = config.debate.scoreWeights.data +
-            config.debate.scoreWeights.logic +
-            config.debate.scoreWeights.risk +
-            config.debate.scoreWeights.catalyst;
-
-        if (normalizedSum !== 100) {
-            const diff = 100 - normalizedSum;
-            // Find the largest weight and adjust it
-            const weights = [
-                { key: 'data', value: config.debate.scoreWeights.data },
-                { key: 'logic', value: config.debate.scoreWeights.logic },
-                { key: 'risk', value: config.debate.scoreWeights.risk },
-                { key: 'catalyst', value: config.debate.scoreWeights.catalyst }
-            ];
-            weights.sort((a, b) => b.value - a.value);
-            const largestKey = weights[0].key as keyof typeof config.debate.scoreWeights;
-            config.debate.scoreWeights[largestKey] += diff;
-        }
-
-        console.warn(
-            `✓ Normalized weights: data=${config.debate.scoreWeights.data}, logic=${config.debate.scoreWeights.logic}, ` +
-            `risk=${config.debate.scoreWeights.risk}, catalyst=${config.debate.scoreWeights.catalyst} (sum=100)`
-        );
-    }
-}
+config.debate.scoreWeights = normalizeScoreWeights(config.debate.scoreWeights);
 
 // CRITICAL: Final validation that weights sum to exactly 100 after normalization
 const finalSum = config.debate.scoreWeights.data +
@@ -235,7 +322,7 @@ const finalSum = config.debate.scoreWeights.data +
     config.debate.scoreWeights.catalyst;
 
 if (finalSum !== 100) {
-    // This should never happen, but if it does, it's a critical bug
+    // This should never happen, but if it does, it's a critical bug in normalizeScoreWeights
     throw new Error(
         `CRITICAL BUG: Score weights normalization failed. Final sum is ${finalSum}, not 100. ` +
         `Weights: data=${config.debate.scoreWeights.data}, logic=${config.debate.scoreWeights.logic}, ` +

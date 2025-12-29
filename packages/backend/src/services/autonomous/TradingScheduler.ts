@@ -137,7 +137,7 @@ export class TradingScheduler {
      * - Zero or negative baseIntervalMs
      * - NaN or Infinity values
      * - Bounds checking on result
-     * - Unknown activity levels default to 1.0 multiplier
+     * - Exhaustive switch ensures all activity levels are handled
      * 
      * @param baseIntervalMs - Base cycle interval (e.g., 5 minutes)
      * @returns Adjusted interval in milliseconds (always >= 1000ms, <= 3600000ms)
@@ -152,21 +152,29 @@ export class TradingScheduler {
         const activity = this.getCurrentMarketActivity();
 
         // Adjust cycle frequency based on market activity
-        // Using explicit type guard to ensure all cases are handled
+        // Using exhaustive switch to ensure compile-time checking of all cases
         let multiplier: number;
         const level = activity.activityLevel;
-        if (level === 'peak') {
-            multiplier = 0.5; // 2x faster (2.5 min)
-        } else if (level === 'high') {
-            multiplier = 0.75; // 1.33x faster (3.75 min)
-        } else if (level === 'medium') {
-            multiplier = 1.0; // Normal speed (5 min)
-        } else if (level === 'low') {
-            multiplier = 2.0; // 2x slower (10 min)
-        } else {
-            // Exhaustive check - should never reach here with current types
-            logger.warn(`Unknown activity level: ${level}, using default multiplier`);
-            multiplier = 1.0;
+        switch (level) {
+            case 'peak':
+                multiplier = 0.5; // 2x faster (2.5 min)
+                break;
+            case 'high':
+                multiplier = 0.75; // 1.33x faster (3.75 min)
+                break;
+            case 'medium':
+                multiplier = 1.0; // Normal speed (5 min)
+                break;
+            case 'low':
+                multiplier = 2.0; // 2x slower (10 min)
+                break;
+            default:
+                // Exhaustiveness check - TypeScript will error if a new union member is added
+                const _exhaustiveCheck: never = level;
+                void _exhaustiveCheck;
+                logger.error(`Unknown activity level: ${level}, using default multiplier`);
+                multiplier = 1.0;
+                break;
         }
 
         const result = baseIntervalMs * multiplier;

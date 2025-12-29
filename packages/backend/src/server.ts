@@ -113,7 +113,7 @@ async function start() {
         try {
             await getRedisClient();
         } catch (error) {
-            logger.warn('Redis connection failed - caching disabled');
+            logger.warn('Redis connection failed - caching disabled', { error });
         }
 
         server.listen(PORT, () => {

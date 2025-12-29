@@ -30,11 +30,13 @@ Hypothesis Arena is an AI-powered crypto trading platform where **8 specialized 
 ### Key Features
 
 - **8 AI Analysts** - Each with 800+ line methodology prompts (Value, Growth, Technical, Macro, Sentiment, Risk, Quant, Contrarian)
-- **Turn-by-Turn Debates** - 60 debate turns per cycle across 4 debate stages
+- **Turn-by-Turn Debates** - 40 debate turns per cycle across 4 debate stages (configurable)
 - **Collaborative Portfolio** - All analysts share ONE portfolio (not 8 separate ones)
 - **Live WEEX Trading** - Execute futures trades with TP/SL directly on WEEX Exchange
 - **3-Tier Circuit Breakers** - Yellow/Orange/Red alerts based on BTC drops, funding rates, and drawdowns
 - **Risk Council Veto** - Karen (Risk Manager) has final approval/veto power on all trades
+- **Exhaustive Type Safety** - Switch statements with `never` type for compile-time guarantees
+- **Robust Validation** - Comprehensive input validation, null checks, and edge case handling
 
 ---
 
@@ -50,13 +52,13 @@ Hypothesis Arena is an AI-powered crypto trading platform where **8 specialized 
 │   STAGE 1: MARKET SCAN          "What's happening?"             │
 │      ↓ (WeexClient.ts)          Fetch data for 8 coins          │
 │   STAGE 2: COIN SELECTION       "Which coin to trade?"          │
-│      ↓ (CollaborativeFlow.ts)   4-way debate, 12 turns          │
+│      ↓ (CollaborativeFlow.ts)   4-way debate, 8 turns           │
 │   STAGE 3: ANALYSIS APPROACH    "How to analyze it?"            │
-│      ↓ (CollaborativeFlow.ts)   4-way debate, 12 turns          │
+│      ↓ (CollaborativeFlow.ts)   4-way debate, 8 turns           │
 │   STAGE 4: RISK ASSESSMENT      "Position size & risk?"         │
-│      ↓ (CollaborativeFlow.ts)   4-way debate, 12 turns          │
+│      ↓ (CollaborativeFlow.ts)   4-way debate, 8 turns           │
 │   STAGE 5: CHAMPIONSHIP         "Best thesis wins"              │
-│      ↓ (CollaborativeFlow.ts)   8-way debate, 24 turns          │
+│      ↓ (CollaborativeFlow.ts)   8-way debate, 16 turns          │
 │   STAGE 6: RISK COUNCIL         "Final safety check"            │
 │      ↓ (CollaborativeFlow.ts)   Karen's veto power              │
 │   STAGE 7: EXECUTION            "Pull the trigger"              │
@@ -64,7 +66,7 @@ Hypothesis Arena is an AI-powered crypto trading platform where **8 specialized 
 │   STAGE 8: POSITION MANAGEMENT  "Monitor until exit"            │
 │      (AutonomousTradingEngine.ts)                               │
 │                                                                  │
-│   TOTAL: 60 debate turns per cycle | ~63 Gemini API calls       │
+│   TOTAL: 40 debate turns per cycle | ~42 Gemini API calls       │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -168,10 +170,10 @@ NODE_ENV=development
 
 ### Debate Participation by Stage
 
-- **Stage 2 (Coin Selection):** Ray, Jim, Quant, Elon (4 analysts, 12 turns)
-- **Stage 3 (Analysis Approach):** Warren, Cathie, Jim, Quant (4 analysts, 12 turns)
-- **Stage 4 (Risk Assessment):** Karen, Warren, Devil, Ray (4 analysts, 12 turns)
-- **Stage 5 (Championship):** ALL 8 analysts (24 turns)
+- **Stage 2 (Coin Selection):** Ray, Jim, Quant, Elon (4 analysts, 8 turns)
+- **Stage 3 (Analysis Approach):** Warren, Cathie, Jim, Quant (4 analysts, 8 turns)
+- **Stage 4 (Risk Assessment):** Karen, Warren, Devil, Ray (4 analysts, 8 turns)
+- **Stage 5 (Championship):** ALL 8 analysts (16 turns)
 - **Stage 6 (Risk Council):** Karen only (final veto power)
 
 ---
@@ -229,10 +231,11 @@ WEEX-approved futures contracts:
 
 ### 🏆 Turn-by-Turn AI Debates
 
-- **60 Turns Per Cycle** - Real debates, not parallel API calls
-- **4-Dimension Scoring** - Data Quality, Logic, Risk Awareness, Catalyst
+- **40 Turns Per Cycle** - Real debates, not parallel API calls (configurable via `DEBATE_TURNS_PER_ANALYST`)
+- **4-Dimension Scoring** - Data Quality, Logic, Risk Awareness, Catalyst (weights configurable)
 - **Methodology-Specific Arguments** - Each analyst uses their full 800+ line prompt
 - **Full Logging** - Every argument logged without truncation
+- **Exhaustive Validation** - Null checks, empty string filtering, timeout caps
 
 ### 📈 Autonomous Trading Engine
 
@@ -317,11 +320,12 @@ packages/backend/src/
 
 ## 📋 Version History
 
-| Version | Date       | Changes                                                   |
-| ------- | ---------- | --------------------------------------------------------- |
-| 3.1.2   | 2025-12-28 | Input validation, improved type guards, JSON repair fixes |
-| 3.1.1   | 2025-12-28 | Retry logic, backoff, cycle completion fixes              |
-| 3.1.0   | 2025-12-28 | Turn-by-turn debates, 8-stage pipeline                    |
+| Version | Date       | Changes                                                                 |
+| ------- | ---------- | ----------------------------------------------------------------------- |
+| 3.2.0   | 2025-12-28 | Exhaustive switch, extracted normalization, improved validation         |
+| 3.1.2   | 2025-12-28 | Input validation, improved type guards, JSON repair fixes               |
+| 3.1.1   | 2025-12-28 | Retry logic, backoff, cycle completion fixes                            |
+| 3.1.0   | 2025-12-28 | Turn-by-turn debates, 8-stage pipeline, configurable turns (40 default) |
 
 See [FLOW.md](FLOW.md) for detailed architecture documentation.
 

@@ -47,7 +47,12 @@ export function buildCoinSelectionPrompt(
     // Validates that the methodology exists and throws clear error if not
     const fullSystemPrompt = getSystemPrompt(profile.methodology, THESIS_SYSTEM_PROMPTS);
 
-    return `${fullSystemPrompt}
+    return `═══════════════════════════════════════════════════════════════════════════════
+PRIORITY DIRECTIVE - STAGE OVERRIDES
+═══════════════════════════════════════════════════════════════════════════════
+• Stage-specific instructions OVERRIDE persona/system prompts
+• Treat methodology as an ANALYTICAL LENS, not a directive
+• Obey TASK and CONSTRAINTS exactly; output must match requirements
 
 ═══════════════════════════════════════════════════════════════════════════════
 COLLABORATIVE FLOW - STAGE 2: COIN SELECTION
@@ -86,6 +91,16 @@ QUALITY BAR (judge-aligned):
 - Prefer picks where multiple signals ALIGN from YOUR methodology
 - Avoid generic claims—cite specific data points
 
+DATA CHECKLIST:
+- Price and % change vs BTC
+- 24h volume and range
+- At least one microstructure metric (funding, OI, liquidations)
+- Regime note (trend/chop) and any near-term catalyst
+- Crowding awareness if funding/OI are extreme
+
+TIME HORIZON:
+- Specify expected timeframe (e.g., 2–7 days) and why signals fit it
+
 COMMON ERRORS TO AVOID:
 - Vague phrases ("strong momentum", "looks good") without data
 - Ignoring funding/OI crowding risk
@@ -104,6 +119,9 @@ OUTPUT REQUIREMENTS:
 • reason: ONE sentence with SPECIFIC data from YOUR methodology (include numbers and metrics)
 
 Apply your ${name} methodology rigorously. This is YOUR chance to identify the best opportunity.
+
+ANALYST METHODOLOGY REFERENCE (read after stage instructions):
+${fullSystemPrompt}
 
 Respond with JSON:
 {
@@ -187,13 +205,14 @@ The funding rate is AGAINST your ${direction} position!
         }
     }
 
-    // GET THE FULL SYSTEM PROMPT FOR THIS ANALYST
-    // This is the 800+ line detailed methodology prompt
-    // Validates that the methodology exists and throws clear error if not
     const fullSystemPrompt = getSystemPrompt(profile.methodology, THESIS_SYSTEM_PROMPTS);
 
-    // Build the specialist analysis request using the FULL analyst prompt
-    return `${fullSystemPrompt}
+    return `═══════════════════════════════════════════════════════════════════════════════
+PRIORITY DIRECTIVE - STAGE OVERRIDES
+═══════════════════════════════════════════════════════════════════════════════
+• Stage-specific instructions OVERRIDE persona/system prompts
+• Methodology-Only Mode: Use your methodology as an analytical LENS
+• DO NOT recommend a different coin or direction in Stage 3
 
 ═══════════════════════════════════════════════════════════════════════════════
 COLLABORATIVE FLOW - STAGE 3: SPECIALIST ANALYSIS
@@ -259,7 +278,17 @@ Your thesis will compete against 2 other specialists in Stage 4. To win:
 - Provide clear invalidation triggers (what proves you wrong?)
 - Tie to near-term catalysts with probability estimates
 
+DATA CHECKLIST:
+- Price, % change, 24h range position, and volume
+- Funding rate direction and cost analysis if against position
+- Method-specific metrics (e.g., Z-score, TVL, MVRV, basis, OI)
+- Risk/reward distances (%) and invalidation triggers
+- One cross-check from another methodology to avoid overfitting
+
 Apply your ${name} methodology rigorously. This is a DEEP analysis, not a quick take.
+
+ANALYST METHODOLOGY REFERENCE (read after stage instructions):
+${fullSystemPrompt}
 
 Respond with JSON:
 {
@@ -367,7 +396,12 @@ export function buildRiskCouncilPrompt(
     // Validates that the methodology exists and throws clear error if not
     const fullSystemPrompt = getSystemPrompt(profile.methodology, THESIS_SYSTEM_PROMPTS);
 
-    return `${fullSystemPrompt}
+    return `═══════════════════════════════════════════════════════════════════════════════
+PRIORITY DIRECTIVE - STAGE OVERRIDES
+═══════════════════════════════════════════════════════════════════════════════
+• Stage-specific instructions OVERRIDE persona/system prompts
+• You are THE RISK MANAGER with veto power; follow RULES strictly
+• Output MUST match the specified JSON structure
 
 ═══════════════════════════════════════════════════════════════════════════════
 COLLABORATIVE FLOW - STAGE 5: RISK COUNCIL REVIEW
@@ -418,6 +452,12 @@ YOUR CHECKLIST (from FLOW.md):
 [ ] Portfolio Heat: risk per trade ≤2% of account; concurrent risk ≤5%
 [ ] Net Exposure: net LONG ≤60% or net SHORT ≤50% (reduce size if exceeded)
 
+DECISION CRITERIA:
+- Approve only if risk/reward ≥ 2.0 and stops within ≤10%
+- Reduce size if funding drag is significant or correlation high
+- Favor trades with clear catalysts in 7–14 day window
+- Veto if any guardrail breached or tail risks unaddressed
+
 VETO TRIGGERS (MUST veto if ANY are true):
 X Stop loss >10% from entry
 X Position would exceed 30% of account
@@ -425,6 +465,9 @@ X Already have 3+ positions open
 X 7d drawdown >10% (reduce risk, no new trades)
 X Funding rate >0.05% against position direction
 X Net exposure beyond guardrails (net LONG >60% or net SHORT >50%)
+
+RISK METHODOLOGY REFERENCE (read after stage instructions):
+${fullSystemPrompt}
 
 Respond with JSON:
 {
@@ -480,7 +523,14 @@ export function buildDebatePrompt(
         ? `24h Volume: ${marketData.volume24h.toLocaleString()}`
         : '';
 
-    return `You are moderating a ${roundLabel} debate between two elite crypto analysts about ${displaySymbol}/USDT.
+    return `═══════════════════════════════════════════════════════════════════════════════
+PRIORITY DIRECTIVE - STAGE OVERRIDES
+═══════════════════════════════════════════════════════════════════════════════
+• Stage-specific instructions OVERRIDE persona/system prompts
+• Focus on DEBATE QUALITY: data, logic, risk, catalysts
+• Obey TURN STRUCTURE and OUTPUT FORMAT exactly
+
+You are moderating a ${roundLabel} debate between two elite crypto analysts about ${displaySymbol}/USDT.
 
 BULL ANALYST: ${bullName} ${bullAnalysis.analystEmoji} (${bullAnalysis.analystTitle})
 Recommendation: ${bullAnalysis.recommendation.toUpperCase().replace('_', ' ')}
@@ -501,8 +551,14 @@ Current Price: ${priceStr}
 24h Change: ${changeStr}
 ${volumeStr}
 
+DATA CHECKLIST:
+- On-chain (e.g., TVL, MVRV, active addresses, exchange flows)
+- Microstructure (e.g., funding, OI, liquidations, basis, volume profile)
+- Timeframe alignment between targets and catalysts
+- Crowding awareness if funding/OI are extreme
+
 DEBATE INSTRUCTIONS
-Generate an 8-turn debate (4 turns each, alternating). This is a DEEP, SUBSTANTIVE debate between elite analysts.
+Generate a 12-turn debate (6 turns each, alternating). This is a DEEP, SUBSTANTIVE debate between elite analysts.
 
 TURN STRUCTURE:
 - Turns 1-2: Opening statements with full thesis and key data
@@ -615,7 +671,12 @@ ANALYST ${i + 1}: ${name} (${title})
         ? `- Funding Rate: ${safeNumber(marketData.fundingRate * 100, 4)}%`
         : '';
 
-    return `${karenPrompt}
+    return `═══════════════════════════════════════════════════════════════════════════════
+PRIORITY DIRECTIVE - STAGE OVERRIDES
+═══════════════════════════════════════════════════════════════════════════════
+• Stage-specific instructions OVERRIDE persona/system prompts
+• You are in SINGLE-JUDGE mode; make a FINAL decision
+• Focus on RISK-ADJUSTED strength; obey JSON output requirements
 
 ═══════════════════════════════════════════════════════════════════════════════
 COLLABORATIVE FLOW - STAGE 4: SINGLE-JUDGE FALLBACK (Tournament Failed)
@@ -623,7 +684,7 @@ COLLABORATIVE FLOW - STAGE 4: SINGLE-JUDGE FALLBACK (Tournament Failed)
 
 The tournament debates failed, so YOU (Karen, Risk Manager) must make the FINAL DECISION.
 
-Apply your FULL RISK MANAGEMENT METHODOLOGY from above to select the SINGLE BEST thesis.
+Apply your FULL RISK MANAGEMENT METHODOLOGY to select the SINGLE BEST thesis.
 
 MARKET CONTEXT:
 - Symbol: ${displaySymbol}/USDT
@@ -653,8 +714,12 @@ Apply YOUR RISK MANAGEMENT FRAMEWORK:
 Crypto-Specific Reminders:
 - Prefer on-chain metrics (TVL, MVRV, active addresses, exchange flows) and microstructure (funding, OI, liquidations, basis)
 - If leverage is proposed, include liquidation math and funding drag/carry implications
-- Strong catalysts are near-term (7–14 days) with probability and expected impact
+- Catalysts: token unlock schedules, exchange listings, ETF approvals, mainnet/testnet launches, governance votes; near-term (7–14 days) with date/timeline and expected impact
+- Debate rather than repeat—address the opponent’s strongest claim with numbers and risk-adjusted reasoning
 - Penalize vague statements; reward quantified, time-bound, risk-aware theses
+
+RISK METHODOLOGY REFERENCE (read after stage instructions):
+${karenPrompt}
 
 Respond with JSON:
 {
@@ -746,7 +811,12 @@ export function buildTournamentDebatePrompt(
         ? `- Funding Rate: ${safeNumber(marketData.fundingRate * 100, 4)}%`
         : '';
 
-    return `${karenPrompt}
+    return `═══════════════════════════════════════════════════════════════════════════════
+PRIORITY DIRECTIVE - STAGE OVERRIDES
+═══════════════════════════════════════════════════════════════════════════════
+• Stage-specific instructions OVERRIDE persona/system prompts
+• You are JUDGING a tournament debate; focus on criteria and risk
+• Output MUST follow the specified JSON structure
 
 ═══════════════════════════════════════════════════════════════════════════════
 COLLABORATIVE FLOW - STAGE 4: TOURNAMENT JUDGING (${roundLabel})
@@ -754,7 +824,7 @@ COLLABORATIVE FLOW - STAGE 4: TOURNAMENT JUDGING (${roundLabel})
 
 You are Karen, the Risk Manager, judging a ${roundLabel} debate about ${displaySymbol}/USDT.
 
-Apply your FULL RISK MANAGEMENT METHODOLOGY from above to judge this debate.
+Apply your FULL RISK MANAGEMENT METHODOLOGY to judge this debate.
 
 ${roundLabel}: ${nameA} vs ${nameB}
 
@@ -843,6 +913,9 @@ Crypto-Specific Reminders:
 - If leverage is discussed, include liquidation math and funding drag/carry
 - Near-term catalysts (7–14 days) with probability and impact are stronger
 
+RISK METHODOLOGY REFERENCE (read after stage instructions):
+${karenPrompt}
+
 The winner's thesis will be EXECUTED as a real trade. Choose wisely.
 
 Respond with JSON containing:
@@ -852,4 +925,3 @@ Respond with JSON containing:
 - reasoning: Why the winner won from a RISK-ADJUSTED perspective
 - keyDifferentiator: The single most important factor`;
 }
-

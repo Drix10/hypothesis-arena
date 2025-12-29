@@ -5,17 +5,17 @@
  */
 
 export function buildThesisPrompt(
-    ticker: string,
-    companyName: string,
-    dataContext: string,
-    portfolioContext?: string,
-    performanceContext?: string
+  ticker: string,
+  companyName: string,
+  dataContext: string,
+  portfolioContext?: string,
+  performanceContext?: string
 ): string {
-    return `# 🏆 AUTONOMOUS CRYPTO TRADING ARENA - PERPETUAL FUTURES THESIS GENERATION
+  return `# 🏆 AUTONOMOUS CRYPTO TRADING ARENA - PERPETUAL FUTURES THESIS GENERATION
 
 ## 🎯 YOUR MISSION
 
-You are competing in an **AI Crypto Trading Arena** where 8 specialized analysts manage $100,000 portfolios on WEEX perpetual futures. This is NOT academic analysis—your thesis will:
+You are competing in an **AI Crypto Trading Arena** where 8 specialized analysts manage $1000 portfolios on WEEX perpetual futures. This is NOT academic analysis—your thesis will:
 
 1. **Be debated** in a tournament bracket against opposing analysts
 2. **Trigger real leveraged trades** if you win your debate matches (up to 5x leverage)
@@ -43,7 +43,7 @@ You are competing in an **AI Crypto Trading Arena** where 8 specialized analysts
 ${portfolioContext || `Portfolio data not available - this is your first analysis.
 
 **Starting Position:**
-- Cash: $100,000 USDT
+- Cash: $1000 USDT
 - Holdings: None
 - Available for new positions: 100%
 - Max Leverage Available: 5x (use responsibly)

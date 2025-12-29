@@ -113,16 +113,12 @@ const DEBATE_TURN_SCHEMA = {
             items: { type: SchemaType.STRING },
             description: 'List of specific data points referenced'
         },
-        keyPoint: {
-            type: SchemaType.STRING,
-            description: 'The single most important point in your argument'
-        },
         strength: {
             type: SchemaType.NUMBER,
             description: 'Self-assessed argument strength (1-10)'
         }
     },
-    required: ['argument', 'dataPointsReferenced', 'keyPoint', 'strength']
+    required: ['argument', 'dataPointsReferenced', 'strength']
 };
 
 const RISK_COUNCIL_SCHEMA = {
@@ -288,7 +284,7 @@ function parseJSONWithRepair(text: string): any {
         const repaired = repairJSON(text);
         try {
             return JSON.parse(repaired);
-        } catch (secondError) {
+        } catch (_secondError) {
             // Log both attempts for debugging
             logger.warn('JSON repair failed. Original error:', firstError);
             logger.warn('Repaired text:', repaired.slice(0, 200));
@@ -314,7 +310,8 @@ async function generateDebateTurn(
     previousTurns: DebateTurn[],
     context: string,
     turnNumber: number,
-    totalTurns: number = 12
+    totalTurns: number = 12,
+    stage: 2 | 3 | 4 | 5
 ): Promise<DebateTurn> {
     // Validate inputs
     if (!model) {
@@ -415,7 +412,7 @@ async function generateDebateTurn(
 
     const prompt = `${context}
 
-${buildDebateTurnPrompt(analystName, analystMethodology, previousArguments, turnNumber, totalTurns, allPreviousTurnsData)}`;
+${buildDebateTurnPrompt(analystName, analystMethodology, previousArguments, turnNumber, totalTurns, stage, allPreviousTurnsData)}`;
 
     // Log prompt length for debugging
     logger.info(`[Turn ${turnNumber}] Prompt length: ${prompt.length} chars (~${Math.ceil(prompt.length / 4)} tokens)`);
@@ -443,20 +440,12 @@ ${buildDebateTurnPrompt(analystName, analystMethodology, previousArguments, turn
 
             // Check finish reason
             const candidates = result.response.candidates;
-            let finishReason = 'UNKNOWN';
             if (candidates && candidates.length > 0) {
-                finishReason = candidates[0].finishReason || 'UNKNOWN';
+                const finishReason = candidates[0].finishReason || 'UNKNOWN';
                 if (finishReason !== 'STOP') {
                     logger.warn(`⚠️ Gemini finish reason: ${finishReason} (expected STOP)`);
                 }
             }
-
-            // LOG FULL RAW AI RESPONSE
-            logger.info(`\n${'─'.repeat(60)}`);
-            logger.info(`📡 RAW AI RESPONSE for ${analystName} (Turn ${turnNumber}):`);
-            logger.info(`📊 Response length: ${responseText.length} chars | Finish reason: ${finishReason}`);
-            logger.info(responseText);
-            logger.info(`${'─'.repeat(60)}\n`);
 
             // Parse JSON response
             const parsed = parseJSONWithRepair(responseText);
@@ -653,8 +642,17 @@ function calculateDebateScores(
             }
         }
         const dataPointsList = Array.from(dataPoints);
-        // Scale: 8+ data points = max score
-        const dataScore = Math.min(weights.data, Math.round(dataPoints.size * (weights.data / 8)));
+        const numericTokenPattern = /(?:\$?\d+(?:\.\d+)?%?)/g;
+        let numericTokenCount = 0;
+        for (const t of analystTurns) {
+            if (t.argument && typeof t.argument === 'string') {
+                const matches = t.argument.match(numericTokenPattern);
+                if (matches) numericTokenCount += matches.length;
+            }
+        }
+        const uniqueDataScore = Math.min(weights.data, Math.round(dataPoints.size * (weights.data / 8)));
+        const numericDensityScore = Math.min(weights.data, Math.round(Math.min(numericTokenCount, 12) * (weights.data / 12)));
+        const dataScore = Math.min(weights.data, Math.round((uniqueDataScore * 0.6) + (numericDensityScore * 0.4)));
 
         // Logic: average argument strength (with safe division)
         const validStrengths = analystTurns
@@ -663,24 +661,64 @@ function calculateDebateScores(
         const avgStrength = validStrengths.length > 0
             ? validStrengths.reduce((sum, s) => sum + s, 0) / validStrengths.length
             : 5;
-        // Scale: strength 10 = max score
-        const logicScore = Math.min(weights.logic, Math.round(avgStrength * (weights.logic / 10)));
+        const baseLogicScore = Math.min(weights.logic, Math.round(avgStrength * (weights.logic / 10)));
+        let avgArgLen = 0;
+        for (const t of analystTurns) {
+            if (t.argument && typeof t.argument === 'string') {
+                avgArgLen += t.argument.length;
+            }
+        }
+        avgArgLen = analystTurns.length > 0 ? avgArgLen / analystTurns.length : 0;
+        const minLen = config.debate.minArgumentLength;
+        const lengthFactor = avgArgLen >= minLen ? 1 : 0.8;
+        const names = new Set((turns || []).map(tr => tr.analystName).filter(n => typeof n === 'string'));
+        let engagementCount = 0;
+        for (const t of analystTurns) {
+            if (t.argument && typeof t.argument === 'string') {
+                for (const n of names) {
+                    if (n && t.analystName !== n && t.argument.includes(n)) {
+                        engagementCount++;
+                        break;
+                    }
+                }
+            }
+        }
+        const engagementFactor = engagementCount >= Math.max(1, Math.floor(analystTurns.length / 2)) ? 1.05 : 1;
+        const logicScore = Math.min(weights.logic, Math.round(baseLogicScore * lengthFactor * engagementFactor));
 
-        // Risk Awareness: risk-related keywords
-        const riskPattern = /risk|concern|downside|challenge|worst.case|invalidation|stop.?loss|drawdown/i;
-        const riskTurns = analystTurns.filter(t =>
-            t && t.argument && typeof t.argument === 'string' && t.argument.trim().length > 0 && riskPattern.test(t.argument)
-        ).length;
-        // Scale: 3+ turns with risk = max score
-        const riskScore = Math.min(weights.risk, Math.round(riskTurns * (weights.risk / 3)));
+        // Risk Awareness: risk-related keywords with numeric specificity
+        const riskPattern = /risk|concern|downside|challenge|worst.?case|invalidation|stop.?loss|drawdown/i;
+        const hasNumberPattern = /(?:\$?\d+(?:\.\d+)?%?)/;
+        let strongRiskTurns = 0;
+        let weakRiskTurns = 0;
+        for (const t of analystTurns) {
+            const arg = t && t.argument && typeof t.argument === 'string' ? t.argument.trim() : '';
+            if (arg && riskPattern.test(arg)) {
+                if (hasNumberPattern.test(arg)) strongRiskTurns++;
+                else weakRiskTurns++;
+            }
+        }
+        const riskScore = Math.min(
+            weights.risk,
+            Math.round(Math.min(strongRiskTurns, 2) * (weights.risk / 2) + Math.min(weakRiskTurns, 2) * (weights.risk / 6))
+        );
 
-        // Catalyst: catalyst-related keywords
-        const catalystPattern = /catalyst|trigger|timeline|Q[1-4]|earnings|announcement|near.term|upcoming|event/i;
-        const catalystTurns = analystTurns.filter(t =>
-            t && t.argument && typeof t.argument === 'string' && t.argument.trim().length > 0 && catalystPattern.test(t.argument)
-        ).length;
-        // Scale: 3+ turns with catalyst = max score
-        const catalystScore = Math.min(weights.catalyst, Math.round(catalystTurns * (weights.catalyst / 3)));
+        // Catalyst: event + timeline specificity
+        const catalystPattern = /catalyst|trigger|timeline|earnings|announcement|upgrade|listing|ETF|mainnet|testnet|event/i;
+        const timelinePattern = /\bQ[1-4]\b|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|today|tomorrow|week|month|by\s+\w+|on\s+\w+/i;
+        let strongCatalystTurns = 0;
+        let weakCatalystTurns = 0;
+        for (const t of analystTurns) {
+            const arg = t && t.argument && typeof t.argument === 'string' ? t.argument.trim() : '';
+            if (arg && catalystPattern.test(arg)) {
+                if (timelinePattern.test(arg)) strongCatalystTurns++;
+                else weakCatalystTurns++;
+            }
+        }
+        const catalystScore = Math.min(
+            weights.catalyst,
+            Math.round(Math.min(strongCatalystTurns, 2) * (weights.catalyst / 2) + Math.min(weakCatalystTurns, 2) * (weights.catalyst / 6))
+        );
 
         const total = dataScore + logicScore + riskScore + catalystScore;
 
@@ -693,8 +731,8 @@ function calculateDebateScores(
             dataPointsList: dataPointsList.slice(0, 5), // First 5 for logging
             avgStrength: Math.round(avgStrength * 100) / 100,
             strengthValues: validStrengths,
-            riskTurns,
-            catalystTurns,
+            riskTurns: strongRiskTurns + weakRiskTurns,
+            catalystTurns: strongCatalystTurns + weakCatalystTurns,
             breakdown: { data: dataScore, logic: logicScore, risk: riskScore, catalyst: catalystScore, total }
         });
     }
@@ -746,7 +784,8 @@ function calculateDebateScores(
  */
 function determineDebateWinner(
     scores: Record<string, AnalystScore>,
-    turns: DebateTurn[]
+    turns: DebateTurn[],
+    previousWinnerIds: string[] = []
 ): string {
     // Validate scores object
     if (!scores || typeof scores !== 'object') {
@@ -785,6 +824,18 @@ function determineDebateWinner(
     logger.info(`\n${'─'.repeat(60)}`);
     logger.info(`⚖️ TIE DETECTED: ${winners.length} analysts with score ${topScore}/100`);
     logger.info(`   Tied analysts: ${winners.map(w => w[0]).join(', ')}`);
+
+    // Prefer analysts not in previous winners first
+    if (Array.isArray(previousWinnerIds) && previousWinnerIds.length > 0) {
+        const nonPrev = winners.filter(([id]) => !previousWinnerIds.includes(id));
+        if (nonPrev.length === 1) {
+            logger.info(`🏆 Winner by anti-dominance preference: ${nonPrev[0][0]}`);
+            logger.info(`${'─'.repeat(60)}\n`);
+            return nonPrev[0][0];
+        } else if (nonPrev.length > 1) {
+            logger.info(`   Anti-dominance filtered candidates: ${nonPrev.map(w => w[0]).join(', ')}`);
+        }
+    }
 
     // Tie-breaker 1: most unique data points
     const dataPointCounts = winners.map(([id]) => {
@@ -847,11 +898,73 @@ function determineDebateWinner(
         return strengthWinners[0].id;
     }
 
-    // Tie-breaker 3: First in analyst order (deterministic fallback)
-    logger.info(`   Tie-breaker #3 (analyst order): Using first analyst in order`);
-    logger.info(`🏆 Winner by tie-breaker #3 (deterministic): ${strengthScores[0].id}`);
+    // Tie-breaker 3: highest numeric token count across arguments
+    const numericTokenPattern = /(?:\$?\d+(?:\.\d+)?%?)/g;
+    const numericCounts = strengthWinners.map(({ id }) => {
+        const analystTurns = turns && Array.isArray(turns)
+            ? turns.filter(t => t && typeof t === 'object' && t.speaker === id)
+            : [];
+        let count = 0;
+        for (const t of analystTurns) {
+            if (t.argument && typeof t.argument === 'string') {
+                const matches = t.argument.match(numericTokenPattern);
+                if (matches) count += matches.length;
+            }
+        }
+        return { id, count };
+    });
+    numericCounts.sort((a, b) => b.count - a.count);
+    logger.info(`   Tie-breaker #3 (numeric density): ${numericCounts.map(n => `${n.id}=${n.count}`).join(', ')}`);
+    if (numericCounts.length > 0 && numericCounts[0].count > 0) {
+        const topNum = numericCounts[0].count;
+        const numericWinners = numericCounts.filter(n => n.count === topNum);
+        if (numericWinners.length === 1) {
+            logger.info(`🏆 Winner by tie-breaker #3 (numeric density): ${numericWinners[0].id}`);
+            logger.info(`${'─'.repeat(60)}\n`);
+            return numericWinners[0].id;
+        }
+    }
+
+    // Tie-breaker 4: highest average argument length
+    const avgLengths = strengthWinners.map(({ id }) => {
+        const analystTurns = turns && Array.isArray(turns)
+            ? turns.filter(t => t && typeof t === 'object' && t.speaker === id)
+            : [];
+        let totalLen = 0;
+        for (const t of analystTurns) {
+            if (t.argument && typeof t.argument === 'string') {
+                totalLen += t.argument.length;
+            }
+        }
+        const avgLen = analystTurns.length > 0 ? Math.round((totalLen / analystTurns.length) * 100) / 100 : 0;
+        return { id, avgLen };
+    });
+    avgLengths.sort((a, b) => b.avgLen - a.avgLen);
+    logger.info(`   Tie-breaker #4 (avg length): ${avgLengths.map(a => `${a.id}=${a.avgLen}`).join(', ')}`);
+    if (avgLengths.length > 0 && avgLengths[0].avgLen > 0) {
+        const topLen = avgLengths[0].avgLen;
+        const lengthWinners = avgLengths.filter(a => a.avgLen === topLen);
+        if (lengthWinners.length === 1) {
+            logger.info(`🏆 Winner by tie-breaker #4 (avg length): ${lengthWinners[0].id}`);
+            logger.info(`${'─'.repeat(60)}\n`);
+            return lengthWinners[0].id;
+        }
+    }
+
+    // Final fallback: strongest last turn
+    const lastTurnStrengths = strengthWinners.map(({ id }) => {
+        const analystTurns = turns && Array.isArray(turns)
+            ? turns.filter(t => t && typeof t === 'object' && t.speaker === id)
+            : [];
+        const last = analystTurns[analystTurns.length - 1];
+        const s = last && Number.isFinite(last.strength) ? Number(last.strength) : 0;
+        return { id, s };
+    });
+    lastTurnStrengths.sort((a, b) => b.s - a.s);
+    logger.info(`   Final fallback (closing strength): ${lastTurnStrengths.map(l => `${l.id}=${l.s}`).join(', ')}`);
+    logger.info(`🏆 Winner by final fallback: ${lastTurnStrengths[0].id}`);
     logger.info(`${'─'.repeat(60)}\n`);
-    return strengthScores[0].id;
+    return lastTurnStrengths[0].id;
 }
 
 /**
@@ -1170,31 +1283,12 @@ export class CollaborativeFlowService {
 
                 // Check finish reason
                 const candidates = result.response.candidates;
-                let finishReason = 'UNKNOWN';
                 if (candidates && candidates.length > 0) {
-                    finishReason = candidates[0].finishReason || 'UNKNOWN';
+                    const finishReason = candidates[0].finishReason || 'UNKNOWN';
                     if (finishReason !== 'STOP') {
                         logger.warn(`⚠️ Specialist ${analystId} finish reason: ${finishReason}`);
                     }
                 }
-
-                // LOG FULL RAW AI RESPONSE with metadata
-                logger.info(`\n${'─'.repeat(60)}`);
-                logger.info(`📡 RAW AI RESPONSE for Specialist ${analystId}:`);
-                logger.info(`📊 Response length: ${responseText.length} chars | Finish reason: ${finishReason}`);
-                // Log in chunks to avoid terminal buffer issues
-                const chunkSize = 2000;
-                for (let i = 0; i < responseText.length; i += chunkSize) {
-                    const chunk = responseText.slice(i, i + chunkSize);
-                    const chunkNum = Math.floor(i / chunkSize) + 1;
-                    const totalChunks = Math.ceil(responseText.length / chunkSize);
-                    if (totalChunks > 1) {
-                        logger.info(`[Chunk ${chunkNum}/${totalChunks}] ${chunk}`);
-                    } else {
-                        logger.info(chunk);
-                    }
-                }
-                logger.info(`${'─'.repeat(60)}\n`);
 
                 // Check if response appears truncated
                 if (!responseText.trim().endsWith('}')) {
@@ -1296,7 +1390,7 @@ export class CollaborativeFlowService {
 
                 const turn = await generateDebateTurn(
                     model, analyst.id, analyst.name, analyst.methodology,
-                    turns, context, turnNumber, totalTurns
+                    turns, context, turnNumber, totalTurns, 2
                 );
 
                 turns.push(turn);
@@ -1441,7 +1535,8 @@ export class CollaborativeFlowService {
     async runAnalysisApproachDebate(
         coinSymbol: string,
         marketData: ExtendedMarketData,
-        direction: 'LONG' | 'SHORT'
+        direction: 'LONG' | 'SHORT',
+        previousWinnerIds: string[] = []
     ): Promise<{ winner: string; approach: AnalysisResult; debate: FourWayDebateResult }> {
         logger.info(`Stage 3: Analysis Approach Debate for ${coinSymbol} (${4 * config.debate.turnsPerAnalyst} turns)...`);
 
@@ -1486,7 +1581,7 @@ export class CollaborativeFlowService {
 
                 const turn = await generateDebateTurn(
                     model, analyst.id, analyst.name, analyst.methodology,
-                    turns, context, turnNumber, totalTurns
+                    turns, context, turnNumber, totalTurns, 3
                 );
 
                 turns.push(turn);
@@ -1499,7 +1594,7 @@ export class CollaborativeFlowService {
         }
 
         const scores = calculateDebateScores(turns, analystIds);
-        const winner = determineDebateWinner(scores, turns);
+        const winner = determineDebateWinner(scores, turns, previousWinnerIds);
 
         // Validate winner was determined
         if (!winner) {
@@ -1546,7 +1641,8 @@ export class CollaborativeFlowService {
     async runRiskAssessmentDebate(
         coinSymbol: string,
         proposedThesis: AnalysisResult,
-        marketData: ExtendedMarketData
+        marketData: ExtendedMarketData,
+        previousWinnerIds: string[] = []
     ): Promise<{ winner: string; riskFramework: AnalysisResult; debate: FourWayDebateResult }> {
         logger.info(`Stage 4: Risk Assessment Debate for ${coinSymbol} (${4 * config.debate.turnsPerAnalyst} turns)...`);
 
@@ -1609,7 +1705,7 @@ export class CollaborativeFlowService {
 
                 const turn = await generateDebateTurn(
                     model, analyst.id, analyst.name, analyst.methodology,
-                    turns, context, turnNumber, totalTurns
+                    turns, context, turnNumber, totalTurns, 4
                 );
 
                 turns.push(turn);
@@ -1622,7 +1718,7 @@ export class CollaborativeFlowService {
         }
 
         const scores = calculateDebateScores(turns, analystIds);
-        const winner = determineDebateWinner(scores, turns);
+        const winner = determineDebateWinner(scores, turns, previousWinnerIds);
 
         // Validate winner was determined
         if (!winner) {
@@ -1768,7 +1864,7 @@ export class CollaborativeFlowService {
 
                 const turn = await generateDebateTurn(
                     model, analyst.id, analyst.name, analyst.methodology,
-                    turns, context, turnNumber, totalTurns
+                    turns, context, turnNumber, totalTurns, 5
                 );
 
                 turns.push(turn);
@@ -1781,7 +1877,7 @@ export class CollaborativeFlowService {
         }
 
         const scores = calculateDebateScores(turns, analystIds);
-        const winner = determineDebateWinner(scores, turns);
+        const winner = determineDebateWinner(scores, turns, [safeWinners.coinSelector, safeWinners.analysisApproach, safeWinners.riskAssessment].filter(Boolean) as string[]);
 
         // Validate winner was determined
         if (!winner) {
@@ -1947,31 +2043,12 @@ export class CollaborativeFlowService {
 
                 // Check finish reason
                 const candidates = result.response.candidates;
-                let finishReason = 'UNKNOWN';
                 if (candidates && candidates.length > 0) {
-                    finishReason = candidates[0].finishReason || 'UNKNOWN';
+                    const finishReason = candidates[0].finishReason || 'UNKNOWN';
                     if (finishReason !== 'STOP') {
                         logger.warn(`⚠️ Risk Council finish reason: ${finishReason}`);
                     }
                 }
-
-                // LOG FULL RAW AI RESPONSE with metadata
-                logger.info(`\n${'─'.repeat(60)}`);
-                logger.info(`📡 RAW AI RESPONSE for Risk Council (Karen):`);
-                logger.info(`📊 Response length: ${responseText.length} chars | Finish reason: ${finishReason}`);
-                // Log in chunks to avoid terminal buffer issues
-                const chunkSize = 2000;
-                for (let i = 0; i < responseText.length; i += chunkSize) {
-                    const chunk = responseText.slice(i, i + chunkSize);
-                    const chunkNum = Math.floor(i / chunkSize) + 1;
-                    const totalChunks = Math.ceil(responseText.length / chunkSize);
-                    if (totalChunks > 1) {
-                        logger.info(`[Chunk ${chunkNum}/${totalChunks}] ${chunk}`);
-                    } else {
-                        logger.info(chunk);
-                    }
-                }
-                logger.info(`${'─'.repeat(60)}\n`);
 
                 // Check if response appears truncated
                 if (!responseText.trim().endsWith('}')) {

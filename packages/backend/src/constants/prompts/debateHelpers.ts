@@ -6,6 +6,7 @@
  */
 
 import { DEBATE_CONTEXTS, DEBATE_TURN_INSTRUCTIONS } from './debateContexts';
+import { config } from '../../config';
 import { safeNumber } from './promptHelpers';
 
 /**
@@ -54,7 +55,28 @@ ${marketSummary}${fundingSection}
 
 TASK: ${ctx.task}
 
-JUDGING: ${ctx.judging}`;
+JUDGING: ${ctx.judging}
+
+WORD LIMIT:
+- 150–200 words; under 120 too thin; >200 penalized
+
+DATA CHECKLIST:
+- Price, % change vs BTC, and 24h volume
+- At least one microstructure metric (funding, OI, liquidations)
+- Regime note (trend/chop) and any near-term catalyst
+- Crowding awareness if funding/OI are extreme
+ - Catalyst taxonomy examples: token unlock schedules, exchange listings, ETF approvals, mainnet/testnet launches, governance votes; prefer near-term catalysts (7–14 days) with dates/timelines
+ 
+ RESPONSE FORMAT:
+ - symbol: Exact WEEX symbol (e.g., "cmt_btcusdt")
+ - direction: "LONG" or "SHORT"
+ - conviction: 1–10 (be honest; low-conviction picks hurt score)
+ - reason: ONE sentence with specific numbers from your methodology
+ 
+ COMMON MISTAKES:
+ - Vague statements without numbers, ignoring crowding or regime
+ - Selecting multiple highly correlated picks without diversification
+ - Overweighting price alone; missing volume/structure/funding`;
 }
 
 /**
@@ -100,12 +122,6 @@ export function buildAnalysisApproachContext(
             const fundingPercent = safeNumber(marketData.fundingRate * 100, 4);
             const fundingDirection = marketData.fundingRate > 0 ? 'longs pay shorts' : 'shorts pay longs';
             parts.push(`Funding Rate: ${fundingPercent}% (${fundingDirection})`);
-            // Add funding warning for the proposed direction
-            // FIXED: Use consistent threshold of 0.0001 (0.01%) across all contexts
-            if ((direction === 'LONG' && marketData.fundingRate > 0.0001) ||
-                (direction === 'SHORT' && marketData.fundingRate < -0.0001)) {
-                parts.push(`⚠️ WARNING: Funding rate is AGAINST your ${direction} position!`);
-            }
         }
         if (parts.length > 0) {
             marketDataSection = `\n${parts.join('\n')}`;
@@ -115,13 +131,34 @@ export function buildAnalysisApproachContext(
     return `${ctx.title}
 
 Coin: ${displaySymbol}/USDT
-Direction: ${direction}
+Selected Direction: ${direction}
 Current Price: ${priceStr}
 24h Change: ${changeStr}${marketDataSection}
 
 TASK: ${ctx.task}
 
-JUDGING: ${ctx.judging}`;
+JUDGING: ${ctx.judging}
+
+WORD LIMIT:
+- 150–200 words; under 120 too thin; >200 penalized
+
+FRAMEWORK REQUIREMENTS:
+- Method-specific metrics and techniques applied to this coin/direction
+- Time horizon declared and risk/reward assessed over that horizon
+- One cross-check from another methodology to avoid overfitting
+- Expected insight types explained and tied to thesis improvement
+ - Debate rather than repeat—quote a prior claim and bring NEW evidence or analysis
+ 
+ RESPONSE FORMAT:
+ - Methodology statement (1 sentence)
+ - Metrics/techniques (2–3 sentences; method-specific)
+ - Engagement (address one prior argument explicitly)
+ - Cross-check (1 sentence from another lens)
+ - Closing (1 sentence on added edge)
+ 
+ COMMON MISTAKES:
+ - Recommending trades or restarting thesis
+ - Repeating generic metrics; no falsifiable claim or horizon`;
 }
 
 /**
@@ -180,11 +217,14 @@ export function buildRiskAssessmentContext(
             const fundingPercent = safeNumber(marketData.fundingRate * 100, 4);
             const fundingDirection = marketData.fundingRate > 0 ? 'longs pay shorts' : 'shorts pay longs';
             parts.push(`Funding Rate: ${fundingPercent}% (${fundingDirection})`);
-            // Add funding warning for the proposed direction
-            // FIXED: Use consistent threshold of 0.0001 (0.01%) across all contexts
+            const autonomousCfg = (config && (config as any).autonomous) ? (config as any).autonomous : {};
+            const thresholdPct = Number.isFinite(autonomousCfg?.fundingWarnThresholdPercent)
+                ? autonomousCfg.fundingWarnThresholdPercent
+                : 0.01;
+            const threshold = Number.isFinite(thresholdPct) ? (thresholdPct / 100) : 0;
             if (proposedThesis.direction) {
-                if ((proposedThesis.direction === 'LONG' && marketData.fundingRate > 0.0001) ||
-                    (proposedThesis.direction === 'SHORT' && marketData.fundingRate < -0.0001)) {
+                if ((proposedThesis.direction === 'LONG' && marketData.fundingRate > threshold) ||
+                    (proposedThesis.direction === 'SHORT' && marketData.fundingRate < -threshold)) {
                     parts.push(`⚠️ RISK: Funding rate is AGAINST the proposed ${proposedThesis.direction} position!`);
                 }
             }
@@ -206,9 +246,33 @@ Proposed Thesis by ${proposedThesis.analystName}:
 
 TASK: ${ctx.task}
 
-HARD RULES: ${ctx.hardRules}
+${(() => {
+            const autonomous = (config && (config as any).autonomous) ? (config as any).autonomous : {};
+            const maxPositionSizePercent = Number.isFinite(autonomous?.maxPositionSizePercent) ? autonomous.maxPositionSizePercent : 10;
+            const maxLeverage = Number.isFinite(autonomous?.maxLeverage) ? autonomous.maxLeverage : 5;
+            const stopLossPercent = Number.isFinite(autonomous?.stopLossPercent) ? autonomous.stopLossPercent : 10;
+            return `HARD RULES: Max position ${safeNumber(maxPositionSizePercent, 0)}%, Max leverage ${safeNumber(maxLeverage, 0)}x, Max stop loss ${safeNumber(stopLossPercent, 0)}% from entry`;
+        })()}
 
-JUDGING: ${ctx.judging}`;
+JUDGING: ${ctx.judging}
+
+WORD LIMIT:
+- 150–200 words; under 120 too thin; >200 penalized
+
+DATA CHECKLIST:
+- Volatility/range metrics supporting stop placement
+- Funding/OI crowding and adverse-move scenarios
+- Distances (%) to stop and targets to quantify risk/reward
+ - Consider catalyst timing risk when relevant (unlock schedules, listings, mainnet/testnet launches, governance votes)
+
+OUTPUT FORMAT:
+- Position size (1–10), leverage (1–5x), stop-loss level
+- Invalidation triggers and scenario notes
+ 
+ COMMON MISTAKES:
+ - Platitudes without numbers; violating max leverage/stop rules
+ - Ignoring crowding or adverse-move scenarios
+ - Not linking invalidation to Stage 3 thesis`;
 }
 
 /**
@@ -300,7 +364,28 @@ ${winnersSection}
 
 TASK: ${ctx.task}
 
-JUDGING: ${ctx.judging}`;
+JUDGING: ${ctx.judging}
+
+WORD LIMIT:
+- 150–200 words; under 120 too thin; >200 penalized
+
+INTEGRATION CHECKLIST:
+- Tie new evidence directly to prior-stage winner arguments
+- Quantify improvements to risk/reward or probability
+- Specify execution triggers (time/price/flow) and invalidation
+- Provide one integrated thesis paragraph plus final parameters
+ - Catalyst taxonomy examples: token unlock schedules, exchange listings, ETF approvals, mainnet/testnet launches, governance votes; prefer near-term catalysts (7–14 days)
+ 
+ RESPONSE FORMAT:
+ - Thesis refinement (1–2 sentences referencing prior winners)
+ - New evidence or counter-evidence (2–3 sentences with numbers)
+ - Final parameters: entry, targets, stop-loss
+ - Catalyst and timeline (1 sentence), conviction level
+ 
+ COMMON MISTAKES:
+ - Restarting selection; ignoring prior winners
+ - Adding unrelated new arguments without integration
+ - Missing parameters or catalyst timing`;
 }
 
 /**
@@ -328,6 +413,7 @@ export function buildDebateTurnPrompt(
     previousArguments: string,
     turnNumber: number,
     totalTurns: number,
+    stage: 2 | 3 | 4 | 5,
     allPreviousTurns?: Array<{
         analystName: string;
         argument: string;
@@ -488,8 +574,8 @@ export function buildDebateTurnPrompt(
             }
         }
 
-        // Check for clustering: if we have 2+ stops within 5% of each other
-        if (stopLossValues.length >= 2) {
+        // Check for clustering only in stages where stop-loss is relevant (4 and 5)
+        if ((stage === 4 || stage === 5) && stopLossValues.length >= 2) {
             const sortedStops = [...stopLossValues].sort((a, b) => a - b);
             const minStop = sortedStops[0];
             const maxStop = sortedStops[sortedStops.length - 1];
@@ -509,7 +595,25 @@ export function buildDebateTurnPrompt(
         }
     }
 
-    // Build a more detailed prompt that emphasizes the methodology
+    // Select stage-specific general instructions
+    let generalInstructions: string;
+    switch (stage) {
+        case 2:
+            generalInstructions = DEBATE_TURN_INSTRUCTIONS.general.stage2;
+            break;
+        case 3:
+            generalInstructions = DEBATE_TURN_INSTRUCTIONS.general.stage3;
+            break;
+        case 4:
+            generalInstructions = DEBATE_TURN_INSTRUCTIONS.general.stage4;
+            break;
+        case 5:
+            generalInstructions = DEBATE_TURN_INSTRUCTIONS.general.stage5;
+            break;
+        default:
+            generalInstructions = DEBATE_TURN_INSTRUCTIONS.general.stage2;
+    }
+
     return `You are ${analystName}, an elite crypto analyst specializing in ${analystMethodology} methodology.
 
 YOUR METHODOLOGY: ${analystMethodology.toUpperCase()}
@@ -526,5 +630,16 @@ YOUR TURN: ${turnNumber} of ${totalTurns}
 ═══════════════════════════════════════════════════════════════
 ${turnType}
 
-${DEBATE_TURN_INSTRUCTIONS.general}`;
+${generalInstructions}
+Word Limit:
+- 150–200 words; judges penalize under 120 or over 200
+Response Format:
+- Opening (1 sentence with a specific number)
+- Main (2–3 sentences; 3–4 metrics)
+- Engagement (quote and address one prior claim)
+- Close (1 sentence on why your view wins)
+Quality Checklist:
+- Use exact numbers and stage-appropriate metrics
+- Directly engage prior arguments; avoid repetition
+- Declare horizon; include one cross-check where relevant`;
 }

@@ -6,6 +6,7 @@
 
 import type { AnalystMethodology } from '../analyst/types';
 
+
 /**
  * Safely get a system prompt for an analyst methodology
  * Validates that the methodology exists and returns a valid prompt

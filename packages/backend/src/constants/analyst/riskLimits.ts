@@ -45,10 +45,10 @@ export const GLOBAL_RISK_LIMITS = {
     // These values ensure worst-case (leverage × stopPercent) stays below ~90% liquidation threshold.
     // If MAX_SAFE_LEVERAGE changes, these values must be updated proportionally.
     STOP_LOSS_REQUIREMENTS: {
-        VALUE: 12, // Max -12% from entry or 200-week MA break (5x × 12% = 60% notional loss)
-        GROWTH: 12, // Max -12% from entry or narrative breaks (5x × 12% = 60% notional loss)
+        VALUE: 10, // Max -10% from entry or 200-week MA break (5x × 10% = 50% notional loss)
+        GROWTH: 10, // Max -10% from entry or narrative breaks (5x × 10% = 50% notional loss)
         TECHNICAL: 8, // Max -8% from entry or key support breaks (5x × 8% = 40% notional loss)
-        MACRO: 12, // Max -12% from entry or macro thesis invalidates (5x × 12% = 60% notional loss)
+        MACRO: 10, // Max -10% from entry or macro thesis invalidates (5x × 10% = 50% notional loss)
         SENTIMENT: 10, // Max -10% from entry or sentiment reverses (5x × 10% = 50% notional loss)
         RISK: 8, // Max -8% from entry (most conservative, 5x × 8% = 40% notional loss)
         QUANT: 10, // Max -10% from entry or statistical edge disappears (5x × 10% = 50% notional loss)

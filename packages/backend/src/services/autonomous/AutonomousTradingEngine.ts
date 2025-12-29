@@ -211,6 +211,12 @@ export class AutonomousTradingEngine extends EventEmitter {
             return;
         }
 
+        // If a previous loop is still cleaning up, wait for cleanup to finish
+        if (this.mainLoopPromise && !this.isStarting) {
+            logger.warn('Previous engine loop detected. Performing cleanup before restart...');
+            await this.cleanup();
+        }
+
         if (this.isStarting) {
             logger.warn('Autonomous trading engine is starting...');
             return;
@@ -413,7 +419,9 @@ export class AutonomousTradingEngine extends EventEmitter {
                     break;
                 } catch (error) {
                     if (retry === this.MAX_RETRIES - 1) {
-                        logger.warn(`Collaborative portfolio: Failed to fetch positions after ${this.MAX_RETRIES} retries`);
+                        logger.warn(`Collaborative portfolio: Failed to fetch positions after ${this.MAX_RETRIES} retries`, {
+                            error: error instanceof Error ? { message: error.message, stack: error.stack } : String(error)
+                        });
                     } else {
                         await this.sleep(1000 * (retry + 1));
                     }
@@ -616,7 +624,8 @@ export class AutonomousTradingEngine extends EventEmitter {
                     analysisDebate = await collaborativeFlowService.runAnalysisApproachDebate(
                         coinSymbol,
                         selectedMarketData,
-                        direction
+                        direction,
+                        [coinSelectorWinner]
                     );
                 } catch (error) {
                     logger.error('Analysis approach debate failed:', error);
@@ -673,7 +682,8 @@ export class AutonomousTradingEngine extends EventEmitter {
                     riskDebate = await collaborativeFlowService.runRiskAssessmentDebate(
                         coinSymbol,
                         approach,
-                        selectedMarketData
+                        selectedMarketData,
+                        [coinSelectorWinner, analysisWinner]
                     );
                 } catch (error) {
                     logger.error('Risk assessment debate failed:', error);
