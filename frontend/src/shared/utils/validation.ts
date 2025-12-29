@@ -31,32 +31,19 @@ export function validateEmail(email: string): boolean {
  * Validate a password meets security requirements
  * @param password - The password to validate
  * @returns Object with valid flag and array of error messages
- * 
- * Requirements:
- * - Must be a string
- * - Length: 8-128 characters
- * - Must contain at least one uppercase letter
- * - Must contain at least one lowercase letter
- * - Must contain at least one number
  */
 export function validatePassword(password: string): { valid: boolean; errors: string[] } {
     const errors: string[] = [];
-
-    // Type check
     if (!password || typeof password !== 'string') {
         errors.push('Password must be a string');
         return { valid: false, errors };
     }
-
-    // Length validation
     if (password.length < 8) {
         errors.push('Password must be at least 8 characters');
     }
     if (password.length > 128) {
         errors.push('Password must be at most 128 characters');
     }
-
-    // Complexity validation
     if (!/[A-Z]/.test(password)) {
         errors.push('Password must contain at least one uppercase letter');
     }
@@ -66,7 +53,6 @@ export function validatePassword(password: string): { valid: boolean; errors: st
     if (!/[0-9]/.test(password)) {
         errors.push('Password must contain at least one number');
     }
-
     return { valid: errors.length === 0, errors };
 }
 

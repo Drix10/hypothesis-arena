@@ -5,8 +5,8 @@ WORKDIR /app
 
 # Copy package files
 COPY package*.json ./
-COPY packages/backend/package*.json ./packages/backend/
-COPY packages/frontend/package*.json ./packages/frontend/
+COPY backend/package*.json ./backend/
+COPY frontend/package*.json ./frontend/
 
 # Install dependencies
 RUN npm ci
@@ -27,8 +27,8 @@ COPY package*.json ./
 COPY packages/backend/package.json ./packages/backend/
 
 # Copy built artifacts
-COPY --from=builder /app/packages/backend/dist ./packages/backend/dist
-COPY --from=builder /app/packages/frontend/dist ./packages/frontend/dist
+COPY --from=builder /app/backend/dist ./backend/dist
+COPY --from=builder /app/frontend/dist ./frontend/dist
 
 # Install production dependencies (backend only - frontend is static)
 RUN npm ci --omit=dev -w @hypothesis-arena/backend

@@ -5,10 +5,9 @@ import fs from 'fs';
 // Load .env from project root using reliable path resolution
 // Uses __dirname which is reliable in CommonJS (backend uses CommonJS)
 const envPaths = [
-    path.resolve(__dirname, '../../../../.env'),  // From packages/backend/dist/config
-    path.resolve(__dirname, '../../../.env'),     // From packages/backend/src/config (ts-node)
-    path.resolve(__dirname, '../../.env'),        // From packages/backend/dist
-    path.resolve(process.cwd(), '.env'),          // From cwd (fallback)
+    path.resolve(__dirname, '../../../.env'),     // From backend/src/config or backend/dist/config → project root
+    path.resolve(__dirname, '../../.env'),        // From backend/src/config or backend/dist/config → backend root
+    path.resolve(process.cwd(), '.env'),          // Fallback: current working directory
 ];
 
 let loaded = false;

@@ -13,8 +13,8 @@
     "noUnusedParameters": true
   },
   "references": [
-    { "path": "./packages/backend" },
-    { "path": "./packages/frontend" }
+    { "path": "./backend" },
+    { "path": "./frontend" }
   ],
   "files": [],
   "include": []

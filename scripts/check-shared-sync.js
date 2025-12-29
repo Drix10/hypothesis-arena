@@ -13,8 +13,8 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 
-const BACKEND_SHARED = path.join(__dirname, "../packages/backend/src/shared");
-const FRONTEND_SHARED = path.join(__dirname, "../packages/frontend/src/shared");
+const BACKEND_SHARED = path.join(__dirname, "../backend/src/shared");
+const FRONTEND_SHARED = path.join(__dirname, "../frontend/src/shared");
 
 function getFileHash(filePath) {
   const content = fs.readFileSync(filePath);
