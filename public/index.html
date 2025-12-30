@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hypothesis Arena - AI Trading Platform</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>⚔️ Hypothesis Arena</h1>
+            <p class="subtitle">8 AI Analysts • Turn-by-Turn Debates • WEEX Futures</p>
+        </header>
+
+        <main>
+            <!-- Status Section -->
+            <section class="card">
+                <h2>System Status</h2>
+                <div id="status" class="status-grid">
+                    <div class="status-item">
+                        <span class="label">Engine</span>
+                        <span id="engine-status" class="value loading">Loading...</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="label">Database</span>
+                        <span id="db-status" class="value loading">Loading...</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="label">Mode</span>
+                        <span id="mode-status" class="value loading">Loading...</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="label">Last Cycle</span>
+                        <span id="last-cycle" class="value loading">Loading...</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Controls Section -->
+            <section class="card">
+                <h2>Engine Controls</h2>
+                <div class="controls">
+                    <button id="btn-start" class="btn btn-success" onclick="startEngine()">▶ Start Engine</button>
+                    <button id="btn-stop" class="btn btn-danger" onclick="stopEngine()">⏹ Stop Engine</button>
+                    <button id="btn-cycle" class="btn btn-primary" onclick="triggerCycle()">🔄 Trigger Cycle</button>
+                    <button id="btn-refresh" class="btn btn-secondary" onclick="refreshStatus()">↻ Refresh</button>
+                </div>
+            </section>
+
+            <!-- Portfolio Section -->
+            <section class="card">
+                <h2>Portfolio</h2>
+                <div id="portfolio" class="portfolio-grid">
+                    <div class="portfolio-item">
+                        <span class="label">Balance</span>
+                        <span id="balance" class="value big">$0.00</span>
+                    </div>
+                    <div class="portfolio-item">
+                        <span class="label">Equity</span>
+                        <span id="equity" class="value big">$0.00</span>
+                    </div>
+                    <div class="portfolio-item">
+                        <span class="label">Unrealized PnL</span>
+                        <span id="unrealized-pnl" class="value big">$0.00</span>
+                    </div>
+                    <div class="portfolio-item">
+                        <span class="label">Open Positions</span>
+                        <span id="positions-count" class="value big">0</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Positions Section -->
+            <section class="card">
+                <h2>Open Positions</h2>
+                <div id="positions-list" class="positions-list">
+                    <p class="empty">No open positions</p>
+                </div>
+            </section>
+
+            <!-- Recent Trades Section -->
+            <section class="card">
+                <h2>Recent Activity</h2>
+                <div id="activity-log" class="activity-log">
+                    <p class="empty">No recent activity</p>
+                </div>
+            </section>
+
+            <!-- Logs Section -->
+            <section class="card">
+                <h2>Live Logs</h2>
+                <div id="logs" class="logs">
+                    <p class="log-entry">Waiting for logs...</p>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p>Built for WEEX Hackathon 2025 • Express 5 • Gemini 2.5 Flash</p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

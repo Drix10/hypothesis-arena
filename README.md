@@ -29,14 +29,12 @@ Hypothesis Arena is an AI-powered crypto trading platform where **8 specialized 
 
 ### Key Features
 
-- **8 AI Analysts** - Each with 800+ line methodology prompts (Value, Growth, Technical, Macro, Sentiment, Risk, Quant, Contrarian)
+- **8 AI Analysts** - Value, Growth, Technical, Macro, Sentiment, Risk, Quant, Contrarian
 - **Turn-by-Turn Debates** - 40 debate turns per cycle across 4 debate stages (configurable)
 - **Collaborative Portfolio** - All analysts share ONE portfolio (not 8 separate ones)
 - **Live WEEX Trading** - Execute futures trades with TP/SL directly on WEEX Exchange
 - **3-Tier Circuit Breakers** - Yellow/Orange/Red alerts based on BTC drops, funding rates, and drawdowns
 - **Risk Council Veto** - Karen (Risk Manager) has final approval/veto power on all trades
-- **Exhaustive Type Safety** - Switch statements with `never` type for compile-time guarantees
-- **Robust Validation** - Comprehensive input validation, null checks, and edge case handling
 
 ---
 
@@ -75,37 +73,33 @@ Hypothesis Arena is an AI-powered crypto trading platform where **8 specialized 
 
 ```
 hypothesis-arena/
-├── backend/               # Node.js + Express API server (port 25655)
-│   ├── src/              # TypeScript source code
-│   ├── dist/             # Compiled JavaScript
-│   ├── migrations/       # Database migrations
-│   ├── .env              # Backend configuration
-│   ├── package.json      # Backend dependencies
-│   └── tsconfig.json     # Backend TypeScript config
-├── frontend/             # React + Vite SPA (port 5173)
-│   ├── src/              # React components
-│   ├── dist/             # Production build
-│   ├── .env              # Frontend configuration
-│   ├── package.json      # Frontend dependencies
-│   ├── tsconfig.json     # Frontend TypeScript config
-│   └── index.html        # Entry HTML file
+├── src/                   # TypeScript backend source code
+│   ├── api/              # REST API routes
+│   ├── services/         # Business logic (AI, trading, WEEX)
+│   ├── config/           # Database, Redis, environment
+│   ├── constants/        # AI prompts, analyst profiles
+│   └── utils/            # Logger, helpers
+├── public/               # Frontend static files (HTML, CSS, JS, React)
+├── dist/                 # Compiled backend JavaScript
+├── migrations/           # Database migrations
 ├── weex/                 # WEEX API documentation
 ├── scripts/              # Utility scripts
-├── FLOW.md              # Detailed system architecture docs
-└── README.md            # This file
+├── package.json          # Dependencies
+├── tsconfig.json         # TypeScript config
+├── .env                  # Configuration
+└── README.md             # This file
 ```
 
-**Note:** Backend and frontend are completely independent applications, each with their own dependencies, configuration, and build process.
+**Single Port Architecture:** Both API (`/api/*`) and frontend static files are served on port 25655.
 
 ### Tech Stack
 
-| Layer    | Technology                                                |
-| -------- | --------------------------------------------------------- |
-| Frontend | React 19, Vite, TailwindCSS, Framer Motion                |
-| Backend  | Express 5, TypeScript, PostgreSQL (Neon), Redis (Upstash) |
-| AI       | Google Gemini 2.5 Flash                                   |
-| Exchange | WEEX Futures API                                          |
-| Auth     | JWT with refresh tokens                                   |
+| Layer    | Technology                                 |
+| -------- | ------------------------------------------ |
+| Backend  | Express 5, TypeScript, PostgreSQL (Neon)   |
+| AI       | Google Gemini 2.5 Flash                    |
+| Exchange | WEEX Futures API                           |
+| Frontend | Simple HTML/CSS/JS (served from `/public`) |
 
 ---
 
@@ -115,7 +109,6 @@ hypothesis-arena/
 
 - Node.js 18+
 - PostgreSQL database ([Neon](https://neon.tech) - free tier)
-- Redis instance ([Upstash](https://upstash.com) - free tier)
 - Gemini API key ([Google AI Studio](https://aistudio.google.com/apikey))
 - WEEX API credentials ([WEEX](https://www.weex.com/api))
 
@@ -126,35 +119,26 @@ hypothesis-arena/
 git clone https://github.com/drix10/hypothesis-arena.git
 cd hypothesis-arena
 
-# Setup Backend
-cd backend
+# Install dependencies
 npm install
+
+# Setup environment
 cp .env.example .env
 # Edit .env with your API keys (DATABASE_URL, REDIS_URL, WEEX credentials, etc.)
 
 # Run database migrations
 npm run migrate
 
-# Setup Frontend
-cd ../frontend
-npm install
-cp .env.example .env
-# Edit .env with your backend API URL
-
-# Start Backend (Terminal 1)
-cd backend
+# Start the server
 npm run dev
-# Backend runs on http://localhost:25655
-
-# Start Frontend (Terminal 2)
-cd frontend
-npm run dev
-# Frontend runs on http://localhost:5173
+# Server runs on http://localhost:25655
+# Frontend served from http://localhost:25655
+# API available at http://localhost:25655/api
 ```
 
 ### Environment Variables
 
-**Backend** (`backend/.env`):
+See `.env.example` for all options. Key variables:
 
 ```env
 # Database (Neon PostgreSQL)
@@ -170,58 +154,13 @@ GEMINI_API_KEY=your_gemini_api_key
 WEEX_API_KEY=your_weex_api_key
 WEEX_SECRET_KEY=your_weex_api_secret
 WEEX_PASSPHRASE=your_weex_passphrase
-WEEX_BASE_URL=https://api-contract.weex.com
-WEEX_WS_URL=wss://ws-contract.weex.com/v2/ws
 
 # Auth
 JWT_SECRET=your_jwt_secret
-JWT_EXPIRY=7d
-REFRESH_TOKEN_EXPIRY=30d
 
 # Server
 PORT=25655
 NODE_ENV=development
-LOG_LEVEL=info
-
-# Trading Configuration
-MAX_POSITION_SIZE=0.2
-MAX_TOTAL_INVESTED=0.8
-DRAWDOWN_PAUSE_THRESHOLD=0.3
-DRAWDOWN_LIQUIDATE_THRESHOLD=0.8
-MAX_LEVERAGE=10
-
-# Autonomous Trading Engine
-NUM_AI_ANALYSTS=8
-AI_ANALYST_BUDGET=100
-USER_TRADING_BUDGET=200
-TOTAL_CAPITAL=1000
-CYCLE_INTERVAL_MS=600000
-MIN_TRADE_INTERVAL_MS=900000
-DEBATE_FREQUENCY=3
-MAX_POSITION_SIZE_PERCENT=30
-MIN_BALANCE_TO_TRADE=10
-DEFAULT_LEVERAGE=5
-STOP_LOSS_PERCENT=5
-TAKE_PROFIT_PERCENT=10
-MIN_CONFIDENCE_TO_TRADE=60
-MIN_CONSENSUS_TO_TRADE=2
-MAX_RETRIES=3
-DRY_RUN=false
-REQUIRE_AI_LOGS=true
-
-# CORS
-CORS_ORIGINS=http://localhost:5173,http://localhost:3000
-```
-
-**Frontend** (`frontend/.env`):
-
-```env
-# API Configuration
-VITE_API_URL=http://localhost:25655/api
-VITE_WS_URL=ws://localhost:25655
-
-# Environment
-VITE_NODE_ENV=development
 ```
 
 ---
@@ -298,62 +237,24 @@ WEEX-approved futures contracts:
 
 ---
 
-## ✨ Features
-
-### 🏆 Turn-by-Turn AI Debates
-
-- **40 Turns Per Cycle** - Real debates, not parallel API calls (configurable via `DEBATE_TURNS_PER_ANALYST`)
-- **4-Dimension Scoring** - Data Quality, Logic, Risk Awareness, Catalyst (weights configurable)
-- **Methodology-Specific Arguments** - Each analyst uses their full 800+ line prompt
-- **Full Logging** - Every argument logged without truncation
-- **Exhaustive Validation** - Null checks, empty string filtering, timeout caps
-
-### 📈 Autonomous Trading Engine
-
-- **10-Minute Cycles** - Configurable via environment
-- **Dynamic Scheduling** - Faster during peak market hours (US-Europe overlap)
-- **Exponential Backoff** - On consecutive failures
-- **Dry Run Mode** - Test without executing real trades
-
-### 🎨 Cinematic UI
-
-- **Glass Morphism** - Frosted glass card effects
-- **Animated Meters** - Circular progress indicators
-- **Price Range Bars** - Bull/bear target visualization
-- **Scanline Textures** - Command center aesthetic
-- **Golden Accents** - Champion highlights
-
----
-
 ## 🛠️ Scripts
 
-### Backend (`cd backend`)
-
-| Command                         | Description                     |
-| ------------------------------- | ------------------------------- |
-| `npm run dev`                   | Start backend in development    |
-| `npm run build`                 | Build backend for production    |
-| `npm run start`                 | Start production backend server |
-| `npm run migrate`               | Run database migrations         |
-| `npm run migrate:down`          | Rollback last migration         |
-| `npm run migrate:create <name>` | Create new migration            |
-| `npm run typecheck`             | Type check without building     |
-
-### Frontend (`cd frontend`)
-
-| Command             | Description                       |
-| ------------------- | --------------------------------- |
-| `npm run dev`       | Start frontend development server |
-| `npm run build`     | Build frontend for production     |
-| `npm run preview`   | Preview production build locally  |
-| `npm run typecheck` | Type check without building       |
+| Command                         | Description                 |
+| ------------------------------- | --------------------------- |
+| `npm run dev`                   | Start server in development |
+| `npm run build`                 | Build for production        |
+| `npm run start`                 | Start production server     |
+| `npm run migrate`               | Run database migrations     |
+| `npm run migrate:down`          | Rollback last migration     |
+| `npm run migrate:create <name>` | Create new migration        |
+| `npm run typecheck`             | Type check without building |
 
 ---
 
-## 📁 Backend Structure
+## 📁 Project Structure
 
 ```
-backend/src/
+src/
 ├── api/routes/              # REST endpoints
 ├── config/                  # Database, Redis, environment
 ├── constants/
@@ -378,34 +279,21 @@ backend/src/
 │   ├── types/               # TypeScript type definitions
 │   └── utils/               # Shared utilities
 └── utils/                   # Logger, helpers
-```
 
-## 📁 Frontend Structure
-
-```
-frontend/src/
-├── components/              # React components
-│   ├── ui/                 # Reusable UI components
-│   ├── charts/             # Chart components
-│   └── layout/             # Layout components
-├── pages/                   # Page components
-├── hooks/                   # Custom React hooks
-├── services/                # API client services
-├── types/                   # TypeScript type definitions
-├── utils/                   # Utility functions
-└── styles/                  # Global styles
+public/
+├── index.html               # Frontend entry point
+├── styles.css               # CSS styles
+└── app.js                   # JavaScript logic
 ```
 
 ---
 
 ## 🔒 Security
 
-- JWT authentication with refresh token rotation
 - WEEX API signature verification (HMAC-SHA256)
 - Rate limiting on all endpoints
 - Input validation and sanitization
-- Secure credential storage
-- userId validation on all database queries
+- All configuration via environment variables
 
 ---
 
@@ -432,7 +320,7 @@ MIT License - see [LICENSE](LICENSE) for details.
   
   **Built for WEEX Hackathon 2025**
   
-  React 19 • Express 5 • Gemini 3 Flash • WEEX Futures API
+  Express 5 • Gemini 2.5 Flash • WEEX Futures API • React 19
   
   ⭐ Star if you find this useful • 🐛 Report bugs • 💡 Suggest features
   
