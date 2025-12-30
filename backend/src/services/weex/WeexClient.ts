@@ -3,6 +3,7 @@ import axios, { AxiosInstance, AxiosError } from 'axios';
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
 import { WeexApiError, RateLimitError } from '../../utils/errors';
+import { validateWeexOrder } from '../../shared/utils/weex';
 import {
     WeexCredentials,
     WeexOrderRequest,
@@ -37,6 +38,7 @@ export class WeexClient {
     private ipBucket: TokenBucket;
     private uidBucket: TokenBucket;
     private orderBucket: TokenBucket;
+    private responseInterceptorId: number | null = null;
 
     constructor(credentials?: WeexCredentials) {
         this.credentials = credentials || {
@@ -77,7 +79,8 @@ export class WeexClient {
     }
 
     private setupInterceptors() {
-        this.client.interceptors.response.use(
+        // Store interceptor ID for cleanup
+        this.responseInterceptorId = this.client.interceptors.response.use(
             (response) => response,
             (error: AxiosError) => {
                 if (error.response?.status === 429) {
@@ -96,6 +99,17 @@ export class WeexClient {
                 throw cleanError;
             }
         );
+    }
+
+    /**
+     * Cleanup resources to prevent memory leaks
+     */
+    cleanup(): void {
+        // Remove response interceptor
+        if (this.responseInterceptorId !== null) {
+            this.client.interceptors.response.eject(this.responseInterceptorId);
+            this.responseInterceptorId = null;
+        }
     }
 
     private generateSignature(
@@ -171,6 +185,9 @@ export class WeexClient {
         // Reset if elapsed time is unreasonably large (> 1 hour) or negative (clock skew)
         // This prevents overflow and handles system clock changes
         if (elapsed > 3600000 || elapsed < 0) {
+            if (elapsed < 0) {
+                logger.warn(`Clock skew detected: elapsed time is negative (${elapsed}ms). Resetting rate limiter.`);
+            }
             bucket.tokens = limit;
             bucket.lastRefill = now;
             return;
@@ -185,8 +202,20 @@ export class WeexClient {
         const weight = ENDPOINT_WEIGHTS[endpoint] || 1;
         let attempts = 0;
         const MAX_ATTEMPTS = 20;
+        const MAX_TOTAL_WAIT_MS = 60000; // 60 seconds max total wait
+        const startTime = Date.now();
+
+        // Validate rate limits are configured correctly
+        if (DEFAULT_RATE_LIMITS.ipLimit <= 0 || DEFAULT_RATE_LIMITS.uidLimit <= 0) {
+            throw new Error('Invalid rate limit configuration: limits must be > 0');
+        }
 
         while (attempts < MAX_ATTEMPTS) {
+            // Check if we've exceeded total wait time
+            if (Date.now() - startTime > MAX_TOTAL_WAIT_MS) {
+                throw new RateLimitError(`Rate limit retry timeout after ${MAX_TOTAL_WAIT_MS}ms`);
+            }
+
             // Refill buckets
             this.refillBucket(this.ipBucket, DEFAULT_RATE_LIMITS.ipLimit, DEFAULT_RATE_LIMITS.ipWindowMs);
             this.refillBucket(this.uidBucket, DEFAULT_RATE_LIMITS.uidLimit, DEFAULT_RATE_LIMITS.uidWindowMs);
@@ -207,6 +236,15 @@ export class WeexClient {
                 if (isOrderRequest) {
                     this.orderBucket.tokens = Math.max(0, this.orderBucket.tokens - 1);
                 }
+
+                // Warn if tokens are running low (< 10%)
+                if (this.ipBucket.tokens < DEFAULT_RATE_LIMITS.ipLimit * 0.1) {
+                    logger.warn(`IP rate limit tokens low: ${this.ipBucket.tokens.toFixed(0)}/${DEFAULT_RATE_LIMITS.ipLimit}`);
+                }
+                if (this.uidBucket.tokens < DEFAULT_RATE_LIMITS.uidLimit * 0.1) {
+                    logger.warn(`UID rate limit tokens low: ${this.uidBucket.tokens.toFixed(0)}/${DEFAULT_RATE_LIMITS.uidLimit}`);
+                }
+
                 return;
             }
 
@@ -504,6 +542,22 @@ export class WeexClient {
     }
 
     async placeOrder(order: WeexOrderRequest): Promise<WeexOrderResponse> {
+        // Validate order before submission
+        try {
+            validateWeexOrder({
+                symbol: order.symbol,
+                size: order.size,
+                price: order.price,
+                type: order.type,
+                order_type: order.order_type,
+                match_price: order.match_price,
+                client_oid: order.client_oid,
+            });
+        } catch (error) {
+            logger.error('Order validation failed:', error);
+            throw error;
+        }
+
         return this.request<WeexOrderResponse>(
             'POST',
             '/capi/v2/order/placeOrder',

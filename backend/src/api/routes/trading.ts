@@ -117,8 +117,8 @@ router.post('/execute', authenticate, async (req: Request, res: Response, next: 
                 type: data.side.toLowerCase() === 'buy' ? '1' : '2', // 1=Open long, 2=Open short
                 order_type: '0', // Normal order
                 match_price: data.type === 'MARKET' ? '1' : '0', // 1=Market, 0=Limit
-                size: String(data.size),
-                price: data.price ? String(data.price) : '0',
+                size: parseFloat(String(data.size)).toFixed(4), // Match WEEX stepSize 0.0001
+                price: data.price ? parseFloat(String(data.price)).toFixed(2) : '0', // Match WEEX tick_size
             });
 
             if (!orderResponse.order_id) {

@@ -1,5 +1,4 @@
 import express from 'express';
-import path from 'path';
 import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
@@ -74,21 +73,6 @@ app.get('/health', async (_req, res) => {
         },
     });
 });
-
-// Serve frontend in production
-if (config.nodeEnv === 'production') {
-    const frontendPath = path.join(__dirname, '../../frontend/dist');
-    app.use(express.static(frontendPath, { maxAge: '1d' }));
-
-    // SPA fallback
-    app.get('*', (req, res, next) => {
-        if (req.path.startsWith('/api') || req.path.startsWith('/ws')) {
-            next();
-            return;
-        }
-        res.sendFile(path.join(frontendPath, 'index.html'));
-    });
-}
 
 // Error handlers
 app.use(notFoundHandler);

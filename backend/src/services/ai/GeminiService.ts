@@ -13,6 +13,7 @@
 import { GoogleGenerativeAI, GenerativeModel, SchemaType } from '@google/generative-ai';
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
+import { roundToStepSize, roundToTickSize } from '../../shared/utils/weex';
 import { aiLogService } from '../compliance/AILogService';
 import { ANALYST_PROFILES, THESIS_SYSTEM_PROMPTS, type AnalystMethodology, buildDebatePrompt } from '../../constants/analyst';
 import { getSystemPrompt } from '../../constants/prompts/promptHelpers';
@@ -1553,7 +1554,8 @@ Respond ONLY with valid JSON matching this exact structure.`;
                 );
             }
 
-            if (!marketData.currentPrice || marketData.currentPrice <= 0) {
+            // Validate market price before division
+            if (!marketData.currentPrice || !Number.isFinite(marketData.currentPrice) || marketData.currentPrice <= 0) {
                 throw new Error(
                     `Cannot create new position without valid market price. ` +
                     `Symbol: ${marketData.symbol}, Price: ${marketData.currentPrice}`
@@ -1562,7 +1564,18 @@ Respond ONLY with valid JSON matching this exact structure.`;
 
             // Calculate actual size from position size percent and account balance
             const positionValue = accountBalance * (riskManagement.positionSizePercent / 100);
-            size = positionValue / marketData.currentPrice;
+            const rawSize = positionValue / marketData.currentPrice;
+
+            // Validate calculated size
+            if (!Number.isFinite(rawSize) || rawSize <= 0 || isNaN(rawSize)) {
+                throw new Error(
+                    `Invalid size calculated: ${rawSize}. ` +
+                    `Balance: ${accountBalance}, Position %: ${riskManagement.positionSizePercent}%, ` +
+                    `Price: ${marketData.currentPrice}`
+                );
+            }
+
+            size = rawSize;
 
             // Ensure minimum size (0.001 for most pairs)
             if (size < 0.001) {
@@ -1575,8 +1588,14 @@ Respond ONLY with valid JSON matching this exact structure.`;
             }
         }
 
-        // Generate unique client order ID
-        const clientOid = `ha_${champion.analystId}_${Date.now()}`;
+        // Generate unique client order ID (max 40 chars per WEEX spec)
+        const timestamp = Date.now();
+        const clientOid = `ha_${champion.analystId}_${timestamp}`.slice(0, 40);
+
+        // Validate client order ID length
+        if (clientOid.length > 40) {
+            logger.warn(`Client order ID truncated from ${`ha_${champion.analystId}_${timestamp}`.length} to 40 chars`);
+        }
 
         // Determine position direction for TP/SL fallback logic
         const isLongPosition = isBullish;
@@ -1614,14 +1633,14 @@ Respond ONLY with valid JSON matching this exact structure.`;
 
         return {
             symbol: marketData.symbol,
-            client_oid: clientOid.slice(0, 40),
-            size: size.toString(),
+            client_oid: clientOid, // Already validated to be <= 40 chars
+            size: roundToStepSize(size), // WEEX stepSize 0.0001
             type: orderType,
             order_type: '0', // Normal limit order
             match_price: '1', // Market price for immediate execution
-            price: marketData.currentPrice.toString(),
-            presetTakeProfitPrice: validTpPrice.toString(),
-            presetStopLossPrice: validSlPrice.toString(),
+            price: roundToTickSize(marketData.currentPrice), // WEEX tick_size
+            presetTakeProfitPrice: roundToTickSize(validTpPrice),
+            presetStopLossPrice: roundToTickSize(validSlPrice),
             marginMode: 1, // Cross mode
         };
     }
@@ -1779,17 +1798,18 @@ Respond ONLY with valid JSON matching this exact structure.`;
         marketData: ExtendedMarketData,
         existingPosition: { side: 'LONG' | 'SHORT'; size: number }
     ): TradeOrder {
-        const clientOid = `ha_emergency_close_${Date.now()}`;
+        const timestamp = Date.now();
+        const clientOid = `ha_emergency_close_${timestamp}`.slice(0, 40);
         const orderType: WeexOrderType = existingPosition.side === 'LONG' ? '3' : '4'; // 3=Close long, 4=Close short
 
         return {
             symbol: marketData.symbol,
-            client_oid: clientOid.slice(0, 40),
-            size: existingPosition.size.toString(),
+            client_oid: clientOid,
+            size: roundToStepSize(existingPosition.size), // WEEX stepSize 0.0001
             type: orderType,
             order_type: '0', // Normal limit order
             match_price: '1', // Market price for immediate execution
-            price: marketData.currentPrice.toString(),
+            price: roundToTickSize(marketData.currentPrice), // WEEX tick_size
             marginMode: 1, // Cross mode
         };
     }
