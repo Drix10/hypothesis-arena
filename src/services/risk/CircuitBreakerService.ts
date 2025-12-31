@@ -11,7 +11,8 @@
 
 import { logger } from '../../utils/logger';
 import { getWeexClient } from '../weex/WeexClient';
-import { pool } from '../../config/database';
+import { prisma } from '../../config/database';
+import { config } from '../../config';
 import { GLOBAL_RISK_LIMITS } from '../../constants/analyst';
 
 export type CircuitBreakerLevel = 'NONE' | 'YELLOW' | 'ORANGE' | 'RED';
@@ -30,15 +31,17 @@ export class CircuitBreakerService {
     private weexClient = getWeexClient();
     private lastCheckTime: number = 0;
     private cachedStatus: CircuitBreakerStatus | null = null;
-    private readonly CACHE_DURATION_MS = 60000; // Cache for 1 minute
-    private checkInProgress: Promise<CircuitBreakerStatus> | null = null; // Prevent concurrent checks
+    private readonly CACHE_DURATION_MS = config.autonomous.circuitBreakerCacheDurationMs; // From config
+    private checkInProgress: Promise<CircuitBreakerStatus> | null = null; // Mutex: prevents concurrent checks
 
     /**
      * Check all circuit breaker conditions
      * 
-     * FIXED: Race condition - now properly waits for in-flight checks
+     * FIXED: Race condition - now properly waits for in-flight checks using mutex pattern
+     * Cache updates are synchronized to prevent concurrent modifications
+     * FIXED: Memory leak - ensures checkInProgress is always cleared even on error
      */
-    async checkCircuitBreakers(userId?: string): Promise<CircuitBreakerStatus> {
+    async checkCircuitBreakers(): Promise<CircuitBreakerStatus> {
         const now = Date.now();
 
         // Return cached status if recent (within 1 minute)
@@ -50,28 +53,38 @@ export class CircuitBreakerService {
         // This prevents multiple concurrent checks from hitting the API/DB
         if (this.checkInProgress) {
             logger.debug('Circuit breaker check already in progress, waiting...');
+            // CRITICAL: Return the promise directly to avoid creating new promise chain
+            // This ensures all callers wait for the same check
             return this.checkInProgress;
         }
 
         // Start new check and store the promise
-        this.checkInProgress = this.performCheck(userId);
+        // CRITICAL: Wrap in try-catch to ensure checkInProgress is always cleared
+        this.checkInProgress = (async () => {
+            try {
+                return await this.performCheck();
+            } catch (error) {
+                logger.error('Circuit breaker check failed:', error);
+                // Return YELLOW alert on error (fail-safe)
+                return {
+                    level: 'YELLOW' as CircuitBreakerLevel,
+                    reason: `Circuit breaker check error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+                    timestamp: Date.now(),
+                };
+            } finally {
+                // CRITICAL: Clear the in-flight promise in finally block
+                // This ensures it's cleared even if performCheck throws
+                this.checkInProgress = null;
+            }
+        })();
 
-        try {
-            const result = await this.checkInProgress;
-            return result;
-        } catch (error) {
-            logger.error('Circuit breaker check failed:', error);
-            throw error;
-        } finally {
-            // Clear the in-flight promise
-            this.checkInProgress = null;
-        }
+        return this.checkInProgress;
     }
 
     /**
      * Perform the actual circuit breaker check
      */
-    private async performCheck(userId?: string): Promise<CircuitBreakerStatus> {
+    private async performCheck(): Promise<CircuitBreakerStatus> {
         try {
             // Check BTC drop first (most critical) - fail fast
             const btcStatus = await this.checkBtcDrop();
@@ -84,7 +97,7 @@ export class CircuitBreakerService {
             // Check remaining conditions in parallel
             const [fundingStatus, portfolioStatus, exchangeStatus] = await Promise.all([
                 this.checkFundingRateExtremes(),
-                userId ? this.checkPortfolioDrawdown(userId) : Promise.resolve({ level: 'NONE' as CircuitBreakerLevel, reason: '' }),
+                this.checkPortfolioDrawdown(),
                 this.checkExchangeHealth(),
             ]);
 
@@ -139,7 +152,7 @@ export class CircuitBreakerService {
     }
 
     /**
-     * Update cache atomically
+     * Update cache (synchronous operation, no lock needed)
      */
     private updateCache(status: CircuitBreakerStatus): void {
         this.cachedStatus = status;
@@ -278,14 +291,10 @@ export class CircuitBreakerService {
      * 
      * FAIL-CLOSED: Returns YELLOW alert if wallet balance unavailable
      * to prevent trading without knowing account state
+     * 
+     * FIXED: Added zero-division protection
      */
-    private async checkPortfolioDrawdown(userId: string): Promise<Partial<CircuitBreakerStatus>> {
-        // Validate userId to prevent SQL injection and invalid queries
-        if (!userId || typeof userId !== 'string' || userId.trim().length === 0) {
-            logger.warn('Invalid userId provided to checkPortfolioDrawdown');
-            return { level: 'NONE', reason: '' };
-        }
-
+    private async checkPortfolioDrawdown(): Promise<Partial<CircuitBreakerStatus>> {
         try {
             // Get ACTUAL wallet balance from WEEX (source of truth)
             let totalCurrent: number;
@@ -310,27 +319,42 @@ export class CircuitBreakerService {
             }
 
             // Get portfolio value from 24 hours ago from snapshots
-            const dayAgoResult = await pool.query(
-                `SELECT total_value
-                 FROM performance_snapshots 
-                 WHERE user_id = $1 
-                   AND timestamp >= NOW() - INTERVAL '24 hours'
-                   AND timestamp <= NOW() - INTERVAL '23 hours'
-                 ORDER BY timestamp ASC
-                 LIMIT 1`,
-                [userId]
-            );
+            // NOTE: This query intentionally does NOT filter by user_id.
+            // The system operates with a single shared portfolio controlled via environment variables.
+            // User authentication was removed in migration 004_remove_user_auth.sql.
+            // 
+            // WIDENED TIME WINDOW: Query 22-26 hours ago (4-hour window) to handle variable snapshot frequencies
+            // This ensures we find a snapshot even if snapshots are taken hourly or less frequently
+            const twentySixHoursAgo = new Date(Date.now() - 26 * 60 * 60 * 1000);
+            const twentyTwoHoursAgo = new Date(Date.now() - 22 * 60 * 60 * 1000);
+
+            const dayAgoSnapshot = await prisma.performanceSnapshot.findFirst({
+                where: {
+                    timestamp: {
+                        gte: twentySixHoursAgo,
+                        lte: twentyTwoHoursAgo
+                    }
+                },
+                orderBy: {
+                    timestamp: 'desc' // Get most recent snapshot in the window
+                },
+                select: {
+                    totalValue: true
+                }
+            });
 
             // If no 24h snapshot, we can't calculate drawdown
             // This is acceptable for new accounts - log and continue
-            if (dayAgoResult.rows.length === 0 || !dayAgoResult.rows[0].total_value) {
+            if (!dayAgoSnapshot || !dayAgoSnapshot.totalValue) {
                 logger.debug('No 24h snapshot available for drawdown calculation - new account or missing data');
                 return { level: 'NONE', reason: '' };
             }
 
-            const total24hAgo = parseFloat(dayAgoResult.rows[0].total_value);
+            const total24hAgo = dayAgoSnapshot.totalValue;
 
+            // CRITICAL FIX: Protect against division by zero
             if (!Number.isFinite(total24hAgo) || total24hAgo <= 0) {
+                logger.warn(`Invalid 24h portfolio value: ${total24hAgo}, cannot calculate drawdown`);
                 return { level: 'NONE', reason: '' };
             }
 
@@ -338,6 +362,7 @@ export class CircuitBreakerService {
             const drawdownPercent = Math.max(0, ((total24hAgo - totalCurrent) / total24hAgo) * 100);
 
             if (!Number.isFinite(drawdownPercent)) {
+                logger.error(`Drawdown calculation resulted in non-finite value: ${drawdownPercent}`);
                 return { level: 'NONE', reason: '' };
             }
 

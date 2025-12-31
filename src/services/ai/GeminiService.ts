@@ -1,8 +1,12 @@
 /**
- * Gemini AI Service - ENHANCED
+ * Gemini AI Service - ENHANCED with OpenRouter Support
  * 
- * Handles all AI-powered analysis using Google's Gemini API.
+ * Handles all AI-powered analysis using Google's Gemini API or OpenRouter.
  * Uses high-quality analyst personas with detailed prompts and debate strategies.
+ * 
+ * Supports two AI providers:
+ * - Gemini: Google's Gemini 2.5 Flash with native JSON Schema support
+ * - OpenRouter: Unified API for multiple models (Qwen, Claude, etc.) with JSON Schema
  * 
  * Matches the prompts file format exactly:
  * - 8 analysts: warren, cathie, jim, ray, elon, karen, quant, devil
@@ -23,14 +27,74 @@ import { circuitBreakerService, CircuitBreakerStatus } from '../risk/CircuitBrea
 // Re-export arena context types for external use
 export type { FullArenaContext } from '../../constants/ArenaContext';
 
-// Constants
-const AI_REQUEST_TIMEOUT = 90000; // 90 seconds for detailed analysis
+// Use config values instead of hardcoded constants
+const AI_REQUEST_TIMEOUT = config.ai.analysisTimeoutMs; // 90 seconds for detailed analysis
 const VALID_RECOMMENDATIONS = ['strong_buy', 'buy', 'hold', 'sell', 'strong_sell'] as const;
 const VALID_WINNERS = ['bull', 'bear', 'draw'] as const;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // STRUCTURED OUTPUT SCHEMAS - Gemini 2.0 JSON Schema Support
 // ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Convert Gemini SchemaType to OpenRouter JSON Schema type
+ */
+function geminiToOpenRouterType(schemaType: SchemaType): string {
+    switch (schemaType) {
+        case SchemaType.STRING: return 'string';
+        case SchemaType.NUMBER: return 'number';
+        case SchemaType.INTEGER: return 'integer';
+        case SchemaType.BOOLEAN: return 'boolean';
+        case SchemaType.ARRAY: return 'array';
+        case SchemaType.OBJECT: return 'object';
+        default: return 'string';
+    }
+}
+
+/**
+ * Convert Gemini schema to OpenRouter JSON Schema format
+ * Handles nested objects, arrays, and all schema properties
+ */
+function convertGeminiSchemaToOpenRouter(geminiSchema: any): any {
+    // GUARD: Handle null/undefined schema
+    if (!geminiSchema || typeof geminiSchema !== 'object') {
+        return { type: 'string' };
+    }
+
+    const converted: any = {
+        type: geminiToOpenRouterType(geminiSchema.type),
+    };
+
+    if (geminiSchema.description) {
+        converted.description = geminiSchema.description;
+    }
+
+    if (geminiSchema.enum) {
+        converted.enum = geminiSchema.enum;
+    }
+
+    // Handle nested properties (objects)
+    if (geminiSchema.properties) {
+        converted.properties = {};
+        for (const [key, value] of Object.entries(geminiSchema.properties)) {
+            converted.properties[key] = convertGeminiSchemaToOpenRouter(value);
+        }
+        // CRITICAL: Disable additionalProperties for strict schema validation
+        converted.additionalProperties = false;
+    }
+
+    // Handle array items
+    if (geminiSchema.items) {
+        converted.items = convertGeminiSchemaToOpenRouter(geminiSchema.items);
+    }
+
+    // Handle required fields
+    if (geminiSchema.required) {
+        converted.required = geminiSchema.required;
+    }
+
+    return converted;
+}
 
 /**
  * Schema for analysis response - ensures structured, validated output from Gemini
@@ -283,6 +347,7 @@ export interface ExtendedMarketData {
     low24h: number;
     volume24h: number;
     change24h: number;
+    fetchTimestamp?: number; // Unix timestamp (ms) when data was fetched
     // Additional WEEX data
     markPrice?: number;
     indexPrice?: number;
@@ -345,7 +410,7 @@ export interface TradeOrder {
  */
 export interface WeexAILog {
     orderId?: number;
-    stage: 'Decision Making' | 'Strategy Generation' | 'Risk Assessment' | 'Market Analysis' | 'Order Execution' | 'Portfolio Management';
+    stage: 'DECISION_MAKING' | 'STRATEGY_GENERATION' | 'RISK_ASSESSMENT' | 'COLLABORATIVE_TRADE' | 'POSITION_MANAGEMENT' | 'MANUAL_CLOSE'; // FIXED: Use enum values
     model: string;
     input: Record<string, any>;
     output: Record<string, any>;
@@ -374,23 +439,215 @@ export interface TradingDecision {
 }
 
 class GeminiService {
-    private model: GenerativeModel | null = null;
+    private geminiModel: GenerativeModel | null = null;
+    private openRouterBaseUrl = 'https://openrouter.ai/api/v1';
+    private currentProvider: 'gemini' | 'openrouter' | null = null;
 
-    private getModel(): GenerativeModel {
-        if (!this.model) {
+    /**
+     * Get or initialize Gemini model (only for Gemini provider)
+     * FIXED: Separate model caching from provider logic
+     */
+    private getGeminiModel(): GenerativeModel {
+        // GUARD: Only initialize if using Gemini
+        if (config.ai.provider !== 'gemini') {
+            throw new Error('getGeminiModel() called but provider is not gemini');
+        }
+
+        if (!this.geminiModel || this.currentProvider !== 'gemini') {
             if (!config.geminiApiKey) {
                 throw new Error('GEMINI_API_KEY not configured');
             }
             const genAI = new GoogleGenerativeAI(config.geminiApiKey);
-            this.model = genAI.getGenerativeModel({
+            this.geminiModel = genAI.getGenerativeModel({
                 model: config.ai.model,
                 generationConfig: {
                     responseMimeType: "application/json",
                     maxOutputTokens: config.ai.maxOutputTokens
                 }
             });
+            this.currentProvider = 'gemini';
+            logger.info(`🔄 Initialized Gemini with model: ${config.ai.model}`);
         }
-        return this.model;
+        return this.geminiModel;
+    }
+
+    /**
+     * Validate OpenRouter configuration
+     * FIXED: Fail fast with clear error messages
+     */
+    private validateOpenRouterConfig(): void {
+        if (!config.openRouterApiKey) {
+            throw new Error('OPENROUTER_API_KEY not configured. Set OPENROUTER_API_KEY in .env file.');
+        }
+        if (!config.ai.openRouterModel) {
+            throw new Error('OPENROUTER_MODEL not configured. Set OPENROUTER_MODEL in .env file.');
+        }
+        // Log once per provider switch
+        if (this.currentProvider !== 'openrouter') {
+            logger.info(`🔄 Using OpenRouter with model: ${config.ai.openRouterModel}`);
+            this.currentProvider = 'openrouter';
+        }
+    }
+
+    /**
+     * Unified content generation that works with both Gemini and OpenRouter
+     */
+    private async generateContent(prompt: string, schema: any): Promise<{ text: string; finishReason: string }> {
+        if (config.ai.provider === 'openrouter') {
+            return await this.generateContentOpenRouter(prompt, schema);
+        } else {
+            return await this.generateContentGemini(prompt, schema);
+        }
+    }
+
+    /**
+     * Generate content using Gemini API
+     */
+    private async generateContentGemini(prompt: string, schema: any): Promise<{ text: string; finishReason: string }> {
+        const model = this.getGeminiModel();
+
+        const result = await model.generateContent({
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            generationConfig: {
+                responseMimeType: "application/json",
+                responseSchema: schema
+            }
+        });
+
+        const text = result.response.text();
+        const candidates = result.response.candidates;
+        const finishReason = (candidates && candidates.length > 0)
+            ? (candidates[0].finishReason || 'UNKNOWN')
+            : 'UNKNOWN';
+
+        return { text, finishReason };
+    }
+
+    /**
+     * Generate content using OpenRouter API
+     * FIXED: Added timeout, retry logic, better error handling
+     */
+    private async generateContentOpenRouter(prompt: string, geminiSchema: any): Promise<{ text: string; finishReason: string }> {
+        this.validateOpenRouterConfig();
+
+        // Convert Gemini schema to OpenRouter JSON Schema format
+        const openRouterSchema = convertGeminiSchemaToOpenRouter(geminiSchema);
+
+        const requestBody = {
+            model: config.ai.openRouterModel,
+            messages: [
+                {
+                    role: 'user',
+                    content: prompt
+                }
+            ],
+            response_format: {
+                type: 'json_schema',
+                json_schema: {
+                    name: 'analysis_response',
+                    strict: true,
+                    schema: openRouterSchema
+                }
+            },
+            temperature: config.ai.temperature,
+            max_tokens: config.ai.maxOutputTokens,
+        };
+
+        // FIXED: Add timeout using AbortController
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), config.ai.requestTimeoutMs);
+
+        try {
+            const response = await fetch(`${this.openRouterBaseUrl}/chat/completions`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${config.openRouterApiKey}`,
+                    'Content-Type': 'application/json',
+                    'HTTP-Referer': 'https://hypothesis-arena.com',
+                    'X-Title': 'Hypothesis Arena',
+                },
+                body: JSON.stringify(requestBody),
+                signal: controller.signal, // FIXED: Add timeout signal
+            });
+
+            clearTimeout(timeoutId); // FIXED: Clear timeout on success
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                // FIXED: Include model name in error for debugging
+                throw new Error(
+                    `OpenRouter API error (${response.status}) for model ${config.ai.openRouterModel}: ${errorText}`
+                );
+            }
+
+            // FIXED: Validate response is JSON before parsing
+            const contentType = response.headers.get('content-type');
+            if (!contentType || !contentType.includes('application/json')) {
+                const text = await response.text();
+                throw new Error(
+                    `OpenRouter returned non-JSON response (${contentType}): ${text.slice(0, 200)}`
+                );
+            }
+
+            const data: any = await response.json();
+
+            // FIXED: Better validation of response structure
+            if (!data || typeof data !== 'object') {
+                throw new Error('OpenRouter returned invalid response structure');
+            }
+
+            if (!data.choices || !Array.isArray(data.choices) || data.choices.length === 0) {
+                throw new Error(
+                    `OpenRouter returned no choices. Response: ${JSON.stringify(data).slice(0, 200)}`
+                );
+            }
+
+            const choice = data.choices[0];
+            if (!choice || !choice.message) {
+                throw new Error('OpenRouter choice missing message field');
+            }
+
+            const text = choice.message.content || '{}';
+            const finishReason = choice.finish_reason || 'UNKNOWN';
+
+            // FIXED: Extract JSON from markdown code blocks if present
+            // Some models (like DeepSeek) wrap JSON in ```json ... ```
+            let cleanedText = text.trim();
+            const jsonBlockMatch = cleanedText.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+            if (jsonBlockMatch) {
+                cleanedText = jsonBlockMatch[1].trim();
+            }
+
+            // FIXED: Validate JSON before returning
+            try {
+                JSON.parse(cleanedText);
+            } catch (parseError) {
+                throw new Error(
+                    `OpenRouter returned invalid JSON: ${cleanedText.slice(0, 200)}. Parse error: ${parseError}`
+                );
+            }
+
+            return { text: cleanedText, finishReason };
+        } catch (error: any) {
+            clearTimeout(timeoutId); // FIXED: Clear timeout on error
+
+            // FIXED: Better error messages for different error types
+            if (error.name === 'AbortError') {
+                throw new Error(
+                    `OpenRouter request timeout after ${config.ai.requestTimeoutMs}ms for model ${config.ai.openRouterModel}`
+                );
+            }
+
+            // FIXED: Handle rate limiting specifically
+            if (error.message?.includes('429') || error.message?.toLowerCase().includes('rate limit')) {
+                throw new Error(
+                    `OpenRouter rate limit exceeded for model ${config.ai.openRouterModel}. ${error.message}`
+                );
+            }
+
+            // Re-throw with context
+            throw new Error(`OpenRouter request failed: ${error.message}`);
+        }
     }
 
     /**
@@ -407,12 +664,9 @@ class GeminiService {
      * Uses the exact JSON format from the prompts file
      * 
      * @param request - Analysis request with market data
-     * @param _userId - Optional user ID for logging
      * @param arenaContext - Optional full arena context for autonomous trading
      */
-    async generateAnalysis(request: AnalysisRequest, _userId?: string, arenaContext?: FullArenaContext): Promise<AnalysisResult> {
-        const model = this.getModel();
-
+    async generateAnalysis(request: AnalysisRequest, arenaContext?: FullArenaContext): Promise<AnalysisResult> {
         // Determine which analyst to use
         let methodology: AnalystMethodology;
         if (request.analystId) {
@@ -489,33 +743,19 @@ Respond ONLY with valid JSON matching this exact structure.`;
                 timeoutId = setTimeout(() => reject(new Error('AI request timeout')), AI_REQUEST_TIMEOUT);
             });
 
-            // Use structured output with schema
-            const result = await Promise.race([
-                model.generateContent({
-                    contents: [{ role: 'user', parts: [{ text: prompt }] }],
-                    generationConfig: {
-                        responseMimeType: "application/json",
-                        responseSchema: ANALYSIS_RESPONSE_SCHEMA
-                    }
-                }),
+            // Use unified content generation (works with both Gemini and OpenRouter)
+            const { text, finishReason } = await Promise.race([
+                this.generateContent(prompt, ANALYSIS_RESPONSE_SCHEMA),
                 timeoutPromise
             ]);
 
-            const text = result.response.text();
-
-            // Check finish reason
-            const candidates = result.response.candidates;
-            let finishReason = 'UNKNOWN';
-            if (candidates && candidates.length > 0) {
-                finishReason = candidates[0].finishReason || 'UNKNOWN';
-                if (finishReason !== 'STOP') {
-                    logger.warn(`⚠️ Analysis finish reason: ${finishReason} (expected STOP)`);
-                }
+            if (finishReason !== 'STOP' && finishReason !== 'stop') {
+                logger.warn(`⚠️ Analysis finish reason: ${finishReason} (expected STOP)`);
             }
 
             // LOG FULL RAW AI RESPONSE with metadata
             logger.info(`\n${'─'.repeat(60)}`);
-            logger.info(`📡 RAW AI RESPONSE for ${profile.name} Analysis:`);
+            logger.info(`📡 RAW AI RESPONSE for ${profile.name} Analysis (${config.ai.provider}):`);
             logger.info(`📊 Response length: ${text.length} chars | Finish reason: ${finishReason}`);
             // Log in chunks to avoid terminal buffer issues
             const chunkSize = 2000;
@@ -531,11 +771,11 @@ Respond ONLY with valid JSON matching this exact structure.`;
             }
             logger.info(`${'─'.repeat(60)}\n`);
 
-            const parsed = JSON.parse(text); // Gemini guarantees valid JSON with schema
+            const parsed = JSON.parse(text); // Both providers guarantee valid JSON with schema
 
             return this.parseAnalysisResponse(parsed, profile, methodology, request.currentPrice);
         } catch (error: any) {
-            logger.error('Gemini analysis failed:', { error: error.message, analyst: profile.id });
+            logger.error(`${config.ai.provider} analysis failed:`, { error: error.message, analyst: profile.id });
             throw new Error(`AI analysis failed: ${error.message}`);
         } finally {
             // Clear timeout to prevent memory leak
@@ -620,12 +860,10 @@ Respond ONLY with valid JSON matching this exact structure.`;
      * This reduces latency from ~8x to ~2x compared to sequential processing.
      * 
      * @param request - Analysis request with market data
-     * @param userId - Optional user ID for logging
      * @param arenaContexts - Optional map of analyst ID to their arena context
      */
     async generateAllAnalyses(
         request: AnalysisRequest,
-        userId?: string,
         arenaContexts?: Map<string, FullArenaContext>
     ): Promise<AnalysisResult[]> {
         const results: AnalysisResult[] = [];
@@ -641,7 +879,6 @@ Respond ONLY with valid JSON matching this exact structure.`;
                     const arenaContext = arenaContexts?.get(profile.id);
                     return await this.generateAnalysisWithRetry(
                         { ...request, analystId: profile.id },
-                        userId,
                         arenaContext
                     );
                 } catch (err: any) {
@@ -662,9 +899,9 @@ Respond ONLY with valid JSON matching this exact structure.`;
         }
 
         // Log for compliance
-        if (userId && results.length > 0) {
+        if (results.length > 0) {
             await aiLogService.createLog(
-                userId, 'analysis', 'all-analysts',
+                'analysis', 'all-analysts',
                 { symbol: request.symbol, count: results.length },
                 { summary: `${results.length} analyses generated` },
                 `Generated ${results.length} analyst opinions`
@@ -679,13 +916,12 @@ Respond ONLY with valid JSON matching this exact structure.`;
      */
     private async generateAnalysisWithRetry(
         request: AnalysisRequest,
-        userId?: string,
         arenaContext?: FullArenaContext,
         maxRetries: number = 3
     ): Promise<AnalysisResult | null> {
         for (let attempt = 0; attempt < maxRetries; attempt++) {
             try {
-                return await this.generateAnalysis(request, userId, arenaContext);
+                return await this.generateAnalysis(request, arenaContext);
             } catch (err: any) {
                 const isRateLimit = err.message?.includes('429') || err.message?.includes('quota');
 
@@ -708,8 +944,7 @@ Respond ONLY with valid JSON matching this exact structure.`;
      * Generate a high-quality debate between bull and bear analysts
      * Enhanced with scoring breakdown and winning arguments extraction
      */
-    async generateDebate(request: DebateRequest, _userId?: string): Promise<DebateResult> {
-        const model = this.getModel();
+    async generateDebate(request: DebateRequest): Promise<DebateResult> {
         const displaySymbol = request.symbol.replace('cmt_', '').replace('usdt', '').toUpperCase();
         const roundLabel = request.round.toUpperCase().replace('FINAL', 'CHAMPIONSHIP');
 
@@ -727,33 +962,19 @@ Respond ONLY with valid JSON matching this exact structure.`;
                 timeoutId = setTimeout(() => reject(new Error('AI request timeout')), AI_REQUEST_TIMEOUT);
             });
 
-            // Use structured output with schema
-            const result = await Promise.race([
-                model.generateContent({
-                    contents: [{ role: 'user', parts: [{ text: prompt }] }],
-                    generationConfig: {
-                        responseMimeType: "application/json",
-                        responseSchema: DEBATE_RESPONSE_SCHEMA
-                    }
-                }),
+            // Use unified content generation (works with both Gemini and OpenRouter)
+            const { text, finishReason } = await Promise.race([
+                this.generateContent(prompt, DEBATE_RESPONSE_SCHEMA),
                 timeoutPromise
             ]);
 
-            const text = result.response.text();
-
-            // Check finish reason
-            const candidates = result.response.candidates;
-            let finishReason = 'UNKNOWN';
-            if (candidates && candidates.length > 0) {
-                finishReason = candidates[0].finishReason || 'UNKNOWN';
-                if (finishReason !== 'STOP') {
-                    logger.warn(`⚠️ Debate finish reason: ${finishReason} (expected STOP)`);
-                }
+            if (finishReason !== 'STOP' && finishReason !== 'stop') {
+                logger.warn(`⚠️ Debate finish reason: ${finishReason} (expected STOP)`);
             }
 
             // LOG FULL RAW AI RESPONSE with metadata
             logger.info(`\n${'─'.repeat(60)}`);
-            logger.info(`📡 RAW AI RESPONSE for Debate (${request.round}):`);
+            logger.info(`📡 RAW AI RESPONSE for Debate (${request.round}, ${config.ai.provider}):`);
             logger.info(`📊 Response length: ${text.length} chars | Finish reason: ${finishReason}`);
             // Log in chunks to avoid terminal buffer issues
             const chunkSize = 2000;
@@ -769,11 +990,11 @@ Respond ONLY with valid JSON matching this exact structure.`;
             }
             logger.info(`${'─'.repeat(60)}\n`);
 
-            const parsed = JSON.parse(text); // Gemini guarantees valid JSON with schema
+            const parsed = JSON.parse(text); // Both providers guarantee valid JSON with schema
 
             return this.parseDebateResponse(parsed, request);
         } catch (error: any) {
-            logger.error('Gemini debate failed:', { error: error.message });
+            logger.error(`${config.ai.provider} debate failed:`, { error: error.message });
             throw new Error(`AI debate failed: ${error.message}`);
         } finally {
             // Clear timeout to prevent memory leak
@@ -842,8 +1063,7 @@ Respond ONLY with valid JSON matching this exact structure.`;
     async runTournament(
         analyses: AnalysisResult[],
         marketData: { price: number; change24h: number; volume24h?: number },
-        symbol: string,
-        userId?: string
+        symbol: string
     ): Promise<TournamentBracket> {
         if (analyses.length < 2) {
             return { quarterfinals: [], semifinals: [], final: null, champion: analyses[0] || null };
@@ -877,7 +1097,7 @@ Respond ONLY with valid JSON matching this exact structure.`;
                     bearAnalysis: bears[i],
                     round: 'quarterfinal',
                     marketData,
-                }, userId);
+                });
                 bracket.quarterfinals.push(debate);
                 await new Promise(resolve => setTimeout(resolve, 500)); // Rate limit
             } catch (err: any) {
@@ -913,7 +1133,7 @@ Respond ONLY with valid JSON matching this exact structure.`;
                         bearAnalysis: semiBears[i],
                         round: 'semifinal',
                         marketData,
-                    }, userId);
+                    });
                     bracket.semifinals.push(debate);
                     await new Promise(resolve => setTimeout(resolve, 500));
                 } catch (err: any) {
@@ -942,7 +1162,7 @@ Respond ONLY with valid JSON matching this exact structure.`;
                     bearAnalysis: sfWinners[1],
                     round: 'final',
                     marketData,
-                }, userId);
+                });
 
                 const finalBullId = bracket.final.turns.find(t => t.speaker === 'bull')?.analystId;
                 const finalBearId = bracket.final.turns.find(t => t.speaker === 'bear')?.analystId;
@@ -958,11 +1178,11 @@ Respond ONLY with valid JSON matching this exact structure.`;
         }
 
         // Log tournament result
-        if (userId && bracket.champion) {
+        if (bracket.champion) {
             // Destructure to avoid null access issues
             const { analystId, analystName, recommendation } = bracket.champion;
             await aiLogService.createLog(
-                userId, 'decision', 'tournament',
+                'decision', 'tournament',
                 { symbol, debates: bracket.quarterfinals.length + bracket.semifinals.length + (bracket.final ? 1 : 0) },
                 { champion: analystId, recommendation },
                 `Tournament champion: ${analystName} (${recommendation})`
@@ -978,8 +1198,7 @@ Respond ONLY with valid JSON matching this exact structure.`;
     async generateTradingSignal(
         symbol: string,
         analyses: AnalysisResult[],
-        tournament?: TournamentBracket,
-        userId?: string
+        tournament?: TournamentBracket
     ): Promise<{
         action: 'buy' | 'sell' | 'hold';
         confidence: number;
@@ -1021,14 +1240,12 @@ Respond ONLY with valid JSON matching this exact structure.`;
             reasoning += `Consensus leans ${action}.`;
         }
 
-        if (userId) {
-            await aiLogService.createLog(
-                userId, 'decision', 'signal-generator',
-                { symbol, analysisCount: analyses.length },
-                { action, confidence },
-                `Signal: ${action.toUpperCase()} (${confidence.toFixed(0)}%)`
-            );
-        }
+        await aiLogService.createLog(
+            'decision', 'signal-generator',
+            { symbol, analysisCount: analyses.length },
+            { action, confidence },
+            `Signal: ${action.toUpperCase()} (${confidence.toFixed(0)}%)`
+        );
 
         return {
             action,
@@ -1043,6 +1260,9 @@ Respond ONLY with valid JSON matching this exact structure.`;
      * Check if service is configured
      */
     isConfigured(): boolean {
+        if (config.ai.provider === 'openrouter') {
+            return !!config.openRouterApiKey;
+        }
         return !!config.geminiApiKey;
     }
 
@@ -1088,7 +1308,6 @@ Respond ONLY with valid JSON matching this exact structure.`;
         marketData: ExtendedMarketData,
         accountBalance: number,
         existingPosition?: { side: 'LONG' | 'SHORT'; size: number },
-        userId?: string,
         analystId?: string // Optional: generate decision for specific analyst
     ): Promise<TradingDecision> {
         // Validate symbol is approved for trading
@@ -1097,7 +1316,7 @@ Respond ONLY with valid JSON matching this exact structure.`;
         }
 
         // CHECK CIRCUIT BREAKERS FIRST
-        const circuitBreakerStatus = await circuitBreakerService.checkCircuitBreakers(userId);
+        const circuitBreakerStatus = await circuitBreakerService.checkCircuitBreakers();
 
         // RED ALERT: Emergency exit - close all positions
         if (circuitBreakerStatus.level === 'RED') {
@@ -1191,7 +1410,7 @@ Respond ONLY with valid JSON matching this exact structure.`;
             low24h: marketData.low24h,
             volume24h: marketData.volume24h,
             change24h: marketData.change24h,
-        }, userId, arenaContexts);
+        }, arenaContexts);
 
         // GUARD: If no analyses generated, fail fast
         if (analyses.length === 0) {
@@ -1199,7 +1418,7 @@ Respond ONLY with valid JSON matching this exact structure.`;
             return {
                 shouldTrade: false,
                 aiLog: {
-                    stage: 'Decision Making',
+                    stage: 'DECISION_MAKING', // FIXED: Use enum value
                     model: 'Gemini-2.0-Flash + Hypothesis Arena Multi-Agent System',
                     input: { symbol: marketData.symbol, error: 'No analyses generated' },
                     output: { decision: 'NO_TRADE', reason: 'All analysts failed to generate analysis' },
@@ -1228,8 +1447,7 @@ Respond ONLY with valid JSON matching this exact structure.`;
                 change24h: marketData.change24h,
                 volume24h: marketData.volume24h,
             },
-            marketData.symbol,
-            userId
+            marketData.symbol
         );
 
         // Calculate consensus
@@ -1634,13 +1852,13 @@ Respond ONLY with valid JSON matching this exact structure.`;
         return {
             symbol: marketData.symbol,
             client_oid: clientOid, // Already validated to be <= 40 chars
-            size: roundToStepSize(size), // WEEX stepSize 0.0001
+            size: roundToStepSize(size, marketData.symbol), // WEEX stepSize with contract specs
             type: orderType,
             order_type: '0', // Normal limit order
             match_price: '1', // Market price for immediate execution
-            price: roundToTickSize(marketData.currentPrice), // WEEX tick_size
-            presetTakeProfitPrice: roundToTickSize(validTpPrice),
-            presetStopLossPrice: roundToTickSize(validSlPrice),
+            price: roundToTickSize(marketData.currentPrice, marketData.symbol), // WEEX tick_size with contract specs
+            presetTakeProfitPrice: roundToTickSize(validTpPrice, marketData.symbol),
+            presetStopLossPrice: roundToTickSize(validSlPrice, marketData.symbol),
             marginMode: 1, // Cross mode
         };
     }
@@ -1773,8 +1991,10 @@ Respond ONLY with valid JSON matching this exact structure.`;
         }
 
         return {
-            stage: shouldTrade ? 'Order Execution' : 'Decision Making',
-            model: 'Gemini-2.0-Flash + Hypothesis Arena Multi-Agent System',
+            stage: shouldTrade ? 'COLLABORATIVE_TRADE' : 'DECISION_MAKING', // FIXED: Use enum values
+            model: config.ai.provider === 'openrouter'
+                ? `${config.ai.openRouterModel} (via OpenRouter) + Hypothesis Arena Multi-Agent System`
+                : `${config.ai.model} + Hypothesis Arena Multi-Agent System`,
             input,
             output,
             // WEEX requires max 500 words - truncate by words more accurately
@@ -1805,11 +2025,11 @@ Respond ONLY with valid JSON matching this exact structure.`;
         return {
             symbol: marketData.symbol,
             client_oid: clientOid,
-            size: roundToStepSize(existingPosition.size), // WEEX stepSize 0.0001
+            size: roundToStepSize(existingPosition.size, marketData.symbol), // WEEX stepSize with contract specs
             type: orderType,
             order_type: '0', // Normal limit order
             match_price: '1', // Market price for immediate execution
-            price: roundToTickSize(marketData.currentPrice), // WEEX tick_size
+            price: roundToTickSize(marketData.currentPrice, marketData.symbol), // WEEX tick_size with contract specs
             marginMode: 1, // Cross mode
         };
     }
@@ -1822,8 +2042,10 @@ Respond ONLY with valid JSON matching this exact structure.`;
         action: 'EMERGENCY_CLOSE' | 'HALT_TRADING'
     ): WeexAILog {
         return {
-            stage: 'Risk Assessment',
-            model: 'Circuit Breaker System + Hypothesis Arena',
+            stage: 'RISK_ASSESSMENT', // FIXED: Use enum value
+            model: config.ai.provider === 'openrouter'
+                ? `Circuit Breaker System + ${config.ai.openRouterModel} (via OpenRouter)`
+                : 'Circuit Breaker System + Hypothesis Arena',
             input: {
                 circuitBreakerLevel: circuitBreakerStatus.level,
                 reason: circuitBreakerStatus.reason,
@@ -1841,11 +2063,8 @@ Respond ONLY with valid JSON matching this exact structure.`;
      */
     async generateAnalysisWithExtendedData(
         marketData: ExtendedMarketData,
-        analystId?: string,
-        _userId?: string
+        analystId?: string
     ): Promise<AnalysisResult> {
-        const model = this.getModel();
-
         // Determine which analyst to use
         let methodology: AnalystMethodology;
         if (analystId) {
@@ -1924,33 +2143,19 @@ Respond ONLY with valid JSON.`;
                 timeoutId = setTimeout(() => reject(new Error('AI request timeout')), AI_REQUEST_TIMEOUT);
             });
 
-            // Use structured output with schema
-            const result = await Promise.race([
-                model.generateContent({
-                    contents: [{ role: 'user', parts: [{ text: prompt }] }],
-                    generationConfig: {
-                        responseMimeType: "application/json",
-                        responseSchema: ANALYSIS_RESPONSE_SCHEMA
-                    }
-                }),
+            // Use unified content generation (works with both Gemini and OpenRouter)
+            const { text, finishReason } = await Promise.race([
+                this.generateContent(prompt, ANALYSIS_RESPONSE_SCHEMA),
                 timeoutPromise
             ]);
 
-            const text = result.response.text();
-
-            // Check finish reason
-            const candidates = result.response.candidates;
-            let finishReason = 'UNKNOWN';
-            if (candidates && candidates.length > 0) {
-                finishReason = candidates[0].finishReason || 'UNKNOWN';
-                if (finishReason !== 'STOP') {
-                    logger.warn(`⚠️ Extended Analysis finish reason: ${finishReason} (expected STOP)`);
-                }
+            if (finishReason !== 'STOP' && finishReason !== 'stop') {
+                logger.warn(`⚠️ Extended Analysis finish reason: ${finishReason} (expected STOP)`);
             }
 
             // LOG FULL RAW AI RESPONSE with metadata
             logger.info(`\n${'─'.repeat(60)}`);
-            logger.info(`📡 RAW AI RESPONSE for Extended Analysis (${profile.name}):`);
+            logger.info(`📡 RAW AI RESPONSE for Extended Analysis (${profile.name}, ${config.ai.provider}):`);
             logger.info(`📊 Response length: ${text.length} chars | Finish reason: ${finishReason}`);
             // Log in chunks to avoid terminal buffer issues
             const chunkSize = 2000;
@@ -1972,12 +2177,23 @@ Respond ONLY with valid JSON.`;
             const parsed = JSON.parse(jsonMatch[0]);
             return this.parseAnalysisResponse(parsed, profile, methodology, marketData.currentPrice);
         } catch (error: any) {
-            logger.error('Gemini extended analysis failed:', { error: error.message, analyst: profile.id });
+            logger.error(`${config.ai.provider} extended analysis failed:`, { error: error.message, analyst: profile.id });
             throw new Error(`AI analysis failed: ${error.message}`);
         } finally {
             // Clear timeout to prevent memory leak
             if (timeoutId) clearTimeout(timeoutId);
         }
+    }
+
+    /**
+     * Cleanup method for graceful shutdown
+     * Clears model instance to free resources
+     * FIXED: Handle both providers
+     */
+    cleanup(): void {
+        this.geminiModel = null;
+        this.currentProvider = null;
+        logger.debug('GeminiService cleaned up');
     }
 }
 

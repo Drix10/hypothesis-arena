@@ -1,15 +1,23 @@
 # Hypothesis Arena - Collaborative AI Trading System
 
-**STATUS: IMPLEMENTED** ✅  
-**VERSION: 2.2.0**  
-**LAST UPDATED: December 25, 2025**
+**STATUS: PRODUCTION READY ✅**  
+**VERSION: 3.0.1**  
+**LAST UPDATED: January 1, 2026**
+
+## Implementation Status
+
+- ✅ **Entry Mode:** Fully implemented and operational
+- ✅ **Position Management (MANAGE Action):** Implemented - AI can close/manage existing positions
+- ✅ **Production Ready:** TypeScript 0 errors, all edge cases handled
+- 📋 **See:** `src/constants/prompts/managePrompts.ts` for position management prompts
 
 ## 🎯 Philosophy
 
-**Every decision is a debate. Every debate has a winner. Winners trade.**
+**Every decision is a debate. Every debate has a winner. Winners trade OR manage.**
 
 8 world-class AI analysts with unique methodologies collaborate on ONE shared portfolio.
 Debates are the core decision mechanism - the winning thesis gets executed on WEEX Exchange.
+**NEW:** Analysts can now choose to MANAGE existing positions instead of opening new ones.
 
 ---
 
@@ -22,8 +30,14 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 │                                                                  │
 │   STAGE 1: MARKET SCAN          "What's happening?"             │
 │      ↓                                                           │
-│   STAGE 2: COIN SELECTION       "Where's the opportunity?"      │
+│   STAGE 2: OPPORTUNITY SELECTION "Trade or Manage?"             │
+│      ↓         ┌─────────────────────────────────┐              │
+│                │  NEW: Can select MANAGE action  │              │
+│                │  to close/adjust positions      │              │
+│                └─────────────────────────────────┘              │
 │      ↓                                                           │
+│   [If MANAGE] → Close/Reduce Position → DONE                    │
+│   [If LONG/SHORT] ↓                                             │
 │   STAGE 3: SPECIALIST ANALYSIS  "Deep dive by experts"          │
 │      ↓                                                           │
 │   STAGE 4: TOURNAMENT           "Best thesis wins"              │
@@ -84,32 +98,71 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 
 ---
 
-## 🎯 Stage 2: Coin Selection Debate
+## 🎯 Stage 2: Opportunity Selection Debate
 
-**Service:** `CollaborativeFlow.ts` → `runCoinSelection()`  
+**Service:** `CollaborativeFlow.ts` → `runCoinSelectionDebate()`  
 **Duration:** ~30 seconds  
-**Participants:** Ray (Macro), Jim (Technical), Quant (Stats)
+**Participants:** Ray (Macro), Jim (Technical), Quant (Stats), Elon (Sentiment)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  3 PARALLEL GEMINI API CALLS                                    │
+│  PORTFOLIO-AWARE OPPORTUNITY SELECTION                          │
+│                                                                  │
+│  NEW IN v3.0: Analysts see BOTH market data AND open positions │
+│  They can choose to:                                            │
+│  • LONG/SHORT: Open a new position on a coin                   │
+│  • MANAGE: Close/reduce/adjust an existing position            │
+│                                                                  │
+├─────────────────────────────────────────────────────────────────┤
+│  POSITION DATA FETCHED (for MANAGE decisions):                  │
+│                                                                  │
+│  For each open position:                                        │
+│  ├─ symbol, side (LONG/SHORT)                                  │
+│  ├─ entryPrice, currentPrice (from live ticker)                │
+│  ├─ unrealizedPnl, unrealizedPnlPercent                        │
+│  ├─ holdTimeHours (from database trade history)                │
+│  └─ fundingPaid (if available)                                 │
+│                                                                  │
+│  EDGE CASES HANDLED:                                            │
+│  ✓ Current price fetched from WEEX ticker (not entry price)   │
+│  ✓ Hold time calculated from actual trade entry in DB          │
+│  ✓ Invalid entry prices skipped                                │
+│  ✓ Future timestamps rejected                                  │
+│                                                                  │
+├─────────────────────────────────────────────────────────────────┤
+│  4 ANALYSTS DEBATE (Turn-by-Turn)                               │
 │                                                                  │
 │  Each analyst receives:                                         │
 │  ├─ Their full persona prompt                                  │
 │  ├─ Market summary for all 8 coins                             │
-│  └─ Task: "Rank your TOP 3 trading opportunities"              │
+│  ├─ Current portfolio positions with P&L                       │
+│  └─ Task: "Rank TOP 3 opportunities (new trade OR manage)"     │
 │                                                                  │
 │  STRUCTURED OUTPUT (JSON Schema enforced):                      │
 │  {                                                               │
 │    "picks": [                                                   │
-│      { "symbol": "cmt_solusdt", "direction": "LONG",           │
+│      { "symbol": "cmt_solusdt", "action": "LONG",              │
 │        "conviction": 9, "reason": "Breakout with volume" },    │
-│      { "symbol": "cmt_btcusdt", "direction": "LONG",           │
-│        "conviction": 7, "reason": "Holding 95k support" },     │
-│      { "symbol": "cmt_ethusdt", "direction": "SHORT",          │
+│      { "symbol": "cmt_ethusdt", "action": "MANAGE",            │
+│        "conviction": 8, "reason": "+18% profit, lock gains" }, │
+│      { "symbol": "cmt_btcusdt", "action": "SHORT",             │
 │        "conviction": 6, "reason": "Bearish divergence" }       │
 │    ]                                                            │
 │  }                                                               │
+│                                                                  │
+├─────────────────────────────────────────────────────────────────┤
+│  MANAGE ACTION DETECTION (Improved in v3.0):                    │
+│                                                                  │
+│  Specific patterns to avoid false positives:                    │
+│  ├─ "close position", "close the LONG/SHORT position"          │
+│  ├─ "reduce position", "exit position"                         │
+│  ├─ "take profits on/from", "cut losses on/now"                │
+│  ├─ "manage position", "close out"                             │
+│  └─ action: "MANAGE" in JSON                                   │
+│                                                                  │
+│  NOT triggered by:                                              │
+│  ✗ "close to resistance" (false positive avoided)              │
+│  ✗ "take profits" without context                              │
 │                                                                  │
 ├─────────────────────────────────────────────────────────────────┤
 │  AGGREGATION LOGIC (aggregateCoinScores):                       │
@@ -119,17 +172,74 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 │  • #2 pick = 2 × conviction                                    │
 │  • #3 pick = 1 × conviction                                    │
 │                                                                  │
-│  Example:                                                       │
-│  SOL: Ray #1 (9×3=27) + Jim #2 (8×2=16) + Quant #1 (9×3=27)   │
-│       = 70 points → WINNER                                      │
+│  OUTPUT: { winner, coinSymbol, action, debate }                │
+│  action: 'LONG' | 'SHORT' | 'MANAGE'                           │
 │                                                                  │
-│  EDGE CASE HANDLING:                                            │
-│  ✓ Returns default {totalScore: 0} if no valid results         │
-│  ✓ Validates picks is an array before processing               │
-│  ✓ Clamps conviction to 1-10 range                             │
-│  ✓ 60-second timeout with cleanup                              │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🚪 MANAGE Action Flow (Position Management)
+
+**Service:** `AutonomousTradingEngine.ts`  
+**Prompts:** `src/constants/prompts/managePrompts.ts`  
+**Duration:** ~5 seconds
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  WHEN MANAGE ACTION IS SELECTED                                  │
 │                                                                  │
-│  OUTPUT: { topCoin: AggregatedCoinScore, results: [] }         │
+│  1. POSITION LOOKUP (Case-insensitive + Partial Match)          │
+│     ├─ Exact match: "cmt_btcusdt" === "cmt_btcusdt"            │
+│     ├─ Partial match: "btcusdt" matches "cmt_btcusdt"          │
+│     └─ Logs available positions if not found                   │
+│                                                                  │
+│  2. VALIDATION                                                   │
+│     ├─ Position size must be > 0 and finite                    │
+│     ├─ Entry price must be valid                               │
+│     └─ Current price must be valid                             │
+│                                                                  │
+│  3. EXECUTION (Currently: CLOSE_FULL)                           │
+│     ├─ Call weexClient.closeAllPositions(symbol)               │
+│     ├─ Log success/failure                                     │
+│     └─ Increment tradesExecuted counter                        │
+│                                                                  │
+│  4. DATABASE LOGGING (Only if close successful)                 │
+│     INSERT INTO trades:                                         │
+│     ├─ id: UUID                                                │
+│     ├─ portfolio_id: from analyst state                        │
+│     ├─ symbol: position symbol                                 │
+│     ├─ side: 'SELL' (for LONG) or 'BUY' (for SHORT)           │
+│     ├─ type: 'MARKET'                                          │
+│     ├─ size: position size                                     │
+│     ├─ price: current price                                    │
+│     ├─ status: 'FILLED'                                        │
+│     ├─ reason: 'MANAGE: Position closed by AI'                 │
+│     └─ realized_pnl: unrealized P&L at close                   │
+│                                                                  │
+│  5. CYCLE COMPLETION                                            │
+│     ├─ Update leaderboard                                      │
+│     ├─ Complete cycle with "managed {symbol}"                  │
+│     └─ Sleep before next cycle                                 │
+│                                                                  │
+├─────────────────────────────────────────────────────────────────┤
+│  POSITION HEALTH ASSESSMENT (managePrompts.ts)                   │
+│                                                                  │
+│  assessPositionHealth() evaluates:                              │
+│  ├─ pnlStatus: PROFIT | LOSS | BREAKEVEN                       │
+│  ├─ pnlSeverity: CRITICAL (<-7%) | WARNING | HEALTHY           │
+│  ├─ holdTimeStatus: FRESH (<1d) | MATURE | STALE (>5d)         │
+│  ├─ fundingImpact: FAVORABLE | NEUTRAL | ADVERSE               │
+│  └─ thesisStatus: VALID | WEAKENING | INVALIDATED              │
+│                                                                  │
+│  MANAGE TRADING RULES (Mandatory):                              │
+│  🚨 P&L < -7%: MUST close immediately                          │
+│  🚨 Thesis INVALIDATED: MUST close                             │
+│  💰 P&L > +15%: Take at least 50% profits                      │
+│  💰 P&L > +20%: Take at least 75% profits                      │
+│  ⏰ Hold > 7 days: Close unless new catalyst                   │
+│  💸 Funding > 0.05% against: Reduce hold time                  │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -380,10 +490,7 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 │     ├─ All analyst inputs                                      │
 │     └─ Risk council decision                                   │
 │                                                                  │
-│  3. Emit SSE event to frontend                                 │
-│     → "tradeExecuted" event with trade details                 │
-│                                                                  │
-│  4. Update analyst state                                       │
+│  3. Update analyst state                                       │
 │     ├─ Deduct margin from balance                              │
 │     ├─ Add position to positions array                         │
 │     └─ Update lastTradeTime                                    │
@@ -549,50 +656,45 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  LIVE ARENA DASHBOARD (LiveArena.tsx)                           │
+│  LIVE ARENA DASHBOARD (index.html + app.js)                     │
 │                                                                  │
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │  HEADER                                                  │   │
-│  │  ├─ WebSocket connection status (green/red indicator)   │   │
-│  │  ├─ Auth status (Login/Logout button)                   │   │
-│  │  └─ Account assets display                              │   │
+│  │  ├─ Engine status indicator (running/stopped)           │   │
+│  │  └─ Account balance display                             │   │
 │  └─────────────────────────────────────────────────────────┘   │
 │                                                                  │
 │  ┌─────────────────────────────────────────────────────────┐   │
-│  │  ENGINE STATUS BANNER (EngineStatusBanner.tsx)          │   │
-│  │  ├─ Running/Stopped status with pulse indicator         │   │
+│  │  ENGINE CONTROLS                                         │   │
+│  │  ├─ Start/Stop buttons                                  │   │
 │  │  ├─ Current cycle number                                │   │
 │  │  ├─ Next cycle countdown                                │   │
-│  │  ├─ Total trades today                                  │   │
-│  │  ├─ Progress bar                                        │   │
-│  │  └─ Start/Stop buttons                                  │   │
+│  │  └─ Total trades counter                                │   │
 │  └─────────────────────────────────────────────────────────┘   │
 │                                                                  │
 │  ┌─────────────────────────────────────────────────────────┐   │
-│  │  TAB NAVIGATION                                          │   │
-│  │  🏆 Tournament | 📊 Leaderboard | ⚡ Trades | ⚔️ Debates │   │
+│  │  MAIN CONTENT SECTIONS                                   │   │
+│  │                                                          │   │
+│  │  📊 PORTFOLIO OVERVIEW                                   │   │
+│  │  ├─ Current balance                                     │   │
+│  │  ├─ Total P&L                                           │   │
+│  │  └─ Win rate                                            │   │
+│  │                                                          │   │
+│  │  📈 OPEN POSITIONS                                       │   │
+│  │  ├─ Symbol, side, size                                  │   │
+│  │  ├─ Entry price, current price                          │   │
+│  │  └─ Unrealized P&L                                      │   │
+│  │                                                          │   │
+│  │  ⚡ RECENT TRADES                                        │   │
+│  │  ├─ Trade history (last 20)                             │   │
+│  │  └─ Trade details with P&L                              │   │
+│  │                                                          │   │
+│  │  🎯 MARKET DATA                                          │   │
+│  │  └─ Live prices for 8 coins                             │   │
+│  │                                                          │   │
 │  └─────────────────────────────────────────────────────────┘   │
 │                                                                  │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │  TAB CONTENT                                             │   │
-│  │                                                          │   │
-│  │  TOURNAMENT TAB:                                         │   │
-│  │  ├─ AnalystGrid (8 analyst cards)                       │   │
-│  │  └─ LiveTradeFeed (recent 5 trades)                     │   │
-│  │                                                          │   │
-│  │  LEADERBOARD TAB:                                        │   │
-│  │  └─ Leaderboard (ranked analyst table)                  │   │
-│  │                                                          │   │
-│  │  TRADES TAB:                                             │   │
-│  │  └─ LiveTradeFeed (all trades, max 50)                  │   │
-│  │                                                          │   │
-│  │  DEBATES TAB:                                            │   │
-│  │  └─ Debate results (JSON display)                       │   │
-│  │                                                          │   │
-│  │  MANUAL TAB (auth required):                            │   │
-│  │  └─ Manual trade form (symbol, side, size)              │   │
-│  │                                                          │   │
-│  └─────────────────────────────────────────────────────────┘   │
+│  AUTO-REFRESH: Every 10 seconds (polling)                       │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -603,25 +705,19 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  SERVER-SENT EVENTS (SSE)                                        │
+│  POLLING-BASED UPDATES (Replaced SSE in v3.0.1)                 │
 │                                                                  │
-│  Endpoint: GET /api/autonomous/events                           │
+│  Frontend polls every 10 seconds:                               │
+│  ├─ GET /api/status → Engine status                            │
+│  ├─ GET /api/positions → Current positions                     │
+│  ├─ GET /api/portfolio → Portfolio data                        │
+│  └─ GET /api/activity → Recent trades                          │
 │                                                                  │
-│  EVENT TYPES:                                                   │
-│  ├─ "status" → Engine status update                            │
-│  ├─ "cycleStart" → New cycle beginning                         │
-│  ├─ "cycleComplete" → Cycle finished with stats                │
-│  ├─ "coinSelected" → Stage 2 result                            │
-│  ├─ "specialistAnalysis" → Stage 3 result                      │
-│  ├─ "tournamentComplete" → Stage 4 result                      │
-│  ├─ "riskCouncilDecision" → Stage 5 result                     │
-│  ├─ "tradeExecuted" → Stage 6 result                           │
-│  └─ "debatesComplete" → Tournament results                     │
-│                                                                  │
-│  FRONTEND HANDLING (autonomousApi.connectToEvents):             │
-│  ├─ Auto-reconnect on disconnect                               │
-│  ├─ Manual reconnect button on error                           │
-│  └─ Events stored in liveEvents array (max 100)                │
+│  Benefits:                                                      │
+│  ✓ Simpler architecture (no WebSocket/SSE complexity)          │
+│  ✓ Better compatibility with proxies/load balancers            │
+│  ✓ Easier to debug and maintain                                │
+│  ✓ Sufficient for 5-minute trading cycles                      │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -642,15 +738,12 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 │  ├── WeexClient (exchange API)                                  │
 │  ├── CircuitBreakerService (risk management)                   │
 │  ├── TradingScheduler (timing optimization)                    │
-│  ├── AILogService (compliance logging)                         │
-│  └── WebSocketManager (SSE broadcasting)                       │
+│  └── AILogService (compliance logging)                         │
 │                                                                  │
 ├─────────────────────────────────────────────────────────────────┤
 │  SUPPORTING SERVICES                                             │
 │                                                                  │
-│  AuthService → JWT authentication                               │
-│  Database Pool → PostgreSQL (Neon)                              │
-│  Redis → Caching (Upstash)                                      │
+│  Database → SQLite (local) or Turso (production)                │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -660,7 +753,7 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 ## 🧭 Stage-to-Service Ownership
 
 - Stage 1 — Market Scan: `WeexClient.getTicker`, `getFundingRate` (owner: Exchange data)
-- Stage 2 — Coin Selection: `CollaborativeFlow.runCoinSelection` (owners: Ray, Jim, Quant)
+- Stage 2 — Coin Selection: `CollaborativeFlow.runCoinSelection` (owners: Ray, Jim, Quant, Elon)
 - Stage 3 — Specialist Analysis: `CollaborativeFlow.runSpecialistAnalysis` (owners per `COIN_TYPE_MAP`; uses Gemini)
 - Stage 4 — Tournament: `CollaborativeFlow.runTournament` + `runDebateMatch` (judged by Gemini; fallback `runSingleJudgeFallback`, then highest confidence)
 - Stage 5 — Risk Council: `CollaborativeFlow.runRiskCouncil` + `CircuitBreakerService.checkAll` (owner: Karen; respects `GLOBAL_RISK_LIMITS`)
@@ -725,7 +818,10 @@ Benefits of Structured Outputs:
 │  EVERY CYCLE (~5 minutes):                                      │
 │                                                                  │
 │  1. SCAN    → Fetch market data for 8 coins (WeexClient)       │
-│  2. SELECT  → Ray, Jim, Quant pick best opportunity            │
+│  2. SELECT  → Ray, Jim, Quant, Elon pick best opportunity      │
+│              NEW: Can select MANAGE to close positions         │
+│     [If MANAGE] → Close position → Update DB → DONE            │
+│     [If LONG/SHORT] ↓                                          │
 │  3. ANALYZE → 3 specialists deep-dive the chosen coin          │
 │  4. DEBATE  → Tournament determines best thesis                │
 │  5. RISK    → Karen approves/vetoes/adjusts                    │
@@ -743,10 +839,11 @@ Benefits of Structured Outputs:
 │  ✓ Circuit breakers protect against crashes                    │
 │  ✓ One portfolio, collaborative decisions                      │
 │  ✓ All AI decisions logged for WEEX compliance                 │
+│  ✓ NEW: AI can manage existing positions (close/reduce)        │
 │                                                                  │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
-│  EDGE CASES HANDLED (v2.2.0):                                   │
+│  EDGE CASES HANDLED (v3.0.0):                                   │
 │                                                                  │
 │  ✓ Number.isFinite() guards on all calculations                │
 │  ✓ Division by zero protection                                 │
@@ -754,6 +851,12 @@ Benefits of Structured Outputs:
 │  ✓ Timeout cleanup (no memory leaks)                           │
 │  ✓ Array mutation during iteration fixed                       │
 │  ✓ Null/undefined checks on all inputs                         │
+│  ✓ Current price from ticker (not entry price)                 │
+│  ✓ Hold time from DB (not hardcoded)                           │
+│  ✓ Position size validation before close                       │
+│  ✓ DB insert only after successful close                       │
+│  ✓ Case-insensitive position symbol matching                   │
+│  ✓ MANAGE pattern detection avoids false positives             │
 │                                                                  │
-└───────
+└─────────────────────────────────────────────────────────────────┘
 ```

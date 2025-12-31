@@ -8,14 +8,18 @@
 import { DEBATE_CONTEXTS, DEBATE_TURN_INSTRUCTIONS } from './debateContexts';
 import { config } from '../../config';
 import { safeNumber } from './promptHelpers';
+import { formatTradingRulesForAI, getCriticalRulesSummary } from '../analyst/tradingRules';
+import type { PortfolioPosition } from './builders';
 
 /**
  * Build context for Coin Selection Debate (Stage 2)
  * 
- * ENHANCED: Now includes funding rate analysis per coin
+ * ENHANCED: Now includes funding rate analysis per coin, trading rules,
+ * AND current portfolio positions for portfolio-aware decision making
  * 
  * @param marketSummary - Formatted market data for all 8 coins
  * @param fundingAnalysis - Optional funding rate analysis for each coin
+ * @param currentPositions - Optional current portfolio positions
  * @returns Complete debate context string
  */
 export function buildCoinSelectionContext(
@@ -24,9 +28,32 @@ export function buildCoinSelectionContext(
         symbol: string;
         fundingRate: number;
         fundingDirection: 'bullish' | 'bearish' | 'neutral';
-    }>
+    }>,
+    currentPositions?: PortfolioPosition[]
 ): string {
     const ctx = DEBATE_CONTEXTS.coinSelection;
+
+    // Build portfolio section if positions exist
+    let portfolioSection = '';
+    if (currentPositions && currentPositions.length > 0) {
+        const positionsList = currentPositions.map(p => {
+            const pnlSign = p.unrealizedPnlPercent >= 0 ? '+' : '';
+            const holdDays = (p.holdTimeHours / 24).toFixed(1);
+            return `  • ${p.symbol.replace(/cmt_/i, '').replace(/usdt/i, '').toUpperCase()} ${p.side}: Entry $${safeNumber(p.entryPrice, 2)} → $${safeNumber(p.currentPrice, 2)} | P&L: ${pnlSign}${safeNumber(p.unrealizedPnlPercent, 2)}% | Hold: ${holdDays}d`;
+        }).join('\n');
+
+        portfolioSection = `
+═══════════════════════════════════════════════════════════════════════════════
+CURRENT PORTFOLIO (${currentPositions.length} position${currentPositions.length > 1 ? 's' : ''})
+═══════════════════════════════════════════════════════════════════════════════
+${positionsList}
+
+⚠️ You can select "MANAGE" action for any existing position if it needs attention:
+- P&L > +15% → consider taking profits
+- P&L < -7% → consider cutting losses
+- Hold > 5 days → thesis may be stale
+`;
+    }
 
     // Build funding analysis section if provided
     let fundingSection = '';
@@ -38,9 +65,11 @@ export function buildCoinSelectionContext(
                 continue;
             }
             const fundingPercent = safeNumber(coin.fundingRate * 100, 4);
+            // FIXED: Use case-insensitive regex for symbol cleaning
+            const cleanSymbol = coin.symbol.replace(/^cmt_/i, '').replace(/usdt$/i, '').toUpperCase();
             const signal = coin.fundingDirection === 'bullish' ? '🟢 BULLISH' :
                 coin.fundingDirection === 'bearish' ? '🔴 BEARISH' : '⚪ NEUTRAL';
-            fundingLines.push(`  ${coin.symbol}: ${fundingPercent}% (${signal})`);
+            fundingLines.push(`  ${cleanSymbol}: ${fundingPercent}% (${signal})`);
         }
         // Only add section if we have valid entries (more than just the header)
         if (fundingLines.length > 1) {
@@ -49,11 +78,18 @@ export function buildCoinSelectionContext(
         }
     }
 
-    return `${ctx.title}
+    // Add critical trading rules summary
+    const rulesSection = getCriticalRulesSummary();
 
+    return `${ctx.title}
+${portfolioSection}
 ${marketSummary}${fundingSection}
 
-TASK: ${ctx.task}
+${rulesSection}
+
+TASK: Select TOP 3 opportunities. Each can be:
+• NEW TRADE: "LONG" or "SHORT" on a coin
+• MANAGE POSITION: "MANAGE" an existing position (close/reduce/adjust)
 
 JUDGING: ${ctx.judging}
 
@@ -63,20 +99,19 @@ WORD LIMIT:
 DATA CHECKLIST:
 - Price, % change vs BTC, and 24h volume
 - At least one microstructure metric (funding, OI, liquidations)
+- For MANAGE picks: cite P&L %, hold time, or changed conditions
 - Regime note (trend/chop) and any near-term catalyst
-- Crowding awareness if funding/OI are extreme
- - Catalyst taxonomy examples: token unlock schedules, exchange listings, ETF approvals, mainnet/testnet launches, governance votes; prefer near-term catalysts (7–14 days) with dates/timelines
  
- RESPONSE FORMAT:
- - symbol: Exact WEEX symbol (e.g., "cmt_btcusdt")
- - direction: "LONG" or "SHORT"
- - conviction: 1–10 (be honest; low-conviction picks hurt score)
- - reason: ONE sentence with specific numbers from your methodology
- 
- COMMON MISTAKES:
- - Vague statements without numbers, ignoring crowding or regime
- - Selecting multiple highly correlated picks without diversification
- - Overweighting price alone; missing volume/structure/funding`;
+RESPONSE FORMAT:
+- symbol: Exact WEEX symbol (e.g., "cmt_btcusdt")
+- action: "LONG" | "SHORT" | "MANAGE"
+- conviction: 1–10 (be honest; low-conviction picks hurt score)
+- reason: ONE sentence with specific numbers
+
+COMMON MISTAKES:
+- Ignoring existing positions that need attention
+- Adding correlated positions without managing existing exposure
+- Vague statements without numbers`;
 }
 
 /**
@@ -128,12 +163,17 @@ export function buildAnalysisApproachContext(
         }
     }
 
+    // Add full trading rules for analysis stage
+    const tradingRules = formatTradingRulesForAI();
+
     return `${ctx.title}
 
 Coin: ${displaySymbol}/USDT
 Selected Direction: ${direction}
 Current Price: ${priceStr}
 24h Change: ${changeStr}${marketDataSection}
+
+${tradingRules}
 
 TASK: ${ctx.task}
 
@@ -238,6 +278,9 @@ export function buildRiskAssessmentContext(
 
 Coin: ${displaySymbol}/USDT
 Current Price: ${priceStr}${marketDataSection}
+
+${formatTradingRulesForAI()}
+
 Proposed Thesis by ${proposedThesis.analystName}:
 - Direction: ${proposedThesis.direction || 'Not specified'}
 - Targets: Bull ${priceTargets.bull}, Base ${priceTargets.base}, Bear ${priceTargets.bear}
@@ -361,6 +404,8 @@ Current Price: ${priceStr}
 24h Change: ${changeStr}${marketDataSection}
 
 ${winnersSection}
+
+${formatTradingRulesForAI()}
 
 TASK: ${ctx.task}
 

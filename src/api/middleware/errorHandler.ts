@@ -37,15 +37,6 @@ export function errorHandler(
         return;
     }
 
-    // Handle JWT errors
-    if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
-        res.status(401).json({
-            error: 'Invalid or expired token',
-            code: 'AUTHENTICATION_ERROR',
-        });
-        return;
-    }
-
     // Handle unknown errors
     const statusCode = 500;
     const message = config.nodeEnv === 'production'

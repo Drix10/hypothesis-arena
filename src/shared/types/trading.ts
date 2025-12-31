@@ -68,7 +68,6 @@ export interface Portfolio {
     id: string;
     agentId: string;
     agentName: string;
-    userId?: string;
     initialBalance: number;
     currentBalance: number;
     totalValue: number;

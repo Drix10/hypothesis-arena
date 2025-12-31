@@ -10,7 +10,7 @@
  */
 
 import { config } from '../config';
-import { pool } from '../config/database';
+import { prisma } from '../config/database';
 import { logger } from '../utils/logger';
 
 export interface AnalystPortfolio {
@@ -172,52 +172,65 @@ class ArenaContextBuilder {
      */
     private async getAnalystPortfolio(analystId: string): Promise<AnalystPortfolio> {
         try {
-            const result = await pool.query(
-                `SELECT p.*, 
-                    RANK() OVER (ORDER BY p.total_return DESC) as rank
-                 FROM portfolios p 
-                 WHERE p.agent_id = $1
-                 LIMIT 1`,
-                [analystId]
-            );
+            const portfolio = await prisma.portfolio.findUnique({
+                where: { agentId: analystId },
+                select: {
+                    id: true,
+                    agentId: true,
+                    agentName: true,
+                    currentBalance: true,
+                    totalValue: true,
+                    totalReturn: true,
+                    totalTrades: true,
+                    winRate: true
+                }
+            });
 
-            if (result.rows.length === 0) {
+            if (!portfolio) {
                 return this.getDefaultPortfolio(analystId);
             }
 
-            const row = result.rows[0];
+            // Get rank efficiently using a single query with ordering
+            // This avoids the N+1 query problem and is more performant
+            const allPortfolios = await prisma.portfolio.findMany({
+                select: { id: true, totalReturn: true },
+                orderBy: { totalReturn: 'desc' }
+            });
+            const rankIndex = allPortfolios.findIndex(p => p.id === portfolio.id);
+            // CRITICAL: Handle case where portfolio is not found in list (should never happen, but defensive)
+            const rank = rankIndex === -1 ? allPortfolios.length + 1 : rankIndex + 1;
 
             // Get recent trades
-            const tradesResult = await pool.query(
-                `SELECT symbol, side, price, realized_pnl, created_at
-                 FROM trades 
-                 WHERE portfolio_id = $1
-                 ORDER BY created_at DESC
-                 LIMIT 10`,
-                [row.id]
-            );
-
-            // Validate rank - could be NaN if no rows or invalid data
-            const parsedRank = parseInt(row.rank, 10);
-            const safeRank = Number.isFinite(parsedRank) && parsedRank > 0 ? parsedRank : 1;
+            const recentTrades = await prisma.trade.findMany({
+                where: { portfolioId: portfolio.id },
+                orderBy: { createdAt: 'desc' },
+                take: 10,
+                select: {
+                    symbol: true,
+                    side: true,
+                    price: true,
+                    realizedPnl: true,
+                    createdAt: true
+                }
+            });
 
             return {
-                analystId: row.agent_id,
-                analystName: row.agent_name,
-                balance: parseFloat(row.current_balance) || 0,
-                totalValue: parseFloat(row.total_value) || 0,
-                totalReturn: parseFloat(row.total_return) || 0,
-                totalTrades: parseInt(row.total_trades, 10) || 0,
-                winRate: parseFloat(row.win_rate) || 0,
+                analystId: portfolio.agentId,
+                analystName: portfolio.agentName,
+                balance: portfolio.currentBalance,
+                totalValue: portfolio.totalValue,
+                totalReturn: portfolio.totalReturn,
+                totalTrades: portfolio.totalTrades,
+                winRate: portfolio.winRate,
                 positions: [], // Would fetch from WEEX
-                recentTrades: tradesResult.rows.map(t => ({
+                recentTrades: recentTrades.map(t => ({
                     symbol: t.symbol,
                     side: t.side,
-                    price: parseFloat(t.price),
-                    pnl: parseFloat(t.realized_pnl) || 0,
-                    timestamp: new Date(t.created_at).getTime(),
+                    price: t.price,
+                    pnl: t.realizedPnl ?? 0,
+                    timestamp: t.createdAt.getTime(),
                 })),
-                rank: safeRank,
+                rank: rank,
             };
         } catch (error) {
             logger.warn(`Failed to get portfolio for ${analystId}:`, error);
@@ -230,35 +243,36 @@ class ArenaContextBuilder {
      */
     private async getAllPortfolios(): Promise<AnalystPortfolio[]> {
         try {
-            const result = await pool.query(
-                `SELECT p.*, 
-                    RANK() OVER (ORDER BY p.total_return DESC) as rank
-                 FROM portfolios p 
-                 ORDER BY p.total_return DESC`
-            );
+            const portfolios = await prisma.portfolio.findMany({
+                orderBy: { totalReturn: 'desc' },
+                select: {
+                    id: true,
+                    agentId: true,
+                    agentName: true,
+                    currentBalance: true,
+                    totalValue: true,
+                    totalReturn: true,
+                    totalTrades: true,
+                    winRate: true
+                }
+            });
 
-            if (!result.rows || result.rows.length === 0) {
+            if (!portfolios || portfolios.length === 0) {
                 return [];
             }
 
-            return result.rows.map(row => {
-                // Validate rank - could be NaN if invalid data
-                const parsedRank = parseInt(row.rank, 10);
-                const safeRank = Number.isFinite(parsedRank) && parsedRank > 0 ? parsedRank : 1;
-
-                return {
-                    analystId: row.agent_id || 'unknown',
-                    analystName: row.agent_name || row.agent_id || 'Unknown',
-                    balance: parseFloat(row.current_balance) || 0,
-                    totalValue: parseFloat(row.total_value) || 0,
-                    totalReturn: parseFloat(row.total_return) || 0,
-                    totalTrades: parseInt(row.total_trades, 10) || 0,
-                    winRate: parseFloat(row.win_rate) || 0,
-                    positions: [],
-                    recentTrades: [],
-                    rank: safeRank,
-                };
-            });
+            return portfolios.map((portfolio, index) => ({
+                analystId: portfolio.agentId,
+                analystName: portfolio.agentName,
+                balance: portfolio.currentBalance,
+                totalValue: portfolio.totalValue,
+                totalReturn: portfolio.totalReturn,
+                totalTrades: portfolio.totalTrades,
+                winRate: portfolio.winRate,
+                positions: [],
+                recentTrades: [],
+                rank: index + 1, // Rank based on sort order
+            }));
         } catch (error) {
             logger.warn('Failed to get all portfolios:', error);
             return [];
@@ -276,21 +290,28 @@ class ArenaContextBuilder {
         timestamp: number;
     }>> {
         try {
-            const result = await pool.query(
-                `SELECT t.symbol, t.side, t.price, t.created_at, p.agent_id
-                 FROM trades t
-                 JOIN portfolios p ON t.portfolio_id = p.id
-                 ORDER BY t.created_at DESC
-                 LIMIT $1`,
-                [limit]
-            );
+            const trades = await prisma.trade.findMany({
+                orderBy: { createdAt: 'desc' },
+                take: limit,
+                select: {
+                    symbol: true,
+                    side: true,
+                    price: true,
+                    createdAt: true,
+                    portfolio: {
+                        select: {
+                            agentId: true
+                        }
+                    }
+                }
+            });
 
-            return result.rows.map(row => ({
-                analystId: row.agent_id,
-                symbol: row.symbol,
-                side: row.side,
-                price: parseFloat(row.price),
-                timestamp: new Date(row.created_at).getTime(),
+            return trades.map(trade => ({
+                analystId: trade.portfolio.agentId,
+                symbol: trade.symbol,
+                side: trade.side,
+                price: trade.price,
+                timestamp: trade.createdAt.getTime(),
             }));
         } catch (error) {
             logger.warn('Failed to get recent trades:', error);

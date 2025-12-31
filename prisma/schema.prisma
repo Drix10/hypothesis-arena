@@ -1,0 +1,198 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Enums
+enum PortfolioStatus {
+  active
+  paused
+  closed
+}
+
+// Portfolios - ONE collaborative portfolio shared by all 8 analysts
+// Architecture: Single shared portfolio (agentId='collaborative') for all 8 AI analysts
+// Balance: Synced from WEEX wallet API (source of truth), stored here for display/tracking
+//
+// PRECISION WARNING: SQLite uses REAL (8-byte IEEE 754 floating point) for Float type
+// - Precision: ~15-17 decimal digits
+// - Safe range: ±2^53 (9,007,199,254,740,992)
+// - For crypto trading with typical balances ($100-$100k), precision loss is negligible
+// - Example: $100,000.12345678 stored accurately, but $10,000,000,000.12 loses cents
+// 
+// MITIGATION STRATEGY:
+// 1. All financial calculations use application-level validation (Number.isFinite checks)
+// 2. WEEX API is source of truth - we sync from their balances
+// 3. For production with large balances (>$1M), consider:
+//    - Storing values as integer cents (multiply by 100)
+//    - Using Decimal.js library for calculations
+//    - Migrating to PostgreSQL with NUMERIC type
+model Portfolio {
+  id                String   @id @default(uuid())
+  agentId           String   @unique @map("agent_id") // 'collaborative' for shared portfolio
+  agentName         String   @map("agent_name") // 'Collaborative AI Team'
+  initialBalance    Float    @map("initial_balance") // USDT - synced from WEEX
+  currentBalance    Float    @map("current_balance") // USDT - synced from WEEX wallet
+  totalValue        Float    @default(0) @map("total_value") // Portfolio + positions value
+  totalReturn       Float    @default(0) @map("total_return") // Percentage return
+  totalReturnDollar Float    @default(0) @map("total_return_dollar") // Dollar return
+  winRate           Float    @default(0) @map("win_rate") // Win rate percentage
+  sharpeRatio       Float?   @map("sharpe_ratio") // Risk-adjusted return metric
+  maxDrawdown       Float    @default(0) @map("max_drawdown") // Max drawdown percentage
+  currentDrawdown   Float           @default(0) @map("current_drawdown") // Current drawdown
+  totalTrades       Int             @default(0) @map("total_trades")
+  winningTrades     Int             @default(0) @map("winning_trades")
+  losingTrades      Int             @default(0) @map("losing_trades")
+  tournamentWins    Int             @default(0) @map("tournament_wins")
+  totalPoints       Int             @default(0) @map("total_points")
+  status            PortfolioStatus @default(active)
+  createdAt         DateTime        @default(now()) @map("created_at")
+  updatedAt         DateTime        @updatedAt @map("updated_at")
+
+  trades                Trade[]
+  performanceSnapshots  PerformanceSnapshot[]
+  performanceMetrics    PerformanceMetric[]
+
+  @@index([status])
+  @@map("portfolios")
+}
+
+// Trades - Trading history with analyst attribution
+// championId tracks which analyst won the debate for this trade
+//
+// PRECISION WARNING: Float fields (size, price, fee, realizedPnl) use IEEE 754 double precision
+// - Adequate for typical crypto trading (BTC at $100k, size 0.001 BTC = $100)
+// - Precision loss only occurs with extreme values (>$9 quadrillion)
+// - WEEX API returns these as strings/numbers - we validate before storing
+model Trade {
+  id                 String    @id @default(uuid())
+  portfolioId        String    @map("portfolio_id")
+  symbol             String
+  side               TradeSide // 'BUY' or 'SELL' - now enum-constrained
+  type               TradeType // 'MARKET' or 'LIMIT' - now enum-constrained
+  size               Float
+  price              Float
+  fee                Float     @default(0)
+  status             TradeStatus // 'FILLED', 'PENDING', 'CANCELLED' - now enum-constrained
+  reason             String? // Why this trade was made
+  analysisId         String?   @map("analysis_id")
+  confidence         Float? // AI confidence level
+  championId         String?   @map("champion_id") // Analyst who won the debate (warren, cathie, etc.)
+  executedAt         DateTime? @map("executed_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  weexOrderId        String?   @map("weex_order_id")
+  clientOrderId      String?   @unique @map("client_order_id")
+  realizedPnl        Float?    @map("realized_pnl")
+  realizedPnlPercent Float?    @map("realized_pnl_percent")
+
+  portfolio Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+  aiLogs    AILog[]
+
+  @@index([portfolioId])
+  @@index([symbol])
+  @@index([status])
+  @@index([createdAt])
+  @@index([executedAt])
+  @@index([championId]) // Index for analyst performance tracking
+  @@index([symbol, status, executedAt]) // Composite index for hold time queries
+  @@index([status, side, executedAt]) // Composite index for position entry queries
+  @@map("trades")
+}
+
+// AI Logs - WEEX compliance logs
+// Required by WEEX for all AI-driven trading decisions
+model AILog {
+  id              String    @id @default(uuid())
+  tradeId         String?   @map("trade_id")
+  orderId         String?   @map("order_id")
+  stage           AILogStage // FIXED: Spelling matches enum below (DECISION_MAKING, STRATEGY_GENERATION, etc.)
+  model           String // AI model used (e.g., 'gemini-2.5-flash')
+  input           String // JSON string of input data
+  output          String // JSON string of output data
+  explanation     String // FIXED: SQLite String type supports unlimited length (TEXT in SQL, no explicit annotation needed)
+  timestamp       DateTime @default(now()) // FIXED: Changed from Int to DateTime for consistency
+  uploadedToWeex  Boolean   @default(false) @map("uploaded_to_weex")
+  weexLogId       String?   @map("weex_log_id")
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  trade Trade? @relation(fields: [tradeId], references: [id], onDelete: SetNull)
+
+  @@index([tradeId])
+  @@index([orderId])
+  @@index([timestamp])
+  @@index([uploadedToWeex])
+  @@map("ai_logs")
+}
+
+// Performance Snapshots - For circuit breaker drawdown calculations
+// Stores portfolio value at regular intervals to calculate 24h drawdown
+model PerformanceSnapshot {
+  id          String   @id @default(uuid())
+  portfolioId String   @map("portfolio_id")
+  totalValue  Float    @map("total_value")
+  timestamp   DateTime @default(now())
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  portfolio Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+
+  @@index([portfolioId])
+  @@index([timestamp])
+  @@index([portfolioId, timestamp])
+  @@map("performance_snapshots")
+}
+
+// Performance Metrics - Daily performance tracking
+// Aggregated daily statistics for the collaborative portfolio
+model PerformanceMetric {
+  id               String   @id @default(uuid())
+  portfolioId      String   @map("portfolio_id")
+  date             String   // YYYY-MM-DD format
+  portfolioValue   Float    @map("portfolio_value")
+  dailyReturn      Float    @map("daily_return")
+  cumulativeReturn Float    @map("cumulative_return")
+  sharpeRatio      Float?   @map("sharpe_ratio")
+  maxDrawdown      Float    @map("max_drawdown")
+  winRate          Float    @map("win_rate")
+  tradesCount      Int      @default(0) @map("trades_count")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  portfolio Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+
+  @@unique([portfolioId, date])
+  @@index([portfolioId])
+  @@index([date])
+  @@map("performance_metrics")
+}
+
+// Enums for type safety and database constraints
+enum TradeSide {
+  BUY
+  SELL
+}
+
+enum TradeType {
+  MARKET
+  LIMIT
+}
+
+enum TradeStatus {
+  PENDING
+  OPEN
+  FILLED
+  CANCELED
+  FAILED
+}
+
+enum AILogStage {
+  DECISION_MAKING
+  STRATEGY_GENERATION
+  RISK_ASSESSMENT
+  COLLABORATIVE_TRADE
+  POSITION_MANAGEMENT
+  MANUAL_CLOSE
+}

@@ -5,6 +5,7 @@
  */
 
 import type { AnalystMethodology } from '../analyst/types';
+import { filterPromptByAction } from './contextFilter';
 
 
 /**
@@ -13,12 +14,14 @@ import type { AnalystMethodology } from '../analyst/types';
  * 
  * @param methodology - The analyst methodology to get the prompt for
  * @param promptsMap - Map of methodologies to system prompts
- * @returns The system prompt string
+ * @param action - Optional action type for context filtering (LONG, SHORT, or MANAGE)
+ * @returns The system prompt string (filtered if action provided)
  * @throws Error if methodology is invalid or prompt is not found
  */
 export function getSystemPrompt(
     methodology: string | undefined,
-    promptsMap: Record<AnalystMethodology, string>
+    promptsMap: Record<AnalystMethodology, string>,
+    action?: 'LONG' | 'SHORT' | 'MANAGE'
 ): string {
     // Validate methodology is provided
     if (!methodology || typeof methodology !== 'string') {
@@ -46,6 +49,11 @@ export function getSystemPrompt(
             `System prompt for methodology "${methodology}" is empty or invalid. ` +
             `This indicates a configuration error in THESIS_SYSTEM_PROMPTS.`
         );
+    }
+
+    // Apply context filtering if action is provided
+    if (action) {
+        return filterPromptByAction(action, prompt);
     }
 
     return prompt;

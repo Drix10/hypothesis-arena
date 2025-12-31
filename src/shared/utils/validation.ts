@@ -5,58 +5,6 @@ export function isApprovedSymbol(symbol: string): symbol is ApprovedSymbol {
 }
 
 /**
- * Validate an email address format
- * @param email - The email address to validate
- * @returns true if email is valid, false otherwise
- * 
- * Validation rules:
- * - Must be a non-empty string
- * - Maximum length: 254 characters (RFC 5321)
- * - Must match standard email format (local@domain.tld)
- * - Local part: alphanumeric + special chars (.!#$%&'*+/=?^_`{|}~-)
- * - Domain: alphanumeric + hyphens, with valid TLD
- */
-export function validateEmail(email: string): boolean {
-    // Check type and length
-    if (!email || typeof email !== 'string' || email.length > 254) {
-        return false;
-    }
-
-    // RFC 5322 compliant email regex (simplified but robust)
-    const emailRegex = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
-    return emailRegex.test(email);
-}
-
-/**
- * Validate a password meets security requirements
- * @param password - The password to validate
- * @returns Object with valid flag and array of error messages
- */
-export function validatePassword(password: string): { valid: boolean; errors: string[] } {
-    const errors: string[] = [];
-    if (!password || typeof password !== 'string') {
-        errors.push('Password must be a string');
-        return { valid: false, errors };
-    }
-    if (password.length < 8) {
-        errors.push('Password must be at least 8 characters');
-    }
-    if (password.length > 128) {
-        errors.push('Password must be at most 128 characters');
-    }
-    if (!/[A-Z]/.test(password)) {
-        errors.push('Password must contain at least one uppercase letter');
-    }
-    if (!/[a-z]/.test(password)) {
-        errors.push('Password must contain at least one lowercase letter');
-    }
-    if (!/[0-9]/.test(password)) {
-        errors.push('Password must contain at least one number');
-    }
-    return { valid: errors.length === 0, errors };
-}
-
-/**
  * Validate a position size against portfolio value and risk limits
  * @param size - The position size in dollars
  * @param portfolioValue - Total portfolio value in dollars
@@ -68,7 +16,7 @@ export function validatePassword(password: string): { valid: boolean; errors: st
  * - maxPositionPercent must be in range (0, 1]
  * - Position size must not exceed maxPositionPercent of portfolio
  */
- 
+
 
 /**
  * Sanitize a trading symbol to lowercase and trimmed format
@@ -76,7 +24,7 @@ export function validatePassword(password: string): { valid: boolean; errors: st
  * @returns Sanitized symbol in lowercase (e.g., "btc-usdt", "eth_usdt")
  * @throws Error if symbol is null, undefined, not a string, or contains only whitespace
  */
- 
+
 
 /**
  * Format a price number to a string with specified decimal places
@@ -86,7 +34,7 @@ export function validatePassword(password: string): { valid: boolean; errors: st
  *          Returns "0.00" (or "0" if decimals=0) for non-finite inputs
  * @throws Error if decimals is not an integer or out of range [0, 20]
  */
- 
+
 
 /**
  * Format a decimal value as a percentage string
@@ -96,7 +44,7 @@ export function validatePassword(password: string): { valid: boolean; errors: st
  *          Returns "-" for non-finite inputs
  * @throws Error if decimals is not an integer or out of range [0, 20]
  */
- 
+
 
 /**
  * Validate a trade order before execution
@@ -108,7 +56,7 @@ export function validatePassword(password: string): { valid: boolean; errors: st
  * - MARKET orders should NOT have a price (to avoid confusion)
  * - Size must be a positive finite number
  */
- 
+
 
 /**
  * Validate risk limits configuration

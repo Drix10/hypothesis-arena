@@ -42,7 +42,6 @@ export interface DebateResult {
 
 export interface Analysis {
     id: string;
-    userId: string;
     symbol: string;
     status: AnalysisStatus;
     recommendation?: Recommendation;

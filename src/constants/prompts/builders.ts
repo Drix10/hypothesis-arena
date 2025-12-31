@@ -26,14 +26,35 @@ import {
     getCanonicalPrice,
     getSystemPrompt
 } from './promptHelpers';
+import { formatTradingRulesForAI } from '../analyst/tradingRules';
+
+/**
+ * Position info for portfolio-aware coin selection
+ */
+export interface PortfolioPosition {
+    symbol: string;
+    side: 'LONG' | 'SHORT';
+    size: number;
+    entryPrice: number;
+    currentPrice: number;
+    unrealizedPnl: number;
+    unrealizedPnlPercent: number;
+    holdTimeHours: number;
+    fundingPaid?: number;
+}
 
 /**
  * Build the coin selection prompt for Stage 2
+ * Now includes portfolio positions so analysts can choose between:
+ * 1. Opening a new position on a coin
+ * 2. Managing an existing position (close, reduce, adjust)
+ * 
  * Used by: CollaborativeFlow.ts → runCoinSelection()
  */
 export function buildCoinSelectionPrompt(
     profile: AnalystAgent,
-    marketSummary: string
+    marketSummary: string,
+    currentPositions: PortfolioPosition[] = []
 ): string {
     // Validate required fields
     validateRequired(profile.name, 'profile.name');
@@ -43,9 +64,44 @@ export function buildCoinSelectionPrompt(
     const name = sanitizeString(profile.name, 100);
 
     // GET THE FULL SYSTEM PROMPT FOR THIS ANALYST
-    // This is the 800+ line detailed methodology prompt
-    // Validates that the methodology exists and throws clear error if not
+    // For coin selection, we don't know the action yet, so include full prompt
+    // The action will be determined by the analyst's decision
     const fullSystemPrompt = getSystemPrompt(profile.methodology, THESIS_SYSTEM_PROMPTS);
+
+    // Build portfolio section if positions exist
+    let portfolioSection = '';
+    if (currentPositions.length > 0) {
+        const positionsList = currentPositions.map(p => {
+            const pnlSign = p.unrealizedPnlPercent >= 0 ? '+' : '';
+            // FIXED: Validate holdTimeHours before toFixed() to prevent NaN
+            const holdTimeHours = Number.isFinite(p.holdTimeHours) && p.holdTimeHours >= 0 ? p.holdTimeHours : 0;
+            const holdDays = (holdTimeHours / 24).toFixed(1);
+            // FIXED: Enhanced symbol manipulation to handle all casing variants
+            // Handles: cmt_btcusdt, CMT_BTCUSDT, cmt_BTCUSDT, CMT_btcusdt
+            const cleanSymbol = p.symbol
+                .replace(/^cmt_/i, '')  // Remove cmt_ prefix (case-insensitive)
+                .replace(/usdt$/i, '')  // Remove usdt suffix (case-insensitive)
+                .toUpperCase();         // Normalize to uppercase
+            return `  • ${cleanSymbol} ${p.side}: Entry $${safeNumber(p.entryPrice, 2)} → Current $${safeNumber(p.currentPrice, 2)} | P&L: ${pnlSign}${safeNumber(p.unrealizedPnlPercent, 2)}% ($${safeNumber(p.unrealizedPnl, 2)}) | Hold: ${holdDays} days${p.fundingPaid ? ` | Funding paid: $${safeNumber(p.fundingPaid, 2)}` : ''}`;
+        }).join('\n');
+
+        portfolioSection = `
+═══════════════════════════════════════════════════════════════════════════════
+CURRENT PORTFOLIO (${currentPositions.length} open position${currentPositions.length > 1 ? 's' : ''})
+═══════════════════════════════════════════════════════════════════════════════
+${positionsList}
+
+⚠️ PORTFOLIO MANAGEMENT OPTION:
+If an existing position needs urgent attention (take profit, cut loss, adjust), you can select it instead of a new coin. Use action "MANAGE" with the position symbol.
+
+Consider managing a position if:
+- P&L > +15% (lock in profits)
+- P&L < -7% (cut losses before stop)
+- Hold time > 5 days (thesis may be stale)
+- Funding costs eating into profits
+- Market conditions changed against the position
+`;
+    }
 
     return `═══════════════════════════════════════════════════════════════════════════════
 PRIORITY DIRECTIVE - STAGE OVERRIDES
@@ -55,70 +111,52 @@ PRIORITY DIRECTIVE - STAGE OVERRIDES
 • Obey TASK and CONSTRAINTS exactly; output must match requirements
 
 ═══════════════════════════════════════════════════════════════════════════════
-COLLABORATIVE FLOW - STAGE 2: COIN SELECTION
+COLLABORATIVE FLOW - STAGE 2: OPPORTUNITY SELECTION
 ═══════════════════════════════════════════════════════════════════════════════
 
-You are one of 3 analysts (Ray, Jim, Quant) selecting the BEST trading opportunity from 8 coins.
+You are one of 4 analysts (Ray, Jim, Quant, Elon) selecting the BEST action for the portfolio.
 
 This is Stage 2 of the Hypothesis Arena collaborative pipeline:
 - Stage 1 (Market Conditions): Assessed trading environment
-- Stage 2 (YOU ARE HERE): Select top 3 coins using YOUR methodology
-- Stage 3 (Specialist Analysis): 3 specialists will analyze the winning coin
+- Stage 2 (YOU ARE HERE): Select best opportunity - NEW TRADE or MANAGE EXISTING
+- Stage 3 (Specialist Analysis): 3 specialists will analyze the selected opportunity
 - Stage 4 (Tournament): Specialists compete in debates
 - Stage 5 (Risk Council): Karen reviews the winner
-
+${portfolioSection}
 ${marketSummary}
 
-TASK: Select your TOP 3 trading opportunities from these 8 coins.
+TASK: Select your TOP 3 opportunities. Each can be:
+1. NEW TRADE: Open a position on one of the 8 coins (action: "LONG" or "SHORT")
+2. MANAGE POSITION: Close/reduce/adjust an existing position (action: "MANAGE")
 
 SCORING SYSTEM (your picks compete against other analysts):
 • #1 pick = 3 points × conviction
 • #2 pick = 2 points × conviction  
 • #3 pick = 1 point × conviction
 
-The coin with the highest TOTAL score across all analysts will be selected for deep analysis and potential execution.
+The opportunity with the highest TOTAL score will be selected for deep analysis.
 
-SELECTION CRITERIA (apply YOUR FULL METHODOLOGY from above):
+SELECTION CRITERIA (apply YOUR FULL METHODOLOGY):
 1. Use YOUR analytical frameworks, scorecards, and checklists
-2. Apply YOUR specific metrics and evaluation criteria
-3. Leverage YOUR unique edge and perspective
-4. Consider YOUR known biases and blind spots
+2. Compare NEW opportunities vs MANAGING existing positions
+3. Prioritize capital preservation - managing a losing position may be more urgent than a new trade
+4. Consider portfolio correlation - don't add more of the same direction
 
-QUALITY BAR (judge-aligned):
-- Use specific NUMBERS in your reason (e.g., "+5.2% vs BTC, 2.1x avg volume, funding -0.03%")
-- Include at least one on-chain OR microstructure metric (funding, OI, liquidations, exchange flows, active addresses, TVL)
-- Mention regime (trend/chop) or catalyst timing if known
-- Prefer picks where multiple signals ALIGN from YOUR methodology
+QUALITY BAR:
+- Use specific NUMBERS in your reason
+- Include microstructure metrics (funding, OI, liquidations)
+- For MANAGE picks: cite specific P&L, hold time, or changed conditions
 - Avoid generic claims—cite specific data points
-
-DATA CHECKLIST:
-- Price and % change vs BTC
-- 24h volume and range
-- At least one microstructure metric (funding, OI, liquidations)
-- Regime note (trend/chop) and any near-term catalyst
-- Crowding awareness if funding/OI are extreme
-
-TIME HORIZON:
-- Specify expected timeframe (e.g., 2–7 days) and why signals fit it
-
-COMMON ERRORS TO AVOID:
-- Vague phrases ("strong momentum", "looks good") without data
-- Ignoring funding/OI crowding risk
-- Selecting three highly correlated coins in the SAME direction
-- Overweighting price alone; include volume and structure
-- Not applying YOUR specific methodology
 
 OUTPUT REQUIREMENTS:
 • symbol: Exact WEEX symbol (e.g., "cmt_btcusdt", "cmt_solusdt")
-• direction: "LONG" (expecting price increase) or "SHORT" (expecting price decrease)
-• conviction: 1-10 scale (BE HONEST - low conviction picks hurt your score)
-  - 1-3: Speculative, weak signal
-  - 4-6: Moderate confidence, some supporting data
-  - 7-8: High confidence, strong signal alignment
-  - 9-10: Exceptional setup, multiple confirming factors
-• reason: ONE sentence with SPECIFIC data from YOUR methodology (include numbers and metrics)
+• action: "LONG" | "SHORT" | "MANAGE"
+  - LONG/SHORT = open new position
+  - MANAGE = close, reduce, or adjust existing position
+• conviction: 1-10 scale
+• reason: ONE sentence with SPECIFIC data
 
-Apply your ${name} methodology rigorously. This is YOUR chance to identify the best opportunity.
+Apply your ${name} methodology rigorously.
 
 ANALYST METHODOLOGY REFERENCE (read after stage instructions):
 ${fullSystemPrompt}
@@ -126,9 +164,9 @@ ${fullSystemPrompt}
 Respond with JSON:
 {
     "picks": [
-        { "symbol": "cmt_solusdt", "direction": "LONG", "conviction": 8, "reason": "+4.2% outperforming BTC with negative funding -0.02% suggesting short squeeze potential and 2.1x average volume" },
-        { "symbol": "cmt_btcusdt", "direction": "LONG", "conviction": 6, "reason": "Holding above 95k support with declining sell volume and positive exchange outflows indicating accumulation" },
-        { "symbol": "cmt_dogeusdt", "direction": "SHORT", "conviction": 5, "reason": "Lagging the rally with extreme positive funding 0.08% indicating crowded longs vulnerable to squeeze" }
+        { "symbol": "cmt_solusdt", "action": "LONG", "conviction": 8, "reason": "+4.2% outperforming BTC with negative funding -0.02% suggesting short squeeze potential" },
+        { "symbol": "cmt_ethusdt", "action": "MANAGE", "conviction": 7, "reason": "Position at +18% profit, funding turning against us at 0.04%, lock in gains before reversal" },
+        { "symbol": "cmt_btcusdt", "action": "SHORT", "conviction": 5, "reason": "Rejection at 98k resistance with rising OI suggesting overleveraged longs" }
     ]
 }
 
@@ -205,7 +243,9 @@ The funding rate is AGAINST your ${direction} position!
         }
     }
 
-    const fullSystemPrompt = getSystemPrompt(profile.methodology, THESIS_SYSTEM_PROMPTS);
+    // GET THE FILTERED SYSTEM PROMPT FOR THIS ANALYST
+    // For specialist analysis (LONG/SHORT), filter out management sections to save tokens
+    const fullSystemPrompt = getSystemPrompt(profile.methodology, THESIS_SYSTEM_PROMPTS, direction);
 
     return `═══════════════════════════════════════════════════════════════════════════════
 PRIORITY DIRECTIVE - STAGE OVERRIDES
@@ -391,10 +431,9 @@ export function buildRiskCouncilPrompt(
 
     const priceTargets = formatPriceTargets(champion.priceTarget);
 
-    // GET THE FULL SYSTEM PROMPT FOR KAREN (RISK MANAGER)
-    // This is the 800+ line detailed risk management methodology
-    // Validates that the methodology exists and throws clear error if not
-    const fullSystemPrompt = getSystemPrompt(profile.methodology, THESIS_SYSTEM_PROMPTS);
+    // GET THE FILTERED SYSTEM PROMPT FOR KAREN (RISK MANAGER)
+    // For risk council, we're evaluating a trade (LONG/SHORT), so filter out management sections
+    const fullSystemPrompt = getSystemPrompt(profile.methodology, THESIS_SYSTEM_PROMPTS, direction);
 
     return `═══════════════════════════════════════════════════════════════════════════════
 PRIORITY DIRECTIVE - STAGE OVERRIDES
@@ -429,17 +468,35 @@ TRADE PARAMETERS:
 - Stop Loss: ${priceTargets.bear} (-${safeNumber(stopLossDistance, 2)}%)
 - Risk/Reward: 1:${safeNumber(riskRewardRatio, 2)}
 - Position Size: ${safeNumber(validatedPositionSize, 0)}/10 (${safeNumber(positionPercent, 1)}% of account)
+- Proposed Leverage: ${(() => {
+            // Validate and clamp leverage with NaN/Infinity guards
+            const rawLeverage = champion.leverage ?? 1;
+            const validLeverage = Number.isFinite(rawLeverage) && rawLeverage >= 1 ? rawLeverage : 1;
+            const clampedLeverage = Math.min(5, Math.max(1, validLeverage));
+            return safeNumber(clampedLeverage, 1);
+        })()}x (max 5x allowed)
 
 ACCOUNT STATE:
-- Balance: ${safeNumber(accountBalance, 2)}
+- Available Balance: ${safeNumber(accountBalance, 2)} USDT
+- Proposed Margin Usage: ${safeNumber(positionPercent, 1)}% (${safeNumber(accountBalance * positionPercent / 100, 2)} USDT)
 - Current Positions: ${currentPositions.length > 0 ? currentPositions.map(p => `${p.symbol} ${p.side}`).join(', ') : 'None'}
 ${unrealizedPnLSection ? unrealizedPnLSection + '\n' : ''}- 24h P&L: ${safePercent(recentPnL.day, 2, true)}
 - 7d P&L: ${safePercent(recentPnL.week, 2, true)}
+
+IMPORTANT - NET EXPOSURE CALCULATION:
+"Net exposure" refers to the MARGIN USED (not notional value with leverage).
+- Proposed margin for this trade: ${safeNumber(positionPercent, 1)}% of portfolio
+- Net exposure limit: ≤60% for LONG, ≤50% for SHORT (margin used, not notional)
+- With leverage, notional value will be higher, but the LIMIT APPLIES TO MARGIN USED
+- Example: 20% margin with 5x leverage = 100% notional, but only 20% net exposure ✅
+- This allows ~2 max-size positions (30% each) to run concurrently
 
 MARKET CONDITIONS:
 - ${displaySymbol} 24h Change: ${safePercent(marketData.change24h, 2, true)}
 - ${fundingWarning}
 - ${correlationWarning}
+
+${formatTradingRulesForAI()}
 
 YOUR CHECKLIST (from FLOW.md):
 [ ] Position size ≤30% of account? (Currently: ${safeNumber(positionPercent, 1)}%)

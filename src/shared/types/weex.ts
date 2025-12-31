@@ -53,11 +53,13 @@ export interface WeexOrderResponse {
  */
 export interface WeexPosition {
     id?: number;                       // Position ID
+    isolatedPositionId?: number;       // Isolated position ID (for margin adjustment)
     symbol: string;                    // Trading pair (required)
     side: 'LONG' | 'SHORT';            // Position direction (required, normalized to uppercase)
     size: string;                      // Current position size (required)
     leverage: string;                  // Position leverage (required)
     openValue?: string;                // Initial value at position opening
+    entryPrice?: number;               // Calculated entry price (openValue / size)
     marginMode?: string;               // 'SHARED' (cross) or 'ISOLATED'
     marginSize?: string;               // Margin amount
     unrealizePnl?: string;             // Unrealized PnL
@@ -71,6 +73,7 @@ export interface WeexPosition {
  */
 export interface WeexPositionRaw {
     id?: number;                       // Position ID
+    isolated_position_id?: number;     // Isolated position ID (for margin adjustment)
     symbol: string;                    // Trading pair (required)
     side: string;                      // 'LONG' | 'SHORT' (required, uppercase from API)
     size: string;                      // Current position size (required)
@@ -122,13 +125,27 @@ export function normalizeWeexPosition(raw: WeexPositionRaw): WeexPosition {
     }
     const side: 'LONG' | 'SHORT' = normalizedSide as 'LONG' | 'SHORT';
 
+    // Calculate entry price from openValue and size
+    let entryPrice: number | undefined;
+    if (raw.open_value && typeof raw.open_value === 'string') {
+        const openValueNum = parseFloat(raw.open_value);
+        if (Number.isFinite(openValueNum) && openValueNum > 0 && sizeNum > 0) {
+            entryPrice = openValueNum / sizeNum;
+            // Validate entry price is reasonable
+            if (!Number.isFinite(entryPrice) || entryPrice <= 0) {
+                entryPrice = undefined;
+            }
+        }
+    }
+
     return {
         id: raw.id,
-        symbol: raw.symbol,
+        isolatedPositionId: raw.isolated_position_id, symbol: raw.symbol,
         side,
         size: raw.size,
         leverage: raw.leverage,
         openValue: raw.open_value,
+        entryPrice,
         marginMode: raw.margin_mode,
         marginSize: raw.marginSize,
         unrealizePnl: raw.unrealizePnl,
@@ -206,16 +223,32 @@ export interface WeexCandle {
 
 export interface WeexContract {
     symbol: string;
-    baseCoin: string;
-    quoteCoin: string;
-    minTradeNum: string;
-    maxTradeNum: string;
-    takerFeeRate: string;
+    underlying_index: string;
+    quote_currency: string;
+    coin: string;
+    contract_val: string;
+    delivery: string[];
+    size_increment: string; // Decimal places of quantity (e.g., "5" = 5 decimals)
+    tick_size: string; // Decimal places of price (e.g., "1" = 1 decimal)
+    forwardContractFlag: boolean;
+    priceEndStep: number; // Step size of last decimal digit (e.g., 1 = 0.1, 0.1 = 0.01)
+    minLeverage: number;
+    maxLeverage: number;
+    buyLimitPriceRatio: string;
+    sellLimitPriceRatio: string;
     makerFeeRate: string;
-    pricePlace: number;
-    volumePlace: number;
-    minLeverage: string;
-    maxLeverage: string;
+    takerFeeRate: string;
+    minOrderSize: string; // Minimum order size in base currency
+    maxOrderSize: string; // Maximum order size in base currency
+    maxPositionSize: string; // Maximum position size in base currency
+    marketOpenLimitSize?: string; // Market order opening position single limit
+    // Legacy fields (may be deprecated)
+    baseCoin?: string;
+    quoteCoin?: string;
+    minTradeNum?: string;
+    maxTradeNum?: string;
+    pricePlace?: number;
+    volumePlace?: number;
 }
 
 export interface WeexAccountAssets {

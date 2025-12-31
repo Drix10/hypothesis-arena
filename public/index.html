@@ -2,105 +2,330 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hypothesis Arena - AI Trading Platform</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="description" content="Hypothesis Arena - AI-powered autonomous crypto trading platform with 8 analyst agents competing in turn-by-turn debates on WEEX Futures">
+    <meta name="keywords" content="AI trading, crypto, WEEX, futures, autonomous trading, machine learning">
+    <meta name="author" content="Hypothesis Arena">
+    <meta name="theme-color" content="#00d4ff">
+    <meta name="color-scheme" content="dark">
+    
+    <!-- Open Graph -->
+    <meta property="og:title" content="Hypothesis Arena | AI Trading Platform">
+    <meta property="og:description" content="8 AI Analysts competing in real-time debates to trade WEEX Futures">
+    <meta property="og:type" content="website">
+    <meta property="og:image" content="/og-image.png">
+    
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Hypothesis Arena">
+    <meta name="twitter:description" content="AI-powered autonomous crypto trading">
+    
+    <title>Hypothesis Arena | AI Trading Platform</title>
+    
+    <!-- Favicon - Properly encoded SVG data URIs -->
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E⚔️%3C/text%3E%3C/svg%3E">
+    <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E⚔️%3C/text%3E%3C/svg%3E">
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Styles -->
     <link rel="stylesheet" href="styles.css">
+    
+    <!-- Preload critical resources -->
+    <link rel="preload" href="app.js" as="script">
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>⚔️ Hypothesis Arena</h1>
-            <p class="subtitle">8 AI Analysts • Turn-by-Turn Debates • WEEX Futures</p>
+    <!-- Premium Background Effects -->
+    <div class="bg-effects" aria-hidden="true">
+        <div class="glow glow-1"></div>
+        <div class="glow glow-2"></div>
+        <div class="grid-overlay"></div>
+    </div>
+
+    <div class="app">
+        <!-- Premium Header -->
+        <header class="header" role="banner">
+            <div class="header-content">
+                <div class="logo-section">
+                    <h1 class="logo">
+                        <span class="logo-icon" aria-hidden="true">⚔️</span>
+                        <span class="logo-text">Hypothesis Arena</span>
+                    </h1>
+                    <p class="tagline">8 AI Analysts • Real-Time Debates • WEEX Futures</p>
+                </div>
+                <nav class="header-status" aria-label="System status">
+                    <div class="status-pill" id="weex-status" data-status="offline" role="status" aria-live="polite">
+                        <span class="status-dot" aria-hidden="true"></span>
+                        <span class="status-text">WEEX API</span>
+                    </div>
+
+                </nav>
+            </div>
         </header>
 
-        <main>
-            <!-- Status Section -->
-            <section class="card">
-                <h2>System Status</h2>
-                <div id="status" class="status-grid">
-                    <div class="status-item">
-                        <span class="label">Engine</span>
-                        <span id="engine-status" class="value loading">Loading...</span>
+        <!-- Alert Banner -->
+        <div id="alert-banner" class="alert-banner hidden" role="alert" aria-live="assertive">
+            <span class="alert-icon" aria-hidden="true">ℹ️</span>
+            <span id="alert-message" class="alert-text"></span>
+            <button id="btn-dismiss-alert" class="alert-close" aria-label="Dismiss notification" type="button">
+                <span aria-hidden="true">×</span>
+            </button>
+        </div>
+
+        <!-- Main Content -->
+        <main class="main" role="main">
+            <!-- Engine Control Panel -->
+            <section class="panel engine-panel" aria-labelledby="engine-title">
+                <div class="panel-header">
+                    <h2 class="panel-title" id="engine-title">
+                        <span class="title-icon" aria-hidden="true">🎮</span>
+                        Trading Engine
+                    </h2>
+                    <div class="engine-indicator" id="engine-indicator" role="status" aria-live="polite">
+                        <span class="indicator-dot" aria-hidden="true"></span>
+                        <span class="indicator-text" id="engine-status-text">Offline</span>
                     </div>
-                    <div class="status-item">
-                        <span class="label">Database</span>
-                        <span id="db-status" class="value loading">Loading...</span>
+                </div>
+                <div class="panel-body">
+                    <div class="engine-stats" role="group" aria-label="Engine statistics">
+                        <div class="stat-box">
+                            <span class="stat-label">Cycle</span>
+                            <span class="stat-value" id="cycle-count" aria-label="Current cycle number">0</span>
+                        </div>
+                        <div class="stat-box">
+                            <span class="stat-label">Mode</span>
+                            <span class="stat-value mode-badge" id="mode-status" aria-label="Trading mode">--</span>
+                        </div>
+                        <div class="stat-box">
+                            <span class="stat-label">Next Cycle</span>
+                            <span class="stat-value" id="next-cycle" aria-label="Time until next cycle">--</span>
+                        </div>
+                        <div class="stat-box">
+                            <span class="stat-label">Debates</span>
+                            <span class="stat-value" id="debates-run" aria-label="Total debates completed">0</span>
+                        </div>
                     </div>
-                    <div class="status-item">
-                        <span class="label">Mode</span>
-                        <span id="mode-status" class="value loading">Loading...</span>
-                    </div>
-                    <div class="status-item">
-                        <span class="label">Last Cycle</span>
-                        <span id="last-cycle" class="value loading">Loading...</span>
+                    <div class="engine-controls" role="group" aria-label="Engine controls">
+                        <button id="btn-start" class="btn btn-glow btn-success" type="button" aria-describedby="start-desc">
+                            <span class="btn-icon" aria-hidden="true">▶</span>
+                            <span>Start Engine</span>
+                        </button>
+                        <span id="start-desc" class="sr-only">Start the autonomous trading engine</span>
+                        
+                        <button id="btn-stop" class="btn btn-danger" type="button" disabled aria-describedby="stop-desc">
+                            <span class="btn-icon" aria-hidden="true">⏹</span>
+                            <span>Stop</span>
+                        </button>
+                        <span id="stop-desc" class="sr-only">Stop the trading engine</span>
+                        
+                        <button id="btn-trigger" class="btn btn-primary" type="button" aria-describedby="trigger-desc">
+                            <span class="btn-icon" aria-hidden="true">⚡</span>
+                            <span>Trigger Cycle</span>
+                        </button>
+                        <span id="trigger-desc" class="sr-only">Manually trigger a trading cycle</span>
+                        
+                        <button id="btn-refresh" class="btn btn-ghost" type="button" aria-label="Refresh all data">
+                            <span class="btn-icon" aria-hidden="true">↻</span>
+                            <span>Refresh</span>
+                        </button>
                     </div>
                 </div>
             </section>
 
-            <!-- Controls Section -->
-            <section class="card">
-                <h2>Engine Controls</h2>
-                <div class="controls">
-                    <button id="btn-start" class="btn btn-success" onclick="startEngine()">▶ Start Engine</button>
-                    <button id="btn-stop" class="btn btn-danger" onclick="stopEngine()">⏹ Stop Engine</button>
-                    <button id="btn-cycle" class="btn btn-primary" onclick="triggerCycle()">🔄 Trigger Cycle</button>
-                    <button id="btn-refresh" class="btn btn-secondary" onclick="refreshStatus()">↻ Refresh</button>
+            <!-- Portfolio & Market Row -->
+            <div class="grid-row">
+                <!-- Portfolio Panel -->
+                <section class="panel portfolio-panel" aria-labelledby="portfolio-title">
+                    <div class="panel-header">
+                        <h2 class="panel-title" id="portfolio-title">
+                            <span class="title-icon" aria-hidden="true">💰</span>
+                            Portfolio
+                        </h2>
+                        <span class="panel-badge">Live</span>
+                    </div>
+                    <div class="panel-body">
+                        <div class="portfolio-grid" role="group" aria-label="Portfolio metrics">
+                            <div class="portfolio-card main-balance">
+                                <span class="portfolio-label">Available</span>
+                                <span class="portfolio-value" id="balance" aria-label="Available balance">$0.00</span>
+                            </div>
+                            <div class="portfolio-card">
+                                <span class="portfolio-label">Equity</span>
+                                <span class="portfolio-value" id="equity" aria-label="Total equity">$0.00</span>
+                            </div>
+                            <div class="portfolio-card">
+                                <span class="portfolio-label">Unrealized P&L</span>
+                                <span class="portfolio-value pnl" id="unrealized-pnl" aria-label="Unrealized profit and loss">$0.00</span>
+                            </div>
+                            <div class="portfolio-card">
+                                <span class="portfolio-label">Positions</span>
+                                <span class="portfolio-value" id="positions-count" aria-label="Number of open positions">0</span>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Market Overview Panel -->
+                <section class="panel market-panel" aria-labelledby="market-title">
+                    <div class="panel-header">
+                        <h2 class="panel-title" id="market-title">
+                            <span class="title-icon" aria-hidden="true">📊</span>
+                            Markets
+                        </h2>
+                        <span class="panel-timestamp" id="market-updated" aria-label="Last updated">--</span>
+                    </div>
+                    <div class="panel-body">
+                        <div class="market-grid" id="market-overview" role="list" aria-label="Market prices">
+                            <div class="market-skeleton" aria-hidden="true"></div>
+                            <div class="market-skeleton" aria-hidden="true"></div>
+                            <div class="market-skeleton" aria-hidden="true"></div>
+                            <div class="market-skeleton" aria-hidden="true"></div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+            <!-- AI Analysts Panel -->
+            <section class="panel analysts-panel" aria-labelledby="analysts-title">
+                <div class="panel-header">
+                    <h2 class="panel-title" id="analysts-title">
+                        <span class="title-icon" aria-hidden="true">🤖</span>
+                        AI Analysts
+                    </h2>
+                    <span class="panel-subtitle">Click to view performance</span>
+                </div>
+                <div class="panel-body">
+                    <div class="analysts-grid" id="analysts-grid" role="list" aria-label="AI trading analysts">
+                        <button class="analyst-card" data-analyst-id="warren" type="button" aria-label="View Warren's statistics - Value investing style">
+                            <span class="analyst-avatar" aria-hidden="true">👴</span>
+                            <span class="analyst-name">Warren</span>
+                            <span class="analyst-style">Value</span>
+                            <span class="analyst-glow" aria-hidden="true"></span>
+                        </button>
+                        <button class="analyst-card" data-analyst-id="cathie" type="button" aria-label="View Cathie's statistics - Growth investing style">
+                            <span class="analyst-avatar" aria-hidden="true">🚀</span>
+                            <span class="analyst-name">Cathie</span>
+                            <span class="analyst-style">Growth</span>
+                            <span class="analyst-glow" aria-hidden="true"></span>
+                        </button>
+                        <button class="analyst-card" data-analyst-id="jim" type="button" aria-label="View Jim's statistics - Technical analysis style">
+                            <span class="analyst-avatar" aria-hidden="true">📺</span>
+                            <span class="analyst-name">Jim</span>
+                            <span class="analyst-style">Technical</span>
+                            <span class="analyst-glow" aria-hidden="true"></span>
+                        </button>
+                        <button class="analyst-card" data-analyst-id="ray" type="button" aria-label="View Ray's statistics - Macro analysis style">
+                            <span class="analyst-avatar" aria-hidden="true">🌊</span>
+                            <span class="analyst-name">Ray</span>
+                            <span class="analyst-style">Macro</span>
+                            <span class="analyst-glow" aria-hidden="true"></span>
+                        </button>
+                        <button class="analyst-card" data-analyst-id="elon" type="button" aria-label="View Elon's statistics - Sentiment analysis style">
+                            <span class="analyst-avatar" aria-hidden="true">🐦</span>
+                            <span class="analyst-name">Elon</span>
+                            <span class="analyst-style">Sentiment</span>
+                            <span class="analyst-glow" aria-hidden="true"></span>
+                        </button>
+                        <button class="analyst-card" data-analyst-id="karen" type="button" aria-label="View Karen's statistics - Risk management style">
+                            <span class="analyst-avatar" aria-hidden="true">🛡️</span>
+                            <span class="analyst-name">Karen</span>
+                            <span class="analyst-style">Risk</span>
+                            <span class="analyst-glow" aria-hidden="true"></span>
+                        </button>
+                        <button class="analyst-card" data-analyst-id="quant" type="button" aria-label="View Quant's statistics - Quantitative analysis style">
+                            <span class="analyst-avatar" aria-hidden="true">🤖</span>
+                            <span class="analyst-name">Quant</span>
+                            <span class="analyst-style">Quantitative</span>
+                            <span class="analyst-glow" aria-hidden="true"></span>
+                        </button>
+                        <button class="analyst-card" data-analyst-id="devil" type="button" aria-label="View Devil's statistics - Contrarian style">
+                            <span class="analyst-avatar" aria-hidden="true">😈</span>
+                            <span class="analyst-name">Devil</span>
+                            <span class="analyst-style">Contrarian</span>
+                            <span class="analyst-glow" aria-hidden="true"></span>
+                        </button>
+                    </div>
                 </div>
             </section>
 
-            <!-- Portfolio Section -->
-            <section class="card">
-                <h2>Portfolio</h2>
-                <div id="portfolio" class="portfolio-grid">
-                    <div class="portfolio-item">
-                        <span class="label">Balance</span>
-                        <span id="balance" class="value big">$0.00</span>
+            <!-- Positions & Activity Row -->
+            <div class="grid-row">
+                <!-- Positions Panel -->
+                <section class="panel positions-panel" aria-labelledby="positions-title">
+                    <div class="panel-header">
+                        <h2 class="panel-title" id="positions-title">
+                            <span class="title-icon" aria-hidden="true">📈</span>
+                            Open Positions
+                        </h2>
                     </div>
-                    <div class="portfolio-item">
-                        <span class="label">Equity</span>
-                        <span id="equity" class="value big">$0.00</span>
+                    <div class="panel-body">
+                        <div class="positions-list" id="positions-list" role="list" aria-label="Open trading positions">
+                            <div class="empty-state">
+                                <span class="empty-icon" aria-hidden="true">📭</span>
+                                <span class="empty-text">No open positions</span>
+                            </div>
+                        </div>
                     </div>
-                    <div class="portfolio-item">
-                        <span class="label">Unrealized PnL</span>
-                        <span id="unrealized-pnl" class="value big">$0.00</span>
-                    </div>
-                    <div class="portfolio-item">
-                        <span class="label">Open Positions</span>
-                        <span id="positions-count" class="value big">0</span>
-                    </div>
-                </div>
-            </section>
+                </section>
 
-            <!-- Positions Section -->
-            <section class="card">
-                <h2>Open Positions</h2>
-                <div id="positions-list" class="positions-list">
-                    <p class="empty">No open positions</p>
-                </div>
-            </section>
+                <!-- Activity Panel -->
+                <section class="panel activity-panel" aria-labelledby="activity-title">
+                    <div class="panel-header">
+                        <h2 class="panel-title" id="activity-title">
+                            <span class="title-icon" aria-hidden="true">📜</span>
+                            Recent Activity
+                        </h2>
+                    </div>
+                    <div class="panel-body">
+                        <div class="activity-list" id="activity-log" role="list" aria-label="Recent trading activity">
+                            <div class="empty-state">
+                                <span class="empty-icon" aria-hidden="true">🕐</span>
+                                <span class="empty-text">No recent activity</span>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            </div>
 
-            <!-- Recent Trades Section -->
-            <section class="card">
-                <h2>Recent Activity</h2>
-                <div id="activity-log" class="activity-log">
-                    <p class="empty">No recent activity</p>
-                </div>
-            </section>
 
-            <!-- Logs Section -->
-            <section class="card">
-                <h2>Live Logs</h2>
-                <div id="logs" class="logs">
-                    <p class="log-entry">Waiting for logs...</p>
-                </div>
-            </section>
         </main>
 
-        <footer>
-            <p>Built for WEEX Hackathon 2025 • Express 5 • Gemini 2.5 Flash</p>
+        <!-- Footer -->
+        <footer class="footer" role="contentinfo">
+            <p>Built for <strong>WEEX Hackathon 2025</strong></p>
+            <p class="tech-stack">Express 5 • Gemini 2.5 Flash • WEEX Futures API • Prisma</p>
+            <p class="version">v3.3.0</p>
         </footer>
     </div>
 
-    <script src="app.js"></script>
+    <!-- Analyst Stats Modal -->
+    <div id="analyst-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title" aria-describedby="modal-desc">
+        <div class="modal-backdrop" aria-hidden="true"></div>
+        <div class="modal-container">
+            <div class="modal-header">
+                <h3 id="modal-title" class="modal-title">
+                    <span id="modal-analyst-emoji" aria-hidden="true">🤖</span>
+                    <span id="modal-analyst-name">Analyst</span>
+                    <span id="modal-analyst-style" class="modal-style-badge">Style</span>
+                </h3>
+                <button id="btn-close-modal" class="modal-close" type="button" aria-label="Close modal">
+                    <span aria-hidden="true">×</span>
+                </button>
+            </div>
+            <div class="modal-body" id="modal-content">
+                <p id="modal-desc" class="sr-only">Analyst performance statistics and recent trades</p>
+                <div class="modal-loading">
+                    <div class="spinner" aria-hidden="true"></div>
+                    <span>Loading statistics...</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- App Script -->
+    <script src="app.js" defer></script>
 </body>
 </html>

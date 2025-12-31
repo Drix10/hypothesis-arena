@@ -18,20 +18,6 @@ export class ValidationError extends AppError {
     }
 }
 
-export class AuthenticationError extends AppError {
-    constructor(message: string = 'Authentication required') {
-        super(401, message, 'AUTHENTICATION_ERROR');
-        this.name = 'AuthenticationError';
-    }
-}
-
-export class AuthorizationError extends AppError {
-    constructor(message: string = 'Access denied') {
-        super(403, message, 'AUTHORIZATION_ERROR');
-        this.name = 'AuthorizationError';
-    }
-}
-
 export class NotFoundError extends AppError {
     constructor(resource: string = 'Resource') {
         super(404, `${resource} not found`, 'NOT_FOUND');

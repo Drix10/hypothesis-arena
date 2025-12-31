@@ -35,6 +35,7 @@ export class WeexClient {
     private credentials: WeexCredentials;
     private serverTimeOffset: number = 0;
     private lastTimeSync: number = 0;
+    private syncInProgress: boolean = false; // Prevent concurrent syncs
     private ipBucket: TokenBucket;
     private uidBucket: TokenBucket;
     private orderBucket: TokenBucket;
@@ -68,6 +69,14 @@ export class WeexClient {
             timeout: 120000, // Increased to 120 seconds for slow proxy/WEEX responses
             headers: defaultHeaders,
         });
+
+        // Validate rate limit configuration to prevent infinite loops
+        if (DEFAULT_RATE_LIMITS.ipLimit < 1 || DEFAULT_RATE_LIMITS.uidLimit < 1 || DEFAULT_RATE_LIMITS.orderLimit < 1) {
+            throw new Error('Rate limits must be >= 1 to prevent infinite wait loops');
+        }
+        if (DEFAULT_RATE_LIMITS.ipWindowMs < 1000 || DEFAULT_RATE_LIMITS.uidWindowMs < 1000 || DEFAULT_RATE_LIMITS.orderWindowMs < 1000) {
+            throw new Error('Rate limit windows must be >= 1000ms');
+        }
 
         // Initialize rate limit buckets
         const now = Date.now();
@@ -103,13 +112,35 @@ export class WeexClient {
 
     /**
      * Cleanup resources to prevent memory leaks
+     * CRITICAL: Must be called when WeexClient is no longer needed
+     * 
+     * FIXED: Added cleanup state tracking to prevent confusing runtime errors
      */
+    private isCleanedUp: boolean = false;
+
     cleanup(): void {
+        if (this.isCleanedUp) {
+            logger.warn('WeexClient.cleanup() called multiple times - already cleaned up');
+            return;
+        }
+
+        this.isCleanedUp = true;
+
         // Remove response interceptor
         if (this.responseInterceptorId !== null) {
             this.client.interceptors.response.eject(this.responseInterceptorId);
             this.responseInterceptorId = null;
         }
+
+        logger.info('WeexClient cleaned up successfully');
+    }
+
+    /**
+     * Check if client has been cleaned up
+     * Useful for preventing operations on a cleaned-up client
+     */
+    isDestroyed(): boolean {
+        return this.isCleanedUp;
     }
 
     private generateSignature(
@@ -137,10 +168,46 @@ export class WeexClient {
             await this.syncServerTime();
         }
         const ts = Math.round(Date.now() + this.serverTimeOffset);
+
+        // Validate timestamp is reasonable to prevent signature failures
+        // Valid range: 2020-01-01 to 2100-01-01
+        const MIN_TIMESTAMP = 1577836800000;
+        const MAX_TIMESTAMP = 4102444800000;
+        if (ts < MIN_TIMESTAMP || ts > MAX_TIMESTAMP) {
+            logger.error(`Timestamp out of range: ${ts} (offset: ${this.serverTimeOffset}ms) - re-syncing server time`);
+            // Reset offset and re-sync
+            this.serverTimeOffset = 0;
+            this.lastTimeSync = 0;
+            try {
+                await this.syncServerTime();
+                // Recompute timestamp with new offset
+                const newTs = Math.round(Date.now() + this.serverTimeOffset);
+                // Validate new timestamp
+                if (newTs >= MIN_TIMESTAMP && newTs <= MAX_TIMESTAMP) {
+                    return String(newTs);
+                } else {
+                    // If still invalid after sync, use current time without offset
+                    logger.error(`Timestamp still invalid after re-sync: ${newTs}, using Date.now()`);
+                    return String(Date.now());
+                }
+            } catch (syncError) {
+                // If sync fails, use current time without offset
+                logger.error('Failed to re-sync server time:', syncError);
+                return String(Date.now());
+            }
+        }
+
         return String(ts);
     }
 
     private async syncServerTime(): Promise<void> {
+        // Prevent concurrent sync operations (race condition fix)
+        if (this.syncInProgress) {
+            logger.debug('Server time sync already in progress, skipping');
+            return;
+        }
+
+        this.syncInProgress = true;
         try {
             const localBefore = Date.now();
             const response = await this.client.get<{ timestamp: number }>('/capi/v2/market/time');
@@ -175,6 +242,8 @@ export class WeexClient {
             // Don't update lastTimeSync on error - will retry on next request
             // But set a short delay to prevent spam (5 seconds)
             this.lastTimeSync = Date.now() - 5000;
+        } finally {
+            this.syncInProgress = false;
         }
     }
 
@@ -194,6 +263,15 @@ export class WeexClient {
         }
 
         const refillAmount = (elapsed / windowMs) * limit;
+
+        // CRITICAL FIX: Protect against Infinity from extreme elapsed values
+        if (!Number.isFinite(refillAmount) || refillAmount < 0) {
+            logger.warn(`Invalid refillAmount: ${refillAmount} (elapsed: ${elapsed}ms). Resetting bucket.`);
+            bucket.tokens = limit;
+            bucket.lastRefill = now;
+            return;
+        }
+
         bucket.tokens = Math.min(limit, bucket.tokens + refillAmount);
         bucket.lastRefill = now;
     }
@@ -647,6 +725,253 @@ export class WeexClient {
         );
     }
 
+    /**
+     * Close a partial position by placing a close order
+     * @param symbol - Trading pair symbol
+     * @param side - Position side (LONG or SHORT)
+     * @param sizeToClose - Amount to close (as string to preserve precision)
+     * @param priceType - '0' for limit, '1' for market (default: market)
+     * @param price - Required if priceType is '0' (limit order)
+     * @returns Order response with order_id
+     */
+    async closePartialPosition(
+        symbol: string,
+        side: 'LONG' | 'SHORT',
+        sizeToClose: string,
+        priceType: '0' | '1' = '1',
+        price?: string
+    ): Promise<WeexOrderResponse> {
+        // Validate inputs
+        if (!symbol || typeof symbol !== 'string') {
+            throw new Error('Invalid symbol for partial close');
+        }
+        if (side !== 'LONG' && side !== 'SHORT') {
+            throw new Error(`Invalid side for partial close: ${side}. Must be LONG or SHORT`);
+        }
+
+        // FIXED: Validate parseFloat returns finite number, not NaN
+        const parsedSize = parseFloat(sizeToClose);
+        if (!Number.isFinite(parsedSize) || parsedSize <= 0) {
+            throw new Error(`Invalid size to close: ${sizeToClose}`);
+        }
+
+        // FIXED: Validate price is finite number, not NaN
+        if (priceType === '0') {
+            const parsedPrice = parseFloat(price || '0');
+            if (!Number.isFinite(parsedPrice) || parsedPrice <= 0) {
+                throw new Error('Price is required for limit orders (priceType=0) and must be > 0');
+            }
+        }
+
+        // Type 3 = Close long, Type 4 = Close short
+        const type = side === 'LONG' ? '3' : '4';
+
+        const order: WeexOrderRequest = {
+            symbol,
+            client_oid: `close_partial_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`,
+            size: sizeToClose,
+            type,
+            order_type: '0', // Normal order
+            match_price: priceType,
+            price: priceType === '1' ? '0' : price!, // Market orders use price=0
+        };
+
+        logger.info(`Closing partial ${side} position:`, {
+            symbol,
+            size: sizeToClose,
+            priceType: priceType === '1' ? 'market' : 'limit',
+            price: priceType === '1' ? 'market' : price
+        });
+
+        return this.placeOrder(order);
+    }
+
+    /**
+     * Place a take-profit or stop-loss order
+     * @param params - TP/SL order parameters
+     * @returns Array with order result (orderId and success flag)
+     */
+    async placeTpSlOrder(params: {
+        symbol: string;
+        planType: 'profit_plan' | 'loss_plan';
+        triggerPrice: number;
+        executePrice?: number; // 0 or undefined = market, >0 = limit
+        size: number;
+        positionSide: 'long' | 'short';
+        marginMode?: 1 | 3;
+    }): Promise<{ orderId: number; success: boolean }[]> {
+        // Validate inputs
+        if (!params.symbol || typeof params.symbol !== 'string') {
+            throw new Error('Invalid symbol for TP/SL order');
+        }
+        if (params.planType !== 'profit_plan' && params.planType !== 'loss_plan') {
+            throw new Error(`Invalid planType: ${params.planType}. Must be profit_plan or loss_plan`);
+        }
+        if (!Number.isFinite(params.triggerPrice) || params.triggerPrice <= 0) {
+            throw new Error(`Invalid trigger price: ${params.triggerPrice}`);
+        }
+        if (!Number.isFinite(params.size) || params.size <= 0) {
+            throw new Error(`Invalid size: ${params.size}`);
+        }
+        if (params.positionSide !== 'long' && params.positionSide !== 'short') {
+            throw new Error(`Invalid positionSide: ${params.positionSide}. Must be long or short`);
+        }
+
+        // FIXED: Validate executePrice if provided
+        if (params.executePrice !== undefined) {
+            if (!Number.isFinite(params.executePrice) || params.executePrice < 0) {
+                throw new Error(`Invalid execute price: ${params.executePrice}. Must be >= 0 (0 = market)`);
+            }
+        }
+
+        const body = {
+            symbol: params.symbol,
+            clientOrderId: `tpsl_${params.planType}_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`,
+            planType: params.planType,
+            triggerPrice: String(params.triggerPrice),
+            executePrice: String(params.executePrice || 0), // 0 = market execution
+            size: String(params.size),
+            positionSide: params.positionSide,
+            marginMode: params.marginMode || 1, // Default to cross mode
+        };
+
+        logger.info(`Placing ${params.planType} order:`, {
+            symbol: params.symbol,
+            triggerPrice: params.triggerPrice,
+            executePrice: params.executePrice || 'market',
+            size: params.size,
+            positionSide: params.positionSide
+        });
+
+        const response = await this.request<{ orderId: number; success: boolean }[]>(
+            'POST',
+            '/capi/v2/order/placeTpSlOrder',
+            undefined,
+            body,
+            true,
+            true
+        );
+
+        // Response is array: [{ orderId: number, success: boolean }]
+        return Array.isArray(response) ? response : [response as any];
+    }
+
+    /**
+     * Modify an existing take-profit or stop-loss order
+     * @param params - Modification parameters
+     * @returns Response with code and message
+     */
+    async modifyTpSlOrder(params: {
+        orderId: string;
+        triggerPrice: number;
+        executePrice?: number; // 0 or undefined = market, >0 = limit
+        triggerPriceType?: 1 | 3; // 1=Last price (default), 3=Mark price
+    }): Promise<{ code: string; msg: string; requestTime: number; data: any }> {
+        // Validate inputs
+        if (!params.orderId || typeof params.orderId !== 'string') {
+            throw new Error('Invalid orderId for TP/SL modification');
+        }
+        if (!Number.isFinite(params.triggerPrice) || params.triggerPrice <= 0) {
+            throw new Error(`Invalid trigger price: ${params.triggerPrice}`);
+        }
+        if (params.triggerPriceType && params.triggerPriceType !== 1 && params.triggerPriceType !== 3) {
+            throw new Error(`Invalid triggerPriceType: ${params.triggerPriceType}. Must be 1 (Last) or 3 (Mark)`);
+        }
+
+        const body: any = {
+            orderId: params.orderId,
+            triggerPrice: String(params.triggerPrice),
+            triggerPriceType: params.triggerPriceType || 1, // Default to last price
+        };
+
+        // Only include executePrice if provided
+        if (params.executePrice !== undefined) {
+            body.executePrice = String(params.executePrice);
+        }
+
+        logger.info(`Modifying TP/SL order:`, {
+            orderId: params.orderId,
+            triggerPrice: params.triggerPrice,
+            executePrice: params.executePrice !== undefined ? params.executePrice : 'unchanged',
+            triggerPriceType: params.triggerPriceType || 1
+        });
+
+        return this.request(
+            'POST',
+            '/capi/v2/order/modifyTpSlOrder',
+            undefined,
+            body,
+            true,
+            true
+        );
+    }
+
+    /**
+     * Get current plan orders (trigger orders, TP/SL orders)
+     * @param symbol - Optional symbol filter
+     * @returns Array of plan orders
+     */
+    async getCurrentPlanOrders(symbol?: string): Promise<any[]> {
+        const params = symbol ? { symbol } : undefined;
+
+        logger.debug(`Fetching current plan orders${symbol ? ` for ${symbol}` : ''}`);
+
+        const response = await this.request<any[] | { data: any[] }>(
+            'GET',
+            '/capi/v2/order/currentPlan',
+            params,
+            undefined,
+            true
+        );
+
+        // Handle both response formats
+        return Array.isArray(response) ? response : (response as any).data || [];
+    }
+
+    /**
+     * Adjust position margin (add or reduce margin for isolated positions)
+     * @param params - Margin adjustment parameters
+     * @returns Response with success status
+     */
+    async adjustPositionMargin(params: {
+        isolatedPositionId: number;
+        collateralAmount: string; // Positive = add, negative = reduce
+        coinId?: number; // Default: 2 (USDT)
+    }): Promise<any> {
+        // Validate inputs
+        if (!Number.isFinite(params.isolatedPositionId) || params.isolatedPositionId <= 0) {
+            throw new Error(`Invalid isolatedPositionId: ${params.isolatedPositionId}`);
+        }
+        if (!params.collateralAmount || typeof params.collateralAmount !== 'string') {
+            throw new Error(`Invalid collateralAmount: ${params.collateralAmount}`);
+        }
+        const amount = parseFloat(params.collateralAmount);
+        if (!Number.isFinite(amount) || amount === 0) {
+            throw new Error(`Invalid collateralAmount value: ${params.collateralAmount}. Must be non-zero number`);
+        }
+
+        const action = amount > 0 ? 'Adding' : 'Reducing';
+        logger.info(`${action} margin for isolated position:`, {
+            isolatedPositionId: params.isolatedPositionId,
+            collateralAmount: params.collateralAmount,
+            coinId: params.coinId || 2
+        });
+
+        const body = {
+            isolatedPositionId: params.isolatedPositionId,
+            collateralAmount: params.collateralAmount,
+            coinId: params.coinId || 2 // Default to USDT
+        };
+
+        return this.request(
+            'POST',
+            '/capi/v2/account/adjustMargin',
+            undefined,
+            body,
+            true
+        );
+    }
+
     async uploadAILog(log: {
         orderId?: string;
         stage: string;
@@ -669,7 +994,17 @@ export class WeexClient {
 let weexClientInstance: WeexClient | null = null;
 
 export function getWeexClient(credentials?: WeexCredentials): WeexClient {
-    // If new credentials provided, always create new instance
+    // FIXED: Consider implications of cleaning up existing instances
+    // If new credentials provided, cleanup old instance first to prevent memory leaks
+    // WARNING: This will invalidate any existing references to the old client
+    // Callers should not cache WeexClient instances - always use getWeexClient()
+    if (credentials && weexClientInstance) {
+        logger.warn('Creating new WeexClient with different credentials - cleaning up old instance. ' +
+            'Any cached references to the old client will become invalid.');
+        weexClientInstance.cleanup();
+        weexClientInstance = null;
+    }
+
     if (credentials) {
         weexClientInstance = new WeexClient(credentials);
         return weexClientInstance;
@@ -677,6 +1012,11 @@ export function getWeexClient(credentials?: WeexCredentials): WeexClient {
 
     // Return existing instance
     if (weexClientInstance) {
+        // FIXED: Check if instance was destroyed and recreate if needed
+        if (weexClientInstance.isDestroyed()) {
+            logger.warn('Existing WeexClient was destroyed, creating new instance');
+            weexClientInstance = new WeexClient();
+        }
         return weexClientInstance;
     }
 

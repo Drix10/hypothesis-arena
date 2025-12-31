@@ -32,6 +32,7 @@ export const logger = winston.createLogger({
                 logFormat
             ),
         }),
+        // SSETransport removed - no longer streaming logs to frontend
     ],
 });
 

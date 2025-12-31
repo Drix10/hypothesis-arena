@@ -189,7 +189,7 @@ router.post('/create', async (req: Request, res: Response, next: NextFunction): 
         const id = uuid();
         await query(
             `INSERT INTO portfolios (id, agent_name, initial_balance, current_balance, created_at, updated_at)
-             VALUES ($1, $2, $3, $3, NOW(), NOW())`,
+             VALUES ($1, $2, $3, $3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
             [id, agentName, balance]
         );
 

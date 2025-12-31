@@ -266,7 +266,7 @@ router.post('/debate', async (req: Request, res: Response, next: NextFunction): 
             bearAnalysis,
             round: 'final',
             marketData: { price, change24h },
-        }, undefined);
+        });
 
         res.json({
             symbol: normalizedSymbol,
@@ -322,7 +322,7 @@ router.post('/signal', async (req: Request, res: Response, next: NextFunction): 
             high24h: safeParseFloat(ticker.high_24h, price),
             low24h: safeParseFloat(ticker.low_24h, price),
             volume24h: safeParseFloat(ticker.volume_24h),
-        }, undefined);
+        });
 
         // Require at least some successful analyses to generate a signal
         if (analyses.length === 0) {
@@ -334,8 +334,7 @@ router.post('/signal', async (req: Request, res: Response, next: NextFunction): 
         const signal = await geminiService.generateTradingSignal(
             normalizedSymbol,
             analyses,
-            undefined, // No tournament for quick signal
-            undefined
+            undefined // No tournament for quick signal
         );
 
         res.json({
@@ -399,7 +398,7 @@ router.post('/tournament', async (req: Request, res: Response, next: NextFunctio
             high24h: high,
             low24h: low,
             volume24h: volume,
-        }, undefined);
+        });
 
         if (analyses.length < 2) {
             res.status(503).json({ error: 'Not enough analyses generated for tournament' });
@@ -410,16 +409,14 @@ router.post('/tournament', async (req: Request, res: Response, next: NextFunctio
         const tournament = await geminiService.runTournament(
             analyses,
             { price, change24h, volume24h: volume },
-            normalizedSymbol,
-            undefined
+            normalizedSymbol
         );
 
         // Generate final signal with tournament results
         const signal = await geminiService.generateTradingSignal(
             normalizedSymbol,
             analyses,
-            tournament,
-            undefined
+            tournament
         );
 
         res.json({
@@ -448,13 +445,12 @@ router.post('/tournament', async (req: Request, res: Response, next: NextFunctio
     }
 });
 
-// GET /api/analysis/history - Get user's analysis history
+// GET /api/analysis/history - Get analysis history
 router.get('/history', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
         const { symbol, limit = 20 } = req.query;
         const limitNum = Math.min(Math.max(1, Number(limit) || 20), 100);
         const analyses = await analysisService.getRecentAnalyses(
-            'system',
             symbol as string | undefined,
             limitNum
         );
@@ -635,8 +631,7 @@ router.post('/extended', async (req: Request, res: Response, next: NextFunction)
 
         const analysis = await geminiService.generateAnalysisWithExtendedData(
             marketData,
-            analystId,
-            undefined
+            analystId
         );
 
         res.json({

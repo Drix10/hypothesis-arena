@@ -38,6 +38,16 @@ export {
     buildDebatePrompt
 };
 
+// Export manage prompts for position management
+export {
+    assessPositionHealth,
+    buildPositionAnalysis,
+    buildManageDecisionPrompt,
+    buildPortfolioManagementSummary,
+    MANAGE_TRADING_RULES
+} from './managePrompts';
+export type { ManageActionType, ManageActionSchema, PositionHealthMetrics } from './managePrompts';
+
 // Export helper functions and types
 export * from './promptHelpers';
 export * from './promptTypes';

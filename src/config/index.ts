@@ -176,7 +176,9 @@ export const config = {
     corsOrigins: process.env.CORS_ORIGINS?.split(',').map(s => s.trim()).filter(Boolean) || ['http://localhost:3000', 'http://localhost:25655'],
 
     // Database
-    databaseUrl: process.env.DATABASE_URL || 'postgresql://localhost:5432/hypothesis_arena',
+    databaseUrl: process.env.DATABASE_URL || 'file:./dev.db',
+    tursoDatabaseUrl: process.env.TURSO_DATABASE_URL || '',
+    tursoAuthToken: process.env.TURSO_AUTH_TOKEN || '',
 
     // WEEX
     weex: {
@@ -189,8 +191,18 @@ export const config = {
 
     // Gemini / AI
     geminiApiKey: process.env.GEMINI_API_KEY || '',
+    openRouterApiKey: process.env.OPENROUTER_API_KEY || '',
     ai: {
+        provider: (() => {
+            const provider = process.env.AI_PROVIDER || 'gemini';
+            if (provider !== 'gemini' && provider !== 'openrouter') {
+                console.warn(`Invalid AI_PROVIDER: ${provider}, defaulting to 'gemini'`);
+                return 'gemini';
+            }
+            return provider;
+        })() as 'gemini' | 'openrouter',
         model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+        openRouterModel: process.env.OPENROUTER_MODEL || 'deepseek/deepseek-chat',
         maxOutputTokens: safeParseInt(process.env.AI_MAX_OUTPUT_TOKENS, 8192),
         debateMaxTokens: safeParseInt(process.env.AI_DEBATE_MAX_TOKENS, 8192),
         specialistMaxTokens: safeParseInt(process.env.AI_SPECIALIST_MAX_TOKENS, 8192),
@@ -198,6 +210,14 @@ export const config = {
         temperature: safeParseFloat(process.env.AI_TEMPERATURE, 0.8),
         requestTimeoutMs: safeParseInt(process.env.AI_REQUEST_TIMEOUT_MS, 60000),
         maxRetries: safeParseInt(process.env.AI_MAX_RETRIES, 3),
+        // Analysis-specific timeout (longer for detailed analysis)
+        // VALIDATION: Must be <= maxTimeoutMs
+        analysisTimeoutMs: Math.min(
+            safeParseInt(process.env.AI_ANALYSIS_TIMEOUT_MS, 90000),
+            safeParseInt(process.env.AI_MAX_TIMEOUT_MS, 300000)
+        ),
+        // Maximum timeout cap to prevent indefinite hangs
+        maxTimeoutMs: safeParseInt(process.env.AI_MAX_TIMEOUT_MS, 300000),
     },
 
     // Debate Configuration
@@ -259,20 +279,29 @@ export const config = {
         stopLossEnforcementMultiplier: Math.max(1, safeParseFloat(process.env.STOP_LOSS_ENFORCEMENT_MULTIPLIER, 1)),
         maxConcurrentPositions: Math.max(1, safeParseInt(process.env.MAX_CONCURRENT_POSITIONS, 3)),
         weeklyDrawdownLimitPercent: Math.max(0, safeParseFloat(process.env.WEEKLY_DRAWDOWN_LIMIT_PERCENT, 10)),
-        maxFundingAgainstPercent: Math.max(0, safeParseFloat(process.env.MAX_FUNDING_AGAINST_PERCENT, 0.05)),
+        // Accept both formats for backward compatibility: percentage (5) or decimal (0.05)
+        // If value >= 1, treat as percentage and convert; otherwise treat as decimal
+        maxFundingAgainstPercent: (() => {
+            const raw = safeParseFloat(process.env.MAX_FUNDING_AGAINST_PERCENT, 5);
+            return raw >= 1 ? Math.max(0, raw) / 100 : Math.max(0, raw);
+        })(),
         maxSameDirectionPositions: Math.max(1, safeParseInt(process.env.MAX_SAME_DIRECTION_POSITIONS, 2)),
         maxRiskPerTradePercent: Math.max(0, safeParseFloat(process.env.MAX_RISK_PER_TRADE_PERCENT, 2)),
         maxConcurrentRiskPercent: Math.max(0, safeParseFloat(process.env.MAX_CONCURRENT_RISK_PERCENT, 5)),
         netExposureLimits: {
+            // Net exposure = total margin used (not notional value)
+            // With max 10% per position (maxPositionSizePercent) and max 3 concurrent positions, theoretical max is 30%
+            // But we allow up to 60% LONG / 50% SHORT for flexibility (allows ~6 positions at 10% each, or ~2 at 30% each)
             LONG: Math.max(0, safeParseFloat(process.env.NET_EXPOSURE_LONG_PERCENT, 60)),
             SHORT: Math.max(0, safeParseFloat(process.env.NET_EXPOSURE_SHORT_PERCENT, 50))
         },
         fundingWarnThresholdPercent: Math.max(0, safeParseFloat(process.env.FUNDING_WARN_THRESHOLD_PERCENT, 0.01)),
         maxSectorPositions: Math.max(1, safeParseInt(process.env.MAX_SECTOR_POSITIONS, 3)),
 
-        // Circuit breakers (NEW)
+        // Circuit breakers
         enableCircuitBreakers: process.env.ENABLE_CIRCUIT_BREAKERS !== 'false',                // Enabled by default
         circuitBreakerCheckIntervalMs: safeParseInt(process.env.CIRCUIT_BREAKER_CHECK_INTERVAL_MS, 60000), // Check every minute
+        circuitBreakerCacheDurationMs: safeParseInt(process.env.CIRCUIT_BREAKER_CACHE_DURATION_MS, 60000), // Cache for 1 minute
 
         // AI decision thresholds
         minConfidenceToTrade: safeParseInt(process.env.MIN_CONFIDENCE_TO_TRADE, 60),           // Min 60% confidence
@@ -321,7 +350,12 @@ if (finalSum !== 100) {
 
 // Validate required config in production
 if (config.nodeEnv === 'production') {
-    const required = ['DATABASE_URL'];
+    // Check if Turso is being used (TURSO_DATABASE_URL is set)
+    const useTurso = Boolean(process.env.TURSO_DATABASE_URL && process.env.TURSO_DATABASE_URL.startsWith('libsql://'));
+
+    const required = useTurso
+        ? ['TURSO_DATABASE_URL', 'TURSO_AUTH_TOKEN']
+        : ['DATABASE_URL'];
     const missing = required.filter(key => !process.env[key]);
 
     if (missing.length > 0) {
@@ -337,8 +371,11 @@ if (config.nodeEnv === 'production') {
         }
     }
 
-    // Validate Gemini API key
-    if (!config.geminiApiKey) {
+    // Validate AI provider API keys
+    if (config.ai.provider === 'gemini' && !config.geminiApiKey) {
         console.warn('⚠️ GEMINI_API_KEY not set. AI analysis will fail.');
+    }
+    if (config.ai.provider === 'openrouter' && !config.openRouterApiKey) {
+        console.warn('⚠️ OPENROUTER_API_KEY not set. AI analysis will fail.');
     }
 }

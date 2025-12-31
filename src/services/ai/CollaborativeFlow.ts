@@ -35,6 +35,7 @@ import {
     buildChampionshipContext,
     buildDebateTurnPrompt
 } from '../../constants/prompts/debateHelpers';
+import { buildManagePrompt } from '../../constants/prompts/managePrompts'; // FIXED: Moved to module level for better performance
 import type { ExtendedMarketData, AnalysisResult } from './GeminiService';
 
 // =============================================================================
@@ -1049,6 +1050,7 @@ function extractWinningArguments(winnerId: string, turns: DebateTurn[]): string[
  * - Validates ms is a positive finite number
  * - Ensures timeout is always cleared to prevent memory leaks
  * - Thread-safe cancellation with isResolved flag
+ * - Uses config for max timeout cap
  */
 function createTimeoutPromise(ms: number): { promise: Promise<never>; cancel: () => void } {
     // Validate timeout value
@@ -1057,8 +1059,8 @@ function createTimeoutPromise(ms: number): { promise: Promise<never>; cancel: ()
         ms = AI_REQUEST_TIMEOUT;
     }
 
-    // Cap maximum timeout to prevent indefinite hangs
-    const MAX_TIMEOUT = 300000; // 5 minutes
+    // Cap maximum timeout to prevent indefinite hangs (from config)
+    const MAX_TIMEOUT = config.ai.maxTimeoutMs; // 5 minutes default
     if (ms > MAX_TIMEOUT) {
         logger.warn(`Timeout ${ms}ms exceeds maximum ${MAX_TIMEOUT}ms, capping`);
         ms = MAX_TIMEOUT;
@@ -1327,14 +1329,31 @@ export class CollaborativeFlowService {
     // =========================================================================
 
     /**
-     * Stage 2: Coin Selection Debate
-     * 4 analysts (Ray, Jim, Quant, Elon) debate which coin to trade
+     * Stage 2: Opportunity Selection Debate
+     * 4 analysts (Ray, Jim, Quant, Elon) debate the best action:
+     * - NEW TRADE: Open LONG or SHORT on a coin
+     * - MANAGE: Close/reduce/adjust an existing position
+     * 
      * TURN-BY-TURN generation, 8 total turns
      */
     async runCoinSelectionDebate(
-        marketDataMap: Map<string, ExtendedMarketData>
-    ): Promise<{ winner: string; coinSymbol: string; direction: 'LONG' | 'SHORT'; debate: FourWayDebateResult }> {
-        logger.info(`Stage 2: Coin Selection Debate starting (${4 * config.debate.turnsPerAnalyst} turns)...`);
+        marketDataMap: Map<string, ExtendedMarketData>,
+        currentPositions?: Array<{
+            symbol: string;
+            side: 'LONG' | 'SHORT';
+            size: number;
+            entryPrice: number;
+            currentPrice: number;
+            unrealizedPnl: number;
+            unrealizedPnlPercent: number;
+            holdTimeHours: number;
+            fundingPaid?: number;
+        }>
+    ): Promise<{ winner: string; coinSymbol: string; action: 'LONG' | 'SHORT' | 'MANAGE'; debate: FourWayDebateResult }> {
+        logger.info(`Stage 2: Opportunity Selection Debate starting (${4 * config.debate.turnsPerAnalyst} turns)...`);
+        if (currentPositions && currentPositions.length > 0) {
+            logger.info(`  Portfolio: ${currentPositions.length} open position(s)`);
+        }
 
         if (!marketDataMap || marketDataMap.size === 0) {
             throw new Error('Market data map is empty or invalid');
@@ -1363,7 +1382,7 @@ export class CollaborativeFlowService {
             }
         }
 
-        const context = buildCoinSelectionContext(marketSummary, fundingAnalysis);
+        const context = buildCoinSelectionContext(marketSummary, fundingAnalysis, currentPositions);
 
         // 4 analysts for coin selection
         const analystIds = ['ray', 'jim', 'quant', 'elon'];
@@ -1419,18 +1438,21 @@ export class CollaborativeFlowService {
         const reasoning = `${winnerAnalyst?.name || winner} won with total score ${winnerScore?.total || 0}/100`;
 
         logger.info(`\n${'='.repeat(60)}`);
-        logger.info(`🎯 COIN SELECTION DEBATE COMPLETE`);
+        logger.info(`🎯 OPPORTUNITY SELECTION DEBATE COMPLETE`);
         logger.info(`Winner: ${winner} | Score: ${winnerScore?.total || 0}/100`);
         logger.info(`${'='.repeat(60)}\n`);
 
-        // Extract coin and direction from winner's arguments
+        // Extract coin and action from winner's arguments
         const winnerTurns = turns.filter(t => t.speaker === winner);
         let coinSymbol = '';
-        let direction: 'LONG' | 'SHORT' = 'LONG';
-        let directionFound = false;
+        let action: 'LONG' | 'SHORT' | 'MANAGE' = 'LONG';
+        let actionFound = false;
 
         const availableCoins = Array.from(marketDataMap.keys());
         const coinNames = availableCoins.map(c => c.replace('cmt_', '').replace('usdt', '').toUpperCase());
+
+        // Also include position symbols if we have positions
+        const positionSymbols = currentPositions?.map(p => p.symbol) || [];
 
         // Validate we have coins to search for
         if (availableCoins.length === 0) {
@@ -1438,8 +1460,49 @@ export class CollaborativeFlowService {
             throw new Error('No available coins for coin extraction');
         }
 
+        // Pre-compile regex patterns outside the loop to avoid memory churn
+        const managePatterns = [
+            /\baction[:\s]+"?MANAGE"?/i,                    // action: "MANAGE"
+            /\brecommend(?:ing)?\s+(?:to\s+)?MANAGE\b/i,    // recommend MANAGE
+            /\bshould\s+MANAGE\b/i,                         // should MANAGE
+            /\bclose\s+(?:the\s+)?(?:entire\s+)?position\b/i, // close position
+            /\bclose\s+(?:the\s+)?(?:existing\s+)?(?:LONG|SHORT)\s+position/i, // close LONG/SHORT position
+            /\breduce\s+(?:the\s+)?(?:existing\s+)?position\b/i, // reduce position
+            /\bexit\s+(?:the\s+)?(?:existing\s+)?position\b/i,  // exit position
+            /\btake\s+(?:partial\s+)?profit(?:s)?\s+(?:on|from)\b/i, // take profits on/from (more specific)
+            /\bcut\s+(?:the\s+)?loss(?:es)?\s+(?:on|now)\b/i,   // cut losses on/now (more specific)
+            /\bmanage\s+(?:the\s+)?(?:existing\s+)?(?:open\s+)?position\b/i, // manage position
+            /\bclose\s+(?:out|it)\b/i,                      // close out / close it
+        ];
+
+        const recommendPatterns = [
+            /I\s+recommend\s+(LONG|SHORT)\b/i,
+            /recommend(?:ing)?\s+(LONG|SHORT)\b/i,
+            /position[:\s]+(LONG|SHORT)\b/i,
+            /go(?:ing)?\s+(LONG|SHORT)\b/i,
+            /action[:\s]+"?(LONG|SHORT|MANAGE)"?/i
+        ];
+
         for (const turn of winnerTurns) {
             const arg = turn.argument || '';
+
+            // First check for MANAGE action - look for explicit management intent
+            // Use strict patterns to avoid false positives from general discussion
+            if (!actionFound) {
+                for (const pattern of managePatterns) {
+                    if (pattern.test(arg)) {
+                        // Additional validation: ensure it's not just mentioning management in passing
+                        // Check for action verbs: close, reduce, exit, cut, take profit, adjust, tighten
+                        const hasActionVerb = /\b(close|reduce|exit|cut|take\s+profit|adjust|tighten|manage|trim)\b/i.test(arg);
+                        if (hasActionVerb) {
+                            action = 'MANAGE';
+                            actionFound = true;
+                            logger.info(`MANAGE action detected via pattern: ${pattern.source} with action verb`);
+                            break;
+                        }
+                    }
+                }
+            }
 
             // Extract coin symbol
             if (!coinSymbol) {
@@ -1447,8 +1510,8 @@ export class CollaborativeFlowService {
                 const cmt_match = arg.match(/cmt_(\w+)usdt/i);
                 if (cmt_match) {
                     const extractedSymbol = `cmt_${cmt_match[1].toLowerCase()}usdt`;
-                    // Validate extracted coin is in available coins
-                    if (availableCoins.includes(extractedSymbol)) {
+                    // Validate extracted coin is in available coins OR position symbols
+                    if (availableCoins.includes(extractedSymbol) || positionSymbols.includes(extractedSymbol)) {
                         coinSymbol = extractedSymbol;
                     }
                 }
@@ -1464,38 +1527,59 @@ export class CollaborativeFlowService {
                         }
                     }
                 }
+
             }
 
-            // Extract direction using robust patterns (same as championship debate)
-            if (!directionFound) {
-                const recommendPatterns = [
-                    /I\s+recommend\s+(LONG|SHORT)/i,
-                    /recommend(?:ing)?\s+(LONG|SHORT)/i,
-                    /position[:\s]+(LONG|SHORT)/i,
-                    /go(?:ing)?\s+(LONG|SHORT)/i
-                ];
-
+            // FIXED: Extract action FIRST before attempting coin extraction for MANAGE
+            // This ensures action is set before we try to use it in conditional logic
+            if (!actionFound) {
                 for (const pattern of recommendPatterns) {
                     const match = arg.match(pattern);
                     if (match) {
-                        direction = match[1].toUpperCase() as 'LONG' | 'SHORT';
-                        directionFound = true;
+                        const extracted = match[1].toUpperCase();
+                        if (extracted === 'MANAGE') {
+                            action = 'MANAGE';
+                        } else {
+                            action = extracted as 'LONG' | 'SHORT';
+                        }
+                        actionFound = true;
                         break;
-                    }
-                }
-
-                // Fallback: look for direction keywords
-                if (!directionFound) {
-                    const directionMatch = arg.match(/\b(LONG|SHORT|BUY|SELL|BULLISH|BEARISH)\b/i);
-                    if (directionMatch) {
-                        const dirWord = directionMatch[1].toUpperCase();
-                        direction = (dirWord === 'SHORT' || dirWord === 'SELL' || dirWord === 'BEARISH') ? 'SHORT' : 'LONG';
-                        directionFound = true;
                     }
                 }
             }
 
-            if (coinSymbol && directionFound) break;
+            // For MANAGE action, also try to extract from position symbols
+            // Only if we haven't found a coin yet and we have positions
+            // FIXED: This now runs AFTER action extraction, ensuring action is set
+            if (!coinSymbol && action === 'MANAGE' && positionSymbols.length > 0) {
+                // Sort by symbol length descending to match longer symbols first
+                // (e.g., "DOGE" before "DOG" if both existed)
+                const sortedPositions = [...positionSymbols].sort((a, b) => b.length - a.length);
+                for (const posSymbol of sortedPositions) {
+                    const posName = posSymbol.replace('cmt_', '').replace('usdt', '').toUpperCase();
+                    // Use word boundary for more precise matching
+                    const posRegex = new RegExp(`\\b${posName}\\b`, 'i');
+                    if (posRegex.test(arg)) {
+                        coinSymbol = posSymbol;
+                        logger.info(`Extracted position symbol for MANAGE: ${coinSymbol}`);
+                        break;
+                    }
+                }
+            }
+
+            // FIXED: Fallback direction keyword logic moved INSIDE the loop
+            // This ensures 'arg' variable is in scope
+            if (!actionFound) {
+                const directionMatch = arg.match(/\b(LONG|SHORT|BUY|SELL|BULLISH|BEARISH)\b/i);
+                if (directionMatch) {
+                    const dirWord = directionMatch[1].toUpperCase();
+                    action = (dirWord === 'SHORT' || dirWord === 'SELL' || dirWord === 'BEARISH') ? 'SHORT' : 'LONG';
+                    actionFound = true;
+                }
+            }
+
+            // Break if we found both coin and action
+            if (coinSymbol && actionFound) break;
         }
 
         if (!coinSymbol) {
@@ -1512,12 +1596,12 @@ export class CollaborativeFlowService {
             }
         }
 
-        logger.info(`Stage 2 complete: ${winner} won → ${coinSymbol} ${direction}`);
+        logger.info(`Stage 2 complete: ${winner} won → ${coinSymbol} ${action}`);
 
         return {
             winner,
             coinSymbol,
-            direction,
+            action,
             debate: { turns, winner, scores, reasoning, winningArguments }
         };
     }
@@ -2100,6 +2184,201 @@ export class CollaborativeFlowService {
             warnings: ['Risk council analysis failed after multiple attempts'],
             vetoReason: 'Unable to complete risk assessment'
         };
+    }
+
+    /**
+     * Stage 6: Position Management Decision
+     * Karen (Risk Manager) decides how to manage an existing position
+     * 
+     * @param position - Current position to manage
+     * @param marketDataMap - Current market data for all symbols
+     * @returns Management decision with action type and parameters
+     */
+    async runPositionManagement(
+        position: {
+            symbol: string;
+            side: 'LONG' | 'SHORT';
+            size: number;
+            entryPrice: number;
+            currentPrice: number;
+            unrealizedPnl: number;
+            unrealizedPnlPercent: number;
+            holdTimeHours: number;
+            fundingPaid?: number;
+        },
+        marketDataMap: Map<string, ExtendedMarketData>
+    ): Promise<{
+        manageType: 'CLOSE_FULL' | 'CLOSE_PARTIAL' | 'TIGHTEN_STOP' | 'TAKE_PARTIAL' | 'ADJUST_TP' | 'ADD_MARGIN';
+        conviction: number;
+        reason: string;
+        closePercent?: number;
+        newStopLoss?: number;
+        newTakeProfit?: number;
+        marginAmount?: number;
+    }> {
+        logger.info(`\n${'='.repeat(60)}`);
+        logger.info(`🛡️ STAGE 6: POSITION MANAGEMENT DECISION`);
+        logger.info(`${'='.repeat(60)}\n`);
+
+        // Get Karen's profile (Risk Manager)
+        const karenProfile = ANALYST_PROFILES.risk;
+
+        // Get market data for the position's symbol
+        const marketData = marketDataMap.get(position.symbol);
+        if (!marketData) {
+            throw new Error(`Market data not found for ${position.symbol}`);
+        }
+
+        // FIXED: Import moved to module level for better performance
+        // Build the management prompt
+        const prompt = buildManagePrompt(karenProfile, position, marketData);
+
+        // Define schema for management response
+        const MANAGE_RESPONSE_SCHEMA = {
+            type: SchemaType.OBJECT,
+            properties: {
+                manageType: {
+                    type: SchemaType.STRING,
+                    enum: ['CLOSE_FULL', 'CLOSE_PARTIAL', 'TIGHTEN_STOP', 'TAKE_PARTIAL', 'ADJUST_TP', 'ADD_MARGIN'],
+                    description: 'Type of management action to take'
+                },
+                conviction: {
+                    type: SchemaType.NUMBER,
+                    description: 'Conviction level 1-10'
+                },
+                reason: {
+                    type: SchemaType.STRING,
+                    description: 'One sentence reason with specific numbers'
+                },
+                closePercent: {
+                    type: SchemaType.NUMBER,
+                    description: 'Percentage to close (for CLOSE_PARTIAL or TAKE_PARTIAL)'
+                },
+                newStopLoss: {
+                    type: SchemaType.NUMBER,
+                    description: 'New stop loss price (for TIGHTEN_STOP)'
+                },
+                newTakeProfit: {
+                    type: SchemaType.NUMBER,
+                    description: 'New take profit price (for ADJUST_TP)'
+                },
+                marginAmount: {
+                    type: SchemaType.NUMBER,
+                    description: 'Amount of margin to add in USDT (for ADD_MARGIN)'
+                }
+            },
+            required: ['manageType', 'conviction', 'reason']
+        };
+
+        const model = this.getJsonModel();
+        let lastError: Error = new Error('Unknown error');
+        let timeout: { promise: Promise<never>; cancel: () => void } | null = null;
+
+        for (let attempt = 0; attempt <= config.ai.maxRetries; attempt++) {
+            try {
+                timeout = createTimeoutPromise(AI_REQUEST_TIMEOUT);
+                const result = await Promise.race([
+                    model.generateContent({
+                        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                        generationConfig: {
+                            responseMimeType: "application/json",
+                            responseSchema: MANAGE_RESPONSE_SCHEMA,
+                            maxOutputTokens: config.ai.specialistMaxTokens
+                        }
+                    }),
+                    timeout.promise
+                ]);
+
+                const responseText = result.response.text();
+
+                // Check finish reason
+                const candidates = result.response.candidates;
+                if (candidates && candidates.length > 0) {
+                    const finishReason = candidates[0].finishReason || 'UNKNOWN';
+                    if (finishReason !== 'STOP') {
+                        logger.warn(`⚠️ Position Management finish reason: ${finishReason}`);
+                    }
+                }
+
+                const parsed = parseJSONWithRepair(responseText);
+
+                // Validate required fields
+                if (!parsed.manageType || !parsed.conviction || !parsed.reason) {
+                    throw new Error('Missing required fields in management response');
+                }
+
+                // Validate manageType
+                const validTypes = ['CLOSE_FULL', 'CLOSE_PARTIAL', 'TIGHTEN_STOP', 'TAKE_PARTIAL', 'ADJUST_TP', 'ADD_MARGIN'];
+                if (!validTypes.includes(parsed.manageType)) {
+                    throw new Error(`Invalid manageType: ${parsed.manageType}`);
+                }
+
+                // Validate type-specific parameters
+                if ((parsed.manageType === 'CLOSE_PARTIAL' || parsed.manageType === 'TAKE_PARTIAL') && !parsed.closePercent) {
+                    throw new Error(`${parsed.manageType} requires closePercent`);
+                }
+                if (parsed.manageType === 'TIGHTEN_STOP' && !parsed.newStopLoss) {
+                    throw new Error('TIGHTEN_STOP requires newStopLoss');
+                }
+                if (parsed.manageType === 'ADJUST_TP' && !parsed.newTakeProfit) {
+                    throw new Error('ADJUST_TP requires newTakeProfit');
+                }
+                if (parsed.manageType === 'ADD_MARGIN' && !parsed.marginAmount) {
+                    throw new Error('ADD_MARGIN requires marginAmount');
+                }
+
+                logger.info(`\n${'='.repeat(60)}`);
+                logger.info(`📋 POSITION MANAGEMENT DECISION (Karen)`);
+                logger.info(`${'='.repeat(60)}`);
+                logger.info(`Action: ${parsed.manageType}`);
+                logger.info(`Conviction: ${parsed.conviction}/10`);
+                logger.info(`Reason: ${parsed.reason}`);
+                if (parsed.closePercent) logger.info(`Close Percent: ${parsed.closePercent}%`);
+                if (parsed.newStopLoss) logger.info(`New Stop Loss: ${parsed.newStopLoss}`);
+                if (parsed.newTakeProfit) logger.info(`New Take Profit: ${parsed.newTakeProfit}`);
+                if (parsed.marginAmount) logger.info(`Margin Amount: ${parsed.marginAmount} USDT`);
+                logger.info(`${'='.repeat(60)}\n`);
+
+                return {
+                    manageType: parsed.manageType,
+                    conviction: Math.min(10, Math.max(1, Number(parsed.conviction) || 5)),
+                    reason: String(parsed.reason || 'No reason provided'),
+                    closePercent: parsed.closePercent ? Number(parsed.closePercent) : undefined,
+                    newStopLoss: parsed.newStopLoss ? Number(parsed.newStopLoss) : undefined,
+                    newTakeProfit: parsed.newTakeProfit ? Number(parsed.newTakeProfit) : undefined,
+                    marginAmount: parsed.marginAmount ? Number(parsed.marginAmount) : undefined
+                };
+            } catch (error) {
+                lastError = error instanceof Error ? error : new Error(String(error));
+                if (attempt < config.ai.maxRetries) {
+                    logger.warn(`Position management attempt ${attempt + 1} failed, retrying...`);
+                    await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
+                }
+            } finally {
+                // CRITICAL: Always cancel timeout to prevent memory leak
+                if (timeout) {
+                    timeout.cancel();
+                    timeout = null;
+                }
+            }
+        }
+
+        logger.error('Position management failed after 3 attempts:', lastError);
+        // Default to closing the position if decision fails
+        return {
+            manageType: 'CLOSE_FULL',
+            conviction: 5,
+            reason: 'Failed to get management decision - closing position as safety measure'
+        };
+    }
+
+    /**
+     * Cleanup method for graceful shutdown
+     * Clears model instance to free resources
+     */
+    cleanup(): void {
+        this.jsonModel = null;
+        logger.debug('CollaborativeFlowService cleaned up');
     }
 }
 

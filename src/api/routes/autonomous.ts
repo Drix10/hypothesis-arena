@@ -6,9 +6,14 @@
 import { Router, Request, Response } from 'express';
 import { getAutonomousTradingEngine } from '../../services/autonomous/AutonomousTradingEngine';
 import { logger } from '../../utils/logger';
+import { prisma } from '../../config/database';
 
 const router = Router();
 const engine = getAutonomousTradingEngine();
+
+// FIXED: Extract magic numbers to named constants for better maintainability
+const MAX_HISTORY_LIMIT = 50; // Maximum trades to return
+const DEFAULT_HISTORY_LIMIT = 10; // Default trades to return
 
 /**
  * GET /api/autonomous/status
@@ -30,7 +35,7 @@ router.get('/status', (_req, res) => {
  */
 router.post('/start', async (_req: Request, res: Response) => {
     try {
-        await engine.start('system');
+        await engine.start();
         res.json({ success: true, message: 'Autonomous trading engine started' });
     } catch (error: any) {
         logger.error('Failed to start engine:', error);
@@ -95,88 +100,84 @@ router.get('/analysts', (_req, res) => {
 
 /**
  * GET /api/autonomous/history
- * Get recent trading history
+ * Get recent trading history from database
  */
-router.get('/history', async (_req: Request, res: Response) => {
+router.get('/history', async (req: Request, res: Response) => {
     try {
-        // Return empty for now - can be implemented with DB query
-        res.json({ success: true, data: [] });
+        // FIXED: Validate and sanitize limit parameter with NaN check
+        const rawLimit = req.query.limit as string;
+        let limit = DEFAULT_HISTORY_LIMIT; // Use named constant instead of magic number
+
+        if (rawLimit) {
+            const parsedLimit = parseInt(rawLimit, 10);
+            // FIXED: Add Number.isFinite check to prevent NaN values
+            if (!Number.isFinite(parsedLimit) || parsedLimit < 1) {
+                res.status(400).json({ success: false, error: 'Invalid limit parameter. Must be a positive integer.' });
+                return;
+            }
+            limit = Math.min(parsedLimit, MAX_HISTORY_LIMIT); // Cap at configured max
+        }
+
+        // Use Prisma to fetch trade history
+        const trades = await prisma.trade.findMany({
+            where: {
+                executedAt: { not: null } // CRITICAL: Filter out trades without execution time
+            },
+            orderBy: { executedAt: 'desc' },
+            take: limit,
+            select: {
+                id: true,
+                symbol: true,
+                side: true,
+                type: true,
+                size: true,
+                price: true,
+                status: true,
+                reason: true,
+                confidence: true,
+                executedAt: true,
+                weexOrderId: true
+            }
+        });
+
+        const formattedTrades = trades.map(trade => {
+            // FIXED: Add explicit type guard for executedAt even though Prisma filter ensures non-null
+            // TypeScript doesn't infer non-null from Prisma filter, so we need explicit check
+            if (!trade.executedAt) {
+                // This should never happen due to Prisma filter, but TypeScript requires the check
+                logger.warn(`Trade ${trade.id} has null executedAt despite filter - skipping`);
+                return null;
+            }
+
+            return {
+                id: trade.id,
+                symbol: trade.symbol,
+                action: `${trade.side} ${trade.type}`, // Human-readable action
+                side: trade.side, // Trade side (BUY/SELL)
+                type: trade.type, // Order type (MARKET/LIMIT)
+                size: trade.size,
+                price: trade.price,
+                status: trade.status,
+                result: trade.status === 'FILLED' ? 'Executed' : trade.status,
+                reason: trade.reason,
+                confidence: trade.confidence,
+                timestamp: trade.executedAt, // Safe now with explicit type guard
+                orderId: trade.weexOrderId
+            };
+        }).filter((trade): trade is NonNullable<typeof trade> => trade !== null);
+
+        // FIXED: Validate that we have valid trades after filtering
+        // If all trades were filtered out (shouldn't happen), log a warning
+        if (trades.length > 0 && formattedTrades.length === 0) {
+            logger.warn(`All ${trades.length} trades were filtered out due to null executedAt - data integrity issue`);
+        }
+
+        res.json({ success: true, data: formattedTrades });
     } catch (error: any) {
         logger.error('Failed to get history:', error);
-        res.status(500).json({ success: false, error: error.message });
+        // Return error with success: false to properly indicate failure
+        res.status(500).json({ success: false, error: 'Failed to retrieve trade history', data: [] });
     }
-});
-
-/**
- * GET /api/autonomous/events
- * Server-Sent Events stream for real-time updates
- */
-router.get('/events', (req, res) => {
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no');
-
-    // Track if connection is still open
-    let isConnected = true;
-
-    // Send initial status
-    try {
-        const status = engine.getStatus();
-        res.write(`data: ${JSON.stringify({ type: 'status', data: status })}\n\n`);
-    } catch (error) {
-        logger.error('Failed to get initial status for SSE:', error);
-    }
-
-    // Keep-alive ping every 30 seconds
-    const keepAlive = setInterval(() => {
-        if (!isConnected) {
-            clearInterval(keepAlive);
-            return;
-        }
-        try {
-            res.write(`: keepalive\n\n`);
-        } catch {
-            isConnected = false;
-            clearInterval(keepAlive);
-        }
-    }, 30000);
-
-    // Listen to engine events with connection check
-    const onCycleStart = (cycleNumber: number) => {
-        if (!isConnected) return;
-        try { res.write(`data: ${JSON.stringify({ type: 'cycleStart', cycleNumber })}\n\n`); }
-        catch { isConnected = false; }
-    };
-
-    const onCycleComplete = (cycle: any) => {
-        if (!isConnected) return;
-        try { res.write(`data: ${JSON.stringify({ type: 'cycleComplete', data: cycle })}\n\n`); }
-        catch { isConnected = false; }
-    };
-
-    const onTradeExecuted = (trade: any) => {
-        if (!isConnected) return;
-        try { res.write(`data: ${JSON.stringify({ type: 'tradeExecuted', data: trade })}\n\n`); }
-        catch { isConnected = false; }
-    };
-
-    engine.on('cycleStart', onCycleStart);
-    engine.on('cycleComplete', onCycleComplete);
-    engine.on('tradeExecuted', onTradeExecuted);
-
-    const cleanup = () => {
-        isConnected = false;
-        clearInterval(keepAlive);
-        engine.off('cycleStart', onCycleStart);
-        engine.off('cycleComplete', onCycleComplete);
-        engine.off('tradeExecuted', onTradeExecuted);
-    };
-
-    req.on('close', cleanup);
-    req.on('error', cleanup);
-    res.on('close', cleanup);
-    res.on('error', cleanup);
 });
 
 export default router;
