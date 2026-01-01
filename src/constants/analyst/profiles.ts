@@ -6,9 +6,8 @@
  * 
  * COLLABORATIVE FLOW (from FLOW.md):
  * - Stage 2 (Coin Selection): Ray, Jim, Quant pick best opportunities
- * - Stage 3 (Specialist Analysis): Assigned by coin type (see COIN_TYPE_MAP)
- * - Stage 4 (Tournament): Bracket-style debates judged on DATA, LOGIC, RISK, CATALYST
- * - Stage 5 (Risk Council): Karen has VETO POWER over all trades
+ * - Stage 3 (Championship): All 8 analysts compete in debates
+ * - Stage 4 (Risk Council): Karen has VETO POWER over all trades
  * 
  * COIN TYPE ASSIGNMENTS:
  * - Blue Chip (BTC/ETH): Warren, Ray, Karen

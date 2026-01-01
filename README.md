@@ -40,34 +40,29 @@ Hypothesis Arena is an AI-powered crypto trading platform where **8 specialized 
 
 ## 🏗️ System Architecture
 
-### The 8-Stage Decision Pipeline
+### The 6-Stage Decision Pipeline
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                   THE 8-STAGE DECISION PIPELINE                  │
+│                   THE 6-STAGE DECISION PIPELINE                  │
+│                   (OPTIMIZED - 40% Token Reduction)              │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
 │   STAGE 1: MARKET SCAN          "What's happening?"             │
 │      ↓ (WeexClient.ts)          Fetch data for 8 coins          │
-│   STAGE 2: OPPORTUNITY SELECTION    "Trade or Manage?"              │
-│      ↓ (CollaborativeFlow.ts)   4-way debate, 8 turns           │
+│   STAGE 2: OPPORTUNITY SELECTION "Trade or Manage?"             │
+│      ↓ (CollaborativeFlow.ts)   4-way debate                    │
 │      │                          Can select MANAGE action        │
 │      ├─[MANAGE]→ Close Position → Log to DB → DONE              │
 │      └─[LONG/SHORT]↓                                            │
-│   STAGE 3: ANALYSIS APPROACH    "How to analyze it?"            │
-│      ↓ (CollaborativeFlow.ts)   4-way debate, 8 turns           │
-│   STAGE 4: RISK ASSESSMENT      "Position size & risk?"         │
-│      ↓ (CollaborativeFlow.ts)   4-way debate, 8 turns           │
-│   STAGE 5: CHAMPIONSHIP         "Best thesis wins"              │
-│      ↓ (CollaborativeFlow.ts)   8-way debate, 16 turns          │
-│   STAGE 6: RISK COUNCIL         "Final safety check"            │
+│   STAGE 3: CHAMPIONSHIP         "ALL 8 analysts compete"        │
+│      ↓ (CollaborativeFlow.ts)   8-way debate, turn-by-turn      │
+│   STAGE 4: RISK COUNCIL         "Final safety check"            │
 │      ↓ (CollaborativeFlow.ts)   Karen's veto power              │
-│   STAGE 7: EXECUTION            "Pull the trigger"              │
+│   STAGE 5: EXECUTION            "Pull the trigger"              │
 │      ↓ (AutonomousTradingEngine.ts)                             │
-│   STAGE 8: POSITION MANAGEMENT  "Monitor until exit"            │
+│   STAGE 6: POSITION MANAGEMENT  "Monitor until exit"            │
 │      (AutonomousTradingEngine.ts)                               │
-│                                                                  │
-│   TOTAL: 40 debate turns per cycle | ~42 AI API calls          │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -170,25 +165,23 @@ NODE_ENV=development
 
 ## 🤖 The 8 AI Analysts
 
-| Analyst   | ID     | Methodology        | Focus                          | Debate Role                     |
-| --------- | ------ | ------------------ | ------------------------------ | ------------------------------- |
-| 🎩 Warren | warren | Value Investing    | Fundamentals, margin of safety | Stage 3 & 4, Championship       |
-| 🚀 Cathie | cathie | Growth Investing   | TAM expansion, disruption      | Stage 3, Championship           |
-| 📊 Jim    | jim    | Technical Analysis | RSI, MACD, chart patterns      | Stage 2, 3, Championship        |
-| 🌍 Ray    | ray    | Macro Strategy     | Interest rates, correlations   | Stage 2, 4, Championship        |
-| 📱 Elon   | elon   | Sentiment Analysis | Social sentiment, hype         | Stage 2, Championship           |
-| 🛡️ Karen  | karen  | Risk Management    | Volatility, drawdown, vetoes   | Stage 4, 6 (Veto), Championship |
-| 🤖 Quant  | quant  | Quantitative       | Factor models, statistics      | Stage 2, 3, Championship        |
-| 😈 Devil  | devil  | Contrarian         | Consensus challenges           | Stage 4, Championship           |
+| Analyst   | ID     | Methodology        | Focus                          | Debate Role                  |
+| --------- | ------ | ------------------ | ------------------------------ | ---------------------------- |
+| 🎩 Warren | warren | Value Investing    | Fundamentals, margin of safety | Stage 3 & 4, Championship    |
+| 🚀 Cathie | cathie | Growth Investing   | TAM expansion, disruption      | Stage 3, Championship        |
+| 📊 Jim    | jim    | Technical Analysis | RSI, MACD, chart patterns      | Stage 2, 3, Championship     |
+| 🌍 Ray    | ray    | Macro Strategy     | Interest rates, correlations   | Stage 2, 4, Championship     |
+| 📱 Elon   | elon   | Sentiment Analysis | Social sentiment, hype         | Stage 2, Championship        |
+| 🛡️ Karen  | karen  | Risk Management    | Volatility, drawdown, vetoes   | Stage 4 (Veto), Championship |
+| 🤖 Quant  | quant  | Quantitative       | Factor models, statistics      | Stage 2, Championship        |
+| 😈 Devil  | devil  | Contrarian         | Consensus challenges           | Championship                 |
 
 ### Debate Participation by Stage
 
-- **Stage 2 (Opportunity Select):** Ray, Jim, Quant, Elon (4 analysts, 8 turns)
+- **Stage 2 (Opportunity Select):** Ray, Jim, Quant, Elon (4 analysts)
   - Analysts select either a NEW trade (LONG/SHORT) or MANAGE an existing position
-- **Stage 3 (Analysis Approach):** Warren, Cathie, Jim, Quant (4 analysts, 8 turns)
-- **Stage 4 (Risk Assessment):** Karen, Warren, Devil, Ray (4 analysts, 8 turns)
-- **Stage 5 (Championship):** ALL 8 analysts (16 turns)
-- **Stage 6 (Risk Council):** Karen only (final veto power)
+- **Stage 3 (Championship):** ALL 8 analysts compete for execution
+- **Stage 4 (Risk Council):** Karen only (final veto power)
 
 ---
 
@@ -335,14 +328,14 @@ public/
 
 ## 📋 Version History
 
-| Version | Date       | Changes                                                         |
-| ------- | ---------- | --------------------------------------------------------------- |
-| 3.0.1   | 2026-01-01 | SQLite database, polling instead of SSE, all issues fixed       |
-| 3.0.0   | 2025-12-31 | MANAGE action for position management, improved edge cases      |
-| 3.2.0   | 2025-12-28 | Exhaustive switch, extracted normalization, improved validation |
-| 3.1.2   | 2025-12-28 | Input validation, improved type guards, JSON repair fixes       |
-| 3.1.1   | 2025-12-28 | Retry logic, backoff, cycle completion fixes                    |
-| 3.1.0   | 2025-12-28 | Turn-by-turn debates, 8-stage pipeline, configurable turns (40) |
+| Version | Date       | Changes                                                                  |
+| ------- | ---------- | ------------------------------------------------------------------------ |
+| 3.1.1   | 2026-01-02 | Funding rate validation fix, documentation updates, production hardening |
+| 3.0.1   | 2026-01-01 | SQLite database, polling instead of SSE, all issues fixed                |
+| 3.0.0   | 2025-12-31 | MANAGE action for position management, improved edge cases               |
+| 3.2.0   | 2025-12-28 | Exhaustive switch, extracted normalization, improved validation          |
+| 3.1.2   | 2025-12-28 | Input validation, improved type guards, JSON repair fixes                |
+| 3.1.0   | 2025-12-28 | Turn-by-turn debates, 6-stage pipeline (40% token reduction)             |
 
 See [FLOW.md](FLOW.md) for detailed architecture documentation.
 

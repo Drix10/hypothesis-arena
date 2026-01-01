@@ -257,33 +257,59 @@ export const config = {
         minTradeIntervalMs: safeParseInt(process.env.MIN_TRADE_INTERVAL_MS, 15 * 60 * 1000),   // 15 min cooldown per analyst
         debateFrequency: safeParseInt(process.env.DEBATE_FREQUENCY, 3),                         // Debates every N cycles
 
-        // Risk management (UPDATED: Match GLOBAL_RISK_LIMITS from prompts)
-        // WARNING: High leverage (>5x) significantly increases liquidation risk
-        // Prompts mandate 5x max for safety (20% liquidation distance vs 10% at 10x)
-        maxPositionSizePercent: Math.min(100, Math.max(1, safeParseFloat(process.env.MAX_POSITION_SIZE_PERCENT, 10))),     // Max 10% per position (matches GLOBAL_RISK_LIMITS)
+        // Risk management
+        // WARNING: High leverage significantly increases liquidation risk
+        // At 5x leverage, a 20% adverse move = liquidation
+        // MAX_SAFE_LEVERAGE (5x) is enforced - config cannot exceed this
+        maxPositionSizePercent: Math.min(100, Math.max(1, safeParseFloat(process.env.MAX_POSITION_SIZE_PERCENT, 30))),     // Max 30% per position (default)
         minBalanceToTrade: Math.max(0, safeParseFloat(process.env.MIN_BALANCE_TO_TRADE, 10)),                              // Min $10 to trade
-        maxLeverage: Math.min(5, Math.max(1, safeParseInt(process.env.MAX_LEVERAGE, 5))),                                  // Max 5x leverage (matches GLOBAL_RISK_LIMITS.MAX_SAFE_LEVERAGE)
+        maxLeverage: (() => {
+            const requested = safeParseInt(process.env.MAX_LEVERAGE, 5);
+            const clamped = Math.min(5, Math.max(1, requested));
+            // CRITICAL: Enforce MAX_SAFE_LEVERAGE - log error if user tries to exceed it
+            if (requested > 5) {
+                console.error(
+                    `❌ ERROR: MAX_LEVERAGE=${requested}x exceeds MAX_SAFE_LEVERAGE (5x). ` +
+                    `Clamped to 5x for safety. Increasing leverage requires risk assessment and stakeholder sign-off.`
+                );
+            }
+            return clamped;
+        })(),                                  // Max 5x leverage (capped at MAX_SAFE_LEVERAGE)
         defaultLeverage: 0, // Will be set below to ensure it never exceeds maxLeverage
-        stopLossPercent: Math.min(100, Math.max(0.1, safeParseFloat(process.env.STOP_LOSS_PERCENT, 10))),                  // 10% stop loss (conservative)
+        stopLossPercent: Math.min(100, Math.max(0.1, safeParseFloat(process.env.STOP_LOSS_PERCENT, 5))),                   // 5% stop loss (safe for 5x leverage)
         takeProfitPercent: Math.min(1000, Math.max(0.1, safeParseFloat(process.env.TAKE_PROFIT_PERCENT, 15))),             // 15% take profit
         stopLossRequirements: {
-            VALUE: Math.min(100, Math.max(0.1, safeParseFloat(process.env.STOP_LOSS_VALUE, 10))),
-            GROWTH: Math.min(100, Math.max(0.1, safeParseFloat(process.env.STOP_LOSS_GROWTH, 10))),
-            TECHNICAL: Math.min(100, Math.max(0.1, safeParseFloat(process.env.STOP_LOSS_TECHNICAL, 8))),
-            MACRO: Math.min(100, Math.max(0.1, safeParseFloat(process.env.STOP_LOSS_MACRO, 10))),
-            SENTIMENT: Math.min(100, Math.max(0.1, safeParseFloat(process.env.STOP_LOSS_SENTIMENT, 10))),
-            RISK: Math.min(100, Math.max(0.1, safeParseFloat(process.env.STOP_LOSS_RISK, 8))),
-            QUANT: Math.min(100, Math.max(0.1, safeParseFloat(process.env.STOP_LOSS_QUANT, 10))),
-            CONTRARIAN: Math.min(100, Math.max(0.1, safeParseFloat(process.env.STOP_LOSS_CONTRARIAN, 8)))
+            VALUE: Math.min(100, Math.max(0.1, safeParseFloat(process.env.STOP_LOSS_VALUE, 5))),
+            GROWTH: Math.min(100, Math.max(0.1, safeParseFloat(process.env.STOP_LOSS_GROWTH, 5))),
+            TECHNICAL: Math.min(100, Math.max(0.1, safeParseFloat(process.env.STOP_LOSS_TECHNICAL, 4))),
+            MACRO: Math.min(100, Math.max(0.1, safeParseFloat(process.env.STOP_LOSS_MACRO, 5))),
+            SENTIMENT: Math.min(100, Math.max(0.1, safeParseFloat(process.env.STOP_LOSS_SENTIMENT, 5))),
+            RISK: Math.min(100, Math.max(0.1, safeParseFloat(process.env.STOP_LOSS_RISK, 4))),
+            QUANT: Math.min(100, Math.max(0.1, safeParseFloat(process.env.STOP_LOSS_QUANT, 5))),
+            CONTRARIAN: Math.min(100, Math.max(0.1, safeParseFloat(process.env.STOP_LOSS_CONTRARIAN, 4)))
         },
         stopLossEnforcementMultiplier: Math.max(1, safeParseFloat(process.env.STOP_LOSS_ENFORCEMENT_MULTIPLIER, 1)),
         maxConcurrentPositions: Math.max(1, safeParseInt(process.env.MAX_CONCURRENT_POSITIONS, 3)),
         weeklyDrawdownLimitPercent: Math.max(0, safeParseFloat(process.env.WEEKLY_DRAWDOWN_LIMIT_PERCENT, 10)),
-        // Accept both formats for backward compatibility: percentage (5) or decimal (0.05)
-        // If value >= 1, treat as percentage and convert; otherwise treat as decimal
+        // MAX_FUNDING_AGAINST_BPS: Maximum funding rate against position per 8h period
+        // Input: basis points (1 bp = 0.01%, so 5 = 0.05%)
+        // Stored as: decimal (e.g., 0.0005 = 0.05% = 5 bps)
+        // WEEX funding rates are in decimal form (e.g., 0.0001 = 0.01% = 1 bp)
+        // Typical funding rates: 1-10 bps per 8h (0.0001 to 0.001 decimal)
+        // Default 5 bps = 0.0005 decimal = 0.05% (conservative)
         maxFundingAgainstPercent: (() => {
-            const raw = safeParseFloat(process.env.MAX_FUNDING_AGAINST_PERCENT, 5);
-            return raw >= 1 ? Math.max(0, raw) / 100 : Math.max(0, raw);
+            const bps = safeParseInt(process.env.MAX_FUNDING_AGAINST_BPS, 5);
+            // Validate BPS is in reasonable range (0-100 bps = 0-1%)
+            if (bps < 0 || bps > 100) {
+                console.warn(
+                    `⚠️ MAX_FUNDING_AGAINST_BPS=${bps} is out of range (0-100 bps). ` +
+                    `Clamping to safe range. Typical values: 3-10 bps.`
+                );
+            }
+            const clampedBps = Math.max(0, Math.min(100, bps));
+            // Convert basis points to decimal: 5 bps → 0.0005
+            // 1 bp = 0.01% = 0.0001 decimal
+            return clampedBps / 10000;
         })(),
         maxSameDirectionPositions: Math.max(1, safeParseInt(process.env.MAX_SAME_DIRECTION_POSITIONS, 2)),
         maxRiskPerTradePercent: Math.max(0, safeParseFloat(process.env.MAX_RISK_PER_TRADE_PERCENT, 2)),
@@ -295,7 +321,22 @@ export const config = {
             LONG: Math.max(0, safeParseFloat(process.env.NET_EXPOSURE_LONG_PERCENT, 60)),
             SHORT: Math.max(0, safeParseFloat(process.env.NET_EXPOSURE_SHORT_PERCENT, 50))
         },
-        fundingWarnThresholdPercent: Math.max(0, safeParseFloat(process.env.FUNDING_WARN_THRESHOLD_PERCENT, 0.01)),
+        // Funding rate warning threshold (decimal form, same scale as maxFundingAgainstPercent)
+        // Input: basis points (1 bp = 0.01%)
+        // Default 1 bp = 0.0001 decimal = 0.01% per 8h
+        fundingWarnThresholdPercent: (() => {
+            const bps = safeParseInt(process.env.FUNDING_WARN_THRESHOLD_BPS, 1);
+            // Validate BPS is in reasonable range (0-100 bps = 0-1%)
+            if (bps < 0 || bps > 100) {
+                console.warn(
+                    `⚠️ FUNDING_WARN_THRESHOLD_BPS=${bps} is out of range (0-100 bps). ` +
+                    `Clamping to safe range. Typical values: 1-5 bps.`
+                );
+            }
+            const clampedBps = Math.max(0, Math.min(100, bps));
+            // Convert basis points to decimal: 1 bp → 0.0001
+            return clampedBps / 10000;
+        })(),
         maxSectorPositions: Math.max(1, safeParseInt(process.env.MAX_SECTOR_POSITIONS, 3)),
 
         // Circuit breakers
@@ -328,6 +369,48 @@ if (requestedDefaultLeverage > config.autonomous.maxLeverage) {
         `⚠️ DEFAULT_LEVERAGE (${requestedDefaultLeverage}x) exceeds MAX_LEVERAGE (${config.autonomous.maxLeverage}x). ` +
         `Clamped to ${config.autonomous.defaultLeverage}x for safety.`
     );
+}
+
+// Validate parameter interdependencies
+const interdependencyWarnings: string[] = [];
+
+// MAX_SAME_DIRECTION_POSITIONS must be <= MAX_CONCURRENT_POSITIONS
+if (config.autonomous.maxSameDirectionPositions > config.autonomous.maxConcurrentPositions) {
+    interdependencyWarnings.push(
+        `MAX_SAME_DIRECTION_POSITIONS (${config.autonomous.maxSameDirectionPositions}) > ` +
+        `MAX_CONCURRENT_POSITIONS (${config.autonomous.maxConcurrentPositions}). ` +
+        `This is logically impossible - clamping to ${config.autonomous.maxConcurrentPositions}.`
+    );
+    config.autonomous.maxSameDirectionPositions = config.autonomous.maxConcurrentPositions;
+}
+
+// MAX_CONCURRENT_RISK_PERCENT should be >= MAX_RISK_PER_TRADE_PERCENT × MAX_CONCURRENT_POSITIONS
+const minConcurrentRisk = config.autonomous.maxRiskPerTradePercent * config.autonomous.maxConcurrentPositions;
+if (config.autonomous.maxConcurrentRiskPercent < minConcurrentRisk) {
+    interdependencyWarnings.push(
+        `MAX_CONCURRENT_RISK_PERCENT (${config.autonomous.maxConcurrentRiskPercent}%) < ` +
+        `MAX_RISK_PER_TRADE (${config.autonomous.maxRiskPerTradePercent}%) × MAX_CONCURRENT_POSITIONS (${config.autonomous.maxConcurrentPositions}) = ${minConcurrentRisk}%. ` +
+        `This may prevent opening max positions. Consider increasing MAX_CONCURRENT_RISK_PERCENT to ${minConcurrentRisk}% or higher.`
+    );
+}
+
+// WEEKLY_DRAWDOWN_LIMIT_PERCENT should be < DRAWDOWN_LIQUIDATE_THRESHOLD (converted to %)
+const liquidateThresholdPercent = config.trading.drawdownLiquidateThreshold * 100;
+if (config.autonomous.weeklyDrawdownLimitPercent >= liquidateThresholdPercent) {
+    interdependencyWarnings.push(
+        `WEEKLY_DRAWDOWN_LIMIT_PERCENT (${config.autonomous.weeklyDrawdownLimitPercent}%) >= ` +
+        `DRAWDOWN_LIQUIDATE_THRESHOLD (${liquidateThresholdPercent}%). ` +
+        `Weekly limit should trigger before liquidation threshold.`
+    );
+}
+
+// Log all interdependency warnings
+if (interdependencyWarnings.length > 0) {
+    console.warn('\n⚠️ Configuration Interdependency Warnings:');
+    interdependencyWarnings.forEach((warning, i) => {
+        console.warn(`  ${i + 1}. ${warning}`);
+    });
+    console.warn('');
 }
 
 // CRITICAL FIX: Normalize debate score weights to always sum to 100

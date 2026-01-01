@@ -24,7 +24,8 @@ import {
     validateRequired,
     formatPriceTargets,
     getCanonicalPrice,
-    getSystemPrompt
+    getSystemPrompt,
+    cleanSymbol
 } from './promptHelpers';
 import { formatTradingRulesForAI } from '../analyst/tradingRules';
 
@@ -63,10 +64,12 @@ export function buildCoinSelectionPrompt(
 
     const name = sanitizeString(profile.name, 100);
 
-    // GET THE FULL SYSTEM PROMPT FOR THIS ANALYST
-    // For coin selection, we don't know the action yet, so include full prompt
-    // The action will be determined by the analyst's decision
-    const fullSystemPrompt = getSystemPrompt(profile.methodology, THESIS_SYSTEM_PROMPTS);
+    // For coin selection, we don't include the full system prompt because:
+    // 1. The analyst doesn't know the action yet (LONG/SHORT/MANAGE)
+    // 2. Including 800+ lines per analyst per turn is massive token waste
+    // 3. The analyst's core identity and focus areas are sufficient for selection
+    const coreIdentity = `You are ${name}, ${profile.title}.
+Focus areas: ${profile.focusAreas.join(', ')}`;
 
     // Build portfolio section if positions exist
     let portfolioSection = '';
@@ -76,13 +79,9 @@ export function buildCoinSelectionPrompt(
             // FIXED: Validate holdTimeHours before toFixed() to prevent NaN
             const holdTimeHours = Number.isFinite(p.holdTimeHours) && p.holdTimeHours >= 0 ? p.holdTimeHours : 0;
             const holdDays = (holdTimeHours / 24).toFixed(1);
-            // FIXED: Enhanced symbol manipulation to handle all casing variants
-            // Handles: cmt_btcusdt, CMT_BTCUSDT, cmt_BTCUSDT, CMT_btcusdt
-            const cleanSymbol = p.symbol
-                .replace(/^cmt_/i, '')  // Remove cmt_ prefix (case-insensitive)
-                .replace(/usdt$/i, '')  // Remove usdt suffix (case-insensitive)
-                .toUpperCase();         // Normalize to uppercase
-            return `  • ${cleanSymbol} ${p.side}: Entry $${safeNumber(p.entryPrice, 2)} → Current $${safeNumber(p.currentPrice, 2)} | P&L: ${pnlSign}${safeNumber(p.unrealizedPnlPercent, 2)}% ($${safeNumber(p.unrealizedPnl, 2)}) | Hold: ${holdDays} days${p.fundingPaid ? ` | Funding paid: $${safeNumber(p.fundingPaid, 2)}` : ''}`;
+            // Use cleanSymbol helper for consistent case-insensitive symbol cleaning
+            const displaySymbol = cleanSymbol(p.symbol);
+            return `  • ${displaySymbol} ${p.side}: Entry ${safeNumber(p.entryPrice, 2)} → Current ${safeNumber(p.currentPrice, 2)} | P&L: ${pnlSign}${safeNumber(p.unrealizedPnlPercent, 2)}% (${safeNumber(p.unrealizedPnl, 2)}) | Hold: ${holdDays} days${p.fundingPaid ? ` | Funding paid: ${safeNumber(p.fundingPaid, 2)}` : ''}`;
         }).join('\n');
 
         portfolioSection = `
@@ -119,9 +118,8 @@ You are one of 4 analysts (Ray, Jim, Quant, Elon) selecting the BEST action for 
 This is Stage 2 of the Hypothesis Arena collaborative pipeline:
 - Stage 1 (Market Conditions): Assessed trading environment
 - Stage 2 (YOU ARE HERE): Select best opportunity - NEW TRADE or MANAGE EXISTING
-- Stage 3 (Specialist Analysis): 3 specialists will analyze the selected opportunity
-- Stage 4 (Tournament): Specialists compete in debates
-- Stage 5 (Risk Council): Karen reviews the winner
+- Stage 3 (Championship): All 8 analysts compete in debates for execution
+- Stage 4 (Risk Council): Karen reviews the winner
 ${portfolioSection}
 ${marketSummary}
 
@@ -156,10 +154,7 @@ OUTPUT REQUIREMENTS:
 • conviction: 1-10 scale
 • reason: ONE sentence with SPECIFIC data
 
-Apply your ${name} methodology rigorously.
-
-ANALYST METHODOLOGY REFERENCE (read after stage instructions):
-${fullSystemPrompt}
+${coreIdentity}
 
 Respond with JSON:
 {
@@ -188,7 +183,7 @@ export function buildSpecialistPrompt(
     validateRequired(marketData.symbol, 'marketData.symbol');
 
     const name = sanitizeString(profile.name, 100);
-    const displaySymbol = marketData.symbol.replace('cmt_', '').replace('usdt', '').toUpperCase();
+    const displaySymbol = cleanSymbol(marketData.symbol);
     const change = safePercent(marketData.change24h, 2, true);
 
     // Guard against division by zero in range calculations with Number.isFinite checks
@@ -255,16 +250,18 @@ PRIORITY DIRECTIVE - STAGE OVERRIDES
 • DO NOT recommend a different coin or direction in Stage 3
 
 ═══════════════════════════════════════════════════════════════════════════════
-COLLABORATIVE FLOW - STAGE 3: SPECIALIST ANALYSIS
+COLLABORATIVE FLOW - STAGE 3: CHAMPIONSHIP DEBATE
 ═══════════════════════════════════════════════════════════════════════════════
 
-You have been selected as a SPECIALIST to analyze ${displaySymbol}/USDT for a potential ${direction} position.
+You are competing in the CHAMPIONSHIP DEBATE for ${displaySymbol}/USDT ${direction} position.
 
 This is Stage 3 of the Hypothesis Arena collaborative pipeline:
-- Stage 2 (Coin Selection): Ray, Jim, and Quant selected ${displaySymbol} as the top opportunity
-- Stage 3 (YOU ARE HERE): You and 2 other specialists provide deep analysis
-- Stage 4 (Tournament): Your thesis will compete in bracket-style debates
-- Stage 5 (Risk Council): Karen will review the winning thesis
+- Stage 1 (Market Scan): Assessed trading environment
+- Stage 2 (Coin Selection): 4 analysts selected ${displaySymbol} as the top opportunity
+- Stage 3 (YOU ARE HERE): All 8 analysts compete in championship debate
+- Stage 4 (Risk Council): Karen will review the winning thesis
+- Stage 5 (Execution): Place trade on WEEX
+- Stage 6 (Position Management): Monitor and adjust
 
 MARKET DATA:
 - Current Price: ${safePrice(marketData.currentPrice)}
@@ -351,7 +348,7 @@ Respond ONLY with valid JSON. No markdown or extra prose.`;
 }
 
 /**
- * Build the risk council prompt for Stage 5
+ * Build the risk council prompt for Stage 4
  * Used by: CollaborativeFlow.ts → runRiskCouncil()
  * 
  * Includes unrealized PnL from open positions
@@ -374,7 +371,7 @@ export function buildRiskCouncilPrompt(
     const championName = sanitizeString(champion.analystName, 100);
     const thesis = sanitizeString(champion.thesis, 500);
 
-    const displaySymbol = marketData.symbol.replace('cmt_', '').replace('usdt', '').toUpperCase();
+    const displaySymbol = cleanSymbol(marketData.symbol);
     const isBullish = ['strong_buy', 'buy'].includes(champion.recommendation);
     const direction = isBullish ? 'LONG' : 'SHORT';
 
@@ -443,16 +440,18 @@ PRIORITY DIRECTIVE - STAGE OVERRIDES
 • Output MUST match the specified JSON structure
 
 ═══════════════════════════════════════════════════════════════════════════════
-COLLABORATIVE FLOW - STAGE 5: RISK COUNCIL REVIEW
+COLLABORATIVE FLOW - STAGE 4: RISK COUNCIL REVIEW
 ═══════════════════════════════════════════════════════════════════════════════
 
 You are ${name} - THE RISK MANAGER with VETO POWER over all trades.
 
-This is Stage 5 of the Hypothesis Arena collaborative pipeline:
-- Stage 2 (Coin Selection): Ray, Jim, Quant selected ${displaySymbol}
-- Stage 3 (Specialist Analysis): 3 specialists analyzed the opportunity
-- Stage 4 (Tournament): ${championName} won the championship debate
-- Stage 5 (YOU ARE HERE): You review the winning thesis and APPROVE or VETO
+This is Stage 4 of the Hypothesis Arena collaborative pipeline:
+- Stage 1 (Market Scan): Assessed trading environment
+- Stage 2 (Coin Selection): 4 analysts selected ${displaySymbol}
+- Stage 3 (Championship): ${championName} won the championship debate with all 8 analysts competing
+- Stage 4 (YOU ARE HERE): You review the winning thesis and APPROVE or VETO
+- Stage 5 (Execution): Place trade on WEEX
+- Stage 6 (Position Management): Monitor and adjust
 
 Your job is to PROTECT THE PORTFOLIO using your full risk management methodology above.
 

@@ -14,11 +14,19 @@ import { config } from '../../config';
 import { GLOBAL_RISK_LIMITS } from './riskLimits';
 import { RISK_COUNCIL_VETO_TRIGGERS } from './riskCouncil';
 
+// FIXED: Cache trading rules to avoid regenerating 2000+ chars every call
+let cachedTradingRules: string | null = null;
+
 /**
  * Format all trading rules as a clear, structured string for AI context
+ * OPTIMIZED: Results are cached after first call
  */
 export function formatTradingRulesForAI(): string {
-    return `
+    if (cachedTradingRules) {
+        return cachedTradingRules;
+    }
+
+    cachedTradingRules = `
 ═══════════════════════════════════════════════════════════════════
                     MANDATORY TRADING RULES
 ═══════════════════════════════════════════════════════════════════
@@ -221,7 +229,7 @@ export function formatTradingRulesForAI(): string {
    If specs are missing, orders will be REJECTED. System logs warnings if using fallback values.
 
 ───────────────────────────────────────────────────────────────────
-📋 KAREN'S VETO CHECKLIST (Risk Council Stage 6)
+📋 KAREN'S VETO CHECKLIST (Risk Council Stage 4)
 ───────────────────────────────────────────────────────────────────
 Karen will VETO if ANY of these fail:
 ${Array.isArray(RISK_COUNCIL_VETO_TRIGGERS.CHECKLIST) && RISK_COUNCIL_VETO_TRIGGERS.CHECKLIST.length > 0
@@ -250,6 +258,15 @@ When making recommendations, ALWAYS specify:
 
 ═══════════════════════════════════════════════════════════════════
 `;
+
+    return cachedTradingRules;
+}
+
+/**
+ * Clear the trading rules cache (for testing or when rules change)
+ */
+export function clearTradingRulesCache(): void {
+    cachedTradingRules = null;
 }
 
 /**

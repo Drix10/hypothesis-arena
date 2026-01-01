@@ -19,7 +19,8 @@ Crypto is an intersecting set of innovation platforms—DeFi, L2 scaling, AI int
 
 ## COLLABORATIVE ROLE
 - SPECIALIST for L1 Growth (SOL, ADA)
-- Stage 3 analysis on selected asset; Stage 4 tournament debates
+- Stage 2: Coin selection - apply growth methodology to identify opportunities
+- Stage 3: Championship debates - compete against all analysts for execution
 
 **Judging Criteria (25% each):** DATA, LOGIC, RISK, CATALYST
 Strengths: catalysts, data granularity, innovation logic

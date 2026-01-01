@@ -288,6 +288,7 @@ export class AnalystPortfolioService {
                 }),
                 // Get win/loss/breakeven counts in ONE query using conditional aggregation
                 // FIXED: Use Prisma.sql for raw query instead of template literals
+                // CRITICAL: SQLite column names are snake_case (champion_id), not camelCase (championId)
                 prisma.$queryRaw<Array<{
                     championId: string;
                     winningTrades: bigint;
@@ -295,14 +296,14 @@ export class AnalystPortfolioService {
                     breakEvenTrades: bigint;
                 }>>`
                     SELECT 
-                        championId,
-                        COUNT(CASE WHEN realizedPnl > 0 THEN 1 END) as winningTrades,
-                        COUNT(CASE WHEN realizedPnl < 0 THEN 1 END) as losingTrades,
-                        COUNT(CASE WHEN realizedPnl = 0 THEN 1 END) as breakEvenTrades
+                        champion_id as championId,
+                        COUNT(CASE WHEN realized_pnl > 0 THEN 1 END) as winningTrades,
+                        COUNT(CASE WHEN realized_pnl < 0 THEN 1 END) as losingTrades,
+                        COUNT(CASE WHEN realized_pnl = 0 THEN 1 END) as breakEvenTrades
                     FROM trades
-                    WHERE championId IN ('warren', 'cathie', 'jim', 'ray', 'elon', 'karen', 'quant', 'devil')
+                    WHERE champion_id IN ('warren', 'cathie', 'jim', 'ray', 'elon', 'karen', 'quant', 'devil')
                         AND status = 'FILLED'
-                    GROUP BY championId
+                    GROUP BY champion_id
                 `
             ]);
 
@@ -482,13 +483,14 @@ export class AnalystPortfolioService {
 
                     // Calculate variance using raw SQL for efficiency
                     // Variance = AVG((x - mean)^2)
+                    // CRITICAL: SQLite column names are snake_case (realized_pnl, champion_id)
                     const varianceResult = await prisma.$queryRaw<Array<{ variance: number }>>`
                         SELECT 
-                            AVG((realizedPnl - ${meanReturn}) * (realizedPnl - ${meanReturn})) as variance
+                            AVG((realized_pnl - ${meanReturn}) * (realized_pnl - ${meanReturn})) as variance
                         FROM trades
-                        WHERE championId = ${analystId}
+                        WHERE champion_id = ${analystId}
                             AND status = 'FILLED'
-                            AND realizedPnl IS NOT NULL
+                            AND realized_pnl IS NOT NULL
                     `;
 
                     const variance = varianceResult[0]?.variance || 0;

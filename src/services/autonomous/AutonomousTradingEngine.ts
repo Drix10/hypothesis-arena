@@ -4,14 +4,13 @@
  * 8 AI analysts collaborate on ONE shared portfolio.
  * Debates are the core decision mechanism.
  * 
- * 7-Stage Pipeline (from FLOW.md):
+ * 6-Stage Pipeline:
  * 1. Market Scan - Fetch data for all 8 coins
- * 2. Coin Selection - Ray, Jim, Quant pick best opportunity
- * 3. Specialist Analysis - Deep dive by assigned specialists
- * 4. Tournament - Bracket-style debates determine winner
- * 5. Risk Council - Karen approves/vetoes/adjusts
- * 6. Execution - Place trade on WEEX with TP/SL
- * 7. Position Management - Monitor and adjust positions
+ * 2. Coin Selection - Ray, Jim, Quant, Elon pick best opportunity
+ * 3. Championship - ALL 8 analysts compete, winner's thesis gets executed
+ * 4. Risk Council - Karen approves/vetoes/adjusts
+ * 5. Execution - Place trade on WEEX with TP/SL
+ * 6. Position Management - Monitor and adjust positions
  */
 
 import { EventEmitter } from 'events';
@@ -26,8 +25,48 @@ import { aiLogService } from '../compliance/AILogService';
 import { prisma, queryOne } from '../../config/database';
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
-import { ANALYST_PROFILES } from '../../constants/analyst';
-import { roundToStepSize, roundToTickSize, updateContractSpecs } from '../../shared/utils/weex';
+import { ANALYST_PROFILES, RISK_COUNCIL_VETO_TRIGGERS } from '../../constants/analyst';
+import { roundToStepSize, roundToTickSize, updateContractSpecs, getContractSpecs } from '../../shared/utils/weex';
+
+// Contract specs refresh interval (30 minutes) - refresh before cache expires (1 hour TTL)
+const CONTRACT_SPECS_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
+
+// FIXED: Track refresh state per engine instance to avoid stale state on restart
+// This is managed by the engine instance, not module-level
+class ContractSpecsRefreshTracker {
+    private lastRefresh = 0;
+    private isRefreshing = false; // Prevent concurrent refresh attempts
+
+    shouldRefresh(): boolean {
+        if (this.isRefreshing) return false;
+        return Date.now() - this.lastRefresh > CONTRACT_SPECS_REFRESH_INTERVAL_MS;
+    }
+
+    markRefreshing(): boolean {
+        if (this.isRefreshing) return false; // Already refreshing
+        this.isRefreshing = true;
+        return true;
+    }
+
+    markRefreshed(): void {
+        this.lastRefresh = Date.now();
+        this.isRefreshing = false;
+    }
+
+    markFailed(): void {
+        this.isRefreshing = false;
+        // Don't update lastRefresh - allow retry on next cycle
+    }
+
+    reset(): void {
+        this.lastRefresh = 0;
+        this.isRefreshing = false;
+    }
+
+    getLastRefresh(): number {
+        return this.lastRefresh;
+    }
+}
 
 const APPROVED_SYMBOLS = [
     'cmt_btcusdt',
@@ -54,18 +93,6 @@ interface CoinSelectionDebateResult {
     debate: { turns: unknown[]; scores: Record<string, unknown>; reasoning: string };
 }
 
-interface AnalysisDebateResult {
-    winner: string;
-    approach: { recommendation: string; confidence: number };
-    debate: { turns: unknown[] };
-}
-
-interface RiskDebateResult {
-    winner: string;
-    riskFramework: { positionSize: number; riskLevel: string };
-    debate: { turns: unknown[] };
-}
-
 type RecommendationType = 'strong_buy' | 'buy' | 'hold' | 'sell' | 'strong_sell';
 
 interface ChampionshipDebateResult {
@@ -73,7 +100,7 @@ interface ChampionshipDebateResult {
         analystName: string;
         confidence: number;
         thesis: string;
-        recommendation: RecommendationType; // CRITICAL: Required for determining trade direction (LONG/SHORT)
+        recommendation: RecommendationType;
         priceTarget: { base: number; bear: number }
     };
     debate: { turns: unknown[] };
@@ -81,7 +108,6 @@ interface ChampionshipDebateResult {
 
 /**
  * Validates coin selection debate result has required properties
- * Now supports action: 'LONG' | 'SHORT' | 'MANAGE'
  */
 function isValidCoinSelectionResult(obj: unknown): obj is CoinSelectionDebateResult {
     if (!obj || typeof obj !== 'object') return false;
@@ -90,35 +116,9 @@ function isValidCoinSelectionResult(obj: unknown): obj is CoinSelectionDebateRes
         typeof result.winner === 'string' && result.winner.length > 0 &&
         typeof result.coinSymbol === 'string' && result.coinSymbol.length > 0 &&
         (result.action === 'LONG' || result.action === 'SHORT' || result.action === 'MANAGE' ||
-            result.direction === 'LONG' || result.direction === 'SHORT') && // backward compat
+            result.direction === 'LONG' || result.direction === 'SHORT') &&
         result.debate !== null && typeof result.debate === 'object'
     );
-}
-
-/**
- * Validates analysis approach debate result has required properties
- */
-function isValidAnalysisResult(obj: unknown): obj is AnalysisDebateResult {
-    if (!obj || typeof obj !== 'object') return false;
-    const result = obj as Record<string, unknown>;
-    return (
-        typeof result.winner === 'string' && result.winner.length > 0 &&
-        result.approach !== null && typeof result.approach === 'object' &&
-        result.debate !== null && typeof result.debate === 'object'
-    );
-}
-
-/**
- * Validates risk assessment debate result has required properties
- */
-function isValidRiskResult(obj: unknown): obj is RiskDebateResult {
-    if (!obj || typeof obj !== 'object') return false;
-    const result = obj as Record<string, unknown>;
-    if (typeof result.winner !== 'string' || result.winner.length === 0) return false;
-    if (!result.riskFramework || typeof result.riskFramework !== 'object') return false;
-    if (!result.debate || typeof result.debate !== 'object') return false;
-    const framework = result.riskFramework as Record<string, unknown>;
-    return typeof framework.positionSize === 'number' && typeof framework.riskLevel === 'string';
 }
 
 /**
@@ -202,6 +202,9 @@ export class AutonomousTradingEngine extends EventEmitter {
     private currentCycle: TradingCycle | null = null;
     private mainLoopPromise: Promise<void> | null = null;
     private sleepTimeout: NodeJS.Timeout | null = null;
+
+    // FIXED: Track contract specs refresh per engine instance
+    private contractSpecsTracker = new ContractSpecsRefreshTracker();
 
     // FIXED: Track snapshot cleanup to prevent excessive database operations
     private lastSnapshotCleanup = 0;
@@ -663,6 +666,11 @@ export class AutonomousTradingEngine extends EventEmitter {
      */
     private async runEntryCycle(cycleStart: number): Promise<void> {
         // =================================================================
+        // PRE-CYCLE: REFRESH CONTRACT SPECS IF STALE
+        // =================================================================
+        await this.refreshContractSpecsIfNeeded();
+
+        // =================================================================
         // STAGE 1: MARKET SCAN - Fetch data for all 8 coins
         // =================================================================
         const marketDataMap = await this.fetchAllMarketData();
@@ -898,7 +906,8 @@ export class AutonomousTradingEngine extends EventEmitter {
             const now = Date.now();
             for (const [symbol, freshData] of stage2MarketData) {
                 const oldData = marketDataMap.get(symbol);
-                if (oldData) {
+                // Guard against division by zero: skip if old price is invalid
+                if (oldData && Number.isFinite(oldData.currentPrice) && oldData.currentPrice > 0) {
                     const priceChange = Math.abs((freshData.currentPrice - oldData.currentPrice) / oldData.currentPrice * 100);
                     const dataAge = freshData.fetchTimestamp ? Math.floor((now - freshData.fetchTimestamp) / 1000) : 0;
                     if (priceChange > 0.1) {
@@ -1041,10 +1050,10 @@ export class AutonomousTradingEngine extends EventEmitter {
             }
 
             // =================================================================
-            // STAGE 6: POSITION MANAGEMENT DECISION
+            // POSITION MANAGEMENT DECISION (MANAGE Action from Stage 2)
             // Karen (Risk Manager) decides how to manage the position
             // =================================================================
-            logger.info(`🛡️ Stage 6: Position Management Decision for ${positionToManage.symbol}...`);
+            logger.info(`🛡️ Position Management Decision for ${positionToManage.symbol}...`);
 
             let managementDecision: any;
             try {
@@ -1429,6 +1438,223 @@ export class AutonomousTradingEngine extends EventEmitter {
 
         // Continue with normal LONG/SHORT flow
         const direction = action as 'LONG' | 'SHORT';
+
+        // =================================================================
+        // CRITICAL: Refresh position data before early exit checks
+        // Position data from line 750 is now stale (Stage 2 debate took 30-90s)
+        // Race condition: positions could have been closed/liquidated during debate
+        // 
+        // IMPORTANT: For MANAGE actions, we need full position data (P&L, current price)
+        // For LONG/SHORT actions, we only need count and symbols (fast path)
+        // =================================================================
+        logger.info('🔄 Refreshing position data for early exit checks...');
+        try {
+            const freshWeexPositions = await this.weexClient.getPositions();
+
+            // Fast refresh: Only count and symbols (sufficient for early exit checks)
+            // We don't need current prices or P&L calculations for LONG/SHORT early exits
+            portfolioPositions = freshWeexPositions
+                .filter(pos => parseFloat(String(pos.size)) > 0)
+                .map(pos => {
+                    const size = parseFloat(String(pos.size)) || 0;
+                    const openValue = parseFloat(String(pos.openValue)) || 0;
+                    const entryPrice = pos.entryPrice || (size > 0 ? openValue / size : 0);
+                    const unrealizedPnl = parseFloat(String(pos.unrealizePnl)) || 0;
+                    const unrealizedPnlPercent = openValue > 0 ? (unrealizedPnl / openValue) * 100 : 0;
+
+                    return {
+                        symbol: pos.symbol,
+                        side: pos.side?.toUpperCase().includes('LONG') ? 'LONG' : 'SHORT',
+                        size,
+                        entryPrice,
+                        currentPrice: entryPrice, // Use entry price as fallback (sufficient for early exit checks)
+                        unrealizedPnl,
+                        unrealizedPnlPercent,
+                        holdTimeHours: 0, // Not needed for early exit checks
+                        isolatedPositionId: pos.isolatedPositionId,
+                        marginMode: pos.marginMode
+                    };
+                });
+            logger.info(`📊 Fresh position count: ${portfolioPositions.length}`);
+        } catch (error) {
+            logger.warn('Failed to refresh positions for early exit checks, using cached data:', error);
+            // Continue with stale data - better than crashing
+            // Stage 4 (Risk Council) will validate positions again before approval
+        }
+
+        // OPTIMIZATION: Early exit if we already have max positions
+        // Karen will veto this trade anyway, so save tokens by stopping now
+        const MAX_CONCURRENT_POSITIONS = RISK_COUNCIL_VETO_TRIGGERS.MAX_CONCURRENT_POSITIONS;
+        if (portfolioPositions.length >= MAX_CONCURRENT_POSITIONS) {
+            logger.info(`\n${'='.repeat(60)}`);
+            logger.info(`⚠️ EARLY EXIT #1: Already at max positions (${portfolioPositions.length}/${MAX_CONCURRENT_POSITIONS})`);
+            logger.info(`Selected: ${coinSymbol} ${direction} by ${coinSelectorWinner}`);
+            logger.info(`Reason: Karen would veto this trade in Risk Council (Stage 4) anyway`);
+            logger.info(`Token savings: ~8,000 tokens (skipping Stage 3 Championship)`);
+            logger.info(`${'='.repeat(60)}\n`);
+
+            await this.updateLeaderboard();
+            await this.completeCycle(cycleStart, 'max positions reached (early exit)');
+            const sleepTime = this.getSleepTimeWithBackoff(cycleStart);
+            if (sleepTime > 0 && this.isRunning) await this.sleep(sleepTime);
+            return;
+        }
+
+        // OPTIMIZATION #2: Insufficient balance
+        const currentBalance = await this.getWalletBalance();
+
+        // Validate balance is a valid number
+        if (!Number.isFinite(currentBalance) || currentBalance < 0) {
+            logger.error(`\n${'='.repeat(60)}`);
+            logger.error(`⚠️ EARLY EXIT #2A: Invalid balance data`);
+            logger.error(`Balance returned: ${currentBalance}`);
+            logger.error(`Reason: Cannot proceed with invalid balance`);
+            logger.error(`Token savings: ~8,000 tokens (skipping Stage 3 Championship)`);
+            logger.error(`${'='.repeat(60)}\n`);
+
+            await this.updateLeaderboard();
+            await this.completeCycle(cycleStart, 'invalid balance data (early exit)');
+            const sleepTime = this.getSleepTimeWithBackoff(cycleStart);
+            if (sleepTime > 0 && this.isRunning) await this.sleep(sleepTime);
+            return;
+        }
+
+        if (currentBalance < config.autonomous.minBalanceToTrade) {
+            logger.info(`\n${'='.repeat(60)}`);
+            logger.info(`⚠️ EARLY EXIT #2: Insufficient balance`);
+            logger.info(`Current: $${currentBalance.toFixed(2)} < Min: $${config.autonomous.minBalanceToTrade}`);
+            logger.info(`Selected: ${coinSymbol} ${direction} by ${coinSelectorWinner}`);
+            logger.info(`Reason: Karen would veto this trade in Risk Council (Stage 4) anyway`);
+            logger.info(`Token savings: ~8,000 tokens (skipping Stage 3 Championship)`);
+            logger.info(`${'='.repeat(60)}\n`);
+
+            await this.updateLeaderboard();
+            await this.completeCycle(cycleStart, 'insufficient balance (early exit)');
+            const sleepTime = this.getSleepTimeWithBackoff(cycleStart);
+            if (sleepTime > 0 && this.isRunning) await this.sleep(sleepTime);
+            return;
+        }
+
+        // OPTIMIZATION #3: Weekly drawdown exceeded
+        const earlyExitPnL = await this.getRecentPnLCached();
+
+        // Validate P&L data is valid
+        if (!earlyExitPnL || typeof earlyExitPnL.week !== 'number' || !Number.isFinite(earlyExitPnL.week)) {
+            logger.warn(`⚠️ Invalid P&L data returned (${JSON.stringify(earlyExitPnL)}), skipping drawdown check`);
+            // Continue to next check - don't block on bad data
+        } else if (earlyExitPnL.week < -RISK_COUNCIL_VETO_TRIGGERS.MAX_WEEKLY_DRAWDOWN) {
+            logger.info(`\n${'='.repeat(60)}`);
+            logger.info(`⚠️ EARLY EXIT #3: Weekly drawdown limit exceeded`);
+            logger.info(`Current: ${earlyExitPnL.week.toFixed(1)}% < -${RISK_COUNCIL_VETO_TRIGGERS.MAX_WEEKLY_DRAWDOWN}%`);
+            logger.info(`Selected: ${coinSymbol} ${direction} by ${coinSelectorWinner}`);
+            logger.info(`Reason: Karen would veto this trade in Risk Council (Stage 4) anyway`);
+            logger.info(`Token savings: ~8,000 tokens (skipping Stage 3 Championship)`);
+            logger.info(`${'='.repeat(60)}\n`);
+
+            await this.updateLeaderboard();
+            await this.completeCycle(cycleStart, 'drawdown limit exceeded (early exit)');
+            const sleepTime = this.getSleepTimeWithBackoff(cycleStart);
+            if (sleepTime > 0 && this.isRunning) await this.sleep(sleepTime);
+            return;
+        }
+
+        // OPTIMIZATION #4: Same direction limit reached
+        const sameDirectionCount = portfolioPositions.filter(p =>
+            p.side === (direction === 'LONG' ? 'LONG' : 'SHORT')
+        ).length;
+        if (sameDirectionCount >= RISK_COUNCIL_VETO_TRIGGERS.MAX_SAME_DIRECTION_POSITIONS) {
+            logger.info(`\n${'='.repeat(60)}`);
+            logger.info(`⚠️ EARLY EXIT #4: Same direction limit reached`);
+            logger.info(`Current ${direction}: ${sameDirectionCount}/${RISK_COUNCIL_VETO_TRIGGERS.MAX_SAME_DIRECTION_POSITIONS} positions`);
+            logger.info(`Selected: ${coinSymbol} ${direction} by ${coinSelectorWinner}`);
+            logger.info(`Reason: Karen would veto this trade in Risk Council (Stage 4) anyway`);
+            logger.info(`Token savings: ~8,000 tokens (skipping Stage 3 Championship)`);
+            logger.info(`${'='.repeat(60)}\n`);
+
+            await this.updateLeaderboard();
+            await this.completeCycle(cycleStart, 'directional limit reached (early exit)');
+            const sleepTime = this.getSleepTimeWithBackoff(cycleStart);
+            if (sleepTime > 0 && this.isRunning) await this.sleep(sleepTime);
+            return;
+        }
+
+        // OPTIMIZATION #5: Extreme funding rate against position
+        // CRITICAL: Check if market data exists for selected coin
+        const tempMarketData = marketDataMap.get(coinSymbol);
+        if (!tempMarketData) {
+            // No market data = cannot verify funding rate safety
+            logger.error(`\n${'='.repeat(60)}`);
+            logger.error(`⚠️ EARLY EXIT #5A: No market data for ${coinSymbol}`);
+            logger.error(`Cannot verify funding rate safety`);
+            logger.error(`Reason: Missing market data is a red flag`);
+            logger.error(`Token savings: ~8,000 tokens (skipping Stage 3 Championship)`);
+            logger.error(`${'='.repeat(60)}\n`);
+
+            await this.updateLeaderboard();
+            await this.completeCycle(cycleStart, 'missing market data (early exit)');
+            const sleepTime = this.getSleepTimeWithBackoff(cycleStart);
+            if (sleepTime > 0 && this.isRunning) await this.sleep(sleepTime);
+            return;
+        }
+
+        // Now safe to check funding rate
+        const fundingRate = tempMarketData.fundingRate || 0;
+        const fundingAgainstUs = (direction === 'LONG' && fundingRate > 0) ||
+            (direction === 'SHORT' && fundingRate < 0);
+        if (fundingAgainstUs && Math.abs(fundingRate) > RISK_COUNCIL_VETO_TRIGGERS.MAX_FUNDING_AGAINST) {
+            logger.info(`\n${'='.repeat(60)}`);
+            logger.info(`⚠️ EARLY EXIT #5: Extreme funding rate against position`);
+            logger.info(`Funding: ${(fundingRate * 100).toFixed(4)}% (${direction} position)`);
+            logger.info(`Max allowed against: ${(RISK_COUNCIL_VETO_TRIGGERS.MAX_FUNDING_AGAINST * 100).toFixed(2)}%`);
+            logger.info(`Selected: ${coinSymbol} ${direction} by ${coinSelectorWinner}`);
+            logger.info(`Reason: Karen would veto this trade in Risk Council (Stage 4) anyway`);
+            logger.info(`Token savings: ~8,000 tokens (skipping Stage 3 Championship)`);
+            logger.info(`${'='.repeat(60)}\n`);
+
+            await this.updateLeaderboard();
+            await this.completeCycle(cycleStart, 'extreme funding rate (early exit)');
+            const sleepTime = this.getSleepTimeWithBackoff(cycleStart);
+            if (sleepTime > 0 && this.isRunning) await this.sleep(sleepTime);
+            return;
+        }
+
+        // OPTIMIZATION #6: Duplicate position check
+        const existingPosition = portfolioPositions.find(p => p.symbol === coinSymbol);
+        if (existingPosition) {
+            logger.info(`\n${'='.repeat(60)}`);
+            logger.info(`⚠️ EARLY EXIT #6: Position already exists for ${coinSymbol}`);
+            logger.info(`Existing: ${existingPosition.side} ${existingPosition.size} @ ${existingPosition.entryPrice}`);
+            logger.info(`Selected: ${coinSymbol} ${direction} by ${coinSelectorWinner}`);
+            logger.info(`Reason: Cannot open duplicate position on same symbol`);
+            logger.info(`Token savings: ~8,000 tokens (skipping Stage 3 Championship)`);
+            logger.info(`${'='.repeat(60)}\n`);
+
+            await this.updateLeaderboard();
+            await this.completeCycle(cycleStart, 'duplicate position (early exit)');
+            const sleepTime = this.getSleepTimeWithBackoff(cycleStart);
+            if (sleepTime > 0 && this.isRunning) await this.sleep(sleepTime);
+            return;
+        }
+
+        // OPTIMIZATION #7: Unapproved symbol check
+        if (!APPROVED_SYMBOLS.includes(coinSymbol as any)) {
+            logger.warn(`\n${'='.repeat(60)}`);
+            logger.warn(`⚠️ EARLY EXIT #7: Unapproved symbol selected`);
+            logger.warn(`Selected: ${coinSymbol} ${direction} by ${coinSelectorWinner}`);
+            logger.warn(`Approved symbols: ${APPROVED_SYMBOLS.join(', ')}`);
+            logger.warn(`Reason: Cannot trade unapproved symbols`);
+            logger.warn(`Token savings: ~8,000 tokens (skipping Stage 3 Championship)`);
+            logger.warn(`${'='.repeat(60)}\n`);
+
+            await this.updateLeaderboard();
+            await this.completeCycle(cycleStart, 'unapproved symbol (early exit)');
+            const sleepTime = this.getSleepTimeWithBackoff(cycleStart);
+            if (sleepTime > 0 && this.isRunning) await this.sleep(sleepTime);
+            return;
+        }
+
+        logger.info(`✅ All 8 early exit checks passed - proceeding to Stage 3 (Championship)`);
+
         if (this.currentCycle) {
             this.currentCycle.debatesRun++;
         }
@@ -1469,273 +1695,79 @@ export class AutonomousTradingEngine extends EventEmitter {
         }
 
         // =================================================================
-        // STAGE 3: ANALYSIS APPROACH DEBATE (Turn-by-Turn)
-        // 4 analysts (Warren, Cathie, Jim, Quant) debate HOW to analyze
-        // =================================================================
-        logger.info(`🔬 Stage 3: Analysis Approach Debate for ${coinSymbol} (${4 * config.debate.turnsPerAnalyst} turns)...`);
-
-        // CRITICAL: Refresh market data for selected coin before analysis
-        // Coin selection debate may have taken 2-3 minutes
-        logger.info(`📊 Refreshing market data for ${coinSymbol}...`);
-        let stage3MarketData = selectedMarketData;
-        try {
-            const [freshTicker, freshFunding] = await Promise.all([
-                this.weexClient.getTicker(coinSymbol),
-                this.weexClient.getFundingRate(coinSymbol),
-            ]);
-            const freshPrice = parseFloat(freshTicker.last);
-            if (Number.isFinite(freshPrice) && freshPrice > 0) {
-                const priceChange = Math.abs((freshPrice - selectedMarketData.currentPrice) / selectedMarketData.currentPrice * 100);
-                const dataAge = selectedMarketData.fetchTimestamp ? Math.floor((Date.now() - selectedMarketData.fetchTimestamp) / 1000) : 0;
-                if (priceChange > 0.1) {
-                    logger.info(`  Price moved ${priceChange.toFixed(2)}% (${selectedMarketData.currentPrice.toFixed(2)} → ${freshPrice.toFixed(2)}) [old data age: ${dataAge}s]`);
-                }
-                // Parse and validate all numeric fields
-                const parsedHigh = parseFloat(freshTicker.high_24h);
-                const parsedLow = parseFloat(freshTicker.low_24h);
-                const parsedVolume = parseFloat(freshTicker.volume_24h);
-                const parsedChangePercent = parseFloat(freshTicker.priceChangePercent || '0');
-                const parsedFundingRate = parseFloat(freshFunding.fundingRate || '0');
-
-                stage3MarketData = {
-                    ...selectedMarketData,
-                    currentPrice: freshPrice,
-                    high24h: Number.isFinite(parsedHigh) ? parsedHigh : selectedMarketData.high24h,
-                    low24h: Number.isFinite(parsedLow) ? parsedLow : selectedMarketData.low24h,
-                    volume24h: Number.isFinite(parsedVolume) ? parsedVolume : selectedMarketData.volume24h,
-                    change24h: Number.isFinite(parsedChangePercent) ? parsedChangePercent * 100 : selectedMarketData.change24h,
-                    fundingRate: Number.isFinite(parsedFundingRate) ? parsedFundingRate : 0,
-                    fetchTimestamp: Date.now(), // Update timestamp
-                };
-            }
-        } catch (err) {
-            logger.warn(`Failed to refresh market data for Stage 3:`, err instanceof Error ? err.message : String(err));
-            // Log staleness warning - we keep the old data with its original timestamp
-            const dataAge = selectedMarketData.fetchTimestamp ? Math.floor((Date.now() - selectedMarketData.fetchTimestamp) / 1000) : 0;
-            logger.warn(`⚠️ Using stale data for Stage 3 (age: ${dataAge}s)`);
-            // Keep old data with original timestamp to accurately reflect data age
-        }
-
-        let analysisDebate;
-        try {
-            // Check if engine was stopped before starting debate
-            if (!this.isRunning) {
-                logger.info('🛑 Engine stopped before analysis debate');
-                await this.completeCycle(cycleStart, 'stopped by user');
-                return;
-            }
-
-            analysisDebate = await collaborativeFlowService.runAnalysisApproachDebate(
-                coinSymbol,
-                stage3MarketData,
-                direction,
-                [coinSelectorWinner]
-            );
-        } catch (error) {
-            logger.error('Analysis approach debate failed:', error);
-            if (this.currentCycle) {
-                this.currentCycle.errors.push('Analysis approach debate failed');
-            }
-            this.consecutiveFailures++;
-            await this.updateLeaderboard();
-            await this.completeCycle(cycleStart, 'analysis debate failed');
-            const sleepTime = this.getSleepTimeWithBackoff(cycleStart);
-            if (sleepTime > 0 && this.isRunning) await this.sleep(sleepTime);
-            return;
-        }
-
-        // Validate debate result before destructuring
-        if (!isValidAnalysisResult(analysisDebate)) {
-            logger.error('Analysis approach debate returned malformed result:', analysisDebate);
-            if (this.currentCycle) {
-                this.currentCycle.errors.push('Analysis approach debate returned invalid data');
-            }
-            this.consecutiveFailures++;
-            await this.updateLeaderboard();
-            await this.completeCycle(cycleStart, 'invalid analysis result');
-            const sleepTime = this.getSleepTimeWithBackoff(cycleStart);
-            if (sleepTime > 0 && this.isRunning) await this.sleep(sleepTime);
-            return;
-        }
-
-        const { winner: analysisWinner, approach, debate: analysisApproachDebate } = analysisDebate;
-        if (this.currentCycle) {
-            this.currentCycle.debatesRun++;
-        }
-
-        // Log debate turns - FULL arguments, no truncation
-        logger.info(`\n${'='.repeat(60)}`);
-        logger.info(`🔬 ANALYSIS APPROACH DEBATE - ${analysisApproachDebate.turns.length} TURNS`);
-        logger.info(`${'='.repeat(60)}`);
-        for (let i = 0; i < analysisApproachDebate.turns.length; i++) {
-            const turn = analysisApproachDebate.turns[i];
-            logger.info(`\n[Turn ${i + 1}] ${turn.analystName} (strength: ${turn.strength}/10):`);
-            logger.info(turn.argument);
-            if (turn.dataPointsReferenced && turn.dataPointsReferenced.length > 0) {
-                logger.info(`Data points: ${turn.dataPointsReferenced.join(', ')}`);
-            }
-        }
-        logger.info(`\n${'='.repeat(60)}`);
-        logger.info(`🏆 Winner: ${analysisWinner} with ${approach.recommendation} (${approach.confidence}% confidence)`);
-        logger.info(`Scores: ${Object.entries(analysisApproachDebate.scores).map(([id, s]: [string, any]) => `${id}:${s.total}`).join(', ')}`);
-        logger.info(`${'='.repeat(60)}\n`);
-
-        this.emit('specialistAnalysis', { symbol: coinSymbol, winner: analysisWinner, approach, debate: analysisApproachDebate });
-
-        // =================================================================
-        // STAGE 4: RISK ASSESSMENT DEBATE (Turn-by-Turn)
-        // 4 analysts (Karen, Warren, Devil, Ray) debate position sizing & risk
-        // =================================================================
-        logger.info(`🛡️ Stage 4: Risk Assessment Debate for ${coinSymbol} (${4 * config.debate.turnsPerAnalyst} turns)...`);
-
-        // CRITICAL: Refresh market data before risk assessment
-        // Analysis debate may have taken 2-3 minutes
-        logger.info(`📊 Refreshing market data for ${coinSymbol}...`);
-        let stage4MarketData = stage3MarketData;
-        try {
-            const [freshTicker, freshFunding] = await Promise.all([
-                this.weexClient.getTicker(coinSymbol),
-                this.weexClient.getFundingRate(coinSymbol),
-            ]);
-            const freshPrice = parseFloat(freshTicker.last);
-            if (Number.isFinite(freshPrice) && freshPrice > 0) {
-                const priceChange = Math.abs((freshPrice - stage3MarketData.currentPrice) / stage3MarketData.currentPrice * 100);
-                const dataAge = stage3MarketData.fetchTimestamp ? Math.floor((Date.now() - stage3MarketData.fetchTimestamp) / 1000) : 0;
-                if (priceChange > 0.1) {
-                    logger.info(`  Price moved ${priceChange.toFixed(2)}% (${stage3MarketData.currentPrice.toFixed(2)} → ${freshPrice.toFixed(2)}) [old data age: ${dataAge}s]`);
-                }
-                // Parse and validate all numeric fields
-                const parsedHigh = parseFloat(freshTicker.high_24h);
-                const parsedLow = parseFloat(freshTicker.low_24h);
-                const parsedVolume = parseFloat(freshTicker.volume_24h);
-                const parsedChangePercent = parseFloat(freshTicker.priceChangePercent || '0');
-                const parsedFundingRate = parseFloat(freshFunding.fundingRate || '0');
-
-                stage4MarketData = {
-                    ...stage3MarketData,
-                    currentPrice: freshPrice,
-                    high24h: Number.isFinite(parsedHigh) ? parsedHigh : stage3MarketData.high24h,
-                    low24h: Number.isFinite(parsedLow) ? parsedLow : stage3MarketData.low24h,
-                    volume24h: Number.isFinite(parsedVolume) ? parsedVolume : stage3MarketData.volume24h,
-                    change24h: Number.isFinite(parsedChangePercent) ? parsedChangePercent * 100 : stage3MarketData.change24h,
-                    fundingRate: Number.isFinite(parsedFundingRate) ? parsedFundingRate : 0,
-                    fetchTimestamp: Date.now(), // Update timestamp
-                };
-            }
-        } catch (err) {
-            logger.warn(`Failed to refresh market data for Stage 4:`, err instanceof Error ? err.message : String(err));
-            const dataAge = stage3MarketData.fetchTimestamp ? Math.floor((Date.now() - stage3MarketData.fetchTimestamp) / 1000) : 0;
-            logger.warn(`⚠️ Using stale data for Stage 4 (age: ${dataAge}s)`);
-        }
-
-        let riskDebate;
-        try {
-            // Check if engine was stopped before starting debate
-            if (!this.isRunning) {
-                logger.info('🛑 Engine stopped before risk assessment');
-                await this.completeCycle(cycleStart, 'stopped by user');
-                return;
-            }
-
-            riskDebate = await collaborativeFlowService.runRiskAssessmentDebate(
-                coinSymbol,
-                approach,
-                stage4MarketData,
-                [coinSelectorWinner, analysisWinner]
-            );
-        } catch (error) {
-            logger.error('Risk assessment debate failed:', error);
-            if (this.currentCycle) {
-                this.currentCycle.errors.push('Risk assessment debate failed');
-            }
-            this.consecutiveFailures++;
-            await this.updateLeaderboard();
-            await this.completeCycle(cycleStart, 'risk debate failed');
-            const sleepTime = this.getSleepTimeWithBackoff(cycleStart);
-            if (sleepTime > 0 && this.isRunning) await this.sleep(sleepTime);
-            return;
-        }
-
-        // Validate debate result before destructuring
-        if (!isValidRiskResult(riskDebate)) {
-            logger.error('Risk assessment debate returned malformed result:', riskDebate);
-            if (this.currentCycle) {
-                this.currentCycle.errors.push('Risk assessment debate returned invalid data');
-            }
-            this.consecutiveFailures++;
-            await this.updateLeaderboard();
-            await this.completeCycle(cycleStart, 'invalid risk result');
-            const sleepTime = this.getSleepTimeWithBackoff(cycleStart);
-            if (sleepTime > 0 && this.isRunning) await this.sleep(sleepTime);
-            return;
-        }
-
-        const { winner: riskWinner, riskFramework, debate: riskAssessmentDebate } = riskDebate;
-        if (this.currentCycle) {
-            this.currentCycle.debatesRun++;
-        }
-
-        // Log debate turns - FULL arguments, no truncation
-        logger.info(`\n${'='.repeat(60)}`);
-        logger.info(`🛡️ RISK ASSESSMENT DEBATE - ${riskAssessmentDebate.turns.length} TURNS`);
-        logger.info(`${'='.repeat(60)}`);
-        for (let i = 0; i < riskAssessmentDebate.turns.length; i++) {
-            const turn = riskAssessmentDebate.turns[i];
-            logger.info(`\n[Turn ${i + 1}] ${turn.analystName} (strength: ${turn.strength}/10):`);
-            logger.info(turn.argument);
-            if (turn.dataPointsReferenced && turn.dataPointsReferenced.length > 0) {
-                logger.info(`Data points: ${turn.dataPointsReferenced.join(', ')}`);
-            }
-        }
-        logger.info(`\n${'='.repeat(60)}`);
-        logger.info(`🏆 Winner: ${riskWinner} → Position: ${riskFramework.positionSize}/10, Risk: ${riskFramework.riskLevel}`);
-        logger.info(`Scores: ${Object.entries(riskAssessmentDebate.scores).map(([id, s]: [string, any]) => `${id}:${s.total}`).join(', ')}`);
-        logger.info(`${'='.repeat(60)}\n`);
-
-        // =================================================================
-        // STAGE 5: CHAMPIONSHIP DEBATE (Turn-by-Turn)
+        // STAGE 3: CHAMPIONSHIP DEBATE (Turn-by-Turn)
         // ALL 8 analysts compete - winner's thesis gets executed
         // =================================================================
-        logger.info(`🏆 Stage 5: Championship Debate for ${coinSymbol} (${8 * config.debate.turnsPerAnalyst} turns - ALL 8 analysts)...`);
+        logger.info(`🏆 Stage 3: Championship Debate for ${coinSymbol} (${8 * config.debate.turnsPerAnalyst} turns - ALL 8 analysts)...`);
 
         // CRITICAL: Refresh market data before championship debate
-        // Risk debate may have taken 2-3 minutes, total elapsed could be 8-10 minutes
-        logger.info(`📊 Refreshing market data for ${coinSymbol}...`);
-        let championshipMarketData = stage4MarketData;
+        // Coin selection debate may have taken 2-3 minutes
+        logger.info(`📊 Refreshing market data for ${coinSymbol} before championship...`);
+        let championshipMarketData = selectedMarketData;
+
         try {
             const [freshTicker, freshFunding] = await Promise.all([
                 this.weexClient.getTicker(coinSymbol),
                 this.weexClient.getFundingRate(coinSymbol),
             ]);
+
             const freshPrice = parseFloat(freshTicker.last);
             if (Number.isFinite(freshPrice) && freshPrice > 0) {
-                const priceChange = Math.abs((freshPrice - stage4MarketData.currentPrice) / stage4MarketData.currentPrice * 100);
-                const dataAge = stage4MarketData.fetchTimestamp ? Math.floor((Date.now() - stage4MarketData.fetchTimestamp) / 1000) : 0;
+                const priceChange = Math.abs(
+                    ((freshPrice - selectedMarketData.currentPrice) /
+                        selectedMarketData.currentPrice) *
+                    100
+                );
+                const dataAge = selectedMarketData.fetchTimestamp
+                    ? Math.floor((Date.now() - selectedMarketData.fetchTimestamp) / 1000)
+                    : 0;
+
                 if (priceChange > 0.1) {
-                    logger.info(`  Price moved ${priceChange.toFixed(2)}% (${stage4MarketData.currentPrice.toFixed(2)} → ${freshPrice.toFixed(2)}) [old data age: ${dataAge}s]`);
+                    logger.info(
+                        `  Price moved ${priceChange.toFixed(
+                            2
+                        )}% (${selectedMarketData.currentPrice.toFixed(
+                            2
+                        )} → ${freshPrice.toFixed(2)}) [data age: ${dataAge}s]`
+                    );
                 }
-                // Parse and validate all numeric fields
+
                 const parsedHigh = parseFloat(freshTicker.high_24h);
                 const parsedLow = parseFloat(freshTicker.low_24h);
                 const parsedVolume = parseFloat(freshTicker.volume_24h);
-                const parsedChangePercent = parseFloat(freshTicker.priceChangePercent || '0');
+                const parsedChangePercent = parseFloat(
+                    freshTicker.priceChangePercent || '0'
+                );
                 const parsedFundingRate = parseFloat(freshFunding.fundingRate || '0');
 
                 championshipMarketData = {
-                    ...stage4MarketData,
+                    ...selectedMarketData,
                     currentPrice: freshPrice,
-                    high24h: Number.isFinite(parsedHigh) ? parsedHigh : stage4MarketData.high24h,
-                    low24h: Number.isFinite(parsedLow) ? parsedLow : stage4MarketData.low24h,
-                    volume24h: Number.isFinite(parsedVolume) ? parsedVolume : stage4MarketData.volume24h,
-                    change24h: Number.isFinite(parsedChangePercent) ? parsedChangePercent * 100 : stage4MarketData.change24h,
+                    high24h: Number.isFinite(parsedHigh)
+                        ? parsedHigh
+                        : selectedMarketData.high24h,
+                    low24h: Number.isFinite(parsedLow)
+                        ? parsedLow
+                        : selectedMarketData.low24h,
+                    volume24h: Number.isFinite(parsedVolume)
+                        ? parsedVolume
+                        : selectedMarketData.volume24h,
+                    change24h: Number.isFinite(parsedChangePercent)
+                        ? parsedChangePercent * 100
+                        : selectedMarketData.change24h,
                     fundingRate: Number.isFinite(parsedFundingRate) ? parsedFundingRate : 0,
-                    fetchTimestamp: Date.now(), // Update timestamp
+                    fetchTimestamp: Date.now(),
                 };
             }
         } catch (err) {
-            logger.warn(`Failed to refresh market data for championship, using cached data:`, err instanceof Error ? err.message : String(err));
-            const dataAge = stage4MarketData.fetchTimestamp ? Math.floor((Date.now() - stage4MarketData.fetchTimestamp) / 1000) : 0;
-            logger.warn(`⚠️ Using stale data for Stage 5 (age: ${dataAge}s)`);
+            logger.warn(
+                `Failed to refresh market data for championship:`,
+                err instanceof Error ? err.message : String(err)
+            );
+            const dataAge = selectedMarketData.fetchTimestamp
+                ? Math.floor((Date.now() - selectedMarketData.fetchTimestamp) / 1000)
+                : 0;
+            logger.warn(`⚠️ Using stale data for championship (age: ${dataAge}s)`);
         }
 
         let championshipResult;
@@ -1752,12 +1784,8 @@ export class AutonomousTradingEngine extends EventEmitter {
                 championshipMarketData,
                 {
                     coinSelector: coinSelectorWinner,
-                    analysisApproach: analysisWinner,
-                    riskAssessment: riskWinner,
-                    // Pass winning arguments from previous stages for context
+                    // Pass winning argument from coin selection for context
                     coinSelectorArgument: coinDebate.winningArguments?.[0],
-                    analysisApproachArgument: analysisApproachDebate.winningArguments?.[0],
-                    riskAssessmentArgument: riskAssessmentDebate.winningArguments?.[0]
                 }
             );
         } catch (error) {
@@ -1826,19 +1854,19 @@ export class AutonomousTradingEngine extends EventEmitter {
         // Reset consecutive failures on successful debate completion
         this.consecutiveFailures = 0;
 
-        // Apply risk framework adjustments from Stage 4 to champion
-        // This ensures the risk debate's position sizing is respected
+        // Extract champion's risk parameters from their thesis
+        // These will be reviewed and potentially adjusted by Karen in Stage 4 (Risk Council)
         const adjustedChampion = {
             ...champion,
-            positionSize: riskFramework.positionSize,
-            riskLevel: riskFramework.riskLevel
+            positionSize: champion.positionSize || 5, // Default moderate position
+            riskLevel: champion.riskLevel || 'moderate'
         };
-        logger.info(`Applied Stage 4 risk adjustments: position ${adjustedChampion.positionSize}/10, risk ${adjustedChampion.riskLevel}`);
+        logger.info(`Champion's proposed parameters: position ${adjustedChampion.positionSize}/10, risk ${adjustedChampion.riskLevel}`);
 
         // =================================================================
-        // STAGE 6: RISK COUNCIL - Karen approves/vetoes/adjusts
+        // STAGE 4: RISK COUNCIL - Karen approves/vetoes/adjusts
         // =================================================================
-        logger.info('🛡️ Stage 6: Risk Council Final Review...');
+        logger.info('🛡️ Stage 4: Risk Council Final Review...');
 
         // Refresh market data before risk council
         // This is critical - we need current price for accurate risk assessment
@@ -1850,81 +1878,123 @@ export class AutonomousTradingEngine extends EventEmitter {
             ]);
             const freshPrice = parseFloat(freshTicker.last);
             if (Number.isFinite(freshPrice) && freshPrice > 0) {
-                const priceChange = Math.abs((freshPrice - championshipMarketData.currentPrice) / championshipMarketData.currentPrice * 100);
-                const dataAge = championshipMarketData.fetchTimestamp ? Math.floor((Date.now() - championshipMarketData.fetchTimestamp) / 1000) : 0;
-                if (priceChange > 0.1) { // Log if price moved more than 0.1%
-                    logger.info(`📊 Market data refreshed for risk council: ${coinSymbol} price moved ${priceChange.toFixed(2)}% (${championshipMarketData.currentPrice.toFixed(2)} → ${freshPrice.toFixed(2)}) [old data age: ${dataAge}s]`);
-                }
-                riskCouncilMarketData = {
-                    ...championshipMarketData,
-                    currentPrice: freshPrice,
-                    high24h: parseFloat(freshTicker.high_24h) || championshipMarketData.high24h,
-                    low24h: parseFloat(freshTicker.low_24h) || championshipMarketData.low24h,
-                    fundingRate: parseFloat(freshFunding.fundingRate || '0'),
-                    fetchTimestamp: Date.now(), // Update timestamp
-                };
-
-                // CRITICAL: Recalculate price targets based on fresh price
-                // The original targets were calculated with old data, which can cause
-                // stop loss to be above entry price for LONG trades (invalid)
-                const isBullish = ['strong_buy', 'buy'].includes(adjustedChampion.recommendation);
-                const originalTakeProfit = adjustedChampion.priceTarget.base;
-                const originalStopLoss = adjustedChampion.priceTarget.bear;
-
-                // Calculate the percentage distances from the original entry
-                const originalEntry = championshipMarketData.currentPrice;
-                const takeProfitPct = (originalTakeProfit - originalEntry) / originalEntry;
-                const stopLossPct = (originalStopLoss - originalEntry) / originalEntry;
-
-                // Apply same percentages to fresh price
-                const newTakeProfit = freshPrice * (1 + takeProfitPct);
-                const newStopLoss = freshPrice * (1 + stopLossPct);
-
-                // Validate the recalculated targets make sense
-                if (isBullish) {
-                    // LONG: TP should be above entry, SL should be below entry
-                    if (newTakeProfit > freshPrice && newStopLoss < freshPrice) {
-                        adjustedChampion.priceTarget = {
-                            ...adjustedChampion.priceTarget,
-                            base: newTakeProfit,
-                            bear: newStopLoss
-                        };
-                        logger.info(`📊 Price targets recalculated: TP ${originalTakeProfit.toFixed(2)} → ${newTakeProfit.toFixed(2)}, SL ${originalStopLoss.toFixed(2)} → ${newStopLoss.toFixed(2)}`);
-                    } else {
-                        // Fallback: use percentage-based targets with proper risk/reward
-                        // Karen requires minimum 2:1 risk/reward ratio
-                        const defaultSlPct = 0.015; // 1.5% stop loss (risk)
-                        const defaultTpPct = 0.03; // 3% take profit (reward) = 2:1 ratio
-                        adjustedChampion.priceTarget = {
-                            ...adjustedChampion.priceTarget,
-                            base: freshPrice * (1 + defaultTpPct),
-                            bear: freshPrice * (1 - defaultSlPct)
-                        };
-                        logger.warn(`⚠️ Invalid price targets detected, using defaults: TP ${(freshPrice * (1 + defaultTpPct)).toFixed(2)}, SL ${(freshPrice * (1 - defaultSlPct)).toFixed(2)} (2:1 R/R)`);
-                    }
+                // CRITICAL: Validate championshipMarketData.currentPrice before division
+                const oldPrice = championshipMarketData.currentPrice;
+                if (!Number.isFinite(oldPrice) || oldPrice <= 0) {
+                    logger.warn(`⚠️ Invalid old price ${oldPrice}, skipping price target recalculation`);
                 } else {
-                    // SHORT: TP should be below entry, SL should be above entry
-                    if (newTakeProfit < freshPrice && newStopLoss > freshPrice) {
-                        adjustedChampion.priceTarget = {
-                            ...adjustedChampion.priceTarget,
-                            base: newTakeProfit,
-                            bear: newStopLoss
-                        };
-                        logger.info(`📊 Price targets recalculated: TP ${originalTakeProfit.toFixed(2)} → ${newTakeProfit.toFixed(2)}, SL ${originalStopLoss.toFixed(2)} → ${newStopLoss.toFixed(2)}`);
-                    } else {
-                        // Fallback: use percentage-based targets with proper risk/reward
-                        // Karen requires minimum 2:1 risk/reward ratio
-                        const defaultSlPct = 0.015; // 1.5% stop loss (risk)
-                        const defaultTpPct = 0.03; // 3% take profit (reward) = 2:1 ratio
-                        adjustedChampion.priceTarget = {
-                            ...adjustedChampion.priceTarget,
-                            base: freshPrice * (1 - defaultTpPct),
-                            bear: freshPrice * (1 + defaultSlPct)
-                        };
-                        logger.warn(`⚠️ Invalid price targets detected, using defaults: TP ${(freshPrice * (1 - defaultTpPct)).toFixed(2)}, SL ${(freshPrice * (1 + defaultSlPct)).toFixed(2)} (2:1 R/R)`);
+                    const priceChange = Math.abs((freshPrice - oldPrice) / oldPrice * 100);
+                    const dataAge = championshipMarketData.fetchTimestamp ? Math.floor((Date.now() - championshipMarketData.fetchTimestamp) / 1000) : 0;
+                    if (priceChange > 0.1) { // Log if price moved more than 0.1%
+                        logger.info(`📊 Market data refreshed for risk council: ${coinSymbol} price moved ${priceChange.toFixed(2)}% (${championshipMarketData.currentPrice.toFixed(2)} → ${freshPrice.toFixed(2)}) [old data age: ${dataAge}s]`);
                     }
-                }
-            }
+                    riskCouncilMarketData = {
+                        ...championshipMarketData,
+                        currentPrice: freshPrice,
+                        high24h: parseFloat(freshTicker.high_24h) || championshipMarketData.high24h,
+                        low24h: parseFloat(freshTicker.low_24h) || championshipMarketData.low24h,
+                        fundingRate: parseFloat(freshFunding.fundingRate || '0'),
+                        fetchTimestamp: Date.now(), // Update timestamp
+                    };
+
+                    // CRITICAL: Recalculate price targets based on fresh price
+                    // The original targets were calculated with old data, which can cause
+                    // stop loss to be above entry price for LONG trades (invalid)
+                    const isBullish = ['strong_buy', 'buy'].includes(adjustedChampion.recommendation);
+                    const originalTakeProfit = adjustedChampion.priceTarget.base;
+                    const originalStopLoss = adjustedChampion.priceTarget.bear;
+
+                    // Log original AI targets for debugging
+                    logger.info(`📊 Champion's original targets: TP=${originalTakeProfit.toFixed(6)}, SL=${originalStopLoss.toFixed(6)} (entry=${championshipMarketData.currentPrice.toFixed(6)})`);
+
+                    // Calculate the percentage distances from the original entry
+                    const originalEntry = championshipMarketData.currentPrice;
+                    const takeProfitPct = (originalTakeProfit - originalEntry) / originalEntry;
+                    const stopLossPct = (originalStopLoss - originalEntry) / originalEntry;
+
+                    logger.info(`📊 Target percentages: TP=${(takeProfitPct * 100).toFixed(2)}%, SL=${(stopLossPct * 100).toFixed(2)}%`);
+
+                    // Apply same percentages to fresh price
+                    const newTakeProfit = freshPrice * (1 + takeProfitPct);
+                    const newStopLoss = freshPrice * (1 + stopLossPct);
+
+                    // Validate the recalculated targets make sense
+                    // Add tolerance for floating-point precision issues (0.01% = 0.0001)
+                    const PRICE_TOLERANCE = 0.0001;
+
+                    if (isBullish) {
+                        // LONG: TP should be above entry, SL should be below entry
+                        const tpValid = newTakeProfit > freshPrice * (1 + PRICE_TOLERANCE);
+                        const slValid = newStopLoss < freshPrice * (1 - PRICE_TOLERANCE);
+
+                        if (tpValid && slValid) {
+                            adjustedChampion.priceTarget = {
+                                ...adjustedChampion.priceTarget,
+                                base: newTakeProfit,
+                                bear: newStopLoss
+                            };
+                            logger.info(`📊 Price targets recalculated: TP ${originalTakeProfit.toFixed(6)} → ${newTakeProfit.toFixed(6)}, SL ${originalStopLoss.toFixed(6)} → ${newStopLoss.toFixed(6)}`);
+                        } else {
+                            // Log detailed validation failure for debugging
+                            logger.warn(`⚠️ Price target validation failed for LONG:`, {
+                                freshPrice: freshPrice.toFixed(6),
+                                newTakeProfit: newTakeProfit.toFixed(6),
+                                newStopLoss: newStopLoss.toFixed(6),
+                                tpValid,
+                                slValid,
+                                tpAboveEntry: newTakeProfit > freshPrice,
+                                slBelowEntry: newStopLoss < freshPrice
+                            });
+
+                            // Fallback: use percentage-based targets with proper risk/reward
+                            // Karen requires minimum 2:1 risk/reward ratio
+                            const defaultSlPct = 0.015; // 1.5% stop loss (risk)
+                            const defaultTpPct = 0.03; // 3% take profit (reward) = 2:1 ratio
+                            adjustedChampion.priceTarget = {
+                                ...adjustedChampion.priceTarget,
+                                base: freshPrice * (1 + defaultTpPct),
+                                bear: freshPrice * (1 - defaultSlPct)
+                            };
+                            logger.warn(`⚠️ Using default targets: TP ${(freshPrice * (1 + defaultTpPct)).toFixed(6)}, SL ${(freshPrice * (1 - defaultSlPct)).toFixed(6)} (2:1 R/R)`);
+                        }
+                    } else {
+                        // SHORT: TP should be below entry, SL should be above entry
+                        const tpValid = newTakeProfit < freshPrice * (1 - PRICE_TOLERANCE);
+                        const slValid = newStopLoss > freshPrice * (1 + PRICE_TOLERANCE);
+
+                        if (tpValid && slValid) {
+                            adjustedChampion.priceTarget = {
+                                ...adjustedChampion.priceTarget,
+                                base: newTakeProfit,
+                                bear: newStopLoss
+                            };
+                            logger.info(`📊 Price targets recalculated: TP ${originalTakeProfit.toFixed(6)} → ${newTakeProfit.toFixed(6)}, SL ${originalStopLoss.toFixed(6)} → ${newStopLoss.toFixed(6)}`);
+                        } else {
+                            // Log detailed validation failure for debugging
+                            logger.warn(`⚠️ Price target validation failed for SHORT:`, {
+                                freshPrice: freshPrice.toFixed(6),
+                                newTakeProfit: newTakeProfit.toFixed(6),
+                                newStopLoss: newStopLoss.toFixed(6),
+                                tpValid,
+                                slValid,
+                                tpBelowEntry: newTakeProfit < freshPrice,
+                                slAboveEntry: newStopLoss > freshPrice
+                            });
+
+                            // Fallback: use percentage-based targets with proper risk/reward
+                            // Karen requires minimum 2:1 risk/reward ratio
+                            const defaultSlPct = 0.015; // 1.5% stop loss (risk)
+                            const defaultTpPct = 0.03; // 3% take profit (reward) = 2:1 ratio
+                            adjustedChampion.priceTarget = {
+                                ...adjustedChampion.priceTarget,
+                                base: freshPrice * (1 - defaultTpPct),
+                                bear: freshPrice * (1 + defaultSlPct)
+                            };
+                            logger.warn(`⚠️ Using default targets: TP ${(freshPrice * (1 - defaultTpPct)).toFixed(6)}, SL ${(freshPrice * (1 + defaultSlPct)).toFixed(6)} (2:1 R/R)`);
+                        }
+                    }
+                } // Close: else (oldPrice is valid)
+            } // Close: if (freshPrice > 0)
         } catch (err) {
             logger.warn(`Failed to refresh market data for risk council:`, err instanceof Error ? err.message : String(err));
         }
@@ -1967,9 +2037,9 @@ export class AutonomousTradingEngine extends EventEmitter {
         logger.info('✅ Trade APPROVED by Risk Council');
 
         // =================================================================
-        // STAGE 7: EXECUTION - Place trade on WEEX with TP/SL
+        // STAGE 4: EXECUTION - Place trade on WEEX with TP/SL
         // =================================================================
-        logger.info('🚀 Stage 7: Executing Trade...');
+        logger.info('🚀 Stage 4: Executing Trade...');
 
         // Build coin selection results for compatibility
         const coinSelectionResults = [{
@@ -1987,11 +2057,56 @@ export class AutonomousTradingEngine extends EventEmitter {
         );
 
         // =================================================================
-        // STAGE 8: POSITION MANAGEMENT - Update leaderboard
+        // STAGE 6: POSITION MANAGEMENT - Update leaderboard
         // =================================================================
         await this.updateLeaderboard();
 
         await this.completeCycle(cycleStart, 'entry complete');
+    }
+
+    /**
+     * Refresh contract specifications if stale (older than 30 minutes)
+     * This prevents order failures due to expired cache
+     * FIXED: Uses instance tracker to prevent race conditions and stale state
+     */
+    private async refreshContractSpecsIfNeeded(): Promise<void> {
+        // Check if any approved symbol is missing from cache
+        const missingSpecs = APPROVED_SYMBOLS.filter(symbol => !getContractSpecs(symbol));
+
+        const needsRefresh = missingSpecs.length > 0 || this.contractSpecsTracker.shouldRefresh();
+
+        if (!needsRefresh) {
+            return;
+        }
+
+        // Prevent concurrent refresh attempts
+        if (!this.contractSpecsTracker.markRefreshing()) {
+            logger.debug('Contract specs refresh already in progress, skipping');
+            return;
+        }
+
+        const reason = missingSpecs.length > 0
+            ? `missing specs for: ${missingSpecs.join(', ')}`
+            : `cache age: ${Math.floor((Date.now() - this.contractSpecsTracker.getLastRefresh()) / 60000)} minutes`;
+
+        logger.info(`🔄 Refreshing contract specs (${reason})...`);
+
+        try {
+            const contracts = await this.weexClient.getContracts();
+            if (contracts && contracts.length > 0) {
+                updateContractSpecs(contracts);
+                this.contractSpecsTracker.markRefreshed();
+                logger.info(`✅ Contract specs refreshed: ${contracts.length} contracts cached`);
+            } else {
+                logger.warn('⚠️ WEEX returned empty contracts array during refresh');
+                this.contractSpecsTracker.markFailed();
+            }
+        } catch (error) {
+            logger.error('❌ Failed to refresh contract specs:', error);
+            this.contractSpecsTracker.markFailed();
+            // Don't throw - continue with potentially stale specs rather than failing the cycle
+            // The roundToTickSize/roundToStepSize functions will warn if specs are missing
+        }
     }
 
     /**
@@ -2212,7 +2327,7 @@ export class AutonomousTradingEngine extends EventEmitter {
     }
 
     /**
-     * Execute a collaborative trade (Stage 6)
+     * Execute a collaborative trade (Stage 5)
      * Places the trade on WEEX with TP/SL orders
      */
     private async executeCollaborativeTrade(
@@ -2438,9 +2553,27 @@ export class AutonomousTradingEngine extends EventEmitter {
         const clientOrderId = `collab_${champion.analystId}_${Date.now()}`;
         const orderType = direction === 'LONG' ? '1' : '2';
 
-        // CRITICAL: Validate position size against contract specs BEFORE rounding
+        // CRITICAL: Ensure contract specs are available before placing order
+        // This prevents order rejection due to wrong tick/step sizes
         const { getContractSpecs } = await import('../../shared/utils/weex');
-        const contractSpecs = getContractSpecs(symbol);
+        let contractSpecs = getContractSpecs(symbol);
+
+        // If specs are missing, try to refresh them before proceeding
+        if (!contractSpecs) {
+            logger.warn(`⚠️ Contract specs missing for ${symbol}, attempting refresh before order...`);
+            try {
+                const contracts = await this.weexClient.getContracts();
+                if (contracts && contracts.length > 0) {
+                    updateContractSpecs(contracts);
+                    contractSpecs = getContractSpecs(symbol);
+                    if (contractSpecs) {
+                        logger.info(`✅ Contract specs refreshed successfully for ${symbol}`);
+                    }
+                }
+            } catch (error) {
+                logger.error(`❌ Failed to refresh contract specs before order:`, error);
+            }
+        }
 
         if (contractSpecs) {
             // Validate size is within contract limits
@@ -2454,7 +2587,11 @@ export class AutonomousTradingEngine extends EventEmitter {
                 size = contractSpecs.maxOrderSize;
             }
         } else {
-            logger.warn(`No contract specs found for ${symbol}, skipping size validation`);
+            // CRITICAL: If specs are still missing after refresh attempt, abort the trade
+            // This prevents order rejection due to wrong tick/step sizes
+            logger.error(`❌ CRITICAL: Contract specs unavailable for ${symbol} even after refresh - aborting trade to prevent rejection`);
+            this.currentCycle?.errors.push(`Contract specs unavailable for ${symbol}`);
+            return;
         }
 
         // CRITICAL DEBUG: Log exact values before creating order

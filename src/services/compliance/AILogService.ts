@@ -24,6 +24,11 @@ export class AILogService {
     // This prevents silent failures and allows monitoring of upload health
     private failedUploads: Set<string> = new Set();
     private readonly MAX_FAILED_UPLOADS = 100; // Prevent unbounded growth
+
+    // CRITICAL FIX: Track retry attempts per log to prevent infinite retries
+    private retryAttempts: Map<string, number> = new Map();
+    private readonly MAX_RETRY_ATTEMPTS = 5; // Max retries per log before giving up
+
     private lastRetryAttempt = 0;
     private readonly RETRY_INTERVAL_MS = 3600000; // 1 hour
     private retryInProgress = false; // FIXED: Prevent concurrent retries
@@ -42,6 +47,7 @@ export class AILogService {
      */
     clearFailedUploads(): void {
         this.failedUploads.clear();
+        this.retryAttempts.clear();
     }
 
     /**
@@ -82,6 +88,49 @@ export class AILogService {
 
             for (const dbLog of failedLogs) {
                 try {
+                    // CRITICAL: Check retry attempts to prevent infinite retries
+                    const attempts = this.retryAttempts.get(dbLog.id) || 0;
+                    if (attempts >= this.MAX_RETRY_ATTEMPTS) {
+                        logger.error(`❌ Log ${dbLog.id} exceeded max retry attempts (${this.MAX_RETRY_ATTEMPTS}), removing from retry queue`);
+                        this.failedUploads.delete(dbLog.id);
+                        this.retryAttempts.delete(dbLog.id);
+
+                        // Mark as uploaded in DB to stop future retries
+                        try {
+                            await prisma.aILog.update({
+                                where: { id: dbLog.id },
+                                data: {
+                                    uploadedToWeex: true,
+                                    weexLogId: `FAILED_AFTER_${this.MAX_RETRY_ATTEMPTS}_ATTEMPTS`
+                                }
+                            });
+                        } catch (updateError) {
+                            logger.warn(`Failed to mark log ${dbLog.id} as permanently failed:`, updateError);
+                        }
+                        continue;
+                    }
+
+                    // CRITICAL: Skip if log has weexLogId (already uploaded, DB just not updated)
+                    // This prevents duplicate uploads when DB update fails after successful WEEX upload
+                    if (dbLog.weexLogId && dbLog.weexLogId.trim().length > 0) {
+                        logger.info(`Skipping retry for log ${dbLog.id} - already has weexLogId: ${dbLog.weexLogId}`);
+
+                        // Update DB to reflect successful upload (wrap in try-catch)
+                        try {
+                            await prisma.aILog.update({
+                                where: { id: dbLog.id },
+                                data: { uploadedToWeex: true }
+                            });
+                            this.failedUploads.delete(dbLog.id);
+                            this.retryAttempts.delete(dbLog.id);
+                        } catch (updateError) {
+                            logger.error(`Failed to update DB for log ${dbLog.id} (attempt ${attempts + 1}/${this.MAX_RETRY_ATTEMPTS}):`, updateError);
+                            // Increment retry counter even for DB failures
+                            this.retryAttempts.set(dbLog.id, attempts + 1);
+                        }
+                        continue;
+                    }
+
                     // FIXED: Wrap JSON.parse in try-catch
                     let input: any;
                     let output: any;
@@ -90,10 +139,21 @@ export class AILogService {
                         input = JSON.parse(dbLog.input);
                     } catch (parseError) {
                         logger.error(`Failed to parse input for log ${dbLog.id}, marking as uploaded to stop retries`);
-                        await prisma.aILog.update({
-                            where: { id: dbLog.id },
-                            data: { uploadedToWeex: true }
-                        });
+
+                        // Wrap DB update in try-catch
+                        try {
+                            await prisma.aILog.update({
+                                where: { id: dbLog.id },
+                                data: { uploadedToWeex: true }
+                            });
+                            this.failedUploads.delete(dbLog.id);
+                            this.retryAttempts.delete(dbLog.id);
+                        } catch (updateError) {
+                            logger.error(`Failed to mark unparseable log ${dbLog.id} as uploaded:`, updateError);
+                            // Increment retry counter
+                            const attempts = this.retryAttempts.get(dbLog.id) || 0;
+                            this.retryAttempts.set(dbLog.id, attempts + 1);
+                        }
                         continue;
                     }
 
@@ -101,10 +161,21 @@ export class AILogService {
                         output = JSON.parse(dbLog.output);
                     } catch (parseError) {
                         logger.error(`Failed to parse output for log ${dbLog.id}, marking as uploaded to stop retries`);
-                        await prisma.aILog.update({
-                            where: { id: dbLog.id },
-                            data: { uploadedToWeex: true }
-                        });
+
+                        // Wrap DB update in try-catch
+                        try {
+                            await prisma.aILog.update({
+                                where: { id: dbLog.id },
+                                data: { uploadedToWeex: true }
+                            });
+                            this.failedUploads.delete(dbLog.id);
+                            this.retryAttempts.delete(dbLog.id);
+                        } catch (updateError) {
+                            logger.error(`Failed to mark unparseable log ${dbLog.id} as uploaded:`, updateError);
+                            // Increment retry counter
+                            const attempts = this.retryAttempts.get(dbLog.id) || 0;
+                            this.retryAttempts.set(dbLog.id, attempts + 1);
+                        }
                         continue;
                     }
 
@@ -118,14 +189,27 @@ export class AILogService {
                         output,
                         explanation: dbLog.explanation,
                         timestamp: dbLog.timestamp.getTime(),
-                        uploadedToWeex: false
+                        uploadedToWeex: false,
+                        weexLogId: dbLog.weexLogId || undefined
                     };
 
                     await this.uploadToWeex(log);
+
+                    // Success: clear retry counter
                     this.failedUploads.delete(dbLog.id);
+                    this.retryAttempts.delete(dbLog.id);
                     logger.info(`✅ Retry successful for log ${dbLog.id}`);
                 } catch (error) {
                     logger.warn(`Retry failed for log ${dbLog.id}:`, error instanceof Error ? error.message : String(error));
+
+                    // Increment retry counter on failure
+                    const attempts = this.retryAttempts.get(dbLog.id) || 0;
+                    this.retryAttempts.set(dbLog.id, attempts + 1);
+
+                    // Log warning if approaching max attempts
+                    if (attempts + 1 >= this.MAX_RETRY_ATTEMPTS) {
+                        logger.warn(`⚠️ Log ${dbLog.id} has ${attempts + 1}/${this.MAX_RETRY_ATTEMPTS} failed attempts, will be removed on next retry`);
+                    }
                 }
             }
         } catch (error) {
@@ -320,6 +404,26 @@ export class AILogService {
 
     async uploadToWeex(log: AILogEntry): Promise<void> {
         try {
+            // CRITICAL: Skip if log already has weexLogId (already uploaded)
+            // This prevents duplicate uploads if retry is triggered after successful upload
+            if (log.weexLogId && log.weexLogId.trim().length > 0) {
+                logger.info(`Skipping upload for log ${log.id} - already uploaded with weexLogId: ${log.weexLogId}`);
+                // Ensure DB reflects uploaded status
+                try {
+                    await prisma.aILog.update({
+                        where: { id: log.id },
+                        data: { uploadedToWeex: true }
+                    });
+                } catch (updateError: any) {
+                    if (updateError.code !== 'P2025') {
+                        logger.warn(`Failed to update upload status for already-uploaded log ${log.id}:`, updateError);
+                    }
+                }
+                // Remove from failed uploads set
+                this.failedUploads.delete(log.id);
+                return;
+            }
+
             // FIXED: Upload with objects (no re-serialization needed)
             // Note: idempotencyKey would be ideal but may not be supported by WEEX API
             const response = await getWeexClient().uploadAILog({
@@ -362,10 +466,37 @@ export class AILogService {
                     weexLogId = response.logId; // May be undefined, but upload succeeded
                 }
                 // Check for error code
-                else if (response.code && response.code !== '0' && response.code !== '200') {
+                // FIXED: WEEX returns '00000' for success, not '0'
+                // Success codes: '0', '00000', '200'
+                // Any other code is an error
+                else if (response.code && response.code !== '0' && response.code !== '00000' && response.code !== '200') {
                     const errorMsg = `WEEX upload failed for log ${log.id}: code=${response.code}, msg=${response.msg || 'unknown'}`;
                     logger.error(errorMsg);
                     throw new Error(errorMsg);
+                }
+                // FIXED: If code is '00000' or '0' or '200', treat as success
+                else if (response.code && (response.code === '0' || response.code === '00000' || response.code === '200')) {
+                    uploadSuccess = true;
+                    // Try to extract logId from response if present
+                    if (response.data && typeof response.data === 'object' && response.data.logId) {
+                        weexLogId = response.data.logId;
+                    } else if (response.logId && typeof response.logId === 'string') {
+                        weexLogId = response.logId;
+                    }
+                    // CRITICAL FIX: Generate unique composite identifier instead of using orderId
+                    // Multiple AI logs can share the same orderId (analysis, decision, execution stages)
+                    // Using orderId as fallback causes identifier collision
+                    if (!weexLogId) {
+                        // Generate composite identifier: orderId-stage-timestamp-random
+                        // This ensures uniqueness even when multiple logs share the same order
+                        // and are created within the same millisecond under high load
+                        const timestamp = Date.now();
+                        const randomSuffix = Math.random().toString(36).substring(2, 8); // 6 char random string
+                        weexLogId = log.orderId
+                            ? `${log.orderId}-${log.stage}-${timestamp}-${randomSuffix}`
+                            : `${log.id}-${timestamp}-${randomSuffix}`; // Fallback to log ID if no orderId
+                        logger.warn(`WEEX did not return logId for log ${log.id}, generated composite ID: ${weexLogId}`);
+                    }
                 }
             }
 
@@ -376,9 +507,19 @@ export class AILogService {
                 throw new Error(errorMsg);
             }
 
+            // CRITICAL: Update in-memory log object FIRST, before DB update
+            // This ensures the log is marked as uploaded even if DB update fails
+            // Must happen BEFORE any DB operations that could throw
+            log.uploadedToWeex = true;
+            log.weexLogId = weexLogId;
+
+            // CRITICAL: Remove from failedUploads set immediately
+            // This prevents retry attempts even if DB update fails
+            this.failedUploads.delete(log.id);
+
             // Only update database if upload was successful
-            // CRITICAL FIX: Log DB errors but don't rethrow - WEEX upload succeeded
-            // Rethrowing would cause outer catch to mark upload as failed and retry
+            // CRITICAL: DB update is best-effort - failure won't cause retry
+            // because in-memory state is already updated above
             try {
                 await prisma.aILog.update({
                     where: { id: log.id },
@@ -392,21 +533,19 @@ export class AILogService {
                 if (updateError.code === 'P2025') {
                     // This is fine - log was already updated or deleted
                 } else {
-                    // Other DB errors: Log but DON'T rethrow
-                    // WEEX upload succeeded, so we don't want to retry
+                    // CRITICAL: Other DB errors - log but DON'T rethrow
+                    // WEEX upload succeeded and in-memory state is updated
+                    // DB inconsistency will be fixed on next retry check
                     logger.error(`Failed to update AI log ${log.id} in database after successful WEEX upload:`, {
                         error: updateError.message,
                         code: updateError.code,
                         logId: log.id,
                         weexLogId: weexLogId
                     });
+                    // Note: failedUploads.delete() already called above
                     // Continue execution - don't let DB error cause retry of successful upload
                 }
             }
-
-            // Update in-memory log object
-            log.uploadedToWeex = true;
-            log.weexLogId = weexLogId;
 
             logger.info(`AI log uploaded to WEEX: ${log.id}${weexLogId ? ` (logId: ${weexLogId})` : ''}`);
         } catch (error) {

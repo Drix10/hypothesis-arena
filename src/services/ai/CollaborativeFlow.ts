@@ -1,18 +1,16 @@
 /**
  * Collaborative Trading Flow v3.1.0
  * 
- * Implements the 8-stage pipeline with TURN-BY-TURN debates:
+ * Implements the 6-stage pipeline with TURN-BY-TURN debates:
  * 1. Market Scan - Fetch data for all coins
  * 2. Coin Selection Debate - 4 analysts
- * 3. Analysis Approach Debate - 4 analysts
- * 4. Risk Assessment Debate - 4 analysts
- * 5. Championship Debate - 8 analysts
- * 6. Risk Council - Karen approves/vetoes
- * 7. Execution - Place trade on WEEX
- * 8. Position Management - Monitor and adjust
+ * 3. Championship Debate - 8 analysts
+ * 4. Risk Council - Karen approves/vetoes
+ * 5. Execution - Place trade on WEEX
+ * 6. Position Management - Monitor and adjust
  * 
  * Turn counts configurable via config.debate.turnsPerAnalyst
- * Default: 2 turns/analyst = 40 total turns (8+8+8+16)
+ * Default: 2 turns/analyst = 24 total turns (8+16)
  */
 
 import { GoogleGenerativeAI, GenerativeModel, SchemaType } from '@google/generative-ai';
@@ -26,16 +24,14 @@ import {
 import {
     safePrice,
     safePercent,
-    formatPriceTargets
+    cleanSymbol
 } from '../../constants/prompts/promptHelpers';
 import {
     buildCoinSelectionContext,
-    buildAnalysisApproachContext,
-    buildRiskAssessmentContext,
     buildChampionshipContext,
     buildDebateTurnPrompt
 } from '../../constants/prompts/debateHelpers';
-import { buildManagePrompt } from '../../constants/prompts/managePrompts'; // FIXED: Moved to module level for better performance
+import { buildManagePrompt } from '../../constants/prompts/managePrompts';
 import type { ExtendedMarketData, AnalysisResult } from './GeminiService';
 
 // =============================================================================
@@ -186,6 +182,30 @@ const SPECIALIST_ANALYSIS_SCHEMA = {
 
 const AI_REQUEST_TIMEOUT = config.ai.requestTimeoutMs;
 const MAX_DEBATE_TURN_RETRIES = config.ai.maxRetries;
+
+// FIXED: Pre-compile regex patterns at module level to avoid repeated compilation
+// These patterns are used in coin/action extraction from debate arguments
+const MANAGE_PATTERNS = [
+    /\baction[:\s]+"?MANAGE"?/i,                    // action: "MANAGE"
+    /\brecommend(?:ing)?\s+(?:to\s+)?MANAGE\b/i,    // recommend MANAGE
+    /\bshould\s+MANAGE\b/i,                         // should MANAGE
+    /\bclose\s+(?:the\s+)?(?:entire\s+)?position\b/i, // close position
+    /\bclose\s+(?:the\s+)?(?:existing\s+)?(?:LONG|SHORT)\s+position/i, // close LONG/SHORT position
+    /\breduce\s+(?:the\s+)?(?:existing\s+)?position\b/i, // reduce position
+    /\bexit\s+(?:the\s+)?(?:existing\s+)?position\b/i,  // exit position
+    /\btake\s+(?:partial\s+)?profit(?:s)?\s+(?:on|from)\b/i, // take profits on/from
+    /\bcut\s+(?:the\s+)?loss(?:es)?\s+(?:on|now)\b/i,   // cut losses on/now
+    /\bmanage\s+(?:the\s+)?(?:existing\s+)?(?:open\s+)?position\b/i, // manage position
+    /\bclose\s+(?:out|it)\b/i,                      // close out / close it
+];
+
+const RECOMMEND_PATTERNS = [
+    /I\s+recommend\s+(LONG|SHORT)\b/i,
+    /recommend(?:ing)?\s+(LONG|SHORT)\b/i,
+    /position[:\s]+(LONG|SHORT)\b/i,
+    /go(?:ing)?\s+(LONG|SHORT)\b/i,
+    /action[:\s]+"?(LONG|SHORT|MANAGE)"?/i
+];
 
 // Validate config at module load
 if (config.debate.turnsPerAnalyst < 1) {
@@ -488,8 +508,13 @@ ${buildDebateTurnPrompt(analystName, analystMethodology, previousArguments, turn
         } finally {
             // CRITICAL: Always cancel timeout to prevent memory leak
             if (timeout) {
-                timeout.cancel();
-                timeout = null;
+                try {
+                    timeout.cancel();
+                } catch (cancelError) {
+                    logger.warn('Failed to cancel timeout:', cancelError);
+                } finally {
+                    timeout = null;
+                }
             }
         }
     }
@@ -1128,7 +1153,7 @@ export class CollaborativeFlowService {
         lines.push('');
 
         for (const [symbol, data] of marketDataMap) {
-            const displaySymbol = symbol.replace('cmt_', '').replace('usdt', '').toUpperCase();
+            const displaySymbol = cleanSymbol(symbol);
             const change = Number.isFinite(data.change24h)
                 ? (data.change24h >= 0 ? `+${data.change24h.toFixed(2)}%` : `${data.change24h.toFixed(2)}%`)
                 : 'N/A';
@@ -1359,6 +1384,18 @@ export class CollaborativeFlowService {
             throw new Error('Market data map is empty or invalid');
         }
 
+        // FIXED: Validate at least one entry has valid data
+        let validEntries = 0;
+        for (const [_symbol, data] of marketDataMap) {
+            if (Number.isFinite(data.currentPrice) && data.currentPrice > 0) {
+                validEntries++;
+            }
+        }
+
+        if (validEntries === 0) {
+            throw new Error(`Market data map has ${marketDataMap.size} entries but none have valid prices`);
+        }
+
         const model = this.getJsonModel(); // Use JSON model with structured outputs
         const marketSummary = this.buildMarketSummary(marketDataMap);
 
@@ -1368,9 +1405,9 @@ export class CollaborativeFlowService {
             fundingRate: number;
             fundingDirection: 'bullish' | 'bearish' | 'neutral';
         }> = [];
-        for (const [symbol, data] of marketDataMap) {
+        for (const [_symbol, data] of marketDataMap) {
             if (data.fundingRate !== undefined && Number.isFinite(data.fundingRate)) {
-                const displaySymbol = symbol.replace('cmt_', '').replace('usdt', '').toUpperCase();
+                const displaySymbol = cleanSymbol(_symbol);
                 let fundingDirection: 'bullish' | 'bearish' | 'neutral' = 'neutral';
                 if (data.fundingRate < -0.0001) fundingDirection = 'bullish';
                 else if (data.fundingRate > 0.0001) fundingDirection = 'bearish';
@@ -1411,6 +1448,27 @@ export class CollaborativeFlowService {
                     model, analyst.id, analyst.name, analyst.methodology,
                     turns, context, turnNumber, totalTurns, 2
                 );
+
+                // FIXED: Validate turn before adding to prevent crashes
+                if (!turn) {
+                    logger.error(`Failed to generate turn ${turnNumber} for ${analyst.name}`);
+                    throw new Error(`Debate turn generation failed for ${analyst.name}`);
+                }
+
+                if (!turn.argument || typeof turn.argument !== 'string' || turn.argument.trim().length < 50) {
+                    logger.error(`Invalid argument in turn ${turnNumber}: "${turn.argument}"`);
+                    throw new Error(`Debate turn has invalid argument (too short or empty)`);
+                }
+
+                if (!Number.isFinite(turn.strength) || turn.strength < 1 || turn.strength > 10) {
+                    logger.warn(`Invalid strength ${turn.strength} in turn ${turnNumber}, defaulting to 5`);
+                    turn.strength = 5;
+                }
+
+                if (turn.speaker !== analyst.id) {
+                    logger.warn(`Speaker mismatch: expected ${analyst.id}, got ${turn.speaker}`);
+                    turn.speaker = analyst.id;
+                }
 
                 turns.push(turn);
                 // Log full argument - no truncation
@@ -1460,36 +1518,13 @@ export class CollaborativeFlowService {
             throw new Error('No available coins for coin extraction');
         }
 
-        // Pre-compile regex patterns outside the loop to avoid memory churn
-        const managePatterns = [
-            /\baction[:\s]+"?MANAGE"?/i,                    // action: "MANAGE"
-            /\brecommend(?:ing)?\s+(?:to\s+)?MANAGE\b/i,    // recommend MANAGE
-            /\bshould\s+MANAGE\b/i,                         // should MANAGE
-            /\bclose\s+(?:the\s+)?(?:entire\s+)?position\b/i, // close position
-            /\bclose\s+(?:the\s+)?(?:existing\s+)?(?:LONG|SHORT)\s+position/i, // close LONG/SHORT position
-            /\breduce\s+(?:the\s+)?(?:existing\s+)?position\b/i, // reduce position
-            /\bexit\s+(?:the\s+)?(?:existing\s+)?position\b/i,  // exit position
-            /\btake\s+(?:partial\s+)?profit(?:s)?\s+(?:on|from)\b/i, // take profits on/from (more specific)
-            /\bcut\s+(?:the\s+)?loss(?:es)?\s+(?:on|now)\b/i,   // cut losses on/now (more specific)
-            /\bmanage\s+(?:the\s+)?(?:existing\s+)?(?:open\s+)?position\b/i, // manage position
-            /\bclose\s+(?:out|it)\b/i,                      // close out / close it
-        ];
-
-        const recommendPatterns = [
-            /I\s+recommend\s+(LONG|SHORT)\b/i,
-            /recommend(?:ing)?\s+(LONG|SHORT)\b/i,
-            /position[:\s]+(LONG|SHORT)\b/i,
-            /go(?:ing)?\s+(LONG|SHORT)\b/i,
-            /action[:\s]+"?(LONG|SHORT|MANAGE)"?/i
-        ];
-
         for (const turn of winnerTurns) {
             const arg = turn.argument || '';
 
             // First check for MANAGE action - look for explicit management intent
             // Use strict patterns to avoid false positives from general discussion
             if (!actionFound) {
-                for (const pattern of managePatterns) {
+                for (const pattern of MANAGE_PATTERNS) {
                     if (pattern.test(arg)) {
                         // Additional validation: ensure it's not just mentioning management in passing
                         // Check for action verbs: close, reduce, exit, cut, take profit, adjust, tighten
@@ -1533,7 +1568,7 @@ export class CollaborativeFlowService {
             // FIXED: Extract action FIRST before attempting coin extraction for MANAGE
             // This ensures action is set before we try to use it in conditional logic
             if (!actionFound) {
-                for (const pattern of recommendPatterns) {
+                for (const pattern of RECOMMEND_PATTERNS) {
                     const match = arg.match(pattern);
                     if (match) {
                         const extracted = match[1].toUpperCase();
@@ -1556,7 +1591,7 @@ export class CollaborativeFlowService {
                 // (e.g., "DOGE" before "DOG" if both existed)
                 const sortedPositions = [...positionSymbols].sort((a, b) => b.length - a.length);
                 for (const posSymbol of sortedPositions) {
-                    const posName = posSymbol.replace('cmt_', '').replace('usdt', '').toUpperCase();
+                    const posName = cleanSymbol(posSymbol);
                     // Use word boundary for more precise matching
                     const posRegex = new RegExp(`\\b${posName}\\b`, 'i');
                     if (posRegex.test(arg)) {
@@ -1608,286 +1643,24 @@ export class CollaborativeFlowService {
 
 
     // =========================================================================
-    // STAGE 3: ANALYSIS APPROACH DEBATE
+    // STAGE 3: CHAMPIONSHIP DEBATE
     // =========================================================================
 
     /**
-     * Stage 3: Analysis Approach Debate
-     * 4 analysts (Warren, Cathie, Jim, Quant) debate HOW to analyze the coin
-     * TURN-BY-TURN generation, 8 total turns
-     */
-    async runAnalysisApproachDebate(
-        coinSymbol: string,
-        marketData: ExtendedMarketData,
-        direction: 'LONG' | 'SHORT',
-        previousWinnerIds: string[] = []
-    ): Promise<{ winner: string; approach: AnalysisResult; debate: FourWayDebateResult }> {
-        logger.info(`Stage 3: Analysis Approach Debate for ${coinSymbol} (${4 * config.debate.turnsPerAnalyst} turns)...`);
-
-        if (!marketData || !Number.isFinite(marketData.currentPrice)) {
-            throw new Error('Invalid market data provided');
-        }
-
-        const model = this.getJsonModel(); // Use JSON model with structured outputs
-
-        // 4 analysts for analysis approach
-        const analystIds = ['warren', 'cathie', 'jim', 'quant'];
-        const analysts = analystIds.map(id => {
-            const methodology = Object.keys(ANALYST_PROFILES).find(
-                m => ANALYST_PROFILES[m as AnalystMethodology].id === id
-            ) as AnalystMethodology | undefined;
-            return methodology ? ANALYST_PROFILES[methodology] : null;
-        }).filter((a): a is typeof ANALYST_PROFILES[AnalystMethodology] => a !== null);
-
-        if (analysts.length !== 4) {
-            throw new Error(`Failed to load all 4 analysis approach analysts. Got ${analysts.length}`);
-        }
-
-        const displaySymbol = coinSymbol.replace('cmt_', '').replace('usdt', '').toUpperCase();
-        const priceStr = safePrice(marketData.currentPrice);
-        const changeStr = safePercent(marketData.change24h, 2, true);
-
-        // Pass full market data to context builder
-        const context = buildAnalysisApproachContext(displaySymbol, direction, priceStr, changeStr, {
-            volume24h: marketData.volume24h,
-            fundingRate: marketData.fundingRate,
-            high24h: marketData.high24h,
-            low24h: marketData.low24h
-        });
-        const turns: DebateTurn[] = [];
-        const turnsPerAnalyst = config.debate.turnsPerAnalyst;
-        const totalTurns = analysts.length * turnsPerAnalyst;
-
-        for (let round = 0; round < turnsPerAnalyst; round++) {
-            for (const analyst of analysts) {
-                const turnNumber = turns.length + 1;
-                logger.info(`[Turn ${turnNumber}/${totalTurns}] ${analyst.name} speaking...`);
-
-                const turn = await generateDebateTurn(
-                    model, analyst.id, analyst.name, analyst.methodology,
-                    turns, context, turnNumber, totalTurns, 3
-                );
-
-                turns.push(turn);
-                // Log full argument - no truncation
-                logger.info(`[Turn ${turnNumber}/${totalTurns}] ${analyst.name} (strength: ${turn.strength}/10):`);
-                logger.info(`  ${turn.argument}`);
-
-                await new Promise(resolve => setTimeout(resolve, config.debate.turnDelayMs));
-            }
-        }
-
-        const scores = calculateDebateScores(turns, analystIds);
-        const winner = determineDebateWinner(scores, turns, previousWinnerIds);
-
-        // Validate winner was determined
-        if (!winner) {
-            logger.error('Failed to determine analysis approach debate winner');
-            throw new Error('Could not determine debate winner');
-        }
-
-        const winningArguments = extractWinningArguments(winner, turns);
-
-        const winnerScore = scores[winner];
-        const winnerAnalyst = analysts.find(a => a.id === winner);
-        const reasoning = `${winnerAnalyst?.name || winner} won with total score ${winnerScore?.total || 0}/100`;
-
-        logger.info(`\n${'='.repeat(60)}`);
-        logger.info(`🔬 ANALYSIS APPROACH DEBATE COMPLETE`);
-        logger.info(`Winner: ${winner} | Score: ${winnerScore?.total || 0}/100`);
-        logger.info(`${'='.repeat(60)}\n`);
-
-        // Generate winner's full analysis
-        const winnerAnalysis = await this.generateSpecialistAnalysis(winner, marketData, direction);
-
-        if (!winnerAnalysis) {
-            throw new Error(`Could not generate analysis for winner ${winner}`);
-        }
-
-        logger.info(`Stage 3 complete: ${winner} won with their analytical approach`);
-
-        return {
-            winner,
-            approach: winnerAnalysis,
-            debate: { turns, winner, scores, reasoning, winningArguments }
-        };
-    }
-
-    // =========================================================================
-    // STAGE 4: RISK ASSESSMENT DEBATE
-    // =========================================================================
-
-    /**
-     * Stage 4: Risk Assessment Debate
-     * 4 analysts (Karen, Warren, Devil, Ray) debate position sizing & risk
-     * TURN-BY-TURN generation, 8 total turns
-     */
-    async runRiskAssessmentDebate(
-        coinSymbol: string,
-        proposedThesis: AnalysisResult,
-        marketData: ExtendedMarketData,
-        previousWinnerIds: string[] = []
-    ): Promise<{ winner: string; riskFramework: AnalysisResult; debate: FourWayDebateResult }> {
-        logger.info(`Stage 4: Risk Assessment Debate for ${coinSymbol} (${4 * config.debate.turnsPerAnalyst} turns)...`);
-
-        if (!marketData || !Number.isFinite(marketData.currentPrice)) {
-            throw new Error('Invalid market data provided');
-        }
-        if (!proposedThesis) {
-            throw new Error('Proposed thesis is required');
-        }
-        if (!proposedThesis.priceTarget) {
-            throw new Error('Proposed thesis must have price targets');
-        }
-
-        const model = this.getJsonModel(); // Use JSON model with structured outputs
-
-        // 4 analysts for risk assessment
-        const analystIds = ['karen', 'warren', 'devil', 'ray'];
-        const analysts = analystIds.map(id => {
-            const methodology = Object.keys(ANALYST_PROFILES).find(
-                m => ANALYST_PROFILES[m as AnalystMethodology].id === id
-            ) as AnalystMethodology | undefined;
-            return methodology ? ANALYST_PROFILES[methodology] : null;
-        }).filter((a): a is typeof ANALYST_PROFILES[AnalystMethodology] => a !== null);
-
-        if (analysts.length !== 4) {
-            throw new Error(`Failed to load all 4 risk assessment analysts. Got ${analysts.length}`);
-        }
-
-        const displaySymbol = coinSymbol.replace('cmt_', '').replace('usdt', '').toUpperCase();
-        const priceStr = safePrice(marketData.currentPrice);
-        const priceTargets = formatPriceTargets(proposedThesis.priceTarget);
-
-        // Determine direction from recommendation
-        const direction: 'LONG' | 'SHORT' =
-            proposedThesis.recommendation === 'strong_sell' || proposedThesis.recommendation === 'sell'
-                ? 'SHORT' : 'LONG';
-
-        // Pass full market data and direction to context builder
-        const context = buildRiskAssessmentContext(
-            displaySymbol,
-            { ...proposedThesis, direction },
-            priceStr,
-            priceTargets,
-            {
-                volume24h: marketData.volume24h,
-                fundingRate: marketData.fundingRate,
-                high24h: marketData.high24h,
-                low24h: marketData.low24h,
-                change24h: marketData.change24h
-            }
-        );
-        const turns: DebateTurn[] = [];
-        const turnsPerAnalyst = config.debate.turnsPerAnalyst;
-        const totalTurns = analysts.length * turnsPerAnalyst;
-
-        for (let round = 0; round < turnsPerAnalyst; round++) {
-            for (const analyst of analysts) {
-                const turnNumber = turns.length + 1;
-                logger.info(`[Turn ${turnNumber}/${totalTurns}] ${analyst.name} speaking...`);
-
-                const turn = await generateDebateTurn(
-                    model, analyst.id, analyst.name, analyst.methodology,
-                    turns, context, turnNumber, totalTurns, 4
-                );
-
-                turns.push(turn);
-                // Log full argument - no truncation
-                logger.info(`[Turn ${turnNumber}/${totalTurns}] ${analyst.name} (strength: ${turn.strength}/10):`);
-                logger.info(`  ${turn.argument}`);
-
-                await new Promise(resolve => setTimeout(resolve, config.debate.turnDelayMs));
-            }
-        }
-
-        const scores = calculateDebateScores(turns, analystIds);
-        const winner = determineDebateWinner(scores, turns, previousWinnerIds);
-
-        // Validate winner was determined
-        if (!winner) {
-            logger.error('Failed to determine risk assessment debate winner');
-            throw new Error('Could not determine debate winner');
-        }
-
-        const winningArguments = extractWinningArguments(winner, turns);
-
-        const winnerScore = scores[winner];
-        const winnerAnalyst = analysts.find(a => a.id === winner);
-        const reasoning = `${winnerAnalyst?.name || winner} won with total score ${winnerScore?.total || 0}/100`;
-
-        logger.info(`\n${'='.repeat(60)}`);
-        logger.info(`🛡️ RISK ASSESSMENT DEBATE COMPLETE`);
-        logger.info(`Winner: ${winner} | Score: ${winnerScore?.total || 0}/100`);
-        logger.info(`${'='.repeat(60)}\n`);
-
-        // Extract risk adjustments from winner's arguments
-        const winnerTurns = turns.filter(t => t.speaker === winner);
-        let adjustedPositionSize = proposedThesis.positionSize;
-        let adjustedRiskLevel = proposedThesis.riskLevel;
-
-        for (const turn of winnerTurns) {
-            const sizeMatch = turn.argument.match(/position\s*(?:size)?[:\s]*(\d+)(?:\/10)?/i);
-            if (sizeMatch) {
-                const suggestedSize = parseInt(sizeMatch[1], 10);
-                if (suggestedSize >= 1 && suggestedSize <= 10) {
-                    adjustedPositionSize = suggestedSize;
-                }
-            }
-
-            if (winner === 'karen') {
-                if (adjustedPositionSize > 7) adjustedPositionSize = 7;
-                adjustedRiskLevel = 'medium';
-            } else if (winner === 'devil') {
-                if (turn.argument.toLowerCase().includes('aggressive')) {
-                    adjustedRiskLevel = 'high';
-                }
-            }
-        }
-
-        const riskFramework: AnalysisResult = {
-            ...proposedThesis,
-            analystId: winner,
-            analystName: analysts.find(a => a.id === winner)?.name || proposedThesis.analystName,
-            positionSize: adjustedPositionSize,
-            riskLevel: adjustedRiskLevel
-        };
-
-        logger.info(`Stage 4 complete: ${winner} won (position: ${adjustedPositionSize}/10, risk: ${adjustedRiskLevel})`);
-
-        return {
-            winner,
-            riskFramework,
-            debate: { turns, winner, scores, reasoning, winningArguments }
-        };
-    }
-
-
-    // =========================================================================
-    // STAGE 5: CHAMPIONSHIP DEBATE
-    // =========================================================================
-
-    /**
-     * Stage 5: Championship Debate
+     * Stage 3: Championship Debate
      * ALL 8 analysts compete in a championship debate
      * TURN-BY-TURN generation, 16 total turns
      * Winner's thesis gets executed as a real trade
-     * 
-     * ENHANCED: Now accepts winning arguments from previous stages
      */
     async runChampionshipDebate(
         coinSymbol: string,
         marketData: ExtendedMarketData,
         previousWinners: {
             coinSelector: string;
-            analysisApproach: string;
-            riskAssessment: string;
             coinSelectorArgument?: string;
-            analysisApproachArgument?: string;
-            riskAssessmentArgument?: string;
         }
     ): Promise<{ champion: AnalysisResult; debate: ChampionshipDebateResult }> {
-        logger.info(`Stage 5: Championship Debate for ${coinSymbol} (${8 * config.debate.turnsPerAnalyst} turns - ALL 8 analysts)...`);
+        logger.info(`Stage 3: Championship Debate for ${coinSymbol} (${8 * config.debate.turnsPerAnalyst} turns - ALL 8 analysts)...`);
 
         // Validate inputs
         if (!coinSymbol || typeof coinSymbol !== 'string') {
@@ -1903,11 +1676,7 @@ export class CollaborativeFlowService {
         // Provide defaults for missing previous winners
         const safeWinners = {
             coinSelector: previousWinners.coinSelector || 'Unknown',
-            analysisApproach: previousWinners.analysisApproach || 'Unknown',
-            riskAssessment: previousWinners.riskAssessment || 'Unknown',
-            coinSelectorArgument: previousWinners.coinSelectorArgument,
-            analysisApproachArgument: previousWinners.analysisApproachArgument,
-            riskAssessmentArgument: previousWinners.riskAssessmentArgument
+            coinSelectorArgument: previousWinners.coinSelectorArgument
         };
 
         const model = this.getJsonModel(); // Use JSON model with structured outputs
@@ -1918,7 +1687,7 @@ export class CollaborativeFlowService {
             throw new Error(`Expected 8 analysts, got ${allAnalysts.length}`);
         }
 
-        const displaySymbol = coinSymbol.replace('cmt_', '').replace('usdt', '').toUpperCase();
+        const displaySymbol = cleanSymbol(coinSymbol);
         const priceStr = safePrice(marketData.currentPrice);
         const changeStr = safePercent(marketData.change24h, 2, true);
 
@@ -1961,7 +1730,7 @@ export class CollaborativeFlowService {
         }
 
         const scores = calculateDebateScores(turns, analystIds);
-        const winner = determineDebateWinner(scores, turns, [safeWinners.coinSelector, safeWinners.analysisApproach, safeWinners.riskAssessment].filter(Boolean) as string[]);
+        const winner = determineDebateWinner(scores, turns, [safeWinners.coinSelector].filter(Boolean) as string[]);
 
         // Validate winner was determined
         if (!winner) {
@@ -2059,7 +1828,7 @@ export class CollaborativeFlowService {
             throw new Error(`Could not generate analysis for champion ${winner}`);
         }
 
-        logger.info(`Stage 5 complete: ${winner} is the CHAMPION! 🏆`);
+        logger.info(`Stage 3 complete: ${winner} is the CHAMPION! 🏆`);
 
         return {
             champion: championAnalysis,
@@ -2068,11 +1837,11 @@ export class CollaborativeFlowService {
     }
 
     // =========================================================================
-    // STAGE 6: RISK COUNCIL (Karen's Final Review)
+    // STAGE 4: RISK COUNCIL (Karen's Final Review)
     // =========================================================================
 
     /**
-     * Stage 6: Risk Council
+     * Stage 4: Risk Council
      * Karen reviews and approves/vetoes the trade
      * 
      * Updated signature to accept entryPrice and unrealizedPnl for positions
@@ -2084,7 +1853,7 @@ export class CollaborativeFlowService {
         currentPositions: Array<{ symbol: string; side: string; size: number; entryPrice?: number; unrealizedPnl?: number }>,
         recentPnL: { day: number; week: number }
     ): Promise<RiskCouncilDecision> {
-        logger.info('Stage 6: Risk Council review...');
+        logger.info('Stage 4: Risk Council review...');
 
         // Validate inputs
         if (!champion) {
@@ -2161,7 +1930,7 @@ export class CollaborativeFlowService {
                     } : undefined
                 };
 
-                logger.info(`Stage 6 complete: ${decision.approved ? 'APPROVED ✅' : 'VETOED ❌'}`);
+                logger.info(`Stage 4 complete: ${decision.approved ? 'APPROVED ✅' : 'VETOED ❌'}`);
                 return decision;
             } catch (error) {
                 lastError = error instanceof Error ? error : new Error(String(error));
@@ -2187,9 +1956,11 @@ export class CollaborativeFlowService {
     }
 
     /**
-     * Stage 6: Position Management Decision
+     * Position Management Decision (MANAGE Action from Stage 2)
      * Karen (Risk Manager) decides how to manage an existing position
      * 
+     * This is called when Stage 2 selects MANAGE action instead of LONG/SHORT.
+     * It bypasses stages 3-4 and goes directly to position management.
      * @param position - Current position to manage
      * @param marketDataMap - Current market data for all symbols
      * @returns Management decision with action type and parameters
@@ -2217,7 +1988,7 @@ export class CollaborativeFlowService {
         marginAmount?: number;
     }> {
         logger.info(`\n${'='.repeat(60)}`);
-        logger.info(`🛡️ STAGE 6: POSITION MANAGEMENT DECISION`);
+        logger.info(`🛡️ POSITION MANAGEMENT DECISION (MANAGE Action)`);
         logger.info(`${'='.repeat(60)}\n`);
 
         // Get Karen's profile (Risk Manager)

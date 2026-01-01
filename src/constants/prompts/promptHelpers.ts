@@ -89,6 +89,26 @@ export function safePercent(value: number | undefined | null, decimals: number =
 }
 
 /**
+ * Clean WEEX symbol format to display format
+ * OPTIMIZED: Single regex pass instead of multiple replace() calls
+ * 
+ * Examples:
+ * - "cmt_btcusdt" → "BTC"
+ * - "CMT_ETHUSDT" → "ETH"
+ * - "cmt_solusdt" → "SOL"
+ * 
+ * @param symbol - WEEX symbol format (e.g., "cmt_btcusdt")
+ * @returns Clean uppercase symbol (e.g., "BTC")
+ */
+export function cleanSymbol(symbol: string | undefined | null): string {
+    if (!symbol || typeof symbol !== 'string') return 'UNKNOWN';
+
+    // Single regex with capture group: matches "cmt_XXXusdt" and extracts XXX
+    const match = symbol.match(/^cmt_(.+?)usdt$/i);
+    return match ? match[1].toUpperCase() : symbol.toUpperCase();
+}
+
+/**
  * Sanitize string for safe inclusion in prompts
  * Removes control characters and limits length
  * 

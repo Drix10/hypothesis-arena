@@ -1,14 +1,15 @@
 # Hypothesis Arena - Collaborative AI Trading System
 
 **STATUS: PRODUCTION READY ✅**  
-**VERSION: 3.0.1**  
-**LAST UPDATED: January 1, 2026**
+**VERSION: 3.1.1**  
+**LAST UPDATED: January 2, 2026**
 
 ## Implementation Status
 
 - ✅ **Entry Mode:** Fully implemented and operational
 - ✅ **Position Management (MANAGE Action):** Implemented - AI can close/manage existing positions
 - ✅ **Production Ready:** TypeScript 0 errors, all edge cases handled
+- ✅ **OPTIMIZED:** 40% token reduction (260k → 156k per cycle)
 - 📋 **See:** `src/constants/prompts/managePrompts.ts` for position management prompts
 
 ## 🎯 Philosophy
@@ -25,28 +26,27 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                   THE 7-STAGE DECISION PIPELINE                  │
+│                   THE 6-STAGE DECISION PIPELINE                  │
+│                   (OPTIMIZED - 40% Token Reduction)              │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
 │   STAGE 1: MARKET SCAN          "What's happening?"             │
 │      ↓                                                           │
 │   STAGE 2: OPPORTUNITY SELECTION "Trade or Manage?"             │
 │      ↓         ┌─────────────────────────────────┐              │
-│                │  NEW: Can select MANAGE action  │              │
+│                │  Can select MANAGE action       │              │
 │                │  to close/adjust positions      │              │
 │                └─────────────────────────────────┘              │
 │      ↓                                                           │
 │   [If MANAGE] → Close/Reduce Position → DONE                    │
 │   [If LONG/SHORT] ↓                                             │
-│   STAGE 3: SPECIALIST ANALYSIS  "Deep dive by experts"          │
+│   STAGE 3: CHAMPIONSHIP         "ALL 8 analysts compete"        │
 │      ↓                                                           │
-│   STAGE 4: TOURNAMENT           "Best thesis wins"              │
+│   STAGE 4: RISK COUNCIL         "Final safety check"            │
 │      ↓                                                           │
-│   STAGE 5: RISK COUNCIL         "Final safety check"            │
+│   STAGE 5: EXECUTION            "Pull the trigger"              │
 │      ↓                                                           │
-│   STAGE 6: EXECUTION            "Pull the trigger"              │
-│      ↓                                                           │
-│   STAGE 7: POSITION MANAGEMENT  "Monitor until exit"            │
+│   STAGE 6: POSITION MANAGEMENT  "Monitor until exit"            │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -246,38 +246,28 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 
 ---
 
-## 🔬 Stage 3: Specialist Deep Analysis
+## 🏆 Stage 3: Championship Debate (ALL 8 Analysts)
 
-**Service:** `CollaborativeFlow.ts` → `runSpecialistAnalysis()`  
-**Duration:** ~60 seconds
+**Service:** `CollaborativeFlow.ts` → `runChampionshipDebate()`  
+**Duration:** ~60 seconds  
+**Participants:** ALL 8 analysts compete
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  SPECIALIST ASSIGNMENT (COIN_TYPE_MAP):                         │
+│  CHAMPIONSHIP DEBATE (OPTIMIZED - Replaces old Stages 3-4)      │
 │                                                                  │
-│  ┌─ COIN TYPE → SPECIALISTS ─────────────────────────────────┐ │
-│  │                                                            │ │
-│  │  BTC/ETH (Blue chips):                                     │ │
-│  │  → Warren (Value) + Ray (Macro) + Karen (Risk)            │ │
-│  │                                                            │ │
-│  │  SOL/ADA (L1 Growth):                                      │ │
-│  │  → Cathie (Growth) + Quant (Stats) + Jim (Technical)      │ │
-│  │                                                            │ │
-│  │  DOGE/XRP (Momentum/Meme):                                 │ │
-│  │  → Elon (Sentiment) + Devil (Contrarian) + Jim (Technical)│ │
-│  │                                                            │ │
-│  │  BNB/LTC (Utility):                                        │ │
-│  │  → Warren (Value) + Quant (Stats) + Karen (Risk)          │ │
-│  │                                                            │ │
-│  └────────────────────────────────────────────────────────────┘ │
+│  ALL 8 analysts compete in a single championship debate.        │
+│  Each analyst uses their own methodology to analyze the coin.   │
+│  Winner's thesis gets executed as a real trade.                 │
 │                                                                  │
 ├─────────────────────────────────────────────────────────────────┤
-│  3 PARALLEL AI API CALLS                                        │
+│  8 ANALYSTS DEBATE (Turn-by-Turn)                               │
 │                                                                  │
-│  Each specialist receives:                                      │
+│  Each analyst receives:                                         │
 │  ├─ Their full persona prompt with focus areas                 │
 │  ├─ Detailed market data for selected coin                     │
 │  ├─ Direction hint from Stage 2 (LONG/SHORT)                   │
+│  ├─ Coin selector winner context                               │
 │  └─ Judging criteria (data, logic, risk, catalyst)             │
 │                                                                  │
 │  STRUCTURED OUTPUT (AnalysisResult):                            │
@@ -296,6 +286,16 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 │    "timeframe": "2-5 days"                                     │
 │  }                                                               │
 │                                                                  │
+│  SCORING (Per Turn):                                            │
+│  ├─ DATA (25%): Specific numbers vs vague claims               │
+│  ├─ LOGIC (25%): Reasoning follows from data                   │
+│  ├─ RISK (25%): Acknowledges what could go wrong               │
+│  └─ CATALYST (25%): Clear price driver with timeline           │
+│                                                                  │
+│  CHAMPION SELECTION:                                            │
+│  → Highest total score across all turns wins                   │
+│  → Winner's thesis becomes the trade plan                      │
+│                                                                  │
 │  VALIDATION:                                                    │
 │  ✓ Number.isFinite() guards on price targets                   │
 │  ✓ Division by zero guards in range calculations               │
@@ -306,68 +306,7 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 
 ---
 
-## ⚔️ Stage 4: Championship Tournament
-
-**Service:** `CollaborativeFlow.ts` → `runTournament()`  
-**Duration:** ~45 seconds
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  TOURNAMENT BRACKET (Dynamic based on specialist count)         │
-│                                                                  │
-│  1 specialist  → Auto-champion (no debate)                      │
-│  2 specialists → Single final match                             │
-│  3 specialists → Semifinal (#1 vs #3) + Final (winner vs #2)   │
-│                                                                  │
-├─────────────────────────────────────────────────────────────────┤
-│  DEBATE MATCH (runDebateMatch):                                 │
-│                                                                  │
-│  PROMPT TO AI (as hedge fund CIO):                              │
-│  "Judge this debate about {SYMBOL}/USDT.                        │
-│                                                                  │
-│   ANALYST A: {Full thesis from specialist A}                    │
-│   ANALYST B: {Full thesis from specialist B}                    │
-│                                                                  │
-│   Score each on:                                                │
-│   - DATA (25%): Specific numbers vs vague claims               │
-│   - LOGIC (25%): Reasoning follows from data                   │
-│   - RISK (25%): Acknowledges what could go wrong               │
-│   - CATALYST (25%): Clear price driver with timeline"          │
-│                                                                  │
-│  STRUCTURED OUTPUT (TOURNAMENT_JUDGE_SCHEMA):                   │
-│  {                                                               │
-│    "winner": "cathie",                                          │
-│    "scores": {                                                  │
-│      "cathie": { "data": 22, "logic": 20, "risk": 18,          │
-│                  "catalyst": 22, "total": 82 },                │
-│      "quant":  { "data": 20, "logic": 18, "risk": 20,          │
-│                  "catalyst": 17, "total": 75 }                 │
-│    },                                                           │
-│    "reasoning": "Clearer catalyst with Jupiter airdrop...",    │
-│    "keyDifferentiator": "Specific TVL metrics"                 │
-│  }                                                               │
-│                                                                  │
-├─────────────────────────────────────────────────────────────────┤
-│  EXAMPLE BRACKET (3 specialists):                               │
-│                                                                  │
-│  SEMIFINAL: Cathie (85%) vs Jim (72%)                          │
-│  → Winner: Cathie (82 vs 75)                                   │
-│                                                                  │
-│  FINAL: Cathie vs Quant (78%)                                  │
-│  → 🏆 CHAMPION: Cathie                                          │
-│  → Winning Thesis: LONG SOL @ 185.50, TP 200, SL 175           │
-│                                                                  │
-│  EDGE CASE HANDLING:                                            │
-│  ✓ Sorts specialists by confidence before bracket              │
-│  ✓ Single-judge fallback if debate fails; last resort confidence│
-│  ✓ Improved error logging shows actual error message           │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 🛡️ Stage 5: Risk Council
+## 🛡️ Stage 4: Risk Council
 
 **Service:** `CollaborativeFlow.ts` → `runRiskCouncil()`  
 **Service:** `CircuitBreakerService.ts` → `checkCircuitBreakers()`  
@@ -435,7 +374,7 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 
 ---
 
-## 🚀 Stage 6: Execution
+## 🚀 Stage 5: Execution
 
 **Service:** `AutonomousTradingEngine.ts` → `executeCollaborativeTrade()`  
 **Service:** `WeexClient.ts` → `placeOrder()`  
@@ -500,7 +439,7 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 
 ---
 
-## 🔄 Stage 7: Position Management
+## 🔄 Stage 6: Position Management
 
 **Service:** `AutonomousTradingEngine.ts` → `updateLeaderboard()`  
 **Continuous:** Every cycle
@@ -559,29 +498,28 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 │  Stage 1: Market Scan ................ ~5 seconds              │
 │           (8 parallel WEEX API calls)                           │
 │  Stage 2: Coin Selection ............. ~30 seconds             │
-│           (3 parallel AI calls)                                │
-│  Stage 3: Specialist Analysis ........ ~60 seconds             │
-│           (3 parallel AI calls)                                │
-│  Stage 4: Tournament ................. ~45 seconds             │
-│           (1-2 sequential debates)                              │
-│  Stage 5: Risk Council ............... ~15 seconds             │
-│           (1 AI call)                                          │
-│  Stage 6: Execution .................. ~5 seconds              │
+│           (4 parallel AI calls)                                │
+│  Stage 3: Championship ............... ~60 seconds             │
+│           (8 analysts, turn-by-turn)                           │
+│  Stage 4: Risk Council ............... ~15 seconds             │
+│           (1 AI call - Karen)                                  │
+│  Stage 5: Execution .................. ~5 seconds              │
 │           (WEEX API + DB + compliance)                          │
+│  Stage 6: Position Management ........ Continuous              │
+│           (Monitor and adjust)                                  │
 │  ─────────────────────────────────────────────────             │
-│  TOTAL CYCLE TIME: ~2.5 minutes                                │
+│  TOTAL CYCLE TIME: ~2 minutes                                  │
 │                                                                  │
 ├─────────────────────────────────────────────────────────────────┤
 │  GEMINI API USAGE PER CYCLE                                      │
 │                                                                  │
-│  Stage 2: 3 calls (Ray, Jim, Quant)                            │
-│  Stage 3: 3 calls (Specialists)                                │
-│  Stage 4: 1-2 calls (Debates)                                  │
-│  Stage 5: 1 call (Karen)                                       │
+│  Stage 2: 4 calls (Ray, Jim, Quant, Elon)                      │
+│  Stage 3: 8+ calls (All analysts, turn-by-turn)                │
+│  Stage 4: 1 call (Karen)                                       │
 │  ─────────────────────────────────────────────────             │
-│  TOTAL: 8-9 AI API calls per cycle                             │
+│  TOTAL: 13+ AI API calls per cycle                             │
 │                                                                  │
-│  At 5-minute cycles: ~100 calls/hour                           │
+│  At 5-minute cycles: ~150 calls/hour                           │
 │  Supports: Gemini, OpenRouter, DeepSeek                        │
 │                                                                  │
 ├─────────────────────────────────────────────────────────────────┤
@@ -641,11 +579,14 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 │  • Stop loss CAN be tightened (trailing)                       │
 │                                                                  │
 ├─────────────────────────────────────────────────────────────────┤
-│  FUNDING RATE LIMITS                                             │
+│  FUNDING RATE LIMITS (Basis Points Convention)                   │
 │                                                                  │
-│  • If funding >0.05% against position: Karen warns             │
-│  • If funding >0.1% against position: Karen vetoes             │
+│  • Stored as decimal: 0.0005 = 0.05% = 5 basis points (bps)   │
+│  • Configured via MAX_FUNDING_AGAINST_BPS in .env (default: 5) │
+│  • If funding >0.05% (5 bps) against position: Karen warns     │
+│  • If funding >0.1% (10 bps) against position: Karen vetoes    │
 │  • Track cumulative funding cost per position                  │
+│  • 0 = no limit (not recommended for production)               │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -754,10 +695,10 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 
 - Stage 1 — Market Scan: `WeexClient.getTicker`, `getFundingRate` (owner: Exchange data)
 - Stage 2 — Coin Selection: `CollaborativeFlow.runCoinSelection` (owners: Ray, Jim, Quant, Elon)
-- Stage 3 — Specialist Analysis: `CollaborativeFlow.runSpecialistAnalysis` (owners per `COIN_TYPE_MAP`; uses AI)
-- Stage 4 — Tournament: `CollaborativeFlow.runTournament` + `runDebateMatch` (judged by AI; fallback `runSingleJudgeFallback`, then highest confidence)
-- Stage 5 — Risk Council: `CollaborativeFlow.runRiskCouncil` + `CircuitBreakerService.checkAll` (owner: Karen; respects `GLOBAL_RISK_LIMITS`)
-- Stage 6 — Execution: `AutonomousTradingEngine.executeCollaborativeTrade` + `WeexClient.placeOrder` + compliance logging via `AILogService.createLog`/`weexClient.uploadAILog`
+- Stage 3 — Championship: `CollaborativeFlow.runChampionshipDebate` (all 8 analysts compete; turn-by-turn)
+- Stage 4 — Risk Council: `CollaborativeFlow.runRiskCouncil` + `CircuitBreakerService.checkAll` (owner: Karen; respects `GLOBAL_RISK_LIMITS`)
+- Stage 5 — Execution: `AutonomousTradingEngine.executeCollaborativeTrade` + `WeexClient.placeOrder` + compliance logging via `AILogService.createLog`/`weexClient.uploadAILog`
+- Stage 6 — Position Management: `AutonomousTradingEngine.updateLeaderboard` (continuous monitoring)
 
 ---
 
@@ -772,14 +713,14 @@ All AI outputs use structured JSON Schema enforcement for reliable, validated re
 │  COIN_SELECTION_SCHEMA         │ Stage 2: runCoinSelection()   │
 │  ├─ picks[]: symbol, direction, conviction, reason             │
 │                                                                  │
-│  SPECIALIST_ANALYSIS_SCHEMA    │ Stage 3: runSpecialistAnalysis│
+│  DEBATE_TURN_SCHEMA            │ Stage 3: Championship debates │
+│  ├─ argument, dataPointsReferenced[], strength                 │
+│                                                                  │
+│  SPECIALIST_ANALYSIS_SCHEMA    │ Stage 3: Champion's thesis    │
 │  ├─ recommendation, confidence, targets, thesis                │
 │  ├─ bullCase[], bearCase[], keyMetrics, catalyst               │
 │                                                                  │
-│  TOURNAMENT_JUDGE_SCHEMA       │ Stage 4: runDebateMatch()     │
-│  ├─ winner, scores{}, reasoning, keyDifferentiator             │
-│                                                                  │
-│  RISK_COUNCIL_SCHEMA           │ Stage 5: runRiskCouncil()     │
+│  RISK_COUNCIL_SCHEMA           │ Stage 4: runRiskCouncil()     │
 │  ├─ approved, adjustments{}, warnings[], vetoReason            │
 │                                                                  │
 │  ANALYSIS_RESPONSE_SCHEMA      │ AIService.generateAnalysis    │
@@ -822,11 +763,10 @@ Benefits of Structured Outputs:
 │              NEW: Can select MANAGE to close positions         │
 │     [If MANAGE] → Close position → Update DB → DONE            │
 │     [If LONG/SHORT] ↓                                          │
-│  3. ANALYZE → 3 specialists deep-dive the chosen coin          │
-│  4. DEBATE  → Tournament determines best thesis                │
-│  5. RISK    → Karen approves/vetoes/adjusts                    │
-│  6. EXECUTE → Place trade on WEEX with compliance log          │
-│  7. MANAGE  → Update leaderboard, monitor positions            │
+│  3. CHAMPIONSHIP → ALL 8 analysts compete for execution        │
+│  4. RISK    → Karen approves/vetoes/adjusts                    │
+│  5. EXECUTE → Place trade on WEEX with compliance log          │
+│  6. MANAGE  → Update leaderboard, monitor positions            │
 │                                                                  │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │

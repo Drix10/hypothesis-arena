@@ -483,7 +483,7 @@ import type { AnalystAgent } from '../analyst/types';
 
 /**
  * Build complete management prompt for Karen (Risk Manager)
- * Used in Stage 6: Position Management Decision
+ * Used when MANAGE action is selected in Stage 2
  * 
  * FIXED Issue 14: Replaced 'any' types with proper interfaces
  * 
@@ -548,14 +548,14 @@ PRIORITY DIRECTIVE - STAGE OVERRIDES
 • Output MUST match the specified JSON structure
 
 ═══════════════════════════════════════════════════════════════════════════════
-COLLABORATIVE FLOW - STAGE 6: POSITION MANAGEMENT
+COLLABORATIVE FLOW - POSITION MANAGEMENT (MANAGE Action)
 ═══════════════════════════════════════════════════════════════════════════════
 
 You are ${profile.name} - THE RISK MANAGER deciding how to manage an existing position.
 
-This is Stage 6 of the Hypothesis Arena collaborative pipeline:
+This is the Position Management flow (triggered by MANAGE action in Stage 2):
 - Stage 2 (Coin Selection): Analysts selected MANAGE for this position
-- Stage 6 (YOU ARE HERE): Decide the specific management action
+- Position Management (YOU ARE HERE): Decide the specific management action
 
 Your job is to PROTECT THE PORTFOLIO using your full risk management methodology.
 

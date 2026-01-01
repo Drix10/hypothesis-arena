@@ -56,8 +56,6 @@ export * from './promptTypes';
 export { DEBATE_CONTEXTS, DEBATE_TURN_INSTRUCTIONS } from './debateContexts';
 export {
     buildCoinSelectionContext,
-    buildAnalysisApproachContext,
-    buildRiskAssessmentContext,
     buildChampionshipContext,
     buildDebateTurnPrompt
 } from './debateHelpers';

@@ -5,6 +5,17 @@
  * These provide the debate framework and judging criteria.
  * 
  * All debate contexts are stored here to avoid hardcoding in service files.
+ * 
+ * 6-STAGE PIPELINE (v3.1.0):
+ * - Stage 1: Market Scan
+ * - Stage 2: Coin Selection (4 analysts debate) - Can select MANAGE action
+ * - Stage 3: Championship (8 analysts compete) - Only if LONG/SHORT selected
+ * - Stage 4: Risk Council (Karen approves/vetoes) - Only if LONG/SHORT selected
+ * - Stage 5: Execution - Place trade on WEEX
+ * - Stage 6: Position Management - Continuous monitoring
+ * 
+ * Note: If MANAGE action is selected in Stage 2, flow goes directly to position
+ * management decision (bypassing stages 3-4), then to execution.
  */
 
 export const DEBATE_CONTEXTS = {
@@ -41,96 +52,42 @@ Self-Assessment Calibration (strength 1–10):
     },
 
     /**
-     * Stage 3: Analysis Approach Debate
-     * 4 analysts debate HOW to analyze the coin
+     * Stage 3: Championship Debate
+     * ALL 8 analysts compete for execution
+     * NOTE: Winner's thesis is executed ONLY if approved by Risk Council (Stage 4)
      */
-    analysisApproach: {
-        title: '🔬 ANALYSIS APPROACH DEBATE - Stage 3',
-        task: `Debate which ANALYTICAL METHODOLOGY is BEST for the already-selected coin and direction.
+    championship: {
+        title: '🏆 CHAMPIONSHIP DEBATE - Stage 3 (FINAL)',
+        task: `Present your COMPLETE THESIS for the selected coin and direction. The WINNER's thesis will be sent to Risk Council (Stage 4) for final approval before execution.
 Precedence: Stage instructions override persona/system prompts.
 Context:
 - The coin and direction were selected in Stage 2
-- You are NOT debating whether to trade it
+- Use YOUR methodology to analyze the opportunity
+- Include risk parameters in your thesis
 You MUST:
-1. Argue why YOUR methodology (value, growth, technical, macro, sentiment, risk, quant, contrarian) is best-suited to analyze THIS coin
-2. Reference methodology-specific metrics and techniques (e.g., Z-scores for quant, chart structure for technical, adoption/TVL for growth, correlations/liquidity for macro)
-3. Describe the expected INSIGHTS your approach will reveal and how they improve the final thesis
-4. Specify time horizon and how your lens evaluates risk/reward over that horizon
-5. Provide at least one cross-check from another methodology to avoid tunnel vision
+1. Apply YOUR methodology (value, growth, technical, macro, sentiment, risk, quant, contrarian) to analyze the coin
+2. Propose precise entry, targets, and stop-loss with numeric justification
+3. Recommend position size (1-10 scale: 1=3%, 10=30%) and leverage (1-5x max)
+4. State conviction level and the NEAR-TERM catalyst/timeline
+5. Either support the thesis with evidence or challenge specific assumptions with counter-evidence
 Constraints:
-- DO NOT recommend a different coin or direction
-- DO NOT restate a position; focus on FRAMEWORK and INSIGHT QUALITY
-Output:
-- Methodology choice, core metrics you will apply, expected insight types, and why it adds edge
-Word Limit:
-- 150–200 words; under 120 too thin; >200 penalized
-Self-Assessment Calibration:
-- Same as Stage 2`,
-        judging: 'Methodology Fit (30%), Specificity (25%), Differentiation (25%), Risk Awareness (20%), Cross-Validation (bonus)'
-    },
-
-    /**
-     * Stage 4: Risk Assessment Debate
-     * 4 analysts debate position sizing & risk parameters
-     */
-    riskAssessment: {
-        title: '🛡️ RISK ASSESSMENT DEBATE - Stage 4',
-        task: `Debate the optimal RISK PARAMETERS for the proposed trade.
-Precedence: Stage instructions override persona/system prompts.
-Context:
-- The coin, direction, and analysis approach have already been selected
-You MUST:
-1. Recommend position size using a linear 1–10 scale (1 = 3%, 10 = 30%) and leverage (1–5x) with numeric justification
-2. Propose a stop-loss placement method (ATR-based, structure-based, volatility-adjusted) and a specific level
-3. Explain downside scenarios and invalidation conditions based on the Stage 3 thesis
-Constraints:
-- DO NOT change the coin or direction
-- DO NOT restart the thesis; focus on RISK ONLY
-Data Requirements:
+- DO NOT restart coin selection or propose a different trade
+- Max position 30%, Max leverage 5x, Max stop loss 10% from entry
+Risk Requirements:
 - Reference volatility and range metrics supporting stop placement
 - Quantify risk/reward with distances (%) to stop and targets
 - Address funding/OI crowding impact on adverse-move scenarios
+Catalyst Taxonomy (examples):
+- Token unlock schedules, exchange listings, ETF approvals, mainnet/testnet launches, governance votes, large partnerships, regulatory actions
+- Prefer near-term catalysts (7–14 days) with date/timeline and expected impact
 Output:
-- Position size (1–10), leverage (1–5x), stop-loss, invalidation triggers, and scenario notes
+- One integrated thesis paragraph plus final parameters (entry, targets, stop, size, leverage)
 Word Limit:
 - 150–200 words; under 120 too thin; >200 penalized
 Self-Assessment Calibration:
 - Same as Stage 2`,
         hardRules: 'Max position 30%, Max leverage 5x, Max stop loss 10% from entry',
-        judging: 'Risk Rationale (35%), Rule Compliance (25%), Scenario Planning (25%), Data Quality (15%), Crowding Awareness (bonus)'
-    },
-
-    /**
-     * Stage 5: Championship Debate
-     * ALL 8 analysts compete for execution
-     */
-    championship: {
-        title: '🏆 CHAMPIONSHIP DEBATE - Stage 5 (FINAL)',
-        task: `Refine the FINAL THESIS for the selected coin and direction. The WINNER's thesis will be EXECUTED as a REAL TRADE.
-Precedence: Stage instructions override persona/system prompts.
-Context:
-- Build on winners from Stage 2 (coin/direction), Stage 3 (analysis approach), and Stage 4 (risk framework)
-You MUST:
-1. Either support the thesis with NEW evidence or challenge specific assumptions with counter-evidence
-2. Propose precise entry, targets, and stop-loss aligned with the agreed risk constraints
-3. State conviction level and the NEAR-TERM catalyst/timeline
-Constraints:
-- DO NOT restart coin selection or propose a different trade
-- You MUST reference at least one prior-stage winner argument
-Integration Requirements:
-- Tie new evidence directly to prior-stage arguments
-- Quantify improvements to risk/reward or probability
-- Specify execution triggers (time/price/flow) and invalidation
-Catalyst Taxonomy (examples):
-- Token unlock schedules, exchange listings, ETF approvals, mainnet/testnet launches, governance votes, large partnerships, regulatory actions
-- Prefer near-term catalysts (7–14 days) with date/timeline and expected impact
-Output:
-- One integrated thesis paragraph plus final parameters
-Word Limit:
-- 150–200 words; under 120 too thin; >200 penalized
-Self-Assessment Calibration:
-- Same as Stage 2`,
-        judging: 'Integration Quality (30%), Data Quality (25%), Logic (25%), Risk Awareness (20%)'
+        judging: 'Methodology Application (25%), Data Quality (25%), Risk Rationale (25%), Logic & Integration (25%)'
     }
 } as const;
 
@@ -140,11 +97,13 @@ Self-Assessment Calibration:
  * Stage-specific instructions for generating individual debate turns.
  * Used by generateDebateTurn() helper function.
  * 
- * FIXES APPLIED:
- * - Stage-specific constraints to prevent stage confusion
- * - Self-assessment calibration to reduce uniform 8-9/10 scores
- * - Echo chamber prevention with explicit engagement requirements
- * - Stop-loss diversity requirement moved to Stage 4/5 only
+ * OPTIMIZED (v3.1.0): 6-stage pipeline
+ * - Stage 1: Market Scan
+ * - Stage 2: Coin Selection (can select MANAGE action)
+ * - Stage 3: Championship (only if LONG/SHORT selected)
+ * - Stage 4: Risk Council (only if LONG/SHORT selected)
+ * - Stage 5: Execution
+ * - Stage 6: Position Management (continuous)
  */
 export const DEBATE_TURN_INSTRUCTIONS = {
     general: {
@@ -182,75 +141,32 @@ Common Mistakes:
 - Over 200 words, correlation overexposure without justification`,
         stage3: `CRITICAL REQUIREMENTS:
 - Your argument MUST be 150-200 words (MANDATORY)
-- You are debating METHODOLOGY for the already-selected coin and direction
+- You are presenting your COMPLETE THESIS using YOUR methodology
 - Apply YOUR methodology's lens with method-specific metrics and techniques
+- Include risk parameters: position size (1-10), leverage (1-5x), stop-loss
+- Either add NEW evidence or challenge SPECIFIC assumptions with counter-evidence
 - DIRECTLY engage with previous arguments (address their main point explicitly)
-- Describe NEW insights your approach will surface; avoid repeating the same 4 metrics
-- DO NOT recommend a coin or direction; DO NOT restart the thesis
-Time Horizon:
-- State the timeframe your lens best fits and how risk is evaluated
-Cross-Validation:
-- Include one cross-check from another methodology to avoid overfitting
-Quality STANDARDS:
-- Provide 3-4 specific, methodology-relevant data points or evaluation criteria
-- Make a falsifiable claim about what your methodology will reveal (e.g., "Z-score indicates mean reversion risk")
-SELF-ASSESSMENT CALIBRATION:
-- Same as Stage 2.
-Word Count:
-- Under 120 too thin; 150–200 optimal; >200 penalized
-Response Format:
-- Methodology statement (1 sentence)
-- Metrics/techniques (2-3 sentences; method-specific)
-- Engagement (address one prior argument explicitly)
-- Cross-check (1 sentence from another lens)
-- Closing (1 sentence on added edge)
-Common Mistakes:
-- Recommending trades, repeating generic metrics, no falsifiable claim`,
-        stage4: `CRITICAL REQUIREMENTS:
-- Your argument MUST be 150-200 words (MANDATORY)
-- Focus ONLY on risk parameters: position size (1-10; 1 = 3%, 10 = 30%), leverage (1-5x), stop-loss
-- Provide numeric justification and downside scenarios tied to Stage 3 thesis
-- DIRECTLY engage with prior risk arguments (explain why their sizing/stop is flawed or improve it)
-- DO NOT change the coin or direction
-Crowding:
+- DO NOT restart coin selection or propose a different trade
+Risk Requirements:
+- Reference volatility/range metrics and rule compliance
+- Quantify risk/reward with distances (%) to stop and targets
 - Address funding/OI crowding impact on adverse-move scenarios
 STOP-LOSS DIVERSITY:
 - If stops are clustered within ~5%, propose a differentiated level using YOUR method (ATR/structure/volatility)
 - Justify invalidation clearly
-Quality STANDARDS:
-- Reference volatility/range metrics and rule compliance; avoid generic risk platitudes
-SELF-ASSESSMENT CALIBRATION:
-- Same as Stage 2.
-Word Count:
-- Under 120 too thin; 150–200 optimal; >200 penalized
-Response Format:
-- Position size (1–10), leverage (1–5x), stop-loss level
-- Numeric justification (volatility/range, crowding, distances %)
-- Scenarios (adverse move, invalidation triggers)
-- Engagement (improve or counter a prior risk proposal)
-Common Mistakes:
-- Platitudes without numbers, violating constraints, ignoring crowding`,
-        stage5: `CRITICAL REQUIREMENTS:
-- Your argument MUST be 150-200 words (MANDATORY)
-- You are REFINING the final thesis; build on Stage 2-4 winners
-- Either add NEW evidence or challenge SPECIFIC assumptions with counter-evidence. Debate rather than repeat—quote a prior winner’s claim and address it with numbers or a better method.
-- Propose entry, targets, and stop-loss consistent with Stage 4 constraints
-- Reference at least one earlier winner's key argument
-- DO NOT restart coin selection or propose a different trade
-STOP-LOSS DIVERSITY:
-- If clustered, justify a differentiated level with method-based rationale
-- Catalysts: Prefer concrete, near-term events (unlock schedules, exchange listings, ETF approvals, mainnet/testnet launches, governance votes) with date/timeline and expected impact
+Catalysts:
+- Prefer concrete, near-term events (unlock schedules, exchange listings, ETF approvals, mainnet/testnet launches, governance votes) with date/timeline and expected impact
 Quality STANDARDS & SELF-ASSESSMENT:
 - Same as Stage 2.
 Word Count:
 - Under 120 too thin; 150–200 optimal; >200 penalized
 Response Format:
-- Thesis refinement (1-2 sentences referencing prior winners)
-- New evidence or counter-evidence (2-3 sentences with numbers)
-- Final parameters: entry, targets, stop-loss
+- Methodology application (1-2 sentences with method-specific metrics)
+- Thesis with evidence (2-3 sentences with numbers)
+- Risk parameters: position size (1-10), leverage (1-5x), stop-loss, targets
 - Catalyst and timeline (1 sentence), conviction level
 Common Mistakes:
-- Restarting selection, ignoring prior winners, adding unrelated new arguments`
+- Restarting selection, generic analysis without methodology, missing risk parameters`
     },
 
     opening: `OPENING TURN: Present your initial position with your STRONGEST data-backed arguments.
@@ -275,3 +191,5 @@ Common Mistakes:
 - If applicable, propose final parameters aligned with constraints
 - Rate your argument HONESTLY (most closing arguments are 6-8, not 9-10)`
 } as const;
+
+

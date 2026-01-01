@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Debate Context Builder Helpers
  * 
  * Functions to build debate context strings from templates.
@@ -6,8 +6,8 @@
  */
 
 import { DEBATE_CONTEXTS, DEBATE_TURN_INSTRUCTIONS } from './debateContexts';
-import { config } from '../../config';
-import { safeNumber } from './promptHelpers';
+// import { config } from '../../config'; // DEPRECATED: No longer needed after stage removal
+import { safeNumber, cleanSymbol } from './promptHelpers';
 import { formatTradingRulesForAI, getCriticalRulesSummary } from '../analyst/tradingRules';
 import type { PortfolioPosition } from './builders';
 
@@ -39,7 +39,7 @@ export function buildCoinSelectionContext(
         const positionsList = currentPositions.map(p => {
             const pnlSign = p.unrealizedPnlPercent >= 0 ? '+' : '';
             const holdDays = (p.holdTimeHours / 24).toFixed(1);
-            return `  • ${p.symbol.replace(/cmt_/i, '').replace(/usdt/i, '').toUpperCase()} ${p.side}: Entry $${safeNumber(p.entryPrice, 2)} → $${safeNumber(p.currentPrice, 2)} | P&L: ${pnlSign}${safeNumber(p.unrealizedPnlPercent, 2)}% | Hold: ${holdDays}d`;
+            return `  • ${cleanSymbol(p.symbol)} ${p.side}: Entry $${safeNumber(p.entryPrice, 2)} → $${safeNumber(p.currentPrice, 2)} | P&L: ${pnlSign}${safeNumber(p.unrealizedPnlPercent, 2)}% | Hold: ${holdDays}d`;
         }).join('\n');
 
         portfolioSection = `
@@ -65,11 +65,11 @@ ${positionsList}
                 continue;
             }
             const fundingPercent = safeNumber(coin.fundingRate * 100, 4);
-            // FIXED: Use case-insensitive regex for symbol cleaning
-            const cleanSymbol = coin.symbol.replace(/^cmt_/i, '').replace(/usdt$/i, '').toUpperCase();
+            // OPTIMIZED: Use cleanSymbol helper for single-pass cleaning
+            const cleanSym = cleanSymbol(coin.symbol);
             const signal = coin.fundingDirection === 'bullish' ? '🟢 BULLISH' :
                 coin.fundingDirection === 'bearish' ? '🔴 BEARISH' : '⚪ NEUTRAL';
-            fundingLines.push(`  ${cleanSymbol}: ${fundingPercent}% (${signal})`);
+            fundingLines.push(`  ${cleanSym}: ${fundingPercent}% (${signal})`);
         }
         // Only add section if we have valid entries (more than just the header)
         if (fundingLines.length > 1) {
@@ -115,213 +115,10 @@ COMMON MISTAKES:
 }
 
 /**
- * Build context for Analysis Approach Debate (Stage 3)
+ * Build context for Championship Debate (Stage 3)
  * 
- * Includes full market data (funding rate, volume, 24h range)
- * 
- * @param displaySymbol - Coin symbol (e.g., "SOL")
- * @param direction - Trade direction (LONG or SHORT)
- * @param priceStr - Formatted current price
- * @param changeStr - Formatted 24h change
- * @param marketData - Full market data including funding rate, volume, etc.
- * @returns Complete debate context string
- */
-export function buildAnalysisApproachContext(
-    displaySymbol: string,
-    direction: 'LONG' | 'SHORT',
-    priceStr: string,
-    changeStr: string,
-    marketData?: {
-        volume24h?: number;
-        fundingRate?: number;
-        high24h?: number;
-        low24h?: number;
-    }
-): string {
-    const ctx = DEBATE_CONTEXTS.analysisApproach;
-
-    // Build market data section
-    // Added Number.isFinite checks for all numeric values
-    let marketDataSection = '';
-    if (marketData) {
-        const parts: string[] = [];
-        if (marketData.high24h !== undefined && marketData.low24h !== undefined &&
-            Number.isFinite(marketData.high24h) && Number.isFinite(marketData.low24h) &&
-            marketData.high24h > 0 && marketData.low24h > 0) {
-            parts.push(`24h Range: $${safeNumber(marketData.low24h, 2)} - $${safeNumber(marketData.high24h, 2)}`);
-        }
-        if (marketData.volume24h !== undefined && Number.isFinite(marketData.volume24h) && marketData.volume24h > 0) {
-            parts.push(`24h Volume: $${safeNumber(marketData.volume24h / 1e6, 1)}M`);
-        }
-        if (marketData.fundingRate !== undefined && Number.isFinite(marketData.fundingRate)) {
-            const fundingPercent = safeNumber(marketData.fundingRate * 100, 4);
-            const fundingDirection = marketData.fundingRate > 0 ? 'longs pay shorts' : 'shorts pay longs';
-            parts.push(`Funding Rate: ${fundingPercent}% (${fundingDirection})`);
-        }
-        if (parts.length > 0) {
-            marketDataSection = `\n${parts.join('\n')}`;
-        }
-    }
-
-    // Add full trading rules for analysis stage
-    const tradingRules = formatTradingRulesForAI();
-
-    return `${ctx.title}
-
-Coin: ${displaySymbol}/USDT
-Selected Direction: ${direction}
-Current Price: ${priceStr}
-24h Change: ${changeStr}${marketDataSection}
-
-${tradingRules}
-
-TASK: ${ctx.task}
-
-JUDGING: ${ctx.judging}
-
-WORD LIMIT:
-- 150–200 words; under 120 too thin; >200 penalized
-
-FRAMEWORK REQUIREMENTS:
-- Method-specific metrics and techniques applied to this coin/direction
-- Time horizon declared and risk/reward assessed over that horizon
-- One cross-check from another methodology to avoid overfitting
-- Expected insight types explained and tied to thesis improvement
- - Debate rather than repeat—quote a prior claim and bring NEW evidence or analysis
- 
- RESPONSE FORMAT:
- - Methodology statement (1 sentence)
- - Metrics/techniques (2–3 sentences; method-specific)
- - Engagement (address one prior argument explicitly)
- - Cross-check (1 sentence from another lens)
- - Closing (1 sentence on added edge)
- 
- COMMON MISTAKES:
- - Recommending trades or restarting thesis
- - Repeating generic metrics; no falsifiable claim or horizon`;
-}
-
-/**
- * Build context for Risk Assessment Debate (Stage 4)
- * 
- * ENHANCED: Now includes full market data for risk assessment
- * 
- * @param displaySymbol - Coin symbol (e.g., "SOL")
- * @param proposedThesis - The winning thesis from Stage 3
- * @param priceStr - Formatted current price
- * @param priceTargets - Formatted price targets
- * @param marketData - Full market data including funding rate, volume, volatility
- * @returns Complete debate context string
- */
-export function buildRiskAssessmentContext(
-    displaySymbol: string,
-    proposedThesis: {
-        analystName: string;
-        positionSize: number;
-        riskLevel: string;
-        direction?: 'LONG' | 'SHORT';
-    },
-    priceStr: string,
-    priceTargets: { bull: string; base: string; bear: string },
-    marketData?: {
-        volume24h?: number;
-        fundingRate?: number;
-        high24h?: number;
-        low24h?: number;
-        change24h?: number;
-    }
-): string {
-    const ctx = DEBATE_CONTEXTS.riskAssessment;
-
-    // Build market data section for risk assessment
-    let marketDataSection = '';
-    if (marketData) {
-        const parts: string[] = [];
-        // FIXED: Added Number.isFinite checks for all numeric values
-        if (marketData.change24h !== undefined && Number.isFinite(marketData.change24h)) {
-            const changeStr = marketData.change24h >= 0 ? `+${safeNumber(marketData.change24h, 2)}%` : `${safeNumber(marketData.change24h, 2)}%`;
-            parts.push(`24h Change: ${changeStr}`);
-        }
-        if (marketData.high24h !== undefined && marketData.low24h !== undefined &&
-            Number.isFinite(marketData.high24h) && Number.isFinite(marketData.low24h) && marketData.low24h > 0) {
-            const range = marketData.high24h - marketData.low24h;
-            const rangePercent = (range / marketData.low24h) * 100;
-            if (Number.isFinite(rangePercent)) {
-                parts.push(`24h Range: ${safeNumber(marketData.low24h, 2)} - ${safeNumber(marketData.high24h, 2)} (${safeNumber(rangePercent, 1)}% volatility)`);
-            }
-        }
-        if (marketData.volume24h !== undefined && Number.isFinite(marketData.volume24h) && marketData.volume24h > 0) {
-            parts.push(`24h Volume: ${safeNumber(marketData.volume24h / 1e6, 1)}M`);
-        }
-        if (marketData.fundingRate !== undefined && Number.isFinite(marketData.fundingRate)) {
-            const fundingPercent = safeNumber(marketData.fundingRate * 100, 4);
-            const fundingDirection = marketData.fundingRate > 0 ? 'longs pay shorts' : 'shorts pay longs';
-            parts.push(`Funding Rate: ${fundingPercent}% (${fundingDirection})`);
-            const autonomousCfg = (config && (config as any).autonomous) ? (config as any).autonomous : {};
-            const thresholdPct = Number.isFinite(autonomousCfg?.fundingWarnThresholdPercent)
-                ? autonomousCfg.fundingWarnThresholdPercent
-                : 0.01;
-            const threshold = Number.isFinite(thresholdPct) ? (thresholdPct / 100) : 0;
-            if (proposedThesis.direction) {
-                if ((proposedThesis.direction === 'LONG' && marketData.fundingRate > threshold) ||
-                    (proposedThesis.direction === 'SHORT' && marketData.fundingRate < -threshold)) {
-                    parts.push(`⚠️ RISK: Funding rate is AGAINST the proposed ${proposedThesis.direction} position!`);
-                }
-            }
-        }
-        if (parts.length > 0) {
-            marketDataSection = `\n${parts.join('\n')}\n`;
-        }
-    }
-
-    return `${ctx.title}
-
-Coin: ${displaySymbol}/USDT
-Current Price: ${priceStr}${marketDataSection}
-
-${formatTradingRulesForAI()}
-
-Proposed Thesis by ${proposedThesis.analystName}:
-- Direction: ${proposedThesis.direction || 'Not specified'}
-- Targets: Bull ${priceTargets.bull}, Base ${priceTargets.base}, Bear ${priceTargets.bear}
-- Position Size: ${safeNumber(proposedThesis.positionSize, 0)}/10
-- Risk Level: ${proposedThesis.riskLevel}
-
-TASK: ${ctx.task}
-
-${(() => {
-            const autonomous = (config && (config as any).autonomous) ? (config as any).autonomous : {};
-            const maxPositionSizePercent = Number.isFinite(autonomous?.maxPositionSizePercent) ? autonomous.maxPositionSizePercent : 10;
-            const maxLeverage = Number.isFinite(autonomous?.maxLeverage) ? autonomous.maxLeverage : 5;
-            const stopLossPercent = Number.isFinite(autonomous?.stopLossPercent) ? autonomous.stopLossPercent : 10;
-            return `HARD RULES: Max position ${safeNumber(maxPositionSizePercent, 0)}%, Max leverage ${safeNumber(maxLeverage, 0)}x, Max stop loss ${safeNumber(stopLossPercent, 0)}% from entry`;
-        })()}
-
-JUDGING: ${ctx.judging}
-
-WORD LIMIT:
-- 150–200 words; under 120 too thin; >200 penalized
-
-DATA CHECKLIST:
-- Volatility/range metrics supporting stop placement
-- Funding/OI crowding and adverse-move scenarios
-- Distances (%) to stop and targets to quantify risk/reward
- - Consider catalyst timing risk when relevant (unlock schedules, listings, mainnet/testnet launches, governance votes)
-
-OUTPUT FORMAT:
-- Position size (1–10), leverage (1–5x), stop-loss level
-- Invalidation triggers and scenario notes
- 
- COMMON MISTAKES:
- - Platitudes without numbers; violating max leverage/stop rules
- - Ignoring crowding or adverse-move scenarios
- - Not linking invalidation to Stage 3 thesis`;
-}
-
-/**
- * Build context for Championship Debate (Stage 5)
- * 
- * ENHANCED: Now includes full market data and previous winners' key arguments
+ * All 8 analysts compete in championship debates.
+ * Winner's thesis gets executed as a real trade.
  * 
  * @param displaySymbol - Coin symbol (e.g., "SOL")
  * @param priceStr - Formatted current price
@@ -336,11 +133,7 @@ export function buildChampionshipContext(
     changeStr: string,
     previousWinners: {
         coinSelector: string;
-        analysisApproach: string;
-        riskAssessment: string;
         coinSelectorArgument?: string;
-        analysisApproachArgument?: string;
-        riskAssessmentArgument?: string;
     },
     marketData?: {
         volume24h?: number;
@@ -378,22 +171,11 @@ export function buildChampionshipContext(
         }
     }
 
-    // Build previous winners section with their key arguments
-    // FIXED: Added null/undefined checks for arguments
-    let winnersSection = `Previous Winners:
+    // Build previous winners section - only Stage 2 (Coin Selection) is relevant now
+    let winnersSection = `Previous Stage Winner:
 - Stage 2 (Coin Selection): ${previousWinners.coinSelector || 'Unknown'}`;
     if (previousWinners.coinSelectorArgument && typeof previousWinners.coinSelectorArgument === 'string' && previousWinners.coinSelectorArgument.trim().length > 0) {
         const arg = previousWinners.coinSelectorArgument.trim();
-        winnersSection += `\n  Key argument: "${arg.slice(0, 200)}${arg.length > 200 ? '...' : ''}"`;
-    }
-    winnersSection += `\n- Stage 3 (Analysis Approach): ${previousWinners.analysisApproach || 'Unknown'}`;
-    if (previousWinners.analysisApproachArgument && typeof previousWinners.analysisApproachArgument === 'string' && previousWinners.analysisApproachArgument.trim().length > 0) {
-        const arg = previousWinners.analysisApproachArgument.trim();
-        winnersSection += `\n  Key argument: "${arg.slice(0, 200)}${arg.length > 200 ? '...' : ''}"`;
-    }
-    winnersSection += `\n- Stage 4 (Risk Assessment): ${previousWinners.riskAssessment || 'Unknown'}`;
-    if (previousWinners.riskAssessmentArgument && typeof previousWinners.riskAssessmentArgument === 'string' && previousWinners.riskAssessmentArgument.trim().length > 0) {
-        const arg = previousWinners.riskAssessmentArgument.trim();
         winnersSection += `\n  Key argument: "${arg.slice(0, 200)}${arg.length > 200 ? '...' : ''}"`;
     }
 
@@ -415,20 +197,20 @@ WORD LIMIT:
 - 150–200 words; under 120 too thin; >200 penalized
 
 INTEGRATION CHECKLIST:
-- Tie new evidence directly to prior-stage winner arguments
+- Tie new evidence directly to Stage 2 coin selection rationale
 - Quantify improvements to risk/reward or probability
 - Specify execution triggers (time/price/flow) and invalidation
 - Provide one integrated thesis paragraph plus final parameters
  - Catalyst taxonomy examples: token unlock schedules, exchange listings, ETF approvals, mainnet/testnet launches, governance votes; prefer near-term catalysts (7–14 days)
  
  RESPONSE FORMAT:
- - Thesis refinement (1–2 sentences referencing prior winners)
+ - Thesis refinement (1–2 sentences referencing coin selection rationale)
  - New evidence or counter-evidence (2–3 sentences with numbers)
  - Final parameters: entry, targets, stop-loss
  - Catalyst and timeline (1 sentence), conviction level
  
  COMMON MISTAKES:
- - Restarting selection; ignoring prior winners
+ - Restarting selection; ignoring coin selection rationale
  - Adding unrelated new arguments without integration
  - Missing parameters or catalyst timing`;
 }
@@ -436,8 +218,13 @@ INTEGRATION CHECKLIST:
 /**
  * Build prompt for a single debate turn
  * 
- * IMPORTANT: This now includes the FULL analyst system prompt (800+ lines)
- * to ensure the AI uses the complete methodology, not just a brief description.
+ * TOKEN OPTIMIZATION: This function does NOT include the full analyst system prompt
+ * to save tokens. Instead, it relies on:
+ * 1. The debate context (market data, previous winners, trading rules)
+ * 2. The analyst's methodology name for self-identification
+ * 3. Previous debate arguments for engagement
+ * 
+ * This saves ~800 lines × 4-8 analysts × turns = massive token reduction.
  * 
  * FIXES APPLIED:
  * - Added echo chamber prevention for later turns
@@ -641,19 +428,19 @@ export function buildDebateTurnPrompt(
     }
 
     // Select stage-specific general instructions
+    // OPTIMIZED: Only stage2 (Coin Selection) and stage3 (Championship) remain
+    // Stage 4 (Risk Council) uses stage3 instructions
+    // Stage 5 parameter is used for position management (MANAGE action flow)
     let generalInstructions: string;
     switch (stage) {
         case 2:
             generalInstructions = DEBATE_TURN_INSTRUCTIONS.general.stage2;
             break;
         case 3:
-            generalInstructions = DEBATE_TURN_INSTRUCTIONS.general.stage3;
-            break;
         case 4:
-            generalInstructions = DEBATE_TURN_INSTRUCTIONS.general.stage4;
-            break;
         case 5:
-            generalInstructions = DEBATE_TURN_INSTRUCTIONS.general.stage5;
+            // Championship, Risk Council, and Position Management all use stage3 instructions
+            generalInstructions = DEBATE_TURN_INSTRUCTIONS.general.stage3;
             break;
         default:
             generalInstructions = DEBATE_TURN_INSTRUCTIONS.general.stage2;

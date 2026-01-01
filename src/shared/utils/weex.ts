@@ -421,13 +421,30 @@ export function roundToStepSize(size: number, symbol?: string, stepSize?: number
             actualStepSize = specs.sizeStepSize;
             decimals = specs.sizeDecimals;
         } else {
-            logger.warn(`⚠️ No contract specs cached for ${symbol}, using fallback stepSize 0.0001 - may cause order rejection!`);
+            // CRITICAL: Use symbol-aware fallback step sizes
+            // BTC has smaller position sizes (higher price), so uses smaller step (0.0001)
+            // Other coins may use larger steps
+            const symbolLower = symbol.toLowerCase();
+            if (symbolLower.includes('btc')) {
+                actualStepSize = 0.0001;
+                decimals = 4;
+                logger.warn(`⚠️ No contract specs cached for ${symbol}, using BTC fallback stepSize 0.0001 - may cause order rejection!`);
+            } else if (symbolLower.includes('eth')) {
+                actualStepSize = 0.001;
+                decimals = 3;
+                logger.warn(`⚠️ No contract specs cached for ${symbol}, using ETH fallback stepSize 0.001 - may cause order rejection!`);
+            } else {
+                // For other coins, use 0.01 as default (most common for altcoins)
+                actualStepSize = 0.01;
+                decimals = 2;
+                logger.warn(`⚠️ No contract specs cached for ${symbol}, using fallback stepSize 0.01 - may cause order rejection!`);
+            }
         }
     } else if (!actualStepSize && !symbol) {
         logger.warn(`⚠️ roundToStepSize called without symbol or stepSize - using fallback 0.0001 - may cause order rejection!`);
     }
 
-    // Fallback to default 0.0001 if no specs available
+    // Fallback to default 0.0001 if no specs available (no symbol provided)
     if (!actualStepSize) {
         actualStepSize = 0.0001;
         decimals = 4;
@@ -533,13 +550,31 @@ export function roundToTickSize(price: number, symbol?: string, tickSize?: numbe
             actualTickSize = specs.tickSize;
             decimals = specs.priceDecimals;
         } else {
-            logger.warn(`⚠️ No contract specs cached for ${symbol}, using fallback tickSize 0.01 - may cause order rejection!`);
+            // CRITICAL: Use symbol-aware fallback tick sizes
+            // BTC has higher prices, so uses larger tick size (0.1)
+            // Other coins typically use 0.01
+            // This prevents order rejection when specs are missing
+            const symbolLower = symbol.toLowerCase();
+            if (symbolLower.includes('btc')) {
+                actualTickSize = 0.1;
+                decimals = 1;
+                logger.warn(`⚠️ No contract specs cached for ${symbol}, using BTC fallback tickSize 0.1 - may cause order rejection!`);
+            } else if (symbolLower.includes('eth')) {
+                actualTickSize = 0.01;
+                decimals = 2;
+                logger.warn(`⚠️ No contract specs cached for ${symbol}, using ETH fallback tickSize 0.01 - may cause order rejection!`);
+            } else {
+                // For other coins, use 0.01 as default (most common)
+                actualTickSize = 0.01;
+                decimals = 2;
+                logger.warn(`⚠️ No contract specs cached for ${symbol}, using fallback tickSize 0.01 - may cause order rejection!`);
+            }
         }
     } else if (!actualTickSize && !symbol) {
         logger.warn(`⚠️ roundToTickSize called without symbol or tickSize - using fallback 0.01 - may cause order rejection!`);
     }
 
-    // Fallback to 0.01 if no specs available
+    // Fallback to 0.01 if no specs available (no symbol provided)
     if (!actualTickSize) {
         actualTickSize = 0.01;
         decimals = 2;

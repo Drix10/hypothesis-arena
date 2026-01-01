@@ -38,8 +38,15 @@ const VALID_WINNERS = ['bull', 'bear', 'draw'] as const;
 
 /**
  * Convert Gemini SchemaType to OpenRouter JSON Schema type
+ * CRITICAL: Handles invalid/unknown types gracefully
  */
 function geminiToOpenRouterType(schemaType: SchemaType): string {
+    // CRITICAL: Validate schemaType exists
+    if (schemaType === null || schemaType === undefined) {
+        logger.warn('geminiToOpenRouterType called with null/undefined, defaulting to string');
+        return 'string';
+    }
+
     switch (schemaType) {
         case SchemaType.STRING: return 'string';
         case SchemaType.NUMBER: return 'number';
@@ -47,17 +54,39 @@ function geminiToOpenRouterType(schemaType: SchemaType): string {
         case SchemaType.BOOLEAN: return 'boolean';
         case SchemaType.ARRAY: return 'array';
         case SchemaType.OBJECT: return 'object';
-        default: return 'string';
+        default:
+            logger.warn(`Unknown SchemaType: ${schemaType}, defaulting to string`);
+            return 'string';
     }
 }
 
 /**
  * Convert Gemini schema to OpenRouter JSON Schema format
  * Handles nested objects, arrays, and all schema properties
+ * 
+ * CRITICAL FIXES:
+ * - Validates schema is an object before processing
+ * - Handles circular references (max depth 10)
+ * - Validates enum arrays are non-empty
+ * - Validates required arrays contain valid strings
+ * - Prevents infinite recursion
  */
-function convertGeminiSchemaToOpenRouter(geminiSchema: any): any {
-    // GUARD: Handle null/undefined schema
+function convertGeminiSchemaToOpenRouter(geminiSchema: any, depth: number = 0): any {
+    // CRITICAL: Prevent infinite recursion
+    const MAX_DEPTH = 10;
+    if (depth > MAX_DEPTH) {
+        logger.error(`Schema conversion exceeded max depth ${MAX_DEPTH}, possible circular reference`);
+        return { type: 'string' };
+    }
+
+    // CRITICAL: Handle null/undefined schema
     if (!geminiSchema || typeof geminiSchema !== 'object') {
+        return { type: 'string' };
+    }
+
+    // CRITICAL: Validate type field exists
+    if (!geminiSchema.type) {
+        logger.warn('Schema missing type field, defaulting to string');
         return { type: 'string' };
     }
 
@@ -65,19 +94,31 @@ function convertGeminiSchemaToOpenRouter(geminiSchema: any): any {
         type: geminiToOpenRouterType(geminiSchema.type),
     };
 
-    if (geminiSchema.description) {
+    // CRITICAL: Validate description is a string
+    if (geminiSchema.description && typeof geminiSchema.description === 'string') {
         converted.description = geminiSchema.description;
     }
 
+    // CRITICAL: Validate enum is a non-empty array
     if (geminiSchema.enum) {
-        converted.enum = geminiSchema.enum;
+        if (Array.isArray(geminiSchema.enum) && geminiSchema.enum.length > 0) {
+            converted.enum = geminiSchema.enum;
+        } else {
+            logger.warn('Schema enum is not a valid non-empty array, ignoring');
+        }
     }
 
     // Handle nested properties (objects)
-    if (geminiSchema.properties) {
+    if (geminiSchema.properties && typeof geminiSchema.properties === 'object') {
         converted.properties = {};
         for (const [key, value] of Object.entries(geminiSchema.properties)) {
-            converted.properties[key] = convertGeminiSchemaToOpenRouter(value);
+            // CRITICAL: Validate key is a non-empty string
+            if (!key || typeof key !== 'string' || key.trim().length === 0) {
+                logger.warn(`Invalid property key: ${key}, skipping`);
+                continue;
+            }
+            // CRITICAL: Recursively convert with depth tracking
+            converted.properties[key] = convertGeminiSchemaToOpenRouter(value, depth + 1);
         }
         // CRITICAL: Disable additionalProperties for strict schema validation
         converted.additionalProperties = false;
@@ -85,12 +126,22 @@ function convertGeminiSchemaToOpenRouter(geminiSchema: any): any {
 
     // Handle array items
     if (geminiSchema.items) {
-        converted.items = convertGeminiSchemaToOpenRouter(geminiSchema.items);
+        // CRITICAL: Recursively convert with depth tracking
+        converted.items = convertGeminiSchemaToOpenRouter(geminiSchema.items, depth + 1);
     }
 
-    // Handle required fields
+    // CRITICAL: Validate required is an array of non-empty strings
     if (geminiSchema.required) {
-        converted.required = geminiSchema.required;
+        if (Array.isArray(geminiSchema.required)) {
+            const validRequired = geminiSchema.required.filter(
+                (field: any) => field && typeof field === 'string' && field.trim().length > 0
+            );
+            if (validRequired.length > 0) {
+                converted.required = validRequired;
+            }
+        } else {
+            logger.warn('Schema required field is not an array, ignoring');
+        }
     }
 
     return converted;
@@ -490,6 +541,142 @@ class GeminiService {
     }
 
     /**
+     * Split prompt into cacheable prefix and dynamic suffix for optimal caching
+     * 
+     * CACHING STRATEGY:
+     * - Cacheable: System prompts, trading rules, analyst methodologies (static, ~40k tokens)
+     * - Dynamic: Market data, prices, positions, timestamps (changes every cycle)
+     * 
+     * OpenRouter/DeepSeek caching:
+     * - Minimum: 1024 tokens to activate caching
+     * - TTL: 5-10 minutes (automatic)
+     * - Cost: 90% savings on cached tokens
+     * 
+     * CRITICAL FIXES:
+     * - Validates prompt is non-empty string
+     * - Handles empty/whitespace-only prompts
+     * - Prevents negative token counts
+     * - Guards against malformed marker strings
+     * 
+     * @param prompt - Full prompt to split
+     * @returns Object with cacheablePrefix and dynamicSuffix
+     */
+    private splitPromptForCaching(prompt: string): { cacheablePrefix: string; dynamicSuffix: string } {
+        // CRITICAL: Validate input is a non-empty string
+        if (!prompt || typeof prompt !== 'string') {
+            logger.warn('splitPromptForCaching called with invalid prompt, returning empty split');
+            return {
+                cacheablePrefix: '',
+                dynamicSuffix: ''
+            };
+        }
+
+        // CRITICAL: Handle empty or whitespace-only prompts
+        const trimmedPrompt = prompt.trim();
+        if (trimmedPrompt.length === 0) {
+            logger.warn('splitPromptForCaching called with empty prompt');
+            return {
+                cacheablePrefix: '',
+                dynamicSuffix: ''
+            };
+        }
+
+        // Markers that indicate start of dynamic content
+        // CRITICAL: These must match actual prompt formats exactly
+        const dynamicMarkers = [
+            'MARKET DATA:',
+            'CURRENT MARKET DATA',
+            'ANALYZE THIS CRYPTO ASSET:',
+            'PROPOSED TRADE:',
+            'ACCOUNT STATE:',
+            'CURRENT PORTFOLIO',
+            'Previous Winners:',
+            'Coin: ',
+            'Current Price:',
+            '24h Change:',
+            'PREVIOUS ARGUMENTS IN THIS DEBATE'
+        ];
+
+        // Find the earliest dynamic marker
+        let splitIndex = -1;
+        let foundMarker = '';
+
+        for (const marker of dynamicMarkers) {
+            // CRITICAL: Validate marker is a string before indexOf
+            if (!marker || typeof marker !== 'string') {
+                continue;
+            }
+            const index = trimmedPrompt.indexOf(marker);
+            if (index !== -1 && (splitIndex === -1 || index < splitIndex)) {
+                splitIndex = index;
+                foundMarker = marker;
+            }
+        }
+
+        // If no marker found, cache the entire prompt (conservative approach)
+        if (splitIndex === -1) {
+            logger.debug('No dynamic marker found in prompt, caching entire prompt');
+            return {
+                cacheablePrefix: trimmedPrompt,
+                dynamicSuffix: ''
+            };
+        }
+
+        // CRITICAL: Validate splitIndex is within bounds
+        if (splitIndex < 0 || splitIndex > trimmedPrompt.length) {
+            logger.error(`Invalid splitIndex ${splitIndex} for prompt length ${trimmedPrompt.length}`);
+            return {
+                cacheablePrefix: trimmedPrompt,
+                dynamicSuffix: ''
+            };
+        }
+
+        // Split at the marker
+        const cacheablePrefix = trimmedPrompt.substring(0, splitIndex).trim();
+        const dynamicSuffix = trimmedPrompt.substring(splitIndex).trim();
+
+        // CRITICAL: Estimate token counts with bounds checking
+        // Token estimation: 1 token ≈ 4 chars is a rough approximation
+        // Actual token counts vary by model and content (code, special chars, etc.)
+        // This is used for cache threshold decisions, not billing - conservative is fine
+        const prefixTokens = cacheablePrefix.length > 0 ? Math.ceil(cacheablePrefix.length / 4) : 0;
+        const suffixTokens = dynamicSuffix.length > 0 ? Math.ceil(dynamicSuffix.length / 4) : 0;
+
+        // CRITICAL: Validate token counts are non-negative
+        if (prefixTokens < 0 || suffixTokens < 0 || !Number.isFinite(prefixTokens) || !Number.isFinite(suffixTokens)) {
+            logger.error(`Invalid token counts: prefix=${prefixTokens}, suffix=${suffixTokens}`);
+            return {
+                cacheablePrefix: '',
+                dynamicSuffix: trimmedPrompt
+            };
+        }
+
+        logger.debug(
+            `Prompt split for caching: ` +
+            `prefix=${prefixTokens} tokens (cacheable), ` +
+            `suffix=${suffixTokens} tokens (dynamic), ` +
+            `marker="${foundMarker}"`
+        );
+
+        // Only cache if prefix is large enough (1024+ tokens)
+        // CRITICAL: This prevents wasting cache on small prompts
+        if (prefixTokens < 1024) {
+            logger.debug(`Prefix too small (${prefixTokens} < 1024 tokens), not caching`);
+            return {
+                cacheablePrefix: '',
+                dynamicSuffix: trimmedPrompt
+            };
+        }
+
+        // CRITICAL: Final validation before returning
+        // Ensure we're not returning undefined or null
+        return {
+            cacheablePrefix: cacheablePrefix || '',
+            dynamicSuffix: dynamicSuffix || trimmedPrompt
+        };
+    }
+
+    /**
      * Unified content generation that works with both Gemini and OpenRouter
      */
     private async generateContent(prompt: string, schema: any): Promise<{ text: string; finishReason: string }> {
@@ -533,14 +720,49 @@ class GeminiService {
         // Convert Gemini schema to OpenRouter JSON Schema format
         const openRouterSchema = convertGeminiSchemaToOpenRouter(geminiSchema);
 
+        // PROMPT CACHING OPTIMIZATION for DeepSeek
+        // Split prompt into cacheable prefix (system instructions, trading rules) and dynamic suffix (market data)
+        // OpenRouter/DeepSeek automatically caches messages with cache_control
+        // Minimum: 1024 tokens for caching to activate
+        const { cacheablePrefix, dynamicSuffix } = this.splitPromptForCaching(prompt);
+
+        const messages: any[] = [];
+
+        // CRITICAL: Add cacheable prefix as system message if it exists AND is non-empty
+        // Empty strings should not be added as messages
+        if (cacheablePrefix && cacheablePrefix.trim().length > 0) {
+            messages.push({
+                role: 'system',
+                content: cacheablePrefix,
+                // Mark for caching - OpenRouter will cache this across requests
+                cache_control: { type: 'ephemeral' }
+            });
+        }
+
+        // CRITICAL: Add dynamic content as user message
+        // Must have at least one message, so use full prompt as fallback
+        const userContent = (dynamicSuffix && dynamicSuffix.trim().length > 0)
+            ? dynamicSuffix
+            : prompt;
+
+        // CRITICAL: Validate userContent is not empty
+        if (!userContent || userContent.trim().length === 0) {
+            throw new Error('Cannot generate content with empty prompt');
+        }
+
+        messages.push({
+            role: 'user',
+            content: userContent
+        });
+
+        // CRITICAL: Validate we have at least one message
+        if (messages.length === 0) {
+            throw new Error('No messages to send to OpenRouter - prompt split failed');
+        }
+
         const requestBody = {
             model: config.ai.openRouterModel,
-            messages: [
-                {
-                    role: 'user',
-                    content: prompt
-                }
-            ],
+            messages,
             response_format: {
                 type: 'json_schema',
                 json_schema: {
@@ -553,7 +775,8 @@ class GeminiService {
             max_tokens: config.ai.maxOutputTokens,
         };
 
-        // FIXED: Add timeout using AbortController
+        // CRITICAL: Add timeout using AbortController
+        // Must be cleaned up in finally block to prevent memory leaks
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), config.ai.requestTimeoutMs);
 
@@ -567,20 +790,20 @@ class GeminiService {
                     'X-Title': 'Hypothesis Arena',
                 },
                 body: JSON.stringify(requestBody),
-                signal: controller.signal, // FIXED: Add timeout signal
+                signal: controller.signal,
             });
 
-            clearTimeout(timeoutId); // FIXED: Clear timeout on success
+            // CRITICAL: Clear timeout immediately on success to prevent memory leak
+            clearTimeout(timeoutId);
 
             if (!response.ok) {
                 const errorText = await response.text();
-                // FIXED: Include model name in error for debugging
                 throw new Error(
                     `OpenRouter API error (${response.status}) for model ${config.ai.openRouterModel}: ${errorText}`
                 );
             }
 
-            // FIXED: Validate response is JSON before parsing
+            // CRITICAL: Validate response is JSON before parsing
             const contentType = response.headers.get('content-type');
             if (!contentType || !contentType.includes('application/json')) {
                 const text = await response.text();
@@ -591,7 +814,7 @@ class GeminiService {
 
             const data: any = await response.json();
 
-            // FIXED: Better validation of response structure
+            // CRITICAL: Validate response structure before accessing
             if (!data || typeof data !== 'object') {
                 throw new Error('OpenRouter returned invalid response structure');
             }
@@ -607,18 +830,29 @@ class GeminiService {
                 throw new Error('OpenRouter choice missing message field');
             }
 
-            const text = choice.message.content || '{}';
+            // CRITICAL: Validate message content exists
+            const text = choice.message.content;
+            if (text === null || text === undefined) {
+                throw new Error('OpenRouter message content is null or undefined');
+            }
+
+            // Convert to string and handle empty responses
+            const textStr = String(text).trim();
+            if (textStr.length === 0) {
+                throw new Error('OpenRouter returned empty message content');
+            }
+
             const finishReason = choice.finish_reason || 'UNKNOWN';
 
-            // FIXED: Extract JSON from markdown code blocks if present
+            // CRITICAL: Extract JSON from markdown code blocks if present
             // Some models (like DeepSeek) wrap JSON in ```json ... ```
-            let cleanedText = text.trim();
+            let cleanedText = textStr;
             const jsonBlockMatch = cleanedText.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
-            if (jsonBlockMatch) {
+            if (jsonBlockMatch && jsonBlockMatch[1]) {
                 cleanedText = jsonBlockMatch[1].trim();
             }
 
-            // FIXED: Validate JSON before returning
+            // CRITICAL: Validate JSON before returning
             try {
                 JSON.parse(cleanedText);
             } catch (parseError) {
@@ -629,16 +863,14 @@ class GeminiService {
 
             return { text: cleanedText, finishReason };
         } catch (error: any) {
-            clearTimeout(timeoutId); // FIXED: Clear timeout on error
-
-            // FIXED: Better error messages for different error types
+            // CRITICAL: Better error messages for different error types
             if (error.name === 'AbortError') {
                 throw new Error(
                     `OpenRouter request timeout after ${config.ai.requestTimeoutMs}ms for model ${config.ai.openRouterModel}`
                 );
             }
 
-            // FIXED: Handle rate limiting specifically
+            // CRITICAL: Handle rate limiting specifically
             if (error.message?.includes('429') || error.message?.toLowerCase().includes('rate limit')) {
                 throw new Error(
                     `OpenRouter rate limit exceeded for model ${config.ai.openRouterModel}. ${error.message}`
@@ -647,6 +879,10 @@ class GeminiService {
 
             // Re-throw with context
             throw new Error(`OpenRouter request failed: ${error.message}`);
+        } finally {
+            // CRITICAL: Always clear timeout in finally block to prevent memory leak
+            // This runs whether the request succeeds, fails, or is aborted
+            clearTimeout(timeoutId);
         }
     }
 

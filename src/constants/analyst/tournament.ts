@@ -1,5 +1,5 @@
 /**
- * Tournament Judging Criteria (Stage 4 - from FLOW.md)
+ * Tournament Judging Criteria (Stage 3 - Championship from FLOW.md)
  * 
  * These criteria are used to judge analyst debates in the Championship Tournament.
  * Each criterion is worth 25 points (0-25 scale), total 100 points.

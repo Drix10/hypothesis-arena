@@ -3,10 +3,22 @@
  * 
  * Applied to ALL analysts regardless of methodology.
  * Designed to prevent catastrophic losses in leveraged crypto trading.
+ * 
+ * IMPORTANT: Any changes to MAX_SAFE_LEVERAGE require:
+ * 1. Risk assessment review
+ * 2. Stop loss adjustment validation
+ * 3. Stakeholder sign-off
+ * 4. Integration/backtest validation
  */
 
 export const GLOBAL_RISK_LIMITS = {
-    MAX_SAFE_LEVERAGE: 5, // Never exceed 5x leverage in crypto
+    // Maximum leverage allowed by the system
+    // WARNING: High leverage significantly increases liquidation risk
+    // At 5x leverage, a 20% adverse move = liquidation
+    // At 3x leverage, a 33% adverse move = liquidation (safer)
+    // This is the ABSOLUTE MAXIMUM - config.autonomous.maxLeverage can be lower but not higher
+    // CRITICAL: Do NOT increase without risk assessment and stakeholder sign-off
+    MAX_SAFE_LEVERAGE: 5, // Absolute max 5x leverage (safe default)
     MAX_POSITION_SIZE_PERCENT: 30, // Max 30% of portfolio in single position (matches FLOW.md and RISK_COUNCIL_VETO_TRIGGERS)
 
     // Maximum total capital allocated across all leveraged positions (not leveraged notional)
@@ -41,20 +53,77 @@ export const GLOBAL_RISK_LIMITS = {
     },
 
     // Stop loss requirements by analyst methodology (percentage from entry price)
-    // Calibrated for MAX_SAFE_LEVERAGE = 5x. At 5x leverage, a 20% stop = 100% account loss.
-    // These values ensure worst-case (leverage × stopPercent) stays below ~90% liquidation threshold.
-    // If MAX_SAFE_LEVERAGE changes, these values must be updated proportionally.
+    // These values are calibrated for MAX_SAFE_LEVERAGE of 5x:
+    // At 5x leverage with 5% stop = 25% account loss on that position (manageable)
+    // At 5x leverage with 8% stop = 40% account loss on that position (aggressive)
+    // IMPORTANT: If leverage increases, stop losses MUST be tightened proportionally
+    // Formula: effective_risk = leverage × stop_percent
+    // Target: effective_risk ≤ 40% per position
     STOP_LOSS_REQUIREMENTS: {
-        VALUE: 10, // Max -10% from entry or 200-week MA break (5x × 10% = 50% notional loss)
-        GROWTH: 10, // Max -10% from entry or narrative breaks (5x × 10% = 50% notional loss)
-        TECHNICAL: 8, // Max -8% from entry or key support breaks (5x × 8% = 40% notional loss)
-        MACRO: 10, // Max -10% from entry or macro thesis invalidates (5x × 10% = 50% notional loss)
-        SENTIMENT: 10, // Max -10% from entry or sentiment reverses (5x × 10% = 50% notional loss)
-        RISK: 8, // Max -8% from entry (most conservative, 5x × 8% = 40% notional loss)
-        QUANT: 10, // Max -10% from entry or statistical edge disappears (5x × 10% = 50% notional loss)
-        CONTRARIAN: 8 // Max -8% from entry or extreme becomes more extreme (5x × 8% = 40% notional loss)
+        VALUE: 5, // Max -5% from entry or 200-week MA break (5x × 5% = 25% risk)
+        GROWTH: 5, // Max -5% from entry or narrative breaks (5x × 5% = 25% risk)
+        TECHNICAL: 4, // Max -4% from entry or key support breaks (5x × 4% = 20% risk)
+        MACRO: 5, // Max -5% from entry or macro thesis invalidates (5x × 5% = 25% risk)
+        SENTIMENT: 5, // Max -5% from entry or sentiment reverses (5x × 5% = 25% risk)
+        RISK: 4, // Max -4% from entry (most conservative) (5x × 4% = 20% risk)
+        QUANT: 5, // Max -5% from entry or statistical edge disappears (5x × 5% = 25% risk)
+        CONTRARIAN: 4 // Max -4% from entry or extreme becomes more extreme (5x × 4% = 20% risk)
     }
 };
+
+/**
+ * Calculate leverage-adjusted stop loss
+ * Ensures effective risk (leverage × stop%) stays within safe bounds
+ * 
+ * NOTE: This function is currently NOT USED in production.
+ * Stop losses are pre-calibrated for MAX_SAFE_LEVERAGE (5x) in STOP_LOSS_REQUIREMENTS.
+ * This function exists for future use if dynamic leverage adjustment is needed.
+ * 
+ * @param baseStopPercent - Base stop loss percentage from STOP_LOSS_REQUIREMENTS (must be > 0)
+ * @param leverage - Actual leverage being used (must be > 0)
+ * @param maxEffectiveRisk - Maximum effective risk (default 40%, must be > 0)
+ * @returns Adjusted stop loss percentage
+ * @throws Error if any parameter is invalid (≤ 0, NaN, or Infinity)
+ * 
+ * @example
+ * // At 5x leverage with 5% stop, effective risk = 25% (safe)
+ * getLeverageAdjustedStopLoss(5, 5, 40) // Returns 5 (no adjustment needed)
+ * 
+ * @example
+ * // At 10x leverage with 5% stop, effective risk = 50% (too high)
+ * getLeverageAdjustedStopLoss(5, 10, 40) // Returns 4 (tightened to 40% effective risk)
+ */
+export function getLeverageAdjustedStopLoss(
+    baseStopPercent: number,
+    leverage: number,
+    maxEffectiveRisk: number = 40
+): number {
+    // Validate inputs to prevent division by zero and invalid calculations
+    if (!Number.isFinite(baseStopPercent) || baseStopPercent <= 0) {
+        throw new Error(
+            `Invalid baseStopPercent: ${baseStopPercent}. Must be a positive finite number > 0.`
+        );
+    }
+    if (!Number.isFinite(leverage) || leverage <= 0) {
+        throw new Error(
+            `Invalid leverage: ${leverage}. Must be a positive finite number > 0.`
+        );
+    }
+    if (!Number.isFinite(maxEffectiveRisk) || maxEffectiveRisk <= 0) {
+        throw new Error(
+            `Invalid maxEffectiveRisk: ${maxEffectiveRisk}. Must be a positive finite number > 0.`
+        );
+    }
+
+    // Effective risk = leverage × stop%
+    // If effective risk > maxEffectiveRisk, tighten stop
+    const effectiveRisk = leverage * baseStopPercent;
+    if (effectiveRisk > maxEffectiveRisk) {
+        // Solve: leverage × newStop = maxEffectiveRisk
+        return maxEffectiveRisk / leverage;
+    }
+    return baseStopPercent;
+}
 
 /**
  * @deprecated Use GLOBAL_RISK_LIMITS.MAX_POSITION_SIZE_PERCENT instead.
