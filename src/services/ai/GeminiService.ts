@@ -24,9 +24,6 @@ import { getSystemPrompt } from '../../constants/prompts/promptHelpers';
 import { arenaContextBuilder, FullArenaContext } from '../../constants/ArenaContext';
 import { circuitBreakerService, CircuitBreakerStatus } from '../risk/CircuitBreakerService';
 
-// Re-export arena context types for external use
-export type { FullArenaContext } from '../../constants/ArenaContext';
-
 // Use config values instead of hardcoded constants
 const AI_REQUEST_TIMEOUT = config.ai.analysisTimeoutMs; // 90 seconds for detailed analysis
 const VALID_RECOMMENDATIONS = ['strong_buy', 'buy', 'hold', 'sell', 'strong_sell'] as const;

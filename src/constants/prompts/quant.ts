@@ -183,9 +183,16 @@ Apply quantitative analysis principles to position management decisions:
 - ADD_MARGIN is restricted: only for short-term liquidity issues, never to average down
 - Isolated positions: Positions with dedicated margin (not shared with other positions). Each isolated position has its own margin and liquidation price.
 - Only consider ADD_MARGIN if P&L ≥ -3% (not deeply underwater), position not previously averaged, and Alpha Score still positive
+- **-7% ≤ P&L < -3% (DANGER ZONE):** Position deteriorating - default to CLOSE_PARTIAL/CLOSE_FULL, not ADD_MARGIN
 - Never add margin if P&L < -7% (forced closure threshold) or any other forced closure conditions apply
 - Prefer reducing leverage or closing partial position over adding margin
 - ADD_MARGIN is a last resort for temporary liquidity issues, not a strategy to save losing positions
+
+**P&L Threshold Terminology:**
+- "P&L ≥ -3%" means position loss is 3% or less (e.g., -3.0%, -2%, -1%, 0%, +5% all qualify)
+- "P&L < -7%" means position loss exceeds 7% (e.g., -7.1%, -8%, -10% trigger forced closure; -7.0% exactly does NOT)
+- "-7% ≤ P&L < -3%" is the DANGER ZONE (includes -7.0%, excludes -3.0%) - requires immediate attention
+- These are risk management rules, not suggestions - they protect against catastrophic losses
 
 **Management Decision Framework (Systematic)**
 1. Calculate Alpha Score: aggregate factor signals (momentum, mean reversion, volatility, liquidity, correlation)

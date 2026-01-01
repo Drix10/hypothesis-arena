@@ -1617,6 +1617,42 @@ export class CollaborativeFlowService {
             if (coinSymbol && actionFound) break;
         }
 
+        // CRITICAL FIX: Validate MANAGE action - coin must have an open position
+        // If MANAGE is selected for a coin without a position, fall back to LONG
+        if (action === 'MANAGE' && coinSymbol) {
+            const hasPosition = positionSymbols.some(ps => ps.toLowerCase() === coinSymbol.toLowerCase());
+            if (!hasPosition) {
+                logger.warn(`⚠️ MANAGE action selected for ${coinSymbol} but no position exists`);
+                logger.info(`Available positions: ${positionSymbols.join(', ') || 'none'}`);
+
+                // Try to find a position that was mentioned in the winner's arguments
+                let foundPositionCoin = '';
+                for (const turn of winnerTurns) {
+                    const arg = turn.argument || '';
+                    for (const posSymbol of positionSymbols) {
+                        const posName = cleanSymbol(posSymbol);
+                        const posRegex = new RegExp(`\\b${posName}\\b`, 'i');
+                        if (posRegex.test(arg)) {
+                            foundPositionCoin = posSymbol;
+                            logger.info(`Found position ${posSymbol} mentioned in arguments, switching to it`);
+                            break;
+                        }
+                    }
+                    if (foundPositionCoin) break;
+                }
+
+                if (foundPositionCoin) {
+                    // Switch to the position that was actually mentioned
+                    coinSymbol = foundPositionCoin;
+                    logger.info(`Switched MANAGE target to ${coinSymbol} (has open position)`);
+                } else {
+                    // No position mentioned - fall back to LONG for the selected coin
+                    action = 'LONG';
+                    logger.warn(`No valid position for MANAGE, falling back to ${action} ${coinSymbol}`);
+                }
+            }
+        }
+
         if (!coinSymbol) {
             logger.warn('Could not extract coin from winner arguments, using BTC as fallback');
             // Verify BTC is in available coins before using as fallback
@@ -2096,6 +2132,46 @@ export class CollaborativeFlowService {
                 }
                 if (parsed.manageType === 'ADD_MARGIN' && !parsed.marginAmount) {
                     throw new Error('ADD_MARGIN requires marginAmount');
+                }
+
+                // CRITICAL: Validate closePercent range
+                if (parsed.closePercent !== undefined) {
+                    const pct = Number(parsed.closePercent);
+                    if (!Number.isFinite(pct) || pct < 1 || pct > 99) {
+                        throw new Error(`closePercent must be between 1 and 99, got: ${parsed.closePercent}`);
+                    }
+                }
+
+                // CRITICAL: Validate price values are positive
+                if (parsed.newStopLoss !== undefined) {
+                    const sl = Number(parsed.newStopLoss);
+                    if (!Number.isFinite(sl) || sl <= 0) {
+                        throw new Error(`newStopLoss must be positive, got: ${parsed.newStopLoss}`);
+                    }
+                }
+                if (parsed.newTakeProfit !== undefined) {
+                    const tp = Number(parsed.newTakeProfit);
+                    if (!Number.isFinite(tp) || tp <= 0) {
+                        throw new Error(`newTakeProfit must be positive, got: ${parsed.newTakeProfit}`);
+                    }
+                }
+
+                // CRITICAL: Validate marginAmount is positive and reasonable
+                if (parsed.marginAmount !== undefined) {
+                    const margin = Number(parsed.marginAmount);
+                    if (!Number.isFinite(margin) || margin <= 0) {
+                        throw new Error(`marginAmount must be positive, got: ${parsed.marginAmount}`);
+                    }
+                    // Sanity check: margin shouldn't exceed $10,000 in a single add
+                    if (margin > 10000) {
+                        throw new Error(`marginAmount ${margin} exceeds safety limit of $10,000`);
+                    }
+                }
+
+                // CRITICAL: Validate conviction is in range
+                const conviction = Number(parsed.conviction);
+                if (!Number.isFinite(conviction) || conviction < 1 || conviction > 10) {
+                    logger.warn(`Invalid conviction ${parsed.conviction}, clamping to 1-10 range`);
                 }
 
                 logger.info(`\n${'='.repeat(60)}`);

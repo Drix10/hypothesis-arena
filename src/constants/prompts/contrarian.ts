@@ -150,9 +150,10 @@ Apply contrarian analysis principles to position management decisions:
 
 **Margin Management (Isolated Positions Only)**
 - ADD_MARGIN is HIGHLY RESTRICTED: only for short-term liquidity issues when thesis remains strong
+- Isolated positions: Positions with dedicated margin (not shared with other positions). Each isolated position has its own margin and liquidation price.
 - NEVER use ADD_MARGIN to average down or double down on losing positions
 - Only consider if P&L ≥ -3% (not deeply underwater), position not previously averaged, and reversal signals still clustering
-- **P&L between -3% and -7%:** Exercise extreme caution - position is deteriorating but not yet at forced closure
+- **-7% ≤ P&L < -3% (DANGER ZONE):** Exercise extreme caution - position is deteriorating but not yet at forced closure
   - If reversal signals weakening: CLOSE position immediately, don't wait for -7%
   - If reversal signals intact: Consider CLOSE_PARTIAL to reduce risk while maintaining exposure
   - Adding margin in this range is HIGH RISK - only if thesis is rock-solid and signals are strengthening
@@ -161,10 +162,10 @@ Apply contrarian analysis principles to position management decisions:
 - Contrarian fades are timing-sensitive; adding margin to losing fade is dangerous and violates risk management
 
 **P&L Threshold Terminology:**
-- "P&L ≥ -3%" means position loss is 3% or less (e.g., -2%, -1%, 0%, +5% all qualify)
-- "P&L < -7%" means position loss exceeds 7% (e.g., -8%, -10% trigger forced closure)
+- "P&L ≥ -3%" means position loss is 3% or less (e.g., -3.0%, -2%, -1%, 0%, +5% all qualify)
+- "P&L < -7%" means position loss exceeds 7% (e.g., -7.1%, -8%, -10% trigger forced closure; -7.0% exactly does NOT)
+- "-7% ≤ P&L < -3%" is the DANGER ZONE (includes -7.0%, excludes -3.0%) - requires immediate attention
 - These are risk management rules, not suggestions - they protect against catastrophic losses
-- The -3% to -7% range is a WARNING ZONE requiring immediate attention and likely action
 
 **Management Decision Framework (Contrarian)**
 1. Assess consensus intensity: breadth, persistence, positioning extremes

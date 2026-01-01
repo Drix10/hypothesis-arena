@@ -178,9 +178,10 @@ Apply macro analysis principles to position management decisions:
 
 **Margin Management (Isolated Positions Only)**
 - ADD_MARGIN is HIGHLY RESTRICTED: only for short-term liquidity issues, never to average down
+- Isolated positions: Positions with dedicated margin (not shared with other positions). Each isolated position has its own margin and liquidation price.
 - **Threshold Logic (boundaries are INCLUSIVE on the stated side):**
   - P&L ≥ -3%: Position is "not deeply underwater" (includes exactly -3.0%) - ADD_MARGIN may be considered if all other conditions met
-  - P&L between -3% and -7%: DANGER ZONE (excludes -3.0%, includes -7.0%) - position deteriorating rapidly, default to CLOSE_PARTIAL/CLOSE_FULL
+  - -7% ≤ P&L < -3%: DANGER ZONE - position deteriorating rapidly, default to CLOSE_PARTIAL/CLOSE_FULL
   - P&L < -7%: FORCED CLOSURE ZONE (excludes -7.0%, e.g., -7.1% or worse) - ADD_MARGIN forbidden, must close position immediately
 - Only consider ADD_MARGIN if: P&L ≥ -3%, position not previously averaged, macro thesis fully intact, and short-term liquidity issue only
 - Prefer reducing leverage or closing partial position over adding margin
@@ -189,7 +190,7 @@ Apply macro analysis principles to position management decisions:
 **P&L Threshold Terminology:**
 - "P&L ≥ -3%" means position loss is 3% or less (e.g., -3.0%, -2%, -1%, 0%, +5% all qualify)
 - "P&L < -7%" means position loss exceeds 7% (e.g., -7.1%, -8%, -10% trigger forced closure)
-- "between -3% and -7%" means strictly greater than -3% and up to -7% (e.g., -3.1%, -5%, -7.0% are in this range)
+- "-7% ≤ P&L < -3%" is the DANGER ZONE (includes -7.0%, excludes -3.0%) - requires immediate attention
 - These are risk management rules, not suggestions - they protect against catastrophic losses
 
 **Management Decision Framework**

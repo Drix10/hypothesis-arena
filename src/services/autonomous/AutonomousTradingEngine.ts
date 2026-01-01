@@ -195,6 +195,7 @@ export class AutonomousTradingEngine extends EventEmitter {
     private cleanupInProgress = false; // FIXED: Guard against concurrent cleanup
     private startLock: Promise<void> | null = null; // Mutex for start operation
     private cycleCount = 0;
+    private totalDebatesRun = 0; // FIXED: Track cumulative debates across all cycles
     private consecutiveFailures = 0; // Track consecutive failures for backoff
     private readonly MAX_CONSECUTIVE_FAILURES = 10; // Circuit breaker threshold
     private analystStates = new Map<string, AnalystState>();
@@ -376,14 +377,6 @@ export class AutonomousTradingEngine extends EventEmitter {
     }
 
     /**
-     * Check if engine should stop (for use in long-running operations)
-     * @returns true if engine should continue, false if it should stop
-     */
-    shouldContinue(): boolean {
-        return this.isRunning;
-    }
-
-    /**
      * Complete the current cycle with proper cleanup
      * FIXED: Update analyst portfolios after each cycle to keep P&L attribution current
      */
@@ -392,6 +385,10 @@ export class AutonomousTradingEngine extends EventEmitter {
 
         this.currentCycle.endTime = Date.now();
         const cycleDuration = this.currentCycle.endTime - cycleStart;
+
+        // FIXED: Accumulate total debates across all cycles for frontend display
+        this.totalDebatesRun += this.currentCycle.debatesRun;
+
         logger.info(`✅ Cycle #${this.cycleCount} complete (${reason}): ${this.currentCycle.tradesExecuted} trades, ${this.currentCycle.debatesRun} debates (${(cycleDuration / 1000).toFixed(1)}s)`);
 
         // Update analyst virtual portfolios with latest P&L attribution
@@ -450,6 +447,8 @@ export class AutonomousTradingEngine extends EventEmitter {
             dryRun: config.autonomous.dryRun,
             analysts,
             currentCycle: this.currentCycle,
+            // FIXED: Include totalDebatesRun for frontend display
+            totalDebatesRun: this.totalDebatesRun,
             sharedPortfolio: {
                 balance: sharedBalance,
                 totalTrades: sharedTotalTrades,
@@ -458,6 +457,7 @@ export class AutonomousTradingEngine extends EventEmitter {
             stats: {
                 totalTrades: sharedTotalTrades,
                 tradesThisCycle: this.currentCycle?.tradesExecuted || 0,
+                totalDebates: this.totalDebatesRun, // Also in stats for backward compat
                 avgCycleTime: this.CYCLE_INTERVAL_MS,
             },
             nextCycleIn: this.currentCycle
@@ -961,11 +961,48 @@ export class AutonomousTradingEngine extends EventEmitter {
 
         const { winner: coinSelectorWinner, coinSymbol, action, debate: coinDebate } = coinSelectionDebate;
 
+        // INCREMENT DEBATES COUNTER: Stage 2 (Coin Selection) debate completed successfully
+        // This must happen BEFORE branching to MANAGE or LONG/SHORT paths
+        if (this.currentCycle) {
+            this.currentCycle.debatesRun++;
+        }
+
         // Handle MANAGE action - route to position management flow
         if (action === 'MANAGE') {
             logger.info(`\n${'='.repeat(60)}`);
             logger.info(`🚪 MANAGE ACTION SELECTED: ${coinSymbol}`);
             logger.info(`${'='.repeat(60)}\n`);
+
+            // CRITICAL: Check circuit breaker status for MANAGE actions
+            // RED alert = close all positions immediately (override any other decision)
+            // ORANGE alert = close losing positions, tighten stops on winners
+            if (config.autonomous.enableCircuitBreakers) {
+                try {
+                    const circuitStatus = await circuitBreakerService.checkCircuitBreakers();
+                    if (circuitStatus.level === 'RED') {
+                        logger.error(`🚨 CIRCUIT BREAKER RED: Forcing CLOSE_FULL for all positions`);
+                        // Force close all positions - override AI decision
+                        for (const pos of portfolioPositions) {
+                            try {
+                                await this.weexClient.closeAllPositions(pos.symbol);
+                                logger.info(`✅ Emergency closed ${pos.symbol} due to RED circuit breaker`);
+                            } catch (closeError) {
+                                logger.error(`Failed to emergency close ${pos.symbol}:`, closeError);
+                            }
+                        }
+                        await this.updateLeaderboard();
+                        await this.completeCycle(cycleStart, 'circuit breaker RED - emergency close');
+                        const sleepTime = this.getSleepTimeWithBackoff(cycleStart);
+                        if (sleepTime > 0 && this.isRunning) await this.sleep(sleepTime);
+                        return;
+                    } else if (circuitStatus.level === 'ORANGE') {
+                        logger.warn(`⚠️ CIRCUIT BREAKER ORANGE: Will prioritize closing losing positions`);
+                        // Continue with MANAGE but log the elevated risk
+                    }
+                } catch (cbError) {
+                    logger.warn('Circuit breaker check failed, continuing with MANAGE:', cbError);
+                }
+            }
 
             // Find the position to manage - case-insensitive match with fallback to partial match
             const normalizedCoinSymbol = coinSymbol.toLowerCase();
@@ -1154,6 +1191,13 @@ export class AutonomousTradingEngine extends EventEmitter {
                             if (!closePercent || closePercent < 1 || closePercent > 99) {
                                 throw new Error(`Invalid closePercent for TAKE_PARTIAL: ${closePercent}. Must be between 1 and 99`);
                             }
+
+                            // CRITICAL: TAKE_PARTIAL should only be used for profitable positions
+                            // If position is at a loss, use CLOSE_PARTIAL instead (different intent)
+                            if (positionToManage.unrealizedPnlPercent < 0) {
+                                logger.warn(`⚠️ TAKE_PARTIAL on losing position (${positionToManage.unrealizedPnlPercent.toFixed(2)}%). Consider CLOSE_PARTIAL for loss-cutting.`);
+                            }
+
                             const profitSize = roundToStepSize(
                                 (positionToManage.size * closePercent) / 100,
                                 positionToManage.symbol
@@ -1190,6 +1234,22 @@ export class AutonomousTradingEngine extends EventEmitter {
                             }
                             if (positionToManage.side === 'SHORT' && newStopLoss <= positionToManage.currentPrice) {
                                 throw new Error(`Stop loss for SHORT must be above current price: ${newStopLoss} <= ${positionToManage.currentPrice}`);
+                            }
+
+                            // CRITICAL: Validate that new stop is actually TIGHTER (closer to current price)
+                            // For LONG: tighter = higher stop loss (closer to current price from below)
+                            // For SHORT: tighter = lower stop loss (closer to current price from above)
+                            // We need to compare against entry price to determine if it's tighter
+                            if (positionToManage.side === 'LONG') {
+                                // For LONG, new SL should be higher than entry (protecting profits) or at least not worse
+                                if (newStopLoss < positionToManage.entryPrice * 0.95) {
+                                    logger.warn(`⚠️ New stop loss ${newStopLoss} is more than 5% below entry ${positionToManage.entryPrice} - this is loosening, not tightening`);
+                                }
+                            } else {
+                                // For SHORT, new SL should be lower than entry (protecting profits) or at least not worse
+                                if (newStopLoss > positionToManage.entryPrice * 1.05) {
+                                    logger.warn(`⚠️ New stop loss ${newStopLoss} is more than 5% above entry ${positionToManage.entryPrice} - this is loosening, not tightening`);
+                                }
                             }
 
                             // Check both camelCase and snake_case field names
@@ -1296,14 +1356,39 @@ export class AutonomousTradingEngine extends EventEmitter {
                                 throw new Error(`Invalid marginAmount: ${marginAmount}`);
                             }
 
+                            // CRITICAL: Validate P&L is a finite number before threshold checks
+                            if (!Number.isFinite(positionToManage.unrealizedPnlPercent)) {
+                                throw new Error(`ADD_MARGIN forbidden: Invalid P&L value (${positionToManage.unrealizedPnlPercent}). Cannot proceed with non-finite P&L.`);
+                            }
+
+                            // CRITICAL: Enforce ADD_MARGIN restrictions per MANAGE_TRADING_RULES
+                            // Check most severe condition first (-7%) then less severe (-3%)
+
+                            // 1. Never allowed if P&L < -7% (must close instead)
+                            if (positionToManage.unrealizedPnlPercent < -7) {
+                                throw new Error(`ADD_MARGIN forbidden: P&L ${positionToManage.unrealizedPnlPercent.toFixed(2)}% < -7%. Must close position instead.`);
+                            }
+
+                            // 2. Only allowed if P&L >= -3% (not deeply underwater)
+                            if (positionToManage.unrealizedPnlPercent < -3) {
+                                throw new Error(`ADD_MARGIN forbidden: P&L ${positionToManage.unrealizedPnlPercent.toFixed(2)}% < -3%. Position is too underwater - consider CLOSE_FULL instead.`);
+                            }
+
                             // Verify position is isolated mode
                             if (positionToManage.marginMode !== 'ISOLATED') {
-                                throw new Error(`ADD_MARGIN only allowed for isolated positions. Current mode: ${positionToManage.marginMode || 'UNKNOWN'}`);
+                                throw new Error(`ADD_MARGIN only allowed for isolated positions. Current mode: ${positionToManage.marginMode || 'CROSS (default)'}`);
                             }
 
                             // Verify we have isolatedPositionId
                             if (!positionToManage.isolatedPositionId || !Number.isFinite(positionToManage.isolatedPositionId)) {
-                                throw new Error(`Missing isolatedPositionId for ${positionToManage.symbol}`);
+                                throw new Error(`Missing isolatedPositionId for ${positionToManage.symbol}. Cannot adjust margin without position ID.`);
+                            }
+
+                            // Validate margin amount is reasonable (max 50% of position value)
+                            const positionValue = positionToManage.size * positionToManage.currentPrice;
+                            const maxMarginAdd = positionValue * 0.5;
+                            if (marginAmount > maxMarginAdd) {
+                                throw new Error(`Margin amount ${marginAmount} exceeds 50% of position value (${maxMarginAdd.toFixed(2)}). Consider closing position instead.`);
                             }
 
                             await this.weexClient.adjustPositionMargin({
@@ -1311,7 +1396,7 @@ export class AutonomousTradingEngine extends EventEmitter {
                                 collateralAmount: String(marginAmount), // Positive value = add margin
                                 coinId: 2 // USDT
                             });
-                            actionDetails = `Added ${marginAmount} USDT margin`;
+                            actionDetails = `Added ${marginAmount} USDT margin to isolated position`;
                             actionSuccess = true;
                             logger.info(`✅ ${actionDetails}`);
                             break;
@@ -1477,9 +1562,30 @@ export class AutonomousTradingEngine extends EventEmitter {
                 });
             logger.info(`📊 Fresh position count: ${portfolioPositions.length}`);
         } catch (error) {
-            logger.warn('Failed to refresh positions for early exit checks, using cached data:', error);
-            // Continue with stale data - better than crashing
+            // CRITICAL: Position refresh failure during decision-making is serious
+            // Stale data could lead to:
+            // - False negatives on max position checks (trading when at limit)
+            // - Duplicate position checks missing actual positions
+            // - Incorrect exposure calculations
+            logger.error('🚨 Failed to refresh positions for early exit checks - data may be stale:', error);
+
+            // If we have no cached positions at all, we must abort
+            // (we can't make safe decisions without any position data)
+            if (!portfolioPositions || portfolioPositions.length === 0) {
+                logger.error('🚨 No cached position data available - aborting cycle for safety');
+                if (this.currentCycle) {
+                    this.currentCycle.errors.push('Position refresh failed with no cached data');
+                }
+                await this.updateLeaderboard();
+                await this.completeCycle(cycleStart, 'position refresh failed (no cache)');
+                const sleepTime = this.getSleepTimeWithBackoff(cycleStart);
+                if (sleepTime > 0 && this.isRunning) await this.sleep(sleepTime);
+                return;
+            }
+
+            // We have cached data - continue with warning
             // Stage 4 (Risk Council) will validate positions again before approval
+            logger.warn(`⚠️ Continuing with ${portfolioPositions.length} cached positions - Risk Council will re-validate`);
         }
 
         // OPTIMIZATION: Early exit if we already have max positions
@@ -1655,9 +1761,7 @@ export class AutonomousTradingEngine extends EventEmitter {
 
         logger.info(`✅ All 8 early exit checks passed - proceeding to Stage 3 (Championship)`);
 
-        if (this.currentCycle) {
-            this.currentCycle.debatesRun++;
-        }
+        // NOTE: debatesRun already incremented after Stage 2 validation (before MANAGE/LONG/SHORT branching)
 
         // Log debate turns - FULL arguments, no truncation
         logger.info(`\n${'='.repeat(60)}`);
@@ -1880,8 +1984,41 @@ export class AutonomousTradingEngine extends EventEmitter {
             if (Number.isFinite(freshPrice) && freshPrice > 0) {
                 // CRITICAL: Validate championshipMarketData.currentPrice before division
                 const oldPrice = championshipMarketData.currentPrice;
+                const isBullish = ['strong_buy', 'buy'].includes(adjustedChampion.recommendation);
+
                 if (!Number.isFinite(oldPrice) || oldPrice <= 0) {
-                    logger.warn(`⚠️ Invalid old price ${oldPrice}, skipping price target recalculation`);
+                    // CRITICAL FIX: If old price is invalid, original targets might also be invalid
+                    // Use default targets based on fresh price instead of potentially invalid original targets
+                    logger.warn(`⚠️ Invalid old price ${oldPrice}, using default targets based on fresh price`);
+
+                    const defaultSlPct = 0.015; // 1.5% stop loss (risk)
+                    const defaultTpPct = 0.03; // 3% take profit (reward) = 2:1 ratio
+
+                    if (isBullish) {
+                        adjustedChampion.priceTarget = {
+                            ...adjustedChampion.priceTarget,
+                            base: freshPrice * (1 + defaultTpPct),
+                            bear: freshPrice * (1 - defaultSlPct)
+                        };
+                    } else {
+                        adjustedChampion.priceTarget = {
+                            ...adjustedChampion.priceTarget,
+                            base: freshPrice * (1 - defaultTpPct),
+                            bear: freshPrice * (1 + defaultSlPct)
+                        };
+                    }
+
+                    logger.warn(`⚠️ Default targets applied: TP ${adjustedChampion.priceTarget.base.toFixed(6)}, SL ${adjustedChampion.priceTarget.bear.toFixed(6)} (2:1 R/R)`);
+
+                    // Update market data with fresh price
+                    riskCouncilMarketData = {
+                        ...championshipMarketData,
+                        currentPrice: freshPrice,
+                        high24h: parseFloat(freshTicker.high_24h) || championshipMarketData.high24h,
+                        low24h: parseFloat(freshTicker.low_24h) || championshipMarketData.low24h,
+                        fundingRate: parseFloat(freshFunding.fundingRate || '0'),
+                        fetchTimestamp: Date.now(),
+                    };
                 } else {
                     const priceChange = Math.abs((freshPrice - oldPrice) / oldPrice * 100);
                     const dataAge = championshipMarketData.fetchTimestamp ? Math.floor((Date.now() - championshipMarketData.fetchTimestamp) / 1000) : 0;
@@ -3095,6 +3232,25 @@ export class AutonomousTradingEngine extends EventEmitter {
             this.cycleCount = 0;
             this.consecutiveFailures = 0;
             this.mainLoopPromise = null;
+
+            // FIXED: Reset totalDebatesRun to prevent stale count on restart
+            this.totalDebatesRun = 0;
+
+            // FIXED: Reset contract specs tracker to force fresh fetch on restart
+            this.contractSpecsTracker.reset();
+
+            // FIXED: Reset snapshot tracking to prevent stale state
+            this.lastSnapshotCleanup = 0;
+            this.snapshotFailureCount = 0;
+
+            // FIXED: Clear weekly P&L cache
+            this.weeklyPnLCache = null;
+
+            // FIXED: Cleanup AILogService state
+            aiLogService.cleanup();
+
+            // FIXED: Cleanup CollaborativeFlowService to free AI model resources
+            collaborativeFlowService.cleanup();
 
             // FIXED: Remove all listeners with error handling
             try {

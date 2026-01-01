@@ -182,9 +182,10 @@ Apply risk management principles to position management decisions:
 
 **Margin Management (Isolated Positions Only)**
 - ADD_MARGIN is HIGHLY RESTRICTED from risk perspective
+- Isolated positions: Positions with dedicated margin (not shared with other positions). Each isolated position has its own margin and liquidation price.
 - **Threshold Logic (Risk-First, boundaries are INCLUSIVE on the stated side):**
   - P&L ≥ -3%: Position "not deeply underwater" (includes exactly -3.0%) - ADD_MARGIN may be considered if liquidation buffer >25% and all other conditions met
-  - P&L between -3% and -7%: DANGER ZONE (excludes -3.0%, includes -7.0%) - position deteriorating rapidly
+  - -7% ≤ P&L < -3%: DANGER ZONE - position deteriorating rapidly
     - Default action: CLOSE_PARTIAL or CLOSE_FULL to preserve capital
     - Adding margin in this range is EXTREMELY HIGH RISK - almost never justified
     - Only consider if: liquidation buffer >30%, all risk signals green, temporary liquidity issue only
@@ -196,7 +197,7 @@ Apply risk management principles to position management decisions:
 **P&L Threshold Terminology:**
 - "P&L ≥ -3%" means position loss is 3% or less (e.g., -3.0%, -2%, -1%, 0%, +5% all qualify)
 - "P&L < -7%" means position loss exceeds 7% (e.g., -7.1%, -8%, -10% trigger forced closure)
-- "between -3% and -7%" means strictly greater than -3% and up to -7% (e.g., -3.1%, -5%, -7.0% are in this range)
+- "-7% ≤ P&L < -3%" is the DANGER ZONE (includes -7.0%, excludes -3.0%) - requires immediate attention
 - These are risk management rules, not suggestions - they protect against catastrophic losses
 - "Liquidation buffer" refers to distance between current price and liquidation price (expressed as %)
 - "Short-term liquidity issue" means temporary margin pressure, NOT fundamental position loss

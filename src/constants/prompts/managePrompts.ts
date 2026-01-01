@@ -310,7 +310,7 @@ DECISION RULES (MUST FOLLOW)
 
 🚫 ADD_MARGIN RESTRICTIONS:
 - ONLY allowed if P&L >= -3% (not deeply underwater)
-- NEVER allowed if P&L < -7% (must close instead)
+- P&L < -7%: MUST close position immediately (system enforced)
 - NEVER allowed if position was previously averaged down
 - ONLY for isolated positions with short-term liquidity issues
 - Must have valid thesis and no invalidation signals
@@ -427,18 +427,20 @@ ${priorityLabel} PRIORITY | ${symbol} ${position.side}
 
 /**
  * Trading rules specific to position management
+ * Cross-referenced with WEEX API documentation
  */
 export const MANAGE_TRADING_RULES = `
 ═══════════════════════════════════════════════════════════════════════════════
-POSITION MANAGEMENT RULES (MANDATORY)
+POSITION MANAGEMENT RULES (MANDATORY - ENFORCED BY SYSTEM)
 ═══════════════════════════════════════════════════════════════════════════════
 
-🚨 LOSS MANAGEMENT (NON-NEGOTIABLE):
+🚨 LOSS MANAGEMENT (NON-NEGOTIABLE - SYSTEM ENFORCED):
 1. P&L < -7%: MUST close position immediately (no exceptions)
 2. P&L < -5%: Strongly consider closing; thesis must be re-validated
 3. Never average down on a losing position
 4. Never move stop-loss further from entry to "give it room"
-5. ADD_MARGIN forbidden if P&L < -7% (must close instead)
+5. ADD_MARGIN forbidden if P&L < -3% (system will reject)
+6. P&L < -7%: MUST close position immediately (system enforced)
 
 💰 PROFIT MANAGEMENT:
 1. P&L > +15%: Take at least 50% profits or tighten stop to +10%
@@ -456,23 +458,67 @@ POSITION MANAGEMENT RULES (MANDATORY)
 2. Funding > 0.05% against position: Reduce hold time by 50%
 3. Cumulative funding > 1% of position: Consider closing
 
-🛡️ ADD_MARGIN RESTRICTIONS (CRITICAL):
+🛡️ ADD_MARGIN RESTRICTIONS (CRITICAL - SYSTEM ENFORCED):
 1. ONLY allowed if P&L >= -3% (not deeply underwater)
 2. NEVER allowed if P&L < -7% (must close position instead)
 3. NEVER allowed if position was previously averaged down
-4. ONLY for isolated positions with short-term liquidity issues
+4. ONLY for ISOLATED margin positions (not cross margin)
 5. Must have valid thesis with no invalidation signals
-6. Restricted to positions with temporary margin pressure, not fundamental losses
+6. Max margin add = 50% of position value (system enforced)
+7. Requires isolatedPositionId from WEEX position data
 
-📊 WEEX EXECUTION (API Reference):
-- Close Position: POST /capi/v2/order/closePositions
-- Partial Close: Use PLACE_ORDER with type 3 (close long) or 4 (close short)
-- Modify TP/SL: POST /capi/v2/order/modifyTpSlOrder
-- Rate Limit: 10 orders/second for place/cancel
+📊 WEEX API EXECUTION REFERENCE:
+┌─────────────────────────────────────────────────────────────────┐
+│ CLOSE_FULL:                                                     │
+│   Endpoint: POST /capi/v2/order/closePositions                  │
+│   Weight: IP=40, UID=50                                         │
+│   Params: { symbol: "cmt_btcusdt" }                             │
+│   Response: [{ positionId, success, successOrderId, errorMsg }] │
+├─────────────────────────────────────────────────────────────────┤
+│ CLOSE_PARTIAL / TAKE_PARTIAL:                                   │
+│   Endpoint: POST /capi/v2/order/placeOrder                      │
+│   Weight: IP=2, UID=5                                           │
+│   Params: { symbol, type: "3"(close long)/"4"(close short),     │
+│            size, match_price: "1" (market) }                    │
+├─────────────────────────────────────────────────────────────────┤
+│ TIGHTEN_STOP / ADJUST_TP:                                       │
+│   Endpoint: POST /capi/v2/order/modifyTpSlOrder                 │
+│   Weight: IP=2, UID=5                                           │
+│   Params: { orderId, triggerPrice, executePrice: "0" (market) } │
+│   Note: If no existing order, use placeTpSlOrder instead        │
+├─────────────────────────────────────────────────────────────────┤
+│ ADD_MARGIN:                                                     │
+│   Endpoint: POST /capi/v2/account/adjustMargin                  │
+│   Weight: IP=15, UID=30                                         │
+│   Params: { isolatedPositionId, collateralAmount: "+X" (add) }  │
+│   Note: ONLY for isolated positions, requires position ID       │
+└─────────────────────────────────────────────────────────────────┘
 
-⚠️ IMMEDIATE ACTION TRIGGERS:
-- Circuit breaker RED: Close ALL positions immediately
-- Circuit breaker ORANGE: Close losing positions, tighten stops on winners
+⚠️ IMMEDIATE ACTION TRIGGERS (CIRCUIT BREAKER):
+
+CIRCUIT BREAKER DEFINITIONS (from GLOBAL_RISK_LIMITS):
+┌─────────────────────────────────────────────────────────────────┐
+│ YELLOW (CAUTION):                                               │
+│   Triggers: BTC drops >10% in 4h OR portfolio down >10% in 24h  │
+│             OR |funding rate| >0.25%                            │
+│   Meaning: Elevated risk, reduce exposure                       │
+│   Action: Reduce all leverage to 3x max, close speculative      │
+│           positions, no new high-risk trades                    │
+├─────────────────────────────────────────────────────────────────┤
+│ ORANGE (HIGH RISK):                                             │
+│   Triggers: BTC drops >15% in 4h OR portfolio down >15% in 24h  │
+│             OR |funding rate| >0.4%                             │
+│   Meaning: Major market stress, defensive posture required      │
+│   Action: Reduce all leverage to 2x max, close all positions    │
+│           with size <5, close losing positions                  │
+├─────────────────────────────────────────────────────────────────┤
+│ RED (EMERGENCY):                                                │
+│   Triggers: BTC drops >20% in 4h OR portfolio down >25% in 24h  │
+│   Meaning: Liquidation cascade risk, capital preservation mode  │
+│   Action: CLOSE ALL positions immediately (system override)     │
+│           Convert to stablecoins, no new trades until clear     │
+└─────────────────────────────────────────────────────────────────┘
+
 - BTC flash crash > 5%: Close all altcoin positions
 `;
 

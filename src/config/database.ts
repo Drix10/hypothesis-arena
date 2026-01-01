@@ -408,14 +408,15 @@ export const startDatabaseHealthCheck = () => {
         isHealthCheckRunning = true;
         lastHealthCheckTime = now;
 
+        let healthCheckTimeoutId: NodeJS.Timeout | null = null;
         try {
             // Use a lightweight Prisma query that validates schema and connection
             // Use Portfolio model since it's guaranteed to exist in your schema
             await Promise.race([
                 prisma.portfolio.findFirst({ select: { id: true }, take: 1 }),
-                new Promise((_, reject) =>
-                    setTimeout(() => reject(new Error('Health check timeout')), 15000) // 15s timeout - balance between responsiveness and Turso latency
-                )
+                new Promise((_, reject) => {
+                    healthCheckTimeoutId = setTimeout(() => reject(new Error('Health check timeout')), 15000); // 15s timeout - balance between responsiveness and Turso latency
+                })
             ]);
 
             // Reset failure counter on success
@@ -441,6 +442,11 @@ export const startDatabaseHealthCheck = () => {
                 }
             }
         } finally {
+            // FIXED: Clear timeout to prevent memory leak
+            if (healthCheckTimeoutId) {
+                clearTimeout(healthCheckTimeoutId);
+                healthCheckTimeoutId = null;
+            }
             isHealthCheckRunning = false;
         }
     }, 180000); // Check every 3 minutes

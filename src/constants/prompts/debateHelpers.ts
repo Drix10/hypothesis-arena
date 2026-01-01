@@ -42,16 +42,26 @@ export function buildCoinSelectionContext(
             return `  • ${cleanSymbol(p.symbol)} ${p.side}: Entry $${safeNumber(p.entryPrice, 2)} → $${safeNumber(p.currentPrice, 2)} | P&L: ${pnlSign}${safeNumber(p.unrealizedPnlPercent, 2)}% | Hold: ${holdDays}d`;
         }).join('\n');
 
+        // Create list of position symbols for the constraint
+        const positionSymbolsList = currentPositions.map(p => cleanSymbol(p.symbol)).join(', ');
+
         portfolioSection = `
 ═══════════════════════════════════════════════════════════════════════════════
 CURRENT PORTFOLIO (${currentPositions.length} position${currentPositions.length > 1 ? 's' : ''})
 ═══════════════════════════════════════════════════════════════════════════════
 ${positionsList}
 
-⚠️ You can select "MANAGE" action for any existing position if it needs attention:
-- P&L > +15% → consider taking profits
-- P&L < -7% → consider cutting losses
-- Hold > 5 days → thesis may be stale
+⚠️ MANAGE ACTION RULES:
+- You can ONLY select "MANAGE" for coins WITH open positions: ${positionSymbolsList}
+- Do NOT select MANAGE for coins without positions
+- MANAGE triggers: P&L > +15% (take profits), P&L < -7% (cut losses), Hold > 5 days (stale thesis)
+`;
+    } else {
+        portfolioSection = `
+═══════════════════════════════════════════════════════════════════════════════
+CURRENT PORTFOLIO: EMPTY (no open positions)
+═══════════════════════════════════════════════════════════════════════════════
+⚠️ No positions to manage - you MUST select LONG or SHORT for a new trade.
 `;
     }
 

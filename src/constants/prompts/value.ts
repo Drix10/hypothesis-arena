@@ -201,9 +201,17 @@ Apply value investing principles to position management decisions:
 
 **Margin Management (Isolated Positions Only)**
 - ADD_MARGIN is restricted: only for short-term liquidity issues, never to average down
+- Isolated positions: Positions with dedicated margin (not shared with other positions). Each isolated position has its own margin and liquidation price.
 - Only consider if P&L ≥ -3%, position not previously averaged, and thesis fully intact
+- **-7% ≤ P&L < -3% (DANGER ZONE):** Position deteriorating - default to CLOSE_PARTIAL/CLOSE_FULL, not ADD_MARGIN
 - Prefer reducing leverage or closing partial position over adding margin
-- Never add margin if P&L < -7% or any forced closure conditions apply
+- Never add margin if P&L < -7% (forced closure threshold) or any forced closure conditions apply
+
+**P&L Threshold Terminology:**
+- "P&L ≥ -3%" means position loss is 3% or less (e.g., -3.0%, -2%, -1%, 0%, +5% all qualify)
+- "P&L < -7%" means position loss exceeds 7% (e.g., -7.1%, -8%, -10% trigger forced closure; -7.0% exactly does NOT)
+- "-7% ≤ P&L < -3%" is the DANGER ZONE (includes -7.0%, excludes -3.0%) - requires immediate attention
+- These are risk management rules, not suggestions - they protect against catastrophic losses
 
 **Management Decision Framework**
 1. Assess fundamental health: revenue, margins, competitive position, execution

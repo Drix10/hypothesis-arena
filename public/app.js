@@ -173,7 +173,11 @@ function attachEventListeners() {
       const target = e.target;
       if (target.classList.contains("btn-close-position")) {
         const symbol = target.dataset.symbol;
-        if (symbol) closePosition(symbol);
+        const side = target.dataset.side;
+        const size = target.dataset.size;
+        if (symbol && side && size) {
+          closePosition(symbol, side, size);
+        }
       }
     });
   }
@@ -274,7 +278,10 @@ function updateEngineUI(status) {
   updateText("cycle-count", status.cycleCount ?? 0);
   updateText(
     "debates-run",
-    status.currentCycle?.debatesRun ?? status.stats?.totalDebates ?? 0
+    status.totalDebatesRun ??
+      status.currentCycle?.debatesRun ??
+      status.stats?.totalDebates ??
+      0
   );
 
   // Mode badge
@@ -439,6 +446,8 @@ function renderPositionCard(pos) {
   const symbol = formatSymbol(pos.symbol);
   const pnlClass = pnl >= 0 ? "positive" : "negative";
   const rawSymbol = pos.symbol || "";
+  const rawSide = (pos.side || "").toUpperCase();
+  const rawSize = pos.size || "0";
 
   return `
     <div class="position-card" role="listitem">
@@ -451,6 +460,8 @@ function renderPositionCard(pos) {
         <button 
           class="btn-close-position" 
           data-symbol="${escapeHtml(rawSymbol)}"
+          data-side="${escapeHtml(rawSide)}"
+          data-size="${escapeHtml(rawSize)}"
           aria-label="Close position"
           title="Close position">
           ✕
@@ -819,10 +830,14 @@ async function triggerCycle() {
   }
 }
 
-async function closePosition(symbol) {
-  if (!symbol) return;
+async function closePosition(symbol, side, size) {
+  if (!symbol || !side || !size) return;
 
-  if (!confirm(`Close position for ${formatSymbol(symbol)}?`)) {
+  if (
+    !confirm(
+      `Close ${side} position for ${formatSymbol(symbol)} (${size} units)?`
+    )
+  ) {
     return;
   }
 
@@ -841,7 +856,7 @@ async function closePosition(symbol) {
     const res = await fetch(`${CONFIG.API_BASE}/trading/manual/close`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ symbol }),
+      body: JSON.stringify({ symbol, side, size }),
       signal: controller.signal,
     });
 

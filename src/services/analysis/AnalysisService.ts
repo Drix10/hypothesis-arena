@@ -1,3 +1,15 @@
+/**
+ * Analysis Service
+ * 
+ * NOTE: This service is a placeholder. The 'analyses' table doesn't exist in the Prisma schema.
+ * The getRecentAnalyses method returns an empty array for API compatibility.
+ * 
+ * If analysis history is needed in the future:
+ * 1. Add an 'Analysis' model to prisma/schema.prisma
+ * 2. Run prisma migrate dev
+ * 3. Implement actual database queries here
+ */
+
 import { logger } from '../../utils/logger';
 
 export interface Analysis {
@@ -18,16 +30,13 @@ export interface Analysis {
     expiresAt: number;
 }
 
-export class AnalysisService {
+class AnalysisService {
     /**
-     * Get recent analyses with optional symbol filter
-     * 
-     * NOTE: The 'analyses' table doesn't exist in the Prisma schema.
-     * This method returns an empty array until the analyses table is added to the schema.
-     * Kept for backward compatibility with existing API routes.
+     * Get recent analyses - returns empty array (table doesn't exist)
+     * Kept for backward compatibility with /api/analysis/history endpoint
      */
     async getRecentAnalyses(_symbol?: string, _limit: number = 20): Promise<Analysis[]> {
-        logger.debug('getRecentAnalyses called but analyses table does not exist in schema');
+        logger.debug('getRecentAnalyses: analyses table not implemented');
         return [];
     }
 }

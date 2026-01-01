@@ -72,8 +72,17 @@ export class AILogService {
 
         try {
             // Get up to 10 failed logs from database
+            // CRITICAL: Exclude permanently failed logs (those with FAILED_AFTER_* sentinel)
             const failedLogs = await prisma.aILog.findMany({
-                where: { uploadedToWeex: false },
+                where: {
+                    uploadedToWeex: false,
+                    // Exclude logs that have been permanently marked as failed
+                    NOT: {
+                        weexLogId: {
+                            startsWith: 'FAILED_AFTER_'
+                        }
+                    }
+                },
                 take: 10,
                 orderBy: { timestamp: 'asc' }
             });
@@ -91,19 +100,22 @@ export class AILogService {
                     // CRITICAL: Check retry attempts to prevent infinite retries
                     const attempts = this.retryAttempts.get(dbLog.id) || 0;
                     if (attempts >= this.MAX_RETRY_ATTEMPTS) {
-                        logger.error(`❌ Log ${dbLog.id} exceeded max retry attempts (${this.MAX_RETRY_ATTEMPTS}), removing from retry queue`);
+                        logger.error(`❌ Log ${dbLog.id} exceeded max retry attempts (${this.MAX_RETRY_ATTEMPTS}), marking as permanently failed`);
                         this.failedUploads.delete(dbLog.id);
                         this.retryAttempts.delete(dbLog.id);
 
-                        // Mark as uploaded in DB to stop future retries
+                        // CRITICAL FIX: Mark as permanently failed with sentinel value
+                        // Keep uploadedToWeex: false to indicate it was never successfully uploaded
+                        // Use weexLogId sentinel to exclude from future retry queries
                         try {
                             await prisma.aILog.update({
                                 where: { id: dbLog.id },
                                 data: {
-                                    uploadedToWeex: true,
-                                    weexLogId: `FAILED_AFTER_${this.MAX_RETRY_ATTEMPTS}_ATTEMPTS`
+                                    uploadedToWeex: false, // NOT uploaded - this is a failure
+                                    weexLogId: `FAILED_AFTER_${this.MAX_RETRY_ATTEMPTS}_ATTEMPTS_${Date.now()}`
                                 }
                             });
+                            logger.warn(`📝 Log ${dbLog.id} marked as permanently failed (will not be retried)`);
                         } catch (updateError) {
                             logger.warn(`Failed to mark log ${dbLog.id} as permanently failed:`, updateError);
                         }
@@ -581,6 +593,19 @@ export class AILogService {
             // Don't throw - log upload failure shouldn't block trading
             // But the error is logged and database reflects failed state for potential retry
         }
+    }
+
+    /**
+     * Cleanup method for graceful shutdown
+     * Resets all in-memory state to prevent memory leaks
+     */
+    cleanup(): void {
+        this.failedUploads.clear();
+        this.retryAttempts.clear();
+        this.retryInProgress = false;
+        this.lastRetryAttempt = 0;
+        this.lastLogCleanup = 0;
+        logger.debug('AILogService cleaned up');
     }
 }
 

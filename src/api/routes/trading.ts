@@ -321,7 +321,7 @@ router.post('/manual/close', async (req: Request, res: Response, next: NextFunct
             return;
         }
 
-        const { symbol } = req.body;
+        const { symbol, side, size } = req.body;
 
         if (!symbol || typeof symbol !== 'string') {
             res.status(400).json({ error: 'Symbol is required', code: 'INVALID_SYMBOL' });
@@ -348,51 +348,45 @@ router.post('/manual/close', async (req: Request, res: Response, next: NextFunct
             return;
         }
 
-        // FIXED: Use dedicated WEEX closePositions endpoint (more reliable)
-        // This is the recommended way per WEEX documentation
-        const closeResponse = await weexClient.closeAllPositions(normalizedSymbol);
+        // FIXED: Use closePartialPosition for targeted close (closes only the specific position)
+        // This prevents accidentally closing multiple positions for the same symbol
+        const positionSide = (side || position.side || '').toUpperCase() as 'LONG' | 'SHORT';
+        const positionSize = size || position.size;
 
-        // FIXED: Handle response array (WEEX returns array of results)
-        if (!Array.isArray(closeResponse) || closeResponse.length === 0) {
-            throw new Error('Invalid response from WEEX closePositions endpoint');
-        }
-
-        // FIXED: Iterate over all results and collect failures
-        const failures: Array<{ positionId: string; error: string }> = [];
-        const successes: Array<{ positionId: string; orderId: string }> = [];
-
-        for (const result of closeResponse) {
-            if (!result.success) {
-                failures.push({
-                    positionId: result.positionId?.toString() || 'unknown',
-                    error: result.errorMessage || 'Unknown error'
-                });
-            } else {
-                successes.push({
-                    positionId: result.positionId?.toString() || 'unknown',
-                    orderId: result.successOrderId?.toString() || '0'
-                });
-            }
-        }
-
-        // If any failures, return error with details
-        if (failures.length > 0) {
-            res.status(500).json({
-                error: 'Failed to close one or more positions',
-                code: 'PARTIAL_CLOSE_FAILED',
-                failures,
-                successes,
-                totalAttempted: closeResponse.length,
-                successCount: successes.length,
-                failureCount: failures.length
+        if (positionSide !== 'LONG' && positionSide !== 'SHORT') {
+            res.status(400).json({
+                error: 'Invalid position side. Must be LONG or SHORT',
+                code: 'INVALID_SIDE',
+                side: positionSide
             });
             return;
         }
 
-        // All successful - use first result for backward compatibility
-        const firstSuccess = successes[0];
+        // Validate size
+        const sizeNum = parseFloat(positionSize);
+        if (!Number.isFinite(sizeNum) || sizeNum <= 0) {
+            res.status(400).json({
+                error: 'Invalid position size',
+                code: 'INVALID_SIZE',
+                size: positionSize
+            });
+            return;
+        }
+
+        // Use closePartialPosition with full size to close the specific position
+        const closeResponse = await weexClient.closePartialPosition(
+            normalizedSymbol,
+            positionSide,
+            String(positionSize),
+            '1' // Market order
+        );
+
+        if (!closeResponse || !closeResponse.order_id) {
+            throw new Error('Invalid response from WEEX closePartialPosition endpoint');
+        }
+
         const tradeId = uuid();
-        const orderId = firstSuccess.orderId;
+        const orderId = closeResponse.order_id;
 
         // FIXED: Log to database with proper error handling
         try {
@@ -405,7 +399,7 @@ router.post('/manual/close', async (req: Request, res: Response, next: NextFunct
                 // CRITICAL FIX: Map WEEX position side to Prisma enum
                 // WEEX uses: LONG/SHORT
                 // Prisma enum: BUY/SELL
-                const prismaSide = position.side.toUpperCase() === 'LONG' ? 'BUY' : 'SELL';
+                const prismaSide = positionSide === 'LONG' ? 'BUY' : 'SELL';
 
                 await withTransaction(async (client) => {
                     await client.query(
@@ -417,7 +411,7 @@ router.post('/manual/close', async (req: Request, res: Response, next: NextFunct
                             normalizedSymbol,
                             prismaSide,
                             'MARKET',
-                            parseFloat(position.size),
+                            sizeNum,
                             0, // Market close
                             'FILLED',
                             `manual_close_${Date.now()}`,
@@ -441,13 +435,12 @@ router.post('/manual/close', async (req: Request, res: Response, next: NextFunct
                         {
                             symbol: normalizedSymbol,
                             action: 'close_position',
-                            side: position.side,
-                            size: parseFloat(position.size),
+                            side: positionSide,
+                            size: sizeNum,
                             source: 'ui'
                         },
                         {
                             orderId,
-                            positionId: firstSuccess.positionId,
                             success: true
                         },
                         'Manual position close via UI',
@@ -469,22 +462,20 @@ router.post('/manual/close', async (req: Request, res: Response, next: NextFunct
         }
 
         logger.info(`Manual position closed: ${normalizedSymbol}`, {
-            side: position.side,
-            size: position.size,
+            side: positionSide,
+            size: positionSize,
             orderId,
-            positionId: firstSuccess.positionId,
-            tradeId,
-            totalClosed: successes.length
+            tradeId
         });
 
         res.json({
             success: true,
             message: 'Position closed successfully',
             symbol: normalizedSymbol,
+            side: positionSide,
+            size: positionSize,
             orderId,
-            positionId: firstSuccess.positionId,
-            tradeId,
-            closedPositions: successes.length
+            tradeId
         });
 
     } catch (error: any) {
