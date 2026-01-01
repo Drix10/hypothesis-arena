@@ -843,7 +843,7 @@ Benefits of Structured Outputs:
 │                                                                  │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
-│  EDGE CASES HANDLED (v3.0.0):                                   │
+│  EDGE CASES HANDLED (v3.0.1):                                   │
 │                                                                  │
 │  ✓ Number.isFinite() guards on all calculations                │
 │  ✓ Division by zero protection                                 │

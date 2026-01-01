@@ -8,7 +8,7 @@
   *8 AI analysts collaborate through turn-by-turn debates on ONE shared portfolio, then execute trades on WEEX futures*
   
   [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-blue?logo=typescript)](https://www.typescriptlang.org/)
-  [![React](https://img.shields.io/badge/React-19-61dafb?logo=react)](https://react.dev/)
+  [![Node.js](https://img.shields.io/badge/Node.js-18+-green?logo=node.js)](https://nodejs.org/)
   [![Express](https://img.shields.io/badge/Express-5-000000?logo=express)](https://expressjs.com/)
   [![Gemini](https://img.shields.io/badge/Gemini-2.5_Flash-4285F4?logo=google)](https://ai.google.dev/)
   [![WEEX](https://img.shields.io/badge/WEEX-Futures-00D4AA)](https://www.weex.com/)
@@ -50,7 +50,7 @@ Hypothesis Arena is an AI-powered crypto trading platform where **8 specialized 
 │                                                                  │
 │   STAGE 1: MARKET SCAN          "What's happening?"             │
 │      ↓ (WeexClient.ts)          Fetch data for 8 coins          │
-│   STAGE 2: OPPORTUNITY SELECT    "Trade or Manage?"              │
+│   STAGE 2: OPPORTUNITY SELECTION    "Trade or Manage?"              │
 │      ↓ (CollaborativeFlow.ts)   4-way debate, 8 turns           │
 │      │                          Can select MANAGE action        │
 │      ├─[MANAGE]→ Close Position → Log to DB → DONE              │
@@ -355,7 +355,7 @@ MIT License - see [LICENSE](LICENSE) for details.
   
   **Built for WEEX Hackathon 2025**
   
-  Express 5 • Gemini 2.5 Flash • WEEX Futures API • React 19
+  Express 5 • Gemini 2.5 Flash • WEEX Futures API • SQLite/Turso
   
   ⭐ Star if you find this useful • 🐛 Report bugs • 💡 Suggest features
   
