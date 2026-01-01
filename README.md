@@ -10,7 +10,6 @@
   [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-blue?logo=typescript)](https://www.typescriptlang.org/)
   [![Node.js](https://img.shields.io/badge/Node.js-18+-green?logo=node.js)](https://nodejs.org/)
   [![Express](https://img.shields.io/badge/Express-5-000000?logo=express)](https://expressjs.com/)
-  [![Gemini](https://img.shields.io/badge/Gemini-2.5_Flash-4285F4?logo=google)](https://ai.google.dev/)
   [![WEEX](https://img.shields.io/badge/WEEX-Futures-00D4AA)](https://www.weex.com/)
   
   **🏆 WEEX Hackathon 2025 Submission**
@@ -68,7 +67,7 @@ Hypothesis Arena is an AI-powered crypto trading platform where **8 specialized 
 │   STAGE 8: POSITION MANAGEMENT  "Monitor until exit"            │
 │      (AutonomousTradingEngine.ts)                               │
 │                                                                  │
-│   TOTAL: 40 debate turns per cycle | ~42 Gemini API calls       │
+│   TOTAL: 40 debate turns per cycle | ~42 AI API calls          │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -100,7 +99,7 @@ hypothesis-arena/
 | Layer    | Technology                          |
 | -------- | ----------------------------------- |
 | Backend  | Express 5, TypeScript, SQLite/Turso |
-| AI       | Google Gemini 2.5 Flash             |
+| AI       | Gemini / OpenRouter / DeepSeek      |
 | Exchange | WEEX Futures API                    |
 | Frontend | Vanilla HTML/CSS/JS (polling-based) |
 
@@ -112,7 +111,7 @@ hypothesis-arena/
 
 - Node.js 18+
 - SQLite (included) or Turso account for production
-- Gemini API key ([Google AI Studio](https://aistudio.google.com/apikey))
+- AI API key (Gemini, OpenRouter, or DeepSeek)
 - WEEX API credentials ([WEEX](https://www.weex.com/api))
 
 ### Installation
@@ -150,8 +149,12 @@ DATABASE_URL=file:./prisma/dev.db
 # For Turso: DATABASE_URL=libsql://your-db.turso.io
 # TURSO_AUTH_TOKEN=your_token
 
-# AI
-GEMINI_API_KEY=your_gemini_api_key
+# AI Provider (gemini, openrouter, or deepseek)
+AI_PROVIDER=gemini
+GEMINI_API_KEY=your_api_key
+# OR
+# OPENROUTER_API_KEY=your_api_key
+# OPENROUTER_MODEL=deepseek/deepseek-chat-v3.1
 
 # WEEX Exchange
 WEEX_API_KEY=your_weex_api_key
@@ -300,7 +303,7 @@ src/
 ├── services/
 │   ├── ai/
 │   │   ├── CollaborativeFlow.ts  # Turn-by-turn debate engine
-│   │   └── GeminiService.ts      # Gemini API client
+│   │   └── AIService.ts           # AI provider abstraction
 │   ├── autonomous/
 │   │   ├── AutonomousTradingEngine.ts  # Main orchestration
 │   │   └── TradingScheduler.ts         # Market-aware scheduling
@@ -355,7 +358,7 @@ MIT License - see [LICENSE](LICENSE) for details.
   
   **Built for WEEX Hackathon 2025**
   
-  Express 5 • Gemini 2.5 Flash • WEEX Futures API • SQLite/Turso
+  Express 5 • AI-Powered • WEEX Futures API • SQLite/Turso
   
   ⭐ Star if you find this useful • 🐛 Report bugs • 💡 Suggest features
   

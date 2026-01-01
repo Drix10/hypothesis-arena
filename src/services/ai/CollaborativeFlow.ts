@@ -444,7 +444,7 @@ ${buildDebateTurnPrompt(analystName, analystMethodology, previousArguments, turn
             if (candidates && candidates.length > 0) {
                 const finishReason = candidates[0].finishReason || 'UNKNOWN';
                 if (finishReason !== 'STOP') {
-                    logger.warn(`⚠️ Gemini finish reason: ${finishReason} (expected STOP)`);
+                    logger.warn(`⚠️ AI finish reason: ${finishReason} (expected STOP)`);
                 }
             }
 

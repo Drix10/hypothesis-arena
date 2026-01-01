@@ -870,6 +870,30 @@ body {
     flex-wrap: wrap;
 }
 
+.btn-close-position {
+    margin-left: auto;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    width: 28px;
+    height: 28px;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: var(--transition-fast);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+    padding: 0;
+}
+
+.btn-close-position:hover {
+    background: var(--danger-bg);
+    border-color: var(--danger);
+    color: var(--danger);
+    transform: scale(1.1);
+}
+
 .position-symbol {
     font-size: 1.1rem;
     font-weight: 800;

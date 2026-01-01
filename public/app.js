@@ -165,6 +165,18 @@ function attachEventListeners() {
         if (symbol) showMarketInfo(symbol);
       }
     });
+
+  // FIXED: Event delegation for position close buttons (prevents memory leak)
+  const positionsContainer = document.getElementById("positions-list");
+  if (positionsContainer) {
+    positionsContainer.addEventListener("click", (e) => {
+      const target = e.target;
+      if (target.classList.contains("btn-close-position")) {
+        const symbol = target.dataset.symbol;
+        if (symbol) closePosition(symbol);
+      }
+    });
+  }
 }
 
 function handleKeyboardShortcuts(e) {
@@ -411,6 +423,7 @@ async function fetchPositions() {
     if (countEl) countEl.textContent = activePositions.length;
 
     if (activePositions.length > 0) {
+      // FIXED: No need to attach listeners - using event delegation on container
       container.innerHTML = activePositions.map(renderPositionCard).join("");
     } else {
       container.innerHTML = renderEmptyState("📭", "No open positions");
@@ -425,6 +438,7 @@ function renderPositionCard(pos) {
   const side = (pos.side || "").toLowerCase();
   const symbol = formatSymbol(pos.symbol);
   const pnlClass = pnl >= 0 ? "positive" : "negative";
+  const rawSymbol = pos.symbol || "";
 
   return `
     <div class="position-card" role="listitem">
@@ -434,6 +448,13 @@ function renderPositionCard(pos) {
     side.toUpperCase()
   )}</span>
         <span class="position-leverage">${pos.leverage || 1}x</span>
+        <button 
+          class="btn-close-position" 
+          data-symbol="${escapeHtml(rawSymbol)}"
+          aria-label="Close position"
+          title="Close position">
+          ✕
+        </button>
       </div>
       <div class="position-details">
         <div class="position-detail">
@@ -790,10 +811,61 @@ async function triggerCycle() {
     showAlert(`❌ Error: ${err.message}`, "error");
   } finally {
     state.isEngineActionPending = false;
+
     if (btnTrigger) {
       btnTrigger.disabled = false;
       btnTrigger.removeAttribute("aria-busy");
     }
+  }
+}
+
+async function closePosition(symbol) {
+  if (!symbol) return;
+
+  if (!confirm(`Close position for ${formatSymbol(symbol)}?`)) {
+    return;
+  }
+
+  // FIXED: Disable all close buttons to prevent duplicate requests
+  const buttons = document.querySelectorAll(".btn-close-position");
+  buttons.forEach((btn) => {
+    btn.disabled = true;
+    btn.setAttribute("aria-busy", "true");
+  });
+
+  // FIXED: Add timeout to prevent hanging requests
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+  try {
+    const res = await fetch(`${CONFIG.API_BASE}/trading/manual/close`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ symbol }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+    const data = await res.json();
+
+    if (res.ok && data.success) {
+      showAlert(`✅ Position closed: ${formatSymbol(symbol)}`, "success");
+      await refreshAll();
+    } else {
+      showAlert(`❌ Failed: ${data.error || "Unknown error"}`, "error");
+    }
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err.name === "AbortError") {
+      showAlert("❌ Request timeout - please try again", "error");
+    } else {
+      showAlert(`❌ Error: ${err.message}`, "error");
+    }
+  } finally {
+    buttons.forEach((btn) => {
+      btn.disabled = false;
+      btn.removeAttribute("aria-busy");
+    });
   }
 }
 

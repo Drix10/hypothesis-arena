@@ -140,6 +140,7 @@ model PerformanceSnapshot {
 
   portfolio Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
 
+  @@unique([portfolioId, timestamp]) // FIXED: Prevent duplicate snapshots (race condition)
   @@index([portfolioId])
   @@index([timestamp])
   @@index([portfolioId, timestamp])

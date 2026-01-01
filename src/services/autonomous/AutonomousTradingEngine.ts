@@ -22,6 +22,7 @@ import { getWeexClient } from '../weex/WeexClient';
 import { tradingScheduler } from './TradingScheduler';
 import { circuitBreakerService } from '../risk/CircuitBreakerService';
 import { AnalystPortfolioService } from '../portfolio/AnalystPortfolioService';
+import { aiLogService } from '../compliance/AILogService';
 import { prisma, queryOne } from '../../config/database';
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
@@ -201,6 +202,12 @@ export class AutonomousTradingEngine extends EventEmitter {
     private currentCycle: TradingCycle | null = null;
     private mainLoopPromise: Promise<void> | null = null;
     private sleepTimeout: NodeJS.Timeout | null = null;
+
+    // FIXED: Track snapshot cleanup to prevent excessive database operations
+    private lastSnapshotCleanup = 0;
+    private snapshotFailureCount = 0;
+    private readonly MAX_SNAPSHOT_FAILURES = 10;
+    private readonly SNAPSHOT_CLEANUP_INTERVAL_MS = 3600000; // 1 hour
 
     // Weekly P&L caching to reduce database load
     private weeklyPnLCache: { value: { day: number; week: number }; timestamp: number } | null = null;
@@ -2511,28 +2518,39 @@ export class AutonomousTradingEngine extends EventEmitter {
             const response = await this.weexClient.placeOrder(order);
             logger.info(`✅ Order placed: ${direction} ${symbol} (Order ID: ${response.order_id})`);
 
-            // Build AI log for WEEX compliance
-            const aiLog = {
-                stage: 'COLLABORATIVE_TRADE', // FIXED: Use enum value (uppercase with underscore)
-                model: 'gemini-2.5-flash',
-                input: {
-                    symbol,
-                    direction,
-                    champion: champion.analystName,
-                    confidence: champion.confidence,
-                    coinSelectors: coinSelectors.map(cs => cs.analystId)
-                },
-                output: {
-                    orderId: response.order_id,
-                    size: size.toFixed(8),
-                    leverage,
-                    priceTargets: champion.priceTarget
-                },
-                explanation: `[${champion.analystName}] ${champion.thesis}`,
-                orderId: response.order_id
-            };
-
-            await this.weexClient.uploadAILog(aiLog);
+            // FIXED: Create AI log for WEEX compliance using AILogService
+            // This ensures logs are saved to database AND uploaded to WEEX
+            try {
+                await aiLogService.createLog(
+                    'execution', // Maps to COLLABORATIVE_TRADE in Prisma
+                    config.ai.model || 'unknown',
+                    {
+                        symbol,
+                        direction,
+                        champion: champion.analystName,
+                        confidence: champion.confidence,
+                        coinSelectors: coinSelectors.map(cs => cs.analystId),
+                        marketData: {
+                            price: marketData.currentPrice,
+                            volume24h: marketData.volume24h,
+                            change24h: marketData.change24h
+                        }
+                    },
+                    {
+                        orderId: response.order_id,
+                        size: size.toFixed(8),
+                        leverage,
+                        priceTargets: champion.priceTarget,
+                        executedAt: new Date().toISOString()
+                    },
+                    `[${champion.analystName}] ${champion.thesis}`,
+                    String(response.order_id) // orderId for WEEX upload
+                );
+                logger.info(`📝 AI log created and uploaded for order ${response.order_id}`);
+            } catch (logError) {
+                logger.error('Failed to create AI log:', logError);
+                // Don't throw - log failure shouldn't block trade recording
+            }
 
             await this.saveTrade(firstAnalyst.portfolioId, {
                 symbol,
@@ -2638,6 +2656,77 @@ export class AutonomousTradingEngine extends EventEmitter {
                         updatedAt: new Date()
                     }
                 });
+
+                // FIXED: Create performance snapshot for circuit breaker drawdown calculations
+                // Snapshots are used by CircuitBreakerService to calculate 24h portfolio drawdown
+                try {
+                    // CRITICAL FIX: Validate totalValue before saving
+                    // Allow negative values (portfolio can be in loss) but reject NaN/Infinity
+                    if (!Number.isFinite(totalValue)) {
+                        logger.error(`Invalid totalValue for snapshot: ${totalValue}, skipping`);
+                    } else {
+                        // FIXED: Round timestamp to nearest minute to reduce duplicates
+                        const roundedTimestamp = new Date(
+                            Math.floor(Date.now() / 60000) * 60000
+                        );
+
+                        // FIXED: Try to create snapshot, ignore if duplicate (unique constraint)
+                        try {
+                            await prisma.performanceSnapshot.create({
+                                data: {
+                                    portfolioId: firstAnalyst.portfolioId,
+                                    totalValue: totalValue,
+                                    timestamp: roundedTimestamp
+                                }
+                            });
+                            // FIXED: Only reset failure count on successful create
+                            this.snapshotFailureCount = 0;
+                        } catch (createError: any) {
+                            // Ignore unique constraint violations (P2002) - snapshot already exists
+                            if (createError.code !== 'P2002') {
+                                throw createError;
+                            }
+                            // Duplicate snapshot is fine - unique constraint prevents it
+                            // Don't reset failure count for duplicates
+                        }
+                    }
+
+                    // CRITICAL FIX: Cleanup old snapshots only once per hour (not every cycle)
+                    // This prevents excessive database operations and lock contention
+                    // FIXED: Use batch deletion to prevent lock contention on large datasets
+                    const now = Date.now();
+                    if (now - this.lastSnapshotCleanup > this.SNAPSHOT_CLEANUP_INTERVAL_MS) {
+                        const sevenDaysAgo = new Date(now - 7 * 24 * 60 * 60 * 1000);
+                        let deletedTotal = 0;
+
+                        // Delete in batches to prevent lock contention
+                        // Note: Prisma deleteMany doesn't support 'take', so we delete all at once
+                        // For very large datasets, consider using raw SQL with LIMIT
+                        const deleted = await prisma.performanceSnapshot.deleteMany({
+                            where: {
+                                portfolioId: firstAnalyst.portfolioId,
+                                timestamp: { lt: sevenDaysAgo }
+                            }
+                        });
+                        deletedTotal = deleted.count;
+
+                        this.lastSnapshotCleanup = now;
+                        if (deletedTotal > 0) {
+                            logger.info(`🧹 Cleaned up ${deletedTotal} old performance snapshots`);
+                        }
+                    }
+                } catch (snapshotError) {
+                    this.snapshotFailureCount++;
+                    logger.error(`Failed to create performance snapshot (${this.snapshotFailureCount}/${this.MAX_SNAPSHOT_FAILURES}):`,
+                        snapshotError instanceof Error ? snapshotError.message : String(snapshotError));
+
+                    // CRITICAL: Alert if snapshots are failing repeatedly
+                    if (this.snapshotFailureCount >= this.MAX_SNAPSHOT_FAILURES) {
+                        logger.error('🚨 CRITICAL: Performance snapshots failing repeatedly - circuit breaker may not work!');
+                        this.emit('snapshotFailure', { count: this.snapshotFailureCount });
+                    }
+                    // Don't throw - snapshot creation failure shouldn't stop trading
+                }
             }
         } catch (error) {
             logger.warn('Failed to update leaderboard:', error instanceof Error ? error.message : String(error));

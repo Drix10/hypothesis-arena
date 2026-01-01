@@ -272,7 +272,7 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 │  └────────────────────────────────────────────────────────────┘ │
 │                                                                  │
 ├─────────────────────────────────────────────────────────────────┤
-│  3 PARALLEL GEMINI API CALLS                                    │
+│  3 PARALLEL AI API CALLS                                        │
 │                                                                  │
 │  Each specialist receives:                                      │
 │  ├─ Their full persona prompt with focus areas                 │
@@ -322,7 +322,7 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 ├─────────────────────────────────────────────────────────────────┤
 │  DEBATE MATCH (runDebateMatch):                                 │
 │                                                                  │
-│  PROMPT TO GEMINI (as hedge fund CIO):                          │
+│  PROMPT TO AI (as hedge fund CIO):                              │
 │  "Judge this debate about {SYMBOL}/USDT.                        │
 │                                                                  │
 │   ANALYST A: {Full thesis from specialist A}                    │
@@ -559,13 +559,13 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 │  Stage 1: Market Scan ................ ~5 seconds              │
 │           (8 parallel WEEX API calls)                           │
 │  Stage 2: Coin Selection ............. ~30 seconds             │
-│           (3 parallel Gemini calls)                             │
+│           (3 parallel AI calls)                                │
 │  Stage 3: Specialist Analysis ........ ~60 seconds             │
-│           (3 parallel Gemini calls)                             │
+│           (3 parallel AI calls)                                │
 │  Stage 4: Tournament ................. ~45 seconds             │
 │           (1-2 sequential debates)                              │
 │  Stage 5: Risk Council ............... ~15 seconds             │
-│           (1 Gemini call)                                       │
+│           (1 AI call)                                          │
 │  Stage 6: Execution .................. ~5 seconds              │
 │           (WEEX API + DB + compliance)                          │
 │  ─────────────────────────────────────────────────             │
@@ -579,10 +579,10 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 │  Stage 4: 1-2 calls (Debates)                                  │
 │  Stage 5: 1 call (Karen)                                       │
 │  ─────────────────────────────────────────────────             │
-│  TOTAL: 8-9 Gemini API calls per cycle                         │
+│  TOTAL: 8-9 AI API calls per cycle                             │
 │                                                                  │
 │  At 5-minute cycles: ~100 calls/hour                           │
-│  Model: gemini-2.5-flash                                       │
+│  Supports: Gemini, OpenRouter, DeepSeek                        │
 │                                                                  │
 ├─────────────────────────────────────────────────────────────────┤
 │  DYNAMIC CYCLE INTERVALS (TradingScheduler)                      │
@@ -732,7 +732,7 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 │                                                                  │
 │  AutonomousTradingEngine (Orchestrator)                         │
 │  ├── CollaborativeFlowService                                   │
-│  │   ├── GeminiService (AI generation)                         │
+│  │   ├── AIService (AI generation)                             │
 │  │   ├── ArenaContextBuilder (context building)                │
 │  │   └── ANALYST_PROFILES (constants)                          │
 │  ├── WeexClient (exchange API)                                  │
@@ -754,8 +754,8 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 
 - Stage 1 — Market Scan: `WeexClient.getTicker`, `getFundingRate` (owner: Exchange data)
 - Stage 2 — Coin Selection: `CollaborativeFlow.runCoinSelection` (owners: Ray, Jim, Quant, Elon)
-- Stage 3 — Specialist Analysis: `CollaborativeFlow.runSpecialistAnalysis` (owners per `COIN_TYPE_MAP`; uses Gemini)
-- Stage 4 — Tournament: `CollaborativeFlow.runTournament` + `runDebateMatch` (judged by Gemini; fallback `runSingleJudgeFallback`, then highest confidence)
+- Stage 3 — Specialist Analysis: `CollaborativeFlow.runSpecialistAnalysis` (owners per `COIN_TYPE_MAP`; uses AI)
+- Stage 4 — Tournament: `CollaborativeFlow.runTournament` + `runDebateMatch` (judged by AI; fallback `runSingleJudgeFallback`, then highest confidence)
 - Stage 5 — Risk Council: `CollaborativeFlow.runRiskCouncil` + `CircuitBreakerService.checkAll` (owner: Karen; respects `GLOBAL_RISK_LIMITS`)
 - Stage 6 — Execution: `AutonomousTradingEngine.executeCollaborativeTrade` + `WeexClient.placeOrder` + compliance logging via `AILogService.createLog`/`weexClient.uploadAILog`
 
@@ -763,7 +763,7 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 
 ## 📋 Structured Output Schemas
 
-All AI outputs use Gemini's JSON Schema enforcement for reliable, validated responses:
+All AI outputs use structured JSON Schema enforcement for reliable, validated responses:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -782,14 +782,14 @@ All AI outputs use Gemini's JSON Schema enforcement for reliable, validated resp
 │  RISK_COUNCIL_SCHEMA           │ Stage 5: runRiskCouncil()     │
 │  ├─ approved, adjustments{}, warnings[], vetoReason            │
 │                                                                  │
-│  ANALYSIS_RESPONSE_SCHEMA      │ GeminiService.generateAnalysis│
+│  ANALYSIS_RESPONSE_SCHEMA      │ AIService.generateAnalysis    │
 │  ├─ recommendation, confidence, priceTarget, positionSize      │
 │  ├─ bullCase[], bearCase[], catalysts[], summary               │
 │                                                                  │
-│  DEBATE_RESPONSE_SCHEMA        │ GeminiService.generateDebate  │
+│  DEBATE_RESPONSE_SCHEMA        │ AIService.generateDebate      │
 │  ├─ turns[], winner, scores{}, winningArguments[], summary     │
 │                                                                  │
-│  TRADING_DECISION_SCHEMA       │ GeminiService.tradingDecision │
+│  TRADING_DECISION_SCHEMA       │ AIService.tradingDecision     │
 │  ├─ shouldTrade, action, confidence, riskAssessment            │
 │  ├─ positionSizePercent, leverage, stopLoss, takeProfit        │
 │                                                                  │

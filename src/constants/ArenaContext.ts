@@ -330,8 +330,9 @@ class ArenaContextBuilder {
         const champion = portfolios.length > 0 ? portfolios[0] : null;
 
         // Calculate market sentiment from recent trades
-        const recentLongs = recentTrades.filter(t => t.side === 'LONG').length;
-        const recentShorts = recentTrades.filter(t => t.side === 'SHORT').length;
+        // Database stores BUY/SELL, map to LONG/SHORT for sentiment
+        const recentLongs = recentTrades.filter(t => t.side === 'BUY').length;
+        const recentShorts = recentTrades.filter(t => t.side === 'SELL').length;
         const sentiment = recentLongs > recentShorts * 1.5 ? 'greed'
             : recentShorts > recentLongs * 1.5 ? 'fear'
                 : 'neutral';

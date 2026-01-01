@@ -324,7 +324,7 @@ router.post('/manual/close', async (req: Request, res: Response, next: NextFunct
         const { symbol } = req.body;
 
         if (!symbol || typeof symbol !== 'string') {
-            res.status(400).json({ error: 'Symbol is required' });
+            res.status(400).json({ error: 'Symbol is required', code: 'INVALID_SYMBOL' });
             return;
         }
 
@@ -335,43 +335,78 @@ router.post('/manual/close', async (req: Request, res: Response, next: NextFunct
 
         const weexClient = getWeexClient();
 
-        // Get current position
+        // FIXED: Verify position exists and is valid before attempting close
         const positions = await weexClient.getPositions();
         const position = positions.find((p: any) => p.symbol === normalizedSymbol);
 
         if (!position || parseFloat(position.size) === 0) {
-            res.status(404).json({ error: 'No open position for this symbol' });
+            res.status(404).json({
+                error: 'No open position for this symbol',
+                code: 'POSITION_NOT_FOUND',
+                symbol: normalizedSymbol
+            });
             return;
         }
 
-        // Close position at market price
-        // VERIFIED CORRECT: Type 3 = close long, Type 4 = close short
-        // For a LONG position, we use type 4 (close short side)
-        // For a SHORT position, we use type 3 (close long side)
-        const side = position.side.toLowerCase() === 'long' ? '4' : '3';
-        const clientOrderId = `manual_close_${Date.now()}_${uuid().substring(0, 8)}`;
+        // FIXED: Use dedicated WEEX closePositions endpoint (more reliable)
+        // This is the recommended way per WEEX documentation
+        const closeResponse = await weexClient.closeAllPositions(normalizedSymbol);
+
+        // FIXED: Handle response array (WEEX returns array of results)
+        if (!Array.isArray(closeResponse) || closeResponse.length === 0) {
+            throw new Error('Invalid response from WEEX closePositions endpoint');
+        }
+
+        // FIXED: Iterate over all results and collect failures
+        const failures: Array<{ positionId: string; error: string }> = [];
+        const successes: Array<{ positionId: string; orderId: string }> = [];
+
+        for (const result of closeResponse) {
+            if (!result.success) {
+                failures.push({
+                    positionId: result.positionId?.toString() || 'unknown',
+                    error: result.errorMessage || 'Unknown error'
+                });
+            } else {
+                successes.push({
+                    positionId: result.positionId?.toString() || 'unknown',
+                    orderId: result.successOrderId?.toString() || '0'
+                });
+            }
+        }
+
+        // If any failures, return error with details
+        if (failures.length > 0) {
+            res.status(500).json({
+                error: 'Failed to close one or more positions',
+                code: 'PARTIAL_CLOSE_FAILED',
+                failures,
+                successes,
+                totalAttempted: closeResponse.length,
+                successCount: successes.length,
+                failureCount: failures.length
+            });
+            return;
+        }
+
+        // All successful - use first result for backward compatibility
+        const firstSuccess = successes[0];
         const tradeId = uuid();
+        const orderId = firstSuccess.orderId;
 
-        const orderResponse = await weexClient.placeOrder({
-            symbol: normalizedSymbol,
-            client_oid: clientOrderId,
-            type: side,
-            order_type: '0',
-            match_price: '1', // Market price
-            size: position.size,
-            price: '0',
-        });
-
-        // FIXED: Log to database with proper agent tracking
-        // Use 'manual' agent_id for user-initiated actions to distinguish from autonomous trades
+        // FIXED: Log to database with proper error handling
         try {
-            // Get portfolio for manual trades
             const portfolio = await queryOne<any>(
                 'SELECT * FROM portfolios WHERE agent_id = $1',
                 ['collaborative']
             );
 
             if (portfolio) {
+                // CRITICAL FIX: Map WEEX position side to Prisma enum
+                // WEEX uses: LONG/SHORT
+                // Prisma enum: BUY/SELL
+                const prismaSide = position.side.toUpperCase() === 'LONG' ? 'BUY' : 'SELL';
+
                 await withTransaction(async (client) => {
                     await client.query(
                         `INSERT INTO trades (id, portfolio_id, symbol, side, type, size, price, status, client_order_id, weex_order_id, reason, executed_at, created_at)
@@ -380,14 +415,14 @@ router.post('/manual/close', async (req: Request, res: Response, next: NextFunct
                             tradeId,
                             portfolio.id,
                             normalizedSymbol,
-                            position.side.toUpperCase(),
+                            prismaSide,
                             'MARKET',
                             parseFloat(position.size),
-                            0, // Market order
+                            0, // Market close
                             'FILLED',
-                            clientOrderId,
-                            orderResponse.order_id,
-                            'Manual close via UI - initiated by user' // FIXED: Clarify this is user-initiated
+                            `manual_close_${Date.now()}`,
+                            orderId,
+                            'Manual close via UI'
                         ]
                     );
 
@@ -396,33 +431,63 @@ router.post('/manual/close', async (req: Request, res: Response, next: NextFunct
                         [portfolio.id]
                     );
                 });
+
+                // FIXED: Create AI log for WEEX compliance
+                try {
+                    const { aiLogService } = await import('../../services/compliance/AILogService');
+                    await aiLogService.createLog(
+                        'manual_close', // FIXED: Use correct stage for manual closes
+                        'manual',
+                        {
+                            symbol: normalizedSymbol,
+                            action: 'close_position',
+                            side: position.side,
+                            size: parseFloat(position.size),
+                            source: 'ui'
+                        },
+                        {
+                            orderId,
+                            positionId: firstSuccess.positionId,
+                            success: true
+                        },
+                        'Manual position close via UI',
+                        orderId
+                    );
+                    logger.info(`📝 AI log created for manual close: ${orderId}`);
+                } catch (logError) {
+                    logger.error('Failed to create AI log for manual close:', logError);
+                    // Don't fail the request - position is already closed
+                }
             }
         } catch (dbError: any) {
-            // FIXED: Log database errors with context for debugging
             logger.error('Failed to persist manual close to database:', {
-                clientOrderId,
-                weexOrderId: orderResponse.order_id,
+                orderId,
                 symbol: normalizedSymbol,
                 error: dbError.message
             });
+            // Don't fail the request if DB logging fails - position is already closed
         }
 
-        logger.info(`Manual position close: ${normalizedSymbol}`, {
+        logger.info(`Manual position closed: ${normalizedSymbol}`, {
             side: position.side,
             size: position.size,
-            orderId: orderResponse.order_id,
-            tradeId
+            orderId,
+            positionId: firstSuccess.positionId,
+            tradeId,
+            totalClosed: successes.length
         });
 
         res.json({
             success: true,
-            message: 'Position closed',
+            message: 'Position closed successfully',
             symbol: normalizedSymbol,
-            orderId: orderResponse.order_id,
-            clientOrderId,
+            orderId,
+            positionId: firstSuccess.positionId,
             tradeId,
+            closedPositions: successes.length
         });
-    } catch (error) {
+
+    } catch (error: any) {
         next(error);
     }
 });
