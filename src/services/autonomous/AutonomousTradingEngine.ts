@@ -23,7 +23,7 @@ import { circuitBreakerService } from '../risk/CircuitBreakerService';
 import { AnalystPortfolioService } from '../portfolio/AnalystPortfolioService';
 import { aiLogService } from '../compliance/AILogService';
 import { prisma, queryOne } from '../../config/database';
-import { config } from '../../config';
+import { config, getActiveTradingStyle } from '../../config';
 import { logger } from '../../utils/logger';
 import { ANALYST_PROFILES, RISK_COUNCIL_VETO_TRIGGERS } from '../../constants/analyst';
 import { roundToStepSize, roundToTickSize, updateContractSpecs, getContractSpecs } from '../../shared/utils/weex';
@@ -2125,8 +2125,10 @@ export class AutonomousTradingEngine extends EventEmitter {
                     // Use default targets based on fresh price instead of potentially invalid original targets
                     logger.warn(`⚠️ Invalid old price ${oldPrice}, using default targets based on fresh price`);
 
-                    const defaultSlPct = 0.04; // 4% stop loss (risk)
-                    const defaultTpPct = 0.08; // 8% take profit (reward) = 2:1 ratio
+                    // Use trading style config for TP/SL percentages
+                    const tradingStyle = getActiveTradingStyle();
+                    const defaultSlPct = tradingStyle.stopLossPercent / 100; // Convert from % to decimal
+                    const defaultTpPct = tradingStyle.targetProfitPercent / 100;
 
                     if (isBullish) {
                         adjustedChampion.priceTarget = {
@@ -2218,15 +2220,16 @@ export class AutonomousTradingEngine extends EventEmitter {
                             });
 
                             // Fallback: use percentage-based targets with proper risk/reward
-                            // Karen requires minimum 2:1 risk/reward ratio
-                            const defaultSlPct = 0.04; // 4% stop loss (risk)
-                            const defaultTpPct = 0.08; // 8% take profit (reward) = 2:1 ratio
+                            // Use trading style config for TP/SL percentages
+                            const tradingStyle = getActiveTradingStyle();
+                            const defaultSlPct = tradingStyle.stopLossPercent / 100;
+                            const defaultTpPct = tradingStyle.targetProfitPercent / 100;
                             adjustedChampion.priceTarget = {
                                 ...adjustedChampion.priceTarget,
                                 base: freshPrice * (1 + defaultTpPct),
                                 bear: freshPrice * (1 - defaultSlPct)
                             };
-                            logger.warn(`⚠️ Using default targets: TP ${(freshPrice * (1 + defaultTpPct)).toFixed(6)}, SL ${(freshPrice * (1 - defaultSlPct)).toFixed(6)} (2:1 R/R)`);
+                            logger.warn(`⚠️ Using default targets: TP ${(freshPrice * (1 + defaultTpPct)).toFixed(6)}, SL ${(freshPrice * (1 - defaultSlPct)).toFixed(6)} (${tradingStyle.minRiskRewardRatio}:1 R/R ${tradingStyle.style} style)`);
                         }
                     } else {
                         // SHORT: TP should be below entry, SL should be above entry
@@ -2253,15 +2256,16 @@ export class AutonomousTradingEngine extends EventEmitter {
                             });
 
                             // Fallback: use percentage-based targets with proper risk/reward
-                            // Karen requires minimum 2:1 risk/reward ratio
-                            const defaultSlPct = 0.04; // 4% stop loss (risk)
-                            const defaultTpPct = 0.08; // 8% take profit (reward) = 2:1 ratio
+                            // Use trading style config for TP/SL percentages
+                            const tradingStyleShort = getActiveTradingStyle();
+                            const defaultSlPct = tradingStyleShort.stopLossPercent / 100;
+                            const defaultTpPct = tradingStyleShort.targetProfitPercent / 100;
                             adjustedChampion.priceTarget = {
                                 ...adjustedChampion.priceTarget,
                                 base: freshPrice * (1 - defaultTpPct),
                                 bear: freshPrice * (1 + defaultSlPct)
                             };
-                            logger.warn(`⚠️ Using default targets: TP ${(freshPrice * (1 - defaultTpPct)).toFixed(6)}, SL ${(freshPrice * (1 + defaultSlPct)).toFixed(6)} (2:1 R/R)`);
+                            logger.warn(`⚠️ Using default targets: TP ${(freshPrice * (1 - defaultTpPct)).toFixed(6)}, SL ${(freshPrice * (1 + defaultSlPct)).toFixed(6)} (${tradingStyleShort.minRiskRewardRatio}:1 R/R ${tradingStyleShort.style} style)`);
                         }
                     }
                 } // Close: else (oldPrice is valid)

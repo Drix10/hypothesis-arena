@@ -195,7 +195,21 @@ NODE_ENV=development
 | Max Position Size        | 30%   |
 | Max Stop Loss Distance   | 10%   |
 | Drawdown Liquidation     | 50%   |
-| Max Concurrent Positions | 3     |
+| Max Concurrent Positions | 5     |
+
+### Trading Style Configuration
+
+The system supports two trading styles, configurable via `TRADING_STYLE` env var:
+
+| Parameter     | Scalping (Default) | Swing             |
+| ------------- | ------------------ | ----------------- |
+| Target Profit | 4%                 | 8%                |
+| Stop Loss     | 2.5%               | 4%                |
+| Max Hold Time | 8 hours            | 36 hours          |
+| Min R/R Ratio | 1.6:1              | 2:1               |
+| Profit Taking | +1.5% → breakeven  | +2.5% → breakeven |
+
+**Scalping Philosophy:** High volume, quick profits, tight risk. We capture 4% moves with 2.5% stops for a 1.6:1 R/R ratio. Positions are closed within 8 hours to minimize funding drag.
 
 ### 3-Tier Circuit Breakers
 
@@ -221,15 +235,28 @@ Karen will automatically VETO trades if:
 
 In Stage 2, analysts can choose to MANAGE an existing position instead of opening a new trade.
 
+### Trading Style: Scalping (Default)
+
+The system is optimized for high-frequency scalping with configurable parameters:
+
+| Trigger        | Scalp Action                      |
+| -------------- | --------------------------------- |
+| P&L > +1.5%    | Move stop to breakeven            |
+| P&L > +2.5%    | Take 25% profits                  |
+| P&L > +3.5%    | Take 50% profits                  |
+| P&L > +4%      | Take 75% profits (target reached) |
+| P&L < -2.5%    | Stop loss triggered               |
+| Hold > 8 hours | Force review/close                |
+
 ### When MANAGE is Selected
 
-| Trigger            | Action                     |
-| ------------------ | -------------------------- |
-| P&L < -7%          | Close position immediately |
-| P&L > +15%         | Take at least 50% profits  |
-| P&L > +20%         | Take at least 75% profits  |
-| Hold > 7 days      | Close unless new catalyst  |
-| Thesis invalidated | Close position             |
+| Trigger            | Action                       |
+| ------------------ | ---------------------------- |
+| P&L < -7%          | Close position immediately   |
+| P&L > +4%          | Take profits (scalp target)  |
+| P&L > +8%          | Take at least 50% profits    |
+| Hold > 8 hours     | Close unless strong momentum |
+| Thesis invalidated | Close position               |
 
 ### MANAGE Action Flow
 
@@ -243,8 +270,8 @@ In Stage 2, analysts can choose to MANAGE an existing position instead of openin
 The system evaluates each position on:
 
 - **P&L Status**: PROFIT / LOSS / BREAKEVEN
-- **P&L Severity**: CRITICAL (<-7%) / WARNING / HEALTHY
-- **Hold Time**: FRESH (<1d) / MATURE (1-5d) / STALE (>5d)
+- **P&L Severity**: CRITICAL (<-7%) / WARNING (<-2.5%) / HEALTHY
+- **Hold Time**: FRESH (<4h) / MATURE (4-8h) / STALE (>8h for scalping)
 - **Funding Impact**: FAVORABLE / NEUTRAL / ADVERSE
 - **Thesis Status**: VALID / WEAKENING / INVALIDATED
 
@@ -328,14 +355,15 @@ public/
 
 ## 📋 Version History
 
-| Version | Date       | Changes                                                                  |
-| ------- | ---------- | ------------------------------------------------------------------------ |
-| 3.1.1   | 2026-01-02 | Funding rate validation fix, documentation updates, production hardening |
-| 3.0.1   | 2026-01-01 | SQLite database, polling instead of SSE, all issues fixed                |
-| 3.0.0   | 2025-12-31 | MANAGE action for position management, improved edge cases               |
-| 3.2.0   | 2025-12-28 | Exhaustive switch, extracted normalization, improved validation          |
-| 3.1.2   | 2025-12-28 | Input validation, improved type guards, JSON repair fixes                |
-| 3.1.0   | 2025-12-28 | Turn-by-turn debates, 6-stage pipeline (40% token reduction)             |
+| Version | Date       | Changes                                                                       |
+| ------- | ---------- | ----------------------------------------------------------------------------- |
+| 3.2.0   | 2026-01-02 | Trading style config (scalp/swing), env-driven parameters, quant optimization |
+| 3.1.1   | 2026-01-02 | Funding rate validation fix, documentation updates, production hardening      |
+| 3.0.1   | 2026-01-01 | SQLite database, polling instead of SSE, all issues fixed                     |
+| 3.0.0   | 2025-12-31 | MANAGE action for position management, improved edge cases                    |
+| 2.2.0   | 2025-12-28 | Exhaustive switch, extracted normalization, improved validation               |
+| 2.1.2   | 2025-12-28 | Input validation, improved type guards, JSON repair fixes                     |
+| 2.1.0   | 2025-12-28 | Turn-by-turn debates, 6-stage pipeline (40% token reduction)                  |
 
 See [FLOW.md](FLOW.md) for detailed architecture documentation.
 

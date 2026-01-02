@@ -348,6 +348,56 @@ export const config = {
         minConfidenceToTrade: safeParseInt(process.env.MIN_CONFIDENCE_TO_TRADE, 60),           // Min 60% confidence
         minConsensusToTrade: safeParseInt(process.env.MIN_CONSENSUS_TO_TRADE, 2),              // Min 2 analysts agree
 
+        // ===========================================
+        // Trading Style Configuration (Scalping vs Swing)
+        // ===========================================
+        // TRADING_STYLE: 'scalp' for high-frequency small profits, 'swing' for larger moves
+        tradingStyle: (() => {
+            const style = process.env.TRADING_STYLE || 'scalp';
+            if (style !== 'scalp' && style !== 'swing') {
+                console.warn(
+                    `⚠️ Invalid TRADING_STYLE: "${style}". ` +
+                    `Valid values are 'scalp' or 'swing'. Defaulting to 'scalp'.`
+                );
+                return 'scalp' as const;
+            }
+            return style as 'scalp' | 'swing';
+        })(),
+
+        // Scalping parameters (used when TRADING_STYLE=scalp)
+        scalp: {
+            // Target profit percentage (default 5% for scalping)
+            targetProfitPercent: Math.min(50, Math.max(1, safeParseFloat(process.env.SCALP_TARGET_PROFIT_PERCENT, 5))),
+            // Stop loss percentage (default 3% for tight risk)
+            stopLossPercent: Math.min(20, Math.max(0.5, safeParseFloat(process.env.SCALP_STOP_LOSS_PERCENT, 3))),
+            // Max hold time in hours before forcing review (default 12h)
+            maxHoldHours: Math.max(1, safeParseInt(process.env.SCALP_MAX_HOLD_HOURS, 12)),
+            // Take profit thresholds (when to start taking partial profits)
+            takeProfitThreshold1: Math.max(0.5, safeParseFloat(process.env.SCALP_TP_THRESHOLD_1, 2)),  // Move stop to breakeven
+            takeProfitThreshold2: Math.max(1, safeParseFloat(process.env.SCALP_TP_THRESHOLD_2, 3)),    // Take 25% profits
+            takeProfitThreshold3: Math.max(2, safeParseFloat(process.env.SCALP_TP_THRESHOLD_3, 5)),    // Take 50% profits
+            takeProfitThreshold4: Math.max(3, safeParseFloat(process.env.SCALP_TP_THRESHOLD_4, 7)),    // Take 75% profits
+            // Minimum R/R ratio acceptable for scalps (can be lower than swing)
+            minRiskRewardRatio: Math.max(1, safeParseFloat(process.env.SCALP_MIN_RR_RATIO, 1.5)),
+        },
+
+        // Swing trading parameters (used when TRADING_STYLE=swing)
+        swing: {
+            // Target profit percentage (default 10% for swing)
+            targetProfitPercent: Math.min(100, Math.max(5, safeParseFloat(process.env.SWING_TARGET_PROFIT_PERCENT, 10))),
+            // Stop loss percentage (default 5% for swing)
+            stopLossPercent: Math.min(30, Math.max(2, safeParseFloat(process.env.SWING_STOP_LOSS_PERCENT, 5))),
+            // Max hold time in hours before forcing review (default 48h)
+            maxHoldHours: Math.max(12, safeParseInt(process.env.SWING_MAX_HOLD_HOURS, 48)),
+            // Take profit thresholds
+            takeProfitThreshold1: Math.max(2, safeParseFloat(process.env.SWING_TP_THRESHOLD_1, 3)),    // Move stop to breakeven
+            takeProfitThreshold2: Math.max(3, safeParseFloat(process.env.SWING_TP_THRESHOLD_2, 5)),    // Take 25% profits
+            takeProfitThreshold3: Math.max(5, safeParseFloat(process.env.SWING_TP_THRESHOLD_3, 8)),    // Take 50% profits
+            takeProfitThreshold4: Math.max(7, safeParseFloat(process.env.SWING_TP_THRESHOLD_4, 10)),   // Take 75% profits
+            // Minimum R/R ratio for swing trades
+            minRiskRewardRatio: Math.max(1.5, safeParseFloat(process.env.SWING_MIN_RR_RATIO, 2)),
+        },
+
         // Retries
         maxRetries: safeParseInt(process.env.MAX_RETRIES, 3),                                  // Max retries for failed ops
 
@@ -413,6 +463,52 @@ if (interdependencyWarnings.length > 0) {
     console.warn('');
 }
 
+// Validate and ENFORCE trading style take profit thresholds are in ascending order
+function validateAndEnforceTakeProfitThresholds(style: 'scalp' | 'swing') {
+    const cfg = style === 'scalp' ? config.autonomous.scalp : config.autonomous.swing;
+    const thresholds = [
+        cfg.takeProfitThreshold1,
+        cfg.takeProfitThreshold2,
+        cfg.takeProfitThreshold3,
+        cfg.takeProfitThreshold4
+    ];
+
+    // ENFORCE ascending order by adjusting invalid thresholds
+    let needsCorrection = false;
+    for (let i = 1; i < thresholds.length; i++) {
+        if (thresholds[i] <= thresholds[i - 1]) {
+            needsCorrection = true;
+            // Set to previous + 0.5% minimum gap
+            thresholds[i] = thresholds[i - 1] + 0.5;
+        }
+    }
+
+    if (needsCorrection) {
+        console.warn(
+            `⚠️ ${style.toUpperCase()} take profit thresholds were not in ascending order. ` +
+            `ENFORCED ascending order: TP1=${thresholds[0]}%, TP2=${thresholds[1]}%, ` +
+            `TP3=${thresholds[2]}%, TP4=${thresholds[3]}%.`
+        );
+        // Apply corrected values back to config
+        cfg.takeProfitThreshold1 = thresholds[0];
+        cfg.takeProfitThreshold2 = thresholds[1];
+        cfg.takeProfitThreshold3 = thresholds[2];
+        cfg.takeProfitThreshold4 = thresholds[3];
+    }
+
+    // Warn if target profit is less than the highest threshold
+    if (cfg.targetProfitPercent < cfg.takeProfitThreshold4) {
+        console.warn(
+            `⚠️ ${style.toUpperCase()} target profit (${cfg.targetProfitPercent}%) is less than ` +
+            `TP threshold 4 (${cfg.takeProfitThreshold4}%). ` +
+            `Positions may close before reaching the 75% profit-taking threshold.`
+        );
+    }
+}
+
+validateAndEnforceTakeProfitThresholds('scalp');
+validateAndEnforceTakeProfitThresholds('swing');
+
 // CRITICAL FIX: Normalize debate score weights to always sum to 100
 config.debate.scoreWeights = normalizeScoreWeights(config.debate.scoreWeights);
 
@@ -461,4 +557,30 @@ if (config.nodeEnv === 'production') {
     if (config.ai.provider === 'openrouter' && !config.openRouterApiKey) {
         console.warn('⚠️ OPENROUTER_API_KEY not set. AI analysis will fail.');
     }
+}
+
+/**
+ * Get the active trading style configuration based on TRADING_STYLE env var
+ * Returns either scalp or swing config with all parameters
+ */
+export function getActiveTradingStyle() {
+    const style = config.autonomous.tradingStyle;
+    const styleConfig = style === 'scalp' ? config.autonomous.scalp : config.autonomous.swing;
+
+    return {
+        style,
+        targetProfitPercent: styleConfig.targetProfitPercent,
+        stopLossPercent: styleConfig.stopLossPercent,
+        maxHoldHours: styleConfig.maxHoldHours,
+        takeProfitThresholds: {
+            breakeven: styleConfig.takeProfitThreshold1,
+            partial25: styleConfig.takeProfitThreshold2,
+            partial50: styleConfig.takeProfitThreshold3,
+            partial75: styleConfig.takeProfitThreshold4,
+        },
+        minRiskRewardRatio: styleConfig.minRiskRewardRatio,
+        // Derived values
+        maxHoldDays: styleConfig.maxHoldHours / 24,
+        isScalping: style === 'scalp',
+    };
 }

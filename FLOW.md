@@ -1,13 +1,14 @@
 # Hypothesis Arena - Collaborative AI Trading System
 
 **STATUS: PRODUCTION READY ✅**  
-**VERSION: 3.1.1**  
+**VERSION: 3.2.0**  
 **LAST UPDATED: January 2, 2026**
 
 ## Implementation Status
 
 - ✅ **Entry Mode:** Fully implemented and operational
 - ✅ **Position Management (MANAGE Action):** Implemented - AI can close/manage existing positions
+- ✅ **Trading Style Config:** Scalping (default) and Swing modes with env-driven parameters
 - ✅ **Production Ready:** TypeScript 0 errors, all edge cases handled
 - ✅ **OPTIMIZED:** 40% token reduction (260k → 156k per cycle)
 - 📋 **See:** `src/constants/prompts/managePrompts.ts` for position management prompts
@@ -228,18 +229,20 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 │                                                                  │
 │  assessPositionHealth() evaluates:                              │
 │  ├─ pnlStatus: PROFIT | LOSS | BREAKEVEN                       │
-│  ├─ pnlSeverity: CRITICAL (<-7%) | WARNING | HEALTHY           │
-│  ├─ holdTimeStatus: FRESH (<1d) | MATURE | STALE (>5d)         │
+│  ├─ pnlSeverity: CRITICAL (<-7%) | WARNING (<-2.5%) | HEALTHY  │
+│  ├─ holdTimeStatus: FRESH (<4h) | MATURE (4-8h) | STALE (>8h)  │
 │  ├─ fundingImpact: FAVORABLE | NEUTRAL | ADVERSE               │
 │  └─ thesisStatus: VALID | WEAKENING | INVALIDATED              │
 │                                                                  │
-│  MANAGE TRADING RULES (Mandatory):                              │
+│  SCALPING TRADING RULES (Default - from config):                │
 │  🚨 P&L < -7%: MUST close immediately                          │
 │  🚨 Thesis INVALIDATED: MUST close                             │
-│  💰 P&L > +15%: Take at least 50% profits                      │
-│  💰 P&L > +20%: Take at least 75% profits                      │
-│  ⏰ Hold > 7 days: Close unless new catalyst                   │
-│  💸 Funding > 0.05% against: Reduce hold time                  │
+│  💰 P&L > +1.5%: Move stop to breakeven                        │
+│  💰 P&L > +2.5%: Take 25% profits                              │
+│  💰 P&L > +3.5%: Take 50% profits                              │
+│  💰 P&L > +4%: Take 75% profits (target reached)               │
+│  ⏰ Hold > 8 hours: Close unless strong momentum               │
+│  💸 Funding > 0.03% against: Factor into hold decision         │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -565,10 +568,27 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 │                                                                  │
 │  • Max position size: 30% of portfolio                         │
 │  • Max leverage: 5x (NEVER exceed)                             │
-│  • Max concurrent positions: 3                                 │
+│  • Max concurrent positions: 5                                 │
 │  • Min time between trades: 15 minutes                         │
-│  • Min balance to trade: $10                                   │
+│  • Min balance to trade: $30                                   │
 │  • Min confidence to trade: 60%                                │
+│                                                                  │
+├─────────────────────────────────────────────────────────────────┤
+│  TRADING STYLE CONFIG (config.autonomous.scalp/swing)            │
+│                                                                  │
+│  SCALPING (Default - TRADING_STYLE=scalp):                      │
+│  • Target profit: 4% (SCALP_TARGET_PROFIT_PERCENT)             │
+│  • Stop loss: 2.5% (SCALP_STOP_LOSS_PERCENT)                   │
+│  • Max hold: 8 hours (SCALP_MAX_HOLD_HOURS)                    │
+│  • Min R/R: 1.6:1 (SCALP_MIN_RR_RATIO)                         │
+│  • Profit thresholds: +1.5%/+2.5%/+3.5%/+4%                    │
+│                                                                  │
+│  SWING (TRADING_STYLE=swing):                                   │
+│  • Target profit: 8% (SWING_TARGET_PROFIT_PERCENT)             │
+│  • Stop loss: 4% (SWING_STOP_LOSS_PERCENT)                     │
+│  • Max hold: 36 hours (SWING_MAX_HOLD_HOURS)                   │
+│  • Min R/R: 2:1 (SWING_MIN_RR_RATIO)                           │
+│  • Profit thresholds: +2.5%/+4%/+6%/+8%                        │
 │                                                                  │
 ├─────────────────────────────────────────────────────────────────┤
 │  STOP LOSS REQUIREMENTS                                          │
@@ -756,7 +776,7 @@ Benefits of Structured Outputs:
 │                                                                  │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
-│  EVERY CYCLE (~5 minutes):                                      │
+│  EVERY CYCLE (~10 minutes):                                     │
 │                                                                  │
 │  1. SCAN    → Fetch market data for 8 coins (WeexClient)       │
 │  2. SELECT  → Ray, Jim, Quant, Elon pick best opportunity      │
@@ -779,11 +799,13 @@ Benefits of Structured Outputs:
 │  ✓ Circuit breakers protect against crashes                    │
 │  ✓ One portfolio, collaborative decisions                      │
 │  ✓ All AI decisions logged for WEEX compliance                 │
-│  ✓ NEW: AI can manage existing positions (close/reduce)        │
+│  ✓ AI can manage existing positions (close/reduce)             │
+│  ✓ Trading style configurable (scalp/swing via env)            │
+│  ✓ All parameters env-driven (no hardcoded values)             │
 │                                                                  │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
-│  EDGE CASES HANDLED (v3.0.1):                                   │
+│  EDGE CASES HANDLED (v3.2.0):                                   │
 │                                                                  │
 │  ✓ Number.isFinite() guards on all calculations                │
 │  ✓ Division by zero protection                                 │

@@ -6,7 +6,7 @@
 
 import type { AnalystMethodology } from '../analyst/types';
 import { filterPromptByAction } from './contextFilter';
-import { config } from '../../config';
+import { config, getActiveTradingStyle } from '../../config';
 import { RISK_COUNCIL_VETO_TRIGGERS } from '../analyst/riskCouncil';
 
 /**
@@ -14,8 +14,22 @@ import { RISK_COUNCIL_VETO_TRIGGERS } from '../analyst/riskCouncil';
  * All values come from config/env - NO HARDCODING
  * 
  * This ensures all prompts use consistent, configurable values
+ * 
+ * @returns Trading configuration object with validated values
+ * @throws Error if critical configuration is missing or invalid
  */
 export function getTradingConfig() {
+    const tradingStyle = getActiveTradingStyle();
+
+    // Validate cycleIntervalMs before division to prevent NaN/Infinity
+    const cycleIntervalMs = config.autonomous.cycleIntervalMs;
+    if (!Number.isFinite(cycleIntervalMs) || cycleIntervalMs <= 0) {
+        throw new Error(
+            `Invalid cycleIntervalMs: ${cycleIntervalMs}. ` +
+            `Must be a positive finite number. Check CYCLE_INTERVAL_MS in .env`
+        );
+    }
+
     return {
         // Position limits
         maxPositionSizePercent: RISK_COUNCIL_VETO_TRIGGERS.MAX_POSITION_PERCENT,
@@ -35,15 +49,25 @@ export function getTradingConfig() {
         maxRiskPerTrade: RISK_COUNCIL_VETO_TRIGGERS.MAX_RISK_PER_TRADE_PERCENT,
         maxConcurrentRisk: RISK_COUNCIL_VETO_TRIGGERS.MAX_CONCURRENT_RISK_PERCENT,
 
-        // Timing
-        cycleIntervalMs: config.autonomous.cycleIntervalMs,
-        cycleIntervalMinutes: Math.round(config.autonomous.cycleIntervalMs / 60000),
+        // Timing (validated above)
+        cycleIntervalMs: cycleIntervalMs,
+        cycleIntervalMinutes: Math.round(cycleIntervalMs / 60000),
 
         // Mode
         dryRun: config.autonomous.dryRun,
 
         // Checklist (pre-formatted)
         checklist: RISK_COUNCIL_VETO_TRIGGERS.CHECKLIST,
+
+        // Trading Style (from env)
+        tradingStyle: tradingStyle.style,
+        isScalping: tradingStyle.isScalping,
+        targetProfitPercent: tradingStyle.targetProfitPercent,
+        styleStopLossPercent: tradingStyle.stopLossPercent,
+        maxHoldHours: tradingStyle.maxHoldHours,
+        maxHoldDays: tradingStyle.maxHoldDays,
+        takeProfitThresholds: tradingStyle.takeProfitThresholds,
+        minRiskRewardRatio: tradingStyle.minRiskRewardRatio,
     };
 }
 

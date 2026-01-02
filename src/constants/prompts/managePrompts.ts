@@ -11,7 +11,7 @@
  * - Adjust Margin: POST /capi/v2/account/adjustPositionMargin
  */
 
-import { safeNumber, safePercent } from './promptHelpers';
+import { safeNumber, safePercent, getTradingConfig } from './promptHelpers';
 import type { PortfolioPosition } from './builders';
 
 /**
@@ -61,39 +61,53 @@ export interface PositionHealthMetrics {
  * - Division by zero in funding calculation
  * - NaN/Infinity values in position data
  * - Missing optional fields
+ * 
+ * Uses config values for dynamic thresholds based on trading style
  */
 export function assessPositionHealth(position: PortfolioPosition): PositionHealthMetrics {
+    // Get trading style config for dynamic thresholds
+    const cfg = getTradingConfig();
+
     // Validate input - use safe defaults for invalid values
     const pnlPercent = Number.isFinite(position.unrealizedPnlPercent) ? position.unrealizedPnlPercent : 0;
     const holdTimeHours = Number.isFinite(position.holdTimeHours) && position.holdTimeHours >= 0 ? position.holdTimeHours : 0;
     const entryPrice = Number.isFinite(position.entryPrice) && position.entryPrice > 0 ? position.entryPrice : 1;
     const size = Number.isFinite(position.size) && position.size > 0 ? position.size : 1;
 
-    // P&L Status - AGGRESSIVE profit-taking thresholds
+    // P&L Status - Use config thresholds for profit-taking
+    // Breakeven threshold from config (e.g., 1.5% for scalp)
+    const breakevenThreshold = cfg.takeProfitThresholds.breakeven;
+    const profitWarningThreshold = cfg.takeProfitThresholds.partial25; // Take profits at this level
+    const stopLossThreshold = cfg.styleStopLossPercent;
+
     let pnlStatus: 'PROFIT' | 'LOSS' | 'BREAKEVEN';
     let pnlSeverity: 'CRITICAL' | 'WARNING' | 'HEALTHY';
 
-    if (pnlPercent > 1) {
+    if (pnlPercent > breakevenThreshold) {
         pnlStatus = 'PROFIT';
-        pnlSeverity = pnlPercent > 5 ? 'WARNING' : 'HEALTHY'; // Warning = take profits at +5%
-    } else if (pnlPercent < -1) {
+        pnlSeverity = pnlPercent > profitWarningThreshold ? 'WARNING' : 'HEALTHY'; // Warning = take profits
+    } else if (pnlPercent < -breakevenThreshold) {
         pnlStatus = 'LOSS';
+        // CRITICAL at -7% (hard limit), WARNING at stop loss threshold
         pnlSeverity = pnlPercent < -7 ? 'CRITICAL' :
-            pnlPercent < -4 ? 'WARNING' : 'HEALTHY';
+            pnlPercent < -stopLossThreshold ? 'WARNING' : 'HEALTHY';
     } else {
         pnlStatus = 'BREAKEVEN';
         pnlSeverity = 'HEALTHY';
     }
 
-    // Hold Time Status - AGGRESSIVE time limits
-    const holdDays = holdTimeHours / 24;
+    // Hold Time Status - Use config max hold hours
+    const maxHoldHours = cfg.maxHoldHours;
+    const matureThreshold = maxHoldHours * 0.5; // 50% of max hold = mature
+    const staleThreshold = maxHoldHours * 0.75; // 75% of max hold = stale
+
     let holdTimeStatus: 'FRESH' | 'MATURE' | 'STALE';
-    if (holdDays < 1) {
+    if (holdTimeHours < matureThreshold) {
         holdTimeStatus = 'FRESH';
-    } else if (holdDays < 2) {
+    } else if (holdTimeHours < staleThreshold) {
         holdTimeStatus = 'MATURE';
     } else {
-        holdTimeStatus = 'STALE'; // After 2 days, position is stale
+        holdTimeStatus = 'STALE';
     }
 
     // Funding Impact (if available)
@@ -114,14 +128,12 @@ export function assessPositionHealth(position: PortfolioPosition): PositionHealt
     }
 
     // Thesis Status - use unrealizedPnlPercent directly since it already accounts for direction
-    // For LONG: negative pnl = price went down = thesis weakening
-    // For SHORT: negative pnl = price went up = thesis weakening
-    // unrealizedPnlPercent is already direction-aware, so we just check the magnitude
+    // INVALIDATED at -7% (hard limit), WEAKENING at stop loss threshold
     let thesisStatus: 'VALID' | 'WEAKENING' | 'INVALIDATED';
 
-    if (pnlPercent < -8) {
+    if (pnlPercent < -7) {
         thesisStatus = 'INVALIDATED';
-    } else if (pnlPercent < -4) {
+    } else if (pnlPercent < -stopLossThreshold) {
         thesisStatus = 'WEAKENING';
     } else {
         thesisStatus = 'VALID';
@@ -253,6 +265,9 @@ export function buildManageDecisionPrompt(
         ? `- 24h Volatility: ${safeNumber(marketContext.volatility24h, 2)}%`
         : '';
 
+    const cfg = getTradingConfig();
+    const tp = cfg.takeProfitThresholds;
+
     return `═══════════════════════════════════════════════════════════════════════════════
 POSITION MANAGEMENT DECISION - ${displaySymbol} ${side}
 ═══════════════════════════════════════════════════════════════════════════════
@@ -291,19 +306,20 @@ MANAGEMENT OPTIONS
    and no active rule-forced closure conditions (P&L must be > -7%)
 
 ═══════════════════════════════════════════════════════════════════════════════
-DECISION RULES (MUST FOLLOW)
+DECISION RULES (MUST FOLLOW) - ${cfg.isScalping ? 'SCALPING' : 'SWING'} STYLE
 ═══════════════════════════════════════════════════════════════════════════════
 
 🚨 IMMEDIATE CLOSE TRIGGERS:
 - P&L < -7% → CLOSE_FULL (cut losses before stop)
 - Thesis INVALIDATED → CLOSE_FULL (don't hope for recovery)
-- Hold time > 7 days with no progress → CLOSE_FULL (capital efficiency)
+- Hold time > ${cfg.maxHoldHours}h with no progress → CLOSE_FULL (capital efficiency)
 
-⚠️ PROFIT PROTECTION TRIGGERS (AGGRESSIVE - TAKE PROFITS EARLY):
-- P&L > +5% → Consider TAKE_PARTIAL (25-50%) to lock in gains
-- P&L > +8% → TAKE_PARTIAL (50%) or TIGHTEN_STOP to +4%
-- P&L > +10% → Strongly consider CLOSE_FULL or TAKE_PARTIAL (75%)
-- P&L > +15% → CLOSE_FULL - don't be greedy, secure the win
+⚠️ PROFIT PROTECTION TRIGGERS (TAKE PROFITS ${cfg.isScalping ? 'EARLY' : 'AT TARGETS'}):
+- P&L > +${tp.breakeven}% → Move stop to breakeven
+- P&L > +${tp.partial25}% → Consider TAKE_PARTIAL (25-50%) to lock in gains
+- P&L > +${tp.partial50}% → TAKE_PARTIAL (50%) or TIGHTEN_STOP to +${Math.max(2, tp.partial25 - 1)}%
+- P&L > +${tp.partial75}% → Strongly consider CLOSE_FULL or TAKE_PARTIAL (75%)
+- P&L > +${cfg.targetProfitPercent}% → CLOSE_FULL - don't be greedy, secure the win
 
 📊 FUNDING CONSIDERATIONS:
 - If funding ADVERSE and > 0.03%/8h → Factor into hold decision
@@ -363,6 +379,10 @@ export function buildPortfolioManagementSummary(positions: PortfolioPosition[]):
 
     const needsAttention: Array<{ position: PortfolioPosition; health: PositionHealthMetrics; priority: number }> = [];
 
+    // Get config for dynamic thresholds
+    const cfg = getTradingConfig();
+    const profitTakingThreshold = cfg.takeProfitThresholds.partial25;
+
     for (const pos of validPositions) {
         const health = assessPositionHealth(pos);
         let priority = 0;
@@ -375,10 +395,10 @@ export function buildPortfolioManagementSummary(positions: PortfolioPosition[]):
         if (health.holdTimeStatus === 'STALE') priority += 40;
         if (health.fundingImpact === 'ADVERSE') priority += 20;
 
-        // Profit-taking opportunities also need attention - AGGRESSIVE thresholds
+        // Profit-taking opportunities also need attention - use config threshold
         const pnlPercent = Number.isFinite(pos.unrealizedPnlPercent) ? pos.unrealizedPnlPercent : 0;
-        if (health.pnlStatus === 'PROFIT' && pnlPercent > 5) {
-            priority += 70; // High priority to take profits at +5%
+        if (health.pnlStatus === 'PROFIT' && pnlPercent > profitTakingThreshold) {
+            priority += 70; // High priority to take profits
         }
 
         needsAttention.push({ position: pos, health, priority });
@@ -410,7 +430,7 @@ PORTFOLIO MANAGEMENT SUMMARY (${validPositions.length} position${validPositions.
             actionHint = '→ Consider CLOSE_FULL';
         } else if (health.thesisStatus === 'INVALIDATED') {
             actionHint = '→ Consider CLOSE_FULL';
-        } else if (health.pnlStatus === 'PROFIT' && pnlPercent > 5) {
+        } else if (health.pnlStatus === 'PROFIT' && pnlPercent > cfg.takeProfitThresholds.partial25) {
             actionHint = '→ TAKE_PARTIAL or CLOSE_FULL - secure profits!';
         } else if (health.holdTimeStatus === 'STALE') {
             actionHint = '→ CLOSE_FULL - position too old, free up capital';
@@ -427,10 +447,15 @@ ${priorityLabel} PRIORITY | ${symbol} ${position.side}
 }
 
 /**
- * Trading rules specific to position management
+ * Get trading rules specific to position management
  * Cross-referenced with WEEX API documentation
+ * Uses config values for dynamic thresholds
  */
-export const MANAGE_TRADING_RULES = `
+export function getManageTradingRules(): string {
+    const cfg = getTradingConfig();
+    const tp = cfg.takeProfitThresholds;
+
+    return `
 ═══════════════════════════════════════════════════════════════════════════════
 POSITION MANAGEMENT RULES (MANDATORY - ENFORCED BY SYSTEM)
 ═══════════════════════════════════════════════════════════════════════════════
@@ -443,18 +468,19 @@ POSITION MANAGEMENT RULES (MANDATORY - ENFORCED BY SYSTEM)
 5. ADD_MARGIN forbidden if P&L < -3% (system will reject)
 6. -7% ≤ P&L < -5%: DANGER ZONE - reduce position size or tighten stops
 
-💰 PROFIT MANAGEMENT (AGGRESSIVE - SECURE GAINS EARLY):
-1. P&L > +3%: Move stop to breakeven (entry price) - protect the trade
-2. P&L > +5%: Take at least 25% profits AND tighten stop to +2%
-3. P&L > +8%: Take at least 50% profits AND tighten stop to +4%
-4. P&L > +10%: Take at least 75% profits - don't let winners reverse
-5. Never let a +5% winner turn into a loser - PROTECT GAINS
+💰 PROFIT MANAGEMENT (${cfg.isScalping ? 'SCALPING' : 'SWING'} STYLE - TAKE PROFITS ${cfg.isScalping ? 'EARLY' : 'AT TARGETS'}):
+1. P&L > +${tp.breakeven}%: Move stop to breakeven (entry price) - protect the trade
+2. P&L > +${tp.partial25}%: Take at least 25% profits AND tighten stop to +${Math.max(1, tp.breakeven - 1)}%
+3. P&L > +${tp.partial50}%: Take at least 50% profits AND tighten stop to +${Math.max(2, tp.partial25 - 1)}%
+4. P&L > +${tp.partial75}%: Take at least 75% profits - secure the win!
+5. P&L > +${cfg.targetProfitPercent}%: CLOSE_FULL - don't be greedy, bank the profit
+6. Never let a +${tp.partial25}% winner turn into a loser - PROTECT GAINS
 
-⏰ TIME-BASED RULES (AGGRESSIVE - CAPITAL EFFICIENCY):
-1. Hold > 2 days: Re-evaluate thesis - is the move happening?
-2. Hold > 3 days: Close unless strong momentum with clear catalyst
-3. Hold > 5 days: CLOSE_FULL - stale positions waste capital
-4. Crypto moves fast - if it's not working in 48h, it's probably not working
+⏰ TIME-BASED RULES (${cfg.isScalping ? 'SCALPING' : 'SWING'} STYLE - ${cfg.isScalping ? 'FAST TURNOVER' : 'PATIENT HOLDS'}):
+1. Hold > ${Math.round(cfg.maxHoldHours / 2)} hours: Re-evaluate thesis - is the move happening?
+2. Hold > ${Math.round(cfg.maxHoldHours * 0.75)} hours: Close unless strong momentum with clear catalyst
+3. Hold > ${cfg.maxHoldHours} hours: CLOSE_FULL - stale positions waste capital
+4. Crypto moves fast - if it's not working in ${Math.round(cfg.maxHoldHours / 2)}h, it's probably not working
 
 💸 FUNDING RATE RULES:
 1. Funding > 0.03% against position: Factor into daily cost
@@ -524,6 +550,13 @@ CIRCUIT BREAKER DEFINITIONS (from GLOBAL_RISK_LIMITS):
 
 - BTC flash crash > 5%: Close all altcoin positions
 `;
+}
+
+// DEPRECATED: Use getManageTradingRules() instead for dynamic config values
+// This constant is kept for backward compatibility but calls the function each time
+// WARNING: This is evaluated at module load time, so config changes won't be reflected
+// For dynamic values, always call getManageTradingRules() directly
+export const MANAGE_TRADING_RULES = getManageTradingRules();
 
 // FIXED Issue 13: Moved imports to top of file (standard convention)
 import { getSystemPrompt } from './promptHelpers';

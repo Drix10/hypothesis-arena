@@ -31,6 +31,66 @@ import {
 import { formatTradingRulesForAI } from '../analyst/tradingRules';
 
 /**
+ * Validate trading config object has all required properties
+ * Guards against invalid config from getTradingConfig()
+ * 
+ * @param cfg - Trading config object to validate
+ * @throws Error if config is invalid or missing required properties
+ */
+function validateTradingConfig(cfg: ReturnType<typeof getTradingConfig>): void {
+    if (!cfg || typeof cfg !== 'object') {
+        throw new Error('getTradingConfig() returned invalid config object');
+    }
+
+    // Validate numeric properties used in toFixed() calls
+    const requiredNumericProps = [
+        'targetProfitPercent', 'styleStopLossPercent', 'maxHoldHours',
+        'minRiskRewardRatio', 'maxStopLossPercent', 'maxLeverage',
+        'maxPositionSizePercent', 'maxConcurrentPositions', 'maxSameDirectionPositions',
+        'maxWeeklyDrawdown', 'maxFundingAgainstPercent', 'netExposureLong',
+        'netExposureShort', 'maxRiskPerTrade', 'maxConcurrentRisk', 'maxHoldDays'
+    ] as const;
+
+    for (const prop of requiredNumericProps) {
+        const value = cfg[prop as keyof typeof cfg];
+        if (typeof value !== 'number' || !Number.isFinite(value)) {
+            throw new Error(
+                `Invalid trading config: ${prop} is ${value}. ` +
+                `Expected a finite number. Check your .env configuration.`
+            );
+        }
+    }
+
+    // Validate takeProfitThresholds object
+    if (!cfg.takeProfitThresholds || typeof cfg.takeProfitThresholds !== 'object') {
+        throw new Error('getTradingConfig() returned invalid takeProfitThresholds');
+    }
+
+    const thresholdProps = ['breakeven', 'partial25', 'partial50', 'partial75'] as const;
+    for (const prop of thresholdProps) {
+        if (!Number.isFinite(cfg.takeProfitThresholds[prop])) {
+            throw new Error(
+                `Invalid trading config: takeProfitThresholds.${prop} is ${cfg.takeProfitThresholds[prop]}. ` +
+                `Expected a finite number.`
+            );
+        }
+    }
+}
+
+/**
+ * Get validated trading config
+ * Wrapper around getTradingConfig() that ensures all values are valid
+ * 
+ * @returns Validated trading config object
+ * @throws Error if config is invalid
+ */
+function getValidatedTradingConfig(): ReturnType<typeof getTradingConfig> {
+    const cfg = getTradingConfig();
+    validateTradingConfig(cfg);
+    return cfg;
+}
+
+/**
  * Position info for portfolio-aware coin selection
  */
 export interface PortfolioPosition {
@@ -64,6 +124,9 @@ export function buildCoinSelectionPrompt(
     validateRequired(marketSummary, 'marketSummary');
 
     const name = sanitizeString(profile.name, 100);
+
+    // Get validated config values for dynamic limits
+    const cfg = getValidatedTradingConfig();
 
     // For coin selection, we don't include the full system prompt because:
     // 1. The analyst doesn't know the action yet (LONG/SHORT/MANAGE)
@@ -141,11 +204,24 @@ SELECTION CRITERIA (apply YOUR FULL METHODOLOGY):
 3. Prioritize capital preservation - managing a losing position may be more urgent than a new trade
 4. Consider portfolio correlation - don't add more of the same direction
 
+TRADING STYLE - ${cfg.isScalping ? 'HIGH FREQUENCY SCALPING' : 'SWING TRADING'}:
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ ${cfg.isScalping ? 'WE ARE A QUANT FIRM - PREFER SHORT TRADES WITH QUICK PROFITS' : 'SWING TRADING - LARGER MOVES, LONGER HOLDS'}                │
+│                                                                             │
+│ ${cfg.isScalping ? 'IDEAL SETUPS:' : 'IDEAL SETUPS:'}                                                               │
+│   • ${cfg.isScalping ? `Clear momentum with ${cfg.targetProfitPercent}% move potential in hours` : `Strong trend with ${cfg.targetProfitPercent}% move potential over days`}                        │
+│   • ${cfg.isScalping ? 'High volume coins with tight spreads' : 'Clear catalyst with defined timeline'}                                    │
+│   • ${cfg.isScalping ? 'Breakout/breakdown setups near key levels' : 'Technical breakout with fundamental support'}                               │
+│   • Funding rate favoring our direction                                     │
+│                                                                             │
+│ TARGETS: TP ${cfg.targetProfitPercent}% | SL ${cfg.styleStopLossPercent}% | Max Hold ${cfg.maxHoldHours}h | Min R/R ${cfg.minRiskRewardRatio}:1              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
 DECISION FRAMEWORK (TWO-STEP):
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │ STEP 1: MANAGE vs TRADE (evaluate MANAGE first - 50/50 importance)         │
-│   MANAGE if: P&L > +5%, P&L < -5%, hold > 2 days, thesis invalidated       │
-│   TRADE only if: No positions need attention AND clear opportunity         │
+│   MANAGE if: P&L > +${cfg.takeProfitThresholds.partial25}% (take profits!), P&L < -${cfg.styleStopLossPercent}%, hold > ${Math.round(cfg.maxHoldHours / 24 * 10) / 10} day${cfg.maxHoldHours >= 24 ? 's' : ''}            │
+│   TRADE only if: No positions need attention AND clear ${cfg.isScalping ? 'scalp' : 'swing'} opportunity   │
 │                                                                             │
 │ STEP 2: If TRADE → LONG vs SHORT based on market setup                     │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -252,8 +328,8 @@ The funding rate is AGAINST your ${direction} position!
     // For specialist analysis (LONG/SHORT), filter out management sections to save tokens
     const fullSystemPrompt = getSystemPrompt(profile.methodology, THESIS_SYSTEM_PROMPTS, direction);
 
-    // Get config values for dynamic limits
-    const cfg = getTradingConfig();
+    // Get validated config values for dynamic limits
+    const cfg = getValidatedTradingConfig();
 
     return `═══════════════════════════════════════════════════════════════════════════════
 PRIORITY DIRECTIVE - STAGE OVERRIDES
@@ -318,7 +394,24 @@ EXECUTION REQUIREMENTS:
 - Leverage: 1-${cfg.maxLeverage}x max (crypto volatility requires tight risk management)
 - Position size: 1-10 scale (scaled to conviction and risk)
 - Stop loss: ≤${cfg.maxStopLossPercent}% from entry unless justified by volatility/structure
-- Time horizon: Crypto moves fast—set realistic timeframe (2-14 days typical)
+- Time horizon: ${cfg.isScalping ? `SCALPING - target ${cfg.targetProfitPercent}% moves over hours to ${cfg.maxHoldDays.toFixed(1)} days` : `SWING - target ${cfg.targetProfitPercent}% moves over ${cfg.maxHoldDays.toFixed(0)} days`}
+
+TRADING STYLE - ${cfg.isScalping ? 'HIGH FREQUENCY SCALPING' : 'SWING TRADING'}:
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ ${cfg.isScalping ? 'WE ARE A QUANT TRADING FIRM - VOLUME OVER SIZE' : 'SWING TRADING - QUALITY OVER QUANTITY'}                              │
+│                                                                             │
+│ TARGET PARAMETERS (from config):                                            │
+│   • Take Profit: ${cfg.targetProfitPercent}% from entry                                           │
+│   • Stop Loss: ${cfg.styleStopLossPercent}% from entry                                             │
+│   • Risk/Reward: ${cfg.minRiskRewardRatio}:1 minimum                                            │
+│   • Max Hold: ${cfg.maxHoldHours} hours (${cfg.maxHoldDays.toFixed(1)} days)                                          │
+│                                                                             │
+│ PROFIT TAKING THRESHOLDS:                                                   │
+│   • +${cfg.takeProfitThresholds.breakeven}%: Move stop to breakeven                                        │
+│   • +${cfg.takeProfitThresholds.partial25}%: Take 25% profits                                              │
+│   • +${cfg.takeProfitThresholds.partial50}%: Take 50% profits                                              │
+│   • +${cfg.takeProfitThresholds.partial75}%: Take 75% profits                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
 
 DEBATE PREPARATION:
 Your thesis will compete against 2 other specialists in Stage 4. To win:
@@ -400,8 +493,8 @@ export function buildRiskCouncilPrompt(
     const takeProfitDistance = Math.abs((baseTarget - currentPrice) / currentPrice * 100);
     const riskRewardRatio = stopLossDistance > 0 ? takeProfitDistance / stopLossDistance : 0;
 
-    // Get config values for dynamic limits
-    const cfg = getTradingConfig();
+    // Get validated config values for dynamic limits
+    const cfg = getValidatedTradingConfig();
 
     // Validate and clamp positionSize to expected range (0-10)
     const validatedPositionSize = Math.max(0, Math.min(10, Number(champion.positionSize) || 0));
@@ -525,18 +618,22 @@ YOUR CHECKLIST (from FLOW.md):
 [ ] Net Exposure: net LONG ≤${cfg.netExposureLong}% or net SHORT ≤${cfg.netExposureShort}% (reduce size if exceeded)
 
 DECISION CRITERIA:
-- Approve only if risk/reward ≥ 2.0 and stops within ≤${cfg.maxStopLossPercent}%
-- Reduce size if funding drag is significant or correlation high
-- Favor trades with clear catalysts in 7–14 day window
-- Veto if any guardrail breached or tail risks unaddressed
+- PREFER ADJUSTING over VETOING - only veto for hard blockers (max positions, weekly drawdown)
+- If position size exceeds limit → ADJUST DOWN to ${cfg.maxPositionSizePercent}% and APPROVE
+- If stop loss too wide → TIGHTEN stop loss and APPROVE
+- If leverage too high → REDUCE leverage and APPROVE
+- Approve with adjustments unless a HARD BLOCKER exists
 
-VETO TRIGGERS (MUST veto if ANY are true):
-X Stop loss >${cfg.maxStopLossPercent}% from entry
-X Position would exceed ${cfg.maxPositionSizePercent}% of account
+HARD BLOCKERS (MUST veto - cannot be adjusted):
 X Already at MAX_CONCURRENT_POSITIONS limit (currently: ${currentPositions.length}/${cfg.maxConcurrentPositions})
 X 7d drawdown >${cfg.maxWeeklyDrawdown}% (reduce risk, no new trades)
-X Funding rate >${cfg.maxFundingAgainstPercent.toFixed(2)}% against position direction
-X Net exposure beyond guardrails (net LONG >${cfg.netExposureLong}% or net SHORT >${cfg.netExposureShort}%)
+X Same direction limit reached (${sameDirectionPositions.length}/${cfg.maxSameDirectionPositions} ${direction} positions)
+
+ADJUSTABLE ISSUES (FIX and APPROVE - do NOT veto):
+→ Position size >${cfg.maxPositionSizePercent}%? → Set positionSize to fit within ${cfg.maxPositionSizePercent}%
+→ Stop loss >${cfg.maxStopLossPercent}%? → Tighten stopLoss to ≤${cfg.maxStopLossPercent}% from entry
+→ Leverage too high? → Reduce leverage to safe level
+→ Funding rate high? → Reduce position size, still APPROVE
 
 RISK METHODOLOGY REFERENCE (read after stage instructions):
 ${fullSystemPrompt}
