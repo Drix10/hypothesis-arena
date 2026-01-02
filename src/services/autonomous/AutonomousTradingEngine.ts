@@ -293,7 +293,7 @@ export class AutonomousTradingEngine extends EventEmitter {
             );
 
             if (managementDecision && managementDecision.manageType) {
-                const { manageType, conviction, reason, closePercent } = managementDecision;
+                const { manageType, conviction, reason, closePercent, newStopLoss, newTakeProfit } = managementDecision;
                 logger.info(`📋 Management Decision: ${manageType} (conviction: ${conviction}/10)`);
                 logger.info(`Reason: ${reason}`);
 
@@ -320,8 +320,100 @@ export class AutonomousTradingEngine extends EventEmitter {
                                     logger.info(`✅ Closed ${closePercent}% of ${positionToManage.symbol}`);
                                 }
                                 break;
+                            case 'TIGHTEN_STOP':
+                                if (newStopLoss && Number.isFinite(newStopLoss) && newStopLoss > 0) {
+                                    // Validate stop loss direction
+                                    const isValidDirection = positionToManage.side === 'LONG'
+                                        ? newStopLoss < positionToManage.currentPrice
+                                        : newStopLoss > positionToManage.currentPrice;
+
+                                    if (!isValidDirection) {
+                                        logger.warn(`⚠️ Invalid stop loss direction for ${positionToManage.side}: ${newStopLoss} vs current ${positionToManage.currentPrice}`);
+                                        break;
+                                    }
+
+                                    // Check for existing stop loss order
+                                    const existingOrders = await this.weexClient.getCurrentPlanOrders(positionToManage.symbol);
+                                    const stopLossOrder = existingOrders.find((o: any) =>
+                                        (o.planType === 'loss_plan' || o.plan_type === 'loss_plan') &&
+                                        (o.positionSide === positionToManage.side.toLowerCase() ||
+                                            o.position_side === positionToManage.side.toLowerCase())
+                                    );
+
+                                    if (stopLossOrder && (stopLossOrder.orderId || stopLossOrder.order_id)) {
+                                        // Modify existing stop loss
+                                        const orderId = String(stopLossOrder.orderId || stopLossOrder.order_id);
+                                        await this.weexClient.modifyTpSlOrder({
+                                            orderId,
+                                            triggerPrice: newStopLoss,
+                                            executePrice: 0,
+                                        });
+                                        logger.info(`✅ Modified stop loss to ${newStopLoss}`);
+                                    } else {
+                                        // Place new stop loss
+                                        await this.weexClient.placeTpSlOrder({
+                                            symbol: positionToManage.symbol,
+                                            planType: 'loss_plan',
+                                            triggerPrice: newStopLoss,
+                                            size: positionToManage.size,
+                                            positionSide: positionToManage.side.toLowerCase() as 'long' | 'short',
+                                        });
+                                        logger.info(`✅ Placed new stop loss at ${newStopLoss}`);
+                                    }
+                                } else {
+                                    logger.warn(`⚠️ TIGHTEN_STOP requires valid newStopLoss, got: ${newStopLoss}`);
+                                }
+                                break;
+                            case 'ADJUST_TP':
+                                if (newTakeProfit && Number.isFinite(newTakeProfit) && newTakeProfit > 0) {
+                                    // Validate take profit direction
+                                    const isValidTPDirection = positionToManage.side === 'LONG'
+                                        ? newTakeProfit > positionToManage.currentPrice
+                                        : newTakeProfit < positionToManage.currentPrice;
+
+                                    if (!isValidTPDirection) {
+                                        logger.warn(`⚠️ Invalid take profit direction for ${positionToManage.side}: ${newTakeProfit} vs current ${positionToManage.currentPrice}`);
+                                        break;
+                                    }
+
+                                    // Check for existing take profit order
+                                    const existingTPOrders = await this.weexClient.getCurrentPlanOrders(positionToManage.symbol);
+                                    const takeProfitOrder = existingTPOrders.find((o: any) =>
+                                        (o.planType === 'profit_plan' || o.plan_type === 'profit_plan') &&
+                                        (o.positionSide === positionToManage.side.toLowerCase() ||
+                                            o.position_side === positionToManage.side.toLowerCase())
+                                    );
+
+                                    if (takeProfitOrder && (takeProfitOrder.orderId || takeProfitOrder.order_id)) {
+                                        // Modify existing take profit
+                                        const orderId = String(takeProfitOrder.orderId || takeProfitOrder.order_id);
+                                        await this.weexClient.modifyTpSlOrder({
+                                            orderId,
+                                            triggerPrice: newTakeProfit,
+                                            executePrice: 0,
+                                        });
+                                        logger.info(`✅ Modified take profit to ${newTakeProfit}`);
+                                    } else {
+                                        // Place new take profit
+                                        await this.weexClient.placeTpSlOrder({
+                                            symbol: positionToManage.symbol,
+                                            planType: 'profit_plan',
+                                            triggerPrice: newTakeProfit,
+                                            size: positionToManage.size,
+                                            positionSide: positionToManage.side.toLowerCase() as 'long' | 'short',
+                                        });
+                                        logger.info(`✅ Placed new take profit at ${newTakeProfit}`);
+                                    }
+                                } else {
+                                    logger.warn(`⚠️ ADJUST_TP requires valid newTakeProfit, got: ${newTakeProfit}`);
+                                }
+                                break;
+                            case 'ADD_MARGIN':
+                                // ADD_MARGIN is rarely used and requires careful handling
+                                logger.info(`ℹ️ ADD_MARGIN action noted but not auto-executed in fallback mode`);
+                                break;
                             default:
-                                logger.info(`ℹ️ Management action ${manageType} - no immediate execution needed`);
+                                logger.warn(`⚠️ Unknown management action: ${manageType}`);
                         }
                         if (this.currentCycle) {
                             this.currentCycle.tradesExecuted++;
@@ -918,7 +1010,29 @@ export class AutonomousTradingEngine extends EventEmitter {
                     // Match trade side to position direction for accurate hold time
                     for (const row of holdTimeResult) {
                         if (row._max.executedAt) {
-                            const entryTime = row._max.executedAt.getTime();
+                            // FIXED: SQLite returns DateTime as string in groupBy aggregations
+                            // Handle both Date objects and string representations
+                            let entryTime: number;
+                            const executedAt = row._max.executedAt;
+
+                            if (executedAt instanceof Date) {
+                                entryTime = executedAt.getTime();
+                            } else if (typeof executedAt === 'string') {
+                                // SQLite returns ISO-like strings: "2026-01-02 08:25:02" or "2026-01-02T08:25:02.000Z"
+                                const parsed = new Date(executedAt);
+                                if (isNaN(parsed.getTime())) {
+                                    logger.warn(`Invalid date string for ${row.symbol}: ${executedAt}, skipping`);
+                                    continue;
+                                }
+                                entryTime = parsed.getTime();
+                            } else if (typeof executedAt === 'number') {
+                                // Unix timestamp
+                                entryTime = executedAt;
+                            } else {
+                                logger.warn(`Unexpected executedAt type for ${row.symbol}: ${typeof executedAt}, skipping`);
+                                continue;
+                            }
+
                             // Validate entryTime is not in the future
                             if (entryTime > Date.now()) {
                                 logger.warn(`Invalid future entry time for ${row.symbol}, using default`);
