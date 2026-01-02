@@ -404,10 +404,28 @@ router.post('/manual/close', async (req: Request, res: Response, next: NextFunct
                 // Prisma enum: BUY/SELL for trade action
                 const prismaSide = positionSide === 'LONG' ? 'SELL' : 'BUY';
 
+                // Calculate realized P&L from position data
+                const unrealizedPnl = parseFloat(position.unrealizePnl || '0') || 0;
+                const entryPrice = position.entryPrice || 0;
+
+                // Find original champion who opened this position
+                let championId: string | null = null;
+                try {
+                    const originalTrade = await queryOne<any>(
+                        `SELECT champion_id FROM trades 
+                         WHERE symbol = $1 AND status = 'FILLED' AND realized_pnl IS NULL 
+                         AND side = $2 ORDER BY executed_at DESC LIMIT 1`,
+                        [normalizedSymbol, positionSide === 'LONG' ? 'BUY' : 'SELL']
+                    );
+                    championId = originalTrade?.champion_id || null;
+                } catch {
+                    // Ignore - championId will be null
+                }
+
                 await withTransaction(async (client) => {
                     await client.query(
-                        `INSERT INTO trades (id, portfolio_id, symbol, side, type, size, price, status, client_order_id, weex_order_id, reason, executed_at, created_at)
-                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+                        `INSERT INTO trades (id, portfolio_id, symbol, side, type, size, price, status, client_order_id, weex_order_id, reason, realized_pnl, champion_id, executed_at, created_at)
+                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
                         [
                             tradeId,
                             portfolio.id,
@@ -415,11 +433,13 @@ router.post('/manual/close', async (req: Request, res: Response, next: NextFunct
                             prismaSide,
                             'MARKET',
                             sizeNum,
-                            0, // Market close
+                            entryPrice, // Use entry price instead of 0
                             'FILLED',
                             `manual_close_${Date.now()}`,
                             orderId,
-                            'Manual close via UI'
+                            'Manual close via UI',
+                            unrealizedPnl, // $12: realized_pnl - use unrealized P&L from position as realized
+                            championId     // $13: champion_id - from original entry trade
                         ]
                     );
 

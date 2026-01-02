@@ -56,7 +56,6 @@ model Portfolio {
 
   trades                Trade[]
   performanceSnapshots  PerformanceSnapshot[]
-  performanceMetrics    PerformanceMetric[]
 
   @@index([status])
   @@map("portfolios")
@@ -145,29 +144,6 @@ model PerformanceSnapshot {
   @@index([timestamp])
   @@index([portfolioId, timestamp])
   @@map("performance_snapshots")
-}
-
-// Performance Metrics - Daily performance tracking
-// Aggregated daily statistics for the collaborative portfolio
-model PerformanceMetric {
-  id               String   @id @default(uuid())
-  portfolioId      String   @map("portfolio_id")
-  date             String   // YYYY-MM-DD format
-  portfolioValue   Float    @map("portfolio_value")
-  dailyReturn      Float    @map("daily_return")
-  cumulativeReturn Float    @map("cumulative_return")
-  sharpeRatio      Float?   @map("sharpe_ratio")
-  maxDrawdown      Float    @map("max_drawdown")
-  winRate          Float    @map("win_rate")
-  tradesCount      Int      @default(0) @map("trades_count")
-  createdAt        DateTime @default(now()) @map("created_at")
-
-  portfolio Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
-
-  @@unique([portfolioId, date])
-  @@index([portfolioId])
-  @@index([date])
-  @@map("performance_metrics")
 }
 
 // Enums for type safety and database constraints

@@ -187,16 +187,21 @@ router.get('/assets', async (_req: Request, res: Response, next: NextFunction) =
         // Calculate total wallet P&L based on starting balance from config
         const startingBalance = config.trading.startingBalance;
         const currentEquity = parseFloat(assets.equity || '0');
-        const totalWalletPnl = currentEquity - startingBalance;
-        const totalWalletPnlPercent = startingBalance > 0
+
+        // Validate and calculate P&L with NaN protection
+        const rawTotalWalletPnl = currentEquity - startingBalance;
+        const totalWalletPnl = Number.isFinite(rawTotalWalletPnl) ? rawTotalWalletPnl : 0;
+
+        const rawTotalWalletPnlPercent = startingBalance > 0
             ? ((currentEquity - startingBalance) / startingBalance) * 100
             : 0;
+        const totalWalletPnlPercent = Number.isFinite(rawTotalWalletPnlPercent) ? rawTotalWalletPnlPercent : 0;
 
         // Get positions to calculate unrealized P&L
         const positions = await weex.getPositions();
         const unrealizedPL = positions.reduce((sum, pos) => {
             const pnl = parseFloat(String(pos.unrealizePnl)) || 0;
-            return sum + pnl;
+            return sum + (Number.isFinite(pnl) ? pnl : 0);
         }, 0);
 
         // Consolidated response - assets with additional calculated fields
@@ -215,13 +220,117 @@ router.get('/assets', async (_req: Request, res: Response, next: NextFunction) =
     }
 });
 
-// GET /api/weex/positions - Get all positions
+// GET /api/weex/positions - Get all positions with current market prices
 router.get('/positions', async (_req: Request, res: Response, next: NextFunction) => {
     try {
         const weex = getWeexClient();
         const positions = await weex.getPositions();
 
-        res.json({ success: true, data: positions, positions });
+        // Fetch current prices for all position symbols
+        const activePositions = positions.filter(p => parseFloat(String(p.size)) > 0);
+
+        if (activePositions.length === 0) {
+            res.json({ success: true, data: [] });
+            return;
+        }
+
+        // Batch fetch tickers and plan orders for all symbols to avoid N+1
+        const symbols = [...new Set(activePositions.map(p => p.symbol))];
+
+        const [tickerResults, planOrderResults] = await Promise.all([
+            // Fetch all tickers in parallel
+            Promise.all(symbols.map(async (symbol) => {
+                try {
+                    const ticker = await weex.getTicker(symbol);
+                    return { symbol, price: parseFloat(ticker?.last || '0') };
+                } catch {
+                    return { symbol, price: 0 };
+                }
+            })),
+            // Fetch all plan orders in parallel
+            Promise.all(symbols.map(async (symbol) => {
+                try {
+                    const orders = await weex.getCurrentPlanOrders(symbol);
+                    return { symbol, orders };
+                } catch {
+                    return { symbol, orders: [] };
+                }
+            }))
+        ]);
+
+        // Build lookup maps
+        const tickerMap = new Map(tickerResults.map(t => [t.symbol, t.price]));
+        const planOrderMap = new Map(planOrderResults.map(p => [p.symbol, p.orders]));
+
+        // Enhance positions with current market price and SL distance
+        const enhancedPositions = activePositions.map((pos) => {
+            const markPrice = tickerMap.get(pos.symbol) || 0;
+            const planOrders = planOrderMap.get(pos.symbol) || [];
+
+            // Get TP/SL orders for this position
+            // WEEX plan orders don't return planType or positionSide in response
+            // We infer SL vs TP based on trigger price relative to mark price:
+            // - LONG: SL trigger < mark price, TP trigger > mark price
+            // - SHORT: SL trigger > mark price, TP trigger < mark price
+            let stopLoss: number | null = null;
+            let takeProfit: number | null = null;
+
+            const isLongPos = pos.side === 'LONG';
+            for (const order of planOrders) {
+                const triggerPrice = parseFloat(order.triggerPrice || order.trigger_price || '0');
+                if (triggerPrice <= 0) continue;
+
+                // Determine if this is SL or TP based on trigger price vs mark price
+                if (isLongPos) {
+                    // LONG: SL below mark, TP above mark
+                    if (triggerPrice < markPrice) {
+                        stopLoss = triggerPrice;
+                    } else if (triggerPrice > markPrice) {
+                        takeProfit = triggerPrice;
+                    }
+                } else {
+                    // SHORT: SL above mark, TP below mark
+                    if (triggerPrice > markPrice) {
+                        stopLoss = triggerPrice;
+                    } else if (triggerPrice < markPrice) {
+                        takeProfit = triggerPrice;
+                    }
+                }
+            }
+
+            // Calculate distance to SL/TP
+            const isLong = isLongPos;
+            const size = parseFloat(String(pos.size)) || 0;
+
+            let slDistance: number | null = null;
+            let tpDistance: number | null = null;
+
+            if (stopLoss && markPrice > 0 && size > 0) {
+                // Distance as $ amount to SL
+                const rawSlDist = isLong
+                    ? (markPrice - stopLoss) * size  // LONG: lose money if price drops to SL
+                    : (stopLoss - markPrice) * size; // SHORT: lose money if price rises to SL
+                slDistance = Number.isFinite(rawSlDist) ? rawSlDist : null;
+            }
+
+            if (takeProfit && markPrice > 0 && size > 0) {
+                const rawTpDist = isLong
+                    ? (takeProfit - markPrice) * size  // LONG: gain money if price rises to TP
+                    : (markPrice - takeProfit) * size; // SHORT: gain money if price drops to TP
+                tpDistance = Number.isFinite(rawTpDist) ? rawTpDist : null;
+            }
+
+            return {
+                ...pos,
+                markPrice: Number.isFinite(markPrice) ? markPrice : 0,
+                stopLoss,
+                takeProfit,
+                slDistance,
+                tpDistance
+            };
+        });
+
+        res.json({ success: true, data: enhancedPositions });
     } catch (error) {
         next(error);
     }

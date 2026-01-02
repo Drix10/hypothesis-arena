@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Hypothesis Arena - Premium Frontend Application
  * AI-powered autonomous crypto trading platform
  *
@@ -42,11 +42,11 @@ const state = {
 // ============================================================================
 
 const ANALYSTS = Object.freeze({
-  warren: { emoji: "👴", name: "Warren", style: "Value", color: "#3fb950" },
+  warren: { emoji: "🦉", name: "Warren", style: "Value", color: "#3fb950" },
   cathie: { emoji: "🚀", name: "Cathie", style: "Growth", color: "#58a6ff" },
-  jim: { emoji: "📺", name: "Jim", style: "Technical", color: "#f0883e" },
-  ray: { emoji: "🌊", name: "Ray", style: "Macro", color: "#a371f7" },
-  elon: { emoji: "🐦", name: "Elon", style: "Sentiment", color: "#00d4ff" },
+  jim: { emoji: "📊", name: "Jim", style: "Technical", color: "#f0883e" },
+  ray: { emoji: "🌍", name: "Ray", style: "Macro", color: "#a371f7" },
+  elon: { emoji: "⚡", name: "Elon", style: "Sentiment", color: "#00d4ff" },
   karen: { emoji: "🛡️", name: "Karen", style: "Risk", color: "#d29922" },
   quant: {
     emoji: "🤖",
@@ -398,10 +398,10 @@ async function fetchMarketOverview() {
       container.innerHTML = markets.map(renderMarketCard).join("");
       updateText("market-updated", formatTime(new Date()));
     } else {
-      container.innerHTML = renderEmptyState("📊", "Failed to load markets");
+      container.innerHTML = renderEmptyState("📉", "Failed to load markets");
     }
   } catch (err) {
-    container.innerHTML = renderEmptyState("⚠️", "Market data unavailable");
+    container.innerHTML = renderEmptyState("📉", "Market data unavailable");
   }
 }
 
@@ -429,7 +429,7 @@ function renderMarketCard(market) {
 }
 
 function showMarketInfo(symbol) {
-  showAlert(`📊 ${symbol}/USDT - Chart view coming soon`, "info");
+  showAlert(`📈 ${symbol}/USDT - Chart view coming soon`, "info");
 }
 
 // ============================================================================
@@ -467,6 +467,7 @@ function renderPositionCard(pos) {
   const side = (pos.side || "").toLowerCase();
   const symbol = formatSymbol(pos.symbol);
   const pnlClass = pnl >= 0 ? "positive" : "negative";
+  const pnlSign = pnl >= 0 ? "+" : "";
   const rawSymbol = pos.symbol || "";
   const rawSide = (pos.side || "").toUpperCase();
   const rawSize = pos.size || "0";
@@ -477,6 +478,16 @@ function renderPositionCard(pos) {
   const leverage = parseFloat(pos.leverage) || 1;
   const investedAmount = leverage > 0 ? (size * entryPrice) / leverage : 0;
 
+  // SL/TP: Show only $ distance (how much you lose/gain when hit)
+  const slDistance = pos.slDistance != null ? parseFloat(pos.slDistance) : null;
+  const tpDistance = pos.tpDistance != null ? parseFloat(pos.tpDistance) : null;
+
+  // Format: "-$12.50" for SL (loss), "+$25.00" for TP (gain)
+  const slInfo =
+    slDistance !== null ? "-$" + Math.abs(slDistance).toFixed(2) : "--";
+  const tpInfo =
+    tpDistance !== null ? "+$" + Math.abs(tpDistance).toFixed(2) : "--";
+
   return `
     <div class="position-card" role="listitem">
       <div class="position-header">
@@ -484,16 +495,14 @@ function renderPositionCard(pos) {
         <span class="position-side ${side}">${escapeHtml(
     side.toUpperCase()
   )}</span>
-        <span class="position-leverage">${pos.leverage || 1}x</span>
-        <button 
-          class="btn-close-position" 
+        <span class="position-leverage">${leverage}x</span>
+        <button
+          class="btn-close-position"
           data-symbol="${escapeHtml(rawSymbol)}"
           data-side="${escapeHtml(rawSide)}"
           data-size="${escapeHtml(rawSize)}"
           aria-label="Close position"
-          title="Close position">
-          ✕
-        </button>
+          title="Close position">X</button>
       </div>
       <div class="position-details">
         <div class="position-detail">
@@ -501,26 +510,18 @@ function renderPositionCard(pos) {
           <span class="value">$${investedAmount.toFixed(2)}</span>
         </div>
         <div class="position-detail">
-          <span class="label">Size</span>
-          <span class="value">${formatNumber(pos.size || 0)}</span>
-        </div>
-        <div class="position-detail">
-          <span class="label">Entry</span>
-          <span class="value">${formatPrice(
-            pos.entryPrice || pos.avgPrice || 0
-          )}</span>
-        </div>
-        <div class="position-detail">
-          <span class="label">Mark</span>
-          <span class="value">${formatPrice(pos.markPrice || 0)}</span>
-        </div>
-        <div class="position-detail">
           <span class="label">P&L</span>
-          <span class="value ${pnlClass}">${formatCurrency(pnl)}</span>
+          <span class="value ${pnlClass}">${pnlSign}$${Math.abs(pnl).toFixed(
+    2
+  )}</span>
         </div>
         <div class="position-detail">
-          <span class="label">Liq.</span>
-          <span class="value">${formatPrice(pos.liquidationPrice || 0)}</span>
+          <span class="label">SL</span>
+          <span class="value negative">${slInfo}</span>
+        </div>
+        <div class="position-detail">
+          <span class="label">TP</span>
+          <span class="value positive">${tpInfo}</span>
         </div>
       </div>
     </div>
@@ -548,7 +549,7 @@ async function fetchRecentActivity() {
     if (items.length > 0) {
       container.innerHTML = items.map(renderActivityItem).join("");
     } else {
-      container.innerHTML = renderEmptyState("🕐", "No recent activity");
+      container.innerHTML = renderEmptyState("📭", "No recent activity");
     }
   } catch (err) {
     if (err.name !== "AbortError") {
@@ -586,7 +587,7 @@ async function showAnalystStats(analystId) {
   const modal = document.getElementById("analyst-modal");
   const content = document.getElementById("modal-content");
   const info = ANALYSTS[analystId] || {
-    emoji: "🤖",
+    emoji: "❓",
     name: analystId,
     style: "Unknown",
   };
@@ -722,10 +723,16 @@ function renderRecentTrades(trades) {
         ${trades
           .slice(0, 5)
           .map((trade) => {
-            const pnl = trade.realized_pnl || 0;
+            // Handle both camelCase (API) and snake_case (DB) field names
+            // null/undefined = entry trade (still open), number = closed trade
+            const rawPnl = trade.realizedPnl ?? trade.realized_pnl;
+            const isEntryTrade = rawPnl === null || rawPnl === undefined;
+            const pnl = isEntryTrade ? 0 : parseFloat(rawPnl) || 0;
             const symbol = formatSymbol(trade.symbol);
             const side = (trade.side || "").toLowerCase();
             const pnlClass = pnl >= 0 ? "positive" : "negative";
+            // Show "OPEN" for entry trades (no realized P&L yet)
+            const pnlDisplay = isEntryTrade ? "OPEN" : formatCurrency(pnl);
 
             return `
             <div class="trade-item" role="listitem">
@@ -735,7 +742,7 @@ function renderRecentTrades(trades) {
               trade.side || ""
             )}</span>
               </div>
-              <span class="trade-pnl ${pnlClass}">${formatCurrency(pnl)}</span>
+              <span class="trade-pnl ${pnlClass}">${pnlDisplay}</span>
             </div>
           `;
           })
@@ -787,10 +794,10 @@ async function startEngine() {
       showAlert("🚀 Engine started successfully", "success");
       await fetchEngineStatus();
     } else {
-      showAlert(`❌ Failed: ${data.error || "Unknown error"}`, "error");
+      showAlert(`? Failed: ${data.error || "Unknown error"}`, "error");
     }
   } catch (err) {
-    showAlert(`❌ Error: ${err.message}`, "error");
+    showAlert(`? Error: ${err.message}`, "error");
   } finally {
     state.isEngineActionPending = false;
     if (btnStart) btnStart.removeAttribute("aria-busy");
@@ -815,13 +822,13 @@ async function stopEngine() {
     const data = await res.json();
 
     if (data.success) {
-      showAlert("⏹️ Engine stopped", "info");
+      showAlert("🛑 Engine stopped", "info");
       await fetchEngineStatus();
     } else {
-      showAlert(`❌ Failed: ${data.error || "Unknown error"}`, "error");
+      showAlert(`? Failed: ${data.error || "Unknown error"}`, "error");
     }
   } catch (err) {
-    showAlert(`❌ Error: ${err.message}`, "error");
+    showAlert(`? Error: ${err.message}`, "error");
   } finally {
     state.isEngineActionPending = false;
     if (btnStop) btnStop.removeAttribute("aria-busy");
@@ -846,12 +853,12 @@ async function triggerCycle() {
     const data = await res.json();
 
     if (data.success) {
-      showAlert(data.message || "⚡ Cycle triggered", "success");
+      showAlert(data.message || "? Cycle triggered", "success");
     } else {
-      showAlert(`❌ Failed: ${data.error || "Unknown error"}`, "error");
+      showAlert(`? Failed: ${data.error || "Unknown error"}`, "error");
     }
   } catch (err) {
-    showAlert(`❌ Error: ${err.message}`, "error");
+    showAlert(`? Error: ${err.message}`, "error");
   } finally {
     state.isEngineActionPending = false;
 
@@ -896,17 +903,17 @@ async function closePosition(symbol, side, size) {
     const data = await res.json();
 
     if (res.ok && data.success) {
-      showAlert(`✅ Position closed: ${formatSymbol(symbol)}`, "success");
+      showAlert(`? Position closed: ${formatSymbol(symbol)}`, "success");
       await refreshAll();
     } else {
-      showAlert(`❌ Failed: ${data.error || "Unknown error"}`, "error");
+      showAlert(`? Failed: ${data.error || "Unknown error"}`, "error");
     }
   } catch (err) {
     clearTimeout(timeoutId);
     if (err.name === "AbortError") {
-      showAlert("❌ Request timeout - please try again", "error");
+      showAlert("? Request timeout - please try again", "error");
     } else {
-      showAlert(`❌ Error: ${err.message}`, "error");
+      showAlert(`? Error: ${err.message}`, "error");
     }
   } finally {
     buttons.forEach((btn) => {

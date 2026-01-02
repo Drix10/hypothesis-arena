@@ -555,6 +555,83 @@ export class AutonomousTradingEngine extends EventEmitter {
                             default:
                                 logger.warn(`⚠️ Unknown management action: ${manageType}`);
                         }
+
+                        // Record the management trade to database (for CLOSE actions)
+                        if (manageType === 'CLOSE_FULL' || manageType === 'CLOSE_PARTIAL' || manageType === 'TAKE_PARTIAL') {
+                            try {
+                                // Find original champion who opened this position
+                                let originalChampionId: string | null = null;
+                                try {
+                                    const originalTrade = await prisma.trade.findFirst({
+                                        where: {
+                                            symbol: positionToManage.symbol,
+                                            status: 'FILLED',
+                                            realizedPnl: null, // Entry trade
+                                            side: positionToManage.side === 'LONG' ? 'BUY' : 'SELL'
+                                        },
+                                        orderBy: { executedAt: 'desc' },
+                                        select: { championId: true }
+                                    });
+                                    originalChampionId = originalTrade?.championId || 'karen';
+                                } catch {
+                                    originalChampionId = 'karen';
+                                }
+
+                                // Calculate size and P&L for the trade record
+                                // CRITICAL: Sanitize all numeric values to prevent NaN/undefined issues
+                                let loggedSize = Number.isFinite(positionToManage.size) ? positionToManage.size : 0;
+                                let loggedPnl = Number.isFinite(positionToManage.unrealizedPnl) ? positionToManage.unrealizedPnl : 0;
+
+                                if ((manageType === 'CLOSE_PARTIAL' || manageType === 'TAKE_PARTIAL') && closePercent && closePercent > 0) {
+                                    loggedSize = Number.isFinite(loggedSize) ? (loggedSize * closePercent) / 100 : 0;
+                                    loggedPnl = Number.isFinite(loggedPnl) ? (loggedPnl * closePercent) / 100 : 0;
+                                }
+
+                                // Final validation - ensure values are finite
+                                if (!Number.isFinite(loggedSize)) loggedSize = 0;
+                                if (!Number.isFinite(loggedPnl)) loggedPnl = 0;
+
+                                // Get collaborative portfolio ID - MUST be a valid UUID from DB
+                                const firstAnalyst = this.analystStates.values().next().value;
+                                let portfolioId = firstAnalyst?.portfolioId;
+
+                                // If no portfolioId from analyst state, fetch from DB
+                                if (!portfolioId) {
+                                    const collabPortfolio = await prisma.portfolio.findFirst({
+                                        where: { agentId: 'collaborative' },
+                                        select: { id: true }
+                                    });
+                                    if (!collabPortfolio) {
+                                        logger.error('Cannot record fallback trade: collaborative portfolio not found in DB');
+                                        return { executed: true, symbol: positionToManage.symbol };
+                                    }
+                                    portfolioId = collabPortfolio.id;
+                                }
+
+                                const tradeId = crypto.randomUUID();
+                                await prisma.trade.create({
+                                    data: {
+                                        id: tradeId,
+                                        portfolioId: portfolioId,
+                                        symbol: positionToManage.symbol,
+                                        side: positionToManage.side === 'LONG' ? 'SELL' : 'BUY',
+                                        type: 'MARKET',
+                                        size: loggedSize,
+                                        price: positionToManage.currentPrice,
+                                        status: 'FILLED',
+                                        reason: `FALLBACK: ${manageType} - ${fallbackReason}`,
+                                        championId: originalChampionId,
+                                        realizedPnl: loggedPnl,
+                                        executedAt: new Date(),
+                                        createdAt: new Date()
+                                    }
+                                });
+                                logger.info(`📊 Recorded fallback trade: ${positionToManage.symbol} P&L: ${loggedPnl.toFixed(2)} (${originalChampionId})`);
+                            } catch (dbError) {
+                                logger.error('Failed to record fallback management trade:', dbError);
+                            }
+                        }
+
                         if (this.currentCycle) {
                             this.currentCycle.tradesExecuted++;
                         }
@@ -3582,10 +3659,196 @@ export class AutonomousTradingEngine extends EventEmitter {
     }
 
     /**
+     * Sync closed orders from WEEX that we missed (SL/TP triggered automatically)
+     * This ensures realized P&L is recorded even when WEEX closes positions via SL/TP
+     * 
+     * EDGE CASES HANDLED:
+     * - Breakeven trades (totalProfits = 0) are still recorded
+     * - NaN/Infinity validation on all numeric fields
+     * - Multiple entry trades for same symbol - matches by size
+     * - Batch query for existing closures to avoid N+1
+     */
+    private async syncClosedOrdersFromWeex(): Promise<void> {
+        try {
+            // Get all symbols we have entry trades for (that haven't been closed yet)
+            const entryTrades = await prisma.trade.findMany({
+                where: {
+                    status: 'FILLED',
+                    realizedPnl: null, // Entry trades only
+                    reason: { not: { startsWith: 'MANAGE:' } },
+                    // Only look at recent trades (last 7 days) to limit scope
+                    executedAt: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
+                },
+                select: { id: true, symbol: true, weexOrderId: true, championId: true, side: true, size: true, price: true, executedAt: true }
+            });
+
+            if (entryTrades.length === 0) return;
+
+            // Get unique symbols
+            const symbols = [...new Set(entryTrades.map(t => t.symbol))];
+
+            // Get collaborative portfolio ID - MUST be a valid UUID from DB
+            let portfolioId: string;
+            const collabPortfolio = await prisma.portfolio.findFirst({
+                where: { agentId: 'collaborative' },
+                select: { id: true }
+            });
+
+            if (!collabPortfolio) {
+                // Portfolio doesn't exist - this shouldn't happen in normal operation
+                // Create it to ensure we have a valid FK reference
+                logger.warn('Collaborative portfolio not found, creating one for sync...');
+                const newPortfolio = await prisma.portfolio.create({
+                    data: {
+                        agentId: 'collaborative',
+                        agentName: 'Collaborative AI Team',
+                        initialBalance: 0,
+                        currentBalance: 0,
+                        totalValue: 0,
+                        totalReturn: 0,
+                        totalReturnDollar: 0,
+                        winRate: 0,
+                        maxDrawdown: 0,
+                        currentDrawdown: 0,
+                        totalTrades: 0,
+                        winningTrades: 0,
+                        losingTrades: 0,
+                        tournamentWins: 0,
+                        totalPoints: 0,
+                        status: 'active'
+                    }
+                });
+                portfolioId = newPortfolio.id;
+            } else {
+                portfolioId = collabPortfolio.id;
+            }
+
+            // Batch fetch all existing closure order IDs to avoid N+1 queries
+            const existingClosures = await prisma.trade.findMany({
+                where: {
+                    realizedPnl: { not: null },
+                    weexOrderId: { not: null }
+                },
+                select: { weexOrderId: true }
+            });
+            const existingOrderIds = new Set(existingClosures.map(c => c.weexOrderId).filter(Boolean));
+
+            let syncedCount = 0;
+
+            for (const symbol of symbols) {
+                try {
+                    // Get order history from WEEX
+                    const orders = await this.weexClient.getHistoryOrders(symbol, 50);
+
+                    // Get entry trades for this symbol
+                    const symbolEntryTrades = entryTrades.filter(t => t.symbol === symbol);
+
+                    for (const order of orders) {
+                        // Only process filled orders
+                        if (order.status !== 'filled') continue;
+
+                        // Skip if already recorded
+                        if (existingOrderIds.has(order.orderId)) continue;
+
+                        // Parse and validate totalProfits - include 0 (breakeven) but exclude null/undefined
+                        const totalProfits = parseFloat(order.totalProfits || '');
+                        if (!Number.isFinite(totalProfits)) continue; // Skip if not a valid number (NaN from empty string)
+
+                        // Skip entry orders (they have no P&L impact, totalProfits would be from previous trades)
+                        // Entry orders typically have the same side as the position direction
+                        // Close orders have opposite side
+                        const orderSide = order.side?.toUpperCase();
+                        if (!orderSide) continue;
+
+                        // Find the matching entry trade to get championId
+                        // Match by: symbol, opposite side, and closest size
+                        const matchingEntries = symbolEntryTrades.filter(t =>
+                            // Match opposite side (entry BUY -> close SELL, entry SELL -> close BUY)
+                            (t.side === 'BUY' && orderSide === 'SELL') ||
+                            (t.side === 'SELL' && orderSide === 'BUY')
+                        );
+
+                        if (matchingEntries.length === 0) continue;
+
+                        // If multiple matches, pick the one with closest size
+                        const orderSize = parseFloat(order.filledQty || order.size || '0');
+                        let bestMatch = matchingEntries[0];
+                        let bestSizeDiff = Math.abs(bestMatch.size - orderSize);
+
+                        for (const entry of matchingEntries) {
+                            const sizeDiff = Math.abs(entry.size - orderSize);
+                            if (sizeDiff < bestSizeDiff) {
+                                bestSizeDiff = sizeDiff;
+                                bestMatch = entry;
+                            }
+                        }
+
+                        // Parse and validate other fields
+                        const closeSize = Number.isFinite(orderSize) && orderSize > 0 ? orderSize : bestMatch.size;
+                        const closePrice = parseFloat(order.priceAvg || order.price || '0');
+                        if (!Number.isFinite(closePrice) || closePrice <= 0) continue;
+
+                        // Parse createTime - could be milliseconds timestamp or date string
+                        let executedAt: Date;
+                        const createTimeNum = parseInt(order.createTime);
+                        if (Number.isFinite(createTimeNum) && createTimeNum > 0) {
+                            // If it's a reasonable timestamp (after year 2020)
+                            executedAt = createTimeNum > 1577836800000 ? new Date(createTimeNum) : new Date(createTimeNum * 1000);
+                        } else {
+                            executedAt = new Date();
+                        }
+
+                        // Record the closure trade
+                        const tradeId = crypto.randomUUID();
+                        const closeSide = orderSide === 'BUY' ? 'BUY' : 'SELL';
+
+                        await prisma.trade.create({
+                            data: {
+                                id: tradeId,
+                                portfolioId: portfolioId,
+                                symbol: symbol,
+                                side: closeSide as 'BUY' | 'SELL',
+                                type: 'MARKET',
+                                size: closeSize,
+                                price: closePrice,
+                                status: 'FILLED',
+                                reason: `AUTO: SL/TP triggered on WEEX`,
+                                championId: bestMatch.championId,
+                                weexOrderId: order.orderId,
+                                realizedPnl: totalProfits,
+                                executedAt: executedAt,
+                                createdAt: new Date()
+                            }
+                        });
+
+                        // Add to set to prevent duplicate processing in same run
+                        existingOrderIds.add(order.orderId);
+                        syncedCount++;
+
+                        const pnlSign = totalProfits >= 0 ? '+' : '';
+                        logger.info(`📊 Synced closed order: ${symbol} ${closeSide} P&L: ${pnlSign}${totalProfits.toFixed(2)} (${bestMatch.championId})`);
+                    }
+                } catch (symbolError) {
+                    logger.debug(`Failed to sync orders for ${symbol}:`, symbolError);
+                }
+            }
+
+            if (syncedCount > 0) {
+                logger.info(`✅ Synced ${syncedCount} closed orders from WEEX`);
+            }
+        } catch (error) {
+            logger.warn('Failed to sync closed orders from WEEX:', error);
+        }
+    }
+
+    /**
      * Update leaderboard and portfolio values
      * Balance is ALWAYS fetched from WEEX wallet (source of truth)
      */
     private async updateLeaderboard(): Promise<void> {
+        // First sync any closed orders we might have missed
+        await this.syncClosedOrdersFromWeex();
+
         try {
             // Get actual wallet balance from WEEX (source of truth)
             const walletBalance = await this.getWalletBalance();
