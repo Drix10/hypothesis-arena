@@ -275,31 +275,38 @@ export class AnalystPortfolioService {
         try {
             // OPTIMIZED: Single query to get all stats grouped by championId
             // This replaces the N+1 pattern where we queried each analyst separately
+            // FIXED: Separate entry trades (realizedPnl IS NULL) from exit trades (realizedPnl IS NOT NULL)
+            // Entry trades = positions opened, Exit trades = positions closed with P&L
+            // Win/loss stats should only count EXIT trades (where P&L is realized)
             const [tradeStats, winLossCounts] = await Promise.all([
-                // Get total trades and P&L per analyst
+                // Get total P&L per analyst (only from trades with realized P&L)
                 prisma.trade.groupBy({
                     by: ['championId'],
                     where: {
                         championId: { not: null, in: [...ANALYST_IDS] },
-                        status: 'FILLED'
+                        status: 'FILLED',
+                        realizedPnl: { not: null } // Only count trades with realized P&L
                     },
                     _count: { id: true },
                     _sum: { realizedPnl: true }
                 }),
                 // Get win/loss/breakeven counts in ONE query using conditional aggregation
-                // FIXED: Use Prisma.sql for raw query instead of template literals
+                // FIXED: Only count trades where realized_pnl IS NOT NULL (exit trades)
+                // Entry trades (realized_pnl IS NULL) are still open and shouldn't be counted
                 // CRITICAL: SQLite column names are snake_case (champion_id), not camelCase (championId)
                 prisma.$queryRaw<Array<{
                     championId: string;
                     winningTrades: bigint;
                     losingTrades: bigint;
                     breakEvenTrades: bigint;
+                    entryTrades: bigint;
                 }>>`
                     SELECT 
                         champion_id as championId,
                         COUNT(CASE WHEN realized_pnl > 0 THEN 1 END) as winningTrades,
                         COUNT(CASE WHEN realized_pnl < 0 THEN 1 END) as losingTrades,
-                        COUNT(CASE WHEN realized_pnl = 0 THEN 1 END) as breakEvenTrades
+                        COUNT(CASE WHEN realized_pnl = 0 THEN 1 END) as breakEvenTrades,
+                        COUNT(CASE WHEN realized_pnl IS NULL THEN 1 END) as entryTrades
                     FROM trades
                     WHERE champion_id IN ('warren', 'cathie', 'jim', 'ray', 'elon', 'karen', 'quant', 'devil')
                         AND status = 'FILLED'
@@ -319,36 +326,46 @@ export class AnalystPortfolioService {
                 const stats = tradeStats.find(s => s.championId === analystId);
                 const counts = winLossCounts.find(c => c.championId === analystId);
 
-                if (!stats || !stats._count.id) {
-                    // No trades for this analyst, skip update
-                    return null;
-                }
-
-                const totalPnl = stats._sum.realizedPnl || 0;
-                const totalTrades = stats._count.id;
-
                 // FIXED: Validate BigInt conversion with safety checks
                 const winningTrades = counts ? this._safeBigIntToNumber(counts.winningTrades, 'winningTrades') : 0;
                 const losingTrades = counts ? this._safeBigIntToNumber(counts.losingTrades, 'losingTrades') : 0;
                 const breakEvenTrades = counts ? this._safeBigIntToNumber(counts.breakEvenTrades, 'breakEvenTrades') : 0;
+                const entryTrades = counts ? this._safeBigIntToNumber(counts.entryTrades, 'entryTrades') : 0;
 
-                const winRate = totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0;
+                // Total closed trades = trades with realized P&L (win + loss + breakeven)
+                const closedTrades = winningTrades + losingTrades + breakEvenTrades;
+                // Total all trades = closed + entry (still open)
+                const totalAllTrades = closedTrades + entryTrades;
+
+                if (totalAllTrades === 0) {
+                    // No trades for this analyst, skip update
+                    return null;
+                }
+
+                // P&L only comes from closed trades
+                const totalPnl = stats?._sum.realizedPnl || 0;
+
+                // FIXED: Win rate should be based on CLOSED trades only (not entry trades)
+                // Entry trades are still open and haven't realized P&L yet
+                const winRate = closedTrades > 0 ? (winningTrades / closedTrades) * 100 : 0;
                 const sharpeRatio = sharpeRatios.get(analystId) || null;
 
                 return {
                     analystId,
                     data: {
                         totalReturnDollar: totalPnl,
-                        totalTrades,
+                        totalTrades: totalAllTrades, // Store total including open positions
                         winningTrades,
                         losingTrades,
                         winRate,
-                        tournamentWins: totalTrades,
-                        sharpeRatio, // FIXED: Now calculated
+                        tournamentWins: totalAllTrades, // Debates won = total trades initiated
+                        sharpeRatio,
                         updatedAt: new Date()
                     },
                     logData: {
-                        totalTrades,
+                        totalAllTrades,
+                        closedTrades,
+                        entryTrades,
                         totalPnl,
                         winRate,
                         winningTrades,
@@ -376,8 +393,12 @@ export class AnalystPortfolioService {
                         const pnlDisplay = Number.isFinite(logData.totalPnl) ? logData.totalPnl : 0;
                         const winRateDisplay = Number.isFinite(logData.winRate) ? logData.winRate : 0;
 
+                        // FIXED: Show entry trades (open positions) separately from closed trades
+                        // Format: "3 trades (2 open), 5.00 USDT P&L, 50.0% win rate (1W/0L/0BE)"
+                        const openStr = logData.entryTrades > 0 ? ` (${logData.entryTrades} open)` : '';
+
                         logger.info(
-                            `📊 ${analystId}: ${logData.totalTrades} trades, ` +
+                            `📊 ${analystId}: ${logData.totalAllTrades} trades${openStr}, ` +
                             `${pnlDisplay.toFixed(2)} USDT P&L, ` +
                             `${winRateDisplay.toFixed(1)}% win rate ` +
                             `(${logData.winningTrades}W/${logData.losingTrades}L/${logData.breakEvenTrades}BE)` +

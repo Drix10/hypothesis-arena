@@ -190,6 +190,94 @@ interface TradingCycle {
     errors: string[];
 }
 
+// =========================================================================
+// PRE-STAGE-2 OPTIMIZATION: URGENCY LEVELS FOR POSITION MANAGEMENT
+// =========================================================================
+
+/**
+ * Urgency levels for position management decisions
+ * Used to determine whether to skip Stage 2 debate entirely
+ */
+type PositionUrgency = 'VERY_URGENT' | 'MODERATE' | 'LOW';
+
+interface PositionWithUrgency {
+    symbol: string;
+    side: 'LONG' | 'SHORT';
+    size: number;
+    entryPrice: number;
+    currentPrice: number;
+    unrealizedPnl: number;
+    unrealizedPnlPercent: number;
+    holdTimeHours: number;
+    urgency: PositionUrgency;
+    urgencyReason: string;
+}
+
+/**
+ * Calculate urgency level for a position based on P&L and hold time
+ * Uses trading style config for dynamic thresholds
+ * 
+ * @param position - Position to evaluate
+ * @returns Urgency level and reason
+ */
+function calculatePositionUrgency(position: {
+    unrealizedPnlPercent: number;
+    holdTimeHours: number;
+}): { urgency: PositionUrgency; reason: string } {
+    const tradingStyle = getActiveTradingStyle();
+    const tp4 = tradingStyle.takeProfitThresholds.partial75; // Highest TP threshold
+    const tp2 = tradingStyle.takeProfitThresholds.partial25; // Partial TP zone
+    const sl = tradingStyle.stopLossPercent;
+    const maxHold = tradingStyle.maxHoldHours;
+
+    // FLAW FIX: Validate inputs - treat invalid values as LOW urgency
+    const pnl = Number.isFinite(position.unrealizedPnlPercent) ? position.unrealizedPnlPercent : 0;
+    const holdHours = Number.isFinite(position.holdTimeHours) ? position.holdTimeHours : 0;
+
+    // FLAW FIX: Validate config values - use safe defaults if invalid
+    const safeTp4 = Number.isFinite(tp4) && tp4 > 0 ? tp4 : 5;
+    const safeTp2 = Number.isFinite(tp2) && tp2 > 0 ? tp2 : 2;
+    const safeSl = Number.isFinite(sl) && sl > 0 ? sl : 5;
+    const safeMaxHold = Number.isFinite(maxHold) && maxHold > 0 ? maxHold : 12;
+
+    // VERY_URGENT: Needs immediate action
+    if (pnl >= safeTp4) {
+        return { urgency: 'VERY_URGENT', reason: `P&L +${pnl.toFixed(1)}% >= TP4 (${safeTp4}%)` };
+    }
+    if (pnl <= -safeSl) {
+        return { urgency: 'VERY_URGENT', reason: `P&L ${pnl.toFixed(1)}% <= -SL (${safeSl}%)` };
+    }
+    if (holdHours >= safeMaxHold) {
+        return { urgency: 'VERY_URGENT', reason: `Hold time ${holdHours.toFixed(1)}h >= max (${safeMaxHold}h)` };
+    }
+
+    // MODERATE: Should consider action
+    if (pnl >= safeTp2) {
+        return { urgency: 'MODERATE', reason: `P&L +${pnl.toFixed(1)}% in TP zone (${safeTp2}%-${safeTp4}%)` };
+    }
+    if (pnl <= -safeSl / 2) {
+        return { urgency: 'MODERATE', reason: `P&L ${pnl.toFixed(1)}% approaching SL` };
+    }
+    if (holdHours >= safeMaxHold * 0.75) {
+        return { urgency: 'MODERATE', reason: `Hold time ${holdHours.toFixed(1)}h approaching max` };
+    }
+
+    // LOW: No immediate action needed
+    return { urgency: 'LOW', reason: 'Position within normal parameters' };
+}
+
+/**
+ * Pre-Stage-2 check result
+ */
+interface PreStage2CheckResult {
+    canRunStage2: boolean;
+    reason: string;
+    action: 'RUN_STAGE_2' | 'DIRECT_MANAGE' | 'LIGHTWEIGHT_DEBATE' | 'SKIP_CYCLE';
+    urgentPosition?: PositionWithUrgency;
+    allPositions?: PositionWithUrgency[];
+    tokensSaved: number; // Estimated tokens saved by skipping/shortcutting
+}
+
 export class AutonomousTradingEngine extends EventEmitter {
     private isRunning = false;
     private isStarting = false; // Prevent concurrent starts
@@ -197,6 +285,7 @@ export class AutonomousTradingEngine extends EventEmitter {
     private startLock: Promise<void> | null = null; // Mutex for start operation
     private cycleCount = 0;
     private totalDebatesRun = 0; // FIXED: Track cumulative debates across all cycles
+    private totalTokensSaved = 0; // Track tokens saved by pre-Stage-2 optimization
     private consecutiveFailures = 0; // Track consecutive failures for backoff
     private readonly MAX_CONSECUTIVE_FAILURES = 10; // Circuit breaker threshold
     private analystStates = new Map<string, AnalystState>();
@@ -284,9 +373,32 @@ export class AutonomousTradingEngine extends EventEmitter {
             return { executed: false };
         }
 
-        const pnlDisplay = Number.isFinite(positionToManage.unrealizedPnlPercent) ? positionToManage.unrealizedPnlPercent : 0;
-        logger.info(`📋 Auto-managing: ${positionToManage.symbol} ${positionToManage.side} (P&L: ${pnlDisplay.toFixed(2)}%)`);
+        // FIXED: Update currentPrice from marketDataMap (position data may have stale/fallback price)
+        // Also recalculate unrealizedPnl based on fresh price
+        const marketData = marketDataMap.get(positionToManage.symbol);
+        if (marketData && Number.isFinite(marketData.currentPrice) && marketData.currentPrice > 0) {
+            const oldPrice = positionToManage.currentPrice;
+            positionToManage.currentPrice = marketData.currentPrice;
 
+            // Recalculate unrealizedPnl if price changed significantly
+            if (Math.abs(oldPrice - marketData.currentPrice) > 0.0000001) {
+                const priceDiff = positionToManage.side === 'LONG'
+                    ? marketData.currentPrice - positionToManage.entryPrice
+                    : positionToManage.entryPrice - marketData.currentPrice;
+                positionToManage.unrealizedPnl = priceDiff * positionToManage.size;
+
+                // Recalculate percent
+                const openValue = positionToManage.size * positionToManage.entryPrice;
+                positionToManage.unrealizedPnlPercent = openValue > 0
+                    ? (positionToManage.unrealizedPnl / openValue) * 100
+                    : 0;
+            }
+        }
+
+        const pnlDisplay = Number.isFinite(positionToManage.unrealizedPnlPercent) ? positionToManage.unrealizedPnlPercent : 0;
+        const pnlDollarDisplay = Number.isFinite(positionToManage.unrealizedPnl) ? positionToManage.unrealizedPnl : 0;
+        logger.info(`📋 Auto-managing: ${positionToManage.symbol} ${positionToManage.side} (P&L: ${pnlDisplay.toFixed(2)}% / $${pnlDollarDisplay.toFixed(2)})`);
+        logger.info(`   Entry: ${positionToManage.entryPrice}, Current: ${positionToManage.currentPrice}`);
         try {
             const managementDecision = await collaborativeFlowService.runPositionManagement(
                 positionToManage,
@@ -351,12 +463,14 @@ export class AutonomousTradingEngine extends EventEmitter {
                             case 'TIGHTEN_STOP':
                                 if (newStopLoss && Number.isFinite(newStopLoss) && newStopLoss > 0) {
                                     // Validate stop loss direction
+                                    // For LONG: SL must be below current price
+                                    // For SHORT: SL must be above current price
                                     const isValidDirection = positionToManage.side === 'LONG'
                                         ? newStopLoss < positionToManage.currentPrice
                                         : newStopLoss > positionToManage.currentPrice;
 
                                     if (!isValidDirection) {
-                                        logger.warn(`⚠️ Invalid stop loss direction for ${positionToManage.side}: ${newStopLoss} vs current ${positionToManage.currentPrice}`);
+                                        logger.warn(`⚠️ Invalid stop loss direction for ${positionToManage.side}: SL=${newStopLoss} vs current=${positionToManage.currentPrice}`);
                                         break;
                                     }
 
@@ -456,6 +570,252 @@ export class AutonomousTradingEngine extends EventEmitter {
         }
 
         return { executed: true, symbol: positionToManage.symbol };
+    }
+
+    /**
+     * PRE-STAGE-2 OPTIMIZATION: Check if we can skip the expensive Stage 2 debate
+     * 
+     * This method runs BEFORE Stage 2 to save ~8000 tokens when:
+     * - Balance is too low to trade
+     * - Weekly drawdown limit exceeded
+     * - Max positions reached with no urgent management needed
+     * 
+     * @returns Decision on whether to run Stage 2, skip, or go direct to manage
+     */
+    private async runPreStage2Checks(): Promise<PreStage2CheckResult> {
+        const TOKENS_FULL_DEBATE = 8000;
+        const TOKENS_LIGHTWEIGHT = 3000;
+        const TOKENS_DIRECT = 500;
+
+        // =====================================================================
+        // CHECK 1: BALANCE
+        // =====================================================================
+        let currentBalance: number;
+        try {
+            const assets = await this.weexClient.getAccountAssets();
+            currentBalance = parseFloat(assets.available || '0');
+        } catch (error) {
+            logger.warn('Failed to fetch balance for pre-check, continuing to Stage 2');
+            return { canRunStage2: true, reason: 'Balance check failed', action: 'RUN_STAGE_2', tokensSaved: 0 };
+        }
+
+        if (!Number.isFinite(currentBalance) || currentBalance < config.autonomous.minBalanceToTrade) {
+            logger.info(`\n${'='.repeat(60)}`);
+            logger.info(`💰 PRE-CHECK: Insufficient balance ($${currentBalance?.toFixed(2) || 'N/A'} < $${config.autonomous.minBalanceToTrade})`);
+            logger.info(`🎯 ACTION: SKIP CYCLE (saving ~${TOKENS_FULL_DEBATE} tokens)`);
+            logger.info(`${'='.repeat(60)}\n`);
+            return {
+                canRunStage2: false,
+                reason: `Insufficient balance: $${currentBalance?.toFixed(2) || 'N/A'}`,
+                action: 'SKIP_CYCLE',
+                tokensSaved: TOKENS_FULL_DEBATE
+            };
+        }
+
+        // =====================================================================
+        // CHECK 2: WEEKLY DRAWDOWN
+        // =====================================================================
+        const weeklyPnL = await this.getRecentPnLCached();
+        if (weeklyPnL && Number.isFinite(weeklyPnL.week) && weeklyPnL.week < -RISK_COUNCIL_VETO_TRIGGERS.MAX_WEEKLY_DRAWDOWN) {
+            logger.info(`\n${'='.repeat(60)}`);
+            logger.info(`📉 PRE-CHECK: Weekly drawdown exceeded (${weeklyPnL.week.toFixed(1)}% < -${RISK_COUNCIL_VETO_TRIGGERS.MAX_WEEKLY_DRAWDOWN}%)`);
+            logger.info(`🎯 ACTION: SKIP CYCLE (saving ~${TOKENS_FULL_DEBATE} tokens)`);
+            logger.info(`${'='.repeat(60)}\n`);
+            return {
+                canRunStage2: false,
+                reason: `Weekly drawdown: ${weeklyPnL.week.toFixed(1)}%`,
+                action: 'SKIP_CYCLE',
+                tokensSaved: TOKENS_FULL_DEBATE
+            };
+        }
+
+        // =====================================================================
+        // CHECK 3: POSITION LIMITS
+        // =====================================================================
+        let positions: Array<{
+            symbol: string;
+            side: 'LONG' | 'SHORT';
+            size: number;
+            entryPrice: number;
+            currentPrice: number;
+            unrealizedPnl: number;
+            unrealizedPnlPercent: number;
+            holdTimeHours: number;
+        }>;
+
+        try {
+            const weexPositions = await this.weexClient.getPositions();
+            const activePositions = weexPositions.filter(pos => parseFloat(String(pos.size)) > 0);
+
+            // Fetch hold times from database (same logic as main loop)
+            const holdTimes = new Map<string, number>();
+            if (activePositions.length > 0) {
+                try {
+                    const holdTimeResult = await prisma.$queryRaw<Array<{ symbol: string; side: string; max_executed_at: string }>>`
+                        SELECT symbol, side, MAX(executed_at) as max_executed_at
+                        FROM trades
+                        WHERE symbol IN (${Prisma.join(activePositions.map(p => p.symbol))})
+                            AND status = 'FILLED'
+                            AND executed_at IS NOT NULL
+                            AND side IN ('BUY', 'SELL')
+                            AND (reason IS NULL OR reason NOT LIKE 'MANAGE:%')
+                        GROUP BY symbol, side
+                    `;
+
+                    for (const row of holdTimeResult) {
+                        if (row.max_executed_at) {
+                            const parsed = new Date(row.max_executed_at);
+                            if (isNaN(parsed.getTime())) continue;
+                            const entryTime = parsed.getTime();
+                            if (entryTime > Date.now()) continue;
+
+                            const matchingPos = activePositions.find(p => p.symbol === row.symbol);
+                            if (matchingPos) {
+                                const posIsLong = matchingPos.side?.toUpperCase().includes('LONG');
+                                const tradeIsBuy = row.side === 'BUY';
+                                if ((posIsLong && tradeIsBuy) || (!posIsLong && !tradeIsBuy)) {
+                                    const holdMs = Math.max(0, Date.now() - entryTime);
+                                    const holdHours = holdMs / (1000 * 60 * 60);
+                                    if (Number.isFinite(holdHours) && holdHours >= 0) {
+                                        holdTimes.set(row.symbol, holdHours);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (dbErr) {
+                    logger.debug('Failed to fetch hold times for pre-check, using defaults');
+                }
+            }
+
+            positions = activePositions.map(pos => {
+                const size = parseFloat(String(pos.size)) || 0;
+                const openValue = parseFloat(String(pos.openValue)) || 0;
+                const entryPrice = pos.entryPrice || (size > 0 ? openValue / size : 0);
+                const unrealizedPnl = parseFloat(String(pos.unrealizePnl)) || 0;
+                const unrealizedPnlPercent = openValue > 0 ? (unrealizedPnl / openValue) * 100 : 0;
+
+                // Derive currentPrice from unrealizedPnl
+                const isLong = pos.side?.toUpperCase().includes('LONG');
+                let currentPrice = entryPrice;
+                if (size > 0 && entryPrice > 0 && Number.isFinite(unrealizedPnl)) {
+                    const pnlPerUnit = unrealizedPnl / size;
+                    currentPrice = isLong ? entryPrice + pnlPerUnit : entryPrice - pnlPerUnit;
+                    if (currentPrice <= 0 || !Number.isFinite(currentPrice)) {
+                        currentPrice = entryPrice;
+                    }
+                }
+
+                // Use actual hold time from DB, fallback to 0 (conservative - won't trigger time-based urgency)
+                const holdTimeHours = holdTimes.get(pos.symbol) ?? 0;
+
+                return {
+                    symbol: pos.symbol,
+                    side: (isLong ? 'LONG' : 'SHORT') as 'LONG' | 'SHORT',
+                    size,
+                    entryPrice,
+                    currentPrice,
+                    unrealizedPnl,
+                    unrealizedPnlPercent,
+                    holdTimeHours
+                };
+            });
+        } catch (error) {
+            logger.warn('Failed to fetch positions for pre-check, continuing to Stage 2');
+            return { canRunStage2: true, reason: 'Position check failed', action: 'RUN_STAGE_2', tokensSaved: 0 };
+        }
+
+        const MAX_POSITIONS = RISK_COUNCIL_VETO_TRIGGERS.MAX_CONCURRENT_POSITIONS;
+        const MAX_SAME_DIR = RISK_COUNCIL_VETO_TRIGGERS.MAX_SAME_DIRECTION_POSITIONS;
+
+        // Count positions by direction
+        const longCount = positions.filter(p => p.side === 'LONG').length;
+        const shortCount = positions.filter(p => p.side === 'SHORT').length;
+
+        // Check if we're at max positions
+        const atMaxPositions = positions.length >= MAX_POSITIONS;
+        const atMaxLong = longCount >= MAX_SAME_DIR;
+        const atMaxShort = shortCount >= MAX_SAME_DIR;
+        const bothDirectionsBlocked = atMaxLong && atMaxShort;
+
+        // If not at max positions total
+        if (!atMaxPositions) {
+            // If both directions blocked, we can't trade - fall through to urgency check
+            if (bothDirectionsBlocked) {
+                logger.info(`📊 PRE-CHECK: Both directions blocked (LONG: ${longCount}/${MAX_SAME_DIR}, SHORT: ${shortCount}/${MAX_SAME_DIR})`);
+                // Fall through to urgency check below
+            } else {
+                // At least one direction available - run full Stage 2
+                const availableDir = atMaxLong ? 'SHORT only' : (atMaxShort ? 'LONG only' : 'both directions');
+                logger.debug(`📊 PRE-CHECK: Can trade ${availableDir}`);
+                return { canRunStage2: true, reason: `Within limits, ${availableDir} available`, action: 'RUN_STAGE_2', tokensSaved: 0 };
+            }
+        }
+
+        // =====================================================================
+        // CHECK 4: URGENCY OF EXISTING POSITIONS
+        // At this point, we can't open new trades. Check if any position needs management.
+        // =====================================================================
+        const positionsWithUrgency: PositionWithUrgency[] = positions.map(pos => {
+            const { urgency, reason } = calculatePositionUrgency(pos);
+            return { ...pos, urgency, urgencyReason: reason };
+        });
+
+        // Sort by urgency: VERY_URGENT first, then MODERATE, then LOW
+        const urgencyOrder: Record<PositionUrgency, number> = { 'VERY_URGENT': 0, 'MODERATE': 1, 'LOW': 2 };
+        positionsWithUrgency.sort((a, b) => urgencyOrder[a.urgency] - urgencyOrder[b.urgency]);
+
+        const veryUrgent = positionsWithUrgency.filter(p => p.urgency === 'VERY_URGENT');
+        const moderate = positionsWithUrgency.filter(p => p.urgency === 'MODERATE');
+
+        logger.info(`\n${'='.repeat(60)}`);
+        logger.info(`📊 PRE-CHECK: Position limits reached (${positions.length}/${MAX_POSITIONS})`);
+        logger.info(`   LONG: ${longCount}/${MAX_SAME_DIR}, SHORT: ${shortCount}/${MAX_SAME_DIR}`);
+        logger.info(`   Urgency: ${veryUrgent.length} VERY_URGENT, ${moderate.length} MODERATE, ${positionsWithUrgency.length - veryUrgent.length - moderate.length} LOW`);
+
+        if (veryUrgent.length > 0) {
+            // VERY URGENT: Go direct to Karen (skip debate entirely)
+            const urgent = veryUrgent[0];
+            logger.info(`🚨 VERY URGENT: ${urgent.symbol} - ${urgent.urgencyReason}`);
+            logger.info(`🎯 ACTION: DIRECT MANAGE (saving ~${TOKENS_FULL_DEBATE - TOKENS_DIRECT} tokens)`);
+            logger.info(`${'='.repeat(60)}\n`);
+            return {
+                canRunStage2: false,
+                reason: `Very urgent: ${urgent.urgencyReason}`,
+                action: 'DIRECT_MANAGE',
+                urgentPosition: urgent,
+                allPositions: positionsWithUrgency,
+                tokensSaved: TOKENS_FULL_DEBATE - TOKENS_DIRECT
+            };
+        }
+
+        if (moderate.length > 0) {
+            // MODERATE: Run lightweight debate (2-3 analysts instead of 8)
+            const mod = moderate[0];
+            logger.info(`⚠️ MODERATE: ${mod.symbol} - ${mod.urgencyReason}`);
+            logger.info(`🎯 ACTION: LIGHTWEIGHT MANAGE DEBATE (saving ~${TOKENS_FULL_DEBATE - TOKENS_LIGHTWEIGHT} tokens)`);
+            logger.info(`${'='.repeat(60)}\n`);
+            return {
+                canRunStage2: false,
+                reason: `Moderate urgency: ${mod.urgencyReason}`,
+                action: 'LIGHTWEIGHT_DEBATE',
+                urgentPosition: mod,
+                allPositions: positionsWithUrgency,
+                tokensSaved: TOKENS_FULL_DEBATE - TOKENS_LIGHTWEIGHT
+            };
+        }
+
+        // All positions are LOW urgency - skip cycle entirely
+        logger.info(`✅ All positions LOW urgency - nothing to do`);
+        logger.info(`🎯 ACTION: SKIP CYCLE (saving ~${TOKENS_FULL_DEBATE} tokens)`);
+        logger.info(`${'='.repeat(60)}\n`);
+        return {
+            canRunStage2: false,
+            reason: 'At limits, no urgent positions',
+            action: 'SKIP_CYCLE',
+            allPositions: positionsWithUrgency,
+            tokensSaved: TOKENS_FULL_DEBATE
+        };
     }
 
     /**
@@ -664,6 +1024,7 @@ export class AutonomousTradingEngine extends EventEmitter {
             currentCycle: this.currentCycle,
             // FIXED: Include totalDebatesRun for frontend display
             totalDebatesRun: this.totalDebatesRun,
+            totalTokensSaved: this.totalTokensSaved, // Pre-Stage-2 optimization savings
             sharedPortfolio: {
                 balance: sharedBalance,
                 totalTrades: sharedTotalTrades,
@@ -673,6 +1034,7 @@ export class AutonomousTradingEngine extends EventEmitter {
                 totalTrades: sharedTotalTrades,
                 tradesThisCycle: this.currentCycle?.tradesExecuted || 0,
                 totalDebates: this.totalDebatesRun, // Also in stats for backward compat
+                tokensSaved: this.totalTokensSaved, // Also in stats
                 avgCycleTime: this.CYCLE_INTERVAL_MS,
             },
             // FIXED: Calculate nextCycleIn based on cycle state
@@ -963,6 +1325,69 @@ export class AutonomousTradingEngine extends EventEmitter {
             if (circuitBreakerStatus.level === 'YELLOW') {
                 logger.warn(`⚠️ YELLOW ALERT: ${circuitBreakerStatus.reason}`);
                 logger.warn(`Action: ${circuitBreakerService.getRecommendedAction('YELLOW')}`);
+            }
+        }
+
+        // =================================================================
+        // PRE-STAGE-2 OPTIMIZATION: Check if we can skip expensive debate
+        // Saves ~8000 tokens when we can't trade anyway
+        // =================================================================
+        const preCheck = await this.runPreStage2Checks();
+
+        if (!preCheck.canRunStage2) {
+            this.totalTokensSaved += preCheck.tokensSaved;
+            logger.info(`💡 Token savings this cycle: ~${preCheck.tokensSaved} tokens (total saved: ~${this.totalTokensSaved})`);
+
+            switch (preCheck.action) {
+                case 'SKIP_CYCLE':
+                    // Nothing to do - skip entirely
+                    await this.updateLeaderboard();
+                    await this.completeCycle(cycleStart, `skipped: ${preCheck.reason}`);
+                    return;
+
+                case 'DIRECT_MANAGE':
+                    // Very urgent - go directly to Karen (no debate)
+                    if (preCheck.urgentPosition && preCheck.allPositions && preCheck.allPositions.length > 0) {
+                        logger.info(`🚨 DIRECT MANAGE: ${preCheck.urgentPosition.symbol} (${preCheck.urgentPosition.urgencyReason})`);
+                        const result = await this.executeFallbackManagement(
+                            preCheck.allPositions,
+                            marketDataMap,
+                            `direct manage: ${preCheck.urgentPosition.urgencyReason}`
+                        );
+                        await this.updateLeaderboard();
+                        if (result.executed) {
+                            await this.completeCycle(cycleStart, `direct-managed ${result.symbol}`);
+                        } else {
+                            await this.completeCycle(cycleStart, 'direct manage failed');
+                        }
+                    } else {
+                        logger.warn('DIRECT_MANAGE action but no positions available');
+                        await this.completeCycle(cycleStart, 'direct manage: no position');
+                    }
+                    return;
+
+                case 'LIGHTWEIGHT_DEBATE':
+                    // Moderate urgency - run lightweight debate (still uses Karen but with context)
+                    if (preCheck.urgentPosition && preCheck.allPositions && preCheck.allPositions.length > 0) {
+                        logger.info(`⚠️ LIGHTWEIGHT MANAGE: ${preCheck.urgentPosition.symbol} (${preCheck.urgentPosition.urgencyReason})`);
+                        // For now, use the same fallback management (Karen decides)
+                        // TODO: Implement actual lightweight debate with 2-3 analysts
+                        const result = await this.executeFallbackManagement(
+                            preCheck.allPositions,
+                            marketDataMap,
+                            `lightweight manage: ${preCheck.urgentPosition.urgencyReason}`
+                        );
+                        await this.updateLeaderboard();
+                        if (result.executed) {
+                            await this.completeCycle(cycleStart, `lightweight-managed ${result.symbol}`);
+                        } else {
+                            await this.completeCycle(cycleStart, 'lightweight manage failed');
+                        }
+                    } else {
+                        logger.warn('LIGHTWEIGHT_DEBATE action but no positions available');
+                        await this.completeCycle(cycleStart, 'lightweight manage: no position');
+                    }
+                    return;
             }
         }
 
@@ -1783,7 +2208,7 @@ export class AutonomousTradingEngine extends EventEmitter {
             const freshWeexPositions = await this.weexClient.getPositions();
 
             // Fast refresh: Only count and symbols (sufficient for early exit checks)
-            // We don't need current prices or P&L calculations for LONG/SHORT early exits
+            // FIXED: Derive currentPrice from unrealizedPnl if available
             portfolioPositions = freshWeexPositions
                 .filter(pos => parseFloat(String(pos.size)) > 0)
                 .map(pos => {
@@ -1793,12 +2218,28 @@ export class AutonomousTradingEngine extends EventEmitter {
                     const unrealizedPnl = parseFloat(String(pos.unrealizePnl)) || 0;
                     const unrealizedPnlPercent = openValue > 0 ? (unrealizedPnl / openValue) * 100 : 0;
 
+                    // FIXED: Derive currentPrice from unrealizedPnl
+                    // PnL = (currentPrice - entryPrice) * size for LONG
+                    // PnL = (entryPrice - currentPrice) * size for SHORT
+                    let currentPrice = entryPrice;
+                    const isLong = pos.side?.toUpperCase().includes('LONG');
+                    if (size > 0 && entryPrice > 0 && Number.isFinite(unrealizedPnl)) {
+                        const pnlPerUnit = unrealizedPnl / size;
+                        currentPrice = isLong
+                            ? entryPrice + pnlPerUnit
+                            : entryPrice - pnlPerUnit;
+                        // Sanity check
+                        if (currentPrice <= 0 || !Number.isFinite(currentPrice)) {
+                            currentPrice = entryPrice;
+                        }
+                    }
+
                     return {
                         symbol: pos.symbol,
-                        side: pos.side?.toUpperCase().includes('LONG') ? 'LONG' : 'SHORT',
+                        side: isLong ? 'LONG' : 'SHORT',
                         size,
                         entryPrice,
-                        currentPrice: entryPrice, // Use entry price as fallback (sufficient for early exit checks)
+                        currentPrice,
                         unrealizedPnl,
                         unrealizedPnlPercent,
                         holdTimeHours: 0, // Not needed for early exit checks
@@ -3509,6 +3950,7 @@ export class AutonomousTradingEngine extends EventEmitter {
 
             // FIXED: Reset totalDebatesRun to prevent stale count on restart
             this.totalDebatesRun = 0;
+            this.totalTokensSaved = 0;
 
             // FIXED: Reset contract specs tracker to force fresh fetch on restart
             this.contractSpecsTracker.reset();

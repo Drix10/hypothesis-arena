@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { getWeexClient } from '../../services/weex/WeexClient';
 import { logger } from '../../utils/logger';
 import { APPROVED_SYMBOLS } from '../../shared/types/weex';
+import { config } from '../../config';
 
 const router = Router();
 
@@ -183,7 +184,32 @@ router.get('/assets', async (_req: Request, res: Response, next: NextFunction) =
         const weex = getWeexClient();
         const assets = await weex.getAccountAssets();
 
-        res.json({ success: true, data: assets, assets });
+        // Calculate total wallet P&L based on starting balance from config
+        const startingBalance = config.trading.startingBalance;
+        const currentEquity = parseFloat(assets.equity || '0');
+        const totalWalletPnl = currentEquity - startingBalance;
+        const totalWalletPnlPercent = startingBalance > 0
+            ? ((currentEquity - startingBalance) / startingBalance) * 100
+            : 0;
+
+        // Get positions to calculate unrealized P&L
+        const positions = await weex.getPositions();
+        const unrealizedPL = positions.reduce((sum, pos) => {
+            const pnl = parseFloat(String(pos.unrealizePnl)) || 0;
+            return sum + pnl;
+        }, 0);
+
+        // Consolidated response - assets with additional calculated fields
+        res.json({
+            success: true,
+            data: {
+                ...assets,
+                unrealizedPL,
+                totalWalletPnl,
+                totalWalletPnlPercent,
+                startingBalance
+            }
+        });
     } catch (error) {
         next(error);
     }

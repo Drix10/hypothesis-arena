@@ -243,6 +243,7 @@ export const config = {
 
     // Trading - General
     trading: {
+        startingBalance: safeParseFloat(process.env.STARTING_BALANCE, 1000), // Starting balance for P&L tracking
         maxPositionSize: safeParseFloat(process.env.MAX_POSITION_SIZE, 0.2),
         maxTotalInvested: safeParseFloat(process.env.MAX_TOTAL_INVESTED, 0.8),
         maxDailyTrades: safeParseInt(process.env.MAX_DAILY_TRADES, 20),

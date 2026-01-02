@@ -636,7 +636,7 @@ body {
 
 .portfolio-grid {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(2, 1fr);
     gap: var(--space-md);
 }
 
@@ -644,14 +644,14 @@ body {
     background: linear-gradient(135deg, var(--bg-dark) 0%, var(--bg-deep) 100%);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
-    padding: var(--space-lg);
+    padding: var(--space-md) var(--space-lg);
     text-align: center;
     transition: var(--transition-fast);
 }
 
 .portfolio-card:hover {
     border-color: var(--border-accent);
-    transform: translateY(-3px);
+    transform: translateY(-2px);
 }
 
 .portfolio-card.main-balance {
@@ -661,17 +661,17 @@ body {
 
 .portfolio-label {
     display: block;
-    font-size: 0.65rem;
+    font-size: 0.7rem;
     font-weight: 600;
     color: var(--text-muted);
     text-transform: uppercase;
-    letter-spacing: 0.1em;
-    margin-bottom: var(--space-sm);
+    letter-spacing: 0.08em;
+    margin-bottom: var(--space-xs);
 }
 
 .portfolio-value {
     display: block;
-    font-size: 1.5rem;
+    font-size: 1.3rem;
     font-weight: 700;
     color: var(--text-bright);
     font-family: 'JetBrains Mono', monospace;
@@ -681,7 +681,7 @@ body {
 .portfolio-value.pnl.negative { color: var(--bear); text-shadow: 0 0 20px var(--bear-glow); }
 
 @media (max-width: 768px) {
-    .portfolio-grid { grid-template-columns: repeat(2, 1fr); }
+    .portfolio-grid { grid-template-columns: 1fr; }
 }
 
 /* ============================================================================
@@ -691,14 +691,14 @@ body {
 .market-grid {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
-    gap: var(--space-md);
+    gap: var(--space-sm);
 }
 
 .market-card {
     background: linear-gradient(135deg, var(--bg-dark) 0%, var(--bg-deep) 100%);
     border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    padding: var(--space-md);
+    border-radius: var(--radius-md);
+    padding: var(--space-sm) var(--space-md);
     text-align: center;
     cursor: pointer;
     transition: var(--transition-normal);
@@ -706,35 +706,35 @@ body {
 
 .market-card:hover {
     border-color: var(--border-gold);
-    transform: translateY(-4px) scale(1.02);
-    box-shadow: var(--shadow-lg), var(--glow-gold);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md), var(--glow-gold);
 }
 
 .market-card:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 
 .market-symbol {
     display: block;
-    font-size: 1.1rem;
+    font-size: 0.9rem;
     font-weight: 800;
     color: var(--gold);
-    margin-bottom: 4px;
+    margin-bottom: 2px;
     text-shadow: 0 0 15px var(--gold-glow);
 }
 
 .market-price {
     display: block;
-    font-size: 1.15rem;
+    font-size: 1rem;
     font-weight: 600;
     color: var(--text-bright);
     font-family: 'JetBrains Mono', monospace;
-    margin-bottom: 6px;
+    margin-bottom: 4px;
 }
 
 .market-change {
     display: inline-block;
-    font-size: 0.75rem;
+    font-size: 0.7rem;
     font-weight: 700;
-    padding: 3px 10px;
+    padding: 2px 8px;
     border-radius: var(--radius-full);
     font-family: 'JetBrains Mono', monospace;
 }
@@ -745,8 +745,8 @@ body {
 .market-skeleton {
     background: var(--bg-dark);
     border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    height: 100px;
+    border-radius: var(--radius-md);
+    height: 70px;
     animation: skeletonPulse 2s infinite;
 }
 

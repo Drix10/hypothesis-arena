@@ -321,14 +321,26 @@ async function fetchPortfolio() {
     updateText("balance", formatCurrency(assets.available || 0));
     updateText("equity", formatCurrency(assets.equity || 0));
 
-    // Update PnL with color
-    // Backend returns unrealizedPL (capital PL)
-    const pnl = parseFloat(assets.unrealizedPL) || 0;
-    const pnlEl = document.getElementById("unrealized-pnl");
-    if (pnlEl) {
-      pnlEl.textContent = formatCurrency(pnl);
-      pnlEl.classList.toggle("positive", pnl >= 0);
-      pnlEl.classList.toggle("negative", pnl < 0);
+    // Update Unrealized P&L (from open positions)
+    const unrealizedPnl = parseFloat(assets.unrealizedPL) || 0;
+    const unrealizedPnlEl = document.getElementById("unrealized-pnl");
+    if (unrealizedPnlEl) {
+      unrealizedPnlEl.textContent = formatCurrency(unrealizedPnl);
+      unrealizedPnlEl.classList.toggle("positive", unrealizedPnl >= 0);
+      unrealizedPnlEl.classList.toggle("negative", unrealizedPnl < 0);
+    }
+
+    // Update Total Wallet P&L (since starting balance)
+    const totalPnl = parseFloat(assets.totalWalletPnl) || 0;
+    const totalPnlPercent = parseFloat(assets.totalWalletPnlPercent) || 0;
+    const totalPnlEl = document.getElementById("total-pnl");
+    if (totalPnlEl) {
+      const sign = totalPnl >= 0 ? "+" : "";
+      totalPnlEl.textContent = `${sign}$${Math.abs(totalPnl).toFixed(
+        2
+      )} (${sign}${totalPnlPercent.toFixed(1)}%)`;
+      totalPnlEl.classList.toggle("positive", totalPnl >= 0);
+      totalPnlEl.classList.toggle("negative", totalPnl < 0);
     }
   } catch (err) {
     if (err.name !== "AbortError") {
@@ -345,7 +357,17 @@ async function fetchMarketOverview() {
   const container = document.getElementById("market-overview");
   if (!container) return;
 
-  const symbols = ["cmt_btcusdt", "cmt_ethusdt", "cmt_bnbusdt", "cmt_ltcusdt"];
+  // All 8 tradeable coins
+  const symbols = [
+    "cmt_btcusdt",
+    "cmt_ethusdt",
+    "cmt_solusdt",
+    "cmt_xrpusdt",
+    "cmt_dogeusdt",
+    "cmt_adausdt",
+    "cmt_bnbusdt",
+    "cmt_ltcusdt",
+  ];
   const markets = [];
 
   try {
@@ -449,6 +471,12 @@ function renderPositionCard(pos) {
   const rawSide = (pos.side || "").toUpperCase();
   const rawSize = pos.size || "0";
 
+  // Calculate invested amount (margin used) = (size * entryPrice) / leverage
+  const size = parseFloat(pos.size) || 0;
+  const entryPrice = parseFloat(pos.entryPrice || pos.avgPrice) || 0;
+  const leverage = parseFloat(pos.leverage) || 1;
+  const investedAmount = leverage > 0 ? (size * entryPrice) / leverage : 0;
+
   return `
     <div class="position-card" role="listitem">
       <div class="position-header">
@@ -468,6 +496,10 @@ function renderPositionCard(pos) {
         </button>
       </div>
       <div class="position-details">
+        <div class="position-detail">
+          <span class="label">Invested</span>
+          <span class="value">$${investedAmount.toFixed(2)}</span>
+        </div>
         <div class="position-detail">
           <span class="label">Size</span>
           <span class="value">${formatNumber(pos.size || 0)}</span>

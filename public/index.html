@@ -153,7 +153,7 @@
                                 <span class="portfolio-value" id="balance" aria-label="Available balance">$0.00</span>
                             </div>
                             <div class="portfolio-card">
-                                <span class="portfolio-label">Equity</span>
+                                <span class="portfolio-label">Equity (<span id="positions-count">0</span> pos)</span>
                                 <span class="portfolio-value" id="equity" aria-label="Total equity">$0.00</span>
                             </div>
                             <div class="portfolio-card">
@@ -161,8 +161,8 @@
                                 <span class="portfolio-value pnl" id="unrealized-pnl" aria-label="Unrealized profit and loss">$0.00</span>
                             </div>
                             <div class="portfolio-card">
-                                <span class="portfolio-label">Positions</span>
-                                <span class="portfolio-value" id="positions-count" aria-label="Number of open positions">0</span>
+                                <span class="portfolio-label">Total P&L</span>
+                                <span class="portfolio-value pnl" id="total-pnl" aria-label="Total profit and loss since start">$0.00</span>
                             </div>
                         </div>
                     </div>
@@ -179,6 +179,10 @@
                     </div>
                     <div class="panel-body">
                         <div class="market-grid" id="market-overview" role="list" aria-label="Market prices">
+                            <div class="market-skeleton" aria-hidden="true"></div>
+                            <div class="market-skeleton" aria-hidden="true"></div>
+                            <div class="market-skeleton" aria-hidden="true"></div>
+                            <div class="market-skeleton" aria-hidden="true"></div>
                             <div class="market-skeleton" aria-hidden="true"></div>
                             <div class="market-skeleton" aria-hidden="true"></div>
                             <div class="market-skeleton" aria-hidden="true"></div>
