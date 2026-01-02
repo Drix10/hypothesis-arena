@@ -473,27 +473,61 @@ function validateAndEnforceTakeProfitThresholds(style: 'scalp' | 'swing') {
         cfg.takeProfitThreshold4
     ];
 
-    // ENFORCE ascending order by adjusting invalid thresholds
+    // Define bounds based on style
+    const minThreshold = 0.5;
+    const maxThreshold = style === 'scalp' ? 50 : 100; // Match the Math.min bounds in config
+    const minGap = 0.5; // Minimum gap between thresholds for strict ascending order
+
+    // STEP 1: Pre-clamp all thresholds to valid range BEFORE ascending order correction
+    // This ensures the correction logic works with valid values
+    for (let i = 0; i < thresholds.length; i++) {
+        thresholds[i] = Math.min(maxThreshold, Math.max(minThreshold, thresholds[i]));
+    }
+
+    // STEP 2: ENFORCE strict ascending order by adjusting invalid thresholds
     let needsCorrection = false;
+    let hitCeiling = false;
+
     for (let i = 1; i < thresholds.length; i++) {
         if (thresholds[i] <= thresholds[i - 1]) {
             needsCorrection = true;
-            // Set to previous + 0.5% minimum gap
-            thresholds[i] = thresholds[i - 1] + 0.5;
+
+            // Calculate candidate value: previous + minGap
+            const candidate = thresholds[i - 1] + minGap;
+
+            // Check if we can maintain strict ascending order within bounds
+            if (candidate <= maxThreshold) {
+                thresholds[i] = candidate;
+            } else {
+                // Cannot maintain strict ascending order - hit ceiling
+                // Set to maxThreshold (will be equal to or less than previous)
+                thresholds[i] = maxThreshold;
+                hitCeiling = true;
+            }
         }
     }
 
-    if (needsCorrection) {
+    // STEP 3: Apply corrected values back to config
+    cfg.takeProfitThreshold1 = thresholds[0];
+    cfg.takeProfitThreshold2 = thresholds[1];
+    cfg.takeProfitThreshold3 = thresholds[2];
+    cfg.takeProfitThreshold4 = thresholds[3];
+
+    // STEP 4: Log appropriate warnings
+    if (hitCeiling) {
+        // Critical warning: could not maintain strict ascending order due to ceiling
+        console.error(
+            `❌ ${style.toUpperCase()} take profit thresholds could NOT be corrected to strict ascending order. ` +
+            `One or more thresholds hit the maximum (${maxThreshold}%). ` +
+            `Final values: TP1=${thresholds[0]}%, TP2=${thresholds[1]}%, TP3=${thresholds[2]}%, TP4=${thresholds[3]}%. ` +
+            `This may cause unexpected profit-taking behavior. Please adjust your .env configuration.`
+        );
+    } else if (needsCorrection) {
         console.warn(
             `⚠️ ${style.toUpperCase()} take profit thresholds were not in ascending order. ` +
-            `ENFORCED ascending order: TP1=${thresholds[0]}%, TP2=${thresholds[1]}%, ` +
+            `ENFORCED strict ascending order: TP1=${thresholds[0]}%, TP2=${thresholds[1]}%, ` +
             `TP3=${thresholds[2]}%, TP4=${thresholds[3]}%.`
         );
-        // Apply corrected values back to config
-        cfg.takeProfitThreshold1 = thresholds[0];
-        cfg.takeProfitThreshold2 = thresholds[1];
-        cfg.takeProfitThreshold3 = thresholds[2];
-        cfg.takeProfitThreshold4 = thresholds[3];
     }
 
     // Warn if target profit is less than the highest threshold

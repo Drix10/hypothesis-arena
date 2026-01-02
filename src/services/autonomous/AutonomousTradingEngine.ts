@@ -23,6 +23,7 @@ import { circuitBreakerService } from '../risk/CircuitBreakerService';
 import { AnalystPortfolioService } from '../portfolio/AnalystPortfolioService';
 import { aiLogService } from '../compliance/AILogService';
 import { prisma, queryOne } from '../../config/database';
+import { Prisma } from '@prisma/client';
 import { config, getActiveTradingStyle } from '../../config';
 import { logger } from '../../utils/logger';
 import { ANALYST_PROFILES, RISK_COUNCIL_VETO_TRIGGERS } from '../../constants/analyst';
@@ -299,6 +300,33 @@ export class AutonomousTradingEngine extends EventEmitter {
 
                 if (!config.autonomous.dryRun) {
                     try {
+                        // Pre-fetch plan orders once for TIGHTEN_STOP and ADJUST_TP to avoid duplicate API calls
+                        let existingPlanOrders: any[] = [];
+                        if (manageType === 'TIGHTEN_STOP' || manageType === 'ADJUST_TP') {
+                            try {
+                                existingPlanOrders = await this.weexClient.getCurrentPlanOrders(positionToManage.symbol);
+                            } catch (planOrderErr) {
+                                logger.warn(`Failed to fetch plan orders for ${positionToManage.symbol}:`, planOrderErr);
+                                // Continue - we'll place new orders instead of modifying
+                            }
+                        }
+
+                        // Fetch fresh position size for order placement (position may have changed)
+                        let currentPositionSize = positionToManage.size;
+                        if (manageType === 'TIGHTEN_STOP' || manageType === 'ADJUST_TP') {
+                            try {
+                                const freshPosition = await this.weexClient.getPosition(positionToManage.symbol);
+                                if (freshPosition) {
+                                    const parsedSize = parseFloat(String(freshPosition.size));
+                                    if (Number.isFinite(parsedSize) && parsedSize > 0) {
+                                        currentPositionSize = parsedSize;
+                                    }
+                                }
+                            } catch (posErr) {
+                                logger.warn(`Failed to fetch fresh position size, using cached: ${positionToManage.size}`);
+                            }
+                        }
+
                         switch (manageType) {
                             case 'CLOSE_FULL':
                                 await this.weexClient.closeAllPositions(positionToManage.symbol);
@@ -332,9 +360,8 @@ export class AutonomousTradingEngine extends EventEmitter {
                                         break;
                                     }
 
-                                    // Check for existing stop loss order
-                                    const existingOrders = await this.weexClient.getCurrentPlanOrders(positionToManage.symbol);
-                                    const stopLossOrder = existingOrders.find((o: any) =>
+                                    // Find existing stop loss order from pre-fetched orders
+                                    const stopLossOrder = existingPlanOrders.find((o: any) =>
                                         (o.planType === 'loss_plan' || o.plan_type === 'loss_plan') &&
                                         (o.positionSide === positionToManage.side.toLowerCase() ||
                                             o.position_side === positionToManage.side.toLowerCase())
@@ -350,12 +377,12 @@ export class AutonomousTradingEngine extends EventEmitter {
                                         });
                                         logger.info(`✅ Modified stop loss to ${newStopLoss}`);
                                     } else {
-                                        // Place new stop loss
+                                        // Place new stop loss with fresh position size
                                         await this.weexClient.placeTpSlOrder({
                                             symbol: positionToManage.symbol,
                                             planType: 'loss_plan',
                                             triggerPrice: newStopLoss,
-                                            size: positionToManage.size,
+                                            size: currentPositionSize,
                                             positionSide: positionToManage.side.toLowerCase() as 'long' | 'short',
                                         });
                                         logger.info(`✅ Placed new stop loss at ${newStopLoss}`);
@@ -376,9 +403,8 @@ export class AutonomousTradingEngine extends EventEmitter {
                                         break;
                                     }
 
-                                    // Check for existing take profit order
-                                    const existingTPOrders = await this.weexClient.getCurrentPlanOrders(positionToManage.symbol);
-                                    const takeProfitOrder = existingTPOrders.find((o: any) =>
+                                    // Find existing take profit order from pre-fetched orders
+                                    const takeProfitOrder = existingPlanOrders.find((o: any) =>
                                         (o.planType === 'profit_plan' || o.plan_type === 'profit_plan') &&
                                         (o.positionSide === positionToManage.side.toLowerCase() ||
                                             o.position_side === positionToManage.side.toLowerCase())
@@ -394,12 +420,12 @@ export class AutonomousTradingEngine extends EventEmitter {
                                         });
                                         logger.info(`✅ Modified take profit to ${newTakeProfit}`);
                                     } else {
-                                        // Place new take profit
+                                        // Place new take profit with fresh position size
                                         await this.weexClient.placeTpSlOrder({
                                             symbol: positionToManage.symbol,
                                             planType: 'profit_plan',
                                             triggerPrice: newTakeProfit,
-                                            size: positionToManage.size,
+                                            size: currentPositionSize,
                                             positionSide: positionToManage.side.toLowerCase() as 'long' | 'short',
                                         });
                                         logger.info(`✅ Placed new take profit at ${newTakeProfit}`);
@@ -993,45 +1019,41 @@ export class AutonomousTradingEngine extends EventEmitter {
             const holdTimes = new Map<string, number>();
             if (positionSymbols.length > 0) {
                 try {
-                    // Fetch hold times using Prisma - find most recent entry trade for each symbol
-                    const holdTimeResult = await prisma.trade.groupBy({
-                        by: ['symbol', 'side'],
-                        where: {
-                            symbol: { in: positionSymbols },
-                            status: 'FILLED',
-                            executedAt: { not: null },
-                            side: { in: ['BUY', 'SELL'] },
-                            reason: { not: { startsWith: 'MANAGE:' } }
-                        },
-                        _max: {
-                            executedAt: true
-                        }
-                    });
+                    // FIXED: Use raw SQL instead of Prisma groupBy to avoid DateTime conversion issues
+                    // SQLite stores DateTime as strings, and Prisma's groupBy fails to parse them
+                    // Raw SQL returns the string directly which we can parse manually
+                    //
+                    // SECURITY: positionSymbols are validated WEEX symbols from APPROVED_SYMBOLS constant
+                    // They only contain alphanumeric characters and underscores (e.g., "cmt_btcusdt")
+                    // Prisma.join() also provides parameterized query protection
+                    const holdTimeResult = await prisma.$queryRaw<Array<{
+                        symbol: string;
+                        side: string;
+                        max_executed_at: string | null;
+                    }>>`
+                        SELECT 
+                            symbol,
+                            side,
+                            MAX(executed_at) as max_executed_at
+                        FROM trades
+                        WHERE symbol IN (${Prisma.join(positionSymbols)})
+                            AND status = 'FILLED'
+                            AND executed_at IS NOT NULL
+                            AND side IN ('BUY', 'SELL')
+                            AND (reason IS NULL OR reason NOT LIKE 'MANAGE:%')
+                        GROUP BY symbol, side
+                    `;
+
                     // Match trade side to position direction for accurate hold time
                     for (const row of holdTimeResult) {
-                        if (row._max.executedAt) {
-                            // FIXED: SQLite returns DateTime as string in groupBy aggregations
-                            // Handle both Date objects and string representations
-                            let entryTime: number;
-                            const executedAt = row._max.executedAt;
-
-                            if (executedAt instanceof Date) {
-                                entryTime = executedAt.getTime();
-                            } else if (typeof executedAt === 'string') {
-                                // SQLite returns ISO-like strings: "2026-01-02 08:25:02" or "2026-01-02T08:25:02.000Z"
-                                const parsed = new Date(executedAt);
-                                if (isNaN(parsed.getTime())) {
-                                    logger.warn(`Invalid date string for ${row.symbol}: ${executedAt}, skipping`);
-                                    continue;
-                                }
-                                entryTime = parsed.getTime();
-                            } else if (typeof executedAt === 'number') {
-                                // Unix timestamp
-                                entryTime = executedAt;
-                            } else {
-                                logger.warn(`Unexpected executedAt type for ${row.symbol}: ${typeof executedAt}, skipping`);
+                        if (row.max_executed_at) {
+                            // Parse the SQLite date string (format: "2026-01-02 08:25:02" or ISO format)
+                            const parsed = new Date(row.max_executed_at);
+                            if (isNaN(parsed.getTime())) {
+                                logger.warn(`Invalid date string for ${row.symbol}: ${row.max_executed_at}, skipping`);
                                 continue;
                             }
+                            const entryTime = parsed.getTime();
 
                             // Validate entryTime is not in the future
                             if (entryTime > Date.now()) {

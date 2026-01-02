@@ -206,7 +206,7 @@ SELECTION CRITERIA (apply YOUR FULL METHODOLOGY):
 
 TRADING STYLE - ${cfg.isScalping ? 'HIGH FREQUENCY SCALPING' : 'SWING TRADING'}:
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ ${cfg.isScalping ? 'WE ARE A QUANT FIRM - PREFER SHORT TRADES WITH QUICK PROFITS' : 'SWING TRADING - LARGER MOVES, LONGER HOLDS'}                │
+│ ${cfg.isScalping ? 'WE ARE A QUANT FIRM - PREFER QUICK TRADES (SHORT DURATION)' : 'SWING TRADING - LARGER MOVES, LONGER HOLDS'}             │
 │                                                                             │
 │ ${cfg.isScalping ? 'IDEAL SETUPS:' : 'IDEAL SETUPS:'}                                                               │
 │   • ${cfg.isScalping ? `Clear momentum with ${cfg.targetProfitPercent}% move potential in hours` : `Strong trend with ${cfg.targetProfitPercent}% move potential over days`}                        │
