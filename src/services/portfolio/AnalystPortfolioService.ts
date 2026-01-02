@@ -368,14 +368,18 @@ export class AnalystPortfolioService {
                             data
                         });
 
-                        const sharpeStr = logData.sharpeRatio !== null
+                        const sharpeStr = logData.sharpeRatio !== null && Number.isFinite(logData.sharpeRatio)
                             ? `, Sharpe: ${logData.sharpeRatio.toFixed(2)}`
                             : '';
 
+                        // FIXED: Validate numeric fields before toFixed() to prevent NaN
+                        const pnlDisplay = Number.isFinite(logData.totalPnl) ? logData.totalPnl : 0;
+                        const winRateDisplay = Number.isFinite(logData.winRate) ? logData.winRate : 0;
+
                         logger.info(
                             `📊 ${analystId}: ${logData.totalTrades} trades, ` +
-                            `${logData.totalPnl.toFixed(2)} USDT P&L, ` +
-                            `${logData.winRate.toFixed(1)}% win rate ` +
+                            `${pnlDisplay.toFixed(2)} USDT P&L, ` +
+                            `${winRateDisplay.toFixed(1)}% win rate ` +
                             `(${logData.winningTrades}W/${logData.losingTrades}L/${logData.breakEvenTrades}BE)` +
                             sharpeStr
                         );

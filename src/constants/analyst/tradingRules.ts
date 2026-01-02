@@ -15,6 +15,7 @@ import { GLOBAL_RISK_LIMITS } from './riskLimits';
 import { RISK_COUNCIL_VETO_TRIGGERS } from './riskCouncil';
 
 // FIXED: Cache trading rules to avoid regenerating 2000+ chars every call
+// NOTE: Cache is invalidated on server restart - changes to rules require restart
 let cachedTradingRules: string | null = null;
 
 /**
@@ -22,11 +23,11 @@ let cachedTradingRules: string | null = null;
  * OPTIMIZED: Results are cached after first call
  */
 export function formatTradingRulesForAI(): string {
-    if (cachedTradingRules) {
-        return cachedTradingRules;
-    }
+   if (cachedTradingRules) {
+      return cachedTradingRules;
+   }
 
-    cachedTradingRules = `
+   cachedTradingRules = `
 ═══════════════════════════════════════════════════════════════════
                     MANDATORY TRADING RULES
 ═══════════════════════════════════════════════════════════════════
@@ -48,14 +49,14 @@ export function formatTradingRulesForAI(): string {
 ✓ Max Leverage: ${RISK_COUNCIL_VETO_TRIGGERS.MAX_LEVERAGE}x (NEVER exceed this)
 ✓ Default Leverage: ${config.autonomous.defaultLeverage}x
 ✓ Liquidation Risk: At ${RISK_COUNCIL_VETO_TRIGGERS.MAX_LEVERAGE}x, a ${(() => {
-            // FIXED: Add division by zero guard
-            const maxLev = RISK_COUNCIL_VETO_TRIGGERS.MAX_LEVERAGE;
-            if (!Number.isFinite(maxLev) || maxLev <= 0) {
-                return '20.0'; // Fallback value
-            }
-            const distance = 100 / maxLev;
-            return Number.isFinite(distance) ? distance.toFixed(1) : '20.0';
-        })()}% move liquidates position
+         // FIXED: Add division by zero guard
+         const maxLev = RISK_COUNCIL_VETO_TRIGGERS.MAX_LEVERAGE;
+         if (!Number.isFinite(maxLev) || maxLev <= 0) {
+            return '20.0'; // Fallback value
+         }
+         const distance = 100 / maxLev;
+         return Number.isFinite(distance) ? distance.toFixed(1) : '20.0';
+      })()}% move liquidates position
 
 ───────────────────────────────────────────────────────────────────
 🛡️ STOP LOSS RULES (By Analyst Type)
@@ -115,16 +116,17 @@ export function formatTradingRulesForAI(): string {
 ✗ Thesis INVALIDATED: CLOSE regardless of P&L
 ✗ Hold time > 7 days with no progress: CLOSE (capital efficiency)
 
-💰 PROFIT PROTECTION RULES:
-✓ P&L > +10%: Move stop to BREAKEVEN (entry price)
-✓ P&L > +15%: Take at least 50% profits OR tighten stop to +10%
-✓ P&L > +20%: Take at least 75% profits
-✓ NEVER let a +10% winner turn into a loser
+💰 PROFIT PROTECTION RULES (AGGRESSIVE - SECURE GAINS EARLY):
+✓ P&L > +3%: Move stop to BREAKEVEN (entry price)
+✓ P&L > +5%: Take at least 25% profits OR tighten stop to +2%
+✓ P&L > +8%: Take at least 50% profits OR tighten stop to +4%
+✓ P&L > +10%: Take at least 75% profits - don't let winners reverse
+✓ NEVER let a +5% winner turn into a loser
 
-⏰ TIME-BASED MANAGEMENT:
-✓ Hold > 3 days: Review thesis - is catalyst still valid?
-✓ Hold > 5 days: Re-evaluate urgently - stale thesis risk
-✓ Hold > 7 days: Close unless NEW catalyst identified
+⏰ TIME-BASED MANAGEMENT (AGGRESSIVE - CAPITAL EFFICIENCY):
+✓ Hold > 1 day: Review thesis - is momentum still there?
+✓ Hold > 2 days: Re-evaluate urgently - crypto moves fast
+✓ Hold > 3 days: Close unless strong momentum with clear catalyst
 
 💸 FUNDING RATE MANAGEMENT:
 ✓ Funding > 0.03% against position: Factor into daily cost
@@ -233,8 +235,8 @@ export function formatTradingRulesForAI(): string {
 ───────────────────────────────────────────────────────────────────
 Karen will VETO if ANY of these fail:
 ${Array.isArray(RISK_COUNCIL_VETO_TRIGGERS.CHECKLIST) && RISK_COUNCIL_VETO_TRIGGERS.CHECKLIST.length > 0
-            ? RISK_COUNCIL_VETO_TRIGGERS.CHECKLIST.map((rule, i) => `${i + 1}. ${rule}`).join('\n')
-            : '⚠️ ERROR: CHECKLIST array is empty or invalid - check riskCouncil.ts configuration'}
+         ? RISK_COUNCIL_VETO_TRIGGERS.CHECKLIST.map((rule, i) => `${i + 1}. ${rule}`).join('\n')
+         : '⚠️ ERROR: CHECKLIST array is empty or invalid - check riskCouncil.ts configuration'}
 
 ═══════════════════════════════════════════════════════════════════
                     RECOMMENDATION FORMAT
@@ -259,14 +261,14 @@ When making recommendations, ALWAYS specify:
 ═══════════════════════════════════════════════════════════════════
 `;
 
-    return cachedTradingRules;
+   return cachedTradingRules;
 }
 
 /**
  * Get a concise summary of the most critical rules for quick reference
  */
 export function getCriticalRulesSummary(): string {
-    return `
+   return `
 🚨 CRITICAL RULES (MUST FOLLOW):
 • Max Position: ${RISK_COUNCIL_VETO_TRIGGERS.MAX_POSITION_PERCENT}% | Max Leverage: ${RISK_COUNCIL_VETO_TRIGGERS.MAX_LEVERAGE}x | Max Stop Loss: ${RISK_COUNCIL_VETO_TRIGGERS.MAX_STOP_LOSS_DISTANCE}%
 • Max Concurrent: ${RISK_COUNCIL_VETO_TRIGGERS.MAX_CONCURRENT_POSITIONS} positions | Max Same Direction: ${RISK_COUNCIL_VETO_TRIGGERS.MAX_SAME_DIRECTION_POSITIONS}

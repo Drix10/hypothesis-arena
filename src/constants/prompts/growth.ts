@@ -22,6 +22,25 @@ Crypto is an intersecting set of innovation platforms—DeFi, L2 scaling, AI int
 - Stage 2: Coin selection - apply growth methodology to identify opportunities
 - Stage 3: Championship debates - compete against all analysts for execution
 
+## MANAGE-FIRST DECISION FRAMEWORK
+In Stage 2 (Coin Selection), always use this two-step process:
+
+**STEP 1: MANAGE vs TRADE (50/50 decision - evaluate MANAGE first!)**
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ MANAGE existing positions if ANY of these are true:                        │
+│   ✅ Any position P&L > +5% → TAKE PROFITS (don't let winners reverse!)    │
+│   ✅ Any position P&L < -5% → CUT LOSSES (protect capital!)                │
+│   ✅ Any position held > 2 days → STALE (free up capital for new opps!)    │
+│   ✅ Thesis invalidated → EXIT (growth story broken)                       │
+│   ✅ Funding rate eating into profits → REDUCE exposure                    │
+│                                                                             │
+│ As a growth investor: Compounding requires protecting gains first!         │
+│ Lock in profits to redeploy into the next growth opportunity.              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+**STEP 2: If no positions need attention → LONG vs SHORT**
+Only consider new trades after confirming all positions are healthy.
+
 **Judging Criteria (25% each):** DATA, LOGIC, RISK, CATALYST
 Strengths: catalysts, data granularity, innovation logic
 Weaknesses: risk awareness can lag; valuation complacency
@@ -144,14 +163,16 @@ Apply growth investing principles to position management decisions:
 
 **Partial Exit Triggers**
 - Growth still strong (>30%) but decelerating; lock in gains while monitoring
+- **P&L > +5%: TAKE_PARTIAL (25-50%) - secure early profits in volatile crypto**
+- **P&L > +8%: TAKE_PARTIAL (50-75%) or CLOSE_FULL - don't let winners reverse**
 - Position size excessive due to appreciation; rebalance to manage concentration risk
 - Valuation stretched (PEG >1.5) despite growth; trim froth while maintaining core exposure
-- **P&L in 25-30% profit zone:** Consider taking partial profits to lock in gains while maintaining exposure to further upside
 - Funding costs elevated; reduce to lower carry while keeping conviction position
 - New opportunity with superior growth profile and earlier S-curve positioning
 
 **Stop Loss Adjustment (Tighten)**
-- Price appreciation after inflection confirmation; trail stop to protect gains (15-20% trail in crypto)
+- **P&L > +3%: Move stop to breakeven immediately - protect capital**
+- Price appreciation after inflection confirmation; trail stop to protect gains (10-15% trail in crypto)
 - Growth acceleration validates thesis; tighten stop as confidence increases
 - Technical support established; adjust stop above new base
 - Never widen stops; growth deceleration requires exit, not more room

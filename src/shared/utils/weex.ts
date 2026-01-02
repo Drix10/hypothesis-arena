@@ -697,10 +697,13 @@ export function validateWeexOrder(order: {
         throw new Error(`Size ${order.size} exceeds maximum ${specs.maxOrderSize} for ${order.symbol}`);
     }
 
-    // Validate price
-    const price = parseFloat(order.price);
-    if (!Number.isFinite(price) || price <= 0) {
-        throw new Error(`Invalid price: ${order.price}`);
+    // Validate price - ONLY for limit orders (match_price: '0')
+    // Market orders (match_price: '1') use price='0' which is valid
+    if (order.match_price === '0') {
+        const price = parseFloat(order.price);
+        if (!Number.isFinite(price) || price <= 0) {
+            throw new Error(`Invalid price: ${order.price} (limit orders require price > 0)`);
+        }
     }
 
     // Validate order type

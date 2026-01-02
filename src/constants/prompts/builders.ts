@@ -94,9 +94,9 @@ ${positionsList}
 If an existing position needs urgent attention (take profit, cut loss, adjust), you can select it instead of a new coin. Use action "MANAGE" with the position symbol.
 
 Consider managing a position if:
-- P&L > +15% (lock in profits)
-- P&L < -7% (cut losses before stop)
-- Hold time > 5 days (thesis may be stale)
+- P&L > +5% (lock in profits early)
+- P&L < -5% (cut losses before stop)
+- Hold time > 2 days (thesis may be stale)
 - Funding costs eating into profits
 - Market conditions changed against the position
 `;
@@ -140,6 +140,15 @@ SELECTION CRITERIA (apply YOUR FULL METHODOLOGY):
 3. Prioritize capital preservation - managing a losing position may be more urgent than a new trade
 4. Consider portfolio correlation - don't add more of the same direction
 
+DECISION FRAMEWORK (TWO-STEP):
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 1: MANAGE vs TRADE (evaluate MANAGE first - 50/50 importance)         │
+│   MANAGE if: P&L > +5%, P&L < -5%, hold > 2 days, thesis invalidated       │
+│   TRADE only if: No positions need attention AND clear opportunity         │
+│                                                                             │
+│ STEP 2: If TRADE → LONG vs SHORT based on market setup                     │
+└─────────────────────────────────────────────────────────────────────────────┘
+
 QUALITY BAR:
 - Use specific NUMBERS in your reason
 - Include microstructure metrics (funding, OI, liquidations)
@@ -148,9 +157,9 @@ QUALITY BAR:
 
 OUTPUT REQUIREMENTS:
 • symbol: Exact WEEX symbol (e.g., "cmt_btcusdt", "cmt_solusdt")
-• action: "LONG" | "SHORT" | "MANAGE"
-  - LONG/SHORT = open new position
-  - MANAGE = close, reduce, or adjust existing position
+• action: "MANAGE" | "LONG" | "SHORT" (evaluate MANAGE first!)
+  - MANAGE = close, reduce, or adjust existing position (PRIORITY)
+  - LONG/SHORT = open new position (only if no positions need attention)
 • conviction: 1-10 scale
 • reason: ONE sentence with SPECIFIC data
 
@@ -159,8 +168,8 @@ ${coreIdentity}
 Respond with JSON:
 {
     "picks": [
-        { "symbol": "cmt_solusdt", "action": "LONG", "conviction": 8, "reason": "+4.2% outperforming BTC with negative funding -0.02% suggesting short squeeze potential" },
-        { "symbol": "cmt_ethusdt", "action": "MANAGE", "conviction": 7, "reason": "Position at +18% profit, funding turning against us at 0.04%, lock in gains before reversal" },
+        { "symbol": "cmt_ethusdt", "action": "MANAGE", "conviction": 9, "reason": "Position at +8% profit for 3 days, funding turning against us at 0.04%, TAKE_PARTIAL 50% to lock gains" },
+        { "symbol": "cmt_solusdt", "action": "LONG", "conviction": 7, "reason": "+4.2% outperforming BTC with negative funding -0.02% suggesting short squeeze potential" },
         { "symbol": "cmt_btcusdt", "action": "SHORT", "conviction": 5, "reason": "Rejection at 98k resistance with rising OI suggesting overleveraged longs" }
     ]
 }

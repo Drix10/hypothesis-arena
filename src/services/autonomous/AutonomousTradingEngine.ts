@@ -244,6 +244,103 @@ export class AutonomousTradingEngine extends EventEmitter {
     }
 
     /**
+     * Execute fallback position management when limits are reached
+     * Consolidates duplicated logic for max positions and directional limit fallbacks
+     * 
+     * @param positions - Array of positions to choose from for management
+     * @param marketDataMap - Current market data for all symbols
+     * @param fallbackReason - Reason for the fallback (for logging)
+     * @returns true if management was executed, false if no positions available
+     */
+    private async executeFallbackManagement(
+        positions: Array<{
+            symbol: string;
+            side: 'LONG' | 'SHORT';
+            size: number;
+            entryPrice: number;
+            currentPrice: number;
+            unrealizedPnl: number;
+            unrealizedPnlPercent: number;
+            holdTimeHours: number;
+        }>,
+        marketDataMap: Map<string, ExtendedMarketData>,
+        fallbackReason: string
+    ): Promise<{ executed: boolean; symbol?: string }> {
+        // Sort by P&L: prioritize positions with P&L > +5% (take profits) or < -5% (cut losses)
+        const sortedPositions = [...positions].sort((a, b) => {
+            const aPnl = Number.isFinite(a.unrealizedPnlPercent) ? a.unrealizedPnlPercent : 0;
+            const bPnl = Number.isFinite(b.unrealizedPnlPercent) ? b.unrealizedPnlPercent : 0;
+            const aUrgent = Math.abs(aPnl) > 5;
+            const bUrgent = Math.abs(bPnl) > 5;
+            if (aUrgent && !bUrgent) return -1;
+            if (!aUrgent && bUrgent) return 1;
+            return Math.abs(bPnl) - Math.abs(aPnl);
+        });
+
+        const positionToManage = sortedPositions[0];
+        if (!positionToManage) {
+            logger.warn(`No positions available to auto-manage for ${fallbackReason}`);
+            return { executed: false };
+        }
+
+        const pnlDisplay = Number.isFinite(positionToManage.unrealizedPnlPercent) ? positionToManage.unrealizedPnlPercent : 0;
+        logger.info(`📋 Auto-managing: ${positionToManage.symbol} ${positionToManage.side} (P&L: ${pnlDisplay.toFixed(2)}%)`);
+
+        try {
+            const managementDecision = await collaborativeFlowService.runPositionManagement(
+                positionToManage,
+                marketDataMap
+            );
+
+            if (managementDecision && managementDecision.manageType) {
+                const { manageType, conviction, reason, closePercent } = managementDecision;
+                logger.info(`📋 Management Decision: ${manageType} (conviction: ${conviction}/10)`);
+                logger.info(`Reason: ${reason}`);
+
+                if (!config.autonomous.dryRun) {
+                    try {
+                        switch (manageType) {
+                            case 'CLOSE_FULL':
+                                await this.weexClient.closeAllPositions(positionToManage.symbol);
+                                logger.info(`✅ Closed full position: ${positionToManage.symbol}`);
+                                break;
+                            case 'CLOSE_PARTIAL':
+                            case 'TAKE_PARTIAL':
+                                if (closePercent && closePercent > 0 && closePercent < 100) {
+                                    const sizeToClose = roundToStepSize(
+                                        (positionToManage.size * closePercent) / 100,
+                                        positionToManage.symbol
+                                    );
+                                    await this.weexClient.closePartialPosition(
+                                        positionToManage.symbol,
+                                        positionToManage.side,
+                                        sizeToClose,
+                                        '1'
+                                    );
+                                    logger.info(`✅ Closed ${closePercent}% of ${positionToManage.symbol}`);
+                                }
+                                break;
+                            default:
+                                logger.info(`ℹ️ Management action ${manageType} - no immediate execution needed`);
+                        }
+                        if (this.currentCycle) {
+                            this.currentCycle.tradesExecuted++;
+                        }
+                    } catch (execError) {
+                        logger.error(`Failed to execute management action:`, execError);
+                    }
+                } else {
+                    logger.info(`[DRY RUN] Would execute ${manageType} on ${positionToManage.symbol}`);
+                }
+            }
+        } catch (manageError) {
+            logger.error(`Failed to get management decision:`, manageError);
+        }
+
+        return { executed: true, symbol: positionToManage.symbol };
+    }
+
+    /**
      * Start the autonomous trading engine
      * Uses a promise-based mutex to ensure only one start operation at a time
      */
@@ -888,8 +985,12 @@ export class AutonomousTradingEngine extends EventEmitter {
             if (portfolioPositions.length > 0) {
                 logger.info(`📊 Portfolio: ${portfolioPositions.length} open position(s)`);
                 for (const p of portfolioPositions) {
-                    const pnlSign = p.unrealizedPnlPercent >= 0 ? '+' : '';
-                    logger.info(`  • ${p.symbol} ${p.side}: ${pnlSign}${p.unrealizedPnlPercent.toFixed(2)}% ($${p.unrealizedPnl.toFixed(2)}) [hold: ${p.holdTimeHours.toFixed(1)}h]`);
+                    // FIXED: Validate numeric fields before toFixed() to prevent NaN
+                    const pnlPercent = Number.isFinite(p.unrealizedPnlPercent) ? p.unrealizedPnlPercent : 0;
+                    const pnlValue = Number.isFinite(p.unrealizedPnl) ? p.unrealizedPnl : 0;
+                    const holdHours = Number.isFinite(p.holdTimeHours) ? p.holdTimeHours : 0;
+                    const pnlSign = pnlPercent >= 0 ? '+' : '';
+                    logger.info(`  • ${p.symbol} ${p.side}: ${pnlSign}${pnlPercent.toFixed(2)}% ($${pnlValue.toFixed(2)}) [hold: ${holdHours.toFixed(1)}h]`);
                 }
             }
         } catch (error) {
@@ -1071,7 +1172,9 @@ export class AutonomousTradingEngine extends EventEmitter {
             }
 
             // For now, close the position (can be extended to support partial close, adjust TP/SL)
-            logger.info(`Managing position: ${positionToManage.symbol} ${positionToManage.side} (P&L: ${positionToManage.unrealizedPnlPercent.toFixed(2)}%)`);
+            // FIXED: Validate numeric field before toFixed()
+            const pnlPercentDisplay = Number.isFinite(positionToManage.unrealizedPnlPercent) ? positionToManage.unrealizedPnlPercent : 0;
+            logger.info(`Managing position: ${positionToManage.symbol} ${positionToManage.side} (P&L: ${pnlPercentDisplay.toFixed(2)}%)`);
 
             // Validate position data before proceeding
             if (!Number.isFinite(positionToManage.size) || positionToManage.size <= 0) {
@@ -1194,8 +1297,10 @@ export class AutonomousTradingEngine extends EventEmitter {
 
                             // CRITICAL: TAKE_PARTIAL should only be used for profitable positions
                             // If position is at a loss, use CLOSE_PARTIAL instead (different intent)
-                            if (positionToManage.unrealizedPnlPercent < 0) {
-                                logger.warn(`⚠️ TAKE_PARTIAL on losing position (${positionToManage.unrealizedPnlPercent.toFixed(2)}%). Consider CLOSE_PARTIAL for loss-cutting.`);
+                            // FIXED: Validate numeric field before toFixed()
+                            const takePnlPercent = Number.isFinite(positionToManage.unrealizedPnlPercent) ? positionToManage.unrealizedPnlPercent : 0;
+                            if (takePnlPercent < 0) {
+                                logger.warn(`⚠️ TAKE_PARTIAL on losing position (${takePnlPercent.toFixed(2)}%). Consider CLOSE_PARTIAL for loss-cutting.`);
                             }
 
                             const profitSize = roundToStepSize(
@@ -1588,19 +1693,25 @@ export class AutonomousTradingEngine extends EventEmitter {
             logger.warn(`⚠️ Continuing with ${portfolioPositions.length} cached positions - Risk Council will re-validate`);
         }
 
-        // OPTIMIZATION: Early exit if we already have max positions
-        // Karen will veto this trade anyway, so save tokens by stopping now
+        // OPTIMIZATION: Max positions reached - FALLBACK TO MANAGE
+        // Instead of early exit, auto-manage the best candidate position
         const MAX_CONCURRENT_POSITIONS = RISK_COUNCIL_VETO_TRIGGERS.MAX_CONCURRENT_POSITIONS;
         if (portfolioPositions.length >= MAX_CONCURRENT_POSITIONS) {
             logger.info(`\n${'='.repeat(60)}`);
-            logger.info(`⚠️ EARLY EXIT #1: Already at max positions (${portfolioPositions.length}/${MAX_CONCURRENT_POSITIONS})`);
-            logger.info(`Selected: ${coinSymbol} ${direction} by ${coinSelectorWinner}`);
-            logger.info(`Reason: Karen would veto this trade in Risk Council (Stage 4) anyway`);
-            logger.info(`Token savings: ~8,000 tokens (skipping Stage 3 Championship)`);
+            logger.info(`⚠️ MAX POSITIONS: Already at limit (${portfolioPositions.length}/${MAX_CONCURRENT_POSITIONS})`);
+            logger.info(`AI selected: ${coinSymbol} ${direction} by ${coinSelectorWinner}`);
+            logger.info(`🔄 FALLBACK: Auto-selecting best position to MANAGE instead of early exit`);
             logger.info(`${'='.repeat(60)}\n`);
 
+            const result = await this.executeFallbackManagement(portfolioPositions, marketDataMap, 'max positions');
             await this.updateLeaderboard();
-            await this.completeCycle(cycleStart, 'max positions reached (early exit)');
+
+            if (result.executed) {
+                await this.completeCycle(cycleStart, `auto-managed ${result.symbol} (max positions fallback)`);
+            } else {
+                await this.completeCycle(cycleStart, 'max positions reached (early exit)');
+            }
+
             const sleepTime = this.getSleepTimeWithBackoff(cycleStart);
             if (sleepTime > 0 && this.isRunning) await this.sleep(sleepTime);
             return;
@@ -1664,21 +1775,39 @@ export class AutonomousTradingEngine extends EventEmitter {
             return;
         }
 
-        // OPTIMIZATION #4: Same direction limit reached
+        // OPTIMIZATION #4: Same direction limit reached - FALLBACK TO MANAGE
+        // DEBUG: Log all positions and their sides for troubleshooting
+        logger.info(`📊 DEBUG: portfolioPositions count: ${portfolioPositions.length}`);
+        for (const p of portfolioPositions) {
+            logger.info(`  - ${p.symbol}: side="${p.side}" (type: ${typeof p.side})`);
+        }
+        logger.info(`📊 DEBUG: direction="${direction}" (type: ${typeof direction})`);
+
         const sameDirectionCount = portfolioPositions.filter(p =>
             p.side === (direction === 'LONG' ? 'LONG' : 'SHORT')
         ).length;
+        logger.info(`📊 DEBUG: sameDirectionCount=${sameDirectionCount}`);
+
         if (sameDirectionCount >= RISK_COUNCIL_VETO_TRIGGERS.MAX_SAME_DIRECTION_POSITIONS) {
             logger.info(`\n${'='.repeat(60)}`);
-            logger.info(`⚠️ EARLY EXIT #4: Same direction limit reached`);
-            logger.info(`Current ${direction}: ${sameDirectionCount}/${RISK_COUNCIL_VETO_TRIGGERS.MAX_SAME_DIRECTION_POSITIONS} positions`);
-            logger.info(`Selected: ${coinSymbol} ${direction} by ${coinSelectorWinner}`);
-            logger.info(`Reason: Karen would veto this trade in Risk Council (Stage 4) anyway`);
-            logger.info(`Token savings: ~8,000 tokens (skipping Stage 3 Championship)`);
+            logger.info(`⚠️ DIRECTIONAL LIMIT: ${direction} limit reached (${sameDirectionCount}/${RISK_COUNCIL_VETO_TRIGGERS.MAX_SAME_DIRECTION_POSITIONS})`);
+            logger.info(`AI selected: ${coinSymbol} ${direction} by ${coinSelectorWinner}`);
+            logger.info(`🔄 FALLBACK: Auto-selecting best position to MANAGE instead of early exit`);
             logger.info(`${'='.repeat(60)}\n`);
 
+            // Filter to same direction positions only
+            const sameDirectionPositions = portfolioPositions.filter(p => p.side === direction);
+            logger.info(`📊 DEBUG: sameDirectionPositions count: ${sameDirectionPositions.length}`);
+
+            const result = await this.executeFallbackManagement(sameDirectionPositions, marketDataMap, 'directional limit');
             await this.updateLeaderboard();
-            await this.completeCycle(cycleStart, 'directional limit reached (early exit)');
+
+            if (result.executed) {
+                await this.completeCycle(cycleStart, `auto-managed ${result.symbol} (directional limit fallback)`);
+            } else {
+                await this.completeCycle(cycleStart, 'directional limit reached (early exit)');
+            }
+
             const sleepTime = this.getSleepTimeWithBackoff(cycleStart);
             if (sleepTime > 0 && this.isRunning) await this.sleep(sleepTime);
             return;
@@ -1991,8 +2120,8 @@ export class AutonomousTradingEngine extends EventEmitter {
                     // Use default targets based on fresh price instead of potentially invalid original targets
                     logger.warn(`⚠️ Invalid old price ${oldPrice}, using default targets based on fresh price`);
 
-                    const defaultSlPct = 0.015; // 1.5% stop loss (risk)
-                    const defaultTpPct = 0.03; // 3% take profit (reward) = 2:1 ratio
+                    const defaultSlPct = 0.04; // 4% stop loss (risk)
+                    const defaultTpPct = 0.08; // 8% take profit (reward) = 2:1 ratio
 
                     if (isBullish) {
                         adjustedChampion.priceTarget = {
@@ -2085,8 +2214,8 @@ export class AutonomousTradingEngine extends EventEmitter {
 
                             // Fallback: use percentage-based targets with proper risk/reward
                             // Karen requires minimum 2:1 risk/reward ratio
-                            const defaultSlPct = 0.015; // 1.5% stop loss (risk)
-                            const defaultTpPct = 0.03; // 3% take profit (reward) = 2:1 ratio
+                            const defaultSlPct = 0.04; // 4% stop loss (risk)
+                            const defaultTpPct = 0.08; // 8% take profit (reward) = 2:1 ratio
                             adjustedChampion.priceTarget = {
                                 ...adjustedChampion.priceTarget,
                                 base: freshPrice * (1 + defaultTpPct),
@@ -2120,8 +2249,8 @@ export class AutonomousTradingEngine extends EventEmitter {
 
                             // Fallback: use percentage-based targets with proper risk/reward
                             // Karen requires minimum 2:1 risk/reward ratio
-                            const defaultSlPct = 0.015; // 1.5% stop loss (risk)
-                            const defaultTpPct = 0.03; // 3% take profit (reward) = 2:1 ratio
+                            const defaultSlPct = 0.04; // 4% stop loss (risk)
+                            const defaultTpPct = 0.08; // 8% take profit (reward) = 2:1 ratio
                             adjustedChampion.priceTarget = {
                                 ...adjustedChampion.priceTarget,
                                 base: freshPrice * (1 - defaultTpPct),

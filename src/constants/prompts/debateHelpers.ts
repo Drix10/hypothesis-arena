@@ -6,9 +6,9 @@
  */
 
 import { DEBATE_CONTEXTS, DEBATE_TURN_INSTRUCTIONS } from './debateContexts';
-// import { config } from '../../config'; // DEPRECATED: No longer needed after stage removal
 import { safeNumber, cleanSymbol } from './promptHelpers';
 import { formatTradingRulesForAI, getCriticalRulesSummary } from '../analyst/tradingRules';
+import { RISK_COUNCIL_VETO_TRIGGERS } from '../analyst/riskCouncil';
 import type { PortfolioPosition } from './builders';
 
 /**
@@ -37,24 +37,81 @@ export function buildCoinSelectionContext(
     let portfolioSection = '';
     if (currentPositions && currentPositions.length > 0) {
         const positionsList = currentPositions.map(p => {
-            const pnlSign = p.unrealizedPnlPercent >= 0 ? '+' : '';
-            const holdDays = (p.holdTimeHours / 24).toFixed(1);
-            return `  • ${cleanSymbol(p.symbol)} ${p.side}: Entry $${safeNumber(p.entryPrice, 2)} → $${safeNumber(p.currentPrice, 2)} | P&L: ${pnlSign}${safeNumber(p.unrealizedPnlPercent, 2)}% | Hold: ${holdDays}d`;
+            // FIXED: Validate numeric fields before operations to prevent NaN
+            const pnlPercent = Number.isFinite(p.unrealizedPnlPercent) ? p.unrealizedPnlPercent : 0;
+            const holdHours = Number.isFinite(p.holdTimeHours) ? p.holdTimeHours : 0;
+            const pnlSign = pnlPercent >= 0 ? '+' : '';
+            const holdDays = (holdHours / 24).toFixed(1);
+            return `  • ${cleanSymbol(p.symbol)} ${p.side}: Entry $${safeNumber(p.entryPrice, 2)} → $${safeNumber(p.currentPrice, 2)} | P&L: ${pnlSign}${safeNumber(pnlPercent, 2)}% | Hold: ${holdDays}d`;
         }).join('\n');
 
         // Create list of position symbols for the constraint
         const positionSymbolsList = currentPositions.map(p => cleanSymbol(p.symbol)).join(', ');
+
+        // Calculate directional limits
+        const maxSameDirection = RISK_COUNCIL_VETO_TRIGGERS.MAX_SAME_DIRECTION_POSITIONS;
+        const maxConcurrent = RISK_COUNCIL_VETO_TRIGGERS.MAX_CONCURRENT_POSITIONS;
+        const longCount = currentPositions.filter(p => p.side === 'LONG').length;
+        const shortCount = currentPositions.filter(p => p.side === 'SHORT').length;
+        const totalPositions = currentPositions.length;
+
+        // Build directional constraint warning
+        const longLimitReached = longCount >= maxSameDirection;
+        const shortLimitReached = shortCount >= maxSameDirection;
+        const maxPositionsReached = totalPositions >= maxConcurrent;
+
+        let directionalConstraint = '';
+        if (maxPositionsReached) {
+            directionalConstraint = `
+🚨 CRITICAL CONSTRAINT: MAX POSITIONS REACHED (${totalPositions}/${maxConcurrent})
+   ❌ You CANNOT open any new LONG or SHORT positions
+   ✅ You MUST select MANAGE to close/reduce existing positions first
+   ⚠️ Any LONG or SHORT recommendation will be REJECTED by Risk Council
+`;
+        } else if (longLimitReached && shortLimitReached) {
+            directionalConstraint = `
+🚨 CRITICAL CONSTRAINT: BOTH DIRECTIONAL LIMITS REACHED
+   ❌ LONG positions: ${longCount}/${maxSameDirection} (LIMIT REACHED)
+   ❌ SHORT positions: ${shortCount}/${maxSameDirection} (LIMIT REACHED)
+   ✅ You MUST select MANAGE to close/reduce existing positions
+   ⚠️ Any new LONG or SHORT will be REJECTED by Risk Council
+`;
+        } else if (longLimitReached) {
+            directionalConstraint = `
+⚠️ DIRECTIONAL CONSTRAINT: LONG LIMIT REACHED
+   ❌ LONG positions: ${longCount}/${maxSameDirection} (LIMIT REACHED - cannot add more)
+   ✅ SHORT positions: ${shortCount}/${maxSameDirection} (${maxSameDirection - shortCount} slot${maxSameDirection - shortCount !== 1 ? 's' : ''} available)
+   ✅ MANAGE existing positions is always allowed
+   ⚠️ Any new LONG recommendation will be REJECTED by Risk Council
+`;
+        } else if (shortLimitReached) {
+            directionalConstraint = `
+⚠️ DIRECTIONAL CONSTRAINT: SHORT LIMIT REACHED
+   ✅ LONG positions: ${longCount}/${maxSameDirection} (${maxSameDirection - longCount} slot${maxSameDirection - longCount !== 1 ? 's' : ''} available)
+   ❌ SHORT positions: ${shortCount}/${maxSameDirection} (LIMIT REACHED - cannot add more)
+   ✅ MANAGE existing positions is always allowed
+   ⚠️ Any new SHORT recommendation will be REJECTED by Risk Council
+`;
+        } else {
+            // No limits reached - show available slots
+            directionalConstraint = `
+📊 POSITION LIMITS:
+   ✅ LONG positions: ${longCount}/${maxSameDirection} (${maxSameDirection - longCount} slot${maxSameDirection - longCount !== 1 ? 's' : ''} available)
+   ✅ SHORT positions: ${shortCount}/${maxSameDirection} (${maxSameDirection - shortCount} slot${maxSameDirection - shortCount !== 1 ? 's' : ''} available)
+   ✅ Total positions: ${totalPositions}/${maxConcurrent} (${maxConcurrent - totalPositions} slot${maxConcurrent - totalPositions !== 1 ? 's' : ''} available)
+`;
+        }
 
         portfolioSection = `
 ═══════════════════════════════════════════════════════════════════════════════
 CURRENT PORTFOLIO (${currentPositions.length} position${currentPositions.length > 1 ? 's' : ''})
 ═══════════════════════════════════════════════════════════════════════════════
 ${positionsList}
-
+${directionalConstraint}
 ⚠️ MANAGE ACTION RULES:
 - You can ONLY select "MANAGE" for coins WITH open positions: ${positionSymbolsList}
 - Do NOT select MANAGE for coins without positions
-- MANAGE triggers: P&L > +15% (take profits), P&L < -7% (cut losses), Hold > 5 days (stale thesis)
+- MANAGE triggers: P&L > +5% (take profits), P&L < -5% (cut losses), Hold > 2 days (stale thesis)
 `;
     } else {
         portfolioSection = `
@@ -97,9 +154,38 @@ ${marketSummary}${fundingSection}
 
 ${rulesSection}
 
-TASK: Select TOP 3 opportunities. Each can be:
-• NEW TRADE: "LONG" or "SHORT" on a coin
-• MANAGE POSITION: "MANAGE" an existing position (close/reduce/adjust)
+═══════════════════════════════════════════════════════════════════════════════
+DECISION FRAMEWORK (TWO-STEP PROCESS)
+═══════════════════════════════════════════════════════════════════════════════
+
+STEP 1: MANAGE vs TRADE (50/50 decision)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ MANAGE FIRST: Always evaluate existing positions BEFORE considering new    │
+│ trades. Position management is equally important as new entries!           │
+│                                                                             │
+│ MANAGE if ANY of these are true:                                           │
+│   ✅ Any position P&L > +5% (TAKE PROFITS - don't let winners reverse!)    │
+│   ✅ Any position P&L < -5% (CUT LOSSES - protect capital!)                │
+│   ✅ Any position held > 2 days (STALE - free up capital!)                 │
+│   ✅ Thesis invalidated (market moved against your reasoning)              │
+│   ✅ Funding rate eating into profits                                      │
+│                                                                             │
+│ TRADE (new position) only if:                                              │
+│   ✅ No positions need urgent attention (all healthy)                      │
+│   ✅ Clear opportunity with high conviction (7+/10)                        │
+│   ✅ Position limits allow it (check constraints above)                    │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+STEP 2: If TRADE → LONG vs SHORT
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Only after confirming no positions need management:                        │
+│   • LONG: Bullish setup with clear catalyst                                │
+│   • SHORT: Bearish setup with clear catalyst                               │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+TASK: Select TOP 3 opportunities using the two-step framework above.
+• FIRST evaluate if any positions need MANAGE
+• THEN consider new LONG/SHORT trades
 
 JUDGING: ${ctx.judging}
 
@@ -114,12 +200,14 @@ DATA CHECKLIST:
  
 RESPONSE FORMAT:
 - symbol: Exact WEEX symbol (e.g., "cmt_btcusdt")
-- action: "LONG" | "SHORT" | "MANAGE"
+- action: "MANAGE" | "LONG" | "SHORT" (evaluate MANAGE first!)
 - conviction: 1–10 (be honest; low-conviction picks hurt score)
 - reason: ONE sentence with specific numbers
 
 COMMON MISTAKES:
-- Ignoring existing positions that need attention
+- Opening new trades while ignoring positions that need attention
+- Not taking profits when P&L > +5% (greed kills returns)
+- Not cutting losses when P&L < -5% (hope is not a strategy)
 - Adding correlated positions without managing existing exposure
 - Vague statements without numbers`;
 }

@@ -69,13 +69,13 @@ export function assessPositionHealth(position: PortfolioPosition): PositionHealt
     const entryPrice = Number.isFinite(position.entryPrice) && position.entryPrice > 0 ? position.entryPrice : 1;
     const size = Number.isFinite(position.size) && position.size > 0 ? position.size : 1;
 
-    // P&L Status
+    // P&L Status - AGGRESSIVE profit-taking thresholds
     let pnlStatus: 'PROFIT' | 'LOSS' | 'BREAKEVEN';
     let pnlSeverity: 'CRITICAL' | 'WARNING' | 'HEALTHY';
 
     if (pnlPercent > 1) {
         pnlStatus = 'PROFIT';
-        pnlSeverity = pnlPercent > 15 ? 'WARNING' : 'HEALTHY'; // Warning = take profits
+        pnlSeverity = pnlPercent > 5 ? 'WARNING' : 'HEALTHY'; // Warning = take profits at +5%
     } else if (pnlPercent < -1) {
         pnlStatus = 'LOSS';
         pnlSeverity = pnlPercent < -7 ? 'CRITICAL' :
@@ -85,15 +85,15 @@ export function assessPositionHealth(position: PortfolioPosition): PositionHealt
         pnlSeverity = 'HEALTHY';
     }
 
-    // Hold Time Status
+    // Hold Time Status - AGGRESSIVE time limits
     const holdDays = holdTimeHours / 24;
     let holdTimeStatus: 'FRESH' | 'MATURE' | 'STALE';
     if (holdDays < 1) {
         holdTimeStatus = 'FRESH';
-    } else if (holdDays < 5) {
+    } else if (holdDays < 2) {
         holdTimeStatus = 'MATURE';
     } else {
-        holdTimeStatus = 'STALE';
+        holdTimeStatus = 'STALE'; // After 2 days, position is stale
     }
 
     // Funding Impact (if available)
@@ -299,10 +299,11 @@ DECISION RULES (MUST FOLLOW)
 - Thesis INVALIDATED → CLOSE_FULL (don't hope for recovery)
 - Hold time > 7 days with no progress → CLOSE_FULL (capital efficiency)
 
-⚠️ PROFIT PROTECTION TRIGGERS:
-- P&L > +15% → Consider TAKE_PARTIAL (50%) or TIGHTEN_STOP
-- P&L > +10% → Consider TIGHTEN_STOP to breakeven
-- P&L > +20% → Strongly consider CLOSE_FULL or TAKE_PARTIAL (75%)
+⚠️ PROFIT PROTECTION TRIGGERS (AGGRESSIVE - TAKE PROFITS EARLY):
+- P&L > +5% → Consider TAKE_PARTIAL (25-50%) to lock in gains
+- P&L > +8% → TAKE_PARTIAL (50%) or TIGHTEN_STOP to +4%
+- P&L > +10% → Strongly consider CLOSE_FULL or TAKE_PARTIAL (75%)
+- P&L > +15% → CLOSE_FULL - don't be greedy, secure the win
 
 📊 FUNDING CONSIDERATIONS:
 - If funding ADVERSE and > 0.03%/8h → Factor into hold decision
@@ -374,10 +375,10 @@ export function buildPortfolioManagementSummary(positions: PortfolioPosition[]):
         if (health.holdTimeStatus === 'STALE') priority += 40;
         if (health.fundingImpact === 'ADVERSE') priority += 20;
 
-        // Profit-taking opportunities also need attention
+        // Profit-taking opportunities also need attention - AGGRESSIVE thresholds
         const pnlPercent = Number.isFinite(pos.unrealizedPnlPercent) ? pos.unrealizedPnlPercent : 0;
-        if (health.pnlStatus === 'PROFIT' && pnlPercent > 15) {
-            priority += 60;
+        if (health.pnlStatus === 'PROFIT' && pnlPercent > 5) {
+            priority += 70; // High priority to take profits at +5%
         }
 
         needsAttention.push({ position: pos, health, priority });
@@ -409,10 +410,10 @@ PORTFOLIO MANAGEMENT SUMMARY (${validPositions.length} position${validPositions.
             actionHint = '→ Consider CLOSE_FULL';
         } else if (health.thesisStatus === 'INVALIDATED') {
             actionHint = '→ Consider CLOSE_FULL';
-        } else if (health.pnlStatus === 'PROFIT' && pnlPercent > 15) {
-            actionHint = '→ Consider TAKE_PARTIAL or TIGHTEN_STOP';
+        } else if (health.pnlStatus === 'PROFIT' && pnlPercent > 5) {
+            actionHint = '→ TAKE_PARTIAL or CLOSE_FULL - secure profits!';
         } else if (health.holdTimeStatus === 'STALE') {
-            actionHint = '→ Review thesis validity';
+            actionHint = '→ CLOSE_FULL - position too old, free up capital';
         }
 
         summary += `
@@ -442,16 +443,18 @@ POSITION MANAGEMENT RULES (MANDATORY - ENFORCED BY SYSTEM)
 5. ADD_MARGIN forbidden if P&L < -3% (system will reject)
 6. P&L < -7%: MUST close position immediately (system enforced)
 
-💰 PROFIT MANAGEMENT:
-1. P&L > +15%: Take at least 50% profits or tighten stop to +10%
-2. P&L > +20%: Take at least 75% profits
-3. P&L > +10%: Move stop to breakeven (entry price)
-4. Never let a +10% winner turn into a loser
+💰 PROFIT MANAGEMENT (AGGRESSIVE - SECURE GAINS EARLY):
+1. P&L > +3%: Move stop to breakeven (entry price) - protect the trade
+2. P&L > +5%: Take at least 25% profits AND tighten stop to +2%
+3. P&L > +8%: Take at least 50% profits AND tighten stop to +4%
+4. P&L > +10%: Take at least 75% profits - don't let winners reverse
+5. Never let a +5% winner turn into a loser - PROTECT GAINS
 
-⏰ TIME-BASED RULES:
-1. Hold > 5 days: Re-evaluate thesis - is the catalyst still valid?
-2. Hold > 7 days: Close unless strong conviction with new catalyst
-3. Stale positions tie up capital - opportunity cost matters
+⏰ TIME-BASED RULES (AGGRESSIVE - CAPITAL EFFICIENCY):
+1. Hold > 2 days: Re-evaluate thesis - is the move happening?
+2. Hold > 3 days: Close unless strong momentum with clear catalyst
+3. Hold > 5 days: CLOSE_FULL - stale positions waste capital
+4. Crypto moves fast - if it's not working in 48h, it's probably not working
 
 💸 FUNDING RATE RULES:
 1. Funding > 0.03% against position: Factor into daily cost
