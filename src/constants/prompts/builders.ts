@@ -25,7 +25,8 @@ import {
     formatPriceTargets,
     getCanonicalPrice,
     getSystemPrompt,
-    cleanSymbol
+    cleanSymbol,
+    getTradingConfig
 } from './promptHelpers';
 import { formatTradingRulesForAI } from '../analyst/tradingRules';
 
@@ -251,6 +252,9 @@ The funding rate is AGAINST your ${direction} position!
     // For specialist analysis (LONG/SHORT), filter out management sections to save tokens
     const fullSystemPrompt = getSystemPrompt(profile.methodology, THESIS_SYSTEM_PROMPTS, direction);
 
+    // Get config values for dynamic limits
+    const cfg = getTradingConfig();
+
     return `═══════════════════════════════════════════════════════════════════════════════
 PRIORITY DIRECTIVE - STAGE OVERRIDES
 ═══════════════════════════════════════════════════════════════════════════════
@@ -296,7 +300,7 @@ TOURNAMENT JUDGING CRITERIA (Your thesis will be scored on):
 
 3. RISK AWARENESS (25%): Acknowledge what could go wrong
    - Has realistic bear case with specific scenarios
-   - Stop loss is reasonable (≤10% from entry)
+   - Stop loss is reasonable (≤${cfg.maxStopLossPercent}% from entry)
    - Identifies thesis invalidation triggers
    - Acknowledges own biases and blind spots
 
@@ -311,9 +315,9 @@ EXECUTION REQUIREMENTS:
 - Use your analytical frameworks, scorecards, and checklists
 - Cite specific metrics relevant to your methodology
 - Build a complete thesis that will win debates in Stage 4
-- Leverage: 1-5x max (crypto volatility requires tight risk management)
+- Leverage: 1-${cfg.maxLeverage}x max (crypto volatility requires tight risk management)
 - Position size: 1-10 scale (scaled to conviction and risk)
-- Stop loss: ≤10% from entry unless justified by volatility/structure
+- Stop loss: ≤${cfg.maxStopLossPercent}% from entry unless justified by volatility/structure
 - Time horizon: Crypto moves fast—set realistic timeframe (2-14 days typical)
 
 DEBATE PREPARATION:
@@ -343,7 +347,7 @@ Respond with JSON:
     "entry": number (suggested entry price),
     "targets": { "bull": number, "base": number, "bear": number },
     "stopLoss": number,
-    "leverage": 1-5,
+    "leverage": 1-${cfg.maxLeverage},
     "positionSize": 1-10,
     "thesis": "Your main argument in 2-3 sentences with SPECIFIC numbers and methodology",
     "bullCase": ["Point 1 with data", "Point 2 with data", "Point 3 with data"],
@@ -396,9 +400,12 @@ export function buildRiskCouncilPrompt(
     const takeProfitDistance = Math.abs((baseTarget - currentPrice) / currentPrice * 100);
     const riskRewardRatio = stopLossDistance > 0 ? takeProfitDistance / stopLossDistance : 0;
 
+    // Get config values for dynamic limits
+    const cfg = getTradingConfig();
+
     // Validate and clamp positionSize to expected range (0-10)
     const validatedPositionSize = Math.max(0, Math.min(10, Number(champion.positionSize) || 0));
-    const positionPercent = (validatedPositionSize / 10) * 30; // Max 30% at size 10
+    const positionPercent = (validatedPositionSize / 10) * cfg.maxPositionSizePercent; // Max position % at size 10
 
     // Check for correlation with existing positions
     const sameDirectionPositions = currentPositions.filter(p =>
@@ -480,9 +487,9 @@ TRADE PARAMETERS:
             // Validate and clamp leverage with NaN/Infinity guards
             const rawLeverage = champion.leverage ?? 1;
             const validLeverage = Number.isFinite(rawLeverage) && rawLeverage >= 1 ? rawLeverage : 1;
-            const clampedLeverage = Math.min(5, Math.max(1, validLeverage));
+            const clampedLeverage = Math.min(cfg.maxLeverage, Math.max(1, validLeverage));
             return safeNumber(clampedLeverage, 1);
-        })()}x (max 5x allowed)
+        })()}x (max ${cfg.maxLeverage}x allowed)
 
 ACCOUNT STATE:
 - Available Balance: ${safeNumber(accountBalance, 2)} USDT
@@ -494,10 +501,10 @@ ${unrealizedPnLSection ? unrealizedPnLSection + '\n' : ''}- 24h P&L: ${safePerce
 IMPORTANT - NET EXPOSURE CALCULATION:
 "Net exposure" refers to the MARGIN USED (not notional value with leverage).
 - Proposed margin for this trade: ${safeNumber(positionPercent, 1)}% of portfolio
-- Net exposure limit: ≤60% for LONG, ≤50% for SHORT (margin used, not notional)
+- Net exposure limit: ≤${cfg.netExposureLong}% for LONG, ≤${cfg.netExposureShort}% for SHORT (margin used, not notional)
 - With leverage, notional value will be higher, but the LIMIT APPLIES TO MARGIN USED
-- Example: 20% margin with 5x leverage = 100% notional, but only 20% net exposure ✅
-- This allows ~2 max-size positions (30% each) to run concurrently
+- Example: 20% margin with ${cfg.maxLeverage}x leverage = ${20 * cfg.maxLeverage}% notional, but only 20% net exposure ✅
+- This allows ~${Math.floor(cfg.netExposureLong / cfg.maxPositionSizePercent)} max-size positions (${cfg.maxPositionSizePercent}% each) to run concurrently
 
 MARKET CONDITIONS:
 - ${displaySymbol} 24h Change: ${safePercent(marketData.change24h, 2, true)}
@@ -507,29 +514,29 @@ MARKET CONDITIONS:
 ${formatTradingRulesForAI()}
 
 YOUR CHECKLIST (from FLOW.md):
-[ ] Position size ≤30% of account? (Currently: ${safeNumber(positionPercent, 1)}%)
-[ ] Stop loss ≤10% from entry? (Currently: ${safeNumber(stopLossDistance, 2)}%)
-[ ] Leverage ≤5x? (Max allowed)
-[ ] Not overexposed to one direction? (${sameDirectionPositions.length} same-direction positions)
-[ ] Funding rate acceptable? (≤0.05% against us)
-[ ] Recent drawdown acceptable? (7d: ${safePercent(recentPnL.week, 2)})
+[ ] Position size ≤${cfg.maxPositionSizePercent}% of account? (Currently: ${safeNumber(positionPercent, 1)}%)
+[ ] Stop loss ≤${cfg.maxStopLossPercent}% from entry? (Currently: ${safeNumber(stopLossDistance, 2)}%)
+[ ] Leverage ≤${cfg.maxLeverage}x? (Max allowed)
+[ ] Not overexposed to one direction? (${sameDirectionPositions.length}/${cfg.maxSameDirectionPositions} same-direction positions)
+[ ] Funding rate acceptable? (≤${cfg.maxFundingAgainstPercent.toFixed(2)}% against us)
+[ ] Recent drawdown acceptable? (7d: ${safePercent(recentPnL.week, 2)}, limit: ${cfg.maxWeeklyDrawdown}%)
 [ ] Correlation & Regime: BTC beta/regime risk acceptable? (reduce size if beta > 0.7 or in chop)
-[ ] Portfolio Heat: risk per trade ≤2% of account; concurrent risk ≤5%
-[ ] Net Exposure: net LONG ≤60% or net SHORT ≤50% (reduce size if exceeded)
+[ ] Portfolio Heat: risk per trade ≤${cfg.maxRiskPerTrade}% of account; concurrent risk ≤${cfg.maxConcurrentRisk}%
+[ ] Net Exposure: net LONG ≤${cfg.netExposureLong}% or net SHORT ≤${cfg.netExposureShort}% (reduce size if exceeded)
 
 DECISION CRITERIA:
-- Approve only if risk/reward ≥ 2.0 and stops within ≤10%
+- Approve only if risk/reward ≥ 2.0 and stops within ≤${cfg.maxStopLossPercent}%
 - Reduce size if funding drag is significant or correlation high
 - Favor trades with clear catalysts in 7–14 day window
 - Veto if any guardrail breached or tail risks unaddressed
 
 VETO TRIGGERS (MUST veto if ANY are true):
-X Stop loss >10% from entry
-X Position would exceed 30% of account
-X Already have 3+ positions open
-X 7d drawdown >10% (reduce risk, no new trades)
-X Funding rate >0.05% against position direction
-X Net exposure beyond guardrails (net LONG >60% or net SHORT >50%)
+X Stop loss >${cfg.maxStopLossPercent}% from entry
+X Position would exceed ${cfg.maxPositionSizePercent}% of account
+X Already at MAX_CONCURRENT_POSITIONS limit (currently: ${currentPositions.length}/${cfg.maxConcurrentPositions})
+X 7d drawdown >${cfg.maxWeeklyDrawdown}% (reduce risk, no new trades)
+X Funding rate >${cfg.maxFundingAgainstPercent.toFixed(2)}% against position direction
+X Net exposure beyond guardrails (net LONG >${cfg.netExposureLong}% or net SHORT >${cfg.netExposureShort}%)
 
 RISK METHODOLOGY REFERENCE (read after stage instructions):
 ${fullSystemPrompt}
@@ -539,7 +546,7 @@ Respond with JSON:
     "approved": true/false,
     "adjustments": {
         "positionSize": number (1-10, reduce if needed),
-        "leverage": number (1-5, reduce if volatility high),
+        "leverage": number (1-${cfg.maxLeverage}, reduce if volatility high),
         "stopLoss": number (tighter stop loss price if needed)
     },
     "warnings": ["Warning 1", "Warning 2"],

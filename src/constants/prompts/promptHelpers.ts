@@ -6,6 +6,86 @@
 
 import type { AnalystMethodology } from '../analyst/types';
 import { filterPromptByAction } from './contextFilter';
+import { config } from '../../config';
+import { RISK_COUNCIL_VETO_TRIGGERS } from '../analyst/riskCouncil';
+
+/**
+ * Get trading configuration values for use in prompts
+ * All values come from config/env - NO HARDCODING
+ * 
+ * This ensures all prompts use consistent, configurable values
+ */
+export function getTradingConfig() {
+    return {
+        // Position limits
+        maxPositionSizePercent: RISK_COUNCIL_VETO_TRIGGERS.MAX_POSITION_PERCENT,
+        maxConcurrentPositions: RISK_COUNCIL_VETO_TRIGGERS.MAX_CONCURRENT_POSITIONS,
+        maxSameDirectionPositions: RISK_COUNCIL_VETO_TRIGGERS.MAX_SAME_DIRECTION_POSITIONS,
+
+        // Risk limits
+        maxStopLossPercent: RISK_COUNCIL_VETO_TRIGGERS.MAX_STOP_LOSS_DISTANCE,
+        maxLeverage: RISK_COUNCIL_VETO_TRIGGERS.MAX_LEVERAGE,
+        maxWeeklyDrawdown: RISK_COUNCIL_VETO_TRIGGERS.MAX_WEEKLY_DRAWDOWN,
+        maxFundingAgainst: RISK_COUNCIL_VETO_TRIGGERS.MAX_FUNDING_AGAINST,
+        maxFundingAgainstPercent: RISK_COUNCIL_VETO_TRIGGERS.MAX_FUNDING_AGAINST * 100, // As percentage
+
+        // Portfolio limits
+        netExposureLong: RISK_COUNCIL_VETO_TRIGGERS.NET_EXPOSURE_LIMITS.LONG,
+        netExposureShort: RISK_COUNCIL_VETO_TRIGGERS.NET_EXPOSURE_LIMITS.SHORT,
+        maxRiskPerTrade: RISK_COUNCIL_VETO_TRIGGERS.MAX_RISK_PER_TRADE_PERCENT,
+        maxConcurrentRisk: RISK_COUNCIL_VETO_TRIGGERS.MAX_CONCURRENT_RISK_PERCENT,
+
+        // Timing
+        cycleIntervalMs: config.autonomous.cycleIntervalMs,
+        cycleIntervalMinutes: Math.round(config.autonomous.cycleIntervalMs / 60000),
+
+        // Mode
+        dryRun: config.autonomous.dryRun,
+
+        // Checklist (pre-formatted)
+        checklist: RISK_COUNCIL_VETO_TRIGGERS.CHECKLIST,
+    };
+}
+
+/**
+ * Format trading config as a string for inclusion in prompts
+ */
+export function formatTradingConfigForPrompt(): string {
+    const cfg = getTradingConfig();
+    return `
+SYSTEM CONFIGURATION (from config - DO NOT HARDCODE):
+- Max Position Size: ${cfg.maxPositionSizePercent}% of account
+- Max Concurrent Positions: ${cfg.maxConcurrentPositions}
+- Max Same Direction: ${cfg.maxSameDirectionPositions} positions
+- Max Leverage: ${cfg.maxLeverage}x
+- Max Stop Loss: ${cfg.maxStopLossPercent}% from entry
+- Max Weekly Drawdown: ${cfg.maxWeeklyDrawdown}%
+- Max Funding Against: ${cfg.maxFundingAgainstPercent.toFixed(2)}%
+- Net Exposure Limits: LONG ≤${cfg.netExposureLong}%, SHORT ≤${cfg.netExposureShort}%
+- Cycle Interval: ${cfg.cycleIntervalMinutes} minutes
+- Mode: ${cfg.dryRun ? 'DRY RUN (no real trades)' : 'LIVE TRADING'}
+`.trim();
+}
+
+/**
+ * Get cycle context for prompts - explains the autonomous trading cycle
+ */
+export function getCycleContext(): string {
+    const cfg = getTradingConfig();
+    return `
+AUTONOMOUS TRADING CYCLE CONTEXT:
+You are part of an autonomous trading system that runs in cycles every ${cfg.cycleIntervalMinutes} minutes.
+Each cycle: Market Scan → Coin Selection (4 analysts) → Championship (8 analysts) → Risk Council → Execution → Position Management
+
+Your decisions directly affect real portfolio positions. The system:
+- Manages a shared portfolio with max ${cfg.maxConcurrentPositions} concurrent positions
+- Enforces ${cfg.maxLeverage}x max leverage and ${cfg.maxStopLossPercent}% max stop loss
+- Runs 24/7 with automated position management between cycles
+- Tracks your win rate and P&L attribution for performance ranking
+
+CRITICAL: Position management is equally important as new entries. Always evaluate existing positions first!
+`.trim();
+}
 
 
 /**

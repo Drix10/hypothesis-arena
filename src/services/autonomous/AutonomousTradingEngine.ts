@@ -557,8 +557,13 @@ export class AutonomousTradingEngine extends EventEmitter {
                 totalDebates: this.totalDebatesRun, // Also in stats for backward compat
                 avgCycleTime: this.CYCLE_INTERVAL_MS,
             },
+            // FIXED: Calculate nextCycleIn based on cycle state
+            // If cycle is complete (has endTime), calculate from endTime
+            // If cycle is in progress, calculate from startTime
             nextCycleIn: this.currentCycle
-                ? Math.max(0, this.CYCLE_INTERVAL_MS - (Date.now() - this.currentCycle.startTime))
+                ? (this.currentCycle.endTime
+                    ? Math.max(0, this.CYCLE_INTERVAL_MS - (Date.now() - this.currentCycle.endTime))
+                    : Math.max(0, this.CYCLE_INTERVAL_MS - (Date.now() - this.currentCycle.startTime)))
                 : this.CYCLE_INTERVAL_MS,
         };
     }

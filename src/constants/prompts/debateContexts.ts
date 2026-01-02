@@ -16,7 +16,14 @@
  * 
  * Note: If MANAGE action is selected in Stage 2, flow goes directly to position
  * management decision (bypassing stages 3-4), then to execution.
+ * 
+ * IMPORTANT: All risk limits come from config via getTradingConfig() - NO HARDCODING
  */
+
+import { getTradingConfig } from './promptHelpers';
+
+// Get config values for use in templates
+const cfg = getTradingConfig();
 
 export const DEBATE_CONTEXTS = {
     /**
@@ -67,12 +74,12 @@ Context:
 You MUST:
 1. Apply YOUR methodology (value, growth, technical, macro, sentiment, risk, quant, contrarian) to analyze the coin
 2. Propose precise entry, targets, and stop-loss with numeric justification
-3. Recommend position size (1-10 scale: 1=3%, 10=30%) and leverage (1-5x max)
+3. Recommend position size (1-10 scale) and leverage (1-${cfg.maxLeverage}x max)
 4. State conviction level and the NEAR-TERM catalyst/timeline
 5. Either support the thesis with evidence or challenge specific assumptions with counter-evidence
 Constraints:
 - DO NOT restart coin selection or propose a different trade
-- Max position 30%, Max leverage 5x, Max stop loss 10% from entry
+- Max position ${cfg.maxPositionSizePercent}%, Max leverage ${cfg.maxLeverage}x, Max stop loss ${cfg.maxStopLossPercent}% from entry
 Risk Requirements:
 - Reference volatility and range metrics supporting stop placement
 - Quantify risk/reward with distances (%) to stop and targets
@@ -86,7 +93,7 @@ Word Limit:
 - 150–200 words; under 120 too thin; >200 penalized
 Self-Assessment Calibration:
 - Same as Stage 2`,
-        hardRules: 'Max position 30%, Max leverage 5x, Max stop loss 10% from entry',
+        hardRules: `Max position ${cfg.maxPositionSizePercent}%, Max leverage ${cfg.maxLeverage}x, Max stop loss ${cfg.maxStopLossPercent}% from entry`,
         judging: 'Methodology Application (25%), Data Quality (25%), Risk Rationale (25%), Logic & Integration (25%)'
     }
 } as const;
@@ -143,7 +150,7 @@ Common Mistakes:
 - Your argument MUST be 150-200 words (MANDATORY)
 - You are presenting your COMPLETE THESIS using YOUR methodology
 - Apply YOUR methodology's lens with method-specific metrics and techniques
-- Include risk parameters: position size (1-10), leverage (1-5x), stop-loss
+- Include risk parameters: position size (1-10), leverage (1-${cfg.maxLeverage}x), stop-loss
 - Either add NEW evidence or challenge SPECIFIC assumptions with counter-evidence
 - DIRECTLY engage with previous arguments (address their main point explicitly)
 - DO NOT restart coin selection or propose a different trade
@@ -151,6 +158,7 @@ Risk Requirements:
 - Reference volatility/range metrics and rule compliance
 - Quantify risk/reward with distances (%) to stop and targets
 - Address funding/OI crowding impact on adverse-move scenarios
+- Max position ${cfg.maxPositionSizePercent}%, Max leverage ${cfg.maxLeverage}x, Max stop loss ${cfg.maxStopLossPercent}% from entry
 STOP-LOSS DIVERSITY:
 - If stops are clustered within ~5%, propose a differentiated level using YOUR method (ATR/structure/volatility)
 - Justify invalidation clearly
@@ -163,7 +171,7 @@ Word Count:
 Response Format:
 - Methodology application (1-2 sentences with method-specific metrics)
 - Thesis with evidence (2-3 sentences with numbers)
-- Risk parameters: position size (1-10), leverage (1-5x), stop-loss, targets
+- Risk parameters: position size (1-10), leverage (1-${cfg.maxLeverage}x), stop-loss, targets
 - Catalyst and timeline (1 sentence), conviction level
 Common Mistakes:
 - Restarting selection, generic analysis without methodology, missing risk parameters`

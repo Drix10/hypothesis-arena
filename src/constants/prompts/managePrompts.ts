@@ -441,7 +441,7 @@ POSITION MANAGEMENT RULES (MANDATORY - ENFORCED BY SYSTEM)
 3. Never average down on a losing position
 4. Never move stop-loss further from entry to "give it room"
 5. ADD_MARGIN forbidden if P&L < -3% (system will reject)
-6. P&L < -7%: MUST close position immediately (system enforced)
+6. -7% ≤ P&L < -5%: DANGER ZONE - reduce position size or tighten stops
 
 💰 PROFIT MANAGEMENT (AGGRESSIVE - SECURE GAINS EARLY):
 1. P&L > +3%: Move stop to breakeven (entry price) - protect the trade

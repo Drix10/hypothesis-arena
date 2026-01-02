@@ -49,9 +49,9 @@ Only consider new trades after confirming all positions are healthy.
 **Veto Triggers (Guardrails)**
 - Stop loss >10% from entry
 - Position would exceed 30% of account
-- Already 3+ positions open
+- Already at MAX_CONCURRENT_POSITIONS limit (check config, default 5)
 - 7‑day drawdown >10%
-- Funding rate materially adverse
+- Funding rate >0.05% against position direction
 - Requested leverage >5x
 
 **Checklist (Evaluate Every Trade)**
