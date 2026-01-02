@@ -396,10 +396,13 @@ router.post('/manual/close', async (req: Request, res: Response, next: NextFunct
             );
 
             if (portfolio) {
-                // CRITICAL FIX: Map WEEX position side to Prisma enum
-                // WEEX uses: LONG/SHORT
-                // Prisma enum: BUY/SELL
-                const prismaSide = positionSide === 'LONG' ? 'BUY' : 'SELL';
+                // CRITICAL FIX: Map WEEX position side to Prisma enum for CLOSE operations
+                // When CLOSING a position, use the OPPOSITE side:
+                // - Closing LONG → SELL (you sell to close a long)
+                // - Closing SHORT → BUY (you buy to close a short)
+                // WEEX uses: LONG/SHORT for position direction
+                // Prisma enum: BUY/SELL for trade action
+                const prismaSide = positionSide === 'LONG' ? 'SELL' : 'BUY';
 
                 await withTransaction(async (client) => {
                     await client.query(

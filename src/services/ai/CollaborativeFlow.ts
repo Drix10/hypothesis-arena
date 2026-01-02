@@ -2168,10 +2168,10 @@ export class CollaborativeFlowService {
                     }
                 }
 
-                // CRITICAL: Validate conviction is in range
+                // CRITICAL: Validate conviction is in range - throw error for consistency with other validations
                 const conviction = Number(parsed.conviction);
                 if (!Number.isFinite(conviction) || conviction < 1 || conviction > 10) {
-                    logger.warn(`Invalid conviction ${parsed.conviction}, clamping to 1-10 range`);
+                    throw new Error(`conviction must be between 1 and 10, got: ${parsed.conviction}`);
                 }
 
                 logger.info(`\n${'='.repeat(60)}`);
@@ -2188,7 +2188,7 @@ export class CollaborativeFlowService {
 
                 return {
                     manageType: parsed.manageType,
-                    conviction: Math.min(10, Math.max(1, Number(parsed.conviction) || 5)),
+                    conviction: conviction, // Already validated above, no clamping needed
                     reason: String(parsed.reason || 'No reason provided'),
                     closePercent: parsed.closePercent ? Number(parsed.closePercent) : undefined,
                     newStopLoss: parsed.newStopLoss ? Number(parsed.newStopLoss) : undefined,
