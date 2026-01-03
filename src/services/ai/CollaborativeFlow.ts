@@ -3,14 +3,14 @@
  * 
  * Implements the 6-stage pipeline with TURN-BY-TURN debates:
  * 1. Market Scan - Fetch data for all coins
- * 2. Coin Selection Debate - 4 analysts
- * 3. Championship Debate - 8 analysts
+ * 2. Coin Selection Debate - 3 analysts
+ * 3. Championship Debate - 4 analysts
  * 4. Risk Council - Karen approves/vetoes
  * 5. Execution - Place trade on WEEX
  * 6. Position Management - Monitor and adjust
  * 
  * Turn counts configurable via config.debate.turnsPerAnalyst
- * Default: 2 turns/analyst = 24 total turns (8+16)
+ * Default: 2 turns/analyst = 14 total turns (6+8)
  */
 
 import { GoogleGenerativeAI, GenerativeModel, SchemaType } from '@google/generative-ai';
@@ -1355,7 +1355,7 @@ export class CollaborativeFlowService {
 
     /**
      * Stage 2: Opportunity Selection Debate
-     * 4 analysts (Ray, Jim, Quant, Elon) debate the best action:
+     * 3 analysts (Ray, Jim, Quant) debate the best action:
      * - NEW TRADE: Open LONG or SHORT on a coin
      * - MANAGE: Close/reduce/adjust an existing position
      * 
@@ -1421,8 +1421,8 @@ export class CollaborativeFlowService {
 
         const context = buildCoinSelectionContext(marketSummary, fundingAnalysis, currentPositions);
 
-        // 4 analysts for coin selection
-        const analystIds = ['ray', 'jim', 'quant', 'elon'];
+        // 3 analysts for coin selection (jim, ray, quant - karen is risk council only)
+        const analystIds = ['ray', 'jim', 'quant'];
         const analysts = analystIds.map(id => {
             const methodology = Object.keys(ANALYST_PROFILES).find(
                 m => ANALYST_PROFILES[m as AnalystMethodology].id === id
@@ -1430,8 +1430,8 @@ export class CollaborativeFlowService {
             return methodology ? ANALYST_PROFILES[methodology] : null;
         }).filter((a): a is typeof ANALYST_PROFILES[AnalystMethodology] => a !== null);
 
-        if (analysts.length !== 4) {
-            throw new Error(`Failed to load all 4 coin selection analysts. Got ${analysts.length}`);
+        if (analysts.length !== 3) {
+            throw new Error(`Failed to load all 3 coin selection analysts. Got ${analysts.length}`);
         }
 
         const turns: DebateTurn[] = [];
@@ -1684,8 +1684,8 @@ export class CollaborativeFlowService {
 
     /**
      * Stage 3: Championship Debate
-     * ALL 8 analysts compete in a championship debate
-     * TURN-BY-TURN generation, 16 total turns
+     * ALL 4 analysts compete in a championship debate
+     * TURN-BY-TURN generation, 8 total turns (4 analysts × 2 turns)
      * Winner's thesis gets executed as a real trade
      */
     async runChampionshipDebate(
@@ -1696,7 +1696,7 @@ export class CollaborativeFlowService {
             coinSelectorArgument?: string;
         }
     ): Promise<{ champion: AnalysisResult; debate: ChampionshipDebateResult }> {
-        logger.info(`Stage 3: Championship Debate for ${coinSymbol} (${8 * config.debate.turnsPerAnalyst} turns - ALL 8 analysts)...`);
+        logger.info(`Stage 3: Championship Debate for ${coinSymbol} (${4 * config.debate.turnsPerAnalyst} turns - ALL 4 analysts)...`);
 
         // Validate inputs
         if (!coinSymbol || typeof coinSymbol !== 'string') {
@@ -1717,10 +1717,10 @@ export class CollaborativeFlowService {
 
         const model = this.getJsonModel(); // Use JSON model with structured outputs
 
-        // Get ALL 8 analysts
+        // Get ALL 4 analysts
         const allAnalysts = Object.values(ANALYST_PROFILES);
-        if (allAnalysts.length !== 8) {
-            throw new Error(`Expected 8 analysts, got ${allAnalysts.length}`);
+        if (allAnalysts.length !== 4) {
+            throw new Error(`Expected 4 analysts, got ${allAnalysts.length}`);
         }
 
         const displaySymbol = cleanSymbol(coinSymbol);

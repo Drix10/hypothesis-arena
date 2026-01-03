@@ -129,7 +129,7 @@ router.post('/generate', async (req: Request, res: Response, next: NextFunction)
     }
 });
 
-// POST /api/analysis/generate-all - Generate analyses from all 8 analysts
+// POST /api/analysis/generate-all - Generate analyses from all 4 analysts
 router.post('/generate-all', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
         const { symbol } = req.body;

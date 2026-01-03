@@ -9,7 +9,7 @@
  * 6-STAGE PIPELINE (v3.1.0):
  * - Stage 1: Market Scan
  * - Stage 2: Coin Selection (4 analysts debate) - Can select MANAGE action
- * - Stage 3: Championship (8 analysts compete) - Only if LONG/SHORT selected
+ * - Stage 3: Championship (4 analysts compete) - Only if LONG/SHORT selected
  * - Stage 4: Risk Council (Karen approves/vetoes) - Only if LONG/SHORT selected
  * - Stage 5: Execution - Place trade on WEEX
  * - Stage 6: Position Management - Continuous monitoring
@@ -60,7 +60,7 @@ Self-Assessment Calibration (strength 1–10):
 
     /**
      * Stage 3: Championship Debate
-     * ALL 8 analysts compete for execution
+     * ALL 4 analysts compete for execution
      * NOTE: Winner's thesis is executed ONLY if approved by Risk Council (Stage 4)
      */
     championship: {

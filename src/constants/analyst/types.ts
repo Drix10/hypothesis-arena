@@ -1,18 +1,14 @@
 /**
  * Analyst Type Definitions
  * 
- * Core types for the 8 specialized analyst agents in the Hypothesis Arena.
+ * Core types for the 4 specialized analyst agents in the Hypothesis Arena.
  */
 
 export type AnalystMethodology =
-    | 'value'
-    | 'growth'
     | 'technical'
     | 'macro'
-    | 'sentiment'
     | 'risk'
-    | 'quant'
-    | 'contrarian';
+    | 'quant';
 
 export interface AnalystAgent {
     id: string;

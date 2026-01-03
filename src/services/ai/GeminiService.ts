@@ -9,7 +9,7 @@
  * - OpenRouter: Unified API for multiple models (Qwen, Claude, etc.) with JSON Schema
  * 
  * Matches the prompts file format exactly:
- * - 8 analysts: warren, cathie, jim, ray, elon, karen, quant, devil
+ * - 4 analysts: jim, ray, karen, quant
  * - Recommendations: STRONG_BUY, BUY, HOLD, SELL, STRONG_SELL
  * - Price targets: bull/base/bear structure
  */
@@ -296,7 +296,7 @@ const WEEX_APPROVED_PAIRS = [
 export type WeexApprovedPair = typeof WEEX_APPROVED_PAIRS[number];
 
 // Map methodology to analyst for easy lookup - matches prompts file exactly
-const METHODOLOGY_ORDER: AnalystMethodology[] = ['value', 'growth', 'technical', 'macro', 'sentiment', 'risk', 'quant', 'contrarian'];
+const METHODOLOGY_ORDER: AnalystMethodology[] = ['technical', 'macro', 'risk', 'quant'];
 
 export interface AnalysisRequest {
     symbol: string;
@@ -903,7 +903,7 @@ class GeminiService {
         // Determine which analyst to use
         let methodology: AnalystMethodology;
         if (request.analystId) {
-            methodology = METHODOLOGY_ORDER.find(m => ANALYST_PROFILES[m].id === request.analystId) || 'value';
+            methodology = METHODOLOGY_ORDER.find(m => ANALYST_PROFILES[m].id === request.analystId) || 'technical';
         } else {
             methodology = METHODOLOGY_ORDER[Math.floor(Math.random() * METHODOLOGY_ORDER.length)];
         }
@@ -1086,7 +1086,7 @@ Respond ONLY with valid JSON matching this exact structure.`;
 
 
     /**
-     * Generate analyses from all 8 analysts with high-quality prompts
+     * Generate analyses from all 4 analysts with high-quality prompts
      * 
      * PERFORMANCE FIX: Process in parallel batches instead of sequentially.
      * Gemini 2.5 Flash has 1000 RPM limit, so we can safely run 4 concurrent requests.
@@ -2301,7 +2301,7 @@ Respond ONLY with valid JSON matching this exact structure.`;
         // Determine which analyst to use
         let methodology: AnalystMethodology;
         if (analystId) {
-            methodology = METHODOLOGY_ORDER.find(m => ANALYST_PROFILES[m].id === analystId) || 'value';
+            methodology = METHODOLOGY_ORDER.find(m => ANALYST_PROFILES[m].id === analystId) || 'technical';
         } else {
             methodology = METHODOLOGY_ORDER[Math.floor(Math.random() * METHODOLOGY_ORDER.length)];
         }

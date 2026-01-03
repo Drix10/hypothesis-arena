@@ -99,7 +99,7 @@ export function getCycleContext(): string {
     return `
 AUTONOMOUS TRADING CYCLE CONTEXT:
 You are part of an autonomous trading system that runs in cycles every ${cfg.cycleIntervalMinutes} minutes.
-Each cycle: Market Scan → Coin Selection (4 analysts) → Championship (8 analysts) → Risk Council → Execution → Position Management
+Each cycle: Market Scan → Coin Selection (3 analysts) → Championship (4 analysts) → Risk Council → Execution → Position Management
 
 Your decisions directly affect real portfolio positions. The system:
 - Manages a shared portfolio with max ${cfg.maxConcurrentPositions} concurrent positions

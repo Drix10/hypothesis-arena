@@ -17,7 +17,7 @@
 
 **Every decision is a debate. Every debate has a winner. Winners trade OR manage.**
 
-8 world-class AI analysts with unique methodologies collaborate on ONE shared portfolio.
+4 world-class AI analysts with unique methodologies collaborate on ONE shared portfolio.
 Debates are the core decision mechanism - the winning thesis gets executed on WEEX Exchange.
 **NEW:** Analysts can now choose to MANAGE existing positions instead of opening new ones.
 
@@ -41,7 +41,7 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 │      ↓                                                           │
 │   [If MANAGE] → Close/Reduce Position → DONE                    │
 │   [If LONG/SHORT] ↓                                             │
-│   STAGE 3: CHAMPIONSHIP         "ALL 8 analysts compete"        │
+│   STAGE 3: CHAMPIONSHIP         "ALL 4 analysts compete"        │
 │      ↓                                                           │
 │   STAGE 4: RISK COUNCIL         "Final safety check"            │
 │      ↓                                                           │
@@ -54,18 +54,14 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 
 ---
 
-## 🤖 The 8 AI Analysts
+## 🤖 The 4 AI Analysts
 
-| Analyst   | ID     | Methodology        | Focus                          |
-| --------- | ------ | ------------------ | ------------------------------ |
-| 🎩 Warren | warren | Value Investing    | Fundamentals, margin of safety |
-| 🚀 Cathie | cathie | Growth Investing   | TAM expansion, disruption      |
-| 📊 Jim    | jim    | Technical Analysis | RSI, MACD, chart patterns      |
-| 🌍 Ray    | ray    | Macro Strategy     | Interest rates, correlations   |
-| 📱 Elon   | elon   | Sentiment Analysis | Social sentiment, hype         |
-| 🛡️ Karen  | karen  | Risk Management    | Volatility, drawdown, vetoes   |
-| 🤖 Quant  | quant  | Quantitative       | Factor models, statistics      |
-| 😈 Devil  | devil  | Contrarian         | Consensus challenges           |
+| Analyst  | ID    | Methodology        | Focus                        |
+| -------- | ----- | ------------------ | ---------------------------- |
+| 📊 Jim   | jim   | Technical Analysis | RSI, MACD, chart patterns    |
+| 🌍 Ray   | ray   | Macro Strategy     | Interest rates, correlations |
+| 🛡️ Karen | karen | Risk Management    | Volatility, drawdown, vetoes |
+| 🤖 Quant | quant | Quantitative       | Factor models, statistics    |
 
 ---
 
@@ -102,8 +98,8 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 ## 🎯 Stage 2: Opportunity Selection Debate
 
 **Service:** `CollaborativeFlow.ts` → `runCoinSelectionDebate()`  
-**Duration:** ~30 seconds  
-**Participants:** Ray (Macro), Jim (Technical), Quant (Stats), Elon (Sentiment)
+**Duration:** ~20 seconds  
+**Participants:** Ray (Macro), Jim (Technical), Quant (Stats)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -131,7 +127,7 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 │  ✓ Future timestamps rejected                                  │
 │                                                                  │
 ├─────────────────────────────────────────────────────────────────┤
-│  4 ANALYSTS DEBATE (Turn-by-Turn)                               │
+│  3 ANALYSTS DEBATE (Turn-by-Turn)                               │
 │                                                                  │
 │  Each analyst receives:                                         │
 │  ├─ Their full persona prompt                                  │
@@ -249,22 +245,22 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 
 ---
 
-## 🏆 Stage 3: Championship Debate (ALL 8 Analysts)
+## 🏆 Stage 3: Championship Debate (ALL 4 Analysts)
 
 **Service:** `CollaborativeFlow.ts` → `runChampionshipDebate()`  
-**Duration:** ~60 seconds  
-**Participants:** ALL 8 analysts compete
+**Duration:** ~30 seconds  
+**Participants:** ALL 4 analysts compete
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  CHAMPIONSHIP DEBATE (OPTIMIZED - Replaces old Stages 3-4)      │
 │                                                                  │
-│  ALL 8 analysts compete in a single championship debate.        │
+│  ALL 4 analysts compete in a single championship debate.        │
 │  Each analyst uses their own methodology to analyze the coin.   │
 │  Winner's thesis gets executed as a real trade.                 │
 │                                                                  │
 ├─────────────────────────────────────────────────────────────────┤
-│  8 ANALYSTS DEBATE (Turn-by-Turn)                               │
+│  4 ANALYSTS DEBATE (Turn-by-Turn)                               │
 │                                                                  │
 │  Each analyst receives:                                         │
 │  ├─ Their full persona prompt with focus areas                 │
@@ -459,7 +455,7 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 │                                                                  │
 │  LEADERBOARD UPDATE:                                            │
 │  ├─ Sort analysts by total value                               │
-│  ├─ Assign ranks 1-8                                           │
+│  ├─ Assign ranks 1-4                                           │
 │  ├─ Calculate win rates                                        │
 │  └─ Persist to database                                        │
 │                                                                  │
@@ -500,10 +496,10 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 │                                                                  │
 │  Stage 1: Market Scan ................ ~5 seconds              │
 │           (8 parallel WEEX API calls)                           │
-│  Stage 2: Coin Selection ............. ~30 seconds             │
-│           (4 parallel AI calls)                                │
-│  Stage 3: Championship ............... ~60 seconds             │
-│           (8 analysts, turn-by-turn)                           │
+│  Stage 2: Coin Selection ............. ~20 seconds             │
+│           (3 parallel AI calls)                                │
+│  Stage 3: Championship ............... ~30 seconds             │
+│           (4 analysts, turn-by-turn)                           │
 │  Stage 4: Risk Council ............... ~15 seconds             │
 │           (1 AI call - Karen)                                  │
 │  Stage 5: Execution .................. ~5 seconds              │
@@ -511,13 +507,13 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 │  Stage 6: Position Management ........ Continuous              │
 │           (Monitor and adjust)                                  │
 │  ─────────────────────────────────────────────────             │
-│  TOTAL CYCLE TIME: ~2 minutes                                  │
+│  TOTAL CYCLE TIME: ~1.5 minutes                                │
 │                                                                  │
 ├─────────────────────────────────────────────────────────────────┤
 │  GEMINI API USAGE PER CYCLE                                      │
 │                                                                  │
-│  Stage 2: 4 calls (Ray, Jim, Quant, Elon)                      │
-│  Stage 3: 8+ calls (All analysts, turn-by-turn)                │
+│  Stage 2: 3 calls (Ray, Jim, Quant)                            │
+│  Stage 3: 4+ calls (All analysts, turn-by-turn)                │
 │  Stage 4: 1 call (Karen)                                       │
 │  ─────────────────────────────────────────────────             │
 │  TOTAL: 13+ AI API calls per cycle                             │
@@ -714,8 +710,8 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 ## 🧭 Stage-to-Service Ownership
 
 - Stage 1 — Market Scan: `WeexClient.getTicker`, `getFundingRate` (owner: Exchange data)
-- Stage 2 — Coin Selection: `CollaborativeFlow.runCoinSelection` (owners: Ray, Jim, Quant, Elon)
-- Stage 3 — Championship: `CollaborativeFlow.runChampionshipDebate` (all 8 analysts compete; turn-by-turn)
+- Stage 2 — Coin Selection: `CollaborativeFlow.runCoinSelection` (owners: Ray, Jim, Quant)
+- Stage 3 — Championship: `CollaborativeFlow.runChampionshipDebate` (all 4 analysts compete; turn-by-turn)
 - Stage 4 — Risk Council: `CollaborativeFlow.runRiskCouncil` + `CircuitBreakerService.checkAll` (owner: Karen; respects `GLOBAL_RISK_LIMITS`)
 - Stage 5 — Execution: `AutonomousTradingEngine.executeCollaborativeTrade` + `WeexClient.placeOrder` + compliance logging via `AILogService.createLog`/`weexClient.uploadAILog`
 - Stage 6 — Position Management: `AutonomousTradingEngine.updateLeaderboard` (continuous monitoring)
@@ -772,18 +768,18 @@ Benefits of Structured Outputs:
 ┌─────────────────────────────────────────────────────────────────┐
 │                    HYPOTHESIS ARENA FLOW                         │
 │                                                                  │
-│  "8 AI analysts, 1 shared portfolio, debates decide trades"    │
+│  "4 AI analysts, 1 shared portfolio, debates decide trades"    │
 │                                                                  │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
 │  EVERY CYCLE (~10 minutes):                                     │
 │                                                                  │
 │  1. SCAN    → Fetch market data for 8 coins (WeexClient)       │
-│  2. SELECT  → Ray, Jim, Quant, Elon pick best opportunity      │
+│  2. SELECT  → Ray, Jim, Quant pick best opportunity            │
 │              NEW: Can select MANAGE to close positions         │
 │     [If MANAGE] → Close position → Update DB → DONE            │
 │     [If LONG/SHORT] ↓                                          │
-│  3. CHAMPIONSHIP → ALL 8 analysts compete for execution        │
+│  3. CHAMPIONSHIP → ALL 4 analysts compete for execution        │
 │  4. RISK    → Karen approves/vetoes/adjusts                    │
 │  5. EXECUTE → Place trade on WEEX with compliance log          │
 │  6. MANAGE  → Update leaderboard, monitor positions            │

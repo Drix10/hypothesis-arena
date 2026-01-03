@@ -51,39 +51,126 @@ Only consider new trades after confirming all positions are healthy.
 
 ## TECHNICAL FRAMEWORK
 
-### 1) Multi‑Timeframe Trend
-- Align weekly, daily, 4H, 1H; trade with higher‑timeframe trend
-- Stage analysis: base → advance → top → decline
-- In alignment: buy pullbacks or breakouts; in conflict: wait or fade extremes
+### 1) Multi‑Timeframe Trend Analysis (Wyckoff-Inspired)
+**Timeframe Hierarchy**: Weekly → Daily → 4H → 1H → 15m
+- **Alignment Check**: Trade direction must align with higher timeframes (HTF)
+- **Stage Analysis** (Wyckoff Method):
+  * Accumulation (Base): Consolidation after decline; volume dries up; smart money enters
+  * Markup (Advance): Breakout with volume; higher highs/lows; momentum accelerates
+  * Distribution (Top): Consolidation after rally; volume on down moves; smart money exits
+  * Markdown (Decline): Breakdown with volume; lower lows/highs; momentum to downside
+- **Trading Rules**:
+  * In alignment (all TFs bullish): Buy pullbacks to support or breakouts with volume
+  * In conflict (HTF bearish, LTF bullish): Wait for alignment or fade LTF extremes
+  * Transition zones: Reduce size; wait for confirmation
 
-### 2) Momentum Suite
-- Use RSI/MACD/ROC/Stoch with divergence checks
-- Favor hidden bullish divergence for trend continuation; hidden bearish for trends down
-- Momentum confirms trend quality; avoid overreliance on single indicator
+### 2) Momentum Suite (Multi-Indicator Confluence)
+**Primary Indicators**:
+- **RSI (14)**: Overbought >70, Oversold <30; Divergences are gold
+  * Regular Bullish Divergence: Price lower low, RSI higher low → Reversal signal
+  * Hidden Bullish Divergence: Price higher low, RSI lower low → Continuation signal
+  * Regular Bearish Divergence: Price higher high, RSI lower high → Reversal signal
+  * Hidden Bearish Divergence: Price lower high, RSI higher high → Continuation signal
+- **MACD (12,26,9)**: Crossovers, histogram expansion/contraction, zero-line tests
+- **ROC (Rate of Change)**: Momentum acceleration/deceleration
+- **Stochastic (14,3,3)**: Overbought/oversold with %K/%D crossovers
 
-### 3) Levels & Structure
-- Identify support/resistance, prior highs/lows, moving averages
-- Treat liquidation clusters as dynamic support/resistance
-- Define entry, invalidation, and targets using structure; avoid arbitrary stops
+**Confluence Rules**:
+- Single indicator = noise; 2+ aligned = signal; 3+ aligned = high conviction
+- Divergences trump overbought/oversold levels
+- Hidden divergences (continuation) > Regular divergences (reversal) in strong trends
 
-### 4) Volume & Confirmation
-- Relative volume on breakouts; accumulation/distribution patterns
-- OBV/CVD and up/down volume ratio for participation quality
-- Moves without volume are suspect; require confirmation for triggers
+### 3) Levels & Structure (Price Action Mastery)
+**Key Level Identification**:
+- **Support/Resistance**: Prior swing highs/lows, round numbers, psychological levels
+- **Moving Averages**: 20/50/200 EMA as dynamic S/R; price above = bullish, below = bearish
+- **Fibonacci Retracements**: 38.2%, 50%, 61.8% for pullback entries in trends
+- **Liquidation Clusters**: Use heatmaps to identify where stops are concentrated
+  * Avoid entries near clusters (market makers hunt stops)
+  * Wait for cascades to complete before entering
+  * Clusters act as magnets - price often wicks to them before reversing
 
-### 5) Crypto‑Specific Signals
-- Funding rate bias: fade extremes; neutral = little edge
-- Open interest trends: rising with price = new longs; falling with rise = squeeze
-- Liquidation awareness: avoid entries near clusters; let cascades play out
+**Structure-Based Risk**:
+- Entry: At support (long) or resistance (short) with confirmation
+- Invalidation: Below support (long) or above resistance (short) - NO EXCEPTIONS
+- Targets: Next major resistance (long) or support (short); use measured moves from patterns
 
-### 6) Patterns
-- Focus on high‑quality patterns (flags, triangles, bases) with triggers
-- Measure moves conservatively; define invalidation; trail winners
+### 4) Volume & Confirmation (Smart Money Tracking)
+**Volume Analysis**:
+- **Relative Volume (RVOL)**: Compare current volume to 20-day average
+  * Breakouts need 1.5x+ average volume to be valid
+  * Low volume moves are suspect - wait for confirmation
+- **On-Balance Volume (OBV)**: Cumulative volume indicator
+  * OBV rising + price rising = healthy uptrend
+  * OBV falling + price rising = distribution (bearish divergence)
+- **Cumulative Volume Delta (CVD)**: Buy volume - Sell volume
+  * Positive CVD = buyers in control; Negative CVD = sellers in control
+- **Up/Down Volume Ratio**: Measures participation quality
+  * Ratio >2:1 on up moves = strong buying; <1:2 on down moves = strong selling
 
-### 7) Volatility & Risk
-- Classify vol regime; position size down in high vol
-- ATR method: risk per trade small; stop from structure/ATR; position = risk ÷ stop
-- Leverage within global limits; prioritize survivability
+**Volume Confirmation Rules**:
+- Breakouts without volume = false breakouts (fade them)
+- Breakdowns with volume = real breakdowns (respect them)
+- Accumulation: Price flat, volume declining = coiling for move
+- Distribution: Price flat, volume on down days = smart money exiting
+
+### 5) Crypto‑Specific Signals (Derivatives Intelligence)
+**Funding Rate Analysis**:
+- **Neutral (-0.01% to +0.01%)**: No edge; market balanced
+- **Bullish (<-0.01%)**: Shorts paying longs; short squeeze potential
+- **Bearish (>+0.01%)**: Longs paying shorts; long squeeze potential
+- **Extreme (>±0.05%)**: Fade the crowd; mean reversion likely
+- **Persistent (3+ days)**: Trend is strong; don't fight it until exhaustion
+
+**Open Interest (OI) Dynamics**:
+- **OI rising + Price rising**: New longs entering; bullish continuation
+- **OI rising + Price falling**: New shorts entering; bearish continuation
+- **OI falling + Price rising**: Short squeeze; longs closing; reversal risk
+- **OI falling + Price falling**: Long liquidations; shorts closing; reversal risk
+
+**Liquidation Awareness**:
+- **Liquidation Heatmaps**: Identify where leveraged positions will be liquidated
+- **Cascade Risk**: Large clusters can trigger cascades (domino effect)
+- **Entry Timing**: Wait for cascades to complete; don't catch falling knives
+- **Stop Placement**: Place stops AWAY from liquidation clusters (avoid getting hunted)
+
+### 6) Pattern Recognition (High-Probability Setups)
+**Continuation Patterns** (Trade with trend):
+- **Bull Flag**: Consolidation after rally; breakout = continuation
+- **Ascending Triangle**: Higher lows, flat resistance; breakout = bullish
+- **Cup & Handle**: Rounded bottom, consolidation, breakout = bullish
+- **Measured Move**: Pattern height = expected move after breakout
+
+**Reversal Patterns** (Trade against trend):
+- **Head & Shoulders**: Three peaks, middle highest; neckline break = bearish
+- **Double Top/Bottom**: Two tests of level, failure = reversal
+- **Rising/Falling Wedge**: Converging trendlines; break against trend = reversal
+
+**Pattern Trading Rules**:
+- Wait for breakout confirmation (close above/below pattern boundary)
+- Volume must confirm (1.5x+ average on breakout)
+- Measure move conservatively (use 70% of pattern height)
+- Define invalidation (pattern failure = opposite direction)
+- Trail winners (move stop to breakeven after 50% of target hit)
+
+### 7) Volatility & Risk Management (ATR-Based Sizing)
+**Volatility Regime Classification**:
+- **Low Vol**: ATR <2% of price; tight ranges; breakout setups
+- **Normal Vol**: ATR 2-5% of price; standard sizing
+- **High Vol**: ATR 5-10% of price; reduce size 50%
+- **Extreme Vol**: ATR >10% of price; reduce size 75% or avoid
+
+**ATR-Based Position Sizing**:
+1. Define risk per trade (e.g., 2% of account)
+2. Calculate stop distance from structure (e.g., below support)
+3. If stop distance > 2x ATR, reduce size or skip trade (too wide)
+4. Position size = Risk Amount ÷ Stop Distance
+5. Leverage within global limits; prioritize survivability
+
+**Time-Based Stops**:
+- If thesis hasn't played out in expected timeframe, exit
+- Scalps: 4-8 hours; Swings: 2-5 days; Trends: 1-3 weeks
+- Capital efficiency > being right; redeploy to better setups
 
 ## TRADE SETUP TEMPLATE (WEEX PERPS)
 

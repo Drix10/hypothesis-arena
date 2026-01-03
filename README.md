@@ -5,7 +5,7 @@
   
   **AI-Powered Collaborative Crypto Trading Platform for WEEX Exchange**
   
-  *8 AI analysts collaborate through turn-by-turn debates on ONE shared portfolio, then execute trades on WEEX futures*
+  *4 AI analysts collaborate through turn-by-turn debates on ONE shared portfolio, then execute trades on WEEX futures*
   
   [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-blue?logo=typescript)](https://www.typescriptlang.org/)
   [![Node.js](https://img.shields.io/badge/Node.js-18+-green?logo=node.js)](https://nodejs.org/)
@@ -20,7 +20,7 @@
 
 ## 🎯 What is Hypothesis Arena?
 
-Hypothesis Arena is an AI-powered crypto trading platform where **8 specialized AI analysts collaborate through turn-by-turn debates** to make trading decisions on a **single shared portfolio**. The winning thesis from each debate cycle gets executed automatically on WEEX Exchange.
+Hypothesis Arena is an AI-powered crypto trading platform where **4 specialized AI analysts collaborate through turn-by-turn debates** to make trading decisions on a **single shared portfolio**. The winning thesis from each debate cycle gets executed automatically on WEEX Exchange.
 
 ### Core Philosophy
 
@@ -28,9 +28,9 @@ Hypothesis Arena is an AI-powered crypto trading platform where **8 specialized 
 
 ### Key Features
 
-- **8 AI Analysts** - Value, Growth, Technical, Macro, Sentiment, Risk, Quant, Contrarian
-- **Turn-by-Turn Debates** - 40 debate turns per cycle across 4 debate stages (configurable)
-- **Collaborative Portfolio** - All analysts share ONE portfolio (not 8 separate ones)
+- **4 AI Analysts** - Technical, Macro, Risk, Quantitative
+- **Turn-by-Turn Debates** - 14 debate turns per cycle across 4 debate stages (configurable)
+- **Collaborative Portfolio** - All analysts share ONE portfolio (not 4 separate ones)
 - **Live WEEX Trading** - Execute futures trades with TP/SL directly on WEEX Exchange
 - **Position Management** - AI can close/reduce existing positions via MANAGE action
 - **3-Tier Circuit Breakers** - Yellow/Orange/Red alerts based on BTC drops, funding rates, and drawdowns
@@ -51,12 +51,12 @@ Hypothesis Arena is an AI-powered crypto trading platform where **8 specialized 
 │   STAGE 1: MARKET SCAN          "What's happening?"             │
 │      ↓ (WeexClient.ts)          Fetch data for 8 coins          │
 │   STAGE 2: OPPORTUNITY SELECTION "Trade or Manage?"             │
-│      ↓ (CollaborativeFlow.ts)   4-way debate                    │
+│      ↓ (CollaborativeFlow.ts)   3-way debate (Ray, Jim, Quant) │
 │      │                          Can select MANAGE action        │
 │      ├─[MANAGE]→ Close Position → Log to DB → DONE              │
 │      └─[LONG/SHORT]↓                                            │
-│   STAGE 3: CHAMPIONSHIP         "ALL 8 analysts compete"        │
-│      ↓ (CollaborativeFlow.ts)   8-way debate, turn-by-turn      │
+│   STAGE 3: CHAMPIONSHIP         "ALL 4 analysts compete"        │
+│      ↓ (CollaborativeFlow.ts)   4-way debate, turn-by-turn      │
 │   STAGE 4: RISK COUNCIL         "Final safety check"            │
 │      ↓ (CollaborativeFlow.ts)   Karen's veto power              │
 │   STAGE 5: EXECUTION            "Pull the trigger"              │
@@ -163,24 +163,20 @@ NODE_ENV=development
 
 ---
 
-## 🤖 The 8 AI Analysts
+## 🤖 The 4 AI Analysts
 
-| Analyst   | ID     | Methodology        | Focus                          | Debate Role                  |
-| --------- | ------ | ------------------ | ------------------------------ | ---------------------------- |
-| 🎩 Warren | warren | Value Investing    | Fundamentals, margin of safety | Stage 3 & 4, Championship    |
-| 🚀 Cathie | cathie | Growth Investing   | TAM expansion, disruption      | Stage 3, Championship        |
-| 📊 Jim    | jim    | Technical Analysis | RSI, MACD, chart patterns      | Stage 2, 3, Championship     |
-| 🌍 Ray    | ray    | Macro Strategy     | Interest rates, correlations   | Stage 2, 4, Championship     |
-| 📱 Elon   | elon   | Sentiment Analysis | Social sentiment, hype         | Stage 2, Championship        |
-| 🛡️ Karen  | karen  | Risk Management    | Volatility, drawdown, vetoes   | Stage 4 (Veto), Championship |
-| 🤖 Quant  | quant  | Quantitative       | Factor models, statistics      | Stage 2, Championship        |
-| 😈 Devil  | devil  | Contrarian         | Consensus challenges           | Championship                 |
+| Analyst  | ID    | Methodology        | Focus                        | Debate Role                  |
+| -------- | ----- | ------------------ | ---------------------------- | ---------------------------- |
+| 📊 Jim   | jim   | Technical Analysis | RSI, MACD, chart patterns    | Stage 2, 3, Championship     |
+| 🌍 Ray   | ray   | Macro Strategy     | Interest rates, correlations | Stage 2, 4, Championship     |
+| 🛡️ Karen | karen | Risk Management    | Volatility, drawdown, vetoes | Stage 4 (Veto), Championship |
+| 🤖 Quant | quant | Quantitative       | Factor models, statistics    | Stage 2, Championship        |
 
 ### Debate Participation by Stage
 
-- **Stage 2 (Opportunity Select):** Ray, Jim, Quant, Elon (4 analysts)
+- **Stage 2 (Opportunity Select):** Ray, Jim, Quant (3 analysts)
   - Analysts select either a NEW trade (LONG/SHORT) or MANAGE an existing position
-- **Stage 3 (Championship):** ALL 8 analysts compete for execution
+- **Stage 3 (Championship):** ALL 4 analysts compete for execution
 - **Stage 4 (Risk Council):** Karen only (final veto power)
 
 ---

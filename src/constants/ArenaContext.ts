@@ -12,6 +12,10 @@
 import { config } from '../config';
 import { prisma } from '../config/database';
 import { logger } from '../utils/logger';
+import { ANALYST_PROFILES } from './analyst';
+
+// Total number of analysts in the system
+const TOTAL_ANALYSTS = Object.keys(ANALYST_PROFILES).length;
 
 export interface AnalystPortfolio {
     analystId: string;
@@ -341,7 +345,7 @@ class ArenaContextBuilder {
             totalTrades,
             activeBattles: 0, // Would track from debate system
             currentChampion: champion?.analystId || null,
-            leaderboard: portfolios.slice(0, 8).map(p => ({
+            leaderboard: portfolios.slice(0, TOTAL_ANALYSTS).map(p => ({
                 rank: p.rank, // Use the rank from the portfolio (already calculated in SQL)
                 analystId: p.analystId,
                 analystName: p.analystName,
@@ -426,6 +430,9 @@ class ArenaContextBuilder {
 
     /**
      * Build formatted context string for AI prompt
+    /**
+     * Build formatted context string for AI prompt
+     * FIXED: All .toFixed() calls now have Number.isFinite() guards to prevent NaN display
      */
     private buildContextString(
         myPortfolio: AnalystPortfolio,
@@ -436,27 +443,57 @@ class ArenaContextBuilder {
     ): string {
         const displaySymbol = marketConditions.symbol.replace('cmt_', '').replace('usdt', '').toUpperCase();
 
+        // FIXED: Safe formatting helper with Number.isFinite() guards
+        const safeFixed = (val: number, decimals: number, fallback: string = '0.00'): string => {
+            return Number.isFinite(val) ? val.toFixed(decimals) : fallback;
+        };
+
+        // Pre-calculate all safe values
+        const safeBalance = safeFixed(myPortfolio.balance, 2);
+        const safeTotalValue = safeFixed(myPortfolio.totalValue, 2);
+        const safeTotalReturn = safeFixed(myPortfolio.totalReturn, 2);
+        const safeWinRate = safeFixed(myPortfolio.winRate * 100, 1, '0.0');
+
+        const safePrice = safeFixed(marketConditions.price, marketConditions.price < 1 ? 6 : 2, 'N/A');
+        const safeChange24h = safeFixed(marketConditions.change24h, 2);
+        const safeHigh24h = safeFixed(marketConditions.high24h, marketConditions.high24h < 1 ? 6 : 2, 'N/A');
+        const safeLow24h = safeFixed(marketConditions.low24h, marketConditions.low24h < 1 ? 6 : 2, 'N/A');
+        const safeVolume24h = Number.isFinite(marketConditions.volume24h) ? (marketConditions.volume24h / 1e6).toFixed(2) : '0.00';
+        const safeFundingRate = safeFixed(marketConditions.fundingRate * 100, 4, '0.0000');
+
+        const safeMaxPositionSize = Number.isFinite(myPortfolio.balance) && Number.isFinite(tradingRules.maxPositionSizePercent)
+            ? (myPortfolio.balance * tradingRules.maxPositionSizePercent / 100).toFixed(2)
+            : '0.00';
+
         return `
 🏟️ HYPOTHESIS ARENA - LIVE TRADING CONTEXT
 
 📊 YOUR PORTFOLIO STATUS
 
 Analyst: ${myPortfolio.analystName} (${myPortfolio.analystId})
-Current Rank: #${myPortfolio.rank} of 8
-Balance: $${myPortfolio.balance.toFixed(2)} USDT
-Total Value: $${myPortfolio.totalValue.toFixed(2)} USDT
-Total Return: ${myPortfolio.totalReturn >= 0 ? '+' : ''}${myPortfolio.totalReturn.toFixed(2)}%
-Win Rate: ${(myPortfolio.winRate * 100).toFixed(1)}%
+Current Rank: #${myPortfolio.rank} of ${arenaState.leaderboard.length || TOTAL_ANALYSTS}
+Balance: ${safeBalance} USDT
+Total Value: ${safeTotalValue} USDT
+Total Return: ${myPortfolio.totalReturn >= 0 ? '+' : ''}${safeTotalReturn}%
+Win Rate: ${safeWinRate}%
 Total Trades: ${myPortfolio.totalTrades}
 
 ${myPortfolio.positions.length > 0 ? `
 Open Positions:
-${myPortfolio.positions.map(p => `  • ${p.symbol} ${p.side} ${p.size} @ $${p.entryPrice.toFixed(2)} (P&L: ${p.unrealizedPnl >= 0 ? '+' : ''}$${p.unrealizedPnl.toFixed(2)})`).join('\n')}
+${myPortfolio.positions.map(p => {
+            const entryPrice = safeFixed(p.entryPrice, 2, 'N/A');
+            const pnl = safeFixed(p.unrealizedPnl, 2);
+            return `  • ${p.symbol} ${p.side} ${p.size} @ ${entryPrice} (P&L: ${p.unrealizedPnl >= 0 ? '+' : ''}${pnl})`;
+        }).join('\n')}
 ` : 'No open positions.'}
 
 ${myPortfolio.recentTrades.length > 0 ? `
 Recent Trades:
-${myPortfolio.recentTrades.slice(0, 5).map(t => `  • ${t.symbol} ${t.side} @ $${t.price.toFixed(2)} (P&L: ${t.pnl >= 0 ? '+' : ''}$${t.pnl.toFixed(2)})`).join('\n')}
+${myPortfolio.recentTrades.slice(0, 5).map(t => {
+            const price = safeFixed(t.price, 2, 'N/A');
+            const pnl = safeFixed(t.pnl, 2);
+            return `  • ${t.symbol} ${t.side} @ ${price} (P&L: ${t.pnl >= 0 ? '+' : ''}${pnl})`;
+        }).join('\n')}
 ` : ''}
 
 🏆 ARENA LEADERBOARD
@@ -465,7 +502,9 @@ ${arenaState.leaderboard.length > 0 ? arenaState.leaderboard.map(l => {
             const isMe = l.analystId === myPortfolio.analystId;
             const marker = isMe ? '👉' : '  ';
             const crown = l.rank === 1 ? '👑' : `#${l.rank}`;
-            return `${marker} ${crown} ${l.analystName}: ${l.totalReturn >= 0 ? '+' : ''}${l.totalReturn.toFixed(2)}% (${(l.winRate * 100).toFixed(0)}% win rate)`;
+            const returnStr = safeFixed(l.totalReturn, 2);
+            const winRateStr = safeFixed(l.winRate * 100, 0, '0');
+            return `${marker} ${crown} ${l.analystName}: ${l.totalReturn >= 0 ? '+' : ''}${returnStr}% (${winRateStr}% win rate)`;
         }).join('\n') : 'No leaderboard data available yet.'}
 
 Current Champion: ${arenaState.leaderboard.length > 0 && arenaState.leaderboard[0] ? arenaState.leaderboard[0].analystName : 'None'}
@@ -474,35 +513,37 @@ Market Sentiment: ${arenaState.marketSentiment.toUpperCase()}
 
 🎯 COMPETITOR ANALYSIS
 
-${otherAnalysts.slice(0, 5).map(a => {
+${otherAnalysts.slice(0, Math.min(3, otherAnalysts.length)).map(a => {
             const status = a.totalReturn > myPortfolio.totalReturn ? '⬆️ AHEAD' : '⬇️ BEHIND';
-            return `${a.analystName}: $${a.totalValue.toFixed(2)} (${a.totalReturn >= 0 ? '+' : ''}${a.totalReturn.toFixed(2)}%) ${status}`;
+            const valueStr = safeFixed(a.totalValue, 2);
+            const returnStr = safeFixed(a.totalReturn, 2);
+            return `${a.analystName}: ${valueStr} (${a.totalReturn >= 0 ? '+' : ''}${returnStr}%) ${status}`;
         }).join('\n')}
 
 📈 MARKET CONDITIONS: ${displaySymbol}/USDT
 
-Current Price: $${marketConditions.price.toFixed(marketConditions.price < 1 ? 6 : 2)}
-24h Change: ${marketConditions.change24h >= 0 ? '+' : ''}${marketConditions.change24h.toFixed(2)}%
-24h High: $${marketConditions.high24h.toFixed(marketConditions.high24h < 1 ? 6 : 2)}
-24h Low: $${marketConditions.low24h.toFixed(marketConditions.low24h < 1 ? 6 : 2)}
-24h Volume: $${(marketConditions.volume24h / 1e6).toFixed(2)}M
-Funding Rate: ${(marketConditions.fundingRate * 100).toFixed(4)}%
+Current Price: ${safePrice}
+24h Change: ${marketConditions.change24h >= 0 ? '+' : ''}${safeChange24h}%
+24h High: ${safeHigh24h}
+24h Low: ${safeLow24h}
+24h Volume: ${safeVolume24h}M
+Funding Rate: ${safeFundingRate}%
 Volatility: ${marketConditions.volatility.toUpperCase()}
 Trend: ${marketConditions.trend.replace('_', ' ').toUpperCase()}
 
 ⚠️ TRADING RULES & CONSTRAINTS
 
-• Max Position Size: ${tradingRules.maxPositionSizePercent}% of portfolio ($${(myPortfolio.balance * tradingRules.maxPositionSizePercent / 100).toFixed(2)})
+• Max Position Size: ${tradingRules.maxPositionSizePercent}% of portfolio (${safeMaxPositionSize})
 • Max Leverage: ${tradingRules.maxLeverage}x
 • Default Leverage: ${tradingRules.defaultLeverage}x
 • Stop Loss: ${tradingRules.stopLossPercent}%
 • Take Profit: ${tradingRules.takeProfitPercent}%
 • Min Confidence to Trade: ${tradingRules.minConfidenceToTrade}%
-• Min Balance Required: $${tradingRules.minBalanceToTrade}
+• Min Balance Required: ${tradingRules.minBalanceToTrade}
 
 🎯 YOUR OBJECTIVE
 
-You are competing against 7 other AI analysts in the Hypothesis Arena.
+You are competing against ${otherAnalysts.length} other AI analysts in the Hypothesis Arena.
 Your goal is to maximize returns while managing risk.
 ${myPortfolio.rank === 1 ? '🏆 You are the CHAMPION! Defend your position!' : `You need to beat ${arenaState.leaderboard[0]?.analystName || 'the leader'} to become champion.`}
 
@@ -525,7 +566,7 @@ Consider:
 • Include near-term catalysts (7–14 days) with expected impact.
 • Respect portfolio heat and net exposure guardrails.
 
-❌ Don’t
+❌ Don't
 • Hand-wave with vague statements or narrative-only claims.
 • Propose trades without stop, size, and risk calculations.
 • Stack correlated longs/shorts beyond guardrails.
@@ -537,20 +578,13 @@ Consider:
      * Get default portfolio for new/missing analysts
      */
     private getDefaultPortfolio(analystId: string): AnalystPortfolio {
-        const names: Record<string, string> = {
-            warren: 'Warren',
-            cathie: 'Cathie',
-            jim: 'Jim',
-            ray: 'Ray',
-            elon: 'Elon',
-            karen: 'Karen',
-            quant: 'Quant',
-            devil: "Devil's Advocate",
-        };
+        // Get name from ANALYST_PROFILES instead of hardcoding
+        const profile = Object.values(ANALYST_PROFILES).find(p => p.id === analystId);
+        const name = profile?.name || analystId;
 
         return {
             analystId,
-            analystName: names[analystId] || analystId,
+            analystName: name,
             balance: 0,
             totalValue: 0,
             totalReturn: 0,

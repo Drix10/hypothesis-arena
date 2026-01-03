@@ -7,6 +7,7 @@ import { TradingError, ValidationError } from '../../utils/errors';
 import { v4 as uuid } from 'uuid';
 import { APPROVED_SYMBOLS } from '../../shared/types/weex';
 import { isApprovedSymbol } from '../../shared/utils/validation';
+import { ANALYST_PROFILES } from '../../constants/analyst';
 
 const router = Router();
 
@@ -563,8 +564,8 @@ router.get('/analysts/:analystId/stats', async (req: Request, res: Response, nex
         }
 
         // FIXED: Validate analystId format (must be valid analyst ID, not UUID)
-        // Valid analyst IDs: warren, cathie, jim, ray, elon, karen, quant, devil
-        const validAnalystIds = ['warren', 'cathie', 'jim', 'ray', 'elon', 'karen', 'quant', 'devil'];
+        // Valid analyst IDs are dynamically determined from ANALYST_PROFILES
+        const validAnalystIds = Object.values(ANALYST_PROFILES).map(p => p.id);
         if (!validAnalystIds.includes(analystId)) {
             res.status(400).json({
                 success: false,

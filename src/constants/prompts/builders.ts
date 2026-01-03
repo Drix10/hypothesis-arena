@@ -177,12 +177,12 @@ PRIORITY DIRECTIVE - STAGE OVERRIDES
 COLLABORATIVE FLOW - STAGE 2: OPPORTUNITY SELECTION
 ═══════════════════════════════════════════════════════════════════════════════
 
-You are one of 4 analysts (Ray, Jim, Quant, Elon) selecting the BEST action for the portfolio.
+You are one of 3 analysts (Ray, Jim, Quant) selecting the BEST action for the portfolio.
 
 This is Stage 2 of the Hypothesis Arena collaborative pipeline:
 - Stage 1 (Market Conditions): Assessed trading environment
 - Stage 2 (YOU ARE HERE): Select best opportunity - NEW TRADE or MANAGE EXISTING
-- Stage 3 (Championship): All 8 analysts compete in debates for execution
+- Stage 3 (Championship): All analysts compete in debates for execution
 - Stage 4 (Risk Council): Karen reviews the winner
 ${portfolioSection}
 ${marketSummary}
@@ -346,8 +346,8 @@ You are competing in the CHAMPIONSHIP DEBATE for ${displaySymbol}/USDT ${directi
 
 This is Stage 3 of the Hypothesis Arena collaborative pipeline:
 - Stage 1 (Market Scan): Assessed trading environment
-- Stage 2 (Coin Selection): 4 analysts selected ${displaySymbol} as the top opportunity
-- Stage 3 (YOU ARE HERE): All 8 analysts compete in championship debate
+- Stage 2 (Coin Selection): 3 analysts selected ${displaySymbol} as the top opportunity
+- Stage 3 (YOU ARE HERE): All analysts compete in championship debate
 - Stage 4 (Risk Council): Karen will review the winning thesis
 - Stage 5 (Execution): Place trade on WEEX
 - Stage 6 (Position Management): Monitor and adjust
@@ -414,7 +414,7 @@ TRADING STYLE - ${cfg.isScalping ? 'HIGH FREQUENCY SCALPING' : 'SWING TRADING'}:
 └─────────────────────────────────────────────────────────────────────────────┘
 
 DEBATE PREPARATION:
-Your thesis will compete against 2 other specialists in Stage 4. To win:
+Your thesis will compete against other specialists in Stage 4. To win:
 - Lead with your strongest data points (cite specific numbers)
 - Quantify your edge (why is this opportunity mispriced?)
 - Acknowledge counterarguments preemptively (shows risk awareness)
@@ -556,8 +556,8 @@ You are ${name} - THE RISK MANAGER with VETO POWER over all trades.
 
 This is Stage 4 of the Hypothesis Arena collaborative pipeline:
 - Stage 1 (Market Scan): Assessed trading environment
-- Stage 2 (Coin Selection): 4 analysts selected ${displaySymbol}
-- Stage 3 (Championship): ${championName} won the championship debate with all 8 analysts competing
+- Stage 2 (Coin Selection): 3 analysts selected ${displaySymbol}
+- Stage 3 (Championship): ${championName} won the championship debate with all analysts competing
 - Stage 4 (YOU ARE HERE): You review the winning thesis and APPROVE or VETO
 - Stage 5 (Execution): Place trade on WEEX
 - Stage 6 (Position Management): Monitor and adjust

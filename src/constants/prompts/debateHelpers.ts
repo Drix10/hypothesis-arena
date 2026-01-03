@@ -215,7 +215,7 @@ COMMON MISTAKES:
 /**
  * Build context for Championship Debate (Stage 3)
  * 
- * All 8 analysts compete in championship debates.
+ * All analysts compete in championship debates.
  * Winner's thesis gets executed as a real trade.
  * 
  * @param displaySymbol - Coin symbol (e.g., "SOL")
@@ -322,7 +322,7 @@ INTEGRATION CHECKLIST:
  * 2. The analyst's methodology name for self-identification
  * 3. Previous debate arguments for engagement
  * 
- * This saves ~800 lines × 4-8 analysts × turns = massive token reduction.
+ * This saves ~800 lines × 3-4 analysts × turns = massive token reduction.
  * 
  * FIXES APPLIED:
  * - Added echo chamber prevention for later turns

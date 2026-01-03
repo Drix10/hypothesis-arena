@@ -19,6 +19,14 @@ import { RISK_COUNCIL_VETO_TRIGGERS } from './riskCouncil';
 let cachedTradingRules: string | null = null;
 
 /**
+ * Manually invalidate the trading rules cache
+ * Useful for testing or hot-reloading config changes without server restart
+ */
+export function invalidateTradingRulesCache(): void {
+   cachedTradingRules = null;
+}
+
+/**
  * Format all trading rules as a clear, structured string for AI context
  * OPTIMIZED: Results are cached after first call
  */
@@ -65,14 +73,10 @@ export function formatTradingRulesForAI(): string {
    Analyst-specific limits below are GUIDELINES for methodology-specific risk tolerance.
    ALL stop losses must be ≤${RISK_COUNCIL_VETO_TRIGGERS.MAX_STOP_LOSS_DISTANCE}% to pass Risk Council review.
 
-✓ VALUE (Warren):     Max ${config.autonomous.stopLossRequirements.VALUE}% from entry
-✓ GROWTH (Cathie):    Max ${config.autonomous.stopLossRequirements.GROWTH}% from entry
 ✓ TECHNICAL (Jim):    Max ${config.autonomous.stopLossRequirements.TECHNICAL}% from entry
 ✓ MACRO (Ray):        Max ${config.autonomous.stopLossRequirements.MACRO}% from entry
-✓ SENTIMENT (Elon):   Max ${config.autonomous.stopLossRequirements.SENTIMENT}% from entry
 ✓ RISK (Karen):       Max ${config.autonomous.stopLossRequirements.RISK}% from entry
 ✓ QUANT (Quant):      Max ${config.autonomous.stopLossRequirements.QUANT}% from entry
-✓ CONTRARIAN (Devil): Max ${config.autonomous.stopLossRequirements.CONTRARIAN}% from entry
 
 ⚠️ CRITICAL: Stop loss MUST be set. No exceptions.
 ⚠️ At ${RISK_COUNCIL_VETO_TRIGGERS.MAX_LEVERAGE}x leverage, a ${RISK_COUNCIL_VETO_TRIGGERS.MAX_STOP_LOSS_DISTANCE}% stop = ${RISK_COUNCIL_VETO_TRIGGERS.MAX_LEVERAGE * RISK_COUNCIL_VETO_TRIGGERS.MAX_STOP_LOSS_DISTANCE}% account loss
@@ -90,6 +94,8 @@ export function formatTradingRulesForAI(): string {
 ✓ Max Sector Exposure: ${RISK_COUNCIL_VETO_TRIGGERS.MAX_SECTOR_POSITIONS} positions in same sector
 ✓ Net LONG Exposure: ≤ ${RISK_COUNCIL_VETO_TRIGGERS.NET_EXPOSURE_LIMITS.LONG}% of portfolio
 ✓ Net SHORT Exposure: ≤ ${RISK_COUNCIL_VETO_TRIGGERS.NET_EXPOSURE_LIMITS.SHORT}% of portfolio
+✓ Hedging Allowed: You CAN open opposite direction positions on same symbol (e.g., LONG + SHORT BTC)
+✓ Duplicate Prevention: You CANNOT open multiple positions in SAME direction on same symbol
 
 ───────────────────────────────────────────────────────────────────
 💰 FUNDING RATE RULES

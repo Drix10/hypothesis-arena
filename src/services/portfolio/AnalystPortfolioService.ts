@@ -6,7 +6,7 @@
  * 
  * Architecture:
  * - 1 collaborative portfolio (real WEEX account)
- * - 8 analyst portfolios (virtual, for attribution)
+ * - 4 analyst portfolios (virtual, for attribution)
  * 
  * P&L flows:
  * 1. Trade executed on WEEX using collaborative portfolio
@@ -18,7 +18,7 @@ import { prisma } from '../../config/database';
 import { logger } from '../../utils/logger';
 import { ANALYST_PROFILES } from '../../constants/analyst';
 
-const ANALYST_IDS = ['warren', 'cathie', 'jim', 'ray', 'elon', 'karen', 'quant', 'devil'] as const;
+const ANALYST_IDS = ['jim', 'ray', 'karen', 'quant'] as const;
 
 // Configuration constants
 const RECENT_TRADES_LIMIT = 10; // Number of recent trades to return in getAnalystStats()
@@ -308,7 +308,7 @@ export class AnalystPortfolioService {
                         COUNT(CASE WHEN realized_pnl = 0 THEN 1 END) as breakEvenTrades,
                         COUNT(CASE WHEN realized_pnl IS NULL THEN 1 END) as entryTrades
                     FROM trades
-                    WHERE champion_id IN ('warren', 'cathie', 'jim', 'ray', 'elon', 'karen', 'quant', 'devil')
+                    WHERE champion_id IN (${ANALYST_IDS.map(id => `'${id}'`).join(', ')})
                         AND status = 'FILLED'
                     GROUP BY champion_id
                 `
@@ -590,6 +590,7 @@ export class AnalystPortfolioService {
     /**
      * Get detailed stats for a specific analyst
      * FIXED: Added input validation and optimized to use aggregation queries
+     * FIXED: Only aggregate trades with realized P&L (closed trades)
      */
     static async getAnalystStats(analystId: string) {
         // FIXED: Validate analystId
@@ -608,7 +609,7 @@ export class AnalystPortfolioService {
                 return null;
             }
 
-            // Get recent trades (limit 10)
+            // Get recent trades (limit 10) - includes both entry and exit trades
             const recentTrades = await prisma.trade.findMany({
                 where: {
                     championId: analystId,
@@ -633,13 +634,15 @@ export class AnalystPortfolioService {
                 }
             });
 
-            // FIXED: Use aggregation queries instead of fetching all trades
+            // FIXED: Only aggregate CLOSED trades (realizedPnl IS NOT NULL)
+            // Entry trades have realizedPnl = null and shouldn't affect avg/best/worst
             const [aggregates, symbolCounts] = await Promise.all([
-                // Get min/max/avg P&L in one query
+                // Get min/max/avg P&L in one query - ONLY for closed trades
                 prisma.trade.aggregate({
                     where: {
                         championId: analystId,
-                        status: 'FILLED'
+                        status: 'FILLED',
+                        realizedPnl: { not: null } // FIXED: Only closed trades
                     },
                     _avg: {
                         realizedPnl: true
@@ -654,7 +657,7 @@ export class AnalystPortfolioService {
                         id: true
                     }
                 }),
-                // Get symbol counts
+                // Get symbol counts - all trades (for favorite symbol)
                 prisma.trade.groupBy({
                     by: ['symbol'],
                     where: {
@@ -677,6 +680,7 @@ export class AnalystPortfolioService {
             const bestTrade = aggregates._max.realizedPnl || 0;
             const worstTrade = aggregates._min.realizedPnl || 0;
             const favoriteSymbol = symbolCounts[0]?.symbol || null;
+            const closedTradesCount = aggregates._count.id;
 
             return {
                 portfolio,
@@ -686,7 +690,8 @@ export class AnalystPortfolioService {
                     bestTrade,
                     worstTrade,
                     favoriteSymbol,
-                    totalTrades: aggregates._count.id
+                    totalTrades: portfolio.totalTrades, // Use portfolio total (includes open)
+                    closedTrades: closedTradesCount // Add closed trades count
                 }
             };
         } catch (error) {

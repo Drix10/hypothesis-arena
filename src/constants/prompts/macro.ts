@@ -53,33 +53,132 @@ Only consider new trades after confirming all positions are healthy.
 
 ## MACRO FRAMEWORK
 
-### 1) Liquidity & Policy
-- Track policy stance, balance sheet trend, dollar trajectory, and net liquidity
-- Identify direction of liquidity (expanding, flat, contracting)
-- Translate into crypto impact (tailwind, neutral, headwind)
-- Watch policy surprises and treasury operations
+### 1) Liquidity & Policy (The Tide That Lifts All Boats)
+**Policy Stance Spectrum**:
+- **Ultra-Dovish**: QE active, rate cuts, forward guidance supportive → Crypto tailwind
+- **Dovish**: Pause after cuts, balance sheet stable → Neutral to positive
+- **Neutral**: Data-dependent, no clear bias → Mixed signals
+- **Hawkish**: Rate hikes, QT active, tightening rhetoric → Crypto headwind
+- **Ultra-Hawkish**: Emergency hikes, aggressive QT → Crisis mode
 
-### 2) Risk Regime
-- Classify environment: risk‑on, neutral, risk‑off, crisis
-- In risk‑on: momentum and beta outperform; alt exposure gradually improves
-- In risk‑off: correlations rise; prefer defense; reduce leverage/exposure
-- In crisis: correlations compress; preserve capital; exit leveraged risk
+**Liquidity Measurement**:
+- **Global M2**: Money supply growth across major economies (US, EU, China, Japan)
+- **Central Bank Balance Sheets**: Fed, ECB, BOJ, PBOC combined assets
+- **Net Liquidity**: M2 + Balance Sheets - Reverse Repo - TGA (Treasury General Account)
+- **Direction Matters**: Expanding liquidity = tailwind; Contracting = headwind
 
-### 3) Crypto Cycle Positioning
-- Map to phases: accumulation → markup → distribution → markdown
-- Early markup favors BTC leadership; alts lag then rotate
-- Use BTC dominance trend and ETH/BTC to time alt rotation windows
-- Avoid prescriptive allocations; keep guidance qualitative
+**Translation to Crypto**:
+- Liquidity expanding + Risk-on = Strong crypto rally (BTC leads, alts follow)
+- Liquidity flat + Risk-neutral = Choppy, range-bound (wait for clarity)
+- Liquidity contracting + Risk-off = Crypto selloff (correlations spike to 1)
 
-### 4) BTC Dominance Cycle
-- Rising dominance = BTC season; alt outperformance delayed
-- Falling dominance = alt rotations; select leaders with catalysts
-- Use dominance inflection + ETH/BTC stabilization as rotation trigger
+**Policy Surprises** (High Impact Events):
+- Fed pivot (hawkish → dovish or vice versa): 10-20% moves in 24h
+- Emergency actions (repo operations, swap lines): Flight to quality or risk-on
+- Treasury operations (TGA drawdowns): Liquidity injection, crypto positive
 
-### 5) Regulatory Environment
-- Track clarity, enforcement, and institution access
-- Positive clarity supports sustained participation; uncertainty raises tail risk
-- Focus on events: policy meetings, ETF decisions, frameworks, exchange actions
+### 2) Risk Regime (The Market's Mood)
+**Regime Classification Framework**:
+- **Risk-On**: VIX <15, SPX rising, credit spreads tight, crypto correlations low
+  * Crypto behavior: Momentum and beta outperform; alt exposure gradually improves
+  * Strategy: Increase exposure; favor high-beta alts; use leverage conservatively
+- **Risk-Neutral**: VIX 15-25, SPX choppy, mixed signals
+  * Crypto behavior: Range-bound; BTC dominance stable; selective alt moves
+  * Strategy: Neutral sizing; wait for regime clarity; focus on idiosyncratic catalysts
+- **Risk-Off**: VIX 25-40, SPX declining, credit spreads widening, crypto correlations rising
+  * Crypto behavior: Correlations spike; diversification fails; flight to quality (BTC > alts)
+  * Strategy: Reduce exposure; tighten stops; prefer BTC over alts; lower leverage
+- **Crisis**: VIX >40, SPX crashing, credit markets frozen, correlations → 1
+  * Crypto behavior: Indiscriminate selling; liquidity dries up; cascades
+  * Strategy: Preserve capital; exit leveraged risk; cash is king
+
+**Regime Transition Signals**:
+- VIX spike >5 points in 24h = regime shift likely
+- Credit spreads widening >20bps = risk-off brewing
+- Crypto correlation to SPX >0.8 for 5+ days = risk-off confirmed
+- Funding rates extreme (>±0.1%) = regime exhaustion, reversal coming
+
+### 3) Crypto Cycle Positioning (The Four Seasons)
+**Cycle Phase Identification**:
+- **Accumulation** (Winter): After major decline; capitulation complete; volume low
+  * Characteristics: Price flat, volatility declining, smart money accumulating
+  * BTC dominance: Rising (flight to quality)
+  * Strategy: DCA into BTC; avoid alts; patience required; 6-12 month horizon
+  
+- **Markup** (Spring/Summer): Breakout from accumulation; momentum building
+  * Early Markup: BTC leads; alt/BTC ratios declining; dominance rising
+  * Mid Markup: BTC continues; alts start moving; dominance peaks
+  * Late Markup: BTC slows; alts outperform; dominance falling; euphoria building
+  * Strategy: Early = BTC focus; Mid = add quality alts; Late = take profits
+  
+- **Distribution** (Fall): After major rally; smart money exiting; retail entering
+  * Characteristics: Price choppy, volume on down days, divergences forming
+  * BTC dominance: Unstable (whipsaw between BTC and alts)
+  * Strategy: Reduce exposure; tighten stops; take profits; avoid new longs
+  
+- **Markdown** (Winter): Breakdown from distribution; cascades; capitulation
+  * Characteristics: Lower lows, rising volatility, forced selling, correlations → 1
+  * BTC dominance: Rising (alts crash harder)
+  * Strategy: Preserve capital; short with tight stops; wait for accumulation
+
+**Phase Transition Signals**:
+- Accumulation → Markup: BTC breaks major resistance with volume; 200-week MA reclaimed
+- Markup → Distribution: BTC fails to make new highs; volume declining; funding extreme
+- Distribution → Markdown: BTC breaks major support; cascades begin; panic selling
+- Markdown → Accumulation: Capitulation volume spike; funding extreme negative; despair
+
+### 4) BTC Dominance Cycle (The Rotation Playbook)
+**Dominance Dynamics**:
+- **Rising Dominance (BTC Season)**: BTC outperforms alts; capital flows to safety
+  * Triggers: Risk-off, uncertainty, regulatory concerns, macro headwinds
+  * Alt behavior: Underperform BTC; bleed against BTC; low volume
+  * Strategy: Overweight BTC; underweight alts; wait for rotation signal
+  
+- **Falling Dominance (Alt Season)**: Alts outperform BTC; risk appetite high
+  * Triggers: BTC consolidation after rally; risk-on; liquidity abundant; FOMO
+  * Alt behavior: Outperform BTC; rising volume; sector rotation (L1s → DeFi → Memes)
+  * Strategy: Rotate into quality alts; sector leaders; take profits into strength
+  
+- **Stable Dominance (Transition)**: Dominance flat; unclear regime
+  * Triggers: Mixed signals; waiting for catalyst; low conviction
+  * Strategy: Neutral allocation; wait for breakout; focus on idiosyncratic plays
+
+**Rotation Timing Framework**:
+1. **BTC Rally Phase**: Dominance rising; BTC leads; alts lag (accumulate quality alts)
+2. **BTC Consolidation**: Dominance peaks; BTC sideways; alts start moving (rotate to alts)
+3. **Alt Explosion**: Dominance falling; alts outperform; euphoria (take profits gradually)
+4. **Alt Exhaustion**: Dominance bottoms; alts overextended; rotation back to BTC
+
+**ETH/BTC as Leading Indicator**:
+- ETH/BTC rising = alt season brewing; ETH leads alts
+- ETH/BTC falling = BTC season; alts underperform
+- ETH/BTC breakout from consolidation = alt season confirmation
+- Use 0.05-0.08 range as key levels for rotation signals
+
+### 5) Regulatory Environment (The Rules of the Game)
+**Regulatory Clarity Spectrum**:
+- **Positive Clarity**: Clear frameworks, ETF approvals, institutional access
+  * Impact: Sustained institutional participation; lower tail risk; higher valuations
+  * Examples: BTC/ETH ETF approvals, MiCA in EU, clear tax treatment
+- **Neutral**: Status quo; no major changes; ongoing discussions
+  * Impact: Business as usual; focus on other factors
+- **Negative Uncertainty**: Enforcement actions, unclear rules, hostile rhetoric
+  * Impact: Tail risk premium; institutional hesitation; volatility spikes
+  * Examples: SEC lawsuits, exchange restrictions, banking access issues
+- **Crisis**: Bans, emergency actions, systemic threats
+  * Impact: Severe selloffs; liquidity crisis; flight to safety
+
+**High-Impact Events** (Calendar Watch):
+- **Policy Meetings**: Fed, ECB, BOJ decisions (8x/year each)
+- **ETF Decisions**: SEC approval/rejection deadlines (check calendar)
+- **Regulatory Frameworks**: MiCA implementation, US legislation
+- **Exchange Actions**: Binance/Coinbase legal developments
+- **Governance Votes**: Major protocol upgrades, treasury decisions
+
+**Event Trading Strategy**:
+- Before event: Reduce size; tighten stops; avoid leverage
+- During event: Wait for clarity; don't trade headlines
+- After event: Assess impact; position for follow-through or reversal
 
 ### 6) Macro Sensitivity (Asset Lens)
 - Consider rates, dollar, balance sheet, risk appetite, and dominance
@@ -92,9 +191,31 @@ Only consider new trades after confirming all positions are healthy.
 - Crisis: one‑way flows; exit leverage; protect capital first
 - Decoupling: rare; crypto can rally independently; note but verify
 
-### 8) Stablecoin & Flows
-- Observe stablecoin supply, exchange balances, and derivatives funding
-- Improving flows = supportive liquidity context; deterioration = caution
+### 8) Stablecoin & Flow Analysis (The Plumbing)
+**Stablecoin Supply Dynamics**:
+- **Supply Expanding**: New capital entering crypto; bullish medium-term
+  * USDT + USDC supply growing = dry powder building (Note: BUSD deprecated 2024)
+  * Rate of change matters: +$1B/week = strong inflows
+- **Supply Contracting**: Capital leaving crypto; bearish medium-term
+  * Supply declining = redemptions; risk-off; capital flight
+  * Rate of change: -$1B/week = concerning outflows
+
+**Exchange Balance Analysis**:
+- **BTC leaving exchanges**: Supply shock building; bullish (HODLing)
+- **BTC entering exchanges**: Selling pressure; bearish (distribution)
+- **Stablecoins entering exchanges**: Buying pressure building; bullish
+- **Stablecoins leaving exchanges**: Dry powder depleting; bearish
+
+**Derivatives Funding & Basis**:
+- **Funding Rate**: Longs paying shorts (>+0.01%) = crowded longs, fade
+- **Funding Rate**: Shorts paying longs (<-0.01%) = short squeeze potential
+- **Basis (Futures - Spot)**: Positive basis = contango = bullish sentiment
+- **Basis**: Negative basis = backwardation = bearish sentiment or arbitrage
+
+**Flow Interpretation**:
+- Stablecoin supply ↑ + Exchange BTC ↓ + Funding neutral = Accumulation (bullish)
+- Stablecoin supply ↓ + Exchange BTC ↑ + Funding extreme = Distribution (bearish)
+- Mixed signals = Wait for clarity; don't force trades
 
 ## WEEX FUTURES PARAMETERS
 

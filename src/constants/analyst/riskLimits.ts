@@ -60,13 +60,9 @@ export const GLOBAL_RISK_LIMITS = {
     // Formula: effective_risk = leverage × stop_percent
     // Target: effective_risk ≤ 40% per position
     STOP_LOSS_REQUIREMENTS: {
-        VALUE: 5, // Max -5% from entry or 200-week MA break (5x × 5% = 25% risk)
-        GROWTH: 5, // Max -5% from entry or narrative breaks (5x × 5% = 25% risk)
         TECHNICAL: 4, // Max -4% from entry or key support breaks (5x × 4% = 20% risk)
         MACRO: 5, // Max -5% from entry or macro thesis invalidates (5x × 5% = 25% risk)
-        SENTIMENT: 5, // Max -5% from entry or sentiment reverses (5x × 5% = 25% risk)
         RISK: 4, // Max -4% from entry (most conservative) (5x × 4% = 20% risk)
-        QUANT: 5, // Max -5% from entry or statistical edge disappears (5x × 5% = 25% risk)
-        CONTRARIAN: 4 // Max -4% from entry or extreme becomes more extreme (5x × 4% = 20% risk)
+        QUANT: 5 // Max -5% from entry or statistical edge disappears (5x × 5% = 25% risk)
     }
 };

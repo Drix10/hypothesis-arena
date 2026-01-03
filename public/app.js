@@ -42,11 +42,8 @@ const state = {
 // ============================================================================
 
 const ANALYSTS = Object.freeze({
-  warren: { emoji: "🦉", name: "Warren", style: "Value", color: "#3fb950" },
-  cathie: { emoji: "🚀", name: "Cathie", style: "Growth", color: "#58a6ff" },
   jim: { emoji: "📊", name: "Jim", style: "Technical", color: "#f0883e" },
   ray: { emoji: "🌍", name: "Ray", style: "Macro", color: "#a371f7" },
-  elon: { emoji: "⚡", name: "Elon", style: "Sentiment", color: "#00d4ff" },
   karen: { emoji: "🛡️", name: "Karen", style: "Risk", color: "#d29922" },
   quant: {
     emoji: "🤖",
@@ -54,7 +51,6 @@ const ANALYSTS = Object.freeze({
     style: "Quantitative",
     color: "#8b949e",
   },
-  devil: { emoji: "😈", name: "Devil", style: "Contrarian", color: "#f85149" },
 });
 
 // ============================================================================

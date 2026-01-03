@@ -222,9 +222,9 @@ export const config = {
 
     // Debate Configuration
     debate: {
-        // Turn counts (4-way debates: 4 analysts × turnsPerAnalyst, championship: 8 analysts × turnsPerAnalyst)
+        // Turn counts (3-way debates: 3 analysts × turnsPerAnalyst, championship: 4 analysts × turnsPerAnalyst)
         turnsPerAnalyst: safeParseInt(process.env.DEBATE_TURNS_PER_ANALYST, 2),
-        // Derived: 4-way = 4 × 2 = 8 turns, championship = 8 × 2 = 16 turns, total = 8+8+8+16 = 40
+        // Derived: 3-way = 3 × 2 = 6 turns, championship = 4 × 2 = 8 turns
 
         // Scoring weights (must sum to 100)
         scoreWeights: {

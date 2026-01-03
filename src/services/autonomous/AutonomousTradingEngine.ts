@@ -1,13 +1,13 @@
 /**
  * Autonomous Trading Engine - COLLABORATIVE MODE
  * 
- * 8 AI analysts collaborate on ONE shared portfolio.
+ * 4 AI analysts collaborate on ONE shared portfolio.
  * Debates are the core decision mechanism.
  * 
  * 6-Stage Pipeline:
  * 1. Market Scan - Fetch data for all 8 coins
- * 2. Coin Selection - Ray, Jim, Quant, Elon pick best opportunity
- * 3. Championship - ALL 8 analysts compete, winner's thesis gets executed
+ * 2. Coin Selection - 3 analysts (Ray, Jim, Quant) pick best opportunity
+ * 3. Championship - All 4 analysts compete, winner's thesis gets executed
  * 4. Risk Council - Karen approves/vetoes/adjusts
  * 5. Execution - Place trade on WEEX with TP/SL
  * 6. Position Management - Monitor and adjust positions
@@ -80,7 +80,7 @@ const APPROVED_SYMBOLS = [
     'cmt_ltcusdt',
 ] as const;
 
-const ANALYST_IDS = ['warren', 'cathie', 'jim', 'ray', 'elon', 'karen', 'quant', 'devil'] as const;
+const ANALYST_IDS = ['jim', 'ray', 'karen', 'quant'] as const;
 
 // =========================================================================
 // DEBATE RESULT VALIDATION HELPERS
@@ -572,9 +572,9 @@ export class AutonomousTradingEngine extends EventEmitter {
                                         orderBy: { executedAt: 'desc' },
                                         select: { championId: true }
                                     });
-                                    originalChampionId = originalTrade?.championId || 'karen';
+                                    originalChampionId = originalTrade?.championId || null;
                                 } catch {
-                                    originalChampionId = 'karen';
+                                    originalChampionId = null;
                                 }
 
                                 // Calculate size and P&L for the trade record
@@ -1126,7 +1126,7 @@ export class AutonomousTradingEngine extends EventEmitter {
     }
 
     /**
-     * Initialize ONE shared collaborative portfolio for all 8 analysts
+     * Initialize ONE shared collaborative portfolio for all 4 analysts
      * COLLABORATIVE MODE: All analysts share a single portfolio per FLOW.md
      * Balance is ALWAYS fetched from WEEX wallet, not stored in database
      * 
@@ -1135,7 +1135,7 @@ export class AutonomousTradingEngine extends EventEmitter {
      * - Database connection errors
      */
     private async initializeAnalysts(): Promise<void> {
-        logger.info('Initializing collaborative portfolio (8 analysts, 1 shared portfolio)...');
+        logger.info('Initializing collaborative portfolio (4 analysts, 1 shared portfolio)...');
 
         try {
             // Get actual wallet balance from WEEX
@@ -1235,7 +1235,7 @@ export class AutonomousTradingEngine extends EventEmitter {
                 }
             }
 
-            // Initialize all 8 analysts with the SAME shared portfolio
+            // Initialize all 4 analysts with the SAME shared portfolio
             // Balance comes from WEEX wallet, not database
             for (const analystId of ANALYST_IDS) {
                 const profile = Object.values(ANALYST_PROFILES).find(a => a.id === analystId);
@@ -1253,7 +1253,7 @@ export class AutonomousTradingEngine extends EventEmitter {
                 logger.info(`  📈 ${analystId}: ${profile?.name || analystId} (collaborative)`);
             }
 
-            logger.info(`📊 Collaborative portfolio initialized: 8 analysts sharing ${walletBalance.toFixed(2)} USDT`);
+            logger.info(`📊 Collaborative portfolio initialized: 4 analysts sharing ${walletBalance.toFixed(2)} USDT`);
 
         } catch (error) {
             logger.error('Failed to initialize collaborative portfolio:', error);
@@ -1470,7 +1470,7 @@ export class AutonomousTradingEngine extends EventEmitter {
 
         // =================================================================
         // STAGE 2: OPPORTUNITY SELECTION DEBATE (Turn-by-Turn)
-        // 4 analysts (Ray, Jim, Quant, Elon) debate best action:
+        // 3 analysts (Ray, Jim, Quant) debate best action:
         // - NEW TRADE: Open LONG or SHORT
         // - MANAGE: Close/reduce/adjust existing position
         // =================================================================
@@ -2205,7 +2205,8 @@ export class AutonomousTradingEngine extends EventEmitter {
                             // For TIGHTEN_STOP, ADJUST_TP, ADD_MARGIN: no P&L realized, size/price are informational
 
                             // FIXED: Find the original champion who opened this position
-                            // Query the most recent entry trade (BUY for LONG, SELL for SHORT) for this symbol
+                            // Query the most recent OPEN entry trade (BUY for LONG, SELL for SHORT) for this symbol
+                            // CRITICAL: Must filter by realizedPnl IS NULL to get the CURRENT open position's entry
                             let originalChampionId: string | null = null;
                             try {
                                 const entryTrade = await prisma.trade.findFirst({
@@ -2213,7 +2214,8 @@ export class AutonomousTradingEngine extends EventEmitter {
                                         symbol: positionToManage.symbol,
                                         side: positionToManage.side === 'LONG' ? 'BUY' : 'SELL', // Entry side
                                         status: 'FILLED',
-                                        championId: { not: null }
+                                        championId: { not: null },
+                                        realizedPnl: null // FIXED: Only match OPEN entry trades (not yet closed)
                                     },
                                     orderBy: {
                                         executedAt: 'desc'
@@ -2226,12 +2228,12 @@ export class AutonomousTradingEngine extends EventEmitter {
                                 originalChampionId = entryTrade?.championId || null;
 
                                 if (!originalChampionId) {
-                                    logger.warn(`Could not find original champion for ${positionToManage.symbol} position, defaulting to karen`);
-                                    originalChampionId = 'karen'; // Fallback to risk manager
+                                    logger.warn(`Could not find original champion for ${positionToManage.symbol} position, skipping attribution`);
+                                    // Don't attribute to any analyst if we can't find the original
                                 }
                             } catch (error) {
                                 logger.error('Failed to lookup original champion:', error);
-                                originalChampionId = 'karen'; // Fallback to risk manager
+                                // Don't attribute to any analyst on error
                             }
 
                             await prisma.trade.create({
@@ -2512,14 +2514,16 @@ export class AutonomousTradingEngine extends EventEmitter {
             return;
         }
 
-        // OPTIMIZATION #6: Duplicate position check
-        const existingPosition = portfolioPositions.find(p => p.symbol === coinSymbol);
+        // OPTIMIZATION #6: Duplicate position check (same symbol + same direction)
+        // FIXED: Allow opposite direction positions (hedging) - only block same direction duplicates
+        const existingPosition = portfolioPositions.find(p => p.symbol === coinSymbol && p.side === direction);
         if (existingPosition) {
             logger.info(`\n${'='.repeat(60)}`);
-            logger.info(`⚠️ EARLY EXIT #6: Position already exists for ${coinSymbol}`);
+            logger.info(`⚠️ EARLY EXIT #6: Position already exists for ${coinSymbol} ${direction}`);
             logger.info(`Existing: ${existingPosition.side} ${existingPosition.size} @ ${existingPosition.entryPrice}`);
             logger.info(`Selected: ${coinSymbol} ${direction} by ${coinSelectorWinner}`);
-            logger.info(`Reason: Cannot open duplicate position on same symbol`);
+            logger.info(`Reason: Cannot open duplicate position on same symbol in same direction`);
+            logger.info(`Note: Opposite direction positions (hedging) are allowed`);
             logger.info(`Token savings: ~8,000 tokens (skipping Stage 3 Championship)`);
             logger.info(`${'='.repeat(60)}\n`);
 
@@ -2547,7 +2551,7 @@ export class AutonomousTradingEngine extends EventEmitter {
             return;
         }
 
-        logger.info(`✅ All 8 early exit checks passed - proceeding to Stage 3 (Championship)`);
+        logger.info(`✅ All 7 early exit checks passed - proceeding to Stage 3 (Championship)`);
 
         // NOTE: debatesRun already incremented after Stage 2 validation (before MANAGE/LONG/SHORT branching)
 
@@ -2588,9 +2592,9 @@ export class AutonomousTradingEngine extends EventEmitter {
 
         // =================================================================
         // STAGE 3: CHAMPIONSHIP DEBATE (Turn-by-Turn)
-        // ALL 8 analysts compete - winner's thesis gets executed
+        // ALL 4 analysts compete - winner's thesis gets executed
         // =================================================================
-        logger.info(`🏆 Stage 3: Championship Debate for ${coinSymbol} (${8 * config.debate.turnsPerAnalyst} turns - ALL 8 analysts)...`);
+        logger.info(`🏆 Stage 3: Championship Debate for ${coinSymbol} (${4 * config.debate.turnsPerAnalyst} turns - ALL 4 analysts)...`);
 
         // CRITICAL: Refresh market data before championship debate
         // Coin selection debate may have taken 2-3 minutes

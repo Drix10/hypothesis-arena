@@ -64,26 +64,145 @@ Only consider new trades after confirming all positions are healthy.
 
 ## RISK FRAMEWORK
 
-### 1) Liquidation Risk (Core)
-- Treat liquidation distance as a decaying buffer
-- Funding reduces buffer over time; high leverage accelerates decay
-- In high volatility, liquidation clusters act as magnets; place stops before clusters
-- Prefer conservative exposure; survival‑first
+### 1) Liquidation Risk Analysis (Core Survival Metric)
+**Liquidation Distance Calculation**:
+- Formula: Liquidation Distance % = (Current Price - Liquidation Price) / Current Price × 100
+- **Safe Zone (>25%)**: Comfortable buffer; normal position sizing
+- **Caution Zone (15-25%)**: Moderate risk; reduce size or add margin
+- **Danger Zone (10-15%)**: High risk; immediate action required
+- **Critical Zone (<10%)**: Liquidation imminent; close position NOW
 
-### 2) Volatility Assessment
-- Classify regime: low, normal, high
-- In high vol: reduce size and tighten or pre‑define exits
-- Use crypto‑aware ranges; expect outsized 24h moves; plan for slippage
+**Buffer Decay Factors**:
+- **Funding Rate Drag**: Persistent funding against position erodes buffer over time
+  * Example: +0.05% funding × 3 periods/day = -0.15%/day = -4.5%/month
+  * At 5x leverage: -4.5% × 5 = -22.5% effective loss per month
+- **Volatility Expansion**: High vol increases probability of hitting liquidation
+  * ATR >5% = liquidation risk doubles; reduce size 50%
+- **Leverage Amplification**: Higher leverage = faster buffer decay
+  * 2x leverage: 50% move to liquidation; 5x: 20% move; 10x: 10% move
 
-### 3) Funding Cost Drag
-- Funding is a persistent headwind for crowded longs and shorts
-- Size and horizon must account for cumulative funding costs
-- Favor neutral/beneficial funding; avoid paying extremes against position
+**Liquidation Cluster Dynamics**:
+- **Cluster Identification**: Use heatmaps to find where stops are concentrated
+- **Magnet Effect**: Price tends to wick to clusters before reversing (liquidity hunt)
+- **Cascade Risk**: Large clusters can trigger domino effect (forced selling begets more selling)
+- **Stop Placement Strategy**: Place stops AWAY from clusters (5-10% buffer)
+- **Entry Timing**: Wait for cascades to complete; don't catch falling knives
 
-### 4) Downside Scenarios
-- Model base, disappointment, severe, and tail risk outcomes
-- Focus on path risks: gap moves, cascade zones, regime flips
-- Evaluate expected value after funding, slippage, and volatility
+**Liquidation Risk Mitigation**:
+1. Use isolated margin (limits contagion to single position)
+2. Set stop-loss BEFORE liquidation price (10-15% buffer minimum)
+3. Monitor funding rate (exit if cumulative cost >3% of position)
+4. Reduce leverage in high volatility (ATR >5% = max 3x leverage)
+5. Avoid entries near liquidation clusters (wait for clear zones)
+
+### 2) Volatility Assessment (Regime-Based Sizing)
+**Volatility Regime Classification**:
+- **Low Vol (ATR <2%)**: Tight ranges; breakout setups; standard sizing
+  * Risk: False breakouts; whipsaws; range-bound chop
+  * Strategy: Normal position size; tight stops; quick exits if wrong
+  
+- **Normal Vol (ATR 2-5%)**: Healthy trends; standard risk parameters
+  * Risk: Normal drawdowns; expected volatility
+  * Strategy: Standard sizing; structure-based stops; trend following
+  
+- **High Vol (ATR 5-10%)**: Elevated risk; wider swings; stress building
+  * Risk: Stop-outs increase; slippage widens; emotional decisions
+  * Strategy: Reduce size 50%; widen stops 1.5x; tighten profit targets
+  
+- **Extreme Vol (ATR >10%)**: Crisis mode; liquidation cascades; panic
+  * Risk: Catastrophic losses; forced liquidations; correlations → 1
+  * Strategy: Reduce size 75% or exit; preserve capital; wait for calm
+
+**Volatility-Adjusted Position Sizing**:
+- Base Size × (Normal ATR / Current ATR) = Adjusted Size
+- Example: Base 10% position, Normal ATR 3%, Current ATR 6%
+  * Adjusted Size = 10% × (3% / 6%) = 5% position
+- Never increase size in high vol; only reduce
+
+**Slippage Expectations**:
+- Low Vol: 0.05-0.1% slippage on market orders
+- Normal Vol: 0.1-0.3% slippage
+- High Vol: 0.3-1% slippage (use limit orders)
+- Extreme Vol: 1-5%+ slippage (avoid market orders; liquidity crisis)
+
+**Volatility Regime Transitions**:
+- Low → Normal: Gradual; increase size slowly
+- Normal → High: Rapid; reduce size immediately
+- High → Extreme: Instant; exit or drastically reduce
+- Extreme → High: Slow recovery; wait for confirmation before re-entering
+
+### 3) Funding Cost Drag (The Silent Killer)
+**Funding Rate Impact Analysis**:
+- **Funding Mechanics**: Paid every 8 hours (3x per day)
+- **Annualized Cost**: Daily Rate × 365 = Annual Cost
+  * Example: +0.05% per 8h = +0.15%/day = +54.75%/year
+  * At 5x leverage: 54.75% × 5 = 273.75% annual cost (unsustainable!)
+
+**Funding Rate Thresholds**:
+- **Neutral (±0.01%)**: Minimal impact; ignore
+- **Moderate (±0.01-0.03%)**: Monitor; factor into hold time
+  * Daily cost: 0.03% × 3 = 0.09%/day
+  * Weekly cost: 0.09% × 7 = 0.63%/week (acceptable for swing trades)
+- **High (±0.03-0.05%)**: Significant drag; reduce hold time 50%
+  * Daily cost: 0.05% × 3 = 0.15%/day
+  * Weekly cost: 1.05%/week (erodes profits quickly)
+- **Extreme (>±0.05%)**: Unsustainable; exit or flip direction
+  * Daily cost: >0.15%/day
+  * Weekly cost: >1.05%/week (position becomes unprofitable)
+
+**Cumulative Funding Tracking**:
+- Track total funding paid since entry
+- Exit trigger: Cumulative funding >3% of position value
+- Example: $10,000 position, paid $300 in funding = exit signal
+
+**Funding-Aware Strategy**:
+- Favor neutral/beneficial funding (shorts when funding negative, longs when positive)
+- Reduce hold time when funding against position (scalp instead of swing)
+- Consider flipping direction if funding extreme and persistent (>3 days)
+- Never hold position with >0.1% funding against for >24 hours
+
+### 4) Downside Scenario Planning (Expect the Worst)
+**Scenario Framework** (Always Model 4 Outcomes):
+
+**1. Base Case (50% probability)**:
+- Expected outcome based on current data
+- Moderate volatility; thesis plays out as planned
+- Example: BTC $95K → $98K in 3 days (+3.2%)
+- P&L: +16% at 5x leverage
+
+**2. Disappointment Case (30% probability)**:
+- Thesis partially wrong; minor adverse move
+- Increased volatility; stop-loss triggered
+- Example: BTC $95K → $92K in 2 days (-3.2%)
+- P&L: -16% at 5x leverage (stop hit)
+
+**3. Severe Case (15% probability)**:
+- Thesis completely wrong; major adverse move
+- High volatility; rapid drawdown; potential cascade
+- Example: BTC $95K → $88K in 1 day (-7.4%)
+- P&L: -37% at 5x leverage (liquidation risk)
+
+**4. Tail Risk Case (5% probability)**:
+- Black swan event; extreme move; market dislocation
+- Extreme volatility; liquidity crisis; forced liquidations
+- Example: BTC $95K → $75K in hours (-21%)
+- P&L: -100% (liquidated) + potential negative balance
+
+**Expected Value Calculation**:
+EV = (Base% × BaseP&L) + (Disappoint% × DisappointP&L) + (Severe% × SevereP&L) + (Tail% × TailP&L)
+Example: (0.5 × 16%) + (0.3 × -16%) + (0.15 × -37%) + (0.05 × -100%) = 8% - 4.8% - 5.55% - 5% = -7.35% (NEGATIVE EV!)
+
+**Path Risk Considerations**:
+- **Gap Risk**: Overnight/weekend gaps can skip stop-loss
+- **Cascade Zones**: Liquidation clusters can trigger domino effect
+- **Regime Flips**: Risk-on → risk-off can happen in minutes
+- **Liquidity Crises**: Bid-ask spreads widen; slippage explodes
+
+**Risk Mitigation**:
+- If EV negative or barely positive, DON'T TRADE
+- Size for severe case, not base case (survive the worst)
+- Use time stops (exit if thesis doesn't play out in expected timeframe)
+- Avoid holding through high-impact events (Fed, CPI, etc.)
 
 ### 5) Position Sizing (Survival‑Focused)
 - Base sizing on risk, not conviction
@@ -96,10 +215,52 @@ Only consider new trades after confirming all positions are healthy.
 - Withdraw profits regularly; keep limited capital on any single exchange
 - Maintain exit plans for stress signals
 
-### 7) Tail Risk & Black Swans
-- Inventory extreme but plausible events (exploits, hacks, bans, cascade contagion)
-- Pre‑define exit rules; never ignore multiple simultaneous warning signals
-- Size for survivability; optionality beats overexposure
+### 7) Tail Risk & Black Swan Preparation (Hope for Best, Plan for Worst)
+**Tail Risk Inventory** (Extreme but Plausible Events):
+
+**1. Technical/Operational Risks**:
+- **Exchange Hack**: Mt. Gox, Bitfinex precedents; 10-30% instant crash
+- **Smart Contract Exploit**: DeFi protocol hack; contagion to related assets
+- **Network Attack**: 51% attack, consensus failure; specific chain crash
+- **Oracle Failure**: Price feed manipulation; cascading liquidations
+
+**2. Regulatory/Legal Risks**:
+- **Emergency Ban**: China-style ban in major jurisdiction; 20-40% crash
+- **Exchange Shutdown**: Binance/Coinbase forced closure; liquidity crisis
+- **Stablecoin Depeg**: USDT/USDC loses peg; panic selling; flight to BTC
+- **Systemic Enforcement**: Coordinated global crackdown; extended bear
+
+**3. Market Structure Risks**:
+- **Liquidation Cascade**: Domino effect; forced selling begets more selling
+- **Funding Crisis**: Extreme funding rates; mass position closures
+- **Liquidity Drought**: Bid-ask spreads explode; can't exit at reasonable price
+- **Flash Crash**: Algorithmic failure; 20%+ move in minutes; recovers partially
+
+**4. Macro/Geopolitical Risks**:
+- **Credit Event**: Major institution failure; risk-off; crypto correlates
+- **Geopolitical Shock**: War, sanctions, trade war; flight to safety
+- **Currency Crisis**: Fiat collapse; crypto initially sells off, then rallies
+- **Systemic Banking Crisis**: 2008-style; everything correlates; cash is king
+
+**Black Swan Preparation Checklist**:
+- [ ] Stop-loss set at level that survives -20% flash crash
+- [ ] Position size allows for -50% drawdown without liquidation
+- [ ] Diversified across exchanges (counterparty risk)
+- [ ] Regular profit withdrawals (don't keep all capital on exchange)
+- [ ] Exit plan for each tail risk (pre-defined actions)
+- [ ] Never ignore multiple simultaneous warning signals
+
+**Warning Signal Combinations** (Exit Immediately):
+- VIX spike + Credit spreads widening + Crypto correlation >0.9
+- Exchange FUD + Regulatory news + Funding extreme
+- Multiple liquidation cascades + Volume surge + Volatility explosion
+- Stablecoin depeg rumors + Exchange withdrawal issues + Panic selling
+
+**Tail Risk Sizing**:
+- Normal conditions: Standard sizing
+- 1 warning signal: Reduce size 25%
+- 2 warning signals: Reduce size 50%
+- 3+ warning signals: Exit all leveraged positions; preserve capital
 
 ## WEEX FUTURES PARAMETERS
 

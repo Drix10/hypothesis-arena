@@ -15,8 +15,8 @@ enum PortfolioStatus {
   closed
 }
 
-// Portfolios - ONE collaborative portfolio shared by all 8 analysts
-// Architecture: Single shared portfolio (agentId='collaborative') for all 8 AI analysts
+// Portfolios - ONE collaborative portfolio shared by all 4 analysts
+// Architecture: Single shared portfolio (agentId='collaborative') for all 4 AI analysts
 // Balance: Synced from WEEX wallet API (source of truth), stored here for display/tracking
 //
 // PRECISION WARNING: SQLite uses REAL (8-byte IEEE 754 floating point) for Float type
@@ -81,7 +81,7 @@ model Trade {
   reason             String? // Why this trade was made
   analysisId         String?   @map("analysis_id")
   confidence         Float? // AI confidence level
-  championId         String?   @map("champion_id") // Analyst who won the debate (warren, cathie, etc.)
+  championId         String?   @map("champion_id") // Analyst who won the debate (jim, ray, karen, quant)
   executedAt         DateTime? @map("executed_at")
   createdAt          DateTime  @default(now()) @map("created_at")
   weexOrderId        String?   @map("weex_order_id")
