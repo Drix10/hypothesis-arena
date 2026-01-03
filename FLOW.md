@@ -1,17 +1,18 @@
 # Hypothesis Arena - Collaborative AI Trading System
 
 **STATUS: PRODUCTION READY ✅**  
-**VERSION: 3.2.0**  
-**LAST UPDATED: January 2, 2026**
+**VERSION: 3.3.0**  
+**LAST UPDATED: January 4, 2026**
 
 ## Implementation Status
 
 - ✅ **Entry Mode:** Fully implemented and operational
-- ✅ **Position Management (MANAGE Action):** Implemented - AI can close/manage existing positions
+- ✅ **Position Management (MANAGE Action):** AI can close/manage existing positions
 - ✅ **Trading Style Config:** Scalping (default) and Swing modes with env-driven parameters
-- ✅ **Production Ready:** TypeScript 0 errors, all edge cases handled
+- ✅ **AI Judge System:** Dedicated debate adjudicator with 4-criteria scoring rubric
+- ✅ **Regime-Adaptive Trading:** All 4 analysts adapt strategy based on market regime (ADX/ATR/VIX)
+- ✅ **Production Ready:** TypeScript 0 errors, all edge cases handled, deep code review completed
 - ✅ **OPTIMIZED:** 40% token reduction (260k → 156k per cycle)
-- 📋 **See:** `src/constants/prompts/managePrompts.ts` for position management prompts
 
 ## 🎯 Philosophy
 
@@ -62,6 +63,8 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 | 🌍 Ray   | ray   | Macro Strategy     | Interest rates, correlations |
 | 🛡️ Karen | karen | Risk Management    | Volatility, drawdown, vetoes |
 | 🤖 Quant | quant | Quantitative       | Factor models, statistics    |
+
+**Regime-Adaptive (v3.3.0):** All analysts detect market regime (trending/ranging/volatile) and adapt TP/SL/hold time. Minimum 1.5:1 R/R enforced.
 
 ---
 
@@ -162,12 +165,16 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 │  ✗ "take profits" without context                              │
 │                                                                  │
 ├─────────────────────────────────────────────────────────────────┤
-│  AGGREGATION LOGIC (aggregateCoinScores):                       │
+│  AGGREGATION & WINNER SELECTION:                                │
 │                                                                  │
 │  Score = rank_weight × conviction                               │
 │  • #1 pick = 3 × conviction                                    │
 │  • #2 pick = 2 × conviction                                    │
 │  • #3 pick = 1 × conviction                                    │
+│                                                                  │
+│  AI Judge (v3.3.0) evaluates argument quality:                  │
+│  → DATA (25%) + LOGIC (25%) + RISK (25%) + CATALYST (25%)      │
+│  → Falls back to score aggregation if Judge times out          │
 │                                                                  │
 │  OUTPUT: { winner, coinSymbol, action, debate }                │
 │  action: 'LONG' | 'SHORT' | 'MANAGE'                           │
@@ -291,9 +298,11 @@ Debates are the core decision mechanism - the winning thesis gets executed on WE
 │  ├─ RISK (25%): Acknowledges what could go wrong               │
 │  └─ CATALYST (25%): Clear price driver with timeline           │
 │                                                                  │
-│  CHAMPION SELECTION:                                            │
-│  → Highest total score across all turns wins                   │
+│  CHAMPION SELECTION (AI Judge - v3.3.0):                        │
+│  → Dedicated AI evaluates argument quality, not word count     │
+│  → Scores: DATA (25%) + LOGIC (25%) + RISK (25%) + CATALYST (25%)│
 │  → Winner's thesis becomes the trade plan                      │
+│  → Falls back to heuristic method if Judge times out           │
 │                                                                  │
 │  VALIDATION:                                                    │
 │  ✓ Number.isFinite() guards on price targets                   │
@@ -801,7 +810,22 @@ Benefits of Structured Outputs:
 │                                                                  │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
-│  EDGE CASES HANDLED (v3.2.0):                                   │
+│  NEW IN v3.3.0:                                                 │
+│                                                                  │
+│  ✓ AI Judge System - dedicated debate adjudicator              │
+│  ✓ 4-criteria scoring rubric (data/logic/risk/catalyst)        │
+│  ✓ Regime-Adaptive Trading - AI adapts to market conditions    │
+│  ✓ All 4 analysts share same regime detection table            │
+│  ✓ R/R ratio violations fixed (all ≥1.5:1 now)                 │
+│  ✓ Alpha Score gap fixed (-4 to -1 range defined)              │
+│  ✓ EV calculation formula added to quant prompt                │
+│  ✓ Judge timeout handling with proper cleanup                  │
+│  ✓ Fallback to heuristic if Judge fails                        │
+│  ✓ Anti-bias protections in Judge prompt                       │
+│  ✓ Dominance pattern detection                                 │
+│                                                                  │
+├─────────────────────────────────────────────────────────────────┤
+│  EDGE CASES HANDLED (v3.2.0+):                                  │
 │                                                                  │
 │  ✓ Number.isFinite() guards on all calculations                │
 │  ✓ Division by zero protection                                 │
@@ -815,6 +839,8 @@ Benefits of Structured Outputs:
 │  ✓ DB insert only after successful close                       │
 │  ✓ Case-insensitive position symbol matching                   │
 │  ✓ MANAGE pattern detection avoids false positives             │
+│  ✓ Judge input validation (empty turns/analysts rejected)      │
+│  ✓ Score validation with safe defaults                         │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```

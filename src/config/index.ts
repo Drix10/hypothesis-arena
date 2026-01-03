@@ -619,3 +619,93 @@ export function getActiveTradingStyle() {
         isScalping: style === 'scalp',
     };
 }
+
+/**
+ * Get adaptive trading style based on market regime
+ * AI analysts can call this to get regime-appropriate parameters
+ * 
+ * @param regime - Market regime: 'trending' | 'ranging' | 'volatile' | 'calm'
+ * @returns Trading style config adapted to the regime
+ */
+export function getAdaptiveTradingStyle(regime: 'trending' | 'ranging' | 'volatile' | 'calm') {
+    const scalp = config.autonomous.scalp;
+    const swing = config.autonomous.swing;
+
+    switch (regime) {
+        case 'trending':
+            // Strong trends = swing trade to capture larger moves
+            return {
+                style: 'swing' as const,
+                targetProfitPercent: swing.targetProfitPercent,
+                stopLossPercent: swing.stopLossPercent,
+                maxHoldHours: swing.maxHoldHours,
+                takeProfitThresholds: {
+                    breakeven: swing.takeProfitThreshold1,
+                    partial25: swing.takeProfitThreshold2,
+                    partial50: swing.takeProfitThreshold3,
+                    partial75: swing.takeProfitThreshold4,
+                },
+                minRiskRewardRatio: swing.minRiskRewardRatio,
+                maxHoldDays: swing.maxHoldHours / 24,
+                isScalping: false,
+                reason: 'Trending market - swing trade to capture larger moves',
+            };
+
+        case 'ranging':
+            // Range-bound = scalp the range boundaries
+            return {
+                style: 'scalp' as const,
+                targetProfitPercent: scalp.targetProfitPercent,
+                stopLossPercent: scalp.stopLossPercent,
+                maxHoldHours: scalp.maxHoldHours,
+                takeProfitThresholds: {
+                    breakeven: scalp.takeProfitThreshold1,
+                    partial25: scalp.takeProfitThreshold2,
+                    partial50: scalp.takeProfitThreshold3,
+                    partial75: scalp.takeProfitThreshold4,
+                },
+                minRiskRewardRatio: scalp.minRiskRewardRatio,
+                maxHoldDays: scalp.maxHoldHours / 24,
+                isScalping: true,
+                reason: 'Ranging market - scalp the boundaries',
+            };
+
+        case 'volatile':
+            // High volatility = tight scalps with reduced size
+            return {
+                style: 'scalp' as const,
+                targetProfitPercent: Math.min(scalp.targetProfitPercent, 4), // Tighter targets
+                stopLossPercent: Math.min(scalp.stopLossPercent, 3), // Tighter stops
+                maxHoldHours: Math.min(scalp.maxHoldHours, 6), // Shorter holds
+                takeProfitThresholds: {
+                    breakeven: 1.5,
+                    partial25: 2,
+                    partial50: 3,
+                    partial75: 4,
+                },
+                minRiskRewardRatio: 1.5,
+                maxHoldDays: 0.25, // 6 hours
+                isScalping: true,
+                reason: 'High volatility - tight scalps, quick exits',
+            };
+
+        case 'calm':
+            // Low volatility = swing trade, wait for breakouts
+            return {
+                style: 'swing' as const,
+                targetProfitPercent: swing.targetProfitPercent,
+                stopLossPercent: swing.stopLossPercent,
+                maxHoldHours: swing.maxHoldHours * 1.5, // Can hold longer in calm markets
+                takeProfitThresholds: {
+                    breakeven: swing.takeProfitThreshold1,
+                    partial25: swing.takeProfitThreshold2,
+                    partial50: swing.takeProfitThreshold3,
+                    partial75: swing.takeProfitThreshold4,
+                },
+                minRiskRewardRatio: swing.minRiskRewardRatio,
+                maxHoldDays: (swing.maxHoldHours * 1.5) / 24,
+                isScalping: false,
+                reason: 'Calm market - swing trade, wait for breakouts',
+            };
+    }
+}

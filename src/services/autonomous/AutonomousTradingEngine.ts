@@ -707,6 +707,25 @@ export class AutonomousTradingEngine extends EventEmitter {
         }
 
         // =====================================================================
+        // CHECK 2.5: DAILY TRADE LIMIT
+        // Skip expensive debates if we've already hit max daily trades
+        // =====================================================================
+        const dailyTradeCount = await this.getDailyTradeCount();
+        if (dailyTradeCount >= config.trading.maxDailyTrades) {
+            logger.info(`\n${'='.repeat(60)}`);
+            logger.info(`🚫 PRE-CHECK: Max daily trades reached (${dailyTradeCount}/${config.trading.maxDailyTrades})`);
+            logger.info(`🎯 ACTION: SKIP CYCLE (saving ~${TOKENS_FULL_DEBATE} tokens)`);
+            logger.info(`💡 Daily trade counter resets at midnight UTC`);
+            logger.info(`${'='.repeat(60)}\n`);
+            return {
+                canRunStage2: false,
+                reason: `Max daily trades: ${dailyTradeCount}/${config.trading.maxDailyTrades}`,
+                action: 'SKIP_CYCLE',
+                tokensSaved: TOKENS_FULL_DEBATE
+            };
+        }
+
+        // =====================================================================
         // CHECK 3: POSITION LIMITS
         // =====================================================================
         let positions: Array<{
@@ -3593,14 +3612,26 @@ export class AutonomousTradingEngine extends EventEmitter {
                 await this.weexClient.changeLeverage(symbol, leverage, '1'); // '1' = Cross Mode
                 logger.info(`✅ Leverage set to ${leverage}x for ${symbol}`);
             } catch (leverageError) {
-                // Log but don't fail - leverage might already be set correctly
-                // Error 50007 = "Leverage cannot exceed the limit" (already at max)
+                // Log but don't fail - leverage might already be set or can't be changed
                 const errorMsg = leverageError instanceof Error ? leverageError.message : String(leverageError);
-                if (errorMsg.includes('50007') || errorMsg.includes('already')) {
-                    logger.warn(`⚠️ Leverage change skipped for ${symbol}: ${errorMsg}`);
+
+                // Known acceptable errors - proceed with trade:
+                // - 50007: "Leverage cannot exceed the limit" (already at max)
+                // - FAILED_PRECONDITION: "cannot adjust leverage when there are open orders" (existing position)
+                // - "already": leverage already set to this value
+                const isAcceptableError =
+                    errorMsg.includes('50007') ||
+                    errorMsg.includes('already') ||
+                    errorMsg.includes('FAILED_PRECONDITION') ||
+                    errorMsg.includes('open orders') ||
+                    errorMsg.includes('open position');
+
+                if (isAcceptableError) {
+                    logger.warn(`⚠️ Leverage change skipped for ${symbol} (will use existing): ${errorMsg}`);
+                    // Continue with trade - leverage is either already set or we have an existing position
                 } else {
                     logger.error(`❌ Failed to set leverage for ${symbol}: ${errorMsg}`);
-                    // For safety, abort trade if we can't confirm leverage
+                    // For unknown errors, abort trade for safety
                     this.currentCycle?.errors.push(`Failed to set leverage: ${errorMsg}`);
                     return;
                 }

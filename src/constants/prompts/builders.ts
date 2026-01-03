@@ -125,9 +125,6 @@ export function buildCoinSelectionPrompt(
 
     const name = sanitizeString(profile.name, 100);
 
-    // Get validated config values for dynamic limits
-    const cfg = getValidatedTradingConfig();
-
     // For coin selection, we don't include the full system prompt because:
     // 1. The analyst doesn't know the action yet (LONG/SHORT/MANAGE)
     // 2. Including 800+ lines per analyst per turn is massive token waste
@@ -204,26 +201,25 @@ SELECTION CRITERIA (apply YOUR FULL METHODOLOGY):
 3. Prioritize capital preservation - managing a losing position may be more urgent than a new trade
 4. Consider portfolio correlation - don't add more of the same direction
 
-TRADING STYLE - ${cfg.isScalping ? 'HIGH FREQUENCY SCALPING' : 'SWING TRADING'}:
+REGIME-ADAPTIVE TRADING:
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ ${cfg.isScalping ? 'WE ARE A QUANT FIRM - PREFER QUICK TRADES (SHORT DURATION)' : 'SWING TRADING - LARGER MOVES, LONGER HOLDS'}             │
-│                                                                             │
-│ ${cfg.isScalping ? 'IDEAL SETUPS:' : 'IDEAL SETUPS:'}                                                               │
-│   • ${cfg.isScalping ? `Clear momentum with ${cfg.targetProfitPercent}% move potential in hours` : `Strong trend with ${cfg.targetProfitPercent}% move potential over days`}                        │
-│   • ${cfg.isScalping ? 'High volume coins with tight spreads' : 'Clear catalyst with defined timeline'}                                    │
-│   • ${cfg.isScalping ? 'Breakout/breakdown setups near key levels' : 'Technical breakout with fundamental support'}                               │
-│   • Funding rate favoring our direction                                     │
-│                                                                             │
-│ TARGETS: TP ${cfg.targetProfitPercent}% | SL ${cfg.styleStopLossPercent}% | Max Hold ${cfg.maxHoldHours}h | Min R/R ${cfg.minRiskRewardRatio}:1              │
+│ Regime     │ Detection │ Strategy              │ Parameters                │
+├────────────┼───────────┼───────────────────────┼───────────────────────────┤
+│ TRENDING   │ ADX >25   │ SWING - ride trend    │ TP 8-12%, SL 5%, 2-5d     │
+│ RANGING    │ ADX <20   │ SCALP - trade range   │ TP 5%, SL 3%, 4-12h       │
+│ HIGH VOL   │ ATR >5%   │ TIGHT SCALP - reduce  │ TP 3%, SL 2%, 2-6h        │
+│ LOW VOL    │ ATR <2%   │ BREAKOUT - wait       │ TP 6-8%, SL 4%, 1-3d      │
 └─────────────────────────────────────────────────────────────────────────────┘
+Detect regime → Select strategy → Set parameters accordingly.
 
-DECISION FRAMEWORK (TWO-STEP):
+PROFIT TAKING: +3% → breakeven stop | +5% → take 25-50% | +8% → take 50-75%
+
+DECISION FRAMEWORK:
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ STEP 1: MANAGE vs TRADE (evaluate MANAGE first - 50/50 importance)         │
-│   MANAGE if: P&L > +${cfg.takeProfitThresholds.partial25}% (take profits!), P&L < -${cfg.styleStopLossPercent}%, hold > ${Math.round(cfg.maxHoldHours / 24 * 10) / 10} day${cfg.maxHoldHours >= 24 ? 's' : ''}            │
-│   TRADE only if: No positions need attention AND clear ${cfg.isScalping ? 'scalp' : 'swing'} opportunity   │
+│ STEP 1: MANAGE vs TRADE (always evaluate MANAGE first)                     │
+│   MANAGE if: P&L > +5%, P&L < -5%, hold > 2 days, thesis broken            │
 │                                                                             │
-│ STEP 2: If TRADE → LONG vs SHORT based on market setup                     │
+│ STEP 2: If no positions need attention → LONG vs SHORT                     │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 QUALITY BAR:
@@ -391,27 +387,22 @@ EXECUTION REQUIREMENTS:
 - Use your analytical frameworks, scorecards, and checklists
 - Cite specific metrics relevant to your methodology
 - Build a complete thesis that will win debates in Stage 4
-- Leverage: 1-${cfg.maxLeverage}x max (crypto volatility requires tight risk management)
+- Leverage: 1-5x max (crypto volatility requires tight risk management)
 - Position size: 1-10 scale (scaled to conviction and risk)
-- Stop loss: ≤${cfg.maxStopLossPercent}% from entry unless justified by volatility/structure
-- Time horizon: ${cfg.isScalping ? `SCALPING - target ${cfg.targetProfitPercent}% moves over hours to ${cfg.maxHoldDays.toFixed(1)} days` : `SWING - target ${cfg.targetProfitPercent}% moves over ${cfg.maxHoldDays.toFixed(0)} days`}
+- Stop loss: ≤10% from entry unless justified by volatility/structure
 
-TRADING STYLE - ${cfg.isScalping ? 'HIGH FREQUENCY SCALPING' : 'SWING TRADING'}:
+REGIME-ADAPTIVE TRADING:
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ ${cfg.isScalping ? 'WE ARE A QUANT TRADING FIRM - VOLUME OVER SIZE' : 'SWING TRADING - QUALITY OVER QUANTITY'}                              │
-│                                                                             │
-│ TARGET PARAMETERS (from config):                                            │
-│   • Take Profit: ${cfg.targetProfitPercent}% from entry                                           │
-│   • Stop Loss: ${cfg.styleStopLossPercent}% from entry                                             │
-│   • Risk/Reward: ${cfg.minRiskRewardRatio}:1 minimum                                            │
-│   • Max Hold: ${cfg.maxHoldHours} hours (${cfg.maxHoldDays.toFixed(1)} days)                                          │
-│                                                                             │
-│ PROFIT TAKING THRESHOLDS:                                                   │
-│   • +${cfg.takeProfitThresholds.breakeven}%: Move stop to breakeven                                        │
-│   • +${cfg.takeProfitThresholds.partial25}%: Take 25% profits                                              │
-│   • +${cfg.takeProfitThresholds.partial50}%: Take 50% profits                                              │
-│   • +${cfg.takeProfitThresholds.partial75}%: Take 75% profits                                              │
+│ Regime     │ Detection │ Strategy              │ Parameters                │
+├────────────┼───────────┼───────────────────────┼───────────────────────────┤
+│ TRENDING   │ ADX >25   │ SWING - ride trend    │ TP 8-12%, SL 5%, 2-5d     │
+│ RANGING    │ ADX <20   │ SCALP - trade range   │ TP 5%, SL 3%, 4-12h       │
+│ HIGH VOL   │ ATR >5%   │ TIGHT SCALP - reduce  │ TP 3%, SL 2%, 2-6h        │
+│ LOW VOL    │ ATR <2%   │ BREAKOUT - wait       │ TP 6-8%, SL 4%, 1-3d      │
 └─────────────────────────────────────────────────────────────────────────────┘
+Detect regime → Select strategy → Set parameters accordingly.
+
+PROFIT TAKING: +3% → breakeven stop | +5% → take 25-50% | +8% → take 50-75%
 
 DEBATE PREPARATION:
 Your thesis will compete against other specialists in Stage 4. To win:
@@ -440,7 +431,7 @@ Respond with JSON:
     "entry": number (suggested entry price),
     "targets": { "bull": number, "base": number, "bear": number },
     "stopLoss": number,
-    "leverage": 1-${cfg.maxLeverage},
+    "leverage": 1-5,
     "positionSize": 1-10,
     "thesis": "Your main argument in 2-3 sentences with SPECIFIC numbers and methodology",
     "bullCase": ["Point 1 with data", "Point 2 with data", "Point 3 with data"],

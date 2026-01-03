@@ -51,3 +51,11 @@ export {
     buildChampionshipContext,
     buildDebateTurnPrompt
 } from './debateHelpers';
+
+// Export judge prompts and types
+export {
+    buildJudgePrompt,
+    buildCoinSelectionJudgePrompt,
+    JUDGE_RESPONSE_SCHEMA
+} from './judge';
+export type { JudgeInput, JudgeVerdict } from './judge';

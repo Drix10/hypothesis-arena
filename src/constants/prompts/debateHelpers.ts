@@ -155,33 +155,34 @@ ${marketSummary}${fundingSection}
 ${rulesSection}
 
 ═══════════════════════════════════════════════════════════════════════════════
-DECISION FRAMEWORK (TWO-STEP PROCESS)
+REGIME-ADAPTIVE TRADING
 ═══════════════════════════════════════════════════════════════════════════════
 
-STEP 1: MANAGE vs TRADE (50/50 decision)
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ MANAGE FIRST: Always evaluate existing positions BEFORE considering new    │
-│ trades. Position management is equally important as new entries!           │
-│                                                                             │
-│ MANAGE if ANY of these are true:                                           │
-│   ✅ Any position P&L > +5% (TAKE PROFITS - don't let winners reverse!)    │
-│   ✅ Any position P&L < -5% (CUT LOSSES - protect capital!)                │
-│   ✅ Any position held > 2 days (STALE - free up capital!)                 │
-│   ✅ Thesis invalidated (market moved against your reasoning)              │
-│   ✅ Funding rate eating into profits                                      │
-│                                                                             │
-│ TRADE (new position) only if:                                              │
-│   ✅ No positions need urgent attention (all healthy)                      │
-│   ✅ Clear opportunity with high conviction (7+/10)                        │
-│   ✅ Position limits allow it (check constraints above)                    │
-└─────────────────────────────────────────────────────────────────────────────┘
+| Regime | Detection | Strategy | Parameters |
+|--------|-----------|----------|------------|
+| TRENDING | ADX >25 | SWING - ride trend | TP 8-12%, SL 5%, hold 2-5d |
+| RANGING | ADX <20 | SCALP - trade range | TP 5%, SL 3%, hold 4-12h |
+| HIGH VOL | ATR >5% | TIGHT SCALP - reduce 50% | TP 3%, SL 2%, hold 2-6h |
+| LOW VOL | ATR <2% | BREAKOUT - wait | TP 6-8%, SL 4%, hold 1-3d |
 
-STEP 2: If TRADE → LONG vs SHORT
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ Only after confirming no positions need management:                        │
-│   • LONG: Bullish setup with clear catalyst                                │
-│   • SHORT: Bearish setup with clear catalyst                               │
-└─────────────────────────────────────────────────────────────────────────────┘
+Detect regime from market data → Select strategy → Set parameters accordingly.
+
+═══════════════════════════════════════════════════════════════════════════════
+DECISION FRAMEWORK
+═══════════════════════════════════════════════════════════════════════════════
+
+STEP 1: MANAGE vs TRADE (always evaluate MANAGE first)
+MANAGE existing positions if ANY condition is true:
+  • P&L > +5% → TAKE PROFITS
+  • P&L < -5% → CUT LOSSES
+  • Hold > 2 days → STALE
+  • Thesis invalidated → EXIT
+  • Funding eating profits → REDUCE
+
+STEP 2: If no positions need attention → LONG vs SHORT
+  • LONG: Bullish setup with clear catalyst
+  • SHORT: Bearish setup with clear catalyst
+  • ADAPT parameters to detected regime
 
 TASK: Select TOP 3 opportunities using the two-step framework above.
 • FIRST evaluate if any positions need MANAGE

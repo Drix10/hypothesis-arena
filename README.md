@@ -28,13 +28,14 @@ Hypothesis Arena is an AI-powered crypto trading platform where **4 specialized 
 
 ### Key Features
 
-- **4 AI Analysts** - Technical, Macro, Risk, Quantitative
-- **Turn-by-Turn Debates** - 14 debate turns per cycle across 4 debate stages (configurable)
-- **Collaborative Portfolio** - All analysts share ONE portfolio (not 4 separate ones)
-- **Live WEEX Trading** - Execute futures trades with TP/SL directly on WEEX Exchange
-- **Position Management** - AI can close/reduce existing positions via MANAGE action
-- **3-Tier Circuit Breakers** - Yellow/Orange/Red alerts based on BTC drops, funding rates, and drawdowns
-- **Risk Council Veto** - Karen (Risk Manager) has final approval/veto power on all trades
+- **4 AI Analysts** - Technical, Macro, Risk, Quantitative with regime-adaptive strategies
+- **AI Judge** - Evaluates debate quality (data/logic/risk/catalyst), not word count
+- **Turn-by-Turn Debates** - Structured debates with JSON schema enforcement
+- **Collaborative Portfolio** - All analysts share ONE portfolio
+- **Live WEEX Trading** - Execute futures trades with TP/SL on WEEX Exchange
+- **Position Management** - AI can close/reduce positions via MANAGE action
+- **3-Tier Circuit Breakers** - Yellow/Orange/Red alerts for risk protection
+- **Risk Council Veto** - Karen has final approval/veto power
 
 ---
 
@@ -165,19 +166,33 @@ NODE_ENV=development
 
 ## 🤖 The 4 AI Analysts
 
-| Analyst  | ID    | Methodology        | Focus                        | Debate Role                  |
-| -------- | ----- | ------------------ | ---------------------------- | ---------------------------- |
-| 📊 Jim   | jim   | Technical Analysis | RSI, MACD, chart patterns    | Stage 2, 3, Championship     |
-| 🌍 Ray   | ray   | Macro Strategy     | Interest rates, correlations | Stage 2, 4, Championship     |
-| 🛡️ Karen | karen | Risk Management    | Volatility, drawdown, vetoes | Stage 4 (Veto), Championship |
-| 🤖 Quant | quant | Quantitative       | Factor models, statistics    | Stage 2, Championship        |
+| Analyst  | ID    | Methodology        | Focus                        |
+| -------- | ----- | ------------------ | ---------------------------- |
+| 📊 Jim   | jim   | Technical Analysis | RSI, MACD, chart patterns    |
+| 🌍 Ray   | ray   | Macro Strategy     | Interest rates, correlations |
+| 🛡️ Karen | karen | Risk Management    | Volatility, drawdown, vetoes |
+| 🤖 Quant | quant | Quantitative       | Factor models, statistics    |
 
-### Debate Participation by Stage
+All analysts use **regime-adaptive trading** - they detect market conditions (trending/ranging/volatile) and adjust their TP/SL/hold time accordingly. Minimum 1.5:1 R/R enforced.
 
-- **Stage 2 (Opportunity Select):** Ray, Jim, Quant (3 analysts)
-  - Analysts select either a NEW trade (LONG/SHORT) or MANAGE an existing position
-- **Stage 3 (Championship):** ALL 4 analysts compete for execution
-- **Stage 4 (Risk Council):** Karen only (final veto power)
+### Debate Participation
+
+- **Stage 2 (Coin Selection):** Ray, Jim, Quant → AI Judge picks winner
+- **Stage 3 (Championship):** All 4 analysts → AI Judge picks winner
+- **Stage 4 (Risk Council):** Karen only (veto power)
+
+### AI Judge System (v3.3.0)
+
+Debates are evaluated by a dedicated AI Judge using a 4-criteria scoring rubric:
+
+| Criterion      | Weight | Measures                         |
+| -------------- | ------ | -------------------------------- |
+| Data Quality   | 25%    | Specific numbers vs vague claims |
+| Logic          | 25%    | Arguments follow from evidence   |
+| Risk Awareness | 25%    | Acknowledges what could go wrong |
+| Catalyst       | 25%    | Clear price driver with timeline |
+
+The Judge replaces the old heuristic method (word count, data point counting) with actual argument quality evaluation.
 
 ---
 
@@ -351,15 +366,16 @@ public/
 
 ## 📋 Version History
 
-| Version | Date       | Changes                                                                       |
-| ------- | ---------- | ----------------------------------------------------------------------------- |
-| 3.2.0   | 2026-01-02 | Trading style config (scalp/swing), env-driven parameters, quant optimization |
-| 3.1.1   | 2026-01-02 | Funding rate validation fix, documentation updates, production hardening      |
-| 3.0.1   | 2026-01-01 | SQLite database, polling instead of SSE, all issues fixed                     |
-| 3.0.0   | 2025-12-31 | MANAGE action for position management, improved edge cases                    |
-| 2.2.0   | 2025-12-28 | Exhaustive switch, extracted normalization, improved validation               |
-| 2.1.2   | 2025-12-28 | Input validation, improved type guards, JSON repair fixes                     |
-| 2.1.0   | 2025-12-28 | Turn-by-turn debates, 6-stage pipeline (40% token reduction)                  |
+| Version | Date       | Changes                                                                                          |
+| ------- | ---------- | ------------------------------------------------------------------------------------------------ |
+| 3.3.0   | 2026-01-04 | AI Judge System, Regime-Adaptive Trading, R/R fixes, Alpha Score gap fix, memory leak prevention |
+| 3.2.0   | 2026-01-02 | Trading style config (scalp/swing), env-driven parameters, quant optimization                    |
+| 3.1.1   | 2026-01-02 | Funding rate validation fix, documentation updates, production hardening                         |
+| 3.0.1   | 2026-01-01 | SQLite database, polling instead of SSE, all issues fixed                                        |
+| 3.0.0   | 2025-12-31 | MANAGE action for position management, improved edge cases                                       |
+| 2.2.0   | 2025-12-28 | Exhaustive switch, extracted normalization, improved validation                                  |
+| 2.1.2   | 2025-12-28 | Input validation, improved type guards, JSON repair fixes                                        |
+| 2.1.0   | 2025-12-28 | Turn-by-turn debates, 6-stage pipeline (40% token reduction)                                     |
 
 See [FLOW.md](FLOW.md) for detailed architecture documentation.
 

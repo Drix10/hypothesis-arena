@@ -32,6 +32,12 @@ import {
     buildDebateTurnPrompt
 } from '../../constants/prompts/debateHelpers';
 import { buildManagePrompt } from '../../constants/prompts/managePrompts';
+import {
+    buildJudgePrompt,
+    buildCoinSelectionJudgePrompt,
+    type JudgeInput,
+    type JudgeVerdict
+} from '../../constants/prompts/judge';
 import type { ExtendedMarketData, AnalysisResult } from './GeminiService';
 
 // =============================================================================
@@ -1117,6 +1123,290 @@ function createTimeoutPromise(ms: number): { promise: Promise<never>; cancel: ()
 
 
 // =============================================================================
+// AI JUDGE - DEBATE ADJUDICATOR
+// =============================================================================
+
+/** Judge request timeout in milliseconds */
+const JUDGE_TIMEOUT_MS = 60000; // 60 seconds
+
+/**
+ * Validate a single analyst score object has all required fields
+ * Returns a sanitized score object with defaults for missing/invalid fields
+ */
+function validateAnalystScore(score: unknown): { total: number; dataQuality: number; logicCoherence: number; riskAwareness: number; catalystClarity: number } {
+    const defaultScore = { total: 0, dataQuality: 0, logicCoherence: 0, riskAwareness: 0, catalystClarity: 0 };
+
+    if (!score || typeof score !== 'object') {
+        return defaultScore;
+    }
+
+    const s = score as Record<string, unknown>;
+    return {
+        total: Number.isFinite(s.total) ? Math.min(100, Math.max(0, Number(s.total))) : 0,
+        dataQuality: Number.isFinite(s.dataQuality) ? Math.min(100, Math.max(0, Number(s.dataQuality))) : 0,
+        logicCoherence: Number.isFinite(s.logicCoherence) ? Math.min(100, Math.max(0, Number(s.logicCoherence))) : 0,
+        riskAwareness: Number.isFinite(s.riskAwareness) ? Math.min(100, Math.max(0, Number(s.riskAwareness))) : 0,
+        catalystClarity: Number.isFinite(s.catalystClarity) ? Math.min(100, Math.max(0, Number(s.catalystClarity))) : 0
+    };
+}
+
+/**
+ * Call the AI Judge to evaluate a debate and determine the winner
+ * 
+ * This replaces the weak `determineDebateWinner()` function that relied on
+ * superficial metrics like data point counts and argument lengths.
+ * 
+ * The Judge:
+ * 1. Reads the FULL debate transcript
+ * 2. Evaluates each argument's actual quality (not just length/count)
+ * 3. Applies a rigorous scoring rubric
+ * 4. Provides detailed reasoning for the verdict
+ * 
+ * @param model - Gemini model for AI call
+ * @param input - Full debate context and transcript
+ * @param isLightweight - Use lightweight prompt for coin selection (saves tokens)
+ * @returns JudgeVerdict with winner, scores, and reasoning
+ */
+async function callJudge(
+    model: GenerativeModel,
+    input: JudgeInput,
+    isLightweight: boolean = false
+): Promise<JudgeVerdict> {
+    const prompt = isLightweight
+        ? buildCoinSelectionJudgePrompt(input)
+        : buildJudgePrompt(input);
+
+    logger.info(`⚖️ Calling AI Judge to evaluate ${input.debateType} debate...`);
+
+    // Create timeout for judge call
+    const timeout = createTimeoutPromise(JUDGE_TIMEOUT_MS);
+
+    try {
+        const resultPromise = model.generateContent({
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            generationConfig: {
+                responseMimeType: "application/json",
+                maxOutputTokens: 2048 // Judge responses are concise
+            }
+        });
+
+        // Race between result and timeout
+        const result = await Promise.race([resultPromise, timeout.promise]);
+        timeout.cancel(); // CRITICAL: Always cancel timeout to prevent memory leak
+
+        const text = result.response.text();
+
+        // CRITICAL: Validate JSON parsing
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(text);
+        } catch (parseError) {
+            throw new Error(`Judge returned invalid JSON: ${text.slice(0, 200)}...`);
+        }
+
+        if (!parsed || typeof parsed !== 'object') {
+            throw new Error('Judge response is not an object');
+        }
+
+        const response = parsed as Record<string, unknown>;
+
+        // Validate required fields
+        if (!response.winner || typeof response.winner !== 'string') {
+            throw new Error('Judge response missing winner field');
+        }
+        if (!response.scores || typeof response.scores !== 'object') {
+            throw new Error('Judge response missing scores field');
+        }
+
+        // Validate winner is one of the analysts
+        const validAnalystIds = input.analysts.map(a => a.id);
+        let winner = response.winner as string;
+
+        if (!validAnalystIds.includes(winner)) {
+            logger.warn(`Judge returned invalid winner "${winner}", expected one of: ${validAnalystIds.join(', ')}`);
+            // Try to find closest match
+            const closestMatch = validAnalystIds.find(id =>
+                winner.toLowerCase().includes(id.toLowerCase()) ||
+                id.toLowerCase().includes(winner.toLowerCase())
+            );
+            if (closestMatch) {
+                logger.info(`Using closest match: ${closestMatch}`);
+                winner = closestMatch;
+            } else {
+                throw new Error(`Invalid winner: ${winner}`);
+            }
+        }
+
+        // Validate and sanitize scores for each analyst
+        const rawScores = response.scores as Record<string, unknown>;
+        const validatedScores: Record<string, { total: number; dataQuality: number; logicCoherence: number; riskAwareness: number; catalystClarity: number }> = {};
+
+        for (const analystId of validAnalystIds) {
+            validatedScores[analystId] = validateAnalystScore(rawScores[analystId]);
+        }
+
+        const verdict: JudgeVerdict = {
+            winner,
+            winnerName: (typeof response.winnerName === 'string' ? response.winnerName : null)
+                || input.analysts.find(a => a.id === winner)?.name
+                || winner,
+            confidence: Math.min(100, Math.max(0, Number(response.confidence) || 70)),
+            scores: validatedScores,
+            reasoning: typeof response.reasoning === 'string' ? response.reasoning : 'No reasoning provided',
+            keyFactors: Array.isArray(response.keyFactors)
+                ? response.keyFactors.filter((f): f is string => typeof f === 'string').slice(0, 5)
+                : [],
+            flags: response.flags && typeof response.flags === 'object' ? response.flags as JudgeVerdict['flags'] : {}
+        };
+
+        // Log the verdict
+        logger.info(`\n${'═'.repeat(60)}`);
+        logger.info(`⚖️ JUDGE VERDICT`);
+        logger.info(`${'═'.repeat(60)}`);
+        logger.info(`Winner: ${verdict.winnerName} (${verdict.winner})`);
+        logger.info(`Confidence: ${verdict.confidence}%`);
+        logger.info(`Reasoning: ${verdict.reasoning}`);
+        if (verdict.keyFactors.length > 0) {
+            logger.info(`Key Factors:`);
+            verdict.keyFactors.forEach((f, i) => logger.info(`  ${i + 1}. ${f}`));
+        }
+        if (verdict.flags?.closeTie) {
+            logger.info(`⚠️ FLAG: Close tie detected`);
+        }
+        if (verdict.flags?.dominancePattern) {
+            logger.info(`⚠️ FLAG: Dominance pattern detected`);
+        }
+        if (verdict.flags?.lowQualityDebate) {
+            logger.info(`⚠️ FLAG: Low quality debate detected`);
+        }
+        logger.info(`${'═'.repeat(60)}\n`);
+
+        // Log detailed scores
+        logger.info(`Detailed Scores:`);
+        for (const [analystId, score] of Object.entries(verdict.scores)) {
+            logger.info(`  ${analystId}: Total=${score.total}/100 (Data=${score.dataQuality}, Logic=${score.logicCoherence}, Risk=${score.riskAwareness}, Catalyst=${score.catalystClarity})`);
+        }
+
+        return verdict;
+    } catch (error: any) {
+        timeout.cancel(); // CRITICAL: Cancel timeout on error too
+        logger.error(`Judge evaluation failed: ${error.message}`);
+        throw error;
+    }
+}
+
+/**
+ * Determine debate winner using AI Judge
+ * Falls back to heuristic method if judge fails
+ * 
+ * @param model - Gemini model
+ * @param turns - Debate turns
+ * @param analysts - Participating analysts
+ * @param marketData - Market data at time of debate
+ * @param debateType - Type of debate
+ * @param direction - Trade direction
+ * @param previousWinners - Previous stage winners (for dominance detection)
+ * @param portfolio - Current portfolio state (optional)
+ * @returns Winner analyst ID and full verdict
+ */
+async function determineWinnerWithJudge(
+    model: GenerativeModel,
+    turns: DebateTurn[],
+    analysts: Array<{ id: string; name: string; methodology: string }>,
+    marketData: ExtendedMarketData,
+    debateType: 'coin_selection' | 'championship',
+    direction: 'LONG' | 'SHORT' | 'MANAGE',
+    previousWinners: string[] = [],
+    portfolio?: { balance: number; openPositions: number; unrealizedPnl: number; recentPnL: { day: number; week: number } }
+): Promise<{ winner: string; verdict: JudgeVerdict | null; usedFallback: boolean }> {
+
+    // Validate inputs
+    if (!turns || turns.length === 0) {
+        throw new Error('determineWinnerWithJudge: turns array is empty');
+    }
+    if (!analysts || analysts.length === 0) {
+        throw new Error('determineWinnerWithJudge: analysts array is empty');
+    }
+    if (!marketData) {
+        throw new Error('determineWinnerWithJudge: marketData is required');
+    }
+
+    // Build judge input
+    const judgeInput: JudgeInput = {
+        debateType,
+        symbol: marketData.symbol || 'Unknown',
+        direction,
+        marketData: {
+            currentPrice: Number.isFinite(marketData.currentPrice) ? marketData.currentPrice : 0,
+            change24h: Number.isFinite(marketData.change24h) ? marketData.change24h : 0,
+            high24h: Number.isFinite(marketData.high24h) ? marketData.high24h : 0,
+            low24h: Number.isFinite(marketData.low24h) ? marketData.low24h : 0,
+            volume24h: Number.isFinite(marketData.volume24h) ? marketData.volume24h : 0,
+            fundingRate: marketData.fundingRate
+        },
+        turns: turns.map(t => ({
+            speaker: t.speaker || 'unknown',
+            analystName: t.analystName || t.speaker || 'Unknown',
+            argument: t.argument || '',
+            strength: Number.isFinite(t.strength) ? t.strength : 5,
+            dataPointsReferenced: Array.isArray(t.dataPointsReferenced) ? t.dataPointsReferenced : []
+        })),
+        analysts,
+        portfolio,
+        previousWinners
+    };
+
+    try {
+        const isLightweight = debateType === 'coin_selection';
+        const verdict = await callJudge(model, judgeInput, isLightweight);
+        return { winner: verdict.winner, verdict, usedFallback: false };
+    } catch (error: any) {
+        logger.warn(`Judge failed, falling back to heuristic method: ${error.message}`);
+
+        // Fall back to the original heuristic method
+        const analystIds = analysts.map(a => a.id);
+        const scores = calculateDebateScores(turns, analystIds);
+        const winner = determineDebateWinner(scores, turns, previousWinners);
+
+        if (!winner) {
+            throw new Error('Both judge and fallback failed to determine winner');
+        }
+
+        return { winner, verdict: null, usedFallback: true };
+    }
+}
+
+/**
+ * Convert JudgeVerdict scores to AnalystScore format
+ * Safely handles missing/invalid score fields
+ */
+function convertJudgeScoresToAnalystScores(
+    verdictScores: JudgeVerdict['scores'],
+    analystIds: string[]
+): Record<string, AnalystScore> {
+    const result: Record<string, AnalystScore> = {};
+
+    for (const id of analystIds) {
+        const judgeScore = verdictScores[id];
+        if (judgeScore) {
+            result[id] = {
+                data: Number.isFinite(judgeScore.dataQuality) ? judgeScore.dataQuality : 0,
+                logic: Number.isFinite(judgeScore.logicCoherence) ? judgeScore.logicCoherence : 0,
+                risk: Number.isFinite(judgeScore.riskAwareness) ? judgeScore.riskAwareness : 0,
+                catalyst: Number.isFinite(judgeScore.catalystClarity) ? judgeScore.catalystClarity : 0,
+                total: Number.isFinite(judgeScore.total) ? judgeScore.total : 0
+            };
+        } else {
+            // Default score if analyst not in verdict
+            result[id] = { data: 0, logic: 0, risk: 0, catalyst: 0, total: 0 };
+        }
+    }
+
+    return result;
+}
+
+
+// =============================================================================
 // COLLABORATIVE FLOW SERVICE
 // =============================================================================
 
@@ -1479,9 +1769,35 @@ export class CollaborativeFlowService {
             }
         }
 
-        // Calculate scores and determine winner
-        const scores = calculateDebateScores(turns, analystIds);
-        const winner = determineDebateWinner(scores, turns);
+        // Calculate scores and determine winner using AI Judge
+        // Get first coin's market data for judge context (we'll extract actual coin later)
+        const firstCoinDataRaw = marketDataMap.values().next().value;
+        if (!firstCoinDataRaw) {
+            throw new Error('No market data available for judge evaluation');
+        }
+        const firstCoinData: ExtendedMarketData = firstCoinDataRaw;
+
+        const judgeAnalysts = analysts.map(a => ({
+            id: a.id,
+            name: a.name,
+            methodology: a.methodology
+        }));
+
+        // Use AI Judge to determine winner
+        const { winner, verdict, usedFallback } = await determineWinnerWithJudge(
+            model,
+            turns,
+            judgeAnalysts,
+            firstCoinData,
+            'coin_selection',
+            'LONG', // Direction will be extracted from winner's arguments
+            [] // No previous winners for coin selection
+        );
+
+        // Use judge scores if available, otherwise fall back to heuristic scores
+        const scores = verdict?.scores
+            ? convertJudgeScoresToAnalystScores(verdict.scores, analystIds)
+            : calculateDebateScores(turns, analystIds);
 
         // Validate winner was determined
         if (!winner) {
@@ -1493,11 +1809,11 @@ export class CollaborativeFlowService {
 
         const winnerScore = scores[winner];
         const winnerAnalyst = analysts.find(a => a.id === winner);
-        const reasoning = `${winnerAnalyst?.name || winner} won with total score ${winnerScore?.total || 0}/100`;
+        const reasoning = verdict?.reasoning || `${winnerAnalyst?.name || winner} won with total score ${winnerScore?.total || 0}/100`;
 
         logger.info(`\n${'='.repeat(60)}`);
         logger.info(`🎯 OPPORTUNITY SELECTION DEBATE COMPLETE`);
-        logger.info(`Winner: ${winner} | Score: ${winnerScore?.total || 0}/100`);
+        logger.info(`Winner: ${winner} | Score: ${winnerScore?.total || 0}/100${usedFallback ? ' (fallback)' : ' (AI Judge)'}`);
         logger.info(`${'='.repeat(60)}\n`);
 
         // Extract coin and action from winner's arguments
@@ -1765,8 +2081,27 @@ export class CollaborativeFlowService {
             }
         }
 
-        const scores = calculateDebateScores(turns, analystIds);
-        const winner = determineDebateWinner(scores, turns, [safeWinners.coinSelector].filter(Boolean) as string[]);
+        // Use AI Judge to determine winner
+        const judgeAnalysts = allAnalysts.map(a => ({
+            id: a.id,
+            name: a.name,
+            methodology: a.methodology
+        }));
+
+        const { winner, verdict, usedFallback } = await determineWinnerWithJudge(
+            model,
+            turns,
+            judgeAnalysts,
+            marketData,
+            'championship',
+            'LONG', // Direction will be extracted from winner's arguments
+            [safeWinners.coinSelector].filter(Boolean) as string[]
+        );
+
+        // Use judge scores if available, otherwise fall back to heuristic scores
+        const scores = verdict?.scores
+            ? convertJudgeScoresToAnalystScores(verdict.scores, analystIds)
+            : calculateDebateScores(turns, analystIds);
 
         // Validate winner was determined
         if (!winner) {
@@ -1778,12 +2113,15 @@ export class CollaborativeFlowService {
 
         const winnerScore = scores[winner];
         const winnerAnalyst = allAnalysts.find(a => a.id === winner);
-        const reasoning = `${winnerAnalyst?.name || winner} won with total score ${winnerScore?.total || 0}/100`;
-        const summary = `Championship debate completed with ${turns.length} turns. ${winnerAnalyst?.name || winner} emerged as champion.`;
+        const reasoning = verdict?.reasoning || `${winnerAnalyst?.name || winner} won with total score ${winnerScore?.total || 0}/100`;
+        const summary = verdict
+            ? `Championship debate completed with ${turns.length} turns. ${winnerAnalyst?.name || winner} emerged as champion. ${verdict.reasoning}`
+            : `Championship debate completed with ${turns.length} turns. ${winnerAnalyst?.name || winner} emerged as champion.`;
+
 
         logger.info(`\n${'='.repeat(60)}`);
         logger.info(`🏆🏆🏆 CHAMPIONSHIP DEBATE COMPLETE 🏆🏆🏆`);
-        logger.info(`CHAMPION: ${winner} | Score: ${winnerScore?.total || 0}/100`);
+        logger.info(`CHAMPION: ${winner} | Score: ${winnerScore?.total || 0}/100${usedFallback ? ' (fallback)' : ' (AI Judge)'}`);
         logger.info(`${'='.repeat(60)}\n`);
 
         // Extract direction from winner's arguments using robust patterns

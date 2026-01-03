@@ -528,8 +528,41 @@ Current Price: ${safePrice}
 24h Low: ${safeLow24h}
 24h Volume: ${safeVolume24h}M
 Funding Rate: ${safeFundingRate}%
-Volatility: ${marketConditions.volatility.toUpperCase()}
+Volatility Regime: ${marketConditions.volatility.toUpperCase()}
 Trend: ${marketConditions.trend.replace('_', ' ').toUpperCase()}
+
+🎯 REGIME-BASED STRATEGY GUIDANCE
+${marketConditions.volatility === 'extreme' ? `
+⚠️ EXTREME VOLATILITY - DEFENSIVE MODE
+• Reduce position size by 75%
+• Use tight stops (2-3%)
+• Quick scalps only, no swing trades
+• Consider staying flat until volatility normalizes
+` : marketConditions.volatility === 'high' ? `
+⚠️ HIGH VOLATILITY - CAUTIOUS MODE
+• Reduce position size by 50%
+• Tighten stops to 2-3%
+• Prefer scalps over swings
+• Take profits quickly at +3-5%
+` : marketConditions.trend === 'strong_bull' || marketConditions.trend === 'strong_bear' ? `
+📈 TRENDING MARKET - SWING MODE
+• Standard or increased position size
+• Trail stops to capture trend
+• Extend take profit targets (+8-12%)
+• Hold longer (2-5 days)
+` : marketConditions.volatility === 'low' ? `
+😴 LOW VOLATILITY - BREAKOUT WATCH
+• Standard position size
+• Wait for breakout confirmation
+• Set wider stops for false breakout protection
+• Be patient, don't force trades
+` : `
+📊 NORMAL CONDITIONS - BALANCED MODE
+• Standard position size
+• Use config parameters as baseline
+• Adapt to intraday conditions
+• Balance scalp and swing opportunities
+`}
 
 ⚠️ TRADING RULES & CONSTRAINTS
 
