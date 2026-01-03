@@ -3585,6 +3585,27 @@ export class AutonomousTradingEngine extends EventEmitter {
         }
 
         try {
+            // CRITICAL FIX: Set leverage on WEEX BEFORE placing order
+            // Without this, WEEX uses account default leverage (often 20x) instead of our calculated leverage
+            // This was causing positions to open at 20x when we intended 5x, leading to high liquidation risk
+            try {
+                logger.info(`⚙️ Setting leverage to ${leverage}x for ${symbol} before order...`);
+                await this.weexClient.changeLeverage(symbol, leverage, '1'); // '1' = Cross Mode
+                logger.info(`✅ Leverage set to ${leverage}x for ${symbol}`);
+            } catch (leverageError) {
+                // Log but don't fail - leverage might already be set correctly
+                // Error 50007 = "Leverage cannot exceed the limit" (already at max)
+                const errorMsg = leverageError instanceof Error ? leverageError.message : String(leverageError);
+                if (errorMsg.includes('50007') || errorMsg.includes('already')) {
+                    logger.warn(`⚠️ Leverage change skipped for ${symbol}: ${errorMsg}`);
+                } else {
+                    logger.error(`❌ Failed to set leverage for ${symbol}: ${errorMsg}`);
+                    // For safety, abort trade if we can't confirm leverage
+                    this.currentCycle?.errors.push(`Failed to set leverage: ${errorMsg}`);
+                    return;
+                }
+            }
+
             const response = await this.weexClient.placeOrder(order);
             logger.info(`✅ Order placed: ${direction} ${symbol} (Order ID: ${response.order_id})`);
 
