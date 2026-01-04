@@ -35,10 +35,15 @@ import { buildManagePrompt } from '../../constants/prompts/managePrompts';
 import {
     buildJudgePrompt,
     buildCoinSelectionJudgePrompt,
+    extractWinnerScores,
+    estimateNonWinnerScores,
+    JUDGE_RESPONSE_SCHEMA,
     type JudgeInput,
-    type JudgeVerdict
+    type JudgeVerdict,
+    type AnalystScoreBreakdown
 } from '../../constants/prompts/judge';
 import type { ExtendedMarketData, AnalysisResult } from './GeminiService';
+import { geminiService } from './GeminiService';
 
 // =============================================================================
 // TYPES
@@ -1130,23 +1135,41 @@ function createTimeoutPromise(ms: number): { promise: Promise<never>; cancel: ()
 const JUDGE_TIMEOUT_MS = 60000; // 60 seconds
 
 /**
+ * Safely parse and clamp a score value
+ * Shared utility to avoid duplication
+ * @param value - Value to parse
+ * @param max - Maximum allowed value
+ * @param defaultVal - Default value if parsing fails (defaults to 0)
+ * @returns Clamped finite number
+ */
+function safeScoreValue(value: unknown, max: number, defaultVal: number = 0): number {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return defaultVal;
+    return Math.min(max, Math.max(0, num));
+}
+
+/**
  * Validate a single analyst score object has all required fields
  * Returns a sanitized score object with defaults for missing/invalid fields
+ * 
+ * FIXED: Properly handles string numbers by converting first, then validating
  */
-function validateAnalystScore(score: unknown): { total: number; dataQuality: number; logicCoherence: number; riskAwareness: number; catalystClarity: number } {
-    const defaultScore = { total: 0, dataQuality: 0, logicCoherence: 0, riskAwareness: 0, catalystClarity: 0 };
+function validateAnalystScore(score: unknown): AnalystScoreBreakdown {
+    const weights = config.debate.scoreWeights;
+    const defaultScore: AnalystScoreBreakdown = { total: 0, dataQuality: 0, logicCoherence: 0, riskAwareness: 0, catalystClarity: 0 };
 
     if (!score || typeof score !== 'object') {
         return defaultScore;
     }
 
     const s = score as Record<string, unknown>;
+
     return {
-        total: Number.isFinite(s.total) ? Math.min(100, Math.max(0, Number(s.total))) : 0,
-        dataQuality: Number.isFinite(s.dataQuality) ? Math.min(100, Math.max(0, Number(s.dataQuality))) : 0,
-        logicCoherence: Number.isFinite(s.logicCoherence) ? Math.min(100, Math.max(0, Number(s.logicCoherence))) : 0,
-        riskAwareness: Number.isFinite(s.riskAwareness) ? Math.min(100, Math.max(0, Number(s.riskAwareness))) : 0,
-        catalystClarity: Number.isFinite(s.catalystClarity) ? Math.min(100, Math.max(0, Number(s.catalystClarity))) : 0
+        total: safeScoreValue(s.total, 100),
+        dataQuality: safeScoreValue(s.dataQuality, weights.data),
+        logicCoherence: safeScoreValue(s.logicCoherence, weights.logic),
+        riskAwareness: safeScoreValue(s.riskAwareness, weights.risk),
+        catalystClarity: safeScoreValue(s.catalystClarity, weights.catalyst)
     };
 }
 
@@ -1162,13 +1185,11 @@ function validateAnalystScore(score: unknown): { total: number; dataQuality: num
  * 3. Applies a rigorous scoring rubric
  * 4. Provides detailed reasoning for the verdict
  * 
- * @param model - Gemini model for AI call
  * @param input - Full debate context and transcript
  * @param isLightweight - Use lightweight prompt for coin selection (saves tokens)
  * @returns JudgeVerdict with winner, scores, and reasoning
  */
 async function callJudge(
-    model: GenerativeModel,
     input: JudgeInput,
     isLightweight: boolean = false
 ): Promise<JudgeVerdict> {
@@ -1179,22 +1200,18 @@ async function callJudge(
     logger.info(`⚖️ Calling AI Judge to evaluate ${input.debateType} debate...`);
 
     // Create timeout for judge call
+    // Note: generateJudgeContent has its own internal timeout via generateContent,
+    // but we add an outer timeout as a safety net
     const timeout = createTimeoutPromise(JUDGE_TIMEOUT_MS);
 
     try {
-        const resultPromise = model.generateContent({
-            contents: [{ role: 'user', parts: [{ text: prompt }] }],
-            generationConfig: {
-                responseMimeType: "application/json",
-                maxOutputTokens: 2048 // Judge responses are concise
-            }
-        });
+        // Use geminiService.generateJudgeContent which respects AI_PROVIDER config
+        const resultPromise = geminiService.generateJudgeContent(prompt, JUDGE_RESPONSE_SCHEMA);
 
         // Race between result and timeout
         const result = await Promise.race([resultPromise, timeout.promise]);
-        timeout.cancel(); // CRITICAL: Always cancel timeout to prevent memory leak
 
-        const text = result.response.text();
+        const text = result.text;
 
         // CRITICAL: Validate JSON parsing
         let parsed: unknown;
@@ -1213,9 +1230,6 @@ async function callJudge(
         // Validate required fields
         if (!response.winner || typeof response.winner !== 'string') {
             throw new Error('Judge response missing winner field');
-        }
-        if (!response.scores || typeof response.scores !== 'object') {
-            throw new Error('Judge response missing scores field');
         }
 
         // Validate winner is one of the analysts
@@ -1237,12 +1251,36 @@ async function callJudge(
             }
         }
 
-        // Validate and sanitize scores for each analyst
-        const rawScores = response.scores as Record<string, unknown>;
-        const validatedScores: Record<string, { total: number; dataQuality: number; logicCoherence: number; riskAwareness: number; catalystClarity: number }> = {};
+        // Get score weights from config
+        const weights = config.debate.scoreWeights;
 
-        for (const analystId of validAnalystIds) {
-            validatedScores[analystId] = validateAnalystScore(rawScores[analystId]);
+        // Extract winner scores using helper function
+        const winnerScore = extractWinnerScores(response, weights);
+
+        // Build scores object - winner gets actual scores, others get estimated lower scores
+        const validatedScores: Record<string, AnalystScoreBreakdown> = {};
+
+        // Get confidence value for margin calculation (reuse shared helper, default to 70 if invalid)
+        const confidenceValue = safeScoreValue(response.confidence, 100, 70);
+
+        for (let i = 0; i < validAnalystIds.length; i++) {
+            const analystId = validAnalystIds[i];
+            if (analystId === winner) {
+                validatedScores[analystId] = winnerScore;
+            } else {
+                // Estimate non-winner scores using helper function
+                validatedScores[analystId] = estimateNonWinnerScores(winnerScore, confidenceValue, i);
+            }
+        }
+
+        // Handle legacy format (if response has nested scores object)
+        if (response.scores && typeof response.scores === 'object') {
+            const rawScores = response.scores as Record<string, unknown>;
+            for (const analystId of validAnalystIds) {
+                if (rawScores[analystId]) {
+                    validatedScores[analystId] = validateAnalystScore(rawScores[analystId]);
+                }
+            }
         }
 
         const verdict: JudgeVerdict = {
@@ -1250,13 +1288,19 @@ async function callJudge(
             winnerName: (typeof response.winnerName === 'string' ? response.winnerName : null)
                 || input.analysts.find(a => a.id === winner)?.name
                 || winner,
-            confidence: Math.min(100, Math.max(0, Number(response.confidence) || 70)),
+            confidence: confidenceValue, // Reuse already-validated confidence value
             scores: validatedScores,
             reasoning: typeof response.reasoning === 'string' ? response.reasoning : 'No reasoning provided',
             keyFactors: Array.isArray(response.keyFactors)
                 ? response.keyFactors.filter((f): f is string => typeof f === 'string').slice(0, 5)
                 : [],
-            flags: response.flags && typeof response.flags === 'object' ? response.flags as JudgeVerdict['flags'] : {}
+            // Handle both flattened (new) and nested (legacy) flag formats
+            // Use type-safe optional chaining instead of any cast
+            flags: {
+                closeTie: Boolean(response.closeTie ?? (response.flags && typeof response.flags === 'object' ? (response.flags as Record<string, unknown>).closeTie : undefined)),
+                dominancePattern: Boolean(response.dominancePattern ?? (response.flags && typeof response.flags === 'object' ? (response.flags as Record<string, unknown>).dominancePattern : undefined)),
+                lowQualityDebate: Boolean(response.lowQualityDebate ?? (response.flags && typeof response.flags === 'object' ? (response.flags as Record<string, unknown>).lowQualityDebate : undefined))
+            }
         };
 
         // Log the verdict
@@ -1289,9 +1333,14 @@ async function callJudge(
 
         return verdict;
     } catch (error: any) {
-        timeout.cancel(); // CRITICAL: Cancel timeout on error too
         logger.error(`Judge evaluation failed: ${error.message}`);
         throw error;
+    } finally {
+        // CRITICAL: Always cancel timeout in finally block to prevent memory leak
+        // This runs whether the request succeeds, fails, or throws
+        if (timeout) {
+            timeout.cancel();
+        }
     }
 }
 
@@ -1299,7 +1348,6 @@ async function callJudge(
  * Determine debate winner using AI Judge
  * Falls back to heuristic method if judge fails
  * 
- * @param model - Gemini model
  * @param turns - Debate turns
  * @param analysts - Participating analysts
  * @param marketData - Market data at time of debate
@@ -1310,7 +1358,6 @@ async function callJudge(
  * @returns Winner analyst ID and full verdict
  */
 async function determineWinnerWithJudge(
-    model: GenerativeModel,
     turns: DebateTurn[],
     analysts: Array<{ id: string; name: string; methodology: string }>,
     marketData: ExtendedMarketData,
@@ -1342,7 +1389,8 @@ async function determineWinnerWithJudge(
             high24h: Number.isFinite(marketData.high24h) ? marketData.high24h : 0,
             low24h: Number.isFinite(marketData.low24h) ? marketData.low24h : 0,
             volume24h: Number.isFinite(marketData.volume24h) ? marketData.volume24h : 0,
-            fundingRate: marketData.fundingRate
+            // FIXED: Validate fundingRate is finite, otherwise leave undefined
+            fundingRate: Number.isFinite(marketData.fundingRate) ? marketData.fundingRate : undefined
         },
         turns: turns.map(t => ({
             speaker: t.speaker || 'unknown',
@@ -1358,7 +1406,7 @@ async function determineWinnerWithJudge(
 
     try {
         const isLightweight = debateType === 'coin_selection';
-        const verdict = await callJudge(model, judgeInput, isLightweight);
+        const verdict = await callJudge(judgeInput, isLightweight);
         return { winner: verdict.winner, verdict, usedFallback: false };
     } catch (error: any) {
         logger.warn(`Judge failed, falling back to heuristic method: ${error.message}`);
@@ -1785,7 +1833,6 @@ export class CollaborativeFlowService {
 
         // Use AI Judge to determine winner
         const { winner, verdict, usedFallback } = await determineWinnerWithJudge(
-            model,
             turns,
             judgeAnalysts,
             firstCoinData,
@@ -2089,7 +2136,6 @@ export class CollaborativeFlowService {
         }));
 
         const { winner, verdict, usedFallback } = await determineWinnerWithJudge(
-            model,
             turns,
             judgeAnalysts,
             marketData,
@@ -2327,6 +2373,406 @@ export class CollaborativeFlowService {
             warnings: ['Risk council analysis failed after multiple attempts'],
             vetoReason: 'Unable to complete risk assessment'
         };
+    }
+
+    /**
+     * Lightweight Position Management Debate
+     * 
+     * A faster, 2-analyst debate (Jim + Karen) for MODERATE urgency positions.
+     * Uses fewer turns than full debates to save tokens while still getting
+     * multiple perspectives on position management decisions.
+     * 
+     * Flow:
+     * 1. Jim (Technical) analyzes the position from a technical perspective
+     * 2. Karen (Risk) provides risk assessment and management recommendation
+     * 3. Simple scoring determines the final action
+     * 
+     * @param position - Current position to evaluate
+     * @param marketDataMap - Current market data for all symbols
+     * @param urgencyReason - Why this position needs attention
+     * @returns Management decision with action type and parameters
+     */
+    async runLightweightPositionDebate(
+        position: {
+            symbol: string;
+            side: 'LONG' | 'SHORT';
+            size: number;
+            entryPrice: number;
+            currentPrice: number;
+            unrealizedPnl: number;
+            unrealizedPnlPercent: number;
+            holdTimeHours: number;
+            fundingPaid?: number;
+        },
+        marketDataMap: Map<string, ExtendedMarketData>,
+        urgencyReason: string
+    ): Promise<{
+        manageType: 'CLOSE_FULL' | 'CLOSE_PARTIAL' | 'TIGHTEN_STOP' | 'TAKE_PARTIAL' | 'ADJUST_TP' | 'HOLD';
+        conviction: number;
+        reason: string;
+        closePercent?: number;
+        newStopLoss?: number;
+        newTakeProfit?: number;
+        debateSummary: string;
+    }> {
+        // Input validation - create safe position object with validated numbers
+        // Type explicitly to match runPositionManagement parameter type
+        const safePosition: {
+            symbol: string;
+            side: 'LONG' | 'SHORT';
+            size: number;
+            entryPrice: number;
+            currentPrice: number;
+            unrealizedPnl: number;
+            unrealizedPnlPercent: number;
+            holdTimeHours: number;
+            fundingPaid?: number;
+        } = {
+            symbol: position.symbol || 'UNKNOWN',
+            side: (position.side === 'LONG' || position.side === 'SHORT') ? position.side : 'LONG',
+            size: Number.isFinite(position.size) ? position.size : 0,
+            entryPrice: Number.isFinite(position.entryPrice) ? position.entryPrice : 0,
+            currentPrice: Number.isFinite(position.currentPrice) ? position.currentPrice : 0,
+            unrealizedPnl: Number.isFinite(position.unrealizedPnl) ? position.unrealizedPnl : 0,
+            unrealizedPnlPercent: Number.isFinite(position.unrealizedPnlPercent) ? position.unrealizedPnlPercent : 0,
+            holdTimeHours: Number.isFinite(position.holdTimeHours) ? position.holdTimeHours : 0,
+            fundingPaid: Number.isFinite(position.fundingPaid) ? position.fundingPaid : undefined
+        };
+
+        // Early return if critical fields are invalid
+        if (safePosition.entryPrice <= 0 || safePosition.currentPrice <= 0 || safePosition.size <= 0) {
+            logger.warn(`Invalid position data for lightweight debate: entry=${position.entryPrice}, current=${position.currentPrice}, size=${position.size}`);
+            return {
+                manageType: 'HOLD',
+                conviction: 1,
+                reason: 'Invalid position data - holding for safety',
+                debateSummary: 'Lightweight debate skipped - invalid position data'
+            };
+        }
+
+        logger.info('\n' + '='.repeat(60));
+        logger.info('⚡ LIGHTWEIGHT POSITION DEBATE (2 analysts)');
+        logger.info('='.repeat(60));
+        logger.info(`Position: ${safePosition.symbol} ${safePosition.side}`);
+        logger.info(`Urgency: ${urgencyReason}`);
+        logger.info(`P&L: ${safePosition.unrealizedPnlPercent.toFixed(2)}% ($${safePosition.unrealizedPnl.toFixed(2)})`);
+
+        const model = this.getJsonModel();
+        const marketData = marketDataMap.get(safePosition.symbol);
+
+        if (!marketData) {
+            logger.warn(`No market data for ${safePosition.symbol}, falling back to single-analyst decision`);
+            // Pass safePosition to ensure validated data is used in fallback
+            try {
+                const result = await this.runPositionManagement(safePosition, marketDataMap);
+                return {
+                    ...result,
+                    manageType: result.manageType === 'ADD_MARGIN' ? 'HOLD' : result.manageType,
+                    debateSummary: 'Fallback to single-analyst (no market data for debate)'
+                };
+            } catch (fallbackError) {
+                logger.error('Fallback to single-analyst also failed:', fallbackError);
+                return {
+                    manageType: 'HOLD',
+                    conviction: 1,
+                    reason: 'Both lightweight debate and fallback failed - holding for safety',
+                    debateSummary: 'Lightweight debate fallback failed - defaulting to HOLD'
+                };
+            }
+        }
+
+        // Validate market data fields
+        const safeMarketData = {
+            change24h: Number.isFinite(marketData.change24h) ? marketData.change24h : 0,
+            high24h: Number.isFinite(marketData.high24h) ? marketData.high24h : safePosition.currentPrice,
+            low24h: Number.isFinite(marketData.low24h) ? marketData.low24h : safePosition.currentPrice,
+            fundingRate: Number.isFinite(marketData.fundingRate) ? marketData.fundingRate : undefined
+        };
+
+        // Get Jim (Technical) and Karen (Risk) profiles
+        const jimProfile = ANALYST_PROFILES.technical;
+        const karenProfile = ANALYST_PROFILES.risk;
+
+        // Build position context for debate
+        const positionContext = `
+POSITION TO EVALUATE:
+- Symbol: ${safePosition.symbol.replace('cmt_', '').replace('usdt', '').toUpperCase()}/USDT
+- Direction: ${safePosition.side}
+- Size: ${safePosition.size}
+- Entry Price: $${safePosition.entryPrice.toFixed(safePosition.entryPrice < 1 ? 6 : 2)}
+- Current Price: $${safePosition.currentPrice.toFixed(safePosition.currentPrice < 1 ? 6 : 2)}
+- Unrealized P&L: ${safePosition.unrealizedPnlPercent >= 0 ? '+' : ''}${safePosition.unrealizedPnlPercent.toFixed(2)}% ($${safePosition.unrealizedPnl.toFixed(2)})
+- Hold Time: ${safePosition.holdTimeHours.toFixed(1)} hours
+${safePosition.fundingPaid !== undefined ? `- Funding Paid: $${safePosition.fundingPaid.toFixed(4)}` : ''}
+
+URGENCY REASON: ${urgencyReason}
+
+MARKET DATA:
+- 24h Change: ${safeMarketData.change24h >= 0 ? '+' : ''}${safeMarketData.change24h.toFixed(2)}%
+- 24h High: $${safeMarketData.high24h.toFixed(safeMarketData.high24h < 1 ? 6 : 2)}
+- 24h Low: $${safeMarketData.low24h.toFixed(safeMarketData.low24h < 1 ? 6 : 2)}
+${safeMarketData.fundingRate !== undefined ? `- Funding Rate: ${(safeMarketData.fundingRate * 100).toFixed(4)}%` : ''}
+`;
+
+        const turns: DebateTurn[] = [];
+        let timeout: { promise: Promise<never>; cancel: () => void } | null = null;
+
+        // Turn 1: Jim's Technical Analysis
+        try {
+            logger.info(`[Turn 1/2] ${jimProfile.name} (Technical) analyzing...`);
+
+            const jimPrompt = `You are ${jimProfile.name}, a ${jimProfile.title}.
+
+${positionContext}
+
+Analyze this position from a TECHNICAL perspective. Consider:
+- Price action relative to entry
+- Support/resistance levels
+- Momentum indicators (implied from price movement)
+- Risk/reward from current levels
+
+Provide your recommendation in JSON format:
+{
+    "recommendation": "CLOSE_FULL" | "CLOSE_PARTIAL" | "TIGHTEN_STOP" | "TAKE_PARTIAL" | "ADJUST_TP" | "HOLD",
+    "conviction": 1-10,
+    "argument": "Your technical analysis (150-200 words with specific price levels)",
+    "suggestedAction": {
+        "closePercent": number (if partial close),
+        "newStopLoss": number (if tightening stop),
+        "newTakeProfit": number (if adjusting TP)
+    }
+}`;
+
+            timeout = createTimeoutPromise(AI_REQUEST_TIMEOUT);
+            const jimResult = await Promise.race([
+                model.generateContent({
+                    contents: [{ role: 'user', parts: [{ text: jimPrompt }] }],
+                    generationConfig: {
+                        responseMimeType: "application/json",
+                        maxOutputTokens: config.ai.specialistMaxTokens
+                    }
+                }),
+                timeout.promise
+            ]);
+            timeout.cancel();
+            timeout = null;
+
+            const jimParsed = parseJSONWithRepair(jimResult.response.text());
+
+            // Validate Jim's response fields
+            const jimArgument = typeof jimParsed.argument === 'string' && jimParsed.argument.trim()
+                ? jimParsed.argument
+                : 'Technical analysis suggests monitoring the position.';
+            const jimConviction = Number.isFinite(Number(jimParsed.conviction))
+                ? Math.min(10, Math.max(1, Number(jimParsed.conviction)))
+                : 5;
+            const jimRecommendation = typeof jimParsed.recommendation === 'string'
+                ? jimParsed.recommendation
+                : 'HOLD';
+
+            turns.push({
+                speaker: jimProfile.id,
+                analystName: jimProfile.name,
+                argument: jimArgument,
+                strength: jimConviction,
+                dataPointsReferenced: []
+            });
+
+            logger.info(`[Turn 1/2] ${jimProfile.name}: ${jimRecommendation} (conviction: ${jimConviction}/10)`);
+            logger.info(`  ${jimArgument.slice(0, 200)}...`);
+
+        } catch (error) {
+            logger.warn(`Jim's analysis failed:`, error);
+            turns.push({
+                speaker: jimProfile.id,
+                analystName: jimProfile.name,
+                argument: `Technical analysis inconclusive due to error. Current P&L is ${safePosition.unrealizedPnlPercent.toFixed(2)}%. Recommend deferring to risk assessment.`,
+                strength: 3,
+                dataPointsReferenced: []
+            });
+        } finally {
+            if (timeout) { timeout.cancel(); timeout = null; }
+        }
+
+        // Turn 2: Karen's Risk Assessment
+        try {
+            logger.info(`[Turn 2/2] ${karenProfile.name} (Risk) assessing...`);
+
+            const karenPrompt = `You are ${karenProfile.name}, a ${karenProfile.title}.
+
+${positionContext}
+
+PREVIOUS ANALYSIS (Technical - ${jimProfile.name}):
+${turns[0]?.argument || 'No technical analysis available.'}
+
+Now provide your RISK MANAGEMENT assessment. Consider:
+- Position sizing relative to portfolio
+- Stop-loss placement
+- Take-profit optimization
+- Hold time vs. expected move
+- Funding rate impact (if applicable)
+
+You have FINAL DECISION AUTHORITY. Provide your recommendation in JSON format:
+{
+    "recommendation": "CLOSE_FULL" | "CLOSE_PARTIAL" | "TIGHTEN_STOP" | "TAKE_PARTIAL" | "ADJUST_TP" | "HOLD",
+    "conviction": 1-10,
+    "argument": "Your risk assessment (150-200 words with specific numbers)",
+    "suggestedAction": {
+        "closePercent": number (if partial close, 1-99),
+        "newStopLoss": number (if tightening stop),
+        "newTakeProfit": number (if adjusting TP)
+    }
+}`;
+
+            timeout = createTimeoutPromise(AI_REQUEST_TIMEOUT);
+            const karenResult = await Promise.race([
+                model.generateContent({
+                    contents: [{ role: 'user', parts: [{ text: karenPrompt }] }],
+                    generationConfig: {
+                        responseMimeType: "application/json",
+                        maxOutputTokens: config.ai.specialistMaxTokens
+                    }
+                }),
+                timeout.promise
+            ]);
+            timeout.cancel();
+            timeout = null;
+
+            const karenParsed = parseJSONWithRepair(karenResult.response.text());
+
+            // Validate Karen's response fields
+            const karenArgument = typeof karenParsed.argument === 'string' && karenParsed.argument.trim()
+                ? karenParsed.argument
+                : 'Risk assessment suggests caution.';
+            const karenConviction = Number.isFinite(Number(karenParsed.conviction))
+                ? Math.min(10, Math.max(1, Number(karenParsed.conviction)))
+                : 5;
+            const karenRecommendation = typeof karenParsed.recommendation === 'string'
+                ? karenParsed.recommendation
+                : 'HOLD';
+
+            turns.push({
+                speaker: karenProfile.id,
+                analystName: karenProfile.name,
+                argument: karenArgument,
+                strength: karenConviction,
+                dataPointsReferenced: []
+            });
+
+            logger.info(`[Turn 2/2] ${karenProfile.name}: ${karenRecommendation} (conviction: ${karenConviction}/10)`);
+            logger.info(`  ${karenArgument.slice(0, 200)}...`);
+
+            // Karen has final authority - use her recommendation
+            const validTypes = ['CLOSE_FULL', 'CLOSE_PARTIAL', 'TIGHTEN_STOP', 'TAKE_PARTIAL', 'ADJUST_TP', 'HOLD'];
+            const manageType = validTypes.includes(karenRecommendation)
+                ? karenRecommendation as 'CLOSE_FULL' | 'CLOSE_PARTIAL' | 'TIGHTEN_STOP' | 'TAKE_PARTIAL' | 'ADJUST_TP' | 'HOLD'
+                : 'HOLD';
+
+            const conviction = karenConviction;
+
+            // Extract action parameters
+            let closePercent: number | undefined;
+            let newStopLoss: number | undefined;
+            let newTakeProfit: number | undefined;
+
+            if (karenParsed.suggestedAction) {
+                if (karenParsed.suggestedAction.closePercent) {
+                    const pct = Number(karenParsed.suggestedAction.closePercent);
+                    if (Number.isFinite(pct) && pct >= 1 && pct <= 99) {
+                        closePercent = pct;
+                    }
+                }
+                if (karenParsed.suggestedAction.newStopLoss) {
+                    const sl = Number(karenParsed.suggestedAction.newStopLoss);
+                    if (Number.isFinite(sl) && sl > 0) {
+                        newStopLoss = sl;
+                    }
+                }
+                if (karenParsed.suggestedAction.newTakeProfit) {
+                    const tp = Number(karenParsed.suggestedAction.newTakeProfit);
+                    if (Number.isFinite(tp) && tp > 0) {
+                        newTakeProfit = tp;
+                    }
+                }
+            }
+
+            // Build debate summary
+            const debateSummary = `Lightweight debate (2 turns): ${jimProfile.name} analyzed technicals, ${karenProfile.name} made final risk decision. ` +
+                `Outcome: ${manageType} with ${conviction}/10 conviction.`;
+
+            // Validate that required params exist for each action type
+            // Downgrade to HOLD if required params are missing
+            let finalManageType = manageType;
+            let downgradeReason = '';
+
+            if ((manageType === 'CLOSE_PARTIAL' || manageType === 'TAKE_PARTIAL') && !closePercent) {
+                finalManageType = 'HOLD';
+                downgradeReason = ` (downgraded from ${manageType} - missing closePercent)`;
+                logger.warn(`Downgrading ${manageType} to HOLD - missing closePercent`);
+            } else if (manageType === 'TIGHTEN_STOP' && !newStopLoss) {
+                finalManageType = 'HOLD';
+                downgradeReason = ` (downgraded from ${manageType} - missing newStopLoss)`;
+                logger.warn(`Downgrading ${manageType} to HOLD - missing newStopLoss`);
+            } else if (manageType === 'ADJUST_TP' && !newTakeProfit) {
+                finalManageType = 'HOLD';
+                downgradeReason = ` (downgraded from ${manageType} - missing newTakeProfit)`;
+                logger.warn(`Downgrading ${manageType} to HOLD - missing newTakeProfit`);
+            }
+
+            // Validate directional constraints for TP/SL (only if not already downgraded)
+            if (finalManageType === 'TIGHTEN_STOP' && newStopLoss && Number.isFinite(safePosition.currentPrice) && safePosition.currentPrice > 0) {
+                const isValidDirection = safePosition.side === 'LONG'
+                    ? newStopLoss < safePosition.currentPrice
+                    : newStopLoss > safePosition.currentPrice;
+                if (!isValidDirection) {
+                    finalManageType = 'HOLD';
+                    downgradeReason = ` (downgraded from TIGHTEN_STOP - invalid stop loss direction)`;
+                    logger.warn(`Downgrading TIGHTEN_STOP to HOLD - invalid stop loss direction: SL=${newStopLoss} vs current=${safePosition.currentPrice} for ${safePosition.side}`);
+                }
+            }
+
+            if (finalManageType === 'ADJUST_TP' && newTakeProfit && Number.isFinite(safePosition.currentPrice) && safePosition.currentPrice > 0) {
+                const isValidTPDirection = safePosition.side === 'LONG'
+                    ? newTakeProfit > safePosition.currentPrice
+                    : newTakeProfit < safePosition.currentPrice;
+                if (!isValidTPDirection) {
+                    finalManageType = 'HOLD';
+                    downgradeReason = ` (downgraded from ADJUST_TP - invalid take profit direction)`;
+                    logger.warn(`Downgrading ADJUST_TP to HOLD - invalid take profit direction: TP=${newTakeProfit} vs current=${safePosition.currentPrice} for ${safePosition.side}`);
+                }
+            }
+
+            logger.info('\n' + '='.repeat(60));
+            logger.info('⚡ LIGHTWEIGHT DEBATE RESULT');
+            logger.info('='.repeat(60));
+            logger.info(`Decision: ${finalManageType}${downgradeReason}`);
+            logger.info(`Conviction: ${conviction}/10`);
+            logger.info(`Reason: ${karenArgument.slice(0, 200)}...`);
+            logger.info('='.repeat(60) + '\n');
+
+            return {
+                manageType: finalManageType,
+                conviction,
+                reason: karenArgument,
+                closePercent,
+                newStopLoss,
+                newTakeProfit,
+                debateSummary: debateSummary + downgradeReason
+            };
+
+        } catch (error) {
+            logger.error(`Karen's assessment failed:`, error);
+            // Fallback: use Jim's recommendation if available, otherwise HOLD
+            const jimTurn = turns[0];
+            return {
+                manageType: 'HOLD',
+                conviction: 3,
+                reason: `Risk assessment failed. ${jimTurn?.argument?.slice(0, 100) || 'Defaulting to HOLD for safety.'}`,
+                debateSummary: 'Lightweight debate failed - defaulting to HOLD'
+            };
+        } finally {
+            if (timeout) { timeout.cancel(); timeout = null; }
+        }
     }
 
     /**

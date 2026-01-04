@@ -56,6 +56,8 @@ export {
 export {
     buildJudgePrompt,
     buildCoinSelectionJudgePrompt,
+    extractWinnerScores,
+    estimateNonWinnerScores,
     JUDGE_RESPONSE_SCHEMA
 } from './judge';
-export type { JudgeInput, JudgeVerdict } from './judge';
+export type { JudgeInput, JudgeVerdict, RawJudgeResponse, AnalystScoreBreakdown } from './judge';

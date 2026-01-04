@@ -22,12 +22,12 @@ import { aiLogService } from '../compliance/AILogService';
 import { ANALYST_PROFILES, THESIS_SYSTEM_PROMPTS, type AnalystMethodology, buildDebatePrompt } from '../../constants/analyst';
 import { getSystemPrompt } from '../../constants/prompts/promptHelpers';
 import { arenaContextBuilder, FullArenaContext } from '../../constants/ArenaContext';
-import { circuitBreakerService, CircuitBreakerStatus } from '../risk/CircuitBreakerService';
 
 // Use config values instead of hardcoded constants
 const AI_REQUEST_TIMEOUT = config.ai.analysisTimeoutMs; // 90 seconds for detailed analysis
 const VALID_RECOMMENDATIONS = ['strong_buy', 'buy', 'hold', 'sell', 'strong_sell'] as const;
 const VALID_WINNERS = ['bull', 'bear', 'draw'] as const;
+const JUDGE_MAX_TOKENS = 2048; // Judge responses are concise - avoid truncation while not wasting tokens
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // STRUCTURED OUTPUT SCHEMAS - Gemini 2.0 JSON Schema Support
@@ -675,26 +675,33 @@ class GeminiService {
 
     /**
      * Unified content generation that works with both Gemini and OpenRouter
+     * @param prompt - The prompt to send
+     * @param schema - The response schema
+     * @param maxOutputTokens - Optional max tokens (defaults to config value)
      */
-    private async generateContent(prompt: string, schema: any): Promise<{ text: string; finishReason: string }> {
+    private async generateContent(prompt: string, schema: any, maxOutputTokens?: number): Promise<{ text: string; finishReason: string }> {
         if (config.ai.provider === 'openrouter') {
-            return await this.generateContentOpenRouter(prompt, schema);
+            return await this.generateContentOpenRouter(prompt, schema, maxOutputTokens);
         } else {
-            return await this.generateContentGemini(prompt, schema);
+            return await this.generateContentGemini(prompt, schema, maxOutputTokens);
         }
     }
 
     /**
      * Generate content using Gemini API
+     * @param prompt - The prompt to send
+     * @param schema - The response schema
+     * @param maxOutputTokens - Optional max tokens (defaults to config value)
      */
-    private async generateContentGemini(prompt: string, schema: any): Promise<{ text: string; finishReason: string }> {
+    private async generateContentGemini(prompt: string, schema: any, maxOutputTokens?: number): Promise<{ text: string; finishReason: string }> {
         const model = this.getGeminiModel();
 
         const result = await model.generateContent({
             contents: [{ role: 'user', parts: [{ text: prompt }] }],
             generationConfig: {
                 responseMimeType: "application/json",
-                responseSchema: schema
+                responseSchema: schema,
+                maxOutputTokens: maxOutputTokens ?? config.ai.maxOutputTokens
             }
         });
 
@@ -710,8 +717,11 @@ class GeminiService {
     /**
      * Generate content using OpenRouter API
      * FIXED: Added timeout, retry logic, better error handling
+     * @param prompt - The prompt to send
+     * @param geminiSchema - The response schema (Gemini format)
+     * @param maxOutputTokens - Optional max tokens (defaults to config value)
      */
-    private async generateContentOpenRouter(prompt: string, geminiSchema: any): Promise<{ text: string; finishReason: string }> {
+    private async generateContentOpenRouter(prompt: string, geminiSchema: any, maxOutputTokens?: number): Promise<{ text: string; finishReason: string }> {
         this.validateOpenRouterConfig();
 
         // Convert Gemini schema to OpenRouter JSON Schema format
@@ -769,7 +779,7 @@ class GeminiService {
                 }
             },
             temperature: config.ai.temperature,
-            max_tokens: config.ai.maxOutputTokens,
+            max_tokens: maxOutputTokens ?? config.ai.maxOutputTokens,
         };
 
         // CRITICAL: Add timeout using AbortController
@@ -1548,62 +1558,6 @@ Respond ONLY with valid JSON matching this exact structure.`;
             throw new Error(`Symbol ${marketData.symbol} is not an approved WEEX trading pair. Approved pairs: ${WEEX_APPROVED_PAIRS.join(', ')}`);
         }
 
-        // CHECK CIRCUIT BREAKERS FIRST
-        const circuitBreakerStatus = await circuitBreakerService.checkCircuitBreakers();
-
-        // RED ALERT: Emergency exit - close all positions
-        if (circuitBreakerStatus.level === 'RED') {
-            logger.error(`🚨 RED ALERT: ${circuitBreakerStatus.reason}`);
-            logger.error(`Action: ${circuitBreakerService.getRecommendedAction('RED')}`);
-
-            // Generate close order if position exists
-            if (existingPosition) {
-                const closeOrder = this.generateCloseOrder(marketData, existingPosition);
-
-                return {
-                    shouldTrade: true, // Yes, trade to close
-                    order: closeOrder,
-                    aiLog: this.generateCircuitBreakerLog(circuitBreakerStatus, 'EMERGENCY_CLOSE'),
-                    analysis: {
-                        champion: null,
-                        consensus: { bulls: 0, bears: 0, neutral: 0 },
-                        confidence: 0,
-                    },
-                    riskManagement: {
-                        positionSizePercent: 0,
-                        leverage: 1,
-                        takeProfitPrice: marketData.currentPrice,
-                        stopLossPrice: marketData.currentPrice,
-                        riskRewardRatio: 0,
-                    },
-                };
-            } else {
-                // No position to close, just halt trading
-                return {
-                    shouldTrade: false,
-                    aiLog: this.generateCircuitBreakerLog(circuitBreakerStatus, 'HALT_TRADING'),
-                    analysis: {
-                        champion: null,
-                        consensus: { bulls: 0, bears: 0, neutral: 0 },
-                        confidence: 0,
-                    },
-                    riskManagement: {
-                        positionSizePercent: 0,
-                        leverage: 1,
-                        takeProfitPrice: marketData.currentPrice,
-                        stopLossPrice: marketData.currentPrice,
-                        riskRewardRatio: 0,
-                    },
-                };
-            }
-        }
-
-        // ORANGE/YELLOW ALERT: Continue but with reduced leverage (handled in calculateRiskManagement)
-        if (circuitBreakerStatus.level === 'ORANGE' || circuitBreakerStatus.level === 'YELLOW') {
-            logger.warn(`⚠️ ${circuitBreakerStatus.level} ALERT: ${circuitBreakerStatus.reason}`);
-            logger.warn(`Action: ${circuitBreakerService.getRecommendedAction(circuitBreakerStatus.level)}`);
-        }
-
         // Build arena contexts for all analysts (or just one if specified)
         const arenaContexts = new Map<string, FullArenaContext>();
         const analystIds = analystId
@@ -1693,8 +1647,8 @@ Respond ONLY with valid JSON matching this exact structure.`;
         const champion = tournament.champion;
         const shouldTrade = this.shouldExecuteTrade(champion, bulls, bears, neutral, avgConfidence, existingPosition);
 
-        // Calculate risk management parameters using config values (now includes circuit breaker checks)
-        const riskManagement = await this.calculateRiskManagement(
+        // Calculate risk management parameters using config values
+        const riskManagement = this.calculateRiskManagement(
             marketData,
             champion,
             accountBalance,
@@ -1713,7 +1667,7 @@ Respond ONLY with valid JSON matching this exact structure.`;
             );
         }
 
-        // Generate AI log for WEEX compliance (include arena context summary and circuit breaker status)
+        // Generate AI log for WEEX compliance (include arena context summary)
         const aiLog = this.generateAILog(
             marketData,
             analyses,
@@ -1721,8 +1675,7 @@ Respond ONLY with valid JSON matching this exact structure.`;
             champion,
             shouldTrade,
             order,
-            arenaContexts.get(champion?.analystId || ''),
-            circuitBreakerStatus
+            arenaContexts.get(champion?.analystId || '')
         );
 
         return {
@@ -1789,30 +1742,18 @@ Respond ONLY with valid JSON matching this exact structure.`;
 
     /**
      * Calculate risk management parameters using config values
-     * ENHANCED: Now enforces GLOBAL_RISK_LIMITS and circuit breakers
      */
-    private async calculateRiskManagement(
+    private calculateRiskManagement(
         marketData: ExtendedMarketData,
         champion: AnalysisResult | null,
         _accountBalance: number,
-        avgConfidence: number,
-        circuitBreakerStatus?: CircuitBreakerStatus // Pass as parameter to avoid double-check
-    ): Promise<TradingDecision['riskManagement']> {
+        avgConfidence: number
+    ): TradingDecision['riskManagement'] {
         const price = marketData.currentPrice;
 
         // GUARD: Validate price
         if (!Number.isFinite(price) || price <= 0) {
             throw new Error(`Invalid market price: ${price}`);
-        }
-
-        // CHECK CIRCUIT BREAKERS (use passed status or fetch)
-        const cbStatus = circuitBreakerStatus || await circuitBreakerService.checkCircuitBreakers();
-        const maxLeverageFromCircuitBreaker = circuitBreakerService.getMaxLeverage(cbStatus.level);
-
-        // Log circuit breaker status if not NONE
-        if (cbStatus.level !== 'NONE') {
-            logger.warn(`⚠️ Circuit Breaker ${cbStatus.level}: ${cbStatus.reason}`);
-            logger.warn(`Max leverage reduced to ${maxLeverageFromCircuitBreaker}x`);
         }
 
         // Default values from config
@@ -1840,13 +1781,10 @@ Respond ONLY with valid JSON matching this exact structure.`;
                 Math.max(5, calculatedSize)
             );
 
-            // ENFORCE ABSOLUTE MAX LEVERAGE FROM GLOBAL_RISK_LIMITS
-            const ABSOLUTE_MAX_LEVERAGE = Math.min(
-                config.autonomous.maxLeverage,
-                maxLeverageFromCircuitBreaker
-            );
+            // ENFORCE ABSOLUTE MAX LEVERAGE FROM CONFIG
+            const ABSOLUTE_MAX_LEVERAGE = config.autonomous.maxLeverage;
 
-            // Leverage based on risk level (FIXED: never exceeds 5x)
+            // Leverage based on risk level (capped by config max leverage)
             switch (champion.riskLevel) {
                 case 'low':
                     leverage = Math.min(ABSOLUTE_MAX_LEVERAGE, 5);
@@ -1862,8 +1800,8 @@ Respond ONLY with valid JSON matching this exact structure.`;
                     break;
             }
 
-            // Also cap by config (in case config is more conservative)
-            leverage = Math.min(leverage, config.autonomous.maxLeverage);
+            // Note: leverage is already capped by ABSOLUTE_MAX_LEVERAGE above
+            // which equals config.autonomous.maxLeverage, so no additional cap needed
 
             // TP/SL from champion's price targets
             const isBullish = ['strong_buy', 'buy'].includes(champion.recommendation);
@@ -2098,7 +2036,7 @@ Respond ONLY with valid JSON matching this exact structure.`;
 
     /**
      * Generate AI log for WEEX compliance
-     * Enhanced: Includes arena context summary and circuit breaker status
+     * Enhanced: Includes arena context summary
      */
     private generateAILog(
         marketData: ExtendedMarketData,
@@ -2107,8 +2045,7 @@ Respond ONLY with valid JSON matching this exact structure.`;
         champion: AnalysisResult | null,
         shouldTrade: boolean,
         order?: TradeOrder,
-        arenaContext?: FullArenaContext,
-        circuitBreakerStatus?: { level: string; reason: string }
+        arenaContext?: FullArenaContext
     ): WeexAILog {
         const displaySymbol = marketData.symbol.replace('cmt_', '').replace('usdt', '').toUpperCase();
 
@@ -2211,11 +2148,6 @@ Respond ONLY with valid JSON matching this exact structure.`;
             explanation += `Market sentiment: ${arenaContext.arenaState.marketSentiment}. `;
         }
 
-        // Add circuit breaker status
-        if (circuitBreakerStatus && circuitBreakerStatus.level !== 'NONE') {
-            explanation += `Circuit Breaker ${circuitBreakerStatus.level}: ${circuitBreakerStatus.reason}. `;
-        }
-
         if (shouldTrade && order) {
             const orderAction = order.type === '1' ? 'opening long' : order.type === '2' ? 'opening short' : order.type === '3' ? 'closing long' : 'closing short';
             explanation += `Decision: ${orderAction} position with TP at ${order.presetTakeProfitPrice} and SL at ${order.presetStopLossPrice}.`;
@@ -2242,53 +2174,6 @@ Respond ONLY with valid JSON matching this exact structure.`;
         const words = text.split(/\s+/).filter(w => w.length > 0);
         if (words.length <= maxWords) return text;
         return words.slice(0, maxWords).join(' ') + '...';
-    }
-
-    /**
-     * Generate close order for existing position (used during circuit breaker RED alert)
-     */
-    private generateCloseOrder(
-        marketData: ExtendedMarketData,
-        existingPosition: { side: 'LONG' | 'SHORT'; size: number }
-    ): TradeOrder {
-        const timestamp = Date.now();
-        const clientOid = `ha_emergency_close_${timestamp}`.slice(0, 40);
-        const orderType: WeexOrderType = existingPosition.side === 'LONG' ? '3' : '4'; // 3=Close long, 4=Close short
-
-        return {
-            symbol: marketData.symbol,
-            client_oid: clientOid,
-            size: roundToStepSize(existingPosition.size, marketData.symbol), // WEEX stepSize with contract specs
-            type: orderType,
-            order_type: '0', // Normal limit order
-            match_price: '1', // Market price for immediate execution
-            price: roundToTickSize(marketData.currentPrice, marketData.symbol), // WEEX tick_size with contract specs
-            marginMode: 1, // Cross mode
-        };
-    }
-
-    /**
-     * Generate AI log for circuit breaker events
-     */
-    private generateCircuitBreakerLog(
-        circuitBreakerStatus: { level: string; reason: string },
-        action: 'EMERGENCY_CLOSE' | 'HALT_TRADING'
-    ): WeexAILog {
-        return {
-            stage: 'RISK_ASSESSMENT', // FIXED: Use enum value
-            model: config.ai.provider === 'openrouter'
-                ? `Circuit Breaker System + ${config.ai.openRouterModel} (via OpenRouter)`
-                : 'Circuit Breaker System + Hypothesis Arena',
-            input: {
-                circuitBreakerLevel: circuitBreakerStatus.level,
-                reason: circuitBreakerStatus.reason,
-            },
-            output: {
-                action,
-                decision: action === 'EMERGENCY_CLOSE' ? 'Close all positions immediately' : 'Halt all trading',
-            },
-            explanation: `Circuit Breaker ${circuitBreakerStatus.level} triggered: ${circuitBreakerStatus.reason}. ${action === 'EMERGENCY_CLOSE' ? 'Closing all leveraged positions to prevent catastrophic losses.' : 'Halting all trading operations until conditions improve.'}`,
-        };
     }
 
     /**
@@ -2416,6 +2301,29 @@ Respond ONLY with valid JSON.`;
             // Clear timeout to prevent memory leak
             if (timeoutId) clearTimeout(timeoutId);
         }
+    }
+
+    /**
+     * Generate content for Judge evaluation
+     * Uses unified content generation that respects AI_PROVIDER config
+     * 
+     * @param prompt - The judge prompt
+     * @param schema - The response schema (Gemini format, will be converted for OpenRouter)
+     * @returns Parsed JSON response and finish reason
+     */
+    async generateJudgeContent(prompt: string, schema: any): Promise<{ text: string; finishReason: string }> {
+        // Validate inputs
+        if (!prompt || typeof prompt !== 'string' || prompt.trim().length === 0) {
+            throw new Error('generateJudgeContent: prompt is required');
+        }
+        if (!schema || typeof schema !== 'object') {
+            throw new Error('generateJudgeContent: schema is required');
+        }
+
+        logger.info(`⚖️ Judge using ${config.ai.provider} provider`);
+
+        // Use the unified content generation that routes to correct provider
+        return await this.generateContent(prompt, schema, JUDGE_MAX_TOKENS);
     }
 
     /**

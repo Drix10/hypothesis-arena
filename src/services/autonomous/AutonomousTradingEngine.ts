@@ -19,7 +19,6 @@ import { type ExtendedMarketData, type AnalysisResult } from '../ai/GeminiServic
 import { collaborativeFlowService, type CoinSelectionResult, type RiskCouncilDecision } from '../ai/CollaborativeFlow';
 import { getWeexClient } from '../weex/WeexClient';
 import { tradingScheduler } from './TradingScheduler';
-import { circuitBreakerService } from '../risk/CircuitBreakerService';
 import { AnalystPortfolioService } from '../portfolio/AnalystPortfolioService';
 import { aiLogService } from '../compliance/AILogService';
 import { prisma, queryOne } from '../../config/database';
@@ -462,6 +461,12 @@ export class AutonomousTradingEngine extends EventEmitter {
                                 break;
                             case 'TIGHTEN_STOP':
                                 if (newStopLoss && Number.isFinite(newStopLoss) && newStopLoss > 0) {
+                                    // Validate currentPrice before direction check
+                                    if (!Number.isFinite(positionToManage.currentPrice) || positionToManage.currentPrice <= 0) {
+                                        logger.warn(`⚠️ Cannot validate stop loss direction: invalid currentPrice ${positionToManage.currentPrice}`);
+                                        break;
+                                    }
+
                                     // Validate stop loss direction
                                     // For LONG: SL must be below current price
                                     // For SHORT: SL must be above current price
@@ -507,6 +512,12 @@ export class AutonomousTradingEngine extends EventEmitter {
                                 break;
                             case 'ADJUST_TP':
                                 if (newTakeProfit && Number.isFinite(newTakeProfit) && newTakeProfit > 0) {
+                                    // Validate currentPrice before direction check
+                                    if (!Number.isFinite(positionToManage.currentPrice) || positionToManage.currentPrice <= 0) {
+                                        logger.warn(`⚠️ Cannot validate take profit direction: invalid currentPrice ${positionToManage.currentPrice}`);
+                                        break;
+                                    }
+
                                     // Validate take profit direction
                                     const isValidTPDirection = positionToManage.side === 'LONG'
                                         ? newTakeProfit > positionToManage.currentPrice
@@ -558,78 +569,12 @@ export class AutonomousTradingEngine extends EventEmitter {
 
                         // Record the management trade to database (for CLOSE actions)
                         if (manageType === 'CLOSE_FULL' || manageType === 'CLOSE_PARTIAL' || manageType === 'TAKE_PARTIAL') {
-                            try {
-                                // Find original champion who opened this position
-                                let originalChampionId: string | null = null;
-                                try {
-                                    const originalTrade = await prisma.trade.findFirst({
-                                        where: {
-                                            symbol: positionToManage.symbol,
-                                            status: 'FILLED',
-                                            realizedPnl: null, // Entry trade
-                                            side: positionToManage.side === 'LONG' ? 'BUY' : 'SELL'
-                                        },
-                                        orderBy: { executedAt: 'desc' },
-                                        select: { championId: true }
-                                    });
-                                    originalChampionId = originalTrade?.championId || null;
-                                } catch {
-                                    originalChampionId = null;
-                                }
-
-                                // Calculate size and P&L for the trade record
-                                // CRITICAL: Sanitize all numeric values to prevent NaN/undefined issues
-                                let loggedSize = Number.isFinite(positionToManage.size) ? positionToManage.size : 0;
-                                let loggedPnl = Number.isFinite(positionToManage.unrealizedPnl) ? positionToManage.unrealizedPnl : 0;
-
-                                if ((manageType === 'CLOSE_PARTIAL' || manageType === 'TAKE_PARTIAL') && closePercent && closePercent > 0) {
-                                    loggedSize = Number.isFinite(loggedSize) ? (loggedSize * closePercent) / 100 : 0;
-                                    loggedPnl = Number.isFinite(loggedPnl) ? (loggedPnl * closePercent) / 100 : 0;
-                                }
-
-                                // Final validation - ensure values are finite
-                                if (!Number.isFinite(loggedSize)) loggedSize = 0;
-                                if (!Number.isFinite(loggedPnl)) loggedPnl = 0;
-
-                                // Get collaborative portfolio ID - MUST be a valid UUID from DB
-                                const firstAnalyst = this.analystStates.values().next().value;
-                                let portfolioId = firstAnalyst?.portfolioId;
-
-                                // If no portfolioId from analyst state, fetch from DB
-                                if (!portfolioId) {
-                                    const collabPortfolio = await prisma.portfolio.findFirst({
-                                        where: { agentId: 'collaborative' },
-                                        select: { id: true }
-                                    });
-                                    if (!collabPortfolio) {
-                                        logger.error('Cannot record fallback trade: collaborative portfolio not found in DB');
-                                        return { executed: true, symbol: positionToManage.symbol };
-                                    }
-                                    portfolioId = collabPortfolio.id;
-                                }
-
-                                const tradeId = crypto.randomUUID();
-                                await prisma.trade.create({
-                                    data: {
-                                        id: tradeId,
-                                        portfolioId: portfolioId,
-                                        symbol: positionToManage.symbol,
-                                        side: positionToManage.side === 'LONG' ? 'SELL' : 'BUY',
-                                        type: 'MARKET',
-                                        size: loggedSize,
-                                        price: positionToManage.currentPrice,
-                                        status: 'FILLED',
-                                        reason: `FALLBACK: ${manageType} - ${fallbackReason}`,
-                                        championId: originalChampionId,
-                                        realizedPnl: loggedPnl,
-                                        executedAt: new Date(),
-                                        createdAt: new Date()
-                                    }
-                                });
-                                logger.info(`📊 Recorded fallback trade: ${positionToManage.symbol} P&L: ${loggedPnl.toFixed(2)} (${originalChampionId})`);
-                            } catch (dbError) {
-                                logger.error('Failed to record fallback management trade:', dbError);
-                            }
+                            await this.recordManagementTrade(
+                                positionToManage,
+                                manageType,
+                                `FALLBACK: ${manageType} - ${fallbackReason}`,
+                                (manageType === 'CLOSE_PARTIAL' || manageType === 'TAKE_PARTIAL') && closePercent ? closePercent : 100
+                            );
                         }
 
                         if (this.currentCycle) {
@@ -1380,51 +1325,6 @@ export class AutonomousTradingEngine extends EventEmitter {
         }
 
         // =================================================================
-        // CIRCUIT BREAKER CHECK
-        // =================================================================
-        const btcData = marketDataMap.get('cmt_btcusdt');
-        if (btcData) {
-            const circuitBreakerStatus = await circuitBreakerService.checkCircuitBreakers();
-
-            if (circuitBreakerStatus.level === 'RED') {
-                logger.error(`🚨 RED ALERT: ${circuitBreakerStatus.reason}`);
-                logger.error(`Action: ${circuitBreakerService.getRecommendedAction('RED')}`);
-                await this.emergencyCloseAllPositions();
-                if (this.currentCycle) {
-                    this.currentCycle.errors.push(`RED ALERT: ${circuitBreakerStatus.reason} - All positions closed`);
-                }
-
-                // Mark cycle as complete and sleep
-                if (this.currentCycle) {
-                    this.currentCycle.endTime = Date.now();
-                    const cycleDuration = this.currentCycle.endTime - cycleStart;
-                    logger.info(`✅ Cycle #${this.cycleCount} complete (RED ALERT): 0 trades, 0 debates (${(cycleDuration / 1000).toFixed(1)}s)`);
-                    this.emit('cycleComplete', this.currentCycle);
-                }
-
-                const elapsed = Date.now() - cycleStart;
-                const dynamicInterval = tradingScheduler.getDynamicCycleInterval(this.CYCLE_INTERVAL_MS);
-                const sleepTime = Math.max(0, dynamicInterval - elapsed);
-
-                if (sleepTime > 0 && this.isRunning) {
-                    logger.info(`💤 Sleeping for ${(sleepTime / 1000).toFixed(0)}s until next cycle...`);
-                    await this.sleep(sleepTime);
-                }
-                return;
-            }
-
-            if (circuitBreakerStatus.level === 'ORANGE') {
-                logger.warn(`⚠️ ORANGE ALERT: ${circuitBreakerStatus.reason}`);
-                logger.warn(`Action: ${circuitBreakerService.getRecommendedAction('ORANGE')}`);
-            }
-
-            if (circuitBreakerStatus.level === 'YELLOW') {
-                logger.warn(`⚠️ YELLOW ALERT: ${circuitBreakerStatus.reason}`);
-                logger.warn(`Action: ${circuitBreakerService.getRecommendedAction('YELLOW')}`);
-            }
-        }
-
-        // =================================================================
         // PRE-STAGE-2 OPTIMIZATION: Check if we can skip expensive debate
         // Saves ~8000 tokens when we can't trade anyway
         // =================================================================
@@ -1463,25 +1363,221 @@ export class AutonomousTradingEngine extends EventEmitter {
                     return;
 
                 case 'LIGHTWEIGHT_DEBATE':
-                    // Moderate urgency - run lightweight debate (still uses Karen but with context)
+                    // Moderate urgency - run lightweight debate (Jim + Karen, 2 turns)
                     if (preCheck.urgentPosition && preCheck.allPositions && preCheck.allPositions.length > 0) {
-                        logger.info(`⚠️ LIGHTWEIGHT MANAGE: ${preCheck.urgentPosition.symbol} (${preCheck.urgentPosition.urgencyReason})`);
-                        // For now, use the same fallback management (Karen decides)
-                        // TODO: Implement actual lightweight debate with 2-3 analysts
-                        const result = await this.executeFallbackManagement(
-                            preCheck.allPositions,
-                            marketDataMap,
-                            `lightweight manage: ${preCheck.urgentPosition.urgencyReason}`
-                        );
-                        await this.updateLeaderboard();
-                        if (result.executed) {
-                            await this.completeCycle(cycleStart, `lightweight-managed ${result.symbol}`);
-                        } else {
-                            await this.completeCycle(cycleStart, 'lightweight manage failed');
+                        logger.info(`⚠️ LIGHTWEIGHT DEBATE: ${preCheck.urgentPosition.symbol} (${preCheck.urgentPosition.urgencyReason})`);
+
+                        try {
+                            // Run the lightweight 2-analyst debate
+                            const debateResult = await collaborativeFlowService.runLightweightPositionDebate(
+                                {
+                                    symbol: preCheck.urgentPosition.symbol,
+                                    side: preCheck.urgentPosition.side,
+                                    size: preCheck.urgentPosition.size,
+                                    entryPrice: preCheck.urgentPosition.entryPrice,
+                                    currentPrice: preCheck.urgentPosition.currentPrice,
+                                    unrealizedPnl: preCheck.urgentPosition.unrealizedPnl,
+                                    unrealizedPnlPercent: preCheck.urgentPosition.unrealizedPnlPercent,
+                                    holdTimeHours: preCheck.urgentPosition.holdTimeHours
+                                },
+                                marketDataMap,
+                                preCheck.urgentPosition.urgencyReason
+                            );
+
+                            this.totalDebatesRun++; // Count lightweight debates too
+                            if (this.currentCycle) this.currentCycle.debatesRun++; // Track per-cycle debates
+                            logger.info(`📋 Lightweight Debate Decision: ${debateResult.manageType} (conviction: ${debateResult.conviction}/10)`);
+                            logger.info(`Reason: ${(debateResult.reason || 'No reason provided').slice(0, 200)}...`);
+                            logger.info(`Summary: ${debateResult.debateSummary || 'No summary'}`);
+
+                            // Execute the decision if not HOLD
+                            if (debateResult.manageType !== 'HOLD' && !config.autonomous.dryRun) {
+                                const pos = preCheck.urgentPosition;
+
+                                switch (debateResult.manageType) {
+                                    case 'CLOSE_FULL':
+                                        await this.weexClient.closeAllPositions(pos.symbol);
+                                        logger.info(`✅ Closed full position: ${pos.symbol}`);
+                                        // Record trade to database
+                                        await this.recordLightweightDebateTrade(pos, debateResult.manageType, debateResult.reason, 100);
+                                        if (this.currentCycle) this.currentCycle.tradesExecuted++;
+                                        break;
+                                    case 'CLOSE_PARTIAL':
+                                    case 'TAKE_PARTIAL':
+                                        if (debateResult.closePercent && debateResult.closePercent > 0 && debateResult.closePercent < 100) {
+                                            const sizeToClose = roundToStepSize(
+                                                (pos.size * debateResult.closePercent) / 100,
+                                                pos.symbol
+                                            );
+                                            await this.weexClient.closePartialPosition(
+                                                pos.symbol,
+                                                pos.side,
+                                                sizeToClose,
+                                                '1'
+                                            );
+                                            logger.info(`✅ Closed ${debateResult.closePercent}% of ${pos.symbol}`);
+                                            // Record trade to database
+                                            await this.recordLightweightDebateTrade(pos, debateResult.manageType, debateResult.reason, debateResult.closePercent);
+                                            if (this.currentCycle) this.currentCycle.tradesExecuted++;
+                                        }
+                                        break;
+                                    case 'TIGHTEN_STOP':
+                                        if (debateResult.newStopLoss && Number.isFinite(debateResult.newStopLoss) && debateResult.newStopLoss > 0) {
+                                            // Validate currentPrice before direction check
+                                            if (!Number.isFinite(pos.currentPrice) || pos.currentPrice <= 0) {
+                                                logger.warn(`⚠️ Cannot validate stop loss direction: invalid currentPrice ${pos.currentPrice}`);
+                                                break;
+                                            }
+
+                                            // Validate stop loss direction
+                                            const isValidDirection = pos.side === 'LONG'
+                                                ? debateResult.newStopLoss < pos.currentPrice
+                                                : debateResult.newStopLoss > pos.currentPrice;
+
+                                            if (isValidDirection) {
+                                                // Check for existing stop loss order
+                                                let existingPlanOrders: any[] = [];
+                                                try {
+                                                    existingPlanOrders = await this.weexClient.getCurrentPlanOrders(pos.symbol);
+                                                } catch (err) {
+                                                    logger.warn(`Failed to fetch plan orders for ${pos.symbol}:`, err);
+                                                }
+
+                                                const stopLossOrder = existingPlanOrders.find((o: any) =>
+                                                    (o.planType === 'loss_plan' || o.plan_type === 'loss_plan') &&
+                                                    (o.positionSide === pos.side.toLowerCase() ||
+                                                        o.position_side === pos.side.toLowerCase())
+                                                );
+
+                                                if (stopLossOrder && (stopLossOrder.orderId || stopLossOrder.order_id)) {
+                                                    // Modify existing stop loss
+                                                    const orderId = String(stopLossOrder.orderId || stopLossOrder.order_id);
+                                                    await this.weexClient.modifyTpSlOrder({
+                                                        orderId,
+                                                        triggerPrice: debateResult.newStopLoss,
+                                                        executePrice: 0,
+                                                    });
+                                                    logger.info(`✅ Modified stop loss to ${debateResult.newStopLoss}`);
+                                                } else {
+                                                    // Get fresh position size for new order
+                                                    let currentSize = pos.size;
+                                                    try {
+                                                        const freshPos = await this.weexClient.getPosition(pos.symbol);
+                                                        if (freshPos) {
+                                                            const parsedSize = parseFloat(String(freshPos.size));
+                                                            if (Number.isFinite(parsedSize) && parsedSize > 0) {
+                                                                currentSize = parsedSize;
+                                                            }
+                                                        }
+                                                    } catch (err) {
+                                                        logger.debug(`Failed to fetch fresh position size for ${pos.symbol}, using cached: ${err instanceof Error ? err.message : 'Unknown error'}`);
+                                                    }
+
+                                                    await this.weexClient.placeTpSlOrder({
+                                                        symbol: pos.symbol,
+                                                        planType: 'loss_plan',
+                                                        triggerPrice: debateResult.newStopLoss,
+                                                        size: currentSize,
+                                                        positionSide: pos.side.toLowerCase() as 'long' | 'short',
+                                                    });
+                                                    logger.info(`✅ Placed new stop loss at ${debateResult.newStopLoss}`);
+                                                }
+                                            } else {
+                                                logger.warn(`⚠️ Invalid stop loss direction for ${pos.side}: ${debateResult.newStopLoss}`);
+                                            }
+                                        }
+                                        break;
+                                    case 'ADJUST_TP':
+                                        if (debateResult.newTakeProfit && Number.isFinite(debateResult.newTakeProfit) && debateResult.newTakeProfit > 0) {
+                                            // Validate currentPrice before direction check
+                                            if (!Number.isFinite(pos.currentPrice) || pos.currentPrice <= 0) {
+                                                logger.warn(`⚠️ Cannot validate take profit direction: invalid currentPrice ${pos.currentPrice}`);
+                                                break;
+                                            }
+
+                                            // Validate take profit direction
+                                            const isValidTPDirection = pos.side === 'LONG'
+                                                ? debateResult.newTakeProfit > pos.currentPrice
+                                                : debateResult.newTakeProfit < pos.currentPrice;
+
+                                            if (isValidTPDirection) {
+                                                // Check for existing take profit order
+                                                let existingPlanOrders: any[] = [];
+                                                try {
+                                                    existingPlanOrders = await this.weexClient.getCurrentPlanOrders(pos.symbol);
+                                                } catch (err) {
+                                                    logger.warn(`Failed to fetch plan orders for ${pos.symbol}:`, err);
+                                                }
+
+                                                const takeProfitOrder = existingPlanOrders.find((o: any) =>
+                                                    (o.planType === 'profit_plan' || o.plan_type === 'profit_plan') &&
+                                                    (o.positionSide === pos.side.toLowerCase() ||
+                                                        o.position_side === pos.side.toLowerCase())
+                                                );
+
+                                                if (takeProfitOrder && (takeProfitOrder.orderId || takeProfitOrder.order_id)) {
+                                                    // Modify existing take profit
+                                                    const orderId = String(takeProfitOrder.orderId || takeProfitOrder.order_id);
+                                                    await this.weexClient.modifyTpSlOrder({
+                                                        orderId,
+                                                        triggerPrice: debateResult.newTakeProfit,
+                                                        executePrice: 0,
+                                                    });
+                                                    logger.info(`✅ Modified take profit to ${debateResult.newTakeProfit}`);
+                                                } else {
+                                                    // Get fresh position size for new order
+                                                    let currentSize = pos.size;
+                                                    try {
+                                                        const freshPos = await this.weexClient.getPosition(pos.symbol);
+                                                        if (freshPos) {
+                                                            const parsedSize = parseFloat(String(freshPos.size));
+                                                            if (Number.isFinite(parsedSize) && parsedSize > 0) {
+                                                                currentSize = parsedSize;
+                                                            }
+                                                        }
+                                                    } catch (err) {
+                                                        logger.debug(`Failed to fetch fresh position size for ${pos.symbol}, using cached: ${err instanceof Error ? err.message : 'Unknown error'}`);
+                                                    }
+
+                                                    await this.weexClient.placeTpSlOrder({
+                                                        symbol: pos.symbol,
+                                                        planType: 'profit_plan',
+                                                        triggerPrice: debateResult.newTakeProfit,
+                                                        size: currentSize,
+                                                        positionSide: pos.side.toLowerCase() as 'long' | 'short',
+                                                    });
+                                                    logger.info(`✅ Placed new take profit at ${debateResult.newTakeProfit}`);
+                                                }
+                                            } else {
+                                                logger.warn(`⚠️ Invalid take profit direction for ${pos.side}: ${debateResult.newTakeProfit}`);
+                                            }
+                                        }
+                                        break;
+                                }
+                            } else if (debateResult.manageType === 'HOLD') {
+                                logger.info(`📋 Lightweight debate decided to HOLD position`);
+                            }
+
+                            await this.updateLeaderboard();
+                            await this.completeCycle(cycleStart, `lightweight-debate ${preCheck.urgentPosition.symbol}: ${debateResult.manageType}`);
+                        } catch (error) {
+                            logger.error('Lightweight debate failed, falling back to single-analyst:', error);
+                            // Fallback to Karen-only decision
+                            const result = await this.executeFallbackManagement(
+                                preCheck.allPositions,
+                                marketDataMap,
+                                `lightweight fallback: ${preCheck.urgentPosition.urgencyReason}`
+                            );
+                            await this.updateLeaderboard();
+                            if (result.executed) {
+                                await this.completeCycle(cycleStart, `lightweight-fallback ${result.symbol}`);
+                            } else {
+                                await this.completeCycle(cycleStart, 'lightweight fallback failed');
+                            }
                         }
                     } else {
                         logger.warn('LIGHTWEIGHT_DEBATE action but no positions available');
-                        await this.completeCycle(cycleStart, 'lightweight manage: no position');
+                        await this.completeCycle(cycleStart, 'lightweight debate: no position');
                     }
                     return;
             }
@@ -1736,37 +1832,6 @@ export class AutonomousTradingEngine extends EventEmitter {
             logger.info(`🚪 MANAGE ACTION SELECTED: ${coinSymbol}`);
             logger.info(`${'='.repeat(60)}\n`);
 
-            // CRITICAL: Check circuit breaker status for MANAGE actions
-            // RED alert = close all positions immediately (override any other decision)
-            // ORANGE alert = close losing positions, tighten stops on winners
-            if (config.autonomous.enableCircuitBreakers) {
-                try {
-                    const circuitStatus = await circuitBreakerService.checkCircuitBreakers();
-                    if (circuitStatus.level === 'RED') {
-                        logger.error(`🚨 CIRCUIT BREAKER RED: Forcing CLOSE_FULL for all positions`);
-                        // Force close all positions - override AI decision
-                        for (const pos of portfolioPositions) {
-                            try {
-                                await this.weexClient.closeAllPositions(pos.symbol);
-                                logger.info(`✅ Emergency closed ${pos.symbol} due to RED circuit breaker`);
-                            } catch (closeError) {
-                                logger.error(`Failed to emergency close ${pos.symbol}:`, closeError);
-                            }
-                        }
-                        await this.updateLeaderboard();
-                        await this.completeCycle(cycleStart, 'circuit breaker RED - emergency close');
-                        const sleepTime = this.getSleepTimeWithBackoff(cycleStart);
-                        if (sleepTime > 0 && this.isRunning) await this.sleep(sleepTime);
-                        return;
-                    } else if (circuitStatus.level === 'ORANGE') {
-                        logger.warn(`⚠️ CIRCUIT BREAKER ORANGE: Will prioritize closing losing positions`);
-                        // Continue with MANAGE but log the elevated risk
-                    }
-                } catch (cbError) {
-                    logger.warn('Circuit breaker check failed, continuing with MANAGE:', cbError);
-                }
-            }
-
             // Find the position to manage - case-insensitive match with fallback to partial match
             const normalizedCoinSymbol = coinSymbol.toLowerCase();
             let positionToManage = portfolioPositions.find(p =>
@@ -1995,6 +2060,11 @@ export class AutonomousTradingEngine extends EventEmitter {
                                 throw new Error(`Invalid newStopLoss: ${newStopLoss}`);
                             }
 
+                            // Validate currentPrice before direction check
+                            if (!Number.isFinite(positionToManage.currentPrice) || positionToManage.currentPrice <= 0) {
+                                throw new Error(`Cannot validate stop loss direction: invalid currentPrice ${positionToManage.currentPrice}`);
+                            }
+
                             // Validate stop loss direction
                             if (positionToManage.side === 'LONG' && newStopLoss >= positionToManage.currentPrice) {
                                 throw new Error(`Stop loss for LONG must be below current price: ${newStopLoss} >= ${positionToManage.currentPrice}`);
@@ -2065,6 +2135,11 @@ export class AutonomousTradingEngine extends EventEmitter {
                         case 'ADJUST_TP':
                             if (!newTakeProfit || !Number.isFinite(newTakeProfit) || newTakeProfit <= 0) {
                                 throw new Error(`Invalid newTakeProfit: ${newTakeProfit}`);
+                            }
+
+                            // Validate currentPrice before direction check
+                            if (!Number.isFinite(positionToManage.currentPrice) || positionToManage.currentPrice <= 0) {
+                                throw new Error(`Cannot validate take profit direction: invalid currentPrice ${positionToManage.currentPrice}`);
                             }
 
                             // Validate take profit direction
@@ -2149,6 +2224,11 @@ export class AutonomousTradingEngine extends EventEmitter {
                             // Verify we have isolatedPositionId
                             if (!positionToManage.isolatedPositionId || !Number.isFinite(positionToManage.isolatedPositionId)) {
                                 throw new Error(`Missing isolatedPositionId for ${positionToManage.symbol}. Cannot adjust margin without position ID.`);
+                            }
+
+                            // Validate currentPrice before calculating position value
+                            if (!Number.isFinite(positionToManage.currentPrice) || positionToManage.currentPrice <= 0) {
+                                throw new Error(`Cannot calculate position value: invalid currentPrice ${positionToManage.currentPrice}`);
                             }
 
                             // Validate margin amount is reasonable (max 50% of position value)
@@ -3965,8 +4045,7 @@ export class AutonomousTradingEngine extends EventEmitter {
                     }
                 });
 
-                // FIXED: Create performance snapshot for circuit breaker drawdown calculations
-                // Snapshots are used by CircuitBreakerService to calculate 24h portfolio drawdown
+                // Create performance snapshot for historical tracking
                 try {
                     // CRITICAL FIX: Validate totalValue before saving
                     // Allow negative values (portfolio can be in loss) but reject NaN/Infinity
@@ -4007,9 +4086,8 @@ export class AutonomousTradingEngine extends EventEmitter {
                         const sevenDaysAgo = new Date(now - 7 * 24 * 60 * 60 * 1000);
                         let deletedTotal = 0;
 
-                        // Delete in batches to prevent lock contention
                         // Note: Prisma deleteMany doesn't support 'take', so we delete all at once
-                        // For very large datasets, consider using raw SQL with LIMIT
+                        // For very large datasets with lock contention issues, consider using raw SQL with LIMIT
                         const deleted = await prisma.performanceSnapshot.deleteMany({
                             where: {
                                 portfolioId: firstAnalyst.portfolioId,
@@ -4116,6 +4194,122 @@ export class AutonomousTradingEngine extends EventEmitter {
     }
 
     /**
+     * Record lightweight debate trade to database
+     * 
+     * Records CLOSE_FULL, CLOSE_PARTIAL, and TAKE_PARTIAL actions from lightweight debates.
+     * This ensures all position closures are tracked for P&L reporting.
+     */
+    private async recordLightweightDebateTrade(
+        position: { symbol: string; side: string; size: number; currentPrice: number; unrealizedPnl: number },
+        manageType: string,
+        reason: string,
+        closePercent: number
+    ): Promise<void> {
+        await this.recordManagementTrade(
+            position,
+            manageType,
+            `LIGHTWEIGHT_DEBATE: ${manageType} - ${(reason || '').slice(0, 200)}`,
+            closePercent
+        );
+    }
+
+    /**
+     * Record management trade to database (shared helper)
+     * 
+     * Used by both lightweight debates and fallback management to record position closures.
+     * This ensures all position closures are tracked for P&L reporting.
+     */
+    private async recordManagementTrade(
+        position: { symbol: string; side: string; size: number; currentPrice: number; unrealizedPnl: number },
+        manageType: string,
+        reason: string,
+        closePercent: number
+    ): Promise<void> {
+        try {
+            // Validate currentPrice before proceeding
+            if (!Number.isFinite(position.currentPrice) || position.currentPrice <= 0) {
+                logger.warn(`Cannot record management trade: invalid currentPrice ${position.currentPrice}`);
+                return;
+            }
+
+            // Find original champion who opened this position
+            let originalChampionId: string | null = null;
+            try {
+                const originalTrade = await prisma.trade.findFirst({
+                    where: {
+                        symbol: position.symbol,
+                        status: 'FILLED',
+                        realizedPnl: null, // Entry trade
+                        side: position.side === 'LONG' ? 'BUY' : 'SELL'
+                    },
+                    orderBy: { executedAt: 'desc' },
+                    select: { championId: true }
+                });
+                originalChampionId = originalTrade?.championId || null;
+            } catch (err) {
+                logger.debug(`Failed to lookup original champion for ${position.symbol}: ${err instanceof Error ? err.message : 'Unknown error'}`);
+                originalChampionId = null;
+            }
+
+            // Calculate size and P&L for the trade record
+            let loggedSize = Number.isFinite(position.size) ? position.size : 0;
+            let loggedPnl = Number.isFinite(position.unrealizedPnl) ? position.unrealizedPnl : 0;
+
+            // Validate closePercent
+            const safeClosePercent = Number.isFinite(closePercent) && closePercent > 0 && closePercent <= 100
+                ? closePercent
+                : 100;
+
+            if (safeClosePercent < 100) {
+                loggedSize = (loggedSize * safeClosePercent) / 100;
+                loggedPnl = (loggedPnl * safeClosePercent) / 100;
+            }
+
+            // Final validation
+            if (!Number.isFinite(loggedSize)) loggedSize = 0;
+            if (!Number.isFinite(loggedPnl)) loggedPnl = 0;
+
+            // Get collaborative portfolio ID
+            const firstAnalyst = this.analystStates.values().next().value;
+            let portfolioId = firstAnalyst?.portfolioId;
+
+            if (!portfolioId) {
+                const collabPortfolio = await prisma.portfolio.findFirst({
+                    where: { agentId: 'collaborative' },
+                    select: { id: true }
+                });
+                if (!collabPortfolio) {
+                    logger.error('Cannot record management trade: collaborative portfolio not found');
+                    return;
+                }
+                portfolioId = collabPortfolio.id;
+            }
+
+            const tradeId = crypto.randomUUID();
+            await prisma.trade.create({
+                data: {
+                    id: tradeId,
+                    portfolioId: portfolioId,
+                    symbol: position.symbol,
+                    side: position.side === 'LONG' ? 'SELL' : 'BUY',
+                    type: 'MARKET',
+                    size: loggedSize,
+                    price: position.currentPrice,
+                    status: 'FILLED',
+                    reason: reason,
+                    championId: originalChampionId,
+                    realizedPnl: loggedPnl,
+                    executedAt: new Date(),
+                    createdAt: new Date()
+                }
+            });
+            logger.info(`📊 Recorded management trade: ${position.symbol} ${manageType} P&L: ${loggedPnl.toFixed(2)} (${originalChampionId})`);
+        } catch (dbError) {
+            logger.error('Failed to record management trade:', dbError);
+        }
+    }
+
+    /**
      * Save trade to database
      * 
      * EDGE CASES HANDLED:
@@ -4173,39 +4367,6 @@ export class AutonomousTradingEngine extends EventEmitter {
             logger.error('Failed to save trade to database:', error);
             // Don't throw - trade was already executed on WEEX, just log the DB failure
         }
-    }
-
-    /**
-     * Emergency close all positions
-     * FIXED: Collect positions to close first, then iterate to avoid modifying while iterating
-     */
-    private async emergencyCloseAllPositions(): Promise<void> {
-        logger.error('🚨 EMERGENCY: Closing all positions');
-
-        // Collect all unique symbols to close first
-        const symbolsToClose = new Set<string>();
-        for (const [, state] of this.analystStates) {
-            for (const position of state.positions) {
-                symbolsToClose.add(position.symbol);
-            }
-        }
-
-        // Close positions by symbol
-        for (const symbol of symbolsToClose) {
-            try {
-                await this.weexClient.closeAllPositions(symbol);
-                logger.info(`Closed positions for ${symbol}`);
-            } catch (error) {
-                logger.error(`Failed to close ${symbol}:`, error);
-            }
-        }
-
-        // Clear all analyst positions after closing
-        for (const [, state] of this.analystStates) {
-            state.positions = [];
-        }
-
-        this.emit('emergencyClose', { timestamp: Date.now() });
     }
 
     private sleep(ms: number): Promise<void> {

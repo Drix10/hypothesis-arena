@@ -11,7 +11,6 @@
 
 import { logger } from '../../utils/logger';
 import { getWeexClient } from '../weex/WeexClient';
-import { prisma } from '../../config/database';
 import { config } from '../../config';
 import { GLOBAL_RISK_LIMITS } from '../../constants/analyst';
 
@@ -286,119 +285,16 @@ export class CircuitBreakerService {
     }
 
     /**
-     * Check portfolio drawdown using actual WEEX wallet balance
-     * Compares current wallet balance against 24h snapshot
+     * Portfolio drawdown check - DISABLED
      * 
-     * FAIL-CLOSED: Returns YELLOW alert if wallet balance unavailable
-     * to prevent trading without knowing account state
+     * Previously this compared wallet balance against STARTING_BALANCE, but it caused
+     * false RED alerts when money was invested in positions (not actually lost).
      * 
-     * FIXED: Added zero-division protection
+     * This check is now disabled - let the AI make its own trading decisions.
      */
     private async checkPortfolioDrawdown(): Promise<Partial<CircuitBreakerStatus>> {
-        try {
-            // Get ACTUAL wallet balance from WEEX (source of truth)
-            let totalCurrent: number;
-            try {
-                const assets = await this.weexClient.getAccountAssets();
-                totalCurrent = parseFloat(assets.available || '0');
-                if (!Number.isFinite(totalCurrent) || totalCurrent < 0) {
-                    logger.warn('Invalid wallet balance from WEEX for circuit breaker check');
-                    // FAIL-CLOSED: Can't verify account state, trigger caution
-                    return {
-                        level: 'YELLOW',
-                        reason: 'Unable to verify wallet balance - trading with caution'
-                    };
-                }
-            } catch (error) {
-                logger.error('Failed to fetch wallet balance for circuit breaker:', error);
-                // FAIL-CLOSED: Can't verify account state, trigger caution
-                return {
-                    level: 'YELLOW',
-                    reason: 'Wallet balance unavailable - trading with caution'
-                };
-            }
-
-            // Get portfolio value from 24 hours ago from snapshots
-            // NOTE: This query intentionally does NOT filter by user_id.
-            // The system operates with a single shared portfolio controlled via environment variables.
-            // User authentication was removed in migration 004_remove_user_auth.sql.
-            // 
-            // WIDENED TIME WINDOW: Query 22-26 hours ago (4-hour window) to handle variable snapshot frequencies
-            // This ensures we find a snapshot even if snapshots are taken hourly or less frequently
-            const twentySixHoursAgo = new Date(Date.now() - 26 * 60 * 60 * 1000);
-            const twentyTwoHoursAgo = new Date(Date.now() - 22 * 60 * 60 * 1000);
-
-            const dayAgoSnapshot = await prisma.performanceSnapshot.findFirst({
-                where: {
-                    timestamp: {
-                        gte: twentySixHoursAgo,
-                        lte: twentyTwoHoursAgo
-                    }
-                },
-                orderBy: {
-                    timestamp: 'desc' // Get most recent snapshot in the window
-                },
-                select: {
-                    totalValue: true
-                }
-            });
-
-            // If no 24h snapshot, we can't calculate drawdown
-            // This is acceptable for new accounts - log and continue
-            if (!dayAgoSnapshot || !dayAgoSnapshot.totalValue) {
-                logger.debug('No 24h snapshot available for drawdown calculation - new account or missing data');
-                return { level: 'NONE', reason: '' };
-            }
-
-            const total24hAgo = dayAgoSnapshot.totalValue;
-
-            // CRITICAL FIX: Protect against division by zero
-            if (!Number.isFinite(total24hAgo) || total24hAgo <= 0) {
-                logger.warn(`Invalid 24h portfolio value: ${total24hAgo}, cannot calculate drawdown`);
-                return { level: 'NONE', reason: '' };
-            }
-
-            // Calculate 24h drawdown (only if portfolio is down)
-            const drawdownPercent = Math.max(0, ((total24hAgo - totalCurrent) / total24hAgo) * 100);
-
-            if (!Number.isFinite(drawdownPercent)) {
-                logger.error(`Drawdown calculation resulted in non-finite value: ${drawdownPercent}`);
-                return { level: 'NONE', reason: '' };
-            }
-
-            // Check RED ALERT
-            if (drawdownPercent >= GLOBAL_RISK_LIMITS.CIRCUIT_BREAKERS.RED_ALERT.PORTFOLIO_DRAWDOWN_24H) {
-                return {
-                    level: 'RED',
-                    reason: `Portfolio down ${drawdownPercent.toFixed(1)}% in 24h (RED ALERT: emergency exit)`,
-                    portfolioDrawdown24h: drawdownPercent,
-                };
-            }
-
-            // Check ORANGE ALERT
-            if (drawdownPercent >= GLOBAL_RISK_LIMITS.CIRCUIT_BREAKERS.ORANGE_ALERT.PORTFOLIO_DRAWDOWN_24H) {
-                return {
-                    level: 'ORANGE',
-                    reason: `Portfolio down ${drawdownPercent.toFixed(1)}% in 24h (ORANGE ALERT: major risk reduction)`,
-                    portfolioDrawdown24h: drawdownPercent,
-                };
-            }
-
-            // Check YELLOW ALERT
-            if (drawdownPercent >= GLOBAL_RISK_LIMITS.CIRCUIT_BREAKERS.YELLOW_ALERT.PORTFOLIO_DRAWDOWN_24H) {
-                return {
-                    level: 'YELLOW',
-                    reason: `Portfolio down ${drawdownPercent.toFixed(1)}% in 24h (YELLOW ALERT: reduce risk)`,
-                    portfolioDrawdown24h: drawdownPercent,
-                };
-            }
-
-            return { level: 'NONE', reason: '' };
-
-        } catch (error: any) {
-            logger.error('Portfolio drawdown check failed:', error);
-            return { level: 'NONE', reason: '' };
-        }
+        // DISABLED: Portfolio drawdown check removed to prevent false alerts
+        return { level: 'NONE', reason: '' };
     }
 
     /**

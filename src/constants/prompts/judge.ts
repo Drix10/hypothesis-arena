@@ -13,6 +13,7 @@
  */
 
 import { config } from '../../config';
+import { SchemaType } from '@google/generative-ai';
 
 /**
  * Get the debate score weights from config
@@ -95,32 +96,156 @@ export interface JudgeInput {
 }
 
 /**
- * Judge output structure
- * Detailed verdict with full reasoning
+ * Raw judge response structure (matches prompt output format)
+ * This is what the AI returns directly - flat winner-only scores
+ */
+export interface RawJudgeResponse {
+    winner: string;             // Analyst ID of the winner
+    winnerName: string;         // Display name
+    confidence: number;         // 0-100 confidence in verdict
+    reasoning: string;          // 2-3 sentence summary
+    keyFactors: string[];       // Top 3 factors that decided the outcome
+
+    // Flat winner scores (matches prompt output)
+    winnerScore: number;        // 0-100 total score
+    winnerDataQuality: number;  // 0-{weights.data} based on config
+    winnerLogicCoherence: number; // 0-{weights.logic} based on config
+    winnerRiskAwareness: number;  // 0-{weights.risk} based on config
+    winnerCatalystClarity: number; // 0-{weights.catalyst} based on config
+
+    // Flags (flat, not nested)
+    closeTie: boolean;          // True if score margin is within 3 points
+    dominancePattern: boolean;  // True if winner dominated all categories
+    lowQualityDebate: boolean;  // True if overall quality was poor
+}
+
+/**
+ * Individual analyst score breakdown
+ */
+export interface AnalystScoreBreakdown {
+    total: number;          // 0-100 total score
+    dataQuality: number;    // 0-{weights.data} based on config
+    logicCoherence: number; // 0-{weights.logic} based on config
+    riskAwareness: number;  // 0-{weights.risk} based on config
+    catalystClarity: number;// 0-{weights.catalyst} based on config
+}
+
+/**
+ * Judge output structure (normalized for internal use)
+ * Contains winner's actual scores and estimated scores for other analysts
+ * 
+ * NOTE: Only the winner's scores come from the AI. Non-winner scores are
+ * estimated based on the winner's score minus a confidence-based margin.
  */
 export interface JudgeVerdict {
     winner: string;             // Analyst ID of the winner
     winnerName: string;         // Display name
     confidence: number;         // 0-100 confidence in verdict
 
-    // Detailed scores per analyst
-    scores: Record<string, {
-        total: number;          // 0-100 total score
-        dataQuality: number;    // 0-25 (or weighted)
-        logicCoherence: number; // 0-25 (or weighted)
-        riskAwareness: number;  // 0-25 (or weighted)
-        catalystClarity: number;// 0-25 (or weighted)
-    }>;
+    // Scores per analyst (winner = actual from AI, others = estimated)
+    // Key is analyst ID (e.g., "technical", "macro", "risk", "quant")
+    scores: Record<string, AnalystScoreBreakdown>;
 
     // Reasoning
     reasoning: string;          // 2-3 sentence summary
     keyFactors: string[];       // Top 3 factors that decided the outcome
 
     // Warnings/flags
-    flags?: {
-        closeTie?: boolean;     // Scores within 5 points
-        dominancePattern?: boolean; // Same analyst winning repeatedly
-        lowQualityDebate?: boolean; // All scores below 50
+    flags: {
+        closeTie: boolean;      // Scores within 3 points (triggers tie-breaker rules)
+        dominancePattern: boolean; // Same analyst winning repeatedly
+        lowQualityDebate: boolean; // All scores below 50
+    };
+}
+
+/**
+ * Extract winner scores from raw judge response
+ * Used when building JudgeVerdict in callJudge()
+ * 
+ * @param raw - Raw response from AI (or parsed JSON with same shape)
+ * @param weights - Score weights from config
+ * @returns Winner's score breakdown with validated/clamped values
+ */
+export function extractWinnerScores(
+    raw: Record<string, unknown>,
+    weights: { data: number; logic: number; risk: number; catalyst: number }
+): AnalystScoreBreakdown {
+    // Validate weights with safe defaults (standard 25/25/25/25 split)
+    const safeWeights = {
+        data: Number.isFinite(weights?.data) && weights.data > 0 ? weights.data : 25,
+        logic: Number.isFinite(weights?.logic) && weights.logic > 0 ? weights.logic : 25,
+        risk: Number.isFinite(weights?.risk) && weights.risk > 0 ? weights.risk : 25,
+        catalyst: Number.isFinite(weights?.catalyst) && weights.catalyst > 0 ? weights.catalyst : 25,
+    };
+
+    const safeScore = (value: unknown, defaultVal: number, max: number): number => {
+        const num = Number(value);
+        if (!Number.isFinite(num)) return defaultVal;
+        return Math.min(max, Math.max(0, num));
+    };
+
+    // Handle null/undefined raw object
+    const safeRaw = raw && typeof raw === 'object' ? raw : {};
+
+    // Default to 60% of max for each component (consistent with estimateNonWinnerScores baseline)
+    const defaultDataQuality = Math.round(safeWeights.data * 0.6);
+    const defaultLogicCoherence = Math.round(safeWeights.logic * 0.6);
+    const defaultRiskAwareness = Math.round(safeWeights.risk * 0.6);
+    const defaultCatalystClarity = Math.round(safeWeights.catalyst * 0.6);
+    const defaultTotal = defaultDataQuality + defaultLogicCoherence + defaultRiskAwareness + defaultCatalystClarity;
+
+    return {
+        total: safeScore(safeRaw.winnerScore, defaultTotal, 100),
+        dataQuality: safeScore(safeRaw.winnerDataQuality, defaultDataQuality, safeWeights.data),
+        logicCoherence: safeScore(safeRaw.winnerLogicCoherence, defaultLogicCoherence, safeWeights.logic),
+        riskAwareness: safeScore(safeRaw.winnerRiskAwareness, defaultRiskAwareness, safeWeights.risk),
+        catalystClarity: safeScore(safeRaw.winnerCatalystClarity, defaultCatalystClarity, safeWeights.catalyst),
+    };
+}
+
+/**
+ * Estimate non-winner scores based on winner's score and confidence
+ * Higher confidence = larger margin between winner and others
+ * 
+ * @param winnerScore - Winner's actual scores
+ * @param confidence - Judge's confidence (0-100)
+ * @param analystIndex - Index of this analyst (for deterministic variation)
+ * @returns Estimated score breakdown for non-winner
+ */
+export function estimateNonWinnerScores(
+    winnerScore: AnalystScoreBreakdown,
+    confidence: number,
+    analystIndex: number
+): AnalystScoreBreakdown {
+    // Validate inputs - use safe defaults if invalid
+    const safeConfidence = Number.isFinite(confidence) ? Math.max(0, Math.min(100, confidence)) : 70;
+    const safeIndex = Number.isFinite(analystIndex) && analystIndex >= 0 ? analystIndex : 0;
+
+    // Safely extract winner scores with fallbacks
+    const safeWinnerData = Number.isFinite(winnerScore?.dataQuality) ? winnerScore.dataQuality : 15;
+    const safeWinnerLogic = Number.isFinite(winnerScore?.logicCoherence) ? winnerScore.logicCoherence : 15;
+    const safeWinnerRisk = Number.isFinite(winnerScore?.riskAwareness) ? winnerScore.riskAwareness : 15;
+    const safeWinnerCatalyst = Number.isFinite(winnerScore?.catalystClarity) ? winnerScore.catalystClarity : 15;
+
+    // Calculate margin based on confidence (higher confidence = larger margin)
+    const baseMargin = Math.max(5, Math.round((safeConfidence / 100) * 15)); // 5-15 points
+    // Cap indexOffset to prevent excessive reduction for later analysts
+    // With 4 analysts (indices 0-3), max offset is (3+1)*2 = 8
+    const cappedIndex = Math.min(safeIndex, 3);
+    const indexOffset = (cappedIndex + 1) * 2; // 2, 4, 6, 8 (capped at 8)
+    const componentReduction = Math.ceil((baseMargin + indexOffset) / 4);
+
+    const dataQuality = Math.max(0, safeWinnerData - componentReduction);
+    const logicCoherence = Math.max(0, safeWinnerLogic - componentReduction);
+    const riskAwareness = Math.max(0, safeWinnerRisk - componentReduction);
+    const catalystClarity = Math.max(0, safeWinnerCatalyst - componentReduction);
+
+    return {
+        dataQuality,
+        logicCoherence,
+        riskAwareness,
+        catalystClarity,
+        total: dataQuality + logicCoherence + riskAwareness + catalystClarity
     };
 }
 
@@ -318,32 +443,21 @@ ANTI-BIAS CHECKS:
 - Don't favor longer arguments over concise ones
 - Judge the SUBSTANCE, not the style
 
-OUTPUT FORMAT - Respond with JSON:
+OUTPUT FORMAT - Respond with JSON (ALL fields required):
 {
     "winner": "analyst_id",
     "winnerName": "Analyst Display Name",
     "confidence": 0-100,
-    "scores": {
-        "analyst_id_1": {
-            "total": 0-100,
-            "dataQuality": 0-${weights.data},
-            "logicCoherence": 0-${weights.logic},
-            "riskAwareness": 0-${weights.risk},
-            "catalystClarity": 0-${weights.catalyst}
-        },
-        "analyst_id_2": { ... }
-    },
     "reasoning": "2-3 sentence summary of why the winner prevailed",
-    "keyFactors": [
-        "Factor 1 that decided the outcome",
-        "Factor 2",
-        "Factor 3"
-    ],
-    "flags": {
-        "closeTie": true/false,
-        "dominancePattern": true/false,
-        "lowQualityDebate": true/false
-    }
+    "keyFactors": ["Factor 1", "Factor 2", "Factor 3"],
+    "winnerScore": 0-100,
+    "winnerDataQuality": 0-${weights.data},
+    "winnerLogicCoherence": 0-${weights.logic},
+    "winnerRiskAwareness": 0-${weights.risk},
+    "winnerCatalystClarity": 0-${weights.catalyst},
+    "closeTie": true/false,
+    "dominancePattern": true/false,
+    "lowQualityDebate": true/false
 }
 
 Respond ONLY with valid JSON. No markdown or extra prose.`;
@@ -402,76 +516,107 @@ SCORING (total 100):
 - Risk: /${weights.risk} (acknowledges what could go wrong)
 - Catalyst: /${weights.catalyst} (clear price driver with timeline)
 
-OUTPUT JSON:
+OUTPUT JSON (ALL fields required):
 {
     "winner": "analyst_id",
     "winnerName": "Name",
     "confidence": 0-100,
-    "scores": {
-        "analyst_id": { "total": X, "dataQuality": X, "logicCoherence": X, "riskAwareness": X, "catalystClarity": X }
-    },
     "reasoning": "One sentence why winner prevailed",
-    "keyFactors": ["Factor 1", "Factor 2", "Factor 3"]
+    "keyFactors": ["Factor 1", "Factor 2", "Factor 3"],
+    "winnerScore": 0-100,
+    "winnerDataQuality": 0-${weights.data},
+    "winnerLogicCoherence": 0-${weights.logic},
+    "winnerRiskAwareness": 0-${weights.risk},
+    "winnerCatalystClarity": 0-${weights.catalyst},
+    "closeTie": false,
+    "dominancePattern": false,
+    "lowQualityDebate": false
 }`;
 }
 
 /**
- * Schema for judge response validation
- * Used with Gemini/OpenRouter structured output
+ * Build the judge response schema with dynamic weight descriptions
+ * Used with Gemini structured output - ALL FIELDS REQUIRED to prevent truncation
+ * NOTE: Gemini doesn't support additionalProperties, so we define explicit analyst score fields
+ * 
+ * @returns Schema object with descriptions reflecting current config weights
  */
-export const JUDGE_RESPONSE_SCHEMA = {
-    type: 'object' as const,
-    properties: {
-        winner: {
-            type: 'string' as const,
-            description: 'Analyst ID of the winner'
-        },
-        winnerName: {
-            type: 'string' as const,
-            description: 'Display name of the winner'
-        },
-        confidence: {
-            type: 'number' as const,
-            description: 'Confidence in verdict 0-100'
-        },
-        scores: {
-            type: 'object' as const,
-            description: 'Scores per analyst',
-            additionalProperties: {
-                type: 'object' as const,
-                properties: {
-                    total: { type: 'number' as const },
-                    dataQuality: { type: 'number' as const },
-                    logicCoherence: { type: 'number' as const },
-                    riskAwareness: { type: 'number' as const },
-                    catalystClarity: { type: 'number' as const }
-                },
-                required: ['total', 'dataQuality', 'logicCoherence', 'riskAwareness', 'catalystClarity']
+function buildJudgeResponseSchema() {
+    const weights = getScoreWeights();
+
+    return {
+        type: SchemaType.OBJECT,
+        properties: {
+            winner: {
+                type: SchemaType.STRING,
+                description: 'Analyst ID of the winner (e.g., "technical", "macro", "risk", "quant")'
+            },
+            winnerName: {
+                type: SchemaType.STRING,
+                description: 'Display name of the winner (e.g., "Jim", "Ray", "Karen", "Quant")'
+            },
+            confidence: {
+                type: SchemaType.NUMBER,
+                description: 'Confidence in verdict 0-100'
+            },
+            reasoning: {
+                type: SchemaType.STRING,
+                description: 'Summary of why winner prevailed (2-3 sentences)'
+            },
+            keyFactors: {
+                type: SchemaType.ARRAY,
+                items: { type: SchemaType.STRING },
+                description: 'Top 3 factors that decided outcome'
+            },
+            winnerScore: {
+                type: SchemaType.NUMBER,
+                description: 'Winner total score 0-100'
+            },
+            winnerDataQuality: {
+                type: SchemaType.NUMBER,
+                description: `Winner data quality score 0-${weights.data}`
+            },
+            winnerLogicCoherence: {
+                type: SchemaType.NUMBER,
+                description: `Winner logic coherence score 0-${weights.logic}`
+            },
+            winnerRiskAwareness: {
+                type: SchemaType.NUMBER,
+                description: `Winner risk awareness score 0-${weights.risk}`
+            },
+            winnerCatalystClarity: {
+                type: SchemaType.NUMBER,
+                description: `Winner catalyst clarity score 0-${weights.catalyst}`
+            },
+            closeTie: {
+                type: SchemaType.BOOLEAN,
+                description: 'True if score margin is within 3 points (triggers tie-breaker rules)'
+            },
+            dominancePattern: {
+                type: SchemaType.BOOLEAN,
+                description: 'True if winner dominated all categories'
+            },
+            lowQualityDebate: {
+                type: SchemaType.BOOLEAN,
+                description: 'True if overall quality was poor'
             }
         },
-        reasoning: {
-            type: 'string' as const,
-            description: 'Summary of why winner prevailed'
-        },
-        keyFactors: {
-            type: 'array' as const,
-            items: { type: 'string' as const },
-            description: 'Top factors that decided outcome'
-        },
-        flags: {
-            type: 'object' as const,
-            properties: {
-                closeTie: { type: 'boolean' as const },
-                dominancePattern: { type: 'boolean' as const },
-                lowQualityDebate: { type: 'boolean' as const }
-            }
-        }
-    },
-    required: ['winner', 'winnerName', 'confidence', 'scores', 'reasoning', 'keyFactors']
-};
+        required: ['winner', 'winnerName', 'confidence', 'reasoning', 'keyFactors', 'winnerScore',
+            'winnerDataQuality', 'winnerLogicCoherence', 'winnerRiskAwareness', 'winnerCatalystClarity',
+            'closeTie', 'dominancePattern', 'lowQualityDebate']
+    };
+}
+
+/**
+ * Schema for judge response validation
+ * Built dynamically to reflect current config weights
+ */
+export const JUDGE_RESPONSE_SCHEMA = buildJudgeResponseSchema();
 
 export default {
     buildJudgePrompt,
     buildCoinSelectionJudgePrompt,
+    extractWinnerScores,
+    estimateNonWinnerScores,
     JUDGE_RESPONSE_SCHEMA
 };
