@@ -5,7 +5,7 @@
 
 import type { WeexContract } from '../types/weex';
 import { logger } from '../../utils/logger';
-import { APPROVED_SYMBOLS } from '../constants/symbols';
+import { APPROVED_SYMBOLS } from '../types/weex';
 
 /**
  * Contract specifications cache with TTL

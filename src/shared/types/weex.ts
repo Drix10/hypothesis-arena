@@ -242,7 +242,7 @@ export interface WeexContract {
     maxOrderSize: string; // Maximum order size in base currency
     maxPositionSize: string; // Maximum position size in base currency
     marketOpenLimitSize?: string; // Market order opening position single limit
-    // Legacy fields (may be deprecated)
+    // Optional fields from WEEX API (may not always be present in response)
     baseCoin?: string;
     quoteCoin?: string;
     minTradeNum?: string;

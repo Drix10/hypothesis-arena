@@ -256,7 +256,17 @@ export class WeexClient {
         if (elapsed > 3600000 || elapsed < 0) {
             if (elapsed < 0) {
                 logger.warn(`Clock skew detected: elapsed time is negative (${elapsed}ms). Resetting rate limiter.`);
+            } else {
+                logger.debug(`Long elapsed time (${elapsed}ms), resetting rate limiter bucket.`);
             }
+            bucket.tokens = limit;
+            bucket.lastRefill = now;
+            return;
+        }
+
+        // CRITICAL FIX: Validate windowMs to prevent division by zero
+        if (!Number.isFinite(windowMs) || windowMs <= 0) {
+            logger.error(`Invalid windowMs: ${windowMs}. Resetting bucket.`);
             bucket.tokens = limit;
             bucket.lastRefill = now;
             return;
@@ -355,6 +365,11 @@ export class WeexClient {
         isPrivate: boolean = false,
         isOrderRequest: boolean = false
     ): Promise<T> {
+        // FIXED: Check if client has been cleaned up before making requests
+        if (this.isCleanedUp) {
+            throw new Error('WeexClient has been cleaned up - cannot make requests. Create a new instance.');
+        }
+
         await this.consumeTokens(endpoint, isOrderRequest);
 
         const timestamp = await this.getTimestamp();
@@ -649,7 +664,6 @@ export class WeexClient {
     /**
      * Cancel an order by orderId
      * @param orderId - The order ID to cancel
-     * @deprecated symbol parameter removed - it was never used by the API
      */
     async cancelOrder(orderId: string): Promise<any> {
         return this.request(
@@ -1023,4 +1037,17 @@ export function getWeexClient(credentials?: WeexCredentials): WeexClient {
     // Create new instance synchronously (safe since constructor is sync)
     weexClientInstance = new WeexClient();
     return weexClientInstance;
+}
+
+/**
+ * Reset/cleanup the WeexClient singleton
+ * Call this during graceful shutdown to release resources
+ * FIXED: Added for proper cleanup on application shutdown
+ */
+export function resetWeexClient(): void {
+    if (weexClientInstance) {
+        weexClientInstance.cleanup();
+        weexClientInstance = null;
+        logger.info('WeexClient singleton reset');
+    }
 }

@@ -72,15 +72,40 @@ model Trade {
   id                 String    @id @default(uuid())
   portfolioId        String    @map("portfolio_id")
   symbol             String
+  // side: Exchange-level direction (BUY/SELL) - what order to place
+  // action: Trading decision (BUY/SELL/HOLD/CLOSE/REDUCE) - what the AI decided
+  // Example: CLOSE a LONG position = action=CLOSE, side=SELL
   side               TradeSide // 'BUY' or 'SELL' - now enum-constrained
   type               TradeType // 'MARKET' or 'LIMIT' - now enum-constrained
+  action             TradeAction? // v5.0.0: BUY, SELL, HOLD, CLOSE, REDUCE - now enum-constrained
   size               Float
-  price              Float
+  // MIGRATION NOTE: entryPrice is the canonical field for the trade's entry price.
+  // price is DEPRECATED but kept for backward compatibility with existing queries.
+  // INVARIANT: price === entryPrice (enforced at application level in trade creation)
+  // New code should always use entryPrice. The price field will be removed in a future version.
+  //
+  // DATA CONSISTENCY STRATEGY:
+  // - Application layer enforces price === entryPrice on all INSERT operations
+  // - Existing data was migrated with: UPDATE trades SET entry_price = price WHERE entry_price IS NULL
+  // - No database-level constraint (CHECK or trigger) due to SQLite limitations
+  // - Validation in trade creation code ensures both fields are set to the same value
+  //
+  // RISK: If application code bypasses validation, price and entryPrice could diverge.
+  // MITIGATION: All trade creation goes through AutonomousTradingEngine which enforces this.
+  // FUTURE: Remove price field once all consumers migrate to entryPrice.
+  //
+  // NOTE: SQLite does not support CHECK constraints via Prisma schema.
+  // For PostgreSQL migration, add: @@check("price_entry_price_match", "price = entry_price")
+  entryPrice         Float     @map("entry_price") // v5.0.0: Primary price field
+  price              Float     // DEPRECATED: Use entryPrice. Kept for backward compatibility
   fee                Float     @default(0)
   status             TradeStatus // 'FILLED', 'PENDING', 'CANCELLED' - now enum-constrained
   reason             String? // Why this trade was made
+  rationale          String? // v5.0.0: One-line trade thesis summary
   analysisId         String?   @map("analysis_id")
   confidence         Float? // AI confidence level
+  // championId stores the analyst ID (jim, ray, karen, quant) who won the debate.
+  // This is the canonical field for analyst attribution.
   championId         String?   @map("champion_id") // Analyst who won the debate (jim, ray, karen, quant)
   executedAt         DateTime? @map("executed_at")
   createdAt          DateTime  @default(now()) @map("created_at")
@@ -88,6 +113,18 @@ model Trade {
   clientOrderId      String?   @unique @map("client_order_id")
   realizedPnl        Float?    @map("realized_pnl")
   realizedPnlPercent Float?    @map("realized_pnl_percent")
+
+  // v5.0.0: Exit plan tracking (anti-churn)
+  entryThesis        String?   @map("entry_thesis") // Why we entered
+  exitPlan           String?   @map("exit_plan") // Invalidation conditions (JSON or text)
+  takeProfit         Float?    @map("take_profit") // TP price
+  stopLoss           Float?    @map("stop_loss") // SL price
+  leverage           Float?    // Leverage used (3-10x)
+  allocationUsd      Float?    @map("allocation_usd") // Notional exposure in USD
+  entryConfidence    Float?    @map("entry_confidence") // Confidence at entry (for hysteresis)
+  cooldownUntil      DateTime? @map("cooldown_until") // When cooldown expires
+  invalidatedAt      DateTime? @map("invalidated_at") // When exit plan was invalidated
+  invalidationReason String?   @map("invalidation_reason") // Why it was invalidated
 
   portfolio Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
   aiLogs    AILog[]
@@ -163,6 +200,14 @@ enum TradeStatus {
   FILLED
   CANCELED
   FAILED
+}
+
+enum TradeAction {
+  BUY
+  SELL
+  HOLD
+  CLOSE
+  REDUCE
 }
 
 enum AILogStage {

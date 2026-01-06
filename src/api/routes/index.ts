@@ -2,7 +2,6 @@ import { Router, Request, Response, NextFunction } from 'express';
 import tradingRoutes from './trading';
 import portfolioRoutes from './portfolio';
 import weexRoutes from './weex';
-import analysisRoutes from './analysis';
 import autonomousRoutes from './autonomous';
 import { getWeexClient } from '../../services/weex/WeexClient';
 import { query } from '../../config/database';
@@ -13,7 +12,6 @@ const router = Router();
 router.use('/trading', tradingRoutes);
 router.use('/portfolio', portfolioRoutes);
 router.use('/weex', weexRoutes);
-router.use('/analysis', analysisRoutes);
 router.use('/autonomous', autonomousRoutes);
 
 // Frontend compatibility routes (map to existing endpoints)

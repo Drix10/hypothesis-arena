@@ -3,9 +3,9 @@
   
   # ⚔️ Hypothesis Arena
   
-  **AI-Powered Collaborative Crypto Trading Platform for WEEX Exchange**
+  **AI-Powered Autonomous Crypto Trading for WEEX Exchange**
   
-  *4 AI analysts collaborate through turn-by-turn debates on ONE shared portfolio, then execute trades on WEEX futures*
+  *4 AI analysts analyze in parallel, a judge picks the best recommendation, trades execute automatically*
   
   [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-blue?logo=typescript)](https://www.typescriptlang.org/)
   [![Node.js](https://img.shields.io/badge/Node.js-18+-green?logo=node.js)](https://nodejs.org/)
@@ -20,84 +20,52 @@
 
 ## 🎯 What is Hypothesis Arena?
 
-Hypothesis Arena is an AI-powered crypto trading platform where **4 specialized AI analysts collaborate through turn-by-turn debates** to make trading decisions on a **single shared portfolio**. The winning thesis from each debate cycle gets executed automatically on WEEX Exchange.
-
-### Core Philosophy
-
-> **Every decision is a debate. Every debate has a winner. Winners trade OR manage.**
+Hypothesis Arena is an autonomous AI-powered trading system for WEEX perpetual futures. Version 5.0.0 uses a **parallel analysis pipeline** where 4 AI analysts independently analyze market conditions, and a judge picks the best recommendation.
 
 ### Key Features
 
-- **4 AI Analysts** - Technical, Macro, Risk, Quantitative with regime-adaptive strategies
-- **AI Judge** - Evaluates debate quality (data/logic/risk/catalyst), not word count
-- **Turn-by-Turn Debates** - Structured debates with JSON schema enforcement
-- **Collaborative Portfolio** - All analysts share ONE portfolio
-- **Live WEEX Trading** - Execute futures trades with TP/SL on WEEX Exchange
-- **Position Management** - AI can close/reduce positions via MANAGE action
-- **3-Tier Circuit Breakers** - Yellow/Orange/Red alerts for risk protection
-- **Risk Council Veto** - Karen has final approval/veto power
+- **4 AI Analysts** - Technical, Macro, Risk, Quantitative specialists
+- **Parallel Analysis** - All 4 analyze simultaneously (5 AI calls total)
+- **AI Judge** - Picks best recommendation or HOLD if no consensus
+- **Anti-Churn** - Cooldowns, hysteresis, daily limits prevent overtrading
+- **Dynamic Leverage** - 3-10x based on confidence and volatility
+- **Technical Indicators** - EMA, RSI, MACD, ATR, Bollinger Bands
+- **Exit Plans** - Each trade has invalidation conditions
+- **WEEX Compliance** - Full AI logging for hackathon requirements
 
 ---
 
 ## 🏗️ System Architecture
 
-### The 6-Stage Decision Pipeline
-
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                   THE 6-STAGE DECISION PIPELINE                  │
-│                   (OPTIMIZED - 40% Token Reduction)              │
+│                    v5.0.0 PARALLEL PIPELINE                      │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
-│   STAGE 1: MARKET SCAN          "What's happening?"             │
-│      ↓ (WeexClient.ts)          Fetch data for 8 coins          │
-│   STAGE 2: OPPORTUNITY SELECTION "Trade or Manage?"             │
-│      ↓ (CollaborativeFlow.ts)   3-way debate (Ray, Jim, Quant) │
-│      │                          Can select MANAGE action        │
-│      ├─[MANAGE]→ Close Position → Log to DB → DONE              │
-│      └─[LONG/SHORT]↓                                            │
-│   STAGE 3: CHAMPIONSHIP         "ALL 4 analysts compete"        │
-│      ↓ (CollaborativeFlow.ts)   4-way debate, turn-by-turn      │
-│   STAGE 4: RISK COUNCIL         "Final safety check"            │
-│      ↓ (CollaborativeFlow.ts)   Karen's veto power              │
-│   STAGE 5: EXECUTION            "Pull the trigger"              │
-│      ↓ (AutonomousTradingEngine.ts)                             │
-│   STAGE 6: POSITION MANAGEMENT  "Monitor until exit"            │
-│      (AutonomousTradingEngine.ts)                               │
+│   STAGE 1: MARKET SCAN                           (~5 seconds)   │
+│   • Fetch prices, funding rates for 8 coins                     │
+│   • Calculate technical indicators                               │
+│   • Build rich context for AI                                    │
 │                                                                  │
+│   STAGE 2: PARALLEL ANALYSIS                    (~10 seconds)   │
+│   • Jim (Technical), Ray (Macro), Karen (Risk), Quant           │
+│   • All 4 analyze independently in parallel                      │
+│   • Each outputs: BUY/SELL/HOLD/CLOSE/REDUCE                    │
+│                                                                  │
+│   STAGE 3: JUDGE DECISION                        (~5 seconds)   │
+│   • Compare 4 analyses on quality metrics                       │
+│   • Pick winner OR HOLD if no consensus                         │
+│   • Karen's risk concerns carry extra weight (advisory)         │
+│                                                                  │
+│   STAGE 4: EXECUTION                             (~5 seconds)   │
+│   • Place order with dynamic leverage                           │
+│   • Set TP/SL, store exit plan                                  │
+│   • Log to database + WEEX compliance                           │
+│                                                                  │
+│   TOTAL: ~25 seconds (was ~60 seconds in v4.0.0)                │
+│   AI CALLS: 5 (was 8-10 in v4.0.0)                              │
 └─────────────────────────────────────────────────────────────────┘
 ```
-
-### Project Structure
-
-```
-hypothesis-arena/
-├── src/                   # TypeScript backend source code
-│   ├── api/              # REST API routes
-│   ├── services/         # Business logic (AI, trading, WEEX)
-│   ├── config/           # Database, environment
-│   ├── constants/        # AI prompts, analyst profiles
-│   └── utils/            # Logger, helpers
-├── public/               # Frontend static files (HTML, CSS, JS)
-├── dist/                 # Compiled backend JavaScript
-├── migrations/           # Database migrations
-├── weex/                 # WEEX API documentation
-├── package.json          # Dependencies
-├── tsconfig.json         # TypeScript config
-├── .env                  # Configuration
-└── README.md             # This file
-```
-
-**Single Port Architecture:** Both API (`/api/*`) and frontend static files are served on port 25655.
-
-### Tech Stack
-
-| Layer    | Technology                          |
-| -------- | ----------------------------------- |
-| Backend  | Express 5, TypeScript, SQLite/Turso |
-| AI       | Gemini / OpenRouter / DeepSeek      |
-| Exchange | WEEX Futures API                    |
-| Frontend | Vanilla HTML/CSS/JS (polling-based) |
 
 ---
 
@@ -106,18 +74,15 @@ hypothesis-arena/
 ### Prerequisites
 
 - Node.js 18+
-- SQLite (included) or Turso account for production
-- AI API key (Gemini, OpenRouter, or DeepSeek)
-- WEEX API credentials ([WEEX](https://www.weex.com/api))
+- AI API key (Gemini or OpenRouter)
+- WEEX API credentials
 
 ### Installation
 
 ```bash
-# Clone repository
-git clone https://github.com/drix10/hypothesis-arena.git
+# Clone and install
+git clone <repository-url>
 cd hypothesis-arena
-
-# Install dependencies
 npm install
 
 # Setup environment
@@ -126,171 +91,73 @@ cp .env.example .env
 
 # Run database migrations
 npx prisma migrate dev
-# Creates SQLite database at prisma/dev.db
 
 # Start the server
 npm run dev
-# Server runs on http://localhost:25655
-# Frontend served from http://localhost:25655
-# API available at http://localhost:25655/api
+# Server: http://localhost:25655
 ```
 
-### Environment Variables
-
-See `.env.example` for all options. Key variables:
+### Key Environment Variables
 
 ```env
-# Database (SQLite local, Turso for production)
-DATABASE_URL=file:./prisma/dev.db
-# For Turso: DATABASE_URL=libsql://your-db.turso.io
-# TURSO_AUTH_TOKEN=your_token
-
-# AI Provider (gemini, openrouter, or deepseek)
+# AI Provider
 AI_PROVIDER=gemini
-GEMINI_API_KEY=your_api_key
+GEMINI_API_KEY=your_key
 # OR
-# OPENROUTER_API_KEY=your_api_key
-# OPENROUTER_MODEL=deepseek/deepseek-chat-v3.1
+AI_PROVIDER=openrouter
+OPENROUTER_API_KEY=your_key
 
 # WEEX Exchange
-WEEX_API_KEY=your_weex_api_key
-WEEX_SECRET_KEY=your_weex_api_secret
-WEEX_PASSPHRASE=your_weex_passphrase
+WEEX_API_KEY=your_key
+WEEX_SECRET_KEY=your_secret
+WEEX_PASSPHRASE=your_passphrase
 
-# Server
-PORT=25655
-NODE_ENV=development
+# Trading
+# TRADING_STYLE: 'scalp' (5-12h hold, 5% targets) or 'swing' (24-48h hold, 10% targets)
+TRADING_STYLE=scalp
+# MAX_LEVERAGE: Base leverage for dynamic calculation (3-10x range)
+# This is the starting point - actual leverage adjusts based on confidence/volatility
+# The system will NEVER exceed 10x regardless of this setting
+MAX_LEVERAGE=5
+DRY_RUN=false
 ```
 
 ---
 
 ## 🤖 The 4 AI Analysts
 
-| Analyst  | ID    | Methodology        | Focus                        |
-| -------- | ----- | ------------------ | ---------------------------- |
-| 📊 Jim   | jim   | Technical Analysis | RSI, MACD, chart patterns    |
-| 🌍 Ray   | ray   | Macro Strategy     | Interest rates, correlations |
-| 🛡️ Karen | karen | Risk Management    | Volatility, drawdown, vetoes |
-| 🤖 Quant | quant | Quantitative       | Factor models, statistics    |
-
-All analysts use **regime-adaptive trading** - they detect market conditions (trending/ranging/volatile) and adjust their TP/SL/hold time accordingly. Minimum 1.5:1 R/R enforced.
-
-### Debate Participation
-
-- **Stage 2 (Coin Selection):** Ray, Jim, Quant → AI Judge picks winner
-- **Stage 3 (Championship):** All 4 analysts → AI Judge picks winner
-- **Stage 4 (Risk Council):** Karen only (veto power)
-
-### AI Judge System (v3.3.0)
-
-Debates are evaluated by a dedicated AI Judge using a 4-criteria scoring rubric:
-
-| Criterion      | Weight | Measures                         |
-| -------------- | ------ | -------------------------------- |
-| Data Quality   | 25%    | Specific numbers vs vague claims |
-| Logic          | 25%    | Arguments follow from evidence   |
-| Risk Awareness | 25%    | Acknowledges what could go wrong |
-| Catalyst       | 25%    | Clear price driver with timeline |
-
-The Judge replaces the old heuristic method (word count, data point counting) with actual argument quality evaluation.
+| Analyst   | Focus              | Risk Tolerance | Special Role                                |
+| --------- | ------------------ | -------------- | ------------------------------------------- |
+| **Jim**   | Technical Analysis | Moderate       | EMA, RSI, MACD patterns                     |
+| **Ray**   | Macro & Funding    | Moderate       | Funding rates, market structure             |
+| **Karen** | Risk Management    | Conservative   | Risk concerns carry extra weight (advisory) |
+| **Quant** | Quantitative       | Aggressive     | Statistical edge, mean reversion            |
 
 ---
 
-## 🛡️ Risk Management
+## 🛡️ Anti-Churn Rules (v5.0.0)
 
-### Global Risk Limits
-
-| Parameter                | Limit |
-| ------------------------ | ----- |
-| Max Leverage             | 5x    |
-| Max Position Size        | 30%   |
-| Max Stop Loss Distance   | 10%   |
-| Drawdown Liquidation     | 50%   |
-| Max Concurrent Positions | 5     |
-
-### Trading Style Configuration
-
-The system supports two trading styles, configurable via `TRADING_STYLE` env var:
-
-| Parameter     | Scalping (Default) | Swing             |
-| ------------- | ------------------ | ----------------- |
-| Target Profit | 4%                 | 8%                |
-| Stop Loss     | 2.5%               | 4%                |
-| Max Hold Time | 8 hours            | 36 hours          |
-| Min R/R Ratio | 1.6:1              | 2:1               |
-| Profit Taking | +1.5% → breakeven  | +2.5% → breakeven |
-
-**Scalping Philosophy:** High volume, quick profits, tight risk. We capture 4% moves with 2.5% stops for a 1.6:1 R/R ratio. Positions are closed within 8 hours to minimize funding drag.
-
-### 3-Tier Circuit Breakers
-
-| Alert     | BTC Drop (4h) | Portfolio Drawdown (24h) | Funding Rate | Action                |
-| --------- | ------------- | ------------------------ | ------------ | --------------------- |
-| 🟡 Yellow | -10%          | -5%                      | ±0.03%       | Reduce leverage to 3x |
-| 🟠 Orange | -15%          | -10%                     | ±0.05%       | Reduce leverage to 2x |
-| 🔴 Red    | -20%          | -15%                     | -            | Close ALL positions   |
-
-### Risk Council Veto Triggers
-
-Karen will automatically VETO trades if:
-
-- Stop loss >10% from entry
-- Position would exceed 30% of account
-- Already have 3+ positions open
-- 7-day drawdown >10%
-- Funding rate >0.05% against position direction
+| Rule                 | Default   | Purpose                           |
+| -------------------- | --------- | --------------------------------- |
+| Cooldown After Trade | 15 min    | Prevent rapid re-entry            |
+| Cooldown Before Flip | 30 min    | Prevent direction whipsaw         |
+| Hysteresis           | 1.2x      | Need 20% more confidence to close |
+| Daily Limit          | 10 trades | Prevent overtrading               |
+| Exit Plan Respect    | Always    | Don't close unless invalidated    |
 
 ---
 
-## 🚪 Position Management (MANAGE Action)
+## 📊 Technical Indicators
 
-In Stage 2, analysts can choose to MANAGE an existing position instead of opening a new trade.
+Calculated from WEEX candlestick data (no external APIs):
 
-### Trading Style: Scalping (Default)
+**Intraday (5m):** EMA20, EMA50, RSI7, RSI14, MACD, ATR
 
-The system is optimized for high-frequency scalping with configurable parameters:
-
-| Trigger        | Scalp Action                      |
-| -------------- | --------------------------------- |
-| P&L > +1.5%    | Move stop to breakeven            |
-| P&L > +2.5%    | Take 25% profits                  |
-| P&L > +3.5%    | Take 50% profits                  |
-| P&L > +4%      | Take 75% profits (target reached) |
-| P&L < -2.5%    | Stop loss triggered               |
-| Hold > 8 hours | Force review/close                |
-
-### When MANAGE is Selected
-
-| Trigger            | Action                       |
-| ------------------ | ---------------------------- |
-| P&L < -7%          | Close position immediately   |
-| P&L > +4%          | Take profits (scalp target)  |
-| P&L > +8%          | Take at least 50% profits    |
-| Hold > 8 hours     | Close unless strong momentum |
-| Thesis invalidated | Close position               |
-
-### MANAGE Action Flow
-
-1. **Position Lookup** - Case-insensitive symbol matching with partial match fallback
-2. **Validation** - Verify position size, entry price, current price are valid
-3. **Execution** - Close position via WEEX API
-4. **Database Logging** - Record trade with `reason: 'MANAGE: Position closed by AI'`
-
-### Position Health Assessment
-
-The system evaluates each position on:
-
-- **P&L Status**: PROFIT / LOSS / BREAKEVEN
-- **P&L Severity**: CRITICAL (<-7%) / WARNING (<-2.5%) / HEALTHY
-- **Hold Time**: FRESH (<4h) / MATURE (4-8h) / STALE (>8h for scalping)
-- **Funding Impact**: FAVORABLE / NEUTRAL / ADVERSE
-- **Thesis Status**: VALID / WEAKENING / INVALIDATED
+**Long-term (4h):** EMA20, EMA50, EMA200, RSI14, MACD, Bollinger Bands
 
 ---
 
-## 📊 Supported Trading Pairs
-
-WEEX-approved futures contracts:
+## 📈 Supported Trading Pairs
 
 | Symbol         | Asset    |
 | -------------- | -------- |
@@ -307,14 +174,13 @@ WEEX-approved futures contracts:
 
 ## 🛠️ Scripts
 
-| Command                  | Description                 |
-| ------------------------ | --------------------------- |
-| `npm run dev`            | Start server in development |
-| `npm run build`          | Build for production        |
-| `npm run start`          | Start production server     |
-| `npx prisma migrate dev` | Run database migrations     |
-| `npx prisma studio`      | Open database GUI           |
-| `npm run typecheck`      | Type check without building |
+| Command                  | Description          |
+| ------------------------ | -------------------- |
+| `npm run dev`            | Development server   |
+| `npm run build`          | Build for production |
+| `npm run start`          | Production server    |
+| `npx prisma migrate dev` | Run migrations       |
+| `npx prisma studio`      | Database GUI         |
 
 ---
 
@@ -322,68 +188,43 @@ WEEX-approved futures contracts:
 
 ```
 src/
-├── api/routes/              # REST endpoints
-├── config/                  # Database, environment
+├── api/routes/           # REST endpoints
+├── config/               # Configuration
 ├── constants/
-│   ├── analyst/             # Analyst profiles, risk limits
-│   └── prompts/             # 800+ line methodology prompts
-│       ├── builders.ts      # Prompt builder functions
-│       ├── debateContexts.ts
-│       ├── debateHelpers.ts
-│       └── promptHelpers.ts
+│   ├── analyst/          # Analyst profiles, risk limits
+│   └── prompts/          # AI system prompts
 ├── services/
-│   ├── ai/
-│   │   ├── CollaborativeFlow.ts  # Turn-by-turn debate engine
-│   │   └── AIService.ts           # AI provider abstraction
-│   ├── autonomous/
-│   │   ├── AutonomousTradingEngine.ts  # Main orchestration
-│   │   └── TradingScheduler.ts         # Market-aware scheduling
-│   ├── risk/
-│   │   └── CircuitBreakerService.ts    # 3-tier circuit breakers
-│   └── weex/
-│       └── WeexClient.ts               # WEEX API client
-├── shared/
-│   ├── types/               # TypeScript type definitions
-│   └── utils/               # Shared utilities
-└── utils/                   # Logger, helpers
-
-public/
-├── index.html               # Frontend entry point
-├── styles.css               # CSS styles
-└── app.js                   # JavaScript logic
+│   ├── ai/               # CollaborativeFlow (parallel analysis)
+│   ├── autonomous/       # Trading engine, scheduler
+│   ├── compliance/       # WEEX AI logging
+│   ├── context/          # Context builder
+│   ├── indicators/       # Technical indicators
+│   ├── portfolio/        # Virtual portfolios
+│   ├── trading/          # Anti-churn, leverage
+│   └── weex/             # WEEX API client
+├── shared/               # Types, utilities
+├── types/                # TypeScript definitions
+└── utils/                # Logger, errors
 ```
-
----
-
-## 🔒 Security
-
-- WEEX API signature verification (HMAC-SHA256)
-- Rate limiting on all endpoints
-- Input validation and sanitization
-- All configuration via environment variables
 
 ---
 
 ## 📋 Version History
 
-| Version | Date       | Changes                                                                                          |
-| ------- | ---------- | ------------------------------------------------------------------------------------------------ |
-| 3.3.0   | 2026-01-04 | AI Judge System, Regime-Adaptive Trading, R/R fixes, Alpha Score gap fix, memory leak prevention |
-| 3.2.0   | 2026-01-02 | Trading style config (scalp/swing), env-driven parameters, quant optimization                    |
-| 3.1.1   | 2026-01-02 | Funding rate validation fix, documentation updates, production hardening                         |
-| 3.0.1   | 2026-01-01 | SQLite database, polling instead of SSE, all issues fixed                                        |
-| 3.0.0   | 2025-12-31 | MANAGE action for position management, improved edge cases                                       |
-| 2.2.0   | 2025-12-28 | Exhaustive switch, extracted normalization, improved validation                                  |
-| 2.1.2   | 2025-12-28 | Input validation, improved type guards, JSON repair fixes                                        |
-| 2.1.0   | 2025-12-28 | Turn-by-turn debates, 6-stage pipeline (40% token reduction)                                     |
+| Version   | Date       | Changes                                                     |
+| --------- | ---------- | ----------------------------------------------------------- |
+| **5.0.0** | 2026-01-05 | Parallel analysis, anti-churn, dynamic leverage, exit plans |
+| 4.0.0     | 2026-01-04 | 5-stage pipeline, ALL 4 analysts in debates                 |
+| 3.3.0     | 2026-01-03 | AI Judge, regime-adaptive trading                           |
+| 3.0.0     | 2025-12-31 | MANAGE action, position management                          |
 
-See [FLOW.md](FLOW.md) for detailed architecture documentation.
+See [FLOW.md](FLOW.md) for detailed architecture.
 
 ---
 
 ## 📜 License
 
-MIT License - see [LICENSE](LICENSE) for details.
+MIT License - see [LICENSE](LICENSE)
 
 ---
 
@@ -391,10 +232,6 @@ MIT License - see [LICENSE](LICENSE) for details.
   
   **Built for WEEX Hackathon 2025**
   
-  Express 5 • AI-Powered • WEEX Futures API • SQLite/Turso
-  
-  ⭐ Star if you find this useful • 🐛 Report bugs • 💡 Suggest features
-  
-  [GitHub](https://github.com/drix10/hypothesis-arena) • [Issues](https://github.com/drix10/hypothesis-arena/issues)
+  ⭐ Star if useful • 🐛 Report bugs • 💡 Suggest features
   
 </div>

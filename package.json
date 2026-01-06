@@ -1,6 +1,6 @@
 {
     "name": "hypothesis-arena",
-    "version": "1.0.0",
+    "version": "5.0.0",
     "private": true,
     "main": "dist/server.js",
     "scripts": {

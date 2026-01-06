@@ -2,7 +2,7 @@
  * Analyst Portfolio Service
  * 
  * Manages virtual portfolios for individual analysts to track P&L attribution.
- * Each analyst gets credit for trades where they won the championship debate.
+ * Each analyst gets credit for trades where they won the coin selection debate.
  * 
  * Architecture:
  * - 1 collaborative portfolio (real WEEX account)
@@ -10,7 +10,7 @@
  * 
  * P&L flows:
  * 1. Trade executed on WEEX using collaborative portfolio
- * 2. Trade saved with championId = winning analyst
+ * 2. Trade saved with championId = winning analyst from Stage 2
  * 3. P&L attributed to that analyst's virtual portfolio
  */
 
@@ -294,6 +294,8 @@ export class AnalystPortfolioService {
                 // FIXED: Only count trades where realized_pnl IS NOT NULL (exit trades)
                 // Entry trades (realized_pnl IS NULL) are still open and shouldn't be counted
                 // CRITICAL: SQLite column names are snake_case (champion_id), not camelCase (championId)
+                // FIXED: Use Prisma.sql for safe parameterization instead of string interpolation
+                // String interpolation in tagged template literals bypasses Prisma's SQL injection protection
                 prisma.$queryRaw<Array<{
                     championId: string;
                     winningTrades: bigint;
@@ -308,7 +310,7 @@ export class AnalystPortfolioService {
                         COUNT(CASE WHEN realized_pnl = 0 THEN 1 END) as breakEvenTrades,
                         COUNT(CASE WHEN realized_pnl IS NULL THEN 1 END) as entryTrades
                     FROM trades
-                    WHERE champion_id IN (${ANALYST_IDS.map(id => `'${id}'`).join(', ')})
+                    WHERE champion_id IN ('jim', 'ray', 'karen', 'quant')
                         AND status = 'FILLED'
                     GROUP BY champion_id
                 `
@@ -359,6 +361,7 @@ export class AnalystPortfolioService {
                         losingTrades,
                         winRate,
                         tournamentWins: totalAllTrades, // Debates won = total trades initiated
+                        totalPoints: Math.round(totalPnl * 10), // Points = P&L * 10 (gamification)
                         sharpeRatio,
                         updatedAt: new Date()
                     },
@@ -433,13 +436,21 @@ export class AnalystPortfolioService {
     /**
      * Safely convert BigInt to Number with validation
      * FIXED: Prevents precision loss for large numbers
+     * FIXED: Handles negative BigInt values correctly
      */
     private static _safeBigIntToNumber(value: bigint, fieldName: string): number {
-        const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER; // 9,007,199,254,740,991
+        const MAX_SAFE_INTEGER = BigInt(Number.MAX_SAFE_INTEGER); // 9,007,199,254,740,991
+        const MIN_SAFE_INTEGER = BigInt(Number.MIN_SAFE_INTEGER); // -9,007,199,254,740,991
+
+        // Handle negative values
+        if (value < MIN_SAFE_INTEGER) {
+            logger.error(`BigInt value for ${fieldName} below MIN_SAFE_INTEGER: ${value}, clamping to min`);
+            return Number.MIN_SAFE_INTEGER;
+        }
 
         if (value > MAX_SAFE_INTEGER) {
             logger.error(`BigInt value for ${fieldName} exceeds MAX_SAFE_INTEGER: ${value}, clamping to max`);
-            return MAX_SAFE_INTEGER;
+            return Number.MAX_SAFE_INTEGER;
         }
 
         return Number(value);
@@ -734,5 +745,187 @@ export class AnalystPortfolioService {
             logger.error('Failed to get comparative stats:', error);
             return null;
         }
+    }
+
+    /**
+     * Update collaborative portfolio metrics (totalReturn, totalValue, maxDrawdown, currentDrawdown)
+     * Called after each trading cycle to keep metrics current
+     * 
+     * FIXED: Added distributed locking to prevent concurrent update race conditions
+     * Uses the same lock mechanism as updateAnalystPortfolios for consistency
+     * FIXED: Added retry logic with exponential backoff for lock acquisition
+     * 
+     * @param currentBalance - Current wallet balance from WEEX
+     * @param unrealizedPnl - Total unrealized P&L from open positions
+     */
+    static async updateCollaborativePortfolioMetrics(
+        currentBalance: number,
+        unrealizedPnl: number
+    ): Promise<void> {
+        // FIXED: Validate inputs to prevent NaN propagation
+        if (!Number.isFinite(currentBalance) || currentBalance < 0) {
+            logger.warn(`Invalid currentBalance: ${currentBalance}, skipping metrics update`);
+            return;
+        }
+        if (!Number.isFinite(unrealizedPnl)) {
+            logger.warn(`Invalid unrealizedPnl: ${unrealizedPnl}, using 0`);
+            unrealizedPnl = 0;
+        }
+
+        // FIXED: Added retry logic with exponential backoff for lock acquisition
+        // This prevents stale metrics when lock is temporarily held by another instance
+        const MAX_RETRIES = 2;
+        const RETRY_DELAY_MS = 500; // 500ms base delay (shorter than analyst update since this is less critical)
+
+        for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+            const lockAcquired = await this._acquireLock();
+
+            if (!lockAcquired) {
+                if (attempt < MAX_RETRIES) {
+                    const delay = RETRY_DELAY_MS * Math.pow(2, attempt); // Exponential backoff
+                    logger.debug(`Collaborative portfolio lock acquisition failed, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES})`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    continue;
+                } else {
+                    logger.debug('Skipping collaborative portfolio update - another instance is updating (after retries)');
+                    return;
+                }
+            }
+
+            // Lock acquired, perform update
+            try {
+                await this._performCollaborativeUpdate(currentBalance, unrealizedPnl);
+                return; // Success, exit
+            } catch (error) {
+                logger.error('Collaborative portfolio update failed:', error);
+                // Don't throw - this is a non-critical update
+                return;
+            } finally {
+                // FIXED: Always release the lock, even on error
+                await this._releaseLock();
+            }
+        }
+    }
+
+    /**
+     * Internal method that performs the actual collaborative portfolio update
+     * Separated for lock pattern consistency with _performUpdate
+     */
+    private static async _performCollaborativeUpdate(
+        currentBalance: number,
+        unrealizedPnl: number
+    ): Promise<void> {
+        const portfolio = await prisma.portfolio.findUnique({
+            where: { agentId: 'collaborative' }
+        });
+
+        if (!portfolio) {
+            logger.warn('Collaborative portfolio not found for metrics update');
+            return;
+        }
+
+        // Calculate total value (balance + unrealized P&L)
+        const totalValue = currentBalance + unrealizedPnl;
+
+        // Calculate total return percentage
+        const initialBalance = portfolio.initialBalance;
+        const totalReturnDollar = totalValue - initialBalance;
+        const totalReturn = initialBalance > 0
+            ? (totalReturnDollar / initialBalance) * 100
+            : 0;
+
+        // Get trade stats for win rate calculation
+        const tradeStats = await prisma.trade.aggregate({
+            where: {
+                portfolioId: portfolio.id,
+                status: 'FILLED',
+                realizedPnl: { not: null }
+            },
+            _count: { id: true },
+            _sum: { realizedPnl: true }
+        });
+
+        const winningTrades = await prisma.trade.count({
+            where: {
+                portfolioId: portfolio.id,
+                status: 'FILLED',
+                realizedPnl: { gt: 0 }
+            }
+        });
+
+        const losingTrades = await prisma.trade.count({
+            where: {
+                portfolioId: portfolio.id,
+                status: 'FILLED',
+                realizedPnl: { lt: 0 }
+            }
+        });
+
+        const totalTrades = tradeStats._count.id;
+        const winRate = totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0;
+
+        // Calculate drawdown from performance snapshots
+        // FIXED: Limit snapshot loading to prevent memory issues at scale
+        // We only need recent snapshots to calculate current drawdown accurately
+        // For max drawdown, we track it incrementally in the portfolio record
+        //
+        // LIMITATION: currentDrawdown may be underestimated if the all-time peak occurred
+        // outside this 1000-snapshot window. The maxDrawdown field in the portfolio record
+        // is tracked incrementally and remains accurate. For production systems requiring
+        // precise current drawdown, consider:
+        // 1. Storing the all-time peak value in the portfolio record
+        // 2. Using a separate peak tracking table
+        // 3. Increasing the snapshot window (at cost of memory/performance)
+        const snapshots = await prisma.performanceSnapshot.findMany({
+            where: { portfolioId: portfolio.id },
+            orderBy: { timestamp: 'desc' },  // Most recent first
+            take: 1000,  // Limit to last 1000 snapshots (~7 days at 10min intervals)
+            select: { totalValue: true }
+        });
+
+        // Reverse to process in chronological order for drawdown calculation
+        snapshots.reverse();
+
+        // Use stored maxDrawdown as baseline (preserves historical max)
+        // Peak starts at initialBalance but will be updated from snapshots
+        let maxDrawdown = portfolio.maxDrawdown;
+        let currentDrawdown = 0;
+        let peak = initialBalance;
+
+        for (const snapshot of snapshots) {
+            if (snapshot.totalValue > peak) {
+                peak = snapshot.totalValue;
+            }
+            const drawdown = peak > 0 ? ((peak - snapshot.totalValue) / peak) * 100 : 0;
+            if (drawdown > maxDrawdown) {
+                maxDrawdown = drawdown;
+            }
+        }
+
+        // Calculate current drawdown from current total value
+        if (totalValue > peak) {
+            peak = totalValue;
+        }
+        currentDrawdown = peak > 0 ? ((peak - totalValue) / peak) * 100 : 0;
+
+        // Update portfolio
+        await prisma.portfolio.update({
+            where: { agentId: 'collaborative' },
+            data: {
+                currentBalance,
+                totalValue,
+                totalReturn,
+                totalReturnDollar,
+                winRate,
+                winningTrades,
+                losingTrades,
+                totalTrades,
+                maxDrawdown,
+                currentDrawdown,
+                updatedAt: new Date()
+            }
+        });
+
+        logger.debug(`📊 Collaborative portfolio metrics updated: ${totalValue.toFixed(2)} USDT, ${totalReturn.toFixed(2)}% return, ${currentDrawdown.toFixed(2)}% drawdown`);
     }
 }

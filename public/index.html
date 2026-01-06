@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <meta name="description" content="Hypothesis Arena - AI-powered autonomous crypto trading platform with 4 analyst agents competing in turn-by-turn debates on WEEX Futures">
+    <meta name="description" content="Hypothesis Arena - AI-powered autonomous crypto trading platform with 4 analyst agents analyzing in parallel on WEEX Futures">
     <meta name="keywords" content="AI trading, crypto, WEEX, futures, autonomous trading, machine learning">
     <meta name="author" content="Hypothesis Arena">
     <meta name="theme-color" content="#00d4ff">
@@ -11,7 +11,7 @@
     
     <!-- Open Graph -->
     <meta property="og:title" content="Hypothesis Arena | AI Trading Platform">
-    <meta property="og:description" content="4 AI Analysts competing in real-time debates to trade WEEX Futures">
+    <meta property="og:description" content="4 AI Analysts analyzing in parallel to trade WEEX Futures">
     <meta property="og:type" content="website">
     <meta property="og:image" content="/og-image.png">
     
@@ -54,7 +54,7 @@
                         <span class="logo-icon" aria-hidden="true">⚔️</span>
                         <span class="logo-text">Hypothesis Arena</span>
                     </h1>
-                    <p class="tagline">4 AI Analysts • Real-Time Debates • WEEX Futures</p>
+                    <p class="tagline">4 AI Analysts • Parallel Analysis • WEEX Futures</p>
                 </div>
                 <nav class="header-status" aria-label="System status">
                     <div class="status-pill" id="weex-status" data-status="offline" role="status" aria-live="polite">
@@ -104,8 +104,10 @@
                             <span class="stat-value" id="next-cycle" aria-label="Time until next cycle">--</span>
                         </div>
                         <div class="stat-box">
-                            <span class="stat-label">Debates</span>
-                            <span class="stat-value" id="debates-run" aria-label="Total debates completed">0</span>
+                            <span class="stat-label">Analyses</span>
+                            <!-- ID "total-analyses" matches the frontend terminology -->
+                            <!-- Backend sends totalDebatesRun, frontend displays as "Analyses" -->
+                            <span class="stat-value" id="total-analyses" aria-label="Total analyses completed">0</span>
                         </div>
                     </div>
                     <div class="engine-controls" role="group" aria-label="Engine controls">
@@ -277,7 +279,9 @@
         <footer class="footer" role="contentinfo">
             <p>Built for <strong>WEEX Hackathon 2025</strong></p>
             <p class="tech-stack">Express 5 • Gemini 2.5 Flash • WEEX Futures API • Prisma</p>
-            <p class="version">v3.3.0</p>
+            <p class="version">v5.0.0</p>
+            <!-- Version History: v3.3.0 (debate system) -> v5.0.0 (parallel analysis)
+                 v4.x was skipped as internal development versions -->
         </footer>
     </div>
 

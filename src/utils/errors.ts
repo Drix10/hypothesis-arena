@@ -18,20 +18,6 @@ export class ValidationError extends AppError {
     }
 }
 
-export class NotFoundError extends AppError {
-    constructor(resource: string = 'Resource') {
-        super(404, `${resource} not found`, 'NOT_FOUND');
-        this.name = 'NotFoundError';
-    }
-}
-
-export class ConflictError extends AppError {
-    constructor(message: string) {
-        super(409, message, 'CONFLICT');
-        this.name = 'ConflictError';
-    }
-}
-
 export class RateLimitError extends AppError {
     constructor(message: string = 'Too many requests') {
         super(429, message, 'RATE_LIMIT');

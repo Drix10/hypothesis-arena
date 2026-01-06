@@ -1,846 +1,289 @@
-# Hypothesis Arena - Collaborative AI Trading System
+# Hypothesis Arena v5.0.0 - System Flow
 
-**STATUS: PRODUCTION READY ✅**  
-**VERSION: 3.3.0**  
-**LAST UPDATED: January 4, 2026**
+## Overview
 
-## Implementation Status
+Hypothesis Arena is an autonomous AI-powered trading system for WEEX perpetual futures. Version 5.0.0 uses a **parallel analysis pipeline** where 4 AI analysts independently analyze market conditions, and a judge picks the best recommendation.
 
-- ✅ **Entry Mode:** Fully implemented and operational
-- ✅ **Position Management (MANAGE Action):** AI can close/manage existing positions
-- ✅ **Trading Style Config:** Scalping (default) and Swing modes with env-driven parameters
-- ✅ **AI Judge System:** Dedicated debate adjudicator with 4-criteria scoring rubric
-- ✅ **Regime-Adaptive Trading:** All 4 analysts adapt strategy based on market regime (ADX/ATR/VIX)
-- ✅ **Production Ready:** TypeScript 0 errors, all edge cases handled, deep code review completed
-- ✅ **OPTIMIZED:** 40% token reduction (260k → 156k per cycle)
-
-## 🎯 Philosophy
-
-**Every decision is a debate. Every debate has a winner. Winners trade OR manage.**
-
-4 world-class AI analysts with unique methodologies collaborate on ONE shared portfolio.
-Debates are the core decision mechanism - the winning thesis gets executed on WEEX Exchange.
-**NEW:** Analysts can now choose to MANAGE existing positions instead of opening new ones.
-
----
-
-## 🏗️ System Architecture
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                   THE 6-STAGE DECISION PIPELINE                  │
-│                   (OPTIMIZED - 40% Token Reduction)              │
+│                    v5.0.0 PARALLEL PIPELINE                      │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
-│   STAGE 1: MARKET SCAN          "What's happening?"             │
-│      ↓                                                           │
-│   STAGE 2: OPPORTUNITY SELECTION "Trade or Manage?"             │
-│      ↓         ┌─────────────────────────────────┐              │
-│                │  Can select MANAGE action       │              │
-│                │  to close/adjust positions      │              │
-│                └─────────────────────────────────┘              │
-│      ↓                                                           │
-│   [If MANAGE] → Close/Reduce Position → DONE                    │
-│   [If LONG/SHORT] ↓                                             │
-│   STAGE 3: CHAMPIONSHIP         "ALL 4 analysts compete"        │
-│      ↓                                                           │
-│   STAGE 4: RISK COUNCIL         "Final safety check"            │
-│      ↓                                                           │
-│   STAGE 5: EXECUTION            "Pull the trigger"              │
-│      ↓                                                           │
-│   STAGE 6: POSITION MANAGEMENT  "Monitor until exit"            │
+│   STAGE 1: MARKET SCAN                           (~5 seconds)   │
+│   ─────────────────────────────────────────────────────────────  │
+│   • Fetch prices, funding rates for 8 approved coins:           │
+│     BTC, ETH, SOL, DOGE, XRP, ADA, BNB, LTC                     │
+│     (Configured in ContextBuilder.TRADING_SYMBOLS)              │
+│   • Calculate technical indicators (EMA, RSI, MACD, ATR, BB)    │
+│   • Fetch account state, positions, recent trades               │
+│   • Build rich context object for AI analysts                   │
+│                                                                  │
+│   STAGE 2: PARALLEL ANALYSIS                    (~10 seconds)   │
+│   ─────────────────────────────────────────────────────────────  │
+│   ┌─────────────────────────────────────────────────┐           │
+│   │  4 analysts receive IDENTICAL full context      │           │
+│   │  Each responds INDEPENDENTLY in parallel        │           │
+│   │                                                  │           │
+│   │  Jim (Technical) ──┐                            │           │
+│   │  Ray (Macro) ──────┼──→ 4 recommendations       │           │
+│   │  Karen (Risk) ─────┤                            │           │
+│   │  Quant ────────────┘                            │           │
+│   └─────────────────────────────────────────────────┘           │
+│                                                                  │
+│   STAGE 3: JUDGE DECISION                        (~5 seconds)   │
+│   ─────────────────────────────────────────────────────────────  │
+│   • Compare 4 analyses on: thesis quality, risk/reward ratio,   │
+│     confidence level, alignment with market conditions          │
+│   • Pick winner OR output HOLD if no consensus                  │
+│   • Minimum confidence to trade: MIN_CONFIDENCE_TO_TRADE (50%)  │
+│   • Apply risk adjustments to winner's recommendation           │
+│   • Karen's risk concerns get 1.5x weight in scoring (advisory) │
+│                                                                  │
+│   STAGE 4: EXECUTION                             (~5 seconds)   │
+│   ─────────────────────────────────────────────────────────────  │
+│   • Place order with dynamic leverage (3-10x)                   │
+│   • Set TP/SL based on winner's recommendation                  │
+│   • Store exit_plan for future reference                        │
+│   • Log to database + WEEX compliance                           │
+│                                                                  │
+│   TOTAL: ~25 seconds per cycle (was ~60 seconds in v4.0.0)      │
+│   AI CALLS: 5 (was 8-10 in v4.0.0)                              │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
----
+## The 4 Analysts
 
-## 🤖 The 4 AI Analysts
+| Analyst   | Focus              | Risk Tolerance | Special Role                                                    |
+| --------- | ------------------ | -------------- | --------------------------------------------------------------- |
+| **Jim**   | Technical Analysis | Moderate       | EMA crossovers, RSI, MACD patterns                              |
+| **Ray**   | Macro & Funding    | Moderate       | Funding rates, market structure                                 |
+| **Karen** | Risk Management    | Conservative   | **Extra weight** on risk concerns (advisory, not absolute veto) |
+| **Quant** | Quantitative       | Aggressive     | Statistical edge, mean reversion                                |
 
-| Analyst  | ID    | Methodology        | Focus                        |
-| -------- | ----- | ------------------ | ---------------------------- |
-| 📊 Jim   | jim   | Technical Analysis | RSI, MACD, chart patterns    |
-| 🌍 Ray   | ray   | Macro Strategy     | Interest rates, correlations |
-| 🛡️ Karen | karen | Risk Management    | Volatility, drawdown, vetoes |
-| 🤖 Quant | quant | Quantitative       | Factor models, statistics    |
+## Action Types
 
-**Regime-Adaptive (v3.3.0):** All analysts detect market regime (trending/ranging/volatile) and adapt TP/SL/hold time. Minimum 1.5:1 R/R enforced.
+Each analyst outputs ONE of these actions:
 
----
+| Action   | Description                | When to Use                          |
+| -------- | -------------------------- | ------------------------------------ |
+| `BUY`    | Open/add to LONG position  | Bullish setup, entry criteria met    |
+| `SELL`   | Open/add to SHORT position | Bearish setup, entry criteria met    |
+| `HOLD`   | Do nothing                 | No clear edge, wait for better setup |
+| `CLOSE`  | Close existing position    | Exit plan invalidated, take profits  |
+| `REDUCE` | Reduce position size       | Partial profit taking, reduce risk   |
 
-## 📊 Stage 1: Market Scan
+## Anti-Churn Rules
 
-**Service:** `WeexClient.ts`  
-**Duration:** ~5 seconds
+v5.0.0 implements strict anti-churn policies to prevent overtrading:
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  PARALLEL WEEX API CALLS (8 symbols):                           │
-│                                                                  │
-│  For each: BTC, ETH, SOL, DOGE, XRP, ADA, BNB, LTC             │
-│  ├─ getTicker() → Current price, 24h high/low, volume          │
-│  └─ getFundingRate() → Funding rate for futures                │
-│                                                                  │
-│  OUTPUT: Map<symbol, ExtendedMarketData>                        │
-│  ├─ currentPrice, high24h, low24h                              │
-│  ├─ volume24h, change24h                                       │
-│  ├─ markPrice, indexPrice                                      │
-│  ├─ bestBid, bestAsk                                           │
-│  └─ fundingRate (undefined if unavailable)                     │
-│                                                                  │
-│  VALIDATION:                                                    │
-│  ✓ Number.isFinite() guards on all numeric values              │
-│  ✓ Fallback to currentPrice if high/low invalid                │
-│  ✓ Warning logged if funding rate unavailable                  │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
+1. **Cooldown After Trade**: 15 minutes before same symbol can be traded again (configurable via `COOLDOWN_AFTER_TRADE_MS`)
+2. **Cooldown Before Flip**: 30 minutes before direction can be reversed (configurable via `COOLDOWN_BEFORE_FLIP_MS`)
+3. **Hysteresis**: Need 20% more confidence to close than to open (configurable via `HYSTERESIS_MULTIPLIER`)
+4. **Daily Limit**: Maximum 10 trades per day (enforced via database count, resets at midnight UTC)
+5. **Exit Plan Respect**: Don't close unless invalidation condition is met
 
----
+## Technical Indicators
 
-## 🎯 Stage 2: Opportunity Selection Debate
+Calculated from WEEX candlestick data (no external APIs):
 
-**Service:** `CollaborativeFlow.ts` → `runCoinSelectionDebate()`  
-**Duration:** ~20 seconds  
-**Participants:** Ray (Macro), Jim (Technical), Quant (Stats)
+**Intraday (5-minute timeframe):**
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  PORTFOLIO-AWARE OPPORTUNITY SELECTION                          │
-│                                                                  │
-│  NEW IN v3.0: Analysts see BOTH market data AND open positions │
-│  They can choose to:                                            │
-│  • LONG/SHORT: Open a new position on a coin                   │
-│  • MANAGE: Close/reduce/adjust an existing position            │
-│                                                                  │
-├─────────────────────────────────────────────────────────────────┤
-│  POSITION DATA FETCHED (for MANAGE decisions):                  │
-│                                                                  │
-│  For each open position:                                        │
-│  ├─ symbol, side (LONG/SHORT)                                  │
-│  ├─ entryPrice, currentPrice (from live ticker)                │
-│  ├─ unrealizedPnl, unrealizedPnlPercent                        │
-│  ├─ holdTimeHours (from database trade history)                │
-│  └─ fundingPaid (if available)                                 │
-│                                                                  │
-│  EDGE CASES HANDLED:                                            │
-│  ✓ Current price fetched from WEEX ticker (not entry price)   │
-│  ✓ Hold time calculated from actual trade entry in DB          │
-│  ✓ Invalid entry prices skipped                                │
-│  ✓ Future timestamps rejected                                  │
-│                                                                  │
-├─────────────────────────────────────────────────────────────────┤
-│  3 ANALYSTS DEBATE (Turn-by-Turn)                               │
-│                                                                  │
-│  Each analyst receives:                                         │
-│  ├─ Their full persona prompt                                  │
-│  ├─ Market summary for all 8 coins                             │
-│  ├─ Current portfolio positions with P&L                       │
-│  └─ Task: "Rank TOP 3 opportunities (new trade OR manage)"     │
-│                                                                  │
-│  STRUCTURED OUTPUT (JSON Schema enforced):                      │
-│  {                                                               │
-│    "picks": [                                                   │
-│      { "symbol": "cmt_solusdt", "action": "LONG",              │
-│        "conviction": 9, "reason": "Breakout with volume" },    │
-│      { "symbol": "cmt_ethusdt", "action": "MANAGE",            │
-│        "conviction": 8, "reason": "+18% profit, lock gains" }, │
-│      { "symbol": "cmt_btcusdt", "action": "SHORT",             │
-│        "conviction": 6, "reason": "Bearish divergence" }       │
-│    ]                                                            │
-│  }                                                               │
-│                                                                  │
-├─────────────────────────────────────────────────────────────────┤
-│  MANAGE ACTION DETECTION (Improved in v3.0):                    │
-│                                                                  │
-│  Specific patterns to avoid false positives:                    │
-│  ├─ "close position", "close the LONG/SHORT position"          │
-│  ├─ "reduce position", "exit position"                         │
-│  ├─ "take profits on/from", "cut losses on/now"                │
-│  ├─ "manage position", "close out"                             │
-│  └─ action: "MANAGE" in JSON                                   │
-│                                                                  │
-│  NOT triggered by:                                              │
-│  ✗ "close to resistance" (false positive avoided)              │
-│  ✗ "take profits" without context                              │
-│                                                                  │
-├─────────────────────────────────────────────────────────────────┤
-│  AGGREGATION & WINNER SELECTION:                                │
-│                                                                  │
-│  Score = rank_weight × conviction                               │
-│  • #1 pick = 3 × conviction                                    │
-│  • #2 pick = 2 × conviction                                    │
-│  • #3 pick = 1 × conviction                                    │
-│                                                                  │
-│  AI Judge (v3.3.0) evaluates argument quality:                  │
-│  → DATA (25%) + LOGIC (25%) + RISK (25%) + CATALYST (25%)      │
-│  → Falls back to score aggregation if Judge times out          │
-│                                                                  │
-│  OUTPUT: { winner, coinSymbol, action, debate }                │
-│  action: 'LONG' | 'SHORT' | 'MANAGE'                           │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
+- EMA 20, EMA 50
+- RSI 7, RSI 14
+- MACD (12, 26, 9)
+- ATR 14
 
----
+**Long-term (4-hour timeframe):**
 
-## 🚪 MANAGE Action Flow (Position Management)
+- EMA 20, EMA 50, EMA 200
+- RSI 14
+- MACD
+- Bollinger Bands (20, 2)
+- Trend detection: Classified as `bullish` (EMA20 > EMA50 > EMA200), `bearish` (EMA20 < EMA50 < EMA200), or `neutral` (mixed). Trend strength (0-100) is calculated from EMA spread relative to price.
 
-**Service:** `AutonomousTradingEngine.ts`  
-**Prompts:** `src/constants/prompts/managePrompts.ts`  
-**Duration:** ~5 seconds
+## Dynamic Leverage
+
+Leverage is calculated dynamically (3x - 10x) based on market conditions. The `MAX_LEVERAGE` environment variable (default: 5) sets the **base leverage**, which is then adjusted up or down:
+
+| Condition                                        | Adjustment |
+| ------------------------------------------------ | ---------- |
+| Confidence > 95%                                 | +2x        |
+| Confidence > 85%                                 | +1x        |
+| Confidence < 60%                                 | -1x        |
+| High volatility (ATR > 5%)                       | -2x        |
+| High adverse funding (> MAX_FUNDING_AGAINST_BPS) | -2x        |
+| Strong trend alignment (strength > 80)           | +1x        |
+
+**Volatility Classification (ATR-based):**
+
+- Low: ATR < 2% of price
+- Medium: ATR 2-5% of price
+- High: ATR > 5% of price (triggers -2x leverage adjustment)
+
+**Karen's Influence on Leverage:**
+Karen (Risk Management analyst) doesn't directly adjust leverage. Instead, her conservative recommendations influence the Judge's final decision. If Karen flags high risk, the Judge may:
+
+1. Select a more conservative analyst as winner
+2. Apply risk adjustments to reduce leverage/allocation
+3. Output HOLD if risk concerns outweigh opportunity
+
+Karen's risk concerns receive 1.5x weight in the Judge's scoring, making her influence advisory but significant.
+
+**Note:** Final leverage is always clamped to the 3-10x range regardless of adjustments. `MAX_LEVERAGE` in config is the starting point, not the absolute maximum.
+
+## File Structure
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  WHEN MANAGE ACTION IS SELECTED                                  │
-│                                                                  │
-│  1. POSITION LOOKUP (Case-insensitive + Partial Match)          │
-│     ├─ Exact match: "cmt_btcusdt" === "cmt_btcusdt"            │
-│     ├─ Partial match: "btcusdt" matches "cmt_btcusdt"          │
-│     └─ Logs available positions if not found                   │
-│                                                                  │
-│  2. VALIDATION                                                   │
-│     ├─ Position size must be > 0 and finite                    │
-│     ├─ Entry price must be valid                               │
-│     └─ Current price must be valid                             │
-│                                                                  │
-│  3. EXECUTION (Currently: CLOSE_FULL)                           │
-│     ├─ Call weexClient.closeAllPositions(symbol)               │
-│     ├─ Log success/failure                                     │
-│     └─ Increment tradesExecuted counter                        │
-│                                                                  │
-│  4. DATABASE LOGGING (Only if close successful)                 │
-│     INSERT INTO trades:                                         │
-│     ├─ id: UUID                                                │
-│     ├─ portfolio_id: from analyst state                        │
-│     ├─ symbol: position symbol                                 │
-│     ├─ side: 'SELL' (for LONG) or 'BUY' (for SHORT)           │
-│     ├─ type: 'MARKET'                                          │
-│     ├─ size: position size                                     │
-│     ├─ price: current price                                    │
-│     ├─ status: 'FILLED'                                        │
-│     ├─ reason: 'MANAGE: Position closed by AI'                 │
-│     └─ realized_pnl: unrealized P&L at close                   │
-│                                                                  │
-│  5. CYCLE COMPLETION                                            │
-│     ├─ Update leaderboard                                      │
-│     ├─ Complete cycle with "managed {symbol}"                  │
-│     └─ Sleep before next cycle                                 │
-│                                                                  │
-├─────────────────────────────────────────────────────────────────┤
-│  POSITION HEALTH ASSESSMENT (managePrompts.ts)                   │
-│                                                                  │
-│  assessPositionHealth() evaluates:                              │
-│  ├─ pnlStatus: PROFIT | LOSS | BREAKEVEN                       │
-│  ├─ pnlSeverity: CRITICAL (<-7%) | WARNING (<-2.5%) | HEALTHY  │
-│  ├─ holdTimeStatus: FRESH (<4h) | MATURE (4-8h) | STALE (>8h)  │
-│  ├─ fundingImpact: FAVORABLE | NEUTRAL | ADVERSE               │
-│  └─ thesisStatus: VALID | WEAKENING | INVALIDATED              │
-│                                                                  │
-│  SCALPING TRADING RULES (Default - from config):                │
-│  🚨 P&L < -7%: MUST close immediately                          │
-│  🚨 Thesis INVALIDATED: MUST close                             │
-│  💰 P&L > +1.5%: Move stop to breakeven                        │
-│  💰 P&L > +2.5%: Take 25% profits                              │
-│  💰 P&L > +3.5%: Take 50% profits                              │
-│  💰 P&L > +4%: Take 75% profits (target reached)               │
-│  ⏰ Hold > 8 hours: Close unless strong momentum               │
-│  💸 Funding > 0.03% against: Factor into hold decision         │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
+src/
+├── api/
+│   ├── middleware/
+│   │   └── errorHandler.ts
+│   └── routes/
+│       ├── autonomous.ts      # Engine control endpoints
+│       ├── index.ts           # API router
+│       ├── portfolio.ts       # Portfolio endpoints
+│       ├── trading.ts         # Trading endpoints
+│       └── weex.ts            # WEEX proxy endpoints
+├── config/
+│   ├── database.ts            # Prisma + Turso setup
+│   └── index.ts               # Configuration
+├── constants/
+│   ├── analyst/
+│   │   ├── index.ts           # Analyst exports (re-exports from other files)
+│   │   ├── profiles.ts        # Analyst personas (Jim, Ray, Karen, Quant definitions)
+│   │   ├── riskCouncil.ts     # Risk council configuration
+│   │   ├── riskLimits.ts      # Global risk limits (max leverage, position sizes)
+│   │   └── types.ts           # TypeScript types for analyst module
+│   └── prompts/
+│       ├── analystPrompt.ts   # System prompts for each analyst persona
+│       └── judgePrompt.ts     # System prompt for the judge AI
+├── services/
+│   ├── ai/
+│   │   └── CollaborativeFlow.ts    # Parallel analysis orchestration
+│   ├── autonomous/
+│   │   ├── AutonomousTradingEngine.ts  # Main trading engine
+│   │   └── TradingScheduler.ts         # Market-aware scheduling
+│   ├── compliance/
+│   │   └── AILogService.ts     # WEEX compliance logging
+│   ├── context/
+│   │   └── ContextBuilder.ts   # Build rich context for AI
+│   ├── indicators/
+│   │   ├── IndicatorCalculator.ts      # EMA, RSI, MACD, etc.
+│   │   └── TechnicalIndicatorService.ts # Indicator orchestration
+│   ├── portfolio/
+│   │   └── AnalystPortfolioService.ts  # Virtual portfolios
+│   ├── trading/
+│   │   ├── AntiChurnService.ts   # Cooldowns, hysteresis
+│   │   └── LeverageService.ts    # Dynamic leverage
+│   └── weex/
+│       └── WeexClient.ts       # WEEX API client
+├── shared/
+│   ├── types/
+│   │   ├── market.ts           # Market data types
+│   │   └── weex.ts             # WEEX API types
+│   └── utils/
+│       ├── validation.ts       # Input validation
+│       └── weex.ts             # WEEX utilities
+├── types/
+│   ├── analyst.ts              # Analyst/Judge schemas
+│   └── context.ts              # Trading context types
+├── utils/
+│   ├── errors.ts               # Error classes
+│   └── logger.ts               # Winston logger
+└── server.ts                   # Express server
 ```
 
----
+## API Endpoints
 
-## 🏆 Stage 3: Championship Debate (ALL 4 Analysts)
+### Engine Control
 
-**Service:** `CollaborativeFlow.ts` → `runChampionshipDebate()`  
-**Duration:** ~30 seconds  
-**Participants:** ALL 4 analysts compete
+- `POST /api/autonomous/start` - Start trading engine
+- `POST /api/autonomous/stop` - Stop trading engine
+- `GET /api/autonomous/status` - Get engine status
+- `GET /api/autonomous/events` - SSE event stream
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  CHAMPIONSHIP DEBATE (OPTIMIZED - Replaces old Stages 3-4)      │
-│                                                                  │
-│  ALL 4 analysts compete in a single championship debate.        │
-│  Each analyst uses their own methodology to analyze the coin.   │
-│  Winner's thesis gets executed as a real trade.                 │
-│                                                                  │
-├─────────────────────────────────────────────────────────────────┤
-│  4 ANALYSTS DEBATE (Turn-by-Turn)                               │
-│                                                                  │
-│  Each analyst receives:                                         │
-│  ├─ Their full persona prompt with focus areas                 │
-│  ├─ Detailed market data for selected coin                     │
-│  ├─ Direction hint from Stage 2 (LONG/SHORT)                   │
-│  ├─ Coin selector winner context                               │
-│  └─ Judging criteria (data, logic, risk, catalyst)             │
-│                                                                  │
-│  STRUCTURED OUTPUT (AnalysisResult):                            │
-│  {                                                               │
-│    "recommendation": "STRONG_BUY",                              │
-│    "confidence": 85,                                            │
-│    "entry": 185.50,                                             │
-│    "targets": { "bull": 220, "base": 200, "bear": 170 },       │
-│    "stopLoss": 175,                                             │
-│    "leverage": 4,                                               │
-│    "positionSize": 8,                                           │
-│    "thesis": "SOL showing strongest L1 growth metrics...",     │
-│    "bullCase": ["TVL up 40%", "Dev activity high", ...],       │
-│    "bearCase": ["Network congestion risk", ...],               │
-│    "catalyst": "Jupiter airdrop driving activity",             │
-│    "timeframe": "2-5 days"                                     │
-│  }                                                               │
-│                                                                  │
-│  SCORING (Per Turn):                                            │
-│  ├─ DATA (25%): Specific numbers vs vague claims               │
-│  ├─ LOGIC (25%): Reasoning follows from data                   │
-│  ├─ RISK (25%): Acknowledges what could go wrong               │
-│  └─ CATALYST (25%): Clear price driver with timeline           │
-│                                                                  │
-│  CHAMPION SELECTION (AI Judge - v3.3.0):                        │
-│  → Dedicated AI evaluates argument quality, not word count     │
-│  → Scores: DATA (25%) + LOGIC (25%) + RISK (25%) + CATALYST (25%)│
-│  → Winner's thesis becomes the trade plan                      │
-│  → Falls back to heuristic method if Judge times out           │
-│                                                                  │
-│  VALIDATION:                                                    │
-│  ✓ Number.isFinite() guards on price targets                   │
-│  ✓ Division by zero guards in range calculations               │
-│  ✓ 60-second timeout with cleanup                              │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
+### Trading
+
+- `GET /api/trading/trades` - List trades
+- `GET /api/trading/leaderboard` - Analyst leaderboard
+- `GET /api/trading/analysts/:id/stats` - Analyst stats
+
+### Portfolio
+
+- `GET /api/portfolio` - Portfolio summary
+- `GET /api/positions` - Current positions
+
+### WEEX Proxy
+
+- `GET /api/weex/tickers` - Market tickers
+- `GET /api/weex/positions` - WEEX positions
+- `GET /api/weex/account` - Account info
+
+## Configuration
+
+Key environment variables (see `.env.example` in project root):
+
+```bash
+# AI
+AI_PROVIDER=gemini|openrouter
+AI_TEMPERATURE=0.8
+
+# Trading
+# TRADING_STYLE: 'scalp' (5-12h hold, 5% targets) or 'swing' (24-48h hold, 10% targets)
+TRADING_STYLE=scalp|swing
+MAX_LEVERAGE=5
+MAX_CONCURRENT_POSITIONS=6
+
+# Anti-Churn
+COOLDOWN_AFTER_TRADE_MS=900000
+COOLDOWN_BEFORE_FLIP_MS=1800000
+MAX_TRADES_PER_DAY=10
+HYSTERESIS_MULTIPLIER=1.2
+
+# Risk
+WEEKLY_DRAWDOWN_LIMIT_PERCENT=10
+# MAX_FUNDING_AGAINST_BPS: Maximum adverse funding rate before reducing leverage.
+# When position is AGAINST funding direction (e.g., LONG when funding is positive),
+# and funding rate exceeds this threshold, leverage is reduced by -2x.
+# Value is in basis points (bps): 5 bps = 0.05% per 8-hour period.
+# Comparison: funding_rate > MAX_FUNDING_AGAINST_BPS triggers the penalty.
+MAX_FUNDING_AGAINST_BPS=5
 ```
 
----
+## Cycle Flow
 
-## 🛡️ Stage 4: Risk Council
+1. **Pre-checks**: Balance, positions, daily limits
+2. **Market Scan**: Fetch data for all 8 coins
+3. **Context Build**: Assemble rich context with indicators
+4. **Parallel Analysis**: 4 AI calls in parallel
+5. **Judge Decision**: 1 AI call to pick winner
+6. **Execution**: Place order if approved
+7. **Logging**: Database + WEEX compliance
+8. **Wait**: Sleep until next cycle (5 minutes default)
 
-**Service:** `CollaborativeFlow.ts` → `runRiskCouncil()`  
-**Service:** `CircuitBreakerService.ts` → `checkCircuitBreakers()`  
-**Duration:** ~15 seconds
+## Exit Plan Handling
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  CIRCUIT BREAKER CHECK (Before Risk Council)                    │
-│                                                                  │
-│  🟢 GREEN: Normal trading                                       │
-│  🟡 YELLOW: BTC -10% in 4h OR Portfolio -10% in 24h            │
-│     → Max leverage 3x, no new positions                        │
-│  🟠 ORANGE: BTC -15% in 4h OR Portfolio -15% in 24h            │
-│     → Max leverage 2x, close small positions                   │
-│  🔴 RED: BTC -20% in 4h OR Portfolio -25% in 24h               │
-│     → EMERGENCY: Close ALL positions immediately               │
-│                                                                  │
-│  VALIDATION:                                                    │
-│  ✓ Array.isArray() check before accessing candles              │
-│  ✓ Validates sorted candles array is not empty                 │
-│                                                                  │
-├─────────────────────────────────────────────────────────────────┤
-│  KAREN'S RISK COUNCIL REVIEW                                    │
-│                                                                  │
-│  INPUT:                                                         │
-│  ├─ Champion's winning thesis                                  │
-│  ├─ Current market data                                        │
-│  ├─ Account balance (from WEEX wallet - source of truth)       │
-│  ├─ Current positions (from WEEX)                              │
-│  └─ Recent P&L (24h and 7d)                                    │
-│                                                                  │
-│  KAREN'S CHECKLIST:                                             │
-│  [ ] Position size ≤30% of account?                            │
-│  [ ] Stop loss ≤10% from entry?                                │
-│  [ ] Leverage ≤5x?                                             │
-│  [ ] Not correlated with existing positions?                   │
-│  [ ] Funding rate ≤0.1% against us? (warn at 0.05%)            │
-│  [ ] 7d drawdown acceptable?                                   │
-│                                                                  │
-│  VETO TRIGGERS (MUST veto if ANY true):                        │
-│  ✗ Stop loss >10% from entry                                   │
-│  ✗ Position would exceed 30% of account                        │
-│  ✗ Already have 3+ positions open                              │
-│  ✗ 7d drawdown >10%                                            │
-│  ✗ Funding rate >0.1% against position (warn at >0.05%)        │
-│                                                                  │
-│  STRUCTURED OUTPUT (RISK_COUNCIL_SCHEMA):                       │
-│  {                                                               │
-│    "approved": true,                                            │
-│    "adjustments": {                                             │
-│      "positionSize": 7,  // Reduced from 8                     │
-│      "leverage": 4,      // Reduced from 5                     │
-│      "stopLoss": 178     // Tightened                          │
-│    },                                                           │
-│    "warnings": ["SOL volatility elevated"],                    │
-│    "vetoReason": null                                          │
-│  }                                                               │
-│                                                                  │
-│  VALIDATION:                                                    │
-│  ✓ Division by zero guards in risk calculations                │
-│  ✓ Default to conservative veto on error                       │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
+Each trade includes an `exit_plan` field that specifies invalidation conditions:
 
----
+- **Stored in DB**: Exit plans are persisted with each trade record
+- **Passed to AI**: Active trades with exit plans are included in context
+- **Respected by AI**: Analysts MUST NOT recommend closing unless the exit plan is invalidated
+- **Hysteresis**: Need 20% more confidence to close than the original entry confidence
 
-## 🚀 Stage 5: Execution
+**Invalidation Criteria:** An exit plan is considered invalidated when:
 
-**Service:** `AutonomousTradingEngine.ts` → `executeCollaborativeTrade()`  
-**Service:** `WeexClient.ts` → `placeOrder()`  
-**Service:** `AILogService.ts` → `createLog()`  
-**Duration:** ~5 seconds
+1. The specified price level is breached (TP/SL hit)
+2. The stated thesis condition becomes false - AI analysts evaluate this by comparing the current market context against the stored `entry_thesis` and `exit_plan` fields. For example, if the thesis was "bullish while above EMA50" and the current `market_data[].intraday.price_vs_ema50` shows "below", the AI recognizes the invalidation. The AI receives the full `TradingContext` object which includes `account.active_trades[].entry_thesis` and `account.active_trades[].exit_plan` for each open position.
+3. Time-based expiry is reached (if specified in the plan, checked via `hold_time_hours` in context)
+4. A fundamental change occurs that contradicts the entry thesis (AI evaluates this from market data changes)
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  TRADE PARAMETER CALCULATION                                    │
-│                                                                  │
-│  From champion thesis + risk adjustments:                       │
-│  ├─ Direction: LONG or SHORT (from recommendation)             │
-│  ├─ Leverage: min(5, adjusted_leverage)                        │
-│  ├─ Position %: (positionSize/10) × MAX_POSITION_SIZE_PERCENT  │
-│  ├─ Position Value: accountBalance × (positionPercent/100)     │
-│  ├─ Margin Required: positionValue / leverage                  │
-│  └─ Size: positionValue / currentPrice                         │
-│                                                                  │
-│  VALIDATION:                                                    │
-│  ✓ Guard for division by zero (leverage, price)                │
-│  ✓ Number.isFinite() check on marginRequired                   │
-│  ✓ Validates size is positive and finite                       │
-│                                                                  │
-├─────────────────────────────────────────────────────────────────┤
-│  WEEX ORDER PLACEMENT                                           │
-│                                                                  │
-│  Order Parameters:                                              │
-│  {                                                               │
-│    symbol: "cmt_solusdt",                                       │
-│    type: "1" (LONG) or "2" (SHORT),                            │
-│    size: "0.38000000",                                          │
-│    client_oid: "collab_cathie_1735142400000",                  │
-│    order_type: "2" (FOK - Fill or Kill),                       │
-│    match_price: "1" (Market price)                             │
-│  }                                                               │
-│                                                                  │
-│  DRY RUN MODE:                                                  │
-│  If config.autonomous.dryRun = true:                           │
-│  → Log trade details but don't execute                         │
-│  → Useful for testing without real money                       │
-│                                                                  │
-├─────────────────────────────────────────────────────────────────┤
-│  POST-EXECUTION                                                  │
-│                                                                  │
-│  1. Save trade to database with:                               │
-│     ├─ Champion attribution (who won the debate)               │
-│     ├─ Coin selector attribution (who picked the coin)         │
-│     └─ Risk adjuster attribution (Karen's modifications)       │
-│                                                                  │
-│  2. Upload AI decision log to WEEX (compliance)                │
-│     ├─ Full decision chain                                     │
-│     ├─ All analyst inputs                                      │
-│     └─ Risk council decision                                   │
-│                                                                  │
-│  3. Update analyst state                                       │
-│     ├─ Deduct margin from balance                              │
-│     ├─ Add position to positions array                         │
-│     └─ Update lastTradeTime                                    │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
+**AI Safeguards for Exit Plan Respect:**
 
----
-
-## 🔄 Stage 6: Position Management
-
-**Service:** `AutonomousTradingEngine.ts` → `updateLeaderboard()`  
-**Continuous:** Every cycle
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  POSITION MONITORING (Every Cycle)                              │
-│                                                                  │
-│  For each analyst:                                              │
-│  1. Fetch current positions from WEEX                          │
-│  2. Calculate unrealized P&L                                   │
-│  3. Update total value (balance + position value)              │
-│  4. Update return percentage                                   │
-│                                                                  │
-│  LEADERBOARD UPDATE:                                            │
-│  ├─ Sort analysts by total value                               │
-│  ├─ Assign ranks 1-4                                           │
-│  ├─ Calculate win rates                                        │
-│  └─ Persist to database                                        │
-│                                                                  │
-├─────────────────────────────────────────────────────────────────┤
-│  EMERGENCY CLOSE (Circuit Breaker RED)                          │
-│                                                                  │
-│  emergencyCloseAllPositions():                                  │
-│  1. Collect all position symbols first (avoid mutation)        │
-│  2. Close each position sequentially                           │
-│  3. Clear positions array after all closed                     │
-│                                                                  │
-│  FIX APPLIED:                                                   │
-│  ✓ No longer modifies array while iterating                    │
-│  ✓ Collects symbols first, then closes                         │
-│                                                                  │
-├─────────────────────────────────────────────────────────────────┤
-│  CLEANUP (On Engine Stop)                                       │
-│                                                                  │
-│  cleanup():                                                     │
-│  1. Clear sleep timeout                                        │
-│  2. Clear trading locks                                        │
-│  3. Wait for main loop to exit (with timeout)                  │
-│                                                                  │
-│  FIX APPLIED:                                                   │
-│  ✓ Timeout in Promise.race now properly cleaned up             │
-│  ✓ No orphaned timeout handles (memory leak fixed)             │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## ⏱️ Timing & Performance
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  CYCLE TIMING BREAKDOWN                                          │
-│                                                                  │
-│  Stage 1: Market Scan ................ ~5 seconds              │
-│           (8 parallel WEEX API calls)                           │
-│  Stage 2: Coin Selection ............. ~20 seconds             │
-│           (3 parallel AI calls)                                │
-│  Stage 3: Championship ............... ~30 seconds             │
-│           (4 analysts, turn-by-turn)                           │
-│  Stage 4: Risk Council ............... ~15 seconds             │
-│           (1 AI call - Karen)                                  │
-│  Stage 5: Execution .................. ~5 seconds              │
-│           (WEEX API + DB + compliance)                          │
-│  Stage 6: Position Management ........ Continuous              │
-│           (Monitor and adjust)                                  │
-│  ─────────────────────────────────────────────────             │
-│  TOTAL CYCLE TIME: ~1.5 minutes                                │
-│                                                                  │
-├─────────────────────────────────────────────────────────────────┤
-│  GEMINI API USAGE PER CYCLE                                      │
-│                                                                  │
-│  Stage 2: 3 calls (Ray, Jim, Quant)                            │
-│  Stage 3: 4+ calls (All analysts, turn-by-turn)                │
-│  Stage 4: 1 call (Karen)                                       │
-│  ─────────────────────────────────────────────────             │
-│  TOTAL: 13+ AI API calls per cycle                             │
-│                                                                  │
-│  At 5-minute cycles: ~150 calls/hour                           │
-│  Supports: Gemini, OpenRouter, DeepSeek                        │
-│                                                                  │
-├─────────────────────────────────────────────────────────────────┤
-│  DYNAMIC CYCLE INTERVALS (TradingScheduler)                      │
-│                                                                  │
-│  Peak Hours (1.6x activity):                                    │
-│  • US-Europe overlap: 13:00-17:00 UTC                          │
-│  • Asia open: 00:00-04:00 UTC                                  │
-│  → Cycle every 3 minutes                                       │
-│                                                                  │
-│  Normal Hours (1.0x activity):                                  │
-│  → Cycle every 5 minutes (default)                             │
-│                                                                  │
-│  Off-Peak Hours (0.5x activity):                                │
-│  • Weekend nights, low volume                                   │
-│  → Cycle every 10 minutes                                      │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 🚨 Hard Rules (Non-Negotiable)
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  CIRCUIT BREAKERS (CircuitBreakerService)                        │
-│                                                                  │
-│  🟡 YELLOW ALERT                                                │
-│     Trigger: BTC -10% in 4h OR Portfolio -10% in 24h           │
-│     Action: Max leverage 3x, no new positions                  │
-│                                                                  │
-│  🟠 ORANGE ALERT                                                │
-│     Trigger: BTC -15% in 4h OR Portfolio -15% in 24h           │
-│     Action: Max leverage 2x, close positions <5 size           │
-│                                                                  │
-│  🔴 RED ALERT                                                   │
-│     Trigger: BTC -20% in 4h OR Portfolio -25% in 24h           │
-│     Action: CLOSE ALL POSITIONS IMMEDIATELY                    │
-│                                                                  │
-├─────────────────────────────────────────────────────────────────┤
-│  POSITION LIMITS (config.autonomous)                             │
-│                                                                  │
-│  • Max position size: 30% of portfolio                         │
-│  • Max leverage: 5x (NEVER exceed)                             │
-│  • Max concurrent positions: 5                                 │
-│  • Min time between trades: 15 minutes                         │
-│  • Min balance to trade: $30                                   │
-│  • Min confidence to trade: 60%                                │
-│                                                                  │
-├─────────────────────────────────────────────────────────────────┤
-│  TRADING STYLE CONFIG (config.autonomous.scalp/swing)            │
-│                                                                  │
-│  SCALPING (Default - TRADING_STYLE=scalp):                      │
-│  • Target profit: 4% (SCALP_TARGET_PROFIT_PERCENT)             │
-│  • Stop loss: 2.5% (SCALP_STOP_LOSS_PERCENT)                   │
-│  • Max hold: 8 hours (SCALP_MAX_HOLD_HOURS)                    │
-│  • Min R/R: 1.6:1 (SCALP_MIN_RR_RATIO)                         │
-│  • Profit thresholds: +1.5%/+2.5%/+3.5%/+4%                    │
-│                                                                  │
-│  SWING (TRADING_STYLE=swing):                                   │
-│  • Target profit: 8% (SWING_TARGET_PROFIT_PERCENT)             │
-│  • Stop loss: 4% (SWING_STOP_LOSS_PERCENT)                     │
-│  • Max hold: 36 hours (SWING_MAX_HOLD_HOURS)                   │
-│  • Min R/R: 2:1 (SWING_MIN_RR_RATIO)                           │
-│  • Profit thresholds: +2.5%/+4%/+6%/+8%                        │
-│                                                                  │
-├─────────────────────────────────────────────────────────────────┤
-│  STOP LOSS REQUIREMENTS                                          │
-│                                                                  │
-│  • Every position MUST have a stop loss                        │
-│  • Max stop loss distance: 10% from entry                      │
-│  • Stop loss cannot be moved further away                      │
-│  • Stop loss CAN be tightened (trailing)                       │
-│                                                                  │
-├─────────────────────────────────────────────────────────────────┤
-│  FUNDING RATE LIMITS (Basis Points Convention)                   │
-│                                                                  │
-│  • Stored as decimal: 0.0005 = 0.05% = 5 basis points (bps)   │
-│  • Configured via MAX_FUNDING_AGAINST_BPS in .env (default: 5) │
-│  • If funding >0.05% (5 bps) against position: Karen warns     │
-│  • If funding >0.1% (10 bps) against position: Karen vetoes    │
-│  • Track cumulative funding cost per position                  │
-│  • 0 = no limit (not recommended for production)               │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 🖥️ Frontend Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  LIVE ARENA DASHBOARD (index.html + app.js)                     │
-│                                                                  │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │  HEADER                                                  │   │
-│  │  ├─ Engine status indicator (running/stopped)           │   │
-│  │  └─ Account balance display                             │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                                                                  │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │  ENGINE CONTROLS                                         │   │
-│  │  ├─ Start/Stop buttons                                  │   │
-│  │  ├─ Current cycle number                                │   │
-│  │  ├─ Next cycle countdown                                │   │
-│  │  └─ Total trades counter                                │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                                                                  │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │  MAIN CONTENT SECTIONS                                   │   │
-│  │                                                          │   │
-│  │  📊 PORTFOLIO OVERVIEW                                   │   │
-│  │  ├─ Current balance                                     │   │
-│  │  ├─ Total P&L                                           │   │
-│  │  └─ Win rate                                            │   │
-│  │                                                          │   │
-│  │  📈 OPEN POSITIONS                                       │   │
-│  │  ├─ Symbol, side, size                                  │   │
-│  │  ├─ Entry price, current price                          │   │
-│  │  └─ Unrealized P&L                                      │   │
-│  │                                                          │   │
-│  │  ⚡ RECENT TRADES                                        │   │
-│  │  ├─ Trade history (last 20)                             │   │
-│  │  └─ Trade details with P&L                              │   │
-│  │                                                          │   │
-│  │  🎯 MARKET DATA                                          │   │
-│  │  └─ Live prices for 8 coins                             │   │
-│  │                                                          │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                                                                  │
-│  AUTO-REFRESH: Every 10 seconds (polling)                       │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 📡 Real-Time Communication
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  POLLING-BASED UPDATES (Replaced SSE in v3.0.1)                 │
-│                                                                  │
-│  Frontend polls every 10 seconds:                               │
-│  ├─ GET /api/status → Engine status                            │
-│  ├─ GET /api/positions → Current positions                     │
-│  ├─ GET /api/portfolio → Portfolio data                        │
-│  └─ GET /api/activity → Recent trades                          │
-│                                                                  │
-│  Benefits:                                                      │
-│  ✓ Simpler architecture (no WebSocket/SSE complexity)          │
-│  ✓ Better compatibility with proxies/load balancers            │
-│  ✓ Easier to debug and maintain                                │
-│  ✓ Sufficient for 5-minute trading cycles                      │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 🔧 Services Map
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  CORE PIPELINE SERVICES                                          │
-│                                                                  │
-│  AutonomousTradingEngine (Orchestrator)                         │
-│  ├── CollaborativeFlowService                                   │
-│  │   ├── AIService (AI generation)                             │
-│  │   ├── ArenaContextBuilder (context building)                │
-│  │   └── ANALYST_PROFILES (constants)                          │
-│  ├── WeexClient (exchange API)                                  │
-│  ├── CircuitBreakerService (risk management)                   │
-│  ├── TradingScheduler (timing optimization)                    │
-│  └── AILogService (compliance logging)                         │
-│                                                                  │
-├─────────────────────────────────────────────────────────────────┤
-│  SUPPORTING SERVICES                                             │
-│                                                                  │
-│  Database → SQLite (local) or Turso (production)                │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 🧭 Stage-to-Service Ownership
-
-- Stage 1 — Market Scan: `WeexClient.getTicker`, `getFundingRate` (owner: Exchange data)
-- Stage 2 — Coin Selection: `CollaborativeFlow.runCoinSelection` (owners: Ray, Jim, Quant)
-- Stage 3 — Championship: `CollaborativeFlow.runChampionshipDebate` (all 4 analysts compete; turn-by-turn)
-- Stage 4 — Risk Council: `CollaborativeFlow.runRiskCouncil` + `CircuitBreakerService.checkAll` (owner: Karen; respects `GLOBAL_RISK_LIMITS`)
-- Stage 5 — Execution: `AutonomousTradingEngine.executeCollaborativeTrade` + `WeexClient.placeOrder` + compliance logging via `AILogService.createLog`/`weexClient.uploadAILog`
-- Stage 6 — Position Management: `AutonomousTradingEngine.updateLeaderboard` (continuous monitoring)
-
----
-
-## 📋 Structured Output Schemas
-
-All AI outputs use structured JSON Schema enforcement for reliable, validated responses:
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  SCHEMA                        │ USED BY                        │
-├────────────────────────────────┼────────────────────────────────┤
-│  COIN_SELECTION_SCHEMA         │ Stage 2: runCoinSelection()   │
-│  ├─ picks[]: symbol, direction, conviction, reason             │
-│                                                                  │
-│  DEBATE_TURN_SCHEMA            │ Stage 3: Championship debates │
-│  ├─ argument, dataPointsReferenced[], strength                 │
-│                                                                  │
-│  SPECIALIST_ANALYSIS_SCHEMA    │ Stage 3: Champion's thesis    │
-│  ├─ recommendation, confidence, targets, thesis                │
-│  ├─ bullCase[], bearCase[], keyMetrics, catalyst               │
-│                                                                  │
-│  RISK_COUNCIL_SCHEMA           │ Stage 4: runRiskCouncil()     │
-│  ├─ approved, adjustments{}, warnings[], vetoReason            │
-│                                                                  │
-│  ANALYSIS_RESPONSE_SCHEMA      │ AIService.generateAnalysis    │
-│  ├─ recommendation, confidence, priceTarget, positionSize      │
-│  ├─ bullCase[], bearCase[], catalysts[], summary               │
-│                                                                  │
-│  DEBATE_RESPONSE_SCHEMA        │ AIService.generateDebate      │
-│  ├─ turns[], winner, scores{}, winningArguments[], summary     │
-│                                                                  │
-│  TRADING_DECISION_SCHEMA       │ AIService.tradingDecision     │
-│  ├─ shouldTrade, action, confidence, riskAssessment            │
-│  ├─ positionSizePercent, leverage, stopLoss, takeProfit        │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-
-Benefits of Structured Outputs:
-✓ Guaranteed valid JSON (no parsing errors)
-✓ Type-safe responses matching schema
-✓ Enum validation (LONG/SHORT, BUY/SELL, etc.)
-✓ Required field enforcement
-✓ Consistent output format across all AI calls
-```
-
----
-
-## 📊 Summary
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    HYPOTHESIS ARENA FLOW                         │
-│                                                                  │
-│  "4 AI analysts, 1 shared portfolio, debates decide trades"    │
-│                                                                  │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  EVERY CYCLE (~10 minutes):                                     │
-│                                                                  │
-│  1. SCAN    → Fetch market data for 8 coins (WeexClient)       │
-│  2. SELECT  → Ray, Jim, Quant pick best opportunity            │
-│              NEW: Can select MANAGE to close positions         │
-│     [If MANAGE] → Close position → Update DB → DONE            │
-│     [If LONG/SHORT] ↓                                          │
-│  3. CHAMPIONSHIP → ALL 4 analysts compete for execution        │
-│  4. RISK    → Karen approves/vetoes/adjusts                    │
-│  5. EXECUTE → Place trade on WEEX with compliance log          │
-│  6. MANAGE  → Update leaderboard, monitor positions            │
-│                                                                  │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  KEY PRINCIPLES:                                                │
-│                                                                  │
-│  ✓ Every analyst uses their FULL unique prompt                 │
-│  ✓ Debates are the core decision mechanism                     │
-│  ✓ Winner's thesis gets executed                               │
-│  ✓ Karen has veto power for safety                             │
-│  ✓ Circuit breakers protect against crashes                    │
-│  ✓ One portfolio, collaborative decisions                      │
-│  ✓ All AI decisions logged for WEEX compliance                 │
-│  ✓ AI can manage existing positions (close/reduce)             │
-│  ✓ Trading style configurable (scalp/swing via env)            │
-│  ✓ All parameters env-driven (no hardcoded values)             │
-│                                                                  │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  NEW IN v3.3.0:                                                 │
-│                                                                  │
-│  ✓ AI Judge System - dedicated debate adjudicator              │
-│  ✓ 4-criteria scoring rubric (data/logic/risk/catalyst)        │
-│  ✓ Regime-Adaptive Trading - AI adapts to market conditions    │
-│  ✓ All 4 analysts share same regime detection table            │
-│  ✓ R/R ratio violations fixed (all ≥1.5:1 now)                 │
-│  ✓ Alpha Score gap fixed (-4 to -1 range defined)              │
-│  ✓ EV calculation formula added to quant prompt                │
-│  ✓ Judge timeout handling with proper cleanup                  │
-│  ✓ Fallback to heuristic if Judge fails                        │
-│  ✓ Anti-bias protections in Judge prompt                       │
-│  ✓ Dominance pattern detection                                 │
-│                                                                  │
-├─────────────────────────────────────────────────────────────────┤
-│  EDGE CASES HANDLED (v3.2.0+):                                  │
-│                                                                  │
-│  ✓ Number.isFinite() guards on all calculations                │
-│  ✓ Division by zero protection                                 │
-│  ✓ Empty array handling                                        │
-│  ✓ Timeout cleanup (no memory leaks)                           │
-│  ✓ Array mutation during iteration fixed                       │
-│  ✓ Null/undefined checks on all inputs                         │
-│  ✓ Current price from ticker (not entry price)                 │
-│  ✓ Hold time from DB (not hardcoded)                           │
-│  ✓ Position size validation before close                       │
-│  ✓ DB insert only after successful close                       │
-│  ✓ Case-insensitive position symbol matching                   │
-│  ✓ MANAGE pattern detection avoids false positives             │
-│  ✓ Judge input validation (empty turns/analysts rejected)      │
-│  ✓ Score validation with safe defaults                         │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
+- The Judge prompt explicitly instructs: "Do NOT close positions unless the exit_plan invalidation condition is met"
+- Anti-churn hysteresis requires 20% higher confidence to close than the original entry confidence
+- Each analyst receives the full `active_trades` array with `exit_plan` and `entry_thesis` fields
+- The system logs warnings if an analyst recommends CLOSE without clear invalidation reasoning
+- Cooldown periods (15-30 minutes) prevent rapid open/close cycles that might bypass exit plans

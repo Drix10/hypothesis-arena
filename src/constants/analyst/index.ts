@@ -1,24 +1,42 @@
 /**
- * Analyst Constants & Prompts
+ * Analyst Constants - v5.0.0
  * 
- * Central export for all analyst-related types, profiles, and prompts.
- * Modular structure for better organization and maintainability.
+ * Central export for analyst types, profiles, and risk management.
+ * 
+ * ARCHITECTURE NOTE:
+ * - ANALYST_PROFILES (from profiles.ts) contains the full analyst agent definitions
+ *   with metadata like avatarEmoji, focusAreas, biases, etc.
+ * - This module re-exports ANALYST_PROFILES directly from profiles.ts
+ * - The prompt building functions are imported from analystPrompt.ts which also
+ *   imports ANALYST_PROFILES from profiles.ts (no circular dependency)
+ * 
+ * Import graph:
+ *   profiles.ts -> ANALYST_PROFILES
+ *   analystPrompt.ts -> imports ANALYST_PROFILES from profiles.ts
+ *   index.ts (this file) -> imports from both (no cycle)
  */
 
 // Types
 export type { AnalystMethodology, AnalystAgent } from './types';
 
-// Profiles
+// Profiles - Full analyst definitions with metadata
 export { ANALYST_PROFILES } from './profiles';
 
 // Risk Management
 export { GLOBAL_RISK_LIMITS } from './riskLimits';
 export { RISK_COUNCIL_VETO_TRIGGERS } from './riskCouncil';
 
-// Prompts
+// v5.0.0: Export prompt building functions
+// NOTE: These are imported from analystPrompt.ts which has its own import of ANALYST_PROFILES
 export {
-    THESIS_SYSTEM_PROMPTS,
-    buildSpecialistPrompt,
-    buildRiskCouncilPrompt,
-    buildDebatePrompt
-} from '../prompts';
+    buildAnalystPrompt,
+    buildAnalystUserMessage,
+    ANTI_CHURN_RULES,
+    LEVERAGE_POLICY,
+    OUTPUT_FORMAT
+} from '../prompts/analystPrompt';
+
+export {
+    JUDGE_SYSTEM_PROMPT,
+    buildJudgeUserMessage
+} from '../prompts/judgePrompt';

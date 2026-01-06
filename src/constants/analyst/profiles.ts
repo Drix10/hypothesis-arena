@@ -4,16 +4,23 @@
  * Defines the 4 specialized analyst agents with their unique methodologies,
  * personalities, and analysis approaches for the Hypothesis Arena trading system.
  * 
- * COLLABORATIVE FLOW (from FLOW.md):
- * - Stage 2 (Coin Selection): Ray, Jim, Quant pick best opportunities
- * - Stage 3 (Championship): All 4 analysts compete in debates
- * - Stage 4 (Risk Council): Karen has VETO POWER over all trades
+ * PARALLEL ANALYSIS PIPELINE (v5.0.0):
+ * - Stage 1 (Market Scan): Fetch data for all 8 coins + indicators
+ * - Stage 2 (Parallel Analysis): 4 analysts analyze independently in parallel
+ * - Stage 3 (Judge Decision): Compare all 4 and pick winner
+ * - Stage 4 (Execution): Place trade on WEEX with TP/SL
  * 
  * ANALYSTS:
  * - Jim (Technical) - Chart analysis, price action
  * - Ray (Macro) - Big picture, Fed policy, BTC dominance
- * - Karen (Risk) - Risk management, veto power
+ * - Karen (Risk) - Risk management, gets EXTRA WEIGHT on risk concerns (advisory, not absolute veto)
  * - Quant (Quantitative) - Statistical models, on-chain data
+ * 
+ * NOTE ON KAREN'S "VETO POWER":
+ * Karen's role is advisory - the judge gives her risk concerns extra weight when evaluating
+ * recommendations, but she cannot unilaterally block trades. The judge makes the final decision
+ * considering all 4 analysts' inputs. This is consistent with the parallel architecture where
+ * no single analyst has absolute control.
  */
 
 import type { AnalystMethodology, AnalystAgent } from './types';
@@ -89,7 +96,7 @@ export const ANALYST_PROFILES: Record<AnalystMethodology, AnalystAgent> = {
         title: 'Crypto Risk Manager',
         methodology: 'risk',
         avatarEmoji: '🛡️',
-        description: 'Focuses on downside protection, liquidation risks, and what could go wrong. The voice of caution in leveraged crypto trading. Has VETO POWER over all trades in the collaborative pipeline.',
+        description: 'Focuses on downside protection, liquidation risks, and what could go wrong. The voice of caution in leveraged crypto trading. Gets EXTRA WEIGHT on risk concerns in the judge evaluation (advisory role, not absolute veto).',
         focusAreas: [
             'Volatility and ATR analysis',
             'Liquidation cascade risks',

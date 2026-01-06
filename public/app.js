@@ -2,7 +2,7 @@
  * Hypothesis Arena - Premium Frontend Application
  * AI-powered autonomous crypto trading platform
  *
- * @version 3.3.0
+ * @version 5.0.0
  * @author Hypothesis Arena Team
  * @license MIT
  */
@@ -273,7 +273,7 @@ function updateEngineUI(status) {
   // Update stats
   updateText("cycle-count", status.cycleCount ?? 0);
   updateText(
-    "debates-run",
+    "total-analyses",
     status.totalDebatesRun ??
       status.currentCycle?.debatesRun ??
       status.stats?.totalDebates ??

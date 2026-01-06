@@ -54,6 +54,7 @@ export class AILogService {
      * FIXED: Retry failed uploads periodically
      * Called automatically during createLog, or can be called manually
      * FIXED: Prevents concurrent retry operations
+     * FIXED: Added timeout protection to prevent infinite retries
      */
     async retryFailedUploads(): Promise<void> {
         const now = Date.now();
@@ -69,6 +70,10 @@ export class AILogService {
 
         this.retryInProgress = true;
         this.lastRetryAttempt = now;
+
+        // FIXED: Add overall timeout for retry operation (5 minutes max)
+        const RETRY_TIMEOUT_MS = 5 * 60 * 1000;
+        const retryStartTime = Date.now();
 
         try {
             // Get up to 10 failed logs from database
@@ -96,6 +101,12 @@ export class AILogService {
             logger.info(`🔄 Retrying ${failedLogs.length} failed AI log uploads...`);
 
             for (const dbLog of failedLogs) {
+                // FIXED: Check overall timeout to prevent infinite retry loops
+                if (Date.now() - retryStartTime > RETRY_TIMEOUT_MS) {
+                    logger.warn(`Retry operation timeout after ${RETRY_TIMEOUT_MS}ms, stopping`);
+                    break;
+                }
+
                 try {
                     // CRITICAL: Check retry attempts to prevent infinite retries
                     const attempts = this.retryAttempts.get(dbLog.id) || 0;
@@ -149,7 +160,7 @@ export class AILogService {
 
                     try {
                         input = JSON.parse(dbLog.input);
-                    } catch (parseError) {
+                    } catch (_parseError) {
                         logger.error(`Failed to parse input for log ${dbLog.id}, marking as uploaded to stop retries`);
 
                         // Wrap DB update in try-catch
@@ -171,7 +182,7 @@ export class AILogService {
 
                     try {
                         output = JSON.parse(dbLog.output);
-                    } catch (parseError) {
+                    } catch (_parseError) {
                         logger.error(`Failed to parse output for log ${dbLog.id}, marking as uploaded to stop retries`);
 
                         // Wrap DB update in try-catch

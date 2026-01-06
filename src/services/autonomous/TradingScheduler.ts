@@ -195,9 +195,17 @@ export class TradingScheduler {
      * - Negative time calculations
      * - Minutes exceeding 59
      * - NaN values
+     * - Invalid date objects
      */
     getTimeUntilPeakTrading(): { hours: number; minutes: number; nextRegion: string } {
         const now = new Date();
+
+        // Validate date
+        if (isNaN(now.getTime())) {
+            logger.error('Invalid date in getTimeUntilPeakTrading, returning default');
+            return { hours: 0, minutes: 0, nextRegion: 'Unknown (date error)' };
+        }
+
         const utcHour = now.getUTCHours();
         const utcMinutes = now.getUTCMinutes();
         const currentTimeDecimal = utcHour + (utcMinutes / 60);
@@ -226,6 +234,12 @@ export class TradingScheduler {
         // Validate and clamp values
         if (!Number.isFinite(hoursUntilPeak) || hoursUntilPeak < 0) {
             hoursUntilPeak = 0;
+        }
+
+        // EDGE CASE: Cap at 24 hours (shouldn't exceed this for next peak)
+        if (hoursUntilPeak > 24) {
+            logger.warn(`Unexpected hoursUntilPeak: ${hoursUntilPeak}, capping at 24`);
+            hoursUntilPeak = 24;
         }
 
         const hours = Math.floor(hoursUntilPeak);

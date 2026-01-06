@@ -111,16 +111,58 @@ const shutdown = async (signal: string) => {
     }
 
     try {
-        const { getWeexClient } = await import('./services/weex/WeexClient');
-        const weexClient = getWeexClient();
-        weexClient.cleanup();
+        const { resetWeexClient } = await import('./services/weex/WeexClient');
+        resetWeexClient();
         logger.info('WeexClient cleanup complete');
     } catch (error) {
         logger.warn('Error cleaning up WeexClient:', error);
     }
 
+    // FIXED: Cleanup additional singleton services to prevent memory leaks
+    // CLEANUP ORDER: Services are cleaned up in dependency order (leaf services first).
+    // All reset functions are SYNCHRONOUS - try-catch handles import failures only.
     try {
-        cleanupTradingRoutes();
+        const { resetTechnicalIndicatorService } = await import('./services/indicators/TechnicalIndicatorService');
+        resetTechnicalIndicatorService(); // Sync: clears cache and stops prune interval
+        logger.info('TechnicalIndicatorService cleanup complete');
+    } catch (error) {
+        logger.warn('Error cleaning up TechnicalIndicatorService:', error);
+    }
+
+    try {
+        const { resetAntiChurnService } = await import('./services/trading/AntiChurnService');
+        resetAntiChurnService(); // Sync: clears cooldowns and resets counters
+        logger.info('AntiChurnService cleanup complete');
+    } catch (error) {
+        logger.warn('Error cleaning up AntiChurnService:', error);
+    }
+
+    try {
+        const { resetCollaborativeFlow } = await import('./services/ai/CollaborativeFlow');
+        resetCollaborativeFlow(); // Sync: clears AI model references
+        logger.info('CollaborativeFlow cleanup complete');
+    } catch (error) {
+        logger.warn('Error cleaning up CollaborativeFlow:', error);
+    }
+
+    try {
+        const { resetContextBuilder } = await import('./services/context/ContextBuilder');
+        resetContextBuilder(); // Sync: clears singleton instance
+        logger.info('ContextBuilder cleanup complete');
+    } catch (error) {
+        logger.warn('Error cleaning up ContextBuilder:', error);
+    }
+
+    try {
+        const { resetLeverageService } = await import('./services/trading/LeverageService');
+        resetLeverageService(); // Sync: clears singleton instance
+        logger.info('LeverageService cleanup complete');
+    } catch (error) {
+        logger.warn('Error cleaning up LeverageService:', error);
+    }
+
+    try {
+        cleanupTradingRoutes(); // Sync: clears route-level state
         logger.info('Trading routes cleanup complete');
     } catch (error) {
         logger.warn('Error cleaning up trading routes:', error);
