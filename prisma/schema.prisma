@@ -90,14 +90,24 @@ model Trade {
   // - No database-level constraint (CHECK or trigger) due to SQLite limitations
   // - Validation in trade creation code ensures both fields are set to the same value
   //
+  // NULL HANDLING:
+  // - Both fields can be NULL for MARKET orders where execution price is not known at placement
+  // - The invariant is: (price === entryPrice) OR (price === NULL AND entryPrice === NULL)
+  // - Application code must enforce: when updating one field, update both atomically
+  // - Order fill callback updates both fields in a single transaction
+  //
   // RISK: If application code bypasses validation, price and entryPrice could diverge.
   // MITIGATION: All trade creation goes through AutonomousTradingEngine which enforces this.
   // FUTURE: Remove price field once all consumers migrate to entryPrice.
   //
   // NOTE: SQLite does not support CHECK constraints via Prisma schema.
-  // For PostgreSQL migration, add: @@check("price_entry_price_match", "price = entry_price")
-  entryPrice         Float     @map("entry_price") // v5.0.0: Primary price field
-  price              Float     // DEPRECATED: Use entryPrice. Kept for backward compatibility
+  // For PostgreSQL migration, add: @@check("price_entry_price_match", "(price = entry_price) OR (price IS NULL AND entry_price IS NULL)")
+  //
+  // NULLABLE FIELDS: Both entryPrice and price are nullable to support MARKET orders where
+  // the execution price is not known at order placement time. The actual fill price is
+  // fetched from WEEX after execution and updated in a follow-up query.
+  entryPrice         Float?    @map("entry_price") // v5.0.0: Primary price field (NULL for MARKET orders until filled)
+  price              Float?    // DEPRECATED: Use entryPrice. Kept for backward compatibility (NULL for MARKET orders until filled)
   fee                Float     @default(0)
   status             TradeStatus // 'FILLED', 'PENDING', 'CANCELLED' - now enum-constrained
   reason             String? // Why this trade was made

@@ -154,14 +154,6 @@ const shutdown = async (signal: string) => {
     }
 
     try {
-        const { resetLeverageService } = await import('./services/trading/LeverageService');
-        resetLeverageService(); // Sync: clears singleton instance
-        logger.info('LeverageService cleanup complete');
-    } catch (error) {
-        logger.warn('Error cleaning up LeverageService:', error);
-    }
-
-    try {
         cleanupTradingRoutes(); // Sync: clears route-level state
         logger.info('Trading routes cleanup complete');
     } catch (error) {

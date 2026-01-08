@@ -28,13 +28,13 @@ import {
     ParallelAnalysisResult,
     JudgeDecision,
     validateAnalystOutput,
+    normalizeAnalystOutput,
     validateJudgeOutput,
 } from '../../types/analyst';
 import { TradingContext } from '../../types/context';
 import { buildAnalystPrompt, buildAnalystUserMessage } from '../../constants/prompts/analystPrompt';
 import { JUDGE_SYSTEM_PROMPT, buildJudgeUserMessage } from '../../constants/prompts/judgePrompt';
 import { getAntiChurnService } from '../trading/AntiChurnService';
-import { getLeverageService } from '../trading/LeverageService';
 import { getContextBuilder } from '../context/ContextBuilder';
 import { aiService, SchemaType, ResponseSchema } from './AIService';
 
@@ -115,7 +115,7 @@ const ANALYST_RECOMMENDATION_SCHEMA: ResponseSchema = {
         },
         leverage: {
             type: SchemaType.NUMBER,
-            description: 'Leverage multiplier (1-10)',
+            description: 'Leverage multiplier (1-20)',
         },
         tp_price: {
             type: SchemaType.NUMBER,
@@ -167,7 +167,7 @@ const JUDGE_ADJUSTMENTS_SCHEMA: ResponseSchema = {
     properties: {
         leverage: {
             type: SchemaType.NUMBER,
-            description: 'Adjusted leverage (1-10)',
+            description: 'Adjusted leverage (1-20)',
         },
         allocation_usd: {
             type: SchemaType.NUMBER,
@@ -483,8 +483,11 @@ export class CollaborativeFlowService {
 
                 const parsed = this.parseJSON(result.text);
 
-                if (validateAnalystOutput(parsed)) {
-                    return parsed;
+                // Normalize before validation (handles exit_plan as object, etc.)
+                const normalized = normalizeAnalystOutput(parsed);
+
+                if (validateAnalystOutput(normalized)) {
+                    return normalized;
                 } else {
                     // Debug: log what we received vs what we expected
                     logger.warn(`${analystId} output validation failed on attempt ${attempt}`);
@@ -656,7 +659,7 @@ export class CollaborativeFlowService {
 
         const rec = winnerOutput.recommendation;
 
-        // Apply judge's adjustments
+        // Apply judge's adjustments (if any)
         let finalLeverage = rec.leverage;
         let finalAllocation = rec.allocation_usd;
         let finalSlPrice = rec.sl_price;
@@ -677,12 +680,54 @@ export class CollaborativeFlowService {
             }
         }
 
-        // Validate leverage
-        const leverageService = getLeverageService();
-        const leverageValidation = leverageService.validateLeverage(finalLeverage);
-        if (!leverageValidation.valid) {
-            logger.warn(`Leverage adjusted: ${leverageValidation.reason}`);
-            finalLeverage = leverageValidation.adjusted;
+        // CHANGED: Trust AI's leverage decision - only apply hard safety limits
+        // The AI is instructed to use 3-20x leverage based on conditions
+        // We only clamp to exchange limits, not our own conservative limits
+        if (!Number.isFinite(finalLeverage) || finalLeverage <= 0) {
+            // FIXED: Invalid leverage - return HOLD instead of using arbitrary default
+            logger.error(`Invalid leverage from AI: ${finalLeverage} (type: ${typeof finalLeverage}), returning HOLD decision`);
+            return {
+                action: 'HOLD',
+                symbol: rec.symbol,
+                allocation_usd: 0,
+                leverage: 0,
+                tp_price: null,
+                sl_price: null,
+                exit_plan: '',
+                confidence: 0,
+                rationale: `Invalid leverage value: ${finalLeverage}`,
+                winner: 'NONE',
+                warnings: [`AI returned invalid leverage: ${finalLeverage}`],
+                analysisResult,
+                judgeDecision,
+            };
+        } else if (finalLeverage > 20) {
+            // Hard cap at 20x as per prompt instructions
+            logger.warn(`AI leverage ${finalLeverage}x exceeds 20x cap, clamping to 20x`);
+            finalLeverage = 20;
+        } else if (finalLeverage < 1) {
+            // FIXED: Log warning when clamping up to minimum
+            logger.warn(`AI leverage ${finalLeverage}x is below minimum 1x, clamping to 1x`);
+            finalLeverage = 1;
+        }
+
+        // Collect warnings for the final decision
+        // FIXED: Limit warnings array size to prevent memory issues
+        const MAX_WARNINGS = 20;
+        const warnings = judgeDecision.warnings.length > MAX_WARNINGS
+            ? judgeDecision.warnings.slice(0, MAX_WARNINGS)
+            : [...judgeDecision.warnings];
+
+        // ADDED: Validate stop loss is appropriate for leverage level
+        // At high leverage, stop loss must be tighter than liquidation distance
+        // Liquidation distance = 100% / leverage (e.g., 5% at 20x)
+        // We warn if stop loss is > 80% of liquidation distance (too close to liquidation)
+        // FIXED: Removed dead branch and unused maxSafeStopPct calculation
+        // Note: We don't have current price here, so we can only warn about high leverage
+        if (finalLeverage >= 15 && warnings.length < MAX_WARNINGS) {
+            const liquidationDistance = 100 / finalLeverage; // e.g., 6.67% at 15x, 5% at 20x
+            const maxSafeStopPct = liquidationDistance * 0.8; // 80% of liquidation distance
+            warnings.push(`High leverage (${finalLeverage}x) - ensure stop loss is within ${maxSafeStopPct.toFixed(1)}% of entry to avoid liquidation`);
         }
 
         return {
@@ -696,7 +741,7 @@ export class CollaborativeFlowService {
             confidence: rec.confidence,
             rationale: rec.rationale,
             winner: judgeDecision.winner,
-            warnings: judgeDecision.warnings,
+            warnings,
             analysisResult,
             judgeDecision,
         };

@@ -7,6 +7,7 @@
 export type AnalystMethodology =
     | 'technical'
     | 'macro'
+    | 'ml'      // ADDED: Machine learning / AI-driven methodology
     | 'risk'
     | 'quant';
 

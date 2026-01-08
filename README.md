@@ -113,36 +113,54 @@ WEEX_SECRET_KEY=your_secret
 WEEX_PASSPHRASE=your_passphrase
 
 # Trading
-# TRADING_STYLE: 'scalp' (5-12h hold, 5% targets) or 'swing' (24-48h hold, 10% targets)
-TRADING_STYLE=scalp
-# MAX_LEVERAGE: Base leverage for dynamic calculation (3-10x range)
-# This is the starting point - actual leverage adjusts based on confidence/volatility
-# The system will NEVER exceed 10x regardless of this setting
-MAX_LEVERAGE=5
-DRY_RUN=false
+DRY_RUN=true
 ```
 
+### ⚠️ Important: DRY_RUN Mode
+
+The `DRY_RUN` environment variable controls whether the system executes real trades:
+
+| Value            | Behavior                                                                             |
+| ---------------- | ------------------------------------------------------------------------------------ |
+| `true` (default) | **Simulation mode** - No real trades are executed. Safe for testing and development. |
+| `false`          | **Live trading mode** - Real trades will be placed on WEEX with real funds.          |
+
+**Safety Notes:**
+
+- The default in `.env.example` is `DRY_RUN=true` for safety
+- Always test thoroughly in dry-run mode before enabling live trading
+- When `DRY_RUN=true`, the system logs what trades _would_ be executed without actually placing orders
+- Set `DRY_RUN=false` only when you are ready to trade with real funds and have verified your configuration
+
 ---
 
-## 🤖 The 4 AI Analysts
+## 🤖 The 4 Quant Analysts (Quantitative Trading Methodologies)
 
-| Analyst   | Focus              | Risk Tolerance | Special Role                                |
-| --------- | ------------------ | -------------- | ------------------------------------------- |
-| **Jim**   | Technical Analysis | Moderate       | EMA, RSI, MACD patterns                     |
-| **Ray**   | Macro & Funding    | Moderate       | Funding rates, market structure             |
-| **Karen** | Risk Management    | Conservative   | Risk concerns carry extra weight (advisory) |
-| **Quant** | Quantitative       | Aggressive     | Statistical edge, mean reversion            |
+| Analyst   | Methodology Style     | Approach                                 | Edge                                                |
+| --------- | --------------------- | ---------------------------------------- | --------------------------------------------------- |
+| **Jim**   | Statistical Arbitrage | Mean Reversion & Pattern Recognition     | RSI/MACD divergence, Bollinger Bands, z-scores      |
+| **Ray**   | ML-Driven Signals     | AI/ML & Regime Detection                 | Open Interest, Funding Rate, Liquidation analysis   |
+| **Karen** | Multi-Strategy Risk   | Portfolio Optimization & Risk Management | Sharpe ratio, drawdown limits, correlation tracking |
+| **Quant** | Liquidity & Arbitrage | Market Microstructure & Arbitrage        | Funding arbitrage, VWAP, order flow analysis        |
+
+**Each analyst has ~150 lines of deeply researched, crypto-specific methodology:**
+
+- Standardized funding thresholds (±0.08% extreme, ±0.03% moderate)
+- Handles missing data gracefully
+- Validates all trade parameters (R:R, TP/SL, leverage)
+- HOLD is valid when no clear edge exists
 
 ---
 
-## 🛡️ Anti-Churn Rules (v5.0.0)
+## 🛡️ Anti-Churn Rules (v5.0.0 - Competition Mode)
 
 | Rule                 | Default   | Purpose                           |
 | -------------------- | --------- | --------------------------------- |
-| Cooldown After Trade | 15 min    | Prevent rapid re-entry            |
-| Cooldown Before Flip | 30 min    | Prevent direction whipsaw         |
+| Cooldown After Trade | 5 min     | Prevent rapid re-entry            |
+| Cooldown Before Flip | 10 min    | Prevent direction whipsaw         |
 | Hysteresis           | 1.2x      | Need 20% more confidence to close |
-| Daily Limit          | 10 trades | Prevent overtrading               |
+| Daily Limit          | 50 trades | Prevent overtrading               |
+| Max Per Symbol/Hour  | 3 trades  | Symbol-specific rate limit        |
 | Exit Plan Respect    | Always    | Don't close unless invalidated    |
 
 ---
@@ -151,9 +169,16 @@ DRY_RUN=false
 
 Calculated from WEEX candlestick data (no external APIs):
 
-**Intraday (5m):** EMA20, EMA50, RSI7, RSI14, MACD, ATR
+**Intraday (5m):** EMA9, EMA20, EMA50, RSI7, RSI14, MACD, ATR, Bollinger Bands
 
 **Long-term (4h):** EMA20, EMA50, EMA200, RSI14, MACD, Bollinger Bands
+
+**Derivatives:** Open Interest, Funding Rate, VWAP
+
+**Crypto-Specific Thresholds:**
+
+- RSI: Oversold < 25, Overbought > 75 (crypto is more volatile than stocks)
+- Funding: Extreme ±0.08%, Moderate ±0.03%
 
 ---
 
@@ -211,12 +236,22 @@ src/
 
 ## 📋 Version History
 
-| Version   | Date       | Changes                                                     |
-| --------- | ---------- | ----------------------------------------------------------- |
-| **5.0.0** | 2026-01-05 | Parallel analysis, anti-churn, dynamic leverage, exit plans |
-| 4.0.0     | 2026-01-04 | 5-stage pipeline, ALL 4 analysts in debates                 |
-| 3.3.0     | 2026-01-03 | AI Judge, regime-adaptive trading                           |
-| 3.0.0     | 2025-12-31 | MANAGE action, position management                          |
+| Version   | Date       | Changes                                                                             |
+| --------- | ---------- | ----------------------------------------------------------------------------------- |
+| **5.0.1** | 2026-01-08 | Quant firm edition: 4 analysts with 150-line methodologies, standardized thresholds |
+| **5.0.0** | 2026-01-05 | Parallel analysis, anti-churn, dynamic leverage, exit plans                         |
+| 4.0.0     | 2026-01-04 | 5-stage pipeline, ALL 4 analysts in debates                                         |
+| 3.3.0     | 2026-01-03 | AI Judge, regime-adaptive trading                                                   |
+| 3.0.0     | 2025-12-31 | MANAGE action, position management                                                  |
+
+**v5.0.1 Highlights:**
+
+- Comprehensive quant methodologies inspired by Renaissance, Two Sigma, Citadel, Jane Street
+- Standardized funding thresholds (±0.08% extreme, ±0.03% moderate)
+- 3x notional exposure limit with proper validation
+- Missing data handling (skips signals if indicators unavailable)
+- R:R calculation validation for LONG/SHORT trades
+- Fixed TypeScript null-safety issues
 
 See [FLOW.md](FLOW.md) for detailed architecture.
 

@@ -215,13 +215,101 @@ export interface TradingSignals {
 }
 
 /**
+ * Risk limits configuration embedded in instructions
+ * These values are derived from GLOBAL_RISK_LIMITS and formatted for AI consumption
+ */
+export interface RiskLimitsConfig {
+    /** Maximum leverage allowed (e.g., 15) */
+    max_leverage: number;
+    /** Maximum position size as % of account (e.g., 50) */
+    max_position_size_pct: number;
+    /** Maximum total leveraged capital as % of account (e.g., 60) */
+    max_total_leveraged_pct: number;
+    /** Maximum risk per trade as % of account (e.g., 10) */
+    max_risk_per_trade_pct: number;
+    /** Weekly drawdown limit as % (e.g., 25) */
+    weekly_drawdown_limit_pct: number;
+}
+
+/**
  * Instructions embedded in context
  */
 export interface Instructions {
     assets: readonly string[] | string[];
     anti_churn_rules: string;
     leverage_policy: string;
-    trading_style: 'scalp' | 'swing';
+    /**
+     * Risk limits for the AI to follow.
+     * Can be either a structured RiskLimitsConfig object or a formatted string summary.
+     * When string: human-readable summary like "Max leverage: 15x, Max position: 50%..."
+     * When object: structured data for programmatic access
+     */
+    risk_limits: string | RiskLimitsConfig;
+}
+
+/**
+ * Type guard to check if risk_limits is a RiskLimitsConfig object
+ * Use this when you need to access structured risk limit properties
+ * 
+ * @param riskLimits - The risk_limits value from Instructions
+ * @returns true if riskLimits is a RiskLimitsConfig object, false if string
+ * 
+ * @example
+ * ```typescript
+ * if (isRiskLimitsConfig(instructions.risk_limits)) {
+ *   // Access structured properties
+ *   const maxLev = instructions.risk_limits.max_leverage;
+ * } else {
+ *   // It's a string summary
+ *   console.log(instructions.risk_limits);
+ * }
+ * ```
+ */
+export function isRiskLimitsConfig(riskLimits: string | RiskLimitsConfig | null | undefined): riskLimits is RiskLimitsConfig {
+    if (riskLimits === null || riskLimits === undefined) return false;
+    if (typeof riskLimits === 'string') return false;
+    if (typeof riskLimits !== 'object') return false;
+    // FIXED: Arrays are objects in JS, but not valid RiskLimitsConfig
+    if (Array.isArray(riskLimits)) return false;
+
+    // Validate required fields exist and are finite numbers (not NaN or Infinity)
+    // Cast to unknown first to satisfy TypeScript's strict type checking
+    const config = riskLimits as unknown as Record<string, unknown>;
+    return (
+        typeof config.max_leverage === 'number' && Number.isFinite(config.max_leverage) &&
+        typeof config.max_position_size_pct === 'number' && Number.isFinite(config.max_position_size_pct) &&
+        typeof config.max_total_leveraged_pct === 'number' && Number.isFinite(config.max_total_leveraged_pct) &&
+        typeof config.max_risk_per_trade_pct === 'number' && Number.isFinite(config.max_risk_per_trade_pct) &&
+        typeof config.weekly_drawdown_limit_pct === 'number' && Number.isFinite(config.weekly_drawdown_limit_pct)
+    );
+}
+
+/**
+ * Get risk limits as a human-readable string
+ * Handles both string and RiskLimitsConfig forms
+ * 
+ * @param riskLimits - The risk_limits value from Instructions
+ * @returns Human-readable string summary of risk limits
+ */
+export function getRiskLimitsAsString(riskLimits: string | RiskLimitsConfig | null | undefined): string {
+    if (riskLimits === null || riskLimits === undefined) {
+        return 'Risk limits not configured';
+    }
+
+    if (typeof riskLimits === 'string') {
+        return riskLimits;
+    }
+
+    if (isRiskLimitsConfig(riskLimits)) {
+        return `Max leverage: ${riskLimits.max_leverage}x, ` +
+            `Max position: ${riskLimits.max_position_size_pct}%, ` +
+            `Max leveraged capital: ${riskLimits.max_total_leveraged_pct}%, ` +
+            `Max risk/trade: ${riskLimits.max_risk_per_trade_pct}%, ` +
+            `Weekly drawdown limit: ${riskLimits.weekly_drawdown_limit_pct}%`;
+    }
+
+    // Fallback for unexpected types
+    return String(riskLimits);
 }
 
 /**

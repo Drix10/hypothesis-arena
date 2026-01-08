@@ -23,7 +23,7 @@ import { AnalystPortfolioService } from '../portfolio/AnalystPortfolioService';
 import { aiLogService } from '../compliance/AILogService';
 import { prisma } from '../../config/database';
 import { Prisma } from '@prisma/client';
-import { config, getActiveTradingStyle } from '../../config';
+import { config } from '../../config';
 import { logger } from '../../utils/logger';
 import { ANALYST_PROFILES, RISK_COUNCIL_VETO_TRIGGERS } from '../../constants/analyst';
 import { roundToStepSize, roundToTickSize, updateContractSpecs, getContractSpecs } from '../../shared/utils/weex';
@@ -181,7 +181,7 @@ interface PositionWithUrgency {
 
 /**
  * Calculate urgency level for a position based on P&L and hold time
- * Uses trading style config for dynamic thresholds
+ * Uses hardcoded sensible defaults - AI handles TP/SL decisions naturally
  * 
  * @param position - Position to evaluate
  * @returns Urgency level and reason
@@ -190,41 +190,35 @@ function calculatePositionUrgency(position: {
     unrealizedPnlPercent: number;
     holdTimeHours: number;
 }): { urgency: PositionUrgency; reason: string } {
-    const tradingStyle = getActiveTradingStyle();
-    const tp4 = tradingStyle.takeProfitThresholds.partial75; // Highest TP threshold
-    const tp2 = tradingStyle.takeProfitThresholds.partial25; // Partial TP zone
-    const sl = tradingStyle.stopLossPercent;
-    const maxHold = tradingStyle.maxHoldHours;
+    // Hardcoded sensible defaults - AI handles actual TP/SL decisions
+    // These are just for urgency classification to optimize token usage
+    const TARGET_PROFIT_PCT = 5;   // Consider urgent at +5%
+    const STOP_LOSS_PCT = 5;       // Consider urgent at -5%
+    const MAX_HOLD_HOURS = 12;     // Consider urgent after 12h
 
     // FLAW FIX: Validate inputs - treat invalid values as LOW urgency
     const pnl = Number.isFinite(position.unrealizedPnlPercent) ? position.unrealizedPnlPercent : 0;
     const holdHours = Number.isFinite(position.holdTimeHours) ? position.holdTimeHours : 0;
 
-    // FLAW FIX: Validate config values - use safe defaults if invalid
-    const safeTp4 = Number.isFinite(tp4) && tp4 > 0 ? tp4 : 5;
-    const safeTp2 = Number.isFinite(tp2) && tp2 > 0 ? tp2 : 2;
-    const safeSl = Number.isFinite(sl) && sl > 0 ? sl : 5;
-    const safeMaxHold = Number.isFinite(maxHold) && maxHold > 0 ? maxHold : 12;
-
     // VERY_URGENT: Needs immediate action
-    if (pnl >= safeTp4) {
-        return { urgency: 'VERY_URGENT', reason: `P&L +${pnl.toFixed(1)}% >= TP4 (${safeTp4}%)` };
+    if (pnl >= TARGET_PROFIT_PCT) {
+        return { urgency: 'VERY_URGENT', reason: `P&L +${pnl.toFixed(1)}% >= target (${TARGET_PROFIT_PCT}%)` };
     }
-    if (pnl <= -safeSl) {
-        return { urgency: 'VERY_URGENT', reason: `P&L ${pnl.toFixed(1)}% <= -SL (${safeSl}%)` };
+    if (pnl <= -STOP_LOSS_PCT) {
+        return { urgency: 'VERY_URGENT', reason: `P&L ${pnl.toFixed(1)}% <= -SL (${STOP_LOSS_PCT}%)` };
     }
-    if (holdHours >= safeMaxHold) {
-        return { urgency: 'VERY_URGENT', reason: `Hold time ${holdHours.toFixed(1)}h >= max (${safeMaxHold}h)` };
+    if (holdHours >= MAX_HOLD_HOURS) {
+        return { urgency: 'VERY_URGENT', reason: `Hold time ${holdHours.toFixed(1)}h >= max (${MAX_HOLD_HOURS}h)` };
     }
 
     // MODERATE: Should consider action
-    if (pnl >= safeTp2) {
-        return { urgency: 'MODERATE', reason: `P&L +${pnl.toFixed(1)}% in TP zone (${safeTp2}%-${safeTp4}%)` };
+    if (pnl >= TARGET_PROFIT_PCT * 0.4) { // 2% for 5% target
+        return { urgency: 'MODERATE', reason: `P&L +${pnl.toFixed(1)}% in partial TP zone` };
     }
-    if (pnl <= -safeSl / 2) {
+    if (pnl <= -STOP_LOSS_PCT / 2) {
         return { urgency: 'MODERATE', reason: `P&L ${pnl.toFixed(1)}% approaching SL` };
     }
-    if (holdHours >= safeMaxHold * 0.75) {
+    if (holdHours >= MAX_HOLD_HOURS * 0.75) {
         return { urgency: 'MODERATE', reason: `Hold time ${holdHours.toFixed(1)}h approaching max` };
     }
 
@@ -276,8 +270,6 @@ export class AutonomousTradingEngine extends EventEmitter {
 
     // Configuration from environment
     private readonly CYCLE_INTERVAL_MS = config.autonomous.cycleIntervalMs;
-    private readonly MIN_TRADE_INTERVAL_MS = config.autonomous.minTradeIntervalMs;
-    private readonly MAX_POSITION_SIZE_PERCENT = config.autonomous.maxPositionSizePercent;
     private readonly MAX_RETRIES = config.autonomous.maxRetries;
     private readonly MIN_BALANCE_TO_TRADE = config.autonomous.minBalanceToTrade;
     private readonly MIN_CONFIDENCE_TO_TRADE = config.autonomous.minConfidenceToTrade;
@@ -291,8 +283,6 @@ export class AutonomousTradingEngine extends EventEmitter {
         // Log configuration on startup
         logger.info('Autonomous Trading Engine Configuration:', {
             cycleIntervalMs: this.CYCLE_INTERVAL_MS,
-            minTradeIntervalMs: this.MIN_TRADE_INTERVAL_MS,
-            maxPositionSizePercent: this.MAX_POSITION_SIZE_PERCENT,
             minConfidenceToTrade: this.MIN_CONFIDENCE_TO_TRADE,
             dryRun: this.DRY_RUN,
         });
@@ -369,23 +359,30 @@ export class AutonomousTradingEngine extends EventEmitter {
         try {
             const managementDecision = await (async () => {
                 // Rule-based fallback management (v5.0.0 - no AI call)
-                const tradingStyle = getActiveTradingStyle();
+                // Hardcoded sensible defaults - AI handles actual decisions in normal flow
+                const TARGET_PROFIT_PCT = 5;
+                const STOP_LOSS_PCT = 5;
+                const MAX_HOLD_HOURS = 12;
+                const PARTIAL_TP_THRESHOLD = 3; // Take partial at 3%
+
                 const pnl = positionToManage.unrealizedPnlPercent;
+                // FIXED: Validate holdTimeHours to prevent NaN comparison issues
+                const holdHours = Number.isFinite(positionToManage.holdTimeHours) ? positionToManage.holdTimeHours : 0;
 
                 // Take profit if P&L exceeds target
-                if (pnl >= tradingStyle.targetProfitPercent) {
+                if (pnl >= TARGET_PROFIT_PCT) {
                     return { manageType: 'CLOSE_FULL', conviction: 9, reason: `P&L +${pnl.toFixed(1)}% exceeds target` };
                 }
                 // Cut loss if P&L exceeds stop loss
-                if (pnl <= -tradingStyle.stopLossPercent) {
+                if (pnl <= -STOP_LOSS_PCT) {
                     return { manageType: 'CLOSE_FULL', conviction: 10, reason: `P&L ${pnl.toFixed(1)}% exceeds stop loss` };
                 }
                 // Close if held too long
-                if (positionToManage.holdTimeHours >= tradingStyle.maxHoldHours) {
+                if (holdHours >= MAX_HOLD_HOURS) {
                     return { manageType: 'CLOSE_FULL', conviction: 7, reason: `Hold time exceeds max` };
                 }
                 // Partial take profit
-                if (pnl >= tradingStyle.takeProfitThresholds.partial50) {
+                if (pnl >= PARTIAL_TP_THRESHOLD) {
                     return { manageType: 'TAKE_PARTIAL', conviction: 7, reason: `P&L in partial TP zone`, closePercent: 50 };
                 }
                 return null;
@@ -1352,6 +1349,11 @@ export class AutonomousTradingEngine extends EventEmitter {
         let decision: FinalDecision;
         try {
             decision = await flowService.runParallelAnalysis(accountBalance, flowPositions, flowMarketData);
+            // FIXED: Increment debatesRun when parallel analysis completes successfully
+            // This tracks the number of AI debates (4 analysts + 1 judge = 1 debate)
+            if (this.currentCycle) {
+                this.currentCycle.debatesRun++;
+            }
         } catch (error) {
             logger.error('Parallel analysis failed:', error);
             this.consecutiveFailures++;
@@ -1381,14 +1383,14 @@ export class AutonomousTradingEngine extends EventEmitter {
             return;
         }
 
-        // Reset consecutive HOLDs when we take action
-        this.consecutiveHolds = 0;
-
-        // Handle CLOSE/REDUCE actions BEFORE anti-churn check
-        // FIXED: CLOSE/REDUCE are position management actions, not new trades
-        // They should NOT be blocked by anti-churn cooldowns which are designed
-        // to prevent rapid entry/exit cycles on NEW positions
+        // Handle CLOSE/REDUCE actions BEFORE confidence check
+        // CRITICAL: Exit actions (CLOSE/REDUCE) should NOT be blocked by confidence threshold
+        // We want to be able to exit positions even with low confidence signals
+        // (e.g., cutting losses, taking profits based on exit plan invalidation)
         if (decision.action === 'CLOSE' || decision.action === 'REDUCE') {
+            // Reset consecutive HOLDs when we take action
+            this.consecutiveHolds = 0;
+
             const position = flowPositions.find(p => p.symbol.toLowerCase() === decision.symbol.toLowerCase());
             if (position) {
                 try {
@@ -1414,8 +1416,22 @@ export class AutonomousTradingEngine extends EventEmitter {
             return;
         }
 
+        // CRITICAL: Check minimum confidence threshold ONLY for entry actions (BUY/SELL)
+        // Exit actions (CLOSE/REDUCE) are handled above and bypass this check
+        if (decision.confidence < this.MIN_CONFIDENCE_TO_TRADE) {
+            logger.info(`📊 Decision: HOLD - Confidence ${decision.confidence}% below threshold ${this.MIN_CONFIDENCE_TO_TRADE}%`);
+            logger.info(`   Original recommendation was ${decision.action} ${decision.symbol} by ${decision.winner}`);
+            this.consecutiveFailures = 0;
+            this.consecutiveHolds++;
+            await this.updateLeaderboard();
+            await this.completeCycle(cycleStart, `confidence too low: ${decision.confidence}% < ${this.MIN_CONFIDENCE_TO_TRADE}%`);
+            return;
+        }
+
+        // Reset consecutive HOLDs when we take action
+        this.consecutiveHolds = 0;
+
         // Check anti-churn ONLY for BUY/SELL (new position entries)
-        // CLOSE/REDUCE are handled above and bypass this check
         const direction = decision.action === 'BUY' ? 'LONG' : 'SHORT';
         const antiChurnCheck = flowService.checkAntiChurn(decision.symbol, direction);
         if (!antiChurnCheck.allowed) {
@@ -1480,19 +1496,53 @@ export class AutonomousTradingEngine extends EventEmitter {
             return false;
         }
 
-        // Validate leverage
+        // CHANGED: Trust AI's leverage decision - only apply exchange limits
+        // The AI decides leverage based on confidence, volatility, funding rate
         const specs = getContractSpecs(decision.symbol);
         let leverage = decision.leverage;
+
+        // Basic validation
         if (!Number.isFinite(leverage) || leverage <= 0) {
-            leverage = 5; // Safe default
+            logger.warn(`Invalid leverage from AI: ${leverage}, using 5x default`);
+            leverage = 5;
         }
+
+        // Only clamp to exchange-specific limits (not our conservative limits)
         if (specs) {
-            leverage = Math.max(specs.minLeverage, Math.min(specs.maxLeverage, leverage));
+            const originalLeverage = leverage;
+            // Clamp to exchange limits, but also enforce our 20x safety cap
+            const effectiveMax = Math.min(specs.maxLeverage, 20);
+
+            // DEFENSIVE CHECK #1: Detect invalid spec configuration where minLeverage > maxLeverage
+            // This indicates corrupted or invalid contract specs from the exchange
+            if (specs.minLeverage > specs.maxLeverage) {
+                logger.error(`CRITICAL: Invalid leverage specs for ${decision.symbol}: ` +
+                    `minLeverage (${specs.minLeverage}) > maxLeverage (${specs.maxLeverage}). ` +
+                    `Contract specs appear corrupted - aborting trade.`);
+                return false;
+            }
+
+            // DEFENSIVE CHECK #2: Detect invalid spec configuration where minLeverage > effectiveMax
+            // This can happen if exchange minLeverage > 20 (our safety cap) or if specs are corrupted
+            if (specs.minLeverage > effectiveMax) {
+                logger.error(`CRITICAL: Invalid leverage specs for ${decision.symbol}: ` +
+                    `minLeverage (${specs.minLeverage}) > effectiveMax (${effectiveMax}). ` +
+                    `Exchange limits: ${specs.minLeverage}-${specs.maxLeverage}x, safety cap: 20x. ` +
+                    `Cannot determine valid leverage - aborting trade.`);
+                return false;
+            }
+
+            leverage = Math.max(specs.minLeverage, Math.min(effectiveMax, leverage));
+            if (leverage !== originalLeverage) {
+                logger.info(`Leverage adjusted from ${originalLeverage}x to ${leverage}x (exchange limits: ${specs.minLeverage}-${specs.maxLeverage}x, safety cap: 20x)`);
+            }
         } else if (leverage > 20) {
+            // Absolute safety cap if no specs available (20x max)
+            logger.warn(`Leverage ${leverage}x exceeds 20x safety cap, clamping`);
             leverage = 20;
         }
 
-        // Calculate size (allocation_usd and currentPrice already validated)
+        // Calculate size from AI's allocation_usd (AI decides the notional exposure)
         const size = decision.allocation_usd / currentPrice;
         let roundedSize: string;
         try {
@@ -1520,6 +1570,35 @@ export class AutonomousTradingEngine extends EventEmitter {
         if (validatedSlPrice !== null && Number.isFinite(validatedSlPrice)) {
             const slValid = isLong ? validatedSlPrice < currentPrice : validatedSlPrice > currentPrice;
             if (!slValid) validatedSlPrice = null;
+        }
+
+        // ADDED: Validate stop loss is not too wide for the leverage level
+        // At high leverage, stop loss must be tighter than liquidation distance
+        // Liquidation distance = 100% / leverage (e.g., 5% at 20x)
+        if (validatedSlPrice !== null && leverage >= 10 && currentPrice > 0) {
+            const slDistancePct = Math.abs(currentPrice - validatedSlPrice) / currentPrice * 100;
+            const liquidationDistancePct = 100 / leverage; // e.g., 5% at 20x
+            const maxSafeSlPct = liquidationDistancePct * 0.8; // 80% of liquidation distance for safety margin
+
+            // FIXED: Only tighten if slDistancePct is valid (finite and positive)
+            if (Number.isFinite(slDistancePct) && slDistancePct > 0 && slDistancePct > maxSafeSlPct) {
+                logger.warn(`Stop loss ${slDistancePct.toFixed(2)}% exceeds safe limit ${maxSafeSlPct.toFixed(2)}% for ${leverage}x leverage. ` +
+                    `Liquidation at ${liquidationDistancePct.toFixed(2)}%. Tightening stop loss.`);
+
+                // Tighten stop loss to safe level
+                const safeSlDistance = currentPrice * (maxSafeSlPct / 100);
+                const newSlPrice = isLong
+                    ? currentPrice - safeSlDistance
+                    : currentPrice + safeSlDistance;
+
+                // FIXED: Validate the new stop loss is valid before using it
+                if (Number.isFinite(newSlPrice) && newSlPrice > 0) {
+                    validatedSlPrice = newSlPrice;
+                    logger.info(`Adjusted stop loss to ${validatedSlPrice.toFixed(2)} (${maxSafeSlPct.toFixed(2)}% from entry)`);
+                } else {
+                    logger.warn(`Could not calculate valid adjusted stop loss, keeping original: ${validatedSlPrice}`);
+                }
+            }
         }
 
         if (config.autonomous.dryRun) {
@@ -1601,11 +1680,46 @@ export class AutonomousTradingEngine extends EventEmitter {
      */
     private async saveParallelAnalysisTrade(decision: FinalDecision, size: number, price: number, orderId: string): Promise<void> {
         try {
+            // CRITICAL: Validate all required fields before saving
+            if (!decision.symbol || typeof decision.symbol !== 'string') {
+                logger.error('Cannot save trade: invalid symbol');
+                return;
+            }
+            if (!Number.isFinite(size) || size <= 0) {
+                logger.error(`Cannot save trade: invalid size ${size}`);
+                return;
+            }
+            if (!Number.isFinite(price) || price <= 0) {
+                logger.error(`Cannot save trade: invalid price ${price}`);
+                return;
+            }
+            if (!orderId || typeof orderId !== 'string') {
+                logger.error('Cannot save trade: invalid orderId');
+                return;
+            }
+
             const portfolio = await prisma.portfolio.findFirst({ where: { agentId: 'collaborative' } });
             if (!portfolio) {
                 logger.error('Collaborative portfolio not found');
                 return;
             }
+
+            // Validate and sanitize all fields
+            const validatedLeverage = Number.isFinite(decision.leverage) && decision.leverage >= 1
+                ? Math.min(decision.leverage, 20)
+                : 1;
+            const validatedAllocation = Number.isFinite(decision.allocation_usd) && decision.allocation_usd >= 0
+                ? decision.allocation_usd
+                : size * price;
+            const validatedConfidence = Number.isFinite(decision.confidence)
+                ? Math.min(100, Math.max(0, decision.confidence))
+                : 50;
+            const validatedTp = decision.tp_price !== null && Number.isFinite(decision.tp_price) && decision.tp_price > 0
+                ? decision.tp_price
+                : null;
+            const validatedSl = decision.sl_price !== null && Number.isFinite(decision.sl_price) && decision.sl_price > 0
+                ? decision.sl_price
+                : null;
 
             await prisma.trade.create({
                 data: {
@@ -1619,25 +1733,23 @@ export class AutonomousTradingEngine extends EventEmitter {
                     entryPrice: price,
                     price,
                     status: 'FILLED',
-                    reason: decision.rationale?.slice(0, 500) || '',
-                    rationale: decision.rationale?.slice(0, 500) || '',
-                    confidence: Math.min(100, Math.max(0, decision.confidence || 0)),
+                    reason: (decision.rationale || '').slice(0, 500),
+                    rationale: (decision.rationale || '').slice(0, 500),
+                    confidence: validatedConfidence,
                     championId: decision.winner || 'NONE',
                     weexOrderId: orderId,
-                    leverage: Math.max(1, decision.leverage || 1),
-                    allocationUsd: Math.max(0, decision.allocation_usd || 0),
-                    // FIXED: Validate TP/SL are finite numbers before saving to database
-                    // NaN/Infinity would cause database issues and corrupt trade records
-                    takeProfit: Number.isFinite(decision.tp_price) ? decision.tp_price : null,
-                    stopLoss: Number.isFinite(decision.sl_price) ? decision.sl_price : null,
-                    exitPlan: decision.exit_plan?.slice(0, 500) || '',
-                    entryThesis: decision.judgeDecision?.reasoning?.slice(0, 1000) || '',
-                    entryConfidence: Math.min(100, Math.max(0, decision.confidence || 0)),
+                    leverage: validatedLeverage,
+                    allocationUsd: validatedAllocation,
+                    takeProfit: validatedTp,
+                    stopLoss: validatedSl,
+                    exitPlan: (decision.exit_plan || '').slice(0, 500),
+                    entryThesis: (decision.judgeDecision?.reasoning || '').slice(0, 1000),
+                    entryConfidence: validatedConfidence,
                     executedAt: new Date(),
                     createdAt: new Date(),
                 },
             });
-            logger.info(`Trade saved to database`);
+            logger.info(`Trade saved to database: ${decision.symbol} ${decision.action} size=${size} price=${price}`);
         } catch (error) {
             logger.error('Failed to save trade:', error);
         }
@@ -2309,10 +2421,21 @@ export class AutonomousTradingEngine extends EventEmitter {
         closePercent: number
     ): Promise<void> {
         try {
-            // Validate currentPrice before proceeding
-            if (!Number.isFinite(position.currentPrice) || position.currentPrice <= 0) {
-                logger.warn(`Cannot record management trade: invalid currentPrice ${position.currentPrice}`);
-                return;
+            // Validate and normalize currentPrice - must be a valid positive number
+            let closePrice = position.currentPrice;
+            if (!Number.isFinite(closePrice) || closePrice <= 0) {
+                // Try to fetch current price from market data
+                try {
+                    const ticker = await this.weexClient.getTicker(position.symbol);
+                    closePrice = parseFloat(ticker.last);
+                    if (!Number.isFinite(closePrice) || closePrice <= 0) {
+                        logger.warn(`Cannot record management trade: invalid closePrice ${closePrice} for ${position.symbol}`);
+                        return;
+                    }
+                } catch (err) {
+                    logger.warn(`Cannot record management trade: failed to fetch price for ${position.symbol}`);
+                    return;
+                }
             }
 
             // Find original champion who opened this position
@@ -2377,8 +2500,8 @@ export class AutonomousTradingEngine extends EventEmitter {
                     side: position.side === 'LONG' ? 'SELL' : 'BUY',
                     type: 'MARKET',
                     size: loggedSize,
-                    entryPrice: position.currentPrice, // For management trades, entry price is the current price
-                    price: position.currentPrice,
+                    entryPrice: closePrice, // For management trades, entry price is the close price (execution price)
+                    price: closePrice,
                     status: 'FILLED',
                     reason: reason,
                     championId: originalChampionId,

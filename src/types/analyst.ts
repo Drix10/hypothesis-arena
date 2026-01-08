@@ -18,14 +18,14 @@ export type AnalystId = 'jim' | 'ray' | 'karen' | 'quant';
 /**
  * The recommendation output from each analyst
  * 
- * NOTE: leverage range is 3-10x in practice (per LeverageService),
- * but validation allows 1-10x for edge cases where lower leverage is needed.
+ * NOTE: leverage range is typically 3-20x based on market conditions,
+ * but validation allows 0-20x (0 for HOLD actions, 1-20 for trades).
  */
 export interface AnalystRecommendation {
     action: AnalystAction;
     symbol: string;              // e.g., "cmt_btcusdt"
     allocation_usd: number;      // Notional exposure in USD (not margin)
-    leverage: number;            // 1-10x (typically 3-10x based on conditions)
+    leverage: number;            // 1-20x (typically 3-20x based on conditions)
     tp_price: number | null;     // Take profit price
     sl_price: number | null;     // Stop loss price
     exit_plan: string;           // Invalidation condition (CRITICAL)
@@ -109,8 +109,8 @@ export const ANALYST_OUTPUT_SCHEMA = {
                 symbol: { type: 'string' },
                 // NOTE: Schema allows 0 for HOLD actions; validation function enforces > 0 for trades
                 allocation_usd: { type: 'number', minimum: 0 },
-                // FIXED: Allow leverage=0 for HOLD actions (consistent with validator)
-                leverage: { type: 'number', minimum: 0, maximum: 10 },
+                // Allow leverage=0 for HOLD actions, max 20x for trades
+                leverage: { type: 'number', minimum: 0, maximum: 20 },
                 // tp_price and sl_price: null for HOLD, or positive number for trades
                 tp_price: { type: ['number', 'null'], exclusiveMinimum: 0 },
                 sl_price: { type: ['number', 'null'], exclusiveMinimum: 0 },
@@ -140,8 +140,8 @@ export const JUDGE_OUTPUT_SCHEMA = {
         adjustments: {
             type: ['object', 'null'],
             properties: {
-                // FIXED: Allow leverage=0 for HOLD actions (consistent with validator)
-                leverage: { type: 'number', minimum: 0, maximum: 10 },
+                // Allow leverage=0 for HOLD actions, max 20x for trades
+                leverage: { type: 'number', minimum: 0, maximum: 20 },
                 // NOTE: Schema allows 0 for adjustments; validation function enforces > 0 for trades
                 allocation_usd: { type: 'number', minimum: 0 },
                 // sl_price and tp_price in adjustments: 0 means "remove", positive means "set to this value"
@@ -163,8 +163,8 @@ export const JUDGE_OUTPUT_SCHEMA = {
                 symbol: { type: 'string' },
                 // NOTE: Schema allows 0 for HOLD actions; validation function enforces > 0 for trades
                 allocation_usd: { type: 'number', minimum: 0 },
-                // FIXED: Allow leverage=0 for HOLD actions (consistent with validator)
-                leverage: { type: 'number', minimum: 0, maximum: 10 },
+                // Allow leverage=0 for HOLD actions, max 20x for trades
+                leverage: { type: 'number', minimum: 0, maximum: 20 },
                 // tp_price and sl_price: null for HOLD, or positive number for trades
                 tp_price: { type: ['number', 'null'], exclusiveMinimum: 0 },
                 sl_price: { type: ['number', 'null'], exclusiveMinimum: 0 },
@@ -181,7 +181,62 @@ export const JUDGE_OUTPUT_SCHEMA = {
 };
 
 /**
+ * Normalize analyst output - converts non-standard fields to expected format
+ * Call this BEFORE validateAnalystOutput to ensure data is in correct shape.
+ * 
+ * This function returns a shallow copy with normalized fields, preserving the original.
+ * 
+ * Normalizations performed:
+ * - exit_plan: If non-null plain object (not array), converts to JSON string
+ * 
+ * @param output - Raw output from AI (unknown type)
+ * @returns Normalized output (unknown type for safety)
+ * 
+ * FIXED: Added explicit array guard to prevent arrays from being stringified
+ * FIXED: Changed return type to unknown for type safety
+ */
+export function normalizeAnalystOutput(output: unknown): unknown {
+    // Return early for non-object inputs
+    if (!output || typeof output !== 'object') return output;
+
+    // Arrays are objects in JS but should not be processed as AnalystOutput
+    if (Array.isArray(output)) return output;
+
+    const o = output as Record<string, unknown>;
+    if (!o.recommendation || typeof o.recommendation !== 'object') return output;
+
+    // Guard against recommendation being an array
+    if (Array.isArray(o.recommendation)) return output;
+
+    const rec = o.recommendation as Record<string, unknown>;
+
+    // Check if exit_plan needs normalization
+    // Only stringify if it's a non-null plain object (not an array)
+    // Arrays should be preserved as-is (they'll fail validation, which is correct)
+    if (
+        rec.exit_plan !== null &&
+        typeof rec.exit_plan === 'object' &&
+        !Array.isArray(rec.exit_plan)
+    ) {
+        // Return a shallow copy with normalized exit_plan
+        return {
+            ...o,
+            recommendation: {
+                ...rec,
+                exit_plan: JSON.stringify(rec.exit_plan),
+            },
+        };
+    }
+
+    // Return original unchanged
+    return output;
+}
+
+/**
  * Validate analyst output structure
+ * 
+ * NOTE: This function does NOT mutate the input. Call normalizeAnalystOutput() first
+ * if you need to handle non-standard formats (e.g., exit_plan as object).
  * 
  * FIXED: Added Number.isFinite checks to prevent NaN/Infinity propagation
  * FIXED: Added empty string validation for critical fields
@@ -201,38 +256,38 @@ export function validateAnalystOutput(output: unknown): output is AnalystOutput 
     const validActions: AnalystAction[] = ['BUY', 'SELL', 'HOLD', 'CLOSE', 'REDUCE'];
     if (!validActions.includes(rec.action as AnalystAction)) return false;
 
-    // FIXED: Validate symbol is non-empty string
-    if (typeof rec.symbol !== 'string' || rec.symbol.trim().length === 0) return false;
-    // FIXED: Check for NaN/Infinity
-    if (typeof rec.allocation_usd !== 'number' || !Number.isFinite(rec.allocation_usd) || rec.allocation_usd < 0) return false;
-    // FIXED: For non-HOLD actions, allocation_usd must be > 0 (can't trade with zero allocation)
-    if (rec.action !== 'HOLD' && rec.allocation_usd === 0) return false;
-    // FIXED: Allow leverage=0 for HOLD actions (AI returns 0 when not trading)
-    // For non-HOLD actions, leverage must be 1-10
-    if (typeof rec.leverage !== 'number' || !Number.isFinite(rec.leverage)) return false;
+    // For HOLD actions, symbol/allocation/leverage can be null/0
+    // For non-HOLD actions, they must be valid
     if (rec.action === 'HOLD') {
-        if (rec.leverage < 0 || rec.leverage > 10) return false;
+        // HOLD: symbol can be null or empty string
+        if (rec.symbol !== null && rec.symbol !== undefined && typeof rec.symbol !== 'string') return false;
+        // HOLD: allocation_usd must be exactly 0 or null (no other values allowed)
+        // FIXED: Explicitly check for undefined to prevent it from passing validation
+        if (rec.allocation_usd !== null && rec.allocation_usd !== undefined && rec.allocation_usd !== 0) return false;
+        // HOLD: leverage must be exactly 0 or null (no other values allowed)
+        // FIXED: Explicitly check for undefined to prevent it from passing validation
+        if (rec.leverage !== null && rec.leverage !== undefined && rec.leverage !== 0) return false;
+        // HOLD: tp_price and sl_price should be null
+        if (rec.tp_price !== null && (typeof rec.tp_price !== 'number' || !Number.isFinite(rec.tp_price) || rec.tp_price <= 0)) return false;
+        if (rec.sl_price !== null && (typeof rec.sl_price !== 'number' || !Number.isFinite(rec.sl_price) || rec.sl_price <= 0)) return false;
+        // HOLD: exit_plan can be null or empty
+        if (rec.exit_plan !== null && typeof rec.exit_plan !== 'string') return false;
     } else {
-        if (rec.leverage < 1 || rec.leverage > 10) return false;
+        // Non-HOLD actions require valid symbol, allocation, leverage
+        if (typeof rec.symbol !== 'string' || rec.symbol.trim().length === 0) return false;
+        if (typeof rec.allocation_usd !== 'number' || !Number.isFinite(rec.allocation_usd) || rec.allocation_usd <= 0) return false;
+        if (typeof rec.leverage !== 'number' || !Number.isFinite(rec.leverage) || rec.leverage < 1 || rec.leverage > 20) return false;
+        // Validate tp_price: must be null or a positive finite number
+        if (rec.tp_price !== null && (typeof rec.tp_price !== 'number' || !Number.isFinite(rec.tp_price) || rec.tp_price <= 0)) return false;
+        // Validate sl_price: must be null or a positive finite number
+        if (rec.sl_price !== null && (typeof rec.sl_price !== 'number' || !Number.isFinite(rec.sl_price) || rec.sl_price <= 0)) return false;
+        // Validate exit_plan is a non-empty string for non-HOLD actions
+        if (typeof rec.exit_plan !== 'string' || rec.exit_plan.trim().length === 0) return false;
     }
-    // Validate tp_price: must be null or a positive finite number
-    if (rec.tp_price !== null && (typeof rec.tp_price !== 'number' || !Number.isFinite(rec.tp_price) || rec.tp_price <= 0)) return false;
-    // Validate sl_price: must be null or a positive finite number
-    if (rec.sl_price !== null && (typeof rec.sl_price !== 'number' || !Number.isFinite(rec.sl_price) || rec.sl_price <= 0)) return false;
-    // FIXED: Validate exit_plan is non-empty for non-HOLD actions
-    // Also handle case where AI returns object instead of string
-    let exitPlanStr: string;
-    if (rec.exit_plan !== null && typeof rec.exit_plan === 'object') {
-        // AI returned object, convert to string for validation
-        exitPlanStr = JSON.stringify(rec.exit_plan);
-    } else if (typeof rec.exit_plan === 'string') {
-        exitPlanStr = rec.exit_plan;
-    } else {
-        return false;
-    }
-    if (rec.action !== 'HOLD' && exitPlanStr.trim().length === 0) return false;
+
+    // Confidence is required for all actions
     if (typeof rec.confidence !== 'number' || !Number.isFinite(rec.confidence) || rec.confidence < 0 || rec.confidence > 100) return false;
-    // FIXED: Validate rationale is non-empty
+    // Rationale is required for all actions
     if (typeof rec.rationale !== 'string' || rec.rationale.trim().length === 0) return false;
 
     return true;
@@ -258,10 +313,18 @@ export function validateJudgeOutput(output: unknown): output is JudgeDecision {
     if (o.adjustments !== null && typeof o.adjustments !== 'object') return false;
 
     // Validate adjustments properties if present
-    // FIXED: Allow leverage=0 in adjustments for HOLD actions (consistent with schema)
+    // Allow leverage=0 in adjustments for HOLD actions
     if (o.adjustments !== null && typeof o.adjustments === 'object') {
         const adj = o.adjustments as Record<string, unknown>;
-        if (adj.leverage !== undefined && (typeof adj.leverage !== 'number' || !Number.isFinite(adj.leverage) || adj.leverage < 0 || adj.leverage > 10)) return false;
+        if (adj.leverage !== undefined && (typeof adj.leverage !== 'number' || !Number.isFinite(adj.leverage) || adj.leverage < 0 || adj.leverage > 20)) return false;
+
+        // FIXED: Cross-field check - adj.leverage is only allowed for entry actions (BUY/SELL)
+        // Exit actions (HOLD/CLOSE/REDUCE) should not have leverage adjustments
+        if (adj.leverage !== undefined && (o.final_action === 'HOLD' || o.final_action === 'CLOSE' || o.final_action === 'REDUCE')) {
+            // Leverage adjustment with exit actions is invalid
+            return false;
+        }
+
         if (adj.allocation_usd !== undefined && (typeof adj.allocation_usd !== 'number' || !Number.isFinite(adj.allocation_usd) || adj.allocation_usd < 0)) return false;
         if (adj.sl_price !== undefined && (typeof adj.sl_price !== 'number' || !Number.isFinite(adj.sl_price) || adj.sl_price < 0)) return false;
         if (adj.tp_price !== undefined && (typeof adj.tp_price !== 'number' || !Number.isFinite(adj.tp_price) || adj.tp_price < 0)) return false;
@@ -319,13 +382,14 @@ export function validateJudgeOutput(output: unknown): output is JudgeDecision {
         if (typeof rec.allocation_usd !== 'number' || !Number.isFinite(rec.allocation_usd) || rec.allocation_usd < 0) return false;
         // FIXED: For non-HOLD actions, allocation_usd must be > 0 (can't trade with zero allocation)
         if (rec.action !== 'HOLD' && rec.allocation_usd === 0) return false;
-        // FIXED: Allow leverage=0 for HOLD actions (consistent with validateAnalystOutput)
-        // For non-HOLD actions, leverage must be 1-10
+        // Leverage validation (consistent with validateAnalystOutput):
+        // - HOLD: must be exactly 0 (not trading, no leverage)
+        // - Non-HOLD: must be 1-20
         if (typeof rec.leverage !== 'number' || !Number.isFinite(rec.leverage)) return false;
         if (rec.action === 'HOLD') {
-            if (rec.leverage < 0 || rec.leverage > 10) return false;
+            if (rec.leverage !== 0) return false; // HOLD requires exactly 0 leverage
         } else {
-            if (rec.leverage < 1 || rec.leverage > 10) return false;
+            if (rec.leverage < 1 || rec.leverage > 20) return false;
         }
         // Validate tp_price: must be null or a positive finite number
         if (rec.tp_price !== null && (typeof rec.tp_price !== 'number' || !Number.isFinite(rec.tp_price) || rec.tp_price <= 0)) return false;

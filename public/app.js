@@ -272,13 +272,6 @@ function updateEngineUI(status) {
 
   // Update stats
   updateText("cycle-count", status.cycleCount ?? 0);
-  updateText(
-    "total-analyses",
-    status.totalDebatesRun ??
-      status.currentCycle?.debatesRun ??
-      status.stats?.totalDebates ??
-      0
-  );
 
   // Mode badge
   const modeEl = document.getElementById("mode-status");

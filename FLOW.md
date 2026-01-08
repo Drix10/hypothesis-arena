@@ -1,4 +1,10 @@
-# Hypothesis Arena v5.0.0 - System Flow
+# Hypothesis Arena v5.0.1 - System Flow
+
+#
+
+# Document version: v5.0.1 (matches README.md release notes)
+
+# System core version: v5.0.0 (parallel analysis pipeline)
 
 ## Overview
 
@@ -54,14 +60,31 @@ Hypothesis Arena is an autonomous AI-powered trading system for WEEX perpetual f
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-## The 4 Analysts
+## The 4 Quant Analysts (COMPETITION MODE - QUANTITATIVE EDITION)
 
-| Analyst   | Focus              | Risk Tolerance | Special Role                                                    |
-| --------- | ------------------ | -------------- | --------------------------------------------------------------- |
-| **Jim**   | Technical Analysis | Moderate       | EMA crossovers, RSI, MACD patterns                              |
-| **Ray**   | Macro & Funding    | Moderate       | Funding rates, market structure                                 |
-| **Karen** | Risk Management    | Conservative   | **Extra weight** on risk concerns (advisory, not absolute veto) |
-| **Quant** | Quantitative       | Aggressive     | Statistical edge, mean reversion                                |
+Inspired by modern quantitative trading methodologies, each analyst brings a distinct approach:
+
+| Analyst   | Methodology Style     | Approach                                 | Edge                                                |
+| --------- | --------------------- | ---------------------------------------- | --------------------------------------------------- |
+| **Jim**   | Statistical Arbitrage | Mean Reversion & Pattern Recognition     | RSI/MACD divergence, Bollinger Bands, z-scores      |
+| **Ray**   | ML-Driven Signals     | AI/ML & Regime Detection                 | Open Interest, Funding Rate, Liquidation analysis   |
+| **Karen** | Multi-Strategy Risk   | Portfolio Optimization & Risk Management | Sharpe ratio, drawdown limits, correlation tracking |
+| **Quant** | Liquidity & Arbitrage | Market Microstructure & Arbitrage        | Funding arbitrage, VWAP, order flow analysis        |
+
+**Key Features:**
+
+- Each analyst has ~150 lines of deeply researched, crypto-specific methodology
+- Standardized funding rate thresholds (±0.08% extreme, ±0.03% moderate)
+- Handles missing data gracefully (skips signals if indicators unavailable)
+- Validates all trade parameters (R:R ratios, TP/SL placement, leverage limits)
+- HOLD is valid when no clear edge exists per their specific methodology
+
+**Methodology Highlights:**
+
+- **Jim**: 8-point statistical scoring system, RSI divergence (65% accuracy), Bollinger Band squeeze detection
+- **Ray**: OI+Price matrix analysis, regime classification (trending/ranging/choppy), BTC correlation rules
+- **Karen**: A+/A/B/C setup quality grading, position management tables, correlation exposure tracking
+- **Quant**: Funding arbitrage tables with annualized rates, liquidation hunting strategy, VWAP mean reversion
 
 ## Action Types
 
@@ -75,14 +98,22 @@ Each analyst outputs ONE of these actions:
 | `CLOSE`  | Close existing position    | Exit plan invalidated, take profits  |
 | `REDUCE` | Reduce position size       | Partial profit taking, reduce risk   |
 
-## Anti-Churn Rules
+## Trade Quality Gates
 
-v5.0.0 implements strict anti-churn policies to prevent overtrading:
+Before executing any trade, the system checks:
 
-1. **Cooldown After Trade**: 15 minutes before same symbol can be traded again (configurable via `COOLDOWN_AFTER_TRADE_MS`)
-2. **Cooldown Before Flip**: 30 minutes before direction can be reversed (configurable via `COOLDOWN_BEFORE_FLIP_MS`)
-3. **Hysteresis**: Need 20% more confidence to close than to open (configurable via `HYSTERESIS_MULTIPLIER`)
-4. **Daily Limit**: Maximum 10 trades per day (enforced via database count, resets at midnight UTC)
+1. **Minimum Confidence**: Trade must have confidence >= `MIN_CONFIDENCE_TO_TRADE` (default: 50%)
+2. **Anti-Churn Rules**: Cooldowns and daily limits must be respected
+3. **Risk Limits**: Position size, leverage, and exposure limits
+
+## Anti-Churn Rules (COMPETITION MODE - Reduced)
+
+v5.0.0 implements minimal anti-churn policies for competition:
+
+1. **Cooldown After Trade**: 5 minutes before same symbol can be traded again (configurable via `COOLDOWN_AFTER_TRADE_MS`)
+2. **Cooldown Before Flip**: 10 minutes before direction can be reversed (configurable via `COOLDOWN_BEFORE_FLIP_MS`)
+3. **Hysteresis**: Need 20% more confidence to close than to open
+4. **Daily Limit**: Maximum 50 trades per day (configurable via `MAX_DAILY_TRADES`)
 5. **Exit Plan Respect**: Don't close unless invalidation condition is met
 
 ## Technical Indicators
@@ -91,10 +122,11 @@ Calculated from WEEX candlestick data (no external APIs):
 
 **Intraday (5-minute timeframe):**
 
-- EMA 20, EMA 50
+- EMA 9, EMA 20, EMA 50
 - RSI 7, RSI 14
 - MACD (12, 26, 9)
 - ATR 14
+- Bollinger Bands (20, 2)
 
 **Long-term (4-hour timeframe):**
 
@@ -104,35 +136,44 @@ Calculated from WEEX candlestick data (no external APIs):
 - Bollinger Bands (20, 2)
 - Trend detection: Classified as `bullish` (EMA20 > EMA50 > EMA200), `bearish` (EMA20 < EMA50 < EMA200), or `neutral` (mixed). Trend strength (0-100) is calculated from EMA spread relative to price.
 
-## Dynamic Leverage
+**Derivatives Data:**
 
-Leverage is calculated dynamically (3x - 10x) based on market conditions. The `MAX_LEVERAGE` environment variable (default: 5) sets the **base leverage**, which is then adjusted up or down:
+- Open Interest (OI) - Total outstanding contracts
+- Funding Rate - 8-hour payment between longs/shorts
+- VWAP - Volume-weighted average price
 
-| Condition                                        | Adjustment |
-| ------------------------------------------------ | ---------- |
-| Confidence > 95%                                 | +2x        |
-| Confidence > 85%                                 | +1x        |
-| Confidence < 60%                                 | -1x        |
-| High volatility (ATR > 5%)                       | -2x        |
-| High adverse funding (> MAX_FUNDING_AGAINST_BPS) | -2x        |
-| Strong trend alignment (strength > 80)           | +1x        |
+**Crypto-Specific Thresholds:**
 
-**Volatility Classification (ATR-based):**
+- RSI: Oversold < 25 (not 30), Overbought > 75 (not 70) - crypto is more volatile
+- Funding: Extreme at ±0.08%, Moderate at ±0.03%
+- OI Divergence: Price rising + OI falling = weak rally (65% accuracy)
 
-- Low: ATR < 2% of price
-- Medium: ATR 2-5% of price
-- High: ATR > 5% of price (triggers -2x leverage adjustment)
+## Dynamic Leverage (COMPETITION MODE)
 
-**Karen's Influence on Leverage:**
-Karen (Risk Management analyst) doesn't directly adjust leverage. Instead, her conservative recommendations influence the Judge's final decision. If Karen flags high risk, the Judge may:
+Leverage is set by AI analysts (5x - 20x) based on conviction. The system enforces a **3x notional exposure limit**:
 
-1. Select a more conservative analyst as winner
-2. Apply risk adjustments to reduce leverage/allocation
-3. Output HOLD if risk concerns outweigh opportunity
+**Formula**: `allocation_usd * leverage <= 3 * account_balance`
 
-Karen's risk concerns receive 1.5x weight in the Judge's scoring, making her influence advisory but significant.
+| Leverage Range | Position Size     | Stop Loss Requirement | Use Case                                 |
+| -------------- | ----------------- | --------------------- | ---------------------------------------- |
+| 5-7x           | Up to 40% account | 4-5% from entry       | Conservative, larger positions           |
+| 8-10x          | 15-25% account    | 3-4% from entry       | Standard, medium positions               |
+| 12-15x         | 5-15% account     | 2-3% from entry       | Aggressive, smaller positions            |
+| 16-20x         | 5-10% account     | 1.5-2% from entry     | Maximum, minimal positions (tight stops) |
 
-**Note:** Final leverage is always clamped to the 3-10x range regardless of adjustments. `MAX_LEVERAGE` in config is the starting point, not the absolute maximum.
+**Hard Limits:**
+
+- Maximum leverage: 20x (absolute cap, enforced in code)
+- Maximum notional exposure: 3x account balance per trade
+- Never combine max leverage (20x) with max position size (50%)
+- Stop loss must be inversely proportional to leverage to cap max loss at ~30%
+
+**Example** ($1000 account):
+
+- ✓ OK: 10x leverage × $200 allocation = $2000 notional (2x account)
+- ✓ OK: 15x leverage × $150 allocation = $2250 notional (2.25x account)
+- ✗ EXCEEDS: 20x leverage × $200 allocation = $4000 notional (4x account)
+- ✓ CORRECT: 20x leverage × $150 max allocation = $3000 notional (3x account)
 
 ## File Structure
 
@@ -176,8 +217,7 @@ src/
 │   ├── portfolio/
 │   │   └── AnalystPortfolioService.ts  # Virtual portfolios
 │   ├── trading/
-│   │   ├── AntiChurnService.ts   # Cooldowns, hysteresis
-│   │   └── LeverageService.ts    # Dynamic leverage
+│   │   └── AntiChurnService.ts   # Cooldowns, hysteresis
 │   └── weex/
 │       └── WeexClient.ts       # WEEX API client
 ├── shared/
@@ -232,15 +272,14 @@ AI_PROVIDER=gemini|openrouter
 AI_TEMPERATURE=0.8
 
 # Trading
-# TRADING_STYLE: 'scalp' (5-12h hold, 5% targets) or 'swing' (24-48h hold, 10% targets)
-TRADING_STYLE=scalp|swing
-MAX_LEVERAGE=5
-MAX_CONCURRENT_POSITIONS=6
+# Note: MAX_LEVERAGE is enforced at 20x in code (ABSOLUTE_MAX_LEVERAGE in riskLimits.ts)
+MAX_CONCURRENT_POSITIONS=3
 
-# Anti-Churn
-COOLDOWN_AFTER_TRADE_MS=900000
-COOLDOWN_BEFORE_FLIP_MS=1800000
-MAX_TRADES_PER_DAY=10
+# Anti-Churn (COMPETITION MODE - reduced cooldowns)
+COOLDOWN_AFTER_TRADE_MS=300000
+COOLDOWN_BEFORE_FLIP_MS=600000
+MAX_DAILY_TRADES=50
+MAX_TRADES_PER_SYMBOL_PER_HOUR=3
 HYSTERESIS_MULTIPLIER=1.2
 
 # Risk

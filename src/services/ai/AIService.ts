@@ -292,21 +292,40 @@ class AIService {
         const timeoutId = setTimeout(() => controller.abort(), config.ai.requestTimeoutMs);
 
         try {
-            let response = await fetch(`${this.openRouterBaseUrl}/chat/completions`, {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${config.openRouterApiKey}`,
-                    'Content-Type': 'application/json',
-                    'HTTP-Referer': 'https://hypothesis-arena.com',
-                    'X-Title': 'Hypothesis Arena',
-                },
-                body: JSON.stringify(requestBody),
-                signal: controller.signal,
-            });
+            let response: Response;
+
+            // First fetch attempt
+            try {
+                response = await fetch(`${this.openRouterBaseUrl}/chat/completions`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${config.openRouterApiKey}`,
+                        'Content-Type': 'application/json',
+                        'HTTP-Referer': 'https://hypothesis-arena.com',
+                        'X-Title': 'Hypothesis Arena',
+                    },
+                    body: JSON.stringify(requestBody),
+                    signal: controller.signal,
+                });
+            } catch (fetchError: any) {
+                // Network error or abort - body doesn't exist
+                clearTimeout(timeoutId);
+                if (fetchError.name === 'AbortError') {
+                    throw new Error(`OpenRouter request timeout after ${config.ai.requestTimeoutMs}ms`);
+                }
+                throw new Error(`OpenRouter network error: ${fetchError.message}`);
+            }
 
             // Handle errors with fallback
             if (!response.ok) {
-                const errorText = await response.text();
+                let errorText: string;
+                try {
+                    errorText = await response.text();
+                } catch (bodyError: any) {
+                    // Body is unusable - likely network issue or stream already consumed
+                    clearTimeout(timeoutId);
+                    throw new Error(`OpenRouter error (${response.status}): Unable to read response body - ${bodyError.message}`);
+                }
 
                 // Check if this is a "no endpoints" error (model not available)
                 const isNoEndpointsError =
@@ -315,14 +334,12 @@ class AIService {
                     (response.status === 404 && errorText.includes('endpoint'));
 
                 if (isNoEndpointsError) {
-                    // Model has no providers - this is fatal, don't retry
-                    clearTimeout(timeoutId); // FIXED: Clear timeout before throwing
+                    clearTimeout(timeoutId);
                     logger.error(`Model ${config.ai.openRouterModel} has no available endpoints`);
                     throw new Error(`OpenRouter: Model ${config.ai.openRouterModel} has no available providers. Check OpenRouter dashboard or try a different model.`);
                 }
 
                 // Check if this is a response_format error (model doesn't support json_object)
-                // Only retry on format-specific errors, not general 400/422 errors
                 const isFormatError =
                     errorText.includes('response_format') ||
                     errorText.includes('json_object') ||
@@ -335,27 +352,63 @@ class AIService {
                     // Fallback: no response_format, rely on prompt to get JSON
                     delete requestBody.response_format;
 
-                    response = await fetch(`${this.openRouterBaseUrl}/chat/completions`, {
-                        method: 'POST',
-                        headers: {
-                            'Authorization': `Bearer ${config.openRouterApiKey}`,
-                            'Content-Type': 'application/json',
-                            'HTTP-Referer': 'https://hypothesis-arena.com',
-                            'X-Title': 'Hypothesis Arena',
-                        },
-                        body: JSON.stringify(requestBody),
-                        signal: controller.signal,
-                    });
+                    try {
+                        response = await fetch(`${this.openRouterBaseUrl}/chat/completions`, {
+                            method: 'POST',
+                            headers: {
+                                'Authorization': `Bearer ${config.openRouterApiKey}`,
+                                'Content-Type': 'application/json',
+                                'HTTP-Referer': 'https://hypothesis-arena.com',
+                                'X-Title': 'Hypothesis Arena',
+                            },
+                            body: JSON.stringify(requestBody),
+                            signal: controller.signal,
+                        });
+                    } catch (retryFetchError: any) {
+                        clearTimeout(timeoutId);
+                        if (retryFetchError.name === 'AbortError') {
+                            throw new Error(`OpenRouter request timeout after ${config.ai.requestTimeoutMs}ms`);
+                        }
+                        throw new Error(`OpenRouter network error on retry: ${retryFetchError.message}`);
+                    }
+                } else {
+                    // Not a format error - throw with the error details we already have
+                    clearTimeout(timeoutId);
+
+                    let errorDetails = '';
+                    try {
+                        const errorJson = JSON.parse(errorText);
+                        errorDetails = errorJson.error?.message || errorJson.message || '';
+                    } catch {
+                        errorDetails = errorText.slice(0, 200);
+                    }
+
+                    const error = new Error(`OpenRouter API error (${response.status}): ${errorDetails}`);
+
+                    if (response.status === 429) {
+                        (error as any).isRateLimit = true;
+                        const retryAfter = response.headers.get('retry-after');
+                        if (retryAfter) {
+                            (error as any).retryAfter = parseInt(retryAfter, 10);
+                        }
+                    }
+
+                    throw error;
                 }
             }
 
-            // Clear timeout after all fetch attempts
+            // Clear timeout after successful fetch
             clearTimeout(timeoutId);
 
+            // Check if retry response is also not ok
             if (!response.ok) {
-                const errorText = await response.text();
+                let errorText: string;
+                try {
+                    errorText = await response.text();
+                } catch {
+                    errorText = 'Unable to read error response';
+                }
 
-                // Parse error details if available
                 let errorDetails = '';
                 try {
                     const errorJson = JSON.parse(errorText);
@@ -366,7 +419,6 @@ class AIService {
 
                 const error = new Error(`OpenRouter API error (${response.status}): ${errorDetails}`);
 
-                // Add rate limit info to error for upstream handling
                 if (response.status === 429) {
                     (error as any).isRateLimit = true;
                     const retryAfter = response.headers.get('retry-after');
@@ -378,12 +430,17 @@ class AIService {
                 throw error;
             }
 
-            const data: any = await response.json();
+            // Parse response JSON
+            let data: any;
+            try {
+                data = await response.json();
+            } catch (jsonError: any) {
+                throw new Error(`OpenRouter returned invalid JSON response: ${jsonError.message}`);
+            }
 
             // Check for parsed field first (structured outputs)
             let text: string;
             if (data?.choices?.[0]?.message?.parsed) {
-                // Structured output - already parsed
                 text = JSON.stringify(data.choices[0].message.parsed);
             } else if (data?.choices?.[0]?.message?.content) {
                 text = String(data.choices[0].message.content).trim();
@@ -401,8 +458,6 @@ class AIService {
 
             // Try to extract JSON object if response has extra text
             if (!text.startsWith('{') && !text.startsWith('[')) {
-                // Use a more robust regex that handles nested braces
-                // Find the first { and match to the corresponding closing }
                 const startIdx = text.indexOf('{');
                 if (startIdx !== -1) {
                     let depth = 0;

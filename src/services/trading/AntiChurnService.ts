@@ -28,14 +28,20 @@ export class AntiChurnService {
     private tradesExecutedToday: number = 0;
     private lastResetDate: string = '';
 
+    // Per-symbol hourly trade tracking
+    // Key: symbol, Value: array of trade timestamps (ms)
+    private symbolTradeHistory: Map<string, number[]> = new Map();
+
     // Memory leak prevention: limit cooldown entries
     private readonly MAX_COOLDOWN_ENTRIES = 100;
+    private readonly MAX_SYMBOL_HISTORY_ENTRIES = 100;
 
     // Configuration (from config or defaults)
     private readonly cooldownAfterTradeMs: number;
     private readonly cooldownBeforeFlipMs: number;
     private readonly hysteresisMultiplier: number;
     private readonly maxTradesPerDay: number;
+    private readonly maxTradesPerSymbolPerHour: number;
     private readonly fundingThresholdATR: number;
     private readonly fundingPeriodsPerDay: number; // Number of funding periods per day (WEEX: 3)
 
@@ -44,15 +50,72 @@ export class AntiChurnService {
 
         this.cooldownAfterTradeMs = antiChurn.cooldownAfterTradeMs || 900000;      // 15 minutes
         this.cooldownBeforeFlipMs = antiChurn.cooldownBeforeFlipMs || 1800000;     // 30 minutes
-        this.hysteresisMultiplier = antiChurn.hysteresisMultiplier || 1.2;         // 20% more confidence
-        this.maxTradesPerDay = antiChurn.maxTradesPerDay || 10;
-        this.fundingThresholdATR = 0.25;  // Only act on funding if > 0.25×ATR
-        // WEEX uses 8-hour funding periods (3 per day). Other exchanges may differ:
-        // - Binance/Bybit/OKX: 8 hours (3 per day)
-        // - dYdX: 1 hour (24 per day)
-        this.fundingPeriodsPerDay = antiChurn.fundingPeriodsPerDay || 3;
 
-        logger.info(`AntiChurnService initialized: cooldown=${this.cooldownAfterTradeMs}ms, flip=${this.cooldownBeforeFlipMs}ms, hysteresis=${this.hysteresisMultiplier}x, maxTrades=${this.maxTradesPerDay}`);
+        // Hysteresis multiplier: 20% more confidence needed to close than to open
+        // Default is 1.2 (hardcoded), but can be overridden via config.antiChurn.hysteresisMultiplier
+        this.hysteresisMultiplier = antiChurn.hysteresisMultiplier ?? 1.2;
+
+        // Daily trade limit: prefer trading.maxDailyTrades, fallback to deprecated antiChurn.maxTradesPerDay
+        // MIGRATION: antiChurn.maxTradesPerDay is deprecated, use trading.maxDailyTrades instead
+        const deprecatedMaxTrades = (antiChurn as Record<string, unknown>).maxTradesPerDay as number | undefined;
+        let rawMaxTradesPerDay: number;
+        let configField: string; // Track which config field was actually used
+
+        if (config.trading?.maxDailyTrades !== undefined) {
+            rawMaxTradesPerDay = config.trading.maxDailyTrades;
+            configField = 'config.trading.maxDailyTrades';
+        } else if (deprecatedMaxTrades !== undefined) {
+            logger.warn('⚠️ DEPRECATED: antiChurn.maxTradesPerDay is deprecated. Please migrate to trading.maxDailyTrades in your config.');
+            rawMaxTradesPerDay = deprecatedMaxTrades;
+            configField = 'config.antiChurn.maxTradesPerDay';
+        } else {
+            rawMaxTradesPerDay = 20; // Default
+            configField = 'config.trading.maxDailyTrades (using default)';
+        }
+
+        // FIXED: Simplified validation logic - removed redundant checks
+        // Validate and sanitize maxTradesPerDay: must be finite, positive, and in range [1, 1000]
+
+        if (!Number.isFinite(rawMaxTradesPerDay) || rawMaxTradesPerDay < 1) {
+            // Invalid or too low - use default
+            logger.warn(
+                `⚠️ Invalid maxDailyTrades value: ${rawMaxTradesPerDay}. ` +
+                `Must be a finite number >= 1. Falling back to default (20). ` +
+                `Check ${configField}.`
+            );
+            this.maxTradesPerDay = 20;
+        } else if (rawMaxTradesPerDay > 1000) {
+            // Too high - clamp to max
+            logger.warn(
+                `⚠️ maxDailyTrades value too high: ${rawMaxTradesPerDay}. ` +
+                `Maximum is 1000. Clamping to 1000. ` +
+                `Check ${configField}.`
+            );
+            this.maxTradesPerDay = 1000;
+        } else {
+            // Valid range - coerce to integer
+            this.maxTradesPerDay = Math.floor(rawMaxTradesPerDay);
+            if (this.maxTradesPerDay !== rawMaxTradesPerDay) {
+                logger.warn(
+                    `⚠️ maxDailyTrades value was non-integer: ${rawMaxTradesPerDay}. ` +
+                    `Rounded down to ${this.maxTradesPerDay}. ` +
+                    `Check ${configField}.`
+                );
+            }
+        }
+
+        this.fundingThresholdATR = 0.25;  // Only act on funding if > 0.25×ATR
+
+        // Funding periods per day - WEEX uses 8-hour funding periods (3 per day)
+        // Other exchanges may differ: Binance/Bybit/OKX: 3, dYdX: 24
+        // Intentionally hardcoded for WEEX - change this if targeting other exchanges
+        this.fundingPeriodsPerDay = antiChurn.fundingPeriodsPerDay ?? 3;
+
+        // Per-symbol hourly trade limit (default: 3 trades per symbol per hour)
+        // This prevents over-trading a single symbol even if daily limit isn't reached
+        this.maxTradesPerSymbolPerHour = antiChurn.maxTradesPerSymbolPerHour ?? 3;
+
+        logger.info(`AntiChurnService initialized: cooldown=${this.cooldownAfterTradeMs}ms, flip=${this.cooldownBeforeFlipMs}ms, hysteresis=${this.hysteresisMultiplier}x, maxTrades=${this.maxTradesPerDay}, maxPerSymbol/hr=${this.maxTradesPerSymbolPerHour}, fundingPeriods=${this.fundingPeriodsPerDay}`);
     }
 
     /**
@@ -69,6 +132,12 @@ export class AntiChurnService {
             };
         }
 
+        // Check per-symbol hourly limit
+        const symbolHourlyCheck = this.canTradeSymbolThisHour(symbol);
+        if (!symbolHourlyCheck.allowed) {
+            return symbolHourlyCheck;
+        }
+
         // Check symbol-specific cooldown
         const state = this.cooldowns.get(symbol);
         if (!state) {
@@ -83,6 +152,33 @@ export class AntiChurnService {
                 allowed: false,
                 reason: `Cooldown active for ${symbol}`,
                 remainingMs,
+            };
+        }
+
+        return { allowed: true };
+    }
+
+    /**
+     * Check if a symbol can be traded this hour (per-symbol hourly limit)
+     * @returns { allowed: boolean, reason?: string }
+     */
+    private canTradeSymbolThisHour(symbol: string): { allowed: boolean; reason?: string } {
+        const now = Date.now();
+        const oneHourAgo = now - 3600000; // 1 hour in ms
+
+        // Get trade history for this symbol
+        const history = this.symbolTradeHistory.get(symbol);
+        if (!history || history.length === 0) {
+            return { allowed: true };
+        }
+
+        // Count trades in the last hour
+        const tradesInLastHour = history.filter(ts => ts > oneHourAgo).length;
+
+        if (tradesInLastHour >= this.maxTradesPerSymbolPerHour) {
+            return {
+                allowed: false,
+                reason: `Per-symbol hourly limit reached for ${symbol} (${this.maxTradesPerSymbolPerHour} trades/hour)`,
             };
         }
 
@@ -184,12 +280,68 @@ export class AntiChurnService {
             flipCooldownUntil: now + this.cooldownBeforeFlipMs,
         });
 
+        // Record to per-symbol hourly history
+        this.recordSymbolTrade(symbol, now);
+
         this.tradesExecutedToday++;
 
         logger.info(`📝 Trade recorded: ${symbol} ${direction}, cooldown until ${new Date(now + this.cooldownAfterTradeMs).toISOString()}, flip cooldown until ${new Date(now + this.cooldownBeforeFlipMs).toISOString()}`);
         logger.info(`📊 Trades today: ${this.tradesExecutedToday}/${this.maxTradesPerDay}`);
 
         return true;
+    }
+
+    /**
+     * Record a trade timestamp for per-symbol hourly tracking
+     * Also prunes old entries (> 1 hour) to prevent memory leak
+     * 
+     * OPTIMIZED: Mutates array in-place instead of creating new arrays
+     */
+    private recordSymbolTrade(symbol: string, timestamp: number): void {
+        const oneHourAgo = timestamp - 3600000;
+
+        // Get or create history array for this symbol
+        let history = this.symbolTradeHistory.get(symbol);
+        if (!history) {
+            history = [timestamp];
+            this.symbolTradeHistory.set(symbol, history);
+        } else {
+            // OPTIMIZED: Prune in-place by finding first valid index, then splice
+            // This avoids creating a new array on every call
+            let firstValidIndex = 0;
+            while (firstValidIndex < history.length && history[firstValidIndex] <= oneHourAgo) {
+                firstValidIndex++;
+            }
+            if (firstValidIndex > 0) {
+                history.splice(0, firstValidIndex);
+            }
+            history.push(timestamp);
+        }
+
+        // Memory leak prevention: limit total symbols tracked
+        if (this.symbolTradeHistory.size > this.MAX_SYMBOL_HISTORY_ENTRIES) {
+            // Find and remove the symbol with oldest last trade
+            let oldestSymbol: string | null = null;
+            let oldestTime = Infinity;
+
+            for (const [sym, hist] of this.symbolTradeHistory.entries()) {
+                if (hist.length === 0) {
+                    // Empty history - remove immediately
+                    this.symbolTradeHistory.delete(sym);
+                    continue;
+                }
+                const lastTrade = hist[hist.length - 1];
+                if (lastTrade < oldestTime) {
+                    oldestTime = lastTrade;
+                    oldestSymbol = sym;
+                }
+            }
+
+            if (oldestSymbol && this.symbolTradeHistory.size > this.MAX_SYMBOL_HISTORY_ENTRIES) {
+                this.symbolTradeHistory.delete(oldestSymbol);
+                logger.debug(`Evicted oldest symbol history entry: ${oldestSymbol}`);
+            }
+        }
     }
 
     /**
@@ -331,9 +483,21 @@ export class AntiChurnService {
 
     /**
      * Get cooldown state for a symbol
+     * 
+     * NOTE: Returns a COPY of the internal state to prevent external mutation.
+     * This is consistent with getAllCooldowns() behavior.
      */
     getCooldownState(symbol: string): CooldownState | null {
-        return this.cooldowns.get(symbol) || null;
+        const state = this.cooldowns.get(symbol);
+        if (!state) return null;
+
+        // Return a copy to prevent external mutation
+        return {
+            lastTradeTime: state.lastTradeTime,
+            lastDirection: state.lastDirection,
+            cooldownUntil: state.cooldownUntil,
+            flipCooldownUntil: state.flipCooldownUntil,
+        };
     }
 
     /**
@@ -343,8 +507,7 @@ export class AntiChurnService {
      * Both the Map structure and the CooldownState objects are copied, so callers
      * cannot affect internal state by modifying the returned data.
      * 
-     * PERFORMANCE: This creates new objects for each entry. For read-only access
-     * to a single symbol, prefer getCooldownState() which returns the reference directly.
+     * This is consistent with getCooldownState() which also returns a copy.
      */
     getAllCooldowns(): Map<string, CooldownState> {
         const copy = new Map<string, CooldownState>();
@@ -458,20 +621,9 @@ export function getAntiChurnService(): AntiChurnService {
 
 /**
  * Reset singleton (for testing or cleanup)
- * FIXED: Clears all cooldown state to prevent stale data on restart
- * FIXED: Uses public methods where possible to avoid fragile bracket notation
+ * Clears all cooldown state to prevent stale data on restart
  */
 export function resetAntiChurnService(): void {
-    if (antiChurnServiceInstance) {
-        // Use getAllCooldowns to get a copy, then clear each entry
-        const allCooldowns = antiChurnServiceInstance.getAllCooldowns();
-        for (const symbol of allCooldowns.keys()) {
-            antiChurnServiceInstance.clearCooldown(symbol);
-        }
-        // Reset internal state via bracket notation (unavoidable for private fields)
-        (antiChurnServiceInstance as any).tradesExecutedToday = 0;
-        (antiChurnServiceInstance as any).lastResetDate = '';
-    }
     antiChurnServiceInstance = null;
     logger.info('AntiChurnService singleton reset');
 }

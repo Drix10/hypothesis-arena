@@ -122,7 +122,19 @@ const executeTradeSchema = z.object({
     portfolioId: z.string().uuid(),
     confidence: z.number().min(0).max(100).optional(),
     reason: z.string().optional(),
-});
+}).refine(
+    (data) => {
+        // LIMIT orders must have a price
+        if (data.type === 'LIMIT' && (data.price === undefined || data.price === null)) {
+            return false;
+        }
+        return true;
+    },
+    {
+        message: 'LIMIT orders require a price',
+        path: ['price'],
+    }
+);
 
 // POST /api/trading/execute
 router.post('/execute', async (req: Request, res: Response, next: NextFunction) => {
@@ -182,12 +194,16 @@ router.post('/execute', async (req: Request, res: Response, next: NextFunction) 
 
         // Persist to DB
         const initialStatus = data.type === 'MARKET' ? 'FILLED' : 'PENDING';
+        // For MARKET orders, set price to NULL initially (will be updated with actual fill price)
+        // For LIMIT orders, use the specified price
+        const tradePrice = data.type === 'MARKET' ? null : data.price;
+
         try {
             await withTransaction(async (client) => {
                 await client.query(
-                    `INSERT INTO trades (id, portfolio_id, symbol, side, type, size, price, status, client_order_id, weex_order_id, confidence, reason, executed_at, created_at)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, ${data.type === 'MARKET' ? 'CURRENT_TIMESTAMP' : 'NULL'}, CURRENT_TIMESTAMP)`,
-                    [tradeId, data.portfolioId, symbol, data.side, data.type, data.size, data.price || 0, initialStatus, clientOrderId, orderResponse.order_id, data.confidence, data.reason]
+                    `INSERT INTO trades (id, portfolio_id, symbol, side, type, size, entry_price, price, status, client_order_id, weex_order_id, confidence, reason, executed_at, created_at)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, ${data.type === 'MARKET' ? 'CURRENT_TIMESTAMP' : 'NULL'}, CURRENT_TIMESTAMP)`,
+                    [tradeId, data.portfolioId, symbol, data.side, data.type, data.size, tradePrice, tradePrice, initialStatus, clientOrderId, orderResponse.order_id, data.confidence, data.reason]
                 );
 
                 await client.query(
@@ -195,6 +211,86 @@ router.post('/execute', async (req: Request, res: Response, next: NextFunction) 
                     [data.portfolioId]
                 );
             });
+
+            // For MARKET orders, fetch actual execution price and update the trade
+            if (data.type === 'MARKET') {
+                // Spawn async task to update price - don't block response
+                // This prevents race conditions and allows retries without blocking the client
+                (async () => {
+                    const MAX_RETRIES = 5;
+                    const RETRY_DELAYS = [1000, 2000, 3000, 5000, 8000]; // Progressive backoff
+
+                    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+                        try {
+                            // Wait before fetching (WEEX needs time to process)
+                            await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[attempt]));
+
+                            // FIXED: Use getOrder instead of getOrderInfo (correct method name)
+                            const orderDetails = await weexClient.getOrder(orderResponse.order_id);
+
+                            // FIXED: Validate response structure with type guards
+                            if (!orderDetails || typeof orderDetails !== 'object') {
+                                logger.warn(`Invalid order details response for ${tradeId} (attempt ${attempt + 1}/${MAX_RETRIES})`);
+                                continue; // Retry
+                            }
+
+                            // FIXED: Validate priceAvg is a valid string before parsing
+                            if (!orderDetails.priceAvg || typeof orderDetails.priceAvg !== 'string') {
+                                logger.warn(`Missing or invalid priceAvg for ${tradeId} (attempt ${attempt + 1}/${MAX_RETRIES})`);
+                                continue; // Retry
+                            }
+
+                            const actualPrice = parseFloat(orderDetails.priceAvg);
+
+                            // FIXED: Comprehensive validation of actualPrice
+                            if (!Number.isFinite(actualPrice) || actualPrice <= 0) {
+                                logger.warn(`Invalid actualPrice ${actualPrice} for ${tradeId} (attempt ${attempt + 1}/${MAX_RETRIES})`);
+                                continue; // Retry
+                            }
+
+                            // FIXED: Check order status - only update if filled
+                            const status = orderDetails.status;
+                            if (status !== 'filled') {
+                                logger.debug(`Order ${tradeId} not yet filled (status: ${status}), attempt ${attempt + 1}/${MAX_RETRIES}`);
+                                continue; // Retry
+                            }
+
+                            // FIXED: Optimistic locking - only update if price is still NULL
+                            // This prevents overwriting manual corrections
+                            const result = await withTransaction(async (client) => {
+                                const updateResult = await client.query(
+                                    'UPDATE trades SET entry_price = $1, price = $2 WHERE id = $3 AND entry_price IS NULL',
+                                    [actualPrice, actualPrice, tradeId]
+                                );
+                                return updateResult.rowCount;
+                            });
+
+                            if (result && result > 0) {
+                                logger.info(`✅ Updated MARKET order ${tradeId} with actual fill price: ${actualPrice} (attempt ${attempt + 1})`);
+                                return; // Success - exit retry loop
+                            } else {
+                                logger.debug(`Price already set for ${tradeId}, skipping update`);
+                                return; // Already updated - exit retry loop
+                            }
+                        } catch (priceUpdateError: any) {
+                            logger.warn(`Failed to update execution price for ${tradeId} (attempt ${attempt + 1}/${MAX_RETRIES}):`, {
+                                error: priceUpdateError.message,
+                                code: priceUpdateError.code,
+                                stack: priceUpdateError.stack?.split('\n')[0] // First line of stack only
+                            });
+
+                            // On last attempt, log error but don't throw
+                            if (attempt === MAX_RETRIES - 1) {
+                                logger.error(`❌ Failed to update price for ${tradeId} after ${MAX_RETRIES} attempts - price will remain NULL`);
+                            }
+                            // Continue to next retry
+                        }
+                    }
+                })().catch(err => {
+                    // Catch any unhandled errors in the async task
+                    logger.error(`Unhandled error in MARKET price update task for ${tradeId}:`, err);
+                });
+            }
 
             logger.info(`Trade executed: ${tradeId}`, { symbol, side: data.side, size: data.size, status: initialStatus });
 
@@ -423,10 +519,36 @@ router.post('/manual/close', async (req: Request, res: Response, next: NextFunct
                     // Ignore - championId will be null
                 }
 
+                // FIXED: Determine closePrice BEFORE the transaction to avoid holding DB locks during network calls
+                // PRIORITY: Try market price FIRST, fall back to entryPrice, then NULL
+                let closePrice: number | null = null;
+
+                // Try to get current market price from WEEX first (outside transaction)
+                try {
+                    const ticker = await weexClient.getTicker(normalizedSymbol);
+                    if (ticker && ticker.last) {
+                        const lastPrice = parseFloat(ticker.last);
+                        if (Number.isFinite(lastPrice) && lastPrice > 0) {
+                            closePrice = lastPrice;
+                            logger.info(`Using current market price ${closePrice} for close trade`);
+                        }
+                    }
+                } catch (tickerError) {
+                    logger.warn(`Failed to fetch market price for ${normalizedSymbol}:`, tickerError);
+                }
+
+                // Fall back to entryPrice if market price unavailable
+                if (closePrice === null && entryPrice > 0) {
+                    closePrice = entryPrice;
+                    logger.info(`Using entryPrice ${closePrice} for close trade (market price unavailable)`);
+                }
+
+                // If both fail, closePrice remains NULL to preserve data integrity
+
                 await withTransaction(async (client) => {
                     await client.query(
-                        `INSERT INTO trades (id, portfolio_id, symbol, side, type, size, price, status, client_order_id, weex_order_id, reason, realized_pnl, champion_id, executed_at, created_at)
-                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+                        `INSERT INTO trades (id, portfolio_id, symbol, side, type, size, entry_price, price, status, client_order_id, weex_order_id, reason, realized_pnl, champion_id, executed_at, created_at)
+                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
                         [
                             tradeId,
                             portfolio.id,
@@ -434,13 +556,14 @@ router.post('/manual/close', async (req: Request, res: Response, next: NextFunct
                             prismaSide,
                             'MARKET',
                             sizeNum,
-                            entryPrice, // Use entry price instead of 0
+                            closePrice, // entry_price - execution price of this close trade (NULL if unavailable)
+                            closePrice, // price - same as entry_price (schema invariant)
                             'FILLED',
                             `manual_close_${Date.now()}`,
                             orderId,
                             'Manual close via UI',
-                            unrealizedPnl, // $12: realized_pnl - use unrealized P&L from position as realized
-                            championId     // $13: champion_id - from original entry trade
+                            unrealizedPnl, // realized_pnl - use unrealized P&L from position as realized
+                            championId     // champion_id - from original entry trade
                         ]
                     );
 
