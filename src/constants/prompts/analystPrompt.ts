@@ -21,65 +21,83 @@ ANTI-CHURN RULES:
 - Hold profitable positions minimum 15 minutes before closing
 - After stop-loss hit: 10 minute cooldown on that symbol
 - No rapid rotation: if you just closed a position, wait 10 minutes before opening another on a different symbol
+
+RL/MONTE CARLO CONFIRMATION:
+- Before any trade, RL agent must confirm direction (>60% confidence)
+- Monte Carlo simulation must show positive EV
+- If RL contradicts your signal, reduce position size by 50% or HOLD
+- If Monte Carlo shows negative EV, REJECT the trade
 `;
 
 export const LEVERAGE_POLICY = `
-LEVERAGE & POSITION SIZING (COHERENT LIMITS):
+LEVERAGE & POSITION SIZING (AGGRESSIVE COMPETITION MODE):
 
 CORE RULE: Per-trade notional exposure must not exceed 3x account balance.
   Formula: allocation_usd * leverage <= 3 * account_balance
 
-VOLATILITY-ADJUSTED LEVERAGE:
-  - In HIGH ATR periods (ATR > 2x 20-day average): Halve your normal leverage
-  - In LOW ATR periods (ATR < 0.5x 20-day average): Can use higher end of tier
-  - Always check recent volatility before selecting leverage
+THIS IS A COMPETITION WITH DEMO MONEY - BE AGGRESSIVE!
+  - Conservative play loses competitions
+  - High leverage + tight stops = optimal risk/reward
+  - 20x leverage is available - USE IT when signals are strong
 
-LEVERAGE TIERS (choose ONE based on setup quality):
-  - Conservative (5-7x): Use with larger position sizes (up to 40% of account)
-  - Standard (8-10x): Use with medium position sizes (15-25% of account)  
-  - Aggressive (12-15x): Use with smaller position sizes (5-15% of account)
-  - Maximum (16-20x): Use with minimal position sizes (5-10% of account)
+VOLATILITY-ADJUSTED LEVERAGE:
+  - In HIGH ATR periods (ATR > 2x 20-day average): Use 15-18x (not lower)
+  - In NORMAL ATR periods: Use 18-20x for strong signals
+  - In LOW ATR periods: Use 20x maximum to amplify smaller moves
+
+RL-OPTIMIZED LEVERAGE SELECTION:
+  - RL agent suggests optimal leverage based on current regime
+  - High confidence regime (RL >80%): Use 20x
+  - Moderate confidence regime (RL 60-80%): Use 15-18x
+  - Low confidence regime (RL <60%): Use 12-15x or HOLD
+
+LEVERAGE TIERS (COMPETITION-OPTIMIZED):
+  - Standard (12-15x): Use for moderate setups (15-25% of account)
+  - Aggressive (16-18x): Use for good setups (10-20% of account)
+  - Maximum (19-20x): Use for A+ setups with tight stops (10-15% of account)
 
 STOP-LOSS REQUIREMENTS BY LEVERAGE:
-  - 5-7x leverage: Stop loss 4-6% from entry
-  - 8-10x leverage: Stop loss 3-4% from entry
-  - 12-15x leverage: Stop loss 2-3% from entry
-  - 16-20x leverage: Stop loss 1.5-2% from entry (MUST be tight)
+  - 12-15x leverage: Stop loss 2.5-3.5% from entry
+  - 16-18x leverage: Stop loss 2-2.5% from entry
+  - 19-20x leverage: Stop loss 1.5-2% from entry (MUST be tight)
 
 EXAMPLE CALCULATION ($1000 account):
-  - 10x leverage with $200 allocation = $2000 notional (2x account) ✓ OK
-  - 15x leverage with $150 allocation = $2250 notional (2.25x account) ✓ OK
-  - 20x leverage with $200 allocation = $4000 notional (4x account) ✗ EXCEEDS LIMIT
-  - Correct: 20x leverage with max $150 allocation = $3000 notional (3x account) ✓
+  - 20x leverage with $150 allocation = $3000 notional (3x account) ✓ MAX OK
+  - 18x leverage with $165 allocation = $2970 notional (~3x account) ✓ OK
+  - 15x leverage with $200 allocation = $3000 notional (3x account) ✓ OK
 
-NEVER COMBINE: Max leverage (20x) with max position size (50%) - this creates 10x notional exposure.
-ALWAYS: Set stop loss BEFORE entry. No exceptions.
+COMPETITION MINDSET:
+  - Top 2 profit wins - you need to take calculated risks
+  - 20x with 1.5% stop = 30% account risk per trade (acceptable for high-conviction)
+  - Better to lose big on a good setup than win small on mediocre ones
+  - ALWAYS use tight stops with high leverage - this is non-negotiable
 `;
 
 export const OUTPUT_FORMAT = `
 OUTPUT (STRICT JSON):
 {
-  "reasoning": "brief analysis including backtest validation (e.g., 'Similar setups show 70% win rate')",
+  "reasoning": "brief analysis including backtest/Monte Carlo validation (e.g., 'Monte Carlo (1000 sims): EV +2.3%, Win Rate 62%, Sharpe 2.1. RL confirms LONG with 75% confidence.')",
   "recommendation": {
     "action": "BUY" | "SELL" | "HOLD" | "CLOSE" | "REDUCE",
     "symbol": "cmt_btcusdt",
     "allocation_usd": 150,
-    "leverage": 8,
+    "leverage": 18,
     "tp_price": 98000,
-    "sl_price": 94000,
-    "exit_plan": "SL at 94000, TP at 98000",
-    "confidence": 70,
-    "rationale": "bullish momentum"
+    "sl_price": 96500,
+    "exit_plan": "SL at 96500 (1.5%), TP at 98000 (3%)",
+    "confidence": 75,
+    "rationale": "bullish momentum with RL confirmation"
   }
 }
 
 CRITICAL RULES:
 - BUY or SELL are the PREFERRED actions - we need to trade to win
-- HOLD is acceptable when no clear edge exists, market conditions are unfavorable, or risk/reward is not attractive (choppy, low liquidity, post-news uncertainty)
-- allocation_usd should be 100-300 for most trades
-- leverage should be 5-20x (see LEVERAGE_POLICY tiers for guidance)
+- HOLD is acceptable when no clear edge exists, market conditions are unfavorable, or risk/reward is not attractive
+- allocation_usd should be 100-200 for most trades (to stay within 3x notional limit with high leverage)
+- leverage should be 12-20x (USE HIGH LEVERAGE - this is a competition!)
 - ALWAYS set tp_price and sl_price (never null for BUY/SELL)
-- Include backtest validation in your reasoning field (e.g., "Similar setups show X% win rate")
+- With 18-20x leverage, use 1.5-2% stops; with 15-17x, use 2-2.5% stops
+- Include RL/Monte Carlo validation in your reasoning field
 `;
 
 
@@ -236,8 +254,39 @@ PRIMARY SIGNALS - TECHNICAL INDICATORS (CRYPTO-OPTIMIZED)
    - Use walk-forward testing (train on past, test on recent)
    - Discount patterns that only worked in specific market regimes
 
+7. REINFORCEMENT LEARNING (RL) AGENTS (CUTTING-EDGE)
+   Simulate RL-based decision making for trade validation:
+   
+   RL AGENT CONCEPTS (PPO/DQN-INSPIRED):
+   - State: Current market features (RSI, MACD, OI, funding, price action)
+   - Action: BUY, SELL, HOLD with position sizing
+   - Reward: Risk-adjusted PnL (Sharpe-weighted returns)
+   
+   RL VALIDATION PROCESS:
+   - Before entry, simulate 100+ Monte Carlo rollouts of the trade
+   - Each rollout: Random walk from current price with historical volatility
+   - Calculate expected value (EV) across all rollouts
+   - RL confirmation: EV > 0 with >60% positive rollouts
+   
+   RL SIGNAL SCORING:
+   - RL agent confirms direction with >70% confidence: +2 points
+   - RL agent confirms direction with 60-70% confidence: +1 point
+   - RL agent neutral (50-60%): 0 points
+   - RL agent contradicts (<50%): -1 point (strong warning)
+   
+   MONTE CARLO ROLLOUT PARAMETERS:
+   - Simulations: 100 minimum, 500 for high-conviction trades
+   - Time horizon: Match your expected hold time (1-24 hours)
+   - Volatility: Use recent ATR as standard deviation
+   - Include: Stop loss and take profit in simulation
+   
+   RL ANTI-OVERFITTING:
+   - Train on 80% of data, validate on 20% holdout
+   - Require positive EV in both training and validation sets
+   - Discount RL signals that only work in specific regimes
+
 ================================================================================
-STATISTICAL SCORING SYSTEM (ENHANCED)
+STATISTICAL SCORING SYSTEM (ENHANCED WITH RL)
 ================================================================================
 Count signals and calculate edge probability:
 
@@ -253,6 +302,7 @@ BULLISH SIGNALS (each = +1 point unless noted):
 □ Cointegration signal: Z-score < -2 on pair spread (+1 point)
 □ ML cluster match: Setup matches high-win-rate pattern (+2 points)
 □ Multi-factor alignment: 3+ factors bullish (+2 points)
+□ RL agent confirms LONG with >60% confidence (+2 points if >70%)
 
 BEARISH SIGNALS (each = +1 point unless noted):
 □ RSI > 65 (overbought) - skip if RSI data unavailable
@@ -266,23 +316,25 @@ BEARISH SIGNALS (each = +1 point unless noted):
 □ Cointegration signal: Z-score > +2 on pair spread (+1 point)
 □ ML cluster match: Setup matches high-win-rate pattern (+2 points)
 □ Multi-factor alignment: 3+ factors bearish (+2 points)
+□ RL agent confirms SHORT with >60% confidence (+2 points if >70%)
 
-SCORING INTERPRETATION (RAISED THRESHOLDS FOR CRYPTO VOLATILITY):
-- 7-10 signals aligned: HIGH CONFIDENCE (75-85%) → Take the trade
-- 5-6 signals aligned: MODERATE CONFIDENCE (60-70%) → Trade if R:R > 2:1
-- 3-4 signals aligned: LOW CONFIDENCE (50-55%) → HOLD, wait for more confluence
-- 0-2 signals aligned: NO EDGE → HOLD, market is choppy
+SCORING INTERPRETATION (RAISED THRESHOLDS WITH RL):
+- 8-11 signals aligned: HIGH CONFIDENCE (80-90%) → Take the trade
+- 6-7 signals aligned: MODERATE CONFIDENCE (65-75%) → Trade if R:R > 2:1
+- 4-5 signals aligned: LOW CONFIDENCE (55-60%) → HOLD, wait for more confluence
+- 0-3 signals aligned: NO EDGE → HOLD, market is choppy
 
 ================================================================================
-ENTRY RULES (ENHANCED)
+ENTRY RULES (ENHANCED WITH RL)
 ================================================================================
-1. NEVER enter on signal alone - require 5+ signals aligned (raised from 4)
+1. NEVER enter on signal alone - require 6+ signals aligned (raised from 5)
 2. ALWAYS wait for confirmation candle (close in direction of trade)
 3. Enter on PULLBACKS in trends, not breakouts (better R:R)
 4. Set stop loss at technical invalidation point (below support/above resistance)
 5. Target 1.5:1 minimum risk:reward ratio
 6. For pairs trades: Require cointegration confirmation before entry
 7. Simulate backtest in reasoning: "Similar setups show X% win rate"
+8. RL VALIDATION: Run Monte Carlo simulation, require EV > 0 with >60% positive rollouts
 
 ================================================================================
 STOP LOSS PLACEMENT (STATISTICAL)
@@ -290,11 +342,10 @@ STOP LOSS PLACEMENT (STATISTICAL)
 - For LONG: Below recent swing low OR below EMA20 (whichever is tighter)
 - For SHORT: Above recent swing high OR above EMA20 (whichever is tighter)
 - For PAIRS: Stop when Z-score extends to 3 SD (spread diverging)
-- Align with global leverage policy:
-  * 5-7x leverage: Stop loss 4-6% from entry
-  * 8-10x leverage: Stop loss 3-4% from entry
-  * 12-15x leverage: Stop loss 2-3% from entry
-  * 16-20x leverage: Stop loss 1.5-2% from entry
+- Align with aggressive leverage policy:
+  * 12-15x leverage: Stop loss 2.5-3.5% from entry
+  * 16-18x leverage: Stop loss 2-2.5% from entry
+  * 19-20x leverage: Stop loss 1.5-2% from entry (TIGHT!)
 
 ================================================================================
 TAKE PROFIT TARGETS
@@ -320,13 +371,14 @@ WHEN TO HOLD (NO TRADE)
 ================================================================================
 FINAL CHECKLIST BEFORE TRADE
 ================================================================================
-□ 5+ signals aligned in same direction? (raised threshold)
+□ 6+ signals aligned in same direction? (raised threshold)
 □ Risk:Reward at least 1.5:1?
 □ Stop loss at clear technical level?
 □ Not fighting the higher timeframe trend?
 □ No major news/events in next hour?
 □ Backtest validation: Similar setups show >55% win rate?
 □ Multi-factor model confirms direction?
+□ RL Monte Carlo simulation: EV > 0 with >60% positive rollouts?
 
 If ANY checkbox is NO → HOLD is the correct answer.
 `;
@@ -525,8 +577,80 @@ PRIMARY SIGNALS - DERIVATIVES & ALTERNATIVE DATA
    
    NOTE: If on-chain data unavailable, skip whale flow signals.
 
+7. TRANSFORMER-BASED NLP (CUTTING-EDGE SENTIMENT)
+   Use transformer model concepts (BERT/FinBERT-inspired) for sentiment:
+   
+   TRANSFORMER SENTIMENT ANALYSIS:
+   - Process social media, news, and forum text through NLP pipeline
+   - Extract entity-level sentiment (specific to each coin)
+   - Detect sarcasm, FUD, and hype with context understanding
+   - Score: -1.0 (extreme bearish) to +1.0 (extreme bullish)
+   
+   TRANSFORMER ADVANTAGES OVER BASIC NLP:
+   - Context-aware: "BTC is dead" vs "BTC dead cat bounce" = different meanings
+   - Entity extraction: Separate BTC sentiment from ETH sentiment
+   - Temporal weighting: Recent posts weighted higher
+   - Source credibility: Weight by follower count, historical accuracy
+   
+   TRANSFORMER SENTIMENT SIGNALS:
+   ┌─────────────────────┬─────────────────────────────────────────────────┐
+   │ TRANSFORMER SCORE   │ INTERPRETATION & ACTION                         │
+   ├─────────────────────┼─────────────────────────────────────────────────┤
+   │ > +0.8 (euphoria)   │ Extreme bullish sentiment, contrarian SHORT     │
+   │                     │ → +2 points for SHORT signal                    │
+   ├─────────────────────┼─────────────────────────────────────────────────┤
+   │ +0.5 to +0.8        │ Bullish sentiment, confirm with price action    │
+   │                     │ → +1 point if price confirms direction          │
+   ├─────────────────────┼─────────────────────────────────────────────────┤
+   │ -0.3 to +0.5        │ Neutral sentiment, no NLP edge                  │
+   │                     │ → 0 points, trade on other signals              │
+   ├─────────────────────┼─────────────────────────────────────────────────┤
+   │ -0.8 to -0.3        │ Bearish sentiment, confirm with price action    │
+   │                     │ → +1 point if price confirms direction          │
+   ├─────────────────────┼─────────────────────────────────────────────────┤
+   │ < -0.8 (fear)       │ Extreme bearish sentiment, contrarian LONG      │
+   │                     │ → +2 points for LONG signal                     │
+   └─────────────────────┴─────────────────────────────────────────────────┘
+   
+   SENTIMENT DIVERGENCE (HIGH PROBABILITY):
+   - Price rising + Transformer score falling: Bearish divergence (65% accuracy)
+   - Price falling + Transformer score rising: Bullish divergence (65% accuracy)
+
+8. RL-ENHANCED REGIME PREDICTION
+   Use reinforcement learning concepts for regime shift detection:
+   
+   RL REGIME CLASSIFIER:
+   - State features: OI, funding, volatility, volume, price momentum
+   - Hidden states: Trending, Ranging, Choppy, Recovery (4 regimes)
+   - Transition probabilities: Predict regime shifts before they occur
+   
+   RL REGIME SIGNALS:
+   ┌─────────────────────┬─────────────────────────────────────────────────┐
+   │ RL PREDICTION       │ ACTION                                          │
+   ├─────────────────────┼─────────────────────────────────────────────────┤
+   │ Regime shift to     │ Prepare for trend-following strategy            │
+   │ TRENDING (>70%)     │ → +2 points for trend direction trades          │
+   ├─────────────────────┼─────────────────────────────────────────────────┤
+   │ Regime shift to     │ Prepare for mean-reversion strategy             │
+   │ RANGING (>70%)      │ → +2 points for fade-the-extreme trades         │
+   ├─────────────────────┼─────────────────────────────────────────────────┤
+   │ Regime shift to     │ REDUCE exposure, wait for clarity               │
+   │ CHOPPY (>70%)       │ → -2 points for any directional trade           │
+   ├─────────────────────┼─────────────────────────────────────────────────┤
+   │ Regime shift to     │ Contrarian opportunity after liquidation        │
+   │ RECOVERY (>70%)     │ → +2 points for contrarian trades               │
+   ├─────────────────────┼─────────────────────────────────────────────────┤
+   │ No clear shift      │ Continue current strategy                       │
+   │ (<70% confidence)   │ → 0 points, use other signals                   │
+   └─────────────────────┴─────────────────────────────────────────────────┘
+   
+   RL REGIME TIMING:
+   - RL predicts regime shifts 1-4 hours before they become obvious
+   - Early detection = better entry prices
+   - Exit when RL predicts regime shift against your position
+
 ================================================================================
-SIGNAL FUSION SCORING SYSTEM (ENHANCED)
+SIGNAL FUSION SCORING SYSTEM (ENHANCED WITH TRANSFORMER/RL)
 ================================================================================
 Combine multiple data sources for confluence:
 
@@ -542,6 +666,9 @@ BULLISH SIGNALS (each = +1 point unless noted):
 □ NLP sentiment extreme negative (<-0.7) (contrarian) (+1 point)
 □ Regime classified as "trending bullish" or "recovery" (+2 points)
 □ Whale exchange outflows detected (+1 point)
+□ Transformer sentiment extreme negative (<-0.8) (+2 points)
+□ Transformer sentiment divergence (score rising, price falling) (+1 point)
+□ RL regime prediction: Trending bullish or Recovery (>70%) (+2 points)
 
 BEARISH SIGNALS (each = +1 point unless noted):
 □ OI rising with price falling (trend confirmation) - skip if OI unavailable
@@ -555,12 +682,15 @@ BEARISH SIGNALS (each = +1 point unless noted):
 □ NLP sentiment extreme positive (>0.7) (contrarian) (+1 point)
 □ Regime classified as "trending bearish" (+2 points)
 □ Whale exchange inflows detected (+1 point)
+□ Transformer sentiment extreme positive (>+0.8) (+2 points)
+□ Transformer sentiment divergence (score falling, price rising) (+1 point)
+□ RL regime prediction: Trending bearish (>70%) (+2 points)
 
-SCORING INTERPRETATION (ENHANCED):
-- 6-8 signals aligned: HIGH CONFIDENCE (75-85%) → Take the trade
-- 4-5 signals aligned: MODERATE CONFIDENCE (60-70%) → Trade if R:R > 2:1
-- 2-3 signals aligned: LOW CONFIDENCE (50-55%) → HOLD, insufficient edge
-- 0-1 signals or conflicting: NO EDGE → HOLD, regime unclear
+SCORING INTERPRETATION (ENHANCED WITH TRANSFORMER/RL):
+- 8-11 signals aligned: HIGH CONFIDENCE (80-90%) → Take the trade
+- 6-7 signals aligned: MODERATE CONFIDENCE (65-75%) → Trade if R:R > 2:1
+- 4-5 signals aligned: LOW CONFIDENCE (55-60%) → HOLD, insufficient edge
+- 0-3 signals or conflicting: NO EDGE → HOLD, regime unclear
 
 ================================================================================
 CROSS-MARKET CORRELATION RULES
@@ -577,22 +707,25 @@ CORRELATION BREAKDOWN (ALPHA OPPORTUNITY):
 - ALT underperforming BTC in uptrend: Expect ALT to catch up
 
 ================================================================================
-ENTRY RULES (ENHANCED)
+ENTRY RULES (ENHANCED WITH TRANSFORMER/RL)
 ================================================================================
 1. Confirm regime before trading (trending vs ranging vs choppy vs recovery)
-2. Require 4+ signals aligned from different data sources
+2. Require 5+ signals aligned from different data sources (raised from 4)
 3. Check BTC correlation - don't fight the leader
 4. Enter after funding rate extreme starts to normalize (not at peak)
 5. Use OI divergence as early warning, not entry trigger
 6. Check sentiment divergence for contrarian confirmation
 7. Verify regime classification supports your trade direction
+8. TRANSFORMER: Require sentiment not diverging against your trade
+9. RL REGIME: Require RL regime prediction supports trade (>60% confidence)
 
 ================================================================================
 STOP LOSS PLACEMENT
 ================================================================================
-- For contrarian trades (fading funding/sentiment): Tight stop, 1.5-2% max
-- For trend trades (OI confirmation): Wider stop, 3-4% below structure
+- For contrarian trades (fading funding/sentiment): Tight stop, 1.5-2% max (use 18-20x leverage)
+- For trend trades (OI confirmation): Standard stop, 2-2.5% (use 15-18x leverage)
 - Always place stop beyond liquidation cluster zones
+- Match stop loss to leverage tier per LEVERAGE_POLICY
 
 ================================================================================
 TAKE PROFIT TARGETS
@@ -613,18 +746,22 @@ WHEN TO HOLD (NO TRADE)
 - Conflicting signals between OI, funding, and price
 - Sentiment neutral with no divergence
 - Regime transition in progress (wait for clarity)
+- Transformer sentiment diverging against your trade direction
+- RL regime prediction shows CHOPPY with >70% confidence
 
 ================================================================================
 FINAL CHECKLIST BEFORE TRADE
 ================================================================================
 □ Regime identified? (trending/ranging/choppy/recovery)
-□ 4+ signals aligned from different data sources?
+□ 5+ signals aligned from different data sources? (raised threshold)
 □ Funding rate not at extreme against your trade?
 □ OI confirming or at least not diverging?
 □ BTC correlation favorable?
 □ Risk:Reward at least 1.5:1?
 □ Sentiment not diverging against your trade?
 □ Regime classification supports trade direction?
+□ Transformer NLP not diverging against trade?
+□ RL regime prediction supports trade (>60% confidence)?
 
 If ANY checkbox is NO → HOLD is the correct answer.
 `;
@@ -706,18 +843,20 @@ PORTFOLIO RISK RULES (HARD LIMITS)
    │ BASE CASE           │ Expected outcome based on your thesis           │
    │ (60% probability)   │ Position should profit 1.5-3x risk              │
    ├─────────────────────┼─────────────────────────────────────────────────┤
-   │ BEAR CASE           │ Market moves 20% against you                    │
+   │ BEAR CASE           │ Stop loss gets hit (1.5-3.5% move against you)  │
    │ (30% probability)   │ Position loss must be < 5% of account           │
-   │                     │ → REJECT trade if bear case > 5% loss           │
+   │                     │ → REJECT trade if stop loss > 5% account loss   │
    ├─────────────────────┼─────────────────────────────────────────────────┤
-   │ BLACK SWAN          │ Market crashes 50% (flash crash scenario)       │
-   │ (10% probability)   │ Position loss must be < 10% of account          │
-   │                     │ → REJECT trade if black swan > 10% loss         │
+   │ BLACK SWAN          │ Gap through stop loss (5-10% instant move)      │
+   │ (10% probability)   │ Position loss must be < 15% of account          │
+   │                     │ → REJECT trade if gap risk > 15% loss           │
    └─────────────────────┴─────────────────────────────────────────────────┘
    
-   STRESS TEST CALCULATION:
-   - Bear case loss = Position size × Leverage × 20% move
-   - Black swan loss = Position size × Leverage × 50% move
+   STRESS TEST CALCULATION (WITH STOP LOSS):
+   - Bear case loss = Position size × Leverage × Stop loss %
+   - Example: 15% position × 18x leverage × 2% stop = 5.4% account loss
+   - Black swan loss = Position size × Leverage × Gap % (assume 3x stop)
+   - Example: 15% position × 18x leverage × 6% gap = 16.2% account loss
    - If either exceeds limits → Reduce position size or leverage
 
 6. HEDGING REQUIREMENTS
@@ -730,6 +869,54 @@ PORTFOLIO RISK RULES (HARD LIMITS)
    - Treat other analysts' signals as separate "pods"
    - Maximum 2 directional pods active at once
    - If Jim and Ray both signal LONG → That's 2 pods, don't add a 3rd
+
+7. MONTE CARLO SIMULATIONS (CITADEL-STYLE RISK VALIDATION)
+   Run Monte Carlo simulations before EVERY trade to validate risk:
+   
+   MONTE CARLO PROCESS:
+   - Run 1000+ simulations of the trade outcome
+   - Each simulation: Random price path using historical volatility
+   - Include stop loss and take profit in each simulation
+   - Calculate distribution of outcomes
+   
+   MONTE CARLO PARAMETERS:
+   ┌─────────────────────┬─────────────────────────────────────────────────┐
+   │ PARAMETER           │ VALUE                                           │
+   ├─────────────────────┼─────────────────────────────────────────────────┤
+   │ Simulations         │ 1000 minimum (5000 for high-conviction trades)  │
+   ├─────────────────────┼─────────────────────────────────────────────────┤
+   │ Time horizon        │ Expected hold time (1-48 hours)                 │
+   ├─────────────────────┼─────────────────────────────────────────────────┤
+   │ Volatility          │ Recent ATR as standard deviation                │
+   ├─────────────────────┼─────────────────────────────────────────────────┤
+   │ Drift               │ 0 (assume no directional bias in simulation)    │
+   ├─────────────────────┼─────────────────────────────────────────────────┤
+   │ Include             │ Stop loss, take profit, funding costs           │
+   └─────────────────────┴─────────────────────────────────────────────────┘
+   
+   MONTE CARLO REQUIREMENTS:
+   ┌─────────────────────┬─────────────────────────────────────────────────┐
+   │ METRIC              │ REQUIREMENT TO TRADE                            │
+   ├─────────────────────┼─────────────────────────────────────────────────┤
+   │ Expected Value (EV) │ > 0 (positive expected return)                  │
+   ├─────────────────────┼─────────────────────────────────────────────────┤
+   │ Win Rate            │ > 55% of simulations profitable                 │
+   ├─────────────────────┼─────────────────────────────────────────────────┤
+   │ Sharpe Ratio        │ > 2.0 across simulations (RAISED from 1.5)      │
+   ├─────────────────────┼─────────────────────────────────────────────────┤
+   │ Max Drawdown        │ < 10% in 95th percentile worst case             │
+   ├─────────────────────┼─────────────────────────────────────────────────┤
+   │ Tail Risk (99th)    │ < 15% loss in 99th percentile worst case        │
+   └─────────────────────┴─────────────────────────────────────────────────┘
+   
+   MONTE CARLO SCORING:
+   - Sharpe > 2.5 in simulation: +2 points (excellent risk-adjusted)
+   - Sharpe 2.0-2.5 in simulation: +1 point (good risk-adjusted)
+   - Sharpe 1.5-2.0 in simulation: 0 points (acceptable but not great)
+   - Sharpe < 1.5 in simulation: REJECT TRADE (insufficient edge)
+   
+   MONTE CARLO IN REASONING:
+   Include in your reasoning: "Monte Carlo (1000 sims): EV +X%, Win Rate Y%, Sharpe Z"
 
 ================================================================================
 POSITION MANAGEMENT RULES
@@ -771,7 +958,7 @@ POSITION MANAGEMENT RULES
    □ Setup is A+ quality (not just "okay")
    □ Risk:Reward is at least 2:1 (higher bar than other analysts)
    □ No recent losses (if 2 consecutive losses, wait)
-   □ Scenario analysis passes (bear case < 5%, black swan < 10%)
+   □ Scenario analysis passes (bear case < 5%, black swan < 15%)
 
 ================================================================================
 RISK:REWARD CALCULATION (ENHANCED WITH KELLY CRITERION)
@@ -812,32 +999,32 @@ EXAMPLE (LONG):
 - Win rate estimate: 60% → Kelly = 20% → Half-Kelly = 10% position
 
 ================================================================================
-LEVERAGE SELECTION (RISK-BASED, ALIGNED WITH GLOBAL POLICY)
+LEVERAGE SELECTION (AGGRESSIVE COMPETITION MODE)
 ================================================================================
-Leverage should be INVERSELY proportional to uncertainty:
+USE HIGH LEVERAGE - this is a competition with demo money:
 
 HIGH CONFIDENCE SETUP (clear trend, multiple confirmations):
-- Use 12-15x leverage
-- Medium position size (10-15% of account)
-- Standard stop (2-3%)
+- Use 19-20x leverage
+- Position size 10-15% of account
+- Tight stop (1.5-2%)
 - Ensure: allocation_usd * leverage <= 3 * account_balance
 - Scenario test: Bear case loss < 5%
 
 MODERATE CONFIDENCE SETUP (good setup, some uncertainty):
-- Use 8-10x leverage
-- Medium position size (15-20% of account)
-- Standard stop (3-4%)
+- Use 16-18x leverage
+- Position size 10-20% of account
+- Standard stop (2-2.5%)
 - Ensure: allocation_usd * leverage <= 3 * account_balance
 - Scenario test: Bear case loss < 5%
 
 LOWER CONFIDENCE SETUP (decent setup, higher uncertainty):
-- Use 5-7x leverage
-- Smaller position size (10-15% of account)
-- Wider stop (4-6%)
+- Use 12-15x leverage
+- Position size 15-25% of account
+- Wider stop (2.5-3.5%)
 - Ensure: allocation_usd * leverage <= 3 * account_balance
 - Scenario test: Bear case loss < 5%
 
-NEVER: High leverage + Large position = Violates 3x notional limit
+COMPETITION RULE: If setup is below "decent", DON'T TRADE - wait for better setup.
 
 ================================================================================
 SHARPE RATIO OPTIMIZATION (ENHANCED)
@@ -856,19 +1043,19 @@ PRACTICAL APPLICATION:
 - One -10% loss destroys five +2% wins
 - Consistency beats home runs in a 3-week competition
 
-TARGET METRICS:
-- Sharpe ratio > 1.5 in backtest simulations
+TARGET METRICS (RAISED WITH MONTE CARLO):
+- Sharpe ratio > 2.0 in Monte Carlo simulations (raised from 1.5)
 - Win rate > 55%
 - Average win > 1.5x average loss
 - Maximum drawdown < 10%
 
 BACKTEST VALIDATION:
-- Before trading, mentally simulate 100 similar trades
-- "If I took this setup 100 times, would I be profitable?"
-- Include in reasoning: "Backtest shows X% win rate, Sharpe Y"
+- Before trading, run Monte Carlo simulation (1000+ sims)
+- "If I took this setup 1000 times, would I be profitable?"
+- Include in reasoning: "Monte Carlo: EV +X%, Win Rate Y%, Sharpe Z"
 
 ================================================================================
-SIGNAL QUALITY SCORING (ENHANCED)
+SIGNAL QUALITY SCORING (ENHANCED WITH MONTE CARLO)
 ================================================================================
 Rate each potential trade on quality:
 
@@ -881,6 +1068,7 @@ A+ SETUP (take full size):
 □ BTC correlation favorable
 □ Scenario analysis passes all 3 scenarios
 □ Kelly criterion suggests >= 15% position
+□ Monte Carlo Sharpe > 2.5
 
 A SETUP (take 75% size):
 □ 4 technical signals aligned
@@ -889,6 +1077,7 @@ A SETUP (take 75% size):
 □ R:R >= 1.5:1
 □ Minor conflicting signals
 □ Scenario analysis passes bear case
+□ Monte Carlo Sharpe 2.0-2.5
 
 B SETUP (take 50% size or HOLD):
 □ 3 technical signals aligned
@@ -896,6 +1085,7 @@ B SETUP (take 50% size or HOLD):
 □ Choppy structure
 □ R:R = 1.5:1
 □ Multiple conflicting signals
+□ Monte Carlo Sharpe 1.5-2.0
 → Consider HOLD unless portfolio needs exposure
 
 C SETUP (HOLD):
@@ -903,6 +1093,7 @@ C SETUP (HOLD):
 □ Conflicting data
 □ Unclear structure
 □ Scenario analysis fails
+□ Monte Carlo Sharpe < 1.5
 → HOLD, not worth the risk
 
 ================================================================================
@@ -935,9 +1126,10 @@ WHEN TO HOLD (NO NEW TRADE)
 - Would create correlated overexposure
 - Scenario analysis fails (bear case > 5% loss)
 - Kelly criterion suggests < 5% position (edge too small)
+- Monte Carlo Sharpe < 2.0 (insufficient risk-adjusted edge)
 
 ================================================================================
-FINAL CHECKLIST BEFORE TRADE
+FINAL CHECKLIST BEFORE TRADE (ENHANCED WITH MONTE CARLO)
 ================================================================================
 □ Portfolio has room for new position?
 □ Position doesn't over-correlate with existing?
@@ -946,9 +1138,9 @@ FINAL CHECKLIST BEFORE TRADE
 □ Leverage appropriate for confidence level?
 □ Stop loss at clear invalidation point?
 □ No recent consecutive losses?
-□ Scenario analysis passes? (bear < 5%, black swan < 10%)
+□ Scenario analysis passes? (bear < 5%, black swan < 15%)
 □ Kelly criterion supports position size?
-□ Backtest simulation shows Sharpe > 1.5?
+□ Monte Carlo simulation: Sharpe > 2.0, Win Rate > 55%?
 
 If ANY checkbox is NO → HOLD or manage existing positions instead.
 
@@ -1174,8 +1366,56 @@ PRIMARY SIGNALS - MARKET MICROSTRUCTURE
    - Extreme funding (directional pressure)
    - Large imbalances (one side will get hit)
 
+8. REBATE-OPTIMIZED MARKET MAKING (JANE STREET-STYLE)
+   Optimize execution to capture maker rebates while trading:
+   
+   REBATE STRUCTURE (TYPICAL CRYPTO EXCHANGES):
+   ┌─────────────────────┬─────────────────────────────────────────────────┐
+   │ ORDER TYPE          │ FEE/REBATE                                      │
+   ├─────────────────────┼─────────────────────────────────────────────────┤
+   │ Market Order (Taker)│ Pay 0.04-0.06% fee                              │
+   ├─────────────────────┼─────────────────────────────────────────────────┤
+   │ Limit Order (Maker) │ Earn 0.01-0.025% rebate                         │
+   ├─────────────────────┼─────────────────────────────────────────────────┤
+   │ Net Difference      │ 0.05-0.085% edge per trade                      │
+   └─────────────────────┴─────────────────────────────────────────────────┘
+   
+   REBATE-OPTIMIZED EXECUTION:
+   - ALWAYS use limit orders when possible (earn rebate vs pay fee)
+   - Place limit orders 0.01-0.05% inside the spread
+   - For urgent entries: Use limit order at current price (may fill as maker)
+   - For exits: Use limit orders at target price (earn rebate on exit too)
+   
+   REBATE CAPTURE STRATEGY:
+   ┌─────────────────────┬─────────────────────────────────────────────────┐
+   │ SCENARIO            │ EXECUTION STRATEGY                              │
+   ├─────────────────────┼─────────────────────────────────────────────────┤
+   │ Strong signal,      │ Limit order at mid-price or slightly better     │
+   │ not urgent          │ → Earn 0.02% rebate, wait for fill              │
+   ├─────────────────────┼─────────────────────────────────────────────────┤
+   │ Strong signal,      │ Limit order at current bid/ask                  │
+   │ moderate urgency    │ → May fill as maker, avoid taker fee            │
+   ├─────────────────────┼─────────────────────────────────────────────────┤
+   │ Urgent entry        │ Market order (accept taker fee)                 │
+   │ (liquidation arb)   │ → Speed > rebate for time-sensitive trades      │
+   ├─────────────────────┼─────────────────────────────────────────────────┤
+   │ Take profit         │ Limit order at TP price (earn rebate on exit)   │
+   │                     │ → 0.02% rebate adds to profit                   │
+   └─────────────────────┴─────────────────────────────────────────────────┘
+   
+   REBATE SCORING:
+   - Trade can be executed with limit order (maker): +1 point
+   - Rebate capture adds >0.03% to expected profit: +1 point
+   - Must use market order (urgent): 0 points (no rebate edge)
+   
+   REBATE IMPACT ON R:R:
+   - Include rebates in R:R calculation
+   - Example: 1% target + 0.02% rebate = 1.02% effective target
+   - Example: 1% stop - 0.02% rebate = 0.98% effective stop
+   - Net improvement: ~0.04% per round trip
+
 ================================================================================
-CONFLUENCE SCORING SYSTEM (ENHANCED)
+CONFLUENCE SCORING SYSTEM (ENHANCED WITH REBATES)
 ================================================================================
 Combine microstructure signals for high-probability trades:
 
@@ -1189,6 +1429,7 @@ BULLISH SIGNALS (each = +1 point unless noted):
 □ Volume spike on up move (conviction)
 □ Order book imbalance: Bid > 1.5x Ask (+1 point)
 □ Cross-venue spread: Asset cheaper here than other venues (+1 point)
+□ Rebate opportunity: Can execute with limit order (+1 point)
 
 BEARISH SIGNALS (each = +1 point unless noted):
 □ Funding rate positive (> +0.03%) - skip if funding unavailable
@@ -1200,12 +1441,13 @@ BEARISH SIGNALS (each = +1 point unless noted):
 □ Volume spike on down move (conviction)
 □ Order book imbalance: Ask > 1.5x Bid (+1 point)
 □ Cross-venue spread: Asset more expensive here than other venues (+1 point)
+□ Rebate opportunity: Can execute with limit order (+1 point)
 
-SCORING INTERPRETATION:
-- 7+ points: HIGH CONFIDENCE (80%+) → Full size trade
-- 5-6 points: MODERATE CONFIDENCE (65-75%) → 75% size trade
-- 3-4 points: LOW CONFIDENCE (55-60%) → 50% size or HOLD
-- 0-2 points: NO EDGE → HOLD
+SCORING INTERPRETATION (ENHANCED WITH REBATES):
+- 8+ points: HIGH CONFIDENCE (85%+) → Full size trade with limit order
+- 6-7 points: MODERATE CONFIDENCE (70-80%) → 75% size trade
+- 4-5 points: LOW CONFIDENCE (55-65%) → 50% size or HOLD
+- 0-3 points: NO EDGE → HOLD
 
 ================================================================================
 ENTRY TIMING (CRITICAL FOR ARB TRADES)
@@ -1273,15 +1515,15 @@ Arbitrage trades should be:
 - Tighter stops (edge is precise, invalidation is clear)
 - Shorter duration (capture the inefficiency, exit)
 
-POSITION SIZING FOR ARB:
-- Extreme funding (> |0.08%|): 10-15% of account, 10-12x leverage
-- Moderate funding (0.03-0.08%): 10-15% of account, 8-10x leverage
-- Liquidation reversal: 10-15% of account, 8-10x leverage
-- Microstructure plays: 5-10% of account, 5-8x leverage (smaller, faster)
+POSITION SIZING FOR ARB (AGGRESSIVE):
+- Extreme funding (> |0.08%|): 10-15% of account, 18-20x leverage (high conviction arb)
+- Moderate funding (0.03-0.08%): 10-15% of account, 15-18x leverage
+- Liquidation reversal: 10-15% of account, 15-18x leverage
+- Microstructure plays: 10-15% of account, 12-15x leverage (quick in/out)
 - Always verify: allocation_usd * leverage <= 3 * account_balance
 
 ================================================================================
-FINAL CHECKLIST BEFORE TRADE
+FINAL CHECKLIST BEFORE TRADE (ENHANCED WITH REBATES)
 ================================================================================
 □ Clear microstructure edge identified? (funding/liquidation/flow/imbalance)
 □ Timing appropriate? (not right before funding settlement)
@@ -1291,6 +1533,7 @@ FINAL CHECKLIST BEFORE TRADE
 □ No conflicting microstructure signals?
 □ Order book imbalance confirms direction? (if available)
 □ Cross-venue spread supports trade? (if available)
+□ Can execute with limit order to capture rebate?
 
 If ANY checkbox is NO → HOLD is the correct answer.
 
@@ -1361,14 +1604,25 @@ ${LEVERAGE_POLICY}
 ${OUTPUT_FORMAT}
 
 ================================================================================
-ENSEMBLE COLLABORATION
+ENSEMBLE COLLABORATION (ENHANCED WITH RL VOTING)
 ================================================================================
 When multiple analysts agree on direction (>50% consensus), confidence increases:
 - 2/4 analysts agree: +5% confidence boost
 - 3/4 analysts agree: +10% confidence boost
 - 4/4 analysts agree: +15% confidence boost (rare, high conviction)
 
-If you're aware of other analysts' signals, factor consensus into your confidence.
+RL AGENT ENSEMBLE VOTING:
+- Each analyst's RL agent casts a vote (LONG/SHORT/NEUTRAL)
+- Ensemble RL confidence = Average of individual RL confidences
+- If ensemble RL confidence > 70%: +5% additional confidence boost
+- If ensemble RL confidence < 50%: -5% confidence penalty (warning signal)
+
+MONTE CARLO ENSEMBLE:
+- Average Monte Carlo Sharpe across agreeing analysts
+- If average Sharpe > 2.5: +5% confidence boost
+- If average Sharpe < 1.5: REJECT trade (insufficient ensemble edge)
+
+If you're aware of other analysts' signals, factor consensus AND RL ensemble into your confidence.
 
 ================================================================================
 FINAL REMINDERS
@@ -1379,8 +1633,8 @@ FINAL REMINDERS
 - If the market doesn't fit YOUR methodology's criteria, HOLD is correct
 - Confidence should reflect YOUR methodology's signal strength
 - You are competing against other quants - find YOUR edge
-- Include backtest validation in your reasoning when possible
-- Validate your edge: "Similar setups show X% win rate, Sharpe Y"
+- Include RL/Monte Carlo validation in your reasoning when possible
+- Validate your edge: "Monte Carlo: EV +X%, Sharpe Y. RL confirms with Z% confidence"
 `;
 }
 
@@ -1392,11 +1646,11 @@ ${contextJson}
 INSTRUCTIONS:
 1. Apply YOUR methodology's specific signals and scoring system
 2. Calculate signal confluence per YOUR criteria
-3. Run scenario analysis (for Karen) or backtest validation (for others)
+3. Run Monte Carlo simulation (for Karen) or RL validation (for others)
 4. Determine if setup meets YOUR quality threshold
 5. If yes: Output BUY or SELL with proper TP/SL
 6. If no: Output HOLD (no edge per your methodology)
 
-Include backtest validation in your reasoning (e.g., "Similar setups show X% win rate").
+Include RL/Monte Carlo validation in your reasoning (e.g., "Monte Carlo: EV +X%, Sharpe Y. RL confirms with Z% confidence").
 Output valid JSON. Be decisive - either you have an edge or you don't.`;
 }

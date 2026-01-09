@@ -98,7 +98,7 @@ export const ANALYST_PROFILES: Record<string, AnalystAgent> = {
         title: 'Multi-Strategy Risk Quant',
         methodology: 'risk',
         avatarEmoji: '🛡️',
-        description: 'Multi-strategy quant focused on market-neutral approaches and risk-adjusted returns. Combines multiple uncorrelated strategies to generate alpha while minimizing drawdowns. Emphasizes capital preservation and Sharpe ratio optimization. Enhanced with scenario analysis, stress testing, Kelly criterion sizing, and multi-pod hedging.',
+        description: 'Multi-strategy quant focused on market-neutral approaches and risk-adjusted returns. Combines multiple uncorrelated strategies to generate alpha while minimizing drawdowns. Emphasizes capital preservation and Sharpe ratio optimization. Enhanced with scenario analysis, stress testing, Kelly criterion sizing, Monte Carlo simulations (Sharpe > 2.0 target), and multi-pod hedging.',
         focusAreas: [
             'Market-neutral position construction',
             'Portfolio beta hedging',
@@ -112,7 +112,7 @@ export const ANALYST_PROFILES: Record<string, AnalystAgent> = {
             'Funding cost vs expected return',
             'Position concentration limits',
             'Tail risk hedging',
-            'Sharpe ratio optimization (>1.5 target)',
+            'Sharpe ratio optimization (>2.0 target with Monte Carlo)',
             'Backtest validation requirements'
         ],
         biases: [

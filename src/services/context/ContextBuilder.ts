@@ -22,7 +22,8 @@ import {
     convertIndicatorsToMarketData,
 } from '../../types/context';
 import { getTechnicalIndicatorService } from '../indicators/TechnicalIndicatorService';
-import { ANTI_CHURN_RULES, LEVERAGE_POLICY } from '../../constants/prompts/analystPrompt';
+// NOTE: ANTI_CHURN_RULES and LEVERAGE_POLICY are included in the system prompt (buildAnalystPrompt),
+// not in the context, to avoid duplication. Only dynamic risk limits are included here.
 import { RISK_COUNCIL_VETO_TRIGGERS } from '../../constants/analyst/riskCouncil';
 import { GLOBAL_RISK_LIMITS } from '../../constants/analyst/riskLimits';
 import { APPROVED_SYMBOLS } from '../../shared/types/weex';
@@ -182,8 +183,9 @@ export class ContextBuilder {
 
         const instructions: Instructions = {
             assets: TRADING_SYMBOLS,
-            anti_churn_rules: ANTI_CHURN_RULES,
-            leverage_policy: LEVERAGE_POLICY,
+            // NOTE: anti_churn_rules and leverage_policy are included in the system prompt
+            // (buildAnalystPrompt), so we don't duplicate them here in the context.
+            // Only include dynamic risk limits that may change.
             risk_limits: buildRiskRulesString(),
         };
 

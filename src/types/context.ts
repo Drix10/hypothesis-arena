@@ -233,11 +233,17 @@ export interface RiskLimitsConfig {
 
 /**
  * Instructions embedded in context
+ * 
+ * NOTE: anti_churn_rules and leverage_policy are now optional because they are
+ * included in the system prompt (buildAnalystPrompt) to avoid duplication.
+ * Only dynamic data (assets, risk_limits) is required in the context.
  */
 export interface Instructions {
     assets: readonly string[] | string[];
-    anti_churn_rules: string;
-    leverage_policy: string;
+    /** @deprecated Included in system prompt, not context. Optional for backwards compatibility. */
+    anti_churn_rules?: string;
+    /** @deprecated Included in system prompt, not context. Optional for backwards compatibility. */
+    leverage_policy?: string;
     /**
      * Risk limits for the AI to follow.
      * Can be either a structured RiskLimitsConfig object or a formatted string summary.
