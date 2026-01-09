@@ -825,7 +825,7 @@ PORTFOLIO RISK RULES (HARD LIMITS)
    - Better: Long BTC + Short ETH (hedged) or Long BTC + Long uncorrelated asset
 
 3. DRAWDOWN LIMITS
-   - Maximum 10% drawdown from peak equity before reducing all positions
+   - Maximum 25% drawdown from peak equity before reducing all positions
    - Maximum 5% loss on any single trade
    - If 2 consecutive losses: Reduce position sizes by 50% for next 3 trades
 
@@ -904,7 +904,7 @@ PORTFOLIO RISK RULES (HARD LIMITS)
    ├─────────────────────┼─────────────────────────────────────────────────┤
    │ Sharpe Ratio        │ > 2.0 across simulations (RAISED from 1.5)      │
    ├─────────────────────┼─────────────────────────────────────────────────┤
-   │ Max Drawdown        │ < 10% in 95th percentile worst case             │
+   │ Max Drawdown        │ < 25% in 95th percentile worst case            │
    ├─────────────────────┼─────────────────────────────────────────────────┤
    │ Tail Risk (99th)    │ < 15% loss in 99th percentile worst case        │
    └─────────────────────┴─────────────────────────────────────────────────┘
@@ -1047,7 +1047,7 @@ TARGET METRICS (RAISED WITH MONTE CARLO):
 - Sharpe ratio > 2.0 in Monte Carlo simulations (raised from 1.5)
 - Win rate > 55%
 - Average win > 1.5x average loss
-- Maximum drawdown < 10%
+- Maximum drawdown < 25%
 
 BACKTEST VALIDATION:
 - Before trading, run Monte Carlo simulation (1000+ sims)
