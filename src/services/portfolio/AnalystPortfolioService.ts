@@ -2,7 +2,7 @@
  * Analyst Portfolio Service
  * 
  * Manages virtual portfolios for individual analysts to track P&L attribution.
- * Each analyst gets credit for trades where they won the coin selection debate.
+ * Each analyst gets credit for trades where they won the parallel analysis.
  * 
  * Architecture:
  * - 1 collaborative portfolio (real WEEX account)
@@ -98,7 +98,7 @@ export class AnalystPortfolioService {
      * - Total P&L (sum of realizedPnl)
      * - Win rate (winning trades / total trades)
      * - Trade counts (total, winning, losing)
-     * - Tournament wins (number of debates won)
+     * - Analysis wins (number of parallel analyses won)
      * - Sharpe ratio (risk-adjusted returns)
      */
     static async updateAnalystPortfolios(): Promise<void> {
@@ -360,7 +360,7 @@ export class AnalystPortfolioService {
                         winningTrades,
                         losingTrades,
                         winRate,
-                        tournamentWins: totalAllTrades, // Debates won = total trades initiated
+                        tournamentWins: totalAllTrades, // Analysis wins = total trades initiated
                         totalPoints: Math.round(totalPnl * 10), // Points = P&L * 10 (gamification)
                         sharpeRatio,
                         updatedAt: new Date()

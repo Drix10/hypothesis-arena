@@ -26,17 +26,21 @@ export const ANALYST_PROFILES: Record<string, AnalystAgent> = {
         title: 'Statistical Arbitrage Quant',
         methodology: 'technical',
         avatarEmoji: '📊',
-        description: 'Statistical arbitrage specialist focusing on mean reversion and pattern recognition. Uses mathematical models to find short-term pricing inefficiencies across crypto perpetuals. Believes markets are not perfectly efficient and exploits transient anomalies.',
+        description: 'Statistical arbitrage specialist focusing on mean reversion and pattern recognition. Uses mathematical models to find short-term pricing inefficiencies across crypto perpetuals. Believes markets are not perfectly efficient and exploits transient anomalies. Enhanced with cointegration pairs trading, ML pattern clustering, and multi-factor models.',
         focusAreas: [
             'Mean reversion signals (z-scores, Bollinger bands)',
             'Statistical arbitrage pairs trading',
+            'Cointegration & spread trading (BTC-ETH, ETH-SOL)',
+            'ML pattern recognition & clustering',
+            'Multi-factor models (momentum, volatility, mean reversion)',
             'Price pattern recognition via ML',
             'High-frequency signal extraction',
             'Cross-asset correlation breakdowns',
             'Volatility regime detection',
             'Order book imbalance signals',
             'Funding rate mean reversion',
-            'Basis trading (perp vs spot)'
+            'Basis trading (perp vs spot)',
+            'Walk-forward backtesting validation'
         ],
         biases: [
             'Models can overfit to historical patterns',
@@ -58,17 +62,21 @@ export const ANALYST_PROFILES: Record<string, AnalystAgent> = {
         title: 'AI/ML Signals Quant',
         methodology: 'ml',
         avatarEmoji: '🤖',
-        description: 'ML-driven quant leveraging machine learning and alternative data. Uses AI models trained on vast datasets to predict short-term price movements. Combines traditional market data with sentiment, on-chain metrics, and cross-market signals.',
+        description: 'ML-driven quant leveraging machine learning and alternative data. Uses AI models trained on vast datasets to predict short-term price movements. Combines traditional market data with sentiment, on-chain metrics, and cross-market signals. Enhanced with NLP sentiment analysis, unsupervised ML regime detection, and whale flow tracking.',
         focusAreas: [
             'Machine learning price predictions',
-            'Sentiment analysis from social/news',
-            'On-chain flow analysis',
+            'NLP sentiment analysis from social/news',
+            'Sentiment divergence detection',
+            'On-chain whale flow analysis',
+            'Unsupervised ML regime classification (HMM)',
             'Cross-market correlation signals',
             'Regime classification models',
             'Feature engineering from raw data',
             'Ensemble model predictions',
             'Real-time signal adaptation',
-            'Alternative data integration'
+            'Alternative data integration',
+            'Post-liquidation recovery detection',
+            'Multi-source data fusion'
         ],
         biases: [
             'ML models can fail in new regimes',
@@ -90,17 +98,22 @@ export const ANALYST_PROFILES: Record<string, AnalystAgent> = {
         title: 'Multi-Strategy Risk Quant',
         methodology: 'risk',
         avatarEmoji: '🛡️',
-        description: 'Multi-strategy quant focused on market-neutral approaches and risk-adjusted returns. Combines multiple uncorrelated strategies to generate alpha while minimizing drawdowns. Emphasizes capital preservation and Sharpe ratio optimization.',
+        description: 'Multi-strategy quant focused on market-neutral approaches and risk-adjusted returns. Combines multiple uncorrelated strategies to generate alpha while minimizing drawdowns. Emphasizes capital preservation and Sharpe ratio optimization. Enhanced with scenario analysis, stress testing, Kelly criterion sizing, and multi-pod hedging.',
         focusAreas: [
             'Market-neutral position construction',
             'Portfolio beta hedging',
+            'Scenario analysis & stress testing (base/bear/black swan)',
+            'Kelly criterion position sizing',
+            'Multi-pod strategy simulation',
             'Drawdown and VaR limits',
             'Correlation risk monitoring',
             'Leverage optimization',
             'Liquidation distance analysis',
             'Funding cost vs expected return',
             'Position concentration limits',
-            'Tail risk hedging'
+            'Tail risk hedging',
+            'Sharpe ratio optimization (>1.5 target)',
+            'Backtest validation requirements'
         ],
         biases: [
             'May sacrifice upside for risk control',
@@ -122,17 +135,22 @@ export const ANALYST_PROFILES: Record<string, AnalystAgent> = {
         title: 'Liquidity & Arbitrage Quant',
         methodology: 'quant',
         avatarEmoji: '⚡',
-        description: 'Market microstructure specialist focusing on liquidity and arbitrage opportunities. Exploits pricing inefficiencies across exchanges and instruments. Focuses on bid-ask spreads, cross-exchange arb, and ETF/index arbitrage opportunities.',
+        description: 'Market microstructure specialist focusing on liquidity and arbitrage opportunities. Exploits pricing inefficiencies across exchanges and instruments. Focuses on bid-ask spreads, cross-exchange arb, and ETF/index arbitrage opportunities. Enhanced with order book microstructure analysis, cross-venue arbitrage, and liquidity provision models.',
         focusAreas: [
             'Cross-exchange price discrepancies',
             'Funding rate arbitrage',
             'Basis spread opportunities',
+            'Order book microstructure analysis',
+            'Bid/ask imbalance detection',
+            'Cross-venue arbitrage (>0.3% spreads)',
+            'Liquidity provision & maker rebates',
             'Order flow toxicity analysis',
             'Market microstructure signals',
             'Liquidity provision edge',
             'Index vs components arbitrage',
             'Execution cost optimization',
-            'Latency-sensitive opportunities'
+            'Latency-sensitive opportunities',
+            'Liquidation cascade reversal trading'
         ],
         biases: [
             'Arb opportunities are fleeting',

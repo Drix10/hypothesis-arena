@@ -2,7 +2,7 @@
  * Analyst Types for v5.0.0 Parallel Analysis System
  * 
  * Each analyst receives full context and outputs a standardized recommendation.
- * No more turn-by-turn debates - all 4 analyze independently in parallel.
+ * All 4 analyze independently in parallel, then a judge picks the winner.
  */
 
 /**

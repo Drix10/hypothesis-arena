@@ -21,7 +21,7 @@ export interface AnalystAgent {
     description: string;
     /** Topics and metrics the analyst prioritizes (e.g., funding %, TVL) */
     focusAreas: string[];
-    /** Known blind spots or tendencies to watch for in debates */
+    /** Known blind spots or tendencies to watch for in analysis */
     biases: string[];
     /** Collaborative pipeline role as defined in FLOW.md */
     pipelineRole: 'coin_selector' | 'specialist' | 'risk_council';

@@ -152,7 +152,7 @@ interface TradingCycle {
     endTime?: number;
     symbolsAnalyzed: string[];
     tradesExecuted: number;
-    debatesRun: number;
+    analysesRun: number;  // v5.0.0: Renamed from debatesRun - counts parallel analysis runs
     errors: string[];
 }
 
@@ -162,7 +162,7 @@ interface TradingCycle {
 
 /**
  * Urgency levels for position management decisions
- * Used to determine whether to skip Stage 2 debate entirely
+ * Used to determine whether to skip Stage 2 parallel analysis entirely
  */
 type PositionUrgency = 'VERY_URGENT' | 'MODERATE' | 'LOW';
 
@@ -232,7 +232,7 @@ function calculatePositionUrgency(position: {
 interface PreStage2CheckResult {
     canRunStage2: boolean;
     reason: string;
-    action: 'RUN_STAGE_2' | 'DIRECT_MANAGE' | 'LIGHTWEIGHT_DEBATE' | 'SKIP_CYCLE';
+    action: 'RUN_STAGE_2' | 'DIRECT_MANAGE' | 'RULE_BASED_MANAGE' | 'SKIP_CYCLE';  // v5.0.0: Renamed LIGHTWEIGHT_DEBATE to RULE_BASED_MANAGE
     urgentPosition?: PositionWithUrgency;
     allPositions?: PositionWithUrgency[];
     tokensSaved: number; // Estimated tokens saved by skipping/shortcutting
@@ -244,7 +244,7 @@ export class AutonomousTradingEngine extends EventEmitter {
     private cleanupInProgress = false; // FIXED: Guard against concurrent cleanup
     private startLock: Promise<void> | null = null; // Mutex for start operation
     private cycleCount = 0;
-    private totalDebatesRun = 0; // FIXED: Track cumulative debates across all cycles
+    private totalAnalysesRun = 0; // v5.0.0: Track cumulative parallel analyses across all cycles
     private totalTokensSaved = 0; // Track tokens saved by pre-Stage-2 optimization
     private consecutiveFailures = 0; // Track consecutive failures for backoff
     private consecutiveHolds = 0; // Track consecutive HOLD decisions to reduce cycle frequency
@@ -469,7 +469,7 @@ export class AutonomousTradingEngine extends EventEmitter {
     }
 
     /**
-     * PRE-STAGE-2 OPTIMIZATION: Check if we can skip the expensive Stage 2 debate
+     * PRE-STAGE-2 OPTIMIZATION: Check if we can skip the expensive Stage 2 parallel analysis
      * 
      * This method runs BEFORE Stage 2 to save ~8000 tokens when:
      * - Balance is too low to trade
@@ -479,7 +479,7 @@ export class AutonomousTradingEngine extends EventEmitter {
      * @returns Decision on whether to run Stage 2, skip, or go direct to manage
      */
     private async runPreStage2Checks(): Promise<PreStage2CheckResult> {
-        const TOKENS_FULL_DEBATE = 8000;
+        const TOKENS_FULL_ANALYSIS = 8000;  // v5.0.0: Renamed from TOKENS_FULL_DEBATE
         const TOKENS_LIGHTWEIGHT = 3000;
         const TOKENS_DIRECT = 500;
 
@@ -498,13 +498,13 @@ export class AutonomousTradingEngine extends EventEmitter {
         if (!Number.isFinite(currentBalance) || currentBalance < config.autonomous.minBalanceToTrade) {
             logger.info(`\n${'='.repeat(60)}`);
             logger.info(`💰 PRE-CHECK: Insufficient balance ($${currentBalance?.toFixed(2) || 'N/A'} < $${config.autonomous.minBalanceToTrade})`);
-            logger.info(`🎯 ACTION: SKIP CYCLE (saving ~${TOKENS_FULL_DEBATE} tokens)`);
+            logger.info(`🎯 ACTION: SKIP CYCLE (saving ~${TOKENS_FULL_ANALYSIS} tokens)`);
             logger.info(`${'='.repeat(60)}\n`);
             return {
                 canRunStage2: false,
                 reason: `Insufficient balance: $${currentBalance?.toFixed(2) || 'N/A'}`,
                 action: 'SKIP_CYCLE',
-                tokensSaved: TOKENS_FULL_DEBATE
+                tokensSaved: TOKENS_FULL_ANALYSIS
             };
         }
 
@@ -515,32 +515,32 @@ export class AutonomousTradingEngine extends EventEmitter {
         if (weeklyPnL && Number.isFinite(weeklyPnL.week) && weeklyPnL.week < -RISK_COUNCIL_VETO_TRIGGERS.MAX_WEEKLY_DRAWDOWN) {
             logger.info(`\n${'='.repeat(60)}`);
             logger.info(`📉 PRE-CHECK: Weekly drawdown exceeded (${weeklyPnL.week.toFixed(1)}% < -${RISK_COUNCIL_VETO_TRIGGERS.MAX_WEEKLY_DRAWDOWN}%)`);
-            logger.info(`🎯 ACTION: SKIP CYCLE (saving ~${TOKENS_FULL_DEBATE} tokens)`);
+            logger.info(`🎯 ACTION: SKIP CYCLE (saving ~${TOKENS_FULL_ANALYSIS} tokens)`);
             logger.info(`${'='.repeat(60)}\n`);
             return {
                 canRunStage2: false,
                 reason: `Weekly drawdown: ${weeklyPnL.week.toFixed(1)}%`,
                 action: 'SKIP_CYCLE',
-                tokensSaved: TOKENS_FULL_DEBATE
+                tokensSaved: TOKENS_FULL_ANALYSIS
             };
         }
 
         // =====================================================================
         // CHECK 2.5: DAILY TRADE LIMIT
-        // Skip expensive debates if we've already hit max daily trades
+        // Skip expensive parallel analysis if we've already hit max daily trades
         // =====================================================================
         const dailyTradeCount = await this.getDailyTradeCount();
         if (dailyTradeCount >= config.trading.maxDailyTrades) {
             logger.info(`\n${'='.repeat(60)}`);
             logger.info(`🚫 PRE-CHECK: Max daily trades reached (${dailyTradeCount}/${config.trading.maxDailyTrades})`);
-            logger.info(`🎯 ACTION: SKIP CYCLE (saving ~${TOKENS_FULL_DEBATE} tokens)`);
+            logger.info(`🎯 ACTION: SKIP CYCLE (saving ~${TOKENS_FULL_ANALYSIS} tokens)`);
             logger.info(`💡 Daily trade counter resets at midnight UTC`);
             logger.info(`${'='.repeat(60)}\n`);
             return {
                 canRunStage2: false,
                 reason: `Max daily trades: ${dailyTradeCount}/${config.trading.maxDailyTrades}`,
                 action: 'SKIP_CYCLE',
-                tokensSaved: TOKENS_FULL_DEBATE
+                tokensSaved: TOKENS_FULL_ANALYSIS
             };
         }
 
@@ -682,10 +682,10 @@ export class AutonomousTradingEngine extends EventEmitter {
         logger.info(`   Urgency: ${veryUrgent.length} VERY_URGENT, ${moderate.length} MODERATE, ${positionsWithUrgency.length - veryUrgent.length - moderate.length} LOW`);
 
         if (veryUrgent.length > 0) {
-            // VERY URGENT: Go direct to Karen (skip debate entirely)
+            // VERY URGENT: Go direct to rule-based management (skip parallel analysis entirely)
             const urgent = veryUrgent[0];
             logger.info(`🚨 VERY URGENT: ${urgent.symbol} - ${urgent.urgencyReason}`);
-            logger.info(`🎯 ACTION: DIRECT MANAGE (saving ~${TOKENS_FULL_DEBATE - TOKENS_DIRECT} tokens)`);
+            logger.info(`🎯 ACTION: DIRECT MANAGE (saving ~${TOKENS_FULL_ANALYSIS - TOKENS_DIRECT} tokens)`);
             logger.info(`${'='.repeat(60)}\n`);
             return {
                 canRunStage2: false,
@@ -693,36 +693,36 @@ export class AutonomousTradingEngine extends EventEmitter {
                 action: 'DIRECT_MANAGE',
                 urgentPosition: urgent,
                 allPositions: positionsWithUrgency,
-                tokensSaved: TOKENS_FULL_DEBATE - TOKENS_DIRECT
+                tokensSaved: TOKENS_FULL_ANALYSIS - TOKENS_DIRECT
             };
         }
 
         if (moderate.length > 0) {
-            // MODERATE: Run lightweight debate (2-3 analysts instead of 8)
+            // MODERATE: Use rule-based position management (v5.0.0 - no AI call)
             const mod = moderate[0];
             logger.info(`⚠️ MODERATE: ${mod.symbol} - ${mod.urgencyReason}`);
-            logger.info(`🎯 ACTION: LIGHTWEIGHT MANAGE DEBATE (saving ~${TOKENS_FULL_DEBATE - TOKENS_LIGHTWEIGHT} tokens)`);
+            logger.info(`🎯 ACTION: RULE-BASED MANAGE (saving ~${TOKENS_FULL_ANALYSIS - TOKENS_LIGHTWEIGHT} tokens)`);
             logger.info(`${'='.repeat(60)}\n`);
             return {
                 canRunStage2: false,
                 reason: `Moderate urgency: ${mod.urgencyReason}`,
-                action: 'LIGHTWEIGHT_DEBATE',
+                action: 'RULE_BASED_MANAGE',
                 urgentPosition: mod,
                 allPositions: positionsWithUrgency,
-                tokensSaved: TOKENS_FULL_DEBATE - TOKENS_LIGHTWEIGHT
+                tokensSaved: TOKENS_FULL_ANALYSIS - TOKENS_LIGHTWEIGHT
             };
         }
 
         // All positions are LOW urgency - skip cycle entirely
         logger.info(`✅ All positions LOW urgency - nothing to do`);
-        logger.info(`🎯 ACTION: SKIP CYCLE (saving ~${TOKENS_FULL_DEBATE} tokens)`);
+        logger.info(`🎯 ACTION: SKIP CYCLE (saving ~${TOKENS_FULL_ANALYSIS} tokens)`);
         logger.info(`${'='.repeat(60)}\n`);
         return {
             canRunStage2: false,
             reason: 'At limits, no urgent positions',
             action: 'SKIP_CYCLE',
             allPositions: positionsWithUrgency,
-            tokensSaved: TOKENS_FULL_DEBATE
+            tokensSaved: TOKENS_FULL_ANALYSIS
         };
     }
 
@@ -869,10 +869,10 @@ export class AutonomousTradingEngine extends EventEmitter {
         this.currentCycle.endTime = Date.now();
         const cycleDuration = this.currentCycle.endTime - cycleStart;
 
-        // FIXED: Accumulate total debates across all cycles for frontend display
-        this.totalDebatesRun += this.currentCycle.debatesRun;
+        // v5.0.0: Accumulate total analyses across all cycles for frontend display
+        this.totalAnalysesRun += this.currentCycle.analysesRun;
 
-        logger.info(`✅ Cycle #${this.cycleCount} complete (${reason}): ${this.currentCycle.tradesExecuted} trades, ${this.currentCycle.debatesRun} debates (${(cycleDuration / 1000).toFixed(1)}s)`);
+        logger.info(`✅ Cycle #${this.cycleCount} complete (${reason}): ${this.currentCycle.tradesExecuted} trades, ${this.currentCycle.analysesRun} analyses (${(cycleDuration / 1000).toFixed(1)}s)`);
 
         // Update analyst virtual portfolios with latest P&L attribution
         // Only update if trades were executed this cycle
@@ -957,8 +957,8 @@ export class AutonomousTradingEngine extends EventEmitter {
             dryRun: config.autonomous.dryRun,
             analysts,
             currentCycle: this.currentCycle,
-            // FIXED: Include totalDebatesRun for frontend display
-            totalDebatesRun: this.totalDebatesRun,
+            // v5.0.0: Include totalAnalysesRun for frontend display
+            totalAnalysesRun: this.totalAnalysesRun,
             totalTokensSaved: this.totalTokensSaved, // Pre-Stage-2 optimization savings
             sharedPortfolio: {
                 balance: sharedBalance,
@@ -968,7 +968,7 @@ export class AutonomousTradingEngine extends EventEmitter {
             stats: {
                 totalTrades: sharedTotalTrades,
                 tradesThisCycle: this.currentCycle?.tradesExecuted || 0,
-                totalDebates: this.totalDebatesRun,
+                totalAnalyses: this.totalAnalysesRun,  // v5.0.0: Renamed from totalDebates
                 tokensSaved: this.totalTokensSaved,
                 avgCycleTime: this.CYCLE_INTERVAL_MS,
             },
@@ -1073,7 +1073,7 @@ export class AutonomousTradingEngine extends EventEmitter {
             }
 
             // FIXED: Initialize analyst virtual portfolios for P&L attribution
-            // Each analyst gets a virtual portfolio to track their debate wins
+            // Each analyst gets a virtual portfolio to track their analysis wins
             await AnalystPortfolioService.initializeAnalystPortfolios();
 
             // Get current positions from WEEX (shared across all analysts)
@@ -1132,7 +1132,7 @@ export class AutonomousTradingEngine extends EventEmitter {
                 startTime: cycleStart,
                 symbolsAnalyzed: [],
                 tradesExecuted: 0,
-                debatesRun: 0,
+                analysesRun: 0,  // v5.0.0: Renamed from debatesRun
                 errors: [],
             };
 
@@ -1202,7 +1202,7 @@ export class AutonomousTradingEngine extends EventEmitter {
             if (this.currentCycle) {
                 this.currentCycle.endTime = Date.now();
                 const cycleDuration = this.currentCycle.endTime - cycleStart;
-                logger.info(`✅ Cycle #${this.cycleCount} complete (no data): 0 trades, 0 debates (${(cycleDuration / 1000).toFixed(1)}s)`);
+                logger.info(`✅ Cycle #${this.cycleCount} complete (no data): 0 trades, 0 analyses (${(cycleDuration / 1000).toFixed(1)}s)`);
                 this.emit('cycleComplete', this.currentCycle);
             }
 
@@ -1219,7 +1219,7 @@ export class AutonomousTradingEngine extends EventEmitter {
         }
 
         // =================================================================
-        // PRE-STAGE-2 OPTIMIZATION: Check if we can skip expensive debate
+        // PRE-STAGE-2 OPTIMIZATION: Check if we can skip expensive parallel analysis
         // Saves ~8000 tokens when we can't trade anyway
         // =================================================================
         const preCheck = await this.runPreStage2Checks();
@@ -1236,7 +1236,7 @@ export class AutonomousTradingEngine extends EventEmitter {
                     return;
 
                 case 'DIRECT_MANAGE':
-                    // Very urgent - go directly to Karen (no debate)
+                    // Very urgent - go directly to rule-based management (no AI call)
                     if (preCheck.urgentPosition && preCheck.allPositions && preCheck.allPositions.length > 0) {
                         logger.info(`🚨 DIRECT MANAGE: ${preCheck.urgentPosition.symbol} (${preCheck.urgentPosition.urgencyReason})`);
                         const result = await this.executeFallbackManagement(
@@ -1256,8 +1256,8 @@ export class AutonomousTradingEngine extends EventEmitter {
                     }
                     return;
 
-                case 'LIGHTWEIGHT_DEBATE':
-                    // v5.0.0: Use rule-based management instead of lightweight debate
+                case 'RULE_BASED_MANAGE':
+                    // v5.0.0: Use rule-based management (no AI call)
                     if (preCheck.urgentPosition && preCheck.allPositions && preCheck.allPositions.length > 0) {
                         logger.info(`⚠️ RULE-BASED MANAGE: ${preCheck.urgentPosition.symbol} (${preCheck.urgentPosition.urgencyReason})`);
                         const result = await this.executeFallbackManagement(
@@ -1349,10 +1349,10 @@ export class AutonomousTradingEngine extends EventEmitter {
         let decision: FinalDecision;
         try {
             decision = await flowService.runParallelAnalysis(accountBalance, flowPositions, flowMarketData);
-            // FIXED: Increment debatesRun when parallel analysis completes successfully
-            // This tracks the number of AI debates (4 analysts + 1 judge = 1 debate)
+            // v5.0.0: Increment analysesRun when parallel analysis completes successfully
+            // This tracks the number of parallel analysis runs (4 analysts + 1 judge = 1 analysis)
             if (this.currentCycle) {
-                this.currentCycle.debatesRun++;
+                this.currentCycle.analysesRun++;
             }
         } catch (error) {
             logger.error('Parallel analysis failed:', error);
@@ -1501,10 +1501,13 @@ export class AutonomousTradingEngine extends EventEmitter {
         const specs = getContractSpecs(decision.symbol);
         let leverage = decision.leverage;
 
-        // Basic validation
+        // Basic validation - invalid leverage should have been caught by CollaborativeFlow
+        // but we check again as a defensive measure
         if (!Number.isFinite(leverage) || leverage <= 0) {
-            logger.warn(`Invalid leverage from AI: ${leverage}, using 5x default`);
-            leverage = 5;
+            // FIXED: Return false instead of using arbitrary default
+            // This is consistent with CollaborativeFlow returning HOLD for invalid leverage
+            logger.error(`Invalid leverage from AI: ${leverage} (type: ${typeof leverage}), aborting trade`);
+            return false;
         }
 
         // Only clamp to exchange-specific limits (not our conservative limits)
@@ -2411,7 +2414,7 @@ export class AutonomousTradingEngine extends EventEmitter {
     /**
      * Record management trade to database (shared helper)
      * 
-     * Used by both lightweight debates and fallback management to record position closures.
+     * Used by rule-based management and fallback management to record position closures.
      * This ensures all position closures are tracked for P&L reporting.
      */
     private async recordManagementTrade(
@@ -2583,8 +2586,8 @@ export class AutonomousTradingEngine extends EventEmitter {
             this.consecutiveHolds = 0;
             this.mainLoopPromise = null;
 
-            // FIXED: Reset totalDebatesRun to prevent stale count on restart
-            this.totalDebatesRun = 0;
+            // v5.0.0: Reset totalAnalysesRun to prevent stale count on restart
+            this.totalAnalysesRun = 0;
             this.totalTokensSaved = 0;
 
             // FIXED: Reset contract specs tracker to force fresh fetch on restart
