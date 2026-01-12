@@ -2,7 +2,7 @@
  * Hypothesis Arena - Premium Frontend Application
  * AI-powered autonomous crypto trading platform
  *
- * @version 5.0.0
+ * @version 5.3.0
  * @author Hypothesis Arena Team
  * @license MIT
  */
@@ -177,6 +177,9 @@ function attachEventListeners() {
       }
     });
   }
+
+  // Debug & Admin event listeners (v5.3.0)
+  attachDebugEventListeners();
 }
 
 function handleKeyboardShortcuts(e) {
@@ -913,6 +916,690 @@ async function closePosition(symbol, side, size) {
 }
 
 // ============================================================================
+// DEBUG & ADMIN (v5.3.0)
+// ============================================================================
+
+// State for debug panel
+const debugState = {
+  isActionPending: false,
+};
+
+function attachDebugEventListeners() {
+  // Debug buttons
+  document
+    .getElementById("btn-view-journal")
+    ?.addEventListener("click", debounce(viewJournal, CONFIG.DEBOUNCE_DELAY));
+  document
+    .getElementById("btn-view-tracked")
+    ?.addEventListener(
+      "click",
+      debounce(viewTrackedTrades, CONFIG.DEBOUNCE_DELAY)
+    );
+  document
+    .getElementById("btn-view-sentiment")
+    ?.addEventListener("click", debounce(viewSentiment, CONFIG.DEBOUNCE_DELAY));
+  document
+    .getElementById("btn-view-regime")
+    ?.addEventListener("click", debounce(viewRegime, CONFIG.DEBOUNCE_DELAY));
+
+  // Admin buttons
+  document
+    .getElementById("btn-clear-caches")
+    ?.addEventListener("click", debounce(clearCaches, CONFIG.DEBOUNCE_DELAY));
+  document
+    .getElementById("btn-clear-journal")
+    ?.addEventListener("click", debounce(clearJournal, CONFIG.DEBOUNCE_DELAY));
+  document
+    .getElementById("btn-clear-tracked")
+    ?.addEventListener(
+      "click",
+      debounce(clearTrackedTrades, CONFIG.DEBOUNCE_DELAY)
+    );
+
+  // Close debug output
+  document
+    .getElementById("btn-close-debug")
+    ?.addEventListener("click", closeDebugOutput);
+}
+
+async function viewJournal() {
+  if (debugState.isActionPending) return;
+  debugState.isActionPending = true;
+
+  const btn = document.getElementById("btn-view-journal");
+  if (btn) {
+    btn.disabled = true;
+    btn.setAttribute("aria-busy", "true");
+  }
+
+  // FIXED: Add timeout to prevent hanging requests
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+  try {
+    const res = await fetch(
+      `${CONFIG.API_BASE}/autonomous/debug/journal?limit=20`,
+      { signal: controller.signal }
+    );
+    clearTimeout(timeoutId);
+    const data = await res.json();
+
+    if (data.success) {
+      const entries = data.data || [];
+      showDebugOutput("Trade Journal", renderJournalEntries(entries));
+    } else {
+      showAlert(`❌ Failed: ${data.error || "Unknown error"}`, "error");
+    }
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err.name === "AbortError") {
+      showAlert("❌ Request timeout - please try again", "error");
+    } else {
+      showAlert(`❌ Error: ${err.message}`, "error");
+    }
+  } finally {
+    debugState.isActionPending = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.removeAttribute("aria-busy");
+    }
+  }
+}
+
+async function viewTrackedTrades() {
+  if (debugState.isActionPending) return;
+  debugState.isActionPending = true;
+
+  const btn = document.getElementById("btn-view-tracked");
+  if (btn) {
+    btn.disabled = true;
+    btn.setAttribute("aria-busy", "true");
+  }
+
+  // FIXED: Add timeout to prevent hanging requests
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+  try {
+    const res = await fetch(
+      `${CONFIG.API_BASE}/autonomous/debug/tracked-trades`,
+      { signal: controller.signal }
+    );
+    clearTimeout(timeoutId);
+    const data = await res.json();
+
+    if (data.success) {
+      const trades = data.data || [];
+      showDebugOutput("Tracked Trades", renderTrackedTrades(trades));
+    } else {
+      showAlert(`❌ Failed: ${data.error || "Unknown error"}`, "error");
+    }
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err.name === "AbortError") {
+      showAlert("❌ Request timeout - please try again", "error");
+    } else {
+      showAlert(`❌ Error: ${err.message}`, "error");
+    }
+  } finally {
+    debugState.isActionPending = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.removeAttribute("aria-busy");
+    }
+  }
+}
+
+async function viewSentiment() {
+  if (debugState.isActionPending) return;
+  debugState.isActionPending = true;
+
+  const btn = document.getElementById("btn-view-sentiment");
+  if (btn) {
+    btn.disabled = true;
+    btn.setAttribute("aria-busy", "true");
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+  try {
+    const res = await fetch(`${CONFIG.API_BASE}/autonomous/debug/sentiment`, {
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    const data = await res.json();
+
+    if (data.success) {
+      showDebugOutput("Market Sentiment", renderSentiment(data.data));
+    } else {
+      showAlert(`❌ Failed: ${data.error || "Unknown error"}`, "error");
+    }
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err.name === "AbortError") {
+      showAlert("❌ Request timeout - please try again", "error");
+    } else {
+      showAlert(`❌ Error: ${err.message}`, "error");
+    }
+  } finally {
+    debugState.isActionPending = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.removeAttribute("aria-busy");
+    }
+  }
+}
+
+async function viewRegime() {
+  if (debugState.isActionPending) return;
+  debugState.isActionPending = true;
+
+  const btn = document.getElementById("btn-view-regime");
+  if (btn) {
+    btn.disabled = true;
+    btn.setAttribute("aria-busy", "true");
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+  try {
+    // Get regime for BTC as the primary indicator
+    const res = await fetch(
+      `${CONFIG.API_BASE}/autonomous/debug/regime/cmt_btcusdt`,
+      { signal: controller.signal }
+    );
+    clearTimeout(timeoutId);
+    const data = await res.json();
+
+    if (data.success) {
+      showDebugOutput("Market Regime (BTC)", renderRegime(data.data));
+    } else {
+      showAlert(`❌ Failed: ${data.error || "Unknown error"}`, "error");
+    }
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err.name === "AbortError") {
+      showAlert("❌ Request timeout - please try again", "error");
+    } else {
+      showAlert(`❌ Error: ${err.message}`, "error");
+    }
+  } finally {
+    debugState.isActionPending = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.removeAttribute("aria-busy");
+    }
+  }
+}
+
+async function clearCaches() {
+  if (debugState.isActionPending) return;
+
+  if (!confirm("Clear all service caches (sentiment, quant)?")) {
+    return;
+  }
+
+  debugState.isActionPending = true;
+  const btn = document.getElementById("btn-clear-caches");
+  if (btn) {
+    btn.disabled = true;
+    btn.setAttribute("aria-busy", "true");
+  }
+
+  // FIXED: Add timeout to prevent hanging requests
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+  try {
+    const res = await fetch(
+      `${CONFIG.API_BASE}/autonomous/admin/clear-caches`,
+      { method: "POST", signal: controller.signal }
+    );
+    clearTimeout(timeoutId);
+    const data = await res.json();
+
+    if (data.success) {
+      showAlert("✅ All caches cleared", "success");
+    } else {
+      showAlert(`❌ Failed: ${data.error || "Unknown error"}`, "error");
+    }
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err.name === "AbortError") {
+      showAlert("❌ Request timeout - please try again", "error");
+    } else {
+      showAlert(`❌ Error: ${err.message}`, "error");
+    }
+  } finally {
+    debugState.isActionPending = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.removeAttribute("aria-busy");
+    }
+  }
+}
+
+async function clearJournal() {
+  if (debugState.isActionPending) return;
+
+  if (
+    !confirm(
+      "⚠️ Clear trade journal?\n\nThis action is IRREVERSIBLE and will permanently delete all trade journal entries, resetting the learning loop.\n\nOnly use for testing!"
+    )
+  ) {
+    return;
+  }
+
+  debugState.isActionPending = true;
+  const btn = document.getElementById("btn-clear-journal");
+  if (btn) {
+    btn.disabled = true;
+    btn.setAttribute("aria-busy", "true");
+  }
+
+  // FIXED: Add timeout to prevent hanging requests
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+  try {
+    const res = await fetch(
+      `${CONFIG.API_BASE}/autonomous/admin/clear-journal`,
+      { method: "POST", signal: controller.signal }
+    );
+    clearTimeout(timeoutId);
+    const data = await res.json();
+
+    if (data.success) {
+      showAlert("✅ Trade journal cleared", "success");
+      closeDebugOutput();
+    } else {
+      showAlert(`❌ Failed: ${data.error || "Unknown error"}`, "error");
+    }
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err.name === "AbortError") {
+      showAlert("❌ Request timeout - please try again", "error");
+    } else {
+      showAlert(`❌ Error: ${err.message}`, "error");
+    }
+  } finally {
+    debugState.isActionPending = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.removeAttribute("aria-busy");
+    }
+  }
+}
+
+async function clearTrackedTrades() {
+  if (debugState.isActionPending) return;
+
+  if (
+    !confirm(
+      "⚠️ Clear tracked trades?\n\nThis action is IRREVERSIBLE and will permanently delete all tracked trade data, resetting position tracking.\n\nOnly use for testing!"
+    )
+  ) {
+    return;
+  }
+
+  debugState.isActionPending = true;
+  const btn = document.getElementById("btn-clear-tracked");
+  if (btn) {
+    btn.disabled = true;
+    btn.setAttribute("aria-busy", "true");
+  }
+
+  // FIXED: Add timeout to prevent hanging requests
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+  try {
+    const res = await fetch(
+      `${CONFIG.API_BASE}/autonomous/admin/clear-tracked-trades`,
+      { method: "POST", signal: controller.signal }
+    );
+    clearTimeout(timeoutId);
+    const data = await res.json();
+
+    if (data.success) {
+      showAlert("✅ Tracked trades cleared", "success");
+      closeDebugOutput();
+    } else {
+      showAlert(`❌ Failed: ${data.error || "Unknown error"}`, "error");
+    }
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err.name === "AbortError") {
+      showAlert("❌ Request timeout - please try again", "error");
+    } else {
+      showAlert(`❌ Error: ${err.message}`, "error");
+    }
+  } finally {
+    debugState.isActionPending = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.removeAttribute("aria-busy");
+    }
+  }
+}
+
+function showDebugOutput(title, content) {
+  const output = document.getElementById("debug-output");
+  const titleEl = document.getElementById("debug-output-title");
+  const contentEl = document.getElementById("debug-output-content");
+
+  if (!output || !titleEl || !contentEl) return;
+
+  titleEl.textContent = title;
+  contentEl.innerHTML = content;
+  output.classList.remove("hidden");
+}
+
+function closeDebugOutput() {
+  const output = document.getElementById("debug-output");
+  if (output) {
+    output.classList.add("hidden");
+  }
+}
+
+function renderJournalEntries(entries) {
+  if (!entries || entries.length === 0) {
+    return '<div class="empty-state"><span class="empty-icon">📓</span><span class="empty-text">No journal entries</span></div>';
+  }
+
+  return entries
+    .map((entry) => {
+      const outcomeClass =
+        entry.outcome === "win"
+          ? "positive"
+          : entry.outcome === "loss"
+          ? "negative"
+          : "";
+
+      // FIXED: Safe number formatting with null/NaN checks
+      const zScoreDisplay =
+        entry.entryZScore != null && Number.isFinite(entry.entryZScore)
+          ? entry.entryZScore.toFixed(2)
+          : "--";
+      const holdTimeDisplay =
+        entry.holdTimeHours != null && Number.isFinite(entry.holdTimeHours)
+          ? entry.holdTimeHours.toFixed(1) + "h"
+          : "--";
+
+      return `
+      <div class="debug-entry">
+        <div class="debug-entry-header">
+          <span class="debug-entry-id">${escapeHtml(
+            entry.tradeId || entry.id || "N/A"
+          )}</span>
+          <span class="debug-entry-time">${formatTime(entry.createdAt)}</span>
+        </div>
+        <div class="debug-entry-details">
+          <div class="debug-detail">
+            <span class="debug-detail-label">Regime</span>
+            <span class="debug-detail-value">${escapeHtml(
+              entry.entryRegime || "--"
+            )}</span>
+          </div>
+          <div class="debug-detail">
+            <span class="debug-detail-label">Z-Score</span>
+            <span class="debug-detail-value">${zScoreDisplay}</span>
+          </div>
+          <div class="debug-detail">
+            <span class="debug-detail-label">Outcome</span>
+            <span class="debug-detail-value ${outcomeClass}">${escapeHtml(
+        entry.outcome || "--"
+      )}</span>
+          </div>
+          <div class="debug-detail">
+            <span class="debug-detail-label">Hold Time</span>
+            <span class="debug-detail-value">${holdTimeDisplay}</span>
+          </div>
+        </div>
+        ${
+          entry.lessonsLearned
+            ? `<div class="debug-detail" style="margin-top: var(--space-xs);">
+            <span class="debug-detail-label">Lesson</span>
+            <span class="debug-detail-value">${escapeHtml(
+              entry.lessonsLearned
+            )}</span>
+          </div>`
+            : ""
+        }
+      </div>
+    `;
+    })
+    .join("");
+}
+
+function renderTrackedTrades(trades) {
+  if (!trades || trades.length === 0) {
+    return '<div class="empty-state"><span class="empty-icon">🎯</span><span class="empty-text">No tracked trades</span></div>';
+  }
+
+  // Allowlist for valid side classes
+  const validSideClasses = {
+    buy: "buy",
+    sell: "sell",
+    long: "buy",
+    short: "sell",
+  };
+
+  return trades
+    .map((trade) => {
+      const rawSide = (trade.side || "").toLowerCase();
+      // Sanitize sideClass to only allow known values
+      const sideClass = validSideClasses[rawSide] || "unknown";
+      return `
+      <div class="debug-entry">
+        <div class="debug-entry-header">
+          <span class="debug-entry-id">${escapeHtml(
+            formatSymbol(trade.symbol)
+          )}</span>
+          <span class="debug-entry-time">${formatTime(trade.entryTime)}</span>
+        </div>
+        <div class="debug-entry-details">
+          <div class="debug-detail">
+            <span class="debug-detail-label">Side</span>
+            <span class="debug-detail-value ${sideClass}">${escapeHtml(
+        trade.side || "--"
+      )}</span>
+          </div>
+          <div class="debug-detail">
+            <span class="debug-detail-label">Entry</span>
+            <span class="debug-detail-value">${formatPrice(
+              trade.entryPrice
+            )}</span>
+          </div>
+          <div class="debug-detail">
+            <span class="debug-detail-label">Size</span>
+            <span class="debug-detail-value">${
+              trade.size != null && Number.isFinite(Number(trade.size))
+                ? escapeHtml(String(trade.size))
+                : "--"
+            }</span>
+          </div>
+          <div class="debug-detail">
+            <span class="debug-detail-label">Leverage</span>
+            <span class="debug-detail-value">${
+              trade.leverage != null && Number.isFinite(Number(trade.leverage))
+                ? escapeHtml(String(trade.leverage)) + "x"
+                : "--"
+            }</span>
+          </div>
+        </div>
+        ${
+          trade.exitPlan
+            ? `<div class="debug-detail" style="margin-top: var(--space-xs);">
+            <span class="debug-detail-label">Exit Plan</span>
+            <span class="debug-detail-value">${escapeHtml(
+              trade.exitPlan
+            )}</span>
+          </div>`
+            : ""
+        }
+      </div>
+    `;
+    })
+    .join("");
+}
+
+function renderSentiment(data) {
+  if (!data || !data.sentiment) {
+    return '<div class="empty-state"><span class="empty-icon">😊</span><span class="empty-text">No sentiment data</span></div>';
+  }
+
+  const s = data.sentiment;
+
+  // Safely access nested properties with fallbacks
+  const fearGreedIndex = s.market?.fearGreedIndex ?? null;
+  const fearGreedClass =
+    fearGreedIndex != null && fearGreedIndex < 30
+      ? "negative"
+      : fearGreedIndex != null && fearGreedIndex > 70
+      ? "positive"
+      : "";
+  const fearGreedDisplay = fearGreedIndex != null ? fearGreedIndex : "--";
+  const fearGreedClassification = s.market?.fearGreedClassification || "--";
+  const btcScore = parseFloat(s.btc?.score);
+  const ethScore = parseFloat(s.eth?.score);
+  const sentimentTrend = s.market?.sentimentTrend || "--";
+
+  return `
+    <div class="debug-entry">
+      <div class="debug-entry-header">
+        <span class="debug-entry-id">Market Sentiment</span>
+        <span class="debug-entry-time">${formatTime(s.timestamp)}</span>
+      </div>
+      <div class="debug-entry-details">
+        <div class="debug-detail">
+          <span class="debug-detail-label">Fear & Greed</span>
+          <span class="debug-detail-value ${fearGreedClass}">${escapeHtml(
+    String(fearGreedDisplay)
+  )} (${escapeHtml(fearGreedClassification)})</span>
+        </div>
+        <div class="debug-detail">
+          <span class="debug-detail-label">BTC Sentiment</span>
+          <span class="debug-detail-value">${
+            btcScore != null && Number.isFinite(btcScore)
+              ? btcScore.toFixed(2)
+              : "--"
+          }</span>
+        </div>
+        <div class="debug-detail">
+          <span class="debug-detail-label">ETH Sentiment</span>
+          <span class="debug-detail-value">${
+            ethScore != null && Number.isFinite(ethScore)
+              ? ethScore.toFixed(2)
+              : "--"
+          }</span>
+        </div>
+        <div class="debug-detail">
+          <span class="debug-detail-label">Trend</span>
+          <span class="debug-detail-value">${escapeHtml(sentimentTrend)}</span>
+        </div>
+      </div>
+      ${
+        data.formatted
+          ? `<div class="debug-detail" style="margin-top: var(--space-xs);">
+          <span class="debug-detail-label">Formatted</span>
+          <span class="debug-detail-value" style="font-size: 0.65rem; white-space: pre-wrap;">${escapeHtml(
+            data.formatted
+          )}</span>
+        </div>`
+          : ""
+      }
+    </div>
+  `;
+}
+
+function renderRegime(data) {
+  if (!data || !data.regime) {
+    return '<div class="empty-state"><span class="empty-icon">📈</span><span class="empty-text">No regime data</span></div>';
+  }
+
+  const r = data.regime;
+
+  // Safely coerce properties to safe types with fallbacks
+  const overallRegime = String(r.overallRegime || "--");
+  const tradingDifficulty = String(r.tradingDifficulty || "--");
+  const adx = Number(r.adx);
+  const volatilityState = String(
+    r.volatilityState || r.volatilityRegime || "--"
+  );
+  const recommendation =
+    r.recommendation || r.recommendedStrategy
+      ? String(r.recommendation || r.recommendedStrategy)
+      : null;
+
+  const regimeClass =
+    overallRegime === "trending"
+      ? "positive"
+      : overallRegime === "volatile"
+      ? "negative"
+      : "";
+  const difficultyClass =
+    tradingDifficulty === "easy"
+      ? "positive"
+      : tradingDifficulty === "hard" || tradingDifficulty === "extreme"
+      ? "negative"
+      : "";
+
+  return `
+    <div class="debug-entry">
+      <div class="debug-entry-header">
+        <span class="debug-entry-id">${escapeHtml(data.symbol || "BTC")}</span>
+        <span class="debug-entry-time">${formatTime(r.timestamp)}</span>
+      </div>
+      <div class="debug-entry-details">
+        <div class="debug-detail">
+          <span class="debug-detail-label">Regime</span>
+          <span class="debug-detail-value ${regimeClass}">${escapeHtml(
+    overallRegime.toUpperCase()
+  )}</span>
+        </div>
+        <div class="debug-detail">
+          <span class="debug-detail-label">Difficulty</span>
+          <span class="debug-detail-value ${difficultyClass}">${escapeHtml(
+    tradingDifficulty
+  )}</span>
+        </div>
+        <div class="debug-detail">
+          <span class="debug-detail-label">ADX</span>
+          <span class="debug-detail-value">${
+            Number.isFinite(adx) ? adx.toFixed(1) : "--"
+          }</span>
+        </div>
+        <div class="debug-detail">
+          <span class="debug-detail-label">Volatility</span>
+          <span class="debug-detail-value">${escapeHtml(volatilityState)}</span>
+        </div>
+      </div>
+      ${
+        recommendation
+          ? `<div class="debug-detail" style="margin-top: var(--space-xs);">
+          <span class="debug-detail-label">Recommendation</span>
+          <span class="debug-detail-value">${escapeHtml(recommendation)}</span>
+        </div>`
+          : ""
+      }
+      ${
+        data.formatted
+          ? `<div class="debug-detail" style="margin-top: var(--space-xs);">
+          <span class="debug-detail-label">Formatted</span>
+          <span class="debug-detail-value" style="font-size: 0.65rem; white-space: pre-wrap;">${escapeHtml(
+            data.formatted
+          )}</span>
+        </div>`
+          : ""
+      }
+    </div>
+  `;
+}
+
+// ============================================================================
 // ALERTS
 // ============================================================================
 
@@ -1008,9 +1695,15 @@ function formatNumber(value) {
 }
 
 function formatTime(timestamp) {
-  if (!timestamp) return "--:--";
-  const date = new Date(timestamp);
-  return date.toLocaleTimeString("en-US", { hour12: false });
+  if (!timestamp) return "--";
+  try {
+    const date = new Date(timestamp);
+    // Validate the date is valid (not NaN)
+    if (!Number.isFinite(date.getTime())) return "--";
+    return date.toLocaleTimeString("en-US", { hour12: false });
+  } catch {
+    return "--";
+  }
 }
 
 function formatSymbol(symbol) {

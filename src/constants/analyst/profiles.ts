@@ -62,12 +62,11 @@ export const ANALYST_PROFILES: Record<string, AnalystAgent> = {
         title: 'AI/ML Signals Quant',
         methodology: 'ml',
         avatarEmoji: '🤖',
-        description: 'ML-driven quant leveraging machine learning and alternative data. Uses AI models trained on vast datasets to predict short-term price movements. Combines traditional market data with sentiment, on-chain metrics, and cross-market signals. Enhanced with NLP sentiment analysis, unsupervised ML regime detection, and whale flow tracking.',
+        description: 'ML-driven quant leveraging machine learning and alternative data. Uses AI models trained on vast datasets to predict short-term price movements. Combines traditional market data with sentiment and cross-market signals. Enhanced with NLP sentiment analysis and unsupervised ML regime detection.',
         focusAreas: [
             'Machine learning price predictions',
             'NLP sentiment analysis from social/news',
             'Sentiment divergence detection',
-            'On-chain whale flow analysis',
             'Unsupervised ML regime classification (HMM)',
             'Cross-market correlation signals',
             'Regime classification models',

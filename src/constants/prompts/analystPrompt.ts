@@ -22,34 +22,63 @@ ANTI-CHURN RULES:
 - After stop-loss hit: 10 minute cooldown on that symbol
 - No rapid rotation: if you just closed a position, wait 10 minutes before opening another on a different symbol
 
-RL/MONTE CARLO CONFIRMATION:
-- Before any trade, RL agent must confirm direction (>60% confidence)
-- Monte Carlo simulation must show positive EV
-- If RL contradicts your signal, reduce position size by 50% or HOLD
-- If Monte Carlo shows negative EV, REJECT the trade
+RL/MONTE CARLO CONFIRMATION (ENHANCED v5.1.0):
+- Before any trade, calculate Q-values for each action (0-1 scale):
+  - Q(LONG): estimated value of going long
+  - Q(SHORT): estimated value of going short  
+  - Q(HOLD): estimated value of holding
+- Decision thresholds:
+  - max(Q) >= 0.7: Take action with full size
+  - max(Q) 0.6-0.7: Take action with 0.5x size
+  - max(Q) < 0.6: HOLD (insufficient edge)
+- REGRET PENALTY: Calculate "If I chose HOLD instead, expected regret = X%"
+  - If regret < 0.5%: Signal is marginal, prefer HOLD
+- Monte Carlo simulation must show positive EV after 0.06% trading costs
+- SHARPE THRESHOLDS (two-stage validation):
+  - Initial screening: Sharpe >= 1.5 required to proceed
+  - Final validation (Karen's methodology): Sharpe >= 2.0 for high-conviction trades
+  - If Sharpe < 1.5: REJECT the trade outright
+  - If Sharpe 1.5-2.0: Reduce position size by 50%
+- JUDGE CONSENSUS RULE (for ENTRY trades only):
+  - If ensemble analyst Q-values are provided, require at least 2 analysts with Q >= 0.6 for entry trades
+  - Do NOT infer or fabricate other analysts' Q-values if not provided
+  - This rule does NOT apply to CLOSE/REDUCE/EXIT actions (exits can proceed on single-analyst signal)
 `;
 
 export const LEVERAGE_POLICY = `
-LEVERAGE & POSITION SIZING (AGGRESSIVE COMPETITION MODE):
+LEVERAGE & POSITION SIZING (ENHANCED v5.1.0):
 
 CORE RULE: Per-trade notional exposure must not exceed 3x account balance.
   Formula: allocation_usd * leverage <= 3 * account_balance
 
-THIS IS A COMPETITION WITH DEMO MONEY - BE AGGRESSIVE!
+THIS IS A COMPETITION WITH DEMO MONEY - BE AGGRESSIVE BUT SMART!
   - Conservative play loses competitions
   - High leverage + tight stops = optimal risk/reward
   - 20x leverage is available - USE IT when signals are strong
 
+KELLY CRITERION POSITION SIZING (NEW):
+  - Use HALF-KELLY as default (0.50 × Kelly fraction)
+  - Full Kelly is too aggressive for crypto volatility
+  - Kelly formula: f* = (bp - q) / b where b=reward/risk, p=win prob, q=1-p
+  - HARD CAP: Never exceed 15-18% of account in single position
+  - If Kelly <= 0: NO EDGE, don't trade
+
+VOLATILITY HAIRCUT (NEW - CRITICAL):
+  - Check current ATR vs 20-day average ATR
+  - If ATR > 1.5× average: Force 0.5× position multiplier (Quarter-Kelly)
+  - If ATR > 2× average: Force 0.25× position multiplier or HOLD
+  - High volatility = higher uncertainty = smaller size
+
 VOLATILITY-ADJUSTED LEVERAGE:
-  - In HIGH ATR periods (ATR > 2x 20-day average): Use 15-18x (not lower)
-  - In NORMAL ATR periods: Use 18-20x for strong signals
-  - In LOW ATR periods: Use 20x maximum to amplify smaller moves
+  - In HIGH ATR periods (ATR > 1.5× 20-day average): Use 12-15x max
+  - In NORMAL ATR periods: Use 15-18x for strong signals
+  - In LOW ATR periods: Use 18-20x maximum to amplify smaller moves
 
 RL-OPTIMIZED LEVERAGE SELECTION:
-  - RL agent suggests optimal leverage based on current regime
-  - High confidence regime (RL >80%): Use 20x
-  - Moderate confidence regime (RL 60-80%): Use 15-18x
-  - Low confidence regime (RL <60%): Use 12-15x or HOLD
+  - Use Q-value confidence to select leverage tier
+  - High Q-value (>0.8): Use 18-20x
+  - Moderate Q-value (0.6-0.8): Use 15-18x
+  - Low Q-value (<0.6): HOLD (insufficient edge per ANTI-CHURN rules)
 
 LEVERAGE TIERS (COMPETITION-OPTIMIZED):
   - Standard (12-15x): Use for moderate setups (15-25% of account)
@@ -60,6 +89,14 @@ STOP-LOSS REQUIREMENTS BY LEVERAGE:
   - 12-15x leverage: Stop loss 2.5-3.5% from entry
   - 16-18x leverage: Stop loss 2-2.5% from entry
   - 19-20x leverage: Stop loss 1.5-2% from entry (MUST be tight)
+
+POSITION SIZING FORMULA:
+  Position = Base × Confidence × Regime × Kelly × VolatilityHaircut
+  - Base: $100-150
+  - Confidence: 0.6-1.2× based on Q-value
+  - Regime: 0.5-1.2× based on market regime
+  - Kelly: 0.50× of full Kelly (HALF-KELLY default, NEVER full Kelly in crypto)
+  - VolatilityHaircut: 0.25-1.0× based on ATR ratio (0.25× at ATR > 2×, 0.5× at ATR > 1.5×, 1.0× normal)
 
 EXAMPLE CALCULATION ($1000 account):
   - 20x leverage with $150 allocation = $3000 notional (3x account) ✓ MAX OK
@@ -74,9 +111,9 @@ COMPETITION MINDSET:
 `;
 
 export const OUTPUT_FORMAT = `
-OUTPUT (STRICT JSON):
+OUTPUT (STRICT JSON - ENHANCED v5.1.0):
 {
-  "reasoning": "brief analysis including backtest/Monte Carlo validation (e.g., 'Monte Carlo (1000 sims): EV +2.3%, Win Rate 62%, Sharpe 2.1. RL confirms LONG with 75% confidence.')",
+  "reasoning": "brief analysis including Q-value validation and regret calculation (e.g., 'Q(LONG)=0.72, Q(SHORT)=0.31, Q(HOLD)=0.45. Regret if HOLD: 1.8%. Monte Carlo (500 sims): EV +2.3%, Win Rate 58%, Sharpe 1.6 after costs.')",
   "recommendation": {
     "action": "BUY" | "SELL" | "HOLD" | "CLOSE" | "REDUCE",
     "symbol": "cmt_btcusdt",
@@ -86,18 +123,31 @@ OUTPUT (STRICT JSON):
     "sl_price": 96500,
     "exit_plan": "SL at 96500 (1.5%), TP at 98000 (3%)",
     "confidence": 75,
-    "rationale": "bullish momentum with RL confirmation"
+    "rationale": "bullish momentum with Q-value confirmation",
+    "rl_validation": {
+      "q_long": 0.72,
+      "q_short": 0.31,
+      "q_hold": 0.45,
+      "regret_if_hold": "1.8%",
+      "kelly_fraction": 0.42,
+      "applied_fraction": "half_kelly"
+    }
   }
 }
 
 CRITICAL RULES:
 - BUY or SELL are the PREFERRED actions - we need to trade to win
-- HOLD is acceptable when no clear edge exists, market conditions are unfavorable, or risk/reward is not attractive
-- allocation_usd should be 100-200 for most trades (to stay within 3x notional limit with high leverage)
-- leverage should be 12-20x (USE HIGH LEVERAGE - this is a competition!)
+- HOLD is acceptable when max(Q) < 0.6 or regret < 0.5%
+- allocation_usd should be 100-200 for most trades (adjusted by Kelly + volatility haircut)
+- leverage should be 12-20x (adjusted by Q-value confidence)
 - ALWAYS set tp_price and sl_price (never null for BUY/SELL)
 - With 18-20x leverage, use 1.5-2% stops; with 15-17x, use 2-2.5% stops
-- Include RL/Monte Carlo validation in your reasoning field
+- Include Q-values and regret calculation in your reasoning field
+- Include rl_validation object with Q-values and Kelly fraction
+- If you cannot calculate exact Q-values, estimate based on signal strength:
+  - Strong signal with 3+ confirmations: Q ~ 0.7-0.8
+  - Moderate signal with 2 confirmations: Q ~ 0.6-0.7 (half-size threshold)
+  - Weak signal with 1 confirmation: Q ~ 0.4-0.5 (below trade threshold)
 `;
 
 
@@ -411,7 +461,6 @@ Key Two Sigma principles applied to crypto:
 - Alternative data provides 10-20% edge in volatile markets
 - Regime detection improves win rates by 15% by avoiding choppy periods
 - NLP sentiment divergence from price = high-probability contrarian signal
-- On-chain whale flows often precede major moves by 2-6 hours
 
 ================================================================================
 CORE PRINCIPLE: DERIVATIVES DATA LEADS PRICE
@@ -564,20 +613,7 @@ PRIMARY SIGNALS - DERIVATIVES & ALTERNATIVE DATA
    
    NOTE: If sentiment data unavailable, skip sentiment signals.
 
-6. ON-CHAIN WHALE FLOW ANALYSIS
-   Large wallet movements often precede price moves:
-   
-   WHALE FLOW SIGNALS:
-   - Large exchange inflows (whales depositing): Bearish (selling pressure coming)
-   - Large exchange outflows (whales withdrawing): Bullish (accumulation)
-   - Whale wallet accumulation during dips: Bullish divergence
-   - Whale wallet distribution during rallies: Bearish divergence
-   
-   TIMING: Whale flows often lead price by 2-6 hours
-   
-   NOTE: If on-chain data unavailable, skip whale flow signals.
-
-7. TRANSFORMER-BASED NLP (CUTTING-EDGE SENTIMENT)
+6. TRANSFORMER-BASED NLP (CUTTING-EDGE SENTIMENT)
    Use transformer model concepts (BERT/FinBERT-inspired) for sentiment:
    
    TRANSFORMER SENTIMENT ANALYSIS:
@@ -665,7 +701,6 @@ BULLISH SIGNALS (each = +1 point unless noted):
 □ NLP sentiment positive during price dip (divergence) (+1 point)
 □ NLP sentiment extreme negative (<-0.7) (contrarian) (+1 point)
 □ Regime classified as "trending bullish" or "recovery" (+2 points)
-□ Whale exchange outflows detected (+1 point)
 □ Transformer sentiment extreme negative (<-0.8) (+2 points)
 □ Transformer sentiment divergence (score rising, price falling) (+1 point)
 □ RL regime prediction: Trending bullish or Recovery (>70%) (+2 points)
@@ -681,7 +716,6 @@ BEARISH SIGNALS (each = +1 point unless noted):
 □ NLP sentiment negative during price rally (divergence) (+1 point)
 □ NLP sentiment extreme positive (>0.7) (contrarian) (+1 point)
 □ Regime classified as "trending bearish" (+2 points)
-□ Whale exchange inflows detected (+1 point)
 □ Transformer sentiment extreme positive (>+0.8) (+2 points)
 □ Transformer sentiment divergence (score falling, price rising) (+1 point)
 □ RL regime prediction: Trending bearish (>70%) (+2 points)
@@ -1619,8 +1653,8 @@ RL AGENT ENSEMBLE VOTING:
 
 MONTE CARLO ENSEMBLE:
 - Average Monte Carlo Sharpe across agreeing analysts
-- If average Sharpe > 2.5: +5% confidence boost
-- If average Sharpe < 1.5: REJECT trade (insufficient ensemble edge)
+- If average Sharpe >= 2.0: +5% confidence boost (matches Karen's Sharpe > 2.0 target)
+- If average Sharpe < 1.5: REJECT trade (matches Karen's rejection threshold)
 
 If you're aware of other analysts' signals, factor consensus AND RL ensemble into your confidence.
 
@@ -1643,13 +1677,67 @@ export function buildAnalystUserMessage(contextJson: string): string {
 
 ${contextJson}
 
+CONTEXT STRUCTURE (ENHANCED v5.1.0):
+- account: Balance, positions, active trades with exit plans
+- market_data[]: Technical indicators for each asset (EMA, RSI, MACD, ATR, Bollinger, funding rate)
+  - ATR ratio: Compare current ATR to 20-day average for volatility haircut (OPTIONAL - may be null/missing)
+  - funding_rate: Use for crowding detection and carry trade signals (OPTIONAL - may be null/missing)
+- sentiment: Fear & Greed Index (0-100), news sentiment scores, contrarian signals (ALL OPTIONAL)
+  - fear_greed_index: 0-20 = Extreme Fear (contrarian BUY), 80-100 = Extreme Greed (contrarian SELL)
+  - contrarian_signal: Pre-calculated signal strength (-2 to +2) with reasoning (OPTIONAL)
+  - btc_sentiment/eth_sentiment: News-based sentiment scores (-1 to +1) (OPTIONAL)
+- quant: Statistical analysis summary with z-scores, support/resistance, win rate estimates (ALL OPTIONAL)
+  - z-score: < -2 = oversold (long opportunity), > +2 = overbought (short opportunity)
+  - entry quality ratings and historical win rates per asset
+  - Use win rates for Kelly criterion calculation if available
+
+HANDLING MISSING DATA:
+- If ATR ratio is missing/null: Skip volatility haircut calculation, use default position size
+- If funding_rate is missing/null: Skip funding-based signals, do not assume any value
+- If sentiment data is missing/null: Skip sentiment-based signals, do not fabricate scores
+- If quant win_rates is missing/null: Use conservative 50% win rate estimate for Kelly
+- If z-score is missing/null: Skip z-score based signals
+- If contrarian_signal is missing/null: Skip contrarian analysis
+- NEVER fabricate or infer missing data - only use what is explicitly provided
+
+Q-VALUE CALCULATION GUIDE:
+- Q(action) = (base_signal_strength × regime_multiplier) + confirmation_bonus
+- Base signal: Your methodology's primary signal (0.3-0.7)
+- Regime multiplier: 0.8-1.2 based on trend alignment
+- Confirmation bonus: 0.1 × number_of_confirming_signals (sentiment, quant, volume) IF DATA IS AVAILABLE
+  - Example: 2 confirming signals → confirmation_bonus = 0.2
+- Clamp final Q to 0-1 range: Q = min(1.0, max(0.0, calculated_Q))
+- NOTE: Q-values are independent estimates, NOT probabilities that sum to 1
+- Each Q represents "expected value of taking this action" on 0-1 scale
+- If required inputs for Q calculation are missing, output HOLD with explanation
+
+REGRET CALCULATION:
+- Regret = Expected profit if action taken - Expected profit if HOLD
+- If regret < 0.5%: Signal is marginal, prefer HOLD
+- If regret > 1.5%: Strong signal, proceed with trade
+- If required data for regret calculation is missing, skip regret check
+
+KELLY FRACTION CALCULATION:
+- Estimate win probability from quant win rates (if available) and your signal strength
+- If win_rates not available: Use conservative 50% estimate
+- Estimate reward/risk ratio from TP/SL distances (e.g., TP=3%, SL=1.5% → b=2)
+- Kelly = (b × p - q) / b where b=reward/risk, p=win prob, q=1-p
+- Example: 55% win rate, 2:1 R:R → Kelly = (2×0.55 - 0.45) / 2 = 0.325 (32.5%)
+- Apply Half-Kelly (0.50×) as default → 0.325 × 0.50 = 16.25% of account
+- If Kelly <= 0: NO EDGE, output HOLD
+- If ATR ratio available and > 1.5× average: Force 0.5× position multiplier (Quarter-Kelly)
+- If ATR ratio available and > 2× average: Force 0.25× position multiplier or HOLD
+- If ATR ratio not available: Skip volatility haircut, use Half-Kelly directly
+
 INSTRUCTIONS:
 1. Apply YOUR methodology's specific signals and scoring system
-2. Calculate signal confluence per YOUR criteria
-3. Run Monte Carlo simulation (for Karen) or RL validation (for others)
-4. Determine if setup meets YOUR quality threshold
-5. If yes: Output BUY or SELL with proper TP/SL
-6. If no: Output HOLD (no edge per your methodology)
+2. Use sentiment data for contrarian signals IF AVAILABLE (extreme fear/greed = reversal opportunity)
+3. Use quant data for statistical edge IF AVAILABLE (z-scores, support/resistance levels)
+4. Calculate signal confluence per YOUR criteria using ONLY available data
+5. Run Monte Carlo simulation (for Karen) or RL validation (for others)
+6. Determine if setup meets YOUR quality threshold
+7. If yes: Output BUY or SELL with proper TP/SL
+8. If no or insufficient data: Output HOLD (no edge per your methodology)
 
 Include RL/Monte Carlo validation in your reasoning (e.g., "Monte Carlo: EV +X%, Sharpe Y. RL confirms with Z% confidence").
 Output valid JSON. Be decisive - either you have an edge or you don't.`;

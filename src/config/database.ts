@@ -449,6 +449,11 @@ export const startDatabaseHealthCheck = () => {
             isHealthCheckRunning = false;
         }
     }, 180000); // Check every 3 minutes
+
+    // FIXED: Use .unref() to not block process exit
+    if (dbHealthCheckInterval.unref) {
+        dbHealthCheckInterval.unref();
+    }
 };
 
 export const stopDatabaseHealthCheck = () => {

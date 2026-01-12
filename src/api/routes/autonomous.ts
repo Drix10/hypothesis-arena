@@ -3,10 +3,28 @@
  * Control the 24/7 AI trading system
  */
 
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
+import crypto from 'crypto';
 import { getAutonomousTradingEngine } from '../../services/autonomous/AutonomousTradingEngine';
 import { logger } from '../../utils/logger';
 import { prisma } from '../../config/database';
+
+// Debug/Admin imports (v5.2.0)
+import { getJournalEntry, getRecentEntries, clearJournal } from '../../services/journal';
+import { getTrackedTrade, getAllTrackedTrades, clearTrackedTrades } from '../../services/position';
+import { clearSentimentCache, formatSentimentForPrompt, getSentimentContextSafe } from '../../services/sentiment';
+import { formatRedditForPrompt, getRedditSentimentContext } from '../../services/sentiment';
+import {
+    clearQuantCache,
+    clearFundingHistory,
+    clearRegimeHistory,
+    formatRegimeForPrompt,
+    formatMonteCarloForPrompt,
+    formatAnalysisForPrompt,
+    analyzeWithMonteCarlo,
+    runMonteCarloSimulation,
+    getQuantContext
+} from '../../services/quant';
 
 const router = Router();
 const engine = getAutonomousTradingEngine();
@@ -177,6 +195,525 @@ router.get('/history', async (req: Request, res: Response) => {
         logger.error('Failed to get history:', error);
         // Return error with success: false to properly indicate failure
         res.status(500).json({ success: false, error: 'Failed to retrieve trade history', data: [] });
+    }
+});
+
+// =============================================================================
+// ADMIN/DEBUG MIDDLEWARE (v5.3.0) - Shared access control
+// =============================================================================
+
+// Feature flag check for admin endpoints
+const isAdminEnabled = (): boolean => {
+    return process.env.AUTONOMOUS_ADMIN_ENABLED === 'true';
+};
+
+// Internal-only guard middleware
+// In production, ALWAYS requires valid admin token for security
+// In development, allows localhost/internal network access without token
+const requireInternalAccess = (req: Request, res: Response, next: NextFunction): void => {
+    // Check if admin endpoints are enabled
+    if (!isAdminEnabled()) {
+        logger.warn('Admin endpoint access attempted but AUTONOMOUS_ADMIN_ENABLED is not true');
+        res.status(403).json({
+            success: false,
+            error: 'Admin endpoints are disabled. Set AUTONOMOUS_ADMIN_ENABLED=true to enable.'
+        });
+        return;
+    }
+
+    // Check for admin token (required in production, optional in development)
+    const adminToken = process.env.AUTONOMOUS_ADMIN_TOKEN;
+    if (adminToken && adminToken.length >= 32) {
+        const providedToken = req.headers['x-admin-token'];
+        // SECURITY: Use constant-time comparison via SHA-256 hash to prevent timing attacks
+        // Hashing normalizes length and prevents length-based information leakage
+        if (typeof providedToken === 'string' && providedToken.length > 0) {
+            const providedHash = crypto.createHash('sha256').update(providedToken).digest();
+            const expectedHash = crypto.createHash('sha256').update(adminToken).digest();
+            if (crypto.timingSafeEqual(providedHash, expectedHash)) {
+                // Valid admin token - allow access regardless of IP
+                next();
+                return;
+            }
+        }
+    }
+
+    // SECURITY: In production, ALWAYS require valid admin token
+    // RFC1918 IP trust is removed for production - internal networks can still be compromised
+    if (process.env.NODE_ENV === 'production') {
+        // SECURITY: Prefer socket.remoteAddress over req.ip to avoid X-Forwarded-For spoofing
+        let clientIp = req.socket?.remoteAddress || req.ip || '';
+        if (clientIp.startsWith('::ffff:')) {
+            clientIp = clientIp.slice(7);
+        }
+
+        const isLocalhost = clientIp === '127.0.0.1' || clientIp === '::1';
+
+        // In production, only localhost is allowed without token
+        // All other access (including RFC1918 internal IPs) requires valid admin token
+        if (!isLocalhost) {
+            logger.warn(`Admin endpoint access denied in production - valid admin token required. IP: ${clientIp}`);
+            res.status(403).json({
+                success: false,
+                error: 'Admin endpoints require valid admin token in production. Set AUTONOMOUS_ADMIN_TOKEN and provide x-admin-token header.'
+            });
+            return;
+        }
+    }
+
+    next();
+};
+
+// =============================================================================
+// DEBUG ENDPOINTS (v5.2.0) - For runtime inspection and debugging
+// Protected by requireInternalAccess middleware
+// =============================================================================
+
+/**
+ * GET /api/autonomous/debug/journal/:tradeId
+ * Get a specific trade journal entry by trade ID
+ * 
+ * Protected: Requires AUTONOMOUS_ADMIN_ENABLED=true
+ */
+router.get('/debug/journal/:tradeId', requireInternalAccess, (req: Request, res: Response) => {
+    try {
+        const { tradeId } = req.params;
+        if (!tradeId) {
+            res.status(400).json({ success: false, error: 'tradeId is required' });
+            return;
+        }
+
+        const entry = getJournalEntry(tradeId);
+        if (!entry) {
+            res.status(404).json({ success: false, error: 'Journal entry not found' });
+            return;
+        }
+
+        res.json({ success: true, data: entry });
+    } catch (error: any) {
+        logger.error('Failed to get journal entry:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * GET /api/autonomous/debug/journal
+ * Get recent trade journal entries
+ * 
+ * Protected: Requires AUTONOMOUS_ADMIN_ENABLED=true
+ */
+router.get('/debug/journal', requireInternalAccess, (req: Request, res: Response) => {
+    try {
+        const rawLimit = req.query.limit as string;
+        let limit = 20; // Default
+
+        if (rawLimit) {
+            const parsedLimit = parseInt(rawLimit, 10);
+            // Validate parsed limit is a finite positive number
+            if (Number.isFinite(parsedLimit) && parsedLimit > 0) {
+                limit = Math.min(parsedLimit, 100); // Cap at 100
+            }
+            // If invalid, silently use default (don't error for optional param)
+        }
+
+        const entries = getRecentEntries(limit);
+        res.json({ success: true, data: entries, count: entries.length });
+    } catch (error: any) {
+        logger.error('Failed to get journal entries:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * GET /api/autonomous/debug/tracked-trades
+ * Get all currently tracked trades (for position sync)
+ * 
+ * Protected: Requires AUTONOMOUS_ADMIN_ENABLED=true
+ */
+router.get('/debug/tracked-trades', requireInternalAccess, (_req: Request, res: Response) => {
+    try {
+        const trades = getAllTrackedTrades();
+        res.json({ success: true, data: trades, count: trades.length });
+    } catch (error: any) {
+        logger.error('Failed to get tracked trades:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * GET /api/autonomous/debug/tracked-trades/:tradeId
+ * Get a specific tracked trade by trade ID
+ * 
+ * Protected: Requires AUTONOMOUS_ADMIN_ENABLED=true
+ */
+router.get('/debug/tracked-trades/:tradeId', requireInternalAccess, (req: Request, res: Response) => {
+    try {
+        const { tradeId } = req.params;
+        if (!tradeId) {
+            res.status(400).json({ success: false, error: 'tradeId is required' });
+            return;
+        }
+
+        const trade = getTrackedTrade(tradeId);
+        if (!trade) {
+            res.status(404).json({ success: false, error: 'Tracked trade not found' });
+            return;
+        }
+
+        res.json({ success: true, data: trade });
+    } catch (error: any) {
+        logger.error('Failed to get tracked trade:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// =============================================================================
+// ADMIN ENDPOINTS (v5.2.0) - For cache management and maintenance
+// Protected by requireInternalAccess middleware (defined above)
+// =============================================================================
+
+/**
+ * POST /api/autonomous/admin/clear-caches
+ * Clear all service caches (sentiment, quant)
+ * Use when external data sources have issues or to force fresh data
+ * 
+ * Protected: Requires AUTONOMOUS_ADMIN_ENABLED=true
+ */
+router.post('/admin/clear-caches', requireInternalAccess, (_req: Request, res: Response) => {
+    try {
+        clearSentimentCache();
+        clearQuantCache();
+        clearFundingHistory();  // v5.3.0: Also clear funding history
+        clearRegimeHistory();   // v5.3.0: Also clear regime history
+
+        logger.info('All service caches cleared via admin endpoint');
+        res.json({
+            success: true,
+            message: 'All caches cleared',
+            cleared: ['sentiment', 'quant', 'fundingHistory', 'regimeHistory']
+        });
+    } catch (error: any) {
+        logger.error('Failed to clear caches:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * POST /api/autonomous/admin/clear-journal
+ * Clear trade journal (for testing only - use with caution)
+ * 
+ * Protected: Requires AUTONOMOUS_ADMIN_ENABLED=true
+ */
+router.post('/admin/clear-journal', requireInternalAccess, (_req: Request, res: Response) => {
+    try {
+        clearJournal();
+        logger.warn('Trade journal cleared via admin endpoint');
+        res.json({ success: true, message: 'Trade journal cleared' });
+    } catch (error: any) {
+        logger.error('Failed to clear journal:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * POST /api/autonomous/admin/clear-tracked-trades
+ * Clear tracked trades (for testing only - use with caution)
+ * 
+ * Protected: Requires AUTONOMOUS_ADMIN_ENABLED=true
+ */
+router.post('/admin/clear-tracked-trades', requireInternalAccess, (_req: Request, res: Response) => {
+    try {
+        clearTrackedTrades();
+        logger.warn('Tracked trades cleared via admin endpoint');
+        res.json({ success: true, message: 'Tracked trades cleared' });
+    } catch (error: any) {
+        logger.error('Failed to clear tracked trades:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// =============================================================================
+// ANALYSIS ENDPOINTS (v5.3.0) - For runtime analysis and Monte Carlo
+// =============================================================================
+
+/**
+ * GET /api/autonomous/debug/regime/:symbol
+ * Get current market regime for a symbol
+ * 
+ * Protected: Requires AUTONOMOUS_ADMIN_ENABLED=true
+ */
+router.get('/debug/regime/:symbol', requireInternalAccess, async (req: Request, res: Response) => {
+    try {
+        const { symbol } = req.params;
+        if (!symbol) {
+            res.status(400).json({ success: false, error: 'symbol is required' });
+            return;
+        }
+
+        // Validate symbol format (alphanumeric with underscores only, max 20 chars)
+        const symbolRegex = /^[a-zA-Z0-9_]{1,20}$/;
+        if (!symbolRegex.test(symbol)) {
+            res.status(400).json({ success: false, error: 'Invalid symbol format' });
+            return;
+        }
+
+        // Get quant context which includes regime data in regimeAnalysis Map
+        const quantContext = await getQuantContext([symbol]);
+        if (!quantContext || !quantContext.regimeAnalysis) {
+            res.status(404).json({ success: false, error: 'Regime data not available' });
+            return;
+        }
+
+        // Get regime for the specific symbol
+        const regime = quantContext.regimeAnalysis.get(symbol);
+        if (!regime) {
+            res.status(404).json({ success: false, error: `Regime data not available for ${symbol}` });
+            return;
+        }
+
+        const formatted = formatRegimeForPrompt(regime);
+        res.json({
+            success: true,
+            data: {
+                symbol,
+                regime,
+                formatted
+            }
+        });
+    } catch (error: any) {
+        logger.error('Failed to get regime:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * GET /api/autonomous/debug/sentiment
+ * Get current sentiment context with formatted output
+ * 
+ * Protected: Requires AUTONOMOUS_ADMIN_ENABLED=true
+ */
+router.get('/debug/sentiment', requireInternalAccess, async (_req: Request, res: Response) => {
+    try {
+        const sentimentContext = await getSentimentContextSafe();
+        if (!sentimentContext) {
+            res.status(404).json({ success: false, error: 'Sentiment data not available' });
+            return;
+        }
+
+        const formatted = formatSentimentForPrompt(sentimentContext);
+        res.json({
+            success: true,
+            data: {
+                sentiment: sentimentContext,
+                formatted
+            }
+        });
+    } catch (error: any) {
+        logger.error('Failed to get sentiment:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * GET /api/autonomous/debug/reddit-sentiment
+ * Get Reddit sentiment context with formatted output
+ * 
+ * Protected: Requires AUTONOMOUS_ADMIN_ENABLED=true
+ */
+router.get('/debug/reddit-sentiment', requireInternalAccess, async (_req: Request, res: Response) => {
+    try {
+        const redditContext = await getRedditSentimentContext();
+
+        // Check for null/undefined redditContext (same pattern as /debug/sentiment)
+        if (!redditContext) {
+            res.status(404).json({ success: false, error: 'Reddit sentiment data not available' });
+            return;
+        }
+
+        const formatted = formatRedditForPrompt(redditContext);
+        res.json({
+            success: true,
+            data: {
+                reddit: redditContext,
+                formatted
+            }
+        });
+    } catch (error: any) {
+        logger.error('Failed to get Reddit sentiment:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * POST /api/autonomous/debug/monte-carlo
+ * Run Monte Carlo analysis for both long and short scenarios
+ * Body: { volatility, stopLossPercent, takeProfitPercent, drift?, simulations?, timeHorizon? }
+ * 
+ * Protected: Requires AUTONOMOUS_ADMIN_ENABLED=true
+ */
+router.post('/debug/monte-carlo', requireInternalAccess, (req: Request, res: Response) => {
+    try {
+        const { volatility, stopLossPercent, takeProfitPercent, drift, simulations, timeHorizon } = req.body;
+
+        // Validate required parameters
+        if (volatility == null || stopLossPercent == null || takeProfitPercent == null) {
+            res.status(400).json({
+                success: false,
+                error: 'Required: volatility, stopLossPercent, takeProfitPercent. Optional: drift, simulations, timeHorizon'
+            });
+            return;
+        }
+
+        // Parse and validate numeric values
+        const parsedVolatility = parseFloat(volatility);
+        const parsedStopLoss = parseFloat(stopLossPercent);
+        const parsedTakeProfit = parseFloat(takeProfitPercent);
+        const parsedDrift = drift != null ? parseFloat(drift) : 0;
+        const parsedSimulations = simulations ? parseInt(simulations, 10) : 500;
+        const parsedTimeHorizon = timeHorizon ? parseInt(timeHorizon, 10) : 24;
+
+        // Validate parsed values are finite numbers with reasonable bounds
+        if (!Number.isFinite(parsedVolatility) || parsedVolatility <= 0 || parsedVolatility > 100) {
+            res.status(400).json({ success: false, error: 'volatility must be between 0 and 100 (percent)' });
+            return;
+        }
+        if (!Number.isFinite(parsedStopLoss) || parsedStopLoss <= 0 || parsedStopLoss > 50) {
+            res.status(400).json({ success: false, error: 'stopLossPercent must be between 0 and 50' });
+            return;
+        }
+        if (!Number.isFinite(parsedTakeProfit) || parsedTakeProfit <= 0 || parsedTakeProfit > 100) {
+            res.status(400).json({ success: false, error: 'takeProfitPercent must be between 0 and 100' });
+            return;
+        }
+        if (!Number.isFinite(parsedDrift) || Math.abs(parsedDrift) > 10) {
+            res.status(400).json({ success: false, error: 'drift must be between -10 and 10' });
+            return;
+        }
+        if (!Number.isFinite(parsedSimulations) || parsedSimulations < 100 || parsedSimulations > 1000) {
+            res.status(400).json({ success: false, error: 'simulations must be between 100 and 1000' });
+            return;
+        }
+        if (!Number.isFinite(parsedTimeHorizon) || parsedTimeHorizon < 1 || parsedTimeHorizon > 48) {
+            res.status(400).json({ success: false, error: 'timeHorizon must be between 1 and 48 hours' });
+            return;
+        }
+
+        // Run full analysis (both long and short scenarios)
+        const analysis = analyzeWithMonteCarlo(
+            parsedVolatility,
+            parsedStopLoss,
+            parsedTakeProfit,
+            parsedDrift,
+            parsedSimulations,
+            parsedTimeHorizon
+        );
+
+        const formatted = formatAnalysisForPrompt(analysis);
+        // Get compact format for the recommended direction
+        const recommendedResult = analysis.recommendedDirection === 'long'
+            ? analysis.longScenario
+            : analysis.recommendedDirection === 'short'
+                ? analysis.shortScenario
+                : analysis.longScenario;
+        const compactFormatted = formatMonteCarloForPrompt(recommendedResult);
+
+        res.json({
+            success: true,
+            data: {
+                analysis,
+                formatted,
+                compactFormatted
+            }
+        });
+    } catch (error: any) {
+        logger.error('Failed to run Monte Carlo:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * POST /api/autonomous/debug/monte-carlo/raw
+ * Run raw Monte Carlo simulation for a single direction
+ * Body: { volatility, stopLossPercent, takeProfitPercent, direction, drift?, simulations?, timeHorizon? }
+ * 
+ * Protected: Requires AUTONOMOUS_ADMIN_ENABLED=true
+ */
+router.post('/debug/monte-carlo/raw', requireInternalAccess, (req: Request, res: Response) => {
+    try {
+        const { volatility, stopLossPercent, takeProfitPercent, direction, drift, simulations, timeHorizon } = req.body;
+
+        // Validate required parameters
+        if (volatility == null || stopLossPercent == null || takeProfitPercent == null || !direction) {
+            res.status(400).json({
+                success: false,
+                error: 'Required: volatility, stopLossPercent, takeProfitPercent, direction (long/short)'
+            });
+            return;
+        }
+
+        // Validate direction
+        if (direction !== 'long' && direction !== 'short') {
+            res.status(400).json({ success: false, error: 'direction must be "long" or "short"' });
+            return;
+        }
+
+        // Parse and validate numeric values
+        const parsedVolatility = parseFloat(volatility);
+        const parsedStopLoss = parseFloat(stopLossPercent);
+        const parsedTakeProfit = parseFloat(takeProfitPercent);
+        const parsedDrift = drift != null ? parseFloat(drift) : 0;
+        const parsedSimulations = simulations ? parseInt(simulations, 10) : 500;
+        const parsedTimeHorizon = timeHorizon ? parseInt(timeHorizon, 10) : 24;
+
+        // Validate parsed values are finite numbers with reasonable bounds
+        if (!Number.isFinite(parsedVolatility) || parsedVolatility <= 0 || parsedVolatility > 100) {
+            res.status(400).json({ success: false, error: 'volatility must be between 0 and 100 (percent)' });
+            return;
+        }
+        if (!Number.isFinite(parsedStopLoss) || parsedStopLoss <= 0 || parsedStopLoss > 50) {
+            res.status(400).json({ success: false, error: 'stopLossPercent must be between 0 and 50' });
+            return;
+        }
+        if (!Number.isFinite(parsedTakeProfit) || parsedTakeProfit <= 0 || parsedTakeProfit > 100) {
+            res.status(400).json({ success: false, error: 'takeProfitPercent must be between 0 and 100' });
+            return;
+        }
+        if (!Number.isFinite(parsedDrift) || Math.abs(parsedDrift) > 10) {
+            res.status(400).json({ success: false, error: 'drift must be between -10 and 10' });
+            return;
+        }
+        if (!Number.isFinite(parsedSimulations) || parsedSimulations < 100 || parsedSimulations > 1000) {
+            res.status(400).json({ success: false, error: 'simulations must be between 100 and 1000' });
+            return;
+        }
+        if (!Number.isFinite(parsedTimeHorizon) || parsedTimeHorizon < 1 || parsedTimeHorizon > 48) {
+            res.status(400).json({ success: false, error: 'timeHorizon must be between 1 and 48 hours' });
+            return;
+        }
+
+        // Run raw simulation for single direction
+        const result = runMonteCarloSimulation({
+            volatility: parsedVolatility,
+            stopLossPercent: parsedStopLoss,
+            takeProfitPercent: parsedTakeProfit,
+            direction,
+            drift: parsedDrift,
+            simulations: parsedSimulations,
+            timeHorizon: parsedTimeHorizon
+        });
+
+        const formatted = formatMonteCarloForPrompt(result);
+
+        res.json({
+            success: true,
+            data: {
+                result,
+                formatted
+            }
+        });
+    } catch (error: any) {
+        logger.error('Failed to run raw Monte Carlo:', error);
+        res.status(500).json({ success: false, error: error.message });
     }
 });
 

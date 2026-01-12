@@ -84,15 +84,25 @@ router.get('/:agentId', async (req: Request, res: Response, next: NextFunction):
                 unrealizedPnL: parseFloat(p.unrealized_pnl) || 0,
                 leverage: parseFloat(p.leverage) || 1,
             })),
-            recentTrades: trades.map((t: any) => ({
-                id: t.id,
-                symbol: t.symbol,
-                side: t.side,
-                size: parseFloat(t.size) || 0,
-                price: parseFloat(t.price) || 0,
-                status: t.status,
-                createdAt: t.created_at ? new Date(t.created_at).getTime() : Date.now(),
-            })),
+            recentTrades: trades.map((t: any) => {
+                // Validate date parsing to prevent NaN
+                let createdAt = Date.now();
+                if (t.created_at) {
+                    const parsed = new Date(t.created_at).getTime();
+                    if (Number.isFinite(parsed)) {
+                        createdAt = parsed;
+                    }
+                }
+                return {
+                    id: t.id,
+                    symbol: t.symbol,
+                    side: t.side,
+                    size: parseFloat(t.size) || 0,
+                    price: parseFloat(t.price) || 0,
+                    status: t.status,
+                    createdAt,
+                };
+            }),
         });
     } catch (error) {
         next(error);

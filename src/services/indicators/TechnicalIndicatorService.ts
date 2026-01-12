@@ -523,20 +523,25 @@ export class TechnicalIndicatorService {
      */
     pruneExpiredCache(): number {
         const now = Date.now();
-        let prunedCount = 0;
+        // Collect keys to delete first to avoid modifying Map during iteration
+        const keysToDelete: string[] = [];
 
         for (const [symbol, entry] of this.cache.entries()) {
             if (now - entry.timestamp >= this.cacheTTL) {
-                this.cache.delete(symbol);
-                prunedCount++;
+                keysToDelete.push(symbol);
             }
         }
 
-        if (prunedCount > 0) {
-            logger.debug(`Pruned ${prunedCount} expired cache entries`);
+        // Delete after iteration completes
+        for (const key of keysToDelete) {
+            this.cache.delete(key);
         }
 
-        return prunedCount;
+        if (keysToDelete.length > 0) {
+            logger.debug(`Pruned ${keysToDelete.length} expired cache entries`);
+        }
+
+        return keysToDelete.length;
     }
 }
 

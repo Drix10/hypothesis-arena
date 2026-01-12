@@ -266,6 +266,69 @@
                 </section>
             </div>
 
+            <!-- Debug & Admin Panel (v5.3.0) -->
+            <section class="panel debug-panel" aria-labelledby="debug-title">
+                <div class="panel-header">
+                    <h2 class="panel-title" id="debug-title">
+                        <span class="title-icon" aria-hidden="true">🔧</span>
+                        Debug & Admin
+                    </h2>
+                    <span class="panel-badge">v5.3.0</span>
+                </div>
+                <div class="panel-body">
+                    <div class="debug-grid">
+                        <!-- Debug Section -->
+                        <div class="debug-section">
+                            <h3 class="debug-section-title">📊 Debug Tools</h3>
+                            <div class="debug-controls">
+                                <button id="btn-view-journal" class="btn btn-ghost btn-sm" type="button">
+                                    <span class="btn-icon" aria-hidden="true">📓</span>
+                                    <span>Journal</span>
+                                </button>
+                                <button id="btn-view-tracked" class="btn btn-ghost btn-sm" type="button">
+                                    <span class="btn-icon" aria-hidden="true">🎯</span>
+                                    <span>Tracked</span>
+                                </button>
+                                <button id="btn-view-sentiment" class="btn btn-ghost btn-sm" type="button">
+                                    <span class="btn-icon" aria-hidden="true">😊</span>
+                                    <span>Sentiment</span>
+                                </button>
+                                <button id="btn-view-regime" class="btn btn-ghost btn-sm" type="button">
+                                    <span class="btn-icon" aria-hidden="true">📈</span>
+                                    <span>Regime</span>
+                                </button>
+                            </div>
+                        </div>
+                        <!-- Admin Section -->
+                        <div class="debug-section">
+                            <h3 class="debug-section-title">⚙️ Admin Actions</h3>
+                            <div class="debug-controls">
+                                <button id="btn-clear-caches" class="btn btn-ghost btn-sm" type="button">
+                                    <span class="btn-icon" aria-hidden="true">🗑️</span>
+                                    <span>Clear Caches</span>
+                                </button>
+                                <button id="btn-clear-journal" class="btn btn-danger btn-sm" type="button">
+                                    <span class="btn-icon" aria-hidden="true">📕</span>
+                                    <span>Clear Journal</span>
+                                </button>
+                                <button id="btn-clear-tracked" class="btn btn-danger btn-sm" type="button">
+                                    <span class="btn-icon" aria-hidden="true">🎯</span>
+                                    <span>Clear Tracked</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Debug Output -->
+                    <div id="debug-output" class="debug-output hidden" role="region" aria-label="Debug output">
+                        <div class="debug-output-header">
+                            <span id="debug-output-title">Output</span>
+                            <button id="btn-close-debug" class="btn-close-debug" type="button" aria-label="Close debug output">×</button>
+                        </div>
+                        <div id="debug-output-content" class="debug-output-content"></div>
+                    </div>
+                </div>
+            </section>
+
 
         </main>
 
@@ -273,8 +336,8 @@
         <footer class="footer" role="contentinfo">
             <p>Built for <strong>WEEX Hackathon 2025</strong></p>
             <p class="tech-stack">Express 5 • Gemini 2.5 Flash • WEEX Futures API • Prisma</p>
-            <p class="version">v5.0.0</p>
-            <!-- Version History: v3.3.0 (debate system) -> v5.0.0 (parallel analysis)
+            <p class="version">v5.3.0</p>
+            <!-- Version History: v3.3.0 (debate system) -> v5.0.0 (parallel analysis) -> v5.2.0 (debug/admin APIs) -> v5.3.0 (full integration)
                  v4.x was skipped as internal development versions -->
         </footer>
     </div>

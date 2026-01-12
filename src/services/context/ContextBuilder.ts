@@ -19,9 +19,22 @@ import {
     MarketDataWithIndicators,
     PerformanceMetrics,
     Instructions,
+    SentimentContext,
     convertIndicatorsToMarketData,
 } from '../../types/context';
 import { getTechnicalIndicatorService } from '../indicators/TechnicalIndicatorService';
+import {
+    getSentimentContextSafe,
+    checkContrarianSignal,
+} from '../sentiment';
+import {
+    getQuantContext,
+    formatQuantForPrompt,
+} from '../quant';
+import {
+    generateTradingInsights,
+    formatInsightsForPrompt,
+} from '../journal';
 // NOTE: ANTI_CHURN_RULES and LEVERAGE_POLICY are included in the system prompt (buildAnalystPrompt),
 // not in the context, to avoid duplication. Only dynamic risk limits are included here.
 import { RISK_COUNCIL_VETO_TRIGGERS } from '../../constants/analyst/riskCouncil';
@@ -97,6 +110,15 @@ export class ContextBuilder {
             openInterest: number | null;
         }>
     ): Promise<TradingContext> {
+        // FIXED: Validate accountBalance to prevent NaN propagation
+        const safeAccountBalance = Number.isFinite(accountBalance) && accountBalance >= 0
+            ? accountBalance
+            : 0;
+
+        if (!Number.isFinite(accountBalance) || accountBalance < 0) {
+            logger.warn(`Invalid accountBalance received: ${accountBalance}, using 0`);
+        }
+
         if (this.invocationCount >= this.MAX_INVOCATION_COUNT) {
             logger.warn('Invocation count approaching overflow, resetting to 0');
             this.invocationCount = 0;
@@ -155,6 +177,7 @@ export class ContextBuilder {
         ]);
 
         // Enrich positions with current data from market data
+        // FIXED: Compute enrichedPositions BEFORE total_value to ensure consistency
         const enrichedPositions = this.enrichPositions(positions, marketData);
 
         // Create a map of enriched prices for consistency
@@ -166,9 +189,16 @@ export class ContextBuilder {
 
         const activeTrades = await this.getActiveTradesWithExitPlans(positions, enrichedPriceMap);
 
+        // FIXED: Compute total_value from enrichedPositions (filtered/validated) for consistency
+        // This ensures account.positions and total_value are derived from the same data
+        const totalUnrealizedPnl = enrichedPositions.reduce((sum, p) => {
+            const pnl = Number.isFinite(p.unrealized_pnl) ? p.unrealized_pnl : 0;
+            return sum + pnl;
+        }, 0);
+
         const accountState: AccountState = {
-            balance: accountBalance,
-            total_value: accountBalance + positions.reduce((sum, p) => sum + p.unrealizedPnl, 0),
+            balance: safeAccountBalance,
+            total_value: safeAccountBalance + totalUnrealizedPnl,
             total_return_pct: metrics.total_return_pct,
             profit_factor: metrics.profit_factor,
             positions: enrichedPositions,
@@ -189,6 +219,30 @@ export class ContextBuilder {
             risk_limits: buildRiskRulesString(),
         };
 
+        // Fetch sentiment, quant, and journal insights in parallel
+        // Use Promise.allSettled to handle partial failures gracefully
+        const [sentimentResult, quantResult, journalResult] = await Promise.allSettled([
+            this.buildSentimentContext(),
+            this.buildQuantContext(),
+            this.buildJournalInsights(),
+        ]);
+
+        // Extract values from settled promises, defaulting to null on rejection
+        const sentimentContext = sentimentResult.status === 'fulfilled' ? sentimentResult.value : null;
+        const quantSummary = quantResult.status === 'fulfilled' ? quantResult.value : null;
+        const journalInsights = journalResult.status === 'fulfilled' ? journalResult.value : null;
+
+        // Log any failures for debugging
+        if (sentimentResult.status === 'rejected') {
+            logger.warn('Sentiment context fetch failed:', sentimentResult.reason);
+        }
+        if (quantResult.status === 'rejected') {
+            logger.warn('Quant context fetch failed:', quantResult.reason);
+        }
+        if (journalResult.status === 'rejected') {
+            logger.warn('Journal insights fetch failed:', journalResult.reason);
+        }
+
         return {
             invocation: {
                 count: this.invocationCount,
@@ -197,7 +251,106 @@ export class ContextBuilder {
             account: accountState,
             market_data: marketData,
             instructions,
+            sentiment: sentimentContext || undefined,
+            quant: quantSummary || undefined,
+            journal_insights: journalInsights || undefined,
         };
+    }
+
+    /**
+     * Build quant analysis context
+     * Returns formatted string summary for AI consumption
+     */
+    private async buildQuantContext(): Promise<string | null> {
+        try {
+            const quantContext = await getQuantContext([...TRADING_SYMBOLS]);
+            return formatQuantForPrompt(quantContext);
+        } catch (error) {
+            logger.warn('Failed to build quant context:', error);
+            return null;
+        }
+    }
+
+    /**
+     * Build journal insights from trade history
+     * Returns formatted string summary for AI consumption
+     */
+    private async buildJournalInsights(): Promise<string | null> {
+        try {
+            const insights = generateTradingInsights();
+            // Only include if we have meaningful data (at least 5 trades)
+            if (insights.totalTrades < 5) {
+                return null;
+            }
+            return formatInsightsForPrompt(insights);
+        } catch (error) {
+            logger.warn('Failed to build journal insights:', error);
+            return null;
+        }
+    }
+
+    /**
+     * Build sentiment context from cached sentiment data
+     * Returns null if sentiment data is unavailable
+     */
+    private async buildSentimentContext(): Promise<SentimentContext | null> {
+        try {
+            const sentimentData = await getSentimentContextSafe();
+            if (!sentimentData) return null;
+
+            const contrarian = checkContrarianSignal(sentimentData);
+
+            // Extract top headlines (with full null/array safety)
+            const headlines: string[] = [];
+            const btcNews = Array.isArray(sentimentData?.btc?.recentNews)
+                ? sentimentData.btc.recentNews
+                : [];
+            const ethNews = Array.isArray(sentimentData?.eth?.recentNews)
+                ? sentimentData.eth.recentNews
+                : [];
+
+            for (const news of btcNews.slice(0, 3)) {
+                if (news?.title) {
+                    headlines.push(`[BTC] ${news.title.slice(0, 100)}`);
+                }
+            }
+            for (const news of ethNews.slice(0, 2)) {
+                if (news?.title) {
+                    headlines.push(`[ETH] ${news.title.slice(0, 100)}`);
+                }
+            }
+
+            // FIXED: Helper to safely get numeric values
+            const safeNum = (val: number | null | undefined, defaultVal: number = 0): number =>
+                Number.isFinite(val) ? val! : defaultVal;
+
+            return {
+                fear_greed_index: sentimentData.market.fearGreedIndex?.value ?? null,
+                fear_greed_classification: sentimentData.market.fearGreedIndex?.classification ?? null,
+                market_sentiment: safeNum(sentimentData.market.overallSentiment),
+                sentiment_trend: sentimentData.market.sentimentTrend,
+                btc_sentiment: {
+                    score: safeNum(sentimentData.btc.overallScore),
+                    sentiment: sentimentData.btc.overallSentiment,
+                    news_count: safeNum(sentimentData.btc.newsCount),
+                    positive_count: safeNum(sentimentData.btc.positiveCount),
+                    negative_count: safeNum(sentimentData.btc.negativeCount),
+                },
+                eth_sentiment: {
+                    score: safeNum(sentimentData.eth.overallScore),
+                    sentiment: sentimentData.eth.overallSentiment,
+                    news_count: safeNum(sentimentData.eth.newsCount),
+                    positive_count: safeNum(sentimentData.eth.positiveCount),
+                    negative_count: safeNum(sentimentData.eth.negativeCount),
+                },
+                contrarian_signal: contrarian,
+                recent_headlines: headlines,
+                last_updated: sentimentData.lastUpdated,
+            };
+        } catch (error) {
+            logger.warn('Failed to build sentiment context:', error);
+            return null;
+        }
     }
 
     private async getIndicatorsForSymbol(symbol: string) {

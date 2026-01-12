@@ -1,17 +1,4 @@
 -- CreateTable
--- NOTE: SQLite uses REAL (8-byte IEEE 754 floating point) for all numeric types.
--- While DECIMAL/NUMERIC would be preferred for financial precision, SQLite doesn't support them.
--- 
--- PRECISION WARNING: IEEE 754 double precision provides ~15-17 significant decimal digits.
--- For crypto trading with 8 decimal places (e.g., 0.00000001 BTC), this is generally sufficient
--- for values up to ~$100 million. However, be aware of:
--- - Rounding errors in repeated calculations
--- - Loss of precision when adding very large and very small numbers
--- - Comparison issues (use epsilon for equality checks)
--- 
--- For critical financial calculations, consider using integer cents in application code
--- or Decimal libraries (e.g., decimal.js, big.js) for exact arithmetic.
--- Prisma schema uses Float type which maps to REAL in SQLite.
 CREATE TABLE "portfolios" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "agent_id" TEXT NOT NULL,
@@ -32,24 +19,24 @@ CREATE TABLE "portfolios" (
     "total_points" INTEGER NOT NULL DEFAULT 0,
     "status" TEXT NOT NULL DEFAULT 'active',
     "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updated_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP -- FIXED: Added DEFAULT for updated_at
+    "updated_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- CreateTable
--- NOTE: SQLite REAL type used for financial values (size, price, fee, P&L).
--- While not ideal for financial precision, SQLite doesn't support DECIMAL/NUMERIC.
--- Application code should handle rounding and precision as needed.
 CREATE TABLE "trades" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "portfolio_id" TEXT NOT NULL,
     "symbol" TEXT NOT NULL,
     "side" TEXT NOT NULL,
     "type" TEXT NOT NULL,
+    "action" TEXT,
     "size" REAL NOT NULL,
-    "price" REAL NOT NULL,
+    "entry_price" REAL,
+    "price" REAL,
     "fee" REAL NOT NULL DEFAULT 0,
     "status" TEXT NOT NULL,
     "reason" TEXT,
+    "rationale" TEXT,
     "analysis_id" TEXT,
     "confidence" REAL,
     "champion_id" TEXT,
@@ -59,6 +46,16 @@ CREATE TABLE "trades" (
     "client_order_id" TEXT,
     "realized_pnl" REAL,
     "realized_pnl_percent" REAL,
+    "entry_thesis" TEXT,
+    "exit_plan" TEXT,
+    "take_profit" REAL,
+    "stop_loss" REAL,
+    "leverage" REAL,
+    "allocation_usd" REAL,
+    "entry_confidence" REAL,
+    "cooldown_until" DATETIME,
+    "invalidated_at" DATETIME,
+    "invalidation_reason" TEXT,
     CONSTRAINT "trades_portfolio_id_fkey" FOREIGN KEY ("portfolio_id") REFERENCES "portfolios" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
@@ -80,7 +77,6 @@ CREATE TABLE "ai_logs" (
 );
 
 -- CreateTable
--- NOTE: SQLite REAL type used for total_value. DATETIME type already used for timestamp fields.
 CREATE TABLE "performance_snapshots" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "portfolio_id" TEXT NOT NULL,
@@ -91,21 +87,22 @@ CREATE TABLE "performance_snapshots" (
 );
 
 -- CreateTable
--- NOTE: 'date' field stored as TEXT in YYYY-MM-DD format (SQLite doesn't have native DATE type).
--- Financial metrics use REAL type (see note above about precision limitations).
-CREATE TABLE "performance_metrics" (
+CREATE TABLE "trade_journals" (
     "id" TEXT NOT NULL PRIMARY KEY,
-    "portfolio_id" TEXT NOT NULL,
-    "date" TEXT NOT NULL,
-    "portfolio_value" REAL NOT NULL,
-    "daily_return" REAL NOT NULL,
-    "cumulative_return" REAL NOT NULL,
-    "sharpe_ratio" REAL,
-    "max_drawdown" REAL NOT NULL,
-    "win_rate" REAL NOT NULL,
-    "trades_count" INTEGER NOT NULL DEFAULT 0,
+    "trade_id" TEXT NOT NULL,
+    "entry_regime" TEXT,
+    "entry_z_score" REAL,
+    "entry_funding" REAL,
+    "entry_sentiment" REAL,
+    "entry_signals" TEXT,
+    "analyst_scores" TEXT,
+    "judge_reasoning" TEXT,
+    "outcome" TEXT,
+    "hold_time_hours" REAL,
+    "exit_reason" TEXT,
+    "lessons_learned" TEXT,
     "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "performance_metrics_portfolio_id_fkey" FOREIGN KEY ("portfolio_id") REFERENCES "portfolios" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+    CONSTRAINT "trade_journals_trade_id_fkey" FOREIGN KEY ("trade_id") REFERENCES "trades" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
 -- CreateIndex
@@ -160,13 +157,16 @@ CREATE INDEX "performance_snapshots_portfolio_id_idx" ON "performance_snapshots"
 CREATE INDEX "performance_snapshots_timestamp_idx" ON "performance_snapshots"("timestamp");
 
 -- CreateIndex
-CREATE INDEX "performance_snapshots_portfolio_id_timestamp_idx" ON "performance_snapshots"("portfolio_id", "timestamp");
+CREATE UNIQUE INDEX "performance_snapshots_portfolio_id_timestamp_key" ON "performance_snapshots"("portfolio_id", "timestamp");
 
 -- CreateIndex
-CREATE INDEX "performance_metrics_portfolio_id_idx" ON "performance_metrics"("portfolio_id");
+CREATE UNIQUE INDEX "trade_journals_trade_id_key" ON "trade_journals"("trade_id");
 
 -- CreateIndex
-CREATE INDEX "performance_metrics_date_idx" ON "performance_metrics"("date");
+CREATE INDEX "trade_journals_outcome_idx" ON "trade_journals"("outcome");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "performance_metrics_portfolio_id_date_key" ON "performance_metrics"("portfolio_id", "date");
+CREATE INDEX "trade_journals_entry_regime_idx" ON "trade_journals"("entry_regime");
+
+-- CreateIndex
+CREATE INDEX "trade_journals_created_at_idx" ON "trade_journals"("created_at");

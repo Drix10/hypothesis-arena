@@ -37,6 +37,8 @@ import { JUDGE_SYSTEM_PROMPT, buildJudgeUserMessage } from '../../constants/prom
 import { getAntiChurnService } from '../trading/AntiChurnService';
 import { getContextBuilder } from '../context/ContextBuilder';
 import { aiService, SchemaType, ResponseSchema } from './AIService';
+import { modelPoolManager } from './ModelPoolManager';
+import { getAnalystWeights } from '../journal';
 
 // =============================================================================
 // TYPES
@@ -331,7 +333,12 @@ export class CollaborativeFlowService {
         }
 
         const startTime = Date.now();
+        const cycleId = `cycle_${Date.now()}`;
         logger.info('🚀 Starting parallel analysis pipeline...');
+
+        // Assign models to analysts for this cycle (multi-model rotation)
+        // Note: Judge uses standard single-model approach for consistency
+        modelPoolManager.assignModelsForCycle(cycleId);
 
         // FIXED: Mark operation start for safe reset handling
         markOperationStart();
@@ -463,6 +470,7 @@ export class CollaborativeFlowService {
 
     /**
      * Run a single analyst using centralized AIService with strict JSON schema
+     * Uses multi-model rotation when MULTI_MODEL_ENABLED=true (default)
      */
     private async runSingleAnalyst(analystId: AnalystId, contextJson: string): Promise<AnalystOutput | null> {
         const systemPrompt = buildAnalystPrompt(analystId);
@@ -471,27 +479,52 @@ export class CollaborativeFlowService {
         // Combine prompts - system prompt first for caching optimization
         const fullPrompt = systemPrompt + '\n\n' + userMessage;
 
+        // Check if multi-model is enabled
+        const useMultiModel = modelPoolManager.isMultiModelEnabled() && config.ai.provider === 'openrouter';
+
         for (let attempt = 1; attempt <= config.ai.maxRetries; attempt++) {
             try {
-                const result = await aiService.generateContent({
-                    prompt: fullPrompt,
-                    schema: ANALYST_OUTPUT_RESPONSE_SCHEMA,
-                    temperature: config.ai.temperature,
-                    maxOutputTokens: config.ai.maxOutputTokens,
-                    label: `Analyst-${analystId}`,
-                });
+                let resultText: string;
+                let modelUsed: string;
 
-                const parsed = this.parseJSON(result.text);
+                if (useMultiModel) {
+                    // Use assigned model from pool (with automatic fallback)
+                    // Pass schema for consistent JSON-validated output across both paths
+                    const result = await aiService.analyzeWithAssignedModel(
+                        analystId,
+                        fullPrompt,
+                        ANALYST_OUTPUT_RESPONSE_SCHEMA
+                    );
+                    resultText = result.content;
+                    modelUsed = result.model;
+                    if (result.usedFallback) {
+                        logger.info(`${analystId} used fallback model: ${modelUsed}`);
+                    }
+                } else {
+                    // Use standard single-model approach
+                    const result = await aiService.generateContent({
+                        prompt: fullPrompt,
+                        schema: ANALYST_OUTPUT_RESPONSE_SCHEMA,
+                        temperature: config.ai.temperature,
+                        maxOutputTokens: config.ai.maxOutputTokens,
+                        label: `Analyst-${analystId}`,
+                    });
+                    resultText = result.text;
+                    modelUsed = config.ai.openRouterModel || 'gemini';
+                }
+
+                const parsed = this.parseJSON(resultText);
 
                 // Normalize before validation (handles exit_plan as object, etc.)
                 const normalized = normalizeAnalystOutput(parsed);
 
                 if (validateAnalystOutput(normalized)) {
+                    logger.debug(`${analystId} completed with ${modelUsed}`);
                     return normalized;
                 } else {
                     // Debug: log what we received vs what we expected
-                    logger.warn(`${analystId} output validation failed on attempt ${attempt}`);
-                    logger.warn(`${analystId} raw response (first 500 chars): ${result.text.slice(0, 500)}`);
+                    logger.warn(`${analystId} output validation failed on attempt ${attempt} (model: ${modelUsed})`);
+                    logger.warn(`${analystId} raw response (first 500 chars): ${resultText.slice(0, 500)}`);
                     if (parsed) {
                         const rec = (parsed as any).recommendation;
                         logger.warn(`${analystId} parsed fields: reasoning=${typeof (parsed as any).reasoning}, rec.action=${rec?.action}, rec.symbol=${rec?.symbol}, rec.allocation_usd=${rec?.allocation_usd}, rec.leverage=${rec?.leverage}, rec.confidence=${rec?.confidence}, rec.tp_price=${rec?.tp_price}, rec.sl_price=${rec?.sl_price}, rec.exit_plan=${typeof rec?.exit_plan}, rec.rationale=${typeof rec?.rationale}`);
@@ -527,7 +560,19 @@ export class CollaborativeFlowService {
         const karenOutput = analysisResult.karen ? JSON.stringify(analysisResult.karen, null, 2) : null;
         const quantOutput = analysisResult.quant ? JSON.stringify(analysisResult.quant, null, 2) : null;
 
-        const userMessage = buildJudgeUserMessage(contextJson, jimOutput, rayOutput, karenOutput, quantOutput);
+        // Get analyst weight adjustments from trade journal performance
+        // These weights are based on rolling 50-trade win rates per analyst
+        // Only include weights section if there's meaningful data (at least one non-1.0 weight)
+        const analystWeights = getAnalystWeights();
+        const hasNonDefaultWeights = Array.from(analystWeights.values()).some(w => w !== 1.0);
+        const weightsSection = hasNonDefaultWeights
+            ? `\n\nANALYST WEIGHT ADJUSTMENTS (from trade journal performance):\n${Array.from(analystWeights.entries())
+                .map(([id, weight]) => `  - ${id}: ${weight.toFixed(2)}x ${weight > 1 ? '(outperforming)' : weight < 1 ? '(underperforming)' : '(average)'}`)
+                .join('\n')
+            }\nUse these weights when evaluating analyst recommendations - prefer analysts with higher weights.`
+            : '';
+
+        const userMessage = buildJudgeUserMessage(contextJson, jimOutput, rayOutput, karenOutput, quantOutput) + weightsSection;
 
         // Combine prompts - system prompt first for caching optimization
         const fullPrompt = JUDGE_SYSTEM_PROMPT + '\n\n' + userMessage;
@@ -908,7 +953,14 @@ export function resetCollaborativeFlow(force: boolean = false): boolean {
         // Use public cleanup method to clear internal state
         collaborativeFlowInstance._cleanup();
     }
+
+    // Reset model pool manager failures (but don't shutdown - it's a singleton)
+    modelPoolManager.resetFailures();
+
     collaborativeFlowInstance = null;
     operationInProgressCount = 0;
     return true;
 }
+
+// Re-export modelPoolManager for external access (debugging, admin endpoints)
+export { modelPoolManager };

@@ -1189,6 +1189,145 @@ body {
 }
 
 /* ============================================================================
+   DEBUG & ADMIN PANEL (v5.2.0)
+   ============================================================================ */
+
+.debug-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--space-lg);
+    margin-bottom: var(--space-lg);
+}
+
+.debug-section {
+    background: var(--bg-dark);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: var(--space-md);
+}
+
+.debug-section-title {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: var(--space-md);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.debug-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-sm);
+}
+
+.debug-output {
+    background: var(--bg-void);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+
+.debug-output.hidden { display: none; }
+
+.debug-output-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-sm) var(--space-md);
+    background: var(--bg-elevated);
+    border-bottom: 1px solid var(--border);
+}
+
+.debug-output-header span {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+}
+
+.btn-close-debug {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 1.25rem;
+    cursor: pointer;
+    padding: 4px 8px;
+    transition: var(--transition-fast);
+}
+
+.btn-close-debug:hover { color: var(--text-bright); }
+
+.debug-output-content {
+    padding: var(--space-md);
+    max-height: 400px;
+    overflow-y: auto;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    line-height: 1.6;
+    color: var(--text-secondary);
+}
+
+.debug-entry {
+    padding: var(--space-sm);
+    margin-bottom: var(--space-sm);
+    background: var(--bg-dark);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+}
+
+.debug-entry:last-child { margin-bottom: 0; }
+
+.debug-entry-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--space-xs);
+}
+
+.debug-entry-id {
+    font-weight: 600;
+    color: var(--cyan);
+}
+
+.debug-entry-time {
+    font-size: 0.65rem;
+    color: var(--text-dim);
+}
+
+.debug-entry-details {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: var(--space-xs);
+}
+
+.debug-detail {
+    display: flex;
+    flex-direction: column;
+}
+
+.debug-detail-label {
+    font-size: 0.6rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+}
+
+.debug-detail-value {
+    color: var(--text);
+}
+
+.debug-detail-value.positive { color: var(--bull); }
+.debug-detail-value.negative { color: var(--bear); }
+.debug-detail-value.long { color: var(--bull); }
+.debug-detail-value.short { color: var(--bear); }
+
+@media (max-width: 768px) {
+    .debug-grid { grid-template-columns: 1fr; }
+    .debug-controls { flex-direction: column; }
+    .debug-controls .btn { width: 100%; }
+}
+
+/* ============================================================================
    RESPONSIVE
    ============================================================================ */
 

@@ -15,6 +15,39 @@ export interface TradingContext {
     account: AccountState;
     market_data: MarketDataWithIndicators[];
     instructions: Instructions;
+    sentiment?: SentimentContext; // Optional sentiment data
+    quant?: string; // Optional quant analysis summary
+    journal_insights?: string; // Optional trading insights from journal (v5.3.0)
+}
+
+/**
+ * Sentiment context for AI analysts
+ */
+export interface SentimentContext {
+    fear_greed_index: number | null; // 0-100
+    fear_greed_classification: ('Extreme Fear' | 'Fear' | 'Neutral' | 'Greed' | 'Extreme Greed') | null;
+    market_sentiment: number; // -1 to 1
+    sentiment_trend: 'improving' | 'declining' | 'stable';
+    btc_sentiment: {
+        score: number;
+        sentiment: string;
+        news_count: number;
+        positive_count: number;
+        negative_count: number;
+    };
+    eth_sentiment: {
+        score: number;
+        sentiment: string;
+        news_count: number;
+        positive_count: number;
+        negative_count: number;
+    };
+    contrarian_signal: {
+        signal: number; // -2 to +2
+        reason: string;
+    };
+    recent_headlines: string[]; // Top 5 headlines
+    last_updated: string;
 }
 
 /**

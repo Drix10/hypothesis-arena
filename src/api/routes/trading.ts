@@ -50,10 +50,15 @@ let rateLimitCleanupInterval: NodeJS.Timeout | null = setInterval(() => {
     if (rateLimitMap.size > MAX_RATE_LIMIT_ENTRIES) {
         logger.warn(`Rate limit map exceeded ${MAX_RATE_LIMIT_ENTRIES} entries, clearing old entries`);
         const cutoffTime = now - (60000 * 2); // 2x the rate limit window
+        // Collect keys to delete first to avoid modifying Map during iteration
+        const keysToDelete: string[] = [];
         for (const [key, entry] of rateLimitMap.entries()) {
             if (entry.resetTime < cutoffTime) {
-                rateLimitMap.delete(key);
+                keysToDelete.push(key);
             }
+        }
+        for (const key of keysToDelete) {
+            rateLimitMap.delete(key);
         }
         // If still too large after cleanup, clear oldest 50%
         if (rateLimitMap.size > MAX_RATE_LIMIT_ENTRIES) {
@@ -66,12 +71,22 @@ let rateLimitCleanupInterval: NodeJS.Timeout | null = setInterval(() => {
         return;
     }
 
+    // Collect keys to delete first to avoid modifying Map during iteration
+    const keysToDelete: string[] = [];
     for (const [key, entry] of rateLimitMap.entries()) {
         if (now > entry.resetTime) {
-            rateLimitMap.delete(key);
+            keysToDelete.push(key);
         }
     }
+    for (const key of keysToDelete) {
+        rateLimitMap.delete(key);
+    }
 }, RATE_LIMIT_CLEANUP_INTERVAL);
+
+// FIXED: Use .unref() to not block process exit
+if (rateLimitCleanupInterval?.unref) {
+    rateLimitCleanupInterval.unref();
+}
 
 // Export cleanup function for graceful shutdown
 // FIXED: Idempotent cleanup - safe to call multiple times

@@ -33,17 +33,17 @@ enum PortfolioStatus {
 //    - Using Decimal.js library for calculations
 //    - Migrating to PostgreSQL with NUMERIC type
 model Portfolio {
-  id                String   @id @default(uuid())
-  agentId           String   @unique @map("agent_id") // 'collaborative' for shared portfolio
-  agentName         String   @map("agent_name") // 'Collaborative AI Team'
-  initialBalance    Float    @map("initial_balance") // USDT - synced from WEEX
-  currentBalance    Float    @map("current_balance") // USDT - synced from WEEX wallet
-  totalValue        Float    @default(0) @map("total_value") // Portfolio + positions value
-  totalReturn       Float    @default(0) @map("total_return") // Percentage return
-  totalReturnDollar Float    @default(0) @map("total_return_dollar") // Dollar return
-  winRate           Float    @default(0) @map("win_rate") // Win rate percentage
-  sharpeRatio       Float?   @map("sharpe_ratio") // Risk-adjusted return metric
-  maxDrawdown       Float    @default(0) @map("max_drawdown") // Max drawdown percentage
+  id                String          @id @default(uuid())
+  agentId           String          @unique @map("agent_id") // 'collaborative' for shared portfolio
+  agentName         String          @map("agent_name") // 'Collaborative AI Team'
+  initialBalance    Float           @map("initial_balance") // USDT - synced from WEEX
+  currentBalance    Float           @map("current_balance") // USDT - synced from WEEX wallet
+  totalValue        Float           @default(0) @map("total_value") // Portfolio + positions value
+  totalReturn       Float           @default(0) @map("total_return") // Percentage return
+  totalReturnDollar Float           @default(0) @map("total_return_dollar") // Dollar return
+  winRate           Float           @default(0) @map("win_rate") // Win rate percentage
+  sharpeRatio       Float?          @map("sharpe_ratio") // Risk-adjusted return metric
+  maxDrawdown       Float           @default(0) @map("max_drawdown") // Max drawdown percentage
   currentDrawdown   Float           @default(0) @map("current_drawdown") // Current drawdown
   totalTrades       Int             @default(0) @map("total_trades")
   winningTrades     Int             @default(0) @map("winning_trades")
@@ -54,8 +54,8 @@ model Portfolio {
   createdAt         DateTime        @default(now()) @map("created_at")
   updatedAt         DateTime        @updatedAt @map("updated_at")
 
-  trades                Trade[]
-  performanceSnapshots  PerformanceSnapshot[]
+  trades               Trade[]
+  performanceSnapshots PerformanceSnapshot[]
 
   @@index([status])
   @@map("portfolios")
@@ -69,8 +69,8 @@ model Portfolio {
 // - Precision loss only occurs with extreme values (>$9 quadrillion)
 // - WEEX API returns these as strings/numbers - we validate before storing
 model Trade {
-  id                 String    @id @default(uuid())
-  portfolioId        String    @map("portfolio_id")
+  id                 String       @id @default(uuid())
+  portfolioId        String       @map("portfolio_id")
   symbol             String
   // side: Exchange-level direction (BUY/SELL) - what order to place
   // action: Trading decision (BUY/SELL/HOLD/CLOSE/REDUCE) - what the AI decided
@@ -106,38 +106,39 @@ model Trade {
   // NULLABLE FIELDS: Both entryPrice and price are nullable to support MARKET orders where
   // the execution price is not known at order placement time. The actual fill price is
   // fetched from WEEX after execution and updated in a follow-up query.
-  entryPrice         Float?    @map("entry_price") // v5.0.0: Primary price field (NULL for MARKET orders until filled)
-  price              Float?    // DEPRECATED: Use entryPrice. Kept for backward compatibility (NULL for MARKET orders until filled)
-  fee                Float     @default(0)
+  entryPrice         Float?       @map("entry_price") // v5.0.0: Primary price field (NULL for MARKET orders until filled)
+  price              Float? // DEPRECATED: Use entryPrice. Kept for backward compatibility (NULL for MARKET orders until filled)
+  fee                Float        @default(0)
   status             TradeStatus // 'FILLED', 'PENDING', 'CANCELLED' - now enum-constrained
   reason             String? // Why this trade was made
   rationale          String? // v5.0.0: One-line trade thesis summary
-  analysisId         String?   @map("analysis_id")
+  analysisId         String?      @map("analysis_id")
   confidence         Float? // AI confidence level
   // championId stores the analyst ID (jim, ray, karen, quant) who won the debate.
   // This is the canonical field for analyst attribution.
-  championId         String?   @map("champion_id") // Analyst who won the debate (jim, ray, karen, quant)
-  executedAt         DateTime? @map("executed_at")
-  createdAt          DateTime  @default(now()) @map("created_at")
-  weexOrderId        String?   @map("weex_order_id")
-  clientOrderId      String?   @unique @map("client_order_id")
-  realizedPnl        Float?    @map("realized_pnl")
-  realizedPnlPercent Float?    @map("realized_pnl_percent")
+  championId         String?      @map("champion_id") // Analyst who won the debate (jim, ray, karen, quant)
+  executedAt         DateTime?    @map("executed_at")
+  createdAt          DateTime     @default(now()) @map("created_at")
+  weexOrderId        String?      @map("weex_order_id")
+  clientOrderId      String?      @unique @map("client_order_id")
+  realizedPnl        Float?       @map("realized_pnl")
+  realizedPnlPercent Float?       @map("realized_pnl_percent")
 
   // v5.0.0: Exit plan tracking (anti-churn)
   entryThesis        String?   @map("entry_thesis") // Why we entered
   exitPlan           String?   @map("exit_plan") // Invalidation conditions (JSON or text)
   takeProfit         Float?    @map("take_profit") // TP price
   stopLoss           Float?    @map("stop_loss") // SL price
-  leverage           Float?    // Leverage used (3-10x)
+  leverage           Float? // Leverage used (3-10x)
   allocationUsd      Float?    @map("allocation_usd") // Notional exposure in USD
   entryConfidence    Float?    @map("entry_confidence") // Confidence at entry (for hysteresis)
   cooldownUntil      DateTime? @map("cooldown_until") // When cooldown expires
   invalidatedAt      DateTime? @map("invalidated_at") // When exit plan was invalidated
   invalidationReason String?   @map("invalidation_reason") // Why it was invalidated
 
-  portfolio Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+  portfolio Portfolio     @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
   aiLogs    AILog[]
+  journal   TradeJournal?
 
   @@index([portfolioId])
   @@index([symbol])
@@ -153,18 +154,18 @@ model Trade {
 // AI Logs - WEEX compliance logs
 // Required by WEEX for all AI-driven trading decisions
 model AILog {
-  id              String    @id @default(uuid())
-  tradeId         String?   @map("trade_id")
-  orderId         String?   @map("order_id")
-  stage           AILogStage // FIXED: Spelling matches enum below (DECISION_MAKING, STRATEGY_GENERATION, etc.)
-  model           String // AI model used (e.g., 'gemini-2.5-flash')
-  input           String // JSON string of input data
-  output          String // JSON string of output data
-  explanation     String // FIXED: SQLite String type supports unlimited length (TEXT in SQL, no explicit annotation needed)
-  timestamp       DateTime @default(now()) // FIXED: Changed from Int to DateTime for consistency
-  uploadedToWeex  Boolean   @default(false) @map("uploaded_to_weex")
-  weexLogId       String?   @map("weex_log_id")
-  createdAt       DateTime  @default(now()) @map("created_at")
+  id             String     @id @default(uuid())
+  tradeId        String?    @map("trade_id")
+  orderId        String?    @map("order_id")
+  stage          AILogStage // FIXED: Spelling matches enum below (DECISION_MAKING, STRATEGY_GENERATION, etc.)
+  model          String // AI model used (e.g., 'gemini-2.5-flash')
+  input          String // JSON string of input data
+  output         String // JSON string of output data
+  explanation    String // FIXED: SQLite String type supports unlimited length (TEXT in SQL, no explicit annotation needed)
+  timestamp      DateTime   @default(now()) // FIXED: Changed from Int to DateTime for consistency
+  uploadedToWeex Boolean    @default(false) @map("uploaded_to_weex")
+  weexLogId      String?    @map("weex_log_id")
+  createdAt      DateTime   @default(now()) @map("created_at")
 
   trade Trade? @relation(fields: [tradeId], references: [id], onDelete: SetNull)
 
@@ -227,4 +228,74 @@ enum AILogStage {
   COLLABORATIVE_TRADE
   POSITION_MANAGEMENT
   MANUAL_CLOSE
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TRADE JOURNAL (v5.3.0) - Learning Loop & Performance Analysis
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Trade Journal - Enhanced trade logging for learning loop
+// Stores entry context, analyst data, and auto-generated lessons
+// Per quant advisor: Track analyst-specific win rates, penalize underperformers
+//
+// PRECISION NOTE: SQLite uses REAL (IEEE 754 double) for Float fields.
+// For entryZScore, entryFunding, entrySentiment:
+// - Z-scores typically range -3 to +3 with 2-4 decimal places (adequate precision)
+// - Funding rates are typically 0.0001 to 0.001 (adequate precision)
+// - Sentiment scores range -1 to +1 with 2-4 decimal places (adequate precision)
+// For production with higher precision needs, consider:
+// - Storing as integer basis points (multiply by 10000)
+// - Migrating to PostgreSQL with NUMERIC type
+//
+// DESIGN NOTE: pnlPercent is NOT stored in TradeJournal to avoid duplication.
+// Use trade.realizedPnlPercent via the relation instead.
+model TradeJournal {
+  id      String @id @default(uuid())
+  tradeId String @unique @map("trade_id")
+
+  // Entry context (nullable - may not be available at trade open)
+  entryRegime    String? @map("entry_regime") // Market regime at entry
+  entryZScore    Float?  @map("entry_z_score") // Z-score at entry (REAL in SQLite, ~15 digit precision)
+  entryFunding   Float?  @map("entry_funding") // Funding rate at entry (REAL in SQLite, ~15 digit precision)
+  entrySentiment Float?  @map("entry_sentiment") // Sentiment score at entry (REAL in SQLite, ~15 digit precision)
+  entrySignals   String? @map("entry_signals") // JSON string of all signals
+
+  // Analyst data - uses Trade.championId for winning analyst (no duplicate field)
+  analystScores  String? @map("analyst_scores") // JSON string of all analyst confidence scores
+  judgeReasoning String? @map("judge_reasoning") // Why judge picked winner
+
+  // Outcome (nullable - populated when trade closes)
+  // NOTE: pnlPercent removed - use trade.realizedPnlPercent via relation to avoid data divergence
+  outcome       TradeOutcome? // 'WIN', 'LOSS', 'BREAKEVEN'
+  holdTimeHours Float?        @map("hold_time_hours")
+  exitReason    ExitReason?   @map("exit_reason") // 'TP_HIT', 'SL_HIT', 'MANUAL', 'TIME_EXIT', 'INVALIDATED'
+
+  // Learning
+  lessonsLearned String? @map("lessons_learned") // AI-generated post-trade analysis
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relation to Trade model
+  trade Trade @relation(fields: [tradeId], references: [id], onDelete: Cascade)
+
+  @@index([outcome])
+  @@index([entryRegime])
+  @@index([createdAt])
+  @@map("trade_journals")
+}
+
+// Trade outcome enum
+enum TradeOutcome {
+  WIN
+  LOSS
+  BREAKEVEN
+}
+
+// Exit reason enum
+enum ExitReason {
+  TP_HIT
+  SL_HIT
+  MANUAL
+  TIME_EXIT
+  INVALIDATED
 }

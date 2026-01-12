@@ -6,6 +6,7 @@
  * 
  * Features:
  * - Dual provider support (Gemini / OpenRouter)
+ * - Multi-model support for analysts (v5.3.0) - each analyst can use different model
  * - Strict JSON schema enforcement via responseSchema
  * - Schema conversion for OpenRouter compatibility
  * - Prompt caching optimization (implicit for Gemini 2.5+)
@@ -21,6 +22,7 @@
 import { GoogleGenerativeAI, GenerativeModel, SchemaType, ResponseSchema } from '@google/generative-ai';
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
+import { modelPoolManager, ModelConfig } from './ModelPoolManager';
 
 // =============================================================================
 // TYPES
@@ -512,6 +514,301 @@ class AIService {
      */
     getProvider(): 'gemini' | 'openrouter' {
         return config.ai.provider;
+    }
+
+    // =========================================================================
+    // MULTI-MODEL SUPPORT (v5.3.0)
+    // =========================================================================
+
+    /**
+     * Call OpenRouter API with a specific model
+     * Used for multi-model analyst assignments
+     * 
+     * @param prompt - The prompt to send
+     * @param model - Model configuration from ModelPoolManager
+     * @param _schema - Response schema (passed for API consistency but not enforced at API level;
+     *                  validation is done by caller after parsing response)
+     * @returns Response content, model used, and latency
+     */
+    async callWithModel(
+        prompt: string,
+        model: ModelConfig,
+        _schema?: ResponseSchema
+    ): Promise<{ content: string; model: string; latencyMs: number }> {
+        // Validate inputs
+        if (!prompt || typeof prompt !== 'string') {
+            throw new Error('callWithModel: prompt is required');
+        }
+        if (!model || !model.id) {
+            throw new Error('callWithModel: valid model config is required');
+        }
+        if (!config.openRouterApiKey) {
+            throw new Error('OPENROUTER_API_KEY not configured');
+        }
+
+        // Note: _schema is not used at API level - OpenRouter's json_object mode doesn't support
+        // schema enforcement. The schema is validated by the caller (CollaborativeFlow) after parsing.
+
+        const startTime = Date.now();
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), model.timeoutMs);
+
+        try {
+            const requestBody = {
+                model: model.id,
+                messages: [{ role: 'user', content: prompt }],
+                max_tokens: model.maxTokens,
+                temperature: model.temperature,
+                response_format: { type: 'json_object' },
+                provider: {
+                    data_collection: 'allow',
+                    allow_fallbacks: true,
+                },
+            };
+
+            let response: Response;
+            try {
+                response = await fetch(`${this.openRouterBaseUrl}/chat/completions`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${config.openRouterApiKey}`,
+                        'Content-Type': 'application/json',
+                        'HTTP-Referer': 'https://hypothesis-arena.com',
+                        'X-Title': 'Hypothesis Arena',
+                    },
+                    body: JSON.stringify(requestBody),
+                    signal: controller.signal,
+                });
+            } catch (fetchError: any) {
+                clearTimeout(timeoutId);
+                if (fetchError.name === 'AbortError') {
+                    throw new Error(`Model ${model.id} timeout after ${model.timeoutMs}ms`);
+                }
+                throw new Error(`Model ${model.id} network error: ${fetchError.message}`);
+            }
+
+            clearTimeout(timeoutId);
+            const latencyMs = Date.now() - startTime;
+
+            if (!response.ok) {
+                let errorText: string;
+                try {
+                    errorText = await response.text();
+                } catch {
+                    errorText = 'Unable to read error response';
+                }
+
+                // Check for response_format error and retry without it
+                const isFormatError = errorText.includes('response_format') ||
+                    errorText.includes('json_object') ||
+                    errorText.includes('json_schema');
+
+                if (isFormatError) {
+                    logger.warn(`[AIService] Model ${model.id} doesn't support json_object, retrying without`);
+                    // Calculate remaining time for retry
+                    const elapsedMs = Date.now() - startTime;
+                    const remainingMs = Math.max(model.timeoutMs - elapsedMs, 10000); // At least 10s for retry
+                    return this.callWithModelNoFormat(prompt, model, startTime, remainingMs);
+                }
+
+                const error = new Error(`Model ${model.id} error (${response.status}): ${errorText.slice(0, 200)}`);
+                if (response.status === 429) {
+                    (error as any).isRateLimit = true;
+                }
+                throw error;
+            }
+
+            const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+            let content = data.choices?.[0]?.message?.content || '';
+
+            // Check for empty response
+            if (!content || content.trim().length === 0) {
+                throw new Error(`Model ${model.id} returned empty response`);
+            }
+
+            // Extract JSON from markdown if present
+            const jsonBlockMatch = content.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+            if (jsonBlockMatch && jsonBlockMatch[1]) {
+                content = jsonBlockMatch[1].trim();
+            }
+
+            // Try to extract JSON object if response has extra text
+            if (!content.startsWith('{') && !content.startsWith('[')) {
+                const startIdx = content.indexOf('{');
+                if (startIdx !== -1) {
+                    let depth = 0;
+                    let endIdx = -1;
+                    for (let i = startIdx; i < content.length; i++) {
+                        if (content[i] === '{') depth++;
+                        else if (content[i] === '}') {
+                            depth--;
+                            if (depth === 0) {
+                                endIdx = i;
+                                break;
+                            }
+                        }
+                    }
+                    if (endIdx !== -1) {
+                        content = content.slice(startIdx, endIdx + 1);
+                    }
+                }
+            }
+
+            // Validate JSON before returning
+            const trimmedContent = content.trim();
+            try {
+                JSON.parse(trimmedContent);
+            } catch {
+                throw new Error(`Model ${model.id} returned invalid JSON: ${trimmedContent.slice(0, 100)}...`);
+            }
+
+            return { content: trimmedContent, model: model.id, latencyMs };
+        } catch (error) {
+            clearTimeout(timeoutId);
+            throw error;
+        }
+    }
+
+    /**
+     * Call model without response_format (fallback for models that don't support it)
+     * @param prompt - The prompt to send
+     * @param model - Model configuration
+     * @param originalStartTime - When the original request started (for latency calculation)
+     * @param timeoutMs - Timeout for this retry attempt
+     */
+    private async callWithModelNoFormat(
+        prompt: string,
+        model: ModelConfig,
+        originalStartTime: number,
+        timeoutMs: number
+    ): Promise<{ content: string; model: string; latencyMs: number }> {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+        try {
+            const response = await fetch(`${this.openRouterBaseUrl}/chat/completions`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${config.openRouterApiKey}`,
+                    'Content-Type': 'application/json',
+                    'HTTP-Referer': 'https://hypothesis-arena.com',
+                    'X-Title': 'Hypothesis Arena',
+                },
+                body: JSON.stringify({
+                    model: model.id,
+                    messages: [{ role: 'user', content: prompt }],
+                    max_tokens: model.maxTokens,
+                    temperature: model.temperature,
+                }),
+                signal: controller.signal,
+            });
+
+            clearTimeout(timeoutId);
+            const latencyMs = Date.now() - originalStartTime;
+
+            if (!response.ok) {
+                const errorText = await response.text().catch(() => 'Unknown error');
+                throw new Error(`Model ${model.id} error (${response.status}): ${errorText.slice(0, 200)}`);
+            }
+
+            const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+            let content = data.choices?.[0]?.message?.content || '';
+
+            // Check for empty response
+            if (!content || content.trim().length === 0) {
+                throw new Error(`Model ${model.id} returned empty response (no-format mode)`);
+            }
+
+            // Extract JSON from markdown if present
+            const jsonBlockMatch = content.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+            if (jsonBlockMatch && jsonBlockMatch[1]) {
+                content = jsonBlockMatch[1].trim();
+            }
+
+            // Try to extract JSON object if response has extra text
+            if (!content.startsWith('{') && !content.startsWith('[')) {
+                const startIdx = content.indexOf('{');
+                if (startIdx !== -1) {
+                    let depth = 0;
+                    let endIdx = -1;
+                    for (let i = startIdx; i < content.length; i++) {
+                        if (content[i] === '{') depth++;
+                        else if (content[i] === '}') {
+                            depth--;
+                            if (depth === 0) {
+                                endIdx = i;
+                                break;
+                            }
+                        }
+                    }
+                    if (endIdx !== -1) {
+                        content = content.slice(startIdx, endIdx + 1);
+                    }
+                }
+            }
+
+            // Validate JSON before returning
+            const trimmedContent = content.trim();
+            try {
+                JSON.parse(trimmedContent);
+            } catch {
+                throw new Error(`Model ${model.id} returned invalid JSON (no-format): ${trimmedContent.slice(0, 100)}...`);
+            }
+
+            return { content: trimmedContent, model: model.id, latencyMs };
+        } catch (error) {
+            clearTimeout(timeoutId);
+            throw error;
+        }
+    }
+
+    /**
+     * Analyze with assigned model for an analyst, with automatic fallback
+     * 
+     * @param analystId - The analyst ID (jim, ray, karen, quant)
+     * @param prompt - The full prompt to send
+     * @param schema - Optional response schema for structured output validation
+     * @returns Response content, model used, and whether fallback was used
+     */
+    async analyzeWithAssignedModel(
+        analystId: string,
+        prompt: string,
+        schema?: ResponseSchema
+    ): Promise<{ content: string; model: string; latencyMs: number; usedFallback: boolean }> {
+        // Validate inputs
+        if (!analystId || typeof analystId !== 'string') {
+            throw new Error('analyzeWithAssignedModel: analystId is required');
+        }
+        if (!prompt || typeof prompt !== 'string') {
+            throw new Error('analyzeWithAssignedModel: prompt is required');
+        }
+
+        // getModelForAnalyst always returns a valid model (never null)
+        const assignedModel = modelPoolManager.getModelForAnalyst(analystId);
+
+        try {
+            const result = await this.callWithModel(prompt, assignedModel, schema);
+            logger.debug(`[AIService] ${analystId} completed with ${assignedModel.name} in ${result.latencyMs}ms`);
+            return { ...result, usedFallback: false };
+        } catch (error) {
+            logger.warn(`[AIService] ${analystId} primary model ${assignedModel.name} failed:`, error);
+
+            // Try fallback
+            const fallback = modelPoolManager.getFallbackModel(assignedModel.id);
+            if (!fallback) {
+                throw error;
+            }
+
+            logger.info(`[AIService] ${analystId} retrying with fallback ${fallback.name}`);
+            try {
+                const result = await this.callWithModel(prompt, fallback, schema);
+                return { ...result, usedFallback: true };
+            } catch (fallbackError) {
+                // Log fallback failure but throw original error for better debugging
+                logger.error(`[AIService] ${analystId} fallback ${fallback.name} also failed:`, fallbackError);
+                throw error;
+            }
+        }
     }
 
     /**

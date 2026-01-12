@@ -26,8 +26,19 @@ import { Prisma } from '@prisma/client';
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
 import { ANALYST_PROFILES, RISK_COUNCIL_VETO_TRIGGERS } from '../../constants/analyst';
-import { roundToStepSize, roundToTickSize, updateContractSpecs, getContractSpecs } from '../../shared/utils/weex';
+import {
+    GLOBAL_RISK_LIMITS,
+    isLeverageAutoApproved,
+    getMaxLeverageForExposure,
+    getRequiredStopLossPercent,
+    validateCompetitionMode,
+    guardCompetitionModeTrade
+} from '../../constants/analyst/riskLimits';
+import { roundToStepSize, roundToTickSize, updateContractSpecs, getContractSpecs, clearContractSpecs } from '../../shared/utils/weex';
 import { APPROVED_SYMBOLS } from '../../shared/types/weex';
+import { validateTradeWithMonteCarlo } from '../quant';
+import { trackOpenTrade, syncPositions, getTrackedTradeBySymbol, type PositionData } from '../position';
+import { getSymbolSentimentScore } from '../sentiment';
 
 // Contract specs refresh interval (30 minutes) - refresh before cache expires (1 hour TTL)
 const CONTRACT_SPECS_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
@@ -354,6 +365,12 @@ export class AutonomousTradingEngine extends EventEmitter {
         const pnlDollarDisplay = Number.isFinite(positionToManage.unrealizedPnl) ? positionToManage.unrealizedPnl : 0;
         logger.info(`📋 Auto-managing: ${positionToManage.symbol} ${positionToManage.side} (P&L: ${pnlDisplay.toFixed(2)}% / $${pnlDollarDisplay.toFixed(2)})`);
         logger.info(`   Entry: ${positionToManage.entryPrice}, Current: ${positionToManage.currentPrice}`);
+
+        // Get tracked trade context for better decision making (v5.2.0)
+        const trackedTrade = getTrackedTradeBySymbol(positionToManage.symbol);
+        if (trackedTrade) {
+            logger.debug(`   Tracked trade found: ${trackedTrade.winningAnalyst} analyst, entry regime: ${trackedTrade.entryRegime}`);
+        }
 
         let actionExecuted = false;
         try {
@@ -770,6 +787,35 @@ export class AutonomousTradingEngine extends EventEmitter {
 
             try {
                 logger.info('🏟️ Starting Autonomous Trading Engine (Collaborative Mode)...');
+
+                // Validate competition mode configuration (v5.2.0)
+                // This throws if COMPETITION_MODE is enabled but ACK is missing
+                try {
+                    validateCompetitionMode();
+                } catch (competitionError) {
+                    logger.error('Competition mode validation failed:', competitionError);
+                    throw competitionError;
+                }
+
+                // Check competition mode and log prominent warning
+                const { isCompetitionModeAllowed } = await import('../../constants/analyst/riskLimits');
+                if (isCompetitionModeAllowed()) {
+                    logger.warn('');
+                    logger.warn('╔══════════════════════════════════════════════════════════════════════════════╗');
+                    logger.warn('║  ⚠️  COMPETITION MODE ENABLED - AGGRESSIVE SETTINGS ACTIVE                   ║');
+                    logger.warn('╠══════════════════════════════════════════════════════════════════════════════╣');
+                    logger.warn('║  This mode is for DEMO/PAPER TRADING ONLY!                                   ║');
+                    logger.warn('║                                                                              ║');
+                    logger.warn('║  IMPORTANT: The WEEX API does NOT provide a way to detect demo vs live       ║');
+                    logger.warn('║  accounts. YOU must verify your account type in WEEX settings.               ║');
+                    logger.warn('║                                                                              ║');
+                    logger.warn('║  Settings: 20x max leverage, 50% max position, 50 trades/day                 ║');
+                    logger.warn('║                                                                              ║');
+                    logger.warn('║  If you are connected to a LIVE account, STOP NOW and disable                ║');
+                    logger.warn('║  COMPETITION_MODE in your .env file!                                         ║');
+                    logger.warn('╚══════════════════════════════════════════════════════════════════════════════╝');
+                    logger.warn('');
+                }
 
                 // Fetch and cache contract specifications from WEEX with retry logic
                 logger.info('📋 Fetching contract specifications from WEEX...');
@@ -1322,6 +1368,24 @@ export class AutonomousTradingEngine extends EventEmitter {
                     });
                 }
             }
+
+            // POSITION SYNC (v5.3.0): Detect closed positions and create journal entries
+            try {
+                const positionData: PositionData[] = flowPositions.map(p => ({
+                    symbol: p.symbol,
+                    side: p.side === 'LONG' ? 'long' : 'short',
+                    size: p.size,
+                    entryPrice: p.entryPrice,
+                    unrealizedPnl: p.unrealizedPnl,
+                    leverage: p.leverage,
+                }));
+                const closedCount = await syncPositions(this.weexClient, positionData);
+                if (closedCount > 0) {
+                    logger.info(`📓 Position sync: ${closedCount} closed position(s) processed`);
+                }
+            } catch (syncError) {
+                logger.warn('Position sync failed:', syncError);
+            }
         } catch (error) {
             logger.warn('Failed to get positions:', error);
         }
@@ -1510,6 +1574,49 @@ export class AutonomousTradingEngine extends EventEmitter {
             return false;
         }
 
+        // RISK LIMIT VALIDATION (v5.2.0)
+        // Check if leverage is auto-approved based on confidence level
+        // FIXED: Use ?? instead of || to preserve valid zero confidence
+        const confidence = decision.confidence ?? 50;
+        if (!isLeverageAutoApproved(leverage, confidence)) {
+            logger.warn(`Leverage ${leverage}x requires confidence >= 70% (got ${confidence}%), reducing to auto-approve threshold`);
+            leverage = GLOBAL_RISK_LIMITS.AUTO_APPROVE_LEVERAGE_THRESHOLD;
+        }
+
+        // Check max leverage based on current portfolio exposure
+        // This prevents over-leveraging when already heavily exposed
+        try {
+            const assets = await this.weexClient.getAccountAssets();
+            const equity = parseFloat(assets.equity || '0');
+            const positions = await this.weexClient.getPositions();
+
+            // Calculate current total notional exposure
+            // openValue is already the notional value (size * price), NOT margin
+            // We sum openValue directly to get total notional exposure
+            // Then divide by equity to get exposure percentage
+            let totalNotionalExposure = 0;
+            for (const pos of positions) {
+                const posSize = parseFloat(String(pos.size)) || 0;
+                const openValue = parseFloat(String(pos.openValue)) || 0;
+                if (posSize > 0 && openValue > 0) {
+                    // openValue IS the notional - don't multiply by leverage again
+                    totalNotionalExposure += openValue;
+                }
+            }
+
+            // currentExposurePct = (total notional / equity) * 100
+            // This represents how much notional exposure we have relative to equity
+            const currentExposurePct = equity > 0 ? (totalNotionalExposure / equity) * 100 : 0;
+            const maxAllowedLeverage = getMaxLeverageForExposure(currentExposurePct);
+
+            if (leverage > maxAllowedLeverage) {
+                logger.warn(`Leverage ${leverage}x exceeds max ${maxAllowedLeverage}x for current exposure ${currentExposurePct.toFixed(1)}%, reducing`);
+                leverage = maxAllowedLeverage;
+            }
+        } catch (exposureError) {
+            logger.debug('Could not check exposure for leverage limit:', exposureError instanceof Error ? exposureError.message : 'unknown');
+        }
+
         // Only clamp to exchange-specific limits (not our conservative limits)
         if (specs) {
             const originalLeverage = leverage;
@@ -1575,18 +1682,71 @@ export class AutonomousTradingEngine extends EventEmitter {
             if (!slValid) validatedSlPrice = null;
         }
 
+        // MONTE CARLO VALIDATION (v5.1.0)
+        // Validate trade with Monte Carlo simulation before execution
+        if (validatedSlPrice !== null && validatedTpPrice !== null && currentPrice > 0) {
+            const slPercent = Math.abs(currentPrice - validatedSlPrice) / currentPrice * 100;
+            const tpPercent = Math.abs(validatedTpPrice - currentPrice) / currentPrice * 100;
+
+            // Use default volatility since ExtendedMarketData doesn't have ATR
+            // In crypto, 2% hourly volatility is a reasonable default
+            const volatility = 2;
+
+            const mcValidation = validateTradeWithMonteCarlo(
+                isLong ? 'long' : 'short',
+                volatility,
+                slPercent,
+                tpPercent,
+                0 // No drift assumption
+            );
+
+            if (!mcValidation.valid) {
+                logger.info(`🎲 MC advisory: trade flagged - ${mcValidation.reason}`);
+                // Don't block the trade, but log the warning
+                // The AI's Q-value validation is the primary gate
+            } else {
+                logger.info(`🎲 Monte Carlo validated: ${mcValidation.reason}`);
+            }
+        }
+
+        // PER-SYMBOL SENTIMENT CHECK (v5.2.0)
+        // Check sentiment for the specific symbol being traded
+        // Advisory only - logs warning if sentiment contradicts trade direction
+        try {
+            const sentimentResult = await getSymbolSentimentScore(decision.symbol);
+            if (sentimentResult) {
+                const { score, sentiment } = sentimentResult;
+                // Score: -1 (very bearish) to +1 (very bullish)
+                const sentimentAligned = (isLong && score > 0.2) || (!isLong && score < -0.2);
+                const sentimentContradicts = (isLong && score < -0.3) || (!isLong && score > 0.3);
+
+                if (sentimentAligned) {
+                    logger.info(`📰 Sentiment confirms ${isLong ? 'LONG' : 'SHORT'}: ${sentiment} (score: ${score.toFixed(2)})`);
+                } else if (sentimentContradicts) {
+                    logger.warn(`📰 Sentiment contradicts ${isLong ? 'LONG' : 'SHORT'}: ${sentiment} (score: ${score.toFixed(2)}) - advisory only`);
+                } else {
+                    logger.debug(`📰 Sentiment neutral for ${decision.symbol}: ${sentiment} (score: ${score.toFixed(2)})`);
+                }
+            }
+        } catch (sentimentError) {
+            logger.debug('Sentiment check skipped:', sentimentError instanceof Error ? sentimentError.message : 'unknown error');
+        }
+
         // ADDED: Validate stop loss is not too wide for the leverage level
         // At high leverage, stop loss must be tighter than liquidation distance
         // Liquidation distance = 100% / leverage (e.g., 5% at 20x)
         if (validatedSlPrice !== null && leverage >= 10 && currentPrice > 0) {
             const slDistancePct = Math.abs(currentPrice - validatedSlPrice) / currentPrice * 100;
+
+            // Use getRequiredStopLossPercent for leverage-appropriate stop loss limits
+            const requiredMaxSlPct = getRequiredStopLossPercent(leverage);
             const liquidationDistancePct = 100 / leverage; // e.g., 5% at 20x
-            const maxSafeSlPct = liquidationDistancePct * 0.8; // 80% of liquidation distance for safety margin
+            const maxSafeSlPct = Math.min(requiredMaxSlPct, liquidationDistancePct * 0.8); // Use stricter of the two
 
             // FIXED: Only tighten if slDistancePct is valid (finite and positive)
             if (Number.isFinite(slDistancePct) && slDistancePct > 0 && slDistancePct > maxSafeSlPct) {
                 logger.warn(`Stop loss ${slDistancePct.toFixed(2)}% exceeds safe limit ${maxSafeSlPct.toFixed(2)}% for ${leverage}x leverage. ` +
-                    `Liquidation at ${liquidationDistancePct.toFixed(2)}%. Tightening stop loss.`);
+                    `Required max: ${requiredMaxSlPct}%, Liquidation at ${liquidationDistancePct.toFixed(2)}%. Tightening stop loss.`);
 
                 // Tighten stop loss to safe level
                 const safeSlDistance = currentPrice * (maxSafeSlPct / 100);
@@ -1597,11 +1757,19 @@ export class AutonomousTradingEngine extends EventEmitter {
                 // FIXED: Validate the new stop loss is valid before using it
                 if (Number.isFinite(newSlPrice) && newSlPrice > 0) {
                     validatedSlPrice = newSlPrice;
-                    logger.info(`Adjusted stop loss to ${validatedSlPrice.toFixed(2)} (${maxSafeSlPct.toFixed(2)}% from entry)`);
+                    logger.info(`Adjusted stop loss to ${validatedSlPrice.toFixed(2)} (${maxSafeSlPct.toFixed(2)}% from current price)`);
                 } else {
                     logger.warn(`Could not calculate valid adjusted stop loss, keeping original: ${validatedSlPrice}`);
                 }
             }
+        }
+
+        // COMPETITION MODE GUARD (v5.3.0)
+        // Per-trade guard that logs warnings and blocks trades if account type is live
+        const competitionGuard = guardCompetitionModeTrade(decision.symbol, decision.action, leverage);
+        if (!competitionGuard.allowed) {
+            logger.error(`🚫 Trade blocked by competition mode guard: ${competitionGuard.warning}`);
+            return false;
         }
 
         if (config.autonomous.dryRun) {
@@ -1637,16 +1805,23 @@ export class AutonomousTradingEngine extends EventEmitter {
             logger.info(`✅ ${decision.action} order placed: ${result.order_id}`);
 
             // Place TP/SL
+            // FIXED: Round TP/SL prices to symbol's tick size to prevent WEEX rejection
             const positionSide: 'long' | 'short' = isLong ? 'long' : 'short';
             if (validatedTpPrice !== null && validatedTpPrice > 0) {
                 try {
-                    await this.weexClient.placeTpSlOrder({
-                        symbol: decision.symbol,
-                        planType: 'profit_plan',
-                        triggerPrice: validatedTpPrice,
-                        size: roundedSizeNum,
-                        positionSide,
-                    });
+                    // Round to tick size - parseFloat converts string back to number
+                    const roundedTpPrice = parseFloat(roundToTickSize(validatedTpPrice, decision.symbol));
+                    if (Number.isFinite(roundedTpPrice) && roundedTpPrice > 0) {
+                        await this.weexClient.placeTpSlOrder({
+                            symbol: decision.symbol,
+                            planType: 'profit_plan',
+                            triggerPrice: roundedTpPrice,
+                            size: roundedSizeNum,
+                            positionSide,
+                        });
+                    } else {
+                        logger.warn(`TP price rounding failed: ${validatedTpPrice} -> ${roundedTpPrice}`);
+                    }
                 } catch (tpError) {
                     logger.warn('Failed to set TP:', tpError instanceof Error ? tpError.message : String(tpError));
                 }
@@ -1654,13 +1829,19 @@ export class AutonomousTradingEngine extends EventEmitter {
 
             if (validatedSlPrice !== null && validatedSlPrice > 0) {
                 try {
-                    await this.weexClient.placeTpSlOrder({
-                        symbol: decision.symbol,
-                        planType: 'loss_plan',
-                        triggerPrice: validatedSlPrice,
-                        size: roundedSizeNum,
-                        positionSide,
-                    });
+                    // Round to tick size - parseFloat converts string back to number
+                    const roundedSlPrice = parseFloat(roundToTickSize(validatedSlPrice, decision.symbol));
+                    if (Number.isFinite(roundedSlPrice) && roundedSlPrice > 0) {
+                        await this.weexClient.placeTpSlOrder({
+                            symbol: decision.symbol,
+                            planType: 'loss_plan',
+                            triggerPrice: roundedSlPrice,
+                            size: roundedSizeNum,
+                            positionSide,
+                        });
+                    } else {
+                        logger.warn(`SL price rounding failed: ${validatedSlPrice} -> ${roundedSlPrice}`);
+                    }
                 } catch (slError) {
                     logger.warn('Failed to set SL:', slError instanceof Error ? slError.message : String(slError));
                 }
@@ -1724,9 +1905,12 @@ export class AutonomousTradingEngine extends EventEmitter {
                 ? decision.sl_price
                 : null;
 
+            // Generate trade ID once and reuse for both DB and position tracking
+            const tradeId = crypto.randomUUID();
+
             await prisma.trade.create({
                 data: {
-                    id: crypto.randomUUID(),
+                    id: tradeId,
                     portfolioId: portfolio.id,
                     symbol: decision.symbol,
                     side: decision.action === 'BUY' ? 'BUY' : 'SELL',
@@ -1753,6 +1937,49 @@ export class AutonomousTradingEngine extends EventEmitter {
                 },
             });
             logger.info(`Trade saved to database: ${decision.symbol} ${decision.action} size=${size} price=${price}`);
+
+            // Track trade for position sync (v5.3.0)
+            // When this position closes, PositionSyncService will create the journal entry
+            try {
+                // Extract analyst scores from the parallel analysis result
+                // Each analyst's confidence score is used for performance tracking
+                // Use explicit null/undefined checks to preserve valid zero values
+                const analystScores: Record<string, number> = {};
+                const analysisResult = decision.analysisResult;
+                if (analysisResult) {
+                    if (analysisResult.jim?.recommendation?.confidence != null) analystScores['jim'] = analysisResult.jim.recommendation.confidence;
+                    if (analysisResult.ray?.recommendation?.confidence != null) analystScores['ray'] = analysisResult.ray.recommendation.confidence;
+                    if (analysisResult.karen?.recommendation?.confidence != null) analystScores['karen'] = analysisResult.karen.recommendation.confidence;
+                    if (analysisResult.quant?.recommendation?.confidence != null) analystScores['quant'] = analysisResult.quant.recommendation.confidence;
+                }
+
+                trackOpenTrade({
+                    tradeId,  // Use the same tradeId as saved to database
+                    orderId,
+                    symbol: decision.symbol,
+                    side: decision.action === 'BUY' ? 'BUY' : 'SELL',
+                    entryPrice: price,
+                    size,
+                    leverage: validatedLeverage,
+                    tpPrice: validatedTp,
+                    slPrice: validatedSl,
+                    // Entry context - null for unavailable fields (proper nullable types)
+                    // TODO: Pass TradingContext to saveParallelAnalysisTrade to populate these fields
+                    entryRegime: null,  // Not available in FinalDecision
+                    entryZScore: null,  // Not available in FinalDecision
+                    entryFunding: null,  // Not available in FinalDecision
+                    entrySentiment: null,  // Not available in FinalDecision
+                    entrySignals: {},  // Empty object when not available
+                    winningAnalyst: decision.winner || 'unknown',
+                    analystScores,
+                    judgeReasoning: (decision.judgeDecision?.reasoning || '').slice(0, 500),
+                    openedAt: Date.now(),
+                });
+                logger.debug(`Trade tracked for position sync: ${decision.symbol}`);
+            } catch (trackError) {
+                // Don't fail the trade if tracking fails
+                logger.warn('Failed to track trade for position sync:', trackError);
+            }
         } catch (error) {
             logger.error('Failed to save trade:', error);
         }
@@ -2435,7 +2662,7 @@ export class AutonomousTradingEngine extends EventEmitter {
                         logger.warn(`Cannot record management trade: invalid closePrice ${closePrice} for ${position.symbol}`);
                         return;
                     }
-                } catch (err) {
+                } catch (_err) {
                     logger.warn(`Cannot record management trade: failed to fetch price for ${position.symbol}`);
                     return;
                 }
@@ -2537,6 +2764,10 @@ export class AutonomousTradingEngine extends EventEmitter {
         }
         return new Promise((resolve) => {
             this.sleepTimeout = setTimeout(() => { this.sleepTimeout = null; resolve(); }, ms);
+            // FIXED: Use .unref() to not block process exit
+            if (this.sleepTimeout.unref) {
+                this.sleepTimeout.unref();
+            }
         });
     }
 
@@ -2592,6 +2823,9 @@ export class AutonomousTradingEngine extends EventEmitter {
 
             // FIXED: Reset contract specs tracker to force fresh fetch on restart
             this.contractSpecsTracker.reset();
+
+            // Clear contract specs cache to ensure fresh data on restart (v5.2.0)
+            clearContractSpecs();
 
             // FIXED: Reset snapshot tracking to prevent stale state
             this.lastSnapshotCleanup = 0;

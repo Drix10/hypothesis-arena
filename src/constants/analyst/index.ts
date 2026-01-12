@@ -23,7 +23,16 @@ export type { AnalystMethodology, AnalystAgent } from './types';
 export { ANALYST_PROFILES } from './profiles';
 
 // Risk Management
-export { GLOBAL_RISK_LIMITS } from './riskLimits';
+export {
+    GLOBAL_RISK_LIMITS,
+    validateCompetitionMode,
+    validateAccountTypeForCompetition,
+    guardCompetitionModeTrade,
+    isCompetitionModeAllowed,
+    isLeverageAutoApproved,
+    getMaxLeverageForExposure,
+    getRequiredStopLossPercent
+} from './riskLimits';
 export { RISK_COUNCIL_VETO_TRIGGERS } from './riskCouncil';
 
 // v5.0.0: Export prompt building functions

@@ -79,6 +79,14 @@ async function start() {
             logger.warn('Database connection failed - some features may not work');
         }
 
+        // Initialize sentiment service (pre-warm cache)
+        try {
+            const { initializeSentimentService } = await import('./services/sentiment');
+            await initializeSentimentService();
+        } catch (error) {
+            logger.warn('Sentiment service initialization failed (will retry on demand):', error);
+        }
+
         server.listen(PORT, () => {
             logger.info(`Server running on port ${PORT}`);
             logger.info(`Environment: ${config.nodeEnv}`);
@@ -151,6 +159,62 @@ const shutdown = async (signal: string) => {
         logger.info('ContextBuilder cleanup complete');
     } catch (error) {
         logger.warn('Error cleaning up ContextBuilder:', error);
+    }
+
+    try {
+        const { shutdownSentimentService } = await import('./services/sentiment');
+        shutdownSentimentService(); // Sync: clears cache and stops cleanup timer
+        logger.info('SentimentService cleanup complete');
+    } catch (error) {
+        logger.warn('Error cleaning up SentimentService:', error);
+    }
+
+    try {
+        const { shutdownQuantService } = await import('./services/quant');
+        shutdownQuantService(); // Sync: clears cache and stops cleanup timer
+        logger.info('QuantService cleanup complete');
+    } catch (error) {
+        logger.warn('Error cleaning up QuantService:', error);
+    }
+
+    try {
+        const { modelPoolManager } = await import('./services/ai/ModelPoolManager');
+        modelPoolManager.shutdown(); // Sync: clears failure counts and stops reset timer
+        logger.info('ModelPoolManager cleanup complete');
+    } catch (error) {
+        logger.warn('Error cleaning up ModelPoolManager:', error);
+    }
+
+    try {
+        const { shutdownRedditService } = await import('./services/sentiment');
+        shutdownRedditService(); // Sync: clears cache and stops cleanup timer
+        logger.info('RedditSentimentService cleanup complete');
+    } catch (error) {
+        logger.warn('Error cleaning up RedditSentimentService:', error);
+    }
+
+    try {
+        const { shutdownJournalService } = await import('./services/journal');
+        shutdownJournalService(); // Sync: clears in-memory journal
+        logger.info('JournalService cleanup complete');
+    } catch (error) {
+        logger.warn('Error cleaning up JournalService:', error);
+    }
+
+    try {
+        const { shutdownPositionSyncService } = await import('./services/position');
+        shutdownPositionSyncService(); // Sync: clears tracked trades
+        logger.info('PositionSyncService cleanup complete');
+    } catch (error) {
+        logger.warn('Error cleaning up PositionSyncService:', error);
+    }
+
+    try {
+        const { shutdownRegimeDetector } = await import('./services/quant');
+        shutdownRegimeDetector(); // Sync: clears regime history and stops cleanup timer
+        logger.info('RegimeDetector cleanup complete');
+    } catch (error) {
+        logger.warn('Error cleaning up RegimeDetector:', error);
     }
 
     try {
