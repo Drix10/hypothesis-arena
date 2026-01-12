@@ -88,12 +88,12 @@ Each analyst uses a different AI model per cycle, randomly assigned from a pool 
 
 **Model Pool:**
 
-| Model                         | Provider   | Strengths                  | Priority     |
-| ----------------------------- | ---------- | -------------------------- | ------------ |
-| `deepseek/deepseek-chat`      | OpenRouter | Strong reasoning, reliable | 0 (fallback) |
-| `google/gemini-2.0-flash-001` | OpenRouter | Fast, reliable             | 1            |
-| `x-ai/grok-4.1-fast`          | OpenRouter | Fast reasoning             | 2            |
-| `xiaomi/mimo-v2-flash`        | OpenRouter | Fast, cost-effective       | 3            |
+| Model                           | Provider   | Strengths                  | Priority     |
+| ------------------------------- | ---------- | -------------------------- | ------------ |
+| `deepseek/deepseek-chat`        | OpenRouter | Strong reasoning, reliable | 0 (fallback) |
+| `google/gemini-3-flash-preview` | OpenRouter | Fast, reliable             | 1            |
+| `x-ai/grok-4.1-fast`            | OpenRouter | Fast reasoning             | 2            |
+| `xiaomi/mimo-v2-flash:free`     | OpenRouter | Reliable, fast             | 3            |
 
 **Configuration:**
 

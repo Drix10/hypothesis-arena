@@ -28,6 +28,7 @@ export class AILogService {
     // CRITICAL FIX: Track retry attempts per log to prevent infinite retries
     private retryAttempts: Map<string, number> = new Map();
     private readonly MAX_RETRY_ATTEMPTS = 5; // Max retries per log before giving up
+    private readonly MAX_RETRY_ATTEMPTS_ENTRIES = 200; // Prevent unbounded Map growth
 
     private lastRetryAttempt = 0;
     private readonly RETRY_INTERVAL_MS = 3600000; // 1 hour
@@ -135,7 +136,8 @@ export class AILogService {
 
                     // CRITICAL: Skip if log has weexLogId (already uploaded, DB just not updated)
                     // This prevents duplicate uploads when DB update fails after successful WEEX upload
-                    if (dbLog.weexLogId && dbLog.weexLogId.trim().length > 0) {
+                    // FIXED: Exclude FAILED_AFTER_* sentinel values which indicate permanent failure
+                    if (dbLog.weexLogId && dbLog.weexLogId.trim().length > 0 && !dbLog.weexLogId.startsWith('FAILED_AFTER_')) {
                         logger.info(`Skipping retry for log ${dbLog.id} - already has weexLogId: ${dbLog.weexLogId}`);
 
                         // Update DB to reflect successful upload (wrap in try-catch)
@@ -173,9 +175,9 @@ export class AILogService {
                             this.retryAttempts.delete(dbLog.id);
                         } catch (updateError) {
                             logger.error(`Failed to mark unparseable log ${dbLog.id} as uploaded:`, updateError);
-                            // Increment retry counter
-                            const attempts = this.retryAttempts.get(dbLog.id) || 0;
-                            this.retryAttempts.set(dbLog.id, attempts + 1);
+                            // Increment retry counter - use dbLog.id to get current attempts
+                            const currentAttempts = this.retryAttempts.get(dbLog.id) || 0;
+                            this.retryAttempts.set(dbLog.id, currentAttempts + 1);
                         }
                         continue;
                     }
@@ -195,9 +197,9 @@ export class AILogService {
                             this.retryAttempts.delete(dbLog.id);
                         } catch (updateError) {
                             logger.error(`Failed to mark unparseable log ${dbLog.id} as uploaded:`, updateError);
-                            // Increment retry counter
-                            const attempts = this.retryAttempts.get(dbLog.id) || 0;
-                            this.retryAttempts.set(dbLog.id, attempts + 1);
+                            // Increment retry counter - use dbLog.id to get current attempts
+                            const currentAttempts = this.retryAttempts.get(dbLog.id) || 0;
+                            this.retryAttempts.set(dbLog.id, currentAttempts + 1);
                         }
                         continue;
                     }
@@ -401,10 +403,10 @@ export class AILogService {
             // But we should still return the log object for in-memory tracking
         }
 
-        // Upload to WEEX if order-related
-        if (orderId) {
-            await this.uploadToWeex(log);
-        }
+        // CRITICAL: Upload ALL AI logs to WEEX for hackathon compliance
+        // WEEX requires AI logs for all stages (analysis, decision, execution)
+        // orderId is optional in WEEX API - null is acceptable for non-order stages
+        await this.uploadToWeex(log);
 
         // FIXED: Trigger retry and cleanup only if not already running
         const now = Date.now();
@@ -429,7 +431,8 @@ export class AILogService {
         try {
             // CRITICAL: Skip if log already has weexLogId (already uploaded)
             // This prevents duplicate uploads if retry is triggered after successful upload
-            if (log.weexLogId && log.weexLogId.trim().length > 0) {
+            // FIXED: Exclude FAILED_AFTER_* sentinel values which indicate permanent failure
+            if (log.weexLogId && log.weexLogId.trim().length > 0 && !log.weexLogId.startsWith('FAILED_AFTER_')) {
                 logger.info(`Skipping upload for log ${log.id} - already uploaded with weexLogId: ${log.weexLogId}`);
                 // Ensure DB reflects uploaded status
                 try {
@@ -597,9 +600,25 @@ export class AILogService {
                 const firstEntry = this.failedUploads.values().next().value;
                 if (firstEntry) {
                     this.failedUploads.delete(firstEntry);
+                    // CRITICAL FIX: Also remove from retryAttempts to prevent memory leak
+                    this.retryAttempts.delete(firstEntry);
                 }
             }
             this.failedUploads.add(log.id);
+
+            // CRITICAL FIX: Also limit retryAttempts Map size independently
+            // This handles edge cases where retryAttempts grows without corresponding failedUploads
+            if (this.retryAttempts.size > this.MAX_RETRY_ATTEMPTS_ENTRIES) {
+                // Remove oldest entries (first 10% of entries)
+                const entriesToRemove = Math.ceil(this.MAX_RETRY_ATTEMPTS_ENTRIES * 0.1);
+                const iterator = this.retryAttempts.keys();
+                for (let i = 0; i < entriesToRemove; i++) {
+                    const key = iterator.next().value;
+                    if (key) {
+                        this.retryAttempts.delete(key);
+                    }
+                }
+            }
 
             // Don't throw - log upload failure shouldn't block trading
             // But the error is logged and database reflects failed state for potential retry

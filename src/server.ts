@@ -218,6 +218,22 @@ const shutdown = async (signal: string) => {
     }
 
     try {
+        const { aiLogService } = await import('./services/compliance/AILogService');
+        aiLogService.cleanup(); // Sync: clears failed uploads tracking and retry state
+        logger.info('AILogService cleanup complete');
+    } catch (error) {
+        logger.warn('Error cleaning up AILogService:', error);
+    }
+
+    try {
+        const { aiService } = await import('./services/ai/AIService');
+        aiService.cleanup(); // Sync: clears Gemini model references
+        logger.info('AIService cleanup complete');
+    } catch (error) {
+        logger.warn('Error cleaning up AIService:', error);
+    }
+
+    try {
         cleanupTradingRoutes(); // Sync: clears route-level state
         logger.info('Trading routes cleanup complete');
     } catch (error) {

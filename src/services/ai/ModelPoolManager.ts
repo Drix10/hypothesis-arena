@@ -13,9 +13,9 @@
  * 
  * Models (default pool):
  * - deepseek/deepseek-chat (strong reasoning, reliable - primary fallback)
- * - google/gemini-2.0-flash-001 (fast, reliable)
+ * - google/gemini-3-flash-preview (fast, reliable)
  * - x-ai/grok-4.1-fast (fast reasoning)
- * - xiaomi/mimo-v2-flash (fast, cost-effective)
+ * - xiaomi/mimo-v2-flash:free (reliable, fast)
  * 
  * Configuration:
  * - MULTI_MODEL_ENABLED=true (default) - Enable multi-model rotation
@@ -66,8 +66,8 @@ export const MODEL_POOL: readonly ModelConfig[] = Object.freeze([
         priority: 0,  // Most reliable - primary fallback
     },
     {
-        id: 'google/gemini-2.0-flash-001',
-        name: 'Gemini 2.0 Flash',
+        id: 'google/gemini-3-flash-preview',
+        name: 'Gemini 3 Flash',
         provider: 'openrouter',
         timeoutMs: 45000,
         temperature: 0.7,
@@ -84,8 +84,8 @@ export const MODEL_POOL: readonly ModelConfig[] = Object.freeze([
         priority: 2,
     },
     {
-        id: 'xiaomi/mimo-v2-flash',
-        name: 'Xiaomi MiMo v2',
+        id: 'xiaomi/mimo-v2-flash:free',
+        name: 'Xiaomi Mimo v2',
         provider: 'openrouter',
         timeoutMs: 45000,
         temperature: 0.7,

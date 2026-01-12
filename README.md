@@ -127,7 +127,7 @@ OPENROUTER_MODEL=deepseek/deepseek-chat  # Default model when multi-model disabl
 # MULTI-MODEL ROTATION (v5.3.0)
 # =============================================================================
 # When enabled, each analyst uses a different AI model per cycle
-# Models: DeepSeek, Gemini 2.0 Flash, Grok 4.1 Fast, Xiaomi MiMo v2
+# Models: DeepSeek Chat, Gemini 3 Flash, Grok 4.1 Fast, Xiaomi Mimo v2
 # All models accessed via OpenRouter (requires OPENROUTER_API_KEY)
 MULTI_MODEL_ENABLED=true  # Set to 'false' to use single model for all analysts
 

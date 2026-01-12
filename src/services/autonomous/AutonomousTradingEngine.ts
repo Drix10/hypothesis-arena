@@ -203,9 +203,11 @@ function calculatePositionUrgency(position: {
 }): { urgency: PositionUrgency; reason: string } {
     // Hardcoded sensible defaults - AI handles actual TP/SL decisions
     // These are just for urgency classification to optimize token usage
+    // CRITICAL: These thresholds MUST match executeFallbackManagement thresholds
     const TARGET_PROFIT_PCT = 5;   // Consider urgent at +5%
     const STOP_LOSS_PCT = 5;       // Consider urgent at -5%
     const MAX_HOLD_HOURS = 12;     // Consider urgent after 12h
+    const PARTIAL_TP_THRESHOLD = 3; // FIXED: Match executeFallbackManagement threshold
 
     // FLAW FIX: Validate inputs - treat invalid values as LOW urgency
     const pnl = Number.isFinite(position.unrealizedPnlPercent) ? position.unrealizedPnlPercent : 0;
@@ -222,9 +224,10 @@ function calculatePositionUrgency(position: {
         return { urgency: 'VERY_URGENT', reason: `Hold time ${holdHours.toFixed(1)}h >= max (${MAX_HOLD_HOURS}h)` };
     }
 
-    // MODERATE: Should consider action
-    if (pnl >= TARGET_PROFIT_PCT * 0.4) { // 2% for 5% target
-        return { urgency: 'MODERATE', reason: `P&L +${pnl.toFixed(1)}% in partial TP zone` };
+    // MODERATE: Should consider action - FIXED: Use PARTIAL_TP_THRESHOLD (3%) not 2%
+    // This ensures positions flagged as MODERATE will actually trigger TAKE_PARTIAL
+    if (pnl >= PARTIAL_TP_THRESHOLD) {
+        return { urgency: 'MODERATE', reason: `P&L +${pnl.toFixed(1)}% in partial TP zone (>=${PARTIAL_TP_THRESHOLD}%)` };
     }
     if (pnl <= -STOP_LOSS_PCT / 2) {
         return { urgency: 'MODERATE', reason: `P&L ${pnl.toFixed(1)}% approaching SL` };
@@ -410,6 +413,49 @@ export class AutonomousTradingEngine extends EventEmitter {
                 logger.info(`📋 Management Decision: ${manageType} (conviction: ${conviction}/10)`);
                 logger.info(`Reason: ${reason}`);
 
+                // CRITICAL: Log rule-based management decision for WEEX compliance
+                try {
+                    // FIXED: Validate numeric values before using toFixed to prevent NaN errors
+                    const pnlPercent = Number.isFinite(positionToManage.unrealizedPnlPercent) ? positionToManage.unrealizedPnlPercent : 0;
+
+                    await aiLogService.createLog(
+                        'decision',
+                        'rule-based-engine',
+                        {
+                            decision_type: 'RULE_BASED_MANAGEMENT',
+                            position: {
+                                symbol: positionToManage.symbol,
+                                side: positionToManage.side,
+                                size: positionToManage.size,
+                                entryPrice: positionToManage.entryPrice,
+                                currentPrice: positionToManage.currentPrice,
+                                unrealizedPnl: positionToManage.unrealizedPnl,
+                                unrealizedPnlPercent: pnlPercent,
+                                holdTimeHours: positionToManage.holdTimeHours,
+                            },
+                            rules_evaluated: {
+                                target_profit_pct: 5,
+                                stop_loss_pct: 5,
+                                max_hold_hours: 12,
+                                partial_tp_threshold: 3,
+                            },
+                            fallback_reason: fallbackReason,
+                        },
+                        {
+                            action: manageType,
+                            conviction: conviction,
+                            reason: reason,
+                            close_percent: closePercent || 100,
+                            will_execute: !config.autonomous.dryRun,
+                        },
+                        `Rule-based management for ${positionToManage.symbol}: ${manageType} with conviction ${conviction}/10. ` +
+                        `Position P&L: ${pnlPercent.toFixed(2)}%. Reason: ${reason}. ` +
+                        `Triggered by: ${fallbackReason}.`
+                    );
+                } catch (logError) {
+                    logger.warn('Failed to create rule-based management AI log:', logError);
+                }
+
                 if (!config.autonomous.dryRun) {
                     try {
                         // NOTE: TIGHTEN_STOP and ADJUST_TP are not supported in rule-based fallback management
@@ -425,18 +471,30 @@ export class AutonomousTradingEngine extends EventEmitter {
                             case 'CLOSE_PARTIAL':
                             case 'TAKE_PARTIAL':
                                 if (closePercent && closePercent > 0 && closePercent < 100) {
-                                    const sizeToClose = roundToStepSize(
-                                        (positionToManage.size * closePercent) / 100,
-                                        positionToManage.symbol
-                                    );
-                                    await this.weexClient.closePartialPosition(
-                                        positionToManage.symbol,
-                                        positionToManage.side,
-                                        sizeToClose,
-                                        '1'
-                                    );
-                                    logger.info(`✅ Closed ${closePercent}% of ${positionToManage.symbol}`);
-                                    actionExecuted = true;
+                                    const rawSizeToClose = (positionToManage.size * closePercent) / 100;
+
+                                    // FIXED: Check if partial close size is viable before rounding
+                                    // If the partial size is too small, close the full position instead
+                                    try {
+                                        const sizeToClose = roundToStepSize(
+                                            rawSizeToClose,
+                                            positionToManage.symbol
+                                        );
+                                        await this.weexClient.closePartialPosition(
+                                            positionToManage.symbol,
+                                            positionToManage.side,
+                                            sizeToClose,
+                                            '1'
+                                        );
+                                        logger.info(`✅ Closed ${closePercent}% of ${positionToManage.symbol}`);
+                                        actionExecuted = true;
+                                    } catch (roundError) {
+                                        // Size too small for partial close - close full position instead
+                                        logger.warn(`Partial close size too small (${rawSizeToClose}), closing full position instead`);
+                                        await this.weexClient.closeAllPositions(positionToManage.symbol);
+                                        logger.info(`✅ Closed full position (partial was too small): ${positionToManage.symbol}`);
+                                        actionExecuted = true;
+                                    }
                                 }
                                 break;
                             case 'TIGHTEN_STOP':
@@ -477,6 +535,49 @@ export class AutonomousTradingEngine extends EventEmitter {
             } else {
                 // No management decision - position doesn't need action based on rules
                 logger.info(`📋 No management action needed for ${positionToManage.symbol} based on current rules`);
+
+                // CRITICAL: Log rule-based HOLD decision for WEEX compliance
+                try {
+                    // FIXED: Validate numeric values before using toFixed to prevent NaN errors
+                    const pnlPercent = Number.isFinite(positionToManage.unrealizedPnlPercent) ? positionToManage.unrealizedPnlPercent : 0;
+                    const holdHours = Number.isFinite(positionToManage.holdTimeHours) ? positionToManage.holdTimeHours : 0;
+
+                    await aiLogService.createLog(
+                        'decision',
+                        'rule-based-engine',
+                        {
+                            decision_type: 'RULE_BASED_HOLD',
+                            position: {
+                                symbol: positionToManage.symbol,
+                                side: positionToManage.side,
+                                size: positionToManage.size,
+                                entryPrice: positionToManage.entryPrice,
+                                currentPrice: positionToManage.currentPrice,
+                                unrealizedPnl: positionToManage.unrealizedPnl,
+                                unrealizedPnlPercent: pnlPercent,
+                                holdTimeHours: holdHours,
+                            },
+                            rules_evaluated: {
+                                target_profit_pct: 5,
+                                stop_loss_pct: 5,
+                                max_hold_hours: 12,
+                                partial_tp_threshold: 3,
+                            },
+                            fallback_reason: fallbackReason,
+                        },
+                        {
+                            action: 'HOLD',
+                            reason: 'Position within normal parameters - no rule triggered',
+                            pnl_percent: pnlPercent,
+                            hold_hours: holdHours,
+                        },
+                        `Rule-based evaluation for ${positionToManage.symbol}: HOLD (no action needed). ` +
+                        `Position P&L: ${pnlPercent.toFixed(2)}%, Hold time: ${holdHours.toFixed(1)}h. ` +
+                        `No thresholds exceeded (TP: 5%, SL: -5%, Max hold: 12h, Partial TP: 3%).`
+                    );
+                } catch (logError) {
+                    logger.warn('Failed to create rule-based HOLD AI log:', logError);
+                }
             }
         } catch (manageError) {
             logger.error(`Failed to get management decision:`, manageError);
@@ -517,6 +618,31 @@ export class AutonomousTradingEngine extends EventEmitter {
             logger.info(`💰 PRE-CHECK: Insufficient balance ($${currentBalance?.toFixed(2) || 'N/A'} < $${config.autonomous.minBalanceToTrade})`);
             logger.info(`🎯 ACTION: SKIP CYCLE (saving ~${TOKENS_FULL_ANALYSIS} tokens)`);
             logger.info(`${'='.repeat(60)}\n`);
+
+            // CRITICAL: Log rule-based SKIP decision for WEEX compliance
+            try {
+                await aiLogService.createLog(
+                    'decision',
+                    'rule-based-engine',
+                    {
+                        decision_type: 'PRE_CHECK_SKIP',
+                        check: 'INSUFFICIENT_BALANCE',
+                        current_balance: currentBalance,
+                        min_required: config.autonomous.minBalanceToTrade,
+                    },
+                    {
+                        action: 'SKIP_CYCLE',
+                        reason: 'Insufficient balance to trade',
+                        tokens_saved: TOKENS_FULL_ANALYSIS,
+                    },
+                    `Pre-check: SKIP CYCLE due to insufficient balance. ` +
+                    `Current: $${currentBalance?.toFixed(2) || 'N/A'} USDT, Required: $${config.autonomous.minBalanceToTrade} USDT. ` +
+                    `Saved ~${TOKENS_FULL_ANALYSIS} tokens by skipping expensive parallel analysis.`
+                );
+            } catch (logError) {
+                logger.warn('Failed to create insufficient balance AI log:', logError);
+            }
+
             return {
                 canRunStage2: false,
                 reason: `Insufficient balance: $${currentBalance?.toFixed(2) || 'N/A'}`,
@@ -534,6 +660,31 @@ export class AutonomousTradingEngine extends EventEmitter {
             logger.info(`📉 PRE-CHECK: Weekly drawdown exceeded (${weeklyPnL.week.toFixed(1)}% < -${RISK_COUNCIL_VETO_TRIGGERS.MAX_WEEKLY_DRAWDOWN}%)`);
             logger.info(`🎯 ACTION: SKIP CYCLE (saving ~${TOKENS_FULL_ANALYSIS} tokens)`);
             logger.info(`${'='.repeat(60)}\n`);
+
+            // CRITICAL: Log rule-based SKIP decision for WEEX compliance
+            try {
+                await aiLogService.createLog(
+                    'decision',
+                    'rule-based-engine',
+                    {
+                        decision_type: 'PRE_CHECK_SKIP',
+                        check: 'WEEKLY_DRAWDOWN_EXCEEDED',
+                        weekly_pnl_percent: weeklyPnL.week,
+                        max_allowed_drawdown: -RISK_COUNCIL_VETO_TRIGGERS.MAX_WEEKLY_DRAWDOWN,
+                    },
+                    {
+                        action: 'SKIP_CYCLE',
+                        reason: 'Weekly drawdown limit exceeded - risk management pause',
+                        tokens_saved: TOKENS_FULL_ANALYSIS,
+                    },
+                    `Pre-check: SKIP CYCLE due to weekly drawdown limit. ` +
+                    `Current weekly P&L: ${weeklyPnL.week.toFixed(1)}%, Max allowed: -${RISK_COUNCIL_VETO_TRIGGERS.MAX_WEEKLY_DRAWDOWN}%. ` +
+                    `Risk management requires pause until drawdown recovers. Saved ~${TOKENS_FULL_ANALYSIS} tokens.`
+                );
+            } catch (logError) {
+                logger.warn('Failed to create weekly drawdown AI log:', logError);
+            }
+
             return {
                 canRunStage2: false,
                 reason: `Weekly drawdown: ${weeklyPnL.week.toFixed(1)}%`,
@@ -553,6 +704,31 @@ export class AutonomousTradingEngine extends EventEmitter {
             logger.info(`🎯 ACTION: SKIP CYCLE (saving ~${TOKENS_FULL_ANALYSIS} tokens)`);
             logger.info(`💡 Daily trade counter resets at midnight UTC`);
             logger.info(`${'='.repeat(60)}\n`);
+
+            // CRITICAL: Log rule-based SKIP decision for WEEX compliance
+            try {
+                await aiLogService.createLog(
+                    'decision',
+                    'rule-based-engine',
+                    {
+                        decision_type: 'PRE_CHECK_SKIP',
+                        check: 'DAILY_TRADE_LIMIT_REACHED',
+                        daily_trade_count: dailyTradeCount,
+                        max_daily_trades: config.trading.maxDailyTrades,
+                    },
+                    {
+                        action: 'SKIP_CYCLE',
+                        reason: 'Daily trade limit reached - waiting for reset at midnight UTC',
+                        tokens_saved: TOKENS_FULL_ANALYSIS,
+                    },
+                    `Pre-check: SKIP CYCLE due to daily trade limit. ` +
+                    `Trades today: ${dailyTradeCount}/${config.trading.maxDailyTrades}. ` +
+                    `Counter resets at midnight UTC. Saved ~${TOKENS_FULL_ANALYSIS} tokens.`
+                );
+            } catch (logError) {
+                logger.warn('Failed to create daily trade limit AI log:', logError);
+            }
+
             return {
                 canRunStage2: false,
                 reason: `Max daily trades: ${dailyTradeCount}/${config.trading.maxDailyTrades}`,
@@ -734,6 +910,45 @@ export class AutonomousTradingEngine extends EventEmitter {
         logger.info(`✅ All positions LOW urgency - nothing to do`);
         logger.info(`🎯 ACTION: SKIP CYCLE (saving ~${TOKENS_FULL_ANALYSIS} tokens)`);
         logger.info(`${'='.repeat(60)}\n`);
+
+        // CRITICAL: Log rule-based SKIP decision for WEEX compliance
+        try {
+            await aiLogService.createLog(
+                'decision',
+                'rule-based-engine',
+                {
+                    decision_type: 'PRE_CHECK_SKIP',
+                    check: 'POSITION_LIMITS_LOW_URGENCY',
+                    position_count: positions.length,
+                    max_positions: MAX_POSITIONS,
+                    long_count: longCount,
+                    short_count: shortCount,
+                    max_same_direction: MAX_SAME_DIR,
+                    positions_summary: positionsWithUrgency.map(p => ({
+                        symbol: p.symbol,
+                        side: p.side,
+                        pnl_percent: Number.isFinite(p.unrealizedPnlPercent) ? p.unrealizedPnlPercent.toFixed(2) : '0.00',
+                        urgency: p.urgency,
+                    })),
+                },
+                {
+                    action: 'SKIP_CYCLE',
+                    reason: 'At position limits with all LOW urgency - no action needed',
+                    tokens_saved: TOKENS_FULL_ANALYSIS,
+                    urgency_breakdown: {
+                        very_urgent: veryUrgent.length,
+                        moderate: moderate.length,
+                        low: positionsWithUrgency.length - veryUrgent.length - moderate.length,
+                    },
+                },
+                `Pre-check: SKIP CYCLE due to position limits with all LOW urgency positions. ` +
+                `Positions: ${positions.length}/${MAX_POSITIONS} (LONG: ${longCount}/${MAX_SAME_DIR}, SHORT: ${shortCount}/${MAX_SAME_DIR}). ` +
+                `All ${positionsWithUrgency.length} positions are within normal parameters. Saved ~${TOKENS_FULL_ANALYSIS} tokens.`
+            );
+        } catch (logError) {
+            logger.warn('Failed to create position limits AI log:', logError);
+        }
+
         return {
             canRunStage2: false,
             reason: 'At limits, no urgent positions',
@@ -1334,6 +1549,29 @@ export class AutonomousTradingEngine extends EventEmitter {
         const accountBalance = await this.getWalletBalance();
         if (accountBalance < this.MIN_BALANCE_TO_TRADE) {
             logger.warn(`Balance ${accountBalance.toFixed(2)} below minimum ${this.MIN_BALANCE_TO_TRADE}`);
+
+            // CRITICAL: Log rule-based SKIP decision for WEEX compliance
+            try {
+                await aiLogService.createLog(
+                    'decision',
+                    'rule-based-engine',
+                    {
+                        decision_type: 'STAGE2_SKIP',
+                        check: 'INSUFFICIENT_BALANCE',
+                        current_balance: accountBalance,
+                        min_required: this.MIN_BALANCE_TO_TRADE,
+                    },
+                    {
+                        action: 'SKIP_CYCLE',
+                        reason: 'Insufficient balance detected at Stage 2 entry',
+                    },
+                    `Stage 2 entry check: SKIP CYCLE due to insufficient balance. ` +
+                    `Current: $${accountBalance.toFixed(2)} USDT, Required: $${this.MIN_BALANCE_TO_TRADE} USDT.`
+                );
+            } catch (logError) {
+                logger.warn('Failed to create Stage 2 balance check AI log:', logError);
+            }
+
             await this.updateLeaderboard();
             await this.completeCycle(cycleStart, 'insufficient balance');
             return;
@@ -1418,8 +1656,130 @@ export class AutonomousTradingEngine extends EventEmitter {
             if (this.currentCycle) {
                 this.currentCycle.analysesRun++;
             }
+
+            // CRITICAL: Create AI logs for WEEX compliance (v5.3.0)
+            // Log the analysis stage with all analyst outputs
+            try {
+                const analysisInput = {
+                    account_balance: accountBalance,
+                    positions_count: flowPositions.length,
+                    symbols_analyzed: Array.from(flowMarketData.keys()),
+                    market_conditions: Array.from(flowMarketData.entries()).slice(0, 3).map(([symbol, data]) => ({
+                        symbol,
+                        price: data.currentPrice,
+                        change24h: data.change24h,
+                        fundingRate: data.fundingRate,
+                    })),
+                };
+
+                const analysisOutput = {
+                    jim: decision.analysisResult.jim?.recommendation ? {
+                        action: decision.analysisResult.jim.recommendation.action,
+                        symbol: decision.analysisResult.jim.recommendation.symbol,
+                        confidence: decision.analysisResult.jim.recommendation.confidence,
+                    } : 'FAILED',
+                    ray: decision.analysisResult.ray?.recommendation ? {
+                        action: decision.analysisResult.ray.recommendation.action,
+                        symbol: decision.analysisResult.ray.recommendation.symbol,
+                        confidence: decision.analysisResult.ray.recommendation.confidence,
+                    } : 'FAILED',
+                    karen: decision.analysisResult.karen?.recommendation ? {
+                        action: decision.analysisResult.karen.recommendation.action,
+                        symbol: decision.analysisResult.karen.recommendation.symbol,
+                        confidence: decision.analysisResult.karen.recommendation.confidence,
+                    } : 'FAILED',
+                    quant: decision.analysisResult.quant?.recommendation ? {
+                        action: decision.analysisResult.quant.recommendation.action,
+                        symbol: decision.analysisResult.quant.recommendation.symbol,
+                        confidence: decision.analysisResult.quant.recommendation.confidence,
+                    } : 'FAILED',
+                };
+
+                const analysisExplanation = `4 AI analysts (Jim, Ray, Karen, Quant) independently analyzed ${flowMarketData.size} trading pairs. ` +
+                    `Each analyst applied their specialized methodology to identify trading opportunities. ` +
+                    `Results: Jim=${decision.analysisResult.jim?.recommendation.action || 'FAILED'}, ` +
+                    `Ray=${decision.analysisResult.ray?.recommendation.action || 'FAILED'}, ` +
+                    `Karen=${decision.analysisResult.karen?.recommendation.action || 'FAILED'}, ` +
+                    `Quant=${decision.analysisResult.quant?.recommendation.action || 'FAILED'}.`;
+
+                await aiLogService.createLog(
+                    'analysis',
+                    'multi-model-rotation',
+                    analysisInput,
+                    analysisOutput,
+                    analysisExplanation
+                );
+
+                // Log the decision stage with judge output
+                const decisionInput = {
+                    analyst_recommendations: analysisOutput,
+                    market_context: {
+                        symbols: Array.from(flowMarketData.keys()),
+                        positions: flowPositions.length,
+                    },
+                };
+
+                const decisionOutput = {
+                    winner: decision.winner,
+                    action: decision.action,
+                    symbol: decision.symbol,
+                    confidence: decision.confidence,
+                    leverage: decision.leverage,
+                    allocation_usd: decision.allocation_usd,
+                    tp_price: decision.tp_price,
+                    sl_price: decision.sl_price,
+                    warnings: decision.warnings,
+                };
+
+                // FIXED: Guard against undefined/null judgeDecision.reasoning
+                const reasoningSnippet = decision.judgeDecision?.reasoning
+                    ? decision.judgeDecision.reasoning.slice(0, 300)
+                    : 'No reasoning provided';
+                const decisionExplanation = `AI Judge evaluated 4 analyst recommendations and selected ${decision.winner} as winner. ` +
+                    `Final decision: ${decision.action} ${decision.symbol} with ${decision.confidence}% confidence. ` +
+                    `${reasoningSnippet}`;
+
+                await aiLogService.createLog(
+                    'decision',
+                    'judge-ai',
+                    decisionInput,
+                    decisionOutput,
+                    decisionExplanation
+                );
+            } catch (logError) {
+                // Don't fail the trade if logging fails
+                logger.warn('Failed to create AI analysis/decision logs:', logError);
+            }
         } catch (error) {
             logger.error('Parallel analysis failed:', error);
+
+            // CRITICAL: Log analysis failure for WEEX compliance
+            try {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                const truncatedError = errorMessage.length > 500 ? errorMessage.slice(0, 500) + '...' : errorMessage;
+                await aiLogService.createLog(
+                    'decision',
+                    'multi-model-rotation',
+                    {
+                        decision_type: 'ANALYSIS_FAILED',
+                        error: truncatedError,
+                        account_balance: accountBalance,
+                        positions_count: flowPositions.length,
+                        symbols_analyzed: Array.from(flowMarketData.keys()),
+                    },
+                    {
+                        action: 'SKIP_CYCLE',
+                        reason: 'Parallel analysis failed - system error',
+                        consecutive_failures: this.consecutiveFailures + 1,
+                    },
+                    `Parallel analysis failed due to system error. ` +
+                    `Error: ${truncatedError}. ` +
+                    `Consecutive failures: ${this.consecutiveFailures + 1}. Cycle skipped for safety.`
+                );
+            } catch (logError) {
+                logger.warn('Failed to create analysis failure AI log:', logError);
+            }
+
             this.consecutiveFailures++;
             await this.updateLeaderboard();
             await this.completeCycle(cycleStart, 'parallel analysis failed');
@@ -1459,12 +1819,86 @@ export class AutonomousTradingEngine extends EventEmitter {
             if (position) {
                 try {
                     if (decision.action === 'CLOSE') {
-                        await this.weexClient.closeAllPositions(decision.symbol);
+                        const closeResult = await this.weexClient.closeAllPositions(decision.symbol);
                         logger.info(`✅ Closed position: ${decision.symbol}`);
+
+                        // Create AI log for position close
+                        // FIXED: Try to extract orderId from close result for WEEX compliance
+                        try {
+                            const closeOrderId = closeResult?.order_id || closeResult?.orderId || closeResult?.data?.order_id;
+                            await aiLogService.createLog(
+                                'position_management',
+                                'autonomous-engine',
+                                {
+                                    action: 'CLOSE',
+                                    symbol: decision.symbol,
+                                    position: { side: position.side, size: position.size, entryPrice: position.entryPrice },
+                                    decision_confidence: decision.confidence,
+                                    winner: decision.winner,
+                                },
+                                {
+                                    status: 'CLOSED',
+                                    symbol: decision.symbol,
+                                    closed_size: position.size,
+                                    order_id: closeOrderId || null,
+                                },
+                                `AI closed position for ${decision.symbol}. Winner: ${decision.winner}. Reason: ${(decision.rationale || '').slice(0, 200)}`,
+                                closeOrderId ? String(closeOrderId) : undefined // Pass orderId if available for WEEX upload
+                            );
+                        } catch (logError) {
+                            logger.warn('Failed to create AI close log:', logError);
+                        }
                     } else {
-                        const sizeToClose = roundToStepSize(position.size * 0.5, decision.symbol);
-                        await this.weexClient.closePartialPosition(decision.symbol, position.side, sizeToClose, '1');
-                        logger.info(`✅ Reduced position: ${decision.symbol} by 50%`);
+                        // FIXED: Handle case where partial close size is too small
+                        const rawSizeToClose = position.size * 0.5;
+                        let sizeToClose: string;
+                        let actuallyClosedFull = false;
+
+                        try {
+                            sizeToClose = roundToStepSize(rawSizeToClose, decision.symbol);
+                        } catch (roundError) {
+                            // Size too small for partial close - close full position instead
+                            logger.warn(`Partial close size too small (${rawSizeToClose}), closing full position instead`);
+                            await this.weexClient.closeAllPositions(decision.symbol);
+                            logger.info(`✅ Closed full position (partial was too small): ${decision.symbol}`);
+                            actuallyClosedFull = true;
+                            sizeToClose = String(position.size); // For logging
+                        }
+
+                        let reduceResult: any;
+                        if (!actuallyClosedFull) {
+                            reduceResult = await this.weexClient.closePartialPosition(decision.symbol, position.side, sizeToClose, '1');
+                            logger.info(`✅ Reduced position: ${decision.symbol} by 50%`);
+                        }
+
+                        // Create AI log for position reduce
+                        // FIXED: Extract orderId from reduce result for WEEX compliance
+                        try {
+                            const reduceOrderId = reduceResult?.order_id;
+                            await aiLogService.createLog(
+                                'position_management',
+                                'autonomous-engine',
+                                {
+                                    action: actuallyClosedFull ? 'CLOSE' : 'REDUCE',
+                                    symbol: decision.symbol,
+                                    position: { side: position.side, size: position.size, entryPrice: position.entryPrice },
+                                    reduction_percent: actuallyClosedFull ? 100 : 50,
+                                    decision_confidence: decision.confidence,
+                                    winner: decision.winner,
+                                },
+                                {
+                                    status: actuallyClosedFull ? 'CLOSED' : 'REDUCED',
+                                    symbol: decision.symbol,
+                                    reduced_size: sizeToClose,
+                                    remaining_size: actuallyClosedFull ? 0 : position.size * 0.5,
+                                    order_id: reduceOrderId || null,
+                                },
+                                `AI ${actuallyClosedFull ? 'closed' : 'reduced'} position for ${decision.symbol}${actuallyClosedFull ? ' (partial was too small)' : ' by 50%'}. Winner: ${decision.winner}. Reason: ${(decision.rationale || '').slice(0, 200)}`,
+                                reduceOrderId ? String(reduceOrderId) : undefined // Pass orderId for WEEX upload
+                            );
+                        } catch (logError) {
+                            logger.warn('Failed to create AI reduce log:', logError);
+                        }
                     }
                     if (this.currentCycle) this.currentCycle.tradesExecuted++;
                     // FIXED: Reset consecutive failures on successful action
@@ -1485,6 +1919,36 @@ export class AutonomousTradingEngine extends EventEmitter {
         if (decision.confidence < this.MIN_CONFIDENCE_TO_TRADE) {
             logger.info(`📊 Decision: HOLD - Confidence ${decision.confidence}% below threshold ${this.MIN_CONFIDENCE_TO_TRADE}%`);
             logger.info(`   Original recommendation was ${decision.action} ${decision.symbol} by ${decision.winner}`);
+
+            // CRITICAL: Log confidence-based HOLD decision for WEEX compliance
+            // Note: The AI decision was already logged above, this logs the override
+            try {
+                await aiLogService.createLog(
+                    'decision',
+                    'rule-based-engine',
+                    {
+                        decision_type: 'CONFIDENCE_TOO_LOW',
+                        original_decision: {
+                            action: decision.action,
+                            symbol: decision.symbol,
+                            winner: decision.winner,
+                            confidence: decision.confidence,
+                        },
+                        threshold: this.MIN_CONFIDENCE_TO_TRADE,
+                    },
+                    {
+                        action: 'HOLD',
+                        reason: `Confidence ${decision.confidence}% below threshold ${this.MIN_CONFIDENCE_TO_TRADE}%`,
+                        original_action: decision.action,
+                    },
+                    `AI recommended ${decision.action} ${decision.symbol} with ${decision.confidence}% confidence, ` +
+                    `but confidence is below minimum threshold of ${this.MIN_CONFIDENCE_TO_TRADE}%. ` +
+                    `Trade blocked - holding instead. Winner was: ${decision.winner}.`
+                );
+            } catch (logError) {
+                logger.warn('Failed to create confidence threshold AI log:', logError);
+            }
+
             this.consecutiveFailures = 0;
             this.consecutiveHolds++;
             await this.updateLeaderboard();
@@ -1500,6 +1964,40 @@ export class AutonomousTradingEngine extends EventEmitter {
         const antiChurnCheck = flowService.checkAntiChurn(decision.symbol, direction);
         if (!antiChurnCheck.allowed) {
             logger.info(`⏳ Anti-churn blocked: ${antiChurnCheck.reason}`);
+
+            // CRITICAL: Log anti-churn SKIP decision for WEEX compliance
+            try {
+                await aiLogService.createLog(
+                    'decision',
+                    'rule-based-engine',
+                    {
+                        decision_type: 'ANTI_CHURN_SKIP',
+                        original_decision: {
+                            action: decision.action,
+                            symbol: decision.symbol,
+                            winner: decision.winner,
+                            confidence: decision.confidence,
+                        },
+                        anti_churn_check: {
+                            symbol: decision.symbol,
+                            direction: direction,
+                            allowed: antiChurnCheck.allowed,
+                            reason: antiChurnCheck.reason,
+                        },
+                    },
+                    {
+                        action: 'SKIP_TRADE',
+                        reason: `Anti-churn protection: ${antiChurnCheck.reason}`,
+                        original_action: decision.action,
+                    },
+                    `Anti-churn protection blocked ${decision.action} ${decision.symbol}. ` +
+                    `AI recommended ${decision.action} with ${decision.confidence}% confidence, but anti-churn rule prevented execution: ${antiChurnCheck.reason}. ` +
+                    `This prevents excessive trading on the same symbol/direction.`
+                );
+            } catch (logError) {
+                logger.warn('Failed to create anti-churn AI log:', logError);
+            }
+
             await this.updateLeaderboard();
             await this.completeCycle(cycleStart, `anti-churn: ${antiChurnCheck.reason}`);
             return;
@@ -1803,6 +2301,53 @@ export class AutonomousTradingEngine extends EventEmitter {
                 marginMode: 1,
             });
             logger.info(`✅ ${decision.action} order placed: ${result.order_id}`);
+
+            // CRITICAL: Create AI execution log for WEEX compliance (v5.3.0)
+            // This log is linked to the orderId for verification
+            try {
+                const executionInput = {
+                    decision: {
+                        action: decision.action,
+                        symbol: decision.symbol,
+                        confidence: decision.confidence,
+                        winner: decision.winner,
+                    },
+                    order_params: {
+                        size: roundedSize,
+                        leverage: leverage,
+                        tp_price: validatedTpPrice,
+                        sl_price: validatedSlPrice,
+                        current_price: currentPrice,
+                    },
+                };
+
+                const executionOutput = {
+                    order_id: result.order_id,
+                    client_oid: clientOid,
+                    status: 'PLACED',
+                    executed_price: currentPrice,
+                    executed_size: roundedSize,
+                    leverage: leverage,
+                };
+
+                const executionExplanation = `AI executed ${decision.action} order for ${decision.symbol}. ` +
+                    `Order placed with ${leverage}x leverage, size ${roundedSize} at price ${currentPrice}. ` +
+                    `Winner: ${decision.winner} with ${decision.confidence}% confidence. ` +
+                    `TP: ${validatedTpPrice || 'none'}, SL: ${validatedSlPrice || 'none'}. ` +
+                    `Rationale: ${(decision.rationale || '').slice(0, 200)}`;
+
+                await aiLogService.createLog(
+                    'execution',
+                    'autonomous-engine',
+                    executionInput,
+                    executionOutput,
+                    executionExplanation,
+                    String(result.order_id) // Link to orderId for WEEX verification
+                );
+            } catch (logError) {
+                // Don't fail the trade if logging fails
+                logger.warn('Failed to create AI execution log:', logError);
+            }
 
             // Place TP/SL
             // FIXED: Round TP/SL prices to symbol's tick size to prevent WEEX rejection
