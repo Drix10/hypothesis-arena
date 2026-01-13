@@ -12,7 +12,7 @@
   [![Express](https://img.shields.io/badge/Express-4-000000?logo=express)](https://expressjs.com/)
   [![WEEX](https://img.shields.io/badge/WEEX-Futures-00D4AA)](https://www.weex.com/)
   
-  **🏆 WEEX Hackathon 2025 Submission** | **v5.3.0**
+  **🏆 WEEX Hackathon 2026 Submission**
   
 </div>
 
@@ -35,7 +35,7 @@ Hypothesis Arena is an autonomous AI-powered trading system for WEEX perpetual f
 - **Monte Carlo Simulation** - Fat-tailed (Student's t) with GARCH volatility clustering
 - **Trade Journal** - Learning loop with pattern analysis and analyst performance tracking
 - **Anti-Churn** - Cooldowns, hysteresis, daily limits prevent overtrading
-- **Dynamic Leverage** - 10-20x based on conviction (see [FLOW.md](FLOW.md) for details)
+- **Dynamic Leverage** - 15-17x optimal (see [FLOW.md](FLOW.md) for details)
 - **Technical Indicators** - EMA, RSI, MACD, ATR, Bollinger Bands (5m and 4h timeframes)
 - **Exit Plans** - Each trade has invalidation conditions
 - **WEEX Compliance** - Full AI logging for hackathon requirements
@@ -367,6 +367,7 @@ src/
 
 | Version   | Date       | Changes                                                                          |
 | --------- | ---------- | -------------------------------------------------------------------------------- |
+| **5.4.0** | 2026-01-13 | Optimized leverage (15-17x), quarter-Kelly sizing, improved analytics            |
 | **5.3.0** | 2026-01-12 | Full integration - ALL 28 functions integrated, debug/admin API complete         |
 | **5.2.0** | 2026-01-11 | Debug & Admin API endpoints for runtime inspection                               |
 | **5.1.0** | 2026-01-11 | Regime detection, Monte Carlo simulation, funding rate percentile, trade journal |
@@ -396,9 +397,8 @@ MIT License - see [LICENSE](LICENSE)
 
 <div align="center">
   
-  **Built for WEEX Hackathon 2025**
+  **Built for WEEX Hackathon 2026**
   
   ⭐ Star if useful • 🐛 Report bugs • 💡 Suggest features
   
 </div>
-

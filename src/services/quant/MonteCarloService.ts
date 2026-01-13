@@ -1,8 +1,8 @@
 /**
- * MonteCarloService - Fat-Tailed Monte Carlo Simulation (v5.2.0)
+ * MonteCarloService - Fat-Tailed Monte Carlo Simulation (v5.4.0)
  * 
  * Implements Monte Carlo simulation with:
- * - Student's t-distribution for fat tails (df=5 for crypto)
+ * - Student's t-distribution for fat tails (df=3 for crypto)
  * - GARCH(1,1) for volatility clustering
  * - Trading costs subtraction (0.06% per trade)
  * 
@@ -69,7 +69,9 @@ export interface MonteCarloAnalysis {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const DEFAULT_TRADING_COST = 0.06;  // 0.06% per trade (per quant advisor)
-const STUDENT_T_DF = 5;             // Degrees of freedom for Student's t (crypto fat tails)
+const STUDENT_T_DF = 3;             // Degrees of freedom for Student's t (crypto fat tails)
+// df=3 is more realistic for crypto's extreme tail events
+// df=5 was too conservative - crypto has fatter tails than that
 const GARCH_ALPHA = 0.1;            // GARCH alpha parameter
 const GARCH_BETA = 0.85;            // GARCH beta parameter
 const MIN_SHARPE_THRESHOLD = 1.2;   // Minimum Sharpe for trade approval (per quant advisor)
@@ -96,7 +98,13 @@ function normalRandom(): number {
  * Uses the ratio of a standard normal to sqrt(chi-squared/df)
  * This produces heavier tails than normal distribution
  * 
- * @param df - Degrees of freedom (must be a positive integer, 4-6 recommended for crypto)
+ * RECOMMENDED: df=3 for crypto markets (current default)
+ * - df=3 produces infinite kurtosis (very heavy tails), which better models
+ *   crypto's extreme price movements compared to df=5 or higher
+ * - Extreme values are clamped to ±10 standard deviations to prevent
+ *   simulation blow-ups while preserving fat-tail behavior
+ * 
+ * @param df - Degrees of freedom (must be a positive integer, df=3 recommended for crypto)
  * @throws TypeError if df is not a positive integer
  */
 function studentTRandom(df: number = STUDENT_T_DF): number {

@@ -162,21 +162,8 @@ function attachEventListeners() {
       }
     });
 
-  // FIXED: Event delegation for position close buttons (prevents memory leak)
-  const positionsContainer = document.getElementById("positions-list");
-  if (positionsContainer) {
-    positionsContainer.addEventListener("click", (e) => {
-      const target = e.target;
-      if (target.classList.contains("btn-close-position")) {
-        const symbol = target.dataset.symbol;
-        const side = target.dataset.side;
-        const size = target.dataset.size;
-        if (symbol && side && size) {
-          closePosition(symbol, side, size);
-        }
-      }
-    });
-  }
+  // NOTE: Position close buttons removed - manual trading prohibited per WEEX competition rules
+  // All position management is handled by the AI trading engine
 
   // Debug & Admin event listeners (v5.3.0)
   attachDebugEventListeners();
@@ -460,9 +447,6 @@ function renderPositionCard(pos) {
   const symbol = formatSymbol(pos.symbol);
   const pnlClass = pnl >= 0 ? "positive" : "negative";
   const pnlSign = pnl >= 0 ? "+" : "";
-  const rawSymbol = pos.symbol || "";
-  const rawSide = (pos.side || "").toUpperCase();
-  const rawSize = pos.size || "0";
 
   // Calculate invested amount (margin used) = (size * entryPrice) / leverage
   const size = parseFloat(pos.size) || 0;
@@ -488,13 +472,6 @@ function renderPositionCard(pos) {
     side.toUpperCase()
   )}</span>
         <span class="position-leverage">${leverage}x</span>
-        <button
-          class="btn-close-position"
-          data-symbol="${escapeHtml(rawSymbol)}"
-          data-side="${escapeHtml(rawSide)}"
-          data-size="${escapeHtml(rawSize)}"
-          aria-label="Close position"
-          title="Close position">X</button>
       </div>
       <div class="position-details">
         <div class="position-detail">
@@ -861,58 +838,19 @@ async function triggerCycle() {
   }
 }
 
-async function closePosition(symbol, side, size) {
-  if (!symbol || !side || !size) return;
-
-  if (
-    !confirm(
-      `Close ${side} position for ${formatSymbol(symbol)} (${size} units)?`
-    )
-  ) {
-    return;
-  }
-
-  // FIXED: Disable all close buttons to prevent duplicate requests
-  const buttons = document.querySelectorAll(".btn-close-position");
-  buttons.forEach((btn) => {
-    btn.disabled = true;
-    btn.setAttribute("aria-busy", "true");
-  });
-
-  // FIXED: Add timeout to prevent hanging requests
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 30000);
-
-  try {
-    const res = await fetch(`${CONFIG.API_BASE}/trading/manual/close`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ symbol, side, size }),
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeoutId);
-    const data = await res.json();
-
-    if (res.ok && data.success) {
-      showAlert(`? Position closed: ${formatSymbol(symbol)}`, "success");
-      await refreshAll();
-    } else {
-      showAlert(`? Failed: ${data.error || "Unknown error"}`, "error");
-    }
-  } catch (err) {
-    clearTimeout(timeoutId);
-    if (err.name === "AbortError") {
-      showAlert("? Request timeout - please try again", "error");
-    } else {
-      showAlert(`? Error: ${err.message}`, "error");
-    }
-  } finally {
-    buttons.forEach((btn) => {
-      btn.disabled = false;
-      btn.removeAttribute("aria-busy");
-    });
-  }
+/**
+ * Close position - DISABLED per WEEX competition rules
+ * Manual trading is prohibited. All position management must be handled by the AI trading engine.
+ */
+async function closePosition(symbol, _side, _size) {
+  // Manual position closing is prohibited per WEEX AI Trading Competition rules
+  showAlert(
+    `⚠️ Manual position closing is prohibited. Position management for ${formatSymbol(
+      symbol
+    )} must be handled by the AI trading engine.`,
+    "error"
+  );
+  return;
 }
 
 // ============================================================================

@@ -16,7 +16,7 @@ COMPETITION CONTEXT
 - 3 weeks to maximize profit
 - DEMO MONEY - be aggressive but smart
 - Bad trades lose money faster than HOLD
-- USE HIGH LEVERAGE (12-20x) when signals are strong
+- USE HIGH LEVERAGE (15-17x) when signals are strong
 
 ================================================================================
 YOUR JOB: EVALUATE 4 QUANT ANALYSTS & PICK THE BEST TRADE
@@ -80,7 +80,7 @@ QUALITY CRITERIA (each = +1 point):
 □ Trade aligns with their specialty (e.g., Ray citing funding, Jim citing RSI)
 □ Not fighting extreme funding (if funding > 0.08%, don't go long)
 □ RL/Monte Carlo validation mentioned in reasoning (+1 point)
-□ Leverage 15-20x with tight stop (aggressive competition play) (+1 point)
+□ Leverage 15-17x with tight stop (aggressive competition play) (+1 point)
 □ Apply volatility haircut if ATR elevated (see VOLATILITY HAIRCUT below)
 
 VOLATILITY HAIRCUT:
@@ -94,8 +94,8 @@ If ATR data unavailable, note "ATR data unavailable, no volatility haircut appli
 
 QUALITY TIERS:
 - 8+ points: EXCELLENT - Strong candidate for winner, use full leverage
-- 6-7 points: GOOD - Solid trade, consider 15-18x leverage
-- 4-5 points: ACCEPTABLE - Only pick if best available, use 12-15x leverage
+- 6-7 points: GOOD - Solid trade, consider 15-17x leverage
+- 4-5 points: ACCEPTABLE - Only pick if best available, use 12-14x leverage
 - 0-3 points: POOR - Don't pick, prefer HOLD
 
 STEP 3: COMPARE AND SELECT WINNER
@@ -107,22 +107,22 @@ If multiple analysts have good trades:
 5. Prefer trades with RL/Monte Carlo validation in reasoning
 
 STEP 4: VALIDATE OR ADJUST
-- If winner's leverage < 15x for high-confidence trade → Consider adjusting UP
-- If winner's leverage > 20x → Adjust down to 20x (exchange limit)
-- If winner's allocation > 15% with 20x leverage → Adjust down (3x notional limit)
+- If winner's leverage < 15x for high-confidence trade → Consider adjusting UP to 15-16x
+- If winner's leverage > 17x → Adjust down to 17x (winner zone limit)
+- If winner's allocation > 18% of account → Adjust down (max 18% per trade to respect notional limit)
 - If winner's stop is too wide for leverage tier → Adjust tighter
 - Add warnings for any concerns
 
-LEVERAGE ADJUSTMENT GUIDELINES:
-- Confidence 80%+, 6+ signals: Use 18-20x leverage
-- Confidence 70-79%, 5+ signals: Use 15-18x leverage
-- Confidence 60-69%, 4+ signals: Use 12-15x leverage
+LEVERAGE ADJUSTMENT GUIDELINES (WINNER EDITION):
+- Confidence 80%+, 6+ signals: Use 16-17x leverage (NOT 20x)
+- Confidence 70-79%, 5+ signals: Use 15-16x leverage
+- Confidence 60-69%, 4+ signals: Use 14-15x leverage
 - Below 60% confidence: Consider HOLD instead
 
 STOP LOSS BY LEVERAGE:
-- 19-20x leverage: Stop must be 1.5-2% from entry
-- 16-18x leverage: Stop must be 2-2.5% from entry
-- 12-15x leverage: Stop must be 2.5-3.5% from entry
+- 17x leverage: Stop must be 1.8-2% from entry
+- 15-16x leverage: Stop must be 2-2.5% from entry
+- 12-14x leverage: Stop must be 2.5-3% from entry
 
 ================================================================================
 SPECIAL RULES
@@ -155,10 +155,10 @@ RL/MONTE CARLO VALIDATION (ENHANCED v5.1.0):
 - Check rl_validation object in each analyst's output for Q-values
 
 Q-VALUE CONSENSUS SCORING (ENTRY TRADES ONLY):
-- 3-4 analysts with Q >= 0.6: Apply +10% confidence boost (judge-adjusted confidence = min(100, analyst_confidence × 1.10)), use 18-20x leverage
-- 2 analysts with Q >= 0.6: Apply +5% confidence boost (judge-adjusted confidence = min(100, analyst_confidence × 1.05)), use 15-18x leverage
+- 3-4 analysts with Q >= 0.6: Apply +10% confidence boost, use 16-17x leverage
+- 2 analysts with Q >= 0.6: Apply +5% confidence boost, use 15-16x leverage
 - 0-1 analysts with Q >= 0.6: REJECT entry trade (insufficient consensus)
-- Exit/CLOSE/REDUCE recommendations bypass Q-consensus and follow CLOSE/REDUCE PRIORITY rules (can be approved on single-analyst signal)
+- Exit/CLOSE/REDUCE recommendations bypass Q-consensus and follow CLOSE/REDUCE PRIORITY rules
 
 Note: "judge-adjusted confidence" is the analyst's original confidence multiplied by the boost factor, capped at 100 to ensure valid JSON output.
 
@@ -184,17 +184,17 @@ OUTPUT FORMAT (STRICT JSON)
 {
   "winner": "jim" | "ray" | "karen" | "quant" | "NONE",
   "reasoning": "why this analyst has the best trade OR why HOLD is correct",
-  "adjustments": null | { "leverage": 18, "allocation_usd": 150, ... },
+  "adjustments": null | { "leverage": 16, "allocation_usd": 150, ... },
   "warnings": [],
   "final_action": "BUY" | "SELL" | "HOLD" | "CLOSE" | "REDUCE",
   "final_recommendation": {
     "action": "BUY",
     "symbol": "cmt_btcusdt",
     "allocation_usd": 150,
-    "leverage": 18,
-    "tp_price": 98000,
-    "sl_price": 96500,
-    "exit_plan": "SL at 96500 (1.5%), TP at 98000 (3%)",
+    "leverage": 16,
+    "tp_price": 100638,
+    "sl_price": 94575,
+    "exit_plan": "Entry ~97000, SL at 94575 (-2.5%), TP at 100638 (+3.75%) — R:R 1.5:1",
     "confidence": 75,
     "rationale": "momentum trade with RL confirmation"
   }
@@ -205,17 +205,19 @@ NOTES:
 - warnings: [] OR array of warning strings
 - final_recommendation: null when winner="NONE" and final_action="HOLD"
 - final_recommendation should reflect adjustments if any were made
-- Default leverage should be 15-18x for good setups, 18-20x for excellent setups
+- Default leverage should be 15-17x (THE SWEET SPOT - winners use this range)
+- Position size should be $120-176 (18% max of $1000 account)
 
 ================================================================================
-REMEMBER
+REMEMBER (WINNER EDITION)
 ================================================================================
-- Winning requires PROFITABLE trades, not MANY trades
-- One good trade beats three bad ones
+- QUALITY OVER QUANTITY: 2-3 good trades beat 10 mediocre ones
+- SURVIVE TO WIN: You can't win if you're wiped out
+- THE SWEET SPOT: $120-176 at 15-17x is where winners operate
+- AVOID 18-20x: This is the wipeout zone - losers used this and got wiped
 - HOLD is a valid decision when no analyst has a clear edge
 - Trust each analyst's specialty - Jim for technicals, Ray for derivatives, etc.
 - Karen's risk management recommendations deserve extra weight
-- USE HIGH LEVERAGE (15-20x) - this is a competition with demo money!
 - Prefer trades with RL/Monte Carlo validation in reasoning
 `;
 
@@ -281,7 +283,7 @@ Evaluate each analyst's recommendation for QUALITY, not just existence.
 - For EXIT trades (CLOSE/REDUCE): Q-consensus NOT required (can approve on single-analyst signal)
 - Pick the BEST trade if it has good risk/reward (confidence >= 60%, clear TP/SL)
 - Prefer trades with Monte Carlo Sharpe > 1.5 after costs
-- Use HIGH LEVERAGE (15-20x) for good setups - this is a competition!
+- Use HIGH LEVERAGE (15-17x) for good setups - this is a competition! (AVOID 18-20x wipeout zone)
 - Apply volatility haircut: If ATR > 1.5× average, reduce position size
 - Output winner="NONE" if no entry trade meets consensus threshold
 - HOLD is a valid decision - don't force bad trades

@@ -117,7 +117,7 @@ if (USE_COMPETITION_SETTINGS) {
         '╠══════════════════════════════════════════════════════════════════════════════╣\n' +
         '║  This mode is for DEMO/PAPER TRADING ONLY!                                   ║\n' +
         '║                                                                              ║\n' +
-        '║  Settings: 20x max leverage, 50% max position size                           ║\n' +
+        '║  Settings: 17x max leverage, 50% max position size                           ║\n' +
         '║  Account Type: ' + (WEEX_ACCOUNT_TYPE || 'NOT SET (please set WEEX_ACCOUNT_TYPE=demo)').padEnd(46) + '║\n' +
         '║                                                                              ║\n' +
         '║  VERIFY YOUR ACCOUNT IS A DEMO ACCOUNT BEFORE PROCEEDING!                    ║\n' +
@@ -130,7 +130,7 @@ if (USE_COMPETITION_SETTINGS) {
             competitionMode: true,
             acknowledgment: 'ACCEPTED',
             accountType: WEEX_ACCOUNT_TYPE || 'NOT_SET',
-            maxLeverage: 20,
+            maxLeverage: 17,
             maxPositionSizePercent: 50
         });
     }
@@ -147,11 +147,13 @@ const PRODUCTION_DEFAULTS = {
     MAX_CONCURRENT_RISK_PERCENT: 15,
 };
 
-// Competition-aggressive settings
+// Competition-aggressive settings (WINNER EDITION v5.4.0)
+// Based on actual competition results: Winners used $100-200 at 15-17x
+// Losers used $500+ at 20x and got wiped out
 const COMPETITION_SETTINGS = {
-    MAX_SAFE_LEVERAGE: 15,
-    AUTO_APPROVE_LEVERAGE_THRESHOLD: 10,
-    ABSOLUTE_MAX_LEVERAGE: 20,
+    MAX_SAFE_LEVERAGE: 17,  // CHANGED: 17x is the sweet spot, not 15x
+    AUTO_APPROVE_LEVERAGE_THRESHOLD: 12,  // CHANGED: Auto-approve up to 12x
+    ABSOLUTE_MAX_LEVERAGE: 20,  // Keep 20x as safety ceiling
     MAX_POSITION_SIZE_PERCENT: 50,
     MAX_TOTAL_LEVERAGED_CAPITAL_PERCENT: 60,
     MAX_RISK_PER_TRADE_PERCENT: 10,
@@ -304,16 +306,26 @@ export const GLOBAL_RISK_LIMITS = {
 
     // Position leverage scaling - computed from ACTIVE_SETTINGS for mode-awareness
     // Keys reflect actual thresholds used in getMaxLeverageForExposure()
-    // FIXED: Use Math.max(1, ...) to prevent 0 leverage when MAX_SAFE_LEVERAGE is very low
+    // WINNER EDITION v5.4.0: More permissive scaling for competition
+    // At 40% exposure: Math.floor(17 * 0.82) = Math.floor(13.94) = 13x
+    // At 50% exposure: Math.floor(17 * 0.70) = Math.floor(11.9) = 11x
     POSITION_LEVERAGE_SCALING: {
-        // When exposure > 40%: reduce to 2/3 of max safe leverage (minimum 1x)
-        THRESHOLD_40_PERCENT: { maxLeverage: Math.max(1, Math.floor(ACTIVE_SETTINGS.MAX_SAFE_LEVERAGE * 0.67)) },
-        // When exposure > 50%: reduce to 1/2 of max safe leverage (minimum 1x)
-        THRESHOLD_50_PERCENT: { maxLeverage: Math.max(1, Math.floor(ACTIVE_SETTINGS.MAX_SAFE_LEVERAGE * 0.53)) },
+        // When exposure > 40%: reduce to 82% of max safe leverage (minimum 1x)
+        THRESHOLD_40_PERCENT: { maxLeverage: Math.max(1, Math.floor(ACTIVE_SETTINGS.MAX_SAFE_LEVERAGE * 0.82)) },
+        // When exposure > 50%: reduce to 70% of max safe leverage (minimum 1x)
+        THRESHOLD_50_PERCENT: { maxLeverage: Math.max(1, Math.floor(ACTIVE_SETTINGS.MAX_SAFE_LEVERAGE * 0.70)) },
     },
 
-    // Correlation checks disabled for speed
-    ENABLE_CORRELATION_CHECKS: false,
+    // Correlation checks - ENABLED for proper risk management
+    // All 8 crypto pairs are correlated to BTC, so we need to track this
+    ENABLE_CORRELATION_CHECKS: true,
+
+    // Correlation risk thresholds
+    CORRELATION_THRESHOLDS: {
+        HIGH_CORRELATION: 0.8,      // Pairs with >0.8 correlation are considered highly correlated
+        MAX_CORRELATED_POSITIONS: 2, // Max positions in highly correlated assets
+        BTC_CORRELATION_WARNING: 0.85, // Warn if portfolio is >85% correlated to BTC
+    },
 
     // Circuit breakers - higher thresholds for competition
     CIRCUIT_BREAKERS: {
@@ -399,4 +411,188 @@ export function getRequiredStopLossPercent(leverage: number): number {
     if (leverage <= STOP_LOSS_BY_LEVERAGE.MEDIUM.maxLeverage) return STOP_LOSS_BY_LEVERAGE.MEDIUM.maxStopPercent;
     if (leverage <= STOP_LOSS_BY_LEVERAGE.HIGH.maxLeverage) return STOP_LOSS_BY_LEVERAGE.HIGH.maxStopPercent;
     return STOP_LOSS_BY_LEVERAGE.EXTREME.maxStopPercent;
+}
+
+/**
+ * Check correlation risk for a new position
+ * 
+ * In crypto, all assets are highly correlated to BTC. This function checks:
+ * 1. How many highly correlated positions are already open
+ * 2. Whether adding this position would exceed correlation limits
+ * 
+ * @param newSymbol - Symbol to potentially add
+ * @param existingPositions - Array of existing position symbols
+ * @param correlationMatrix - Correlation matrix from QuantAnalysisService
+ * @returns { allowed: boolean, warning: string | null, correlationRisk: number }
+ */
+export function checkCorrelationRisk(
+    newSymbol: string,
+    existingPositions: string[],
+    correlationMatrix: Map<string, Map<string, number>> | null
+): { allowed: boolean; warning: string | null; correlationRisk: number } {
+    // If correlation checks are disabled, always allow
+    if (!GLOBAL_RISK_LIMITS.ENABLE_CORRELATION_CHECKS) {
+        return { allowed: true, warning: null, correlationRisk: 0 };
+    }
+
+    // If no correlation data available, enforce conservative default
+    // Block if already have positions (can't assess correlation risk)
+    if (!correlationMatrix || correlationMatrix.size === 0) {
+        // If no existing positions, allow the first trade
+        if (!existingPositions || existingPositions.length === 0) {
+            return {
+                allowed: true,
+                warning: 'Correlation data unavailable - first position allowed, subsequent trades will be limited',
+                correlationRisk: 0.5 // Assume moderate risk when unknown
+            };
+        }
+
+        // Conservative default: max 1 position per asset when correlation data unavailable
+        // This prevents concentrated BTC exposure during cold-start or data outage
+        return {
+            allowed: false,
+            warning: `Correlation data unavailable - blocking trade to prevent concentrated exposure. ` +
+                `Already have ${existingPositions.length} position(s). Wait for correlation data or reduce positions.`,
+            correlationRisk: 0.8 // Assume high risk when unknown with existing positions
+        };
+    }
+
+    // If no existing positions, no correlation risk
+    if (!existingPositions || existingPositions.length === 0) {
+        return { allowed: true, warning: null, correlationRisk: 0 };
+    }
+
+    const { HIGH_CORRELATION, MAX_CORRELATED_POSITIONS } = GLOBAL_RISK_LIMITS.CORRELATION_THRESHOLDS;
+
+    // Normalize symbol for lookup (handle cmt_ prefix variations)
+    const normalizeSymbol = (sym: string): string => {
+        return sym.toLowerCase().replace(/^cmt_/, '');
+    };
+
+    const newSymNorm = normalizeSymbol(newSymbol);
+    let highlyCorrelatedCount = 0;
+    let maxCorrelation = 0;
+    const correlatedWith: string[] = [];
+
+    // Check correlation with each existing position
+    for (const existingSymbol of existingPositions) {
+        const existingSymNorm = normalizeSymbol(existingSymbol);
+
+        // Try to find correlation in matrix (check both directions)
+        let correlation = 0;
+
+        // Try newSymbol -> existingSymbol
+        // Check all key variations: symNorm, ${symNorm}usdt, cmt_${symNorm}usdt
+        const newSymRow = correlationMatrix.get(newSymNorm) || correlationMatrix.get(`${newSymNorm}usdt`) || correlationMatrix.get(`cmt_${newSymNorm}usdt`);
+        if (newSymRow) {
+            correlation = newSymRow.get(existingSymNorm) || newSymRow.get(`${existingSymNorm}usdt`) || newSymRow.get(`cmt_${existingSymNorm}usdt`) || 0;
+        }
+
+        // If not found, try existingSymbol -> newSymbol
+        // Check all key variations: symNorm, ${symNorm}usdt, cmt_${symNorm}usdt
+        if (correlation === 0) {
+            const existingSymRow = correlationMatrix.get(existingSymNorm) || correlationMatrix.get(`${existingSymNorm}usdt`) || correlationMatrix.get(`cmt_${existingSymNorm}usdt`);
+            if (existingSymRow) {
+                correlation = existingSymRow.get(newSymNorm) || existingSymRow.get(`${newSymNorm}usdt`) || existingSymRow.get(`cmt_${newSymNorm}usdt`) || 0;
+            }
+        }
+
+        // Track max correlation
+        if (Math.abs(correlation) > maxCorrelation) {
+            maxCorrelation = Math.abs(correlation);
+        }
+
+        // Count highly correlated positions
+        if (Math.abs(correlation) >= HIGH_CORRELATION) {
+            highlyCorrelatedCount++;
+            correlatedWith.push(`${existingSymbol} (${(correlation * 100).toFixed(0)}%)`);
+        }
+    }
+
+    // Calculate overall correlation risk (0-1 scale)
+    const correlationRisk = Math.min(1, (highlyCorrelatedCount / MAX_CORRELATED_POSITIONS) * maxCorrelation);
+
+    // Check if we exceed the limit
+    if (highlyCorrelatedCount >= MAX_CORRELATED_POSITIONS) {
+        return {
+            allowed: false,
+            warning: `Correlation limit exceeded: ${newSymbol} is highly correlated with ${correlatedWith.join(', ')}. ` +
+                `Max ${MAX_CORRELATED_POSITIONS} highly correlated positions allowed.`,
+            correlationRisk
+        };
+    }
+
+    // Allow but warn if approaching limit
+    if (highlyCorrelatedCount > 0) {
+        return {
+            allowed: true,
+            warning: `Correlation warning: ${newSymbol} is correlated with ${correlatedWith.join(', ')}. ` +
+                `Consider diversifying.`,
+            correlationRisk
+        };
+    }
+
+    return { allowed: true, warning: null, correlationRisk };
+}
+
+/**
+ * Calculate portfolio-wide BTC correlation
+ * 
+ * Since all crypto assets are correlated to BTC, this measures how
+ * concentrated the portfolio's BTC exposure is.
+ * 
+ * @param positions - Array of position symbols
+ * @param correlationMatrix - Correlation matrix from QuantAnalysisService
+ * @returns Average BTC correlation of the portfolio (0-1)
+ */
+export function calculatePortfolioBtcCorrelation(
+    positions: string[],
+    correlationMatrix: Map<string, Map<string, number>> | null
+): number {
+    if (!positions || positions.length === 0) return 0;
+    if (!correlationMatrix || correlationMatrix.size === 0) return 0.7; // Assume high correlation when unknown
+
+    const normalizeSymbol = (sym: string): string => {
+        return sym.toLowerCase().replace(/^cmt_/, '').replace(/usdt$/, '');
+    };
+
+    let totalCorrelation = 0;
+    let count = 0;
+
+    // Get BTC row from correlation matrix
+    const btcRow = correlationMatrix.get('btcusdt') || correlationMatrix.get('cmt_btcusdt') || correlationMatrix.get('btc');
+
+    for (const symbol of positions) {
+        const symNorm = normalizeSymbol(symbol);
+
+        // BTC is perfectly correlated with itself
+        if (symNorm === 'btc') {
+            totalCorrelation += 1;
+            count++;
+            continue;
+        }
+
+        // Try to find BTC correlation
+        let btcCorr = 0;
+        if (btcRow) {
+            btcCorr = btcRow.get(symNorm) || btcRow.get(`cmt_${symNorm}usdt`) || btcRow.get(`${symNorm}usdt`) || 0;
+        }
+
+        // If not found in BTC row, try the symbol's row
+        // Check all key variations: symNorm, ${symNorm}usdt, cmt_${symNorm}usdt
+        if (btcCorr === 0) {
+            const symRow = correlationMatrix.get(symNorm) || correlationMatrix.get(`${symNorm}usdt`) || correlationMatrix.get(`cmt_${symNorm}usdt`);
+            if (symRow) {
+                btcCorr = symRow.get('btcusdt') || symRow.get('cmt_btcusdt') || symRow.get('btc') || 0;
+            }
+        }
+
+        // Default to high correlation if not found (crypto is generally correlated)
+        if (btcCorr === 0) btcCorr = 0.7;
+
+        totalCorrelation += Math.abs(btcCorr);
+        count++;
+    }
+
+    return count > 0 ? totalCorrelation / count : 0;
 }

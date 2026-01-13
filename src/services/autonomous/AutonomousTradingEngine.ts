@@ -192,7 +192,12 @@ interface PositionWithUrgency {
 
 /**
  * Calculate urgency level for a position based on P&L and hold time
- * Uses hardcoded sensible defaults - AI handles TP/SL decisions naturally
+ * Uses competition-mode aware thresholds for faster position turnover
+ * 
+ * COMPETITION MODE: More aggressive thresholds to free up capital faster
+ * - Lower profit targets (take profits earlier)
+ * - Shorter max hold times (don't let positions stagnate)
+ * - "Stale position" detection (close positions that aren't moving)
  * 
  * @param position - Position to evaluate
  * @returns Urgency level and reason
@@ -201,13 +206,20 @@ function calculatePositionUrgency(position: {
     unrealizedPnlPercent: number;
     holdTimeHours: number;
 }): { urgency: PositionUrgency; reason: string } {
-    // Hardcoded sensible defaults - AI handles actual TP/SL decisions
-    // These are just for urgency classification to optimize token usage
-    // CRITICAL: These thresholds MUST match executeFallbackManagement thresholds
-    const TARGET_PROFIT_PCT = 5;   // Consider urgent at +5%
-    const STOP_LOSS_PCT = 5;       // Consider urgent at -5%
-    const MAX_HOLD_HOURS = 12;     // Consider urgent after 12h
-    const PARTIAL_TP_THRESHOLD = 3; // FIXED: Match executeFallbackManagement threshold
+    // Competition mode detection - use aggressive thresholds for faster turnover
+    const isCompetitionMode = GLOBAL_RISK_LIMITS.COMPETITION_MODE_ENABLED;
+
+    // COMPETITION MODE STRATEGY: Cut losers fast, let winners run
+    // Key insight: Winners make money by letting profitable trades develop
+    // while quickly exiting losing trades. Asymmetric risk management.
+    //
+    // PRODUCTION MODE: Conservative thresholds to let trades develop
+    const TARGET_PROFIT_PCT = isCompetitionMode ? 5 : 5;      // Let winners run to 5% (was 3%)
+    const STOP_LOSS_PCT = isCompetitionMode ? 2.5 : 5;        // Cut losers fast at 2.5% (was 3%)
+    const MAX_HOLD_HOURS = isCompetitionMode ? 12 : 12;       // Extended to 12h for bigger moves (was 8h)
+    const PARTIAL_TP_THRESHOLD = isCompetitionMode ? 3 : 3;   // Partial TP at 3% (was 2%)
+    const STALE_POSITION_HOURS = isCompetitionMode ? 6 : 8;   // Stale after 6h (was 5h)
+    const STALE_PNL_THRESHOLD = 1.0;                          // Tighter stale threshold (was 1.5%)
 
     // FLAW FIX: Validate inputs - treat invalid values as LOW urgency
     const pnl = Number.isFinite(position.unrealizedPnlPercent) ? position.unrealizedPnlPercent : 0;
@@ -224,16 +236,30 @@ function calculatePositionUrgency(position: {
         return { urgency: 'VERY_URGENT', reason: `Hold time ${holdHours.toFixed(1)}h >= max (${MAX_HOLD_HOURS}h)` };
     }
 
-    // MODERATE: Should consider action - FIXED: Use PARTIAL_TP_THRESHOLD (3%) not 2%
-    // This ensures positions flagged as MODERATE will actually trigger TAKE_PARTIAL
+    // MODERATE: Should consider action (check BEFORE stale detection)
+    // This ensures profitable positions approaching TP are handled as MODERATE, not stale
     if (pnl >= PARTIAL_TP_THRESHOLD) {
         return { urgency: 'MODERATE', reason: `P&L +${pnl.toFixed(1)}% in partial TP zone (>=${PARTIAL_TP_THRESHOLD}%)` };
     }
     if (pnl <= -STOP_LOSS_PCT / 2) {
         return { urgency: 'MODERATE', reason: `P&L ${pnl.toFixed(1)}% approaching SL` };
     }
+
+    // COMPETITION MODE: Stale position detection - position held long but not moving
+    // Only applies to positions that are NOT already in profit/loss territory
+    // This frees up capital for better opportunities
+    if (isCompetitionMode && holdHours >= STALE_POSITION_HOURS && Math.abs(pnl) < STALE_PNL_THRESHOLD) {
+        return { urgency: 'VERY_URGENT', reason: `Stale position: ${holdHours.toFixed(1)}h held with only ${pnl.toFixed(1)}% P&L - free capital for better trades` };
+    }
+
+    // Time-based moderate urgency
     if (holdHours >= MAX_HOLD_HOURS * 0.75) {
         return { urgency: 'MODERATE', reason: `Hold time ${holdHours.toFixed(1)}h approaching max` };
+    }
+
+    // COMPETITION MODE: Earlier moderate urgency for positions approaching stale threshold
+    if (isCompetitionMode && holdHours >= STALE_POSITION_HOURS * 0.75 && Math.abs(pnl) < STALE_PNL_THRESHOLD * 1.5) {
+        return { urgency: 'MODERATE', reason: `Position approaching stale: ${holdHours.toFixed(1)}h with ${pnl.toFixed(1)}% P&L` };
     }
 
     // LOW: No immediate action needed
@@ -325,12 +351,19 @@ export class AutonomousTradingEngine extends EventEmitter {
         marketDataMap: Map<string, ExtendedMarketData>,
         fallbackReason: string
     ): Promise<{ executed: boolean; symbol?: string }> {
-        // Sort by P&L: prioritize positions with P&L > +5% (take profits) or < -5% (cut losses)
+        // Competition-mode aware urgency threshold for sorting
+        // Use asymmetric thresholds: cut losers at 2.5%, let winners run to 5%
+        const isCompetitionMode = GLOBAL_RISK_LIMITS.COMPETITION_MODE_ENABLED;
+        const profitThreshold = 5;  // Same for both modes - let winners run
+        const lossThreshold = isCompetitionMode ? 2.5 : 5;  // Cut losers faster in competition
+
+        // Sort by P&L: prioritize positions with P&L > profit threshold or < -loss threshold
         const sortedPositions = [...positions].sort((a, b) => {
             const aPnl = Number.isFinite(a.unrealizedPnlPercent) ? a.unrealizedPnlPercent : 0;
             const bPnl = Number.isFinite(b.unrealizedPnlPercent) ? b.unrealizedPnlPercent : 0;
-            const aUrgent = Math.abs(aPnl) > 5;
-            const bUrgent = Math.abs(bPnl) > 5;
+            // Asymmetric urgency: profit at 5%, loss at 2.5% (competition) or 5% (production)
+            const aUrgent = aPnl >= profitThreshold || aPnl <= -lossThreshold;
+            const bUrgent = bPnl >= profitThreshold || bPnl <= -lossThreshold;
             if (aUrgent && !bUrgent) return -1;
             if (!aUrgent && bUrgent) return 1;
             return Math.abs(bPnl) - Math.abs(aPnl);
@@ -379,11 +412,19 @@ export class AutonomousTradingEngine extends EventEmitter {
         try {
             const managementDecision = await (async () => {
                 // Rule-based fallback management (v5.0.0 - no AI call)
-                // Hardcoded sensible defaults - AI handles actual decisions in normal flow
-                const TARGET_PROFIT_PCT = 5;
-                const STOP_LOSS_PCT = 5;
-                const MAX_HOLD_HOURS = 12;
-                const PARTIAL_TP_THRESHOLD = 3; // Take partial at 3%
+                // Competition-mode aware thresholds - CUT LOSERS FAST, LET WINNERS RUN
+                const isCompetitionMode = GLOBAL_RISK_LIMITS.COMPETITION_MODE_ENABLED;
+
+                // COMPETITION MODE STRATEGY: Asymmetric risk management
+                // - Let winners run to 5% before taking full profit
+                // - Cut losers fast at 2.5% to preserve capital
+                // - Give trades 12h to develop before forcing close
+                const TARGET_PROFIT_PCT = isCompetitionMode ? 5 : 5;      // Let winners run
+                const STOP_LOSS_PCT = isCompetitionMode ? 2.5 : 5;        // Cut losers fast
+                const MAX_HOLD_HOURS = isCompetitionMode ? 12 : 12;       // Extended to 12h for bigger moves
+                const PARTIAL_TP_THRESHOLD = isCompetitionMode ? 3 : 3;   // Partial at 3%
+                const STALE_POSITION_HOURS = isCompetitionMode ? 6 : 8;   // Stale after 6h
+                const STALE_PNL_THRESHOLD = 1.0;                          // Tighter stale threshold
 
                 const pnl = positionToManage.unrealizedPnlPercent;
                 // FIXED: Validate holdTimeHours to prevent NaN comparison issues
@@ -391,19 +432,23 @@ export class AutonomousTradingEngine extends EventEmitter {
 
                 // Take profit if P&L exceeds target
                 if (pnl >= TARGET_PROFIT_PCT) {
-                    return { manageType: 'CLOSE_FULL', conviction: 9, reason: `P&L +${pnl.toFixed(1)}% exceeds target` };
+                    return { manageType: 'CLOSE_FULL', conviction: 9, reason: `P&L +${pnl.toFixed(1)}% exceeds target (${TARGET_PROFIT_PCT}%)` };
                 }
                 // Cut loss if P&L exceeds stop loss
                 if (pnl <= -STOP_LOSS_PCT) {
-                    return { manageType: 'CLOSE_FULL', conviction: 10, reason: `P&L ${pnl.toFixed(1)}% exceeds stop loss` };
+                    return { manageType: 'CLOSE_FULL', conviction: 10, reason: `P&L ${pnl.toFixed(1)}% exceeds stop loss (${STOP_LOSS_PCT}%)` };
                 }
                 // Close if held too long
                 if (holdHours >= MAX_HOLD_HOURS) {
-                    return { manageType: 'CLOSE_FULL', conviction: 7, reason: `Hold time exceeds max` };
+                    return { manageType: 'CLOSE_FULL', conviction: 7, reason: `Hold time ${holdHours.toFixed(1)}h exceeds max (${MAX_HOLD_HOURS}h)` };
+                }
+                // COMPETITION MODE: Close stale positions to free capital
+                if (isCompetitionMode && holdHours >= STALE_POSITION_HOURS && Math.abs(pnl) < STALE_PNL_THRESHOLD) {
+                    return { manageType: 'CLOSE_FULL', conviction: 8, reason: `Stale position: ${holdHours.toFixed(1)}h with only ${pnl.toFixed(1)}% P&L - freeing capital` };
                 }
                 // Partial take profit
                 if (pnl >= PARTIAL_TP_THRESHOLD) {
-                    return { manageType: 'TAKE_PARTIAL', conviction: 7, reason: `P&L in partial TP zone`, closePercent: 50 };
+                    return { manageType: 'TAKE_PARTIAL', conviction: 7, reason: `P&L +${pnl.toFixed(1)}% in partial TP zone (${PARTIAL_TP_THRESHOLD}%)`, closePercent: 50 };
                 }
                 return null;
             })();
@@ -423,6 +468,7 @@ export class AutonomousTradingEngine extends EventEmitter {
                         'rule-based-engine',
                         {
                             decision_type: 'RULE_BASED_MANAGEMENT',
+                            competition_mode: GLOBAL_RISK_LIMITS.COMPETITION_MODE_ENABLED,
                             position: {
                                 symbol: positionToManage.symbol,
                                 side: positionToManage.side,
@@ -434,10 +480,11 @@ export class AutonomousTradingEngine extends EventEmitter {
                                 holdTimeHours: positionToManage.holdTimeHours,
                             },
                             rules_evaluated: {
-                                target_profit_pct: 5,
-                                stop_loss_pct: 5,
-                                max_hold_hours: 12,
-                                partial_tp_threshold: 3,
+                                target_profit_pct: GLOBAL_RISK_LIMITS.COMPETITION_MODE_ENABLED ? 5 : 5,
+                                stop_loss_pct: GLOBAL_RISK_LIMITS.COMPETITION_MODE_ENABLED ? 2.5 : 5,
+                                max_hold_hours: GLOBAL_RISK_LIMITS.COMPETITION_MODE_ENABLED ? 12 : 12,
+                                partial_tp_threshold: GLOBAL_RISK_LIMITS.COMPETITION_MODE_ENABLED ? 3 : 3,
+                                stale_position_hours: GLOBAL_RISK_LIMITS.COMPETITION_MODE_ENABLED ? 6 : 8,
                             },
                             fallback_reason: fallbackReason,
                         },
@@ -547,6 +594,7 @@ export class AutonomousTradingEngine extends EventEmitter {
                         'rule-based-engine',
                         {
                             decision_type: 'RULE_BASED_HOLD',
+                            competition_mode: GLOBAL_RISK_LIMITS.COMPETITION_MODE_ENABLED,
                             position: {
                                 symbol: positionToManage.symbol,
                                 side: positionToManage.side,
@@ -558,10 +606,11 @@ export class AutonomousTradingEngine extends EventEmitter {
                                 holdTimeHours: holdHours,
                             },
                             rules_evaluated: {
-                                target_profit_pct: 5,
-                                stop_loss_pct: 5,
-                                max_hold_hours: 12,
-                                partial_tp_threshold: 3,
+                                target_profit_pct: GLOBAL_RISK_LIMITS.COMPETITION_MODE_ENABLED ? 5 : 5,
+                                stop_loss_pct: GLOBAL_RISK_LIMITS.COMPETITION_MODE_ENABLED ? 2.5 : 5,
+                                max_hold_hours: GLOBAL_RISK_LIMITS.COMPETITION_MODE_ENABLED ? 12 : 12,
+                                partial_tp_threshold: GLOBAL_RISK_LIMITS.COMPETITION_MODE_ENABLED ? 3 : 3,
+                                stale_position_hours: GLOBAL_RISK_LIMITS.COMPETITION_MODE_ENABLED ? 6 : 8,
                             },
                             fallback_reason: fallbackReason,
                         },
@@ -573,7 +622,8 @@ export class AutonomousTradingEngine extends EventEmitter {
                         },
                         `Rule-based evaluation for ${positionToManage.symbol}: HOLD (no action needed). ` +
                         `Position P&L: ${pnlPercent.toFixed(2)}%, Hold time: ${holdHours.toFixed(1)}h. ` +
-                        `No thresholds exceeded (TP: 5%, SL: -5%, Max hold: 12h, Partial TP: 3%).`
+                        `Mode: ${GLOBAL_RISK_LIMITS.COMPETITION_MODE_ENABLED ? 'COMPETITION' : 'PRODUCTION'}. ` +
+                        `Thresholds: TP ${GLOBAL_RISK_LIMITS.COMPETITION_MODE_ENABLED ? '5' : '5'}%, SL ${GLOBAL_RISK_LIMITS.COMPETITION_MODE_ENABLED ? '-2.5' : '-5'}%, Max hold ${GLOBAL_RISK_LIMITS.COMPETITION_MODE_ENABLED ? '12' : '12'}h.`
                     );
                 } catch (logError) {
                     logger.warn('Failed to create rule-based HOLD AI log:', logError);
@@ -1024,7 +1074,7 @@ export class AutonomousTradingEngine extends EventEmitter {
                     logger.warn('║  IMPORTANT: The WEEX API does NOT provide a way to detect demo vs live       ║');
                     logger.warn('║  accounts. YOU must verify your account type in WEEX settings.               ║');
                     logger.warn('║                                                                              ║');
-                    logger.warn('║  Settings: 20x max leverage, 50% max position, 50 trades/day                 ║');
+                    logger.warn('║  Settings: 17x max leverage, 50% max position, 50 trades/day                 ║');
                     logger.warn('║                                                                              ║');
                     logger.warn('║  If you are connected to a LIVE account, STOP NOW and disable                ║');
                     logger.warn('║  COMPETITION_MODE in your .env file!                                         ║');

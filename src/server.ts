@@ -15,6 +15,18 @@ import { cleanupTradingRoutes } from './api/routes/trading';
 const app = express();
 const server = createServer(app);
 
+// Trust proxy for accurate IP resolution behind reverse proxies (nginx, load balancers, etc.)
+// Required for express-rate-limit to use req.ip correctly instead of always seeing proxy IP
+// Set to 1 for single proxy, 'loopback' for localhost proxies, or specific IPs for production
+// See: https://expressjs.com/en/guide/behind-proxies.html
+if (process.env.NODE_ENV === 'production') {
+    // In production, trust only the first proxy (adjust based on your infrastructure)
+    app.set('trust proxy', 1);
+} else {
+    // In development, trust loopback addresses
+    app.set('trust proxy', 'loopback');
+}
+
 app.use(helmet({
     contentSecurityPolicy: false,
     crossOriginEmbedderPolicy: false,

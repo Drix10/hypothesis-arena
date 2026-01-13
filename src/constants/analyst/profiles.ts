@@ -134,22 +134,19 @@ export const ANALYST_PROFILES: Record<string, AnalystAgent> = {
         title: 'Liquidity & Arbitrage Quant',
         methodology: 'quant',
         avatarEmoji: '⚡',
-        description: 'Market microstructure specialist focusing on liquidity and arbitrage opportunities. Exploits pricing inefficiencies across exchanges and instruments. Focuses on bid-ask spreads, cross-exchange arb, and ETF/index arbitrage opportunities. Enhanced with order book microstructure analysis, cross-venue arbitrage, and liquidity provision models.',
+        description: 'Market microstructure specialist focusing on liquidity and funding arbitrage opportunities. Exploits pricing inefficiencies within the WEEX exchange. Focuses on bid-ask spreads, funding rate arbitrage, and basis trading. Enhanced with order book microstructure analysis and liquidity provision models.',
         focusAreas: [
-            'Cross-exchange price discrepancies',
             'Funding rate arbitrage',
             'Basis spread opportunities',
             'Order book microstructure analysis',
             'Bid/ask imbalance detection',
-            'Cross-venue arbitrage (>0.3% spreads)',
             'Liquidity provision & maker rebates',
             'Order flow toxicity analysis',
             'Market microstructure signals',
-            'Liquidity provision edge',
-            'Index vs components arbitrage',
+            'Liquidation cascade reversal trading',
             'Execution cost optimization',
-            'Latency-sensitive opportunities',
-            'Liquidation cascade reversal trading'
+            'VWAP analysis and mean reversion',
+            'Funding timing optimization'
         ],
         biases: [
             'Arb opportunities are fleeting',

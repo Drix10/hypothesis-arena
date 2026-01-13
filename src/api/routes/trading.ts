@@ -1,15 +1,88 @@
 import { Router, Request, Response, NextFunction } from 'express';
-import { z } from 'zod';
+import rateLimit from 'express-rate-limit';
 import { getWeexClient } from '../../services/weex/WeexClient';
-import { query, queryOne, withTransaction } from '../../config/database';
+import { query, queryOne } from '../../config/database';
 import { logger } from '../../utils/logger';
-import { TradingError, ValidationError } from '../../utils/errors';
-import { v4 as uuid } from 'uuid';
+import { ValidationError } from '../../utils/errors';
 import { APPROVED_SYMBOLS } from '../../shared/types/weex';
 import { isApprovedSymbol } from '../../shared/utils/validation';
 import { ANALYST_PROFILES } from '../../constants/analyst';
 
 const router = Router();
+
+// ============================================================================
+// RATE LIMITING MIDDLEWARE
+// ============================================================================
+// Targeted rate limits for external-facing and write-heavy endpoints.
+// These supplement the global rate limiter in server.ts (500 req/15min).
+// ============================================================================
+
+/**
+ * Rate limiter for /candles endpoint - protects external WEEX API calls
+ * More restrictive than global limit since each request hits external API
+ */
+const candlesRateLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 minute window
+    max: 30, // 30 requests per minute per IP (0.5 req/sec)
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => {
+        // Use Express's proxy-aware req.ip (requires app.set('trust proxy', ...) in server.ts)
+        // Do NOT manually parse X-Forwarded-For to prevent IP spoofing
+        return req.ip || 'unknown';
+    },
+    handler: (_req, res) => {
+        logger.warn('Candles endpoint rate limit exceeded');
+        res.status(429).json({
+            error: 'Too many candle requests. Please wait before trying again.',
+            code: 'RATE_LIMIT_EXCEEDED',
+            retryAfter: 60
+        });
+    },
+    skip: (req) => {
+        // Skip rate limiting for internal/localhost requests in development
+        if (process.env.NODE_ENV === 'development') {
+            const ip = req.ip || '';
+            return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+        }
+        return false;
+    }
+});
+
+/**
+ * Rate limiter for /orders endpoint - protects database from excessive queries
+ * Moderate limit since it's read-only but can be expensive
+ */
+const ordersRateLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 minute window
+    max: 60, // 60 requests per minute per IP (1 req/sec)
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => {
+        // Use Express's proxy-aware req.ip (requires app.set('trust proxy', ...) in server.ts)
+        // Do NOT manually parse X-Forwarded-For to prevent IP spoofing
+        return req.ip || 'unknown';
+    },
+    handler: (_req, res) => {
+        logger.warn('Orders endpoint rate limit exceeded');
+        res.status(429).json({
+            error: 'Too many order queries. Please wait before trying again.',
+            code: 'RATE_LIMIT_EXCEEDED',
+            retryAfter: 60
+        });
+    },
+    skip: (req) => {
+        if (process.env.NODE_ENV === 'development') {
+            const ip = req.ip || '';
+            return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+        }
+        return false;
+    }
+});
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
 
 // PERFORMANCE FIX: Cache AnalystPortfolioService import to avoid repeated dynamic imports
 // Dynamic imports on every request are inefficient - cache the module after first load
@@ -34,298 +107,31 @@ const isValidUUID = (id: string): boolean => {
     return UUID_REGEX.test(id);
 };
 
-// Simple in-memory rate limiting with cleanup
-const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
-const TRADES_PER_MINUTE = 10;
-const RATE_LIMIT_CLEANUP_INTERVAL = 60000; // Clean up every minute
-const MAX_RATE_LIMIT_ENTRIES = 1000; // Prevent unbounded growth
-
-// Cleanup old rate limit entries to prevent memory leak
-// Store interval ID for cleanup on shutdown
-let rateLimitCleanupInterval: NodeJS.Timeout | null = setInterval(() => {
-    const now = Date.now();
-
-    // FIXED: Emergency clear with grace period to prevent rate limit bypass
-    // Only clear entries older than 2x the window to maintain rate limiting
-    if (rateLimitMap.size > MAX_RATE_LIMIT_ENTRIES) {
-        logger.warn(`Rate limit map exceeded ${MAX_RATE_LIMIT_ENTRIES} entries, clearing old entries`);
-        const cutoffTime = now - (60000 * 2); // 2x the rate limit window
-        // Collect keys to delete first to avoid modifying Map during iteration
-        const keysToDelete: string[] = [];
-        for (const [key, entry] of rateLimitMap.entries()) {
-            if (entry.resetTime < cutoffTime) {
-                keysToDelete.push(key);
-            }
-        }
-        for (const key of keysToDelete) {
-            rateLimitMap.delete(key);
-        }
-        // If still too large after cleanup, clear oldest 50%
-        if (rateLimitMap.size > MAX_RATE_LIMIT_ENTRIES) {
-            const entries = Array.from(rateLimitMap.entries())
-                .sort((a, b) => a[1].resetTime - b[1].resetTime);
-            const toDelete = entries.slice(0, Math.floor(entries.length / 2));
-            toDelete.forEach(([key]) => rateLimitMap.delete(key));
-            logger.warn(`Cleared ${toDelete.length} oldest rate limit entries`);
-        }
-        return;
-    }
-
-    // Collect keys to delete first to avoid modifying Map during iteration
-    const keysToDelete: string[] = [];
-    for (const [key, entry] of rateLimitMap.entries()) {
-        if (now > entry.resetTime) {
-            keysToDelete.push(key);
-        }
-    }
-    for (const key of keysToDelete) {
-        rateLimitMap.delete(key);
-    }
-}, RATE_LIMIT_CLEANUP_INTERVAL);
-
-// FIXED: Use .unref() to not block process exit
-if (rateLimitCleanupInterval?.unref) {
-    rateLimitCleanupInterval.unref();
-}
-
-// Export cleanup function for graceful shutdown
-// FIXED: Idempotent cleanup - safe to call multiple times
+// Export cleanup function for graceful shutdown (no-op since rate limiting uses express-rate-limit which auto-cleans)
 export function cleanupTradingRoutes(): void {
-    try {
-        // CRITICAL: Check if interval exists before clearing
-        // This makes cleanup idempotent (safe to call multiple times)
-        if (rateLimitCleanupInterval !== null) {
-            clearInterval(rateLimitCleanupInterval);
-            rateLimitCleanupInterval = null;
-        }
-
-        // CRITICAL: Only clear map if it has entries
-        // Prevents unnecessary operations on repeated cleanup calls
-        if (rateLimitMap.size > 0) {
-            rateLimitMap.clear();
-        }
-    } catch (error) {
-        // Log but don't throw - cleanup should never fail the shutdown process
-        logger.warn('Error during trading routes cleanup:', error);
-    }
+    // No cleanup needed - express-rate-limit handles its own cleanup
 }
 
-function checkRateLimit(): boolean {
-    const key = 'global';
-    const now = Date.now();
-    const entry = rateLimitMap.get(key);
-
-    if (!entry || now > entry.resetTime) {
-        rateLimitMap.set(key, { count: 1, resetTime: now + 60000 });
-        return true;
-    }
-
-    if (entry.count >= TRADES_PER_MINUTE) {
-        return false;
-    }
-
-    entry.count++;
-    return true;
-}
-
-const executeTradeSchema = z.object({
-    symbol: z.string(),
-    side: z.enum(['BUY', 'SELL']),
-    type: z.enum(['MARKET', 'LIMIT']).default('MARKET'),
-    size: z.number().positive(),
-    price: z.number().positive().optional(),
-    portfolioId: z.string().uuid(),
-    confidence: z.number().min(0).max(100).optional(),
-    reason: z.string().optional(),
-}).refine(
-    (data) => {
-        // LIMIT orders must have a price
-        if (data.type === 'LIMIT' && (data.price === undefined || data.price === null)) {
-            return false;
-        }
-        return true;
-    },
-    {
-        message: 'LIMIT orders require a price',
-        path: ['price'],
-    }
-);
+// ============================================================================
+// ROUTES
+// ============================================================================
 
 // POST /api/trading/execute
-router.post('/execute', async (req: Request, res: Response, next: NextFunction) => {
-    try {
-        if (!checkRateLimit()) {
-            res.status(429).json({
-                error: `Rate limit exceeded. Maximum ${TRADES_PER_MINUTE} trades per minute.`,
-                code: 'RATE_LIMIT_EXCEEDED'
-            });
-            return;
-        }
-
-        const data = executeTradeSchema.parse(req.body);
-
-        // Validate symbol
-        const symbol = data.symbol.toLowerCase();
-        if (!isApprovedSymbol(symbol)) {
-            throw new ValidationError(`Symbol not approved. Allowed: ${APPROVED_SYMBOLS.join(', ')}`);
-        }
-
-        // Get portfolio
-        const portfolio = await queryOne<any>(
-            'SELECT * FROM portfolios WHERE id = $1',
-            [data.portfolioId]
-        );
-
-        if (!portfolio) {
-            throw new ValidationError('Portfolio not found');
-        }
-
-        // Generate client order ID
-        const clientOrderId = `${Date.now()}_${uuid().substring(0, 8)}`;
-        const tradeId = uuid();
-
-        // Place order on WEEX
-        const weexClient = getWeexClient();
-        let orderResponse: { order_id: string };
-
-        try {
-            orderResponse = await weexClient.placeOrder({
-                symbol,
-                client_oid: clientOrderId,
-                type: data.side.toLowerCase() === 'buy' ? '1' : '2',
-                order_type: '0',
-                match_price: data.type === 'MARKET' ? '1' : '0',
-                size: parseFloat(String(data.size)).toFixed(4),
-                price: data.price ? parseFloat(String(data.price)).toFixed(2) : '0',
-            });
-
-            if (!orderResponse.order_id) {
-                throw new TradingError('WEEX did not return an order ID', 'NO_ORDER_ID');
-            }
-        } catch (error: any) {
-            logger.error('WEEX order failed:', { clientOrderId, error: error.message });
-            throw new TradingError(error.message || 'Failed to place order on WEEX', error.code || 'WEEX_ORDER_FAILED');
-        }
-
-        // Persist to DB
-        const initialStatus = data.type === 'MARKET' ? 'FILLED' : 'PENDING';
-        // For MARKET orders, set price to NULL initially (will be updated with actual fill price)
-        // For LIMIT orders, use the specified price
-        const tradePrice = data.type === 'MARKET' ? null : data.price;
-
-        try {
-            await withTransaction(async (client) => {
-                await client.query(
-                    `INSERT INTO trades (id, portfolio_id, symbol, side, type, size, entry_price, price, status, client_order_id, weex_order_id, confidence, reason, executed_at, created_at)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, ${data.type === 'MARKET' ? 'CURRENT_TIMESTAMP' : 'NULL'}, CURRENT_TIMESTAMP)`,
-                    [tradeId, data.portfolioId, symbol, data.side, data.type, data.size, tradePrice, tradePrice, initialStatus, clientOrderId, orderResponse.order_id, data.confidence, data.reason]
-                );
-
-                await client.query(
-                    'UPDATE portfolios SET total_trades = total_trades + 1, updated_at = CURRENT_TIMESTAMP WHERE id = $1',
-                    [data.portfolioId]
-                );
-            });
-
-            // For MARKET orders, fetch actual execution price and update the trade
-            if (data.type === 'MARKET') {
-                // Spawn async task to update price - don't block response
-                // This prevents race conditions and allows retries without blocking the client
-                (async () => {
-                    const MAX_RETRIES = 5;
-                    const RETRY_DELAYS = [1000, 2000, 3000, 5000, 8000]; // Progressive backoff
-
-                    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-                        try {
-                            // Wait before fetching (WEEX needs time to process)
-                            await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[attempt]));
-
-                            // FIXED: Use getOrder instead of getOrderInfo (correct method name)
-                            const orderDetails = await weexClient.getOrder(orderResponse.order_id);
-
-                            // FIXED: Validate response structure with type guards
-                            if (!orderDetails || typeof orderDetails !== 'object') {
-                                logger.warn(`Invalid order details response for ${tradeId} (attempt ${attempt + 1}/${MAX_RETRIES})`);
-                                continue; // Retry
-                            }
-
-                            // FIXED: Validate priceAvg is a valid string before parsing
-                            if (!orderDetails.priceAvg || typeof orderDetails.priceAvg !== 'string') {
-                                logger.warn(`Missing or invalid priceAvg for ${tradeId} (attempt ${attempt + 1}/${MAX_RETRIES})`);
-                                continue; // Retry
-                            }
-
-                            const actualPrice = parseFloat(orderDetails.priceAvg);
-
-                            // FIXED: Comprehensive validation of actualPrice
-                            if (!Number.isFinite(actualPrice) || actualPrice <= 0) {
-                                logger.warn(`Invalid actualPrice ${actualPrice} for ${tradeId} (attempt ${attempt + 1}/${MAX_RETRIES})`);
-                                continue; // Retry
-                            }
-
-                            // FIXED: Check order status - only update if filled
-                            const status = orderDetails.status;
-                            if (status !== 'filled') {
-                                logger.debug(`Order ${tradeId} not yet filled (status: ${status}), attempt ${attempt + 1}/${MAX_RETRIES}`);
-                                continue; // Retry
-                            }
-
-                            // FIXED: Optimistic locking - only update if price is still NULL
-                            // This prevents overwriting manual corrections
-                            const result = await withTransaction(async (client) => {
-                                const updateResult = await client.query(
-                                    'UPDATE trades SET entry_price = $1, price = $2 WHERE id = $3 AND entry_price IS NULL',
-                                    [actualPrice, actualPrice, tradeId]
-                                );
-                                return updateResult.rowCount;
-                            });
-
-                            if (result && result > 0) {
-                                logger.info(`✅ Updated MARKET order ${tradeId} with actual fill price: ${actualPrice} (attempt ${attempt + 1})`);
-                                return; // Success - exit retry loop
-                            } else {
-                                logger.debug(`Price already set for ${tradeId}, skipping update`);
-                                return; // Already updated - exit retry loop
-                            }
-                        } catch (priceUpdateError: any) {
-                            logger.warn(`Failed to update execution price for ${tradeId} (attempt ${attempt + 1}/${MAX_RETRIES}):`, {
-                                error: priceUpdateError.message,
-                                code: priceUpdateError.code,
-                                stack: priceUpdateError.stack?.split('\n')[0] // First line of stack only
-                            });
-
-                            // On last attempt, log error but don't throw
-                            if (attempt === MAX_RETRIES - 1) {
-                                logger.error(`❌ Failed to update price for ${tradeId} after ${MAX_RETRIES} attempts - price will remain NULL`);
-                            }
-                            // Continue to next retry
-                        }
-                    }
-                })().catch(err => {
-                    // Catch any unhandled errors in the async task
-                    logger.error(`Unhandled error in MARKET price update task for ${tradeId}:`, err);
-                });
-            }
-
-            logger.info(`Trade executed: ${tradeId}`, { symbol, side: data.side, size: data.size, status: initialStatus });
-
-            res.json({
-                id: tradeId,
-                weexOrderId: orderResponse.order_id,
-                clientOrderId,
-                status: initialStatus,
-            });
-        } catch (dbError: any) {
-            logger.error('DB persist failed after WEEX order:', { clientOrderId, weexOrderId: orderResponse.order_id, error: dbError.message });
-            throw new TradingError(`Trade executed on WEEX (${orderResponse.order_id}) but DB update failed.`, 'DB_PERSIST_FAILED');
-        }
-    } catch (error) {
-        next(error);
-    }
+// DISABLED: Manual trading is prohibited per WEEX competition rules.
+// All trading must be conducted through the AI-driven autonomous trading engine.
+// This endpoint is kept for reference but returns 403 Forbidden.
+router.post('/execute', async (_req: Request, res: Response, _next: NextFunction) => {
+    logger.warn('Manual trade execution attempted - blocked per competition rules');
+    res.status(403).json({
+        error: 'Manual trading is prohibited. All trades must be executed through the AI trading engine.',
+        code: 'MANUAL_TRADING_PROHIBITED',
+        reason: 'WEEX AI Trading Competition rules require all trading to use genuine AI technology. Manual trading is strictly prohibited.'
+    });
 });
 
 // GET /api/trading/orders
-router.get('/orders', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+// Rate limited: 60 requests/minute per IP to protect database
+router.get('/orders', ordersRateLimiter, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
         const { portfolioId, status, limit = 50 } = req.query;
         const conditions: string[] = [];
@@ -386,267 +192,34 @@ router.get('/order/:id', async (req: Request, res: Response, next: NextFunction)
 });
 
 // POST /api/trading/cancel
-router.post('/cancel', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    try {
-        const { tradeId } = req.body;
-
-        if (!tradeId || typeof tradeId !== 'string' || !isValidUUID(tradeId)) {
-            res.status(400).json({ error: 'Invalid tradeId format' });
-            return;
-        }
-
-        const trade = await queryOne<any>('SELECT * FROM trades WHERE id = $1', [tradeId]);
-
-        if (!trade) {
-            res.status(404).json({ error: 'Trade not found' });
-            return;
-        }
-
-        if (trade.status !== 'PENDING' && trade.status !== 'OPEN') {
-            throw new TradingError('Cannot cancel trade in current status', 'INVALID_STATUS');
-        }
-
-        if (!trade.weex_order_id) {
-            throw new TradingError('Trade has no associated exchange order', 'NO_ORDER_ID');
-        }
-
-        const weexClient = getWeexClient();
-        await weexClient.cancelOrder(trade.weex_order_id);
-
-        await query('UPDATE trades SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', ['CANCELED', tradeId]);
-
-        res.json({ message: 'Trade canceled', tradeId });
-    } catch (error) {
-        next(error);
-    }
+// DISABLED: Manual trading intervention is prohibited per WEEX competition rules.
+// Order cancellation must be handled by the AI trading engine if needed.
+// This endpoint is kept for reference but returns 403 Forbidden.
+router.post('/cancel', async (_req: Request, res: Response, _next: NextFunction): Promise<void> => {
+    logger.warn('Manual order cancellation attempted - blocked per competition rules');
+    res.status(403).json({
+        error: 'Manual order cancellation is prohibited. All trading operations must be handled by the AI trading engine.',
+        code: 'MANUAL_TRADING_PROHIBITED',
+        reason: 'WEEX AI Trading Competition rules require all trading to use genuine AI technology. Manual intervention is strictly prohibited.'
+    });
 });
 
 // POST /api/trading/manual/close - Manual position close
-router.post('/manual/close', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    try {
-        // SECURITY FIX: Add rate limiting for manual operations
-        if (!checkRateLimit()) {
-            res.status(429).json({
-                error: `Rate limit exceeded. Maximum ${TRADES_PER_MINUTE} operations per minute.`,
-                code: 'RATE_LIMIT_EXCEEDED'
-            });
-            return;
-        }
-
-        const { symbol, side, size } = req.body;
-
-        if (!symbol || typeof symbol !== 'string') {
-            res.status(400).json({ error: 'Symbol is required', code: 'INVALID_SYMBOL' });
-            return;
-        }
-
-        const normalizedSymbol = symbol.toLowerCase();
-        if (!isApprovedSymbol(normalizedSymbol)) {
-            throw new ValidationError(`Symbol not approved. Allowed: ${APPROVED_SYMBOLS.join(', ')}`);
-        }
-
-        const weexClient = getWeexClient();
-
-        // FIXED: Verify position exists and is valid before attempting close
-        const positions = await weexClient.getPositions();
-        const position = positions.find((p: any) => p.symbol === normalizedSymbol);
-
-        if (!position || parseFloat(position.size) === 0) {
-            res.status(404).json({
-                error: 'No open position for this symbol',
-                code: 'POSITION_NOT_FOUND',
-                symbol: normalizedSymbol
-            });
-            return;
-        }
-
-        // FIXED: Use closePartialPosition for targeted close (closes only the specific position)
-        // This prevents accidentally closing multiple positions for the same symbol
-        const positionSide = (side || position.side || '').toUpperCase() as 'LONG' | 'SHORT';
-        const positionSize = size || position.size;
-
-        if (positionSide !== 'LONG' && positionSide !== 'SHORT') {
-            res.status(400).json({
-                error: 'Invalid position side. Must be LONG or SHORT',
-                code: 'INVALID_SIDE',
-                side: positionSide
-            });
-            return;
-        }
-
-        // Validate size
-        const sizeNum = parseFloat(positionSize);
-        if (!Number.isFinite(sizeNum) || sizeNum <= 0) {
-            res.status(400).json({
-                error: 'Invalid position size',
-                code: 'INVALID_SIZE',
-                size: positionSize
-            });
-            return;
-        }
-
-        // Use closePartialPosition with full size to close the specific position
-        const closeResponse = await weexClient.closePartialPosition(
-            normalizedSymbol,
-            positionSide,
-            String(positionSize),
-            '1' // Market order
-        );
-
-        if (!closeResponse || !closeResponse.order_id) {
-            throw new Error('Invalid response from WEEX closePartialPosition endpoint');
-        }
-
-        const tradeId = uuid();
-        const orderId = closeResponse.order_id;
-
-        // FIXED: Log to database with proper error handling
-        try {
-            const portfolio = await queryOne<any>(
-                'SELECT * FROM portfolios WHERE agent_id = $1',
-                ['collaborative']
-            );
-
-            if (portfolio) {
-                // CRITICAL FIX: Map WEEX position side to Prisma enum for CLOSE operations
-                // When CLOSING a position, use the OPPOSITE side:
-                // - Closing LONG → SELL (you sell to close a long)
-                // - Closing SHORT → BUY (you buy to close a short)
-                // WEEX uses: LONG/SHORT for position direction
-                // Prisma enum: BUY/SELL for trade action
-                const prismaSide = positionSide === 'LONG' ? 'SELL' : 'BUY';
-
-                // Calculate realized P&L from position data
-                const unrealizedPnl = parseFloat(position.unrealizePnl || '0') || 0;
-                const entryPrice = position.entryPrice || 0;
-
-                // Find original champion who opened this position
-                let championId: string | null = null;
-                try {
-                    const originalTrade = await queryOne<any>(
-                        `SELECT champion_id FROM trades 
-                         WHERE symbol = $1 AND status = 'FILLED' AND realized_pnl IS NULL 
-                         AND side = $2 ORDER BY executed_at DESC LIMIT 1`,
-                        [normalizedSymbol, positionSide === 'LONG' ? 'BUY' : 'SELL']
-                    );
-                    championId = originalTrade?.champion_id || null;
-                } catch {
-                    // Ignore - championId will be null
-                }
-
-                // FIXED: Determine closePrice BEFORE the transaction to avoid holding DB locks during network calls
-                // PRIORITY: Try market price FIRST, fall back to entryPrice, then NULL
-                let closePrice: number | null = null;
-
-                // Try to get current market price from WEEX first (outside transaction)
-                try {
-                    const ticker = await weexClient.getTicker(normalizedSymbol);
-                    if (ticker && ticker.last) {
-                        const lastPrice = parseFloat(ticker.last);
-                        if (Number.isFinite(lastPrice) && lastPrice > 0) {
-                            closePrice = lastPrice;
-                            logger.info(`Using current market price ${closePrice} for close trade`);
-                        }
-                    }
-                } catch (tickerError) {
-                    logger.warn(`Failed to fetch market price for ${normalizedSymbol}:`, tickerError);
-                }
-
-                // Fall back to entryPrice if market price unavailable
-                if (closePrice === null && entryPrice > 0) {
-                    closePrice = entryPrice;
-                    logger.info(`Using entryPrice ${closePrice} for close trade (market price unavailable)`);
-                }
-
-                // If both fail, closePrice remains NULL to preserve data integrity
-
-                await withTransaction(async (client) => {
-                    await client.query(
-                        `INSERT INTO trades (id, portfolio_id, symbol, side, type, size, entry_price, price, status, client_order_id, weex_order_id, reason, realized_pnl, champion_id, executed_at, created_at)
-                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-                        [
-                            tradeId,
-                            portfolio.id,
-                            normalizedSymbol,
-                            prismaSide,
-                            'MARKET',
-                            sizeNum,
-                            closePrice, // entry_price - execution price of this close trade (NULL if unavailable)
-                            closePrice, // price - same as entry_price (schema invariant)
-                            'FILLED',
-                            `manual_close_${Date.now()}`,
-                            orderId,
-                            'Manual close via UI',
-                            unrealizedPnl, // realized_pnl - use unrealized P&L from position as realized
-                            championId     // champion_id - from original entry trade
-                        ]
-                    );
-
-                    await client.query(
-                        'UPDATE portfolios SET total_trades = total_trades + 1, updated_at = CURRENT_TIMESTAMP WHERE id = $1',
-                        [portfolio.id]
-                    );
-                });
-
-                // FIXED: Create AI log for WEEX compliance
-                try {
-                    const { aiLogService } = await import('../../services/compliance/AILogService');
-                    await aiLogService.createLog(
-                        'manual_close', // FIXED: Use correct stage for manual closes
-                        'manual',
-                        {
-                            symbol: normalizedSymbol,
-                            action: 'close_position',
-                            side: positionSide,
-                            size: sizeNum,
-                            source: 'ui'
-                        },
-                        {
-                            orderId,
-                            success: true
-                        },
-                        'Manual position close via UI',
-                        orderId
-                    );
-                    logger.info(`📝 AI log created for manual close: ${orderId}`);
-                } catch (logError) {
-                    logger.error('Failed to create AI log for manual close:', logError);
-                    // Don't fail the request - position is already closed
-                }
-            }
-        } catch (dbError: any) {
-            logger.error('Failed to persist manual close to database:', {
-                orderId,
-                symbol: normalizedSymbol,
-                error: dbError.message
-            });
-            // Don't fail the request if DB logging fails - position is already closed
-        }
-
-        logger.info(`Manual position closed: ${normalizedSymbol}`, {
-            side: positionSide,
-            size: positionSize,
-            orderId,
-            tradeId
-        });
-
-        res.json({
-            success: true,
-            message: 'Position closed successfully',
-            symbol: normalizedSymbol,
-            side: positionSide,
-            size: positionSize,
-            orderId,
-            tradeId
-        });
-
-    } catch (error: any) {
-        next(error);
-    }
+// DISABLED: Manual trading is prohibited per WEEX competition rules.
+// Position management must be handled by the AI trading engine.
+// This endpoint is kept for reference but returns 403 Forbidden.
+router.post('/manual/close', async (_req: Request, res: Response, _next: NextFunction): Promise<void> => {
+    logger.warn('Manual position close attempted - blocked per competition rules');
+    res.status(403).json({
+        error: 'Manual position closing is prohibited. All position management must be handled by the AI trading engine.',
+        code: 'MANUAL_TRADING_PROHIBITED',
+        reason: 'WEEX AI Trading Competition rules require all trading to use genuine AI technology. Manual trading is strictly prohibited.'
+    });
 });
 
 // GET /api/trading/candles/:symbol - Get candlestick data
-router.get('/candles/:symbol', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+// Rate limited: 30 requests/minute per IP to protect external WEEX API
+router.get('/candles/:symbol', candlesRateLimiter, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
         const { symbol } = req.params;
         const { interval = '1h', limit = 100 } = req.query;
