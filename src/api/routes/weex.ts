@@ -268,61 +268,103 @@ router.get('/positions', async (_req: Request, res: Response, next: NextFunction
             const planOrders = planOrderMap.get(pos.symbol) || [];
 
             // Get TP/SL orders for this position
-            // WEEX plan orders don't return planType or positionSide in response
-            // We infer SL vs TP based on trigger price relative to mark price:
-            // - LONG: SL trigger < mark price, TP trigger > mark price
-            // - SHORT: SL trigger > mark price, TP trigger < mark price
+            // WEEX plan orders return 'type' field:
+            // 1=Open long, 2=Open short, 3=Close long, 4=Close short, 5=Partial close long, 6=Partial close short
+            // For TP/SL, we want close orders (3,4,5,6) that match our position direction
             let stopLoss: number | null = null;
             let takeProfit: number | null = null;
 
             const isLongPos = pos.side === 'LONG';
-            for (const order of planOrders) {
-                const triggerPrice = parseFloat(order.triggerPrice || order.trigger_price || '0');
-                if (triggerPrice <= 0) continue;
 
-                // Determine if this is SL or TP based on trigger price vs mark price
+            // Get entry price first - needed for SL/TP inference when markPrice is unavailable
+            const size = parseFloat(String(pos.size)) || 0;
+            const actualEntryPrice = pos.entryPrice
+                ? parseFloat(String(pos.entryPrice))
+                : (size > 0 ? parseFloat(String(pos.openValue || '0')) / size : 0);
+
+            // Use markPrice if available, otherwise fall back to entryPrice for SL/TP inference
+            const referencePrice = markPrice > 0 ? markPrice : actualEntryPrice;
+
+            // Filter to only close orders for this position's direction
+            // LONG position: close orders are type 3 (close long) or 5 (partial close long)
+            // SHORT position: close orders are type 4 (close short) or 6 (partial close short)
+            const relevantTypes = isLongPos ? ['3', '5'] : ['4', '6'];
+
+            for (const order of planOrders) {
+                const orderType = String(order.type || '');
+
+                // Skip orders that aren't close orders for this position direction
+                if (!relevantTypes.includes(orderType)) continue;
+
+                const triggerPrice = parseFloat(order.triggerPrice || order.trigger_price || '0');
+                if (triggerPrice <= 0 || !Number.isFinite(triggerPrice)) continue;
+
+                // Skip if we have no reference price to compare against
+                if (referencePrice <= 0) continue;
+
+                // Determine if this is SL or TP based on trigger price vs reference price
+                // For LONG: SL trigger < reference (close at loss), TP trigger > reference (close at profit)
+                // For SHORT: SL trigger > reference (close at loss), TP trigger < reference (close at profit)
                 if (isLongPos) {
-                    // LONG: SL below mark, TP above mark
-                    if (triggerPrice < markPrice) {
-                        stopLoss = triggerPrice;
-                    } else if (triggerPrice > markPrice) {
-                        takeProfit = triggerPrice;
+                    if (triggerPrice < referencePrice) {
+                        // SL for LONG - triggers when price drops
+                        // Use the HIGHEST SL (closest to current price, smallest loss)
+                        if (stopLoss === null || triggerPrice > stopLoss) {
+                            stopLoss = triggerPrice;
+                        }
+                    } else if (triggerPrice > referencePrice) {
+                        // TP for LONG - triggers when price rises
+                        // Use the LOWEST TP (closest to current price, first profit target)
+                        if (takeProfit === null || triggerPrice < takeProfit) {
+                            takeProfit = triggerPrice;
+                        }
                     }
+                    // triggerPrice === referencePrice is ambiguous, skip it
                 } else {
-                    // SHORT: SL above mark, TP below mark
-                    if (triggerPrice > markPrice) {
-                        stopLoss = triggerPrice;
-                    } else if (triggerPrice < markPrice) {
-                        takeProfit = triggerPrice;
+                    if (triggerPrice > referencePrice) {
+                        // SL for SHORT - triggers when price rises
+                        // Use the LOWEST SL (closest to current price, smallest loss)
+                        if (stopLoss === null || triggerPrice < stopLoss) {
+                            stopLoss = triggerPrice;
+                        }
+                    } else if (triggerPrice < referencePrice) {
+                        // TP for SHORT - triggers when price drops
+                        // Use the HIGHEST TP (closest to current price, first profit target)
+                        if (takeProfit === null || triggerPrice > takeProfit) {
+                            takeProfit = triggerPrice;
+                        }
                     }
+                    // triggerPrice === referencePrice is ambiguous, skip it
                 }
             }
 
-            // Calculate distance to SL/TP
+            // Calculate SL/TP P&L - the realized P&L when SL/TP is triggered
+            // This matches WEEX's "exit plan" display which shows total P&L from entry
             const isLong = isLongPos;
-            const size = parseFloat(String(pos.size)) || 0;
 
             let slDistance: number | null = null;
             let tpDistance: number | null = null;
 
-            if (stopLoss && markPrice > 0 && size > 0) {
-                // Distance as $ amount to SL
+            if (stopLoss && actualEntryPrice > 0 && size > 0) {
+                // SL P&L = P&L when price hits stopLoss (from entry, not current)
                 const rawSlDist = isLong
-                    ? (markPrice - stopLoss) * size  // LONG: lose money if price drops to SL
-                    : (stopLoss - markPrice) * size; // SHORT: lose money if price rises to SL
+                    ? (stopLoss - actualEntryPrice) * size  // LONG: SL below entry = negative (loss)
+                    : (actualEntryPrice - stopLoss) * size; // SHORT: SL above entry = negative (loss)
                 slDistance = Number.isFinite(rawSlDist) ? rawSlDist : null;
             }
 
-            if (takeProfit && markPrice > 0 && size > 0) {
+            if (takeProfit && actualEntryPrice > 0 && size > 0) {
+                // TP P&L = P&L when price hits takeProfit (from entry, not current)
                 const rawTpDist = isLong
-                    ? (takeProfit - markPrice) * size  // LONG: gain money if price rises to TP
-                    : (markPrice - takeProfit) * size; // SHORT: gain money if price drops to TP
+                    ? (takeProfit - actualEntryPrice) * size  // LONG: TP above entry = positive (profit)
+                    : (actualEntryPrice - takeProfit) * size; // SHORT: TP below entry = positive (profit)
                 tpDistance = Number.isFinite(rawTpDist) ? rawTpDist : null;
             }
 
             return {
                 ...pos,
                 markPrice: Number.isFinite(markPrice) ? markPrice : 0,
+                entryPrice: actualEntryPrice,
                 stopLoss,
                 takeProfit,
                 slDistance,
