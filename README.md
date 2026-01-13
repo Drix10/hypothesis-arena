@@ -25,7 +25,7 @@ Hypothesis Arena is an autonomous AI-powered trading system for WEEX perpetual f
 ### Key Features
 
 - **4 AI Analysts** - Technical, Macro, Risk, Quantitative specialists with ~150 lines of methodology each
-- **Multi-Model Rotation** - Each analyst uses a different AI model per cycle via OpenRouter (DeepSeek, Gemini 2.0 Flash, Grok 4.1 Fast, MiMo v2) - set `MULTI_MODEL_ENABLED=true` (default)
+- **Multi-Model Rotation** - Each analyst uses a different AI model per cycle via OpenRouter (DeepSeek, Gemini 3.0 Flash, Grok 4.1 Fast, MiMo v2) - set `MULTI_MODEL_ENABLED=true` (default)
 - **Parallel Analysis** - All 4 analyze simultaneously (5 AI calls total)
 - **AI Judge** - Picks best recommendation or HOLD if no consensus
 - **Sentiment Analysis** - Fear & Greed Index, news sentiment from NewsData.io
@@ -401,3 +401,4 @@ MIT License - see [LICENSE](LICENSE)
   ⭐ Star if useful • 🐛 Report bugs • 💡 Suggest features
   
 </div>
+
