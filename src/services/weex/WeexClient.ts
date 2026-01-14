@@ -25,6 +25,11 @@ import {
     DEFAULT_RATE_LIMITS,
 } from '../../shared/types/weex';
 
+// Configuration from environment (via config)
+const WEEX_REQUEST_TIMEOUT = config.weexClient.requestTimeoutMs;
+const MAX_ATTEMPTS = config.weexClient.rateLimitMaxAttempts;
+const MAX_TOTAL_WAIT_MS = config.weexClient.rateLimitMaxWaitMs;
+
 interface TokenBucket {
     tokens: number;
     lastRefill: number;
@@ -66,7 +71,7 @@ export class WeexClient {
 
         this.client = axios.create({
             baseURL: config.weex.baseUrl,
-            timeout: 120000, // Increased to 120 seconds for slow proxy/WEEX responses
+            timeout: WEEX_REQUEST_TIMEOUT, // Configurable timeout for slow proxy/WEEX responses
             headers: defaultHeaders,
         });
 
@@ -289,8 +294,6 @@ export class WeexClient {
     private async consumeTokens(endpoint: string, isOrderRequest: boolean): Promise<void> {
         const weight = ENDPOINT_WEIGHTS[endpoint] || 1;
         let attempts = 0;
-        const MAX_ATTEMPTS = 20;
-        const MAX_TOTAL_WAIT_MS = 60000; // 60 seconds max total wait
         const startTime = Date.now();
 
         // Validate rate limits are configured correctly
@@ -411,11 +414,11 @@ export class WeexClient {
             const response = method === 'GET'
                 ? await this.client.get<T>(url, {
                     headers,
-                    timeout: 120000, // Explicit 120s timeout per request (matches client default)
+                    timeout: WEEX_REQUEST_TIMEOUT, // Configurable timeout per request
                 })
                 : await this.client.post<T>(url, body, {
                     headers,
-                    timeout: 120000, // Explicit 120s timeout per request (matches client default)
+                    timeout: WEEX_REQUEST_TIMEOUT, // Configurable timeout per request
                 });
 
             return response.data;

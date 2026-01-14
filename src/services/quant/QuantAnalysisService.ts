@@ -7,6 +7,7 @@
 import { getWeexClient } from '../weex/WeexClient';
 import { WeexCandle } from '../../shared/types/weex';
 import { logger } from '../../utils/logger';
+import { config } from '../../config';
 import { detectRegime, clearRegimeHistory, type MarketRegime, type RegimeInput } from './RegimeDetector';
 
 export interface QuantSignal {
@@ -144,8 +145,8 @@ export interface QuantContext {
 // CONFIGURATION
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const CACHE_TTL = 5 * 60 * 1000;  // 5 minutes
-const MAX_CACHE_SIZE = 100;
+const CACHE_TTL = config.quant.cacheTtlMs;  // 5 minutes
+const MAX_CACHE_SIZE = config.quant.maxCacheSize;
 const CACHE_CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -296,9 +297,9 @@ const quantContextFetchPromisesByKey = new Map<string, Promise<QuantContext>>();
  * Stores last 7 days (21 funding periods at 8h each) per symbol
  * Persists across cache clears but resets on service restart
  */
-const FUNDING_HISTORY_MAX_ENTRIES = 21;  // 7 days × 3 periods/day
-const FUNDING_HISTORY_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;  // 7 days
-const FUNDING_HISTORY_MAX_SYMBOLS = 50;  // Max symbols to track (memory protection)
+const FUNDING_HISTORY_MAX_ENTRIES = config.quant.fundingHistoryMaxEntries;  // 7 days × 3 periods/day
+const FUNDING_HISTORY_MAX_AGE_MS = config.quant.fundingHistoryMaxAgeMs;  // 7 days
+const FUNDING_HISTORY_MAX_SYMBOLS = config.quant.fundingHistoryMaxSymbols;  // Max symbols to track (memory protection)
 
 interface FundingHistoryStore {
     entries: FundingRateHistoryEntry[];

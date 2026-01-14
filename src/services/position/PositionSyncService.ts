@@ -5,6 +5,7 @@
 
 import { logger } from '../../utils/logger';
 import { prisma } from '../../config/database';
+import { config } from '../../config';
 import { addJournalEntry, addLessonToEntry } from '../journal';
 import type { WeexClient } from '../weex/WeexClient';
 
@@ -53,13 +54,13 @@ interface CloseResult {
 }
 
 const trackedTrades = new Map<string, TrackedTrade>();
-const MAX_TRACKED_TRADES = 100;
-const STALE_TRADE_HOURS = 72;
-const POSITION_OUTCOME_THRESHOLD_PERCENT = 1.0;
+const MAX_TRACKED_TRADES = config.positionSync.maxTrackedTrades;
+const STALE_TRADE_HOURS = config.positionSync.staleTradeHours;
+const POSITION_OUTCOME_THRESHOLD_PERCENT = config.positionSync.outcomeThresholdPct;
 const MIN_ABS_PRICE_DIFF = 1e-6;
 const inProgressTradeIds = new Set<string>();
 const notSeenCounts = new Map<string, number>();
-const MISSING_CYCLE_THRESHOLD = 3;
+const MISSING_CYCLE_THRESHOLD = config.positionSync.missingCycleThreshold;
 
 function normalizeSide(side: string): 'BUY' | 'SELL' | null {
     if (!side || typeof side !== 'string') {

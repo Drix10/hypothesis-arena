@@ -46,6 +46,6 @@ export {
 } from '../prompts/analystPrompt';
 
 export {
-    JUDGE_SYSTEM_PROMPT,
+    buildJudgeSystemPrompt,
     buildJudgeUserMessage
 } from '../prompts/judgePrompt';

@@ -6,6 +6,7 @@
 
 import { logger } from '../../utils/logger';
 import { calculateTextSentiment } from './SentimentService';
+import { config } from '../../config';
 
 export interface RedditSentimentResult {
     subreddit: string;
@@ -83,12 +84,39 @@ const REDDIT_ENDPOINTS = [
     { url: 'https://www.reddit.com/r/ethereum/hot.json?limit=50', name: 'eth', weight: 1.0 },
 ];
 
-const REDDIT_CACHE_TTL = 30 * 60 * 1000;  // 30 minutes
-const REQUEST_DELAY = 2500;                // 2.5 seconds between requests
-const REQUEST_TIMEOUT = 10000;             // 10 second timeout
-const STALE_THRESHOLD = 20 * 60 * 1000;    // 20 minutes = stale (must be < REDDIT_CACHE_TTL)
-const STALE_THRESHOLD_MINUTES = 20;        // Human-readable version for messages
-const MAX_POST_AGE_HOURS = 24;             // Only analyze posts < 24h old
+// Validate config.reddit exists and provide safe defaults
+if (!config.reddit || typeof config.reddit !== 'object') {
+    throw new Error('❌ FATAL: config.reddit is missing or invalid. Check src/config/index.ts');
+}
+
+// Reddit configuration with validation and safe defaults
+const REDDIT_CACHE_TTL = Number.isFinite(config.reddit.cacheTtlMs) && config.reddit.cacheTtlMs > 0
+    ? config.reddit.cacheTtlMs
+    : 1800000;  // Default: 30 minutes
+
+const REQUEST_DELAY = Math.max(2500, Number.isFinite(config.reddit.requestDelayMs)
+    ? config.reddit.requestDelayMs
+    : 2500);  // Minimum 2.5 seconds between requests (Reddit rate limit protection)
+
+const REQUEST_TIMEOUT = Number.isFinite(config.reddit.requestTimeoutMs) && config.reddit.requestTimeoutMs > 0
+    ? config.reddit.requestTimeoutMs
+    : 10000;  // Default: 10 second timeout
+
+const STALE_THRESHOLD = (() => {
+    const value = Number.isFinite(config.reddit.staleThresholdMs) && config.reddit.staleThresholdMs > 0
+        ? config.reddit.staleThresholdMs
+        : 1200000;  // Default: 20 minutes
+    // Ensure stale threshold is less than cache TTL (otherwise data is never "fresh")
+    // Guard against negative values if cache TTL is very small
+    const maxStaleThreshold = Math.max(60000, REDDIT_CACHE_TTL - 60000);  // At least 1 min, and 1 min less than cache TTL
+    return Math.min(value, maxStaleThreshold);
+})();
+
+const STALE_THRESHOLD_MINUTES = Math.round(STALE_THRESHOLD / 60000);  // Human-readable version
+
+const MAX_POST_AGE_HOURS = Number.isFinite(config.reddit.maxPostAgeHours) && config.reddit.maxPostAgeHours > 0
+    ? config.reddit.maxPostAgeHours
+    : 24;  // Default: Only analyze posts < 24h old
 
 // Dynamic User-Agent: Use env var if set, otherwise construct from package.json version
 // Cache the user agent string to avoid repeated file reads
@@ -134,7 +162,14 @@ interface CacheEntry<T> {
     timestamp: number;
 }
 
-const MAX_CACHE_SIZE = 50;
+// Validate MAX_CACHE_SIZE for LRU eviction - must be positive integer
+const MAX_CACHE_SIZE = (() => {
+    const value = config.reddit.maxCacheSize;
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+        return Math.floor(value);  // Ensure integer
+    }
+    return 50;  // Safe default
+})();
 const CACHE_CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
 class RedditCacheManager {

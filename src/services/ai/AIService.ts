@@ -6,9 +6,10 @@
  * 
  * Features:
  * - Dual provider support (Gemini / OpenRouter)
- * - Multi-model support for analysts (v5.3.0) - each analyst can use different model
+ * - Hybrid mode (v5.5.0) - split analysts across providers for diversity
  * - Strict JSON schema enforcement via responseSchema
  * - Schema conversion for OpenRouter compatibility
+ * - Cross-provider fallback on failure
  * - Prompt caching optimization (implicit for Gemini 2.5+)
  * - Centralized error handling
  * - Rate limit detection (retries handled by caller - see CollaborativeFlow)
@@ -22,7 +23,6 @@
 import { GoogleGenerativeAI, GenerativeModel, SchemaType, ResponseSchema } from '@google/generative-ai';
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
-import { modelPoolManager, ModelConfig } from './ModelPoolManager';
 
 // =============================================================================
 // TYPES
@@ -85,20 +85,25 @@ function validateSchema(schema: ResponseSchema): void {
 class AIService {
     private genAI: GoogleGenerativeAI | null = null;
     private geminiModel: GenerativeModel | null = null;
-    private currentProvider: 'gemini' | 'openrouter' | null = null;
     private openRouterBaseUrl = 'https://openrouter.ai/api/v1';
     private initializingPromise: Promise<void> | null = null;
 
+    // Hybrid mode: track if both providers are initialized
+    private geminiInitialized: boolean = false;
+    private openRouterValidated: boolean = false;
+
     /**
      * Get or initialize Gemini model with mutex protection
+     * In hybrid mode, this can be called even if primary provider is openrouter
      */
     private async getGeminiModel(): Promise<GenerativeModel> {
-        if (config.ai.provider !== 'gemini') {
-            throw new Error('getGeminiModel() called but provider is not gemini');
+        // In hybrid mode, allow Gemini initialization regardless of primary provider
+        if (!config.ai.hybridMode && config.ai.provider !== 'gemini') {
+            throw new Error('getGeminiModel() called but provider is not gemini and hybrid mode is disabled');
         }
 
-        // Return cached model if available and provider matches
-        if (this.geminiModel && this.currentProvider === 'gemini') {
+        // Return cached model if available
+        if (this.geminiModel && this.geminiInitialized) {
             return this.geminiModel;
         }
 
@@ -110,7 +115,7 @@ class AIService {
                 // Previous initialization failed, will retry below
             }
             // Check if initialization succeeded
-            if (this.geminiModel && this.currentProvider === 'gemini') {
+            if (this.geminiModel && this.geminiInitialized) {
                 return this.geminiModel;
             }
         }
@@ -135,18 +140,13 @@ class AIService {
             throw new Error('GEMINI_API_KEY not configured');
         }
 
-        // Clean up previous instance if switching providers
-        if (this.genAI && this.currentProvider !== 'gemini') {
-            this.genAI = null;
-            this.geminiModel = null;
-        }
-
         this.genAI = new GoogleGenerativeAI(config.geminiApiKey);
         this.geminiModel = this.genAI.getGenerativeModel({
             model: config.ai.model,
         });
-        this.currentProvider = 'gemini';
-        logger.info(`🤖 AI Service initialized with Gemini model: ${config.ai.model}`);
+        this.geminiInitialized = true;
+
+        logger.info(`🤖 Gemini initialized with model: ${config.ai.model}`);
     }
 
     /**
@@ -159,9 +159,192 @@ class AIService {
         if (!config.ai.openRouterModel) {
             throw new Error('OPENROUTER_MODEL not configured');
         }
-        if (this.currentProvider !== 'openrouter') {
-            logger.info(`🤖 AI Service using OpenRouter model: ${config.ai.openRouterModel}`);
-            this.currentProvider = 'openrouter';
+        if (!this.openRouterValidated) {
+            logger.info(`🤖 OpenRouter validated with model: ${config.ai.openRouterModel}`);
+            this.openRouterValidated = true;
+        }
+    }
+
+    /**
+     * Initialize hybrid mode - validate both providers are available
+     * Uses mutex to prevent concurrent initialization
+     */
+    async initializeHybridMode(): Promise<void> {
+        if (!config.ai.hybridMode) {
+            return;
+        }
+
+        // Check which providers are needed
+        const needsGemini = Object.values(config.ai.analystProviders).includes('gemini') ||
+            config.ai.judgeProvider === 'gemini';
+        const needsOpenRouter = Object.values(config.ai.analystProviders).includes('openrouter') ||
+            config.ai.judgeProvider === 'openrouter';
+
+        // Check if already fully initialized
+        const geminiReady = !needsGemini || this.geminiInitialized;
+        const openRouterReady = !needsOpenRouter || this.openRouterValidated;
+        if (geminiReady && openRouterReady) {
+            return;
+        }
+
+        // Prevent concurrent hybrid mode initialization - wait for existing
+        if (this.initializingPromise) {
+            try {
+                await this.initializingPromise;
+            } catch {
+                // Previous initialization failed, will retry below
+            }
+            // Re-check after waiting
+            const geminiReadyNow = !needsGemini || this.geminiInitialized;
+            const openRouterReadyNow = !needsOpenRouter || this.openRouterValidated;
+            if (geminiReadyNow && openRouterReadyNow) {
+                return;
+            }
+            // If still not ready after waiting, fall through to retry
+        }
+
+        // Use mutex for the entire hybrid initialization
+        this.initializingPromise = this._initializeHybridModeInternal();
+        try {
+            await this.initializingPromise;
+        } finally {
+            this.initializingPromise = null;
+        }
+    }
+
+    /**
+     * Internal hybrid mode initialization (called under mutex)
+     */
+    private async _initializeHybridModeInternal(): Promise<void> {
+        const errors: string[] = [];
+
+        // Check which providers are needed based on analyst assignments
+        const needsGemini = Object.values(config.ai.analystProviders).includes('gemini') ||
+            config.ai.judgeProvider === 'gemini';
+        const needsOpenRouter = Object.values(config.ai.analystProviders).includes('openrouter') ||
+            config.ai.judgeProvider === 'openrouter';
+
+        if (needsGemini && !this.geminiInitialized) {
+            try {
+                await this._initializeGemini();
+            } catch (error: any) {
+                errors.push(`Gemini: ${error.message}`);
+            }
+        }
+
+        if (needsOpenRouter && !this.openRouterValidated) {
+            try {
+                this.validateOpenRouterConfig();
+            } catch (error: any) {
+                errors.push(`OpenRouter: ${error.message}`);
+            }
+        }
+
+        if (errors.length > 0) {
+            throw new Error(`Hybrid mode initialization failed:\n${errors.join('\n')}`);
+        }
+
+        // Log hybrid mode configuration
+        const analystAssignments = Object.entries(config.ai.analystProviders)
+            .map(([analyst, provider]) => `${analyst}→${provider}`)
+            .join(', ');
+        logger.info(`🔀 Hybrid AI mode enabled: ${analystAssignments}, judge→${config.ai.judgeProvider}`);
+    }
+
+    /**
+     * Get the provider for a specific analyst in hybrid mode
+     */
+    private getProviderForAnalyst(analystId: string): 'gemini' | 'openrouter' {
+        if (!config.ai.hybridMode) {
+            return config.ai.provider;
+        }
+        const mapping = config.ai.analystProviders as Record<string, 'gemini' | 'openrouter'>;
+        const provider = mapping[analystId];
+        if (!provider) {
+            // Unknown analyst ID - log warning and fall back to default
+            const knownAnalysts = Object.keys(config.ai.analystProviders).join(', ');
+            logger.warn(`Unknown analyst ID '${analystId}' in getProviderForAnalyst. Known: [${knownAnalysts}]. Using default: ${config.ai.provider}`);
+            return config.ai.provider;
+        }
+        return provider;
+    }
+
+    /**
+     * Check if fallback provider is available and can be used
+     * Also ensures the fallback provider is initialized if needed
+     */
+    private async canUseFallbackProvider(fallbackProvider: 'gemini' | 'openrouter'): Promise<boolean> {
+        if (fallbackProvider === 'gemini') {
+            if (!config.geminiApiKey) return false;
+            // Ensure Gemini is initialized for fallback
+            if (!this.geminiInitialized) {
+                try {
+                    await this._initializeGemini();
+                } catch (error: any) {
+                    logger.warn(`Failed to initialize Gemini for fallback: ${error.message}`);
+                    return false;
+                }
+            }
+            return true;
+        } else {
+            if (!config.openRouterApiKey) return false;
+            // Ensure OpenRouter is validated for fallback
+            if (!this.openRouterValidated) {
+                try {
+                    this.validateOpenRouterConfig();
+                } catch (error: any) {
+                    logger.warn(`Failed to validate OpenRouter for fallback: ${error.message}`);
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+
+    /**
+     * Attempt cross-provider fallback after primary provider failure
+     * Returns null if fallback is not available or fails
+     */
+    private async attemptFallback(
+        primaryProvider: 'gemini' | 'openrouter',
+        prompt: string,
+        schema: ResponseSchema,
+        temperature: number | undefined,
+        maxOutputTokens: number | undefined,
+        requestId: string,
+        logLabel: string
+    ): Promise<AIGenerateResult | null> {
+        if (!config.ai.hybridMode) {
+            return null;
+        }
+
+        const fallbackProvider = primaryProvider === 'gemini' ? 'openrouter' : 'gemini';
+        const canFallback = await this.canUseFallbackProvider(fallbackProvider);
+
+        if (!canFallback) {
+            logger.debug(`${logLabel} fallback to ${fallbackProvider} not available`);
+            return null;
+        }
+
+        logger.info(`${logLabel} attempting fallback to ${fallbackProvider}`);
+        const fallbackStart = Date.now();
+
+        try {
+            let result: AIGenerateResult;
+
+            if (fallbackProvider === 'openrouter') {
+                result = await this.generateContentOpenRouter(prompt, schema, temperature, maxOutputTokens, requestId);
+            } else {
+                result = await this.generateContentGemini(prompt, schema, temperature, maxOutputTokens, requestId);
+            }
+
+            const fallbackElapsed = Date.now() - fallbackStart;
+            logger.info(`${logLabel} fallback to ${fallbackProvider} succeeded in ${fallbackElapsed}ms`);
+
+            return result;
+        } catch (fallbackError: any) {
+            logger.error(`${logLabel} fallback to ${fallbackProvider} also failed: ${fallbackError.message}`);
+            return null;
         }
     }
 
@@ -208,6 +391,112 @@ class AIService {
             const elapsed = Date.now() - startTime;
             logger.error(`${logLabel} failed after ${elapsed}ms:`, error.message);
             throw error;
+        }
+    }
+
+    /**
+     * Generate content for a specific analyst (hybrid mode aware)
+     * Routes to the correct provider based on analyst assignment
+     * Includes cross-provider fallback on failure
+     * 
+     * @param analystId - The analyst ID (jim, ray, karen, quant)
+     * @param options - Generation options
+     * @returns Generated text and metadata
+     */
+    async generateContentForAnalyst(
+        analystId: string,
+        options: AIGenerateOptions
+    ): Promise<AIGenerateResult> {
+        const { prompt, schema, temperature, maxOutputTokens, label } = options;
+
+        // Validate inputs
+        if (!prompt || prompt.trim().length === 0) {
+            throw new Error('Cannot generate content with empty prompt');
+        }
+
+        validateSchema(schema);
+
+        const requestId = generateRequestId();
+        const primaryProvider = this.getProviderForAnalyst(analystId);
+        const logLabel = label ? `${label}[${requestId}]` : `${analystId}[${requestId}]`;
+        const startTime = Date.now();
+
+        try {
+            let result: AIGenerateResult;
+
+            if (primaryProvider === 'openrouter') {
+                result = await this.generateContentOpenRouter(prompt, schema, temperature, maxOutputTokens, requestId);
+            } else {
+                result = await this.generateContentGemini(prompt, schema, temperature, maxOutputTokens, requestId);
+            }
+
+            const elapsed = Date.now() - startTime;
+            logger.debug(`${logLabel} completed via ${primaryProvider} in ${elapsed}ms`);
+
+            return result;
+        } catch (primaryError: any) {
+            const elapsed = Date.now() - startTime;
+            logger.warn(`${logLabel} ${primaryProvider} failed after ${elapsed}ms: ${primaryError.message}`);
+
+            // Attempt cross-provider fallback
+            const fallbackResult = await this.attemptFallback(
+                primaryProvider, prompt, schema, temperature, maxOutputTokens, requestId, logLabel
+            );
+
+            if (fallbackResult) {
+                return fallbackResult;
+            }
+
+            throw primaryError;
+        }
+    }
+
+    /**
+     * Generate content for judge (hybrid mode aware)
+     * Uses the configured judge provider with cross-provider fallback
+     */
+    async generateContentForJudge(options: AIGenerateOptions): Promise<AIGenerateResult> {
+        const { prompt, schema, temperature, maxOutputTokens, label } = options;
+
+        // Validate inputs
+        if (!prompt || prompt.trim().length === 0) {
+            throw new Error('Cannot generate content with empty prompt');
+        }
+
+        validateSchema(schema);
+
+        const requestId = generateRequestId();
+        const primaryProvider = config.ai.hybridMode ? config.ai.judgeProvider : config.ai.provider;
+        const logLabel = label ? `${label}[${requestId}]` : `Judge[${requestId}]`;
+        const startTime = Date.now();
+
+        try {
+            let result: AIGenerateResult;
+
+            if (primaryProvider === 'openrouter') {
+                result = await this.generateContentOpenRouter(prompt, schema, temperature, maxOutputTokens, requestId);
+            } else {
+                result = await this.generateContentGemini(prompt, schema, temperature, maxOutputTokens, requestId);
+            }
+
+            const elapsed = Date.now() - startTime;
+            logger.debug(`${logLabel} completed via ${primaryProvider} in ${elapsed}ms`);
+
+            return result;
+        } catch (primaryError: any) {
+            const elapsed = Date.now() - startTime;
+            logger.warn(`${logLabel} ${primaryProvider} failed after ${elapsed}ms: ${primaryError.message}`);
+
+            // Attempt cross-provider fallback
+            const fallbackResult = await this.attemptFallback(
+                primaryProvider, prompt, schema, temperature, maxOutputTokens, requestId, logLabel
+            );
+
+            if (fallbackResult) {
+                return fallbackResult;
+            }
+
+            throw primaryError;
         }
     }
 
@@ -503,6 +792,18 @@ class AIService {
      * Check if the service is configured
      */
     isConfigured(): boolean {
+        if (config.ai.hybridMode) {
+            // In hybrid mode, check which providers are needed
+            const needsGemini = Object.values(config.ai.analystProviders).includes('gemini') ||
+                config.ai.judgeProvider === 'gemini';
+            const needsOpenRouter = Object.values(config.ai.analystProviders).includes('openrouter') ||
+                config.ai.judgeProvider === 'openrouter';
+
+            if (needsGemini && !config.geminiApiKey) return false;
+            if (needsOpenRouter && !config.openRouterApiKey) return false;
+            return true;
+        }
+
         if (config.ai.provider === 'openrouter') {
             return !!config.openRouterApiKey;
         }
@@ -516,310 +817,22 @@ class AIService {
         return config.ai.provider;
     }
 
-    // =========================================================================
-    // MULTI-MODEL SUPPORT (v5.3.0)
-    // =========================================================================
-
     /**
-     * Call OpenRouter API with a specific model
-     * Used for multi-model analyst assignments
-     * 
-     * @param prompt - The prompt to send
-     * @param model - Model configuration from ModelPoolManager
-     * @param _schema - Response schema (passed for API consistency but not enforced at API level;
-     *                  validation is done by caller after parsing response)
-     * @returns Response content, model used, and latency
+     * Check if hybrid mode is enabled
      */
-    async callWithModel(
-        prompt: string,
-        model: ModelConfig,
-        _schema?: ResponseSchema
-    ): Promise<{ content: string; model: string; latencyMs: number }> {
-        // Validate inputs
-        if (!prompt || typeof prompt !== 'string') {
-            throw new Error('callWithModel: prompt is required');
-        }
-        if (!model || !model.id) {
-            throw new Error('callWithModel: valid model config is required');
-        }
-        if (!config.openRouterApiKey) {
-            throw new Error('OPENROUTER_API_KEY not configured');
-        }
-
-        // Note: _schema is not used at API level - OpenRouter's json_object mode doesn't support
-        // schema enforcement. The schema is validated by the caller (CollaborativeFlow) after parsing.
-
-        const startTime = Date.now();
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), model.timeoutMs);
-
-        try {
-            const requestBody = {
-                model: model.id,
-                messages: [{ role: 'user', content: prompt }],
-                max_tokens: model.maxTokens,
-                temperature: model.temperature,
-                response_format: { type: 'json_object' },
-                provider: {
-                    data_collection: 'allow',
-                    allow_fallbacks: true,
-                },
-            };
-
-            let response: Response;
-            try {
-                response = await fetch(`${this.openRouterBaseUrl}/chat/completions`, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${config.openRouterApiKey}`,
-                        'Content-Type': 'application/json',
-                        'HTTP-Referer': 'https://hypothesis-arena.com',
-                        'X-Title': 'Hypothesis Arena',
-                    },
-                    body: JSON.stringify(requestBody),
-                    signal: controller.signal,
-                });
-            } catch (fetchError: any) {
-                clearTimeout(timeoutId);
-                if (fetchError.name === 'AbortError') {
-                    throw new Error(`Model ${model.id} timeout after ${model.timeoutMs}ms`);
-                }
-                throw new Error(`Model ${model.id} network error: ${fetchError.message}`);
-            }
-
-            clearTimeout(timeoutId);
-            const latencyMs = Date.now() - startTime;
-
-            if (!response.ok) {
-                let errorText: string;
-                try {
-                    errorText = await response.text();
-                } catch {
-                    errorText = 'Unable to read error response';
-                }
-
-                // Check for response_format error and retry without it
-                const isFormatError = errorText.includes('response_format') ||
-                    errorText.includes('json_object') ||
-                    errorText.includes('json_schema');
-
-                if (isFormatError) {
-                    logger.warn(`[AIService] Model ${model.id} doesn't support json_object, retrying without`);
-                    // Calculate remaining time for retry
-                    const elapsedMs = Date.now() - startTime;
-                    const remainingMs = Math.max(model.timeoutMs - elapsedMs, 10000); // At least 10s for retry
-                    return this.callWithModelNoFormat(prompt, model, startTime, remainingMs);
-                }
-
-                const error = new Error(`Model ${model.id} error (${response.status}): ${errorText.slice(0, 200)}`);
-                if (response.status === 429) {
-                    (error as any).isRateLimit = true;
-                }
-                throw error;
-            }
-
-            const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
-            let content = data.choices?.[0]?.message?.content || '';
-
-            // Check for empty response
-            if (!content || content.trim().length === 0) {
-                throw new Error(`Model ${model.id} returned empty response`);
-            }
-
-            // Extract JSON from markdown if present
-            const jsonBlockMatch = content.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
-            if (jsonBlockMatch && jsonBlockMatch[1]) {
-                content = jsonBlockMatch[1].trim();
-            }
-
-            // Try to extract JSON object if response has extra text
-            if (!content.startsWith('{') && !content.startsWith('[')) {
-                const startIdx = content.indexOf('{');
-                if (startIdx !== -1) {
-                    let depth = 0;
-                    let endIdx = -1;
-                    for (let i = startIdx; i < content.length; i++) {
-                        if (content[i] === '{') depth++;
-                        else if (content[i] === '}') {
-                            depth--;
-                            if (depth === 0) {
-                                endIdx = i;
-                                break;
-                            }
-                        }
-                    }
-                    if (endIdx !== -1) {
-                        content = content.slice(startIdx, endIdx + 1);
-                    }
-                }
-            }
-
-            // Validate JSON before returning
-            const trimmedContent = content.trim();
-            try {
-                JSON.parse(trimmedContent);
-            } catch {
-                throw new Error(`Model ${model.id} returned invalid JSON: ${trimmedContent.slice(0, 100)}...`);
-            }
-
-            return { content: trimmedContent, model: model.id, latencyMs };
-        } catch (error) {
-            clearTimeout(timeoutId);
-            throw error;
-        }
-    }
-
-    /**
-     * Call model without response_format (fallback for models that don't support it)
-     * @param prompt - The prompt to send
-     * @param model - Model configuration
-     * @param originalStartTime - When the original request started (for latency calculation)
-     * @param timeoutMs - Timeout for this retry attempt
-     */
-    private async callWithModelNoFormat(
-        prompt: string,
-        model: ModelConfig,
-        originalStartTime: number,
-        timeoutMs: number
-    ): Promise<{ content: string; model: string; latencyMs: number }> {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-        try {
-            const response = await fetch(`${this.openRouterBaseUrl}/chat/completions`, {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${config.openRouterApiKey}`,
-                    'Content-Type': 'application/json',
-                    'HTTP-Referer': 'https://hypothesis-arena.com',
-                    'X-Title': 'Hypothesis Arena',
-                },
-                body: JSON.stringify({
-                    model: model.id,
-                    messages: [{ role: 'user', content: prompt }],
-                    max_tokens: model.maxTokens,
-                    temperature: model.temperature,
-                }),
-                signal: controller.signal,
-            });
-
-            clearTimeout(timeoutId);
-            const latencyMs = Date.now() - originalStartTime;
-
-            if (!response.ok) {
-                const errorText = await response.text().catch(() => 'Unknown error');
-                throw new Error(`Model ${model.id} error (${response.status}): ${errorText.slice(0, 200)}`);
-            }
-
-            const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
-            let content = data.choices?.[0]?.message?.content || '';
-
-            // Check for empty response
-            if (!content || content.trim().length === 0) {
-                throw new Error(`Model ${model.id} returned empty response (no-format mode)`);
-            }
-
-            // Extract JSON from markdown if present
-            const jsonBlockMatch = content.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
-            if (jsonBlockMatch && jsonBlockMatch[1]) {
-                content = jsonBlockMatch[1].trim();
-            }
-
-            // Try to extract JSON object if response has extra text
-            if (!content.startsWith('{') && !content.startsWith('[')) {
-                const startIdx = content.indexOf('{');
-                if (startIdx !== -1) {
-                    let depth = 0;
-                    let endIdx = -1;
-                    for (let i = startIdx; i < content.length; i++) {
-                        if (content[i] === '{') depth++;
-                        else if (content[i] === '}') {
-                            depth--;
-                            if (depth === 0) {
-                                endIdx = i;
-                                break;
-                            }
-                        }
-                    }
-                    if (endIdx !== -1) {
-                        content = content.slice(startIdx, endIdx + 1);
-                    }
-                }
-            }
-
-            // Validate JSON before returning
-            const trimmedContent = content.trim();
-            try {
-                JSON.parse(trimmedContent);
-            } catch {
-                throw new Error(`Model ${model.id} returned invalid JSON (no-format): ${trimmedContent.slice(0, 100)}...`);
-            }
-
-            return { content: trimmedContent, model: model.id, latencyMs };
-        } catch (error) {
-            clearTimeout(timeoutId);
-            throw error;
-        }
-    }
-
-    /**
-     * Analyze with assigned model for an analyst, with automatic fallback
-     * 
-     * @param analystId - The analyst ID (jim, ray, karen, quant)
-     * @param prompt - The full prompt to send
-     * @param schema - Optional response schema for structured output validation
-     * @returns Response content, model used, and whether fallback was used
-     */
-    async analyzeWithAssignedModel(
-        analystId: string,
-        prompt: string,
-        schema?: ResponseSchema
-    ): Promise<{ content: string; model: string; latencyMs: number; usedFallback: boolean }> {
-        // Validate inputs
-        if (!analystId || typeof analystId !== 'string') {
-            throw new Error('analyzeWithAssignedModel: analystId is required');
-        }
-        if (!prompt || typeof prompt !== 'string') {
-            throw new Error('analyzeWithAssignedModel: prompt is required');
-        }
-
-        // getModelForAnalyst always returns a valid model (never null)
-        const assignedModel = modelPoolManager.getModelForAnalyst(analystId);
-
-        try {
-            const result = await this.callWithModel(prompt, assignedModel, schema);
-            logger.debug(`[AIService] ${analystId} completed with ${assignedModel.name} in ${result.latencyMs}ms`);
-            return { ...result, usedFallback: false };
-        } catch (error) {
-            logger.warn(`[AIService] ${analystId} primary model ${assignedModel.name} failed:`, error);
-
-            // Try fallback
-            const fallback = modelPoolManager.getFallbackModel(assignedModel.id);
-            if (!fallback) {
-                throw error;
-            }
-
-            logger.info(`[AIService] ${analystId} retrying with fallback ${fallback.name}`);
-            try {
-                const result = await this.callWithModel(prompt, fallback, schema);
-                return { ...result, usedFallback: true };
-            } catch (fallbackError) {
-                // Log fallback failure but throw original error for better debugging
-                logger.error(`[AIService] ${analystId} fallback ${fallback.name} also failed:`, fallbackError);
-                throw error;
-            }
-        }
+    isHybridMode(): boolean {
+        return config.ai.hybridMode;
     }
 
     /**
      * Cleanup resources
-     * FIXED: Properly cleanup GoogleGenerativeAI instance
      */
     cleanup(): void {
         this.geminiModel = null;
         this.genAI = null;
-        this.currentProvider = null;
         this.initializingPromise = null;
+        this.geminiInitialized = false;
+        this.openRouterValidated = false;
         logger.debug('AIService cleaned up');
     }
 }

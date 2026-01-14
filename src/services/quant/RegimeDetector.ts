@@ -4,6 +4,7 @@
  */
 
 import { logger } from '../../utils/logger';
+import { config } from '../../config';
 
 export interface MarketRegime {
     volatilityRegime: 'low' | 'normal' | 'high' | 'extreme';
@@ -63,10 +64,10 @@ interface RegimeHistoryEntry {
 }
 
 const regimeHistory = new Map<string, RegimeHistoryEntry[]>();
-const REGIME_HISTORY_MAX = 20;
-const REGIME_HISTORY_MAX_SYMBOLS = 50;
-const REGIME_CLEANUP_INTERVAL = 10 * 60 * 1000;
-const REGIME_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const REGIME_HISTORY_MAX = config.regime.historyMax;
+const REGIME_HISTORY_MAX_SYMBOLS = config.regime.historyMaxSymbols;
+const REGIME_CLEANUP_INTERVAL = config.regime.cleanupIntervalMs;
+const REGIME_MAX_AGE_MS = config.regime.maxAgeMs;
 
 let regimeCleanupTimer: ReturnType<typeof setInterval> | null = null;
 

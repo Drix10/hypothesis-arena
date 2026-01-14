@@ -2,9 +2,16 @@
  * Global Risk Management Constants
  * COMPETITION MODE: Aggressive settings for demo money competition.
  * IMPORTANT: These aggressive settings are ONLY safe when COMPETITION_MODE is enabled.
+ * 
+ * All values are configurable via environment variables through config.
  */
 
+import { config } from '../../config';
 import { logger } from '../../utils/logger';
+
+// =============================================================================
+// COMPETITION MODE VALIDATION
+// =============================================================================
 
 const COMPETITION_MODE_ENABLED = process.env.COMPETITION_MODE === 'true' || process.env.NODE_ENV === 'competition';
 const COMPETITION_MODE_ACK_STRING = 'I_ACCEPT_DEMO_ONLY_HIGH_RISK_AGGRESSIVE_SETTINGS';
@@ -81,44 +88,66 @@ if (USE_COMPETITION_SETTINGS) {
     }
 }
 
-const PRODUCTION_DEFAULTS = {
-    MAX_SAFE_LEVERAGE: 10,
-    AUTO_APPROVE_LEVERAGE_THRESHOLD: 5,
-    ABSOLUTE_MAX_LEVERAGE: 15,
-    MAX_POSITION_SIZE_PERCENT: 25,
-    MAX_TOTAL_LEVERAGED_CAPITAL_PERCENT: 40,
-    MAX_RISK_PER_TRADE_PERCENT: 5,
-    MAX_CONCURRENT_RISK_PERCENT: 15,
+// =============================================================================
+// SETTINGS SELECTION (Config-based with competition overrides)
+// =============================================================================
+
+// Get base values from config (these are the production defaults)
+const configRiskLimits = config.autonomous.riskLimits;
+const configCorrelation = config.autonomous.correlation;
+const configCircuitBreakers = config.autonomous.circuitBreakers;
+const configStopLoss = config.autonomous.stopLoss;
+const configLeverageScaling = config.autonomous.leverageScaling;
+
+// Competition mode overrides (only applied when USE_COMPETITION_SETTINGS is true)
+const COMPETITION_OVERRIDES = {
+    maxSafeLeverage: 20,
+    autoApproveLeverageThreshold: 15,
+    absoluteMaxLeverage: 20,
+    maxPositionSizePercent: 50,
+    maxTotalLeveragedCapitalPercent: 60,
+    maxRiskPerTradePercent: 10,
+    maxConcurrentRiskPercent: 25,
 };
 
-const COMPETITION_SETTINGS = {
-    MAX_SAFE_LEVERAGE: 20,
-    AUTO_APPROVE_LEVERAGE_THRESHOLD: 15,
-    ABSOLUTE_MAX_LEVERAGE: 20,
-    MAX_POSITION_SIZE_PERCENT: 50,
-    MAX_TOTAL_LEVERAGED_CAPITAL_PERCENT: 60,
-    MAX_RISK_PER_TRADE_PERCENT: 10,
-    MAX_CONCURRENT_RISK_PERCENT: 25,
+// Select final values based on mode
+const ACTIVE_SETTINGS = {
+    MAX_SAFE_LEVERAGE: USE_COMPETITION_SETTINGS
+        ? COMPETITION_OVERRIDES.maxSafeLeverage
+        : configRiskLimits.maxSafeLeverage,
+    AUTO_APPROVE_LEVERAGE_THRESHOLD: USE_COMPETITION_SETTINGS
+        ? COMPETITION_OVERRIDES.autoApproveLeverageThreshold
+        : configRiskLimits.autoApproveLeverageThreshold,
+    ABSOLUTE_MAX_LEVERAGE: USE_COMPETITION_SETTINGS
+        ? COMPETITION_OVERRIDES.absoluteMaxLeverage
+        : configRiskLimits.absoluteMaxLeverage,
+    MAX_POSITION_SIZE_PERCENT: USE_COMPETITION_SETTINGS
+        ? COMPETITION_OVERRIDES.maxPositionSizePercent
+        : configRiskLimits.maxPositionSizePercent,
+    MAX_TOTAL_LEVERAGED_CAPITAL_PERCENT: USE_COMPETITION_SETTINGS
+        ? COMPETITION_OVERRIDES.maxTotalLeveragedCapitalPercent
+        : configRiskLimits.maxTotalLeveragedCapitalPercent,
+    MAX_RISK_PER_TRADE_PERCENT: USE_COMPETITION_SETTINGS
+        ? COMPETITION_OVERRIDES.maxRiskPerTradePercent
+        : configRiskLimits.maxRiskPerTradePercent,
+    MAX_CONCURRENT_RISK_PERCENT: USE_COMPETITION_SETTINGS
+        ? COMPETITION_OVERRIDES.maxConcurrentRiskPercent
+        : configRiskLimits.maxConcurrentRiskPercent,
 };
 
-// Select settings based on mode
-const ACTIVE_SETTINGS = USE_COMPETITION_SETTINGS ? COMPETITION_SETTINGS : PRODUCTION_DEFAULTS;
+// =============================================================================
+// VALIDATION FUNCTIONS
+// =============================================================================
 
 /**
  * Runtime guard to validate competition mode is properly configured
  * Call this from trade-executing entry points to prevent trades with misconfigured settings
  * 
- * NOTE: This validates USE_COMPETITION_SETTINGS (not just COMPETITION_MODE_ENABLED) so the
- * check only throws when competition settings are actually being used. The startup-time
- * throws above handle the fail-fast for misconfigured COMPETITION_MODE_ENABLED cases.
- * 
  * @throws Error if competition settings are active but configuration is invalid
  * @returns true if settings are valid for trading
  */
 export function validateCompetitionMode(): boolean {
-    // Only validate when competition settings are actually in use
     if (USE_COMPETITION_SETTINGS) {
-        // Block if account type is explicitly live (defense-in-depth, should be caught at startup)
         if (ACCOUNT_TYPE_BLOCKS_COMPETITION) {
             throw new Error(
                 'COMPETITION_MODE is blocked because WEEX_ACCOUNT_TYPE is set to "live". ' +
@@ -127,17 +156,11 @@ export function validateCompetitionMode(): boolean {
             );
         }
     }
-
     return true;
 }
 
 /**
  * Validate account type allows competition mode
- * Call this at startup to block the engine from running in competition mode on live accounts
- * 
- * NOTE: This function is now mostly redundant since we fail fast at module load time,
- * but kept for explicit validation calls and clearer error messages in specific contexts.
- * 
  * @returns { valid: boolean, reason: string }
  */
 export function validateAccountTypeForCompetition(): { valid: boolean; reason: string } {
@@ -153,7 +176,6 @@ export function validateAccountTypeForCompetition(): { valid: boolean; reason: s
     }
 
     if (!WEEX_ACCOUNT_TYPE) {
-        // FAIL FAST: No longer allow missing account type (removed legacy warn-but-allow behavior)
         return {
             valid: false,
             reason: 'WEEX_ACCOUNT_TYPE is not set - competition mode requires explicit "demo" or "test" account type'
@@ -172,8 +194,6 @@ export function validateAccountTypeForCompetition(): { valid: boolean; reason: s
 
 /**
  * Per-trade guard for competition mode
- * Call this before executing each trade to log warnings and optionally block
- * 
  * @param symbol - Trading symbol
  * @param side - Trade side (BUY/SELL)
  * @param leverage - Requested leverage
@@ -188,7 +208,6 @@ export function guardCompetitionModeTrade(
         return { allowed: true, warning: null };
     }
 
-    // Log warning for every trade in competition mode
     const warning = `⚠️ COMPETITION MODE TRADE: ${side} ${symbol} @ ${leverage}x leverage`;
     if (typeof logger !== 'undefined' && logger.warn) {
         logger.warn(warning, {
@@ -200,7 +219,6 @@ export function guardCompetitionModeTrade(
         });
     }
 
-    // Block if account type is live (should have been caught earlier, but defense in depth)
     if (ACCOUNT_TYPE_BLOCKS_COMPETITION) {
         return {
             allowed: false,
@@ -218,12 +236,15 @@ export function isCompetitionModeAllowed(): boolean {
     return USE_COMPETITION_SETTINGS;
 }
 
+// =============================================================================
+// GLOBAL RISK LIMITS (Exported)
+// =============================================================================
+
 export const GLOBAL_RISK_LIMITS = {
-    // Maximum leverage - allow full range for competition
+    // Maximum leverage
     MAX_SAFE_LEVERAGE: ACTIVE_SETTINGS.MAX_SAFE_LEVERAGE,
 
     // Threshold for auto-approved leverage (no extra confidence required)
-    // Renamed from CONSERVATIVE_LEVERAGE_THRESHOLD for clarity
     AUTO_APPROVE_LEVERAGE_THRESHOLD: ACTIVE_SETTINGS.AUTO_APPROVE_LEVERAGE_THRESHOLD,
 
     // Legacy alias for backward compatibility
@@ -245,74 +266,86 @@ export const GLOBAL_RISK_LIMITS = {
     // Maximum concurrent risk
     MAX_CONCURRENT_RISK_PERCENT: ACTIVE_SETTINGS.MAX_CONCURRENT_RISK_PERCENT,
 
-    // Position leverage scaling - computed from ACTIVE_SETTINGS for mode-awareness
-    // Keys reflect actual thresholds used in getMaxLeverageForExposure()
-    // WINNER EDITION v5.4.0: More permissive scaling for competition
-    // At 40% exposure: Math.floor(17 * 0.82) = Math.floor(13.94) = 13x
-    // At 50% exposure: Math.floor(17 * 0.70) = Math.floor(11.9) = 11x
-    POSITION_LEVERAGE_SCALING: {
-        // When exposure > 40%: reduce to 82% of max safe leverage (minimum 1x)
-        THRESHOLD_40_PERCENT: { maxLeverage: Math.max(1, Math.floor(ACTIVE_SETTINGS.MAX_SAFE_LEVERAGE * 0.82)) },
-        // When exposure > 50%: reduce to 70% of max safe leverage (minimum 1x)
-        THRESHOLD_50_PERCENT: { maxLeverage: Math.max(1, Math.floor(ACTIVE_SETTINGS.MAX_SAFE_LEVERAGE * 0.70)) },
-    },
+    // Position leverage scaling - computed from config values
+    POSITION_LEVERAGE_SCALING: (() => {
+        const mult40 = configLeverageScaling.scale40PctMultiplier;
+        const mult50 = configLeverageScaling.scale50PctMultiplier;
 
-    // Correlation checks - ENABLED for proper risk management
-    // All 8 crypto pairs are correlated to BTC, so we need to track this
-    ENABLE_CORRELATION_CHECKS: true,
+        const maxLev40 = Math.max(1, Math.floor(ACTIVE_SETTINGS.MAX_SAFE_LEVERAGE * mult40));
+        const maxLev50 = Math.max(1, Math.floor(ACTIVE_SETTINGS.MAX_SAFE_LEVERAGE * mult50));
 
-    // Correlation risk thresholds
+        return {
+            THRESHOLD_40_PERCENT: { maxLeverage: maxLev40 },
+            THRESHOLD_50_PERCENT: { maxLeverage: maxLev50 },
+        };
+    })(),
+
+    // Correlation checks - from config
+    ENABLE_CORRELATION_CHECKS: configCorrelation.enabled,
+
+    // Correlation risk thresholds - from config
     CORRELATION_THRESHOLDS: {
-        HIGH_CORRELATION: 0.8,      // Pairs with >0.8 correlation are considered highly correlated
-        MAX_CORRELATED_POSITIONS: 2, // Max positions in highly correlated assets
-        BTC_CORRELATION_WARNING: 0.85, // Warn if portfolio is >85% correlated to BTC
+        HIGH_CORRELATION: configCorrelation.highCorrelationThreshold,
+        MAX_CORRELATED_POSITIONS: configCorrelation.maxCorrelatedPositions,
+        BTC_CORRELATION_WARNING: configCorrelation.btcCorrelationWarning,
     },
 
-    // Circuit breakers - higher thresholds for competition
+    // Circuit breakers - from config
     CIRCUIT_BREAKERS: {
         YELLOW_ALERT: {
-            BTC_DROP_4H: 12,
-            PORTFOLIO_DRAWDOWN_24H: 15,
+            BTC_DROP_4H: configCircuitBreakers.yellowBtcDrop4h,
+            PORTFOLIO_DRAWDOWN_24H: configCircuitBreakers.yellowDrawdown24h,
             ACTION: 'Reduce leverage to 10x max'
         },
         RED_ALERT: {
-            BTC_DROP_4H: 20,
-            PORTFOLIO_DRAWDOWN_24H: 30,
+            BTC_DROP_4H: configCircuitBreakers.redBtcDrop4h,
+            PORTFOLIO_DRAWDOWN_24H: configCircuitBreakers.redDrawdown24h,
             ACTION: 'Review positions'
         }
     },
 
-    // Stop loss requirements - FIXED: inversely proportional to leverage
-    // Higher leverage = tighter stop loss to keep max capital loss ~30%
-    // Formula: maxStopPercent ≈ 30% / maxLeverage (with some buffer)
+    // Stop loss requirements - from config
     STOP_LOSS_BY_LEVERAGE: {
-        LOW: { maxLeverage: 5, maxStopPercent: 6 },      // 5x * 6% = 30% max loss
-        MEDIUM: { maxLeverage: 10, maxStopPercent: 3 },  // 10x * 3% = 30% max loss
-        HIGH: { maxLeverage: 15, maxStopPercent: 2 },    // 15x * 2% = 30% max loss
-        EXTREME: { maxLeverage: 20, maxStopPercent: 1.5 }, // 20x * 1.5% = 30% max loss
+        LOW: {
+            maxLeverage: configStopLoss.lowMaxLeverage,
+            maxStopPercent: configStopLoss.lowMaxStopPercent
+        },
+        MEDIUM: {
+            maxLeverage: configStopLoss.mediumMaxLeverage,
+            maxStopPercent: configStopLoss.mediumMaxStopPercent
+        },
+        HIGH: {
+            maxLeverage: configStopLoss.highMaxLeverage,
+            maxStopPercent: configStopLoss.highMaxStopPercent
+        },
+        EXTREME: {
+            maxLeverage: configStopLoss.extremeMaxLeverage,
+            maxStopPercent: configStopLoss.extremeMaxStopPercent
+        },
     },
 
-    // Flag indicating if competition mode is active (with proper acknowledgment)
+    // Flag indicating if competition mode is active
     COMPETITION_MODE_ENABLED: USE_COMPETITION_SETTINGS,
 };
+
+// =============================================================================
+// HELPER FUNCTIONS
+// =============================================================================
 
 /**
  * Check if leverage is auto-approved (uses AUTO_APPROVE_LEVERAGE_THRESHOLD)
  */
 export function isLeverageAutoApproved(leverage: number, confidence: number): boolean {
-    // Validate inputs
     if (!Number.isFinite(leverage) || leverage <= 0) {
         return false;
     }
     if (!Number.isFinite(confidence)) {
-        confidence = 50; // Default to moderate confidence
+        confidence = 50;
     }
 
-    // Up to AUTO_APPROVE_LEVERAGE_THRESHOLD always approved
     if (leverage <= GLOBAL_RISK_LIMITS.AUTO_APPROVE_LEVERAGE_THRESHOLD) {
         return true;
     }
-    // Above threshold up to max requires confidence >= 70%
     if (leverage > GLOBAL_RISK_LIMITS.ABSOLUTE_MAX_LEVERAGE) {
         return false;
     }
@@ -320,15 +353,13 @@ export function isLeverageAutoApproved(leverage: number, confidence: number): bo
 }
 
 /**
- * Get maximum allowed leverage based on current portfolio exposure (COMPETITION MODE)
+ * Get maximum allowed leverage based on current portfolio exposure
  */
 export function getMaxLeverageForExposure(currentLeveragedCapitalPercent: number): number {
-    // For invalid/unknown exposure, return most conservative leverage (assume high exposure)
     if (!Number.isFinite(currentLeveragedCapitalPercent) || currentLeveragedCapitalPercent < 0) {
         return GLOBAL_RISK_LIMITS.POSITION_LEVERAGE_SCALING.THRESHOLD_50_PERCENT.maxLeverage;
     }
 
-    // More permissive scaling for competition
     if (currentLeveragedCapitalPercent > 50) {
         return GLOBAL_RISK_LIMITS.POSITION_LEVERAGE_SCALING.THRESHOLD_50_PERCENT.maxLeverage;
     }
@@ -342,7 +373,6 @@ export function getMaxLeverageForExposure(currentLeveragedCapitalPercent: number
  * Get required stop loss percentage for given leverage
  */
 export function getRequiredStopLossPercent(leverage: number): number {
-    // Validate input - return most conservative stop for invalid leverage
     if (!Number.isFinite(leverage) || leverage <= 0) {
         return GLOBAL_RISK_LIMITS.STOP_LOSS_BY_LEVERAGE.EXTREME.maxStopPercent;
     }
@@ -356,56 +386,39 @@ export function getRequiredStopLossPercent(leverage: number): number {
 
 /**
  * Check correlation risk for a new position
- * 
- * In crypto, all assets are highly correlated to BTC. This function checks:
- * 1. How many highly correlated positions are already open
- * 2. Whether adding this position would exceed correlation limits
- * 
- * @param newSymbol - Symbol to potentially add
- * @param existingPositions - Array of existing position symbols
- * @param correlationMatrix - Correlation matrix from QuantAnalysisService
- * @returns { allowed: boolean, warning: string | null, correlationRisk: number }
  */
 export function checkCorrelationRisk(
     newSymbol: string,
     existingPositions: string[],
     correlationMatrix: Map<string, Map<string, number>> | null
 ): { allowed: boolean; warning: string | null; correlationRisk: number } {
-    // If correlation checks are disabled, always allow
     if (!GLOBAL_RISK_LIMITS.ENABLE_CORRELATION_CHECKS) {
         return { allowed: true, warning: null, correlationRisk: 0 };
     }
 
-    // If no correlation data available, enforce conservative default
-    // Block if already have positions (can't assess correlation risk)
     if (!correlationMatrix || correlationMatrix.size === 0) {
-        // If no existing positions, allow the first trade
         if (!existingPositions || existingPositions.length === 0) {
             return {
                 allowed: true,
                 warning: 'Correlation data unavailable - first position allowed, subsequent trades will be limited',
-                correlationRisk: 0.5 // Assume moderate risk when unknown
+                correlationRisk: 0.5
             };
         }
 
-        // Conservative default: max 1 position per asset when correlation data unavailable
-        // This prevents concentrated BTC exposure during cold-start or data outage
         return {
             allowed: false,
             warning: `Correlation data unavailable - blocking trade to prevent concentrated exposure. ` +
                 `Already have ${existingPositions.length} position(s). Wait for correlation data or reduce positions.`,
-            correlationRisk: 0.8 // Assume high risk when unknown with existing positions
+            correlationRisk: 0.8
         };
     }
 
-    // If no existing positions, no correlation risk
     if (!existingPositions || existingPositions.length === 0) {
         return { allowed: true, warning: null, correlationRisk: 0 };
     }
 
     const { HIGH_CORRELATION, MAX_CORRELATED_POSITIONS } = GLOBAL_RISK_LIMITS.CORRELATION_THRESHOLDS;
 
-    // Normalize symbol for lookup (handle cmt_ prefix variations)
     const normalizeSymbol = (sym: string): string => {
         return sym.toLowerCase().replace(/^cmt_/, '');
     };
@@ -415,45 +428,42 @@ export function checkCorrelationRisk(
     let maxCorrelation = 0;
     const correlatedWith: string[] = [];
 
-    // Check correlation with each existing position
     for (const existingSymbol of existingPositions) {
         const existingSymNorm = normalizeSymbol(existingSymbol);
-
-        // Try to find correlation in matrix (check both directions)
         let correlation = 0;
 
-        // Try newSymbol -> existingSymbol
-        // Check all key variations: symNorm, ${symNorm}usdt, cmt_${symNorm}usdt
-        const newSymRow = correlationMatrix.get(newSymNorm) || correlationMatrix.get(`${newSymNorm}usdt`) || correlationMatrix.get(`cmt_${newSymNorm}usdt`);
+        const newSymRow = correlationMatrix.get(newSymNorm) ||
+            correlationMatrix.get(`${newSymNorm}usdt`) ||
+            correlationMatrix.get(`cmt_${newSymNorm}usdt`);
         if (newSymRow) {
-            correlation = newSymRow.get(existingSymNorm) || newSymRow.get(`${existingSymNorm}usdt`) || newSymRow.get(`cmt_${existingSymNorm}usdt`) || 0;
+            correlation = newSymRow.get(existingSymNorm) ||
+                newSymRow.get(`${existingSymNorm}usdt`) ||
+                newSymRow.get(`cmt_${existingSymNorm}usdt`) || 0;
         }
 
-        // If not found, try existingSymbol -> newSymbol
-        // Check all key variations: symNorm, ${symNorm}usdt, cmt_${symNorm}usdt
         if (correlation === 0) {
-            const existingSymRow = correlationMatrix.get(existingSymNorm) || correlationMatrix.get(`${existingSymNorm}usdt`) || correlationMatrix.get(`cmt_${existingSymNorm}usdt`);
+            const existingSymRow = correlationMatrix.get(existingSymNorm) ||
+                correlationMatrix.get(`${existingSymNorm}usdt`) ||
+                correlationMatrix.get(`cmt_${existingSymNorm}usdt`);
             if (existingSymRow) {
-                correlation = existingSymRow.get(newSymNorm) || existingSymRow.get(`${newSymNorm}usdt`) || existingSymRow.get(`cmt_${newSymNorm}usdt`) || 0;
+                correlation = existingSymRow.get(newSymNorm) ||
+                    existingSymRow.get(`${newSymNorm}usdt`) ||
+                    existingSymRow.get(`cmt_${newSymNorm}usdt`) || 0;
             }
         }
 
-        // Track max correlation
         if (Math.abs(correlation) > maxCorrelation) {
             maxCorrelation = Math.abs(correlation);
         }
 
-        // Count highly correlated positions
         if (Math.abs(correlation) >= HIGH_CORRELATION) {
             highlyCorrelatedCount++;
             correlatedWith.push(`${existingSymbol} (${(correlation * 100).toFixed(0)}%)`);
         }
     }
 
-    // Calculate overall correlation risk (0-1 scale)
     const correlationRisk = Math.min(1, (highlyCorrelatedCount / MAX_CORRELATED_POSITIONS) * maxCorrelation);
 
-    // Check if we exceed the limit
     if (highlyCorrelatedCount >= MAX_CORRELATED_POSITIONS) {
         return {
             allowed: false,
@@ -463,7 +473,6 @@ export function checkCorrelationRisk(
         };
     }
 
-    // Allow but warn if approaching limit
     if (highlyCorrelatedCount > 0) {
         return {
             allowed: true,
@@ -478,20 +487,13 @@ export function checkCorrelationRisk(
 
 /**
  * Calculate portfolio-wide BTC correlation
- * 
- * Since all crypto assets are correlated to BTC, this measures how
- * concentrated the portfolio's BTC exposure is.
- * 
- * @param positions - Array of position symbols
- * @param correlationMatrix - Correlation matrix from QuantAnalysisService
- * @returns Average BTC correlation of the portfolio (0-1)
  */
 export function calculatePortfolioBtcCorrelation(
     positions: string[],
     correlationMatrix: Map<string, Map<string, number>> | null
 ): number {
     if (!positions || positions.length === 0) return 0;
-    if (!correlationMatrix || correlationMatrix.size === 0) return 0.7; // Assume high correlation when unknown
+    if (!correlationMatrix || correlationMatrix.size === 0) return 0.7;
 
     const normalizeSymbol = (sym: string): string => {
         return sym.toLowerCase().replace(/^cmt_/, '').replace(/usdt$/, '');
@@ -500,35 +502,37 @@ export function calculatePortfolioBtcCorrelation(
     let totalCorrelation = 0;
     let count = 0;
 
-    // Get BTC row from correlation matrix
-    const btcRow = correlationMatrix.get('btcusdt') || correlationMatrix.get('cmt_btcusdt') || correlationMatrix.get('btc');
+    const btcRow = correlationMatrix.get('btcusdt') ||
+        correlationMatrix.get('cmt_btcusdt') ||
+        correlationMatrix.get('btc');
 
     for (const symbol of positions) {
         const symNorm = normalizeSymbol(symbol);
 
-        // BTC is perfectly correlated with itself
         if (symNorm === 'btc') {
             totalCorrelation += 1;
             count++;
             continue;
         }
 
-        // Try to find BTC correlation
         let btcCorr = 0;
         if (btcRow) {
-            btcCorr = btcRow.get(symNorm) || btcRow.get(`cmt_${symNorm}usdt`) || btcRow.get(`${symNorm}usdt`) || 0;
+            btcCorr = btcRow.get(symNorm) ||
+                btcRow.get(`cmt_${symNorm}usdt`) ||
+                btcRow.get(`${symNorm}usdt`) || 0;
         }
 
-        // If not found in BTC row, try the symbol's row
-        // Check all key variations: symNorm, ${symNorm}usdt, cmt_${symNorm}usdt
         if (btcCorr === 0) {
-            const symRow = correlationMatrix.get(symNorm) || correlationMatrix.get(`${symNorm}usdt`) || correlationMatrix.get(`cmt_${symNorm}usdt`);
+            const symRow = correlationMatrix.get(symNorm) ||
+                correlationMatrix.get(`${symNorm}usdt`) ||
+                correlationMatrix.get(`cmt_${symNorm}usdt`);
             if (symRow) {
-                btcCorr = symRow.get('btcusdt') || symRow.get('cmt_btcusdt') || symRow.get('btc') || 0;
+                btcCorr = symRow.get('btcusdt') ||
+                    symRow.get('cmt_btcusdt') ||
+                    symRow.get('btc') || 0;
             }
         }
 
-        // Default to high correlation if not found (crypto is generally correlated)
         if (btcCorr === 0) btcCorr = 0.7;
 
         totalCorrelation += Math.abs(btcCorr);

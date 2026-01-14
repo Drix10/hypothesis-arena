@@ -3,6 +3,8 @@
  * Implements Monte Carlo simulation with Student's t-distribution for fat tails and GARCH(1,1) for volatility clustering.
  */
 
+import { config } from '../../config';
+
 export interface MonteCarloConfig {
     simulations: number;
     timeHorizon: number;
@@ -50,13 +52,15 @@ export interface MonteCarloAnalysis {
 
 
 
-const DEFAULT_TRADING_COST = 0.06;  // 0.06% per trade (per quant advisor)
-const STUDENT_T_DF = 3;             // Degrees of freedom for Student's t (crypto fat tails)
+// Configuration from environment (via config)
+const DEFAULT_TRADING_COST = config.monteCarlo.tradingCostPct;  // 0.06% per trade (per quant advisor)
+const STUDENT_T_DF = config.monteCarlo.studentTDf;             // Degrees of freedom for Student's t (crypto fat tails)
 // df=3 is more realistic for crypto's extreme tail events
 // df=5 was too conservative - crypto has fatter tails than that
-const GARCH_ALPHA = 0.1;            // GARCH alpha parameter
-const GARCH_BETA = 0.85;            // GARCH beta parameter
-const MIN_SHARPE_THRESHOLD = 1.2;   // Minimum Sharpe for trade approval (per quant advisor)
+const GARCH_ALPHA = config.monteCarlo.garchAlpha;            // GARCH alpha parameter
+const GARCH_BETA = config.monteCarlo.garchBeta;            // GARCH beta parameter
+const MIN_SHARPE_THRESHOLD = config.autonomous.monteCarlo.minSharpeRatio;   // Minimum Sharpe for trade approval (per quant advisor)
+const TRADES_PER_YEAR = config.monteCarlo.tradesPerYear;  // Trades per year for Sharpe annualization
 
 
 
@@ -285,9 +289,8 @@ function calculateStatistics(
     // Sharpe ratio (annualized)
     // Conservative estimate: ~2 trades/day × 365 days = ~730 trades/year
     // We use per-trade Sharpe, so annualize by sqrt(tradesPerYear)
-    const tradesPerYear = 750;  // Conservative estimate (~2 trades/day)
     const sharpeRatio = stdDev > 0.001
-        ? (expectedValue / stdDev) * Math.sqrt(tradesPerYear)
+        ? (expectedValue / stdDev) * Math.sqrt(TRADES_PER_YEAR)
         : 0;
 
     // Max drawdown (worst loss only - ignore gains)

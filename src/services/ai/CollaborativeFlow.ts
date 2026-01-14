@@ -10,6 +10,7 @@
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
 import { PrismaClient } from '@prisma/client';
+import { GLOBAL_RISK_LIMITS } from '../../constants/analyst/riskLimits';
 import {
     AnalystId,
     AnalystOutput,
@@ -21,11 +22,10 @@ import {
 } from '../../types/analyst';
 import { TradingContext } from '../../types/context';
 import { buildAnalystPrompt, buildAnalystUserMessage } from '../../constants/prompts/analystPrompt';
-import { JUDGE_SYSTEM_PROMPT, buildJudgeUserMessage } from '../../constants/prompts/judgePrompt';
+import { buildJudgeSystemPrompt, buildJudgeUserMessage } from '../../constants/prompts/judgePrompt';
 import { getAntiChurnService } from '../trading/AntiChurnService';
 import { getContextBuilder } from '../context/ContextBuilder';
 import { aiService, SchemaType, ResponseSchema } from './AIService';
-import { modelPoolManager } from './ModelPoolManager';
 import { getAnalystWeights } from '../journal';
 
 // =============================================================================
@@ -222,8 +222,18 @@ export class CollaborativeFlowService {
             throw new Error(`AI provider ${config.ai.provider} not configured. Check API keys in .env`);
         }
 
+        // Initialize hybrid mode if enabled
+        if (config.ai.hybridMode) {
+            await aiService.initializeHybridMode();
+        }
+
         this.initialized = true;
-        logger.info(`CollaborativeFlowService initialized with ${aiService.getProvider()} provider`);
+
+        if (aiService.isHybridMode()) {
+            logger.info(`CollaborativeFlowService initialized in HYBRID mode`);
+        } else {
+            logger.info(`CollaborativeFlowService initialized with ${aiService.getProvider()} provider`);
+        }
     }
 
     /**
@@ -306,10 +316,8 @@ export class CollaborativeFlowService {
         }
 
         const startTime = Date.now();
-        const cycleId = `cycle_${Date.now()}`;
         logger.info('🚀 Starting parallel analysis pipeline...');
 
-        modelPoolManager.assignModelsForCycle(cycleId);
         markOperationStart();
 
         try {
@@ -432,32 +440,31 @@ export class CollaborativeFlowService {
 
     /**
      * Run a single analyst using centralized AIService with strict JSON schema
-     * Uses multi-model rotation when MULTI_MODEL_ENABLED=true (default)
+     * Routes to provider based on AI_HYBRID_MODE setting
      */
     private async runSingleAnalyst(analystId: AnalystId, contextJson: string): Promise<AnalystOutput | null> {
         const systemPrompt = buildAnalystPrompt(analystId);
         const userMessage = buildAnalystUserMessage(contextJson);
         const fullPrompt = systemPrompt + '\n\n' + userMessage;
 
-        const useMultiModel = modelPoolManager.isMultiModelEnabled() && config.ai.provider === 'openrouter';
-
         for (let attempt = 1; attempt <= config.ai.maxRetries; attempt++) {
             try {
                 let resultText: string;
                 let modelUsed: string;
 
-                if (useMultiModel) {
-                    const result = await aiService.analyzeWithAssignedModel(
-                        analystId,
-                        fullPrompt,
-                        ANALYST_OUTPUT_RESPONSE_SCHEMA
-                    );
-                    resultText = result.content;
-                    modelUsed = result.model;
-                    if (result.usedFallback) {
-                        logger.info(`${analystId} used fallback model: ${modelUsed}`);
-                    }
+                if (config.ai.hybridMode) {
+                    // Hybrid mode: route to provider based on analyst assignment
+                    const result = await aiService.generateContentForAnalyst(analystId, {
+                        prompt: fullPrompt,
+                        schema: ANALYST_OUTPUT_RESPONSE_SCHEMA,
+                        temperature: config.ai.temperature,
+                        maxOutputTokens: config.ai.maxOutputTokens,
+                        label: `Analyst-${analystId}`,
+                    });
+                    resultText = result.text;
+                    modelUsed = result.provider === 'gemini' ? config.ai.model : config.ai.openRouterModel;
                 } else {
+                    // Single provider mode - all analysts use same provider
                     const result = await aiService.generateContent({
                         prompt: fullPrompt,
                         schema: ANALYST_OUTPUT_RESPONSE_SCHEMA,
@@ -466,7 +473,7 @@ export class CollaborativeFlowService {
                         label: `Analyst-${analystId}`,
                     });
                     resultText = result.text;
-                    modelUsed = config.ai.openRouterModel || 'gemini';
+                    modelUsed = config.ai.provider === 'gemini' ? config.ai.model : config.ai.openRouterModel;
                 }
 
                 const parsed = this.parseJSON(resultText);
@@ -502,6 +509,7 @@ export class CollaborativeFlowService {
 
     /**
      * Run judge to compare all analyst outputs using centralized AIService with strict JSON schema
+     * Uses hybrid mode routing when AI_HYBRID_MODE=true
      */
     private async runJudge(context: TradingContext, analysisResult: ParallelAnalysisResult): Promise<JudgeDecision> {
         const contextJson = JSON.stringify(context, null, 2);
@@ -521,17 +529,34 @@ export class CollaborativeFlowService {
             : '';
 
         const userMessage = buildJudgeUserMessage(contextJson, jimOutput, rayOutput, karenOutput, quantOutput) + weightsSection;
-        const fullPrompt = JUDGE_SYSTEM_PROMPT + '\n\n' + userMessage;
+        const fullPrompt = buildJudgeSystemPrompt() + '\n\n' + userMessage;
+
+        // Determine which mode to use for judge
+        const useHybridMode = config.ai.hybridMode;
 
         for (let attempt = 1; attempt <= config.ai.maxRetries; attempt++) {
             try {
-                const result = await aiService.generateContent({
-                    prompt: fullPrompt,
-                    schema: JUDGE_OUTPUT_RESPONSE_SCHEMA,
-                    temperature: 0.3,
-                    maxOutputTokens: config.ai.maxOutputTokens,
-                    label: 'Judge',
-                });
+                let result;
+
+                if (useHybridMode) {
+                    // Hybrid mode: use judge-specific provider
+                    result = await aiService.generateContentForJudge({
+                        prompt: fullPrompt,
+                        schema: JUDGE_OUTPUT_RESPONSE_SCHEMA,
+                        temperature: 0.3,
+                        maxOutputTokens: config.ai.maxOutputTokens,
+                        label: 'Judge',
+                    });
+                } else {
+                    // Single provider mode
+                    result = await aiService.generateContent({
+                        prompt: fullPrompt,
+                        schema: JUDGE_OUTPUT_RESPONSE_SCHEMA,
+                        temperature: 0.3,
+                        maxOutputTokens: config.ai.maxOutputTokens,
+                        label: 'Judge',
+                    });
+                }
 
                 const parsed = this.parseJSON(result.text);
 
@@ -688,10 +713,10 @@ export class CollaborativeFlowService {
                 analysisResult,
                 judgeDecision,
             };
-        } else if (finalLeverage > 20) {
-            // Hard cap at 20x as per prompt instructions
-            logger.warn(`AI leverage ${finalLeverage}x exceeds 20x cap, clamping to 20x`);
-            finalLeverage = 20;
+        } else if (finalLeverage > GLOBAL_RISK_LIMITS.ABSOLUTE_MAX_LEVERAGE) {
+            // Hard cap at absolute max leverage as per risk limits
+            logger.warn(`AI leverage ${finalLeverage}x exceeds ${GLOBAL_RISK_LIMITS.ABSOLUTE_MAX_LEVERAGE}x cap, clamping`);
+            finalLeverage = GLOBAL_RISK_LIMITS.ABSOLUTE_MAX_LEVERAGE;
         } else if (finalLeverage < 1) {
             // FIXED: Log warning when clamping up to minimum
             logger.warn(`AI leverage ${finalLeverage}x is below minimum 1x, clamping to 1x`);
@@ -712,7 +737,7 @@ export class CollaborativeFlowService {
         // FIXED: Removed dead branch and unused maxSafeStopPct calculation
         // Note: We don't have current price here, so we can only warn about high leverage
         if (finalLeverage >= 15 && warnings.length < MAX_WARNINGS) {
-            const liquidationDistance = 100 / finalLeverage; // e.g., 6.67% at 15x, 5% at 20x
+            const liquidationDistance = 100 / finalLeverage; // e.g., 6.67% at 15x, 5% at ABSOLUTE_MAX_LEVERAGE
             const maxSafeStopPct = liquidationDistance * 0.8; // 80% of liquidation distance
             warnings.push(`High leverage (${finalLeverage}x) - ensure stop loss is within ${maxSafeStopPct.toFixed(1)}% of entry to avoid liquidation`);
         }
@@ -841,10 +866,6 @@ let operationInProgressCount = 0;
  * External callers should NOT use this function - it's managed automatically
  * by runParallelAnalysis() to ensure proper pairing of start/end calls.
  */
-/**
- * Mark operation start (call before runParallelAnalysis)
- * @internal Used ONLY by CollaborativeFlowService to track operation state
- */
 export function markOperationStart(): void {
     operationInProgressCount++;
 }
@@ -856,8 +877,10 @@ export function markOperationStart(): void {
 export function markOperationEnd(): void {
     if (operationInProgressCount <= 0) {
         logger.warn('markOperationEnd called but no operation in progress - possible mismatched start/end calls');
+        operationInProgressCount = 0;  // Ensure we don't go negative
+        return;
     }
-    operationInProgressCount = Math.max(0, operationInProgressCount - 1);
+    operationInProgressCount--;
 }
 
 /**
@@ -882,11 +905,7 @@ export function resetCollaborativeFlow(force: boolean = false): boolean {
         collaborativeFlowInstance._cleanup();
     }
 
-    modelPoolManager.resetFailures();
-
     collaborativeFlowInstance = null;
     operationInProgressCount = 0;
     return true;
 }
-
-export { modelPoolManager };

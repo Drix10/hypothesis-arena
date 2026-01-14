@@ -14,6 +14,7 @@
  */
 
 import { logger } from '../../utils/logger';
+import { config } from '../../config';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -77,12 +78,12 @@ export interface CryptoSentimentContext {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const CACHE_TTL = {
-    NEWS: 30 * 60 * 1000,        // 30 minutes for news (conserve NewsData.io credits)
-    FEAR_GREED: 60 * 60 * 1000,  // 1 hour for fear/greed (updates daily)
+    NEWS: config.sentiment.newsCacheTtlMs,        // 30 minutes for news (conserve NewsData.io credits)
+    FEAR_GREED: config.sentiment.fearGreedCacheTtlMs,  // 1 hour for fear/greed (updates daily)
 };
 
-const MAX_CACHE_SIZE = 100;
-const REQUEST_TIMEOUT = 10000; // 10 seconds
+const MAX_CACHE_SIZE = config.sentiment.maxCacheSize;
+const REQUEST_TIMEOUT = config.sentiment.requestTimeoutMs; // 10 seconds
 const CACHE_CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
 // Cache with TTL tracking
@@ -930,8 +931,8 @@ export async function getMarketSentimentContext(): Promise<CryptoSentimentContex
             ]);
 
             // Calculate overall market sentiment
-            const btcWeight = 0.6; // BTC dominates sentiment
-            const ethWeight = 0.4;
+            const btcWeight = config.sentiment.btcWeight; // BTC dominates sentiment
+            const ethWeight = config.sentiment.ethWeight;
 
             // FIXED: Validate individual scores before calculation
             const btcScore = Number.isFinite(btcSentiment.overallScore) ? btcSentiment.overallScore : 0;
@@ -1101,7 +1102,7 @@ export function checkContrarianSignal(context: CryptoSentimentContext): {
 
 // Service state
 let lastFetchTime = 0;
-const MIN_FETCH_INTERVAL = 5 * 60 * 1000; // 5 minutes minimum between full fetches
+const MIN_FETCH_INTERVAL = config.sentiment.minFetchIntervalMs; // 5 minutes minimum between full fetches
 
 /**
  * Get sentiment context with rate limiting

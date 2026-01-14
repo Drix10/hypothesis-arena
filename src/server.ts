@@ -190,14 +190,6 @@ const shutdown = async (signal: string) => {
     }
 
     try {
-        const { modelPoolManager } = await import('./services/ai/ModelPoolManager');
-        modelPoolManager.shutdown(); // Sync: clears failure counts and stops reset timer
-        logger.info('ModelPoolManager cleanup complete');
-    } catch (error) {
-        logger.warn('Error cleaning up ModelPoolManager:', error);
-    }
-
-    try {
         const { shutdownRedditService } = await import('./services/sentiment');
         shutdownRedditService(); // Sync: clears cache and stops cleanup timer
         logger.info('RedditSentimentService cleanup complete');

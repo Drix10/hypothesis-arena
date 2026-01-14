@@ -6,12 +6,20 @@
 
 import { prisma } from '../../config/database';
 import { logger } from '../../utils/logger';
+import { config } from '../../config';
 import { ANALYST_PROFILES } from '../../constants/analyst';
 
 const ANALYST_IDS = ['jim', 'ray', 'karen', 'quant'] as const;
 
-const RECENT_TRADES_LIMIT = 10;
-const LOCK_TIMEOUT_MS = 30000;
+// Safe access to config.portfolio with sensible defaults
+const RECENT_TRADES_LIMIT: number = (() => {
+    const val = config?.portfolio?.recentTradesLimit;
+    return typeof val === 'number' && Number.isFinite(val) && val > 0 ? val : 50;
+})();
+const LOCK_TIMEOUT_MS: number = (() => {
+    const val = config?.portfolio?.lockTimeoutMs;
+    return typeof val === 'number' && Number.isFinite(val) && val > 0 ? val : 300000;
+})();
 const LOCK_KEY = 'analyst_portfolio_update';
 
 export class AnalystPortfolioService {
@@ -62,8 +70,11 @@ export class AnalystPortfolioService {
     }
 
     static async updateAnalystPortfolios(): Promise<void> {
-        const MAX_RETRIES = 2;
-        const RETRY_DELAY_MS = 1000; // 1 second base delay
+        // Safe access to config with fallback defaults to ensure deterministic behavior
+        const rawMaxRetries = config?.portfolio?.maxRetries;
+        const rawRetryDelayMs = config?.portfolio?.retryDelayMs;
+        const MAX_RETRIES: number = typeof rawMaxRetries === 'number' && Number.isFinite(rawMaxRetries) && rawMaxRetries >= 0 ? rawMaxRetries : 5;
+        const RETRY_DELAY_MS: number = typeof rawRetryDelayMs === 'number' && Number.isFinite(rawRetryDelayMs) && rawRetryDelayMs > 0 ? rawRetryDelayMs : 1000;
 
         for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
             // CRITICAL: Use database advisory lock for distributed mutex

@@ -1816,10 +1816,11 @@ export class AutonomousTradingEngine extends EventEmitter {
         }
 
         // Only clamp to exchange-specific limits (not our conservative limits)
+        const absoluteMaxLeverage = GLOBAL_RISK_LIMITS.ABSOLUTE_MAX_LEVERAGE;
         if (specs) {
             const originalLeverage = leverage;
-            // Clamp to exchange limits, but also enforce our 20x safety cap
-            const effectiveMax = Math.min(specs.maxLeverage, 20);
+            // Clamp to exchange limits, but also enforce our absolute max leverage cap
+            const effectiveMax = Math.min(specs.maxLeverage, absoluteMaxLeverage);
 
             // DEFENSIVE CHECK #1: Detect invalid spec configuration where minLeverage > maxLeverage
             // This indicates corrupted or invalid contract specs from the exchange
@@ -1831,23 +1832,23 @@ export class AutonomousTradingEngine extends EventEmitter {
             }
 
             // DEFENSIVE CHECK #2: Detect invalid spec configuration where minLeverage > effectiveMax
-            // This can happen if exchange minLeverage > 20 (our safety cap) or if specs are corrupted
+            // This can happen if exchange minLeverage > our safety cap or if specs are corrupted
             if (specs.minLeverage > effectiveMax) {
                 logger.error(`CRITICAL: Invalid leverage specs for ${decision.symbol}: ` +
                     `minLeverage(${specs.minLeverage}) > effectiveMax(${effectiveMax}). ` +
-                    `Exchange limits: ${specs.minLeverage} -${specs.maxLeverage} x, safety cap: 20x. ` +
+                    `Exchange limits: ${specs.minLeverage}-${specs.maxLeverage}x, safety cap: ${absoluteMaxLeverage}x. ` +
                     `Cannot determine valid leverage - aborting trade.`);
                 return false;
             }
 
             leverage = Math.max(specs.minLeverage, Math.min(effectiveMax, leverage));
             if (leverage !== originalLeverage) {
-                logger.info(`Leverage adjusted from ${originalLeverage}x to ${leverage} x(exchange limits: ${specs.minLeverage} - ${specs.maxLeverage}x, safety cap: 20x)`);
+                logger.info(`Leverage adjusted from ${originalLeverage}x to ${leverage}x (exchange limits: ${specs.minLeverage}-${specs.maxLeverage}x, safety cap: ${absoluteMaxLeverage}x)`);
             }
-        } else if (leverage > 20) {
-            // Absolute safety cap if no specs available (20x max)
-            logger.warn(`Leverage ${leverage}x exceeds 20x safety cap, clamping`);
-            leverage = 20;
+        } else if (leverage > absoluteMaxLeverage) {
+            // Absolute safety cap if no specs available
+            logger.warn(`Leverage ${leverage}x exceeds ${absoluteMaxLeverage}x safety cap, clamping`);
+            leverage = absoluteMaxLeverage;
         }
 
         // Calculate size from AI's allocation_usd (AI decides the notional exposure)
@@ -2083,7 +2084,31 @@ export class AutonomousTradingEngine extends EventEmitter {
             if (validatedSlPrice !== null && validatedSlPrice > 0) {
                 try {
                     // Round to tick size - parseFloat converts string back to number
-                    const roundedSlPrice = parseFloat(roundToTickSize(validatedSlPrice, decision.symbol));
+                    let roundedSlPrice = parseFloat(roundToTickSize(validatedSlPrice, decision.symbol));
+
+                    // CRITICAL FIX: Add safety buffer to prevent "trigger price must be less/greater than current price" errors
+                    // Market price can move between order placement and TP/SL placement
+                    // For LONG: SL must be < current price, add 0.1% buffer downward
+                    // For SHORT: SL must be > current price, add 0.1% buffer upward
+                    const safetyBufferPct = 0.001; // 0.1% buffer
+                    if (isLong) {
+                        // For LONG positions, SL must be below current price
+                        // If SL is too close, move it further down
+                        const minSafeSlPrice = currentPrice * (1 - safetyBufferPct);
+                        if (roundedSlPrice >= minSafeSlPrice) {
+                            roundedSlPrice = parseFloat(roundToTickSize(currentPrice * (1 - 0.005), decision.symbol)); // 0.5% below
+                            logger.warn(`SL too close to current price, adjusted to ${roundedSlPrice} (0.5% below ${currentPrice})`);
+                        }
+                    } else {
+                        // For SHORT positions, SL must be above current price
+                        // If SL is too close, move it further up
+                        const minSafeSlPrice = currentPrice * (1 + safetyBufferPct);
+                        if (roundedSlPrice <= minSafeSlPrice) {
+                            roundedSlPrice = parseFloat(roundToTickSize(currentPrice * (1 + 0.005), decision.symbol)); // 0.5% above
+                            logger.warn(`SL too close to current price, adjusted to ${roundedSlPrice} (0.5% above ${currentPrice})`);
+                        }
+                    }
+
                     if (Number.isFinite(roundedSlPrice) && roundedSlPrice > 0) {
                         await this.weexClient.placeTpSlOrder({
                             symbol: decision.symbol,
@@ -2143,7 +2168,7 @@ export class AutonomousTradingEngine extends EventEmitter {
 
             // Validate and sanitize all fields
             const validatedLeverage = Number.isFinite(decision.leverage) && decision.leverage >= 1
-                ? Math.min(decision.leverage, 20)
+                ? Math.min(decision.leverage, GLOBAL_RISK_LIMITS.ABSOLUTE_MAX_LEVERAGE)
                 : 1;
             const validatedAllocation = Number.isFinite(decision.allocation_usd) && decision.allocation_usd >= 0
                 ? decision.allocation_usd
