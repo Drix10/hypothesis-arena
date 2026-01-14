@@ -163,6 +163,7 @@ const JUDGE_ADJUSTMENTS_SCHEMA: ResponseSchema = {
             description: 'Adjusted take profit price',
         },
     },
+    required: ['leverage', 'allocation_usd', 'sl_price', 'tp_price'],
 };
 
 /**
