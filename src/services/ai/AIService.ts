@@ -78,6 +78,73 @@ function validateSchema(schema: ResponseSchema): void {
     }
 }
 
+/**
+ * Convert Gemini ResponseSchema to OpenRouter JSON Schema format
+ * OpenRouter uses standard JSON Schema with strict mode
+ */
+function convertToOpenRouterSchema(geminiSchema: ResponseSchema): any {
+    const convertType = (type: SchemaType | undefined): string => {
+        if (!type) return 'string';
+        switch (type) {
+            case SchemaType.STRING: return 'string';
+            case SchemaType.NUMBER: return 'number';
+            case SchemaType.INTEGER: return 'integer';
+            case SchemaType.BOOLEAN: return 'boolean';
+            case SchemaType.ARRAY: return 'array';
+            case SchemaType.OBJECT: return 'object';
+            default: return 'string';
+        }
+    };
+
+    const convertSchema = (schema: ResponseSchema): any => {
+        const baseResult: any = {
+            type: convertType(schema.type),
+        };
+
+        if (schema.description) {
+            baseResult.description = schema.description;
+        }
+
+        if (schema.enum) {
+            baseResult.enum = schema.enum;
+        }
+
+        // Handle object properties
+        if (schema.type === SchemaType.OBJECT && schema.properties) {
+            baseResult.properties = {};
+            for (const [key, value] of Object.entries(schema.properties)) {
+                baseResult.properties[key] = convertSchema(value as ResponseSchema);
+            }
+            if (schema.required) {
+                baseResult.required = schema.required;
+            }
+            baseResult.additionalProperties = false;
+        }
+
+        // Handle array items
+        if (schema.type === SchemaType.ARRAY && schema.items) {
+            baseResult.items = convertSchema(schema.items as ResponseSchema);
+        }
+
+        // Handle nullable - wrap in anyOf AFTER building the full schema
+        // This preserves description and other properties
+        if (schema.nullable) {
+            return {
+                anyOf: [
+                    baseResult,
+                    { type: 'null' }
+                ],
+                // Keep description at top level for better model understanding
+                ...(schema.description ? { description: schema.description } : {})
+            };
+        }
+
+        return baseResult;
+    };
+
+    return convertSchema(geminiSchema);
+}
+
 // =============================================================================
 // AI SERVICE CLASS
 // =============================================================================
@@ -537,17 +604,17 @@ class AIService {
     }
 
     /**
-     * Generate content using OpenRouter API with JSON schema
+     * Generate content using OpenRouter API with strict JSON schema
      * 
      * NOTE: Rate limit handling is delegated to the caller (CollaborativeFlow).
      * This method throws on rate limit errors with isRateLimit=true property,
      * allowing callers to implement appropriate backoff strategies.
      * 
-     * Uses json_object response_format (more widely supported than json_schema).
+     * Uses json_schema response_format with strict: true for structured output.
      */
     private async generateContentOpenRouter(
         prompt: string,
-        _geminiSchema: ResponseSchema, // Schema not used - we rely on prompt for structure
+        geminiSchema: ResponseSchema,
         temperature?: number,
         maxOutputTokens?: number,
         requestId?: string
@@ -555,6 +622,9 @@ class AIService {
         this.validateOpenRouterConfig();
 
         const reqId = requestId || generateRequestId();
+
+        // Convert Gemini schema to OpenRouter JSON Schema format
+        const jsonSchema = convertToOpenRouterSchema(geminiSchema);
 
         // Build messages array
         const messages: any[] = [
@@ -564,18 +634,25 @@ class AIService {
             }
         ];
 
-        // Build request body with json_object (more widely supported than json_schema)
-        // DeepSeek and most models work better with json_object + prompt-based schema
+        // Build request body with strict json_schema for structured output
         const requestBody: any = {
             model: config.ai.openRouterModel,
             messages,
-            response_format: { type: 'json_object' },
+            response_format: {
+                type: 'json_schema',
+                json_schema: {
+                    name: 'analyst_response',
+                    strict: true,
+                    schema: jsonSchema
+                }
+            },
             temperature: temperature ?? config.ai.temperature,
             max_tokens: maxOutputTokens ?? config.ai.maxOutputTokens,
             // Provider preferences - allow data collection to access more endpoints
             provider: {
                 data_collection: 'allow',
                 allow_fallbacks: true,
+                require_parameters: true, // Ensure model supports structured outputs
             },
         };
 
@@ -630,7 +707,7 @@ class AIService {
                     throw new Error(`OpenRouter: Model ${config.ai.openRouterModel} has no available providers. Check OpenRouter dashboard or try a different model.`);
                 }
 
-                // Check if this is a response_format error (model doesn't support json_object)
+                // Check if this is a response_format error (model doesn't support json_schema)
                 const isFormatError =
                     errorText.includes('response_format') ||
                     errorText.includes('json_object') ||
@@ -638,10 +715,11 @@ class AIService {
                     errorText.includes('structured output');
 
                 if (isFormatError) {
-                    logger.warn(`Model may not support json_object, retrying without response_format`);
+                    logger.warn(`Model may not support json_schema, retrying with json_object fallback`);
 
-                    // Fallback: no response_format, rely on prompt to get JSON
-                    delete requestBody.response_format;
+                    // Fallback 1: Try json_object (simpler, more widely supported)
+                    requestBody.response_format = { type: 'json_object' };
+                    delete requestBody.provider.require_parameters;
 
                     try {
                         response = await fetch(`${this.openRouterBaseUrl}/chat/completions`, {
@@ -655,10 +733,66 @@ class AIService {
                             body: JSON.stringify(requestBody),
                             signal: controller.signal,
                         });
+
+                        // If json_object also fails with format error, try without any response_format
+                        if (!response.ok) {
+                            let retryErrorText: string;
+                            try {
+                                retryErrorText = await response.text();
+                            } catch {
+                                retryErrorText = '';
+                            }
+
+                            const isStillFormatError = retryErrorText.includes('response_format') ||
+                                retryErrorText.includes('json_object') ||
+                                retryErrorText.includes('json_schema');
+
+                            if (isStillFormatError) {
+                                logger.warn(`Model doesn't support json_object either, retrying without response_format`);
+                                delete requestBody.response_format;
+                                response = await fetch(`${this.openRouterBaseUrl}/chat/completions`, {
+                                    method: 'POST',
+                                    headers: {
+                                        'Authorization': `Bearer ${config.openRouterApiKey}`,
+                                        'Content-Type': 'application/json',
+                                        'HTTP-Referer': 'https://hypothesis-arena.com',
+                                        'X-Title': 'Hypothesis Arena',
+                                    },
+                                    body: JSON.stringify(requestBody),
+                                    signal: controller.signal,
+                                });
+                            } else {
+                                // Not a format error - it's some other error (rate limit, etc.)
+                                // Throw with the error we already have
+                                clearTimeout(timeoutId);
+
+                                let errorDetails = '';
+                                try {
+                                    const errorJson = JSON.parse(retryErrorText);
+                                    errorDetails = errorJson.error?.message || errorJson.message || '';
+                                } catch {
+                                    errorDetails = retryErrorText.slice(0, 200);
+                                }
+
+                                const error = new Error(`OpenRouter API error (${response.status}): ${errorDetails}`);
+                                if (response.status === 429) {
+                                    (error as any).isRateLimit = true;
+                                    const retryAfter = response.headers?.get('retry-after');
+                                    if (retryAfter) {
+                                        (error as any).retryAfter = parseInt(retryAfter, 10);
+                                    }
+                                }
+                                throw error;
+                            }
+                        }
                     } catch (retryFetchError: any) {
                         clearTimeout(timeoutId);
                         if (retryFetchError.name === 'AbortError') {
                             throw new Error(`OpenRouter request timeout after ${config.ai.requestTimeoutMs}ms`);
+                        }
+                        // Re-throw if it's already a formatted error from above
+                        if (retryFetchError.message.includes('OpenRouter API error')) {
+                            throw retryFetchError;
                         }
                         throw new Error(`OpenRouter network error on retry: ${retryFetchError.message}`);
                     }

@@ -87,29 +87,30 @@ const ANALYST_RECOMMENDATION_SCHEMA: ResponseSchema = {
         },
         symbol: {
             type: SchemaType.STRING,
-            description: 'Trading symbol (e.g., cmt_btcusdt)',
+            nullable: true,
+            description: 'Trading symbol (e.g., cmt_btcusdt). Can be null for HOLD.',
         },
         allocation_usd: {
             type: SchemaType.NUMBER,
-            description: 'Notional exposure in USD (0 for HOLD)',
+            description: 'Notional exposure in USD (MUST be 0 for HOLD)',
         },
         leverage: {
             type: SchemaType.NUMBER,
-            description: 'Leverage multiplier (1-20)',
+            description: 'Leverage multiplier (1-20, MUST be 0 for HOLD)',
         },
         tp_price: {
             type: SchemaType.NUMBER,
             nullable: true,
-            description: 'Take profit price (null for HOLD)',
+            description: 'Take profit price (MUST be null for HOLD)',
         },
         sl_price: {
             type: SchemaType.NUMBER,
             nullable: true,
-            description: 'Stop loss price (null for HOLD)',
+            description: 'Stop loss price (MUST be null for HOLD)',
         },
         exit_plan: {
             type: SchemaType.STRING,
-            description: 'Exit conditions and invalidation triggers',
+            description: 'Exit conditions and invalidation triggers (can be empty for HOLD)',
         },
         confidence: {
             type: SchemaType.NUMBER,

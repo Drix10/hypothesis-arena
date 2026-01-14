@@ -169,10 +169,12 @@ export const LEVERAGE_POLICY = buildLeveragePolicy(120, 150, 100, 180, 1000, 18,
 export function buildOutputFormat(targetMin: number, targetMax: number): string {
    return `
 OUTPUT (STRICT JSON - WINNER EDITION v5.4.0):
+
+EXAMPLE FOR BUY/SELL/CLOSE/REDUCE:
 {
-  "reasoning": "brief analysis including Q-value validation and regret calculation (e.g., 'Q(LONG)=0.72, Q(SHORT)=0.31, Q(HOLD)=0.45. Regret if HOLD: 1.8%. Monte Carlo (500 sims): EV +2.3%, Win Rate 58%, Sharpe 1.6 after costs.')",
+  "reasoning": "Q(LONG)=0.72, Q(SHORT)=0.31, Q(HOLD)=0.45. Regret if HOLD: 1.8%. Monte Carlo (500 sims): EV +2.3%, Win Rate 58%, Sharpe 1.6 after costs. Strong bullish setup with RSI divergence and funding negative.",
   "recommendation": {
-    "action": "BUY" | "SELL" | "HOLD" | "CLOSE" | "REDUCE",
+    "action": "BUY",
     "symbol": "cmt_btcusdt",
     "allocation_usd": ${Math.floor((targetMin + targetMax) / 2)},
     "leverage": 18,
@@ -180,15 +182,23 @@ OUTPUT (STRICT JSON - WINNER EDITION v5.4.0):
     "sl_price": 95100,
     "exit_plan": "Entry ~97000. SL at 95100 (-2%), TP at 99850 (+2.95%) — R:R 1.5:1; invalidate if breaks below 95000.",
     "confidence": 75,
-    "rationale": "bullish momentum with Q-value confirmation",
-    "rl_validation": {
-      "q_long": 0.72,
-      "q_short": 0.31,
-      "q_hold": 0.45,
-      "regret_if_hold": "1.8%",
-      "kelly_fraction": 0.42,
-      "applied_fraction": "quarter_kelly"
-    }
+    "rationale": "bullish momentum with Q-value confirmation"
+  }
+}
+
+EXAMPLE FOR HOLD (CRITICAL - use these exact field values):
+{
+  "reasoning": "Q(LONG)=0.42, Q(SHORT)=0.38, Q(HOLD)=0.55. Regret if HOLD: 0.3%. No clear edge - RSI neutral at 52, EMAs tangled, funding flat at 0.01%.",
+  "recommendation": {
+    "action": "HOLD",
+    "symbol": null,
+    "allocation_usd": 0,
+    "leverage": 0,
+    "tp_price": null,
+    "sl_price": null,
+    "exit_plan": "",
+    "confidence": 70,
+    "rationale": "No clear edge per methodology - waiting for better setup"
   }
 }
 
@@ -200,8 +210,17 @@ CRITICAL RULES (WINNER EDITION):
 - ALWAYS set tp_price and sl_price (never null for BUY/SELL)
 - With 18-20x leverage, use 1.5-2% stops
 - Include Q-values and regret calculation in your reasoning field
-- Include rl_validation object with Q-values and Kelly fraction
 - QUALITY OVER QUANTITY: Skip marginal setups, wait for clear edge
+
+FOR HOLD ACTIONS ONLY (CRITICAL - VALIDATION WILL FAIL OTHERWISE):
+- allocation_usd: MUST be 0 (not trading)
+- leverage: MUST be 0 (not trading)
+- tp_price: MUST be null
+- sl_price: MUST be null
+- exit_plan: Can be empty string "" or null
+- symbol: Can be null or any symbol (doesn't matter for HOLD)
+- confidence: Still required (0-100, your confidence in holding)
+- rationale: Still required (explain why holding is the right choice)
 `;
 }
 
