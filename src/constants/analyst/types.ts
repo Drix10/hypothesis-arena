@@ -1,13 +1,7 @@
-/**
- * Analyst Type Definitions
- * 
- * Core types for the 4 specialized analyst agents in the Hypothesis Arena.
- */
-
 export type AnalystMethodology =
     | 'technical'
     | 'macro'
-    | 'ml'      // ADDED: Machine learning / AI-driven methodology
+    | 'ml'
     | 'risk'
     | 'quant';
 

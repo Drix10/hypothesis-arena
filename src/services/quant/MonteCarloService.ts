@@ -1,45 +1,29 @@
 /**
  * MonteCarloService - Fat-Tailed Monte Carlo Simulation (v5.4.0)
- * 
- * Implements Monte Carlo simulation with:
- * - Student's t-distribution for fat tails (df=3 for crypto)
- * - GARCH(1,1) for volatility clustering
- * - Trading costs subtraction (0.06% per trade)
- * 
- * Usage: Run on candidate trades to validate edge before execution.
- * Expected Impact: Critical safety net, +0.3-0.5 Sharpe lift
+ * Implements Monte Carlo simulation with Student's t-distribution for fat tails and GARCH(1,1) for volatility clustering.
  */
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// TYPES
-// ═══════════════════════════════════════════════════════════════════════════════
-
 export interface MonteCarloConfig {
-    simulations: number;       // 100-1000 (500 recommended)
-    timeHorizon: number;       // Hours (1-48)
-    volatility: number;        // Hourly volatility (from ATR)
-    drift: number;             // Trend bias (-0.01 to +0.01)
-    stopLossPercent: number;   // Stop loss % (1-5)
-    takeProfitPercent: number; // Take profit % (2-10)
+    simulations: number;
+    timeHorizon: number;
+    volatility: number;
+    drift: number;
+    stopLossPercent: number;
+    takeProfitPercent: number;
     direction: 'long' | 'short';
 }
 
 export interface MonteCarloResult {
-    // Core metrics
-    expectedValue: number;     // Average PnL %
-    winRate: number;           // % of profitable sims (0-100)
-    maxDrawdown: number;       // Worst case DD %
-    sharpeRatio: number;       // Risk-adjusted return (annualized)
-
-    // Value at Risk
-    var95: number;             // 95% VaR (5th percentile outcome)
-    var99: number;             // 99% VaR (1st percentile outcome)
-
-    // Profit distribution
+    expectedValue: number;
+    winRate: number;
+    maxDrawdown: number;
+    sharpeRatio: number;
+    var95: number;
+    var99: number;
     profitDistribution: {
-        p10: number;           // 10th percentile
-        p25: number;           // 25th percentile
-        p50: number;           // Median
+        p10: number;
+        p25: number;
+        p50: number;
         p75: number;           // 75th percentile
         p90: number;           // 90th percentile
     };
@@ -64,9 +48,7 @@ export interface MonteCarloAnalysis {
     reason: string;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// CONSTANTS
-// ═══════════════════════════════════════════════════════════════════════════════
+
 
 const DEFAULT_TRADING_COST = 0.06;  // 0.06% per trade (per quant advisor)
 const STUDENT_T_DF = 3;             // Degrees of freedom for Student's t (crypto fat tails)
@@ -76,9 +58,7 @@ const GARCH_ALPHA = 0.1;            // GARCH alpha parameter
 const GARCH_BETA = 0.85;            // GARCH beta parameter
 const MIN_SHARPE_THRESHOLD = 1.2;   // Minimum Sharpe for trade approval (per quant advisor)
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// RANDOM NUMBER GENERATORS
-// ═══════════════════════════════════════════════════════════════════════════════
+
 
 /**
  * Generate a random number from standard normal distribution
@@ -179,9 +159,7 @@ function garchMultiplier(
     return Number.isFinite(multiplier) ? multiplier : 1.0;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// MONTE CARLO SIMULATION
-// ═══════════════════════════════════════════════════════════════════════════════
+
 
 /**
  * Run Monte Carlo simulation for a trade
@@ -417,9 +395,7 @@ function generateRecommendation(
     };
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// ANALYSIS FUNCTIONS
-// ═══════════════════════════════════════════════════════════════════════════════
+
 
 /**
  * Run Monte Carlo analysis for both long and short scenarios
@@ -538,9 +514,7 @@ export function validateTradeWithMonteCarlo(
     };
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// UTILITY FUNCTIONS
-// ═══════════════════════════════════════════════════════════════════════════════
+
 
 function validateConfig(config: MonteCarloConfig): MonteCarloConfig {
     return {

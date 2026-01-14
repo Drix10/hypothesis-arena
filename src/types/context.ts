@@ -1,7 +1,7 @@
 /**
  * Trading Context Types for v5.0.0
  * 
- * Rich context object passed to all analysts (like competitor's approach).
+ * Rich context object passed to all analysts.
  * Contains account state, positions, market data with indicators, and trade history.
  */
 
@@ -48,6 +48,19 @@ export interface SentimentContext {
     };
     recent_headlines: string[]; // Top 5 headlines
     last_updated: string;
+
+    // Reddit social sentiment (v5.4.0)
+    reddit?: {
+        overall_score: number;           // -1 to +1
+        overall_sentiment: 'bullish' | 'bearish' | 'neutral';
+        post_count: number;
+        btc_sentiment: number | null;    // -1 to +1
+        eth_sentiment: number | null;    // -1 to +1
+        divergence_signal: number;       // -2 to +2 (social vs price divergence)
+        divergence_reason: string;
+        top_headlines: string[];         // Top Reddit post titles
+        is_stale: boolean;               // True if data > 20 min old
+    };
 }
 
 /**
@@ -388,28 +401,13 @@ export function convertIndicatorsToMarketData(
 ): MarketDataWithIndicators {
     const currentPrice = ticker.currentPrice;
 
-    // FIXED: Guard against empty indicator arrays before accessing [length - 1]
-    // FIXED: Guard against division by zero when currentPrice is 0
-    // FIXED: Validate indicator values to prevent misleading signals
-    // NOTE: Default values for missing data:
-    // - ema20/ema50: 0 indicates no data (caller should check before using in calculations)
-    // - rsi: 50 is neutral (neither overbought nor oversold) - safe default for missing data
-    // - price_vs_ema: 'below' when data is missing (conservative default)
-
-    // Extract intraday values with validation
-    // NOTE: ema20 is an array (last 5 values for trend analysis), ema50 is a single value
-    // This is intentional - ema20 series is used for short-term trend detection,
-    // while ema50 is only needed as current value for crossover detection
     const ema20_value = indicators.intraday.ema20.length > 0 ? indicators.intraday.ema20[indicators.intraday.ema20.length - 1] : 0;
-    const ema50_value = indicators.intraday.ema50; // Single value, not array
+    const ema50_value = indicators.intraday.ema50;
     const rsi7_value = indicators.intraday.rsi7.length > 0 ? indicators.intraday.rsi7[indicators.intraday.rsi7.length - 1] : 50;
     const rsi14_value = indicators.intraday.rsi14.length > 0 ? indicators.intraday.rsi14[indicators.intraday.rsi14.length - 1] : 50;
 
-    // Validate intraday EMA values are usable (non-zero, finite)
     const ema20_valid = Number.isFinite(ema20_value) && ema20_value > 0;
     const ema50_valid = Number.isFinite(ema50_value) && ema50_value > 0;
-
-    // Validate long-term EMA values before comparison to prevent misleading signals
     const lt_ema20_valid = Number.isFinite(indicators.longTerm.ema20) && indicators.longTerm.ema20 > 0;
     const lt_ema50_valid = Number.isFinite(indicators.longTerm.ema50) && indicators.longTerm.ema50 > 0;
     const lt_ema200_valid = Number.isFinite(indicators.longTerm.ema200) && indicators.longTerm.ema200 > 0;
@@ -418,7 +416,6 @@ export function convertIndicatorsToMarketData(
         asset: symbol,
         current_price: currentPrice,
         price_change_24h: ticker.change24h,
-        // FIXED: Guard against division by zero when previous price equals zero
         price_change_24h_pct: (() => {
             const previousPrice = currentPrice - ticker.change24h;
             return previousPrice !== 0 ? (ticker.change24h / previousPrice) * 100 : 0;
@@ -439,15 +436,10 @@ export function convertIndicatorsToMarketData(
             atr_pct: currentPrice !== 0 ? (indicators.intraday.atr / currentPrice) * 100 : 0,
             series: {
                 ema20: indicators.intraday.ema20,
-                // NOTE: MACD series contains only the current value. For trend analysis,
-                // the AI should compare macd vs macd_signal and check histogram direction.
-                // Full MACD history would require storing more candle data.
                 macd: [indicators.intraday.macd.macd],
                 rsi7: indicators.intraday.rsi7,
                 rsi14: indicators.intraday.rsi14,
             },
-            // FIXED: Only compare price vs EMA when EMA data is valid
-            // When EMA is 0 or invalid, default to 'below' (conservative - no false bullish signals)
             price_vs_ema20: ema20_valid && currentPrice > ema20_value ? 'above' : 'below',
             price_vs_ema50: ema50_valid && currentPrice > ema50_value ? 'above' : 'below',
         },
@@ -467,8 +459,6 @@ export function convertIndicatorsToMarketData(
             bollinger_lower: indicators.longTerm.bollingerBands.lower,
             trend: indicators.longTerm.trend,
             trend_strength: indicators.signals.trendStrength,
-            // FIXED: Only compare price vs EMA when EMA data is valid
-            // When EMA is 0 or invalid, default to 'below' (conservative - no false bullish signals)
             price_vs_ema20: lt_ema20_valid && currentPrice > indicators.longTerm.ema20 ? 'above' : 'below',
             price_vs_ema50: lt_ema50_valid && currentPrice > indicators.longTerm.ema50 ? 'above' : 'below',
             price_vs_ema200: lt_ema200_valid && currentPrice > indicators.longTerm.ema200 ? 'above' : 'below',
@@ -491,16 +481,11 @@ export function convertIndicatorsToMarketData(
 
 /**
  * Determine Bollinger Band signal
- * 
- * FIXED: Added division by zero protection for bb.middle, bb.upper, bb.lower
- * NOTE: Zero guards are placed at the top to prevent any calculations with invalid data
  */
 function getBollingerSignal(
     price: number,
     bb: { upper: number; middle: number; lower: number }
 ): 'upper_touch' | 'lower_touch' | 'squeeze' | 'expansion' | 'neutral' {
-    // Guard against division by zero - check ALL band values upfront before any calculations
-    // This prevents misleading bandwidth calculations when bands are invalid
     if (bb.middle === 0 || bb.upper === 0 || bb.lower === 0) return 'neutral';
 
     const bandwidth = (bb.upper - bb.lower) / bb.middle;
@@ -519,18 +504,8 @@ function getBollingerSignal(
 
 /**
  * Determine funding rate bias
- * 
- * FIXED: Added validation for NaN/Infinity to prevent invalid comparisons
- * 
- * NOTE: Funding rate thresholds (0.0003 = 0.03% per 8h period):
- * - > 0.03%: Longs are paying shorts significantly, indicating long crowding
- * - < -0.03%: Shorts are paying longs significantly, indicating short crowding
- * - Between: Neutral funding, no significant crowding
- * 
- * These thresholds are conservative - extreme crowding is typically > 0.1% (0.001)
  */
 function getFundingBias(fundingRate: number): 'long_crowded' | 'short_crowded' | 'neutral' {
-    // Guard against NaN/Infinity - treat invalid values as neutral
     if (!Number.isFinite(fundingRate)) return 'neutral';
 
     if (fundingRate > 0.0003) return 'long_crowded';

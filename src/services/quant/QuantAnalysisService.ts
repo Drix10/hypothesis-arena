@@ -1,19 +1,7 @@
 /**
  * QuantAnalysisService - HistoBit-Style Quantitative Analysis
- * 
- * Provides mathematically-grounded analysis on all trading pairs BEFORE
- * AI analysts make their decisions. Uses historical price data to uncover
- * hidden patterns, statistical edges, and probability-based signals.
- * 
- * Features:
- * - Statistical Analysis (mean reversion, volatility clustering, z-scores)
- * - Pattern Detection (support/resistance, trend strength, volume anomalies)
- * - Probability Signals (win rate estimates, optimal entry zones)
- * - Cross-Asset Analysis (correlations, BTC dominance effects)
- * - v5.1.0: Funding Rate Percentile Analysis
- * - v5.1.0 Phase 2: Regime Detection (ADX/BB/ATR rules)
- * 
- * Caching: 5 minutes (aligned with trading cycle)
+ * Provides mathematically-grounded analysis on all trading pairs.
+ * Uses historical price data to uncover patterns, statistical edges, and probability-based signals.
  */
 
 import { getWeexClient } from '../weex/WeexClient';
@@ -21,32 +9,23 @@ import { WeexCandle } from '../../shared/types/weex';
 import { logger } from '../../utils/logger';
 import { detectRegime, clearRegimeHistory, type MarketRegime, type RegimeInput } from './RegimeDetector';
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// TYPES
-// ═══════════════════════════════════════════════════════════════════════════════
-
 export interface QuantSignal {
     direction: 'long' | 'short' | 'neutral';
-    strength: number;        // 0-100
-    confidence: number;      // 0-100
+    strength: number;
+    confidence: number;
     reason: string;
 }
 
 export interface StatisticalMetrics {
-    // Price statistics
     mean: number;
     stdDev: number;
-    zScore: number;          // Current price vs mean (-3 to +3 typical)
-    percentile: number;      // Where current price sits in distribution (0-100)
-
-    // Volatility
-    volatility24h: number;   // Annualized volatility
-    volatilityRank: number;  // 0-100, where current vol sits historically
+    zScore: number;
+    percentile: number;
+    volatility24h: number;
+    volatilityRank: number;
     isVolatilityExpanding: boolean;
-
-    // Mean reversion
     meanReversionSignal: QuantSignal;
-    distanceFromMean: number; // Percentage
+    distanceFromMean: number;
 }
 
 export interface PatternAnalysis {

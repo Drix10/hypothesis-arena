@@ -1,22 +1,10 @@
 /**
- * Collaborative Trading Flow
- * 
- * Simplified pipeline with PARALLEL ANALYSIS:
+ * Collaborative Trading Flow - Simplified pipeline with PARALLEL ANALYSIS
  * 1. Market Scan - Fetch data for all coins + indicators
  * 2. Parallel Analysis - 4 analysts analyze independently in parallel
  * 3. Judge Decision - Compare all 4 and pick winner
  * 4. Execution - Place trade on WEEX
- * 
- * AI CALLS: 5 (4 analysts + 1 judge)
- * LATENCY: ~25 seconds
- * 
- * FEATURES:
- * - Strict JSON schemas via responseSchema (prevents parse errors)
- * - Dual provider support (Gemini / OpenRouter) via centralized AIService
- * - Prompt caching optimization (implicit for Gemini 2.5+, explicit for OpenRouter)
- * - Schema conversion for cross-provider compatibility
- * 
- * See: https://ai.google.dev/gemini-api/docs/json-mode
+ * AI CALLS: 5 (4 analysts + 1 judge), LATENCY: ~25 seconds
  */
 
 import { config } from '../../config';
@@ -84,16 +72,6 @@ export interface MarketDataInput {
 
 // =============================================================================
 // JSON SCHEMAS FOR STRUCTURED OUTPUT
-// =============================================================================
-// These schemas enforce strict JSON output from the LLM, preventing parse errors
-// and ensuring consistent response structure. The model will ONLY output valid JSON
-// matching these schemas.
-//
-// IMPORTANT: Gemini's responseSchema uses a subset of JSON Schema:
-// - Supported types: STRING, NUMBER, INTEGER, BOOLEAN, ARRAY, OBJECT
-// - Use 'enum' for string enums
-// - Use 'nullable: true' instead of 'type: ["string", "null"]'
-// - 'required' array specifies mandatory properties
 // =============================================================================
 
 /**
@@ -235,7 +213,7 @@ export class CollaborativeFlowService {
 
     /**
      * Initialize the service
-     * Now uses centralized AIService - just validates configuration
+     * Validates configuration with centralized AIService
      */
     async initialize(): Promise<void> {
         if (this.initialized) return;
@@ -258,13 +236,8 @@ export class CollaborativeFlowService {
     ): Promise<FinalDecision> {
         await this.initialize();
 
-        // FIXED: Validate inputs before proceeding
-        // CRITICAL: Invalid balance is a serious error - we should not trade with unknown balance
-        // Using 0 as fallback prevents new trades but allows position management
         if (!Number.isFinite(accountBalance) || accountBalance < 0) {
             logger.error(`CRITICAL: Invalid accountBalance: ${accountBalance}. Cannot determine trading capacity.`);
-            // Return HOLD with warning instead of silently using 0
-            // This prevents opening new positions when balance is unknown
             return {
                 action: 'HOLD',
                 symbol: '',
@@ -336,16 +309,10 @@ export class CollaborativeFlowService {
         const cycleId = `cycle_${Date.now()}`;
         logger.info('🚀 Starting parallel analysis pipeline...');
 
-        // Assign models to analysts for this cycle (multi-model rotation)
-        // Note: Judge uses standard single-model approach for consistency
         modelPoolManager.assignModelsForCycle(cycleId);
-
-        // FIXED: Mark operation start for safe reset handling
         markOperationStart();
 
         try {
-            // Stage 1: Build rich context
-            // FIXED: Wrap context builder callback in try-catch to prevent pipeline crash
             const contextBuilder = getContextBuilder(this.prisma);
             let context: TradingContext;
             try {
@@ -395,12 +362,10 @@ export class CollaborativeFlowService {
 
             logger.info(`📊 Context built with ${context.market_data.length} assets, ${context.account.positions.length} positions`);
 
-            // Stage 2: Run 4 analysts in parallel
             const analysisResult = await this.runAllAnalysts(context);
             const analysisTime = Date.now() - startTime;
             logger.info(`📊 Parallel analysis completed in ${analysisTime}ms`);
 
-            // Log results
             for (const analystId of ['jim', 'ray', 'karen', 'quant'] as AnalystId[]) {
                 const output = analysisResult[analystId];
                 if (output) {
@@ -410,13 +375,11 @@ export class CollaborativeFlowService {
                 }
             }
 
-            // Stage 3: Judge compares all outputs
             const judgeStart = Date.now();
             const judgeDecision = await this.runJudge(context, analysisResult);
             const judgeTime = Date.now() - judgeStart;
             logger.info(`⚖️ Judge decision in ${judgeTime}ms: winner=${judgeDecision.winner}, action=${judgeDecision.final_action}`);
 
-            // Stage 4: Build final decision
             const finalDecision = this.buildFinalDecision(analysisResult, judgeDecision);
 
             const totalTime = Date.now() - startTime;
@@ -424,7 +387,6 @@ export class CollaborativeFlowService {
 
             return finalDecision;
         } finally {
-            // FIXED: Always mark operation end, even on error
             markOperationEnd();
         }
     }
@@ -475,11 +437,8 @@ export class CollaborativeFlowService {
     private async runSingleAnalyst(analystId: AnalystId, contextJson: string): Promise<AnalystOutput | null> {
         const systemPrompt = buildAnalystPrompt(analystId);
         const userMessage = buildAnalystUserMessage(contextJson);
-
-        // Combine prompts - system prompt first for caching optimization
         const fullPrompt = systemPrompt + '\n\n' + userMessage;
 
-        // Check if multi-model is enabled
         const useMultiModel = modelPoolManager.isMultiModelEnabled() && config.ai.provider === 'openrouter';
 
         for (let attempt = 1; attempt <= config.ai.maxRetries; attempt++) {
@@ -488,8 +447,6 @@ export class CollaborativeFlowService {
                 let modelUsed: string;
 
                 if (useMultiModel) {
-                    // Use assigned model from pool (with automatic fallback)
-                    // Pass schema for consistent JSON-validated output across both paths
                     const result = await aiService.analyzeWithAssignedModel(
                         analystId,
                         fullPrompt,
@@ -501,7 +458,6 @@ export class CollaborativeFlowService {
                         logger.info(`${analystId} used fallback model: ${modelUsed}`);
                     }
                 } else {
-                    // Use standard single-model approach
                     const result = await aiService.generateContent({
                         prompt: fullPrompt,
                         schema: ANALYST_OUTPUT_RESPONSE_SCHEMA,
@@ -514,15 +470,12 @@ export class CollaborativeFlowService {
                 }
 
                 const parsed = this.parseJSON(resultText);
-
-                // Normalize before validation (handles exit_plan as object, etc.)
                 const normalized = normalizeAnalystOutput(parsed);
 
                 if (validateAnalystOutput(normalized)) {
                     logger.debug(`${analystId} completed with ${modelUsed}`);
                     return normalized;
                 } else {
-                    // Debug: log what we received vs what we expected
                     logger.warn(`${analystId} output validation failed on attempt ${attempt} (model: ${modelUsed})`);
                     logger.warn(`${analystId} raw response (first 500 chars): ${resultText.slice(0, 500)}`);
                     if (parsed) {
@@ -544,8 +497,6 @@ export class CollaborativeFlowService {
             }
         }
 
-        // This return is reached when all retries complete but validation keeps failing
-        // (i.e., the AI returns parseable JSON that doesn't match our schema)
         return null;
     }
 
@@ -560,9 +511,6 @@ export class CollaborativeFlowService {
         const karenOutput = analysisResult.karen ? JSON.stringify(analysisResult.karen, null, 2) : null;
         const quantOutput = analysisResult.quant ? JSON.stringify(analysisResult.quant, null, 2) : null;
 
-        // Get analyst weight adjustments from trade journal performance
-        // These weights are based on rolling 50-trade win rates per analyst
-        // Only include weights section if there's meaningful data (at least one non-1.0 weight)
         const analystWeights = getAnalystWeights();
         const hasNonDefaultWeights = Array.from(analystWeights.values()).some(w => w !== 1.0);
         const weightsSection = hasNonDefaultWeights
@@ -573,8 +521,6 @@ export class CollaborativeFlowService {
             : '';
 
         const userMessage = buildJudgeUserMessage(contextJson, jimOutput, rayOutput, karenOutput, quantOutput) + weightsSection;
-
-        // Combine prompts - system prompt first for caching optimization
         const fullPrompt = JUDGE_SYSTEM_PROMPT + '\n\n' + userMessage;
 
         for (let attempt = 1; attempt <= config.ai.maxRetries; attempt++) {
@@ -582,7 +528,7 @@ export class CollaborativeFlowService {
                 const result = await aiService.generateContent({
                     prompt: fullPrompt,
                     schema: JUDGE_OUTPUT_RESPONSE_SCHEMA,
-                    temperature: 0.3, // Lower temperature for judge (more deterministic)
+                    temperature: 0.3,
                     maxOutputTokens: config.ai.maxOutputTokens,
                     label: 'Judge',
                 });
@@ -590,9 +536,6 @@ export class CollaborativeFlowService {
                 const parsed = this.parseJSON(result.text);
 
                 if (validateJudgeOutput(parsed)) {
-                    // Ensure consistency: winner=NONE means HOLD with no recommendation
-                    // EXCEPTION: winner=NONE can have CLOSE action for emergency position management
-                    // (e.g., when all analysts fail but a position needs closing)
                     if (parsed.winner === 'NONE' && parsed.final_action !== 'CLOSE' && parsed.final_action !== 'REDUCE') {
                         parsed.final_action = 'HOLD';
                         parsed.final_recommendation = null;
@@ -607,7 +550,6 @@ export class CollaborativeFlowService {
             } catch (error) {
                 logger.error(`Judge attempt ${attempt} failed:`, error);
                 if (attempt === config.ai.maxRetries) {
-                    // Return safe default
                     return {
                         winner: 'NONE',
                         reasoning: 'Judge failed to produce valid output',
@@ -826,18 +768,14 @@ export class CollaborativeFlowService {
 
     /**
      * Parse JSON with error handling
-     * 
-     * FIXED: Added size limit to prevent memory exhaustion from malicious responses
      */
     private parseJSON(text: string): any {
-        // FIXED: Limit input size to prevent memory exhaustion (10MB max)
         const MAX_JSON_SIZE = 10 * 1024 * 1024;
         if (text.length > MAX_JSON_SIZE) {
             throw new Error(`JSON response too large: ${text.length} bytes (max: ${MAX_JSON_SIZE})`);
         }
 
         try {
-            // Remove markdown code blocks if present
             let cleaned = text.trim();
             if (cleaned.startsWith('```json')) {
                 cleaned = cleaned.slice(7);
@@ -850,8 +788,6 @@ export class CollaborativeFlowService {
             return JSON.parse(cleaned.trim());
         } catch (error) {
             logger.error('JSON parse error:', error);
-            // SECURITY: Only log metadata to avoid exposing sensitive data
-            // Full response may contain API keys, account info, or other sensitive context
             logger.debug(`Raw text length: ${text.length} chars [content redacted for security]`);
             throw error;
         }
@@ -905,18 +841,17 @@ let operationInProgressCount = 0;
  * External callers should NOT use this function - it's managed automatically
  * by runParallelAnalysis() to ensure proper pairing of start/end calls.
  */
+/**
+ * Mark operation start (call before runParallelAnalysis)
+ * @internal Used ONLY by CollaborativeFlowService to track operation state
+ */
 export function markOperationStart(): void {
     operationInProgressCount++;
 }
 
 /**
  * Mark operation end (call after runParallelAnalysis completes)
- * @internal Used ONLY by CollaborativeFlowService to track operation state.
- * External callers should NOT use this function - it's managed automatically
- * by runParallelAnalysis() to ensure proper pairing of start/end calls.
- * 
- * NOTE: Uses Math.max(0, ...) to prevent negative counts from mismatched calls.
- * If this happens, it indicates a bug in the calling code.
+ * @internal Used ONLY by CollaborativeFlowService to track operation state
  */
 export function markOperationEnd(): void {
     if (operationInProgressCount <= 0) {
@@ -927,7 +862,6 @@ export function markOperationEnd(): void {
 
 /**
  * Get current operation count (for debugging/monitoring only)
- * @returns Number of operations currently in progress
  */
 export function getOperationCount(): number {
     return operationInProgressCount;
@@ -935,11 +869,6 @@ export function getOperationCount(): number {
 
 /**
  * Reset singleton (for testing or cleanup)
- * FIXED: Properly cleanup model resources to prevent memory leaks
- * FIXED: Clear initializingPromise to prevent race conditions during reset
- * FIXED: Check if operation is in progress before resetting
- * FIXED: Use public _cleanup() method instead of accessing private fields
- * 
  * @param force - If true, reset even if operation is in progress (use with caution)
  * @returns true if reset was performed, false if skipped due to operation in progress
  */
@@ -950,11 +879,9 @@ export function resetCollaborativeFlow(force: boolean = false): boolean {
     }
 
     if (collaborativeFlowInstance) {
-        // Use public cleanup method to clear internal state
         collaborativeFlowInstance._cleanup();
     }
 
-    // Reset model pool manager failures (but don't shutdown - it's a singleton)
     modelPoolManager.resetFailures();
 
     collaborativeFlowInstance = null;
@@ -962,5 +889,4 @@ export function resetCollaborativeFlow(force: boolean = false): boolean {
     return true;
 }
 
-// Re-export modelPoolManager for external access (debugging, admin endpoints)
 export { modelPoolManager };

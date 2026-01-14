@@ -1,21 +1,11 @@
 /**
  * Anti-Churn Service for v5.0.0
- * 
- * Implements competitor's anti-churn rules:
- * 1. Cooldown after trades (15 minutes)
- * 2. Longer cooldown before flipping direction (30 minutes)
- * 3. Hysteresis - need stronger evidence to change than to keep
- * 4. Daily trade limit
- * 5. Funding threshold for action
+ * Implements competitor's anti-churn rules: cooldowns, direction flips, daily limits, funding thresholds
  */
 
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
 
-/**
- * Cooldown state for a symbol
- * Exported for consumer type safety
- */
 export interface CooldownState {
     lastTradeTime: number;
     lastDirection: 'LONG' | 'SHORT';
@@ -48,18 +38,13 @@ export class AntiChurnService {
     constructor() {
         const antiChurn = config.antiChurn || {};
 
-        this.cooldownAfterTradeMs = antiChurn.cooldownAfterTradeMs || 900000;      // 15 minutes
-        this.cooldownBeforeFlipMs = antiChurn.cooldownBeforeFlipMs || 1800000;     // 30 minutes
-
-        // Hysteresis multiplier: 20% more confidence needed to close than to open
-        // Default is 1.2 (hardcoded), but can be overridden via config.antiChurn.hysteresisMultiplier
+        this.cooldownAfterTradeMs = antiChurn.cooldownAfterTradeMs || 900000;
+        this.cooldownBeforeFlipMs = antiChurn.cooldownBeforeFlipMs || 1800000;
         this.hysteresisMultiplier = antiChurn.hysteresisMultiplier ?? 1.2;
 
-        // Daily trade limit: prefer trading.maxDailyTrades, fallback to deprecated antiChurn.maxTradesPerDay
-        // MIGRATION: antiChurn.maxTradesPerDay is deprecated, use trading.maxDailyTrades instead
         const deprecatedMaxTrades = (antiChurn as Record<string, unknown>).maxTradesPerDay as number | undefined;
         let rawMaxTradesPerDay: number;
-        let configField: string; // Track which config field was actually used
+        let configField: string;
 
         if (config.trading?.maxDailyTrades !== undefined) {
             rawMaxTradesPerDay = config.trading.maxDailyTrades;
@@ -69,15 +54,11 @@ export class AntiChurnService {
             rawMaxTradesPerDay = deprecatedMaxTrades;
             configField = 'config.antiChurn.maxTradesPerDay';
         } else {
-            rawMaxTradesPerDay = 20; // Default
+            rawMaxTradesPerDay = 20;
             configField = 'config.trading.maxDailyTrades (using default)';
         }
 
-        // FIXED: Simplified validation logic - removed redundant checks
-        // Validate and sanitize maxTradesPerDay: must be finite, positive, and in range [1, 1000]
-
         if (!Number.isFinite(rawMaxTradesPerDay) || rawMaxTradesPerDay < 1) {
-            // Invalid or too low - use default
             logger.warn(
                 `⚠️ Invalid maxDailyTrades value: ${rawMaxTradesPerDay}. ` +
                 `Must be a finite number >= 1. Falling back to default (20). ` +
@@ -85,7 +66,6 @@ export class AntiChurnService {
             );
             this.maxTradesPerDay = 20;
         } else if (rawMaxTradesPerDay > 1000) {
-            // Too high - clamp to max
             logger.warn(
                 `⚠️ maxDailyTrades value too high: ${rawMaxTradesPerDay}. ` +
                 `Maximum is 1000. Clamping to 1000. ` +
@@ -93,7 +73,6 @@ export class AntiChurnService {
             );
             this.maxTradesPerDay = 1000;
         } else {
-            // Valid range - coerce to integer
             this.maxTradesPerDay = Math.floor(rawMaxTradesPerDay);
             if (this.maxTradesPerDay !== rawMaxTradesPerDay) {
                 logger.warn(
@@ -104,15 +83,8 @@ export class AntiChurnService {
             }
         }
 
-        this.fundingThresholdATR = 0.25;  // Only act on funding if > 0.25×ATR
-
-        // Funding periods per day - WEEX uses 8-hour funding periods (3 per day)
-        // Other exchanges may differ: Binance/Bybit/OKX: 3, dYdX: 24
-        // Intentionally hardcoded for WEEX - change this if targeting other exchanges
+        this.fundingThresholdATR = 0.25;
         this.fundingPeriodsPerDay = antiChurn.fundingPeriodsPerDay ?? 3;
-
-        // Per-symbol hourly trade limit (default: 3 trades per symbol per hour)
-        // This prevents over-trading a single symbol even if daily limit isn't reached
         this.maxTradesPerSymbolPerHour = antiChurn.maxTradesPerSymbolPerHour ?? 3;
 
         logger.info(`AntiChurnService initialized: cooldown=${this.cooldownAfterTradeMs}ms, flip=${this.cooldownBeforeFlipMs}ms, hysteresis=${this.hysteresisMultiplier}x, maxTrades=${this.maxTradesPerDay}, maxPerSymbol/hr=${this.maxTradesPerSymbolPerHour}, fundingPeriods=${this.fundingPeriodsPerDay}`);
@@ -122,7 +94,6 @@ export class AntiChurnService {
      * Check if trading is allowed for a symbol
      */
     canTrade(symbol: string): { allowed: boolean; reason?: string; remainingMs?: number } {
-        // Check daily limit first
         this.resetDailyCounterIfNeeded();
 
         if (this.tradesExecutedToday >= this.maxTradesPerDay) {
@@ -132,13 +103,11 @@ export class AntiChurnService {
             };
         }
 
-        // Check per-symbol hourly limit
         const symbolHourlyCheck = this.canTradeSymbolThisHour(symbol);
         if (!symbolHourlyCheck.allowed) {
             return symbolHourlyCheck;
         }
 
-        // Check symbol-specific cooldown
         const state = this.cooldowns.get(symbol);
         if (!state) {
             return { allowed: true };
@@ -166,13 +135,11 @@ export class AntiChurnService {
         const now = Date.now();
         const oneHourAgo = now - 3600000; // 1 hour in ms
 
-        // Get trade history for this symbol
         const history = this.symbolTradeHistory.get(symbol);
         if (!history || history.length === 0) {
             return { allowed: true };
         }
 
-        // Count trades in the last hour
         const tradesInLastHour = history.filter(ts => ts > oneHourAgo).length;
 
         if (tradesInLastHour >= this.maxTradesPerSymbolPerHour) {
@@ -215,19 +182,9 @@ export class AntiChurnService {
 
     /**
      * Record a trade and set cooldowns
-     * 
-     * NOTE: This method assumes the trade has already been validated and executed.
-     * Call canTrade() and canFlipDirection() BEFORE executing the trade.
-     * 
-     * IMPORTANT: This method enforces the daily trade limit. If the limit is already
-     * reached, the trade will NOT be recorded and false will be returned.
-     * 
-     * MEMORY LEAK PREVENTION: Prunes expired cooldowns when map exceeds MAX_COOLDOWN_ENTRIES
-     * 
      * @returns true if trade was recorded, false if inputs were invalid or limit reached
      */
     recordTrade(symbol: string, direction: 'LONG' | 'SHORT'): boolean {
-        // Validate inputs
         if (!symbol || typeof symbol !== 'string' || symbol.trim().length === 0) {
             logger.warn(`AntiChurnService.recordTrade: Invalid symbol: ${symbol}`);
             return false;
@@ -237,10 +194,8 @@ export class AntiChurnService {
             return false;
         }
 
-        // FIXED: Reset daily counter before checking to ensure accurate count
         this.resetDailyCounterIfNeeded();
 
-        // FIXED: Enforce daily limit - refuse to record if limit already reached
         if (this.tradesExecutedToday >= this.maxTradesPerDay) {
             logger.warn(`⚠️ AntiChurnService.recordTrade: Daily limit (${this.maxTradesPerDay}) already reached, refusing to record trade`);
             return false;
@@ -248,13 +203,9 @@ export class AntiChurnService {
 
         const now = Date.now();
 
-        // Prune expired cooldowns if map is getting large
-        // FIXED: Also prune oldest entries if all are still active to prevent unbounded growth
         if (this.cooldowns.size >= this.MAX_COOLDOWN_ENTRIES) {
             const prunedExpired = this.pruneExpiredCooldowns();
 
-            // If no expired entries were pruned and we're still at limit,
-            // remove the oldest entry to make room
             if (prunedExpired === 0 && this.cooldowns.size >= this.MAX_COOLDOWN_ENTRIES) {
                 let oldestSymbol: string | null = null;
                 let oldestTime = Infinity;
@@ -280,9 +231,7 @@ export class AntiChurnService {
             flipCooldownUntil: now + this.cooldownBeforeFlipMs,
         });
 
-        // Record to per-symbol hourly history
         this.recordSymbolTrade(symbol, now);
-
         this.tradesExecutedToday++;
 
         logger.info(`📝 Trade recorded: ${symbol} ${direction}, cooldown until ${new Date(now + this.cooldownAfterTradeMs).toISOString()}, flip cooldown until ${new Date(now + this.cooldownBeforeFlipMs).toISOString()}`);
@@ -294,20 +243,15 @@ export class AntiChurnService {
     /**
      * Record a trade timestamp for per-symbol hourly tracking
      * Also prunes old entries (> 1 hour) to prevent memory leak
-     * 
-     * OPTIMIZED: Mutates array in-place instead of creating new arrays
      */
     private recordSymbolTrade(symbol: string, timestamp: number): void {
         const oneHourAgo = timestamp - 3600000;
 
-        // Get or create history array for this symbol
         let history = this.symbolTradeHistory.get(symbol);
         if (!history) {
             history = [timestamp];
             this.symbolTradeHistory.set(symbol, history);
         } else {
-            // OPTIMIZED: Prune in-place by finding first valid index, then splice
-            // This avoids creating a new array on every call
             let firstValidIndex = 0;
             while (firstValidIndex < history.length && history[firstValidIndex] <= oneHourAgo) {
                 firstValidIndex++;
@@ -318,15 +262,12 @@ export class AntiChurnService {
             history.push(timestamp);
         }
 
-        // Memory leak prevention: limit total symbols tracked
         if (this.symbolTradeHistory.size > this.MAX_SYMBOL_HISTORY_ENTRIES) {
-            // Find and remove the symbol with oldest last trade
             let oldestSymbol: string | null = null;
             let oldestTime = Infinity;
 
             for (const [sym, hist] of this.symbolTradeHistory.entries()) {
                 if (hist.length === 0) {
-                    // Empty history - remove immediately
                     this.symbolTradeHistory.delete(sym);
                     continue;
                 }
@@ -386,15 +327,11 @@ export class AntiChurnService {
     /**
      * Apply hysteresis to close decision
      * Returns true if close signal is strong enough to overcome hysteresis
-     * 
-     * FIXED: Added input validation to prevent NaN propagation
-     * FIXED: Use local variables instead of modifying parameters
      */
     shouldClose(
         entryConfidence: number,
         closeConfidence: number
     ): { shouldClose: boolean; requiredConfidence: number } {
-        // Validate inputs - use local variables to avoid parameter reassignment
         let validEntryConfidence = entryConfidence;
         let validCloseConfidence = closeConfidence;
 
@@ -420,31 +357,12 @@ export class AntiChurnService {
     /**
      * Check if funding rate warrants action
      * Only act if funding > 0.25×ATR (per competitor's rules)
-     * 
-     * @param fundingRate - Funding rate as a decimal (e.g., 0.0001 = 0.01% per period).
-     *                      WEEX returns this directly from their API.
-     *                      Positive = longs pay shorts, Negative = shorts pay longs.
-     * @param atr - Average True Range in price units (e.g., $500 for BTC)
-     * @param currentPrice - Current asset price in USD
-     * 
-     * NOTE: Funding period assumption - WEEX uses 8-hour funding periods.
-     * If targeting other exchanges, verify their funding period:
-     * - Binance: 8 hours
-     * - Bybit: 8 hours
-     * - OKX: 8 hours
-     * - dYdX: 1 hour
-     * 
-     * EDGE CASES HANDLED:
-     * - NaN/Infinity inputs
-     * - Zero or negative prices/ATR
-     * - Extremely high funding rates (capped at 100% daily for sanity)
      */
     shouldActOnFunding(
         fundingRate: number,
         atr: number,
         currentPrice: number
     ): { shouldAct: boolean; fundingImpact: number; threshold: number } {
-        // Validate inputs
         if (!Number.isFinite(fundingRate) || !Number.isFinite(atr) || !Number.isFinite(currentPrice)) {
             return { shouldAct: false, fundingImpact: 0, threshold: 0 };
         }
@@ -452,22 +370,14 @@ export class AntiChurnService {
             return { shouldAct: false, fundingImpact: 0, threshold: 0 };
         }
 
-        // Convert funding rate to price impact
-        // Funding is typically per 8 hours (WEEX), so multiply by fundingPeriodsPerDay for daily
         const dailyFundingPct = Math.abs(fundingRate) * this.fundingPeriodsPerDay * 100;
-
-        // EDGE CASE: Cap at 100% daily to prevent unrealistic values from bad data
         const cappedDailyFundingPct = Math.min(dailyFundingPct, 100);
         if (dailyFundingPct > 100) {
             logger.warn(`Extremely high funding rate detected: ${dailyFundingPct.toFixed(2)}% daily, capping at 100%`);
         }
 
-        // ATR as percentage of price
         const atrPct = (atr / currentPrice) * 100;
-
-        // Threshold is 0.25×ATR
         const threshold = atrPct * this.fundingThresholdATR;
-
         const shouldAct = cappedDailyFundingPct > threshold;
 
         if (shouldAct) {
@@ -482,16 +392,12 @@ export class AntiChurnService {
     }
 
     /**
-     * Get cooldown state for a symbol
-     * 
-     * NOTE: Returns a COPY of the internal state to prevent external mutation.
-     * This is consistent with getAllCooldowns() behavior.
+     * Get cooldown state for a symbol (returns a copy to prevent external mutation)
      */
     getCooldownState(symbol: string): CooldownState | null {
         const state = this.cooldowns.get(symbol);
         if (!state) return null;
 
-        // Return a copy to prevent external mutation
         return {
             lastTradeTime: state.lastTradeTime,
             lastDirection: state.lastDirection,
@@ -501,18 +407,11 @@ export class AntiChurnService {
     }
 
     /**
-     * Get all cooldown states
-     * 
-     * NOTE: Returns a DEEP copy of the internal Map to prevent external mutation.
-     * Both the Map structure and the CooldownState objects are copied, so callers
-     * cannot affect internal state by modifying the returned data.
-     * 
-     * This is consistent with getCooldownState() which also returns a copy.
+     * Get all cooldown states (returns a deep copy to prevent external mutation)
      */
     getAllCooldowns(): Map<string, CooldownState> {
         const copy = new Map<string, CooldownState>();
         for (const [symbol, state] of this.cooldowns) {
-            // Deep copy each CooldownState to prevent mutation
             copy.set(symbol, {
                 lastTradeTime: state.lastTradeTime,
                 lastDirection: state.lastDirection,
@@ -532,15 +431,9 @@ export class AntiChurnService {
     }
 
     /**
-     * Reset daily counter if it's a new day
-     * 
-     * NOTE: Uses UTC timezone for consistency across deployments.
-     * toISOString() returns UTC date, ensuring consistent daily resets
-     * regardless of server timezone.
+     * Reset daily counter if it's a new day (uses UTC timezone)
      */
     private resetDailyCounterIfNeeded(): void {
-        // toISOString() returns UTC date (e.g., "2026-01-05T12:00:00.000Z")
-        // split('T')[0] extracts "2026-01-05" in UTC
         const today = new Date().toISOString().split('T')[0];
 
         if (this.lastResetDate !== today) {
@@ -571,8 +464,6 @@ export class AntiChurnService {
             }
         }
 
-        // FIXED: Use Math.max(0, ...) for consistency with getRemainingTradesToday()
-        // This ensures remainingTrades is never negative even if tradesExecutedToday > maxTradesPerDay
         return {
             tradesExecutedToday: this.tradesExecutedToday,
             maxTradesPerDay: this.maxTradesPerDay,
@@ -621,7 +512,6 @@ export function getAntiChurnService(): AntiChurnService {
 
 /**
  * Reset singleton (for testing or cleanup)
- * Clears all cooldown state to prevent stale data on restart
  */
 export function resetAntiChurnService(): void {
     antiChurnServiceInstance = null;

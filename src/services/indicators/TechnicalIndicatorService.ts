@@ -1,8 +1,6 @@
 /**
  * Technical Indicator Service
- * 
- * Fetches candlestick data from WEEX and calculates technical indicators.
- * Implements caching to avoid recalculating on every request.
+ * Fetches candlestick data from WEEX and calculates technical indicators with caching.
  */
 
 import { getWeexClient } from '../weex/WeexClient';
@@ -13,31 +11,25 @@ import { config } from '../../config';
 export interface TechnicalIndicators {
     symbol: string;
     timestamp: number;
-
-    // 5-minute timeframe (intraday/scalping)
     intraday: {
-        ema20: number[];      // Last 5 values
-        ema50: number;        // Current value
-        macd: MACDResult;     // Current MACD values
-        rsi7: number[];       // Last 5 RSI(7) values
-        rsi14: number[];      // Last 5 RSI(14) values
-        atr: number;          // Current ATR
+        ema20: number[];
+        ema50: number;
+        macd: MACDResult;
+        rsi7: number[];
+        rsi14: number[];
+        atr: number;
         currentPrice: number;
     };
-
-    // 4-hour timeframe (trend/swing)
     longTerm: {
-        ema20: number;        // Current EMA20
-        ema50: number;        // Current EMA50
-        ema200: number;       // Current EMA200
-        atr: number;          // Current ATR
-        macd: MACDResult;     // Current MACD
-        rsi14: number;        // Current RSI
+        ema20: number;
+        ema50: number;
+        ema200: number;
+        atr: number;
+        macd: MACDResult;
+        rsi14: number;
         bollingerBands: BollingerBandsResult;
         trend: 'bullish' | 'bearish' | 'neutral';
     };
-
-    // Derived signals
     signals: {
         emaCrossover: 'golden' | 'death' | 'none';
         rsiSignal: 'overbought' | 'oversold' | 'neutral';
@@ -51,8 +43,8 @@ export class TechnicalIndicatorService {
     private calculator: IndicatorCalculator;
     private cache: Map<string, { data: TechnicalIndicators; timestamp: number; lastAccessed: number }>;
     private cacheTTL: number;
-    private readonly MAX_CACHE_SIZE = 100; // Prevent unbounded memory growth
-    private pruneIntervalId: NodeJS.Timeout | null = null; // FIXED: Auto-prune interval
+    private readonly MAX_CACHE_SIZE = 100;
+    private pruneIntervalId: NodeJS.Timeout | null = null;
 
     constructor(cacheTTL: number = 60000) {
         // Validate cacheTTL
@@ -64,7 +56,6 @@ export class TechnicalIndicatorService {
         this.cache = new Map();
         this.cacheTTL = cacheTTL;
 
-        // FIXED: Start automatic cache pruning every 5 minutes
         this.pruneIntervalId = setInterval(() => {
             this.pruneExpiredCache();
         }, 5 * 60 * 1000);
@@ -75,26 +66,6 @@ export class TechnicalIndicatorService {
         }
     }
 
-    /**
-     * Get technical indicators for a symbol
-     * Uses cache if available and not expired
-     * 
-     * MEMORY LEAK PREVENTION:
-     * - Cache size limited to MAX_CACHE_SIZE entries
-     * - True LRU eviction based on lastAccessed timestamp
-     * 
-     * EDGE CASES HANDLED:
-     * - Invalid symbol (empty, null, non-string)
-     * - Cache corruption (invalid entry structure)
-     * 
-     * NOTE ON SYMBOL NORMALIZATION:
-     * Symbols are normalized to lowercase internally for cache keys.
-     * This means 'CMT_BTCUSDT' and 'cmt_btcusdt' will share the same cache entry.
-     * The returned TechnicalIndicators.symbol will be the normalized (lowercase) version.
-     * 
-     * Both getIndicators() and getIndicatorsForSymbols() use normalized (lowercase) keys
-     * in their returned Maps/results for consistency.
-     */
     async getIndicators(symbol: string): Promise<TechnicalIndicators> {
         // Validate symbol
         if (!symbol || typeof symbol !== 'string' || symbol.trim().length === 0) {

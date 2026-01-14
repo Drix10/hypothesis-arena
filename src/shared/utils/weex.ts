@@ -1,35 +1,20 @@
-/**
- * WEEX API Utility Functions
- * Ensures compliance with WEEX trading specifications
- */
-
 import type { WeexContract } from '../types/weex';
 import { logger } from '../../utils/logger';
 import { APPROVED_SYMBOLS } from '../types/weex';
 
-/**
- * Contract specifications cache with TTL
- * Maps symbol to contract specifications
- * 
- * CONCURRENCY NOTE: This cache is accessed from multiple async operations.
- * JavaScript's single-threaded event loop ensures Map operations are atomic.
- * However, async gaps between read-modify-write operations can cause race conditions.
- * The updateContractSpecs() function uses timestamp-based validation to detect stale updates.
- */
 interface CachedContractSpecs {
     specs: ContractSpecs;
     cachedAt: number;
 }
 
 const contractSpecsCache = new Map<string, CachedContractSpecs>();
-const warnedSymbols = new Set<string>(); // Track which symbols have been warned about age
-const CACHE_TTL_MS = 3600000; // 1 hour TTL for contract specs
-const CACHE_REFRESH_THRESHOLD_MS = 3300000; // 55 minutes (warn before expiry)
-const MAX_CACHE_SIZE = 100; // FIXED: Prevent unbounded cache growth
+const warnedSymbols = new Set<string>();
+const CACHE_TTL_MS = 3600000;
+const CACHE_REFRESH_THRESHOLD_MS = 3300000;
+const MAX_CACHE_SIZE = 100;
 
-// Reasonable upper bounds for sanity checks
-const MAX_REASONABLE_PRICE = 10_000_000; // 10 million per coin
-const MAX_REASONABLE_SIZE = 1_000_000; // 1 million coins
+const MAX_REASONABLE_PRICE = 10_000_000;
+const MAX_REASONABLE_SIZE = 1_000_000;
 
 interface ContractSpecs {
     symbol: string;
@@ -58,7 +43,7 @@ function cleanupExpiredSpecs(): void {
     for (const [symbol, cached] of contractSpecsCache.entries()) {
         if (now - cached.cachedAt > CACHE_TTL_MS) {
             contractSpecsCache.delete(symbol);
-            warnedSymbols.delete(symbol); // Clear warning flag for expired symbol
+            warnedSymbols.delete(symbol);
             removedCount++;
         }
     }

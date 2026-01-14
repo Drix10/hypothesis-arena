@@ -17,24 +17,16 @@ export interface AILogEntry {
 }
 
 export class AILogService {
-    // Use singleton getter instead of storing reference
-    // This ensures we always use the same instance and don't create memory leaks
-
-    // FIXED: Track failed uploads for potential retry mechanism
-    // This prevents silent failures and allows monitoring of upload health
     private failedUploads: Set<string> = new Set();
-    private readonly MAX_FAILED_UPLOADS = 100; // Prevent unbounded growth
-
-    // CRITICAL FIX: Track retry attempts per log to prevent infinite retries
+    private readonly MAX_FAILED_UPLOADS = 100;
     private retryAttempts: Map<string, number> = new Map();
-    private readonly MAX_RETRY_ATTEMPTS = 5; // Max retries per log before giving up
-    private readonly MAX_RETRY_ATTEMPTS_ENTRIES = 200; // Prevent unbounded Map growth
-
+    private readonly MAX_RETRY_ATTEMPTS = 5;
+    private readonly MAX_RETRY_ATTEMPTS_ENTRIES = 200;
     private lastRetryAttempt = 0;
-    private readonly RETRY_INTERVAL_MS = 3600000; // 1 hour
-    private retryInProgress = false; // FIXED: Prevent concurrent retries
+    private readonly RETRY_INTERVAL_MS = 3600000;
+    private retryInProgress = false;
     private lastLogCleanup = 0;
-    private readonly LOG_CLEANUP_INTERVAL_MS = 86400000; // 24 hours
+    private readonly LOG_CLEANUP_INTERVAL_MS = 86400000;
 
     /**
      * Get count of failed uploads (for monitoring)

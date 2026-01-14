@@ -1,26 +1,12 @@
 /**
  * PositionSyncService - Track Position Closures & Create Journal Entries (v5.3.0)
- * 
- * Monitors open positions and detects when they close to:
- * 1. Update trade status in database
- * 2. Create journal entries with proper outcomes
- * 3. Track entry context for learning loop
- * 
- * Flow:
- * 1. When trade opens -> trackOpenTrade() stores entry context
- * 2. During sync cycle -> syncPositions() compares with WEEX positions
- * 3. When position closes -> handlePositionClosed() determines outcome
- * 4. Creates journal entry with full context
+ * Monitors open positions and detects when they close to update trade status and create journal entries.
  */
 
 import { logger } from '../../utils/logger';
 import { prisma } from '../../config/database';
 import { addJournalEntry, addLessonToEntry } from '../journal';
 import type { WeexClient } from '../weex/WeexClient';
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// TYPES
-// ═══════════════════════════════════════════════════════════════════════════════
 
 export interface TrackedTrade {
     tradeId: string;
@@ -32,20 +18,14 @@ export interface TrackedTrade {
     leverage: number;
     tpPrice: number | null;
     slPrice: number | null;
-
-    // Fee tracking for accurate P&L calculation
     entryFee: number;
     exitFee: number;
     fundingPaid: number;
-
-    // Entry context for journal (nullable - may not be available at trade open)
     entryRegime: string | null;
     entryZScore: number | null;
     entryFunding: number | null;
     entrySentiment: number | null;
     entrySignals?: Record<string, unknown> | null;
-
-    // Analyst data (nullable - may not be available at trade open)
     winningAnalyst?: string | null;
     analystScores?: Record<string, number> | null;
     judgeReasoning?: string | null;
@@ -72,41 +52,15 @@ interface CloseResult {
     holdTimeHours: number;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// IN-MEMORY TRACKING
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// Map key is tradeId (unique) to allow multiple positions per symbol
 const trackedTrades = new Map<string, TrackedTrade>();
 const MAX_TRACKED_TRADES = 100;
-const STALE_TRADE_HOURS = 72; // Remove trades older than 72 hours
-
-// Configurable outcome threshold (default ±1% to account for fees and leverage)
+const STALE_TRADE_HOURS = 72;
 const POSITION_OUTCOME_THRESHOLD_PERCENT = 1.0;
-
-// Minimum absolute price difference for TP/SL matching (handles very small prices)
 const MIN_ABS_PRICE_DIFF = 1e-6;
-
-// Concurrency guard: Set of tradeIds currently being processed
-// Prevents duplicate journal entries and DB updates from concurrent syncPositions calls
 const inProgressTradeIds = new Set<string>();
-
-// Track consecutive "not seen" cycles for each trade to avoid premature removal during API issues
-// Only remove stale trades after they've been missing for multiple consecutive sync cycles
 const notSeenCounts = new Map<string, number>();
-const MISSING_CYCLE_THRESHOLD = 3; // Require 3 consecutive missing cycles before stale removal
+const MISSING_CYCLE_THRESHOLD = 3;
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// SIDE NORMALIZATION HELPER
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Normalize position side to standard format
- * Handles various formats: 'BUY'/'SELL', 'long'/'short', 'LONG'/'SHORT'
- * Returns 'BUY' for long positions, 'SELL' for short positions, or null for invalid input
- * 
- * @throws Never - returns null for invalid input instead of throwing
- */
 function normalizeSide(side: string): 'BUY' | 'SELL' | null {
     if (!side || typeof side !== 'string') {
         logger.error(`Invalid side value: ${side} (type: ${typeof side})`);
@@ -126,14 +80,6 @@ function normalizeSide(side: string): 'BUY' | 'SELL' | null {
     return null;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// TRADE TRACKING
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Track a newly opened trade for position sync
- * Call this after a trade is successfully executed
- */
 export function trackOpenTrade(trade: Omit<TrackedTrade, 'lastSyncAt' | 'entryFee' | 'exitFee' | 'fundingPaid'>): void {
     // Validate required fields
     if (!trade.tradeId || !trade.symbol || !trade.orderId) {
@@ -240,18 +186,6 @@ export function clearTrackedTrades(): void {
     logger.info('Tracked trades cleared');
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// POSITION SYNC
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Sync positions with WEEX and detect closures
- * Call this during each trading cycle
- * 
- * @param weexClient - WEEX client for API calls
- * @param currentPositions - Current positions from WEEX
- * @returns Number of closed positions processed
- */
 export async function syncPositions(
     weexClient: WeexClient,
     currentPositions: PositionData[]
@@ -259,10 +193,6 @@ export async function syncPositions(
     const now = Date.now();
     let closedCount = 0;
 
-    // Create a map of current positions by symbol+side for accurate matching
-    // NOTE: WEEX typically aggregates positions per symbol+side, so we don't expect
-    // multiple positions with the same symbol+side. If this assumption changes,
-    // we'd need to track by position ID instead.
     const currentPositionMap = new Map<string, PositionData>();
     for (const pos of currentPositions) {
         // Validate size is a positive finite number
@@ -285,11 +215,8 @@ export async function syncPositions(
         currentPositionMap.set(key, pos);
     }
 
-    // Collect trades to process (avoid modifying Map while iterating)
     const tradesToProcess: Array<{ tradeId: string; tracked: TrackedTrade }> = [];
     const tradesToUpdateSyncTime: string[] = [];
-
-    // Check each tracked trade by tradeId
     for (const [tradeId, tracked] of trackedTrades.entries()) {
         // Create composite key for this tracked trade
         const trackedKey = `${tracked.symbol}:${tracked.side}`;
@@ -301,57 +228,38 @@ export async function syncPositions(
             continue;
         }
 
-        // Position closed - atomically check-and-set inProgressTradeIds to prevent race condition
-        // This ensures no concurrent syncPositions can also queue this trade
         if (inProgressTradeIds.has(tradeId)) {
             logger.debug(`Trade ${tradeId} already being processed, skipping`);
             continue;
         }
 
-        // Atomically add to inProgressTradeIds BEFORE adding to tradesToProcess
-        // JavaScript is single-threaded, so between the check above and this add,
-        // no other code can run (no race condition in synchronous code)
         inProgressTradeIds.add(tradeId);
-
-        // Now safe to add to processing queue
         tradesToProcess.push({ tradeId, tracked });
     }
 
-    // Update sync times for active positions and reset their missing counters
     for (const tradeId of tradesToUpdateSyncTime) {
         const tracked = trackedTrades.get(tradeId);
         if (tracked) {
             tracked.lastSyncAt = now;
         }
-        // Reset missing counter - trade was seen in current positions
         notSeenCounts.delete(tradeId);
     }
-
-    // Process closed positions
     for (const { tradeId, tracked } of tradesToProcess) {
-        // Note: tradeId was already added to inProgressTradeIds atomically above
-        // Position closed - process it
         logger.info(`Position closed detected: ${tracked.symbol} ${tracked.side} (tradeId: ${tradeId})`);
 
         try {
             const closeResult = await determineCloseResult(weexClient, tracked);
             await handlePositionClosed(tracked, closeResult);
-            // Only remove from tracking and increment count on SUCCESS
             trackedTrades.delete(tradeId);
-            notSeenCounts.delete(tradeId); // Clean up associated counter
+            notSeenCounts.delete(tradeId);
             closedCount++;
         } catch (error) {
-            // On failure, leave trade in trackedTrades for retry on next sync cycle
             logger.error(`Failed to process closed position ${tracked.symbol}:`, error);
         } finally {
-            // Always remove from in-progress set
             inProgressTradeIds.delete(tradeId);
         }
     }
 
-    // Cleanup stale trades (older than 72 hours with no position AND missing for multiple cycles)
-    // This prevents premature removal during transient API issues
-    // Collect stale trade IDs first to avoid modifying Map while iterating
     const staleTradeIds: string[] = [];
     const staleThreshold = now - (STALE_TRADE_HOURS * 60 * 60 * 1000);
     for (const [tradeId, tracked] of trackedTrades.entries()) {
@@ -360,21 +268,17 @@ export async function syncPositions(
         const isNotInPositions = !currentPositionMap.has(trackedKey);
 
         if (isNotInPositions) {
-            // Increment missing counter for trades not seen in current positions
             const currentCount = notSeenCounts.get(tradeId) || 0;
             notSeenCounts.set(tradeId, currentCount + 1);
 
-            // Only mark as stale if old enough AND missing for multiple consecutive cycles
             if (isOldEnough && currentCount + 1 >= MISSING_CYCLE_THRESHOLD) {
                 staleTradeIds.push(tradeId);
             }
         } else {
-            // Trade is in positions - reset counter (shouldn't happen here, but defensive)
             notSeenCounts.delete(tradeId);
         }
     }
 
-    // Remove stale trades
     for (const tradeId of staleTradeIds) {
         const tracked = trackedTrades.get(tradeId);
         if (tracked) {
@@ -398,15 +302,12 @@ async function determineCloseResult(
     const holdTimeHours = (Date.now() - tracked.openedAt) / (1000 * 60 * 60);
 
     try {
-        // Query recent order history for this symbol
         const orders = await weexClient.getHistoryOrders(tracked.symbol, 20);
 
         if (!orders || orders.length === 0) {
             return createUnknownCloseResult(tracked, holdTimeHours);
         }
 
-        // Find the most recent filled close order
-        // Sort by createTime descending to get the latest order first
         const sortedOrders = [...orders].sort((a, b) => {
             const timeA = Number(a.createTime) || 0;
             const timeB = Number(b.createTime) || 0;
@@ -425,25 +326,18 @@ async function determineCloseResult(
             return createUnknownCloseResult(tracked, holdTimeHours);
         }
 
-        // Parse close price
         const closePrice = parseFloat(closeOrder.priceAvg || closeOrder.price || '0');
         if (!Number.isFinite(closePrice) || closePrice <= 0) {
             return createUnknownCloseResult(tracked, holdTimeHours);
         }
 
-        // Calculate P&L
-        // Note: For perpetual futures, P&L is simply price_diff * size
-        // Leverage affects margin requirement, not the P&L calculation itself
         const isLong = tracked.side === 'BUY';
         const priceDiff = isLong
             ? closePrice - tracked.entryPrice
             : tracked.entryPrice - closePrice;
 
-        // Gross P&L = price difference × size (leverage is NOT multiplied here)
-        // Leverage determines how much margin was used, not the P&L
         const grossPnl = priceDiff * tracked.size;
 
-        // Subtract fees and funding
         const entryFee = tracked.entryFee ?? 0;
         const exitFee = tracked.exitFee ?? 0;
         const fundingPaid = tracked.fundingPaid ?? 0;
@@ -451,39 +345,29 @@ async function determineCloseResult(
 
         const realizedPnl = grossPnl - totalCosts;
 
-        // Calculate P&L percent relative to margin (notional / leverage = margin)
-        // This gives the actual return on invested capital (ROI on margin)
         const notional = tracked.size * tracked.entryPrice;
-        // Guard against non-positive leverage (0, negative, or NaN) to prevent division by zero
         const leverage = (Number.isFinite(tracked.leverage) && tracked.leverage > 0) ? tracked.leverage : 1;
         const margin = notional / leverage;
-        // Guard against zero/negative margin to prevent division by zero or Infinity
         const realizedPnlPercent = (Number.isFinite(margin) && margin > 0) ? (realizedPnl / margin) * 100 : 0;
 
-        // Determine exit reason with proper null/zero checks
-        // Use combined threshold: max of relative (0.5%) and absolute (MIN_ABS_PRICE_DIFF) to handle tiny prices
         let exitReason: CloseResult['exitReason'] = 'unknown';
 
         if (closeOrder.type?.includes('liquidate') || closeOrder.type?.includes('burst')) {
             exitReason = 'liquidation';
         } else if (tracked.tpPrice != null && tracked.tpPrice !== 0) {
-            // Use combined threshold for TP matching
             const tpThreshold = Math.max(tracked.tpPrice * 0.005, MIN_ABS_PRICE_DIFF);
             if (Math.abs(closePrice - tracked.tpPrice) < tpThreshold) {
                 exitReason = 'tp_hit';
             }
         }
 
-        // Only check SL if not already determined as TP
         if (exitReason === 'unknown' && tracked.slPrice != null && tracked.slPrice !== 0) {
-            // Use combined threshold for SL matching
             const slThreshold = Math.max(tracked.slPrice * 0.005, MIN_ABS_PRICE_DIFF);
             if (Math.abs(closePrice - tracked.slPrice) < slThreshold) {
                 exitReason = 'sl_hit';
             }
         }
 
-        // Default to manual if no specific exit reason found
         if (exitReason === 'unknown') {
             exitReason = 'manual';
         }
@@ -511,25 +395,12 @@ function createUnknownCloseResult(tracked: TrackedTrade, holdTimeHours: number):
     };
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// POSITION CLOSURE HANDLING
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Handle a closed position - update DB and create journal entry
- * 
- * NOTE: DB update and journal creation are NOT atomic. If journal creation fails,
- * the error is re-thrown so the caller can keep the trade tracked for retry.
- * This ensures we don't lose journal entries for closed positions.
- */
 async function handlePositionClosed(
     tracked: TrackedTrade,
     closeResult: CloseResult
 ): Promise<void> {
     const { realizedPnl, realizedPnlPercent, exitReason, holdTimeHours } = closeResult;
 
-    // Determine outcome using configurable threshold (default ±1%)
-    // This accounts for fees and leverage effects on small price movements
     const threshold = POSITION_OUTCOME_THRESHOLD_PERCENT;
     let outcome: 'win' | 'loss' | 'breakeven';
     if (realizedPnlPercent > threshold) {
@@ -540,15 +411,13 @@ async function handlePositionClosed(
         outcome = 'breakeven';
     }
 
-    // Map exit reason to journal format
     const journalExitReason = mapExitReason(exitReason);
 
-    // Update trade in database
     try {
         const updateResult = await prisma.trade.updateMany({
             where: {
                 weexOrderId: tracked.orderId,
-                status: { not: 'FILLED' } // Don't update if already filled
+                status: { not: 'FILLED' }
             },
             data: {
                 status: 'FILLED',
@@ -557,7 +426,6 @@ async function handlePositionClosed(
             },
         });
 
-        // Validate exactly one row was updated
         if (updateResult.count === 0) {
             logger.warn(`No trade found to update for orderId ${tracked.orderId} (may already be FILLED)`);
         } else if (updateResult.count > 1) {
@@ -567,17 +435,13 @@ async function handlePositionClosed(
         logger.info(`Updated trade ${tracked.orderId} in database: ${outcome} (${realizedPnlPercent.toFixed(2)}%)`);
     } catch (dbError) {
         logger.error(`Failed to update trade in database:`, dbError);
-        // Re-throw to signal failure - caller will keep trade tracked for retry
         throw dbError;
     }
 
-    // Create journal entry using internal tradeId (not orderId)
-    // If this fails, re-throw so the caller knows to keep the trade tracked for retry
     try {
         await addJournalEntry({
-            tradeId: tracked.tradeId, // Use internal tradeId, not orderId
+            tradeId: tracked.tradeId,
             entryRegime: tracked.entryRegime || 'unknown',
-            // Use 0 as default for nullable numeric fields when creating journal entry
             entryZScore: tracked.entryZScore ?? 0,
             entryFunding: tracked.entryFunding ?? 0,
             entrySentiment: tracked.entrySentiment ?? 0,
@@ -589,26 +453,21 @@ async function handlePositionClosed(
             pnlPercent: realizedPnlPercent,
             holdTimeHours,
             exitReason: journalExitReason,
-            lessonsLearned: null, // Will be generated by addLessonToEntry
+            lessonsLearned: null,
         });
         logger.info(`Journal entry created for ${tracked.symbol}: ${outcome} via ${journalExitReason}`);
 
-        // Generate lesson from trade outcome (v5.2.0)
-        // This auto-generates insights based on entry conditions and outcome
         try {
-            const lesson = await addLessonToEntry(tracked.tradeId); // Use tradeId, await the Promise
+            const lesson = await addLessonToEntry(tracked.tradeId);
             if (lesson && lesson.length > 0) {
-                // Truncate long lessons for logging, only add ellipsis if actually truncated
                 const truncatedLesson = lesson.length > 100 ? `${lesson.slice(0, 100)}...` : lesson;
                 logger.info(`📚 Lesson generated for ${tracked.symbol}: ${truncatedLesson}`);
             }
         } catch (lessonError) {
-            // Lesson generation is non-critical - log but don't fail
             logger.debug('Lesson generation skipped:', lessonError instanceof Error ? lessonError.message : 'unknown');
         }
     } catch (journalError) {
         logger.error(`Failed to create journal entry:`, journalError);
-        // Re-throw to signal failure - caller will keep trade tracked for retry
         throw journalError;
     }
 }
@@ -625,14 +484,6 @@ function mapExitReason(
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// SHUTDOWN & STATE MANAGEMENT
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Reset module-level state (for testing)
- * Clears all tracked trades, in-progress set, and missing counters
- */
 export function resetState(): void {
     trackedTrades.clear();
     inProgressTradeIds.clear();

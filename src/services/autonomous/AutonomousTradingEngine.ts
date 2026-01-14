@@ -1,21 +1,13 @@
-﻿/**
+/**
  * Autonomous Trading Engine - COLLABORATIVE MODE
- * 
  * 4 AI analysts collaborate on ONE shared portfolio.
- * 
- * Pipeline (Parallel Analysis v5.0.0):
- * 1. Market Scan - Fetch data for all 8 coins + indicators
- * 2. Parallel Analysis - 4 analysts analyze independently in parallel
- * 3. Judge Decision - Compare all 4 and pick winner
- * 4. Execution - Place trade on WEEX with TP/SL
  */
 
 import { EventEmitter } from 'events';
-import crypto from 'crypto'; // For generating UUIDs
+import crypto from 'crypto';
 import { type ExtendedMarketData } from '../../shared/types/market';
 import { getCollaborativeFlow, resetCollaborativeFlow, type FinalDecision, type Position as FlowPosition, type MarketDataInput } from '../ai/CollaborativeFlow';
 
-// Re-export resetCollaborativeFlow for use in cleanup
 const _resetCollaborativeFlow = resetCollaborativeFlow;
 import { getWeexClient } from '../weex/WeexClient';
 import { tradingScheduler } from './TradingScheduler';
@@ -40,14 +32,11 @@ import { validateTradeWithMonteCarlo } from '../quant';
 import { trackOpenTrade, syncPositions, type PositionData } from '../position';
 import { getSymbolSentimentScore } from '../sentiment';
 
-// Contract specs refresh interval (30 minutes) - refresh before cache expires (1 hour TTL)
 const CONTRACT_SPECS_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 
-// FIXED: Track refresh state per engine instance to avoid stale state on restart
-// This is managed by the engine instance, not module-level
 class ContractSpecsRefreshTracker {
     private lastRefresh = 0;
-    private isRefreshing = false; // Prevent concurrent refresh attempts
+    private isRefreshing = false;
 
     shouldRefresh(): boolean {
         if (this.isRefreshing) return false;
@@ -55,7 +44,7 @@ class ContractSpecsRefreshTracker {
     }
 
     markRefreshing(): boolean {
-        if (this.isRefreshing) return false; // Already refreshing
+        if (this.isRefreshing) return false;
         this.isRefreshing = true;
         return true;
     }
@@ -67,7 +56,6 @@ class ContractSpecsRefreshTracker {
 
     markFailed(): void {
         this.isRefreshing = false;
-        // Don't update lastRefresh - allow retry on next cycle
     }
 
     reset(): void {
@@ -82,22 +70,8 @@ class ContractSpecsRefreshTracker {
 
 const ANALYST_IDS = ['jim', 'ray', 'karen', 'quant'] as const;
 
-// =========================================================================
-// PRICE DERIVATION HELPER
-// =========================================================================
-
 /**
  * Derive current price from position data
- * 
- * Priority:
- * 1. Market data (most accurate, real-time)
- * 2. Derive from unrealizedPnl (calculated from position P&L)
- * 3. Fallback to entryPrice (stale but safe)
- * 
- * @param entryPrice - Position entry price
- * @param size - Position size
- * @param unrealizedPnl - Unrealized P&L from exchange
- * @param isLong - Whether position is LONG
  * @param marketPrice - Optional current market price (preferred if available)
  * @returns Derived current price
  */
@@ -108,33 +82,24 @@ function deriveCurrentPrice(
     isLong: boolean,
     marketPrice?: number
 ): number {
-    // Priority 1: Use market price if available and valid
     if (marketPrice !== undefined && Number.isFinite(marketPrice) && marketPrice > 0) {
         return marketPrice;
     }
 
-    // Priority 2: Derive from unrealizedPnl
-    // Formula: pnl = (currentPrice - entryPrice) * size * direction
-    // For LONG: currentPrice = entryPrice + (pnl / size)
-    // For SHORT: currentPrice = entryPrice - (pnl / size)
     if (size > 0 && entryPrice > 0 && Number.isFinite(unrealizedPnl)) {
         const pnlPerUnit = unrealizedPnl / size;
         const derivedPrice = isLong ? entryPrice + pnlPerUnit : entryPrice - pnlPerUnit;
 
-        // Sanity check - price should be positive and finite
         if (Number.isFinite(derivedPrice) && derivedPrice > 0) {
             return derivedPrice;
         }
     }
 
-    // Priority 3: Fallback to entry price
     return entryPrice;
 }
 
 /**
- * Assumed average leverage for existing positions when actual leverage is unavailable.
- * Used as a fallback to estimate margin usage. In production, persist per-position leverage
- * in the database for more accurate margin calculations.
+ * Assumed average leverage for existing positions when actual leverage is unavailable
  */
 const ASSUMED_AVERAGE_LEVERAGE = 3;
 
@@ -147,14 +112,14 @@ interface AnalystState {
         side: 'LONG' | 'SHORT';
         size: number;
         entryPrice: number;
-        leverage?: number; // Actual leverage from WEEX (optional, may not always be available)
-        unrealizedPnl?: number; // Unrealized PnL for risk assessment
+        leverage?: number;
+        unrealizedPnl?: number;
     }>;
     lastTradeTime: number;
     totalTrades: number;
     winRate: number;
-    consecutiveWins?: number; // Optional for tracking win streaks
-    consecutiveLosses?: number; // Optional for tracking loss streaks
+    consecutiveWins?: number;
+    consecutiveLosses?: number;
 }
 
 interface TradingCycle {
@@ -163,18 +128,10 @@ interface TradingCycle {
     endTime?: number;
     symbolsAnalyzed: string[];
     tradesExecuted: number;
-    analysesRun: number;  // v5.0.0: Renamed from debatesRun - counts parallel analysis runs
+    analysesRun: number;
     errors: string[];
 }
 
-// =========================================================================
-// PRE-STAGE-2 OPTIMIZATION: URGENCY LEVELS FOR POSITION MANAGEMENT
-// =========================================================================
-
-/**
- * Urgency levels for position management decisions
- * Used to determine whether to skip Stage 2 parallel analysis entirely
- */
 type PositionUrgency = 'VERY_URGENT' | 'MODERATE' | 'LOW';
 
 interface PositionWithUrgency {
@@ -193,39 +150,23 @@ interface PositionWithUrgency {
 /**
  * Calculate urgency level for a position based on P&L and hold time
  * Uses competition-mode aware thresholds for faster position turnover
- * 
- * COMPETITION MODE: More aggressive thresholds to free up capital faster
- * - Lower profit targets (take profits earlier)
- * - Shorter max hold times (don't let positions stagnate)
- * - "Stale position" detection (close positions that aren't moving)
- * 
- * @param position - Position to evaluate
- * @returns Urgency level and reason
  */
 function calculatePositionUrgency(position: {
     unrealizedPnlPercent: number;
     holdTimeHours: number;
 }): { urgency: PositionUrgency; reason: string } {
-    // Competition mode detection - use aggressive thresholds for faster turnover
     const isCompetitionMode = GLOBAL_RISK_LIMITS.COMPETITION_MODE_ENABLED;
+    const thresholds = config.autonomous.urgencyThresholds;
+    const TARGET_PROFIT_PCT = thresholds.targetProfitPct;
+    const STOP_LOSS_PCT = thresholds.stopLossPct;
+    const MAX_HOLD_HOURS = thresholds.maxHoldHours;
+    const PARTIAL_TP_THRESHOLD = thresholds.partialTpPct;
+    const STALE_POSITION_HOURS = isCompetitionMode ? thresholds.stalePositionHours : thresholds.stalePositionHours + 2;
+    const STALE_PNL_THRESHOLD = thresholds.stalePnlThreshold;
 
-    // COMPETITION MODE STRATEGY: Cut losers fast, let winners run
-    // Key insight: Winners make money by letting profitable trades develop
-    // while quickly exiting losing trades. Asymmetric risk management.
-    //
-    // PRODUCTION MODE: Conservative thresholds to let trades develop
-    const TARGET_PROFIT_PCT = isCompetitionMode ? 5 : 5;      // Let winners run to 5% (was 3%)
-    const STOP_LOSS_PCT = isCompetitionMode ? 2.5 : 5;        // Cut losers fast at 2.5% (was 3%)
-    const MAX_HOLD_HOURS = isCompetitionMode ? 12 : 12;       // Extended to 12h for bigger moves (was 8h)
-    const PARTIAL_TP_THRESHOLD = isCompetitionMode ? 3 : 3;   // Partial TP at 3% (was 2%)
-    const STALE_POSITION_HOURS = isCompetitionMode ? 6 : 8;   // Stale after 6h (was 5h)
-    const STALE_PNL_THRESHOLD = 1.0;                          // Tighter stale threshold (was 1.5%)
-
-    // FLAW FIX: Validate inputs - treat invalid values as LOW urgency
     const pnl = Number.isFinite(position.unrealizedPnlPercent) ? position.unrealizedPnlPercent : 0;
     const holdHours = Number.isFinite(position.holdTimeHours) ? position.holdTimeHours : 0;
 
-    // VERY_URGENT: Needs immediate action
     if (pnl >= TARGET_PROFIT_PCT) {
         return { urgency: 'VERY_URGENT', reason: `P&L +${pnl.toFixed(1)}% >= target (${TARGET_PROFIT_PCT}%)` };
     }
@@ -356,8 +297,8 @@ export class AutonomousTradingEngine extends EventEmitter {
 
         if (!Number.isFinite(currentBalance) || currentBalance < config.autonomous.minBalanceToTrade) {
             logger.info(`\n${'='.repeat(60)}`);
-            logger.info(`ðŸ’° PRE-CHECK: Insufficient balance ($${currentBalance?.toFixed(2) || 'N/A'} < $${config.autonomous.minBalanceToTrade})`);
-            logger.info(`ðŸŽ¯ ACTION: SKIP CYCLE (saving ~${TOKENS_FULL_ANALYSIS} tokens)`);
+            logger.info(`💰 PRE-CHECK: Insufficient balance ($${currentBalance?.toFixed(2) || 'N/A'} < $${config.autonomous.minBalanceToTrade})`);
+            logger.info(`🎯 ACTION: SKIP CYCLE (saving ~${TOKENS_FULL_ANALYSIS} tokens)`);
             logger.info(`${'='.repeat(60)}\n`);
 
             // CRITICAL: Log rule-based SKIP decision for WEEX compliance
@@ -398,8 +339,8 @@ export class AutonomousTradingEngine extends EventEmitter {
         const weeklyPnL = await this.getRecentPnLCached();
         if (weeklyPnL && Number.isFinite(weeklyPnL.week) && weeklyPnL.week < -RISK_COUNCIL_VETO_TRIGGERS.MAX_WEEKLY_DRAWDOWN) {
             logger.info(`\n${'='.repeat(60)}`);
-            logger.info(`ðŸ“‰ PRE-CHECK: Weekly drawdown exceeded (${weeklyPnL.week.toFixed(1)}% < -${RISK_COUNCIL_VETO_TRIGGERS.MAX_WEEKLY_DRAWDOWN}%)`);
-            logger.info(`ðŸŽ¯ ACTION: SKIP CYCLE (saving ~${TOKENS_FULL_ANALYSIS} tokens)`);
+            logger.info(`📉 PRE-CHECK: Weekly drawdown exceeded (${weeklyPnL.week.toFixed(1)}% < -${RISK_COUNCIL_VETO_TRIGGERS.MAX_WEEKLY_DRAWDOWN}%)`);
+            logger.info(`🎯 ACTION: SKIP CYCLE (saving ~${TOKENS_FULL_ANALYSIS} tokens)`);
             logger.info(`${'='.repeat(60)}\n`);
 
             // CRITICAL: Log rule-based SKIP decision for WEEX compliance
@@ -441,9 +382,9 @@ export class AutonomousTradingEngine extends EventEmitter {
         const dailyTradeCount = await this.getDailyTradeCount();
         if (dailyTradeCount >= config.trading.maxDailyTrades) {
             logger.info(`\n${'='.repeat(60)}`);
-            logger.info(`ðŸš« PRE-CHECK: Max daily trades reached (${dailyTradeCount}/${config.trading.maxDailyTrades})`);
-            logger.info(`ðŸŽ¯ ACTION: SKIP CYCLE (saving ~${TOKENS_FULL_ANALYSIS} tokens)`);
-            logger.info(`ðŸ’¡ Daily trade counter resets at midnight UTC`);
+            logger.info(`🚫 PRE-CHECK: Max daily trades reached (${dailyTradeCount}/${config.trading.maxDailyTrades})`);
+            logger.info(`🎯 ACTION: SKIP CYCLE (saving ~${TOKENS_FULL_ANALYSIS} tokens)`);
+            logger.info(`💡 Daily trade counter resets at midnight UTC`);
             logger.info(`${'='.repeat(60)}\n`);
 
             // CRITICAL: Log rule-based SKIP decision for WEEX compliance
@@ -574,18 +515,26 @@ export class AutonomousTradingEngine extends EventEmitter {
         const longCount = positions.filter(p => p.side === 'LONG').length;
         const shortCount = positions.filter(p => p.side === 'SHORT').length;
 
+        // Check if we're at max positions
+        const atMaxPositions = positions.length >= MAX_POSITIONS;
+        const atMaxLong = longCount >= MAX_SAME_DIR;
+        const atMaxShort = shortCount >= MAX_SAME_DIR;
+        const bothDirectionsBlocked = atMaxLong && atMaxShort;
+
         // =====================================================================
         // CHECK 3.5: ALL POSITIONS PROFITABLE CHECK (v5.3.1)
-        // Skip AI analysis if all positions are profitable - let winners run!
-        // Only run Stage 2 when at least one position is in loss OR no positions.
+        // Skip AI analysis if all positions are profitable AND we can't open new positions.
+        // If we have room for more positions, run Stage 2 to find new opportunities.
         // =====================================================================
         if (positions.length > 0) {
             const hasLosingPosition = positions.some(p => p.unrealizedPnlPercent < 0);
 
-            if (!hasLosingPosition) {
+            // Only skip if ALL positions are profitable AND we're at max capacity
+            // If we have room for more positions, run Stage 2 to find new opportunities
+            if (!hasLosingPosition && (atMaxPositions || bothDirectionsBlocked)) {
                 logger.info(`\n${'='.repeat(60)}`);
-                logger.info(`✅ PRE-CHECK: All ${positions.length} positions are profitable - letting winners run!`);
-                logger.info(`🎯 ACTION: SKIP CYCLE (saving ~${TOKENS_FULL_ANALYSIS} tokens)`);
+                logger.info(`[PRE-CHECK] All ${positions.length} positions are profitable - letting winners run!`);
+                logger.info(`[ACTION] SKIP CYCLE (saving ~${TOKENS_FULL_ANALYSIS} tokens)`);
                 logger.info(`${'='.repeat(60)}\n`);
 
                 // CRITICAL: Log rule-based SKIP decision for WEEX compliance
@@ -597,6 +546,7 @@ export class AutonomousTradingEngine extends EventEmitter {
                             decision_type: 'PRE_CHECK_SKIP',
                             check: 'ALL_POSITIONS_PROFITABLE',
                             position_count: positions.length,
+                            max_positions: MAX_POSITIONS,
                             positions_summary: positions.map(p => ({
                                 symbol: p.symbol,
                                 side: p.side,
@@ -605,11 +555,11 @@ export class AutonomousTradingEngine extends EventEmitter {
                         },
                         {
                             action: 'SKIP_CYCLE',
-                            reason: 'All positions profitable - letting winners run without AI intervention',
+                            reason: 'All positions profitable and at max capacity - letting winners run without AI intervention',
                             tokens_saved: TOKENS_FULL_ANALYSIS,
                         },
-                        `Pre-check: SKIP CYCLE - all ${positions.length} positions are profitable. ` +
-                        `Strategy: Let winners run, only analyze when positions are in loss. ` +
+                        `Pre-check: SKIP CYCLE - all ${positions.length}/${MAX_POSITIONS} positions are profitable. ` +
+                        `Strategy: Let winners run, only analyze when positions are in loss or room for new trades. ` +
                         `Saved ~${TOKENS_FULL_ANALYSIS} tokens.`
                     );
                 } catch (logError) {
@@ -618,29 +568,39 @@ export class AutonomousTradingEngine extends EventEmitter {
 
                 return {
                     canRunStage2: false,
-                    reason: `All ${positions.length} positions profitable - letting winners run`,
+                    reason: `All ${positions.length}/${MAX_POSITIONS} positions profitable - letting winners run`,
                     action: 'SKIP_CYCLE',
                     tokensSaved: TOKENS_FULL_ANALYSIS
                 };
             }
+
+            // All positions profitable but we have room for more - run Stage 2 to find new opportunities
+            if (!hasLosingPosition && !atMaxPositions && !bothDirectionsBlocked) {
+                const availableDir = atMaxLong ? 'SHORT only' : (atMaxShort ? 'LONG only' : 'both directions');
+                logger.info(`\n${'='.repeat(60)}`);
+                logger.info(`[PRE-CHECK] All ${positions.length}/${MAX_POSITIONS} positions profitable, but room for more!`);
+                logger.info(`[ACTION] RUN STAGE 2 (looking for new opportunities, ${availableDir} available)`);
+                logger.info(`${'='.repeat(60)}\n`);
+                return {
+                    canRunStage2: true,
+                    reason: `All positions profitable but room for more (${positions.length}/${MAX_POSITIONS}), ${availableDir} available`,
+                    action: 'RUN_STAGE_2',
+                    tokensSaved: 0
+                };
+            }
         }
 
-        // Check if we're at max positions
-        const atMaxPositions = positions.length >= MAX_POSITIONS;
-        const atMaxLong = longCount >= MAX_SAME_DIR;
-        const atMaxShort = shortCount >= MAX_SAME_DIR;
-        const bothDirectionsBlocked = atMaxLong && atMaxShort;
-
-        // If not at max positions total
+        // Not at max total positions (!atMaxPositions) - includes both zero positions and some positions (including losing ones)
+        // Check if we can open new trades based on directional limits
         if (!atMaxPositions) {
-            // If both directions blocked, we can't trade - fall through to urgency check
+            // Both directions blocked (atMaxLong && atMaxShort) - can't open new trades, fall through to urgency check
             if (bothDirectionsBlocked) {
-                logger.info(`ðŸ“Š PRE-CHECK: Both directions blocked (LONG: ${longCount}/${MAX_SAME_DIR}, SHORT: ${shortCount}/${MAX_SAME_DIR})`);
+                logger.info(`📊 PRE-CHECK: Both directions blocked (LONG: ${longCount}/${MAX_SAME_DIR}, SHORT: ${shortCount}/${MAX_SAME_DIR})`);
                 // Fall through to urgency check below
             } else {
-                // At least one direction available - run full Stage 2
+                // At least one direction available (positions.length < MAX_POSITIONS and !bothDirectionsBlocked) - run full Stage 2
                 const availableDir = atMaxLong ? 'SHORT only' : (atMaxShort ? 'LONG only' : 'both directions');
-                logger.debug(`ðŸ“Š PRE-CHECK: Can trade ${availableDir}`);
+                logger.debug(`📊 PRE-CHECK: Can trade ${availableDir}`);
                 return { canRunStage2: true, reason: `Within limits, ${availableDir} available`, action: 'RUN_STAGE_2', tokensSaved: 0 };
             }
         }
@@ -665,7 +625,7 @@ export class AutonomousTradingEngine extends EventEmitter {
         const moderate = positionsWithUrgency.filter(p => p.urgency === 'MODERATE');
 
         logger.info(`\n${'='.repeat(60)}`);
-        logger.info(`ðŸ“Š PRE-CHECK: Position limits reached (${positions.length}/${MAX_POSITIONS})`);
+        logger.info(`📊 PRE-CHECK: Position limits reached (${positions.length}/${MAX_POSITIONS})`);
         logger.info(`   LONG: ${longCount}/${MAX_SAME_DIR}, SHORT: ${shortCount}/${MAX_SAME_DIR}`);
         logger.info(`   Urgency: ${veryUrgent.length} VERY_URGENT, ${moderate.length} MODERATE, ${positionsWithUrgency.length - veryUrgent.length - moderate.length} LOW`);
 
@@ -674,8 +634,8 @@ export class AutonomousTradingEngine extends EventEmitter {
             // Rule-based management is disabled, AI handles ALL position decisions
             const urgent = veryUrgent[0] || moderate[0];
             const urgencyLevel = veryUrgent.length > 0 ? 'VERY_URGENT' : 'MODERATE';
-            logger.info(`⚠️ ${urgencyLevel}: ${urgent.symbol} - ${urgent.urgencyReason}`);
-            logger.info(`🎯 ACTION: RUN STAGE 2 (AI will analyze and decide)`);
+            logger.info(`[URGENT] ${urgencyLevel}: ${urgent.symbol} - ${urgent.urgencyReason}`);
+            logger.info(`[ACTION] RUN STAGE 2 (AI will analyze and decide)`);
             logger.info(`${'='.repeat(60)}\n`);
             return {
                 canRunStage2: true,
@@ -687,8 +647,8 @@ export class AutonomousTradingEngine extends EventEmitter {
             };
         }
         // All positions are LOW urgency - skip cycle entirely
-        logger.info(`✅ All positions LOW urgency - nothing to do`);
-        logger.info(`🎯 ACTION: SKIP CYCLE (saving ~${TOKENS_FULL_ANALYSIS} tokens)`);
+        logger.info(`[INFO] All positions LOW urgency - nothing to do`);
+        logger.info(`[ACTION] SKIP CYCLE (saving ~${TOKENS_FULL_ANALYSIS} tokens)`);
         logger.info(`${'='.repeat(60)}\n`);
 
         // CRITICAL: Log rule-based SKIP decision for WEEX compliance
@@ -781,7 +741,7 @@ export class AutonomousTradingEngine extends EventEmitter {
             }
 
             try {
-                logger.info('ðŸŸï¸ Starting Autonomous Trading Engine (Collaborative Mode)...');
+                logger.info('🏟️ Starting Autonomous Trading Engine (Collaborative Mode)...');
 
                 // Validate competition mode configuration (v5.2.0)
                 // This throws if COMPETITION_MODE is enabled but ACK is missing
@@ -796,24 +756,24 @@ export class AutonomousTradingEngine extends EventEmitter {
                 const { isCompetitionModeAllowed } = await import('../../constants/analyst/riskLimits');
                 if (isCompetitionModeAllowed()) {
                     logger.warn('');
-                    logger.warn('â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—');
-                    logger.warn('â•‘  âš ï¸  COMPETITION MODE ENABLED - AGGRESSIVE SETTINGS ACTIVE                   â•‘');
-                    logger.warn('â• â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•£');
-                    logger.warn('â•‘  This mode is for DEMO/PAPER TRADING ONLY!                                   â•‘');
-                    logger.warn('â•‘                                                                              â•‘');
-                    logger.warn('â•‘  IMPORTANT: The WEEX API does NOT provide a way to detect demo vs live       â•‘');
-                    logger.warn('â•‘  accounts. YOU must verify your account type in WEEX settings.               â•‘');
-                    logger.warn('â•‘                                                                              â•‘');
-                    logger.warn('â•‘  Settings: 17x max leverage, 50% max position, 50 trades/day                 â•‘');
-                    logger.warn('â•‘                                                                              â•‘');
-                    logger.warn('â•‘  If you are connected to a LIVE account, STOP NOW and disable                â•‘');
-                    logger.warn('â•‘  COMPETITION_MODE in your .env file!                                         â•‘');
-                    logger.warn('â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•');
+                    logger.warn('╔══════════════════════════════════════════════════════════════════════════════╗');
+                    logger.warn('║  ⚠️  COMPETITION MODE ENABLED - AGGRESSIVE SETTINGS ACTIVE                   ║');
+                    logger.warn('╠══════════════════════════════════════════════════════════════════════════════╣');
+                    logger.warn('║  This mode is for DEMO/PAPER TRADING ONLY!                                   ║');
+                    logger.warn('║                                                                              ║');
+                    logger.warn('║  IMPORTANT: The WEEX API does NOT provide a way to detect demo vs live       ║');
+                    logger.warn('║  accounts. YOU must verify your account type in WEEX settings.               ║');
+                    logger.warn('║                                                                              ║');
+                    logger.warn('║  Settings: 20x max leverage, 50% max position, 50 trades/day                 ║');
+                    logger.warn('║                                                                              ║');
+                    logger.warn('║  If you are connected to a LIVE account, STOP NOW and disable                ║');
+                    logger.warn('║  COMPETITION_MODE in your .env file!                                         ║');
+                    logger.warn('╚══════════════════════════════════════════════════════════════════════════════╝');
                     logger.warn('');
                 }
 
                 // Fetch and cache contract specifications from WEEX with retry logic
-                logger.info('ðŸ“‹ Fetching contract specifications from WEEX...');
+                logger.info('📋 Fetching contract specifications from WEEX...');
                 const weexClient = getWeexClient();
 
                 let contracts: any[] = [];
@@ -888,7 +848,7 @@ export class AutonomousTradingEngine extends EventEmitter {
     stop(): void {
         if (!this.isRunning) return;
 
-        logger.info('ðŸ›‘ Stopping Autonomous Trading Engine...');
+        logger.info('🛑 Stopping Autonomous Trading Engine...');
         this.isRunning = false;
 
         // Clear any pending sleep timeout to prevent memory leak
@@ -913,7 +873,7 @@ export class AutonomousTradingEngine extends EventEmitter {
         // v5.0.0: Accumulate total analyses across all cycles for frontend display
         this.totalAnalysesRun += this.currentCycle.analysesRun;
 
-        logger.info(`âœ… Cycle #${this.cycleCount} complete(${reason}): ${this.currentCycle.tradesExecuted} trades, ${this.currentCycle.analysesRun} analyses(${(cycleDuration / 1000).toFixed(1)}s)`);
+        logger.info(`✅ Cycle #${this.cycleCount} complete(${reason}): ${this.currentCycle.tradesExecuted} trades, ${this.currentCycle.analysesRun} analyses(${(cycleDuration / 1000).toFixed(1)}s)`);
 
         // Update analyst virtual portfolios with latest P&L attribution
         // Only update if trades were executed this cycle
@@ -968,7 +928,7 @@ export class AutonomousTradingEngine extends EventEmitter {
         else if (this.consecutiveHolds >= 3) {
             const holdBackoff = Math.min(2, 1 + (this.consecutiveHolds - 2) * 0.25);
             sleepTime = Math.min(sleepTime * holdBackoff, this.CYCLE_INTERVAL_MS * 2);
-            logger.info(`ðŸ’¤ Market quiet(${this.consecutiveHolds} consecutive HOLDs, ${holdBackoff.toFixed(2)}x backoff): sleeping ${(sleepTime / 1000).toFixed(0)} s`);
+            logger.info(`💤 Market quiet(${this.consecutiveHolds} consecutive HOLDs, ${holdBackoff.toFixed(2)}x backoff): sleeping ${(sleepTime / 1000).toFixed(0)} s`);
         }
 
         return sleepTime;
@@ -1075,7 +1035,7 @@ export class AutonomousTradingEngine extends EventEmitter {
                     }
                 });
 
-                logger.info(`ðŸ“Š Collaborative Portfolio: Existing(${walletBalance.toFixed(2)} USDT from wallet, ${totalTrades} trades)`);
+                logger.info(`📊 Collaborative Portfolio: Existing(${walletBalance.toFixed(2)} USDT from wallet, ${totalTrades} trades)`);
             } else {
                 // Create new portfolio record
                 // Note: agentId='collaborative' has UNIQUE constraint in schema to prevent race conditions
@@ -1110,7 +1070,7 @@ export class AutonomousTradingEngine extends EventEmitter {
                         throw error;
                     }
                 }
-                logger.info(`ðŸ“Š Collaborative Portfolio: Created new (${walletBalance.toFixed(2)} USDT from wallet)`);
+                logger.info(`📊 Collaborative Portfolio: Created new (${walletBalance.toFixed(2)} USDT from wallet)`);
             }
 
             // FIXED: Initialize analyst virtual portfolios for P&L attribution
@@ -1149,10 +1109,10 @@ export class AutonomousTradingEngine extends EventEmitter {
                     winRate,
                 });
 
-                logger.info(`  ðŸ“ˆ ${analystId}: ${profile?.name || analystId} (collaborative)`);
+                logger.info(`  📈 ${analystId}: ${profile?.name || analystId} (collaborative)`);
             }
 
-            logger.info(`ðŸ“Š Collaborative portfolio initialized: 4 analysts sharing ${walletBalance.toFixed(2)} USDT`);
+            logger.info(`📊 Collaborative portfolio initialized: 4 analysts sharing ${walletBalance.toFixed(2)} USDT`);
 
         } catch (error) {
             logger.error('Failed to initialize collaborative portfolio:', error);
@@ -1181,7 +1141,7 @@ export class AutonomousTradingEngine extends EventEmitter {
             tradingScheduler.logMarketConditions();
             const tradingStatus = tradingScheduler.shouldTradeNow();
 
-            logger.info(`\nðŸ”„ Cycle #${this.cycleCount} starting... (${tradingStatus.reason})`);
+            logger.info(`\n🔄 Cycle #${this.cycleCount} starting... (${tradingStatus.reason})`);
             this.emit('cycleStart', { cycleNumber: this.cycleCount });
 
             try {
@@ -1195,7 +1155,7 @@ export class AutonomousTradingEngine extends EventEmitter {
 
                 if (sleepTime > 0 && this.isRunning) {
                     const nextPeak = tradingScheduler.getTimeUntilPeakTrading();
-                    logger.info(`ðŸ’¤ Sleeping for ${(sleepTime / 1000).toFixed(0)}s until next cycle... (Next peak: ${nextPeak.hours}h ${nextPeak.minutes}m)`);
+                    logger.info(`💤 Sleeping for ${(sleepTime / 1000).toFixed(0)}s until next cycle... (Next peak: ${nextPeak.hours}h ${nextPeak.minutes}m)`);
                     await this.sleep(sleepTime);
                 }
             } catch (error) {
@@ -1205,7 +1165,7 @@ export class AutonomousTradingEngine extends EventEmitter {
 
                 // CRITICAL: Circuit breaker - stop engine after too many consecutive failures
                 if (this.consecutiveFailures >= this.MAX_CONSECUTIVE_FAILURES) {
-                    logger.error(`ðŸš¨ CIRCUIT BREAKER: ${this.consecutiveFailures} consecutive failures, stopping engine`);
+                    logger.error(`🚨 CIRCUIT BREAKER: ${this.consecutiveFailures} consecutive failures, stopping engine`);
                     this.stop();
                     break;
                 }
@@ -1243,7 +1203,7 @@ export class AutonomousTradingEngine extends EventEmitter {
             if (this.currentCycle) {
                 this.currentCycle.endTime = Date.now();
                 const cycleDuration = this.currentCycle.endTime - cycleStart;
-                logger.info(`âœ… Cycle #${this.cycleCount} complete(no data): 0 trades, 0 analyses(${(cycleDuration / 1000).toFixed(1)}s)`);
+                logger.info(`✅ Cycle #${this.cycleCount} complete(no data): 0 trades, 0 analyses(${(cycleDuration / 1000).toFixed(1)}s)`);
                 this.emit('cycleComplete', this.currentCycle);
             }
 
@@ -1253,7 +1213,7 @@ export class AutonomousTradingEngine extends EventEmitter {
             const sleepTime = Math.max(0, dynamicInterval - elapsed);
 
             if (sleepTime > 0 && this.isRunning) {
-                logger.info(`ðŸ’¤ Sleeping for ${(sleepTime / 1000).toFixed(0)}s until next cycle...`);
+                logger.info(`💤 Sleeping for ${(sleepTime / 1000).toFixed(0)}s until next cycle...`);
                 await this.sleep(sleepTime);
             }
             return;
@@ -1267,7 +1227,7 @@ export class AutonomousTradingEngine extends EventEmitter {
 
         if (!preCheck.canRunStage2) {
             this.totalTokensSaved += preCheck.tokensSaved;
-            logger.info(`ðŸ’¡ Token savings this cycle: ~${preCheck.tokensSaved} tokens(total saved: ~${this.totalTokensSaved})`);
+            logger.info(`💡 Token savings this cycle: ~${preCheck.tokensSaved} tokens(total saved: ~${this.totalTokensSaved})`);
 
 
             // v5.3.1: Only SKIP_CYCLE is possible here since rule-based management is disabled
@@ -1283,7 +1243,7 @@ export class AutonomousTradingEngine extends EventEmitter {
         // STAGE 2: PARALLEL ANALYSIS (v5.0.0)
         // 4 analysts analyze independently in parallel, judge picks winner
         // =================================================================
-        logger.info(`ðŸŽ¯ Stage 2: Parallel Analysis(4 analysts + judge)...`);
+        logger.info(`🎯 Stage 2: Parallel Analysis(4 analysts + judge)...`);
 
         // Get account balance
         const accountBalance = await this.getWalletBalance();
@@ -1359,7 +1319,7 @@ export class AutonomousTradingEngine extends EventEmitter {
                 }));
                 const closedCount = await syncPositions(this.weexClient, positionData);
                 if (closedCount > 0) {
-                    logger.info(`ðŸ““ Position sync: ${closedCount} closed position(s) processed`);
+                    logger.info(`📓 Position sync: ${closedCount} closed position(s) processed`);
                 }
             } catch (syncError) {
                 logger.warn('Position sync failed:', syncError);
@@ -1528,7 +1488,7 @@ export class AutonomousTradingEngine extends EventEmitter {
 
         // Log decision
         logger.info(`\n${'='.repeat(60)} `);
-        logger.info(`ðŸ“Š DECISION: ${decision.action} ${decision.symbol} `);
+        logger.info(`📊 DECISION: ${decision.action} ${decision.symbol} `);
         logger.info(`   Winner: ${decision.winner}, Confidence: ${decision.confidence}% `);
         if (decision.warnings.length > 0) {
             logger.info(`   Warnings: ${decision.warnings.join(', ')} `);
@@ -1537,7 +1497,7 @@ export class AutonomousTradingEngine extends EventEmitter {
 
         // Handle HOLD action
         if (decision.action === 'HOLD' || decision.winner === 'NONE') {
-            logger.info('ðŸ“Š Decision: HOLD - No trade this cycle');
+            logger.info('📊 Decision: HOLD - No trade this cycle');
             // FIXED: Reset consecutive failures on successful cycle (even if HOLD)
             this.consecutiveFailures = 0;
             // Track consecutive HOLDs to reduce cycle frequency when market is boring
@@ -1560,7 +1520,7 @@ export class AutonomousTradingEngine extends EventEmitter {
                 try {
                     if (decision.action === 'CLOSE') {
                         const closeResult = await this.weexClient.closeAllPositions(decision.symbol);
-                        logger.info(`âœ… Closed position: ${decision.symbol} `);
+                        logger.info(`✅ Closed position: ${decision.symbol} `);
 
                         // Create AI log for position close
                         // FIXED: Try to extract orderId from close result for WEEX compliance
@@ -1600,7 +1560,7 @@ export class AutonomousTradingEngine extends EventEmitter {
                             // Size too small for partial close - close full position instead
                             logger.warn(`Partial close size too small(${rawSizeToClose}), closing full position instead`);
                             await this.weexClient.closeAllPositions(decision.symbol);
-                            logger.info(`âœ… Closed full position(partial was too small): ${decision.symbol} `);
+                            logger.info(`✅ Closed full position(partial was too small): ${decision.symbol} `);
                             actuallyClosedFull = true;
                             sizeToClose = String(position.size); // For logging
                         }
@@ -1608,7 +1568,7 @@ export class AutonomousTradingEngine extends EventEmitter {
                         let reduceResult: any;
                         if (!actuallyClosedFull) {
                             reduceResult = await this.weexClient.closePartialPosition(decision.symbol, position.side, sizeToClose, '1');
-                            logger.info(`âœ… Reduced position: ${decision.symbol} by 50 % `);
+                            logger.info(`✅ Reduced position: ${decision.symbol} by 50 % `);
                         }
 
                         // Create AI log for position reduce
@@ -1657,7 +1617,7 @@ export class AutonomousTradingEngine extends EventEmitter {
         // CRITICAL: Check minimum confidence threshold ONLY for entry actions (BUY/SELL)
         // Exit actions (CLOSE/REDUCE) are handled above and bypass this check
         if (decision.confidence < this.MIN_CONFIDENCE_TO_TRADE) {
-            logger.info(`ðŸ“Š Decision: HOLD - Confidence ${decision.confidence}% below threshold ${this.MIN_CONFIDENCE_TO_TRADE}% `);
+            logger.info(`📊 Decision: HOLD - Confidence ${decision.confidence}% below threshold ${this.MIN_CONFIDENCE_TO_TRADE}% `);
             logger.info(`   Original recommendation was ${decision.action} ${decision.symbol} by ${decision.winner} `);
 
             // CRITICAL: Log confidence-based HOLD decision for WEEX compliance
@@ -1703,7 +1663,7 @@ export class AutonomousTradingEngine extends EventEmitter {
         const direction = decision.action === 'BUY' ? 'LONG' : 'SHORT';
         const antiChurnCheck = flowService.checkAntiChurn(decision.symbol, direction);
         if (!antiChurnCheck.allowed) {
-            logger.info(`â³ Anti - churn blocked: ${antiChurnCheck.reason} `);
+            logger.info(`⏳ Anti - churn blocked: ${antiChurnCheck.reason} `);
 
             // CRITICAL: Log anti-churn SKIP decision for WEEX compliance
             try {
@@ -1939,11 +1899,11 @@ export class AutonomousTradingEngine extends EventEmitter {
             );
 
             if (!mcValidation.valid) {
-                logger.info(`ðŸŽ² MC advisory: trade flagged - ${mcValidation.reason} `);
+                logger.info(`🎲 MC advisory: trade flagged - ${mcValidation.reason} `);
                 // Don't block the trade, but log the warning
                 // The AI's Q-value validation is the primary gate
             } else {
-                logger.info(`ðŸŽ² Monte Carlo validated: ${mcValidation.reason} `);
+                logger.info(`🎲 Monte Carlo validated: ${mcValidation.reason} `);
             }
         }
 
@@ -1959,11 +1919,11 @@ export class AutonomousTradingEngine extends EventEmitter {
                 const sentimentContradicts = (isLong && score < -0.3) || (!isLong && score > 0.3);
 
                 if (sentimentAligned) {
-                    logger.info(`ðŸ“° Sentiment confirms ${isLong ? 'LONG' : 'SHORT'}: ${sentiment} (score: ${score.toFixed(2)})`);
+                    logger.info(`📰 Sentiment confirms ${isLong ? 'LONG' : 'SHORT'}: ${sentiment} (score: ${score.toFixed(2)})`);
                 } else if (sentimentContradicts) {
-                    logger.warn(`ðŸ“° Sentiment contradicts ${isLong ? 'LONG' : 'SHORT'}: ${sentiment} (score: ${score.toFixed(2)}) - advisory only`);
+                    logger.warn(`📰 Sentiment contradicts ${isLong ? 'LONG' : 'SHORT'}: ${sentiment} (score: ${score.toFixed(2)}) - advisory only`);
                 } else {
-                    logger.debug(`ðŸ“° Sentiment neutral for ${decision.symbol}: ${sentiment} (score: ${score.toFixed(2)})`);
+                    logger.debug(`📰 Sentiment neutral for ${decision.symbol}: ${sentiment} (score: ${score.toFixed(2)})`);
                 }
             }
         } catch (sentimentError) {
@@ -2006,7 +1966,7 @@ export class AutonomousTradingEngine extends EventEmitter {
         // Per-trade guard that logs warnings and blocks trades if account type is live
         const competitionGuard = guardCompetitionModeTrade(decision.symbol, decision.action, leverage);
         if (!competitionGuard.allowed) {
-            logger.error(`ðŸš« Trade blocked by competition mode guard: ${competitionGuard.warning} `);
+            logger.error(`🚫 Trade blocked by competition mode guard: ${competitionGuard.warning} `);
             return false;
         }
 
@@ -2018,18 +1978,26 @@ export class AutonomousTradingEngine extends EventEmitter {
         }
 
         try {
-            // Set leverage
+            // Set leverage - WEEX requires no open orders to change leverage
             try {
-                await this.weexClient.changeLeverage(decision.symbol, leverage, '1');
+                // Check for open orders first
+                const openOrders = await this.weexClient.getCurrentOrders(decision.symbol);
+
+                if (openOrders && openOrders.length > 0) {
+                    logger.warn(`Cannot change leverage for ${decision.symbol}: ${openOrders.length} open orders exist. Proceeding with current leverage.`);
+                } else {
+                    await this.weexClient.changeLeverage(decision.symbol, leverage, '1');
+                }
             } catch (leverageError) {
                 const errMsg = leverageError instanceof Error ? leverageError.message : String(leverageError);
-                if (!errMsg.includes('50007') && !errMsg.includes('already')) {
+                // Ignore errors for: already at target leverage (50007), or "FAILED_PRECONDITION" (open orders)
+                if (!errMsg.includes('50007') && !errMsg.includes('already') && !errMsg.includes('FAILED_PRECONDITION')) {
                     logger.warn(`Could not set leverage: ${errMsg} `);
                 }
             }
 
             // Place order
-            const clientOid = `trade_${Date.now()}_${Math.random().toString(36).slice(2, 8)} `;
+            const clientOid = `trade_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
             const result = await this.weexClient.placeOrder({
                 symbol: decision.symbol,
                 client_oid: clientOid,
@@ -2040,7 +2008,7 @@ export class AutonomousTradingEngine extends EventEmitter {
                 price: roundToTickSize(currentPrice, decision.symbol),
                 marginMode: 1,
             });
-            logger.info(`âœ… ${decision.action} order placed: ${result.order_id} `);
+            logger.info(`✅ ${decision.action} order placed: ${result.order_id} `);
 
             // CRITICAL: Create AI execution log for WEEX compliance (v5.3.0)
             // This log is linked to the orderId for verification
@@ -2300,20 +2268,20 @@ export class AutonomousTradingEngine extends EventEmitter {
             ? `missing specs for: ${missingSpecs.join(', ')} `
             : `cache age: ${Math.floor((Date.now() - this.contractSpecsTracker.getLastRefresh()) / 60000)} minutes`;
 
-        logger.info(`ðŸ”„ Refreshing contract specs(${reason})...`);
+        logger.info(`🔄 Refreshing contract specs(${reason})...`);
 
         try {
             const contracts = await this.weexClient.getContracts();
             if (contracts && contracts.length > 0) {
                 updateContractSpecs(contracts);
                 this.contractSpecsTracker.markRefreshed();
-                logger.info(`âœ… Contract specs refreshed: ${contracts.length} contracts cached`);
+                logger.info(`✅ Contract specs refreshed: ${contracts.length} contracts cached`);
             } else {
-                logger.warn('âš ï¸ WEEX returned empty contracts array during refresh');
+                logger.warn('⚠️ WEEX returned empty contracts array during refresh');
                 this.contractSpecsTracker.markFailed();
             }
         } catch (error) {
-            logger.error('âŒ Failed to refresh contract specs:', error);
+            logger.error('❌ Failed to refresh contract specs:', error);
             this.contractSpecsTracker.markFailed();
             // Don't throw - continue with potentially stale specs rather than failing the cycle
             // The roundToTickSize/roundToStepSize functions will warn if specs are missing
@@ -2692,7 +2660,7 @@ export class AutonomousTradingEngine extends EventEmitter {
                         syncedCount++;
 
                         const pnlSign = totalProfits >= 0 ? '+' : '';
-                        logger.info(`ðŸ“Š Synced closed order: ${symbol} ${closeSide} P & L: ${pnlSign}${totalProfits.toFixed(2)} (${bestMatch.championId})`);
+                        logger.info(`📊 Synced closed order: ${symbol} ${closeSide} P & L: ${pnlSign}${totalProfits.toFixed(2)} (${bestMatch.championId})`);
                     }
                 } catch (symbolError) {
                     logger.debug(`Failed to sync orders for ${symbol}: `, symbolError);
@@ -2700,7 +2668,7 @@ export class AutonomousTradingEngine extends EventEmitter {
             }
 
             if (syncedCount > 0) {
-                logger.info(`âœ… Synced ${syncedCount} closed orders from WEEX`);
+                logger.info(`✅ Synced ${syncedCount} closed orders from WEEX`);
             }
         } catch (error) {
             logger.warn('Failed to sync closed orders from WEEX:', error);
@@ -2828,7 +2796,7 @@ export class AutonomousTradingEngine extends EventEmitter {
 
                         this.lastSnapshotCleanup = now;
                         if (deletedTotal > 0) {
-                            logger.info(`ðŸ§¹ Cleaned up ${deletedTotal} old performance snapshots`);
+                            logger.info(`🧹 Cleaned up ${deletedTotal} old performance snapshots`);
                         }
                     }
                 } catch (snapshotError) {
@@ -2838,7 +2806,7 @@ export class AutonomousTradingEngine extends EventEmitter {
 
                     // CRITICAL: Alert if snapshots are failing repeatedly
                     if (this.snapshotFailureCount >= this.MAX_SNAPSHOT_FAILURES) {
-                        logger.error('ðŸš¨ CRITICAL: Performance snapshots failing repeatedly - circuit breaker may not work!');
+                        logger.error('🚨 CRITICAL: Performance snapshots failing repeatedly - circuit breaker may not work!');
                         this.emit('snapshotFailure', { count: this.snapshotFailureCount });
                     }
                     // Don't throw - snapshot creation failure shouldn't stop trading

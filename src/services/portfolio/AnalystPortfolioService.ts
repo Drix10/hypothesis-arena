@@ -1,17 +1,7 @@
 /**
  * Analyst Portfolio Service
- * 
  * Manages virtual portfolios for individual analysts to track P&L attribution.
  * Each analyst gets credit for trades where they won the parallel analysis.
- * 
- * Architecture:
- * - 1 collaborative portfolio (real WEEX account)
- * - 4 analyst portfolios (virtual, for attribution)
- * 
- * P&L flows:
- * 1. Trade executed on WEEX using collaborative portfolio
- * 2. Trade saved with championId = winning analyst from Stage 2
- * 3. P&L attributed to that analyst's virtual portfolio
  */
 
 import { prisma } from '../../config/database';
@@ -20,45 +10,32 @@ import { ANALYST_PROFILES } from '../../constants/analyst';
 
 const ANALYST_IDS = ['jim', 'ray', 'karen', 'quant'] as const;
 
-// Configuration constants
-const RECENT_TRADES_LIMIT = 10; // Number of recent trades to return in getAnalystStats()
-const LOCK_TIMEOUT_MS = 30000; // 30 seconds - max time for portfolio update
-const LOCK_KEY = 'analyst_portfolio_update'; // Database advisory lock key
-
-// CRITICAL: Distributed lock using database advisory locks
-// This ensures only ONE instance across all processes/servers can update portfolios
-// Module-level mutex (isUpdating) only protects within a single process
-// In production with multiple instances, we need database-level locking
+const RECENT_TRADES_LIMIT = 10;
+const LOCK_TIMEOUT_MS = 30000;
+const LOCK_KEY = 'analyst_portfolio_update';
 
 export class AnalystPortfolioService {
-    /**
-     * Initialize all analyst virtual portfolios
-     * Called on engine startup to ensure portfolios exist
-     */
     static async initializeAnalystPortfolios(): Promise<void> {
         logger.info('🏦 Initializing analyst virtual portfolios...');
 
         for (const analystId of ANALYST_IDS) {
             try {
-                // Find profile by ID (ANALYST_PROFILES is keyed by methodology, not ID)
                 const profile = Object.values(ANALYST_PROFILES).find(p => p.id === analystId);
                 if (!profile) {
                     logger.warn(`No profile found for analyst: ${analystId}`);
                     continue;
                 }
 
-                // Use upsert to create if not exists, or update if exists
                 await prisma.portfolio.upsert({
                     where: { agentId: analystId },
                     update: {
-                        // Update name in case it changed
                         agentName: profile.name,
                         updatedAt: new Date()
                     },
                     create: {
                         agentId: analystId,
                         agentName: profile.name,
-                        initialBalance: 0, // Virtual portfolio - no real balance
+                        initialBalance: 0,
                         currentBalance: 0,
                         totalValue: 0,
                         totalReturn: 0,
@@ -78,29 +55,12 @@ export class AnalystPortfolioService {
                 logger.info(`✅ Analyst portfolio ready: ${profile.name} (${analystId})`);
             } catch (error) {
                 logger.error(`Failed to initialize portfolio for ${analystId}:`, error);
-                // Don't throw - continue with other analysts
             }
         }
 
         logger.info('🏦 Analyst portfolio initialization complete');
     }
 
-    /**
-     * Update all analyst virtual portfolios based on their championId trades
-     * Call this after each trading cycle to keep metrics current
-     * 
-     * FIXED: Uses database advisory locks for distributed mutex (multi-instance safe)
-     * FIXED: Optimized to use aggregation queries instead of N+1 queries
-     * FIXED: Calculates Sharpe ratio from trade history
-     * FIXED: Added retry logic with exponential backoff
-     * 
-     * Calculates:
-     * - Total P&L (sum of realizedPnl)
-     * - Win rate (winning trades / total trades)
-     * - Trade counts (total, winning, losing)
-     * - Analysis wins (number of parallel analyses won)
-     * - Sharpe ratio (risk-adjusted returns)
-     */
     static async updateAnalystPortfolios(): Promise<void> {
         const MAX_RETRIES = 2;
         const RETRY_DELAY_MS = 1000; // 1 second base delay
@@ -135,20 +95,6 @@ export class AnalystPortfolioService {
         }
     }
 
-    /**
-     * Acquire distributed lock using atomic compare-and-swap
-     * Returns true if lock acquired, false if already locked
-     * 
-     * CRITICAL FIX: Prevents TOCTOU race condition
-     * Uses version field for atomic compare-and-swap semantics
-     * 
-     * Algorithm:
-     * 1. Read current lock record (if exists)
-     * 2. Check if lock is stale (older than timeout)
-     * 3. Attempt atomic update with version check
-     * 4. If update succeeds (1 row affected), lock acquired
-     * 5. If update fails (0 rows affected), another instance won
-     */
     private static async _acquireLock(): Promise<boolean> {
         try {
             const now = Date.now();
@@ -244,11 +190,6 @@ export class AnalystPortfolioService {
         }
     }
 
-    /**
-     * Release distributed lock
-     * FIXED: Simplified - just delete the lock record
-     * If another instance took over, the delete will fail silently (record already gone)
-     */
     private static async _releaseLock(): Promise<void> {
         try {
             // Delete the lock record to release
@@ -264,13 +205,6 @@ export class AnalystPortfolioService {
         }
     }
 
-    /**
-     * Internal method that performs the actual update
-     * Separated for lock pattern
-     * 
-     * FIXED: Single aggregated query for win/loss counts (no N+1)
-     * FIXED: Calculates Sharpe ratio from trade history
-     */
     private static async _performUpdate(): Promise<void> {
         try {
             // OPTIMIZED: Single query to get all stats grouped by championId
@@ -433,11 +367,6 @@ export class AnalystPortfolioService {
         }
     }
 
-    /**
-     * Safely convert BigInt to Number with validation
-     * FIXED: Prevents precision loss for large numbers
-     * FIXED: Handles negative BigInt values correctly
-     */
     private static _safeBigIntToNumber(value: bigint, fieldName: string): number {
         const MAX_SAFE_INTEGER = BigInt(Number.MAX_SAFE_INTEGER); // 9,007,199,254,740,991
         const MIN_SAFE_INTEGER = BigInt(Number.MIN_SAFE_INTEGER); // -9,007,199,254,740,991
@@ -456,19 +385,6 @@ export class AnalystPortfolioService {
         return Number(value);
     }
 
-    /**
-     * Calculate Sharpe ratio for each analyst
-     * Sharpe Ratio = (Average Return - Risk Free Rate) / Standard Deviation of Returns
-     * 
-     * For crypto trading:
-     * - Risk-free rate assumed to be 0 (or very small)
-     * - Returns calculated as P&L per trade
-     * - Requires minimum 5 trades for statistical significance
-     * 
-     * FIXED: Use database aggregation instead of loading all trades into memory
-     * 
-     * Returns Map of analystId -> sharpeRatio (or null if insufficient data)
-     */
     private static async _calculateSharpeRatios(): Promise<Map<string, number | null>> {
         const sharpeRatios = new Map<string, number | null>();
 
@@ -554,12 +470,6 @@ export class AnalystPortfolioService {
         }
     }
 
-    /**
-     * Get analyst leaderboard sorted by P&L
-     * Returns all analyst portfolios ranked by total return
-     * 
-     * FIXED: Exclude both collaborative portfolio AND lock record
-     */
     static async getLeaderboard() {
         try {
             const portfolios = await prisma.portfolio.findMany({
@@ -598,11 +508,6 @@ export class AnalystPortfolioService {
         }
     }
 
-    /**
-     * Get detailed stats for a specific analyst
-     * FIXED: Added input validation and optimized to use aggregation queries
-     * FIXED: Only aggregate trades with realized P&L (closed trades)
-     */
     static async getAnalystStats(analystId: string) {
         // FIXED: Validate analystId
         if (!ANALYST_IDS.includes(analystId as any)) {

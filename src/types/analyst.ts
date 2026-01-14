@@ -1,54 +1,31 @@
 /**
  * Analyst Types for v5.0.0 Parallel Analysis System
- * 
  * Each analyst receives full context and outputs a standardized recommendation.
  * All 4 analyze independently in parallel, then a judge picks the winner.
  */
 
-/**
- * Actions an analyst can recommend
- */
 export type AnalystAction = 'BUY' | 'SELL' | 'HOLD' | 'CLOSE' | 'REDUCE';
-
-/**
- * Analyst IDs
- */
 export type AnalystId = 'jim' | 'ray' | 'karen' | 'quant';
 
-/**
- * The recommendation output from each analyst
- * 
- * NOTE: leverage range is typically 3-20x based on market conditions,
- * but validation allows 0-20x (0 for HOLD actions, 1-20 for trades).
- */
 export interface AnalystRecommendation {
     action: AnalystAction;
-    symbol: string;              // e.g., "cmt_btcusdt"
-    allocation_usd: number;      // Notional exposure in USD (not margin)
-    leverage: number;            // 1-20x (typically 3-20x based on conditions)
-    tp_price: number | null;     // Take profit price
-    sl_price: number | null;     // Stop loss price
-    exit_plan: string;           // Invalidation condition (CRITICAL)
-    confidence: number;          // 0-100
-    rationale: string;           // One-line summary
+    symbol: string;
+    allocation_usd: number;
+    leverage: number;
+    tp_price: number | null;
+    sl_price: number | null;
+    exit_plan: string;
+    confidence: number;
+    rationale: string;
 }
 
-/**
- * Full output from an analyst (reasoning + recommendation)
- */
 export interface AnalystOutput {
-    reasoning: string;           // Detailed step-by-step analysis
+    reasoning: string;
     recommendation: AnalystRecommendation;
 }
 
-/**
- * Error source identifier - includes analysts and system-level errors
- */
 export type ErrorSource = AnalystId | 'system';
 
-/**
- * Result from parallel analysis (all 4 analysts)
- */
 export interface ParallelAnalysisResult {
     jim: AnalystOutput | null;
     ray: AnalystOutput | null;
@@ -58,19 +35,13 @@ export interface ParallelAnalysisResult {
     errors: { analyst: ErrorSource; error: string }[];
 }
 
-/**
- * Risk adjustments the judge can apply to winner's recommendation
- */
 export interface RiskAdjustments {
-    leverage?: number;           // Reduce if too risky
-    allocation_usd?: number;     // Reduce if too large
-    sl_price?: number;           // Tighten if too wide
-    tp_price?: number;           // Adjust take profit
+    leverage?: number;
+    allocation_usd?: number;
+    sl_price?: number;
+    tp_price?: number;
 }
 
-/**
- * Judge's decision after comparing 4 analyses
- */
 export interface JudgeDecision {
     winner: AnalystId | 'NONE';
     reasoning: string;
@@ -80,9 +51,6 @@ export interface JudgeDecision {
     final_recommendation: AnalystRecommendation | null;
 }
 
-/**
- * Analyst profile for prompt generation
- */
 export interface AnalystProfile {
     id: AnalystId;
     name: string;
@@ -91,13 +59,6 @@ export interface AnalystProfile {
     focus: string[];
     riskTolerance: 'conservative' | 'moderate' | 'aggressive';
 }
-
-/**
- * JSON Schema for analyst output (used for structured output)
- * 
- * NOTE on allocation_usd minimum: 0 is allowed for HOLD actions where no trade is executed.
- * For BUY/SELL/CLOSE/REDUCE actions, the validation function enforces allocation_usd > 0.
- */
 export const ANALYST_OUTPUT_SCHEMA = {
     type: 'object',
     properties: {
@@ -107,11 +68,8 @@ export const ANALYST_OUTPUT_SCHEMA = {
             properties: {
                 action: { type: 'string', enum: ['BUY', 'SELL', 'HOLD', 'CLOSE', 'REDUCE'] },
                 symbol: { type: 'string' },
-                // NOTE: Schema allows 0 for HOLD actions; validation function enforces > 0 for trades
                 allocation_usd: { type: 'number', minimum: 0 },
-                // Allow leverage=0 for HOLD actions, max 20x for trades
                 leverage: { type: 'number', minimum: 0, maximum: 20 },
-                // tp_price and sl_price: null for HOLD, or positive number for trades
                 tp_price: { type: ['number', 'null'], exclusiveMinimum: 0 },
                 sl_price: { type: ['number', 'null'], exclusiveMinimum: 0 },
                 exit_plan: { type: 'string' },
@@ -127,10 +85,7 @@ export const ANALYST_OUTPUT_SCHEMA = {
 };
 
 /**
- * JSON Schema for judge output (used for structured output)
- * 
- * NOTE on allocation_usd minimum: 0 is allowed for HOLD actions where no trade is executed.
- * For BUY/SELL/CLOSE/REDUCE actions, the validation function enforces allocation_usd > 0.
+ * JSON Schema for judge output
  */
 export const JUDGE_OUTPUT_SCHEMA = {
     type: 'object',
@@ -140,11 +95,8 @@ export const JUDGE_OUTPUT_SCHEMA = {
         adjustments: {
             type: ['object', 'null'],
             properties: {
-                // Allow leverage=0 for HOLD actions, max 20x for trades
                 leverage: { type: 'number', minimum: 0, maximum: 20 },
-                // NOTE: Schema allows 0 for adjustments; validation function enforces > 0 for trades
                 allocation_usd: { type: 'number', minimum: 0 },
-                // sl_price and tp_price in adjustments: 0 means "remove", positive means "set to this value"
                 sl_price: { type: 'number', minimum: 0 },
                 tp_price: { type: 'number', minimum: 0 },
             },
@@ -153,7 +105,7 @@ export const JUDGE_OUTPUT_SCHEMA = {
         warnings: {
             type: 'array',
             items: { type: 'string' },
-            maxItems: 10  // Prevent unbounded arrays
+            maxItems: 10
         },
         final_action: { type: 'string', enum: ['BUY', 'SELL', 'HOLD', 'CLOSE', 'REDUCE'] },
         final_recommendation: {
@@ -161,11 +113,8 @@ export const JUDGE_OUTPUT_SCHEMA = {
             properties: {
                 action: { type: 'string', enum: ['BUY', 'SELL', 'HOLD', 'CLOSE', 'REDUCE'] },
                 symbol: { type: 'string' },
-                // NOTE: Schema allows 0 for HOLD actions; validation function enforces > 0 for trades
                 allocation_usd: { type: 'number', minimum: 0 },
-                // Allow leverage=0 for HOLD actions, max 20x for trades
                 leverage: { type: 'number', minimum: 0, maximum: 20 },
-                // tp_price and sl_price: null for HOLD, or positive number for trades
                 tp_price: { type: ['number', 'null'], exclusiveMinimum: 0 },
                 sl_price: { type: ['number', 'null'], exclusiveMinimum: 0 },
                 exit_plan: { type: 'string' },
@@ -182,43 +131,22 @@ export const JUDGE_OUTPUT_SCHEMA = {
 
 /**
  * Normalize analyst output - converts non-standard fields to expected format
- * Call this BEFORE validateAnalystOutput to ensure data is in correct shape.
- * 
- * This function returns a shallow copy with normalized fields, preserving the original.
- * 
- * Normalizations performed:
- * - exit_plan: If non-null plain object (not array), converts to JSON string
- * 
- * @param output - Raw output from AI (unknown type)
- * @returns Normalized output (unknown type for safety)
- * 
- * FIXED: Added explicit array guard to prevent arrays from being stringified
- * FIXED: Changed return type to unknown for type safety
  */
 export function normalizeAnalystOutput(output: unknown): unknown {
-    // Return early for non-object inputs
     if (!output || typeof output !== 'object') return output;
-
-    // Arrays are objects in JS but should not be processed as AnalystOutput
     if (Array.isArray(output)) return output;
 
     const o = output as Record<string, unknown>;
     if (!o.recommendation || typeof o.recommendation !== 'object') return output;
-
-    // Guard against recommendation being an array
     if (Array.isArray(o.recommendation)) return output;
 
     const rec = o.recommendation as Record<string, unknown>;
 
-    // Check if exit_plan needs normalization
-    // Only stringify if it's a non-null plain object (not an array)
-    // Arrays should be preserved as-is (they'll fail validation, which is correct)
     if (
         rec.exit_plan !== null &&
         typeof rec.exit_plan === 'object' &&
         !Array.isArray(rec.exit_plan)
     ) {
-        // Return a shallow copy with normalized exit_plan
         return {
             ...o,
             recommendation: {
@@ -228,20 +156,11 @@ export function normalizeAnalystOutput(output: unknown): unknown {
         };
     }
 
-    // Return original unchanged
     return output;
 }
 
 /**
  * Validate analyst output structure
- * 
- * NOTE: This function does NOT mutate the input. Call normalizeAnalystOutput() first
- * if you need to handle non-standard formats (e.g., exit_plan as object).
- * 
- * FIXED: Added Number.isFinite checks to prevent NaN/Infinity propagation
- * FIXED: Added empty string validation for critical fields
- * FIXED: Enforce allocation_usd > 0 for non-HOLD actions (prevents nonsensical trades)
- * FIXED: Allow leverage=0 for HOLD actions (AI often returns 0 when not trading)
  */
 export function validateAnalystOutput(output: unknown): output is AnalystOutput {
     if (!output || typeof output !== 'object') return false;

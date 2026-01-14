@@ -67,7 +67,7 @@ Hypothesis Arena is an autonomous AI-powered trading system for WEEX perpetual f
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**Note on Leverage:** The "validated leverage" in Stage 4 is mode-dependent. Production mode uses 5–15x leverage (conservative), while Competition mode uses 15–17x (aggressive). See the "Production Mode" and "Competition Mode" sections below for full leverage limit details.
+**Note on Leverage:** The "validated leverage" in Stage 4 is mode-dependent. Production mode uses 5–15x leverage (conservative), while Competition mode uses 15–20x (aggressive). See the "Production Mode" and "Competition Mode" sections below for full leverage limit details.
 
 ## The 4 Quant Analysts (COMPETITION MODE - QUANTITATIVE EDITION)
 
@@ -80,22 +80,20 @@ Inspired by modern quantitative trading methodologies, each analyst brings a dis
 | **Karen** | Multi-Strategy Risk   | Portfolio Optimization & Risk Management | Sharpe ratio, drawdown limits, correlation tracking |
 | **Quant** | Liquidity & Arbitrage | Market Microstructure & Arbitrage        | Funding arbitrage, VWAP, order flow analysis        |
 
-## Multi-Model Rotation (v5.3.0)
+## Multi-Model Rotation (v5.4.0)
 
-Each analyst uses a different AI model per cycle, randomly assigned from a pool of 4 models. This provides:
+Two AI models are shared across the 4 analysts each cycle, with each model assigned to two analysts. This provides:
 
-- **Diversity**: Different models have different strengths and biases
-- **Resilience**: If one model fails, others continue working
-- **Fair comparison**: No single model dominates all analysts
+- **Diversity (with tradeoff)**: Two pairs of analysts share identical model biases per cycle. This reduces analytical variance compared to a 4-model pool, but the tradeoff is acceptable given the improved operational simplicity and reliability.
+- **Resilience**: If one model fails, the other continues working. DeepSeek is the primary fallback.
+- **Simplicity**: Two proven, reliable models instead of four reduces complexity and failure modes.
 
 **Model Pool:**
 
-| Model                           | Provider   | Strengths                  | Priority     |
-| ------------------------------- | ---------- | -------------------------- | ------------ |
-| `deepseek/deepseek-chat`        | OpenRouter | Strong reasoning, reliable | 0 (fallback) |
-| `google/gemini-3-flash-preview` | OpenRouter | Fast, reliable             | 1            |
-| `x-ai/grok-4.1-fast`            | OpenRouter | Fast reasoning             | 2            |
-| `xiaomi/mimo-v2-flash:free`     | OpenRouter | Reliable, fast             | 3            |
+| Model                    | Provider   | Strengths                  | Priority     |
+| ------------------------ | ---------- | -------------------------- | ------------ |
+| `deepseek/deepseek-chat` | OpenRouter | Strong reasoning, reliable | 0 (fallback) |
+| `x-ai/grok-4.1-fast`     | OpenRouter | Fast reasoning             | 1            |
 
 **Configuration:**
 
@@ -110,11 +108,31 @@ OPENROUTER_MODEL=deepseek/deepseek-chat
 **Behavior:**
 
 - At the start of each cycle, models are shuffled using Fisher-Yates algorithm
-- Each analyst gets a unique model (no duplicates when 4+ models available)
-- If a model fails, automatic fallback to the most reliable model (DeepSeek)
+- Each model is used by 2 analysts (4 analysts, 2 models)
+- If a model fails, automatic fallback to the other model (DeepSeek preferred)
 - Models with 3+ recent failures are temporarily skipped (auto-reset after 5 minutes)
 - Set `MULTI_MODEL_ENABLED=false` to use single model for all analysts
-  **Key Features:**
+
+**Fallback & Recovery Behavior:**
+
+| Scenario                    | Behavior                                                                     |
+| --------------------------- | ---------------------------------------------------------------------------- |
+| Model A fails once          | Retry with Model B (the other model in the pool)                             |
+| Model A fails 3+ times      | Model A skipped for 5 minutes, all analysts use Model B                      |
+| DeepSeek skipped (3+ fails) | Use Grok exclusively until DeepSeek reset (5 min)                            |
+| Grok skipped (3+ fails)     | Use DeepSeek exclusively until Grok reset (5 min)                            |
+| Both models fail 3+ times   | Failure counts reset, retry with DeepSeek if not skipped, otherwise try Grok |
+| Both models unavailable     | Error logged, analyst call fails, cycle continues with remaining analysts    |
+
+**Retry Parameters:**
+
+- Max failures before skip: 3 per model
+- Failure count reset: Every 5 minutes (automatic)
+- Fallback priority: DeepSeek (priority 0) > Grok (priority 1)
+- Note: Priority only applies when both models are available. A skipped model (3+ failures) is not used regardless of priority until its 5-minute reset.
+
+**Alerting:** When no models are available (rare edge case), the system logs an error: `[ModelPool] Critical: returning DeepSeek (priority 0) as last resort`. Monitor logs for this message to detect persistent API issues.
+**Key Features:**
 
 - Each analyst has ~150 lines of deeply researched, crypto-specific methodology
 - Standardized funding rate thresholds (±0.08% extreme, ±0.03% moderate)
@@ -215,10 +233,18 @@ Provides market sentiment data to AI analysts (cached, non-blocking):
     - 81-100: "Extreme Greed" (strong contrarian SELL signal)
 
 - **NewsData.io** - FREE tier (200 credits/day, requires API key registration at https://newsdata.io/register)
+
   - Crypto news with text-based sentiment analysis
   - Cached for 30 minutes (`CACHE_TTL.NEWS`) to conserve API credits
   - Covers BTC, ETH, and general crypto news
   - **Optional**: If `NEWSDATA_API_KEY` is not set, news sentiment is disabled and the system operates without crypto news data (Fear & Greed Index still works)
+
+- **Reddit Social Sentiment** (v5.4.0) - FREE, no API key required
+  - Monitors r/cryptocurrency (~7M members), r/bitcoin (~6M members), r/ethereum (~3M members)
+  - Cached for 30 minutes (`REDDIT_CACHE_TTL`)
+  - Provides social pulse and crowd sentiment divergence signals
+  - **Divergence Signal**: Compares Reddit sentiment vs price action for contrarian opportunities
+  - **Optional**: Enabled by default. Set `REDDIT_SENTIMENT_ENABLED=false` to disable.
 
 **Context Fields:**
 
@@ -232,8 +258,40 @@ sentiment: {
   eth_sentiment: { score, sentiment, news_count, positive_count, negative_count },
   contrarian_signal: { signal: number, reason: string },
   recent_headlines: string[],
+
+  // Reddit Social Sentiment (v5.4.0)
+  reddit?: {
+    overall_score: number,              // -1 to +1 (weighted average across subreddits)
+    overall_sentiment: string,          // "bullish" | "bearish" | "neutral"
+    post_count: number,                 // Total posts analyzed
+    btc_sentiment: number | null,       // -1 to +1 (r/bitcoin sentiment)
+    eth_sentiment: number | null,       // -1 to +1 (r/ethereum sentiment)
+    divergence_signal: number,          // -2 to +2 (social vs price divergence)
+    divergence_reason: string,          // Explanation of divergence
+    top_headlines: string[],            // Top Reddit post titles
+    is_stale: boolean,                  // True if data > 20 min old
+  }
 }
 ```
+
+**Reddit Divergence Signals (HIGH VALUE):**
+
+| Divergence Signal | Interpretation                        | Action                               |
+| ----------------- | ------------------------------------- | ------------------------------------ |
+| > +1.5            | Crowd fearful but price stable/rising | Strong contrarian LONG (+2 points)   |
+| +0.5 to +1.5      | Moderate bullish divergence           | Moderate contrarian LONG (+1 point)  |
+| -0.5 to +0.5      | No significant divergence             | No Reddit edge                       |
+| -1.5 to -0.5      | Moderate bearish divergence           | Moderate contrarian SHORT (+1 point) |
+| < -1.5            | Crowd euphoric but price weak/falling | Strong contrarian SHORT (+2 points)  |
+
+**Points System Explanation:**
+
+The "+2 points" and "+1 point" values in the Action column are advisory weights that AI analysts add to their internal signal scoring when evaluating trade setups. These points contribute to the analyst's overall confluence score (not a separate "reddit_divergence_score" variable).
+
+- **How points are used**: Each analyst maintains a running signal score. Reddit divergence points are added alongside other signals (RSI, MACD, funding rate, etc.) to determine overall trade conviction.
+- **Decision thresholds**: Analysts typically require 6+ total points for high-confidence trades, 4-5 for moderate confidence. Reddit alone (max ±2 points) is insufficient for a trade decision.
+- **Advisory vs. hard rules**: These are advisory weights, not hard execution rules. The AI uses them as one input among many. No automatic trade is triggered solely by Reddit divergence.
+- **Example**: If an analyst has 4 points from technical signals and Reddit shows +1.5 divergence (+2 points), the total becomes 6 points, potentially upgrading the trade from "moderate" to "high" confidence.
 
 ## Quant Analysis Service
 
@@ -375,14 +433,14 @@ Implements simplified 4-state regime detection per quant advisor recommendations
 
 | Difficulty | Conditions                         | Production Leverage | Competition Leverage |
 | ---------- | ---------------------------------- | ------------------- | -------------------- |
-| Easy       | Clear trend, normal volatility     | 12-15x              | 15-17x (optimal)     |
-| Moderate   | Mixed signals                      | 8-12x               | 15-16x               |
-| Hard       | High volatility, weak trends       | 5-10x               | 12-15x               |
-| Extreme    | Very high volatility, tangled EMAs | 5x max, HOLD rec.   | 10x max, HOLD rec.   |
+| Easy       | Clear trend, normal volatility     | 12-15x              | 18-20x (optimal)     |
+| Moderate   | Mixed signals                      | 8-12x               | 16-18x               |
+| Hard       | High volatility, weak trends       | 5-10x               | 15-17x               |
+| Extreme    | Very high volatility, tangled EMAs | 5x max, HOLD rec.   | 15x max, HOLD rec.   |
 
-**Competition Sweet Spot:** 15-17x leverage with 10-18% of account per position. Avoid 18-20x (wipeout zone).
+**Competition Sweet Spot:** 15-20x leverage with 10-12% of account per position (optimal within broader 10-15% acceptable range).
 
-See "Production Mode" (5-15x) and "Competition Mode" (15-17x optimal) sections below for full leverage limits.
+See "Production Mode" (5-15x) and "Competition Mode" (15-20x optimal) sections below for full leverage limits.
 
 **Potential impact:** +8–15% improvement in risk-adjusted returns. _Disclaimer: This estimate is based on backtesting and simulations only. Past performance does not guarantee future results. Actual results vary with market conditions, implementation, and operational factors._
 
@@ -459,16 +517,15 @@ Leverage is set by AI analysts based on conviction. The system enforces a **3x n
 | 8-12x          | 15-25% account | 3-4% from entry       | Standard, medium positions     |
 | 12-15x         | 10-20% account | 2.5-3% from entry     | Moderate, smaller positions    |
 
-### Competition Mode: Leverage Range 10x–17x (WINNER EDITION v5.4.0)
+### Competition Mode: Leverage Range 15x–20x (WINNER EDITION v5.4.0)
 
-| Leverage Range | Position Size  | Stop Loss Requirement | Use Case                                |
-| -------------- | -------------- | --------------------- | --------------------------------------- |
-| 10-12x         | 15-25% account | 3-4% from entry       | Conservative, larger positions          |
-| 12-15x         | 10-20% account | 2.5-3% from entry     | Moderate, medium positions              |
-| 15-17x         | 10-18% account | 2-2.5% from entry     | **OPTIMAL** - The winning formula       |
-| 18-20x         | ⚠️ AVOID       | N/A                   | **WIPEOUT ZONE** - Winners don't use it |
+| Leverage Range | Position Size  | Stop Loss Requirement | Use Case                          |
+| -------------- | -------------- | --------------------- | --------------------------------- |
+| 15-16x         | 12-15% account | 2-2.5% from entry     | Conservative, larger positions    |
+| 17-18x         | 10-14% account | 1.8-2% from entry     | Moderate, medium positions        |
+| 19-20x         | 10-12% account | 1.5% from entry       | **OPTIMAL** - The winning formula |
 
-**Competition Insight:** Based on actual results, winners used $100-200 positions at 15-17x leverage with 2-3 winning trades out of 5. Losers went all-in at 20x and got wiped out.
+**Competition Insight:** Based on actual competition results, winners used $100-150 positions at 15-20x leverage with 2-3 winning trades out of 5. Position size matters more than leverage - keep positions reasonable.
 
 **Hard Limits (Both Modes):**
 
@@ -719,7 +776,7 @@ NEWSDATA_API_KEY=your_newsdata_api_key
 ## Cycle Flow
 
 1. **Pre-checks**: Balance, positions, daily limits, weekly drawdown
-2. **Pre-Stage-2 Optimization**: Skip expensive analysis if limits reached
+2. **Pre-Stage-2 Optimization**: Skip expensive analysis if limits reached OR all positions profitable at max capacity
 3. **Market Scan**: Fetch data for all 8 coins
 4. **Context Build**: Assemble rich context with indicators, sentiment, quant, regime
 5. **Parallel Analysis**: 4 AI calls in parallel (each receives full enriched context)
@@ -727,6 +784,21 @@ NEWSDATA_API_KEY=your_newsdata_api_key
 7. **Execution**: Place order if approved
 8. **Logging**: Database + WEEX compliance + trade journal
 9. **Wait**: Sleep until next cycle (5 minutes default)
+
+### Pre-Stage-2 Optimization Logic
+
+The system skips expensive AI analysis (~8000 tokens) when:
+
+| Condition                                    | Action      | Reason                          |
+| -------------------------------------------- | ----------- | ------------------------------- |
+| Insufficient balance                         | SKIP CYCLE  | Can't trade anyway              |
+| Weekly drawdown exceeded                     | SKIP CYCLE  | Risk management pause           |
+| Max daily trades reached                     | SKIP CYCLE  | Daily limit protection          |
+| All positions profitable AND at max capacity | SKIP CYCLE  | Let winners run                 |
+| All positions profitable BUT room for more   | RUN STAGE 2 | Look for new opportunities      |
+| At least one losing position                 | RUN STAGE 2 | AI may need to manage positions |
+
+**Key behavior**: If you have 3 profitable positions and `MAX_CONCURRENT_POSITIONS=8`, the system WILL run Stage 2 to find new opportunities. It only skips when all positions are profitable AND you're at max capacity.
 
 ## Exit Plan Handling
 

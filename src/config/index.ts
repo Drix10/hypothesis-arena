@@ -2,7 +2,6 @@ import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
 
-// Load .env from project root using reliable path resolution
 const envPaths = [
     path.resolve(__dirname, '../../.env'),
     path.resolve(process.cwd(), '.env'),
@@ -23,53 +22,33 @@ if (!loaded && process.env.NODE_ENV !== 'production') {
     console.warn('Warning: No .env file found. Using default configuration.');
 }
 
-// Safe parseInt with fallback
 const safeParseInt = (value: string | undefined, fallback: number): number => {
     if (!value) return fallback;
     const parsed = parseInt(value, 10);
     return (isNaN(parsed) || !Number.isFinite(parsed)) ? fallback : parsed;
 };
 
-// Safe parseFloat with fallback
 const safeParseFloat = (value: string | undefined, fallback: number): number => {
     if (!value) return fallback;
     const parsed = parseFloat(value);
     return (isNaN(parsed) || !Number.isFinite(parsed)) ? fallback : parsed;
 };
 
-// Clamp integer to range [min, max]
 const clampInt = (value: string | undefined, fallback: number, min: number, max: number): number => {
     const parsed = safeParseInt(value, fallback);
     return Math.max(min, Math.min(max, parsed));
 };
 
-// =============================================================================
-// SHARED CONSTANTS - Parse once, use everywhere
-// =============================================================================
-
-// Parse STARTING_BALANCE once for use in multiple places
-// FIXED: Enforce minimum starting balance of 1 to prevent division by zero and invalid thresholds
 const PARSED_STARTING_BALANCE = Math.max(1, safeParseFloat(process.env.STARTING_BALANCE, 1000));
 
-// =============================================================================
-// CONFIGURATION
-// =============================================================================
-
 export const config = {
-    // Server
     port: safeParseInt(process.env.PORT, 3000),
     nodeEnv: process.env.NODE_ENV || 'development',
     logLevel: process.env.LOG_LEVEL || 'info',
-
-    // CORS
     corsOrigins: process.env.CORS_ORIGINS?.split(',').map(s => s.trim()).filter(Boolean) || ['http://localhost:3000', 'http://localhost:25655'],
-
-    // Database
     databaseUrl: process.env.DATABASE_URL || 'file:./dev.db',
     tursoDatabaseUrl: process.env.TURSO_DATABASE_URL || '',
     tursoAuthToken: process.env.TURSO_AUTH_TOKEN || '',
-
-    // WEEX
     weex: {
         apiKey: process.env.WEEX_API_KEY || '',
         secretKey: process.env.WEEX_SECRET_KEY || '',
@@ -77,8 +56,6 @@ export const config = {
         baseUrl: process.env.WEEX_BASE_URL || 'https://api-contract.weex.com',
         wsUrl: process.env.WEEX_WS_URL || 'wss://ws-contract.weex.com/v2/ws',
     },
-
-    // AI Configuration
     geminiApiKey: process.env.GEMINI_API_KEY || '',
     openRouterApiKey: process.env.OPENROUTER_API_KEY || '',
     ai: {
@@ -139,6 +116,61 @@ export const config = {
         // Retry limits - clamped to [1, 10] for safety
         maxRetries: clampInt(process.env.MAX_RETRIES, 3, 1, 10),
         dryRun: process.env.DRY_RUN === 'true',
+
+        // Position urgency thresholds (for pre-Stage-2 optimization)
+        // These control when positions are considered urgent enough to trigger AI analysis
+        urgencyThresholds: {
+            // Target profit % to trigger VERY_URGENT (take profit zone)
+            targetProfitPct: (() => {
+                const value = safeParseFloat(process.env.TARGET_PROFIT_PCT, 5);
+                if (!process.env.TARGET_PROFIT_PCT) {
+                    console.warn('⚠️ TARGET_PROFIT_PCT not set, using default: 5%');
+                }
+                if (value <= 0 || value > 100) {
+                    throw new Error(`❌ FATAL: TARGET_PROFIT_PCT must be between 0 and 100, got: ${value}`);
+                }
+                return value;
+            })(),
+            // Stop loss % to trigger VERY_URGENT (cut losses)
+            stopLossPct: (() => {
+                const value = safeParseFloat(process.env.STOP_LOSS_PCT, 2.5);
+                if (!process.env.STOP_LOSS_PCT) {
+                    console.warn('⚠️ STOP_LOSS_PCT not set, using default: 2.5%');
+                }
+                if (value <= 0 || value > 100) {
+                    throw new Error(`❌ FATAL: STOP_LOSS_PCT must be between 0 and 100, got: ${value}`);
+                }
+                return value;
+            })(),
+            // Max hold hours before VERY_URGENT
+            maxHoldHours: (() => {
+                const value = safeParseFloat(process.env.MAX_HOLD_HOURS, 12);
+                if (!process.env.MAX_HOLD_HOURS) {
+                    console.warn('⚠️ MAX_HOLD_HOURS not set, using default: 12 hours');
+                }
+                if (value <= 0 || value > 168) {
+                    throw new Error(`❌ FATAL: MAX_HOLD_HOURS must be between 0 and 168 (1 week), got: ${value}`);
+                }
+                return value;
+            })(),
+            // Partial take profit threshold for MODERATE urgency
+            partialTpPct: safeParseFloat(process.env.PARTIAL_TP_PCT, 3),
+            // Hours before position is considered stale (competition mode only)
+            stalePositionHours: safeParseFloat(process.env.STALE_POSITION_HOURS, 6),
+            // P&L threshold below which position is considered stale
+            stalePnlThreshold: safeParseFloat(process.env.STALE_PNL_THRESHOLD, 1.0),
+        },
+
+        // Risk Council additional limits (used in riskCouncil.ts)
+        riskCouncil: {
+            // Max funding rate against position (0.001 = 0.1%)
+            maxFundingAgainstPercent: safeParseFloat(process.env.MAX_FUNDING_AGAINST_PERCENT, 0.001),
+            // Max positions in same sector
+            maxSectorPositions: clampInt(process.env.MAX_SECTOR_POSITIONS, 3, 1, 10),
+            // Net exposure limits (percentage)
+            netExposureLimitLong: clampInt(process.env.NET_EXPOSURE_LIMIT_LONG, 70, 10, 100),
+            netExposureLimitShort: clampInt(process.env.NET_EXPOSURE_LIMIT_SHORT, 70, 10, 100),
+        },
     },
 
     // Technical Indicators

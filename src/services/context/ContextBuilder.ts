@@ -26,6 +26,7 @@ import { getTechnicalIndicatorService } from '../indicators/TechnicalIndicatorSe
 import {
     getSentimentContextSafe,
     checkContrarianSignal,
+    getRedditSentimentContext,
 } from '../sentiment';
 import {
     getQuantContext,
@@ -292,10 +293,17 @@ export class ContextBuilder {
     /**
      * Build sentiment context from cached sentiment data
      * Returns null if sentiment data is unavailable
+     * 
+     * v5.4.0: Now includes Reddit social sentiment for better market pulse
      */
     private async buildSentimentContext(): Promise<SentimentContext | null> {
         try {
-            const sentimentData = await getSentimentContextSafe();
+            // Fetch news sentiment and Reddit sentiment in parallel to reduce latency
+            const [sentimentData, redditData] = await Promise.all([
+                getSentimentContextSafe(),
+                this.fetchRedditSentimentSafe(),
+            ]);
+
             if (!sentimentData) return null;
 
             const contrarian = checkContrarianSignal(sentimentData);
@@ -324,6 +332,19 @@ export class ContextBuilder {
             const safeNum = (val: number | null | undefined, defaultVal: number = 0): number =>
                 Number.isFinite(val) ? val! : defaultVal;
 
+            // Build Reddit sentiment object if available
+            const redditSentiment = redditData && redditData.overall ? {
+                overall_score: safeNum(redditData.overall.sentimentScore),
+                overall_sentiment: redditData.overall.sentiment || 'neutral',
+                post_count: safeNum(redditData.overall.postCount),
+                btc_sentiment: redditData.btc?.sentimentScore ?? null,
+                eth_sentiment: redditData.eth?.sentimentScore ?? null,
+                divergence_signal: safeNum(redditData.socialVsPriceDivergence),
+                divergence_reason: redditData.contrarian?.reason || 'No divergence detected',
+                top_headlines: Array.isArray(redditData.topHeadlines) ? redditData.topHeadlines : [],
+                is_stale: redditData.isStale ?? true,
+            } : undefined;
+
             return {
                 fear_greed_index: sentimentData.market.fearGreedIndex?.value ?? null,
                 fear_greed_classification: sentimentData.market.fearGreedIndex?.classification ?? null,
@@ -346,9 +367,39 @@ export class ContextBuilder {
                 contrarian_signal: contrarian,
                 recent_headlines: headlines,
                 last_updated: sentimentData.lastUpdated,
+                reddit: redditSentiment,
             };
         } catch (error) {
             logger.warn('Failed to build sentiment context:', error);
+            return null;
+        }
+    }
+
+    /**
+     * Fetch Reddit sentiment with timeout protection
+     * Returns null if fetch fails or times out (doesn't block main flow)
+     */
+    private async fetchRedditSentimentSafe(): Promise<Awaited<ReturnType<typeof getRedditSentimentContext>> | null> {
+        try {
+            const REDDIT_FETCH_TIMEOUT = 12000; // 12 seconds max
+
+            const timeoutPromise = new Promise<null>((resolve) => {
+                setTimeout(() => {
+                    logger.debug('Reddit sentiment fetch timed out, continuing without it');
+                    resolve(null);
+                }, REDDIT_FETCH_TIMEOUT);
+            });
+
+            const fearGreedValue = null; // Will use cached value in Reddit service
+
+            const result = await Promise.race([
+                getRedditSentimentContext(0, fearGreedValue),
+                timeoutPromise,
+            ]);
+
+            return result;
+        } catch (error) {
+            logger.debug('Reddit sentiment fetch failed (non-critical):', error);
             return null;
         }
     }

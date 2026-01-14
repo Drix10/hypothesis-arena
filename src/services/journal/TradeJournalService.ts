@@ -1,26 +1,4 @@
-/**
- * TradeJournalService - Trade Journal & Learning Loop (v5.3.0)
- * 
- * Provides systematic analysis of past performance to enable continuous improvement.
- * Features:
- * - Enhanced trade logging with entry context
- * - Pattern performance analysis
- * - Auto-generated lessons from outcomes
- * - Analyst-specific win rate tracking
- * - Feedback to analysts for future decisions
- * 
- * Per quant advisor:
- * - Track win rate per analyst over rolling 50 trades
- * - Penalize consistently underperforming analysts in judge weighting
- * - Auto-generate lessons from trade outcomes
- * - Expected impact: +0.1-0.3 Sharpe, +3-8% win rate long-term
- */
-
 import { logger } from '../../utils/logger';
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// TYPES
-// ═══════════════════════════════════════════════════════════════════════════════
 
 export interface TradeJournalEntry {
     id: string;
@@ -77,42 +55,22 @@ export interface AnalystPerformance {
 }
 
 export interface TradingInsights {
-    // Overall stats
     totalTrades: number;
     overallWinRate: number;
     avgPnl: number;
     avgHoldTime: number;
-
-    // Analyst performance
     analystPerformance: Map<string, AnalystPerformance>;
-
-    // Pattern analysis
     topPatterns: PatternPerformance[];
     worstPatterns: PatternPerformance[];
-
-    // Regime analysis
     regimePerformance: Map<string, { winRate: number; avgPnl: number; trades: number }>;
-
-    // Recent lessons
     recentLessons: string[];
-
-    // Recommendations
     recommendations: string[];
-
     lastUpdated: string;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// IN-MEMORY STORAGE (for MVP - migrate to database later)
-// ═══════════════════════════════════════════════════════════════════════════════
-
 const journalEntries: TradeJournalEntry[] = [];
-const MAX_ENTRIES = 500;  // Keep last 500 trades in memory
-const ROLLING_WINDOW = 50;  // Analyst performance over last 50 trades
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// JOURNAL ENTRY MANAGEMENT
-// ═══════════════════════════════════════════════════════════════════════════════
+const MAX_ENTRIES = 500;
+const ROLLING_WINDOW = 50;
 
 /**
  * Add a new trade journal entry
@@ -212,11 +170,6 @@ export function shutdownJournalService(): void {
     journalEntries.length = 0;
     logger.info('Trade journal service shutdown complete');
 }
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// LESSON GENERATION
-// ═══════════════════════════════════════════════════════════════════════════════
-
 /**
  * Generate lesson from a trade outcome
  * Per quant advisor: Auto-generate lessons template
@@ -281,11 +234,6 @@ export function addLessonToEntry(tradeId: string): string | null {
 
     return lesson;
 }
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// ANALYST PERFORMANCE TRACKING
-// ═══════════════════════════════════════════════════════════════════════════════
-
 /**
  * Calculate analyst performance over rolling window
  * Per quant advisor: Track win rate per analyst over rolling 50 trades
@@ -380,11 +328,6 @@ export function calculateAnalystPerformance(): Map<string, AnalystPerformance> {
 
     return performance;
 }
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// PATTERN ANALYSIS
-// ═══════════════════════════════════════════════════════════════════════════════
-
 /**
  * Identify patterns from entry conditions
  */
@@ -416,9 +359,7 @@ function identifyPatterns(entry: TradeJournalEntry): string[] {
     }
 
     return patterns;
-}
-
-/**
+}/**
  * Analyze pattern performance across all trades
  */
 export function analyzePatternPerformance(): PatternPerformance[] {
@@ -514,11 +455,6 @@ export function analyzePatternPerformance(): PatternPerformance[] {
 
     return results;
 }
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// INSIGHTS GENERATION
-// ═══════════════════════════════════════════════════════════════════════════════
-
 /**
  * Generate comprehensive trading insights
  */
@@ -656,11 +592,6 @@ export function generateTradingInsights(): TradingInsights {
         lastUpdated: new Date().toISOString(),
     };
 }
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// PROMPT FORMATTING
-// ═══════════════════════════════════════════════════════════════════════════════
-
 /**
  * Format insights for AI analyst prompt
  */

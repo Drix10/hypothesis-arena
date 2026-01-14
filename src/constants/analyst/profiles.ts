@@ -1,22 +1,3 @@
-/**
- * Analyst Profiles - QUANTITATIVE TRADING EDITION
- * 
- * 4 specialized quant analysts inspired by modern quantitative trading methodologies.
- * Each brings a distinct approach and edge to the parallel analysis pipeline.
- * 
- * PARALLEL ANALYSIS PIPELINE (v5.0.0):
- * - Stage 1 (Market Scan): Fetch data for all 8 coins + indicators
- * - Stage 2 (Parallel Analysis): 4 quants analyze independently in parallel
- * - Stage 3 (Judge Decision): Compare all 4 and pick winner
- * - Stage 4 (Execution): Place trade on WEEX with TP/SL
- * 
- * ANALYST METHODOLOGIES:
- * - Jim (Statistical Arbitrage) - Mean reversion, pattern recognition, statistical models
- * - Ray (ML-Driven Signals) - Machine learning, alternative data, AI-driven predictions
- * - Karen (Multi-Strategy Risk) - Market-neutral, portfolio optimization, risk management
- * - Quant (Liquidity & Arbitrage) - Market making, arbitrage, microstructure analysis
- */
-
 import type { AnalystAgent } from './types';
 
 export const ANALYST_PROFILES: Record<string, AnalystAgent> = {

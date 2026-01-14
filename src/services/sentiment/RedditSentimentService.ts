@@ -1,39 +1,18 @@
 /**
  * RedditSentimentService - FREE Reddit Social Sentiment (v5.2.0)
- * 
  * Fetches crypto sentiment from Reddit using FREE JSON endpoints (no API key needed).
- * Uses .json suffix on Reddit URLs to get structured data.
- * 
- * Subreddits monitored:
- * - r/cryptocurrency (~7M members) - General crypto sentiment
- * - r/bitcoin (~6M members) - BTC-specific
- * - r/ethereum (~3M members) - ETH-specific
- * 
- * Rate Limits:
- * - ~60 requests/minute without auth (Reddit may throttle)
- * - 2.5-second delay between requests
- * - Cache for 30 minutes minimum
- * - Proper User-Agent header required
- * 
- * Per quant advisor:
- * - Max contribution to final score: ±1.5 points
- * - ~55% accuracy alone - use as confirmation only
- * - Weight subreddits: r/cryptocurrency 1.5×, r/bitcoin 1.2×, others 1.0×
+ * Monitors: r/cryptocurrency, r/bitcoin, r/ethereum
  */
 
 import { logger } from '../../utils/logger';
 import { calculateTextSentiment } from './SentimentService';
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// TYPES
-// ═══════════════════════════════════════════════════════════════════════════════
 
 export interface RedditSentimentResult {
     subreddit: string;
     postCount: number;
     avgScore: number;
     avgUpvoteRatio: number;
-    sentimentScore: number;           // -1 to +1
+    sentimentScore: number;
     sentiment: 'bullish' | 'bearish' | 'neutral';
     topPosts: Array<{
         title: string;
@@ -96,9 +75,7 @@ interface RedditListing {
     };
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// CONFIGURATION
-// ═══════════════════════════════════════════════════════════════════════════════
+
 
 const REDDIT_ENDPOINTS = [
     { url: 'https://www.reddit.com/r/cryptocurrency/hot.json?limit=50', name: 'general', weight: 1.5 },
@@ -118,7 +95,7 @@ const MAX_POST_AGE_HOURS = 24;             // Only analyze posts < 24h old
 let cachedUserAgent: string | null = null;
 
 // Single source of truth for fallback version - update this when version changes
-const FALLBACK_VERSION = '5.3.0';
+const FALLBACK_VERSION = '5.4.0';
 
 function getRedditUserAgent(): string {
     // Return cached value if available
@@ -135,7 +112,6 @@ function getRedditUserAgent(): string {
     // Read version from package.json at runtime
     try {
         // Use dynamic import path resolution to handle different build scenarios
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
         const pkg = require('../../../package.json') as { version?: string };
         const version = typeof pkg.version === 'string' && pkg.version.length > 0
             ? pkg.version
@@ -151,9 +127,7 @@ function getRedditUserAgent(): string {
 
 const USER_AGENT = getRedditUserAgent();
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// CACHE (with periodic cleanup to prevent memory leaks)
-// ═══════════════════════════════════════════════════════════════════════════════
+
 
 interface CacheEntry<T> {
     data: T;
@@ -270,9 +244,7 @@ export function shutdownRedditService(): void {
     logger.info('Reddit sentiment service shutdown complete');
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// UTILITIES
-// ═══════════════════════════════════════════════════════════════════════════════
+
 
 function sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -292,9 +264,7 @@ function classifyOverallSentiment(score: number): 'bullish' | 'bearish' | 'neutr
     return 'neutral';
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// REDDIT FETCHING
-// ═══════════════════════════════════════════════════════════════════════════════
+
 
 /**
  * Fetch and analyze sentiment from a single subreddit
@@ -451,9 +421,7 @@ async function fetchAllRedditSentiment(): Promise<Map<string, RedditSentimentRes
     return results;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// DIVERGENCE DETECTION
-// ═══════════════════════════════════════════════════════════════════════════════
+
 
 /**
  * Calculate social vs price divergence (contrarian signals)
@@ -508,11 +476,7 @@ export function calculateDivergence(
     return { signal, reason };
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// MAIN API
-// ═══════════════════════════════════════════════════════════════════════════════
 
-// Note: redditFetchPromise is declared above (before shutdownRedditService) to avoid TDZ
 
 /**
  * Get comprehensive Reddit sentiment context

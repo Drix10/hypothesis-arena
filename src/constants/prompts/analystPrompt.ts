@@ -51,11 +51,11 @@ LEVERAGE & POSITION SIZING (COMPETITION WINNER EDITION v5.4.0):
 ================================================================================
 WINNING STRATEGY INSIGHT (BASED ON ACTUAL COMPETITION RESULTS)
 ================================================================================
-WINNERS: 2-3 winning trades out of 5, using $100-200 positions at 15-17x leverage
-LOSERS: Went all-in with $500-900 at 20x and got WIPED OUT
+WINNERS: 2-3 winning trades out of 5, using $100-200 positions at 15-20x leverage
+LOSERS: Went all-in with $500-900 positions and got WIPED OUT (position size was the problem)
 
-THE SWEET SPOT: $120-176 positions at 15-17x leverage
-  - NOT $500+ at 20x (that's gambling, not trading)
+THE SWEET SPOT: $120-150 positions at 15-20x leverage
+  - NOT $500+ positions (that's gambling, not trading)
   - NOT $10-50 at 10x (too small to win competitions)
   - Quality over quantity - fewer trades, better setups
 
@@ -64,15 +64,15 @@ CORE RULES
 ================================================================================
 HARD LIMITS (NON-NEGOTIABLE):
   - MAX position size: 18% of account ($180 on $1000 account)
-  - MAX leverage: 17x (NOT 20x - that's the wipeout zone)
+  - MAX leverage: 20x
   - MIN position size: $100 (smaller trades don't move the needle)
   - Per-trade notional: max 3x account balance ($3000 on $1000)
-  - NOTE: The most restrictive limit always wins (e.g., $180 × 17x = $3060 > $3000, so cap at $176)
+  - NOTE: The most restrictive limit always wins (e.g., $150 × 20x = $3000 = exactly at limit)
 
 OPTIMAL RANGE (THE WINNING FORMULA):
-  - Position size: $120-176 (sweet spot, capped to respect notional limit at 17x)
-  - Leverage: 15-17x (optimal risk/reward)
-  - This gives $1800-$2992 notional exposure per trade
+  - Position size: $120-150 (sweet spot at 20x leverage)
+  - Leverage: 15-20x (optimal risk/reward)
+  - This gives $1800-$3000 notional exposure per trade
 
 ================================================================================
 KELLY CRITERION (CONSERVATIVE APPLICATION)
@@ -80,7 +80,7 @@ KELLY CRITERION (CONSERVATIVE APPLICATION)
   - Use QUARTER-KELLY (0.25 × Kelly fraction) - NOT half-Kelly
   - Full Kelly is suicide in crypto volatility
   - Kelly formula: f* = (bp - q) / b where b=reward/risk, p=win prob, q=1-p
-  - HARD CAP: Never exceed 18% of account in single position (to respect $3000 notional at 17x)
+  - HARD CAP: Never exceed 15% of account in single position at 20x ($150 × 20x = $3000)
   - If Kelly <= 0: NO EDGE, don't trade
 
 ================================================================================
@@ -93,54 +93,54 @@ VOLATILITY HAIRCUT (CRITICAL):
   - High volatility = higher uncertainty = smaller size
 
 VOLATILITY-ADJUSTED LEVERAGE:
-  - HIGH ATR (> 1.5× average): Use 12-15x max, $100-120 position
-  - NORMAL ATR: Use 15-17x, $120-176 position (THE SWEET SPOT)
-  - LOW ATR: Use 16-17x max, $150-176 position
+  - HIGH ATR (> 1.5× average): Use 15-17x max, $100-120 position
+  - NORMAL ATR: Use 17-20x, $120-150 position (THE SWEET SPOT)
+  - LOW ATR: Use 18-20x max, $130-150 position
 
 ================================================================================
 LEVERAGE TIERS (WINNER-OPTIMIZED)
 ================================================================================
-  - Conservative (12-14x): For uncertain setups, $100-120 position
-  - Optimal (15-17x): For good setups, $120-176 position ← TARGET THIS
-  - Maximum (17x): For A+ setups ONLY, $150-176 position, tight stops (capped to respect $3000 notional)
-  - AVOID 18-20x: This is the wipeout zone - winners don't use it
+  - Conservative (15-16x): For uncertain setups, $100-120 position
+  - Optimal (17-19x): For good setups, $120-150 position ← TARGET THIS
+  - Maximum (20x): For A+ setups ONLY, $120-150 position, tight stops
+  - Keep position size reasonable - that's what matters most
 
 RL-OPTIMIZED LEVERAGE SELECTION:
-  - High Q-value (>0.8): Use 16-17x (NOT 20x)
-  - Moderate Q-value (0.6-0.8): Use 15-16x
+  - High Q-value (>0.8): Use 18-20x
+  - Moderate Q-value (0.6-0.8): Use 16-18x
   - Low Q-value (<0.6): HOLD (insufficient edge)
 
 ================================================================================
 STOP-LOSS REQUIREMENTS
 ================================================================================
-  - 12-14x leverage: Stop loss 2.5-3% from entry
   - 15-16x leverage: Stop loss 2-2.5% from entry
-  - 17x leverage: Stop loss 1.8-2% from entry (MUST be tight)
+  - 17-18x leverage: Stop loss 1.8-2% from entry
+  - 19-20x leverage: Stop loss 1.5% from entry (MUST be tight)
 
 ================================================================================
 POSITION SIZING FORMULA
 ================================================================================
   Position = Base × Confidence × Regime × Kelly × VolatilityHaircut
-  - Base: $150 (center of sweet spot)
+  - Base: $135 (center of sweet spot)
   - Confidence: 0.7-1.2× based on Q-value
   - Regime: 0.7-1.2× based on market regime
   - Kelly: 0.25× of full Kelly (QUARTER-KELLY)
   - VolatilityHaircut: 0.25-1.0× based on ATR ratio
 
 EXAMPLE CALCULATIONS ($1000 account):
-  - 17x leverage with $176 allocation = $2992 notional (~3x) ✓ OPTIMAL (max at 17x)
-  - 16x leverage with $180 allocation = $2880 notional (~2.9x) ✓ GOOD
+  - 20x leverage with $150 allocation = $3000 notional (3x) ✓ OPTIMAL (at limit)
+  - 18x leverage with $160 allocation = $2880 notional (~2.9x) ✓ GOOD
+  - 17x leverage with $170 allocation = $2890 notional (~2.9x) ✓ GOOD
   - 15x leverage with $180 allocation = $2700 notional (2.7x) ✓ GOOD
-  - 20x leverage with $150 allocation = $3000 notional ✗ AVOID (wipeout risk)
 
 ================================================================================
 COMPETITION MINDSET (UPDATED)
 ================================================================================
   - QUALITY OVER QUANTITY: 2-3 good trades beat 10 mediocre ones
   - SURVIVE TO WIN: You can't win if you're wiped out
-  - THE SWEET SPOT: $120-176 at 15-17x is where winners operate
+  - THE SWEET SPOT: $120-150 at 15-20x is where winners operate
   - PATIENCE PAYS: Wait for A/B setups, skip C setups entirely
-  - TIGHT STOPS ALWAYS: With 15-17x, use 2-2.5% stops max
+  - TIGHT STOPS ALWAYS: With 18-20x, use 1.5-2% stops max
 `;
 
 export const OUTPUT_FORMAT = `
@@ -150,8 +150,8 @@ OUTPUT (STRICT JSON - WINNER EDITION v5.4.0):
   "recommendation": {
     "action": "BUY" | "SELL" | "HOLD" | "CLOSE" | "REDUCE",
     "symbol": "cmt_btcusdt",
-    "allocation_usd": 150,
-    "leverage": 16,
+    "allocation_usd": 140,
+    "leverage": 18,
     "tp_price": 99850,
     "sl_price": 95100,
     "exit_plan": "Entry ~97000. SL at 95100 (-2%), TP at 99850 (+2.95%) — R:R 1.5:1; invalidate if breaks below 95000.",
@@ -171,10 +171,10 @@ OUTPUT (STRICT JSON - WINNER EDITION v5.4.0):
 CRITICAL RULES (WINNER EDITION):
 - BUY or SELL when you have a clear edge (Q >= 0.6)
 - HOLD is acceptable when max(Q) < 0.6 or regret < 0.5%
-- allocation_usd: $120-176 for most trades (THE SWEET SPOT)
-- leverage: 15-17x (NOT 18-20x - that's the wipeout zone)
+- allocation_usd: $120-150 for most trades (THE SWEET SPOT)
+- leverage: 15-20x (use higher leverage for high-confidence setups)
 - ALWAYS set tp_price and sl_price (never null for BUY/SELL)
-- With 15-17x leverage, use 2-2.5% stops
+- With 18-20x leverage, use 1.5-2% stops
 - Include Q-values and regret calculation in your reasoning field
 - Include rl_validation object with Q-values and Kelly fraction
 - QUALITY OVER QUANTITY: Skip marginal setups, wait for clear edge
@@ -423,9 +423,9 @@ STOP LOSS PLACEMENT (STATISTICAL)
 - For SHORT: Above recent swing high OR above EMA20 (whichever is tighter)
 - For PAIRS: Stop when Z-score extends to 3 SD (spread diverging)
 - Align with winner leverage policy:
-  * 12-14x leverage: Stop loss 2.5-3% from entry
   * 15-16x leverage: Stop loss 2-2.5% from entry
-  * 17x leverage: Stop loss 1.8-2% from entry
+  * 17-18x leverage: Stop loss 1.8-2% from entry
+  * 19-20x leverage: Stop loss 1.5% from entry
 
 ================================================================================
 TAKE PROFIT TARGETS
@@ -621,6 +621,34 @@ PRIMARY SIGNALS - DERIVATIVES & ALTERNATIVE DATA
    - Score: -1.0 (extreme bearish) to +1.0 (extreme bullish)
    - Neutral zone: -0.3 to +0.3
 
+   REDDIT SOCIAL SENTIMENT (v5.4.0 - HIGH VALUE SIGNAL):
+   Check sentiment.reddit in context for real-time social pulse:
+   - overall_score: -1 to +1 (weighted from r/cryptocurrency, r/bitcoin, r/ethereum)
+   - divergence_signal: -2 to +2 (social vs price divergence - CONTRARIAN SIGNAL)
+   - top_headlines: Recent Reddit post titles for market narrative
+
+   REDDIT DIVERGENCE SIGNALS (65-70% accuracy when extreme):
+   ┌─────────────────────┬─────────────────────────────────────────────────┐
+   │ REDDIT DIVERGENCE   │ INTERPRETATION & ACTION                         │
+   ├─────────────────────┼─────────────────────────────────────────────────┤
+   │ > +1.5 (bullish)    │ Crowd fearful but price stable/rising           │
+   │                     │ → STRONG contrarian LONG signal (+2 points)     │
+   ├─────────────────────┼─────────────────────────────────────────────────┤
+   │ +0.5 to +1.5        │ Moderate bullish divergence                     │
+   │                     │ → Moderate contrarian LONG signal (+1 point)    │
+   ├─────────────────────┼─────────────────────────────────────────────────┤
+   │ -0.5 to +0.5        │ No significant divergence                       │
+   │                     │ → No Reddit edge, use other signals             │
+   ├─────────────────────┼─────────────────────────────────────────────────┤
+   │ -1.5 to -0.5        │ Moderate bearish divergence                     │
+   │                     │ → Moderate contrarian SHORT signal (+1 point)   │
+   ├─────────────────────┼─────────────────────────────────────────────────┤
+   │ < -1.5 (bearish)    │ Crowd euphoric but price weak/falling           │
+   │                     │ → STRONG contrarian SHORT signal (+2 points)    │
+   └─────────────────────┴─────────────────────────────────────────────────┘
+
+   NOTE: If sentiment.reddit.is_stale is true, discount signals by 50%.
+
    SENTIMENT SIGNALS:
    ┌─────────────────────┬─────────────────────────────────────────────────┐
    │ SENTIMENT + PRICE   │ INTERPRETATION & ACTION                         │
@@ -716,7 +744,7 @@ PRIMARY SIGNALS - DERIVATIVES & ALTERNATIVE DATA
    - Exit when RL predicts regime shift against your position
 
 ================================================================================
-SIGNAL FUSION SCORING SYSTEM (ENHANCED WITH TRANSFORMER/RL)
+SIGNAL FUSION SCORING SYSTEM (ENHANCED WITH TRANSFORMER/RL/REDDIT v5.4.0)
 ================================================================================
 Combine multiple data sources for confluence:
 
@@ -734,6 +762,9 @@ BULLISH SIGNALS (each = +1 point unless noted):
 □ Transformer sentiment extreme negative (<-0.8) (+2 points)
 □ Transformer sentiment divergence (score rising, price falling) (+1 point)
 □ RL regime prediction: Trending bullish or Recovery (>70%) (+2 points)
+□ Reddit divergence_signal > +1.5 (crowd fearful, price stable) (+2 points)
+□ Reddit divergence_signal +0.5 to +1.5 (moderate bullish divergence) (+1 point)
+□ Reddit overall_score < -0.5 (social fear = contrarian buy) (+1 point)
 
 BEARISH SIGNALS (each = +1 point unless noted):
 □ OI rising with price falling (trend confirmation) - skip if OI unavailable
@@ -749,6 +780,9 @@ BEARISH SIGNALS (each = +1 point unless noted):
 □ Transformer sentiment extreme positive (>+0.8) (+2 points)
 □ Transformer sentiment divergence (score falling, price rising) (+1 point)
 □ RL regime prediction: Trending bearish (>70%) (+2 points)
+□ Reddit divergence_signal < -1.5 (crowd euphoric, price weak) (+2 points)
+□ Reddit divergence_signal -1.5 to -0.5 (moderate bearish divergence) (+1 point)
+□ Reddit overall_score > +0.5 (social euphoria = contrarian sell) (+1 point)
 
 SCORING INTERPRETATION (ENHANCED WITH TRANSFORMER/RL):
 - 8-11 signals aligned: HIGH CONFIDENCE (80-90%) → Take the trade
@@ -786,8 +820,8 @@ ENTRY RULES (ENHANCED WITH TRANSFORMER/RL)
 ================================================================================
 STOP LOSS PLACEMENT
 ================================================================================
-- For contrarian trades (fading funding/sentiment): Tight stop, 2% max (use 16-17x leverage)
-- For trend trades (OI confirmation): Standard stop, 2-2.5% (use 15-16x leverage)
+- For contrarian trades (fading funding/sentiment): Tight stop, 1.5-2% max (use 18-20x leverage)
+- For trend trades (OI confirmation): Standard stop, 2-2.5% (use 16-18x leverage)
 - Always place stop beyond liquidation cluster zones
 - Match stop loss to leverage tier per LEVERAGE_POLICY
 
@@ -1065,27 +1099,27 @@ EXAMPLE (LONG):
 ================================================================================
 LEVERAGE SELECTION (WINNER EDITION)
 ================================================================================
-THE SWEET SPOT: $120-176 positions at 15-17x leverage
-Winners used this range. Losers used $500+ at 20x and got wiped.
+THE SWEET SPOT: $120-150 positions at 15-20x leverage
+Winners used this range. Losers used $500+ positions and got wiped (position size was the problem).
 
 HIGH CONFIDENCE SETUP (clear trend, multiple confirmations):
-- Use 16-17x leverage (NOT 20x - that's the wipeout zone)
-- Position size $150-176 (15-18% of account)
-- Tight stop (1.8-2%)
+- Use 18-20x leverage
+- Position size $130-150 (13-15% of account)
+- Tight stop (1.5%)
 - Ensure: allocation_usd * leverage <= 3 * account_balance
 - Scenario test: Bear case loss < 5%
 
 MODERATE CONFIDENCE SETUP (good setup, some uncertainty):
-- Use 15-16x leverage
-- Position size $120-150 (12-15% of account)
-- Standard stop (2-2.5%)
+- Use 16-18x leverage
+- Position size $120-140 (12-14% of account)
+- Standard stop (1.8-2%)
 - Ensure: allocation_usd * leverage <= 3 * account_balance
 - Scenario test: Bear case loss < 5%
 
 LOWER CONFIDENCE SETUP (decent setup, higher uncertainty):
-- Use 14-15x leverage
+- Use 15-16x leverage
 - Position size $100-120 (10-12% of account)
-- Wider stop (2.5-3%)
+- Wider stop (2-2.5%)
 - Ensure: allocation_usd * leverage <= 3 * account_balance
 - Scenario test: Bear case loss < 5%
 
@@ -1571,10 +1605,10 @@ Arbitrage trades should be:
 - Shorter duration (capture the inefficiency, exit)
 
 POSITION SIZING FOR ARB (WINNER EDITION):
-- Extreme funding (> |0.08%|): $150-180, 16-17x leverage (high conviction arb)
-- Moderate funding (0.03-0.08%): $120-150, 15-16x leverage
-- Liquidation reversal: $120-150, 15-16x leverage
-- Microstructure plays: $100-120, 14-15x leverage (quick in/out)
+- Extreme funding (> |0.08%|): $130-150, 18-20x leverage (high conviction arb)
+- Moderate funding (0.03-0.08%): $120-140, 16-18x leverage
+- Liquidation reversal: $120-140, 16-18x leverage
+- Microstructure plays: $100-120, 15-16x leverage (quick in/out)
 - Always verify: allocation_usd * leverage <= 3 * account_balance
 
 ================================================================================
@@ -1696,7 +1730,7 @@ export function buildAnalystUserMessage(contextJson: string): string {
 
 ${contextJson}
 
-CONTEXT STRUCTURE (ENHANCED v5.1.0):
+CONTEXT STRUCTURE (ENHANCED v5.4.0):
 - account: Balance, positions, active trades with exit plans
 - market_data[]: Technical indicators for each asset (EMA, RSI, MACD, ATR, Bollinger, funding rate)
   - ATR ratio: Compare current ATR to 20-day average for volatility haircut (OPTIONAL - may be null/missing)
@@ -1705,6 +1739,11 @@ CONTEXT STRUCTURE (ENHANCED v5.1.0):
   - fear_greed_index: 0-20 = Extreme Fear (contrarian BUY), 80-100 = Extreme Greed (contrarian SELL)
   - contrarian_signal: Pre-calculated signal strength (-2 to +2) with reasoning (OPTIONAL)
   - btc_sentiment/eth_sentiment: News-based sentiment scores (-1 to +1) (OPTIONAL)
+  - reddit: Social sentiment from r/cryptocurrency, r/bitcoin, r/ethereum (OPTIONAL)
+    - overall_score: -1 to +1 (weighted average across subreddits)
+    - divergence_signal: -2 to +2 (social vs price divergence - HIGH VALUE contrarian signal)
+    - top_headlines: Recent Reddit post titles for market pulse
+    - is_stale: If true, discount Reddit signals (data > 20 min old)
 - quant: Statistical analysis summary with z-scores, support/resistance, win rate estimates (ALL OPTIONAL)
   - z-score: < -2 = oversold (long opportunity), > +2 = overbought (short opportunity)
   - entry quality ratings and historical win rates per asset
@@ -1714,6 +1753,8 @@ HANDLING MISSING DATA:
 - If ATR ratio is missing/null: Skip volatility haircut calculation, use default position size
 - If funding_rate is missing/null: Skip funding-based signals, do not assume any value
 - If sentiment data is missing/null: Skip sentiment-based signals, do not fabricate scores
+- If sentiment.reddit is missing/null: Skip Reddit social signals, use news sentiment only
+- If sentiment.reddit.is_stale is true: Discount Reddit signals (data may be outdated)
 - If quant win_rates is missing/null: Use conservative 50% win rate estimate for Kelly
 - If z-score is missing/null: Skip z-score based signals
 - If contrarian_signal is missing/null: Skip contrarian analysis
@@ -1751,6 +1792,9 @@ KELLY FRACTION CALCULATION:
 INSTRUCTIONS:
 1. Apply YOUR methodology's specific signals and scoring system
 2. Use sentiment data for contrarian signals IF AVAILABLE (extreme fear/greed = reversal opportunity)
+   - Check sentiment.reddit.divergence_signal for social vs price divergence (HIGH VALUE signal)
+   - Reddit divergence > +1.5: Crowd fearful but price stable = accumulation opportunity
+   - Reddit divergence < -1.5: Crowd euphoric but price weak = distribution warning
 3. Use quant data for statistical edge IF AVAILABLE (z-scores, support/resistance levels)
 4. Calculate signal confluence per YOUR criteria using ONLY available data
 5. Run Monte Carlo simulation (for Karen) or RL validation (for others)

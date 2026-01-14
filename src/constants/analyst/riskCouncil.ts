@@ -1,29 +1,11 @@
-/**
- * Risk Council Veto Triggers (Stage 4 - Karen's Rules from FLOW.md)
- * 
- * These are the HARD RULES that Karen (Risk Council) uses to VETO trades.
- * If ANY of these conditions are true, the trade MUST be vetoed.
- * Used in CollaborativeFlow.ts buildRiskCouncilPrompt()
- */
-
 import { config } from '../../config';
 import { GLOBAL_RISK_LIMITS } from './riskLimits';
 import { logger } from '../../utils/logger';
 
-// ============================================================================
-// Type-guard validators for config values (reusable for derivation + logging)
-// ============================================================================
-
-/**
- * Validates that a value is a positive integer >= 1 (for concurrent position counts)
- */
 function isValidPositiveInt(val: unknown): val is number {
     return typeof val === 'number' && Number.isFinite(val) && val >= 1;
 }
 
-/**
- * Validates that a value is a positive percentage > 0 (for drawdown limits)
- */
 function isValidPositivePercent(val: unknown): val is number {
     return typeof val === 'number' && Number.isFinite(val) && val > 0;
 }
@@ -92,13 +74,19 @@ const maxLeverage = GLOBAL_RISK_LIMITS.MAX_SAFE_LEVERAGE;
 const maxRiskPerTradePercent = GLOBAL_RISK_LIMITS.MAX_RISK_PER_TRADE_PERCENT;
 const maxConcurrentRiskPercent = GLOBAL_RISK_LIMITS.MAX_CONCURRENT_RISK_PERCENT;
 
-// Additional risk limits
+// Additional risk limits - now configurable via environment variables
 // FIXED: Use dynamic stop loss based on leverage tier instead of hardcoded 5%
 // This aligns with STOP_LOSS_BY_LEVERAGE which has different values per tier
 const stopLossPercent = GLOBAL_RISK_LIMITS.STOP_LOSS_BY_LEVERAGE.MEDIUM.maxStopPercent; // Default for display
-const maxFundingAgainstPercent = 0.001; // 0.1% - block extreme funding
-const maxSectorPositions = 3;
-const netExposureLimits = { LONG: 70, SHORT: 70 };
+
+// Get from config with fallbacks
+const riskCouncilConfig = config.autonomous?.riskCouncil;
+const maxFundingAgainstPercent = riskCouncilConfig?.maxFundingAgainstPercent ?? 0.001; // 0.1% default
+const maxSectorPositions = riskCouncilConfig?.maxSectorPositions ?? 3;
+const netExposureLimits = {
+    LONG: riskCouncilConfig?.netExposureLimitLong ?? 70,
+    SHORT: riskCouncilConfig?.netExposureLimitShort ?? 70
+};
 
 export const RISK_COUNCIL_VETO_TRIGGERS = {
     MAX_POSITION_PERCENT: maxPositionSizePercent,

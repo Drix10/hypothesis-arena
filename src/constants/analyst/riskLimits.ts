@@ -1,35 +1,16 @@
 /**
  * Global Risk Management Constants
- * 
  * COMPETITION MODE: Aggressive settings for demo money competition.
- * Top 2 profit wins in 3 weeks - we need to trade actively.
- * 
  * IMPORTANT: These aggressive settings are ONLY safe when COMPETITION_MODE is enabled.
- * In production, use conservative defaults to protect capital.
- * 
- * RUNTIME PROTECTIONS (v5.3.0):
- * 1. validateCompetitionMode() - Validates config at startup
- * 2. validateAccountTypeForCompetition() - Blocks if WEEX_ACCOUNT_TYPE=live
- * 3. guardCompetitionModeTrade() - Per-trade guard with logging
  */
 
 import { logger } from '../../utils/logger';
 
-// Competition mode flag - must be explicitly enabled via environment variable
-// Default: false (safe production mode)
 const COMPETITION_MODE_ENABLED = process.env.COMPETITION_MODE === 'true' || process.env.NODE_ENV === 'competition';
-
-// Competition mode acknowledgment - required when COMPETITION_MODE is enabled
-// This prevents accidental activation of aggressive settings
-// The acknowledgment string must match EXACTLY to enable competition mode
 const COMPETITION_MODE_ACK_STRING = 'I_ACCEPT_DEMO_ONLY_HIGH_RISK_AGGRESSIVE_SETTINGS';
 const COMPETITION_MODE_ACK = process.env.COMPETITION_MODE_ACK === COMPETITION_MODE_ACK_STRING;
-
-// Account type declaration - explicit safeguard against running on live accounts
-// Values: 'demo' | 'test' | 'live' | undefined
 const WEEX_ACCOUNT_TYPE = process.env.WEEX_ACCOUNT_TYPE?.trim()?.toLowerCase();
 
-// Validate competition mode configuration
 if (COMPETITION_MODE_ENABLED && !COMPETITION_MODE_ACK) {
     console.warn(
         '⚠️ COMPETITION MODE ENABLED but acknowledgment missing or incorrect!\n' +
@@ -40,75 +21,42 @@ if (COMPETITION_MODE_ENABLED && !COMPETITION_MODE_ACK) {
     );
 }
 
-// Block competition mode if account type is explicitly set to 'live'
 const ACCOUNT_TYPE_BLOCKS_COMPETITION = WEEX_ACCOUNT_TYPE === 'live';
-
-// Valid account types for competition mode: 'demo' or 'test'
 const VALID_COMPETITION_ACCOUNT_TYPES = ['demo', 'test'];
-
-// FAIL FAST: Block competition mode if account type is not explicitly set to 'demo' or 'test'
-// This removes the legacy warn-but-allow behavior for safety
 const ACCOUNT_TYPE_MISSING_FOR_COMPETITION = COMPETITION_MODE_ENABLED && COMPETITION_MODE_ACK && !WEEX_ACCOUNT_TYPE;
 const ACCOUNT_TYPE_INVALID_FOR_COMPETITION = COMPETITION_MODE_ENABLED && COMPETITION_MODE_ACK &&
     WEEX_ACCOUNT_TYPE && !VALID_COMPETITION_ACCOUNT_TYPES.includes(WEEX_ACCOUNT_TYPE) && WEEX_ACCOUNT_TYPE !== 'live';
 
 if (COMPETITION_MODE_ENABLED && COMPETITION_MODE_ACK && ACCOUNT_TYPE_BLOCKS_COMPETITION) {
-    // Throw error to fail fast - do not allow startup with live account in competition mode
     throw new Error(
         '🚫 STARTUP BLOCKED: COMPETITION_MODE is enabled but WEEX_ACCOUNT_TYPE is set to "live"!\n' +
         '   Competition mode is ONLY for demo/paper trading accounts.\n' +
         '   Either:\n' +
         '   - Set WEEX_ACCOUNT_TYPE=demo if this is a demo account\n' +
-        '   - Remove COMPETITION_MODE=true if this is a live account\n' +
-        '   \n' +
-        '   Environment variables involved:\n' +
-        '   - COMPETITION_MODE=true (currently set)\n' +
-        '   - COMPETITION_MODE_ACK=<acknowledged> (currently set)\n' +
-        '   - WEEX_ACCOUNT_TYPE=live (BLOCKING - must be "demo" or "test" for competition mode)'
+        '   - Remove COMPETITION_MODE=true if this is a live account'
     );
 }
 
 if (ACCOUNT_TYPE_MISSING_FOR_COMPETITION) {
-    // Throw error to fail fast - WEEX_ACCOUNT_TYPE is REQUIRED for competition mode
     throw new Error(
         '🚫 STARTUP BLOCKED: COMPETITION_MODE is enabled but WEEX_ACCOUNT_TYPE is not set!\n' +
         '   Competition mode REQUIRES explicit account type declaration.\n' +
-        '   Set WEEX_ACCOUNT_TYPE=demo to confirm this is a demo account.\n' +
-        '   \n' +
-        '   Environment variables involved:\n' +
-        '   - COMPETITION_MODE=true (currently set)\n' +
-        '   - COMPETITION_MODE_ACK=<acknowledged> (currently set)\n' +
-        '   - WEEX_ACCOUNT_TYPE=<not set> (REQUIRED - must be "demo" or "test" for competition mode)'
+        '   Set WEEX_ACCOUNT_TYPE=demo to confirm this is a demo account.'
     );
 }
 
 if (ACCOUNT_TYPE_INVALID_FOR_COMPETITION) {
-    // Throw error to fail fast - WEEX_ACCOUNT_TYPE has invalid value
-    // Note: "live" is handled separately above with a specific error message
     throw new Error(
         `🚫 STARTUP BLOCKED: COMPETITION_MODE is enabled but WEEX_ACCOUNT_TYPE="${WEEX_ACCOUNT_TYPE}" is invalid!\n` +
-        '   Competition mode requires WEEX_ACCOUNT_TYPE to be "demo" or "test".\n' +
-        '   Valid values: "demo", "test" (for competition mode), or "live" (blocks competition mode)\n' +
-        '   \n' +
-        '   Environment variables involved:\n' +
-        '   - COMPETITION_MODE=true (currently set)\n' +
-        '   - COMPETITION_MODE_ACK=<acknowledged> (currently set)\n' +
-        `   - WEEX_ACCOUNT_TYPE=${WEEX_ACCOUNT_TYPE} (INVALID - must be "demo" or "test" for competition mode)`
+        '   Competition mode requires WEEX_ACCOUNT_TYPE to be "demo" or "test".'
     );
 }
 
-// Only use competition settings if:
-// 1. COMPETITION_MODE=true
-// 2. COMPETITION_MODE_ACK matches exactly
-// 3. WEEX_ACCOUNT_TYPE is 'demo' or 'test' (not 'live', not missing, not invalid)
-// Note: The throws above ensure we never reach here with invalid config,
-// but we add explicit check for defense-in-depth
 const USE_COMPETITION_SETTINGS = COMPETITION_MODE_ENABLED &&
     COMPETITION_MODE_ACK &&
     !ACCOUNT_TYPE_BLOCKS_COMPETITION &&
     VALID_COMPETITION_ACCOUNT_TYPES.includes(WEEX_ACCOUNT_TYPE || '');
 
-// Log warning if competition mode is fully enabled
 if (USE_COMPETITION_SETTINGS) {
     console.warn(
         '\n' +
@@ -116,27 +64,23 @@ if (USE_COMPETITION_SETTINGS) {
         '║  ⚠️  COMPETITION MODE ENABLED - AGGRESSIVE RISK SETTINGS ACTIVE              ║\n' +
         '╠══════════════════════════════════════════════════════════════════════════════╣\n' +
         '║  This mode is for DEMO/PAPER TRADING ONLY!                                   ║\n' +
-        '║                                                                              ║\n' +
-        '║  Settings: 17x max leverage, 50% max position size                           ║\n' +
-        '║  Account Type: ' + (WEEX_ACCOUNT_TYPE || 'NOT SET (please set WEEX_ACCOUNT_TYPE=demo)').padEnd(46) + '║\n' +
-        '║                                                                              ║\n' +
+        '║  Settings: 20x max leverage, 50% max position size                           ║\n' +
+        '║  Account Type: ' + (WEEX_ACCOUNT_TYPE || 'NOT SET').padEnd(46) + '║\n' +
         '║  VERIFY YOUR ACCOUNT IS A DEMO ACCOUNT BEFORE PROCEEDING!                    ║\n' +
         '╚══════════════════════════════════════════════════════════════════════════════╝\n'
     );
 
-    // Also log to file logger for audit trail
     if (typeof logger !== 'undefined' && logger.warn) {
         logger.warn('COMPETITION MODE ENABLED', {
             competitionMode: true,
             acknowledgment: 'ACCEPTED',
             accountType: WEEX_ACCOUNT_TYPE || 'NOT_SET',
-            maxLeverage: 17,
+            maxLeverage: 20,
             maxPositionSizePercent: 50
         });
     }
 }
 
-// Production-safe defaults
 const PRODUCTION_DEFAULTS = {
     MAX_SAFE_LEVERAGE: 10,
     AUTO_APPROVE_LEVERAGE_THRESHOLD: 5,
@@ -147,13 +91,10 @@ const PRODUCTION_DEFAULTS = {
     MAX_CONCURRENT_RISK_PERCENT: 15,
 };
 
-// Competition-aggressive settings (WINNER EDITION v5.4.0)
-// Based on actual competition results: Winners used $100-200 at 15-17x
-// Losers used $500+ at 20x and got wiped out
 const COMPETITION_SETTINGS = {
-    MAX_SAFE_LEVERAGE: 17,  // CHANGED: 17x is the sweet spot, not 15x
-    AUTO_APPROVE_LEVERAGE_THRESHOLD: 12,  // CHANGED: Auto-approve up to 12x
-    ABSOLUTE_MAX_LEVERAGE: 20,  // Keep 20x as safety ceiling
+    MAX_SAFE_LEVERAGE: 20,
+    AUTO_APPROVE_LEVERAGE_THRESHOLD: 15,
+    ABSOLUTE_MAX_LEVERAGE: 20,
     MAX_POSITION_SIZE_PERCENT: 50,
     MAX_TOTAL_LEVERAGED_CAPITAL_PERCENT: 60,
     MAX_RISK_PER_TRADE_PERCENT: 10,

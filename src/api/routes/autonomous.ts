@@ -9,7 +9,6 @@ import { getAutonomousTradingEngine } from '../../services/autonomous/Autonomous
 import { logger } from '../../utils/logger';
 import { prisma } from '../../config/database';
 
-// Debug/Admin imports (v5.2.0)
 import { getJournalEntry, getRecentEntries, clearJournal } from '../../services/journal';
 import { getTrackedTrade, getAllTrackedTrades, clearTrackedTrades } from '../../services/position';
 import { clearSentimentCache, formatSentimentForPrompt, getSentimentContextSafe } from '../../services/sentiment';
@@ -29,14 +28,9 @@ import {
 const router = Router();
 const engine = getAutonomousTradingEngine();
 
-// FIXED: Extract magic numbers to named constants for better maintainability
-const MAX_HISTORY_LIMIT = 50; // Maximum trades to return
-const DEFAULT_HISTORY_LIMIT = 10; // Default trades to return
+const MAX_HISTORY_LIMIT = 50;
+const DEFAULT_HISTORY_LIMIT = 10;
 
-/**
- * GET /api/autonomous/status
- * Get current engine status
- */
 router.get('/status', (_req, res) => {
     try {
         const status = engine.getStatus();
@@ -78,8 +72,6 @@ router.post('/stop', (_req: Request, res: Response) => {
 /**
  * POST /api/autonomous/trigger
  * Trigger a manual trading cycle
- * Note: The engine runs on a loop, so this just signals intent.
- * The actual cycle will run on the next iteration.
  */
 router.post('/trigger', async (_req: Request, res: Response) => {
     try {
@@ -88,8 +80,6 @@ router.post('/trigger', async (_req: Request, res: Response) => {
             res.status(400).json({ success: false, error: 'Engine is not running. Start the engine first.' });
             return;
         }
-        // The engine runs on a loop - we can't directly trigger a cycle
-        // But we can acknowledge the request
         res.json({
             success: true,
             message: 'Engine is running. Next cycle will execute based on configured interval.',
@@ -122,24 +112,21 @@ router.get('/analysts', (_req, res) => {
  */
 router.get('/history', async (req: Request, res: Response) => {
     try {
-        // FIXED: Validate and sanitize limit parameter with NaN check
         const rawLimit = req.query.limit as string;
-        let limit = DEFAULT_HISTORY_LIMIT; // Use named constant instead of magic number
+        let limit = DEFAULT_HISTORY_LIMIT;
 
         if (rawLimit) {
             const parsedLimit = parseInt(rawLimit, 10);
-            // FIXED: Add Number.isFinite check to prevent NaN values
             if (!Number.isFinite(parsedLimit) || parsedLimit < 1) {
                 res.status(400).json({ success: false, error: 'Invalid limit parameter. Must be a positive integer.' });
                 return;
             }
-            limit = Math.min(parsedLimit, MAX_HISTORY_LIMIT); // Cap at configured max
+            limit = Math.min(parsedLimit, MAX_HISTORY_LIMIT);
         }
 
-        // Use Prisma to fetch trade history
         const trades = await prisma.trade.findMany({
             where: {
-                executedAt: { not: null } // CRITICAL: Filter out trades without execution time
+                executedAt: { not: null }
             },
             orderBy: { executedAt: 'desc' },
             take: limit,

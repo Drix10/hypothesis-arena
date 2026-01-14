@@ -6,20 +6,17 @@ import { config } from '../../config';
 
 const router = Router();
 
-// Valid intervals for candlestick data
 const VALID_INTERVALS = ['1m', '5m', '15m', '30m', '1H', '4H', '1D', '1W'];
 
-// Helper to validate symbol format
 const isValidSymbol = (symbol: string): boolean => {
     return /^[a-z0-9_]+$/i.test(symbol) && symbol.length <= 50;
 };
 
-// Helper to check if symbol is in approved list (type-safe)
 const isApprovedSymbolCheck = (symbol: string): boolean => {
     return (APPROVED_SYMBOLS as readonly string[]).includes(symbol);
 };
 
-// GET /api/weex/status - Test WEEX connection (public)
+// GET /api/weex/status
 router.get('/status', async (_req: Request, res: Response, _next: NextFunction) => {
     try {
         const weex = getWeexClient();
@@ -40,13 +37,12 @@ router.get('/status', async (_req: Request, res: Response, _next: NextFunction) 
     }
 });
 
-// GET /api/weex/tickers - Get all tickers (public)
+// GET /api/weex/tickers
 router.get('/tickers', async (_req: Request, res: Response, next: NextFunction) => {
     try {
         const weex = getWeexClient();
         const tickers = await weex.getAllTickers();
 
-        // Filter to approved symbols only - use proper type checking
         const filtered = tickers.filter(t => isApprovedSymbolCheck(t.symbol));
 
         res.json({ tickers: filtered });
@@ -55,7 +51,7 @@ router.get('/tickers', async (_req: Request, res: Response, next: NextFunction) 
     }
 });
 
-// GET /api/weex/ticker/:symbol - Get single ticker (public)
+// GET /api/weex/ticker/:symbol
 router.get('/ticker/:symbol', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
         const symbol = req.params.symbol.toLowerCase();
@@ -79,7 +75,7 @@ router.get('/ticker/:symbol', async (req: Request, res: Response, next: NextFunc
     }
 });
 
-// GET /api/weex/depth/:symbol - Get orderbook (public)
+// GET /api/weex/depth/:symbol
 router.get('/depth/:symbol', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
         const symbol = req.params.symbol.toLowerCase();
@@ -111,7 +107,7 @@ router.get('/depth/:symbol', async (req: Request, res: Response, next: NextFunct
     }
 });
 
-// GET /api/weex/candles/:symbol - Get candlestick data (public)
+// GET /api/weex/candles/:symbol
 router.get('/candles/:symbol', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
         const symbol = req.params.symbol.toLowerCase();
@@ -149,13 +145,12 @@ router.get('/candles/:symbol', async (req: Request, res: Response, next: NextFun
     }
 });
 
-// GET /api/weex/contracts - Get all contracts info (public)
+// GET /api/weex/contracts
 router.get('/contracts', async (_req: Request, res: Response, next: NextFunction) => {
     try {
         const weex = getWeexClient();
         const contracts = await weex.getContracts();
 
-        // Filter to approved symbols - use proper type checking
         const filtered = contracts.filter(c => isApprovedSymbolCheck(c.symbol));
 
         res.json({ contracts: filtered });
@@ -164,7 +159,7 @@ router.get('/contracts', async (_req: Request, res: Response, next: NextFunction
     }
 });
 
-// ============ PRIVATE ENDPOINTS ============
+// PRIVATE ENDPOINTS
 
 // GET /api/weex/account - Get account info
 router.get('/account', async (_req: Request, res: Response, next: NextFunction) => {
@@ -251,8 +246,24 @@ router.get('/positions', async (_req: Request, res: Response, next: NextFunction
             Promise.all(symbols.map(async (symbol) => {
                 try {
                     const orders = await weex.getCurrentPlanOrders(symbol);
+                    // Debug: log what we get from WEEX
+                    if (orders && orders.length > 0) {
+                        logger.debug(`Plan orders for ${symbol}: ${orders.length} orders`, {
+                            orders: orders.map((o: any) => ({
+                                type: o.type,
+                                planType: o.planType || o.plan_type,
+                                positionSide: o.positionSide || o.position_side,
+                                triggerPrice: o.triggerPrice || o.trigger_price,
+                                size: o.size,
+                                status: o.status
+                            }))
+                        });
+                    } else {
+                        logger.debug(`No plan orders for ${symbol}`);
+                    }
                     return { symbol, orders };
-                } catch {
+                } catch (err) {
+                    logger.warn(`Failed to fetch plan orders for ${symbol}:`, err);
                     return { symbol, orders: [] };
                 }
             }))
@@ -267,10 +278,14 @@ router.get('/positions', async (_req: Request, res: Response, next: NextFunction
             const markPrice = tickerMap.get(pos.symbol) || 0;
             const planOrders = planOrderMap.get(pos.symbol) || [];
 
+            // Debug: log plan orders for each position
+            logger.debug(`Position ${pos.symbol} (${pos.side}): ${planOrders.length} plan orders found`);
+
             // Get TP/SL orders for this position
             // WEEX plan orders return 'type' field:
-            // 1=Open long, 2=Open short, 3=Close long, 4=Close short, 5=Partial close long, 6=Partial close short
-            // For TP/SL, we want close orders (3,4,5,6) that match our position direction
+            // WEEX plan orders can be:
+            // 1. Regular trigger orders with type field (1-6)
+            // 2. TP/SL orders placed via placeTpSlOrder with planType field (profit_plan/loss_plan)
             let stopLoss: number | null = null;
             let takeProfit: number | null = null;
 
@@ -286,19 +301,66 @@ router.get('/positions', async (_req: Request, res: Response, next: NextFunction
             const referencePrice = markPrice > 0 ? markPrice : actualEntryPrice;
 
             // Filter to only close orders for this position's direction
-            // LONG position: close orders are type 3 (close long) or 5 (partial close long)
-            // SHORT position: close orders are type 4 (close short) or 6 (partial close short)
-            const relevantTypes = isLongPos ? ['3', '5'] : ['4', '6'];
+            // WEEX API returns type as string names: 'CLOSE_LONG', 'CLOSE_SHORT'
+            // Or numeric: 3/5 for close long, 4/6 for close short
+            const relevantTypes = isLongPos
+                ? ['CLOSE_LONG', '3', '5']
+                : ['CLOSE_SHORT', '4', '6'];
 
             for (const order of planOrders) {
                 const orderType = String(order.type || '');
+                const planType = String(order.planType || order.plan_type || '');
+                const positionSide = String(order.positionSide || order.position_side || '').toLowerCase();
 
-                // Skip orders that aren't close orders for this position direction
-                if (!relevantTypes.includes(orderType)) continue;
+                // Check if this is a TP/SL order via planType
+                const isTpSlOrder = planType === 'profit_plan' || planType === 'loss_plan';
+
+                // For TP/SL orders, check positionSide matches our position
+                if (isTpSlOrder) {
+                    const orderIsForLong = positionSide === 'long';
+                    if (orderIsForLong !== isLongPos) continue; // Skip if wrong direction
+                }
+                // For regular trigger orders, check type
+                else if (!relevantTypes.includes(orderType)) {
+                    continue; // Skip if not a close order for this direction
+                }
 
                 const triggerPrice = parseFloat(order.triggerPrice || order.trigger_price || '0');
                 if (triggerPrice <= 0 || !Number.isFinite(triggerPrice)) continue;
 
+                // For TP/SL orders, use planType to determine SL vs TP
+                if (isTpSlOrder) {
+                    if (planType === 'loss_plan') {
+                        // Stop loss order
+                        if (isLongPos) {
+                            // For LONG, use highest SL (closest to current)
+                            if (stopLoss === null || triggerPrice > stopLoss) {
+                                stopLoss = triggerPrice;
+                            }
+                        } else {
+                            // For SHORT, use lowest SL (closest to current)
+                            if (stopLoss === null || triggerPrice < stopLoss) {
+                                stopLoss = triggerPrice;
+                            }
+                        }
+                    } else if (planType === 'profit_plan') {
+                        // Take profit order
+                        if (isLongPos) {
+                            // For LONG, use lowest TP (closest to current)
+                            if (takeProfit === null || triggerPrice < takeProfit) {
+                                takeProfit = triggerPrice;
+                            }
+                        } else {
+                            // For SHORT, use highest TP (closest to current)
+                            if (takeProfit === null || triggerPrice > takeProfit) {
+                                takeProfit = triggerPrice;
+                            }
+                        }
+                    }
+                    continue;
+                }
+
+                // For regular trigger orders, infer SL/TP from trigger price vs reference
                 // Skip if we have no reference price to compare against
                 if (referencePrice <= 0) continue;
 
@@ -336,6 +398,13 @@ router.get('/positions', async (_req: Request, res: Response, next: NextFunction
                     }
                     // triggerPrice === referencePrice is ambiguous, skip it
                 }
+            }
+
+            // Debug: log if we found SL/TP
+            if (stopLoss || takeProfit) {
+                logger.debug(`${pos.symbol} ${pos.side}: SL=${stopLoss}, TP=${takeProfit}`);
+            } else if (planOrders.length > 0) {
+                logger.debug(`${pos.symbol} ${pos.side}: No SL/TP found from ${planOrders.length} plan orders`);
             }
 
             // Calculate SL/TP P&L - the realized P&L when SL/TP is triggered
