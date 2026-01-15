@@ -8,6 +8,8 @@ import {
     WeexCredentials,
     WeexOrderRequest,
     WeexOrderResponse,
+    WeexClosePositionsResult,
+    WeexClosePositionsResponse,
     WeexPosition,
     WeexPositionRaw,
     normalizeWeexPosition,
@@ -728,11 +730,15 @@ export class WeexClient {
         return (response as any).list || (response as any).data || [];
     }
 
-    async closeAllPositions(symbol?: string): Promise<any> {
+    async closeAllPositions(symbol?: string): Promise<WeexClosePositionsResponse> {
         // Correct endpoint is /capi/v2/order/closePositions (not closeAllPositions)
         // symbol is optional - if not provided, closes all positions
         const body = symbol ? { symbol } : {};
-        return this.request(
+        const response = await this.request<
+            WeexClosePositionsResponse |
+            { data: WeexClosePositionsResponse } |
+            WeexClosePositionsResult
+        >(
             'POST',
             '/capi/v2/order/closePositions',
             undefined,
@@ -740,6 +746,8 @@ export class WeexClient {
             true,
             true
         );
+        const data = (response as any).data ?? response;
+        return Array.isArray(data) ? data : [data as WeexClosePositionsResult];
     }
 
     /**

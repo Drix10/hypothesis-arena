@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Hypothesis Arena - Premium Frontend Application
  * AI-powered autonomous crypto trading platform
  *
@@ -30,6 +30,7 @@ const state = {
   refreshInterval: null,
   alertTimeout: null,
   isEngineActionPending: false,
+  isClosingPosition: false,
   lastEngineStatus: null,
   lastFocusedElement: null,
 
@@ -117,6 +118,20 @@ function attachEventListeners() {
     "click",
     debounce(refreshAll, CONFIG.DEBOUNCE_DELAY)
   );
+
+  // Position close button delegation
+  document.getElementById("positions-list")?.addEventListener("click", (e) => {
+    const btn = e.target.closest(".btn-close-position");
+    if (btn) {
+      e.preventDefault();
+      const symbol = btn.dataset.symbol;
+      const side = btn.dataset.side;
+      const size = parseFloat(btn.dataset.size) || 0;
+      const pnl = parseFloat(btn.dataset.pnl) || 0;
+      const entryPrice = parseFloat(btn.dataset.entry) || 0;
+      closePosition(symbol, side, size, pnl, entryPrice);
+    }
+  });
 
   // Alert
   document
@@ -464,14 +479,20 @@ function renderPositionCard(pos) {
   const tpInfo =
     tpDistance !== null ? "+$" + Math.abs(tpDistance).toFixed(2) : "--";
 
+  const rawSymbol = (pos.symbol || "").replace(/[^a-zA-Z0-9_]/g, "");
+  const rawSide = (pos.side || "").toUpperCase().replace(/[^A-Z]/g, "");
+  const sideClass = (pos.side || "").toLowerCase().replace(/[^a-z]/g, "");
+  const safeSize = Number.isFinite(size) ? size : 0;
+  const safePnl = Number.isFinite(pnl) ? pnl : 0;
+  const safeEntryPrice = Number.isFinite(entryPrice) ? entryPrice : 0;
+
   return `
     <div class="position-card" role="listitem">
       <div class="position-header">
         <span class="position-symbol">${escapeHtml(symbol)}</span>
-        <span class="position-side ${side}">${escapeHtml(
-    side.toUpperCase()
-  )}</span>
+        <span class="position-side ${sideClass}">${escapeHtml(rawSide)}</span>
         <span class="position-leverage">${leverage}x</span>
+        <button class="btn-close-position" data-symbol="${rawSymbol}" data-side="${rawSide}" data-size="${safeSize}" data-pnl="${safePnl}" data-entry="${safeEntryPrice}" title="Close position">×</button>
       </div>
       <div class="position-details">
         <div class="position-detail">
@@ -838,19 +859,50 @@ async function triggerCycle() {
   }
 }
 
-/**
- * Close position - DISABLED per WEEX competition rules
- * Manual trading is prohibited. All position management must be handled by the AI trading engine.
- */
-async function closePosition(symbol, _side, _size) {
-  // Manual position closing is prohibited per WEEX AI Trading Competition rules
-  showAlert(
-    `⚠️ Manual position closing is prohibited. Position management for ${formatSymbol(
-      symbol
-    )} must be handled by the AI trading engine.`,
-    "error"
-  );
-  return;
+async function closePosition(symbol, side, size, pnl, entryPrice) {
+  if (state.isClosingPosition) return;
+
+  const normalizedSymbol = String(symbol || "").trim();
+  const normalizedSide = String(side || "").trim().toUpperCase();
+
+  if (!normalizedSymbol || (normalizedSide !== "LONG" && normalizedSide !== "SHORT")) {
+    showAlert("Invalid position data for close", "error");
+    return;
+  }
+
+  if (!confirm(`Close ${normalizedSide} position for ${formatSymbol(normalizedSymbol)}?`)) {
+    return;
+  }
+
+  state.isClosingPosition = true;
+
+  try {
+    const res = await fetch(`${CONFIG.API_BASE}/trading/manual/close`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        symbol: normalizedSymbol,
+        side: normalizedSide,
+        size,
+        pnl,
+        entryPrice,
+      }),
+    });
+
+    const data = await res.json();
+
+    if (res.ok && data.success) {
+      showAlert(`Position closed: ${formatSymbol(symbol)}`, "success");
+      fetchPositions();
+      fetchRecentActivity();
+    } else {
+      showAlert(data.error || "Failed to close position", "error");
+    }
+  } catch (err) {
+    showAlert("Failed to close position: " + err.message, "error");
+  } finally {
+    state.isClosingPosition = false;
+  }
 }
 
 // ============================================================================

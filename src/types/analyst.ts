@@ -191,8 +191,19 @@ export function validateAnalystOutput(output: unknown): output is AnalystOutput 
         if (rec.sl_price !== null && (typeof rec.sl_price !== 'number' || !Number.isFinite(rec.sl_price) || rec.sl_price <= 0)) return false;
         // HOLD: exit_plan can be null or empty
         if (rec.exit_plan !== null && typeof rec.exit_plan !== 'string') return false;
+    } else if (rec.action === 'CLOSE' || rec.action === 'REDUCE') {
+        if (typeof rec.symbol !== 'string' || rec.symbol.trim().length === 0) return false;
+        if (rec.allocation_usd !== null && rec.allocation_usd !== undefined) {
+            if (typeof rec.allocation_usd !== 'number' || !Number.isFinite(rec.allocation_usd) || rec.allocation_usd < 0) return false;
+        }
+        if (rec.leverage !== null && rec.leverage !== undefined) {
+            if (typeof rec.leverage !== 'number' || !Number.isFinite(rec.leverage) || rec.leverage < 0 || rec.leverage > 20) return false;
+        }
+        if (rec.tp_price !== null && (typeof rec.tp_price !== 'number' || !Number.isFinite(rec.tp_price) || rec.tp_price <= 0)) return false;
+        if (rec.sl_price !== null && (typeof rec.sl_price !== 'number' || !Number.isFinite(rec.sl_price) || rec.sl_price <= 0)) return false;
+        if (rec.exit_plan !== null && typeof rec.exit_plan !== 'string') return false;
     } else {
-        // Non-HOLD actions require valid symbol, allocation, leverage
+        // Entry actions require valid symbol, allocation, leverage
         if (typeof rec.symbol !== 'string' || rec.symbol.trim().length === 0) return false;
         if (typeof rec.allocation_usd !== 'number' || !Number.isFinite(rec.allocation_usd) || rec.allocation_usd <= 0) return false;
         if (typeof rec.leverage !== 'number' || !Number.isFinite(rec.leverage) || rec.leverage < 1 || rec.leverage > 20) return false;
@@ -296,27 +307,37 @@ export function validateJudgeOutput(output: unknown): output is JudgeDecision {
         // If they don't match, the judge output is inconsistent and invalid.
         if (o.final_action !== rec.action) return false;
 
-        // FIXED: Validate symbol is non-empty
-        if (typeof rec.symbol !== 'string' || rec.symbol.trim().length === 0) return false;
+        if (rec.action === 'HOLD') {
+            if (rec.symbol !== null && rec.symbol !== undefined && typeof rec.symbol !== 'string') return false;
+        } else {
+            if (typeof rec.symbol !== 'string' || rec.symbol.trim().length === 0) return false;
+        }
         if (typeof rec.allocation_usd !== 'number' || !Number.isFinite(rec.allocation_usd) || rec.allocation_usd < 0) return false;
-        // FIXED: For non-HOLD actions, allocation_usd must be > 0 (can't trade with zero allocation)
-        if (rec.action !== 'HOLD' && rec.allocation_usd === 0) return false;
+        if ((rec.action === 'BUY' || rec.action === 'SELL') && rec.allocation_usd === 0) return false;
         // Leverage validation (consistent with validateAnalystOutput):
         // - HOLD: must be exactly 0 (not trading, no leverage)
-        // - Non-HOLD: must be 1-20
-        if (typeof rec.leverage !== 'number' || !Number.isFinite(rec.leverage)) return false;
+        // - CLOSE/REDUCE: leverage is ignored; allow 0-20
+        // - BUY/SELL: must be 1-20
         if (rec.action === 'HOLD') {
-            if (rec.leverage !== 0) return false; // HOLD requires exactly 0 leverage
+            if (rec.leverage !== null && rec.leverage !== undefined) {
+                if (typeof rec.leverage !== 'number' || !Number.isFinite(rec.leverage) || rec.leverage !== 0) return false;
+            }
+        } else if (rec.action === 'CLOSE' || rec.action === 'REDUCE') {
+            if (rec.leverage !== null && rec.leverage !== undefined) {
+                if (typeof rec.leverage !== 'number' || !Number.isFinite(rec.leverage)) return false;
+                if (rec.leverage < 0 || rec.leverage > 20) return false;
+            }
         } else {
+            if (typeof rec.leverage !== 'number' || !Number.isFinite(rec.leverage)) return false;
             if (rec.leverage < 1 || rec.leverage > 20) return false;
         }
         // Validate tp_price: must be null or a positive finite number
         if (rec.tp_price !== null && (typeof rec.tp_price !== 'number' || !Number.isFinite(rec.tp_price) || rec.tp_price <= 0)) return false;
         // Validate sl_price: must be null or a positive finite number
         if (rec.sl_price !== null && (typeof rec.sl_price !== 'number' || !Number.isFinite(rec.sl_price) || rec.sl_price <= 0)) return false;
-        // FIXED: Validate exit_plan is non-empty for non-HOLD actions
+        // FIXED: Validate exit_plan is non-empty for entry actions
         if (typeof rec.exit_plan !== 'string') return false;
-        if (rec.action !== 'HOLD' && rec.exit_plan.trim().length === 0) return false;
+        if ((rec.action === 'BUY' || rec.action === 'SELL') && rec.exit_plan.trim().length === 0) return false;
         if (typeof rec.confidence !== 'number' || !Number.isFinite(rec.confidence) || rec.confidence < 0 || rec.confidence > 100) return false;
         // FIXED: Validate rationale is non-empty
         if (typeof rec.rationale !== 'string' || rec.rationale.trim().length === 0) return false;

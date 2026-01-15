@@ -65,7 +65,10 @@ function logConfigWarnings(): void {
 if (typeof setImmediate !== 'undefined') {
     setImmediate(logConfigWarnings);
 } else {
-    setTimeout(logConfigWarnings, 0);
+    const timeoutId = setTimeout(logConfigWarnings, 0);
+    if ((timeoutId as any).unref) {
+        (timeoutId as any).unref();
+    }
 }
 
 // Use GLOBAL_RISK_LIMITS for risk values

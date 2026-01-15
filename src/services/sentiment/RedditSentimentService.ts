@@ -311,6 +311,9 @@ async function fetchSubredditSentiment(
 ): Promise<RedditSentimentResult | null> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+    if ((timeoutId as any).unref) {
+        (timeoutId as any).unref();
+    }
 
     try {
         let response: Response;

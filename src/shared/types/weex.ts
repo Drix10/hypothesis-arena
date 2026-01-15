@@ -46,6 +46,19 @@ export interface WeexOrderResponse {
 }
 
 /**
+ * WEEX Close Positions Response Item
+ * Response item from /capi/v2/order/closePositions
+ */
+export interface WeexClosePositionsResult {
+    positionId: number;
+    successOrderId: number;
+    errorMessage: string;
+    success: boolean;
+}
+
+export type WeexClosePositionsResponse = WeexClosePositionsResult[];
+
+/**
  * WEEX Position - Canonical camelCase interface
  * Based on official WEEX API docs: /capi/v2/account/position/singlePosition
  * 

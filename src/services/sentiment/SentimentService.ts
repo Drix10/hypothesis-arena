@@ -389,6 +389,9 @@ class FetchTimeoutError extends Error {
 async function fetchWithTimeout(url: string, options: RequestInit = {}): Promise<Response> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+    if ((timeoutId as any).unref) {
+        (timeoutId as any).unref();
+    }
 
     try {
         const response = await fetch(url, {

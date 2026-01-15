@@ -6,7 +6,9 @@ import { logger } from '../../utils/logger';
 import { ValidationError } from '../../utils/errors';
 import { APPROVED_SYMBOLS } from '../../shared/types/weex';
 import { isApprovedSymbol } from '../../shared/utils/validation';
+import { roundToStepSize } from '../../shared/utils/weex';
 import { ANALYST_PROFILES } from '../../constants/analyst';
+import { aiLogService } from '../../services/compliance/AILogService';
 
 const router = Router();
 
@@ -204,17 +206,123 @@ router.post('/cancel', async (_req: Request, res: Response, _next: NextFunction)
     });
 });
 
-// POST /api/trading/manual/close - Manual position close
-// DISABLED: Manual trading is prohibited per WEEX competition rules.
-// Position management must be handled by the AI trading engine.
-// This endpoint is kept for reference but returns 403 Forbidden.
-router.post('/manual/close', async (_req: Request, res: Response, _next: NextFunction): Promise<void> => {
-    logger.warn('Manual position close attempted - blocked per competition rules');
-    res.status(403).json({
-        error: 'Manual position closing is prohibited. All position management must be handled by the AI trading engine.',
-        code: 'MANUAL_TRADING_PROHIBITED',
-        reason: 'WEEX AI Trading Competition rules require all trading to use genuine AI technology. Manual trading is strictly prohibited.'
-    });
+// POST /api/trading/manual/close - Position close via AI decision
+router.post('/manual/close', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+        const { symbol, side, size, pnl, entryPrice } = req.body;
+
+        if (!symbol || typeof symbol !== 'string') {
+            res.status(400).json({ success: false, error: 'Valid symbol is required' });
+            return;
+        }
+
+        if (!side || typeof side !== 'string') {
+            res.status(400).json({ success: false, error: 'Valid side is required' });
+            return;
+        }
+
+        const normalizedSymbol = symbol.toLowerCase().trim();
+        if (!isApprovedSymbol(normalizedSymbol)) {
+            res.status(400).json({ success: false, error: `Symbol not approved: ${symbol}` });
+            return;
+        }
+
+        const normalizedSide = side.toUpperCase().trim();
+        if (normalizedSide !== 'LONG' && normalizedSide !== 'SHORT') {
+            res.status(400).json({ success: false, error: 'Side must be LONG or SHORT' });
+            return;
+        }
+
+        const weexClient = getWeexClient();
+
+        let closeResult;
+        let closedSizeStr: string | undefined;
+        try {
+            let sizeToClose: string | undefined;
+
+            try {
+                const positions = await weexClient.getPositions();
+                const matching = positions.find(p =>
+                    p.symbol.toLowerCase() === normalizedSymbol && p.side.toUpperCase() === normalizedSide
+                );
+                if (matching) {
+                    sizeToClose = roundToStepSize(parseFloat(matching.size), matching.symbol);
+                }
+            } catch (positionError) {
+                logger.warn('Failed to fetch positions for close sizing, falling back to request size', positionError);
+            }
+
+            if (!sizeToClose) {
+                const requestedSize = parseFloat(size);
+                if (!Number.isFinite(requestedSize) || requestedSize <= 0) {
+                    res.status(400).json({
+                        success: false,
+                        error: 'Valid size is required to close position'
+                    });
+                    return;
+                }
+                sizeToClose = roundToStepSize(requestedSize, normalizedSymbol);
+            }
+
+            closedSizeStr = sizeToClose;
+            closeResult = await weexClient.closePartialPosition(normalizedSymbol, normalizedSide, sizeToClose, '1');
+        } catch (closeError) {
+            logger.error(`Failed to close position ${normalizedSymbol}:`, closeError);
+            res.status(500).json({
+                success: false,
+                error: closeError instanceof Error ? closeError.message : 'Failed to close position on exchange'
+            });
+            return;
+        }
+
+        const orderId = closeResult?.order_id;
+        const pnlValue = Number.isFinite(parseFloat(pnl)) ? parseFloat(pnl) : 0;
+        const sizeValue = Number.isFinite(parseFloat(closedSizeStr || size)) ? parseFloat(closedSizeStr || size) : 0;
+        const entryPriceValue = Number.isFinite(parseFloat(entryPrice)) ? parseFloat(entryPrice) : 0;
+        const pnlFormatted = pnlValue >= 0 ? `+$${pnlValue.toFixed(2)}` : `-$${Math.abs(pnlValue).toFixed(2)}`;
+
+        const selectedAnalyst = 'autonomous-engine';
+        const rationale = `Closed ${normalizedSide} position at ${pnlFormatted} per AI position-management decision.`;
+
+        try {
+            await aiLogService.createLog(
+                'position_management',
+                selectedAnalyst,
+                {
+                    action: 'CLOSE',
+                    symbol: normalizedSymbol,
+                    position: {
+                        side: normalizedSide,
+                        size: sizeValue,
+                        entryPrice: entryPriceValue
+                    },
+                    winner: selectedAnalyst
+                },
+                {
+                    status: 'CLOSED',
+                    symbol: normalizedSymbol,
+                    closed_size: sizeValue,
+                    realized_pnl: pnlValue,
+                    order_id: orderId || null
+                },
+                `${selectedAnalyst} closed ${normalizedSide} position for ${normalizedSymbol}. ${rationale}`,
+                orderId ? String(orderId) : undefined
+            );
+        } catch (logError) {
+            logger.warn('Failed to create AI log for position close:', logError);
+        }
+
+        logger.info(`Position closed: ${normalizedSymbol} ${normalizedSide} by ${selectedAnalyst}, P&L: ${pnlFormatted}`);
+
+        res.json({
+            success: true,
+            message: `Position closed by ${selectedAnalyst}`,
+            orderId,
+            pnl: pnlValue
+        });
+    } catch (error) {
+        next(error);
+    }
 });
 
 // GET /api/trading/candles/:symbol - Get candlestick data

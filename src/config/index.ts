@@ -186,9 +186,9 @@ export const config = {
             })(),
             // Max hold hours before VERY_URGENT
             maxHoldHours: (() => {
-                const value = safeParseFloat(process.env.MAX_HOLD_HOURS, 12);
+                const value = safeParseFloat(process.env.MAX_HOLD_HOURS, 72);
                 if (!process.env.MAX_HOLD_HOURS) {
-                    console.warn('⚠️ MAX_HOLD_HOURS not set, using default: 12 hours');
+                    console.warn('⚠️ MAX_HOLD_HOURS not set, using default: 72 hours');
                 }
                 if (value <= 0 || value > 168) {
                     throw new Error(`❌ FATAL: MAX_HOLD_HOURS must be between 0 and 168 (1 week), got: ${value}`);
@@ -300,7 +300,7 @@ export const config = {
             let maxSafeLeverage = clampInt(process.env.MAX_SAFE_LEVERAGE, 10, 1, 50);
             let autoApproveLeverageThreshold = clampInt(process.env.AUTO_APPROVE_LEVERAGE_THRESHOLD, 5, 1, 20);
             let absoluteMaxLeverage = clampInt(process.env.ABSOLUTE_MAX_LEVERAGE, 15, 1, 50);
-            const maxPositionSizePercent = clampInt(process.env.MAX_POSITION_SIZE_PERCENT, 25, 5, 100);
+            const maxPositionSizePercent = clampInt(process.env.MAX_POSITION_SIZE_PERCENT ?? process.env.MAX_POSITION_PERCENT, 25, 5, 100);
             const maxTotalLeveragedCapitalPercent = clampInt(process.env.MAX_TOTAL_LEVERAGED_CAPITAL_PERCENT, 40, 10, 100);
             const maxRiskPerTradePercent = clampInt(process.env.MAX_RISK_PER_TRADE_PERCENT, 5, 1, 50);
             const maxConcurrentRiskPercent = clampInt(process.env.MAX_CONCURRENT_RISK_PERCENT, 15, 5, 100);
@@ -377,8 +377,8 @@ export const config = {
 
             const lowMaxStopPercent = Math.max(1, Math.min(20, safeParseFloat(process.env.SL_LOW_MAX_STOP_PERCENT, 6)));
             const mediumMaxStopPercent = Math.max(1, Math.min(10, safeParseFloat(process.env.SL_MEDIUM_MAX_STOP_PERCENT, 3)));
-            const highMaxStopPercent = Math.max(0.5, Math.min(5, safeParseFloat(process.env.SL_HIGH_MAX_STOP_PERCENT, 2)));
-            const extremeMaxStopPercent = Math.max(0.5, Math.min(3, safeParseFloat(process.env.SL_EXTREME_MAX_STOP_PERCENT, 1.5)));
+            const highMaxStopPercent = Math.max(0.5, Math.min(6, safeParseFloat(process.env.SL_HIGH_MAX_STOP_PERCENT, 3)));
+            const extremeMaxStopPercent = Math.max(0.5, Math.min(5, safeParseFloat(process.env.SL_EXTREME_MAX_STOP_PERCENT, 2.5)));
 
             // Validate leverage tier ordering: low < medium < high < extreme
             if (lowMaxLeverage >= mediumMaxLeverage || mediumMaxLeverage >= highMaxLeverage || highMaxLeverage >= extremeMaxLeverage) {
@@ -437,6 +437,7 @@ export const config = {
     // Monte Carlo Simulation Parameters
     monteCarlo: (() => {
         const tradingCostPct = safeParseFloat(process.env.MC_TRADING_COST_PCT, 0.06);
+        const fundingCostPct = safeParseFloat(process.env.MC_FUNDING_COST_PCT, 0.01);
         const studentTDf = clampInt(process.env.MC_STUDENT_T_DF, 3, 2, 10);
         let garchAlpha = Math.max(0.01, Math.min(0.5, safeParseFloat(process.env.MC_GARCH_ALPHA, 0.1)));
         let garchBeta = Math.max(0.5, Math.min(0.99, safeParseFloat(process.env.MC_GARCH_BETA, 0.85)));
@@ -460,6 +461,7 @@ export const config = {
 
         return {
             tradingCostPct,
+            fundingCostPct,
             studentTDf,
             garchAlpha,
             garchBeta,
@@ -536,7 +538,8 @@ if (config.autonomous.maxSameDirectionPositions > config.autonomous.maxConcurren
 }
 
 // Validate confidence threshold ordering: min <= moderate <= high <= veryHigh
-// Sort and correct values if out of order (like position sizing does)
+// IMPORTANT: Store original minConfidenceToTrade BEFORE sorting for safety validation
+const originalMinConfidenceToTrade = config.autonomous.minConfidenceToTrade;
 {
     const { minConfidenceToTrade, moderateConfidenceThreshold, highConfidenceThreshold, veryHighConfidenceThreshold } = config.autonomous;
     if (minConfidenceToTrade > moderateConfidenceThreshold ||
@@ -638,3 +641,88 @@ if (config.ai.hybridMode) {
     // Non-hybrid mode: warn if no API keys configured
     console.warn('⚠️ WARNING: No AI API keys configured (GEMINI_API_KEY or OPENROUTER_API_KEY). AI features will fail.');
 }
+
+// =============================================================================
+// CRITICAL SAFETY VALIDATIONS (v5.6.1)
+// =============================================================================
+
+// SAFETY: Prevent real trading with low confidence threshold
+// When DRY_RUN=false, MIN_CONFIDENCE_TO_TRADE must be >= MODERATE_CONFIDENCE_THRESHOLD
+// Use originalMinConfidenceToTrade to check the user's intended value, not the sorted one
+if (!config.autonomous.dryRun) {
+    const { moderateConfidenceThreshold, highConfidenceThreshold } = config.autonomous;
+
+    if (originalMinConfidenceToTrade < moderateConfidenceThreshold) {
+        const errorMsg = `❌ FATAL: DANGEROUS CONFIGURATION DETECTED!\n` +
+            `  DRY_RUN=false (real trading enabled) but MIN_CONFIDENCE_TO_TRADE (${originalMinConfidenceToTrade}) ` +
+            `is below MODERATE_CONFIDENCE_THRESHOLD (${moderateConfidenceThreshold}).\n` +
+            `  This could result in low-confidence trades with real money.\n` +
+            `  FIX: Either set DRY_RUN=true for testing, or increase MIN_CONFIDENCE_TO_TRADE to at least ${moderateConfidenceThreshold}.\n` +
+            `  RECOMMENDED: Set MIN_CONFIDENCE_TO_TRADE >= HIGH_CONFIDENCE_THRESHOLD (${highConfidenceThreshold}) for real trading.`;
+        console.error(errorMsg);
+        throw new Error(errorMsg);
+    }
+
+    // Warning if below high confidence threshold
+    if (originalMinConfidenceToTrade < highConfidenceThreshold) {
+        console.warn(
+            `⚠️ WARNING: Real trading enabled (DRY_RUN=false) with MIN_CONFIDENCE_TO_TRADE (${originalMinConfidenceToTrade}) ` +
+            `below HIGH_CONFIDENCE_THRESHOLD (${highConfidenceThreshold}). ` +
+            `Consider increasing MIN_CONFIDENCE_TO_TRADE for safer real trading.`
+        );
+    }
+}
+
+// SAFETY: Validate STOP_LOSS_PCT does not exceed the most restrictive tier (SL_EXTREME_MAX_STOP_PERCENT)
+{
+    const globalStopLoss = config.autonomous.urgencyThresholds.stopLossPct;
+    const extremeMaxStop = config.autonomous.stopLoss.extremeMaxStopPercent;
+
+    if (globalStopLoss > extremeMaxStop) {
+        const errorMsg = `❌ FATAL: STOP_LOSS_PCT (${globalStopLoss}%) exceeds SL_EXTREME_MAX_STOP_PERCENT (${extremeMaxStop}%).\n` +
+            `  The global stop loss cannot be wider than the most restrictive leverage tier.\n` +
+            `  FIX: Either reduce STOP_LOSS_PCT to <= ${extremeMaxStop}%, or increase SL_EXTREME_MAX_STOP_PERCENT.`;
+        console.error(errorMsg);
+        throw new Error(errorMsg);
+    }
+}
+
+// SAFETY: Validate per-trade risk is reasonable
+// Risk = position_size × leverage × stop_loss
+{
+    const maxPositionPct = config.autonomous.riskLimits.maxPositionSizePercent;
+    const maxLeverage = config.autonomous.riskLimits.absoluteMaxLeverage;
+    const stopLossPct = config.autonomous.urgencyThresholds.stopLossPct;
+    const maxRiskPerTrade = config.autonomous.riskLimits.maxRiskPerTradePercent;
+
+    // Calculate worst-case per-trade risk
+    const worstCaseRisk = (maxPositionPct / 100) * maxLeverage * stopLossPct;
+
+    if (worstCaseRisk > maxRiskPerTrade) {
+        console.warn(
+            `⚠️ WARNING: Worst-case per-trade risk (${worstCaseRisk.toFixed(1)}%) exceeds MAX_RISK_PER_TRADE_PERCENT (${maxRiskPerTrade}%).\n` +
+            `  Calculation: MAX_POSITION_SIZE_PERCENT (${maxPositionPct}%) × ABSOLUTE_MAX_LEVERAGE (${maxLeverage}x) × STOP_LOSS_PCT (${stopLossPct}%) = ${worstCaseRisk.toFixed(1)}%\n` +
+            `  Consider reducing position size, leverage, or stop loss to stay within risk limits.`
+        );
+    }
+
+    // Validate concurrent risk
+    const maxConcurrent = config.autonomous.maxConcurrentPositions;
+    const maxConcurrentRisk = config.autonomous.riskLimits.maxConcurrentRiskPercent;
+    const worstCaseConcurrentRisk = worstCaseRisk * maxConcurrent;
+
+    if (worstCaseConcurrentRisk > maxConcurrentRisk) {
+        console.warn(
+            `⚠️ WARNING: Worst-case concurrent risk (${worstCaseConcurrentRisk.toFixed(1)}%) exceeds MAX_CONCURRENT_RISK_PERCENT (${maxConcurrentRisk}%).\n` +
+            `  Calculation: Per-trade risk (${worstCaseRisk.toFixed(1)}%) × MAX_CONCURRENT_POSITIONS (${maxConcurrent}) = ${worstCaseConcurrentRisk.toFixed(1)}%\n` +
+            `  Consider reducing position count or per-trade risk.`
+        );
+    }
+}
+
+// Log risk configuration summary
+console.log(
+    `📊 Risk Config: Max ${config.autonomous.riskLimits.maxPositionSizePercent}% position × ${config.autonomous.riskLimits.absoluteMaxLeverage}x leverage, ` +
+    `${config.autonomous.urgencyThresholds.stopLossPct}% stop, ${config.autonomous.maxConcurrentPositions} concurrent positions`
+);
+

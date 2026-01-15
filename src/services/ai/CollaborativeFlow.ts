@@ -148,22 +148,21 @@ const JUDGE_ADJUSTMENTS_SCHEMA: ResponseSchema = {
     properties: {
         leverage: {
             type: SchemaType.NUMBER,
-            description: 'Adjusted leverage (1-20)',
+            description: 'Adjusted leverage (1-20). Only for BUY/SELL.',
         },
         allocation_usd: {
             type: SchemaType.NUMBER,
-            description: 'Adjusted allocation in USD',
+            description: 'Adjusted allocation in USD. Only for BUY/SELL.',
         },
         sl_price: {
             type: SchemaType.NUMBER,
-            description: 'Adjusted stop loss price',
+            description: 'Adjusted stop loss price. Only for BUY/SELL.',
         },
         tp_price: {
             type: SchemaType.NUMBER,
-            description: 'Adjusted take profit price',
+            description: 'Adjusted take profit price. Only for BUY/SELL.',
         },
     },
-    required: ['leverage', 'allocation_usd', 'sl_price', 'tp_price'],
 };
 
 /**
@@ -562,12 +561,14 @@ export class CollaborativeFlowService {
 
                 const parsed = this.parseJSON(result.text);
 
-                if (validateJudgeOutput(parsed)) {
-                    if (parsed.winner === 'NONE' && parsed.final_action !== 'CLOSE' && parsed.final_action !== 'REDUCE') {
-                        parsed.final_action = 'HOLD';
-                        parsed.final_recommendation = null;
+                const normalized = this.normalizeJudgeDecision(parsed);
+
+                if (validateJudgeOutput(normalized)) {
+                    if (normalized.winner === 'NONE' && normalized.final_action !== 'CLOSE' && normalized.final_action !== 'REDUCE') {
+                        normalized.final_action = 'HOLD';
+                        normalized.final_recommendation = null;
                     }
-                    return parsed as JudgeDecision;
+                    return normalized as JudgeDecision;
                 } else {
                     logger.warn(`Judge output validation failed on attempt ${attempt}`);
                     if (attempt < config.ai.maxRetries) {
@@ -600,6 +601,24 @@ export class CollaborativeFlowService {
         };
     }
 
+    private normalizeJudgeDecision(value: unknown): any {
+        if (!value || typeof value !== 'object') return value;
+
+        const v = value as any;
+        const finalAction = v.final_action;
+        if (finalAction === 'CLOSE' || finalAction === 'REDUCE') {
+            v.adjustments = null;
+
+            if (v.final_recommendation && typeof v.final_recommendation === 'object') {
+                v.final_recommendation.leverage = 0;
+            }
+        } else if (finalAction === 'HOLD') {
+            v.adjustments = null;
+        }
+
+        return v;
+    }
+
     /**
      * Build final decision from analysis and judge results
      */
@@ -615,18 +634,35 @@ export class CollaborativeFlowService {
             if ((judgeDecision.final_action === 'CLOSE' || judgeDecision.final_action === 'REDUCE')
                 && judgeDecision.final_recommendation) {
                 const rec = judgeDecision.final_recommendation;
+                const MAX_WARNINGS = 20;
+                const warnings = judgeDecision.warnings.length > MAX_WARNINGS
+                    ? judgeDecision.warnings.slice(0, MAX_WARNINGS)
+                    : [...judgeDecision.warnings];
+
+                const originalLeverage = rec.leverage;
+                let leverage = 0;
+                let allocation = rec.allocation_usd;
+                if (originalLeverage !== 0 && warnings.length < MAX_WARNINGS) {
+                    warnings.push(`Ignored leverage for ${judgeDecision.final_action}: ${originalLeverage}`);
+                }
+
+                if (!Number.isFinite(allocation) || allocation < 0) {
+                    warnings.push(`Ignored invalid allocation_usd for ${judgeDecision.final_action}: ${allocation}`);
+                    allocation = 0;
+                }
+
                 return {
                     action: judgeDecision.final_action,
                     symbol: rec.symbol,
-                    allocation_usd: rec.allocation_usd,
-                    leverage: rec.leverage,
-                    tp_price: rec.tp_price,
-                    sl_price: rec.sl_price,
+                    allocation_usd: allocation,
+                    leverage,
+                    tp_price: null,
+                    sl_price: null,
                     exit_plan: rec.exit_plan,
                     confidence: rec.confidence,
                     rationale: rec.rationale,
                     winner: 'NONE',
-                    warnings: judgeDecision.warnings,
+                    warnings,
                     analysisResult,
                     judgeDecision,
                 };
@@ -694,58 +730,63 @@ export class CollaborativeFlowService {
             }
         }
 
-        // CHANGED: Trust AI's leverage decision - only apply hard safety limits
-        // The AI is instructed to use 3-20x leverage based on conditions
-        // We only clamp to exchange limits, not our own conservative limits
-        if (!Number.isFinite(finalLeverage) || finalLeverage <= 0) {
-            // FIXED: Invalid leverage - return HOLD instead of using arbitrary default
-            logger.error(`Invalid leverage from AI: ${finalLeverage} (type: ${typeof finalLeverage}), returning HOLD decision`);
-            return {
-                action: 'HOLD',
-                symbol: rec.symbol,
-                allocation_usd: 0,
-                leverage: 0,
-                tp_price: null,
-                sl_price: null,
-                exit_plan: '',
-                confidence: 0,
-                rationale: `Invalid leverage value: ${finalLeverage}`,
-                winner: 'NONE',
-                warnings: [`AI returned invalid leverage: ${finalLeverage}`],
-                analysisResult,
-                judgeDecision,
-            };
-        } else if (finalLeverage > GLOBAL_RISK_LIMITS.ABSOLUTE_MAX_LEVERAGE) {
-            // Hard cap at absolute max leverage as per risk limits
-            logger.warn(`AI leverage ${finalLeverage}x exceeds ${GLOBAL_RISK_LIMITS.ABSOLUTE_MAX_LEVERAGE}x cap, clamping`);
-            finalLeverage = GLOBAL_RISK_LIMITS.ABSOLUTE_MAX_LEVERAGE;
-        } else if (finalLeverage < 1) {
-            // FIXED: Log warning when clamping up to minimum
-            logger.warn(`AI leverage ${finalLeverage}x is below minimum 1x, clamping to 1x`);
-            finalLeverage = 1;
-        }
+        const finalAction = judgeDecision.final_action;
+        const isExitAction = finalAction === 'CLOSE' || finalAction === 'REDUCE';
 
-        // Collect warnings for the final decision
-        // FIXED: Limit warnings array size to prevent memory issues
         const MAX_WARNINGS = 20;
         const warnings = judgeDecision.warnings.length > MAX_WARNINGS
             ? judgeDecision.warnings.slice(0, MAX_WARNINGS)
             : [...judgeDecision.warnings];
 
-        // ADDED: Validate stop loss is appropriate for leverage level
-        // At high leverage, stop loss must be tighter than liquidation distance
-        // Liquidation distance = 100% / leverage (e.g., 5% at 20x)
-        // We warn if stop loss is > 80% of liquidation distance (too close to liquidation)
-        // FIXED: Removed dead branch and unused maxSafeStopPct calculation
-        // Note: We don't have current price here, so we can only warn about high leverage
-        if (finalLeverage >= 15 && warnings.length < MAX_WARNINGS) {
-            const liquidationDistance = 100 / finalLeverage; // e.g., 6.67% at 15x, 5% at ABSOLUTE_MAX_LEVERAGE
-            const maxSafeStopPct = liquidationDistance * 0.8; // 80% of liquidation distance
-            warnings.push(`High leverage (${finalLeverage}x) - ensure stop loss is within ${maxSafeStopPct.toFixed(1)}% of entry to avoid liquidation`);
+        if (isExitAction) {
+            const originalLeverage = finalLeverage;
+            finalLeverage = 0;
+            if (originalLeverage !== 0 && warnings.length < MAX_WARNINGS) {
+                warnings.push(`Ignored leverage for ${finalAction}: ${originalLeverage}`);
+            }
+
+            if (!Number.isFinite(finalAllocation) || finalAllocation < 0) {
+                warnings.push(`Ignored invalid allocation_usd for ${finalAction}: ${finalAllocation}`);
+                finalAllocation = 0;
+            }
+
+            finalSlPrice = null;
+            finalTpPrice = null;
+        } else {
+            if (!Number.isFinite(finalLeverage) || finalLeverage <= 0) {
+                logger.error(`Invalid leverage from AI: ${finalLeverage} (type: ${typeof finalLeverage}), returning HOLD decision`);
+                return {
+                    action: 'HOLD',
+                    symbol: rec.symbol,
+                    allocation_usd: 0,
+                    leverage: 0,
+                    tp_price: null,
+                    sl_price: null,
+                    exit_plan: '',
+                    confidence: 0,
+                    rationale: `Invalid leverage value: ${finalLeverage}`,
+                    winner: 'NONE',
+                    warnings: [`AI returned invalid leverage: ${finalLeverage}`],
+                    analysisResult,
+                    judgeDecision,
+                };
+            } else if (finalLeverage > GLOBAL_RISK_LIMITS.ABSOLUTE_MAX_LEVERAGE) {
+                logger.warn(`AI leverage ${finalLeverage}x exceeds ${GLOBAL_RISK_LIMITS.ABSOLUTE_MAX_LEVERAGE}x cap, clamping`);
+                finalLeverage = GLOBAL_RISK_LIMITS.ABSOLUTE_MAX_LEVERAGE;
+            } else if (finalLeverage < 1) {
+                logger.warn(`AI leverage ${finalLeverage}x is below minimum 1x, clamping to 1x`);
+                finalLeverage = 1;
+            }
+
+            if (finalLeverage >= 15 && warnings.length < MAX_WARNINGS) {
+                const liquidationDistance = 100 / finalLeverage;
+                const maxSafeStopPct = liquidationDistance * 0.8;
+                warnings.push(`High leverage (${finalLeverage}x) - ensure stop loss is within ${maxSafeStopPct.toFixed(1)}% of entry to avoid liquidation`);
+            }
         }
 
         return {
-            action: judgeDecision.final_action,
+            action: finalAction,
             symbol: rec.symbol,
             allocation_usd: finalAllocation,
             leverage: finalLeverage,
@@ -824,7 +865,12 @@ export class CollaborativeFlowService {
      * Sleep helper
      */
     private sleep(ms: number): Promise<void> {
-        return new Promise(resolve => setTimeout(resolve, ms));
+        return new Promise((resolve) => {
+            const timeoutId = setTimeout(resolve, ms);
+            if ((timeoutId as any).unref) {
+                (timeoutId as any).unref();
+            }
+        });
     }
 
     /**

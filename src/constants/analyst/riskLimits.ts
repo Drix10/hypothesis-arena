@@ -14,8 +14,10 @@ import { logger } from '../../utils/logger';
 // =============================================================================
 
 const COMPETITION_MODE_ENABLED = process.env.COMPETITION_MODE === 'true' || process.env.NODE_ENV === 'competition';
-const COMPETITION_MODE_ACK_STRING = 'I_ACCEPT_DEMO_ONLY_HIGH_RISK_AGGRESSIVE_SETTINGS';
-const COMPETITION_MODE_ACK = process.env.COMPETITION_MODE_ACK === COMPETITION_MODE_ACK_STRING;
+const COMPETITION_MODE_ACK_STRING = 'I_ACCEPT_DEMO_ONLY_RISK_MANAGED_SETTINGS';
+// Deprecated ack value for backward compatibility: I_ACCEPT_DEMO_ONLY_HIGH_RISK_AGGRESSIVE_SETTINGS
+const COMPETITION_MODE_ACK = process.env.COMPETITION_MODE_ACK === COMPETITION_MODE_ACK_STRING ||
+    process.env.COMPETITION_MODE_ACK === 'I_ACCEPT_DEMO_ONLY_HIGH_RISK_AGGRESSIVE_SETTINGS';
 const WEEX_ACCOUNT_TYPE = process.env.WEEX_ACCOUNT_TYPE?.trim()?.toLowerCase();
 
 if (COMPETITION_MODE_ENABLED && !COMPETITION_MODE_ACK) {
@@ -65,13 +67,15 @@ const USE_COMPETITION_SETTINGS = COMPETITION_MODE_ENABLED &&
     VALID_COMPETITION_ACCOUNT_TYPES.includes(WEEX_ACCOUNT_TYPE || '');
 
 if (USE_COMPETITION_SETTINGS) {
+    const bannerMaxLeverage = config.autonomous.riskLimits.absoluteMaxLeverage;
+    const bannerMaxPositionSizePercent = config.autonomous.riskLimits.maxPositionSizePercent;
     console.warn(
         '\n' +
         '╔══════════════════════════════════════════════════════════════════════════════╗\n' +
         '║  ⚠️  COMPETITION MODE ENABLED - AGGRESSIVE RISK SETTINGS ACTIVE              ║\n' +
         '╠══════════════════════════════════════════════════════════════════════════════╣\n' +
         '║  This mode is for DEMO/PAPER TRADING ONLY!                                   ║\n' +
-        '║  Settings: 20x max leverage, 50% max position size                           ║\n' +
+        `║  Settings: ${String(bannerMaxLeverage).padEnd(2)}x max leverage, ${String(bannerMaxPositionSizePercent).padEnd(3)}% max position size                   ║\n` +
         '║  Account Type: ' + (WEEX_ACCOUNT_TYPE || 'NOT SET').padEnd(46) + '║\n' +
         '║  VERIFY YOUR ACCOUNT IS A DEMO ACCOUNT BEFORE PROCEEDING!                    ║\n' +
         '╚══════════════════════════════════════════════════════════════════════════════╝\n'
@@ -82,8 +86,8 @@ if (USE_COMPETITION_SETTINGS) {
             competitionMode: true,
             acknowledgment: 'ACCEPTED',
             accountType: WEEX_ACCOUNT_TYPE || 'NOT_SET',
-            maxLeverage: 20,
-            maxPositionSizePercent: 50
+            maxLeverage: bannerMaxLeverage,
+            maxPositionSizePercent: bannerMaxPositionSizePercent
         });
     }
 }
@@ -99,40 +103,14 @@ const configCircuitBreakers = config.autonomous.circuitBreakers;
 const configStopLoss = config.autonomous.stopLoss;
 const configLeverageScaling = config.autonomous.leverageScaling;
 
-// Competition mode overrides (only applied when USE_COMPETITION_SETTINGS is true)
-const COMPETITION_OVERRIDES = {
-    maxSafeLeverage: 20,
-    autoApproveLeverageThreshold: 15,
-    absoluteMaxLeverage: 20,
-    maxPositionSizePercent: 50,
-    maxTotalLeveragedCapitalPercent: 60,
-    maxRiskPerTradePercent: 10,
-    maxConcurrentRiskPercent: 25,
-};
-
-// Select final values based on mode
 const ACTIVE_SETTINGS = {
-    MAX_SAFE_LEVERAGE: USE_COMPETITION_SETTINGS
-        ? COMPETITION_OVERRIDES.maxSafeLeverage
-        : configRiskLimits.maxSafeLeverage,
-    AUTO_APPROVE_LEVERAGE_THRESHOLD: USE_COMPETITION_SETTINGS
-        ? COMPETITION_OVERRIDES.autoApproveLeverageThreshold
-        : configRiskLimits.autoApproveLeverageThreshold,
-    ABSOLUTE_MAX_LEVERAGE: USE_COMPETITION_SETTINGS
-        ? COMPETITION_OVERRIDES.absoluteMaxLeverage
-        : configRiskLimits.absoluteMaxLeverage,
-    MAX_POSITION_SIZE_PERCENT: USE_COMPETITION_SETTINGS
-        ? COMPETITION_OVERRIDES.maxPositionSizePercent
-        : configRiskLimits.maxPositionSizePercent,
-    MAX_TOTAL_LEVERAGED_CAPITAL_PERCENT: USE_COMPETITION_SETTINGS
-        ? COMPETITION_OVERRIDES.maxTotalLeveragedCapitalPercent
-        : configRiskLimits.maxTotalLeveragedCapitalPercent,
-    MAX_RISK_PER_TRADE_PERCENT: USE_COMPETITION_SETTINGS
-        ? COMPETITION_OVERRIDES.maxRiskPerTradePercent
-        : configRiskLimits.maxRiskPerTradePercent,
-    MAX_CONCURRENT_RISK_PERCENT: USE_COMPETITION_SETTINGS
-        ? COMPETITION_OVERRIDES.maxConcurrentRiskPercent
-        : configRiskLimits.maxConcurrentRiskPercent,
+    MAX_SAFE_LEVERAGE: configRiskLimits.maxSafeLeverage,
+    AUTO_APPROVE_LEVERAGE_THRESHOLD: configRiskLimits.autoApproveLeverageThreshold,
+    ABSOLUTE_MAX_LEVERAGE: configRiskLimits.absoluteMaxLeverage,
+    MAX_POSITION_SIZE_PERCENT: configRiskLimits.maxPositionSizePercent,
+    MAX_TOTAL_LEVERAGED_CAPITAL_PERCENT: configRiskLimits.maxTotalLeveragedCapitalPercent,
+    MAX_RISK_PER_TRADE_PERCENT: configRiskLimits.maxRiskPerTradePercent,
+    MAX_CONCURRENT_RISK_PERCENT: configRiskLimits.maxConcurrentRiskPercent,
 };
 
 // =============================================================================

@@ -54,12 +54,12 @@ function buildRiskRulesString(): string {
     const maxPositionPct = RISK_COUNCIL_VETO_TRIGGERS?.MAX_POSITION_PERCENT ?? 25;
     const maxConcurrent = RISK_COUNCIL_VETO_TRIGGERS?.MAX_CONCURRENT_POSITIONS ?? 3;
 
-    // Validate STOP_LOSS_BY_LEVERAGE with safe defaults
+    // Validate STOP_LOSS_BY_LEVERAGE with safe defaults (CONVICTION TRADING)
     const stopLoss = GLOBAL_RISK_LIMITS?.STOP_LOSS_BY_LEVERAGE ?? {};
-    const extreme = stopLoss.EXTREME ?? { maxLeverage: 20, maxStopPercent: 1.5 };
-    const high = stopLoss.HIGH ?? { maxLeverage: 15, maxStopPercent: 2 };
-    const medium = stopLoss.MEDIUM ?? { maxLeverage: 10, maxStopPercent: 3 };
-    const low = stopLoss.LOW ?? { maxLeverage: 5, maxStopPercent: 6 };
+    const extreme = stopLoss.EXTREME ?? { maxLeverage: 20, maxStopPercent: 3 };
+    const high = stopLoss.HIGH ?? { maxLeverage: 15, maxStopPercent: 4 };
+    const medium = stopLoss.MEDIUM ?? { maxLeverage: 10, maxStopPercent: 5 };
+    const low = stopLoss.LOW ?? { maxLeverage: 5, maxStopPercent: 8 };
 
     const lines = [
         'LIMITS:',
@@ -383,21 +383,30 @@ export class ContextBuilder {
         try {
             const REDDIT_FETCH_TIMEOUT = 12000; // 12 seconds max
 
+            let timeoutId: ReturnType<typeof setTimeout> | null = null;
             const timeoutPromise = new Promise<null>((resolve) => {
-                setTimeout(() => {
+                timeoutId = setTimeout(() => {
                     logger.debug('Reddit sentiment fetch timed out, continuing without it');
                     resolve(null);
                 }, REDDIT_FETCH_TIMEOUT);
+                if (timeoutId && (timeoutId as any).unref) {
+                    (timeoutId as any).unref();
+                }
             });
 
             const fearGreedValue = null; // Will use cached value in Reddit service
 
-            const result = await Promise.race([
-                getRedditSentimentContext(0, fearGreedValue),
-                timeoutPromise,
-            ]);
-
-            return result;
+            try {
+                return await Promise.race([
+                    getRedditSentimentContext(0, fearGreedValue),
+                    timeoutPromise,
+                ]);
+            } finally {
+                if (timeoutId) {
+                    clearTimeout(timeoutId);
+                    timeoutId = null;
+                }
+            }
         } catch (error) {
             logger.debug('Reddit sentiment fetch failed (non-critical):', error);
             return null;

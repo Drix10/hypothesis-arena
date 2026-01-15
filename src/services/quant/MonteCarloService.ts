@@ -54,6 +54,7 @@ export interface MonteCarloAnalysis {
 
 // Configuration from environment (via config)
 const DEFAULT_TRADING_COST = config.monteCarlo.tradingCostPct;  // 0.06% per trade (per quant advisor)
+const DEFAULT_FUNDING_COST = config.monteCarlo.fundingCostPct;  // 0.01% per 8h funding period
 const STUDENT_T_DF = config.monteCarlo.studentTDf;             // Degrees of freedom for Student's t (crypto fat tails)
 // df=3 is more realistic for crypto's extreme tail events
 // df=5 was too conservative - crypto has fatter tails than that
@@ -249,10 +250,17 @@ export function runMonteCarloSimulation(config: MonteCarloConfig): MonteCarloRes
         // Subtract trading costs (entry + exit)
         pnl -= tradingCost * 2;
 
+        // Subtract funding costs: funding charged every 8 hours
+        // Total funding periods = ceil(timeHorizon / 8)
+        const fundingPeriods = Math.ceil(validatedConfig.timeHorizon / 8);
+        const totalFundingCost = DEFAULT_FUNDING_COST * fundingPeriods;
+        pnl -= totalFundingCost;
+
         results.push(pnl);
     }
 
-    return calculateStatistics(results, validatedConfig, tradingCost * 2);
+    const totalCostApplied = tradingCost * 2 + DEFAULT_FUNDING_COST * Math.ceil(validatedConfig.timeHorizon / 8);
+    return calculateStatistics(results, validatedConfig, totalCostApplied);
 }
 
 /**
@@ -525,8 +533,8 @@ function validateConfig(config: MonteCarloConfig): MonteCarloConfig {
         timeHorizon: Math.min(48, Math.max(1, config.timeHorizon || 24)),       // 1-48 hours per interface
         volatility: Math.min(50, Math.max(0.01, config.volatility || 2)),       // Cap at 50% hourly vol (extreme)
         drift: Math.max(-0.01, Math.min(0.01, config.drift || 0)),              // -0.01 to +0.01 per interface
-        stopLossPercent: Math.max(1, Math.min(5, config.stopLossPercent || 2)), // 1-5% per interface comments
-        takeProfitPercent: Math.max(2, Math.min(10, config.takeProfitPercent || 4)), // 2-10% per interface comments
+        stopLossPercent: Math.max(1, Math.min(8, config.stopLossPercent || 3.5)), // 1-8% for conviction trading
+        takeProfitPercent: Math.max(2, Math.min(15, config.takeProfitPercent || 10)), // 2-15% for conviction trading
         direction: config.direction || 'long',
     };
 }

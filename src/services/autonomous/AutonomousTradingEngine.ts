@@ -755,20 +755,30 @@ export class AutonomousTradingEngine extends EventEmitter {
                 // Check competition mode and log prominent warning
                 const { isCompetitionModeAllowed } = await import('../../constants/analyst/riskLimits');
                 if (isCompetitionModeAllowed()) {
+                    const borderTop = '╔══════════════════════════════════════════════════════════════════════════════╗';
+                    const borderMid = '╠══════════════════════════════════════════════════════════════════════════════╣';
+                    const borderBottom = '╚══════════════════════════════════════════════════════════════════════════════╝';
+                    const innerWidth = borderTop.length - 2;
+                    const boxLine = (text: string) => `║${text.length > innerWidth ? text.slice(0, innerWidth) : text.padEnd(innerWidth)}║`;
+
+                    const maxLeverage = config.autonomous.riskLimits.absoluteMaxLeverage;
+                    const maxPositionPct = config.autonomous.riskLimits.maxPositionSizePercent;
+                    const maxDailyTrades = config.trading.maxDailyTrades;
+
                     logger.warn('');
-                    logger.warn('╔══════════════════════════════════════════════════════════════════════════════╗');
-                    logger.warn('║  ⚠️  COMPETITION MODE ENABLED - AGGRESSIVE SETTINGS ACTIVE                   ║');
-                    logger.warn('╠══════════════════════════════════════════════════════════════════════════════╣');
-                    logger.warn('║  This mode is for DEMO/PAPER TRADING ONLY!                                   ║');
-                    logger.warn('║                                                                              ║');
-                    logger.warn('║  IMPORTANT: The WEEX API does NOT provide a way to detect demo vs live       ║');
-                    logger.warn('║  accounts. YOU must verify your account type in WEEX settings.               ║');
-                    logger.warn('║                                                                              ║');
-                    logger.warn('║  Settings: 20x max leverage, 50% max position, 50 trades/day                 ║');
-                    logger.warn('║                                                                              ║');
-                    logger.warn('║  If you are connected to a LIVE account, STOP NOW and disable                ║');
-                    logger.warn('║  COMPETITION_MODE in your .env file!                                         ║');
-                    logger.warn('╚══════════════════════════════════════════════════════════════════════════════╝');
+                    logger.warn(borderTop);
+                    logger.warn(boxLine('  ⚠️  COMPETITION MODE ENABLED - AGGRESSIVE SETTINGS ACTIVE'));
+                    logger.warn(borderMid);
+                    logger.warn(boxLine('  This mode is for DEMO/PAPER TRADING ONLY!'));
+                    logger.warn(boxLine(''));
+                    logger.warn(boxLine('  IMPORTANT: The WEEX API does NOT provide a way to detect demo vs live'));
+                    logger.warn(boxLine('  accounts. YOU must verify your account type in WEEX settings.'));
+                    logger.warn(boxLine(''));
+                    logger.warn(boxLine(`  Settings: ${maxLeverage}x max leverage, ${maxPositionPct}% max position, ${maxDailyTrades} trades/day`));
+                    logger.warn(boxLine(''));
+                    logger.warn(boxLine('  If you are connected to a LIVE account, STOP NOW and disable'));
+                    logger.warn(boxLine('  COMPETITION_MODE in your .env file!'));
+                    logger.warn(borderBottom);
                     logger.warn('');
                 }
 
@@ -1495,18 +1505,6 @@ export class AutonomousTradingEngine extends EventEmitter {
         }
         logger.info(`${'='.repeat(60)} \n`);
 
-        // Handle HOLD action
-        if (decision.action === 'HOLD' || decision.winner === 'NONE') {
-            logger.info('📊 Decision: HOLD - No trade this cycle');
-            // FIXED: Reset consecutive failures on successful cycle (even if HOLD)
-            this.consecutiveFailures = 0;
-            // Track consecutive HOLDs to reduce cycle frequency when market is boring
-            this.consecutiveHolds++;
-            await this.updateLeaderboard();
-            await this.completeCycle(cycleStart, 'HOLD decision');
-            return;
-        }
-
         // Handle CLOSE/REDUCE actions BEFORE confidence check
         // CRITICAL: Exit actions (CLOSE/REDUCE) should NOT be blocked by confidence threshold
         // We want to be able to exit positions even with low confidence signals
@@ -1525,7 +1523,9 @@ export class AutonomousTradingEngine extends EventEmitter {
                         // Create AI log for position close
                         // FIXED: Try to extract orderId from close result for WEEX compliance
                         try {
-                            const closeOrderId = closeResult?.order_id || closeResult?.orderId || closeResult?.data?.order_id;
+                            const closeResults = Array.isArray(closeResult) ? closeResult : [];
+                            const closeOrderId =
+                                closeResults.find(r => r?.success)?.successOrderId ?? closeResults[0]?.successOrderId;
                             await aiLogService.createLog(
                                 'position_management',
                                 'autonomous-engine',
@@ -1540,10 +1540,10 @@ export class AutonomousTradingEngine extends EventEmitter {
                                     status: 'CLOSED',
                                     symbol: decision.symbol,
                                     closed_size: position.size,
-                                    order_id: closeOrderId || null,
+                                    order_id: closeOrderId != null ? String(closeOrderId) : null,
                                 },
                                 `AI closed position for ${decision.symbol}.Winner: ${decision.winner}.Reason: ${(decision.rationale || '').slice(0, 200)} `,
-                                closeOrderId ? String(closeOrderId) : undefined // Pass orderId if available for WEEX upload
+                                closeOrderId != null ? String(closeOrderId) : undefined // Pass orderId if available for WEEX upload
                             );
                         } catch (logError) {
                             logger.warn('Failed to create AI close log:', logError);
@@ -1553,28 +1553,35 @@ export class AutonomousTradingEngine extends EventEmitter {
                         const rawSizeToClose = position.size * 0.5;
                         let sizeToClose: string;
                         let actuallyClosedFull = false;
+                        let closeOrReduceOrderId: string | undefined;
 
                         try {
                             sizeToClose = roundToStepSize(rawSizeToClose, decision.symbol);
-                        } catch (roundError) {
+                        } catch (_roundError) {
                             // Size too small for partial close - close full position instead
                             logger.warn(`Partial close size too small(${rawSizeToClose}), closing full position instead`);
-                            await this.weexClient.closeAllPositions(decision.symbol);
+                            let fullSizeToClose = String(position.size);
+                            try {
+                                fullSizeToClose = roundToStepSize(position.size, decision.symbol);
+                            } catch (_roundFullError) { }
+                            const fullCloseResult = await this.weexClient.closePartialPosition(decision.symbol, position.side, fullSizeToClose, '1');
                             logger.info(`✅ Closed full position(partial was too small): ${decision.symbol} `);
                             actuallyClosedFull = true;
-                            sizeToClose = String(position.size); // For logging
+                            sizeToClose = fullSizeToClose;
+                            closeOrReduceOrderId = fullCloseResult?.order_id ? String(fullCloseResult.order_id) : undefined;
                         }
 
                         let reduceResult: any;
                         if (!actuallyClosedFull) {
                             reduceResult = await this.weexClient.closePartialPosition(decision.symbol, position.side, sizeToClose, '1');
                             logger.info(`✅ Reduced position: ${decision.symbol} by 50 % `);
+                            closeOrReduceOrderId = reduceResult?.order_id ? String(reduceResult.order_id) : undefined;
                         }
 
                         // Create AI log for position reduce
                         // FIXED: Extract orderId from reduce result for WEEX compliance
                         try {
-                            const reduceOrderId = reduceResult?.order_id;
+                            const remainingSize = actuallyClosedFull ? 0 : Math.max(0, position.size - Number(sizeToClose || 0));
                             await aiLogService.createLog(
                                 'position_management',
                                 'autonomous-engine',
@@ -1590,11 +1597,11 @@ export class AutonomousTradingEngine extends EventEmitter {
                                     status: actuallyClosedFull ? 'CLOSED' : 'REDUCED',
                                     symbol: decision.symbol,
                                     reduced_size: sizeToClose,
-                                    remaining_size: actuallyClosedFull ? 0 : position.size * 0.5,
-                                    order_id: reduceOrderId || null,
+                                    remaining_size: remainingSize,
+                                    order_id: closeOrReduceOrderId || null,
                                 },
                                 `AI ${actuallyClosedFull ? 'closed' : 'reduced'} position for ${decision.symbol}${actuallyClosedFull ? ' (partial was too small)' : ' by 50%'}.Winner: ${decision.winner}.Reason: ${(decision.rationale || '').slice(0, 200)} `,
-                                reduceOrderId ? String(reduceOrderId) : undefined // Pass orderId for WEEX upload
+                                closeOrReduceOrderId // Pass orderId for WEEX upload
                             );
                         } catch (logError) {
                             logger.warn('Failed to create AI reduce log:', logError);
@@ -1723,6 +1730,16 @@ export class AutonomousTradingEngine extends EventEmitter {
                 completionMessage = `${decision.action} failed`;
             }
             await this.completeCycle(cycleStart, completionMessage);
+            return;
+        }
+
+        // Handle HOLD action
+        if (decision.action === 'HOLD' || decision.winner === 'NONE') {
+            logger.info('📊 Decision: HOLD - No trade this cycle');
+            this.consecutiveFailures = 0;
+            this.consecutiveHolds++;
+            await this.updateLeaderboard();
+            await this.completeCycle(cycleStart, 'HOLD decision');
             return;
         }
 
@@ -2964,6 +2981,9 @@ export class AutonomousTradingEngine extends EventEmitter {
                 let cleanupTimeoutId: NodeJS.Timeout | null = null;
                 const timeoutPromise = new Promise<void>((_, reject) => {
                     cleanupTimeoutId = setTimeout(() => reject(new Error('cleanup timeout')), 5000);
+                    if (cleanupTimeoutId && cleanupTimeoutId.unref) {
+                        cleanupTimeoutId.unref();
+                    }
                 });
 
                 try {
