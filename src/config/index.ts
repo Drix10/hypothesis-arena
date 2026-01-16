@@ -69,10 +69,16 @@ export const config = {
         })() as 'gemini' | 'openrouter',
         model: process.env.GEMINI_MODEL || 'gemini-2.0-flash',
         openRouterModel: process.env.OPENROUTER_MODEL || 'deepseek/deepseek-chat',
-        maxOutputTokens: safeParseInt(process.env.AI_MAX_OUTPUT_TOKENS, 8192),
+        maxOutputTokens: safeParseInt(process.env.AI_MAX_OUTPUT_TOKENS, 65536),
         temperature: Math.max(0, Math.min(2, safeParseFloat(process.env.AI_TEMPERATURE, 0.7))),
         requestTimeoutMs: Math.max(5000, safeParseInt(process.env.AI_REQUEST_TIMEOUT_MS, 60000)),
         maxRetries: clampInt(process.env.AI_MAX_RETRIES, 3, 1, 10),
+
+        // Thinking/Reasoning configuration (for models that support it like Claude 3.7)
+        thinking: {
+            enabled: process.env.AI_THINKING_ENABLED === 'true',
+            budgetTokens: clampInt(process.env.AI_THINKING_BUDGET, 16000, 1024, 64000),
+        },
 
         // Hybrid AI Mode (v5.5.0) - Use both Gemini and OpenRouter simultaneously
         hybridMode: process.env.AI_HYBRID_MODE === 'true',
@@ -286,12 +292,12 @@ export const config = {
         // Risk Council additional limits (used in riskCouncil.ts)
         riskCouncil: {
             // Max funding rate against position (0.001 = 0.1%)
-            maxFundingAgainstPercent: safeParseFloat(process.env.MAX_FUNDING_AGAINST_PERCENT, 0.001),
+            maxFundingAgainstPercent: Math.max(0, Math.min(1, safeParseFloat(process.env.MAX_FUNDING_AGAINST_PERCENT, 0.001))),
             // Max positions in same sector
             maxSectorPositions: clampInt(process.env.MAX_SECTOR_POSITIONS, 3, 1, 10),
             // Net exposure limits (percentage)
-            netExposureLimitLong: clampInt(process.env.NET_EXPOSURE_LIMIT_LONG, 70, 10, 100),
-            netExposureLimitShort: clampInt(process.env.NET_EXPOSURE_LIMIT_SHORT, 70, 10, 100),
+            netExposureLimitLong: clampInt(process.env.NET_EXPOSURE_LIMIT_LONG, 70, 0, 300),
+            netExposureLimitShort: clampInt(process.env.NET_EXPOSURE_LIMIT_SHORT, 70, 0, 300),
         },
 
         // Global risk limits (used in riskLimits.ts) - validated for ordering
@@ -690,33 +696,74 @@ if (!config.autonomous.dryRun) {
 // SAFETY: Validate per-trade risk is reasonable
 // Risk = position_size × leverage × stop_loss
 {
-    const maxPositionPct = config.autonomous.riskLimits.maxPositionSizePercent;
+    let maxPositionPct = config.autonomous.riskLimits.maxPositionSizePercent;
     const maxLeverage = config.autonomous.riskLimits.absoluteMaxLeverage;
     const stopLossPct = config.autonomous.urgencyThresholds.stopLossPct;
     const maxRiskPerTrade = config.autonomous.riskLimits.maxRiskPerTradePercent;
 
     // Calculate worst-case per-trade risk
-    const worstCaseRisk = (maxPositionPct / 100) * maxLeverage * stopLossPct;
+    let worstCaseRisk = (maxPositionPct / 100) * maxLeverage * stopLossPct;
+    const suggestedMaxPositionPctToRespectRisk =
+        maxLeverage > 0 && stopLossPct > 0
+            ? (maxRiskPerTrade / (maxLeverage * stopLossPct)) * 100
+            : NaN;
 
     if (worstCaseRisk > maxRiskPerTrade) {
+        const safeMaxPositionPct =
+            Number.isFinite(suggestedMaxPositionPctToRespectRisk)
+                ? Math.max(1, Math.min(maxPositionPct, suggestedMaxPositionPctToRespectRisk))
+                : maxPositionPct;
+
         console.warn(
             `⚠️ WARNING: Worst-case per-trade risk (${worstCaseRisk.toFixed(1)}%) exceeds MAX_RISK_PER_TRADE_PERCENT (${maxRiskPerTrade}%).\n` +
             `  Calculation: MAX_POSITION_SIZE_PERCENT (${maxPositionPct}%) × ABSOLUTE_MAX_LEVERAGE (${maxLeverage}x) × STOP_LOSS_PCT (${stopLossPct}%) = ${worstCaseRisk.toFixed(1)}%\n` +
-            `  Consider reducing position size, leverage, or stop loss to stay within risk limits.`
+            `  FIX: Reduce MAX_POSITION_SIZE_PERCENT to ≤ ${Number.isFinite(suggestedMaxPositionPctToRespectRisk) ? suggestedMaxPositionPctToRespectRisk.toFixed(1) : '?'}% ` +
+            `(or lower ABSOLUTE_MAX_LEVERAGE / STOP_LOSS_PCT, or raise MAX_RISK_PER_TRADE_PERCENT).`
         );
+
+        if (!config.autonomous.dryRun && safeMaxPositionPct < maxPositionPct) {
+            console.warn(
+                `⚠️ WARNING: Enforcing safer runtime cap: MAX_POSITION_SIZE_PERCENT ${maxPositionPct}% → ${safeMaxPositionPct.toFixed(1)}%`
+            );
+            maxPositionPct = safeMaxPositionPct;
+            config.autonomous.riskLimits.maxPositionSizePercent = safeMaxPositionPct;
+            worstCaseRisk = (maxPositionPct / 100) * maxLeverage * stopLossPct;
+        }
     }
 
     // Validate concurrent risk
-    const maxConcurrent = config.autonomous.maxConcurrentPositions;
+    let maxConcurrent = config.autonomous.maxConcurrentPositions;
     const maxConcurrentRisk = config.autonomous.riskLimits.maxConcurrentRiskPercent;
-    const worstCaseConcurrentRisk = worstCaseRisk * maxConcurrent;
+    let worstCaseConcurrentRisk = worstCaseRisk * maxConcurrent;
+    const suggestedMaxConcurrentPositionsToRespectRisk =
+        worstCaseRisk > 0 ? Math.floor(maxConcurrentRisk / worstCaseRisk) : NaN;
 
     if (worstCaseConcurrentRisk > maxConcurrentRisk) {
+        const safeMaxConcurrentPositions =
+            Number.isFinite(suggestedMaxConcurrentPositionsToRespectRisk)
+                ? Math.max(1, Math.min(maxConcurrent, suggestedMaxConcurrentPositionsToRespectRisk))
+                : maxConcurrent;
+
         console.warn(
             `⚠️ WARNING: Worst-case concurrent risk (${worstCaseConcurrentRisk.toFixed(1)}%) exceeds MAX_CONCURRENT_RISK_PERCENT (${maxConcurrentRisk}%).\n` +
             `  Calculation: Per-trade risk (${worstCaseRisk.toFixed(1)}%) × MAX_CONCURRENT_POSITIONS (${maxConcurrent}) = ${worstCaseConcurrentRisk.toFixed(1)}%\n` +
-            `  Consider reducing position count or per-trade risk.`
+            `  FIX: Reduce MAX_CONCURRENT_POSITIONS to ≤ ${Number.isFinite(suggestedMaxConcurrentPositionsToRespectRisk) ? Math.max(1, suggestedMaxConcurrentPositionsToRespectRisk) : '?'} ` +
+            `(or reduce per-trade risk by lowering MAX_POSITION_SIZE_PERCENT / ABSOLUTE_MAX_LEVERAGE / STOP_LOSS_PCT, or raise MAX_CONCURRENT_RISK_PERCENT).`
         );
+
+        if (!config.autonomous.dryRun && safeMaxConcurrentPositions < maxConcurrent) {
+            console.warn(
+                `⚠️ WARNING: Enforcing safer runtime cap: MAX_CONCURRENT_POSITIONS ${maxConcurrent} → ${safeMaxConcurrentPositions}`
+            );
+            maxConcurrent = safeMaxConcurrentPositions;
+            config.autonomous.maxConcurrentPositions = safeMaxConcurrentPositions;
+            worstCaseConcurrentRisk = worstCaseRisk * maxConcurrent;
+
+            if (config.autonomous.maxSameDirectionPositions > config.autonomous.maxConcurrentPositions) {
+                console.warn(`⚠️ WARNING: MAX_SAME_DIRECTION_POSITIONS clamped to ${config.autonomous.maxConcurrentPositions}.`);
+                config.autonomous.maxSameDirectionPositions = config.autonomous.maxConcurrentPositions;
+            }
+        }
     }
 }
 

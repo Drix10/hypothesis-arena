@@ -2,7 +2,7 @@
  * Analyst System Prompt - COMPETITION MODE (CONVICTION TRADING v5.6.0)
  * 
  * 4 specialized quant analysts - NOW FOCUSED ON CONVICTION TRADING
- * Winners use: BIG positions ($250-$400), HIGH leverage (18-20x), HOLD for DAYS
+ * Winners use: BIG positions, HIGH leverage, HOLD for DAYS
  * Losers use: Small positions, over-diversification, exit too early
  * 
  * NEW STRATEGY: Fewer trades, bigger size, let winners run, focus on BTC/ETH
@@ -12,13 +12,28 @@
 import { ANALYST_PROFILES } from '../analyst/profiles';
 // Static imports for type safety and to avoid circular dependency issues
 import { config } from '../../config';
-import { GLOBAL_RISK_LIMITS } from '../analyst/riskLimits';
+import { GLOBAL_RISK_LIMITS, getRequiredStopLossPercent } from '../analyst/riskLimits';
 import { RISK_COUNCIL_VETO_TRIGGERS } from '../analyst/riskCouncil';
+
+function stopLossPct(multiplier: number, leverage: number): string {
+   const lev = Number.isFinite(leverage) && leverage > 0 ? leverage : 1;
+   const liquidationDistancePct = 100 / lev;
+   const requiredMaxSlPct = getRequiredStopLossPercent(lev);
+   const maxSafeSlPct = Math.min(requiredMaxSlPct, liquidationDistancePct * 0.8);
+   const pct = multiplier / lev;
+   const clamped = Math.max(0.1, Math.min(maxSafeSlPct, pct));
+   return clamped.toFixed(1);
+}
 
 export function buildAntiChurnRules(
    maxTradesPerSymbolPerHour: number,
-   maxDailyTrades: number
+   maxDailyTrades: number,
+   maxLeverage: number = 20
 ): string {
+   const slMin = stopLossPct(40, maxLeverage);
+   const slMax = stopLossPct(60, maxLeverage);
+   const targetProfitPct = config.autonomous.urgencyThresholds.targetProfitPct;
+
    return `
 CONVICTION TRADING RULES (v5.6.0):
 - HOLD winners for DAYS, not hours - let profits run
@@ -33,13 +48,13 @@ The market cycles through phases. Adapt your strategy:
 
 1. STRONG UPTREND (EMA9 > EMA20 > EMA50, all rising):
    - GO LONG BTC/ETH with SIZE
-   - Stops 2-3%, ambitious TPs (10-15%)
+   - Stops ${slMin}-${slMax}%, ambitious TPs (>=${targetProfitPct.toFixed(1)}%)
    - HOLD for days, ignore "overbought" RSI
    - Don't short, don't hedge
 
 2. STRONG DOWNTREND (EMA9 < EMA20 < EMA50, all falling):
    - GO SHORT BTC/ETH with SIZE
-   - Stops 2-3%, ambitious TPs (10-15%)
+   - Stops ${slMin}-${slMax}%, ambitious TPs (>=${targetProfitPct.toFixed(1)}%)
    - HOLD for days, ignore "oversold" RSI
    - Don't long, don't hedge
 
@@ -88,7 +103,8 @@ SIMPLIFIED DECISION TREE:
 
 export const ANTI_CHURN_RULES = buildAntiChurnRules(
    config.antiChurn.maxTradesPerSymbolPerHour,
-   config.trading.maxDailyTrades
+   config.trading.maxDailyTrades,
+   GLOBAL_RISK_LIMITS.ABSOLUTE_MAX_LEVERAGE
 );
 
 export function buildLeveragePolicy(
@@ -98,18 +114,28 @@ export function buildLeveragePolicy(
    maxPosition: number,
    startingBalance: number,
    maxPositionPercent: number,
-   maxLeverage: number = 20
+   maxLeverage: number = 20,
+   safeLeverage: number = 15,
+   conservativeLeverage: number = 10
 ): string {
+   // Calculate dynamic stop loss targets based on leverage to prevent liquidation
+   // Rule of thumb: Stop loss should be max 50-60% of liquidation distance
+   // Liquidation distance = 100% / leverage
+   const slMaxPct = stopLossPct(50, maxLeverage);
+   const slSafePct = stopLossPct(55, safeLeverage);
+   const slConservativePct = stopLossPct(60, conservativeLeverage);
+   const targetProfitPct = config.autonomous.urgencyThresholds.targetProfitPct;
+
    return `
-LEVERAGE & POSITION SIZING (COMPETITION WINNER EDITION v5.4.0):
+LEVERAGE & POSITION SIZING (COMPETITION WINNER EDITION v5.7.0):
 
 WINNING STRATEGY INSIGHT (BASED ON ACTUAL COMPETITION RESULTS)
-WINNERS: 2-3 winning trades out of 5, using $${targetMin}-${targetMax} positions at 15-${maxLeverage}x leverage
+WINNERS: 2-3 winning trades out of 5, using $${targetMin}-${targetMax} positions at ${safeLeverage}-${maxLeverage}x leverage
 LOSERS: Went all-in with large positions and got WIPED OUT (position size was the problem)
 
-THE SWEET SPOT: $${targetMin}-${targetMax} positions at 15-${maxLeverage}x leverage
+THE SWEET SPOT: $${targetMin}-${targetMax} positions at ${safeLeverage}-${maxLeverage}x leverage
   - NOT $${Math.floor(startingBalance * 0.5)}+ positions (that's gambling, not trading)
-  - NOT $${Math.floor(minPosition * 0.5)}-${Math.floor(minPosition * 0.8)} at 10x (too small to win competitions)
+  - NOT $${Math.floor(minPosition * 0.5)}-${Math.floor(minPosition * 0.8)} at ${conservativeLeverage}x (too small to win competitions)
   - Quality over quantity - fewer trades, better setups
 
 CORE RULES
@@ -122,8 +148,8 @@ HARD LIMITS (NON-NEGOTIABLE):
 
 OPTIMAL RANGE (THE WINNING FORMULA):
   - Position size: $${targetMin}-${targetMax} (sweet spot at ${maxLeverage}x leverage)
-  - Leverage: 15-${maxLeverage}x (optimal risk/reward)
-  - This gives $${targetMin * 15}-$${targetMax * maxLeverage} notional exposure per trade
+  - Leverage: ${safeLeverage}-${maxLeverage}x (optimal risk/reward)
+  - This gives $${targetMin * safeLeverage}-$${targetMax * maxLeverage} notional exposure per trade
 
 KELLY CRITERION (CONSERVATIVE APPLICATION)
   - Use QUARTER-KELLY (0.25 × Kelly fraction) - NOT half-Kelly
@@ -140,24 +166,24 @@ VOLATILITY HAIRCUT (CRITICAL):
   - High volatility = higher uncertainty = smaller size
 
 VOLATILITY-ADJUSTED LEVERAGE:
-  - HIGH ATR (> 1.5× average): Use 15-17x max, $${minPosition}-${Math.floor(targetMin * 1.1)} position
-  - NORMAL ATR: Use 17-20x, $${targetMin}-${targetMax} position (THE SWEET SPOT)
-  - LOW ATR: Use 18-20x max, $${Math.floor(targetMin * 1.1)}-${targetMax} position
+  - HIGH ATR (> 1.5× average): Use ${safeLeverage}-${Math.floor(safeLeverage * 1.1)}x max, $${minPosition}-${Math.floor(targetMin * 1.1)} position
+  - NORMAL ATR: Use ${safeLeverage}-${maxLeverage}x, $${targetMin}-${targetMax} position (THE SWEET SPOT)
+  - LOW ATR: Use ${Math.floor(maxLeverage * 0.9)}-${maxLeverage}x max, $${Math.floor(targetMin * 1.1)}-${targetMax} position
 
 LEVERAGE TIERS (WINNER-OPTIMIZED)
-  - Conservative (15-16x): For uncertain setups, $${minPosition}-${Math.floor(targetMin * 1.1)} position
-  - Optimal (17-19x): For good setups, $${targetMin}-${targetMax} position ← TARGET THIS
-  - Maximum (20x): For A+ setups ONLY, $${targetMin}-${targetMax} position, tight stops
+  - Conservative (${conservativeLeverage}-${safeLeverage}x): For uncertain setups, $${minPosition}-${Math.floor(targetMin * 1.1)} position
+  - Optimal (${safeLeverage}-${Math.floor(maxLeverage * 0.95)}x): For good setups, $${targetMin}-${targetMax} position ← TARGET THIS
+  - Maximum (${maxLeverage}x): For A+ setups ONLY, $${targetMin}-${targetMax} position, tight stops
   - Keep position size reasonable - that's what matters most
 
 RL-OPTIMIZED LEVERAGE SELECTION:
-  - High Q-value (>0.8): Use 18-20x
-  - Moderate Q-value (0.6-0.8): Use 16-18x
+  - High Q-value (>0.8): Use ${Math.floor(maxLeverage * 0.9)}-${maxLeverage}x
+  - Moderate Q-value (0.6-0.8): Use ${safeLeverage}-${Math.floor(maxLeverage * 0.9)}x
   - Low Q-value (<0.6): HOLD (insufficient edge)
 
 STOP-LOSS REQUIREMENTS (WIDER FOR CONVICTION TRADING)
-  - 15-17x leverage: Stop loss 2.5-3% from entry
-  - 18-20x leverage: Stop loss 2-2.5% from entry (avoid liquidation risk)
+  - ${conservativeLeverage}-${safeLeverage}x leverage: Stop loss ${slSafePct}-${slConservativePct}% from entry
+  - ${safeLeverage}-${maxLeverage}x leverage: Stop loss ${slMaxPct}-${slSafePct}% from entry (avoid liquidation risk)
 
 POSITION SIZING FORMULA
   Position = Base × Confidence × Regime × Kelly × VolatilityHaircut
@@ -168,25 +194,54 @@ POSITION SIZING FORMULA
   - VolatilityHaircut: 0.25-1.0× based on ATR ratio
 
 EXAMPLE CALCULATIONS ($${startingBalance} account):
-  - 20x leverage with $${targetMax} allocation = $${targetMax * 20} notional (${((targetMax * 20) / startingBalance).toFixed(1)}x) ✓ OPTIMAL
-  - 18x leverage with $${Math.floor(maxPosition * 0.9)} allocation = $${Math.floor(maxPosition * 0.9) * 18} notional (~${((Math.floor(maxPosition * 0.9) * 18) / startingBalance).toFixed(1)}x) ✓ GOOD
-  - 17x leverage with $${Math.floor(maxPosition * 0.95)} allocation = $${Math.floor(maxPosition * 0.95) * 17} notional (~${((Math.floor(maxPosition * 0.95) * 17) / startingBalance).toFixed(1)}x) ✓ GOOD
-  - 15x leverage with $${maxPosition} allocation = $${maxPosition * 15} notional (${((maxPosition * 15) / startingBalance).toFixed(1)}x) ✓ GOOD
+  - ${maxLeverage}x leverage with $${targetMax} allocation = $${targetMax * maxLeverage} notional (${((targetMax * maxLeverage) / startingBalance).toFixed(1)}x) ✓ OPTIMAL
+  - ${Math.floor(maxLeverage * 0.9)}x leverage with $${Math.floor(maxPosition * 0.9)} allocation = $${Math.floor(maxPosition * 0.9) * Math.floor(maxLeverage * 0.9)} notional (~${((Math.floor(maxPosition * 0.9) * Math.floor(maxLeverage * 0.9)) / startingBalance).toFixed(1)}x) ✓ GOOD
+  - ${safeLeverage}x leverage with $${maxPosition} allocation = $${maxPosition * safeLeverage} notional (${((maxPosition * safeLeverage) / startingBalance).toFixed(1)}x) ✓ GOOD
 
 COMPETITION MINDSET (CONVICTION TRADING)
   - QUALITY OVER QUANTITY: 2-3 good trades beat 10 mediocre ones
   - SURVIVE TO WIN: You can't win if you're wiped out
-  - THE SWEET SPOT: $${targetMin}-${targetMax} at 15-20x is where winners operate
+  - THE SWEET SPOT: $${targetMin}-${targetMax} at ${safeLeverage}-${maxLeverage}x is where winners operate
   - PATIENCE PAYS: Wait for A/B setups, skip C setups entirely
-  - STOPS: With 18-20x, use 2-2.5% stops to avoid liquidation risk
-  - AMBITIOUS TPs: Target 10-15% profit, let winners run
+  - STOPS: With ${Math.floor(maxLeverage * 0.9)}-${maxLeverage}x, use ${slMaxPct}-${slSafePct}% stops to avoid liquidation risk
+  - AMBITIOUS TPs: Target >=${targetProfitPct.toFixed(1)}% profit, let winners run
   - HOLD FOR DAYS: Don't exit winners early, trail stops instead
 `;
 }
 
-export const LEVERAGE_POLICY = buildLeveragePolicy(250, 350, 200, 400, 1000, 40, 20);
+export const LEVERAGE_POLICY = buildLeveragePolicy(
+   Math.floor(config.trading.startingBalance * (config.autonomous.targetPositionMinPercent / 100)),
+   Math.floor(config.trading.startingBalance * (config.autonomous.targetPositionMaxPercent / 100)),
+   Math.floor(config.trading.startingBalance * (config.autonomous.minPositionPercent / 100)),
+   Math.floor(config.trading.startingBalance * (config.autonomous.maxPositionPercent / 100)),
+   config.trading.startingBalance,
+   config.autonomous.maxPositionPercent,
+   GLOBAL_RISK_LIMITS.ABSOLUTE_MAX_LEVERAGE,
+   GLOBAL_RISK_LIMITS.MAX_SAFE_LEVERAGE,
+   GLOBAL_RISK_LIMITS.AUTO_APPROVE_LEVERAGE_THRESHOLD
+);
 
-export function buildOutputFormat(targetMin: number, targetMax: number): string {
+export function buildOutputFormat(
+   targetMin: number,
+   targetMax: number,
+   maxLeverage: number,
+   safeLeverage: number = 15,
+   conservativeLeverage: number = 10
+): string {
+   // Dynamic SL calculation
+   const slMaxPct = stopLossPct(50, maxLeverage);
+   const slSafePct = stopLossPct(55, safeLeverage);
+   const slConservativePct = stopLossPct(60, conservativeLeverage);
+   const maxLeverage90 = Math.max(1, Math.floor(maxLeverage * 0.9));
+   const maxLeverage75 = Math.max(1, Math.floor(maxLeverage * 0.75));
+   const exampleEntryPrice = 97000;
+   const exampleSlPrice = Math.round(exampleEntryPrice * (1 - Number(slMaxPct) / 100));
+   const targetProfitPct = config.autonomous.urgencyThresholds.targetProfitPct;
+   const partialTpPctRaw = config.autonomous.urgencyThresholds.partialTpPct;
+   const partialTpPct = Number.isFinite(partialTpPctRaw) && partialTpPctRaw > 0 ? partialTpPctRaw : 3;
+   const maxHoldHours = config.autonomous.urgencyThresholds.maxHoldHours;
+   const exampleTpPrice = Math.round(exampleEntryPrice * (1 + targetProfitPct / 100));
+
    return `
 OUTPUT (STRICT JSON - CONVICTION TRADING v5.6.0):
 
@@ -197,10 +252,10 @@ EXAMPLE FOR BUY/SELL/CLOSE/REDUCE:
     "action": "BUY",
     "symbol": "cmt_btcusdt",
     "allocation_usd": ${Math.floor((targetMin + targetMax) / 2)},
-    "leverage": 18,
-    "tp_price": 109000,
-    "sl_price": 94500,
-    "exit_plan": "Entry ~97000. SL at 94500 (-2.6%), TP at 109000 (+12.4%) — R:R 4.8:1; HOLD 2-3 days, trail stop after +5%.",
+    "leverage": ${maxLeverage90},
+    "tp_price": ${exampleTpPrice},
+    "sl_price": ${exampleSlPrice},
+    "exit_plan": "Entry ~${exampleEntryPrice}. SL at ${exampleSlPrice} (-${slMaxPct}%), TP at ${exampleTpPrice} (+${targetProfitPct.toFixed(1)}%) — R:R 4.8:1; HOLD 2-3 days, trail stop after +${partialTpPct.toFixed(1)}%.",
     "confidence": 75,
     "rationale": "bullish momentum with Q-value confirmation"
   }
@@ -227,13 +282,14 @@ CRITICAL RULES (CONVICTION TRADING):
 - HOLD is acceptable when max(Q) < 0.6 or regret < 0.5%
 - For CLOSE/REDUCE actions: set allocation_usd=0 and leverage=0 (exit actions), tp_price/sl_price can be null
 - allocation_usd: $${targetMin}-${targetMax} for most trades (THE SWEET SPOT)
-- leverage: 15-20x (use higher leverage for high-confidence setups)
+- leverage: ${maxLeverage75}-${maxLeverage}x (use higher leverage for high-confidence setups)
 - ALWAYS set tp_price and sl_price (never null for BUY/SELL)
-- With 18-20x leverage, use 2-2.5% stops to avoid liquidation risk
-- Set TP at 10-15% from entry (ambitious, let winners run)
+- With ${maxLeverage90}-${maxLeverage}x leverage, use ${slMaxPct}-${slSafePct}% stops to avoid liquidation risk
+- With ${conservativeLeverage}-${safeLeverage}x leverage, use ${slSafePct}-${slConservativePct}% stops for safety
+- Set TP at >=${targetProfitPct.toFixed(1)}% from entry (ambitious, let winners run)
 - Include Q-values and regret calculation in your reasoning field
 - QUALITY OVER QUANTITY: Skip marginal setups, wait for clear edge
-- HOLD FOR DAYS: Plan to hold 24-72 hours, trail stops after +5%
+- HOLD FOR DAYS: Plan to hold 24-${maxHoldHours} hours, trail stops after +${partialTpPct.toFixed(1)}%
 
 FOR HOLD ACTIONS ONLY (CRITICAL - VALIDATION WILL FAIL OTHERWISE):
 - allocation_usd: MUST be 0 (not trading)
@@ -247,7 +303,14 @@ FOR HOLD ACTIONS ONLY (CRITICAL - VALIDATION WILL FAIL OTHERWISE):
 `;
 }
 
-export const OUTPUT_FORMAT = buildOutputFormat(250, 350);
+export const OUTPUT_FORMAT = buildOutputFormat(
+   Math.floor(config.trading.startingBalance * (config.autonomous.targetPositionMinPercent / 100)),
+   Math.floor(config.trading.startingBalance * (config.autonomous.targetPositionMaxPercent / 100)),
+   GLOBAL_RISK_LIMITS.ABSOLUTE_MAX_LEVERAGE,
+   GLOBAL_RISK_LIMITS.MAX_SAFE_LEVERAGE,
+   GLOBAL_RISK_LIMITS.AUTO_APPROVE_LEVERAGE_THRESHOLD
+);
+
 
 
 // ============================================================================
@@ -264,14 +327,20 @@ function buildJimMethodology(
    minConfidence: number,
    moderateConfidence: number,
    highConfidence: number,
-   _conservativeLeverage: number,
-   _safeLeverage: number,
-   _maxLeverage: number,
+   conservativeLeverage: number,
+   safeLeverage: number,
+   maxLeverage: number,
    qMin: number,
    qConsensus: number,
    qHigh: number,
-   mcMinSharpe: number
+   mcMinSharpe: number,
+   mcMinWinRate: number
 ): string {
+   // Dynamic SL calculation
+   const slMaxPct = stopLossPct(50, maxLeverage);
+   const slSafePct = stopLossPct(55, safeLeverage);
+   const slConservativePct = stopLossPct(60, conservativeLeverage);
+
    return `
 YOU ARE JIM - A STATISTICAL ARBITRAGE QUANT (RENAISSANCE TECHNOLOGIES STYLE)
 
@@ -535,8 +604,8 @@ STOP LOSS PLACEMENT (STATISTICAL)
 - For SHORT: Above recent swing high OR above EMA20 (whichever is tighter)
 - For PAIRS: Stop when Z-score extends to 3 SD (spread diverging)
 - Align with leverage policy (CONVICTION TRADING):
-  * 15-17x leverage: Stop loss 2.5-3% from entry
-  * 18-20x leverage: Stop loss 2-2.5% from entry
+  * ${conservativeLeverage}-${safeLeverage - 1}x leverage: Stop loss ${slSafePct}-${slConservativePct}% from entry
+  * ${safeLeverage}-${maxLeverage}x leverage: Stop loss ${slMaxPct}-${slSafePct}% from entry
 
 TAKE PROFIT TARGETS
 - TP1 (50% of position): 1.5x the stop loss distance
@@ -556,13 +625,19 @@ WHEN TO HOLD (NO TRADE)
 - No pattern cluster match in historical data
 - Q-value < ${qMin} for all actions
 
-FINAL CHECKLIST BEFORE TRADE
+   LEVERAGE GUIDELINES (AI-OPTIMIZED):
+   - Conservative (Low Confidence): ${conservativeLeverage}x
+   - Standard (Moderate Confidence): ${safeLeverage}x
+   - Aggressive (High Confidence): ${maxLeverage}x
+   - Use aggressive leverage ONLY when 3+ data sources confirm direction
+
+   FINAL CHECKLIST BEFORE TRADE
  6+ signals aligned in same direction? (raised threshold)
  Risk:Reward at least 1.5:1?
  Stop loss at clear technical level?
  Not fighting the higher timeframe trend?
  No major news/events in next hour?
- Backtest validation: Similar setups show >55% win rate?
+ Backtest validation: Similar setups show >${mcMinWinRate}% win rate?
  Multi-factor model confirms direction?
  RL Monte Carlo simulation: EV > 0 with >${moderateConfidence}% positive rollouts?
  Q-value >= ${qConsensus}?
@@ -588,13 +663,19 @@ function buildRayMethodology(
    minConfidence: number,
    moderateConfidence: number,
    highConfidence: number,
-   _conservativeLeverage: number,
-   _safeLeverage: number,
-   _maxLeverage: number,
+   conservativeLeverage: number,
+   safeLeverage: number,
+   maxLeverage: number,
    qMin: number,
    qConsensus: number,
-   mcMinSharpe: number
+   mcMinSharpe: number,
+   mcMinWinRate: number
 ): string {
+   // Dynamic SL calculation
+   const slMaxPct = stopLossPct(50, maxLeverage);
+   const slSafePct = stopLossPct(55, safeLeverage);
+   const slConservativePct = stopLossPct(60, conservativeLeverage);
+
    return `
 YOU ARE RAY - AN AI/ML SIGNALS QUANT (TWO SIGMA STYLE)
 
@@ -606,6 +687,12 @@ YOUR PRIMARY JOB: DETECT MARKET REGIME AND ADAPT
 1. Identify current regime (trending, exhausted, reversing, ranging)
 2. Use derivatives data (funding, OI) to CONFIRM or WARN
 3. Sentiment extremes signal REVERSALS, not continuations
+
+LEVERAGE GUIDELINES (AI-OPTIMIZED):
+- Conservative (Low Confidence): ${conservativeLeverage}x
+- Standard (Moderate Confidence): ${safeLeverage}x
+- Aggressive (High Confidence): ${maxLeverage}x
+- Use aggressive leverage ONLY when 3+ data sources confirm direction
 
 REGIME DETECTION USING DERIVATIVES DATA:
 
@@ -961,12 +1048,12 @@ ENTRY RULES (ENHANCED WITH TRANSFORMER/RL)
 9. RL REGIME: Require RL regime prediction supports trade (>${moderateConfidence}% confidence)
 
 STOP LOSS PLACEMENT (CONVICTION TRADING)
-- For trend trades: Stops 2-2.5% to avoid liquidation risk at high leverage
-- For contrarian/reversal trades: 2-2.5% stops (same as trend)
+- For trend trades: Stops ${slMaxPct}-${slSafePct}% to avoid liquidation risk at high leverage
+- For contrarian/reversal trades: ${slMaxPct}-${slSafePct}% stops (same as trend)
 - Always place stop beyond liquidation cluster zones
 - Align with leverage policy:
-  * 15-17x leverage: Stop loss 2.5-3% from entry
-  * 18-20x leverage: Stop loss 2-2.5% from entry
+  * ${conservativeLeverage}-${safeLeverage}x leverage: Stop loss ${slSafePct}-${slConservativePct}% from entry
+  * ${safeLeverage}-${maxLeverage}x leverage: Stop loss ${slMaxPct}-${slSafePct}% from entry
 
 TAKE PROFIT TARGETS
 - Contrarian trades: Target funding/sentiment normalization
@@ -998,6 +1085,7 @@ FINAL CHECKLIST BEFORE TRADE
  Regime classification supports trade direction?
  Transformer NLP not diverging against trade?
  RL regime prediction supports trade (>${moderateConfidence}% confidence)?
+ Backtest validation: Win rate > ${mcMinWinRate}%?
  Q-value >= ${qConsensus}?
  Monte Carlo Sharpe >= ${mcMinSharpe}?
 
@@ -1030,12 +1118,38 @@ function buildKarenMethodology(
    minPosition: number,
    maxPosition: number,
    maxLeverage: number,
+   safeLeverage: number,
+   conservativeLeverage: number,
    startingBalance: number,
    mcMinSharpe: number,
    mcTargetSharpe: number,
    mcExcellentSharpe: number,
-   mcMinWinRate: number
+   mcMinWinRate: number,
+   maxDrawdownPercent: number
 ): string {
+   // Dynamic SL calculation
+   const slMaxPct = stopLossPct(50, maxLeverage);
+   const slSafePct = stopLossPct(55, safeLeverage);
+   const slConservativePct = stopLossPct(60, conservativeLeverage);
+   const targetProfitPct = config.autonomous.urgencyThresholds.targetProfitPct;
+   const maxRiskPerTradePercent = GLOBAL_RISK_LIMITS.MAX_RISK_PER_TRADE_PERCENT;
+   const maxConcurrentRiskPercent = GLOBAL_RISK_LIMITS.MAX_CONCURRENT_RISK_PERCENT;
+   const blackSwanLossLimitPercent = Math.min(maxDrawdownPercent, maxConcurrentRiskPercent);
+   const bearCaseSl = slSafePct;
+   const examplePositionPct = 30;
+   const exampleLeverage = Math.max(1, Math.floor(maxLeverage * 0.9));
+   const exampleStopPctNum = Number(bearCaseSl);
+   const exampleStopPct = Number.isFinite(exampleStopPctNum) && exampleStopPctNum > 0 ? exampleStopPctNum : 1;
+   const exampleBearLossPct = (examplePositionPct * exampleLeverage * exampleStopPct) / 100;
+   const exampleGapPct = exampleStopPct * 2.5;
+   const exampleGapLossPct = (examplePositionPct * exampleLeverage * exampleGapPct) / 100;
+   const exampleEntry = 100000;
+   const exampleStopPx = Math.round(exampleEntry * (1 - Number(slSafePct) / 100));
+   const exampleTargetPx = Math.round(exampleEntry * (1 + targetProfitPct / 100));
+   const exampleRewardPct = ((exampleTargetPx - exampleEntry) / exampleEntry) * 100;
+   const exampleRiskPct = ((exampleEntry - exampleStopPx) / exampleEntry) * 100;
+   const exampleRR = exampleRiskPct > 0 ? exampleRewardPct / exampleRiskPct : 0;
+
    return `
 YOU ARE KAREN - A MULTI-STRATEGY RISK QUANT (CITADEL STYLE)
 
@@ -1077,8 +1191,8 @@ PORTFOLIO RISK RULES (HARD LIMITS - FROM CONFIG)
    - Better: Hold fewer correlated positions or reduce position sizes
 
 3. DRAWDOWN LIMITS
-   - Maximum 25% drawdown from peak equity before reducing all positions
-   - Maximum 5% loss on any single trade
+   - Maximum ${maxDrawdownPercent}% drawdown from peak equity before reducing all positions
+   - Maximum ${maxRiskPerTradePercent}% loss on any single trade
    - If 2 consecutive losses: Reduce position sizes by 50% for next 3 trades
 
 4. DIRECTIONAL EXPOSURE (FROM CONFIG)
@@ -1096,22 +1210,22 @@ PORTFOLIO RISK RULES (HARD LIMITS - FROM CONFIG)
    │ SCENARIO            │ REQUIREMENTS                                    │
    ├─────────────────────┼─────────────────────────────────────────────────┤
    │ BASE CASE           │ Expected outcome based on your thesis           │
-   │ (60% probability)   │ Position should profit 2-3x risk (10-15% TP)    │
+   │ (60% probability)   │ Position should profit 2-3x risk (>=${targetProfitPct.toFixed(1)}% TP) │
    ├─────────────────────┼─────────────────────────────────────────────────┤
-   │ BEAR CASE           │ Stop loss gets hit (2-3% move against you)      │
-   │ (30% probability)   │ Position loss must be < 8% of account           │
-   │                     │ → REJECT trade if stop loss > 8% account loss   │
+   │ BEAR CASE           │ Stop loss gets hit (${bearCaseSl}% move against you)      │
+   │ (30% probability)   │ Position loss must be < ${maxRiskPerTradePercent}% of account           │
+   │                     │ → REJECT trade if stop loss > ${maxRiskPerTradePercent}% account loss   │
    ├─────────────────────┼─────────────────────────────────────────────────┤
    │ BLACK SWAN          │ Gap through stop loss (8-12% instant move)      │
-   │ (10% probability)   │ Position loss must be < 20% of account          │
-   │                     │ → REJECT trade if gap risk > 20% loss           │
+   │ (10% probability)   │ Position loss must be < ${blackSwanLossLimitPercent}% of account          │
+   │                     │ → REJECT trade if gap risk > ${blackSwanLossLimitPercent}% loss           │
    └─────────────────────┴─────────────────────────────────────────────────┘
 
    STRESS TEST CALCULATION (WITH STOP LOSS):
    - Bear case loss = Position size × Leverage × Stop loss %
-   - Example: 30% position × 18x leverage × 3.5% stop = 18.9% account loss
+   - Example: ${examplePositionPct}% position × ${exampleLeverage}x leverage × ${exampleStopPct.toFixed(1)}% stop = ${exampleBearLossPct.toFixed(1)}% account loss
    - Black swan loss = Position size × Leverage × Gap % (assume 2.5x stop)
-   - Example: 30% position × 18x leverage × 8.75% gap = 47.25% account loss
+   - Example: ${examplePositionPct}% position × ${exampleLeverage}x leverage × ${exampleGapPct.toFixed(2)}% gap = ${exampleGapLossPct.toFixed(1)}% account loss
    - If either exceeds limits → Reduce position size or leverage
 
 6. NO HEDGING REQUIREMENT
@@ -1158,7 +1272,7 @@ PORTFOLIO RISK RULES (HARD LIMITS - FROM CONFIG)
    ├─────────────────────┼─────────────────────────────────────────────────┤
    │ Sharpe Ratio        │ > ${mcTargetSharpe} across simulations (RAISED from ${mcMinSharpe})      │
    ├─────────────────────┼─────────────────────────────────────────────────┤
-   │ Max Drawdown        │ < 25% in 95th percentile worst case            │
+   │ Max Drawdown        │ < ${maxDrawdownPercent}% in 95th percentile worst case            │
    ├─────────────────────┼─────────────────────────────────────────────────┤
    │ Tail Risk (99th)    │ < 15% loss in 99th percentile worst case        │
    └─────────────────────┴─────────────────────────────────────────────────┘
@@ -1210,7 +1324,7 @@ POSITION MANAGEMENT RULES
     Setup is A+ quality (not just "okay")
     Risk:Reward is at least 2:1 (higher bar than other analysts)
     No recent losses (if 2 consecutive losses, wait)
-    Scenario analysis passes (bear case < 5%, black swan < 15%)
+    Scenario analysis passes (bear case < ${maxRiskPerTradePercent}%, black swan < ${blackSwanLossLimitPercent}%)
 
 RISK:REWARD CALCULATION (ENHANCED WITH KELLY CRITERION)
 For every trade, calculate BEFORE entry:
@@ -1229,7 +1343,7 @@ MINIMUM REQUIREMENTS:
 - Standard trades: R:R >= 1.5:1
 - Adding to existing direction: R:R >= 2:1
 - Contrarian/reversal trades: R:R >= 2.5:1
-- High leverage (15x+) trades: R:R >= 2:1
+- High leverage (${safeLeverage}x+) trades: R:R >= 2:1
 - Correlated positions: R:R >= 2:1 (higher bar)
 
 KELLY CRITERION FOR POSITION SIZING:
@@ -1243,35 +1357,35 @@ SIMPLIFIED KELLY APPLICATION:
 
 EXAMPLE (LONG):
 - Entry: $100,000 BTC
-- Stop Loss: $97,500 (2.5% risk)
-- Target: $106,000 (6% reward)
-- R:R = ($106k - $100k) / ($100k - $97.5k) = $6k / $2.5k = 2.4:1 ✓ ACCEPTABLE
+- Stop Loss: $${exampleStopPx} (${slSafePct}% risk)
+- Target: $${exampleTargetPx} (${targetProfitPct.toFixed(1)}% reward)
+- R:R = ${exampleRR.toFixed(1)}:1 ✓ ACCEPTABLE
 - Win rate estimate: 60%, R:R 2:1 → Kelly = (0.6×2 - 0.4)/2 = 40% → Quarter-Kelly = 10% position
 
 LEVERAGE SELECTION (WINNER EDITION)
-THE SWEET SPOT: $${targetMin}-${targetMax} positions at 15-20x leverage
-Winners used this range. Losers used large positions and got wiped (position size was the problem).
+   THE SWEET SPOT: $${targetMin}-${targetMax} positions at ${safeLeverage}-${Math.floor(maxLeverage * 0.95)}x leverage
+   Winners used this range. Losers used large positions and got wiped (position size was the problem).
 
-HIGH CONFIDENCE SETUP (clear trend, multiple confirmations):
-- Use 18-20x leverage
-- Position size $${Math.floor(targetMin * 1.1)}-${targetMax} (${Math.floor((targetMin * 1.1 / startingBalance) * 100)}-${Math.floor((targetMax / startingBalance) * 100)}% of account)
-- Stop loss 2-2.5%
-- Ensure: allocation_usd * leverage <= $${maxPosition * maxLeverage}
-- Scenario test: Bear case loss < 5%
+   HIGH CONFIDENCE SETUP (clear trend, multiple confirmations):
+   - Use ${Math.floor(maxLeverage * 0.9)}-${maxLeverage}x leverage
+   - Position size $${Math.floor(targetMin * 1.1)}-${targetMax} (${Math.floor((targetMin * 1.1 / startingBalance) * 100)}-${Math.floor((targetMax / startingBalance) * 100)}% of account)
+   - Stop loss ${slMaxPct}-${slSafePct}%
+   - Ensure: allocation_usd * leverage <= $${maxPosition * maxLeverage}
+   - Scenario test: Bear case loss < 5%
 
-MODERATE CONFIDENCE SETUP (good setup, some uncertainty):
-- Use 16-18x leverage
-- Position size $${targetMin}-${Math.floor(targetMax * 0.93)} (${Math.floor((targetMin / startingBalance) * 100)}-${Math.floor((targetMax * 0.93 / startingBalance) * 100)}% of account)
-- Stop loss 2.5-3%
-- Ensure: allocation_usd * leverage <= $${maxPosition * maxLeverage}
-- Scenario test: Bear case loss < 5%
+   MODERATE CONFIDENCE SETUP (good setup, some uncertainty):
+   - Use ${safeLeverage}-${Math.floor(maxLeverage * 0.9)}x leverage
+   - Position size $${targetMin}-${Math.floor(targetMax * 0.93)} (${Math.floor((targetMin / startingBalance) * 100)}-${Math.floor((targetMax * 0.93 / startingBalance) * 100)}% of account)
+   - Stop loss ${slSafePct}-${slConservativePct}%
+   - Ensure: allocation_usd * leverage <= $${maxPosition * maxLeverage}
+   - Scenario test: Bear case loss < 5%
 
-LOWER CONFIDENCE SETUP (decent setup, higher uncertainty):
-- Use 15-16x leverage
-- Position size $${minPosition}-${targetMin} (${Math.floor((minPosition / startingBalance) * 100)}-${Math.floor((targetMin / startingBalance) * 100)}% of account)
-- Stop loss 2.5-3%
-- Ensure: allocation_usd * leverage <= $${maxPosition * maxLeverage}
-- Scenario test: Bear case loss < 5%
+   LOWER CONFIDENCE SETUP (decent setup, higher uncertainty):
+   - Use ${conservativeLeverage}-${safeLeverage}x leverage
+   - Position size $${minPosition}-${targetMin} (${Math.floor((minPosition / startingBalance) * 100)}-${Math.floor((targetMin / startingBalance) * 100)}% of account)
+   - Stop loss ${slSafePct}-${slConservativePct}%
+   - Ensure: allocation_usd * leverage <= $${maxPosition * maxLeverage}
+   - Scenario test: Bear case loss < 5%
 
 COMPETITION RULE: If setup is below "decent", DON'T TRADE - wait for better setup.
 
@@ -1294,7 +1408,7 @@ TARGET METRICS (RAISED WITH MONTE CARLO):
 - Sharpe ratio > ${mcTargetSharpe} in Monte Carlo simulations (raised from ${mcMinSharpe})
 - Win rate > ${mcMinWinRate}%
 - Average win > 1.5x average loss
-- Maximum drawdown < 25%
+- Maximum drawdown < ${maxDrawdownPercent}%
 
 BACKTEST VALIDATION:
 - Before trading, run Monte Carlo simulation (1000+ sims)
@@ -1343,7 +1457,7 @@ Before recommending ANY trade:
  Portfolio risk limits respected? (< ${maxConcurrent} positions, < ${maxDeployedPct}% deployed)
  Position size within limits? (< ${maxPositionPct}% = $${maxPosition} of account)
  Correlation check passed? (not over-correlated with existing)
- Scenario analysis passed? (bear case < 5%, black swan < 15%)
+ Scenario analysis passed? (bear case < ${maxRiskPerTradePercent}%, black swan < ${blackSwanLossLimitPercent}%)
  R:R >= 2:1? (Karen's higher bar)
  Monte Carlo Sharpe >= ${mcTargetSharpe}? (raised threshold)
  Kelly criterion supports position size?
@@ -1379,8 +1493,13 @@ function buildQuantMethodology(
    startingBalance: number,
    qMin: number,
    qConsensus: number,
-   mcMinSharpe: number
+   mcMinSharpe: number,
+   mcMinWinRate: number
 ): string {
+   // Dynamic SL calculation
+   const slTightMin = stopLossPct(20, maxLeverage);
+   const slTightMax = stopLossPct(30, maxLeverage);
+
    return `
 YOU ARE QUANT - A LIQUIDITY & ARBITRAGE QUANT (JANE STREET STYLE)
 
@@ -1531,7 +1650,7 @@ PRIMARY SIGNALS - MARKET MICROSTRUCTURE
    EXECUTION TIPS:
    - Add 0.5% buffer to entry levels (avoid front-running detection)
    - Target 0.05-0.1% profit on pure microstructure trades
-   - Use tighter stops (1-1.5%) for microstructure plays
+   - Use tighter stops (${slTightMin}-${slTightMax}%) for microstructure plays
 
 6. FUNDING TIMING OPTIMIZATION
    Optimize entry timing around funding settlements:
@@ -1666,7 +1785,7 @@ LIQUIDATION REVERSAL ENTRY:
 MICROSTRUCTURE ENTRY:
 1. Identify order book imbalance (> 1.5x ratio)
 2. Confirm with funding direction (not conflicting)
-3. Enter with tight stop (1-1.5%)
+3. Enter with tight stop (${slTightMin}-${slTightMax}%)
 4. Target: 0.05-0.1% for pure microstructure, more if other signals align
 5. Exit quickly - microstructure edges are fleeting
 
@@ -1674,7 +1793,7 @@ STOP LOSS PLACEMENT (MICROSTRUCTURE-BASED)
 - For funding arb: Stop beyond the extreme that created the funding imbalance
 - For liquidation reversal: Stop beyond the liquidation cascade extreme
 - For VWAP trades: Stop on wrong side of VWAP (thesis invalidated)
-- For microstructure trades: Tight stop, 1-1.5% (edge is precise)
+- For microstructure trades: Tight stop, ${slTightMin}-${slTightMax}% (edge is precise)
 - NEVER place stops at round numbers (will get hunted)
 - Add 0.5-1% buffer beyond obvious levels
 
@@ -1719,6 +1838,7 @@ FINAL CHECKLIST BEFORE TRADE (ENHANCED WITH REBATES)
  No conflicting microstructure signals?
  Order book imbalance confirms direction? (if available)
  Can execute with limit order to capture rebate?
+ Backtest validation: Win rate > ${mcMinWinRate}%?
  Q-value >= ${qConsensus}?
  Monte Carlo Sharpe >= ${mcMinSharpe}?
 
@@ -1790,12 +1910,21 @@ export function buildAnalystPrompt(analystId: string): string {
       MAX_POSITION_USD,
       STARTING_BALANCE,
       MAX_POSITION_PERCENT_CONFIG,
-      MAX_LEVERAGE
+      MAX_LEVERAGE,
+      SAFE_LEVERAGE,
+      CONSERVATIVE_THRESHOLD
    );
-   const OUTPUT_FORMAT_DYNAMIC = buildOutputFormat(TARGET_POSITION_MIN, TARGET_POSITION_MAX);
+   const OUTPUT_FORMAT_DYNAMIC = buildOutputFormat(
+      TARGET_POSITION_MIN,
+      TARGET_POSITION_MAX,
+      MAX_LEVERAGE,
+      SAFE_LEVERAGE,
+      CONSERVATIVE_THRESHOLD
+   );
    const ANTI_CHURN_RULES_DYNAMIC = buildAntiChurnRules(
       config.antiChurn.maxTradesPerSymbolPerHour,
-      config.trading.maxDailyTrades
+      config.trading.maxDailyTrades,
+      MAX_LEVERAGE
    );
 
    // Build Karen's methodology dynamically if this is Karen
@@ -1812,11 +1941,14 @@ export function buildAnalystPrompt(analystId: string): string {
       MIN_POSITION_USD,
       MAX_POSITION_USD,
       MAX_LEVERAGE,
+      SAFE_LEVERAGE,
+      CONSERVATIVE_THRESHOLD,
       STARTING_BALANCE,
       MC_MIN_SHARPE,
       MC_TARGET_SHARPE,
       MC_EXCELLENT_SHARPE,
-      parseFloat(MC_MIN_WIN_RATE)
+      parseFloat(MC_MIN_WIN_RATE),
+      config.autonomous.monteCarlo.maxDrawdownPercent
    );
 
    // Build dynamic methodologies for ALL analysts
@@ -1830,7 +1962,8 @@ export function buildAnalystPrompt(analystId: string): string {
       Q_MIN,
       Q_CONSENSUS,
       Q_HIGH,
-      MC_MIN_SHARPE
+      MC_MIN_SHARPE,
+      parseFloat(MC_MIN_WIN_RATE)
    );
 
    const RAY_METHODOLOGY_DYNAMIC = buildRayMethodology(
@@ -1842,7 +1975,8 @@ export function buildAnalystPrompt(analystId: string): string {
       MAX_LEVERAGE,
       Q_MIN,
       Q_CONSENSUS,
-      MC_MIN_SHARPE
+      MC_MIN_SHARPE,
+      parseFloat(MC_MIN_WIN_RATE)
    );
 
    const QUANT_METHODOLOGY_DYNAMIC = buildQuantMethodology(
@@ -1858,7 +1992,8 @@ export function buildAnalystPrompt(analystId: string): string {
       STARTING_BALANCE,
       Q_MIN,
       Q_CONSENSUS,
-      MC_MIN_SHARPE
+      MC_MIN_SHARPE,
+      parseFloat(MC_MIN_WIN_RATE)
    );
 
    // Map analyst IDs to their dynamic methodologies

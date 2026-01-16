@@ -52,6 +52,31 @@ function generateRequestId(): string {
     return `req_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
 }
 
+function stripLeadingThinking(text: string): string {
+    let out = text;
+    out = out.replace(/^\s*```(?:thinking|reasoning)\b[\s\S]*?```\s*(?=[{\[])/i, '');
+    out = out.replace(/^\s*<think>[\s\S]*?<\/think>\s*(?=[{\[])/i, '');
+    out = out.replace(/^\s*<thinking>[\s\S]*?<\/thinking>\s*(?=[{\[])/i, '');
+    out = out.replace(/^\s*<\|think\|>[\s\S]*?<\|\/think\|>\s*(?=[{\[])/i, '');
+    return out.trim();
+}
+
+function extractThinking(text: string): string | null {
+    const matchFence = text.match(/```(?:thinking|reasoning)\b\s*\n?([\s\S]*?)\n?```/i);
+    if (matchFence && matchFence[1]) return matchFence[1].trim();
+
+    const matchThink = text.match(/<think>\s*([\s\S]*?)\s*<\/think>/i);
+    if (matchThink && matchThink[1]) return matchThink[1].trim();
+
+    const matchThinking = text.match(/<thinking>\s*([\s\S]*?)\s*<\/thinking>/i);
+    if (matchThinking && matchThinking[1]) return matchThinking[1].trim();
+
+    const matchToken = text.match(/<\|think\|>\s*([\s\S]*?)\s*<\|\/think\|>/i);
+    if (matchToken && matchToken[1]) return matchToken[1].trim();
+
+    return null;
+}
+
 /**
  * Check if an error is a rate limit error
  */
@@ -656,6 +681,21 @@ class AIService {
             },
         };
 
+        // Add thinking parameter if enabled
+        if (config.ai.thinking.enabled) {
+            const requestMaxTokens = typeof requestBody.max_tokens === 'number' && Number.isFinite(requestBody.max_tokens)
+                ? requestBody.max_tokens
+                : config.ai.maxOutputTokens;
+            const budgetTokens = Math.min(39000, requestMaxTokens);
+            requestBody.thinking = {
+                type: 'enabled',
+                budget_tokens: budgetTokens
+            };
+            // When thinking is enabled, temperature should often be 1.0 (provider dependent, but 1.0 is standard for reasoning)
+            // We'll keep the configured temperature but log a debug message
+            logger.debug(`🧠 Thinking enabled with budget ${budgetTokens} tokens`);
+        }
+
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), config.ai.requestTimeoutMs);
         if ((timeoutId as any).unref) {
@@ -875,6 +915,16 @@ class AIService {
             } else {
                 throw new Error('OpenRouter returned invalid response structure');
             }
+
+            const responseThinking =
+                (typeof data?.choices?.[0]?.message?.reasoning === 'string' ? data.choices[0].message.reasoning : null) ??
+                (typeof data?.choices?.[0]?.message?.thinking === 'string' ? data.choices[0].message.thinking : null) ??
+                extractThinking(text);
+            if (config.ai.thinking.enabled && responseThinking) {
+                console.log(`[AI THINKING ${reqId}] ${responseThinking}`);
+            }
+
+            text = stripLeadingThinking(text);
 
             const finishReason = data.choices[0].finish_reason || 'UNKNOWN';
 

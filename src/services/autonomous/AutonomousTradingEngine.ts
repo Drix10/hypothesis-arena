@@ -1794,7 +1794,8 @@ export class AutonomousTradingEngine extends EventEmitter {
         // FIXED: Use ?? instead of || to preserve valid zero confidence
         const confidence = decision.confidence ?? 50;
         if (!isLeverageAutoApproved(leverage, confidence)) {
-            logger.warn(`Leverage ${leverage}x requires confidence >= 70 % (got ${confidence}%), reducing to auto - approve threshold`);
+            const requiredConfidence = config.autonomous.highConfidenceThreshold;
+            logger.warn(`Leverage ${leverage}x requires confidence >= ${requiredConfidence}% (got ${confidence}%), reducing to auto-approve threshold`);
             leverage = GLOBAL_RISK_LIMITS.AUTO_APPROVE_LEVERAGE_THRESHOLD;
         }
 

@@ -1,5 +1,5 @@
 import { config } from '../../config';
-import { GLOBAL_RISK_LIMITS } from './riskLimits';
+import { GLOBAL_RISK_LIMITS, getRequiredStopLossPercent } from './riskLimits';
 import { logger } from '../../utils/logger';
 
 function isValidPositiveInt(val: unknown): val is number {
@@ -7,13 +7,18 @@ function isValidPositiveInt(val: unknown): val is number {
 }
 
 function isValidPositivePercent(val: unknown): val is number {
-    return typeof val === 'number' && Number.isFinite(val) && val > 0;
+    return typeof val === 'number' && Number.isFinite(val) && val >= 0;
+}
+
+function isValidPercent0to100(val: unknown): val is number {
+    return typeof val === 'number' && Number.isFinite(val) && val >= 0 && val <= 100;
 }
 
 // Get values from config where available, use safe defaults as fallback
 const rawMaxConcurrentPositions = config.autonomous?.maxConcurrentPositions;
 const rawMaxSameDirectionPositions = config.autonomous?.maxSameDirectionPositions;
 const rawWeeklyDrawdownLimitPercent = config.autonomous?.weeklyDrawdownLimitPercent;
+const rawHighConfidenceThreshold = config.autonomous?.highConfidenceThreshold;
 
 let maxConcurrentPositions = isValidPositiveInt(rawMaxConcurrentPositions)
     ? Math.floor(rawMaxConcurrentPositions) : 3;
@@ -47,6 +52,9 @@ function logConfigWarnings(): void {
         if (!isValidPositivePercent(rawWeeklyDrawdownLimitPercent)) {
             logger.warn('riskCouncil: weeklyDrawdownLimitPercent not configured or invalid, using fallback: 10');
         }
+        if (!isValidPercent0to100(rawHighConfidenceThreshold)) {
+            logger.warn('riskCouncil: highConfidenceThreshold not configured or invalid, using fallback: 70');
+        }
         // FIXED: Log consistency check warning when value was clamped
         // Uses wasClampedForConsistency flag set BEFORE the clamp operation
         if (wasClampedForConsistency) {
@@ -73,14 +81,14 @@ if (typeof setImmediate !== 'undefined') {
 
 // Use GLOBAL_RISK_LIMITS for risk values
 const maxPositionSizePercent = GLOBAL_RISK_LIMITS.MAX_POSITION_SIZE_PERCENT;
-const maxLeverage = GLOBAL_RISK_LIMITS.MAX_SAFE_LEVERAGE;
+const maxLeverage = GLOBAL_RISK_LIMITS.ABSOLUTE_MAX_LEVERAGE;
 const maxRiskPerTradePercent = GLOBAL_RISK_LIMITS.MAX_RISK_PER_TRADE_PERCENT;
 const maxConcurrentRiskPercent = GLOBAL_RISK_LIMITS.MAX_CONCURRENT_RISK_PERCENT;
 
-// Additional risk limits - now configurable via environment variables
-// FIXED: Use dynamic stop loss based on leverage tier instead of hardcoded 5%
-// This aligns with STOP_LOSS_BY_LEVERAGE which has different values per tier
-const stopLossPercent = GLOBAL_RISK_LIMITS.STOP_LOSS_BY_LEVERAGE.MEDIUM.maxStopPercent; // Default for display
+const stopLossPercent = getRequiredStopLossPercent(maxLeverage);
+const requiredConfidenceForHighLeverage = isValidPercent0to100(rawHighConfidenceThreshold)
+    ? Math.floor(rawHighConfidenceThreshold)
+    : 70;
 
 // Get from config with fallbacks
 const riskCouncilConfig = config.autonomous?.riskCouncil;
@@ -107,7 +115,7 @@ export const RISK_COUNCIL_VETO_TRIGGERS = {
     CHECKLIST: [
         `Position size ≤ ${maxPositionSizePercent}% of account`,
         `Stop loss ≤ ${stopLossPercent}% from entry (tighter for high leverage)`,
-        `Leverage ≤ ${maxLeverage}x (>${GLOBAL_RISK_LIMITS.CONSERVATIVE_LEVERAGE_THRESHOLD}x requires >70% confidence)`,
+        `Leverage ≤ ${maxLeverage}x (>${GLOBAL_RISK_LIMITS.CONSERVATIVE_LEVERAGE_THRESHOLD}x requires >${requiredConfidenceForHighLeverage}% confidence)`,
         `Directional concentration: ≤ ${maxSameDirectionPositions} same-direction positions`,
         `Sector concentration: ≤ ${maxSectorPositions} positions in same sector`,
         `Funding rate: |rate| ≤ ${(maxFundingAgainstPercent * 100).toFixed(1)}% against position`,

@@ -2,24 +2,53 @@
  * Judge System Prompt - COMPETITION MODE (CONVICTION TRADING v5.6.0)
  * 
  * NEW STRATEGY: Bigger positions, hold longer, focus on BTC/ETH, no hedging.
- * Winners used $200-$600 margin at 15-20x and held for DAYS.
+ * Winners used large margin, high leverage, and held for DAYS.
  */
 
-export function buildJudgeSystemPrompt(): string {
-  // Import dynamic config values
-  const { config } = require('../../config');
-  const { RISK_COUNCIL_VETO_TRIGGERS } = require('../analyst/riskCouncil');
-  const { GLOBAL_RISK_LIMITS } = require('../analyst/riskLimits');
+import { config } from '../../config';
+import { RISK_COUNCIL_VETO_TRIGGERS } from '../analyst/riskCouncil';
+import { GLOBAL_RISK_LIMITS, getRequiredStopLossPercent } from '../analyst/riskLimits';
 
+export function buildJudgeSystemPrompt(): string {
   const MAX_CONCURRENT = RISK_COUNCIL_VETO_TRIGGERS.MAX_CONCURRENT_POSITIONS;
   const MAX_POSITION_PCT = RISK_COUNCIL_VETO_TRIGGERS.MAX_POSITION_PERCENT;
   const MAX_LEVERAGE = GLOBAL_RISK_LIMITS.ABSOLUTE_MAX_LEVERAGE;
   const CONSERVATIVE_THRESHOLD = GLOBAL_RISK_LIMITS.CONSERVATIVE_LEVERAGE_THRESHOLD;
+  const SAFE_LEVERAGE = GLOBAL_RISK_LIMITS.MAX_SAFE_LEVERAGE;
+
+  const stopLossPct = (multiplier: number, leverage: number): string => {
+    const lev = Number.isFinite(leverage) && leverage > 0 ? leverage : 1;
+    const liquidationDistancePct = 100 / lev;
+    const requiredMaxSlPct = getRequiredStopLossPercent(lev);
+    const maxSafeSlPct = Math.min(requiredMaxSlPct, liquidationDistancePct * 0.8);
+    const pct = multiplier / lev;
+    const clamped = Math.max(0.1, Math.min(maxSafeSlPct, pct));
+    return clamped.toFixed(1);
+  };
+
+  const SL_MAX_PCT = stopLossPct(50, MAX_LEVERAGE);
+  const SL_SAFE_PCT = stopLossPct(55, SAFE_LEVERAGE);
+  const SL_CONSERVATIVE_PCT = stopLossPct(60, CONSERVATIVE_THRESHOLD);
 
   const STARTING_BALANCE = config.trading.startingBalance;
   const MAX_POSITION_USD = Math.floor(STARTING_BALANCE * (MAX_POSITION_PCT / 100));
   const TARGET_POSITION_MIN = Math.floor(STARTING_BALANCE * (config.autonomous.targetPositionMinPercent / 100));
   const TARGET_POSITION_MAX = Math.floor(STARTING_BALANCE * (config.autonomous.targetPositionMaxPercent / 100));
+  const TARGET_MIN_PCT = config.autonomous.targetPositionMinPercent;
+  const TARGET_MAX_PCT = config.autonomous.targetPositionMaxPercent;
+  const TARGET_PROFIT_PCT = config.autonomous.urgencyThresholds.targetProfitPct;
+  const PARTIAL_TP_PCT_RAW = config.autonomous.urgencyThresholds.partialTpPct;
+  const PARTIAL_TP_PCT = Number.isFinite(PARTIAL_TP_PCT_RAW) && PARTIAL_TP_PCT_RAW > 0 ? PARTIAL_TP_PCT_RAW : 3;
+  const MAX_HOLD_HOURS = config.autonomous.urgencyThresholds.maxHoldHours;
+  const MIN_POSITION_PCT = config.autonomous.minPositionPercent;
+  const RANGE_TARGET_MIN_PCT = Math.min(PARTIAL_TP_PCT, TARGET_PROFIT_PCT);
+  const RANGE_TARGET_MAX_PCT = Math.max(PARTIAL_TP_PCT, TARGET_PROFIT_PCT);
+  const EXAMPLE_ENTRY_PRICE = 97000;
+  const EXAMPLE_ALLOCATION_USD = Math.floor((TARGET_POSITION_MIN + TARGET_POSITION_MAX) / 2);
+  const EXAMPLE_LEVERAGE = Math.max(1, Math.floor(MAX_LEVERAGE * 0.9));
+  const EXAMPLE_SL_PCT = stopLossPct(50, EXAMPLE_LEVERAGE);
+  const EXAMPLE_SL_PRICE = Math.round(EXAMPLE_ENTRY_PRICE * (1 - Number(EXAMPLE_SL_PCT) / 100));
+  const EXAMPLE_TP_PRICE = Math.round(EXAMPLE_ENTRY_PRICE * (1 + TARGET_PROFIT_PCT / 100));
 
   return `You are the JUDGE in a TRADING COMPETITION.
 
@@ -27,15 +56,15 @@ COMPETITION CONTEXT (CONVICTION TRADING v5.6.0)
 - 10 AI agents competing for TOP 2 spots
 - Limited time window to maximize profit
 - DEMO MONEY - GO BIG OR GO HOME
-- Winners used: $250-$400 margin, 18-20x leverage, held for DAYS
+- Winners used: $${TARGET_POSITION_MIN}-$${TARGET_POSITION_MAX} margin, ${Math.floor(MAX_LEVERAGE * 0.9)}-${MAX_LEVERAGE}x leverage, held for DAYS
 
 WHAT WINNERS DID:
-- BIG positions: $250-$400 margin (25-40% of account)
-- HIGH leverage: 18-20x (not 11-14x)
-- HELD for DAYS: 24-72 hours (not 2-12 hours)
+- BIG positions: $${TARGET_POSITION_MIN}-$${TARGET_POSITION_MAX} margin (${TARGET_MIN_PCT}-${TARGET_MAX_PCT}% of account)
+- HIGH leverage: ${Math.floor(MAX_LEVERAGE * 0.9)}-${MAX_LEVERAGE}x
+- HELD for DAYS: 24-${MAX_HOLD_HOURS} hours
 - FOCUSED: BTC and ETH only
 - NO HEDGING: If bullish, LONG both BTC and ETH
-- 2-5 trades TOTAL (not 10+ churning)
+- Few trades TOTAL (avoid churning)
 
 YOUR JOB: PICK THE BEST TRADE AND GO BIG
 
@@ -86,20 +115,20 @@ STEP 2: PICK THE BEST RECOMMENDATION
 
 STEP 3: ADJUST BASED ON PHASE
 For TREND and REVERSAL trades (GO BIG):
-- Position size: $${TARGET_POSITION_MIN}-$${TARGET_POSITION_MAX} (25-40% of account)
-- Leverage: 18-${MAX_LEVERAGE}x
-- Stop loss: 2-2.5% from entry (avoid liquidation risk)
-- Take profit: 10-15% from entry (ambitious)
-- Hold: 24-72 hours
+- Position size: $${TARGET_POSITION_MIN}-$${TARGET_POSITION_MAX} (${TARGET_MIN_PCT}-${TARGET_MAX_PCT}% of account)
+- Leverage: ${Math.floor(MAX_LEVERAGE * 0.9)}-${MAX_LEVERAGE}x
+- Stop loss: ${SL_MAX_PCT}-${SL_SAFE_PCT}% from entry (avoid liquidation risk)
+- Take profit: >=${TARGET_PROFIT_PCT.toFixed(1)}% from entry (ambitious)
+- Hold: 24-${MAX_HOLD_HOURS} hours
 
 For EXHAUSTION phase:
 - REDUCE existing by 50-100%
 - Tighten stops on remaining
 
 For RANGING phase:
-- Smaller positions (15-20%)
-- Tighter stops (2-3%)
-- Smaller targets (3-5%)
+- Smaller positions (${MIN_POSITION_PCT}-${TARGET_MIN_PCT}%)
+- Tighter stops (${SL_SAFE_PCT}-${SL_CONSERVATIVE_PCT}%)
+- Smaller targets (${RANGE_TARGET_MIN_PCT.toFixed(1)}-${RANGE_TARGET_MAX_PCT.toFixed(1)}%)
 
 STEP 4: POSITION MANAGEMENT
 - Profitable in trend → HOLD, trail stop
@@ -111,17 +140,17 @@ STEP 4: POSITION MANAGEMENT
 
 POSITION SIZING (GO BIG):
 - High conviction: $${TARGET_POSITION_MAX} at ${MAX_LEVERAGE}x
-- Medium conviction: $${Math.floor((TARGET_POSITION_MIN + TARGET_POSITION_MAX) / 2)} at 18x
-- Lower conviction: $${TARGET_POSITION_MIN} at 17x
+- Medium conviction: $${Math.floor((TARGET_POSITION_MIN + TARGET_POSITION_MAX) / 2)} at ${SAFE_LEVERAGE}x
+- Lower conviction: $${TARGET_POSITION_MIN} at ${CONSERVATIVE_THRESHOLD}x
 - Max ${MAX_CONCURRENT} positions total
 
 STOP LOSS (WIDER FOR HOLDING):
-- 18-20x leverage: 2-2.5% stop
-- 15-17x leverage: 2.5-3% stop
+- ${Math.floor(MAX_LEVERAGE * 0.9)}-${MAX_LEVERAGE}x leverage: ${SL_MAX_PCT}-${SL_SAFE_PCT}% stop
+- ${SAFE_LEVERAGE}-${Math.floor(MAX_LEVERAGE * 0.85)}x leverage: ${SL_SAFE_PCT}-${SL_CONSERVATIVE_PCT}% stop
 - Place below key support levels
 
 TAKE PROFIT (LET IT RUN):
-- Set TP at 10-15% from entry
+- Set TP at >=${TARGET_PROFIT_PCT.toFixed(1)}% from entry
 - Or use trailing stops
 - Don't exit winners early
 
@@ -141,11 +170,11 @@ OUTPUT FORMAT (STRICT JSON)
   "final_recommendation": {
     "action": "BUY",
     "symbol": "cmt_btcusdt",
-    "allocation_usd": 325,
-    "leverage": 18,
-    "tp_price": 106000,
-    "sl_price": 94500,
-    "exit_plan": "Entry ~97000. SL at 94500 (-2.6%), TP at 106000 (+9.3%). HOLD 2-3 days.",
+    "allocation_usd": ${EXAMPLE_ALLOCATION_USD},
+    "leverage": ${EXAMPLE_LEVERAGE},
+    "tp_price": ${EXAMPLE_TP_PRICE},
+    "sl_price": ${EXAMPLE_SL_PRICE},
+    "exit_plan": "Entry ~${EXAMPLE_ENTRY_PRICE}. SL at ${EXAMPLE_SL_PRICE} (-${EXAMPLE_SL_PCT}%), TP at ${EXAMPLE_TP_PRICE} (+${TARGET_PROFIT_PCT}%). HOLD 2-3 days.",
     "confidence": 65,
     "rationale": "Clear uptrend, ride it with size"
   }
@@ -180,23 +209,26 @@ export function buildJudgeUserMessage(
   karenOutput: string | null,
   quantOutput: string | null
 ): string {
-  // Import dynamic config values
-  const { config } = require('../../config');
-  const { GLOBAL_RISK_LIMITS } = require('../analyst/riskLimits');
-
   const Q_CONSENSUS = config.autonomous.qValue.consensus;
   const MODERATE_CONFIDENCE = config.autonomous.moderateConfidenceThreshold;
   const MC_MIN_SHARPE = config.autonomous.monteCarlo.minSharpeRatio;
   const CONSERVATIVE_THRESHOLD = GLOBAL_RISK_LIMITS.CONSERVATIVE_LEVERAGE_THRESHOLD;
   const MAX_LEVERAGE = GLOBAL_RISK_LIMITS.ABSOLUTE_MAX_LEVERAGE;
 
-  // Count valid (non-FAILED) analysts and their actions
+  const normalizeOutput = (output: string | null): string | null => {
+    if (output == null) return null;
+    const trimmed = output.trim();
+    if (trimmed.length === 0) return null;
+    if (trimmed === 'FAILED') return null;
+    return trimmed;
+  };
+
   const outputs = [
     { name: 'JIM', output: jimOutput },
     { name: 'RAY', output: rayOutput },
     { name: 'KAREN', output: karenOutput },
     { name: 'QUANT', output: quantOutput },
-  ];
+  ].map(o => ({ ...o, output: normalizeOutput(o.output) }));
 
   const validCount = outputs.filter(o => o.output !== null).length;
   const failedCount = 4 - validCount;

@@ -273,7 +273,7 @@ export const GLOBAL_RISK_LIMITS = {
         YELLOW_ALERT: {
             BTC_DROP_4H: configCircuitBreakers.yellowBtcDrop4h,
             PORTFOLIO_DRAWDOWN_24H: configCircuitBreakers.yellowDrawdown24h,
-            ACTION: 'Reduce leverage to 10x max'
+            ACTION: `Reduce leverage to ${ACTIVE_SETTINGS.MAX_SAFE_LEVERAGE}x max`
         },
         RED_ALERT: {
             BTC_DROP_4H: configCircuitBreakers.redBtcDrop4h,
@@ -320,6 +320,9 @@ export function isLeverageAutoApproved(leverage: number, confidence: number): bo
     if (!Number.isFinite(confidence)) {
         confidence = 50;
     }
+    const requiredConfidence = Number.isFinite(config.autonomous.highConfidenceThreshold)
+        ? config.autonomous.highConfidenceThreshold
+        : 70;
 
     if (leverage <= GLOBAL_RISK_LIMITS.AUTO_APPROVE_LEVERAGE_THRESHOLD) {
         return true;
@@ -327,7 +330,7 @@ export function isLeverageAutoApproved(leverage: number, confidence: number): bo
     if (leverage > GLOBAL_RISK_LIMITS.ABSOLUTE_MAX_LEVERAGE) {
         return false;
     }
-    return confidence >= 70;
+    return confidence >= requiredConfidence;
 }
 
 /**
