@@ -21,6 +21,7 @@
  */
 
 import { GoogleGenerativeAI, GenerativeModel, SchemaType, ResponseSchema } from '@google/generative-ai';
+import { createHash } from 'crypto';
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
 
@@ -50,6 +51,24 @@ export interface AIGenerateResult {
  */
 function generateRequestId(): string {
     return `req_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+}
+
+function splitPromptSystemUser(prompt: string): { system: string | null; user: string } {
+    const normalized = (prompt ?? '').replace(/\r\n/g, '\n').trim();
+    if (!normalized) return { system: null, user: '' };
+
+    const separatorRegex = /(?:^|\n)\s*---USER---\s*(?:\n|$)/;
+    const match = separatorRegex.exec(normalized);
+    if (!match || typeof match.index !== 'number') {
+        return { system: null, user: normalized };
+    }
+
+    const system = normalized.slice(0, match.index).trim();
+    const user = normalized.slice(match.index + match[0].length).trim();
+    return {
+        system: system.length > 0 ? system : null,
+        user,
+    };
 }
 
 function stripLeadingThinking(text: string): string {
@@ -651,15 +670,109 @@ class AIService {
         // Convert Gemini schema to OpenRouter JSON Schema format
         const jsonSchema = convertToOpenRouterSchema(geminiSchema);
 
-        // Build messages array
-        const messages: any[] = [
-            {
-                role: 'user',
-                content: prompt
+        const { system, user } = splitPromptSystemUser(prompt);
+
+        const messages: any[] = [];
+        const modelId = String(config.ai.openRouterModel || '').toLowerCase();
+        const isAnthropic = modelId.startsWith('anthropic/');
+        if (system) {
+            if (isAnthropic) {
+                const cacheTtl = String(process.env.OPENROUTER_ANTHROPIC_CACHE_TTL || '').trim();
+                const cacheControl = cacheTtl === '1h'
+                    ? { type: 'ephemeral', ttl: '1h' }
+                    : { type: 'ephemeral' };
+
+                messages.push({
+                    role: 'system',
+                    content: [
+                        {
+                            type: 'text',
+                            text: system,
+                            cache_control: cacheControl,
+                        },
+                    ],
+                });
+            } else {
+                messages.push({ role: 'system', content: system });
             }
-        ];
+        }
+        if (isAnthropic) {
+            messages.push({
+                role: 'user',
+                content: [
+                    {
+                        type: 'text',
+                        text: user,
+                    },
+                ],
+            });
+        } else {
+            messages.push({ role: 'user', content: user });
+        }
+
+        // DEBUG: Log message structure for cache debugging
+        logger.debug(`[CACHE DEBUG ${reqId}] System prompt length: ${system?.length || 0} chars, User prompt length: ${user.length} chars`);
+        logger.debug(`[CACHE DEBUG ${reqId}] System prompt hash: ${system ? createHash('md5').update(system).digest('hex').substring(0, 8) : 'none'}`);
+
 
         // Build request body with strict json_schema for structured output
+        const providerPrefs: any = {
+            data_collection: 'deny',
+            allow_fallbacks: true,
+            require_parameters: true,
+        };
+
+        const providerSort = String(process.env.OPENROUTER_PROVIDER_SORT || '').trim().toLowerCase();
+        if (providerSort === 'price' || providerSort === 'throughput' || providerSort === 'latency') {
+            providerPrefs.sort = providerSort;
+        }
+
+        const providerOrderRaw = String(process.env.OPENROUTER_PROVIDER_ORDER || '').trim();
+        if (providerOrderRaw) {
+            const parseProviderOrder = (raw: string): string[] => {
+                const trimmed = raw.trim();
+                if (!trimmed) return [];
+
+                if (trimmed.startsWith('[')) {
+                    try {
+                        const parsed = JSON.parse(trimmed);
+                        if (Array.isArray(parsed)) {
+                            return parsed
+                                .map(v => String(v ?? '').trim())
+                                .map(v => v.replace(/^["']|["']$/g, '').trim())
+                                .map(v => v.toLowerCase())
+                                .filter(Boolean);
+                        }
+                    } catch { }
+                }
+
+                return trimmed
+                    .split(/[,\n;]/g)
+                    .map(s => s.trim())
+                    .map(s => s.replace(/^["']|["']$/g, '').trim())
+                    .map(s => s.toLowerCase())
+                    .filter(Boolean);
+            };
+
+            const providerOrder = Array.from(new Set(parseProviderOrder(providerOrderRaw)));
+            if (providerOrder.length > 0) {
+                providerPrefs.order = providerOrder;
+            }
+        }
+
+        const allowFallbacksRaw = String(process.env.OPENROUTER_ALLOW_FALLBACKS || '').trim().toLowerCase();
+        if (allowFallbacksRaw === 'true') providerPrefs.allow_fallbacks = true;
+        if (allowFallbacksRaw === 'false') providerPrefs.allow_fallbacks = false;
+
+        const requireParametersRaw = String(process.env.OPENROUTER_REQUIRE_PARAMETERS || '').trim().toLowerCase();
+        if (requireParametersRaw === 'true') providerPrefs.require_parameters = true;
+        if (requireParametersRaw === 'false') providerPrefs.require_parameters = false;
+
+        const dataCollectionRaw = String(process.env.OPENROUTER_DATA_COLLECTION || '').trim().toLowerCase();
+        if (dataCollectionRaw === 'allow' || dataCollectionRaw === 'deny') {
+            providerPrefs.data_collection = dataCollectionRaw;
+        }
+
         const requestBody: any = {
             model: config.ai.openRouterModel,
             messages,
@@ -671,14 +784,10 @@ class AIService {
                     schema: jsonSchema
                 }
             },
+            usage: { include: true },
             temperature: temperature ?? config.ai.temperature,
             max_tokens: maxOutputTokens ?? config.ai.maxOutputTokens,
-            // Provider preferences - allow data collection to access more endpoints
-            provider: {
-                data_collection: 'allow',
-                allow_fallbacks: true,
-                require_parameters: true, // Ensure model supports structured outputs
-            },
+            provider: providerPrefs,
         };
 
         // Add thinking parameter if enabled
@@ -696,283 +805,289 @@ class AIService {
             logger.debug(`🧠 Thinking enabled with budget ${budgetTokens} tokens`);
         }
 
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), config.ai.requestTimeoutMs);
-        if ((timeoutId as any).unref) {
-            (timeoutId as any).unref();
-        }
+        const url = `${this.openRouterBaseUrl}/chat/completions`;
+        const headers = {
+            'Authorization': `Bearer ${config.openRouterApiKey}`,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': 'https://hypothesis-arena.com',
+            'X-Title': 'Hypothesis Arena',
+        };
 
-        try {
-            let response: Response;
+        const fetchOnce = async (body: any): Promise<Response> => {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), config.ai.requestTimeoutMs);
+            if ((timeoutId as any).unref) {
+                (timeoutId as any).unref();
+            }
 
-            // First fetch attempt
             try {
-                response = await fetch(`${this.openRouterBaseUrl}/chat/completions`, {
+                return await fetch(url, {
                     method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${config.openRouterApiKey}`,
-                        'Content-Type': 'application/json',
-                        'HTTP-Referer': 'https://hypothesis-arena.com',
-                        'X-Title': 'Hypothesis Arena',
-                    },
-                    body: JSON.stringify(requestBody),
+                    headers,
+                    body: JSON.stringify(body),
                     signal: controller.signal,
                 });
             } catch (fetchError: any) {
-                // Network error or abort - body doesn't exist
-                clearTimeout(timeoutId);
-                if (fetchError.name === 'AbortError') {
+                if (fetchError?.name === 'AbortError') {
                     throw new Error(`OpenRouter request timeout after ${config.ai.requestTimeoutMs}ms`);
                 }
-                throw new Error(`OpenRouter network error: ${fetchError.message}`);
+                throw new Error(`OpenRouter network error: ${fetchError?.message ?? String(fetchError)}`);
+            } finally {
+                clearTimeout(timeoutId);
             }
+        };
 
-            // Handle errors with fallback
-            if (!response.ok) {
-                let errorText: string;
-                try {
-                    errorText = await response.text();
-                } catch (bodyError: any) {
-                    // Body is unusable - likely network issue or stream already consumed
-                    clearTimeout(timeoutId);
-                    throw new Error(`OpenRouter error (${response.status}): Unable to read response body - ${bodyError.message}`);
-                }
-
-                // Check if this is a "no endpoints" error (model not available)
-                const isNoEndpointsError =
-                    errorText.includes('No endpoints found') ||
-                    errorText.includes('no endpoints') ||
-                    (response.status === 404 && errorText.includes('endpoint'));
-
-                if (isNoEndpointsError) {
-                    clearTimeout(timeoutId);
-                    logger.error(`Model ${config.ai.openRouterModel} has no available endpoints`);
-                    throw new Error(`OpenRouter: Model ${config.ai.openRouterModel} has no available providers. Check OpenRouter dashboard or try a different model.`);
-                }
-
-                // Check if this is a response_format error (model doesn't support json_schema)
-                const isFormatError =
-                    errorText.includes('response_format') ||
-                    errorText.includes('json_object') ||
-                    errorText.includes('json_schema') ||
-                    errorText.includes('structured output');
-
-                if (isFormatError) {
-                    logger.warn(`Model may not support json_schema, retrying with json_object fallback`);
-
-                    // Fallback 1: Try json_object (simpler, more widely supported)
-                    requestBody.response_format = { type: 'json_object' };
-                    delete requestBody.provider.require_parameters;
-
-                    try {
-                        response = await fetch(`${this.openRouterBaseUrl}/chat/completions`, {
-                            method: 'POST',
-                            headers: {
-                                'Authorization': `Bearer ${config.openRouterApiKey}`,
-                                'Content-Type': 'application/json',
-                                'HTTP-Referer': 'https://hypothesis-arena.com',
-                                'X-Title': 'Hypothesis Arena',
-                            },
-                            body: JSON.stringify(requestBody),
-                            signal: controller.signal,
-                        });
-
-                        // If json_object also fails with format error, try without any response_format
-                        if (!response.ok) {
-                            let retryErrorText: string;
-                            try {
-                                retryErrorText = await response.text();
-                            } catch {
-                                retryErrorText = '';
-                            }
-
-                            const isStillFormatError = retryErrorText.includes('response_format') ||
-                                retryErrorText.includes('json_object') ||
-                                retryErrorText.includes('json_schema');
-
-                            if (isStillFormatError) {
-                                logger.warn(`Model doesn't support json_object either, retrying without response_format`);
-                                delete requestBody.response_format;
-                                response = await fetch(`${this.openRouterBaseUrl}/chat/completions`, {
-                                    method: 'POST',
-                                    headers: {
-                                        'Authorization': `Bearer ${config.openRouterApiKey}`,
-                                        'Content-Type': 'application/json',
-                                        'HTTP-Referer': 'https://hypothesis-arena.com',
-                                        'X-Title': 'Hypothesis Arena',
-                                    },
-                                    body: JSON.stringify(requestBody),
-                                    signal: controller.signal,
-                                });
-                            } else {
-                                // Not a format error - it's some other error (rate limit, etc.)
-                                // Throw with the error we already have
-                                clearTimeout(timeoutId);
-
-                                let errorDetails = '';
-                                try {
-                                    const errorJson = JSON.parse(retryErrorText);
-                                    errorDetails = errorJson.error?.message || errorJson.message || '';
-                                } catch {
-                                    errorDetails = retryErrorText.slice(0, 200);
-                                }
-
-                                const error = new Error(`OpenRouter API error (${response.status}): ${errorDetails}`);
-                                if (response.status === 429) {
-                                    (error as any).isRateLimit = true;
-                                    const retryAfter = response.headers?.get('retry-after');
-                                    if (retryAfter) {
-                                        (error as any).retryAfter = parseInt(retryAfter, 10);
-                                    }
-                                }
-                                throw error;
-                            }
-                        }
-                    } catch (retryFetchError: any) {
-                        clearTimeout(timeoutId);
-                        if (retryFetchError.name === 'AbortError') {
-                            throw new Error(`OpenRouter request timeout after ${config.ai.requestTimeoutMs}ms`);
-                        }
-                        // Re-throw if it's already a formatted error from above
-                        if (retryFetchError.message.includes('OpenRouter API error')) {
-                            throw retryFetchError;
-                        }
-                        throw new Error(`OpenRouter network error on retry: ${retryFetchError.message}`);
-                    }
-                } else {
-                    // Not a format error - throw with the error details we already have
-                    clearTimeout(timeoutId);
-
-                    let errorDetails = '';
-                    try {
-                        const errorJson = JSON.parse(errorText);
-                        errorDetails = errorJson.error?.message || errorJson.message || '';
-                    } catch {
-                        errorDetails = errorText.slice(0, 200);
-                    }
-
-                    const error = new Error(`OpenRouter API error (${response.status}): ${errorDetails}`);
-
-                    if (response.status === 429) {
-                        (error as any).isRateLimit = true;
-                        const retryAfter = response.headers.get('retry-after');
-                        if (retryAfter) {
-                            (error as any).retryAfter = parseInt(retryAfter, 10);
-                        }
-                    }
-
-                    throw error;
-                }
-            }
-
-            // Clear timeout after successful fetch
-            clearTimeout(timeoutId);
-
-            // Check if retry response is also not ok
-            if (!response.ok) {
-                let errorText: string;
-                try {
-                    errorText = await response.text();
-                } catch {
-                    errorText = 'Unable to read error response';
-                }
-
-                let errorDetails = '';
-                try {
-                    const errorJson = JSON.parse(errorText);
-                    errorDetails = errorJson.error?.message || errorJson.message || '';
-                } catch {
-                    errorDetails = errorText.slice(0, 200);
-                }
-
-                const error = new Error(`OpenRouter API error (${response.status}): ${errorDetails}`);
-
-                if (response.status === 429) {
-                    (error as any).isRateLimit = true;
-                    const retryAfter = response.headers.get('retry-after');
-                    if (retryAfter) {
-                        (error as any).retryAfter = parseInt(retryAfter, 10);
-                    }
-                }
-
-                throw error;
-            }
-
-            // Parse response JSON
-            let data: any;
+        const safeReadText = async (resp: Response): Promise<string> => {
             try {
-                data = await response.json();
-            } catch (jsonError: any) {
-                throw new Error(`OpenRouter returned invalid JSON response: ${jsonError.message}`);
+                return await resp.text();
+            } catch {
+                return '';
+            }
+        };
+
+        const parseErrorDetails = (text: string): string => {
+            if (!text) return '';
+            try {
+                const errorJson = JSON.parse(text);
+                return String(errorJson?.error?.message ?? errorJson?.message ?? '').trim() || text.slice(0, 200);
+            } catch {
+                return text.slice(0, 200);
+            }
+        };
+
+        const buildApiError = (resp: Response, text: string): Error => {
+            const errorDetails = parseErrorDetails(text);
+            const error = new Error(`OpenRouter API error (${resp.status}): ${errorDetails}`);
+            if (resp.status === 429) {
+                (error as any).isRateLimit = true;
+                const retryAfter = resp.headers?.get('retry-after');
+                if (retryAfter) {
+                    const parsed = parseInt(retryAfter, 10);
+                    if (Number.isFinite(parsed)) {
+                        (error as any).retryAfter = parsed;
+                    }
+                }
+            }
+            return error;
+        };
+
+        const isNoEndpointsErrorText = (text: string, status: number): boolean => {
+            return (
+                text.includes('No endpoints found') ||
+                text.includes('no endpoints') ||
+                (status === 404 && text.includes('endpoint'))
+            );
+        };
+
+        const isFormatErrorText = (text: string): boolean => {
+            return (
+                text.includes('response_format') ||
+                text.includes('json_object') ||
+                text.includes('json_schema') ||
+                text.includes('structured output')
+            );
+        };
+
+        let response = await fetchOnce(requestBody);
+        if (!response.ok) {
+            let errorText = await safeReadText(response);
+
+            if (isNoEndpointsErrorText(errorText, response.status)) {
+                logger.error(`Model ${config.ai.openRouterModel} has no available endpoints`);
+                throw new Error(`OpenRouter: Model ${config.ai.openRouterModel} has no available providers. Check OpenRouter dashboard or try a different model.`);
             }
 
-            // Check for parsed field first (structured outputs)
-            let text: string;
-            if (data?.choices?.[0]?.message?.parsed) {
-                text = JSON.stringify(data.choices[0].message.parsed);
-            } else if (data?.choices?.[0]?.message?.content) {
-                text = String(data.choices[0].message.content).trim();
+            if (isFormatErrorText(errorText)) {
+                logger.warn(`Model may not support json_schema, retrying with json_object fallback`);
+
+                requestBody.response_format = { type: 'json_object' };
+                if (requestBody.provider && typeof requestBody.provider === 'object') {
+                    delete requestBody.provider.require_parameters;
+                }
+
+                response = await fetchOnce(requestBody);
+                if (!response.ok) {
+                    const retryErrorText = await safeReadText(response);
+                    if (isFormatErrorText(retryErrorText)) {
+                        logger.warn(`Model doesn't support json_object either, retrying without response_format`);
+                        delete requestBody.response_format;
+
+                        response = await fetchOnce(requestBody);
+                        if (!response.ok) {
+                            const retry2ErrorText = await safeReadText(response);
+                            throw buildApiError(response, retry2ErrorText);
+                        }
+                    } else {
+                        throw buildApiError(response, retryErrorText);
+                    }
+                }
             } else {
-                throw new Error('OpenRouter returned invalid response structure');
+                throw buildApiError(response, errorText);
+            }
+        }
+
+        // Parse response JSON
+        let data: any;
+        try {
+            data = await response.json();
+        } catch (jsonError: any) {
+            throw new Error(`OpenRouter returned invalid JSON response: ${jsonError.message}`);
+        }
+
+        // Check for parsed field first (structured outputs)
+        let text: string;
+        if (data?.choices?.[0]?.message?.parsed) {
+            text = JSON.stringify(data.choices[0].message.parsed);
+        } else if (data?.choices?.[0]?.message?.content) {
+            text = String(data.choices[0].message.content).trim();
+        } else {
+            throw new Error('OpenRouter returned invalid response structure');
+        }
+
+        const responseThinking =
+            (typeof data?.choices?.[0]?.message?.reasoning === 'string' ? data.choices[0].message.reasoning : null) ??
+            (typeof data?.choices?.[0]?.message?.thinking === 'string' ? data.choices[0].message.thinking : null) ??
+            extractThinking(text);
+        if (config.ai.thinking.enabled && responseThinking) {
+            console.log(`[AI THINKING ${reqId}] ${responseThinking}`);
+        }
+
+        text = stripLeadingThinking(text);
+
+        const finishReason = data?.choices?.[0]?.finish_reason || 'UNKNOWN';
+        const providerName = typeof (data as any)?.provider === 'string' ? (data as any).provider : null;
+
+        const usage = data?.usage;
+        if (usage && typeof usage === 'object') {
+            const promptTokensRaw = usage.prompt_tokens ?? usage.input_tokens ?? null;
+            const completionTokensRaw = usage.completion_tokens ?? usage.output_tokens ?? null;
+            const totalTokensRaw = usage.total_tokens ?? null;
+            const cachedTokensRaw =
+                usage?.prompt_tokens_details?.cached_tokens ??
+                usage?.prompt_tokens_details?.cache_read_input_tokens ??
+                usage?.cache_read_input_tokens ??
+                usage?.cached_tokens ??
+                usage?.native_prompt_tokens_cached ??
+                null;
+
+            const promptTokens = typeof promptTokensRaw === 'number' && Number.isFinite(promptTokensRaw) ? promptTokensRaw : null;
+            const completionTokens = typeof completionTokensRaw === 'number' && Number.isFinite(completionTokensRaw) ? completionTokensRaw : null;
+            const totalTokens = typeof totalTokensRaw === 'number' && Number.isFinite(totalTokensRaw) ? totalTokensRaw : null;
+            const cachedTokens = typeof cachedTokensRaw === 'number' && Number.isFinite(cachedTokensRaw) ? cachedTokensRaw : null;
+            const cacheDiscount = (data as any)?.cache_discount ?? usage?.cache_discount ?? null;
+
+            const maybeRate =
+                typeof cachedTokens === 'number' && typeof promptTokens === 'number' && promptTokens > 0
+                    ? (cachedTokens / promptTokens)
+                    : null;
+
+            const autoCacheThreshold = 1024;
+            const belowThreshold = typeof promptTokens === 'number' && promptTokens > 0 && promptTokens < autoCacheThreshold;
+
+            const cacheStatus =
+                typeof cachedTokens === 'number'
+                    ? (cachedTokens > 0 ? 'HIT' : (belowThreshold ? 'BELOW_THRESHOLD' : 'MISS'))
+                    : 'UNKNOWN';
+
+            // Log cache hit with emoji for visibility
+            if (maybeRate !== null && maybeRate > 0) {
+                logger.info(`💰 Cache hit: ${cachedTokens}/${promptTokens} tokens (${(maybeRate * 100).toFixed(1)}%) [${reqId}]`);
             }
 
-            const responseThinking =
-                (typeof data?.choices?.[0]?.message?.reasoning === 'string' ? data.choices[0].message.reasoning : null) ??
-                (typeof data?.choices?.[0]?.message?.thinking === 'string' ? data.choices[0].message.thinking : null) ??
-                extractThinking(text);
-            if (config.ai.thinking.enabled && responseThinking) {
-                console.log(`[AI THINKING ${reqId}] ${responseThinking}`);
-            }
+            console.log(
+                `[AI CACHE ${reqId}] ${cacheStatus} model=${config.ai.openRouterModel}${providerName ? ` provider=${providerName}` : ''} prompt=${promptTokens ?? '?'} cached=${cachedTokens ?? '?'} completion=${completionTokens ?? '?'} total=${totalTokens ?? '?'}${maybeRate !== null ? ` rate=${(maybeRate * 100).toFixed(1)}%` : ''}${belowThreshold ? ` threshold=${autoCacheThreshold}` : ''}${typeof cacheDiscount === 'number' ? ` discount=${cacheDiscount}` : ''}`
+            );
 
-            text = stripLeadingThinking(text);
+            logger.debug(
+                `OpenRouter usage[${reqId}]: prompt=${promptTokens ?? '?'} cached=${cachedTokens ?? '?'} completion=${completionTokens ?? '?'} total=${totalTokens ?? '?'}${maybeRate !== null ? ` cacheRate=${(maybeRate * 100).toFixed(1)}%` : ''}`
+            );
+        } else {
+            console.log(`[AI CACHE ${reqId}] UNKNOWN model=${config.ai.openRouterModel} usage=missing`);
+        }
 
-            const finishReason = data.choices[0].finish_reason || 'UNKNOWN';
+        // Extract JSON from markdown code blocks if present
+        const jsonBlockMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+        if (jsonBlockMatch && jsonBlockMatch[1]) {
+            text = jsonBlockMatch[1].trim();
+        }
 
-            // Extract JSON from markdown code blocks if present
-            const jsonBlockMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
-            if (jsonBlockMatch && jsonBlockMatch[1]) {
-                text = jsonBlockMatch[1].trim();
-            }
+        text = text.trim();
 
-            // Try to extract JSON object if response has extra text
-            if (!text.startsWith('{') && !text.startsWith('[')) {
-                const startIdx = text.indexOf('{');
-                if (startIdx !== -1) {
-                    let depth = 0;
+        // Try to extract JSON object/array if response has extra text
+        if (!text.startsWith('{') && !text.startsWith('[')) {
+            const startObj = text.indexOf('{');
+            const startArr = text.indexOf('[');
+            const startIdx =
+                startObj === -1 ? startArr :
+                    (startArr === -1 ? startObj : Math.min(startObj, startArr));
+
+            if (startIdx !== -1) {
+                const openToClose: Record<string, string> = { '{': '}', '[': ']' };
+                const firstCh = text[startIdx];
+                const firstClose = openToClose[firstCh];
+
+                if (firstClose) {
+                    const stack: string[] = [firstClose];
                     let endIdx = -1;
-                    for (let i = startIdx; i < text.length; i++) {
-                        if (text[i] === '{') depth++;
-                        else if (text[i] === '}') {
-                            depth--;
-                            if (depth === 0) {
+                    let inString = false;
+                    let escapeNext = false;
+
+                    for (let i = startIdx + 1; i < text.length; i++) {
+                        const ch = text[i];
+                        if (inString) {
+                            if (escapeNext) {
+                                escapeNext = false;
+                                continue;
+                            }
+                            if (ch === '\\') {
+                                escapeNext = true;
+                                continue;
+                            }
+                            if (ch === '"') {
+                                inString = false;
+                            }
+                            continue;
+                        }
+
+                        if (ch === '"') {
+                            inString = true;
+                            continue;
+                        }
+
+                        if (ch === '{') {
+                            stack.push('}');
+                            continue;
+                        }
+                        if (ch === '[') {
+                            stack.push(']');
+                            continue;
+                        }
+
+                        const expectedClose = stack[stack.length - 1];
+                        if ((ch === '}' || ch === ']') && ch === expectedClose) {
+                            stack.pop();
+                            if (stack.length === 0) {
                                 endIdx = i;
                                 break;
                             }
                         }
                     }
+
                     if (endIdx !== -1) {
-                        text = text.slice(startIdx, endIdx + 1);
+                        text = text.slice(startIdx, endIdx + 1).trim();
                     }
                 }
             }
-
-            // Validate JSON
-            try {
-                JSON.parse(text);
-            } catch (_parseError) {
-                throw new Error(`OpenRouter returned invalid JSON: ${text.slice(0, 200)}`);
-            }
-
-            return { text, finishReason, provider: 'openrouter', requestId: reqId };
-        } catch (error: any) {
-            // Always clear timeout in catch block
-            clearTimeout(timeoutId);
-
-            if (error.name === 'AbortError') {
-                throw new Error(`OpenRouter request timeout after ${config.ai.requestTimeoutMs}ms`);
-            }
-            throw error;
         }
+
+        // Validate JSON
+        try {
+            JSON.parse(text);
+        } catch (_parseError) {
+            throw new Error(`OpenRouter returned invalid JSON: ${text.slice(0, 200)}`);
+        }
+
+        return { text, finishReason, provider: 'openrouter', requestId: reqId };
     }
 
     /**

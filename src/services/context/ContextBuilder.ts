@@ -20,6 +20,7 @@ import {
     PerformanceMetrics,
     Instructions,
     SentimentContext,
+    PromptVars,
     convertIndicatorsToMarketData,
 } from '../../types/context';
 import { getTechnicalIndicatorService } from '../indicators/TechnicalIndicatorService';
@@ -39,10 +40,151 @@ import {
 // NOTE: ANTI_CHURN_RULES and LEVERAGE_POLICY are included in the system prompt (buildAnalystPrompt),
 // not in the context, to avoid duplication. Only dynamic risk limits are included here.
 import { RISK_COUNCIL_VETO_TRIGGERS } from '../../constants/analyst/riskCouncil';
-import { GLOBAL_RISK_LIMITS } from '../../constants/analyst/riskLimits';
+import { GLOBAL_RISK_LIMITS, getRequiredStopLossPercent } from '../../constants/analyst/riskLimits';
 import { APPROVED_SYMBOLS } from '../../shared/types/weex';
 
 const TRADING_SYMBOLS = APPROVED_SYMBOLS;
+
+function buildPromptVars(accountBalanceUsd: number): PromptVars {
+    const safeNum = (val: unknown, fallback: number): number =>
+        typeof val === 'number' && Number.isFinite(val) ? val : fallback;
+
+    const safeInt = (val: unknown, fallback: number): number => {
+        const n = safeNum(val, fallback);
+        if (!Number.isFinite(n)) return fallback;
+        return Math.floor(n);
+    };
+
+    const stopLossPct = (multiplier: number, leverage: number): number => {
+        const lev = Number.isFinite(leverage) && leverage > 0 ? leverage : 1;
+        const liquidationDistancePct = 100 / lev;
+        const requiredMaxSlPct = getRequiredStopLossPercent(lev);
+        const maxSafeSlPct = Math.min(requiredMaxSlPct, liquidationDistancePct * 0.8);
+        const pct = multiplier / lev;
+        const clamped = Math.max(0.1, Math.min(maxSafeSlPct, pct));
+        return Number(clamped.toFixed(1));
+    };
+
+    const startingBalance = safeNum(config.trading?.startingBalance, 0);
+    const minBalanceToTrade = safeNum(config.autonomous?.minBalanceToTrade, 0);
+
+    const maxConcurrentPositions = safeNum(RISK_COUNCIL_VETO_TRIGGERS?.MAX_CONCURRENT_POSITIONS, 3);
+    const maxSameDirectionPositions = safeNum(RISK_COUNCIL_VETO_TRIGGERS?.MAX_SAME_DIRECTION_POSITIONS, 2);
+    const maxDailyTrades = safeInt(config.trading?.maxDailyTrades, 20);
+    const maxTradesPerSymbolPerHour = safeInt(config.antiChurn?.maxTradesPerSymbolPerHour, 3);
+    const cycleIntervalMinutes = Math.max(0, Math.floor(safeNum(config.autonomous?.cycleIntervalMs, 5 * 60 * 1000) / 60000));
+
+    const maxPositionPercent = safeNum(RISK_COUNCIL_VETO_TRIGGERS?.MAX_POSITION_PERCENT, safeNum(GLOBAL_RISK_LIMITS?.MAX_POSITION_SIZE_PERCENT, 25));
+    const targetPositionMinPercent = safeNum(config.autonomous?.targetPositionMinPercent, 0);
+    const targetPositionMaxPercent = safeNum(config.autonomous?.targetPositionMaxPercent, 0);
+    const minPositionPercent = safeNum(config.autonomous?.minPositionPercent, 0);
+
+    const maxPositionUsd = Math.floor(accountBalanceUsd * (maxPositionPercent / 100));
+    const targetPositionMinUsd = Math.floor(accountBalanceUsd * (targetPositionMinPercent / 100));
+    const targetPositionMaxUsd = Math.floor(accountBalanceUsd * (targetPositionMaxPercent / 100));
+    const targetPositionMidUsd = Math.floor((targetPositionMinUsd + targetPositionMaxUsd) / 2);
+    const minPositionUsd = Math.floor(accountBalanceUsd * (minPositionPercent / 100));
+
+    const targetDeploymentPercent = safeNum(config.autonomous?.targetDeploymentPercent, 0);
+    const maxDeploymentPercent = safeNum(config.autonomous?.maxDeploymentPercent, 0);
+    const netLongExposureLimitPercent = safeNum(RISK_COUNCIL_VETO_TRIGGERS?.NET_EXPOSURE_LIMITS?.LONG, 0);
+    const netShortExposureLimitPercent = safeNum(RISK_COUNCIL_VETO_TRIGGERS?.NET_EXPOSURE_LIMITS?.SHORT, 0);
+
+    const maxLeverage = Math.max(1, safeNum(GLOBAL_RISK_LIMITS?.ABSOLUTE_MAX_LEVERAGE, 1));
+    const safeLeverage = Math.max(1, safeNum(GLOBAL_RISK_LIMITS?.MAX_SAFE_LEVERAGE, 1));
+    const conservativeLeverageThreshold = Math.max(1, safeNum(GLOBAL_RISK_LIMITS?.CONSERVATIVE_LEVERAGE_THRESHOLD, 1));
+    const maxLeverage90 = Math.max(1, Math.floor(maxLeverage * 0.9));
+    const maxLeverage75 = Math.max(1, Math.floor(maxLeverage * 0.75));
+
+    const minConfidenceToTrade = safeNum(config.autonomous?.minConfidenceToTrade, 0);
+    const moderateConfidenceThreshold = safeNum(config.autonomous?.moderateConfidenceThreshold, 0);
+    const highConfidenceThreshold = safeNum(config.autonomous?.highConfidenceThreshold, 0);
+    const veryHighConfidenceThreshold = safeNum(config.autonomous?.veryHighConfidenceThreshold, 0);
+
+    const mc = config.autonomous?.monteCarlo;
+    const monteCarloMinSharpe = safeNum(mc?.minSharpeRatio, 0);
+    const monteCarloTargetSharpe = safeNum(mc?.targetSharpeRatio, 0);
+    const monteCarloExcellentSharpe = safeNum(mc?.excellentSharpeRatio, 0);
+    const monteCarloMinWinRatePercent = safeNum(mc?.minWinRate, 0) * 100;
+    const monteCarloMaxDrawdownPercent = safeNum(mc?.maxDrawdownPercent, 0);
+
+    const qv = config.autonomous?.qValue;
+    const qValueMinimum = safeNum(qv?.minimum, 0);
+    const qValueConsensus = safeNum(qv?.consensus, 0);
+    const qValueHighConfidence = safeNum(qv?.highConfidence, 0);
+
+    const urgency = config.autonomous?.urgencyThresholds;
+    const targetProfitPercent = safeNum(urgency?.targetProfitPct, 0);
+    const partialTpPercentRaw = safeNum(urgency?.partialTpPct, 0);
+    const partialTpPercent = partialTpPercentRaw > 0 ? partialTpPercentRaw : 3;
+    const stopLossPercent = safeNum(urgency?.stopLossPct, 0);
+    const maxHoldHours = safeNum(urgency?.maxHoldHours, 0);
+    const weeklyDrawdownLimitPercent = safeNum(config.autonomous?.weeklyDrawdownLimitPercent, 0);
+
+    const slMaxPctAtMaxLeverage = stopLossPct(50, maxLeverage);
+    const slSafePctAtSafeLeverage = stopLossPct(55, safeLeverage);
+    const slConservativePctAtConservative = stopLossPct(60, conservativeLeverageThreshold);
+    const maxNotionalUsd = Math.floor(maxPositionUsd * maxLeverage);
+
+    return {
+        starting_balance_usd: startingBalance,
+        account_balance_usd: accountBalanceUsd,
+        min_balance_to_trade_usd: minBalanceToTrade,
+
+        max_concurrent_positions: maxConcurrentPositions,
+        max_same_direction_positions: maxSameDirectionPositions,
+        max_daily_trades: maxDailyTrades,
+        max_trades_per_symbol_per_hour: maxTradesPerSymbolPerHour,
+        cycle_interval_minutes: cycleIntervalMinutes,
+
+        max_position_percent: maxPositionPercent,
+        max_position_usd: maxPositionUsd,
+        max_notional_usd: maxNotionalUsd,
+        target_position_min_percent: targetPositionMinPercent,
+        target_position_max_percent: targetPositionMaxPercent,
+        target_position_min_usd: targetPositionMinUsd,
+        target_position_max_usd: targetPositionMaxUsd,
+        target_position_mid_usd: targetPositionMidUsd,
+        min_position_percent: minPositionPercent,
+        min_position_usd: minPositionUsd,
+
+        target_deployment_percent: targetDeploymentPercent,
+        max_deployment_percent: maxDeploymentPercent,
+        net_long_exposure_limit_percent: netLongExposureLimitPercent,
+        net_short_exposure_limit_percent: netShortExposureLimitPercent,
+
+        max_leverage: maxLeverage,
+        safe_leverage: safeLeverage,
+        conservative_leverage_threshold: conservativeLeverageThreshold,
+        max_leverage_90: maxLeverage90,
+        max_leverage_75: maxLeverage75,
+
+        min_confidence_to_trade: minConfidenceToTrade,
+        moderate_confidence_threshold: moderateConfidenceThreshold,
+        high_confidence_threshold: highConfidenceThreshold,
+        very_high_confidence_threshold: veryHighConfidenceThreshold,
+
+        monte_carlo_min_sharpe: monteCarloMinSharpe,
+        monte_carlo_target_sharpe: monteCarloTargetSharpe,
+        monte_carlo_excellent_sharpe: monteCarloExcellentSharpe,
+        monte_carlo_min_win_rate_percent: monteCarloMinWinRatePercent,
+        monte_carlo_max_drawdown_percent: monteCarloMaxDrawdownPercent,
+
+        q_value_minimum: qValueMinimum,
+        q_value_consensus: qValueConsensus,
+        q_value_high_confidence: qValueHighConfidence,
+
+        target_profit_percent: targetProfitPercent,
+        partial_tp_percent: partialTpPercent,
+        stop_loss_percent: stopLossPercent,
+        max_hold_hours: maxHoldHours,
+        weekly_drawdown_limit_percent: weeklyDrawdownLimitPercent,
+
+        sl_max_pct_at_max_leverage: slMaxPctAtMaxLeverage,
+        sl_safe_pct_at_safe_leverage: slSafePctAtSafeLeverage,
+        sl_conservative_pct_at_conservative_leverage: slConservativePctAtConservative,
+    };
+}
 
 /**
  * Build risk rules string for AI context - minimal, profit-focused
@@ -252,6 +394,7 @@ export class ContextBuilder {
             account: accountState,
             market_data: marketData,
             instructions,
+            prompt_vars: buildPromptVars(safeAccountBalance),
             sentiment: sentimentContext || undefined,
             quant: quantSummary || undefined,
             journal_insights: journalInsights || undefined,

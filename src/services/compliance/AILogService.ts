@@ -442,15 +442,59 @@ export class AILogService {
                 return;
             }
 
+            const mapStageToWeexStage = (stage: AILogEntry['stage']): string => {
+                const mapping: Record<AILogEntry['stage'], string> = {
+                    analysis: 'Strategy Generation',
+                    decision: 'Decision Making',
+                    execution: 'Order Execution',
+                    review: 'Risk Assessment',
+                    manual_close: 'Order Execution',
+                    position_management: 'Order Execution',
+                };
+                return mapping[stage] || 'Decision Making';
+            };
+
+            const normalizeOrderId = (orderId?: string): number | null => {
+                const raw = String(orderId ?? '').trim();
+                if (!raw) return null;
+                if (!/^\d+$/.test(raw)) return null;
+                const parsed = Number(raw);
+                return Number.isFinite(parsed) ? parsed : null;
+            };
+
+            const limitWords = (text: string, maxWords: number): string => {
+                const trimmed = String(text ?? '').trim();
+                if (!trimmed) return '';
+                const words = trimmed.split(/\s+/g);
+                if (words.length <= maxWords) return trimmed;
+                return words.slice(0, maxWords).join(' ');
+            };
+
+            const clampJson = (value: any, maxBytes: number): any => {
+                try {
+                    const str = JSON.stringify(value);
+                    if (Buffer.byteLength(str, 'utf8') <= maxBytes) return value;
+                    return {
+                        truncated: true,
+                        sizeBytes: Buffer.byteLength(str, 'utf8'),
+                        preview: str.slice(0, Math.min(8000, str.length)),
+                    };
+                } catch {
+                    return { error: 'Serialization failed', type: typeof value };
+                }
+            };
+
+            const safeExplanation = limitWords(String(log.explanation ?? ''), 500);
+
             // FIXED: Upload with objects (no re-serialization needed)
             // Note: idempotencyKey would be ideal but may not be supported by WEEX API
             const response = await getWeexClient().uploadAILog({
-                orderId: log.orderId,
-                stage: log.stage,
+                orderId: normalizeOrderId(log.orderId),
+                stage: mapStageToWeexStage(log.stage),
                 model: log.model,
-                input: log.input, // Already an object, no re-parsing needed
-                output: log.output, // Already an object, no re-parsing needed
-                explanation: log.explanation,
+                input: clampJson(log.input, 256 * 1024),
+                output: clampJson(log.output, 256 * 1024),
+                explanation: safeExplanation,
             });
 
             // CRITICAL: Validate response before marking as uploaded

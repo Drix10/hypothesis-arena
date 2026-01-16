@@ -1513,12 +1513,53 @@ export class AutonomousTradingEngine extends EventEmitter {
             // Reset consecutive HOLDs when we take action
             this.consecutiveHolds = 0;
 
-            const position = flowPositions.find(p => p.symbol.toLowerCase() === decision.symbol.toLowerCase());
+            let executedAction: 'CLOSE' | 'REDUCE' = decision.action;
+            const decisionSymbol = typeof decision.symbol === 'string' ? decision.symbol : '';
+            if (!decisionSymbol) {
+                logger.warn(`Cannot ${executedAction}: Invalid symbol in decision`);
+                await this.updateLeaderboard();
+                await this.completeCycle(cycleStart, `invalid symbol for ${executedAction}`);
+                return;
+            }
+
+            const position = flowPositions.find(p => p.symbol.toLowerCase() === decisionSymbol.toLowerCase());
             if (position) {
                 try {
-                    if (decision.action === 'CLOSE') {
-                        const closeResult = await this.weexClient.closeAllPositions(decision.symbol);
-                        logger.info(`✅ Closed position: ${decision.symbol} `);
+                    if (executedAction === 'CLOSE') {
+                        const denom = position.entryPrice > 0 && position.size > 0 ? (position.entryPrice * position.size) : 0;
+                        const pnlPercent = denom > 0 ? (position.unrealizedPnl / denom) * 100 : 0;
+                        const rationaleText = `${decision.rationale || ''} ${decision.judgeDecision?.reasoning || ''}`.toLowerCase();
+                        const sizeDriven = [
+                            'haircut',
+                            'max position',
+                            'max_position',
+                            'position size',
+                            'exposure',
+                            'risk limit',
+                            'position limit',
+                            'max_position_percent',
+                            'max_position_usd',
+                            'allocation cap',
+                        ].some(k => rationaleText.includes(k));
+                        const emergencyMentioned = [
+                            'liquidation',
+                            'stop loss',
+                            'stop-loss',
+                            'thesis invalid',
+                            'invalidated',
+                            'margin call',
+                            'forced',
+                            'adl',
+                            'delever',
+                        ].some(k => rationaleText.includes(k));
+                        if (Number.isFinite(pnlPercent) && pnlPercent > 0 && sizeDriven && !emergencyMentioned) {
+                            executedAction = 'REDUCE';
+                        }
+                    }
+
+                    if (executedAction === 'CLOSE') {
+                        const closeResult = await this.weexClient.closeAllPositions(decisionSymbol);
+                        logger.info(`✅ Closed position: ${decisionSymbol} `);
 
                         // Create AI log for position close
                         // FIXED: Try to extract orderId from close result for WEEX compliance
@@ -1531,18 +1572,18 @@ export class AutonomousTradingEngine extends EventEmitter {
                                 'autonomous-engine',
                                 {
                                     action: 'CLOSE',
-                                    symbol: decision.symbol,
+                                    symbol: decisionSymbol,
                                     position: { side: position.side, size: position.size, entryPrice: position.entryPrice },
                                     decision_confidence: decision.confidence,
                                     winner: decision.winner,
                                 },
                                 {
                                     status: 'CLOSED',
-                                    symbol: decision.symbol,
+                                    symbol: decisionSymbol,
                                     closed_size: position.size,
                                     order_id: closeOrderId != null ? String(closeOrderId) : null,
                                 },
-                                `AI closed position for ${decision.symbol}.Winner: ${decision.winner}.Reason: ${(decision.rationale || '').slice(0, 200)} `,
+                                `AI closed position for ${decisionSymbol}.Winner: ${decision.winner}.Reason: ${(decision.rationale || '').slice(0, 200)} `,
                                 closeOrderId != null ? String(closeOrderId) : undefined // Pass orderId if available for WEEX upload
                             );
                         } catch (logError) {
@@ -1556,16 +1597,16 @@ export class AutonomousTradingEngine extends EventEmitter {
                         let closeOrReduceOrderId: string | undefined;
 
                         try {
-                            sizeToClose = roundToStepSize(rawSizeToClose, decision.symbol);
+                            sizeToClose = roundToStepSize(rawSizeToClose, decisionSymbol);
                         } catch (_roundError) {
                             // Size too small for partial close - close full position instead
                             logger.warn(`Partial close size too small(${rawSizeToClose}), closing full position instead`);
                             let fullSizeToClose = String(position.size);
                             try {
-                                fullSizeToClose = roundToStepSize(position.size, decision.symbol);
+                                fullSizeToClose = roundToStepSize(position.size, decisionSymbol);
                             } catch (_roundFullError) { }
-                            const fullCloseResult = await this.weexClient.closePartialPosition(decision.symbol, position.side, fullSizeToClose, '1');
-                            logger.info(`✅ Closed full position(partial was too small): ${decision.symbol} `);
+                            const fullCloseResult = await this.weexClient.closePartialPosition(decisionSymbol, position.side, fullSizeToClose, '1');
+                            logger.info(`✅ Closed full position(partial was too small): ${decisionSymbol} `);
                             actuallyClosedFull = true;
                             sizeToClose = fullSizeToClose;
                             closeOrReduceOrderId = fullCloseResult?.order_id ? String(fullCloseResult.order_id) : undefined;
@@ -1573,8 +1614,8 @@ export class AutonomousTradingEngine extends EventEmitter {
 
                         let reduceResult: any;
                         if (!actuallyClosedFull) {
-                            reduceResult = await this.weexClient.closePartialPosition(decision.symbol, position.side, sizeToClose, '1');
-                            logger.info(`✅ Reduced position: ${decision.symbol} by 50 % `);
+                            reduceResult = await this.weexClient.closePartialPosition(decisionSymbol, position.side, sizeToClose, '1');
+                            logger.info(`✅ Reduced position: ${decisionSymbol} by 50 % `);
                             closeOrReduceOrderId = reduceResult?.order_id ? String(reduceResult.order_id) : undefined;
                         }
 
@@ -1587,7 +1628,7 @@ export class AutonomousTradingEngine extends EventEmitter {
                                 'autonomous-engine',
                                 {
                                     action: actuallyClosedFull ? 'CLOSE' : 'REDUCE',
-                                    symbol: decision.symbol,
+                                    symbol: decisionSymbol,
                                     position: { side: position.side, size: position.size, entryPrice: position.entryPrice },
                                     reduction_percent: actuallyClosedFull ? 100 : 50,
                                     decision_confidence: decision.confidence,
@@ -1595,12 +1636,12 @@ export class AutonomousTradingEngine extends EventEmitter {
                                 },
                                 {
                                     status: actuallyClosedFull ? 'CLOSED' : 'REDUCED',
-                                    symbol: decision.symbol,
+                                    symbol: decisionSymbol,
                                     reduced_size: sizeToClose,
                                     remaining_size: remainingSize,
                                     order_id: closeOrReduceOrderId || null,
                                 },
-                                `AI ${actuallyClosedFull ? 'closed' : 'reduced'} position for ${decision.symbol}${actuallyClosedFull ? ' (partial was too small)' : ' by 50%'}.Winner: ${decision.winner}.Reason: ${(decision.rationale || '').slice(0, 200)} `,
+                                `AI ${actuallyClosedFull ? 'closed' : 'reduced'} position for ${decisionSymbol}${actuallyClosedFull ? ' (partial was too small)' : ' by 50%'}.Winner: ${decision.winner}.Reason: ${(decision.rationale || '').slice(0, 200)} `,
                                 closeOrReduceOrderId // Pass orderId for WEEX upload
                             );
                         } catch (logError) {
@@ -1611,13 +1652,13 @@ export class AutonomousTradingEngine extends EventEmitter {
                     // FIXED: Reset consecutive failures on successful action
                     this.consecutiveFailures = 0;
                 } catch (error) {
-                    logger.error(`Failed to ${decision.action} position: `, error);
+                    logger.error(`Failed to ${executedAction} position: `, error);
                 }
             } else {
-                logger.warn(`Cannot ${decision.action}: No position found for ${decision.symbol}`);
+                logger.warn(`Cannot ${executedAction}: No position found for ${decision.symbol}`);
             }
             await this.updateLeaderboard();
-            await this.completeCycle(cycleStart, `${decision.action} executed`);
+            await this.completeCycle(cycleStart, `${executedAction} executed`);
             return;
         }
 

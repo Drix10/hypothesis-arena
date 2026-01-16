@@ -446,7 +446,8 @@ export class CollaborativeFlowService {
     private async runSingleAnalyst(analystId: AnalystId, contextJson: string): Promise<AnalystOutput | null> {
         const systemPrompt = buildAnalystPrompt(analystId);
         const userMessage = buildAnalystUserMessage(contextJson);
-        const fullPrompt = systemPrompt + '\n\n' + userMessage;
+        // CRITICAL: Add separator for prompt caching - system prompt will be cached
+        const fullPrompt = systemPrompt + '\n\n---USER---\n\n' + userMessage;
 
         for (let attempt = 1; attempt <= config.ai.maxRetries; attempt++) {
             try {
@@ -530,7 +531,8 @@ export class CollaborativeFlowService {
             : '';
 
         const userMessage = buildJudgeUserMessage(contextJson, jimOutput, rayOutput, karenOutput, quantOutput) + weightsSection;
-        const fullPrompt = buildJudgeSystemPrompt() + '\n\n' + userMessage;
+        // CRITICAL: Add separator for prompt caching - system prompt will be cached
+        const fullPrompt = buildJudgeSystemPrompt() + '\n\n---USER---\n\n' + userMessage;
 
         // Determine which mode to use for judge
         const useHybridMode = config.ai.hybridMode;

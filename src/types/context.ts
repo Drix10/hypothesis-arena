@@ -15,9 +15,69 @@ export interface TradingContext {
     account: AccountState;
     market_data: MarketDataWithIndicators[];
     instructions: Instructions;
+    prompt_vars?: PromptVars;
     sentiment?: SentimentContext; // Optional sentiment data
     quant?: string; // Optional quant analysis summary
     journal_insights?: string; // Optional trading insights from journal (v5.3.0)
+}
+
+export interface PromptVars {
+    starting_balance_usd: number;
+    account_balance_usd: number;
+    min_balance_to_trade_usd: number;
+
+    max_concurrent_positions: number;
+    max_same_direction_positions: number;
+    max_daily_trades: number;
+    max_trades_per_symbol_per_hour: number;
+    cycle_interval_minutes: number;
+
+    max_position_percent: number;
+    max_position_usd: number;
+    max_notional_usd: number;
+    target_position_min_percent: number;
+    target_position_max_percent: number;
+    target_position_min_usd: number;
+    target_position_max_usd: number;
+    target_position_mid_usd: number;
+    min_position_percent: number;
+    min_position_usd: number;
+
+    target_deployment_percent: number;
+    max_deployment_percent: number;
+    net_long_exposure_limit_percent: number;
+    net_short_exposure_limit_percent: number;
+
+    max_leverage: number;
+    safe_leverage: number;
+    conservative_leverage_threshold: number;
+    max_leverage_90: number;
+    max_leverage_75: number;
+
+    min_confidence_to_trade: number;
+    moderate_confidence_threshold: number;
+    high_confidence_threshold: number;
+    very_high_confidence_threshold: number;
+
+    monte_carlo_min_sharpe: number;
+    monte_carlo_target_sharpe: number;
+    monte_carlo_excellent_sharpe: number;
+    monte_carlo_min_win_rate_percent: number;
+    monte_carlo_max_drawdown_percent: number;
+
+    q_value_minimum: number;
+    q_value_consensus: number;
+    q_value_high_confidence: number;
+
+    target_profit_percent: number;
+    partial_tp_percent: number;
+    stop_loss_percent: number;
+    max_hold_hours: number;
+    weekly_drawdown_limit_percent: number;
+
+    sl_max_pct_at_max_leverage: number;
+    sl_safe_pct_at_safe_leverage: number;
+    sl_conservative_pct_at_conservative_leverage: number;
 }
 
 /**

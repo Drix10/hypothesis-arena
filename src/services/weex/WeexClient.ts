@@ -998,7 +998,7 @@ export class WeexClient {
     }
 
     async uploadAILog(log: {
-        orderId?: string;
+        orderId?: string | number | null;
         stage: string;
         model: string;
         input: any;
