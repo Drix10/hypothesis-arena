@@ -13,9 +13,10 @@ import { ANALYST_PROFILES } from '../analyst/profiles';
 
 export const ANTI_CHURN_RULES = `
 CONVICTION TRADING RULES (v5.6.0):
+
 - HOLD winners for DAYS, not hours - let profits run
-- Max prompt_vars.max_daily_trades trades per day (fewer is better)
-- Max prompt_vars.max_trades_per_symbol_per_hour trades per hour per symbol
+- Max 3-5 trades per day (fewer is better)
+- Max 1-2 trades per hour per symbol
 - After opening a position: HOLD minimum 24 hours unless stop hit
 - Don't close profitable positions early - trail stops instead
 - Focus on BTC and ETH - they move the most
@@ -25,15 +26,15 @@ The market cycles through phases. Adapt your strategy:
 
 1. STRONG UPTREND (EMA9 > EMA20 > EMA50, all rising):
    - GO LONG BTC/ETH with SIZE
-   - Stops: follow liquidation-safe stop band prompt_vars.sl_max_pct_at_max_leverage-prompt_vars.sl_safe_pct_at_safe_leverage% (or tighter)
-   - Ambitious TPs (>=prompt_vars.target_profit_percent%)
+   - Stops: follow liquidation-safe stop band 2-3% (or tighter)
+   - Ambitious TPs (>= 5%)
    - HOLD for days, ignore "overbought" RSI
    - Don't short, don't hedge
 
 2. STRONG DOWNTREND (EMA9 < EMA20 < EMA50, all falling):
    - GO SHORT BTC/ETH with SIZE
-   - Stops: follow liquidation-safe stop band prompt_vars.sl_max_pct_at_max_leverage-prompt_vars.sl_safe_pct_at_safe_leverage% (or tighter)
-   - Ambitious TPs (>=prompt_vars.target_profit_percent%)
+   - Stops: follow liquidation-safe stop band 2-3% (or tighter)
+   - Ambitious TPs (>= 5%)
    - HOLD for days, ignore "oversold" RSI
    - Don't long, don't hedge
 
@@ -83,30 +84,30 @@ export const LEVERAGE_POLICY = `
 LEVERAGE & POSITION SIZING (COMPETITION WINNER EDITION v5.7.0):
 
 WINNING STRATEGY INSIGHT (BASED ON ACTUAL COMPETITION RESULTS)
-WINNERS: 2-3 winning trades out of 5, using prompt_vars.target_position_min_usd-prompt_vars.target_position_max_usd positions at prompt_vars.safe_leverage-prompt_vars.max_leverage x leverage
+WINNERS: 2-3 winning trades out of 5, using 2000-5000 USD positions at 10-20x leverage
 LOSERS: Went all-in with large positions and got WIPED OUT (position size was the problem)
 
-THE SWEET SPOT: prompt_vars.target_position_min_usd-prompt_vars.target_position_max_usd positions at prompt_vars.safe_leverage-prompt_vars.max_leverage x leverage
+THE SWEET SPOT: 2000-5000 USD positions at 10-20x leverage
   - Avoid all-in sizing; survive to win
   - Quality over quantity - fewer trades, better setups
 
 CORE RULES
 HARD LIMITS (NON-NEGOTIABLE):
-  - MAX position size: prompt_vars.max_position_percent% of account (prompt_vars.max_position_usd on prompt_vars.account_balance_usd account)
-  - MAX leverage: prompt_vars.max_leverage x
-  - MIN position size: prompt_vars.min_position_usd (smaller trades don't move the needle)
-  - Per-trade notional (margin × leverage): max prompt_vars.max_notional_usd
+  - MAX position size: 40% of account (40000 USD on 100000 USD account)
+  - MAX leverage: 20x
+  - MIN position size: 1000 USD (smaller trades don't move the needle)
+  - Per-trade notional (margin × leverage): max 800000 USD
   - NOTE: The most restrictive limit always wins (position size + leverage caps enforce max notional)
 
 OPTIMAL RANGE (THE WINNING FORMULA):
-  - Position size: prompt_vars.target_position_min_usd-prompt_vars.target_position_max_usd (sweet spot at prompt_vars.max_leverage x leverage)
-  - Leverage: prompt_vars.safe_leverage-prompt_vars.max_leverage x (optimal risk/reward)
+  - Position size: 2000-5000 USD (sweet spot at 10-20x leverage)
+  - Leverage: 10-20x (optimal risk/reward)
 
 KELLY CRITERION (CONSERVATIVE APPLICATION)
   - Use QUARTER-KELLY (0.25 × Kelly fraction) - NOT half-Kelly
   - Full Kelly is suicide in crypto volatility
   - Kelly formula: f* = (bp - q) / b where b=reward/risk, p=win prob, q=1-p
-  - HARD CAP: Never exceed prompt_vars.max_position_percent% of account in single position at prompt_vars.max_leverage x (prompt_vars.max_position_usd × prompt_vars.max_leverage = prompt_vars.max_notional_usd)
+  - HARD CAP: Never exceed 40% of account in single position at 20x (40000 USD × 20 = 800000 USD notional limit applies)
   - If Kelly <= 0: NO EDGE, don't trade
 
 VOLATILITY ADJUSTMENTS
@@ -118,45 +119,45 @@ VOLATILITY HAIRCUT (CRITICAL):
   - High volatility = higher uncertainty = smaller size
 
 VOLATILITY-ADJUSTED LEVERAGE:
-  - HIGH ATR (> 1.5× average): Prefer safe_leverage and smaller than target_position_min_usd
-  - NORMAL ATR: Use prompt_vars.safe_leverage-prompt_vars.max_leverage x, prompt_vars.target_position_min_usd-prompt_vars.target_position_max_usd position (THE SWEET SPOT)
-  - LOW ATR: You may use prompt_vars.max_leverage_90-prompt_vars.max_leverage x with prompt_vars.target_position_mid_usd-prompt_vars.target_position_max_usd
+  - HIGH ATR (> 1.5× average): Prefer 5-10x and smaller than 2000 USD
+  - NORMAL ATR: Use 10-20x, 2000-5000 USD position (THE SWEET SPOT)
+  - LOW ATR: You may use 15-20x with 3000-5000 USD
 
 LEVERAGE TIERS (WINNER-OPTIMIZED)
-  - Conservative (prompt_vars.conservative_leverage_threshold-prompt_vars.safe_leverage x): For uncertain setups, prompt_vars.min_position_usd-prompt_vars.target_position_min_usd position
-  - Optimal (prompt_vars.safe_leverage-prompt_vars.max_leverage_90 x): For good setups, prompt_vars.target_position_min_usd-prompt_vars.target_position_max_usd position ← TARGET THIS
-  - Maximum (prompt_vars.max_leverage x): For A+ setups ONLY, prompt_vars.target_position_min_usd-prompt_vars.target_position_max_usd position, tight stops
+  - Conservative (5-10x): For uncertain setups, 1000-2000 USD position
+  - Optimal (10-15x): For good setups, 2000-5000 USD position ← TARGET THIS
+  - Maximum (20x): For A+ setups ONLY, 2000-5000 USD position, tight stops
   - Keep position size reasonable - that's what matters most
 
 RL-OPTIMIZED LEVERAGE SELECTION:
-  - High Q-value (>=prompt_vars.q_value_high_confidence): Use prompt_vars.max_leverage_90-prompt_vars.max_leverage x
-  - Moderate Q-value (>=prompt_vars.q_value_consensus): Use prompt_vars.safe_leverage-prompt_vars.max_leverage_90 x
+  - High Q-value (>= 0.8): Use 15-20x
+  - Moderate Q-value (>= 0.7): Use 10-15x
   - Low Q-value (<0.6): HOLD (insufficient edge)
 
 STOP-LOSS REQUIREMENTS (WIDER FOR CONVICTION TRADING)
-  - prompt_vars.conservative_leverage_threshold-prompt_vars.safe_leverage x leverage: Stop loss prompt_vars.sl_safe_pct_at_safe_leverage-prompt_vars.sl_conservative_pct_at_conservative_leverage% from entry
-  - prompt_vars.safe_leverage-prompt_vars.max_leverage x leverage: Stop loss prompt_vars.sl_max_pct_at_max_leverage-prompt_vars.sl_safe_pct_at_safe_leverage% from entry (avoid liquidation risk)
+  - 5-10x leverage: Stop loss 3-5% from entry
+  - 10-20x leverage: Stop loss 2-3% from entry (avoid liquidation risk)
 
 POSITION SIZING FORMULA
   Position = Base × Confidence × Regime × Kelly × VolatilityHaircut
-  - Base: prompt_vars.target_position_mid_usd (center of sweet spot)
+  - Base: 3500 USD (center of sweet spot)
   - Confidence: 0.7-1.2× based on Q-value
   - Regime: 0.7-1.2× based on market regime
   - Kelly: 0.25× of full Kelly (QUARTER-KELLY)
   - VolatilityHaircut: 0.25-1.0× based on ATR ratio
 
-EXAMPLE CALCULATIONS (prompt_vars.starting_balance_usd account):
-  - Use prompt_vars.max_leverage x leverage with prompt_vars.target_position_max_usd allocation
-  - Use prompt_vars.max_leverage_90 x leverage with prompt_vars.target_position_mid_usd allocation
-  - Use prompt_vars.safe_leverage x leverage with prompt_vars.max_position_usd allocation
+EXAMPLE CALCULATIONS (100000 USD account):
+  - Use 20x leverage with 5000 USD allocation
+  - Use 15x leverage with 3500 USD allocation
+  - Use 10x leverage with 10000 USD allocation
 
 COMPETITION MINDSET (CONVICTION TRADING)
   - QUALITY OVER QUANTITY: 2-3 good trades beat 10 mediocre ones
   - SURVIVE TO WIN: You can't win if you're wiped out
-  - THE SWEET SPOT: prompt_vars.target_position_min_usd-prompt_vars.target_position_max_usd at prompt_vars.safe_leverage-prompt_vars.max_leverage x is where winners operate
+  - THE SWEET SPOT: 2000-5000 USD at 10-20x is where winners operate
   - PATIENCE PAYS: Wait for A/B setups, skip C setups entirely
-  - STOPS: With prompt_vars.max_leverage_90-prompt_vars.max_leverage x, use prompt_vars.sl_max_pct_at_max_leverage-prompt_vars.sl_safe_pct_at_safe_leverage% stops to avoid liquidation risk
-  - AMBITIOUS TPs: Target >=prompt_vars.target_profit_percent% profit, let winners run
+  - STOPS: With 15-20x, use 2-3% stops to avoid liquidation risk
+  - AMBITIOUS TPs: Target >= 5% profit, let winners run
   - HOLD FOR DAYS: Don't exit winners early, trail stops instead
 `;
 
@@ -165,7 +166,7 @@ OUTPUT (STRICT JSON - CONVICTION TRADING v5.6.0):
 
 EXAMPLE FOR BUY/SELL/CLOSE/REDUCE:
 {
-  "reasoning": "Q(LONG)=0.72, Q(SHORT)=0.31, Q(HOLD)=0.45. Regret if HOLD: 1.8%. Monte Carlo (500 sims): EV +2.3%, Win Rate 58%, Sharpe 1.6 after costs. Strong bullish setup with RSI divergence and funding negative.",
+  "reasoning": "Strong bullish setup with RSI divergence and funding negative. Monte Carlo (500 sims): EV +2.3%, Win Rate 58%, Sharpe 1.6 after costs.",
   "recommendation": {
     "action": "BUY",
     "symbol": "cmt_btcusdt",
@@ -173,15 +174,23 @@ EXAMPLE FOR BUY/SELL/CLOSE/REDUCE:
     "leverage": 10,
     "tp_price": 99999,
     "sl_price": 88888,
-    "exit_plan": "Use prompt_vars for sizing/leverage/TP/SL. HOLD 2-3 days, trail stop after +prompt_vars.partial_tp_percent%.",
+    "exit_plan": "HOLD 2-3 days, trail stop after +2% profit.",
     "confidence": 75,
     "rationale": "bullish momentum with Q-value confirmation"
+  },
+  "rl_validation": {
+    "q_long": 0.72,
+    "q_short": 0.31,
+    "q_hold": 0.45,
+    "regret": 1.8,
+    "expected_value": 2.3,
+    "sharpe": 1.6
   }
 }
 
 EXAMPLE FOR HOLD (CRITICAL - use these exact field values):
 {
-  "reasoning": "Q(LONG)=0.42, Q(SHORT)=0.38, Q(HOLD)=0.55. Regret if HOLD: 0.3%. No clear edge - RSI neutral at 52, EMAs tangled, funding flat at 0.01%.",
+  "reasoning": "No clear edge - RSI neutral at 52, EMAs tangled, funding flat at 0.01%.",
   "recommendation": {
     "action": "HOLD",
     "symbol": null,
@@ -192,6 +201,12 @@ EXAMPLE FOR HOLD (CRITICAL - use these exact field values):
     "exit_plan": "",
     "confidence": 70,
     "rationale": "No clear edge per methodology - waiting for better setup"
+  },
+  "rl_validation": {
+    "q_long": 0.42,
+    "q_short": 0.38,
+    "q_hold": 0.55,
+    "regret": 0.3
   }
 }
 
@@ -199,15 +214,15 @@ CRITICAL RULES (CONVICTION TRADING):
 - BUY or SELL when you have a clear edge (Q >= 0.6)
 - HOLD is acceptable when max(Q) < 0.6 or regret < 0.5%
 - For CLOSE/REDUCE actions: set allocation_usd=0 and leverage=0 (exit actions), tp_price/sl_price can be null
-- allocation_usd: prompt_vars.target_position_min_usd-prompt_vars.target_position_max_usd for most trades (THE SWEET SPOT)
-- leverage: prompt_vars.max_leverage_75-prompt_vars.max_leverage x (use higher leverage for high-confidence setups)
+- allocation_usd: 2000-5000 USD for most trades (THE SWEET SPOT)
+- leverage: 10-20x (use higher leverage for high-confidence setups)
 - ALWAYS set tp_price and sl_price (never null for BUY/SELL)
-- With prompt_vars.max_leverage_90-prompt_vars.max_leverage x leverage, use prompt_vars.sl_max_pct_at_max_leverage-prompt_vars.sl_safe_pct_at_safe_leverage% stops to avoid liquidation risk
-- With prompt_vars.conservative_leverage_threshold-prompt_vars.safe_leverage x leverage, use prompt_vars.sl_safe_pct_at_safe_leverage-prompt_vars.sl_conservative_pct_at_conservative_leverage% stops for safety
-- Set TP at >=prompt_vars.target_profit_percent% from entry (ambitious, let winners run)
-- Include Q-values and regret calculation in your reasoning field
+- With 15-20x leverage, use 2-3% stops to avoid liquidation risk
+- With 5-10x leverage, use 3-5% stops for safety
+- Set TP at >= 5% from entry (ambitious, let winners run)
+- Include Q-values and regret calculation in the rl_validation object
 - QUALITY OVER QUANTITY: Skip marginal setups, wait for clear edge
-- HOLD FOR DAYS: Plan to hold 24-prompt_vars.max_hold_hours hours, trail stops after +prompt_vars.partial_tp_percent%
+- HOLD FOR DAYS: Plan to hold 24-72 hours, trail stops after +2% profit.
 
 FOR HOLD ACTIONS ONLY (CRITICAL - VALIDATION WILL FAIL OTHERWISE):
 - allocation_usd: MUST be 0 (not trading)
@@ -418,26 +433,29 @@ PRIMARY SIGNALS - TECHNICAL INDICATORS (CRYPTO-OPTIMIZED)
    - Before entry, simulate 100+ Monte Carlo rollouts of the trade
    - Each rollout: Random walk from current price with historical volatility
    - Calculate expected value (EV) across all rollouts
-   - RL confirmation: EV > 0 with >prompt_vars.moderate_confidence_threshold% positive rollouts
+  - RL confirmation: EV > 0 with high percentage of positive rollouts
+  - RL agent confirms direction with high confidence: +2 points
+  - RL agent confirms direction with moderate confidence: +1 point
+  - RL agent neutral: 0 points
+  - RL agent contradicts: -1 point (strong warning)
 
-   RL SIGNAL SCORING:
-   - RL agent confirms direction with >prompt_vars.high_confidence_threshold% confidence: +2 points
-   - RL agent confirms direction with prompt_vars.moderate_confidence_threshold-prompt_vars.high_confidence_threshold% confidence: +1 point
-   - RL agent neutral (prompt_vars.min_confidence_to_trade-prompt_vars.moderate_confidence_threshold%): 0 points
-   - RL agent contradicts (<prompt_vars.min_confidence_to_trade%): -1 point (strong warning)
-
-   Q-VALUE THRESHOLDS (FROM RUNTIME prompt_vars):
-   - Q >= prompt_vars.q_value_high_confidence: High confidence signal (+2 points)
-   - Q >= prompt_vars.q_value_consensus: Consensus threshold (+1 point)
-   - Q >= prompt_vars.q_value_minimum: Minimum acceptable
-   - Q < prompt_vars.q_value_minimum: Reject trade
+  Q-VALUE THRESHOLDS:
+- Q >= 0.8: High conviction signal
+- Q >= 0.7: Moderate conviction signal
+- Q >= 0.6: Minimum acceptable signal
+- Q < 0.6: NO TRADE
 
    MONTE CARLO ROLLOUT PARAMETERS:
    - Simulations: 100 minimum, 500 for high-conviction trades
    - Time horizon: Match your expected hold time (1-24 hours)
    - Volatility: Use recent ATR as standard deviation
    - Include: Stop loss and take profit in simulation
-   - Sharpe threshold: >= prompt_vars.monte_carlo_min_sharpe required
+  - Sharpe threshold: >= 1.5 required
+
+SHARPE RATIO THRESHOLDS (MONTE CARLO):
+- Sharpe > 2.0: Exceptional risk/reward
+- Sharpe 1.5 - 2.0: Good risk/reward
+- Sharpe < 1.5: Poor risk/reward (consider HOLD)
 
    RL ANTI-OVERFITTING:
    - Train on 80% of data, validate on 20% holdout
@@ -459,7 +477,7 @@ BULLISH SIGNALS (each = +1 point unless noted):
  Cointegration signal: Z-score < -2 on pair spread (+1 point)
  ML cluster match: Setup matches high-win-rate pattern (+2 points)
  Multi-factor alignment: 3+ factors bullish (+2 points)
- RL agent confirms LONG with Q >= prompt_vars.q_value_consensus (+2 points if Q >= prompt_vars.q_value_high_confidence)
+- RL agent confirms LONG with Q >= 0.7 (+2 points if Q >= 0.8)
 
 BEARISH SIGNALS (each = +1 point unless noted):
  RSI > 65 (overbought) - skip if RSI data unavailable
@@ -473,13 +491,13 @@ BEARISH SIGNALS (each = +1 point unless noted):
  Cointegration signal: Z-score > +2 on pair spread (+1 point)
  ML cluster match: Setup matches high-win-rate pattern (+2 points)
  Multi-factor alignment: 3+ factors bearish (+2 points)
- RL agent confirms SHORT with Q >= prompt_vars.q_value_consensus (+2 points if Q >= prompt_vars.q_value_high_confidence)
+- RL agent confirms SHORT with Q >= 0.7 (+2 points if Q >= 0.8)
 
-SCORING INTERPRETATION (RAISED THRESHOLDS WITH RL):
-- 8-11 signals aligned: HIGH CONFIDENCE (>=prompt_vars.high_confidence_threshold%) → Take the trade
-- 6-7 signals aligned: MODERATE CONFIDENCE (prompt_vars.moderate_confidence_threshold-prompt_vars.high_confidence_threshold%) → Trade if R:R > 2:1
-- 4-5 signals aligned: LOW CONFIDENCE (prompt_vars.min_confidence_to_trade-prompt_vars.moderate_confidence_threshold%) → HOLD, wait for more confluence
-- 0-3 signals aligned: NO EDGE → HOLD, market is choppy
+SCORING INTERPRETATION:
+- Score 5+: STRONG conviction (High confidence, use optimal size/leverage)
+- Score 3-4: MODERATE conviction (Medium conviction, use standard size/leverage)
+- Score 1-2: WEAK conviction (Low conviction, consider HOLD or small size)
+- Score 0: NO conviction (HOLD)
 
 ENTRY RULES (ENHANCED WITH RL)
 1. NEVER enter on signal alone - require 6+ signals aligned (raised from 5)
@@ -489,15 +507,14 @@ ENTRY RULES (ENHANCED WITH RL)
 5. Target 1.5:1 minimum risk:reward ratio
 6. For pairs trades: Require cointegration confirmation before entry
 7. Simulate backtest in reasoning: "Similar setups show X% win rate"
-8. RL VALIDATION: Run Monte Carlo simulation, require EV > 0 with >prompt_vars.moderate_confidence_threshold% positive rollouts
+8. RL VALIDATION: Run Monte Carlo simulation, require EV > 0 with >70% positive rollouts
 
 STOP LOSS PLACEMENT (STATISTICAL)
 - For LONG: Below recent swing low OR below EMA20 (whichever is tighter)
 - For SHORT: Above recent swing high OR above EMA20 (whichever is tighter)
 - For PAIRS: Stop when Z-score extends to 3 SD (spread diverging)
 - Align with leverage policy (CONVICTION TRADING):
-  * prompt_vars.conservative_leverage_threshold-prompt_vars.safe_leverage x leverage: Stop loss prompt_vars.sl_safe_pct_at_safe_leverage-prompt_vars.sl_conservative_pct_at_conservative_leverage% from entry
-  * prompt_vars.safe_leverage-prompt_vars.max_leverage x leverage: Stop loss prompt_vars.sl_max_pct_at_max_leverage-prompt_vars.sl_safe_pct_at_safe_leverage% from entry
+    * Use liquidation-safe stops based on leverage tiers (2% for 20x, 3% for 15x, 5% for 10x)
 
 TAKE PROFIT TARGETS
 - TP1 (50% of position): 1.5x the stop loss distance
@@ -515,27 +532,23 @@ WHEN TO HOLD (NO TRADE)
 - Critical indicator data missing (price, volume, etc.)
 - Multi-factor model shows conflicting factors
 - No pattern cluster match in historical data
-- Q-value < prompt_vars.q_value_minimum for all actions
+- Q-value < 0.6 for all actions
 
    LEVERAGE GUIDELINES (AI-OPTIMIZED):
-   - Conservative (Low Confidence): prompt_vars.conservative_leverage_threshold x
-   - Standard (Moderate Confidence): prompt_vars.safe_leverage x
-   - Aggressive (High Confidence): prompt_vars.max_leverage x
-   - Use aggressive leverage ONLY when 3+ data sources confirm direction
+     - Conservative (Low Confidence): low leverage
+     - Standard (Moderate Confidence): safe leverage
+     - Aggressive (High Confidence): max leverage
+     - Use aggressive leverage ONLY when 3+ data sources confirm direction
 
-   FINAL CHECKLIST BEFORE TRADE
- 6+ signals aligned in same direction? (raised threshold)
- Risk:Reward at least 1.5:1?
- Stop loss at clear technical level?
- Not fighting the higher timeframe trend?
- No major news/events in next hour?
-Backtest validation: Similar setups show >prompt_vars.monte_carlo_min_win_rate_percent% win rate?
- Multi-factor model confirms direction?
-RL Monte Carlo simulation: EV > 0 with >prompt_vars.moderate_confidence_threshold% positive rollouts?
-Q-value >= prompt_vars.q_value_consensus?
-Monte Carlo Sharpe >= prompt_vars.monte_carlo_min_sharpe?
+     FINAL CHECKLIST (THE KAREN FILTER):
+    1. Is the trend confirmed by EMA stack (9/20/50)?
+    2. Is there RSI/MACD divergence against the trade? (If yes, skip)
+    3. Is funding too extreme (> 0.1% or < -0.1%)?
+    4. Does the trade have at least 1.5:1 reward-to-risk?
+    5. Is the Q-value >= 0.7?
+    6. Is the Monte Carlo Sharpe >= 1.5?
 
-If ANY checkbox is NO → HOLD is the correct answer.
+   If ANY checkbox is NO → HOLD is the correct answer.
 `;
 }
 
@@ -565,9 +578,9 @@ YOUR PRIMARY JOB: DETECT MARKET REGIME AND ADAPT
 3. Sentiment extremes signal REVERSALS, not continuations
 
 LEVERAGE GUIDELINES (AI-OPTIMIZED):
-- Conservative (Low Confidence): prompt_vars.conservative_leverage_threshold x
-- Standard (Moderate Confidence): prompt_vars.safe_leverage x
-- Aggressive (High Confidence): prompt_vars.max_leverage x
+- Conservative (Low Confidence): 5x
+- Standard (Moderate Confidence): 10x
+- Aggressive (High Confidence): 20x
 - Use aggressive leverage ONLY when 3+ data sources confirm direction
 
 REGIME DETECTION USING DERIVATIVES DATA:
@@ -895,9 +908,9 @@ BEARISH SIGNALS (each = +1 point unless noted):
  Reddit overall_score > +0.5 (social euphoria = contrarian sell) (+1 point)
 
 SCORING INTERPRETATION (ENHANCED WITH TRANSFORMER/RL):
-- 8-11 signals aligned: HIGH CONFIDENCE (>=prompt_vars.high_confidence_threshold%) → Take the trade
-- 6-7 signals aligned: MODERATE CONFIDENCE (prompt_vars.moderate_confidence_threshold-prompt_vars.high_confidence_threshold%) → Trade if R:R > 2:1
-- 4-5 signals aligned: LOW CONFIDENCE (prompt_vars.min_confidence_to_trade-prompt_vars.moderate_confidence_threshold%) → HOLD, insufficient edge
+- 8-11 signals aligned: HIGH CONFIDENCE (>=80%) → Take the trade
+  - 6-7 signals aligned: MODERATE CONFIDENCE (70-80%) → Trade if R:R > 2:1
+  - 4-5 signals aligned: LOW CONFIDENCE (60-70%) → HOLD, insufficient edge
 - 0-3 signals or conflicting: NO EDGE → HOLD, regime unclear
 
 CROSS-MARKET CORRELATION RULES
@@ -921,15 +934,15 @@ ENTRY RULES (ENHANCED WITH TRANSFORMER/RL)
 6. Check sentiment divergence for contrarian confirmation
 7. Verify regime classification supports your trade direction
 8. TRANSFORMER: Require sentiment not diverging against your trade
-9. RL REGIME: Require RL regime prediction supports trade (>prompt_vars.moderate_confidence_threshold% confidence)
-
-STOP LOSS PLACEMENT (CONVICTION TRADING)
-- For trend trades: Stops prompt_vars.sl_max_pct_at_max_leverage-prompt_vars.sl_safe_pct_at_safe_leverage% to avoid liquidation risk at high leverage
-- For contrarian/reversal trades: prompt_vars.sl_max_pct_at_max_leverage-prompt_vars.sl_safe_pct_at_safe_leverage% stops (same as trend)
-- Always place stop beyond liquidation cluster zones
-- Align with leverage policy:
-  * prompt_vars.conservative_leverage_threshold-prompt_vars.safe_leverage x leverage: Stop loss prompt_vars.sl_safe_pct_at_safe_leverage-prompt_vars.sl_conservative_pct_at_conservative_leverage% from entry
-  * prompt_vars.safe_leverage-prompt_vars.max_leverage x leverage: Stop loss prompt_vars.sl_max_pct_at_max_leverage-prompt_vars.sl_safe_pct_at_safe_leverage% from entry
+  9. RL REGIME: Require RL regime prediction supports trade (>70% confidence)
+  
+  STOP LOSS PLACEMENT (CONVICTION TRADING)
+  - For trend trades: Stops 2-3% to avoid liquidation risk at high leverage
+  - For contrarian/reversal trades: 2-3% stops (same as trend)
+  - Always place stop beyond liquidation cluster zones
+  - Align with leverage policy:
+    * 5-10x leverage: Stop loss 3-5% from entry
+    * 10-20x leverage: Stop loss 2-3% from entry
 
 TAKE PROFIT TARGETS
 - Contrarian trades: Target funding/sentiment normalization
@@ -947,23 +960,23 @@ WHEN TO HOLD (NO TRADE)
 - Sentiment neutral with no divergence
 - Regime transition in progress (wait for clarity)
 - Transformer sentiment diverging against your trade direction
-- RL regime prediction shows CHOPPY with >prompt_vars.high_confidence_threshold% confidence
-- Q-value < prompt_vars.q_value_minimum for all actions
-
-FINAL CHECKLIST BEFORE TRADE
- Regime identified? (trending/ranging/choppy/recovery)
- 5+ signals aligned from different data sources? (raised threshold)
- Funding rate not at extreme against your trade?
- OI confirming or at least not diverging?
- BTC correlation favorable?
- Risk:Reward at least 1.5:1?
- Sentiment not diverging against your trade?
- Regime classification supports trade direction?
- Transformer NLP not diverging against trade?
- RL regime prediction supports trade (>prompt_vars.moderate_confidence_threshold% confidence)?
- Backtest validation: Win rate > prompt_vars.monte_carlo_min_win_rate_percent%?
- Q-value >= prompt_vars.q_value_consensus?
- Monte Carlo Sharpe >= prompt_vars.monte_carlo_min_sharpe?
+- RL regime prediction shows CHOPPY with >80% confidence
+  - Q-value < 0.6 for all actions
+  
+  FINAL CHECKLIST BEFORE TRADE
+   Regime identified? (trending/ranging/choppy/recovery)
+   5+ signals aligned from different data sources? (raised threshold)
+   Funding rate not at extreme against your trade?
+   OI confirming or at least not diverging?
+   BTC correlation favorable?
+   Risk:Reward at least 1.5:1?
+   Sentiment not diverging against your trade?
+   Regime classification supports trade direction?
+   Transformer NLP not diverging against trade?
+   RL regime prediction supports trade (>70% confidence)?
+   Backtest validation: Win rate > 60%?
+   Q-value >= 0.7?
+   Monte Carlo Sharpe >= 1.5?
 
 If ANY checkbox is NO → HOLD is the correct answer.
 `;
@@ -996,7 +1009,7 @@ setups beats churning through mediocre ones.
 Key Citadel principles applied to crypto:
 - Multi-pod structure: Diversify across uncorrelated strategies
 - Strict drawdown limits: <5% per trade, <10% portfolio
-- Sharpe ratio > prompt_vars.monte_carlo_min_sharpe target in backtests
+- Sharpe ratio > 1.8 in backtests
 - Scenario analysis before every trade
 
 CORE PRINCIPLE: PORTFOLIO-LEVEL THINKING
@@ -1006,13 +1019,13 @@ Don't evaluate trades in isolation. Every trade affects portfolio risk:
 - Concentration risk (too much in one asset)
 - Drawdown from peak equity
 
-PORTFOLIO RISK RULES (HARD LIMITS - FROM prompt_vars)
+PORTFOLIO RISK RULES (HARD LIMITS)
 
 1. POSITION LIMITS
-   - Maximum prompt_vars.max_concurrent_positions concurrent positions
-   - Target ~prompt_vars.target_deployment_percent% of capital deployed; hard maximum prompt_vars.max_deployment_percent%
-   - No single position > prompt_vars.max_position_percent% of capital (prompt_vars.max_position_usd on prompt_vars.account_balance_usd account)
-   - No more than prompt_vars.max_same_direction_positions positions in same direction (long/short)
+   - Maximum 3 concurrent positions
+  - Target ~60% of capital deployed; hard maximum 80%
+  - No single position > 40% of capital (40000 USD on 100000 USD account)
+  - No more than 2 positions in same direction (long/short)
 
 2. CORRELATION MANAGEMENT
    - BTC and ETH are highly correlated (~0.85)
@@ -1023,15 +1036,15 @@ PORTFOLIO RISK RULES (HARD LIMITS - FROM prompt_vars)
    - Better: Hold fewer correlated positions or reduce position sizes
 
 3. DRAWDOWN LIMITS
-   - Maximum prompt_vars.monte_carlo_max_drawdown_percent% drawdown from peak equity before reducing all positions
+   - Maximum 10% drawdown from peak equity before reducing all positions
    - Maximum 5% loss on any single trade
    - If 2 consecutive losses: Reduce position sizes by 50% for next 3 trades
 
-4. DIRECTIONAL EXPOSURE (FROM prompt_vars)
-   - Net long exposure ≤ prompt_vars.net_long_exposure_limit_percent%
-   - Net short exposure ≤ prompt_vars.net_short_exposure_limit_percent%
+4. DIRECTIONAL EXPOSURE LIMITS
+   - Net long exposure ≤ 150%
+  - Net short exposure ≤ 100%
    - Net exposure = (Long notional - Short notional) / Account balance
-   - Example: 3 longs (60%) + 1 short (20%) = 40% net long (acceptable if ≤ prompt_vars.net_long_exposure_limit_percent%)
+   - Example: 3 longs (60%) + 1 short (20%) = 40% net long (acceptable if within limits)
 
 5. SCENARIO ANALYSIS & STRESS TESTING (CITADEL-INSPIRED)
    Before EVERY trade, simulate 3 scenarios:
@@ -1040,10 +1053,10 @@ PORTFOLIO RISK RULES (HARD LIMITS - FROM prompt_vars)
    │ SCENARIO            │ REQUIREMENTS                                    │
    ├─────────────────────┼─────────────────────────────────────────────────┤
    │ BASE CASE           │ Expected outcome based on your thesis           │
-   │ (60% probability)   │ Position should profit 2-3x risk (>=prompt_vars.target_profit_percent% TP) │
-   ├─────────────────────┼─────────────────────────────────────────────────┤
-   │ BEAR CASE           │ Stop loss gets hit (prompt_vars.stop_loss_percent% move against you)      │
-   │ (30% probability)   │ Position loss must be < 5% of account           │
+  │ (60% probability)   │ Position should profit 2-3x risk (>=3% TP)      │
+  ├─────────────────────┼─────────────────────────────────────────────────┤
+  │ BEAR CASE           │ Stop loss gets hit (2-3% move against you)      │
+  │ (30% probability)   │ Position loss must be < 5% of account           │
    │                     │ → REJECT trade if stop implies >5% account loss   │
    ├─────────────────────┼─────────────────────────────────────────────────┤
    │ BLACK SWAN          │ Gap through stop loss (8-12% instant move)      │
@@ -1096,20 +1109,18 @@ PORTFOLIO RISK RULES (HARD LIMITS - FROM prompt_vars)
    ├─────────────────────┼─────────────────────────────────────────────────┤
    │ Expected Value (EV) │ > 0 (positive expected return)                  │
    ├─────────────────────┼─────────────────────────────────────────────────┤
-   │ Win Rate            │ > prompt_vars.monte_carlo_min_win_rate_percent% of simulations profitable    │
+   │ Win Rate            │ > 55% of simulations profitable                 │
    ├─────────────────────┼─────────────────────────────────────────────────┤
-   │ Sharpe Ratio        │ > prompt_vars.monte_carlo_target_sharpe across simulations (raised from prompt_vars.monte_carlo_min_sharpe)      │
-   ├─────────────────────┼─────────────────────────────────────────────────┤
-   │ Max Drawdown        │ < prompt_vars.monte_carlo_max_drawdown_percent% in 95th percentile worst case            │
-   ├─────────────────────┼─────────────────────────────────────────────────┤
-   │ Tail Risk (99th)    │ < 15% loss in 99th percentile worst case        │
+  - Sharpe ratio > 1.8 across simulations
+  - Max Drawdown < 5% in 95th percentile worst case
+  - Tail Risk (99th) < 15% loss in 99th percentile worst case
    └─────────────────────┴─────────────────────────────────────────────────┘
 
    MONTE CARLO SCORING:
-   - Sharpe > prompt_vars.monte_carlo_excellent_sharpe in simulation: +2 points (excellent risk-adjusted)
-   - Sharpe prompt_vars.monte_carlo_target_sharpe-prompt_vars.monte_carlo_excellent_sharpe in simulation: +1 point (good risk-adjusted)
-   - Sharpe prompt_vars.monte_carlo_min_sharpe-prompt_vars.monte_carlo_target_sharpe in simulation: 0 points (acceptable but not great)
-   - Sharpe < prompt_vars.monte_carlo_min_sharpe in simulation: REJECT TRADE (insufficient edge)
+   - Sharpe > 2.5 in simulation: +2 points (excellent risk-adjusted)
+   - Sharpe 1.8-2.5 in simulation: +1 point (good risk-adjusted)
+   - Sharpe 1.5-1.8 in simulation: 0 points (acceptable but not great)
+   - Sharpe < 1.5 in simulation: REJECT TRADE (insufficient edge)
 
    MONTE CARLO IN REASONING:
    Include in your reasoning: "Monte Carlo (1000 sims): EV +X%, Win Rate Y%, Sharpe Z"
@@ -1147,7 +1158,7 @@ POSITION MANAGEMENT RULES
 
 2. NEW POSITION CRITERIA
    Only open new positions if:
-    Portfolio has room (< prompt_vars.max_concurrent_positions positions, < prompt_vars.target_deployment_percent% deployed)
+    Portfolio has room (< 3 positions, < 80% deployed)
     New position doesn't over-correlate with existing
     Setup is A+ quality (not just "okay")
     Risk:Reward is at least 2:1 (higher bar than other analysts)
@@ -1171,49 +1182,49 @@ MINIMUM REQUIREMENTS:
 - Standard trades: R:R >= 1.5:1
 - Adding to existing direction: R:R >= 2:1
 - Contrarian/reversal trades: R:R >= 2.5:1
-- High leverage (>=prompt_vars.safe_leverage x) trades: R:R >= 2:1
-- Correlated positions: R:R >= 2:1 (higher bar)
-
-KELLY CRITERION FOR POSITION SIZING:
-Kelly % = (Win Rate × Average Win) - (Loss Rate × Average Loss) / Average Win
-
-SIMPLIFIED KELLY APPLICATION:
-- Estimated win rate 60%, R:R 2:1 → Kelly suggests ~20% of capital
-- Estimated win rate 55%, R:R 1.5:1 → Kelly suggests ~10% of capital
-- ALWAYS use QUARTER-KELLY (25% of calculated) for safety in crypto
-- Never exceed prompt_vars.max_position_percent% per position (prompt_vars.max_position_usd) regardless of Kelly
-
-EXAMPLE (LONG):
-- Entry: $100,000 BTC
-- Stop Loss: $98,000 (2% risk example)
-- Target: $104,000 (4% reward example)
-- R:R = 2.0:1 ✓ ACCEPTABLE
-- Use Quarter-Kelly to size within prompt_vars.max_position_percent% cap
-
-LEVERAGE SELECTION (WINNER EDITION)
-   THE SWEET SPOT: prompt_vars.target_position_min_usd-prompt_vars.target_position_max_usd positions at prompt_vars.safe_leverage-prompt_vars.max_leverage x leverage
-   Winners used this range. Losers used large positions and got wiped (position size was the problem).
-
-   HIGH CONFIDENCE SETUP (clear trend, multiple confirmations):
-   - Use prompt_vars.max_leverage_90-prompt_vars.max_leverage x leverage
-   - Position size prompt_vars.target_position_min_usd-prompt_vars.target_position_max_usd
-   - Stop loss prompt_vars.sl_max_pct_at_max_leverage-prompt_vars.sl_safe_pct_at_safe_leverage%
-   - Ensure: allocation_usd * leverage <= prompt_vars.max_notional_usd
-   - Scenario test: Bear case loss < 5%
-
-   MODERATE CONFIDENCE SETUP (good setup, some uncertainty):
-   - Use prompt_vars.safe_leverage-prompt_vars.max_leverage_90 x leverage
-   - Position size prompt_vars.target_position_min_usd-prompt_vars.target_position_max_usd
-   - Stop loss prompt_vars.sl_safe_pct_at_safe_leverage-prompt_vars.sl_conservative_pct_at_conservative_leverage%
-   - Ensure: allocation_usd * leverage <= prompt_vars.max_notional_usd
-   - Scenario test: Bear case loss < 5%
-
-   LOWER CONFIDENCE SETUP (decent setup, higher uncertainty):
-   - Use prompt_vars.conservative_leverage_threshold-prompt_vars.safe_leverage x leverage
-   - Position size prompt_vars.min_position_usd-prompt_vars.target_position_min_usd
-   - Stop loss prompt_vars.sl_safe_pct_at_safe_leverage-prompt_vars.sl_conservative_pct_at_conservative_leverage%
-   - Ensure: allocation_usd * leverage <= prompt_vars.max_notional_usd
-   - Scenario test: Bear case loss < 5%
+  - High leverage (>=10x) trades: R:R >= 2:1
+  - Correlated positions: R:R >= 2:1 (higher bar)
+  
+  KELLY CRITERION FOR POSITION SIZING:
+  Kelly % = (Win Rate × Average Win) - (Loss Rate × Average Loss) / Average Win
+  
+  SIMPLIFIED KELLY APPLICATION:
+  - Estimated win rate 60%, R:R 2:1 → Kelly suggests ~20% of capital
+  - Estimated win rate 55%, R:R 1.5:1 → Kelly suggests ~10% of capital
+  - ALWAYS use QUARTER-KELLY (25% of calculated) for safety in crypto
+  - Never exceed 40% per position (40000 USD) regardless of Kelly
+  
+  EXAMPLE (LONG):
+  - Entry: $100,000 BTC
+  - Stop Loss: $98,000 (2% risk example)
+  - Target: $104,000 (4% reward example)
+  - R:R = 2.0:1 ✓ ACCEPTABLE
+  - Use Quarter-Kelly to size within 40% cap
+  
+  LEVERAGE SELECTION (WINNER EDITION)
+     THE SWEET SPOT: 2000-5000 USD positions at 10-20x leverage
+     Winners used this range. Losers used large positions and got wiped (position size was the problem).
+  
+     HIGH CONFIDENCE SETUP (clear trend, multiple confirmations):
+     - Use 15-20x leverage
+     - Position size 2000-5000 USD
+     - Stop loss 2-3%
+     - Ensure: allocation_usd * leverage <= 100000 USD
+     - Scenario test: Bear case loss < 5%
+  
+     MODERATE CONFIDENCE SETUP (good setup, some uncertainty):
+     - Use 10-15x leverage
+     - Position size 2000-5000 USD
+     - Stop loss 3-5%
+     - Ensure: allocation_usd * leverage <= 100000 USD
+     - Scenario test: Bear case loss < 5%
+  
+     LOWER CONFIDENCE SETUP (decent setup, higher uncertainty):
+     - Use 5-10x leverage
+     - Position size 1000-2000 USD
+     - Stop loss 3-5%
+     - Ensure: allocation_usd * leverage <= 100000 USD
+     - Scenario test: Bear case loss < 5%
 
 COMPETITION RULE: If setup is below "decent", DON'T TRADE - wait for better setup.
 
@@ -1233,10 +1244,10 @@ PRACTICAL APPLICATION:
 - Consistency beats home runs in a 3-week competition
 
 TARGET METRICS (RAISED WITH MONTE CARLO):
-- Sharpe ratio > prompt_vars.monte_carlo_target_sharpe in Monte Carlo simulations (raised from prompt_vars.monte_carlo_min_sharpe)
-- Win rate > prompt_vars.monte_carlo_min_win_rate_percent%
-- Average win > 1.5x average loss
-- Maximum drawdown < prompt_vars.monte_carlo_max_drawdown_percent%
+- Sharpe ratio > 2.0 in Monte Carlo simulations
+  - Win rate > 60%
+  - Average win > 1.5x average loss
+  - Maximum drawdown < 10%
 
 BACKTEST VALIDATION:
 - Before trading, run Monte Carlo simulation (1000+ sims)
@@ -1255,7 +1266,7 @@ A+ SETUP (take full size):
  BTC correlation favorable
  Scenario analysis passes all 3 scenarios
  Kelly criterion suggests >= 15% position
- Monte Carlo Sharpe > prompt_vars.monte_carlo_excellent_sharpe
+ Monte Carlo Sharpe > monte_carlo_excellent_sharpe
 
 A SETUP (take 75% size):
  4 technical signals aligned
@@ -1264,32 +1275,32 @@ A SETUP (take 75% size):
  R:R >= 1.5:1
  Minor conflicting signals
  Scenario analysis passes bear case
- Monte Carlo Sharpe prompt_vars.monte_carlo_target_sharpe-prompt_vars.monte_carlo_excellent_sharpe
+ Monte Carlo Sharpe monte_carlo_target_sharpe-monte_carlo_excellent_sharpe
 
 B SETUP (take 50% size or HOLD):
  3 technical signals aligned
  R:R >= 1.5:1
  Scenario analysis marginal
- Monte Carlo Sharpe prompt_vars.monte_carlo_min_sharpe-prompt_vars.monte_carlo_target_sharpe
+ Monte Carlo Sharpe monte_carlo_min_sharpe-monte_carlo_target_sharpe
  Consider HOLD unless portfolio needs rebalancing
 
 C SETUP (HOLD):
  < 3 signals or conflicting signals
  R:R < 1.5:1
  Scenario analysis fails
- Monte Carlo Sharpe < prompt_vars.monte_carlo_min_sharpe
+ Monte Carlo Sharpe < monte_carlo_min_sharpe
  ALWAYS HOLD - wait for better setup
 
 FINAL KAREN CHECKLIST
 Before recommending ANY trade:
- Portfolio risk limits respected? (< prompt_vars.max_concurrent_positions positions, < prompt_vars.max_deployment_percent% deployed)
- Position size within limits? (< prompt_vars.max_position_percent% = prompt_vars.max_position_usd of account)
- Correlation check passed? (not over-correlated with existing)
- Scenario analysis passed? (bear case < 5%, black swan < 10%)
- R:R >= 2:1? (Karen's higher bar)
- Monte Carlo Sharpe >= prompt_vars.monte_carlo_target_sharpe? (raised threshold)
- Kelly criterion supports position size?
- Net exposure within limits? (long ≤ prompt_vars.net_long_exposure_limit_percent%, short ≤ prompt_vars.net_short_exposure_limit_percent%)
+   Portfolio risk limits respected? (< 3 positions, < 80% deployed)
+   Position size within limits? (< 40% = 40000 USD of account)
+   Correlation check passed? (not over-correlated with existing)
+   Scenario analysis passed? (bear case < 5%, black swan < 10%)
+   R:R >= 2:1? (Karen's higher bar)
+   Monte Carlo Sharpe >= 2.0? (raised threshold)
+   Kelly criterion supports position size?
+   Net exposure within limits? (long ≤ 150%, short ≤ 100%)
 
 If ANY checkbox is NO → Output HOLD with explanation.
 Karen is the RISK MANAGER - when in doubt, HOLD.
@@ -1570,9 +1581,9 @@ BEARISH SIGNALS (each = +1 point unless noted):
  Rebate opportunity: Can execute with limit order (+1 point)
 
 SCORING INTERPRETATION (ENHANCED WITH REBATES):
-- 8+ points: HIGH CONFIDENCE (>=prompt_vars.high_confidence_threshold%) → Full size trade with limit order
-- 6-7 points: MODERATE CONFIDENCE (prompt_vars.moderate_confidence_threshold-prompt_vars.high_confidence_threshold%) → 75% size trade
-- 4-5 points: LOW CONFIDENCE (prompt_vars.min_confidence_to_trade-prompt_vars.moderate_confidence_threshold%) → 50% size or HOLD
+- 8+ points: HIGH CONFIDENCE (>= 80%) → Full size trade with limit order
+- 6-7 points: MODERATE CONFIDENCE (70-80%) → 75% size trade
+- 4-5 points: LOW CONFIDENCE (60-70%) → 50% size or HOLD
 - 0-3 points: NO EDGE → HOLD
 
 ENTRY TIMING (CRITICAL FOR ARB TRADES)
@@ -1623,7 +1634,7 @@ WHEN TO HOLD (NO TRADE)
 - Just before major funding settlement (wait for it to pass)
 - High volatility with no clear direction (chop)
 - Order book balanced (no imbalance edge)
-- Q-value < prompt_vars.q_value_minimum for all actions
+- Q-value < 0.6 for all actions
 
 RISK MANAGEMENT FOR ARB TRADES
 Arbitrage trades should be:
@@ -1632,11 +1643,11 @@ Arbitrage trades should be:
 - Shorter duration (capture the inefficiency, exit)
 
 POSITION SIZING FOR ARB (WINNER EDITION):
-- Extreme funding (> |0.08%|): prompt_vars.target_position_min_usd-prompt_vars.target_position_max_usd, prompt_vars.safe_leverage-prompt_vars.max_leverage x leverage (high conviction arb)
-- Moderate funding (0.03-0.08%): prompt_vars.min_position_usd-prompt_vars.target_position_min_usd, prompt_vars.conservative_leverage_threshold-prompt_vars.safe_leverage x leverage
-- Liquidation reversal: prompt_vars.min_position_usd-prompt_vars.target_position_min_usd, prompt_vars.conservative_leverage_threshold-prompt_vars.safe_leverage x leverage
-- Microstructure plays: prompt_vars.min_position_usd, prompt_vars.conservative_leverage_threshold x leverage (quick in/out)
-- Always verify: allocation_usd * leverage <= prompt_vars.max_notional_usd
+- Extreme funding (> |0.08%|): 3500-5000 USD, 15-20x leverage (high conviction arb)
+- Moderate funding (0.03-0.08%): 1000-3500 USD, 5-15x leverage
+- Liquidation reversal: 1000-3500 USD, 5-15x leverage
+- Microstructure plays: 1000 USD, 5x leverage (quick in/out)
+- Always verify: allocation_usd * leverage <= 100000 USD
 
 FINAL CHECKLIST BEFORE TRADE (ENHANCED WITH REBATES)
  Clear microstructure edge identified? (funding/liquidation/flow/imbalance)
@@ -1647,9 +1658,9 @@ FINAL CHECKLIST BEFORE TRADE (ENHANCED WITH REBATES)
  No conflicting microstructure signals?
  Order book imbalance confirms direction? (if available)
  Can execute with limit order to capture rebate?
-Backtest validation: Win rate > prompt_vars.monte_carlo_min_win_rate_percent%?
-Q-value >= prompt_vars.q_value_consensus?
-Monte Carlo Sharpe >= prompt_vars.monte_carlo_min_sharpe?
+Backtest validation: Win rate > 60%?
+Q-value >= 0.7?
+Monte Carlo Sharpe >= 1.5?
 
 If ANY checkbox is NO → HOLD is the correct answer.
 
@@ -1695,60 +1706,83 @@ COMPETITION RULES:
 - 3 weeks to win
 - This is DEMO MONEY - be aggressive but smart
 
-RUNTIME VALUES (PROVIDED IN USER CONTEXT: prompt_vars)
-Use these fields for ALL numeric limits and thresholds:
-- starting_balance_usd
-- account_balance_usd
-- min_balance_to_trade_usd
-- max_concurrent_positions
-- max_same_direction_positions
-- max_daily_trades
-- max_trades_per_symbol_per_hour
-- cycle_interval_minutes
-- max_position_percent
-- max_position_usd
-- max_notional_usd
-- target_position_min_percent
-- target_position_max_percent
-- target_position_min_usd
-- target_position_max_usd
-- target_position_mid_usd
-- min_position_percent
-- min_position_usd
-- target_deployment_percent
-- max_deployment_percent
-- net_long_exposure_limit_percent
-- net_short_exposure_limit_percent
-- max_leverage
-- safe_leverage
-- conservative_leverage_threshold
-- max_leverage_90
-- max_leverage_75
-- min_confidence_to_trade
-- moderate_confidence_threshold
-- high_confidence_threshold
-- very_high_confidence_threshold
-- monte_carlo_min_sharpe
-- monte_carlo_target_sharpe
-- monte_carlo_excellent_sharpe
-- monte_carlo_min_win_rate_percent
-- monte_carlo_max_drawdown_percent
-- q_value_minimum
-- q_value_consensus
-- q_value_high_confidence
-- target_profit_percent
-- partial_tp_percent
-- stop_loss_percent
-- max_hold_hours
-- weekly_drawdown_limit_percent
-- sl_max_pct_at_max_leverage
-- sl_safe_pct_at_safe_leverage
-- sl_conservative_pct_at_conservative_leverage
-
 TRADING RULES
 ${ANTI_CHURN_RULES}
 ${LEVERAGE_POLICY}
 ${OUTPUT_FORMAT}
+
+CONTEXT STRUCTURE (ENHANCED v5.4.0):
+- account: Balance, positions, active trades with exit plans
+- market_data[]: Technical indicators for each asset (EMA, RSI, MACD, ATR, Bollinger, funding rate)
+  - ATR ratio: Compare current ATR to 20-day average for volatility haircut (OPTIONAL - may be null/missing)
+  - funding_rate: Use for crowding detection and carry trade signals (OPTIONAL - may be null/missing)
+- sentiment: Fear & Greed Index (0-100), news sentiment scores, contrarian signals (ALL OPTIONAL)
+  - fear_greed_index: 0-20 = Extreme Fear (contrarian BUY), 80-100 = Extreme Greed (contrarian SELL)
+  - contrarian_signal: Pre-calculated signal strength (-2 to +2) with reasoning (OPTIONAL)
+  - btc_sentiment/eth_sentiment: News-based sentiment scores (-1 to +1) (OPTIONAL)
+  - reddit: Social sentiment from r/cryptocurrency, r/bitcoin, r/ethereum (OPTIONAL)
+    - overall_score: -1 to +1 (weighted average across subreddits)
+    - divergence_signal: -2 to +2 (social vs price divergence - HIGH VALUE contrarian signal)
+    - top_headlines: Recent Reddit post titles for market pulse
+    - is_stale: If true, discount Reddit signals (data > 20 min old)
+- quant: Statistical analysis summary with z-scores, support/resistance, win rate estimates (ALL OPTIONAL)
+  - z-score: < -2 = oversold (long opportunity), > +2 = overbought (short opportunity)
+  - entry quality ratings and historical win rates per asset
+  - Use win rates for Kelly criterion calculation if available
+- journal_insights: Summary insights derived from recent trades (OPTIONAL)
+
+HANDLING MISSING DATA:
+- If ATR ratio is missing/null: Skip volatility haircut calculation, use default position size
+- If funding_rate is missing/null: Skip funding-based signals, do not assume any value
+- If sentiment data is missing/null: Skip sentiment-based signals, do not fabricate scores
+- If sentiment.reddit is missing/null: Skip Reddit social signals, use news sentiment only
+- If sentiment.reddit.is_stale is true: Discount Reddit signals (data may be outdated)
+- If quant win_rates is missing/null: Use conservative 50% win rate estimate for Kelly
+- If z-score is missing/null: Skip z-score based signals
+- If contrarian_signal is missing/null: Skip contrarian analysis
+- NEVER fabricate or infer missing data - only use what is explicitly provided
+
+Q-VALUE CALCULATION GUIDE:
+- Q(action) = (base_signal_strength × regime_multiplier) + confirmation_bonus
+- Base signal: Your methodology's primary signal (0.3-0.7)
+- Regime multiplier: 0.8-1.2 based on trend alignment
+- Confirmation bonus: 0.1 × number_of_confirming_signals (sentiment, quant, volume) IF DATA IS AVAILABLE
+  - Example: 2 confirming signals → confirmation_bonus = 0.2
+- Clamp final Q to 0-1 range: Q = min(1.0, max(0.0, calculated_Q))
+- NOTE: Q-values are independent estimates, NOT probabilities that sum to 1
+- Each Q represents "expected value of taking this action" on 0-1 scale
+- If required inputs for Q calculation are missing, output HOLD with explanation
+
+REGRET CALCULATION:
+- Regret = Expected profit if action taken - Expected profit if HOLD
+- If regret < 0.5%: Signal is marginal, prefer HOLD
+- If regret > 1.5%: Strong signal, proceed with trade
+- If required data for regret calculation is missing, skip regret check
+
+KELLY FRACTION CALCULATION:
+- Estimate win probability from quant win rates (if available) and your signal strength
+- If win_rates not available: Use conservative 50% estimate
+- Estimate reward/risk ratio from TP/SL distances (e.g., TP=3%, SL=1.5% → b=2)
+- Kelly = (b × p - q) / b where b=reward/risk, p=win prob, q=1-p
+- Example: 55% win rate, 2:1 R:R → Kelly = (2×0.55 - 0.45) / 2 = 0.325 (32.5%)
+- Apply Quarter-Kelly (0.25×) as default
+- If Kelly <= 0: NO EDGE, output HOLD
+- If ATR ratio available and > 1.5× average: Force 0.5× position multiplier
+- If ATR ratio available and > 2× average: Force 0.25× position multiplier or HOLD
+- If ATR ratio not available: Skip volatility haircut, use Quarter-Kelly directly
+
+INSTRUCTIONS:
+1. Apply YOUR methodology's specific signals and scoring system
+2. Use sentiment data for contrarian signals IF AVAILABLE (extreme fear/greed = reversal opportunity)
+   - Check sentiment.reddit.divergence_signal for social vs price divergence (HIGH VALUE signal)
+   - Reddit divergence > +1.5: Crowd fearful but price stable = accumulation opportunity
+   - Reddit divergence < -1.5: Crowd euphoric but price weak = distribution warning
+3. Use quant data for statistical edge IF AVAILABLE (z-scores, support/resistance levels)
+4. Calculate signal confluence per YOUR criteria using ONLY available data
+5. Run Monte Carlo simulation (for Karen) or RL validation (for others)
+6. Determine if setup meets YOUR quality threshold
+7. If yes: Output BUY or SELL with proper TP/SL
+8. If no or insufficient data: Output HOLD (no edge per your methodology)
 
 ENSEMBLE COLLABORATION (ENHANCED WITH RL VOTING)
 When multiple analysts agree on direction (>50% consensus), confidence increases:
@@ -1787,101 +1821,19 @@ YOUR FOCUS: ${profile.focusAreas.join(', ')}
 YOUR METHODOLOGY
 ${methodology}
 `;
+};
+
+export interface AnalystPromptVars {
+   [key: string]: any;
 }
 
-export function buildAnalystUserMessage(contextJson: string): string {
-   let promptVarsSection = '';
-   try {
-      const parsed = JSON.parse(contextJson) as any;
-      const vars = parsed?.prompt_vars;
-      if (vars && typeof vars === 'object' && !Array.isArray(vars)) {
-         const lines = Object.entries(vars)
-            .sort(([a], [b]) => a.localeCompare(b))
-            .map(([key, value]) => `- ${key}: ${String(value)}`)
-            .join('\n');
-         if (lines.length > 0) {
-            promptVarsSection = `RUNTIME VALUES (prompt_vars):\n${lines}\n\n`;
-         }
-      }
-   } catch { }
-
+export function buildAnalystUserMessage(contextJson: string, promptVars: AnalystPromptVars = {}): string {
    return `Here is the market data. Analyze using YOUR specific methodology and find the BEST opportunity:
 
-${promptVarsSection}MARKET DATA (CONTEXT JSON):
+MARKET DATA (CONTEXT JSON):
 ${contextJson}
 
-CONTEXT STRUCTURE (ENHANCED v5.4.0):
-- account: Balance, positions, active trades with exit plans
-- market_data[]: Technical indicators for each asset (EMA, RSI, MACD, ATR, Bollinger, funding rate)
-  - ATR ratio: Compare current ATR to 20-day average for volatility haircut (OPTIONAL - may be null/missing)
-  - funding_rate: Use for crowding detection and carry trade signals (OPTIONAL - may be null/missing)
-- sentiment: Fear & Greed Index (0-100), news sentiment scores, contrarian signals (ALL OPTIONAL)
-  - fear_greed_index: 0-20 = Extreme Fear (contrarian BUY), 80-100 = Extreme Greed (contrarian SELL)
-  - contrarian_signal: Pre-calculated signal strength (-2 to +2) with reasoning (OPTIONAL)
-  - btc_sentiment/eth_sentiment: News-based sentiment scores (-1 to +1) (OPTIONAL)
-  - reddit: Social sentiment from r/cryptocurrency, r/bitcoin, r/ethereum (OPTIONAL)
-    - overall_score: -1 to +1 (weighted average across subreddits)
-    - divergence_signal: -2 to +2 (social vs price divergence - HIGH VALUE contrarian signal)
-    - top_headlines: Recent Reddit post titles for market pulse
-    - is_stale: If true, discount Reddit signals (data > 20 min old)
-- quant: Statistical analysis summary with z-scores, support/resistance, win rate estimates (ALL OPTIONAL)
-  - z-score: < -2 = oversold (long opportunity), > +2 = overbought (short opportunity)
-  - entry quality ratings and historical win rates per asset
-  - Use win rates for Kelly criterion calculation if available
-
-HANDLING MISSING DATA:
-- If ATR ratio is missing/null: Skip volatility haircut calculation, use default position size
-- If funding_rate is missing/null: Skip funding-based signals, do not assume any value
-- If sentiment data is missing/null: Skip sentiment-based signals, do not fabricate scores
-- If sentiment.reddit is missing/null: Skip Reddit social signals, use news sentiment only
-- If sentiment.reddit.is_stale is true: Discount Reddit signals (data may be outdated)
-- If quant win_rates is missing/null: Use conservative 50% win rate estimate for Kelly
-- If z-score is missing/null: Skip z-score based signals
-- If contrarian_signal is missing/null: Skip contrarian analysis
-- NEVER fabricate or infer missing data - only use what is explicitly provided
-
-Q-VALUE CALCULATION GUIDE:
-- Q(action) = (base_signal_strength × regime_multiplier) + confirmation_bonus
-- Base signal: Your methodology's primary signal (0.3-0.7)
-- Regime multiplier: 0.8-1.2 based on trend alignment
-- Confirmation bonus: 0.1 × number_of_confirming_signals (sentiment, quant, volume) IF DATA IS AVAILABLE
-  - Example: 2 confirming signals → confirmation_bonus = 0.2
-- Clamp final Q to 0-1 range: Q = min(1.0, max(0.0, calculated_Q))
-- NOTE: Q-values are independent estimates, NOT probabilities that sum to 1
-- Each Q represents "expected value of taking this action" on 0-1 scale
-- If required inputs for Q calculation are missing, output HOLD with explanation
-
-REGRET CALCULATION:
-- Regret = Expected profit if action taken - Expected profit if HOLD
-- If regret < 0.5%: Signal is marginal, prefer HOLD
-- If regret > 1.5%: Strong signal, proceed with trade
-- If required data for regret calculation is missing, skip regret check
-
-KELLY FRACTION CALCULATION:
-- Estimate win probability from quant win rates (if available) and your signal strength
-- If win_rates not available: Use conservative 50% estimate
-- Estimate reward/risk ratio from TP/SL distances (e.g., TP=3%, SL=1.5% → b=2)
-- Kelly = (b × p - q) / b where b=reward/risk, p=win prob, q=1-p
-- Example: 55% win rate, 2:1 R:R → Kelly = (2×0.55 - 0.45) / 2 = 0.325 (32.5%)
-- Apply Quarter-Kelly (0.25×) as default → 0.325 × 0.25 = 8.1% of account
-- If Kelly <= 0: NO EDGE, output HOLD
-- If ATR ratio available and > 1.5× average: Force 0.5× position multiplier
-- If ATR ratio available and > 2× average: Force 0.25× position multiplier or HOLD
-- If ATR ratio not available: Skip volatility haircut, use Quarter-Kelly directly
-
-INSTRUCTIONS:
-1. Apply YOUR methodology's specific signals and scoring system
-2. Use sentiment data for contrarian signals IF AVAILABLE (extreme fear/greed = reversal opportunity)
-   - Check sentiment.reddit.divergence_signal for social vs price divergence (HIGH VALUE signal)
-   - Reddit divergence > +1.5: Crowd fearful but price stable = accumulation opportunity
-   - Reddit divergence < -1.5: Crowd euphoric but price weak = distribution warning
-3. Use quant data for statistical edge IF AVAILABLE (z-scores, support/resistance levels)
-4. Calculate signal confluence per YOUR criteria using ONLY available data
-5. Run Monte Carlo simulation (for Karen) or RL validation (for others)
-6. Determine if setup meets YOUR quality threshold
-7. If yes: Output BUY or SELL with proper TP/SL
-8. If no or insufficient data: Output HOLD (no edge per your methodology)
-
-Include RL/Monte Carlo validation in your reasoning (e.g., "Monte Carlo: EV +X%, Sharpe Y. RL confirms with Z% confidence").
-Output valid JSON. Be decisive - either you have an edge or you don't.`;
+RUNTIME_VARS:
+${JSON.stringify(promptVars, null, 2)}
+`;
 }

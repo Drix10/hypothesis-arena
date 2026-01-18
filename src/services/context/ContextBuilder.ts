@@ -218,7 +218,6 @@ export class ContextBuilder {
     private prisma: PrismaClient;
     private invocationCount: number = 0;
     private readonly MAX_INVOCATION_COUNT = Number.MAX_SAFE_INTEGER - 1;
-    private lastInvocationTime: number = 0;
 
     constructor(prisma: PrismaClient) {
         if (!prisma) {
@@ -230,6 +229,11 @@ export class ContextBuilder {
 
     /**
      * Build full context object for analysts
+     * 
+     * @param accountBalance - Current available balance in USDT
+     * @param positions - Current open positions from exchange
+     * @param marketDataFetcher - Callback to fetch ticker data for symbols
+     * @param options - Optional flags for conditional fetching
      */
     async buildContext(
         accountBalance: number,
@@ -251,44 +255,67 @@ export class ContextBuilder {
             change24h: number;
             fundingRate: number;
             openInterest: number | null;
-        }>
+        }>,
+        options: {
+            forceFreshSentiment?: boolean;
+            skipJournal?: boolean;
+            skipQuant?: boolean;
+        } = {}
     ): Promise<TradingContext> {
-        // FIXED: Validate accountBalance to prevent NaN propagation
+        const startTime = Date.now();
         const safeAccountBalance = Number.isFinite(accountBalance) && accountBalance >= 0
             ? accountBalance
             : 0;
 
-        if (!Number.isFinite(accountBalance) || accountBalance < 0) {
-            logger.warn(`Invalid accountBalance received: ${accountBalance}, using 0`);
-        }
-
         if (this.invocationCount >= this.MAX_INVOCATION_COUNT) {
-            logger.warn('Invocation count approaching overflow, resetting to 0');
             this.invocationCount = 0;
         }
         this.invocationCount++;
 
-        const now = Date.now();
-        const timeSinceLastInvocation = now - this.lastInvocationTime;
-        if (this.lastInvocationTime > 0 && timeSinceLastInvocation < 100) {
-            logger.warn(`Rapid context building detected: ${timeSinceLastInvocation}ms since last invocation`);
-        }
-        this.lastInvocationTime = now;
-
         const currentTime = new Date().toISOString();
 
-        // Fetch all market data and indicators in parallel
-        const marketDataPromises = TRADING_SYMBOLS.map(async (symbol) => {
-            try {
-                const [ticker, indicators] = await Promise.all([
-                    marketDataFetcher(symbol),
-                    this.getIndicatorsForSymbol(symbol),
-                ]);
+        // PHASE 1: Parallel Fetching of all independent data sources
+        // This is the most critical optimization for latency reduction (<25s target)
+        const indicatorService = getTechnicalIndicatorService();
 
-                if (!indicators) {
-                    logger.warn(`No indicators available for ${symbol}`);
-                    return null;
-                }
+        // Determine which data sources to fetch based on frequency and options
+        // v5.5.0: Optimize by skipping expensive but slow-changing data sources
+        const shouldFetchJournal = !options.skipJournal && (this.invocationCount % 5 === 1 || positions.length > 0);
+        const shouldFetchQuant = !options.skipQuant && (this.invocationCount % 3 === 1);
+        const shouldFetchSentiment = options.forceFreshSentiment || (this.invocationCount % 2 === 1);
+
+        const [
+            indicatorsMap,
+            recentTrades,
+            recentFills,
+            metrics,
+            sentimentContext,
+            quantSummary,
+            journalInsights
+        ] = await Promise.all([
+            indicatorService.getIndicatorsForSymbols([...TRADING_SYMBOLS]),
+            this.getRecentTrades(10),
+            this.getRecentFills(20),
+            this.calculatePerformanceMetrics(),
+            shouldFetchSentiment
+                ? this.buildSentimentContext().catch(e => { logger.warn('Sentiment failed:', e); return null; })
+                : Promise.resolve(null),
+            shouldFetchQuant
+                ? this.buildQuantContext().catch(e => { logger.warn('Quant failed:', e); return null; })
+                : Promise.resolve(null),
+            shouldFetchJournal
+                ? this.buildJournalInsights().catch(e => { logger.warn('Journal failed:', e); return null; })
+                : Promise.resolve(null),
+        ]);
+
+        // PHASE 1.5: Merge Ticker Data with Indicators
+        // marketDataFetcher is now just a local Map lookup in CollaborativeFlow
+        const marketDataResults = await Promise.all(TRADING_SYMBOLS.map(async (symbol) => {
+            try {
+                const ticker = await marketDataFetcher(symbol);
+                const indicators = indicatorsMap.get(symbol.toLowerCase());
+
+                if (!indicators) return null;
 
                 return convertIndicatorsToMarketData(
                     symbol,
@@ -301,30 +328,12 @@ export class ContextBuilder {
                 logger.error(`Failed to fetch market data for ${symbol}:`, error);
                 return null;
             }
-        });
+        }));
 
-        const marketDataResults = await Promise.all(marketDataPromises);
         const marketData = marketDataResults.filter((m): m is MarketDataWithIndicators => m !== null);
 
-        if (marketData.length === 0) {
-            logger.warn('No market data available for any symbol - all fetches failed');
-        } else if (marketData.length < TRADING_SYMBOLS.length) {
-            logger.warn(`Partial market data: ${marketData.length}/${TRADING_SYMBOLS.length} symbols available`);
-        }
-
-        // Get account state
-        const [recentTrades, recentFills, metrics] = await Promise.all([
-            this.getRecentTrades(10),
-            this.getRecentFills(20),
-            this.calculatePerformanceMetrics(),
-        ]);
-
-        // Enrich positions with current data from market data
-        // FIXED: Compute enrichedPositions BEFORE total_value to ensure consistency
+        // PHASE 2: Compute derived state (depends on Phase 1)
         const enrichedPositions = this.enrichPositions(positions, marketData);
-
-        // Create a map of enriched prices for consistency
-        // NOTE: Use original case for symbol keys to match tradeMap lookup
         const enrichedPriceMap = new Map<string, number>();
         for (const pos of enrichedPositions) {
             enrichedPriceMap.set(pos.symbol, pos.current_price);
@@ -332,8 +341,6 @@ export class ContextBuilder {
 
         const activeTrades = await this.getActiveTradesWithExitPlans(positions, enrichedPriceMap);
 
-        // FIXED: Compute total_value from enrichedPositions (filtered/validated) for consistency
-        // This ensures account.positions and total_value are derived from the same data
         const totalUnrealizedPnl = enrichedPositions.reduce((sum, p) => {
             const pnl = Number.isFinite(p.unrealized_pnl) ? p.unrealized_pnl : 0;
             return sum + pnl;
@@ -346,9 +353,6 @@ export class ContextBuilder {
             profit_factor: metrics.profit_factor,
             positions: enrichedPositions,
             active_trades: activeTrades,
-            // NOTE: open_orders is intentionally empty - WEEX open orders are managed separately
-            // via TP/SL orders attached to positions. The system doesn't place standalone limit orders.
-            // If standalone order support is added, fetch from WeexClient.getOpenOrders() here.
             open_orders: [],
             recent_diary: recentTrades,
             recent_fills: recentFills,
@@ -356,49 +360,65 @@ export class ContextBuilder {
 
         const instructions: Instructions = {
             assets: TRADING_SYMBOLS,
-            // NOTE: anti_churn_rules and leverage_policy are included in the system prompt
-            // (buildAnalystPrompt), so we don't duplicate them here in the context.
-            // Only include dynamic risk limits that may change.
             risk_limits: buildRiskRulesString(),
         };
 
-        // Fetch sentiment, quant, and journal insights in parallel
-        // Use Promise.allSettled to handle partial failures gracefully
-        const [sentimentResult, quantResult, journalResult] = await Promise.allSettled([
-            this.buildSentimentContext(),
-            this.buildQuantContext(),
-            this.buildJournalInsights(),
-        ]);
-
-        // Extract values from settled promises, defaulting to null on rejection
-        const sentimentContext = sentimentResult.status === 'fulfilled' ? sentimentResult.value : null;
-        const quantSummary = quantResult.status === 'fulfilled' ? quantResult.value : null;
-        const journalInsights = journalResult.status === 'fulfilled' ? journalResult.value : null;
-
-        // Log any failures for debugging
-        if (sentimentResult.status === 'rejected') {
-            logger.warn('Sentiment context fetch failed:', sentimentResult.reason);
-        }
-        if (quantResult.status === 'rejected') {
-            logger.warn('Quant context fetch failed:', quantResult.reason);
-        }
-        if (journalResult.status === 'rejected') {
-            logger.warn('Journal insights fetch failed:', journalResult.reason);
-        }
-
-        return {
+        const rawContext: TradingContext = {
             invocation: {
                 count: this.invocationCount,
                 current_time: currentTime,
             },
             account: accountState,
-            market_data: marketData,
             instructions,
-            prompt_vars: buildPromptVars(safeAccountBalance),
+            market_data: marketData,
             sentiment: sentimentContext || undefined,
             quant: quantSummary || undefined,
             journal_insights: journalInsights || undefined,
+            prompt_vars: buildPromptVars(safeAccountBalance),
         };
+
+        // ROUND ALL NUMBERS IN CONTEXT TO REDUCE JSON SIZE AND AI LATENCY
+        const roundedContext = this.roundNumbers(rawContext);
+
+        const buildTime = Date.now() - startTime;
+        logger.info(`🏗️ Context built in ${buildTime}ms (invocation #${this.invocationCount})`);
+
+        return roundedContext;
+    }
+
+    /**
+     * Recursively round all numbers in an object to reduce JSON size and AI latency
+     */
+    private roundNumbers(obj: any): any {
+        if (obj === null || obj === undefined) return obj;
+
+        if (typeof obj === 'number') {
+            // Round to 6 decimal places for general precision
+            // If the number is very small (< 0.000001), keep it as is
+            if (Math.abs(obj) < 0.000001 && obj !== 0) return obj;
+            return Number(obj.toFixed(6));
+        }
+
+        if (Array.isArray(obj)) {
+            return obj.map(item => this.roundNumbers(item));
+        }
+
+        if (typeof obj === 'object') {
+            const result: any = {};
+            for (const key in obj) {
+                if (Object.prototype.hasOwnProperty.call(obj, key)) {
+                    // Skip rounding for certain fields if needed (e.g. timestamps, counts)
+                    if (key === 'count' || key === 'timestamp' || key === 'opened_at') {
+                        result[key] = obj[key];
+                    } else {
+                        result[key] = this.roundNumbers(obj[key]);
+                    }
+                }
+            }
+            return result;
+        }
+
+        return obj;
     }
 
     /**
@@ -539,12 +559,17 @@ export class ContextBuilder {
 
             const fearGreedValue = null; // Will use cached value in Reddit service
 
+            const redditStart = Date.now();
             try {
                 return await Promise.race([
                     getRedditSentimentContext(0, fearGreedValue),
                     timeoutPromise,
                 ]);
             } finally {
+                const redditElapsed = Date.now() - redditStart;
+                if (redditElapsed > 5000) {
+                    logger.warn(`Reddit sentiment fetch took ${redditElapsed}ms`);
+                }
                 if (timeoutId) {
                     clearTimeout(timeoutId);
                     timeoutId = null;
@@ -552,16 +577,6 @@ export class ContextBuilder {
             }
         } catch (error) {
             logger.debug('Reddit sentiment fetch failed (non-critical):', error);
-            return null;
-        }
-    }
-
-    private async getIndicatorsForSymbol(symbol: string) {
-        try {
-            const indicatorService = getTechnicalIndicatorService();
-            return await indicatorService.getIndicators(symbol);
-        } catch (error) {
-            logger.error(`Failed to get indicators for ${symbol}:`, error);
             return null;
         }
     }

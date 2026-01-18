@@ -16,17 +16,19 @@ import {
     AnalystOutput,
     ParallelAnalysisResult,
     JudgeDecision,
+    TournamentResult,
     validateAnalystOutput,
     normalizeAnalystOutput,
     validateJudgeOutput,
 } from '../../types/analyst';
 import { TradingContext } from '../../types/context';
-import { buildAnalystPrompt, buildAnalystUserMessage } from '../../constants/prompts/analystPrompt';
+import { buildAnalystPrompt, buildAnalystUserMessage, AnalystPromptVars } from '../../constants/prompts/analystPrompt';
 import { buildJudgeSystemPrompt, buildJudgeUserMessage } from '../../constants/prompts/judgePrompt';
 import { getAntiChurnService } from '../trading/AntiChurnService';
 import { getContextBuilder } from '../context/ContextBuilder';
 import { aiService, SchemaType, ResponseSchema } from './AIService';
 import { getAnalystWeights } from '../journal';
+import { debateService } from './DebateService';
 
 // =============================================================================
 // TYPES
@@ -45,6 +47,7 @@ export interface FinalDecision {
     winner: AnalystId | 'NONE';
     warnings: string[];
     analysisResult: ParallelAnalysisResult;
+    debateResult: TournamentResult | null;
     judgeDecision: JudgeDecision;
 }
 
@@ -135,6 +138,19 @@ const ANALYST_OUTPUT_RESPONSE_SCHEMA: ResponseSchema = {
             description: 'Detailed step-by-step analysis',
         },
         recommendation: ANALYST_RECOMMENDATION_SCHEMA,
+        rl_validation: {
+            type: SchemaType.OBJECT,
+            nullable: true,
+            properties: {
+                q_long: { type: SchemaType.NUMBER, description: 'Q-value for LONG' },
+                q_short: { type: SchemaType.NUMBER, description: 'Q-value for SHORT' },
+                q_hold: { type: SchemaType.NUMBER, description: 'Q-value for HOLD' },
+                regret: { type: SchemaType.NUMBER, description: 'Opportunity cost of NOT trading' },
+                expected_value: { type: SchemaType.NUMBER, nullable: true, description: 'Expected value of the trade' },
+                sharpe: { type: SchemaType.NUMBER, nullable: true, description: 'Sharpe ratio of the trade' },
+            },
+            required: ['q_long', 'q_short', 'q_hold', 'regret'],
+        },
     },
     required: ['reasoning', 'recommendation'],
 };
@@ -277,6 +293,7 @@ export class CollaborativeFlowService {
                     final_action: 'HOLD',
                     final_recommendation: null,
                 },
+                debateResult: null,
             };
         }
         if (!positions || !Array.isArray(positions)) {
@@ -313,6 +330,7 @@ export class CollaborativeFlowService {
                     final_action: 'HOLD',
                     final_recommendation: null,
                 },
+                debateResult: null,
             };
         }
 
@@ -366,6 +384,7 @@ export class CollaborativeFlowService {
                         final_action: 'HOLD',
                         final_recommendation: null,
                     },
+                    debateResult: null,
                 };
             }
 
@@ -384,12 +403,78 @@ export class CollaborativeFlowService {
                 }
             }
 
+            // --- DEBATE PHASE ---
+            const debateStart = Date.now();
+            let debateResult: TournamentResult | null = null;
+
+            // Hard timeout for debate phase (reduced to align with <25s pipeline target)
+            const DEBATE_TIMEOUT_MS = Number(process.env.DEBATE_TIMEOUT_MS) || 15000;
+
+            try {
+                // Determine the best symbol to debate (the one with the most conflict or highest conviction)
+                const symbolStats = new Map<string, { count: number; maxConf: number; actions: Set<string> }>();
+
+                Object.values(analysisResult).forEach(o => {
+                    if (o && o.recommendation && o.recommendation.symbol) {
+                        const s = o.recommendation.symbol;
+                        const stats = symbolStats.get(s) || { count: 0, maxConf: 0, actions: new Set() };
+                        stats.count++;
+                        stats.maxConf = Math.max(stats.maxConf, o.recommendation.confidence);
+                        stats.actions.add(o.recommendation.action);
+                        symbolStats.set(s, stats);
+                    }
+                });
+
+                // Pick symbol with most actions (divergence) first, then by count, then by max conviction
+                let debateSymbol = (context.market_data[0]?.asset || 'UNKNOWN');
+                let maxDivergence = -1;
+
+                for (const [s, stats] of symbolStats.entries()) {
+                    const divergence = stats.actions.size;
+                    if (divergence > maxDivergence) {
+                        maxDivergence = divergence;
+                        debateSymbol = s;
+                    } else if (divergence === maxDivergence) {
+                        const currentStats = symbolStats.get(debateSymbol);
+                        if (!currentStats || stats.count > currentStats.count) {
+                            debateSymbol = s;
+                        } else if (stats.count === currentStats.count && stats.maxConf > currentStats.maxConf) {
+                            debateSymbol = s;
+                        }
+                    }
+                }
+
+                logger.info(`⚖️ Selected ${debateSymbol} for debate tournament (Divergence: ${maxDivergence})`);
+
+                // Consensus check to skip debate and save time (<25s target)
+                const stats = symbolStats.get(debateSymbol);
+                const isStrongConsensus = stats && stats.count >= 3 && stats.actions.size === 1;
+
+                if (isStrongConsensus) {
+                    logger.info(`🤝 Strong consensus for ${debateSymbol} (${stats.count}/4 analysts). Skipping debate to save time.`);
+                } else {
+                    // Run tournament with timeout
+                    debateResult = await Promise.race([
+                        debateService.runTournament(debateSymbol, analysisResult, context),
+                        new Promise<null>((_, reject) =>
+                            setTimeout(() => reject(new Error('Debate tournament timed out')), DEBATE_TIMEOUT_MS)
+                        )
+                    ]) as TournamentResult;
+                }
+
+                const debateTime = Date.now() - debateStart;
+                logger.info(`⚖️ Debate tournament completed in ${debateTime}ms with ${debateResult?.debates.length || 0} matches`);
+            } catch (debateError) {
+                logger.error('Debate tournament failed or timed out:', debateError);
+                // Continue without debate result rather than failing the whole pipeline
+            }
+
             const judgeStart = Date.now();
-            const judgeDecision = await this.runJudge(context, analysisResult);
+            const judgeDecision = await this.runJudge(context, analysisResult, debateResult);
             const judgeTime = Date.now() - judgeStart;
             logger.info(`⚖️ Judge decision in ${judgeTime}ms: winner=${judgeDecision.winner}, action=${judgeDecision.final_action}`);
 
-            const finalDecision = this.buildFinalDecision(analysisResult, judgeDecision);
+            const finalDecision = this.buildFinalDecision(analysisResult, judgeDecision, debateResult);
 
             const totalTime = Date.now() - startTime;
             logger.info(`✅ Total pipeline time: ${totalTime}ms (target: <25000ms)`);
@@ -404,14 +489,30 @@ export class CollaborativeFlowService {
      * Run all 4 analysts in parallel
      */
     private async runAllAnalysts(context: TradingContext): Promise<ParallelAnalysisResult> {
-        const contextJson = JSON.stringify(context, null, 2);
+        const promptVars = context.prompt_vars;
+        const cleanContext = { ...context };
+        delete (cleanContext as any).prompt_vars;
+
+        const contextJson = JSON.stringify(cleanContext, null, 2);
+        logger.info(`📊 Context built: ${context.market_data.length} assets, ${context.account.positions.length} positions, JSON size: ${(contextJson.length / 1024).toFixed(2)} KB`);
         const analysts: AnalystId[] = ['jim', 'ray', 'karen', 'quant'];
 
-        const promises = analysts.map((analystId) =>
-            this.runSingleAnalyst(analystId, contextJson)
-        );
+        const startTime = Date.now();
+        const promises = analysts.map(async (analystId) => {
+            const analystStart = Date.now();
+            const result = await this.runSingleAnalyst(analystId, contextJson, promptVars);
+            const duration = Date.now() - analystStart;
+            if (result) {
+                logger.info(`⏱️ Analyst ${analystId} completed in ${duration}ms (${result.recommendation.action} ${result.recommendation.symbol})`);
+            } else {
+                logger.warn(`⏱️ Analyst ${analystId} FAILED in ${duration}ms`);
+            }
+            return result;
+        });
 
         const results = await Promise.allSettled(promises);
+        const totalDuration = Date.now() - startTime;
+        logger.info(`⏱️ All analysts completed in ${totalDuration}ms (parallel)`);
 
         const analysisResult: ParallelAnalysisResult = {
             jim: null,
@@ -443,10 +544,13 @@ export class CollaborativeFlowService {
      * Run a single analyst using centralized AIService with strict JSON schema
      * Routes to provider based on AI_HYBRID_MODE setting
      */
-    private async runSingleAnalyst(analystId: AnalystId, contextJson: string): Promise<AnalystOutput | null> {
+    private async runSingleAnalyst(analystId: AnalystId, contextJson: string, promptVars: AnalystPromptVars = {}): Promise<AnalystOutput | null> {
         const systemPrompt = buildAnalystPrompt(analystId);
-        const userMessage = buildAnalystUserMessage(contextJson);
+        // CRITICAL: We pass promptVars to buildAnalystUserMessage so it's part of the dynamic user message
+        const userMessage = buildAnalystUserMessage(contextJson, promptVars);
+
         // CRITICAL: Add separator for prompt caching - system prompt will be cached
+        // The system prompt is now static (promptVars moved to userMessage), maximizing cache hits
         const fullPrompt = systemPrompt + '\n\n---USER---\n\n' + userMessage;
 
         for (let attempt = 1; attempt <= config.ai.maxRetries; attempt++) {
@@ -460,7 +564,7 @@ export class CollaborativeFlowService {
                         prompt: fullPrompt,
                         schema: ANALYST_OUTPUT_RESPONSE_SCHEMA,
                         temperature: config.ai.temperature,
-                        maxOutputTokens: config.ai.maxOutputTokens,
+                        maxOutputTokens: 2048, // Reduced from config.ai.maxOutputTokens (65k) for latency
                         label: `Analyst-${analystId}`,
                     });
                     resultText = result.text;
@@ -471,7 +575,7 @@ export class CollaborativeFlowService {
                         prompt: fullPrompt,
                         schema: ANALYST_OUTPUT_RESPONSE_SCHEMA,
                         temperature: config.ai.temperature,
-                        maxOutputTokens: config.ai.maxOutputTokens,
+                        maxOutputTokens: 2048, // Reduced from config.ai.maxOutputTokens (65k) for latency
                         label: `Analyst-${analystId}`,
                     });
                     resultText = result.text;
@@ -513,8 +617,17 @@ export class CollaborativeFlowService {
      * Run judge to compare all analyst outputs using centralized AIService with strict JSON schema
      * Uses hybrid mode routing when AI_HYBRID_MODE=true
      */
-    private async runJudge(context: TradingContext, analysisResult: ParallelAnalysisResult): Promise<JudgeDecision> {
-        const contextJson = JSON.stringify(context, null, 2);
+    private async runJudge(
+        context: TradingContext,
+        analysisResult: ParallelAnalysisResult,
+        debateResult: TournamentResult | null = null
+    ): Promise<JudgeDecision> {
+        const promptVars = context.prompt_vars;
+        // Create a copy of context without prompt_vars to reduce redundant data
+        const cleanContext = { ...context };
+        delete (cleanContext as any).prompt_vars;
+
+        const contextJson = JSON.stringify(cleanContext, null, 2);
 
         const jimOutput = analysisResult.jim ? JSON.stringify(analysisResult.jim, null, 2) : null;
         const rayOutput = analysisResult.ray ? JSON.stringify(analysisResult.ray, null, 2) : null;
@@ -530,7 +643,15 @@ export class CollaborativeFlowService {
             }\nUse these weights when evaluating analyst recommendations - prefer analysts with higher weights.`
             : '';
 
-        const userMessage = buildJudgeUserMessage(contextJson, jimOutput, rayOutput, karenOutput, quantOutput) + weightsSection;
+        const userMessage = buildJudgeUserMessage(
+            contextJson,
+            jimOutput,
+            rayOutput,
+            karenOutput,
+            quantOutput,
+            promptVars,
+            debateResult || undefined
+        ) + weightsSection;
         // CRITICAL: Add separator for prompt caching - system prompt will be cached
         const fullPrompt = buildJudgeSystemPrompt() + '\n\n---USER---\n\n' + userMessage;
 
@@ -547,7 +668,7 @@ export class CollaborativeFlowService {
                         prompt: fullPrompt,
                         schema: JUDGE_OUTPUT_RESPONSE_SCHEMA,
                         temperature: 0.3,
-                        maxOutputTokens: config.ai.maxOutputTokens,
+                        maxOutputTokens: 2048, // Reduced from config.ai.maxOutputTokens for latency
                         label: 'Judge',
                     });
                 } else {
@@ -556,7 +677,7 @@ export class CollaborativeFlowService {
                         prompt: fullPrompt,
                         schema: JUDGE_OUTPUT_RESPONSE_SCHEMA,
                         temperature: 0.3,
-                        maxOutputTokens: config.ai.maxOutputTokens,
+                        maxOutputTokens: 2048, // Reduced from config.ai.maxOutputTokens for latency
                         label: 'Judge',
                     });
                 }
@@ -626,7 +747,8 @@ export class CollaborativeFlowService {
      */
     private buildFinalDecision(
         analysisResult: ParallelAnalysisResult,
-        judgeDecision: JudgeDecision
+        judgeDecision: JudgeDecision,
+        debateResult: TournamentResult | null = null
     ): FinalDecision {
         // If no winner, check if it's an emergency CLOSE/REDUCE action
         // FIXED: Handle CLOSE/REDUCE with winner=NONE (emergency position management)
@@ -666,6 +788,7 @@ export class CollaborativeFlowService {
                     winner: 'NONE',
                     warnings,
                     analysisResult,
+                    debateResult,
                     judgeDecision,
                 };
             }
@@ -684,6 +807,7 @@ export class CollaborativeFlowService {
                 winner: 'NONE',
                 warnings: judgeDecision.warnings,
                 analysisResult,
+                debateResult,
                 judgeDecision,
             };
         }
@@ -705,6 +829,7 @@ export class CollaborativeFlowService {
                 winner: 'NONE',
                 warnings: ['Winner output missing'],
                 analysisResult,
+                debateResult,
                 judgeDecision,
             };
         }
@@ -770,6 +895,7 @@ export class CollaborativeFlowService {
                     winner: 'NONE',
                     warnings: [`AI returned invalid leverage: ${finalLeverage}`],
                     analysisResult,
+                    debateResult,
                     judgeDecision,
                 };
             } else if (finalLeverage > GLOBAL_RISK_LIMITS.ABSOLUTE_MAX_LEVERAGE) {
@@ -800,6 +926,7 @@ export class CollaborativeFlowService {
             winner: judgeDecision.winner,
             warnings,
             analysisResult,
+            debateResult,
             judgeDecision,
         };
     }
@@ -838,6 +965,7 @@ export class CollaborativeFlowService {
 
     /**
      * Parse JSON with error handling
+     * NOTE: AIService already handles robust extraction and basic validation.
      */
     private parseJSON(text: string): any {
         const MAX_JSON_SIZE = 10 * 1024 * 1024;
@@ -846,16 +974,7 @@ export class CollaborativeFlowService {
         }
 
         try {
-            let cleaned = text.trim();
-            if (cleaned.startsWith('```json')) {
-                cleaned = cleaned.slice(7);
-            } else if (cleaned.startsWith('```')) {
-                cleaned = cleaned.slice(3);
-            }
-            if (cleaned.endsWith('```')) {
-                cleaned = cleaned.slice(0, -3);
-            }
-            return JSON.parse(cleaned.trim());
+            return JSON.parse(text.trim());
         } catch (error) {
             logger.error('JSON parse error:', error);
             logger.debug(`Raw text length: ${text.length} chars [content redacted for security]`);

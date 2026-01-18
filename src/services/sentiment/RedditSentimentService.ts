@@ -94,10 +94,6 @@ const REDDIT_CACHE_TTL = Number.isFinite(config.reddit.cacheTtlMs) && config.red
     ? config.reddit.cacheTtlMs
     : 1800000;  // Default: 30 minutes
 
-const REQUEST_DELAY = Math.max(2500, Number.isFinite(config.reddit.requestDelayMs)
-    ? config.reddit.requestDelayMs
-    : 2500);  // Minimum 2.5 seconds between requests (Reddit rate limit protection)
-
 const REQUEST_TIMEOUT = Number.isFinite(config.reddit.requestTimeoutMs) && config.reddit.requestTimeoutMs > 0
     ? config.reddit.requestTimeoutMs
     : 10000;  // Default: 10 second timeout
@@ -281,10 +277,6 @@ export function shutdownRedditService(): void {
 
 
 
-function sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
-
 function classifySentiment(score: number): 'positive' | 'negative' | 'neutral' {
     if (!Number.isFinite(score)) return 'neutral';
     if (score > 0.15) return 'positive';
@@ -438,21 +430,27 @@ async function fetchSubredditSentiment(
 
 /**
  * Fetch sentiment from all monitored subreddits
+ * v5.5.0: OPTIMIZATION - Parallelize subreddit fetching to reduce latency by ~5-7s
  */
 async function fetchAllRedditSentiment(): Promise<Map<string, RedditSentimentResult>> {
     const results = new Map<string, RedditSentimentResult>();
 
-    for (let i = 0; i < REDDIT_ENDPOINTS.length; i++) {
-        const endpoint = REDDIT_ENDPOINTS[i];
-
-        // Skip sleep on first iteration
-        if (i > 0) {
-            await sleep(REQUEST_DELAY);
+    // Parallelize all endpoint fetches to save time
+    const fetchPromises = REDDIT_ENDPOINTS.map(async (endpoint) => {
+        try {
+            const result = await fetchSubredditSentiment(endpoint.url, endpoint.name, endpoint.weight);
+            return { name: endpoint.name, result };
+        } catch (error) {
+            logger.warn(`Failed to fetch Reddit sentiment for ${endpoint.name}:`, error);
+            return { name: endpoint.name, result: null };
         }
+    });
 
-        const result = await fetchSubredditSentiment(endpoint.url, endpoint.name, endpoint.weight);
+    const settledResults = await Promise.all(fetchPromises);
+
+    for (const { name, result } of settledResults) {
         if (result) {
-            results.set(endpoint.name, result);
+            results.set(name, result);
         }
     }
 

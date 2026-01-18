@@ -22,6 +22,14 @@ export interface AnalystRecommendation {
 export interface AnalystOutput {
     reasoning: string;
     recommendation: AnalystRecommendation;
+    rl_validation?: {
+        q_long: number;
+        q_short: number;
+        q_hold: number;
+        regret: number;
+        expected_value?: number;
+        sharpe?: number;
+    } | null;
 }
 
 export type ErrorSource = AnalystId | 'system';
@@ -51,6 +59,49 @@ export interface JudgeDecision {
     final_recommendation: AnalystRecommendation | null;
 }
 
+// =============================================================================
+// DEBATE TYPES
+// =============================================================================
+
+export interface DebateTurn {
+    speakerId: AnalystId;
+    position: 'bull' | 'bear';
+    content: string;
+    dataPointsReferenced: string[];
+    argumentStrength: number;
+    timestamp: number;
+}
+
+export interface DebateScores {
+    bullScore: number;
+    bearScore: number;
+    dataQuality: { bull: number; bear: number };
+    logicCoherence: { bull: number; bear: number };
+    riskAcknowledgment: { bull: number; bear: number };
+    catalystIdentification: { bull: number; bear: number };
+}
+
+export interface StockDebate {
+    matchId: string;
+    symbol: string;
+    round: 'quarterfinal' | 'semifinal' | 'final';
+    bullAnalystId: AnalystId;
+    bearAnalystId: AnalystId;
+    bullOutput: AnalystOutput;
+    bearOutput: AnalystOutput;
+    dialogue: DebateTurn[];
+    winner: 'bull' | 'bear' | null;
+    winningArguments: string[];
+    scores: DebateScores;
+}
+
+export interface TournamentResult {
+    debates: StockDebate[];
+    championId: AnalystId | null;
+    summary: string;
+    durationMs: number;
+}
+
 export interface AnalystProfile {
     id: AnalystId;
     name: string;
@@ -58,6 +109,12 @@ export interface AnalystProfile {
     methodology: string;
     focus: string[];
     riskTolerance: 'conservative' | 'moderate' | 'aggressive';
+    tournamentStrengths?: {
+        data: number;
+        logic: number;
+        rebuttal: number;
+        catalysts: number;
+    };
 }
 export const ANALYST_OUTPUT_SCHEMA = {
     type: 'object',
@@ -77,6 +134,19 @@ export const ANALYST_OUTPUT_SCHEMA = {
                 rationale: { type: 'string' },
             },
             required: ['action', 'symbol', 'allocation_usd', 'leverage', 'tp_price', 'sl_price', 'exit_plan', 'confidence', 'rationale'],
+            additionalProperties: false,
+        },
+        rl_validation: {
+            type: ['object', 'null'],
+            properties: {
+                q_long: { type: 'number' },
+                q_short: { type: 'number' },
+                q_hold: { type: 'number' },
+                regret: { type: 'number' },
+                expected_value: { type: 'number' },
+                sharpe: { type: 'number' },
+            },
+            required: ['q_long', 'q_short', 'q_hold', 'regret'],
             additionalProperties: false,
         },
     },

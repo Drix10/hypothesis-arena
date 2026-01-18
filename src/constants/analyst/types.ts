@@ -21,6 +21,13 @@ export interface AnalystAgent {
     pipelineRole: 'coin_selector' | 'specialist' | 'risk_council';
     /** Coin categories where the analyst is most effective */
     coinTypeSpecialty: ('blue_chip' | 'l1_growth' | 'momentum_meme' | 'utility')[];
+    /** Numeric strengths for tournament scoring (0-100) */
+    tournamentScores?: {
+        data: number;
+        logic: number;
+        rebuttal: number;
+        catalysts: number;
+    };
     /** Strengths aligned to judging criteria (DATA, LOGIC, RISK, CATALYST) */
     tournamentStrengths: string[];
 }

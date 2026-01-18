@@ -36,6 +36,12 @@ export interface AIGenerateOptions {
     maxOutputTokens?: number;
     /** Optional label for logging */
     label?: string;
+    provider?: 'gemini' | 'openrouter';
+    model?: string;
+    topP?: number;
+    presencePenalty?: number;
+    frequencyPenalty?: number;
+    stop?: string[];
 }
 
 export interface AIGenerateResult {
@@ -202,6 +208,132 @@ class AIService {
     // Hybrid mode: track if both providers are initialized
     private geminiInitialized: boolean = false;
     private openRouterValidated: boolean = false;
+    private pruneIntervalId: NodeJS.Timeout | null = null;
+    private statsIntervalId: NodeJS.Timeout | null = null;
+
+    // Local AI cache for performance and cost reduction
+    private cache: Map<string, { result: AIGenerateResult; timestamp: number; lastAccessed: number }> = new Map();
+    private readonly MAX_CACHE_SIZE = 200;
+    private readonly CACHE_TTL = 30 * 60 * 1000; // 30 minutes
+    private cacheHits = 0;
+    private cacheMisses = 0;
+    private labelStats: Map<string, { hits: number; misses: number }> = new Map();
+
+    constructor() {
+        // Periodically prune expired cache
+        this.pruneIntervalId = setInterval(() => this.pruneCache(), 5 * 60 * 1000);
+        if (this.pruneIntervalId.unref) this.pruneIntervalId.unref();
+
+        // Log cache stats every 10 minutes
+        this.statsIntervalId = setInterval(() => this.logCacheStats(), 10 * 60 * 1000);
+        if (this.statsIntervalId.unref) this.statsIntervalId.unref();
+    }
+
+    private logCacheStats(): void {
+        const total = this.cacheHits + this.cacheMisses;
+        const hitRate = total > 0 ? ((this.cacheHits / total) * 100).toFixed(2) : '0.00';
+        logger.info(`📊 AI Cache Overall: Hits=${this.cacheHits}, Misses=${this.cacheMisses}, Rate=${hitRate}%, Size=${this.cache.size}`);
+
+        if (this.labelStats.size > 0) {
+            logger.info('📊 AI Cache Breakdown by Label:');
+            // Sort labels alphabetically for consistent output
+            const sortedLabels = Array.from(this.labelStats.keys()).sort();
+            for (const label of sortedLabels) {
+                const stats = this.labelStats.get(label)!;
+                const labelTotal = stats.hits + stats.misses;
+                const labelRate = labelTotal > 0 ? ((stats.hits / labelTotal) * 100).toFixed(2) : '0.00';
+                logger.info(`   - ${label.padEnd(20)}: Hits=${stats.hits.toString().padStart(3)}, Misses=${stats.misses.toString().padStart(3)}, Rate=${labelRate}%`);
+            }
+        }
+
+        // Reset counters after logging to see period-over-period effectiveness
+        this.cacheHits = 0;
+        this.cacheMisses = 0;
+        this.labelStats.clear();
+    }
+
+    /**
+     * Generate a cache key for an AI request
+     * CRITICAL: We normalize the prompt to increase cache hits for high-frequency trading cycles
+     */
+    private getCacheKey(options: AIGenerateOptions): string {
+        const {
+            prompt,
+            schema,
+            temperature,
+            maxOutputTokens,
+            provider,
+            model,
+            topP,
+            presencePenalty,
+            frequencyPenalty,
+            stop
+        } = options;
+
+        // OPTIMIZATION: Fuzzy normalization to increase cache hits
+        // 1. Remove high-entropy timestamps
+        // 2. Round large numbers to reduce noise-driven cache misses
+        let normalizedPrompt = prompt;
+
+        // Normalize timestamps
+        normalizedPrompt = normalizedPrompt.replace(/"current_time":\s*"[^"]*"/g, '"current_time": "NORMALIZED"');
+        normalizedPrompt = normalizedPrompt.replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z/g, 'TIMESTAMP_NORMALIZED');
+
+        // Normalize invocation count (v5.5.0: Critical for high-frequency cache hits)
+        normalizedPrompt = normalizedPrompt.replace(/"count":\s*\d+/g, '"count": 0');
+
+        // Normalize numbers to 4 decimal places for fuzzy matching
+        // This regex matches numbers like 123.456789 and rounds them
+        normalizedPrompt = normalizedPrompt.replace(/(\d+\.\d{5,})/g, (match) => {
+            const num = parseFloat(match);
+            return num.toFixed(4);
+        });
+
+        const payload = JSON.stringify({
+            prompt: normalizedPrompt,
+            schema,
+            temperature: temperature ?? config.ai.temperature,
+            maxOutputTokens: maxOutputTokens ?? config.ai.maxOutputTokens,
+            provider: provider ?? config.ai.provider,
+            model: model ?? (provider === 'gemini' ? config.ai.model : config.ai.openRouterModel),
+            topP,
+            presencePenalty,
+            frequencyPenalty,
+            stop
+        });
+        return createHash('sha256').update(payload).digest('hex');
+    }
+
+    /**
+     * Prune expired or excessive cache entries
+     */
+    private pruneCache(): void {
+        const now = Date.now();
+        let expiredCount = 0;
+
+        // Remove expired entries
+        for (const [key, entry] of this.cache.entries()) {
+            if (now - entry.timestamp > this.CACHE_TTL) {
+                this.cache.delete(key);
+                expiredCount++;
+            }
+        }
+
+        // If still too large, remove least recently used
+        if (this.cache.size > this.MAX_CACHE_SIZE) {
+            const sorted = Array.from(this.cache.entries())
+                .sort((a, b) => a[1].lastAccessed - b[1].lastAccessed);
+
+            const toRemove = sorted.slice(0, this.cache.size - this.MAX_CACHE_SIZE);
+            for (const [key] of toRemove) {
+                this.cache.delete(key);
+            }
+        }
+
+        if (expiredCount > 0) {
+            logger.debug(`Pruned ${expiredCount} expired entries from AI cache`);
+        }
+    }
 
     /**
      * Get or initialize Gemini model with mutex protection
@@ -386,29 +518,9 @@ class AIService {
      */
     private async canUseFallbackProvider(fallbackProvider: 'gemini' | 'openrouter'): Promise<boolean> {
         if (fallbackProvider === 'gemini') {
-            if (!config.geminiApiKey) return false;
-            // Ensure Gemini is initialized for fallback
-            if (!this.geminiInitialized) {
-                try {
-                    await this._initializeGemini();
-                } catch (error: any) {
-                    logger.warn(`Failed to initialize Gemini for fallback: ${error.message}`);
-                    return false;
-                }
-            }
-            return true;
+            return !!config.geminiApiKey;
         } else {
-            if (!config.openRouterApiKey) return false;
-            // Ensure OpenRouter is validated for fallback
-            if (!this.openRouterValidated) {
-                try {
-                    this.validateOpenRouterConfig();
-                } catch (error: any) {
-                    logger.warn(`Failed to validate OpenRouter for fallback: ${error.message}`);
-                    return false;
-                }
-            }
-            return true;
+            return !!config.openRouterApiKey && !!config.ai.openRouterModel;
         }
     }
 
@@ -425,10 +537,6 @@ class AIService {
         requestId: string,
         logLabel: string
     ): Promise<AIGenerateResult | null> {
-        if (!config.ai.hybridMode) {
-            return null;
-        }
-
         const fallbackProvider = primaryProvider === 'gemini' ? 'openrouter' : 'gemini';
         const canFallback = await this.canUseFallbackProvider(fallbackProvider);
 
@@ -460,29 +568,56 @@ class AIService {
     }
 
     /**
-     * Generate content using the configured AI provider
-     * 
-     * @param options - Generation options including prompt and schema
-     * @returns Generated text and metadata
+     * Internal execution method with caching and fallback
      */
-    async generateContent(options: AIGenerateOptions): Promise<AIGenerateResult> {
+    private async executeWithCache(
+        options: AIGenerateOptions,
+        primaryProvider: 'gemini' | 'openrouter',
+        defaultLogLabel: string,
+        allowFallback: boolean = true
+    ): Promise<AIGenerateResult> {
         const { prompt, schema, temperature, maxOutputTokens, label } = options;
 
         // Validate inputs
         if (!prompt || prompt.trim().length === 0) {
             throw new Error('Cannot generate content with empty prompt');
         }
-
         validateSchema(schema);
 
         const requestId = generateRequestId();
-        const logLabel = label ? `${label}[${requestId}]` : `AI[${requestId}]`;
+        const logLabel = label ? `${label}[${requestId}]` : `${defaultLogLabel}[${requestId}]`;
+        const statsLabel = label || defaultLogLabel;
         const startTime = Date.now();
+
+        // Track stats by label
+        if (!this.labelStats.has(statsLabel)) {
+            this.labelStats.set(statsLabel, { hits: 0, misses: 0 });
+        }
+        const stats = this.labelStats.get(statsLabel)!;
+
+        // Check local cache
+        const cacheKey = this.getCacheKey(options);
+        const cached = this.cache.get(cacheKey);
+        if (cached && (Date.now() - cached.timestamp < this.CACHE_TTL)) {
+            this.cacheHits++;
+            stats.hits++;
+            cached.lastAccessed = Date.now();
+            const hitRate = ((stats.hits / (stats.hits + stats.misses)) * 100).toFixed(1);
+            logger.info(`${logLabel} CACHE HIT (local) - Rate: ${hitRate}% - returning cached result`);
+            return {
+                ...cached.result,
+                requestId // Update requestId to current one for logging consistency
+            };
+        }
+
+        this.cacheMisses++;
+        stats.misses++;
+        const missRate = ((stats.misses / (stats.hits + stats.misses)) * 100).toFixed(1);
+        logger.debug(`${logLabel} CACHE MISS - Rate: ${missRate}% - executing fresh request`);
 
         try {
             let result: AIGenerateResult;
-
-            if (config.ai.provider === 'openrouter') {
+            if (primaryProvider === 'openrouter') {
                 result = await this.generateContentOpenRouter(prompt, schema, temperature, maxOutputTokens, requestId);
             } else {
                 result = await this.generateContentGemini(prompt, schema, temperature, maxOutputTokens, requestId);
@@ -495,14 +630,67 @@ class AIService {
                 logger.warn(`${logLabel} non-standard finish reason: ${result.finishReason} (expected STOP)`);
             }
 
-            logger.debug(`${logLabel} completed in ${elapsed}ms: ${result.text.length} chars, finish=${result.finishReason}`);
+            logger.info(`${logLabel} completed via ${primaryProvider} in ${elapsed}ms: ${result.text.length} chars, finish=${result.finishReason}`);
+
+            // Save to local cache
+            this.cache.set(cacheKey, {
+                result,
+                timestamp: Date.now(),
+                lastAccessed: Date.now()
+            });
+
+            // ENFORCE MAX_CACHE_SIZE IMMEDIATELY (v6.0.0: Prevent memory growth during high throughput)
+            if (this.cache.size > this.MAX_CACHE_SIZE) {
+                const sorted = Array.from(this.cache.entries())
+                    .sort((a, b) => a[1].lastAccessed - b[1].lastAccessed);
+
+                const toRemoveCount = this.cache.size - this.MAX_CACHE_SIZE;
+                for (let i = 0; i < toRemoveCount; i++) {
+                    const [key] = sorted[i];
+                    this.cache.delete(key);
+                }
+                logger.debug(`Evicted ${toRemoveCount} entries to maintain MAX_CACHE_SIZE`);
+            }
 
             return result;
-        } catch (error: any) {
+        } catch (primaryError: any) {
             const elapsed = Date.now() - startTime;
-            logger.error(`${logLabel} failed after ${elapsed}ms:`, error.message);
-            throw error;
+            logger.warn(`${logLabel} ${primaryProvider} failed after ${elapsed}ms: ${primaryError.message}`);
+
+            if (allowFallback && config.ai.hybridMode) {
+                // Attempt cross-provider fallback
+                const fallbackResult = await this.attemptFallback(
+                    primaryProvider, prompt, schema, temperature, maxOutputTokens, requestId, logLabel
+                );
+
+                if (fallbackResult) {
+                    // Cache the fallback result too
+                    this.cache.set(cacheKey, {
+                        result: fallbackResult,
+                        timestamp: Date.now(),
+                        lastAccessed: Date.now()
+                    });
+                    return fallbackResult;
+                }
+            }
+
+            throw primaryError;
         }
+    }
+
+    /**
+     * Generate content using the configured AI provider
+     * 
+     * @param options - Generation options including prompt and schema
+     * @returns Generated text and metadata
+     */
+    async generateContent(options: AIGenerateOptions): Promise<AIGenerateResult> {
+        return this.executeWithCache(
+            options,
+            config.ai.provider as 'gemini' | 'openrouter',
+            'AI',
+            false // No fallback for simple generateContent to avoid infinite loops if config is wrong
+        );
     }
 
     /**
@@ -518,48 +706,12 @@ class AIService {
         analystId: string,
         options: AIGenerateOptions
     ): Promise<AIGenerateResult> {
-        const { prompt, schema, temperature, maxOutputTokens, label } = options;
-
-        // Validate inputs
-        if (!prompt || prompt.trim().length === 0) {
-            throw new Error('Cannot generate content with empty prompt');
-        }
-
-        validateSchema(schema);
-
-        const requestId = generateRequestId();
         const primaryProvider = this.getProviderForAnalyst(analystId);
-        const logLabel = label ? `${label}[${requestId}]` : `${analystId}[${requestId}]`;
-        const startTime = Date.now();
-
-        try {
-            let result: AIGenerateResult;
-
-            if (primaryProvider === 'openrouter') {
-                result = await this.generateContentOpenRouter(prompt, schema, temperature, maxOutputTokens, requestId);
-            } else {
-                result = await this.generateContentGemini(prompt, schema, temperature, maxOutputTokens, requestId);
-            }
-
-            const elapsed = Date.now() - startTime;
-            logger.debug(`${logLabel} completed via ${primaryProvider} in ${elapsed}ms`);
-
-            return result;
-        } catch (primaryError: any) {
-            const elapsed = Date.now() - startTime;
-            logger.warn(`${logLabel} ${primaryProvider} failed after ${elapsed}ms: ${primaryError.message}`);
-
-            // Attempt cross-provider fallback
-            const fallbackResult = await this.attemptFallback(
-                primaryProvider, prompt, schema, temperature, maxOutputTokens, requestId, logLabel
-            );
-
-            if (fallbackResult) {
-                return fallbackResult;
-            }
-
-            throw primaryError;
-        }
+        return this.executeWithCache(
+            options,
+            primaryProvider,
+            analystId
+        );
     }
 
     /**
@@ -567,48 +719,131 @@ class AIService {
      * Uses the configured judge provider with cross-provider fallback
      */
     async generateContentForJudge(options: AIGenerateOptions): Promise<AIGenerateResult> {
-        const { prompt, schema, temperature, maxOutputTokens, label } = options;
-
-        // Validate inputs
-        if (!prompt || prompt.trim().length === 0) {
-            throw new Error('Cannot generate content with empty prompt');
-        }
-
-        validateSchema(schema);
-
-        const requestId = generateRequestId();
         const primaryProvider = config.ai.hybridMode ? config.ai.judgeProvider : config.ai.provider;
-        const logLabel = label ? `${label}[${requestId}]` : `Judge[${requestId}]`;
-        const startTime = Date.now();
+        return this.executeWithCache(
+            options,
+            primaryProvider as 'gemini' | 'openrouter',
+            'Judge'
+        );
+    }
 
-        try {
-            let result: AIGenerateResult;
+    /**
+     * Extract JSON string from text that may contain markdown or other fluff
+     */
+    private extractJSON(text: string): string {
+        let out = text.trim();
 
-            if (primaryProvider === 'openrouter') {
-                result = await this.generateContentOpenRouter(prompt, schema, temperature, maxOutputTokens, requestId);
-            } else {
-                result = await this.generateContentGemini(prompt, schema, temperature, maxOutputTokens, requestId);
-            }
-
-            const elapsed = Date.now() - startTime;
-            logger.debug(`${logLabel} completed via ${primaryProvider} in ${elapsed}ms`);
-
-            return result;
-        } catch (primaryError: any) {
-            const elapsed = Date.now() - startTime;
-            logger.warn(`${logLabel} ${primaryProvider} failed after ${elapsed}ms: ${primaryError.message}`);
-
-            // Attempt cross-provider fallback
-            const fallbackResult = await this.attemptFallback(
-                primaryProvider, prompt, schema, temperature, maxOutputTokens, requestId, logLabel
-            );
-
-            if (fallbackResult) {
-                return fallbackResult;
-            }
-
-            throw primaryError;
+        // 1. Handle markdown code blocks
+        const jsonBlockMatch = out.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+        if (jsonBlockMatch && jsonBlockMatch[1]) {
+            out = jsonBlockMatch[1].trim();
         }
+
+        // 2. If it still doesn't look like JSON, try to find the first { or [ and matching } or ]
+        if (!out.startsWith('{') && !out.startsWith('[')) {
+            const startObj = out.indexOf('{');
+            const startArr = out.indexOf('[');
+            const startIdx =
+                startObj === -1 ? startArr :
+                    (startArr === -1 ? startObj : Math.min(startObj, startArr));
+
+            if (startIdx !== -1) {
+                const openToClose: Record<string, string> = { '{': '}', '[': ']' };
+                const firstCh = out[startIdx];
+                const firstClose = openToClose[firstCh];
+
+                if (firstClose) {
+                    const stack: string[] = [firstClose];
+                    let endIdx = -1;
+                    let inString = false;
+                    let escapeNext = false;
+
+                    for (let i = startIdx + 1; i < out.length; i++) {
+                        const ch = out[i];
+                        if (inString) {
+                            if (escapeNext) {
+                                escapeNext = false;
+                                continue;
+                            }
+                            if (ch === '\\') {
+                                escapeNext = true;
+                                continue;
+                            }
+                            if (ch === '"') {
+                                inString = false;
+                            }
+                            continue;
+                        }
+
+                        if (ch === '"') {
+                            inString = true;
+                            continue;
+                        }
+
+                        if (ch === '{') {
+                            stack.push('}');
+                            continue;
+                        }
+                        if (ch === '[') {
+                            stack.push(']');
+                            continue;
+                        }
+
+                        const expectedClose = stack[stack.length - 1];
+                        if ((ch === '}' || ch === ']') && ch === expectedClose) {
+                            stack.pop();
+                            if (stack.length === 0) {
+                                endIdx = i;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (endIdx !== -1) {
+                        out = out.slice(startIdx, endIdx + 1).trim();
+                    }
+                }
+            }
+        }
+
+        // 3. Remove single-line comments (//) that are not inside strings
+        // This is a simple heuristic to handle LLMs that output comments in JSON
+        if (out.includes('//')) {
+            let cleanOut = '';
+            let inString = false;
+            let escapeNext = false;
+            let i = 0;
+            while (i < out.length) {
+                const ch = out[i];
+                if (inString) {
+                    cleanOut += ch;
+                    if (escapeNext) {
+                        escapeNext = false;
+                    } else if (ch === '\\') {
+                        escapeNext = true;
+                    } else if (ch === '"') {
+                        inString = false;
+                    }
+                } else {
+                    if (ch === '"') {
+                        inString = true;
+                        cleanOut += ch;
+                    } else if (ch === '/' && out[i + 1] === '/') {
+                        // Skip until newline
+                        while (i < out.length && out[i] !== '\n') {
+                            i++;
+                        }
+                        continue; // Don't add newline yet, or let the loop handle it
+                    } else {
+                        cleanOut += ch;
+                    }
+                }
+                i++;
+            }
+            out = cleanOut.trim();
+        }
+
+        return out;
     }
 
     /**
@@ -638,11 +873,18 @@ class AIService {
             },
         });
 
-        const text = result.response.text();
+        const text = this.extractJSON(result.response.text());
         const candidates = result.response.candidates;
         const finishReason = (candidates && candidates.length > 0)
             ? (candidates[0].finishReason || 'UNKNOWN')
             : 'UNKNOWN';
+
+        // Validate JSON
+        try {
+            JSON.parse(text);
+        } catch (_parseError) {
+            throw new Error(`Gemini returned invalid JSON: ${text.slice(0, 200)}`);
+        }
 
         return { text, finishReason, provider: 'gemini', requestId: reqId };
     }
@@ -1005,80 +1247,8 @@ class AIService {
             console.log(`[AI CACHE ${reqId}] UNKNOWN model=${config.ai.openRouterModel} usage=missing`);
         }
 
-        // Extract JSON from markdown code blocks if present
-        const jsonBlockMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
-        if (jsonBlockMatch && jsonBlockMatch[1]) {
-            text = jsonBlockMatch[1].trim();
-        }
-
-        text = text.trim();
-
-        // Try to extract JSON object/array if response has extra text
-        if (!text.startsWith('{') && !text.startsWith('[')) {
-            const startObj = text.indexOf('{');
-            const startArr = text.indexOf('[');
-            const startIdx =
-                startObj === -1 ? startArr :
-                    (startArr === -1 ? startObj : Math.min(startObj, startArr));
-
-            if (startIdx !== -1) {
-                const openToClose: Record<string, string> = { '{': '}', '[': ']' };
-                const firstCh = text[startIdx];
-                const firstClose = openToClose[firstCh];
-
-                if (firstClose) {
-                    const stack: string[] = [firstClose];
-                    let endIdx = -1;
-                    let inString = false;
-                    let escapeNext = false;
-
-                    for (let i = startIdx + 1; i < text.length; i++) {
-                        const ch = text[i];
-                        if (inString) {
-                            if (escapeNext) {
-                                escapeNext = false;
-                                continue;
-                            }
-                            if (ch === '\\') {
-                                escapeNext = true;
-                                continue;
-                            }
-                            if (ch === '"') {
-                                inString = false;
-                            }
-                            continue;
-                        }
-
-                        if (ch === '"') {
-                            inString = true;
-                            continue;
-                        }
-
-                        if (ch === '{') {
-                            stack.push('}');
-                            continue;
-                        }
-                        if (ch === '[') {
-                            stack.push(']');
-                            continue;
-                        }
-
-                        const expectedClose = stack[stack.length - 1];
-                        if ((ch === '}' || ch === ']') && ch === expectedClose) {
-                            stack.pop();
-                            if (stack.length === 0) {
-                                endIdx = i;
-                                break;
-                            }
-                        }
-                    }
-
-                    if (endIdx !== -1) {
-                        text = text.slice(startIdx, endIdx + 1).trim();
-                    }
-                }
-            }
-        }
+        // Use robust JSON extraction
+        text = this.extractJSON(text);
 
         // Validate JSON
         try {
@@ -1130,11 +1300,23 @@ class AIService {
      * Cleanup resources
      */
     cleanup(): void {
+        // Clear intervals to prevent memory leaks
+        if (this.pruneIntervalId) {
+            clearInterval(this.pruneIntervalId);
+            this.pruneIntervalId = null;
+        }
+        if (this.statsIntervalId) {
+            clearInterval(this.statsIntervalId);
+            this.statsIntervalId = null;
+        }
+
         this.geminiModel = null;
         this.genAI = null;
         this.initializingPromise = null;
         this.geminiInitialized = false;
         this.openRouterValidated = false;
+        this.cache.clear();
+        this.labelStats.clear();
         logger.debug('AIService cleaned up');
     }
 }

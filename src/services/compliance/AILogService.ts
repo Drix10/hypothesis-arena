@@ -549,15 +549,20 @@ export class AILogService {
                     // Multiple AI logs can share the same orderId (analysis, decision, execution stages)
                     // Using orderId as fallback causes identifier collision
                     if (!weexLogId) {
-                        // Generate composite identifier: orderId-stage-timestamp-random
+                        // Generate robust composite identifier: orderId-stage-timestamp-random
                         // This ensures uniqueness even when multiple logs share the same order
                         // and are created within the same millisecond under high load
                         const timestamp = Date.now();
-                        const randomSuffix = Math.random().toString(36).substring(2, 8); // 6 char random string
+                        const randomSuffix = Math.random().toString(36).substring(2, 8);
+                        
+                        // Use a prefix to distinguish generated IDs from WEEX-returned ones
+                        const prefix = 'GEN-';
                         weexLogId = log.orderId
-                            ? `${log.orderId}-${log.stage}-${timestamp}-${randomSuffix}`
-                            : `${log.id}-${timestamp}-${randomSuffix}`; // Fallback to log ID if no orderId
-                        logger.warn(`WEEX did not return logId for log ${log.id}, generated composite ID: ${weexLogId}`);
+                            ? `${prefix}${log.orderId}-${log.stage}-${timestamp}-${randomSuffix}`
+                            : `${prefix}${log.id}-${timestamp}-${randomSuffix}`;
+
+                        // Downgrade to debug to avoid log clutter, as this is a handled fallback
+                        logger.debug(`WEEX did not return logId for log ${log.id}, using robust composite ID: ${weexLogId}`);
                     }
                 }
             }

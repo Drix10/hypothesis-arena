@@ -495,10 +495,10 @@ export function convertIndicatorsToMarketData(
             atr: indicators.intraday.atr,
             atr_pct: currentPrice !== 0 ? (indicators.intraday.atr / currentPrice) * 100 : 0,
             series: {
-                ema20: indicators.intraday.ema20,
+                ema20: indicators.intraday.ema20.slice(-5),
                 macd: [indicators.intraday.macd.macd],
-                rsi7: indicators.intraday.rsi7,
-                rsi14: indicators.intraday.rsi14,
+                rsi7: indicators.intraday.rsi7.slice(-5),
+                rsi14: indicators.intraday.rsi14.slice(-5),
             },
             price_vs_ema20: ema20_valid && currentPrice > ema20_value ? 'above' : 'below',
             price_vs_ema50: ema50_valid && currentPrice > ema50_value ? 'above' : 'below',

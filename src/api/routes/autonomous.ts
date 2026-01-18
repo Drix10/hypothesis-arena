@@ -28,6 +28,72 @@ import {
 const router = Router();
 const engine = getAutonomousTradingEngine();
 
+// =============================================================================
+// ADMIN/DEBUG MIDDLEWARE (v5.3.0) - Shared access control
+// =============================================================================
+
+// Feature flag check for admin endpoints
+const isAdminEnabled = (): boolean => {
+    return process.env.AUTONOMOUS_ADMIN_ENABLED === 'true';
+};
+
+// Internal-only guard middleware
+// In production, ALWAYS requires valid admin token for security
+// In development, allows localhost/internal network access without token
+const requireInternalAccess = (req: Request, res: Response, next: NextFunction): void => {
+    // Check if admin endpoints are enabled
+    if (!isAdminEnabled()) {
+        logger.warn('Admin endpoint access attempted but AUTONOMOUS_ADMIN_ENABLED is not true');
+        res.status(403).json({
+            success: false,
+            error: 'Admin endpoints are disabled. Set AUTONOMOUS_ADMIN_ENABLED=true to enable.'
+        });
+        return;
+    }
+
+    // Check for admin token (required in production, optional in development)
+    const adminToken = process.env.AUTONOMOUS_ADMIN_TOKEN;
+    if (adminToken && adminToken.length >= 32) {
+        const providedToken = req.headers['x-admin-token'];
+        // SECURITY: Use constant-time comparison via SHA-256 hash to prevent timing attacks
+        // Hashing normalizes length and prevents length-based information leakage
+        if (typeof providedToken === 'string' && providedToken.length > 0) {
+            const providedHash = crypto.createHash('sha256').update(providedToken).digest();
+            const expectedHash = crypto.createHash('sha256').update(adminToken).digest();
+            if (crypto.timingSafeEqual(providedHash, expectedHash)) {
+                // Valid admin token - allow access regardless of IP
+                next();
+                return;
+            }
+        }
+    }
+
+    // SECURITY: In production, ALWAYS require valid admin token
+    // RFC1918 IP trust is removed for production - internal networks can still be compromised
+    if (process.env.NODE_ENV === 'production') {
+        // SECURITY: Prefer socket.remoteAddress over req.ip to avoid X-Forwarded-For spoofing
+        let clientIp = req.socket?.remoteAddress || req.ip || '';
+        if (clientIp.startsWith('::ffff:')) {
+            clientIp = clientIp.slice(7);
+        }
+
+        const isLocalhost = clientIp === '127.0.0.1' || clientIp === '::1';
+
+        // In production, only localhost is allowed without token
+        // All other access (including RFC1918 internal IPs) requires valid admin token
+        if (!isLocalhost) {
+            logger.warn(`Admin endpoint access denied in production - valid admin token required. IP: ${clientIp}`);
+            res.status(403).json({
+                success: false,
+                error: 'Admin endpoints require valid admin token in production. Set AUTONOMOUS_ADMIN_TOKEN and provide x-admin-token header.'
+            });
+            return;
+        }
+    }
+
+    next();
+};
+
 const MAX_HISTORY_LIMIT = 50;
 const DEFAULT_HISTORY_LIMIT = 10;
 
@@ -39,6 +105,100 @@ router.get('/status', (_req, res) => {
         logger.error('Failed to get engine status:', error);
         res.status(500).json({ success: false, error: error.message });
     }
+});
+
+/**
+ * GET /api/autonomous/events
+ * SSE stream for engine events
+ * Protected: Internal/Admin access only
+ */
+router.get('/events', requireInternalAccess, (req: Request, res: Response) => {
+    // Set SSE headers
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no'); // Disable proxy buffering
+
+    // Send initial heartbeat/connection confirmation
+    if (!res.writableEnded) {
+        res.write(`data: ${JSON.stringify({ type: 'connected', timestamp: Date.now() })}\n\n`);
+    }
+
+    // Event handlers
+    const onStarted = () => {
+        if (!res.writableEnded) {
+            try {
+                res.write(`data: ${JSON.stringify({ type: 'started', timestamp: Date.now() })}\n\n`);
+            } catch (err) {
+                logger.error('SSE onStarted write error:', err);
+            }
+        }
+    };
+
+    const onStopped = () => {
+        if (!res.writableEnded) {
+            try {
+                res.write(`data: ${JSON.stringify({ type: 'stopped', timestamp: Date.now() })}\n\n`);
+            } catch (err) {
+                logger.error('SSE onStopped write error:', err);
+            }
+        }
+    };
+
+    const onCycleStart = (data: any) => {
+        if (!res.writableEnded) {
+            try {
+                res.write(`data: ${JSON.stringify({ type: 'cycleStart', data, timestamp: Date.now() })}\n\n`);
+            } catch (err) {
+                logger.error('SSE onCycleStart write error:', err);
+            }
+        }
+    };
+
+    const onCycleComplete = (data: any) => {
+        if (!res.writableEnded) {
+            try {
+                res.write(`data: ${JSON.stringify({ type: 'cycleComplete', data, timestamp: Date.now() })}\n\n`);
+            } catch (err) {
+                logger.error('SSE onCycleComplete write error:', err);
+            }
+        }
+    };
+
+    const onSnapshotFailure = (data: any) => {
+        if (!res.writableEnded) {
+            try {
+                res.write(`data: ${JSON.stringify({ type: 'snapshotFailure', data, timestamp: Date.now() })}\n\n`);
+            } catch (err) {
+                logger.error('SSE onSnapshotFailure write error:', err);
+            }
+        }
+    };
+
+    // Subscribe to engine events
+    engine.on('started', onStarted);
+    engine.on('stopped', onStopped);
+    engine.on('cycleStart', onCycleStart);
+    engine.on('cycleComplete', onCycleComplete);
+    engine.on('snapshotFailure', onSnapshotFailure);
+
+    // Keep-alive heartbeat every 30s to prevent connection timeout
+    const heartbeat = setInterval(() => {
+        if (!res.writableEnded) {
+            res.write(`: heartbeat\n\n`);
+        }
+    }, 30000);
+
+    // Cleanup on client disconnection
+    req.on('close', () => {
+        clearInterval(heartbeat);
+        engine.removeListener('started', onStarted);
+        engine.removeListener('stopped', onStopped);
+        engine.removeListener('cycleStart', onCycleStart);
+        engine.removeListener('cycleComplete', onCycleComplete);
+        engine.removeListener('snapshotFailure', onSnapshotFailure);
+        logger.debug('SSE client disconnected from autonomous events');
+    });
 });
 
 /**
@@ -184,72 +344,6 @@ router.get('/history', async (req: Request, res: Response) => {
         res.status(500).json({ success: false, error: 'Failed to retrieve trade history', data: [] });
     }
 });
-
-// =============================================================================
-// ADMIN/DEBUG MIDDLEWARE (v5.3.0) - Shared access control
-// =============================================================================
-
-// Feature flag check for admin endpoints
-const isAdminEnabled = (): boolean => {
-    return process.env.AUTONOMOUS_ADMIN_ENABLED === 'true';
-};
-
-// Internal-only guard middleware
-// In production, ALWAYS requires valid admin token for security
-// In development, allows localhost/internal network access without token
-const requireInternalAccess = (req: Request, res: Response, next: NextFunction): void => {
-    // Check if admin endpoints are enabled
-    if (!isAdminEnabled()) {
-        logger.warn('Admin endpoint access attempted but AUTONOMOUS_ADMIN_ENABLED is not true');
-        res.status(403).json({
-            success: false,
-            error: 'Admin endpoints are disabled. Set AUTONOMOUS_ADMIN_ENABLED=true to enable.'
-        });
-        return;
-    }
-
-    // Check for admin token (required in production, optional in development)
-    const adminToken = process.env.AUTONOMOUS_ADMIN_TOKEN;
-    if (adminToken && adminToken.length >= 32) {
-        const providedToken = req.headers['x-admin-token'];
-        // SECURITY: Use constant-time comparison via SHA-256 hash to prevent timing attacks
-        // Hashing normalizes length and prevents length-based information leakage
-        if (typeof providedToken === 'string' && providedToken.length > 0) {
-            const providedHash = crypto.createHash('sha256').update(providedToken).digest();
-            const expectedHash = crypto.createHash('sha256').update(adminToken).digest();
-            if (crypto.timingSafeEqual(providedHash, expectedHash)) {
-                // Valid admin token - allow access regardless of IP
-                next();
-                return;
-            }
-        }
-    }
-
-    // SECURITY: In production, ALWAYS require valid admin token
-    // RFC1918 IP trust is removed for production - internal networks can still be compromised
-    if (process.env.NODE_ENV === 'production') {
-        // SECURITY: Prefer socket.remoteAddress over req.ip to avoid X-Forwarded-For spoofing
-        let clientIp = req.socket?.remoteAddress || req.ip || '';
-        if (clientIp.startsWith('::ffff:')) {
-            clientIp = clientIp.slice(7);
-        }
-
-        const isLocalhost = clientIp === '127.0.0.1' || clientIp === '::1';
-
-        // In production, only localhost is allowed without token
-        // All other access (including RFC1918 internal IPs) requires valid admin token
-        if (!isLocalhost) {
-            logger.warn(`Admin endpoint access denied in production - valid admin token required. IP: ${clientIp}`);
-            res.status(403).json({
-                success: false,
-                error: 'Admin endpoints require valid admin token in production. Set AUTONOMOUS_ADMIN_TOKEN and provide x-admin-token header.'
-            });
-            return;
-        }
-    }
-
-    next();
-};
 
 // =============================================================================
 // DEBUG ENDPOINTS (v5.2.0) - For runtime inspection and debugging

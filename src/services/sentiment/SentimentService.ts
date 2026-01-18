@@ -188,6 +188,15 @@ class CacheManager {
 
 const cacheManager = new CacheManager();
 
+/**
+ * Shutdown the sentiment service (cleanup timers, clear cache)
+ * Call this when the application is shutting down
+ */
+export function shutdownSentimentService(): void {
+    cacheManager.shutdown();
+    logger.info('Sentiment service shutdown complete');
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // SENTIMENT WORD LISTS (CRYPTO-SPECIFIC)
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -248,15 +257,6 @@ function setCache<T>(key: string, data: T, ttl: number): void {
 
 export function clearSentimentCache(): void {
     cacheManager.clear();
-}
-
-/**
- * Shutdown the sentiment service (cleanup timers, clear cache)
- * Call this when the application is shutting down
- */
-export function shutdownSentimentService(): void {
-    cacheManager.shutdown();
-    logger.info('Sentiment service shutdown complete');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -446,6 +446,9 @@ function validateFearGreedClassification(
     return 'Extreme Greed';
 }
 
+// FIXED: Race condition protection for Fear & Greed fetch
+let fearGreedFetchPromise: Promise<FearGreedData | null> | null = null;
+
 /**
  * Fetch Bitcoin Fear & Greed Index from alternative.me
  * FREE API, no key required, updates daily
@@ -455,66 +458,76 @@ export async function fetchFearGreedIndex(): Promise<FearGreedData | null> {
     const cached = getCached<FearGreedData>(cacheKey);
     if (cached) return cached;
 
-    try {
-        const response = await fetchWithTimeout(
-            'https://api.alternative.me/fng/?limit=2&format=json'
-        );
-
-        if (!response.ok) {
-            logger.warn(`Fear & Greed API returned ${response.status}`);
-            return null;
-        }
-
-        const data = await response.json() as { data?: Array<{ value: string; value_classification: string; timestamp: string }> };
-        if (!data.data || data.data.length === 0) {
-            logger.warn('Fear & Greed API returned empty data');
-            return null;
-        }
-
-        const current = data.data[0];
-        const previous = data.data[1];
-
-        // FIXED: Validate parseInt results to prevent NaN
-        const currentValue = parseInt(current.value, 10);
-        const currentTimestamp = parseInt(current.timestamp, 10);
-
-        if (!Number.isFinite(currentValue) || !Number.isFinite(currentTimestamp)) {
-            logger.warn('Fear & Greed API returned invalid numeric data');
-            return null;
-        }
-
-        // FIXED: Validate previousValue if present
-        const previousValue = previous ? parseInt(previous.value, 10) : undefined;
-        const validPreviousValue = previousValue !== undefined && Number.isFinite(previousValue)
-            ? previousValue
-            : undefined;
-
-        // FIXED: Validate classification instead of unsafe cast
-        const classification = validateFearGreedClassification(current.value_classification, currentValue);
-        const previousClassification = validPreviousValue !== undefined
-            ? validateFearGreedClassification(previous?.value_classification, validPreviousValue)
-            : undefined;
-
-        const result: FearGreedData = {
-            value: currentValue,
-            classification,
-            timestamp: new Date(currentTimestamp * 1000).toISOString(),
-            previousValue: validPreviousValue,
-            previousClassification,
-        };
-
-        setCache(cacheKey, result, CACHE_TTL.FEAR_GREED);
-        logger.debug(`Fear & Greed Index: ${result.value} (${result.classification})`);
-        return result;
-    } catch (error) {
-        // FIXED: Better error logging with type distinction
-        if (error instanceof FetchTimeoutError) {
-            logger.warn(`Fear & Greed API timeout: ${error.message}`);
-        } else {
-            logger.warn('Failed to fetch Fear & Greed Index:', error);
-        }
-        return null;
+    if (fearGreedFetchPromise) {
+        return fearGreedFetchPromise;
     }
+
+    fearGreedFetchPromise = (async () => {
+        try {
+            const response = await fetchWithTimeout(
+                'https://api.alternative.me/fng/?limit=2&format=json'
+            );
+
+            if (!response.ok) {
+                logger.warn(`Fear & Greed API returned ${response.status}`);
+                return null;
+            }
+
+            const data = await response.json() as { data?: Array<{ value: string; value_classification: string; timestamp: string }> };
+            if (!data.data || data.data.length === 0) {
+                logger.warn('Fear & Greed API returned empty data');
+                return null;
+            }
+
+            const current = data.data[0];
+            const previous = data.data[1];
+
+            // FIXED: Validate parseInt results to prevent NaN
+            const currentValue = parseInt(current.value, 10);
+            const currentTimestamp = parseInt(current.timestamp, 10);
+
+            if (!Number.isFinite(currentValue) || !Number.isFinite(currentTimestamp)) {
+                logger.warn('Fear & Greed API returned invalid numeric data');
+                return null;
+            }
+
+            // FIXED: Validate previousValue if present
+            const previousValue = previous ? parseInt(previous.value, 10) : undefined;
+            const validPreviousValue = previousValue !== undefined && Number.isFinite(previousValue)
+                ? previousValue
+                : undefined;
+
+            // FIXED: Validate classification instead of unsafe cast
+            const classification = validateFearGreedClassification(current.value_classification, currentValue);
+            const previousClassification = validPreviousValue !== undefined
+                ? validateFearGreedClassification(previous?.value_classification, validPreviousValue)
+                : undefined;
+
+            const result: FearGreedData = {
+                value: currentValue,
+                classification,
+                timestamp: new Date(currentTimestamp * 1000).toISOString(),
+                previousValue: validPreviousValue,
+                previousClassification,
+            };
+
+            setCache(cacheKey, result, CACHE_TTL.FEAR_GREED);
+            logger.debug(`Fear & Greed Index: ${result.value} (${result.classification})`);
+            return result;
+        } catch (error) {
+            // FIXED: Better error logging with type distinction
+            if (error instanceof FetchTimeoutError) {
+                logger.warn(`Fear & Greed API timeout: ${error.message}`);
+            } else {
+                logger.warn('Failed to fetch Fear & Greed Index:', error);
+            }
+            return null;
+        } finally {
+            fearGreedFetchPromise = null;
+        }
+    })();
+
+    return fearGreedFetchPromise;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1156,6 +1169,7 @@ export async function initializeSentimentService(): Promise<void> {
 export function resetSentimentServiceState(): void {
     lastFetchTime = 0;
     marketSentimentFetchPromise = null;
+    fearGreedFetchPromise = null;
     cacheManager.clear();
     logger.info('Sentiment service state reset');
 }

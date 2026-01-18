@@ -47,6 +47,7 @@ export class WeexClient {
     private uidBucket: TokenBucket;
     private orderBucket: TokenBucket;
     private responseInterceptorId: number | null = null;
+    private consumeLock: Promise<void> | null = null; // Mutex for rate limit consumption
 
     constructor(credentials?: WeexCredentials) {
         this.credentials = credentials || {
@@ -309,54 +310,81 @@ export class WeexClient {
                 throw new RateLimitError(`Rate limit retry timeout after ${MAX_TOTAL_WAIT_MS}ms`);
             }
 
-            // Refill buckets
-            this.refillBucket(this.ipBucket, DEFAULT_RATE_LIMITS.ipLimit, DEFAULT_RATE_LIMITS.ipWindowMs);
-            this.refillBucket(this.uidBucket, DEFAULT_RATE_LIMITS.uidLimit, DEFAULT_RATE_LIMITS.uidWindowMs);
-
-            if (isOrderRequest) {
-                this.refillBucket(this.orderBucket, DEFAULT_RATE_LIMITS.orderLimit, DEFAULT_RATE_LIMITS.orderWindowMs);
+            // ACQUIRE MUTEX for bucket check and decrement
+            // FIXED: Use while loop to re-check lock availability after waiting (v6.0.0)
+            while (this.consumeLock) {
+                try {
+                    await this.consumeLock;
+                } catch {
+                    // Ignore errors from previous lock holders
+                }
             }
 
-            // Check if we have enough tokens
-            const hasIPTokens = this.ipBucket.tokens >= weight;
-            const hasUIDTokens = this.uidBucket.tokens >= weight;
-            const hasOrderTokens = !isOrderRequest || this.orderBucket.tokens >= 1;
+            let resolveLock: () => void = () => { };
+            this.consumeLock = new Promise<void>(resolve => {
+                resolveLock = resolve;
+            });
 
-            if (hasIPTokens && hasUIDTokens && hasOrderTokens) {
-                // Consume tokens (ensure we don't go negative)
-                this.ipBucket.tokens = Math.max(0, this.ipBucket.tokens - weight);
-                this.uidBucket.tokens = Math.max(0, this.uidBucket.tokens - weight);
+            try {
+                // Refill buckets
+                this.refillBucket(this.ipBucket, DEFAULT_RATE_LIMITS.ipLimit, DEFAULT_RATE_LIMITS.ipWindowMs);
+                this.refillBucket(this.uidBucket, DEFAULT_RATE_LIMITS.uidLimit, DEFAULT_RATE_LIMITS.uidWindowMs);
+
                 if (isOrderRequest) {
-                    this.orderBucket.tokens = Math.max(0, this.orderBucket.tokens - 1);
+                    this.refillBucket(this.orderBucket, DEFAULT_RATE_LIMITS.orderLimit, DEFAULT_RATE_LIMITS.orderWindowMs);
                 }
 
-                // Warn if tokens are running low (< 10%)
-                if (this.ipBucket.tokens < DEFAULT_RATE_LIMITS.ipLimit * 0.1) {
-                    logger.warn(`IP rate limit tokens low: ${this.ipBucket.tokens.toFixed(0)}/${DEFAULT_RATE_LIMITS.ipLimit}`);
-                }
-                if (this.uidBucket.tokens < DEFAULT_RATE_LIMITS.uidLimit * 0.1) {
-                    logger.warn(`UID rate limit tokens low: ${this.uidBucket.tokens.toFixed(0)}/${DEFAULT_RATE_LIMITS.uidLimit}`);
+                // Check if we have enough tokens
+                const hasIPTokens = this.ipBucket.tokens >= weight;
+                const hasUIDTokens = this.uidBucket.tokens >= weight;
+                const hasOrderTokens = !isOrderRequest || this.orderBucket.tokens >= 1;
+
+                if (hasIPTokens && hasUIDTokens && hasOrderTokens) {
+                    // Consume tokens (ensure we don't go negative)
+                    this.ipBucket.tokens = Math.max(0, this.ipBucket.tokens - weight);
+                    this.uidBucket.tokens = Math.max(0, this.uidBucket.tokens - weight);
+                    if (isOrderRequest) {
+                        this.orderBucket.tokens = Math.max(0, this.orderBucket.tokens - 1);
+                    }
+
+                    // Warn if tokens are running low (< 10%)
+                    if (this.ipBucket.tokens < DEFAULT_RATE_LIMITS.ipLimit * 0.1) {
+                        logger.warn(`IP rate limit tokens low: ${this.ipBucket.tokens.toFixed(0)}/${DEFAULT_RATE_LIMITS.ipLimit}`);
+                    }
+                    if (this.uidBucket.tokens < DEFAULT_RATE_LIMITS.uidLimit * 0.1) {
+                        logger.warn(`UID rate limit tokens low: ${this.uidBucket.tokens.toFixed(0)}/${DEFAULT_RATE_LIMITS.uidLimit}`);
+                    }
+
+                    // Success - return and release lock
+                    return;
                 }
 
-                return;
+                // Tokens not available - calculate wait time while holding lock to get accurate tokens
+                const ipWaitTime = (weight - this.ipBucket.tokens) / DEFAULT_RATE_LIMITS.ipLimit * DEFAULT_RATE_LIMITS.ipWindowMs;
+                const uidWaitTime = (weight - this.uidBucket.tokens) / DEFAULT_RATE_LIMITS.uidLimit * DEFAULT_RATE_LIMITS.uidWindowMs;
+                const orderWaitTime = isOrderRequest && this.orderBucket.tokens < 1
+                    ? (1 - this.orderBucket.tokens) / DEFAULT_RATE_LIMITS.orderLimit * DEFAULT_RATE_LIMITS.orderWindowMs
+                    : 0;
+
+                const baseWaitTime = Math.min(
+                    Math.max(ipWaitTime, uidWaitTime, orderWaitTime),
+                    5000 // Max base wait 5 seconds
+                );
+
+                // Add exponential backoff factor
+                const waitTime = Math.min(baseWaitTime * Math.pow(1.5, attempts), 30000); // Cap at 30 seconds
+
+                // RELEASE LOCK before waiting to allow other requests to try
+                resolveLock();
+
+                await new Promise(resolve => setTimeout(resolve, waitTime));
+                attempts++;
+                continue; // Retry after waiting
+
+            } finally {
+                // Ensure lock is always released
+                resolveLock();
             }
-
-            // Calculate wait time with exponential backoff
-            // Include order bucket in wait time calculation to prevent tight retry loops
-            const ipWaitTime = (weight - this.ipBucket.tokens) / DEFAULT_RATE_LIMITS.ipLimit * DEFAULT_RATE_LIMITS.ipWindowMs;
-            const uidWaitTime = (weight - this.uidBucket.tokens) / DEFAULT_RATE_LIMITS.uidLimit * DEFAULT_RATE_LIMITS.uidWindowMs;
-            const orderWaitTime = isOrderRequest && this.orderBucket.tokens < 1
-                ? (1 - this.orderBucket.tokens) / DEFAULT_RATE_LIMITS.orderLimit * DEFAULT_RATE_LIMITS.orderWindowMs
-                : 0;
-
-            const baseWaitTime = Math.min(
-                Math.max(ipWaitTime, uidWaitTime, orderWaitTime),
-                5000 // Max base wait 5 seconds
-            );
-            // Add exponential backoff factor
-            const waitTime = Math.min(baseWaitTime * Math.pow(1.5, attempts), 30000); // Cap at 30 seconds
-            await new Promise(resolve => setTimeout(resolve, waitTime));
-            attempts++;
         }
 
         throw new RateLimitError('Rate limit retry exceeded after 20 attempts');

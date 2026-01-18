@@ -68,7 +68,7 @@ export const config = {
             return provider;
         })() as 'gemini' | 'openrouter',
         model: process.env.GEMINI_MODEL || 'gemini-2.0-flash',
-        openRouterModel: process.env.OPENROUTER_MODEL || 'deepseek/deepseek-chat',
+        openRouterModel: process.env.OPENROUTER_MODEL || 'anthropic/claude-3.5-haiku',
         maxOutputTokens: safeParseInt(process.env.AI_MAX_OUTPUT_TOKENS, 65536),
         temperature: Math.max(0, Math.min(2, safeParseFloat(process.env.AI_TEMPERATURE, 0.7))),
         requestTimeoutMs: Math.max(5000, safeParseInt(process.env.AI_REQUEST_TIMEOUT_MS, 60000)),

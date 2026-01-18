@@ -13,11 +13,17 @@ import { logger } from '../../utils/logger';
 // COMPETITION MODE VALIDATION
 // =============================================================================
 
-const COMPETITION_MODE_ENABLED = process.env.COMPETITION_MODE === 'true' || process.env.NODE_ENV === 'competition';
-const COMPETITION_MODE_ACK_STRING = 'I_ACCEPT_DEMO_ONLY_RISK_MANAGED_SETTINGS';
-// Deprecated ack value for backward compatibility: I_ACCEPT_DEMO_ONLY_HIGH_RISK_AGGRESSIVE_SETTINGS
+const COMPETITION_MODE_ENABLED = process.env.COMPETITION_MODE === 'true' ||
+    process.env.NODE_ENV === 'competition' ||
+    process.env.ENV_RULES === 'aggressive' ||
+    process.env.TRADING_MODE === 'competition';
+const COMPETITION_MODE_ACK_STRING = 'I_ACCEPT_DEMO_ONLY_AGGRESSIVE_SETTINGS';
+// Deprecated ack values for backward compatibility
 const COMPETITION_MODE_ACK = process.env.COMPETITION_MODE_ACK === COMPETITION_MODE_ACK_STRING ||
-    process.env.COMPETITION_MODE_ACK === 'I_ACCEPT_DEMO_ONLY_HIGH_RISK_AGGRESSIVE_SETTINGS';
+    process.env.TRADING_MODE_ACK === COMPETITION_MODE_ACK_STRING ||
+    process.env.COMPETITION_MODE_ACK === 'I_ACCEPT_DEMO_ONLY_RISK_MANAGED_SETTINGS' ||
+    process.env.COMPETITION_MODE_ACK === 'I_ACCEPT_DEMO_ONLY_HIGH_RISK_AGGRESSIVE_SETTINGS' ||
+    process.env.ENV_RULES_ACK === 'I_ACCEPT_DEMO_ONLY_AGGRESSIVE_SETTINGS';
 const WEEX_ACCOUNT_TYPE = process.env.WEEX_ACCOUNT_TYPE?.trim()?.toLowerCase();
 
 if (COMPETITION_MODE_ENABLED && !COMPETITION_MODE_ACK) {

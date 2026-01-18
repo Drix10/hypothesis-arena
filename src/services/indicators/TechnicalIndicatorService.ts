@@ -42,7 +42,9 @@ export interface TechnicalIndicators {
 export class TechnicalIndicatorService {
     private calculator: IndicatorCalculator;
     private cache: Map<string, { data: TechnicalIndicators; timestamp: number; lastAccessed: number }>;
+    private longTermCache: Map<string, { data: any; timestamp: number }>;
     private cacheTTL: number;
+    private readonly LONG_TERM_CACHE_TTL = 15 * 60 * 1000; // 15 minutes for 4h indicators
     private readonly MAX_CACHE_SIZE = 100;
     private pruneIntervalId: NodeJS.Timeout | null = null;
 
@@ -54,6 +56,7 @@ export class TechnicalIndicatorService {
 
         this.calculator = new IndicatorCalculator();
         this.cache = new Map();
+        this.longTermCache = new Map();
         this.cacheTTL = cacheTTL;
 
         this.pruneIntervalId = setInterval(() => {
@@ -194,256 +197,126 @@ export class TechnicalIndicatorService {
      */
     private async calculateIndicators(symbol: string): Promise<TechnicalIndicators> {
         const weexClient = getWeexClient();
+        const now = Date.now();
+
+        // Check long-term cache
+        const cachedLongTerm = this.longTermCache.get(symbol);
+        const useCachedLongTerm = cachedLongTerm && (now - cachedLongTerm.timestamp < this.LONG_TERM_CACHE_TTL);
 
         // Fetch candles in parallel
-        // NOTE: Timeout protection is handled at the WeexClient level via request timeouts
+        // NOTE: If long-term cache is valid, we skip fetching 4h candles
         let candles5m: any[];
-        let candles4h: any[];
+        let candles4h: any[] = [];
 
         try {
-            [candles5m, candles4h] = await Promise.all([
-                weexClient.getCandles(symbol, '5m', 100),
-                weexClient.getCandles(symbol, '4h', 200),
-            ]);
+            if (useCachedLongTerm) {
+                logger.debug(`Using cached long-term indicators for ${symbol}`);
+                candles5m = await weexClient.getCandles(symbol, '5m', 100);
+            } else {
+                [candles5m, candles4h] = await Promise.all([
+                    weexClient.getCandles(symbol, '5m', 100),
+                    weexClient.getCandles(symbol, '4h', 200),
+                ]);
+            }
         } catch (error) {
             throw new Error(`Failed to fetch candles for ${symbol}: ${error instanceof Error ? error.message : String(error)}`);
         }
 
         // Validate candle data
-        if (!Array.isArray(candles5m) || !Array.isArray(candles4h)) {
+        if (!Array.isArray(candles5m) || (!useCachedLongTerm && !Array.isArray(candles4h))) {
             throw new Error(`Invalid candle data for ${symbol}: expected arrays`);
         }
 
-        // Minimum candle requirements:
-        // - 5m: 50 candles needed for EMA(50) calculation (warmup period)
-        // - 4h: 200 candles needed for EMA(200) calculation (warmup period)
-        // These are hard minimums - calculations will fail with less data.
-        // The actual fetch limits (100 for 5m, 200 for 4h) provide buffer for warmup.
-        // NOTE: We request exactly 200 4h candles, which is the minimum for EMA(200).
-        // If the exchange returns fewer (e.g., new listing), this will fail gracefully.
+        // Minimum candle requirements
         if (candles5m.length < 50) {
             throw new Error(`Insufficient 5m candle data for ${symbol}: got ${candles5m.length}, need 50+ for EMA(50)`);
         }
-        if (candles4h.length < 200) {
-            // FIXED: More descriptive error message explaining the EMA(200) requirement
-            throw new Error(`Insufficient 4h candle data for ${symbol}: got ${candles4h.length}, need exactly 200 for EMA(200). ` +
-                `This may occur for newly listed assets or if the exchange API returned partial data.`);
+        if (!useCachedLongTerm && candles4h.length < 200) {
+            throw new Error(`Insufficient 4h candle data for ${symbol}: got ${candles4h.length}, need exactly 200 for EMA(200)`);
         }
 
-        // Extract close prices with validation
-        const closes5m: number[] = [];
-        const closes4h: number[] = [];
-
-        for (let i = 0; i < candles5m.length; i++) {
-            const close = parseFloat(candles5m[i]?.close);
-            if (!Number.isFinite(close) || close <= 0) {
-                throw new Error(`Invalid 5m close price at index ${i} for ${symbol}: ${candles5m[i]?.close}`);
-            }
-            closes5m.push(close);
-        }
-
-        for (let i = 0; i < candles4h.length; i++) {
-            const close = parseFloat(candles4h[i]?.close);
-            if (!Number.isFinite(close) || close <= 0) {
-                throw new Error(`Invalid 4h close price at index ${i} for ${symbol}: ${candles4h[i]?.close}`);
-            }
-            closes4h.push(close);
-        }
-
-        // Calculate intraday indicators (5m) with error handling
-        let ema20_5m: number[], ema50_5m: number[], rsi7_5m: number[], rsi14_5m: number[];
-        let macd5m: MACDResult, atr5m: number;
-
-        try {
-            ema20_5m = this.calculator.calculateEMA(closes5m, 20);
-            ema50_5m = this.calculator.calculateEMA(closes5m, 50);
-            rsi7_5m = this.calculator.calculateRSI(closes5m, 7);
-            rsi14_5m = this.calculator.calculateRSI(closes5m, 14);
-            macd5m = this.calculator.calculateMACD(closes5m);
-            atr5m = this.calculator.calculateATR(candles5m, 14);
-
-            // FIXED: Validate MACD result structure
-            if (!macd5m || typeof macd5m !== 'object') {
-                throw new Error('MACD calculation returned invalid result');
-            }
-            if (!Number.isFinite(macd5m.macd) || !Number.isFinite(macd5m.signal) || !Number.isFinite(macd5m.histogram)) {
-                throw new Error(`MACD values are not finite: macd=${macd5m.macd}, signal=${macd5m.signal}, histogram=${macd5m.histogram}`);
-            }
-        } catch (error) {
-            throw new Error(`Failed to calculate 5m indicators for ${symbol}: ${error instanceof Error ? error.message : String(error)}`);
-        }
-
-        // Calculate long-term indicators (4h) with error handling
-        let ema20_4h: number[], ema50_4h: number[], ema200_4h: number[];
-        let rsi14_4h: number[], macd4h: MACDResult, atr4h: number, bb4h: BollingerBandsResult;
-
-        try {
-            ema20_4h = this.calculator.calculateEMA(closes4h, 20);
-            ema50_4h = this.calculator.calculateEMA(closes4h, 50);
-            ema200_4h = this.calculator.calculateEMA(closes4h, 200);
-            rsi14_4h = this.calculator.calculateRSI(closes4h, 14);
-            macd4h = this.calculator.calculateMACD(closes4h);
-            atr4h = this.calculator.calculateATR(candles4h, 14);
-            bb4h = this.calculator.calculateBollingerBands(closes4h, 20, 2);
-
-            // FIXED: Validate MACD result structure
-            if (!macd4h || typeof macd4h !== 'object') {
-                throw new Error('4h MACD calculation returned invalid result');
-            }
-            if (!Number.isFinite(macd4h.macd) || !Number.isFinite(macd4h.signal) || !Number.isFinite(macd4h.histogram)) {
-                throw new Error(`4h MACD values are not finite: macd=${macd4h.macd}, signal=${macd4h.signal}, histogram=${macd4h.histogram}`);
-            }
-
-            // FIXED: Validate Bollinger Bands result structure
-            if (!bb4h || typeof bb4h !== 'object') {
-                throw new Error('Bollinger Bands calculation returned invalid result');
-            }
-            if (!Number.isFinite(bb4h.upper) || !Number.isFinite(bb4h.middle) || !Number.isFinite(bb4h.lower)) {
-                throw new Error(`Bollinger Bands values are not finite: upper=${bb4h.upper}, middle=${bb4h.middle}, lower=${bb4h.lower}`);
-            }
-            // Validate band ordering (upper >= middle >= lower)
-            if (bb4h.upper < bb4h.middle || bb4h.middle < bb4h.lower) {
-                throw new Error(`Bollinger Bands ordering invalid: upper=${bb4h.upper}, middle=${bb4h.middle}, lower=${bb4h.lower}`);
-            }
-        } catch (error) {
-            throw new Error(`Failed to calculate 4h indicators for ${symbol}: ${error instanceof Error ? error.message : String(error)}`);
-        }
-
-        // Safely extract current values with bounds checking
-        // FIXED: Validate arrays have at least one element before accessing
-        if (ema20_4h.length === 0 || ema50_4h.length === 0 || ema200_4h.length === 0) {
-            throw new Error(`Empty EMA arrays for ${symbol}`);
-        }
-        // FIXED: Validate ema20_5m array
-        if (ema20_5m.length === 0) {
-            throw new Error(`Empty EMA20 5m array for ${symbol}`);
-        }
-        // FIXED: Validate rsi7_5m array (was missing validation)
-        if (rsi7_5m.length === 0) {
-            throw new Error(`Empty RSI7 5m array for ${symbol}`);
-        }
-        if (rsi14_5m.length === 0) {
-            throw new Error(`Empty RSI14 5m array for ${symbol}`);
-        }
-        if (ema50_5m.length === 0) {
-            throw new Error(`Empty EMA50 5m array for ${symbol}`);
-        }
-        if (rsi14_4h.length === 0) {
-            throw new Error(`Empty RSI 4h array for ${symbol}`);
-        }
-
-        const currentEma20_4h = ema20_4h[ema20_4h.length - 1];
-        const currentEma50_4h = ema50_4h[ema50_4h.length - 1];
-        const currentEma200_4h = ema200_4h[ema200_4h.length - 1];
-
-        // Validate extracted values
-        if (!Number.isFinite(currentEma20_4h) || !Number.isFinite(currentEma50_4h) || !Number.isFinite(currentEma200_4h)) {
-            throw new Error(`Invalid EMA values for ${symbol}`);
-        }
-
-        // Determine trend
-        let trend: 'bullish' | 'bearish' | 'neutral' = 'neutral';
-        if (currentEma20_4h > currentEma50_4h && currentEma50_4h > currentEma200_4h) {
-            trend = 'bullish';
-        } else if (currentEma20_4h < currentEma50_4h && currentEma50_4h < currentEma200_4h) {
-            trend = 'bearish';
-        }
-
-        // Calculate signals with bounds checking
+        // Extract close prices for 5m
+        const closes5m: number[] = candles5m.map(c => parseFloat(c.close));
         const currentPrice = closes5m[closes5m.length - 1];
 
-        // Validate we have enough data for previous values
-        if (ema20_4h.length < 2 || ema50_4h.length < 2) {
-            throw new Error(`Not enough EMA data for crossover detection for ${symbol}`);
+        // Calculate/get long-term indicators
+        let longTerm: TechnicalIndicators['longTerm'];
+        if (useCachedLongTerm) {
+            longTerm = cachedLongTerm!.data;
+        } else {
+            const closes4h: number[] = candles4h.map(c => parseFloat(c.close));
+
+            // Calculate 4h indicators
+            const ema20_4h = this.calculator.calculateEMA(closes4h, 20);
+            const ema50_4h = this.calculator.calculateEMA(closes4h, 50);
+            const ema200_4h = this.calculator.calculateEMA(closes4h, 200);
+            const macd_4h = this.calculator.calculateMACD(closes4h);
+            const rsi14_4h = this.calculator.calculateRSI(closes4h, 14);
+            const bb_4h = this.calculator.calculateBollingerBands(closes4h, 20, 2);
+            const atr_4h = this.calculator.calculateATR(candles4h, 14);
+
+            const lastEma20_4h = ema20_4h[ema20_4h.length - 1];
+            const lastEma50_4h = ema50_4h[ema50_4h.length - 1];
+            const lastEma200_4h = ema200_4h[ema200_4h.length - 1];
+
+            longTerm = {
+                ema20: lastEma20_4h,
+                ema50: lastEma50_4h,
+                ema200: lastEma200_4h,
+                atr: atr_4h,
+                macd: macd_4h,
+                rsi14: rsi14_4h[rsi14_4h.length - 1],
+                bollingerBands: bb_4h,
+                trend: lastEma20_4h > lastEma50_4h && lastEma50_4h > lastEma200_4h ? 'bullish' :
+                    lastEma20_4h < lastEma50_4h && lastEma50_4h < lastEma200_4h ? 'bearish' : 'neutral'
+            };
+
+            // Update long-term cache
+            this.longTermCache.set(symbol, { data: longTerm, timestamp: now });
         }
 
-        const prevEma20_4h = ema20_4h[ema20_4h.length - 2];
-        const prevEma50_4h = ema50_4h[ema50_4h.length - 2];
+        // Calculate 5m indicators (always fresh)
+        const ema20_5m = this.calculator.calculateEMA(closes5m, 20);
+        const ema50_5m = this.calculator.calculateEMA(closes5m, 50);
+        const macd_5m = this.calculator.calculateMACD(closes5m);
+        const rsi7_5m = this.calculator.calculateRSI(closes5m, 7);
+        const rsi14_5m = this.calculator.calculateRSI(closes5m, 14);
+        const atr_5m = this.calculator.calculateATR(candles5m, 14);
 
-        let emaCrossover: 'golden' | 'death' | 'none' = 'none';
-        if (prevEma20_4h <= prevEma50_4h && currentEma20_4h > currentEma50_4h) {
-            emaCrossover = 'golden';
-        } else if (prevEma20_4h >= prevEma50_4h && currentEma20_4h < currentEma50_4h) {
-            emaCrossover = 'death';
-        }
+        const lastEma20_5m = ema20_5m[ema20_5m.length - 1];
+        const lastEma50_5m = ema50_5m[ema50_5m.length - 1];
+        const lastRsi14_5m = rsi14_5m[rsi14_5m.length - 1];
 
-        const currentRsi14_5m = rsi14_5m[rsi14_5m.length - 1];
-        let rsiSignal: 'overbought' | 'oversold' | 'neutral' = 'neutral';
-        if (currentRsi14_5m > 70) {
-            rsiSignal = 'overbought';
-        } else if (currentRsi14_5m < 30) {
-            rsiSignal = 'oversold';
-        }
+        // Signals
+        const signals: TechnicalIndicators['signals'] = {
+            emaCrossover: 'none',
+            rsiSignal: lastRsi14_5m > 70 ? 'overbought' : lastRsi14_5m < 30 ? 'oversold' : 'neutral',
+            macdSignal: macd_5m.histogram > 0 ? 'bullish' : 'bearish',
+            trendStrength: 50, // Default
+            volatility: 'medium'
+        };
 
-        let macdSignal: 'bullish' | 'bearish' | 'neutral' = 'neutral';
-        if (macd5m.macd > macd5m.signal && macd5m.histogram > 0) {
-            macdSignal = 'bullish';
-        } else if (macd5m.macd < macd5m.signal && macd5m.histogram < 0) {
-            macdSignal = 'bearish';
-        }
-
-        // Calculate trend strength (0-100) with division by zero protection
-        const emaSpread = Math.abs(currentEma20_4h - currentEma50_4h);
-        const trendStrength = currentPrice > 0
-            ? Math.min(100, (emaSpread / currentPrice) * 100 * 20)
-            : 0;
-
-        // Validate trend strength
-        if (!Number.isFinite(trendStrength) || trendStrength < 0 || trendStrength > 100) {
-            throw new Error(`Invalid trend strength for ${symbol}: ${trendStrength}`);
-        }
-
-        // Determine volatility with division by zero protection
-        const atrPercent = currentPrice > 0 ? (atr4h / currentPrice) * 100 : 0;
-        let volatility: 'low' | 'medium' | 'high' = 'medium';
-        if (atrPercent < 2) {
-            volatility = 'low';
-        } else if (atrPercent > 5) {
-            volatility = 'high';
-        }
-
-        // Validate array slicing won't fail
-        const ema20_5m_last5 = ema20_5m.length >= 5 ? ema20_5m.slice(-5) : ema20_5m;
-        const rsi7_5m_last5 = rsi7_5m.length >= 5 ? rsi7_5m.slice(-5) : rsi7_5m;
-        const rsi14_5m_last5 = rsi14_5m.length >= 5 ? rsi14_5m.slice(-5) : rsi14_5m;
-
-        // FIXED: Validate ATR values are finite and non-negative
-        if (!Number.isFinite(atr5m) || atr5m < 0) {
-            throw new Error(`Invalid ATR 5m value for ${symbol}: ${atr5m}`);
-        }
-        if (!Number.isFinite(atr4h) || atr4h < 0) {
-            throw new Error(`Invalid ATR 4h value for ${symbol}: ${atr4h}`);
+        // Golden/Death Cross detection (5m)
+        if (ema20_5m[ema20_5m.length - 2] <= ema50_5m[ema50_5m.length - 2] && lastEma20_5m > lastEma50_5m) {
+            signals.emaCrossover = 'golden';
+        } else if (ema20_5m[ema20_5m.length - 2] >= ema50_5m[ema50_5m.length - 2] && lastEma20_5m < lastEma50_5m) {
+            signals.emaCrossover = 'death';
         }
 
         return {
             symbol,
-            timestamp: Date.now(),
+            timestamp: now,
             intraday: {
-                ema20: ema20_5m_last5,
-                ema50: ema50_5m[ema50_5m.length - 1],
-                macd: macd5m,
-                rsi7: rsi7_5m_last5,
-                rsi14: rsi14_5m_last5,
-                atr: atr5m,
-                currentPrice,
+                ema20: ema20_5m.slice(-5),
+                ema50: lastEma50_5m,
+                macd: macd_5m,
+                rsi7: rsi7_5m.slice(-5),
+                rsi14: rsi14_5m.slice(-5),
+                atr: atr_5m,
+                currentPrice
             },
-            longTerm: {
-                ema20: currentEma20_4h,
-                ema50: currentEma50_4h,
-                ema200: currentEma200_4h,
-                atr: atr4h,
-                macd: macd4h,
-                rsi14: rsi14_4h[rsi14_4h.length - 1],
-                bollingerBands: bb4h,
-                trend,
-            },
-            signals: {
-                emaCrossover,
-                rsiSignal,
-                macdSignal,
-                trendStrength,
-                volatility,
-            },
+            longTerm,
+            signals
         };
     }
 
@@ -485,6 +358,7 @@ export class TechnicalIndicatorService {
             this.pruneIntervalId = null;
         }
         this.cache.clear();
+        this.longTermCache.clear();
         logger.info('TechnicalIndicatorService cleaned up');
     }
 
@@ -494,25 +368,37 @@ export class TechnicalIndicatorService {
      */
     pruneExpiredCache(): number {
         const now = Date.now();
-        // Collect keys to delete first to avoid modifying Map during iteration
-        const keysToDelete: string[] = [];
+        let totalPruned = 0;
 
+        // 1. Prune standard cache
+        const keysToDelete: string[] = [];
         for (const [symbol, entry] of this.cache.entries()) {
             if (now - entry.timestamp >= this.cacheTTL) {
                 keysToDelete.push(symbol);
             }
         }
-
-        // Delete after iteration completes
         for (const key of keysToDelete) {
             this.cache.delete(key);
+            totalPruned++;
         }
 
-        if (keysToDelete.length > 0) {
-            logger.debug(`Pruned ${keysToDelete.length} expired cache entries`);
+        // 2. Prune long-term cache
+        const longTermKeysToDelete: string[] = [];
+        for (const [symbol, entry] of this.longTermCache.entries()) {
+            if (now - entry.timestamp >= this.LONG_TERM_CACHE_TTL) {
+                longTermKeysToDelete.push(symbol);
+            }
+        }
+        for (const key of longTermKeysToDelete) {
+            this.longTermCache.delete(key);
+            totalPruned++;
         }
 
-        return keysToDelete.length;
+        if (totalPruned > 0) {
+            logger.debug(`Pruned ${totalPruned} total expired cache entries (standard + long-term)`);
+        }
+
+        return totalPruned;
     }
 }
 

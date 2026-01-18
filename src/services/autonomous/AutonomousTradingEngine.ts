@@ -30,7 +30,10 @@ import { roundToStepSize, roundToTickSize, updateContractSpecs, getContractSpecs
 import { APPROVED_SYMBOLS } from '../../shared/types/weex';
 import { validateTradeWithMonteCarlo } from '../quant';
 import { trackOpenTrade, syncPositions, type PositionData } from '../position';
-import { getSymbolSentimentScore } from '../sentiment';
+import { getSymbolSentimentScore, shutdownSentimentService, shutdownRedditService } from '../sentiment';
+import { aiService } from '../ai/AIService';
+import { resetTechnicalIndicatorService } from '../indicators/TechnicalIndicatorService';
+import { shutdownQuantService, shutdownRegimeDetector } from '../quant';
 
 const CONTRACT_SPECS_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 
@@ -867,6 +870,20 @@ export class AutonomousTradingEngine extends EventEmitter {
             this.sleepTimeout = null;
         }
 
+        // Cleanup core services to prevent memory leaks (unclosed intervals, etc.)
+        try {
+            aiService.cleanup();
+            shutdownSentimentService();
+            shutdownRedditService();
+            shutdownQuantService();
+            shutdownRegimeDetector();
+            resetTechnicalIndicatorService();
+            resetCollaborativeFlow();
+            logger.info('✅ Engine services cleaned up successfully');
+        } catch (error) {
+            logger.error('Error during engine services cleanup:', error);
+        }
+
         this.emit('stopped');
     }
 
@@ -1403,14 +1420,22 @@ export class AutonomousTradingEngine extends EventEmitter {
                         symbol: decision.analysisResult.quant.recommendation.symbol,
                         confidence: decision.analysisResult.quant.recommendation.confidence,
                     } : 'FAILED',
+                    debateResult: decision.debateResult ? {
+                        championId: decision.debateResult.championId || 'NONE',
+                        matchCount: decision.debateResult.debates?.length ?? 0,
+                        summary: decision.debateResult.summary || 'No summary',
+                        durationMs: decision.debateResult.durationMs || 0
+                    } : 'NONE',
                 };
 
-                const analysisExplanation = `4 AI analysts(Jim, Ray, Karen, Quant) independently analyzed ${flowMarketData.size} trading pairs. ` +
+                const analysisExplanation = `4 AI analysts (Jim, Ray, Karen, Quant) independently analyzed ${flowMarketData.size} trading pairs. ` +
                     `Each analyst applied their specialized methodology to identify trading opportunities. ` +
+                    (decision.debateResult ? `A tournament of ${decision.debateResult.debates?.length ?? 0} debates was held to resolve conflicting views (took ${decision.debateResult.durationMs}ms). ` : '') +
                     `Results: Jim = ${decision.analysisResult.jim?.recommendation.action || 'FAILED'}, ` +
                     `Ray = ${decision.analysisResult.ray?.recommendation.action || 'FAILED'}, ` +
                     `Karen = ${decision.analysisResult.karen?.recommendation.action || 'FAILED'}, ` +
-                    `Quant = ${decision.analysisResult.quant?.recommendation.action || 'FAILED'}.`;
+                    `Quant = ${decision.analysisResult.quant?.recommendation.action || 'FAILED'}.` +
+                    (decision.debateResult?.championId ? ` Debate Champion: ${decision.debateResult.championId}.` : '');
 
                 await aiLogService.createLog(
                     'analysis',
@@ -1439,15 +1464,16 @@ export class AutonomousTradingEngine extends EventEmitter {
                     tp_price: decision.tp_price,
                     sl_price: decision.sl_price,
                     warnings: decision.warnings,
+                    debate_champion: decision.debateResult?.championId || 'NONE',
                 };
 
                 // FIXED: Guard against undefined/null judgeDecision.reasoning
                 const reasoningSnippet = decision.judgeDecision?.reasoning
                     ? decision.judgeDecision.reasoning.slice(0, 300)
                     : 'No reasoning provided';
-                const decisionExplanation = `AI Judge evaluated 4 analyst recommendations and selected ${decision.winner} as winner. ` +
+                const decisionExplanation = `AI Judge evaluated 4 analyst recommendations and ${decision.debateResult ? 'the outcome of their tournament debates' : 'individual views'} to select ${decision.winner} as winner. ` +
                     `Final decision: ${decision.action} ${decision.symbol} with ${decision.confidence}% confidence. ` +
-                    `${reasoningSnippet} `;
+                    `${reasoningSnippet}`;
 
                 await aiLogService.createLog(
                     'decision',

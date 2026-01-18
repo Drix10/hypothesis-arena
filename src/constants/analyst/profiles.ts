@@ -30,6 +30,12 @@ export const ANALYST_PROFILES: Record<string, AnalystAgent> = {
         ],
         pipelineRole: 'coin_selector',
         coinTypeSpecialty: ['l1_growth', 'momentum_meme'],
+        tournamentScores: {
+            data: 95,
+            logic: 90,
+            rebuttal: 80,
+            catalysts: 70
+        },
         tournamentStrengths: [
             'DATA QUALITY - Precise statistical thresholds with z-scores',
             'LOGIC - Mathematical models with clear entry/exit rules',
@@ -65,6 +71,12 @@ export const ANALYST_PROFILES: Record<string, AnalystAgent> = {
         ],
         pipelineRole: 'coin_selector',
         coinTypeSpecialty: ['blue_chip'],
+        tournamentScores: {
+            data: 90,
+            logic: 85,
+            rebuttal: 75,
+            catalysts: 95
+        },
         tournamentStrengths: [
             'DATA QUALITY - Multi-source data fusion',
             'LOGIC - AI-driven probability estimates',
@@ -102,6 +114,12 @@ export const ANALYST_PROFILES: Record<string, AnalystAgent> = {
         ],
         pipelineRole: 'risk_council',
         coinTypeSpecialty: ['blue_chip', 'utility'],
+        tournamentScores: {
+            data: 85,
+            logic: 95,
+            rebuttal: 90,
+            catalysts: 60
+        },
         tournamentStrengths: [
             'RISK AWARENESS - Primary strength, Sharpe ratio focus',
             'DATA QUALITY - Precise risk metrics and limits',
@@ -136,6 +154,12 @@ export const ANALYST_PROFILES: Record<string, AnalystAgent> = {
         ],
         pipelineRole: 'coin_selector',
         coinTypeSpecialty: ['l1_growth', 'utility'],
+        tournamentScores: {
+            data: 95,
+            logic: 80,
+            rebuttal: 70,
+            catalysts: 85
+        },
         tournamentStrengths: [
             'DATA QUALITY - Real-time spread and flow analysis',
             'LOGIC - Clear arbitrage math with defined edge',
