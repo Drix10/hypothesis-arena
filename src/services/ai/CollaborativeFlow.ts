@@ -578,8 +578,14 @@ export class CollaborativeFlowService {
                 s.bollinger_signal === 'squeeze';
 
             const hasVol = s.volatility === 'high';
+            const hasFunding = s.funding_bias !== 'neutral';
+            
+            // Check for strong trends (0-100 scale, <20 is strong bear, >80 is strong bull)
+            // Note: trend_strength is calculated on 5m data despite being in long_term object
+            const trendStrength = asset.long_term.trend_strength;
+            const hasStrongTrend = trendStrength >= 80 || trendStrength <= 20;
 
-            return hasEma || hasRsi || hasMacd || hasBollinger || hasVol;
+            return hasEma || hasRsi || hasMacd || hasBollinger || hasVol || hasFunding || hasStrongTrend;
         });
     }
 

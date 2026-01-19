@@ -288,12 +288,34 @@ export class TechnicalIndicatorService {
         const lastRsi14_5m = rsi14_5m[rsi14_5m.length - 1];
 
         // Signals
+        const atrPct = currentPrice > 0 ? (atr_5m / currentPrice) * 100 : 0;
+        let volatility: 'low' | 'medium' | 'high' = 'medium';
+        if (atrPct < 0.2) volatility = 'low';
+        else if (atrPct > 0.5) volatility = 'high';
+
+        // Calculate Trend Strength (0-100)
+        let trendStrength = 50;
+        const isBullish = lastEma20_5m > lastEma50_5m;
+
+        if (isBullish) {
+            trendStrength += 20; // Bullish crossover
+            if (currentPrice > lastEma20_5m) trendStrength += 15; // Price above fast EMA
+            if (lastRsi14_5m > 55) trendStrength += 15; // RSI confirms
+        } else {
+            trendStrength -= 20; // Bearish crossover
+            if (currentPrice < lastEma20_5m) trendStrength -= 15; // Price below fast EMA
+            if (lastRsi14_5m < 45) trendStrength -= 15; // RSI confirms
+        }
+
+        // Normalize to 0-100 (currently 0-100 logic: 50 +/- 50)
+        trendStrength = Math.max(0, Math.min(100, trendStrength));
+
         const signals: TechnicalIndicators['signals'] = {
             emaCrossover: 'none',
             rsiSignal: lastRsi14_5m > 70 ? 'overbought' : lastRsi14_5m < 30 ? 'oversold' : 'neutral',
             macdSignal: macd_5m.histogram > 0 ? 'bullish' : 'bearish',
-            trendStrength: 50, // Default
-            volatility: 'medium'
+            trendStrength,
+            volatility
         };
 
         // Golden/Death Cross detection (5m)
