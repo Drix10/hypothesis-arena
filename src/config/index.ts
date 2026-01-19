@@ -80,34 +80,19 @@ export const config = {
             budgetTokens: clampInt(process.env.AI_THINKING_BUDGET, 16000, 1024, 64000),
         },
 
-        // Hybrid AI Mode (v5.5.0) - Use both Gemini and OpenRouter simultaneously
-        hybridMode: process.env.AI_HYBRID_MODE === 'true',
+        // Hybrid AI Mode (v5.5.0) - Simplified to single provider by default
+        hybridMode: false,
 
-        // Per-analyst provider assignment (only used when hybridMode=true)
+        // Per-analyst provider assignment (unused when hybridMode=false)
         analystProviders: {
-            jim: (() => {
-                const p = process.env.ANALYST_JIM_PROVIDER?.toLowerCase();
-                return (p === 'gemini' || p === 'openrouter') ? p : 'openrouter';
-            })() as 'gemini' | 'openrouter',
-            ray: (() => {
-                const p = process.env.ANALYST_RAY_PROVIDER?.toLowerCase();
-                return (p === 'gemini' || p === 'openrouter') ? p : 'openrouter';
-            })() as 'gemini' | 'openrouter',
-            karen: (() => {
-                const p = process.env.ANALYST_KAREN_PROVIDER?.toLowerCase();
-                return (p === 'gemini' || p === 'openrouter') ? p : 'gemini';
-            })() as 'gemini' | 'openrouter',
-            quant: (() => {
-                const p = process.env.ANALYST_QUANT_PROVIDER?.toLowerCase();
-                return (p === 'gemini' || p === 'openrouter') ? p : 'gemini';
-            })() as 'gemini' | 'openrouter',
+            jim: 'openrouter',
+            ray: 'openrouter',
+            karen: 'openrouter',
+            quant: 'openrouter',
         },
 
-        // Judge provider (only used when hybridMode=true)
-        judgeProvider: (() => {
-            const p = process.env.JUDGE_PROVIDER?.toLowerCase();
-            return (p === 'gemini' || p === 'openrouter') ? p : 'gemini';
-        })() as 'gemini' | 'openrouter',
+        // Judge provider (unused when hybridMode=false)
+        judgeProvider: 'openrouter',
     },
 
     // Trading - General
@@ -550,43 +535,15 @@ if (config.nodeEnv === 'production') {
     }
 }
 
-// Validate hybrid mode API key requirements at startup
-if (config.ai.hybridMode) {
-    const needsGemini = Object.values(config.ai.analystProviders).includes('gemini') ||
-        config.ai.judgeProvider === 'gemini';
-    const needsOpenRouter = Object.values(config.ai.analystProviders).includes('openrouter') ||
-        config.ai.judgeProvider === 'openrouter';
-
-    const hybridErrors: string[] = [];
-
-    if (needsGemini && !config.geminiApiKey) {
-        hybridErrors.push('GEMINI_API_KEY required for assigned analysts/judge');
-    }
-    if (needsOpenRouter && !config.openRouterApiKey) {
-        hybridErrors.push('OPENROUTER_API_KEY required for assigned analysts/judge');
-    }
-    // Check raw env var since config.ai.openRouterModel has a default value
-    if (needsOpenRouter && !process.env.OPENROUTER_MODEL) {
-        hybridErrors.push('OPENROUTER_MODEL required for assigned analysts/judge');
-    }
-
-    if (hybridErrors.length > 0) {
-        const errorMsg = `❌ FATAL: Hybrid AI mode enabled but missing configuration:\n  - ${hybridErrors.join('\n  - ')}\n` +
-            `  Analyst assignments: jim→${config.ai.analystProviders.jim}, ray→${config.ai.analystProviders.ray}, ` +
-            `karen→${config.ai.analystProviders.karen}, quant→${config.ai.analystProviders.quant}\n` +
-            `  Judge: ${config.ai.judgeProvider}`;
-        console.error(errorMsg);
-        throw new Error(errorMsg);
-    }
-
-    // Log hybrid mode configuration at startup
-    console.log(
-        `🔀 Hybrid AI mode: jim→${config.ai.analystProviders.jim}, ray→${config.ai.analystProviders.ray}, ` +
-        `karen→${config.ai.analystProviders.karen}, quant→${config.ai.analystProviders.quant}, judge→${config.ai.judgeProvider}`
-    );
-} else if (!config.geminiApiKey && !config.openRouterApiKey) {
-    // Non-hybrid mode: warn if no API keys configured
-    console.warn('⚠️ WARNING: No AI API keys configured (GEMINI_API_KEY or OPENROUTER_API_KEY). AI features will fail.');
+// Validate API key presence based on provider
+if (config.ai.provider === 'gemini' && !config.geminiApiKey) {
+    const errorMsg = '❌ FATAL: GEMINI_API_KEY is required when provider is set to "gemini"';
+    console.error(errorMsg);
+    if (config.nodeEnv === 'production') throw new Error(errorMsg);
+} else if (config.ai.provider === 'openrouter' && !config.openRouterApiKey) {
+    const errorMsg = '❌ FATAL: OPENROUTER_API_KEY is required when provider is set to "openrouter"';
+    console.error(errorMsg);
+    if (config.nodeEnv === 'production') throw new Error(errorMsg);
 }
 
 // =============================================================================

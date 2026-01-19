@@ -322,7 +322,7 @@ export class WeexClient {
                 } catch (error) {
                     // Lock timeout or error - force release and continue
                     const waitTime = Date.now() - lockWaitStart;
-                    logger.error(`[WEEX] Lock wait timeout/error after ${waitTime}ms, forcing lock release`);
+                    logger.error(`[WEEX] Lock wait timeout/error after ${waitTime}ms, forcing lock release: ${error instanceof Error ? error.message : String(error)}`, { error });
                     this.consumeLock = null;
                 }
             }

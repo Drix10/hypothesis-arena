@@ -290,18 +290,18 @@ ${marketDataStr}
 
         for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
             try {
-                const result = await aiService.generateContentForAnalyst(analystId, {
+                const result = await aiService.generateContent({
                     prompt: `${systemPrompt}\n\n---USER---\n\n${userPrompt}`,
                     schema: DEBATE_TURN_SCHEMA,
-                    maxOutputTokens: 2048, // Limit output for faster turns
+                    maxOutputTokens: 4096, // Increased limit for safer output
                     label: `Debate-${analystId}-Attempt${attempt}`
                 });
 
                 let parsed: any;
                 try {
                     parsed = JSON.parse(result.text);
-                } catch (e) {
-                    logger.warn(`Failed to parse debate turn for ${analystId} (attempt ${attempt}). Model: ${result.provider}.`);
+                } catch (error: any) {
+                    logger.warn(`Failed to parse debate turn for ${analystId} (attempt ${attempt}). Model: ${result.provider}. Error: ${error.message}`);
                     if (attempt === MAX_ATTEMPTS) {
                         parsed = {
                             argument: result.text.length > 50 ? result.text : 'No coherent argument provided.',

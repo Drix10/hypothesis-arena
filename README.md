@@ -31,7 +31,8 @@ An autonomous trading system for WEEX perpetual futures using a **parallel AI an
 | ---------------------- | -------------------------------------------------------------------- |
 | **4 AI Analysts**      | Jim (Statistical), Ray (ML/Signals), Karen (Risk), Quant (Liquidity) |
 | **Hybrid AI Mode**     | Split analysts across Gemini + OpenRouter for diversity              |
-| **Parallel Analysis**  | All 4 analyze simultaneously (~25 sec total)                         |
+| **Parallel Analysis**  | Combined 4-in-1 call + parallel fallback (~25 sec total)             |
+| **Prompt Caching**     | Optimized context caching for reduced latency/cost                   |
 | **Sentiment Analysis** | Fear & Greed, news, Reddit social sentiment                          |
 | **Quant Analysis**     | Z-scores, patterns, correlation tracking                             |
 | **Regime Detection**   | Trending/ranging/volatile/quiet classification                       |
@@ -99,9 +100,9 @@ MAX_CONCURRENT_POSITIONS=3
 │   • Sentiment (Fear & Greed, news, Reddit)                      │
 │   • Quant analysis, regime detection                            │
 ├─────────────────────────────────────────────────────────────────┤
-│   STAGE 2: PARALLEL ANALYSIS                    (~10 seconds)   │
-│   • Jim, Ray, Karen, Quant analyze independently                │
-│   • Each outputs: BUY/SELL/HOLD/CLOSE/REDUCE                    │
+│   STAGE 2: PARALLEL ANALYSIS                  (~25 sec total)   │
+│   • COMBINED ANALYST CALL (Optimization)                        │
+│   • All 4 analysts run in 1 single LLM request (or fallback)    │
 ├─────────────────────────────────────────────────────────────────┤
 │   STAGE 3: JUDGE DECISION                        (~5 seconds)   │
 │   • Compare analyses, pick winner or HOLD                       │
@@ -163,7 +164,7 @@ MAX_CONCURRENT_POSITIONS=3
 
 ```env
 COMPETITION_MODE=true
-COMPETITION_MODE_ACK=I_ACCEPT_DEMO_ONLY_HIGH_RISK_AGGRESSIVE_SETTINGS
+COMPETITION_MODE_ACK=I_ACCEPT_DEMO_ONLY_AGGRESSIVE_SETTINGS
 WEEX_ACCOUNT_TYPE=demo
 ```
 

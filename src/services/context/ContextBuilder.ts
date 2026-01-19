@@ -37,7 +37,7 @@ import {
     generateTradingInsights,
     formatInsightsForPrompt,
 } from '../journal';
-// NOTE: ANTI_CHURN_RULES and LEVERAGE_POLICY are included in the system prompt (buildAnalystPrompt),
+// NOTE: ANTI_CHURN_RULES and LEVERAGE_POLICY are included in the system prompt (ANALYST_SYSTEM_PROMPT),
 // not in the context, to avoid duplication. Only dynamic risk limits are included here.
 import { RISK_COUNCIL_VETO_TRIGGERS } from '../../constants/analyst/riskCouncil';
 import { GLOBAL_RISK_LIMITS, getRequiredStopLossPercent } from '../../constants/analyst/riskLimits';

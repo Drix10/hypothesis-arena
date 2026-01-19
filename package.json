@@ -13,7 +13,7 @@
         "typecheck": "tsc --noEmit"
     },
     "dependencies": {
-        "@google/generative-ai": "^0.21.0",
+        "@google/generative-ai": "^0.24.1",
         "@libsql/client": "^0.15.15",
         "@prisma/adapter-libsql": "6.19.0",
         "@prisma/client": "6.19.0",

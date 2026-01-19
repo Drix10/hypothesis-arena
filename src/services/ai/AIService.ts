@@ -6,10 +6,8 @@
  * 
  * Features:
  * - Dual provider support (Gemini / OpenRouter)
- * - Hybrid mode (v5.5.0) - split analysts across providers for diversity
  * - Strict JSON schema enforcement via responseSchema
  * - Schema conversion for OpenRouter compatibility
- * - Cross-provider fallback on failure
  * - Prompt caching optimization (implicit for Gemini 2.5+)
  * - Centralized error handling
  * - Rate limit detection (retries handled by caller - see CollaborativeFlow)
@@ -21,6 +19,7 @@
  */
 
 import { GoogleGenerativeAI, GenerativeModel, SchemaType, ResponseSchema } from '@google/generative-ai';
+import { GoogleAICacheManager } from '@google/generative-ai/server';
 import { createHash } from 'crypto';
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
@@ -155,8 +154,8 @@ function convertToOpenRouterSchema(geminiSchema: ResponseSchema): any {
             baseResult.description = schema.description;
         }
 
-        if (schema.enum) {
-            baseResult.enum = schema.enum;
+        if ((schema as any).enum) {
+            baseResult.enum = (schema as any).enum;
         }
 
         // Handle object properties
@@ -202,12 +201,11 @@ function convertToOpenRouterSchema(geminiSchema: ResponseSchema): any {
 class AIService {
     private genAI: GoogleGenerativeAI | null = null;
     private geminiModel: GenerativeModel | null = null;
+    private cacheManager: GoogleAICacheManager | null = null;
+    private remoteCacheMap: Map<string, { name: string; expires: number }> = new Map();
     private openRouterBaseUrl = 'https://openrouter.ai/api/v1';
     private initializingPromise: Promise<void> | null = null;
-
-    // Hybrid mode: track if both providers are initialized
-    private geminiInitialized: boolean = false;
-    private openRouterValidated: boolean = false;
+    private cacheCreationLocks: Map<string, Promise<string | null>> = new Map();
     private pruneIntervalId: NodeJS.Timeout | null = null;
     private statsIntervalId: NodeJS.Timeout | null = null;
 
@@ -311,7 +309,7 @@ class AIService {
         const now = Date.now();
         let expiredCount = 0;
 
-        // Remove expired entries
+        // Remove expired entries from local cache
         for (const [key, entry] of this.cache.entries()) {
             if (now - entry.timestamp > this.CACHE_TTL) {
                 this.cache.delete(key);
@@ -319,7 +317,14 @@ class AIService {
             }
         }
 
-        // If still too large, remove least recently used
+        // Remove expired entries from remote cache map
+        for (const [hash, entry] of this.remoteCacheMap.entries()) {
+            if (now > entry.expires) {
+                this.remoteCacheMap.delete(hash);
+            }
+        }
+
+        // If still too large, remove least recently used from local cache
         if (this.cache.size > this.MAX_CACHE_SIZE) {
             const sorted = Array.from(this.cache.entries())
                 .sort((a, b) => a[1].lastAccessed - b[1].lastAccessed);
@@ -337,16 +342,10 @@ class AIService {
 
     /**
      * Get or initialize Gemini model with mutex protection
-     * In hybrid mode, this can be called even if primary provider is openrouter
      */
     private async getGeminiModel(): Promise<GenerativeModel> {
-        // In hybrid mode, allow Gemini initialization regardless of primary provider
-        if (!config.ai.hybridMode && config.ai.provider !== 'gemini') {
-            throw new Error('getGeminiModel() called but provider is not gemini and hybrid mode is disabled');
-        }
-
         // Return cached model if available
-        if (this.geminiModel && this.geminiInitialized) {
+        if (this.geminiModel) {
             return this.geminiModel;
         }
 
@@ -358,7 +357,7 @@ class AIService {
                 // Previous initialization failed, will retry below
             }
             // Check if initialization succeeded
-            if (this.geminiModel && this.geminiInitialized) {
+            if (this.geminiModel) {
                 return this.geminiModel;
             }
         }
@@ -384,10 +383,11 @@ class AIService {
         }
 
         this.genAI = new GoogleGenerativeAI(config.geminiApiKey);
+        this.cacheManager = new GoogleAICacheManager(config.geminiApiKey);
+
         this.geminiModel = this.genAI.getGenerativeModel({
             model: config.ai.model,
         });
-        this.geminiInitialized = true;
 
         logger.info(`🤖 Gemini initialized with model: ${config.ai.model}`);
     }
@@ -402,179 +402,17 @@ class AIService {
         if (!config.ai.openRouterModel) {
             throw new Error('OPENROUTER_MODEL not configured');
         }
-        if (!this.openRouterValidated) {
-            logger.info(`🤖 OpenRouter validated with model: ${config.ai.openRouterModel}`);
-            this.openRouterValidated = true;
-        }
     }
 
-    /**
-     * Initialize hybrid mode - validate both providers are available
-     * Uses mutex to prevent concurrent initialization
-     */
-    async initializeHybridMode(): Promise<void> {
-        if (!config.ai.hybridMode) {
-            return;
-        }
 
-        // Check which providers are needed
-        const needsGemini = Object.values(config.ai.analystProviders).includes('gemini') ||
-            config.ai.judgeProvider === 'gemini';
-        const needsOpenRouter = Object.values(config.ai.analystProviders).includes('openrouter') ||
-            config.ai.judgeProvider === 'openrouter';
-
-        // Check if already fully initialized
-        const geminiReady = !needsGemini || this.geminiInitialized;
-        const openRouterReady = !needsOpenRouter || this.openRouterValidated;
-        if (geminiReady && openRouterReady) {
-            return;
-        }
-
-        // Prevent concurrent hybrid mode initialization - wait for existing
-        if (this.initializingPromise) {
-            try {
-                await this.initializingPromise;
-            } catch {
-                // Previous initialization failed, will retry below
-            }
-            // Re-check after waiting
-            const geminiReadyNow = !needsGemini || this.geminiInitialized;
-            const openRouterReadyNow = !needsOpenRouter || this.openRouterValidated;
-            if (geminiReadyNow && openRouterReadyNow) {
-                return;
-            }
-            // If still not ready after waiting, fall through to retry
-        }
-
-        // Use mutex for the entire hybrid initialization
-        this.initializingPromise = this._initializeHybridModeInternal();
-        try {
-            await this.initializingPromise;
-        } finally {
-            this.initializingPromise = null;
-        }
-    }
 
     /**
-     * Internal hybrid mode initialization (called under mutex)
-     */
-    private async _initializeHybridModeInternal(): Promise<void> {
-        const errors: string[] = [];
-
-        // Check which providers are needed based on analyst assignments
-        const needsGemini = Object.values(config.ai.analystProviders).includes('gemini') ||
-            config.ai.judgeProvider === 'gemini';
-        const needsOpenRouter = Object.values(config.ai.analystProviders).includes('openrouter') ||
-            config.ai.judgeProvider === 'openrouter';
-
-        if (needsGemini && !this.geminiInitialized) {
-            try {
-                await this._initializeGemini();
-            } catch (error: any) {
-                errors.push(`Gemini: ${error.message}`);
-            }
-        }
-
-        if (needsOpenRouter && !this.openRouterValidated) {
-            try {
-                this.validateOpenRouterConfig();
-            } catch (error: any) {
-                errors.push(`OpenRouter: ${error.message}`);
-            }
-        }
-
-        if (errors.length > 0) {
-            throw new Error(`Hybrid mode initialization failed:\n${errors.join('\n')}`);
-        }
-
-        // Log hybrid mode configuration
-        const analystAssignments = Object.entries(config.ai.analystProviders)
-            .map(([analyst, provider]) => `${analyst}→${provider}`)
-            .join(', ');
-        logger.info(`🔀 Hybrid AI mode enabled: ${analystAssignments}, judge→${config.ai.judgeProvider}`);
-    }
-
-    /**
-     * Get the provider for a specific analyst in hybrid mode
-     */
-    private getProviderForAnalyst(analystId: string): 'gemini' | 'openrouter' {
-        if (!config.ai.hybridMode) {
-            return config.ai.provider;
-        }
-        const mapping = config.ai.analystProviders as Record<string, 'gemini' | 'openrouter'>;
-        const provider = mapping[analystId];
-        if (!provider) {
-            // Unknown analyst ID - log warning and fall back to default
-            const knownAnalysts = Object.keys(config.ai.analystProviders).join(', ');
-            logger.warn(`Unknown analyst ID '${analystId}' in getProviderForAnalyst. Known: [${knownAnalysts}]. Using default: ${config.ai.provider}`);
-            return config.ai.provider;
-        }
-        return provider;
-    }
-
-    /**
-     * Check if fallback provider is available and can be used
-     * Also ensures the fallback provider is initialized if needed
-     */
-    private async canUseFallbackProvider(fallbackProvider: 'gemini' | 'openrouter'): Promise<boolean> {
-        if (fallbackProvider === 'gemini') {
-            return !!config.geminiApiKey;
-        } else {
-            return !!config.openRouterApiKey && !!config.ai.openRouterModel;
-        }
-    }
-
-    /**
-     * Attempt cross-provider fallback after primary provider failure
-     * Returns null if fallback is not available or fails
-     */
-    private async attemptFallback(
-        primaryProvider: 'gemini' | 'openrouter',
-        prompt: string,
-        schema: ResponseSchema,
-        temperature: number | undefined,
-        maxOutputTokens: number | undefined,
-        requestId: string,
-        logLabel: string
-    ): Promise<AIGenerateResult | null> {
-        const fallbackProvider = primaryProvider === 'gemini' ? 'openrouter' : 'gemini';
-        const canFallback = await this.canUseFallbackProvider(fallbackProvider);
-
-        if (!canFallback) {
-            logger.debug(`${logLabel} fallback to ${fallbackProvider} not available`);
-            return null;
-        }
-
-        logger.info(`${logLabel} attempting fallback to ${fallbackProvider}`);
-        const fallbackStart = Date.now();
-
-        try {
-            let result: AIGenerateResult;
-
-            if (fallbackProvider === 'openrouter') {
-                result = await this.generateContentOpenRouter(prompt, schema, temperature, maxOutputTokens, requestId);
-            } else {
-                result = await this.generateContentGemini(prompt, schema, temperature, maxOutputTokens, requestId);
-            }
-
-            const fallbackElapsed = Date.now() - fallbackStart;
-            logger.info(`${logLabel} fallback to ${fallbackProvider} succeeded in ${fallbackElapsed}ms`);
-
-            return result;
-        } catch (fallbackError: any) {
-            logger.error(`${logLabel} fallback to ${fallbackProvider} also failed: ${fallbackError.message}`);
-            return null;
-        }
-    }
-
-    /**
-     * Internal execution method with caching and fallback
+     * Internal execution method with caching
      */
     private async executeWithCache(
         options: AIGenerateOptions,
         primaryProvider: 'gemini' | 'openrouter',
-        defaultLogLabel: string,
-        allowFallback: boolean = true
+        defaultLogLabel: string
     ): Promise<AIGenerateResult> {
         const { prompt, schema, temperature, maxOutputTokens, label } = options;
 
@@ -603,7 +441,7 @@ class AIService {
             stats.hits++;
             cached.lastAccessed = Date.now();
             const hitRate = ((stats.hits / (stats.hits + stats.misses)) * 100).toFixed(1);
-            logger.info(`${logLabel} CACHE HIT (local) - Rate: ${hitRate}% - returning cached result`);
+            logger.info(`${logLabel} Local Response Cache HIT - Rate: ${hitRate}% - returning cached result`);
             return {
                 ...cached.result,
                 requestId // Update requestId to current one for logging consistency
@@ -613,7 +451,7 @@ class AIService {
         this.cacheMisses++;
         stats.misses++;
         const missRate = ((stats.misses / (stats.hits + stats.misses)) * 100).toFixed(1);
-        logger.debug(`${logLabel} CACHE MISS - Rate: ${missRate}% - executing fresh request`);
+        logger.info(`${logLabel} Local Response Cache MISS - Rate: ${missRate}% - executing fresh request`);
 
         try {
             let result: AIGenerateResult;
@@ -653,28 +491,10 @@ class AIService {
             }
 
             return result;
-        } catch (primaryError: any) {
+        } catch (error: any) {
             const elapsed = Date.now() - startTime;
-            logger.warn(`${logLabel} ${primaryProvider} failed after ${elapsed}ms: ${primaryError.message}`);
-
-            if (allowFallback && config.ai.hybridMode) {
-                // Attempt cross-provider fallback
-                const fallbackResult = await this.attemptFallback(
-                    primaryProvider, prompt, schema, temperature, maxOutputTokens, requestId, logLabel
-                );
-
-                if (fallbackResult) {
-                    // Cache the fallback result too
-                    this.cache.set(cacheKey, {
-                        result: fallbackResult,
-                        timestamp: Date.now(),
-                        lastAccessed: Date.now()
-                    });
-                    return fallbackResult;
-                }
-            }
-
-            throw primaryError;
+            logger.warn(`${logLabel} ${primaryProvider} failed after ${elapsed}ms: ${error.message}`);
+            throw error;
         }
     }
 
@@ -688,44 +508,10 @@ class AIService {
         return this.executeWithCache(
             options,
             config.ai.provider as 'gemini' | 'openrouter',
-            'AI',
-            false // No fallback for simple generateContent to avoid infinite loops if config is wrong
+            'AI'
         );
     }
 
-    /**
-     * Generate content for a specific analyst (hybrid mode aware)
-     * Routes to the correct provider based on analyst assignment
-     * Includes cross-provider fallback on failure
-     * 
-     * @param analystId - The analyst ID (jim, ray, karen, quant)
-     * @param options - Generation options
-     * @returns Generated text and metadata
-     */
-    async generateContentForAnalyst(
-        analystId: string,
-        options: AIGenerateOptions
-    ): Promise<AIGenerateResult> {
-        const primaryProvider = this.getProviderForAnalyst(analystId);
-        return this.executeWithCache(
-            options,
-            primaryProvider,
-            analystId
-        );
-    }
-
-    /**
-     * Generate content for judge (hybrid mode aware)
-     * Uses the configured judge provider with cross-provider fallback
-     */
-    async generateContentForJudge(options: AIGenerateOptions): Promise<AIGenerateResult> {
-        const primaryProvider = config.ai.hybridMode ? config.ai.judgeProvider : config.ai.provider;
-        return this.executeWithCache(
-            options,
-            primaryProvider as 'gemini' | 'openrouter',
-            'Judge'
-        );
-    }
 
     /**
      * Extract JSON string from text that may contain markdown or other fluff
@@ -847,6 +633,123 @@ class AIService {
     }
 
     /**
+     * Get or create a Gemini Context Cache for the system prompt
+     */
+    private async getGeminiCache(systemPrompt: string): Promise<string | null> {
+        if (!this.cacheManager) {
+            await this._initializeGemini();
+        }
+        if (!this.cacheManager) return null;
+
+        // Hash the system prompt to use as displayName/key
+        const hash = createHash('sha256').update(systemPrompt + config.ai.model).digest('hex');
+
+        // Check in-memory map first
+        const local = this.remoteCacheMap.get(hash);
+        if (local && local.expires > Date.now()) {
+            return local.name;
+        }
+
+        // MUTEX: Prevent race conditions for same hash
+        // If a creation is already in progress for this hash, wait for it
+        if (this.cacheCreationLocks.has(hash)) {
+            logger.debug(`Waiting for pending cache creation: ${hash}`);
+            return this.cacheCreationLocks.get(hash) || null;
+        }
+
+        // Create a placeholder promise and lock IMMEDIATELY to prevent race conditions
+        let resolveCreation!: (value: string | null) => void;
+        const creationPromise = new Promise<string | null>((resolve) => {
+            resolveCreation = resolve;
+        });
+
+        this.cacheCreationLocks.set(hash, creationPromise);
+
+        // Start async work
+        (async () => {
+            try {
+                // List existing caches to find a match
+                // Note: This might be slow if there are many caches, but we only do it on miss
+                let foundCache: any = null;
+                // The list method might return a paginated response or just the list depending on version
+                // We'll assume standard list behavior
+                const listResult = await this.cacheManager!.list();
+                // @ts-ignore - cachedContents property might vary by version
+                const caches = listResult.cachedContents || listResult;
+
+                if (Array.isArray(caches)) {
+                    foundCache = caches.find((c: any) => c.displayName === hash);
+                }
+
+                if (foundCache && foundCache.name) {
+                    // Update map
+                    let expireTime = new Date(foundCache.expireTime).getTime();
+
+                    // REFRESH TTL if less than 1 hour remaining
+                    // This implements the "Update a cache" functionality to keep active contexts alive
+                    const now = Date.now();
+                    const remaining = expireTime - now;
+                    // If less than 1 hour remaining, refresh to full 2 hours
+                    if (remaining < 60 * 60 * 1000) {
+                        try {
+                            const ttlSeconds = 7200;
+                            // Update structure must match CachedContentUpdateParams
+                            await this.cacheManager!.update(foundCache.name, { cachedContent: { ttlSeconds } });
+                            expireTime = now + (ttlSeconds * 1000);
+                            logger.info(`🔄 Refreshed Gemini Context Cache TTL: ${foundCache.name}`);
+                        } catch (err) {
+                            logger.warn(`Failed to refresh cache TTL: ${err}`);
+                        }
+                    }
+
+                    this.remoteCacheMap.set(hash, { name: foundCache.name, expires: expireTime });
+                    resolveCreation(foundCache.name);
+                    return;
+                }
+
+                // Create new cache
+                // Note: Explicit caching requires a minimum token count (usually 32k for Flash)
+                // If the prompt is too short, this will fail. We'll catch it and return null.
+                const ttlSeconds = 7200; // 2 hours
+
+                // Create cache with system instruction
+                // Note: We provide an empty contents array as we're caching the system prompt
+                const cache = await this.cacheManager!.create({
+                    model: config.ai.model,
+                    displayName: hash,
+                    systemInstruction: systemPrompt,
+                    contents: [],
+                    ttlSeconds,
+                });
+
+                if (!cache.name) {
+                    throw new Error('Cache created but returned no name');
+                }
+
+                // Calculate expiration (approximate)
+                const expireTime = Date.now() + (ttlSeconds * 1000);
+                this.remoteCacheMap.set(hash, { name: cache.name, expires: expireTime });
+                logger.info(`✨ Created Gemini Context Cache: ${cache.name} (TTL: 2h)`);
+
+                resolveCreation(cache.name);
+
+            } catch (error: any) {
+                // Log warning but don't fail - fallback to standard prompt
+                if (error.message?.includes('minimum') || error.message?.includes('token count') || error.message?.includes('length')) {
+                    logger.debug(`Context caching skipped (likely too short): ${error.message}`);
+                } else {
+                    logger.warn(`Failed to use Gemini Context Caching: ${error.message}`);
+                }
+                resolveCreation(null);
+            } finally {
+                this.cacheCreationLocks.delete(hash);
+            }
+        })();
+
+        return creationPromise;
+    }
+
+    /**
      * Generate content using Gemini API with strict JSON schema
      */
     private async generateContentGemini(
@@ -856,37 +759,111 @@ class AIService {
         maxOutputTokens?: number,
         requestId?: string
     ): Promise<AIGenerateResult> {
-        const model = await this.getGeminiModel();
         const reqId = requestId || generateRequestId();
 
-        // PROMPT CACHING: Place system prompt first for implicit caching
-        // Gemini 2.5+ automatically caches repeated prefixes
-        const result = await model.generateContent({
-            contents: [
-                { role: 'user', parts: [{ text: prompt }] }
-            ],
-            generationConfig: {
-                responseMimeType: 'application/json',
-                responseSchema: schema,
-                temperature: temperature ?? config.ai.temperature,
-                maxOutputTokens: maxOutputTokens ?? config.ai.maxOutputTokens,
-            },
-        });
+        // SPLIT PROMPT: Separate system instruction from user message
+        // This is CRITICAL for Gemini Context Caching
+        const { system, user } = splitPromptSystemUser(prompt);
 
-        const text = this.extractJSON(result.response.text());
-        const candidates = result.response.candidates;
-        const finishReason = (candidates && candidates.length > 0)
-            ? (candidates[0].finishReason || 'UNKNOWN')
-            : 'UNKNOWN';
+        let model = this.geminiModel;
 
-        // Validate JSON
-        try {
-            JSON.parse(text);
-        } catch (_parseError) {
-            throw new Error(`Gemini returned invalid JSON: ${text.slice(0, 200)}`);
+        // Explicit Caching Logic
+        let cachedContentName: string | null = null;
+        if (system) {
+            // Try to get/create explicit cache
+            cachedContentName = await this.getGeminiCache(system);
         }
 
-        return { text, finishReason, provider: 'gemini', requestId: reqId };
+        // If explicit cache exists, use it
+        if (cachedContentName && this.genAI) {
+            try {
+                model = this.genAI.getGenerativeModel({
+                    model: config.ai.model,
+                    cachedContent: { name: cachedContentName } as any // Cast to any to avoid interface mismatch
+                });
+                logger.info(`Using Explicit Gemini Context Cache: ${cachedContentName}`);
+            } catch (e) {
+                logger.warn(`Failed to get model from cache, falling back: ${e}`);
+                // Fallback to implicit caching (standard model with system instruction)
+                if (system && this.genAI) {
+                    model = this.genAI.getGenerativeModel({
+                        model: config.ai.model,
+                        systemInstruction: system
+                    });
+                } else {
+                    model = this.geminiModel;
+                }
+                cachedContentName = null;
+            }
+        }
+
+        // If NO explicit cache, but we have system prompt, use standard systemInstruction (Implicit Caching)
+        if (!cachedContentName && system) {
+            if (!this.genAI) {
+                await this._initializeGemini();
+            }
+            if (this.genAI) {
+                model = this.genAI.getGenerativeModel({
+                    model: config.ai.model,
+                    systemInstruction: system
+                });
+            }
+        }
+
+        // Fallback if initialization failed (shouldn't happen due to _initializeGemini check)
+        if (!model) {
+            model = await this.getGeminiModel();
+        }
+
+        try {
+            const result = await model.generateContent({
+                contents: [
+                    { role: 'user', parts: [{ text: user }] }
+                ],
+                generationConfig: {
+                    responseMimeType: 'application/json',
+                    responseSchema: schema,
+                    temperature: temperature ?? config.ai.temperature,
+                    maxOutputTokens: maxOutputTokens ?? config.ai.maxOutputTokens,
+                },
+            });
+
+            const text = this.extractJSON(result.response.text());
+            const candidates = result.response.candidates;
+            const finishReason = (candidates && candidates.length > 0)
+                ? (candidates[0].finishReason || 'UNKNOWN')
+                : 'UNKNOWN';
+
+            // Validate JSON
+            try {
+                JSON.parse(text);
+            } catch (_parseError) {
+                // Log the full text for debugging (truncated to 1000 chars)
+                logger.error(`Invalid JSON from Gemini. FinishReason: ${finishReason}. Text length: ${text.length}`);
+                logger.debug(`Raw invalid JSON: ${text.slice(0, 1000)}...`);
+                throw new Error(`Gemini returned invalid JSON (Reason: ${finishReason}): ${text.slice(0, 200)}...`);
+            }
+
+            return { text, finishReason, provider: 'gemini', requestId: reqId };
+        } catch (error: any) {
+            // If cache invalidation error (404 on cache?), retry without cache?
+            if (cachedContentName && (error.message?.includes('not found') || error.message?.includes('cache'))) {
+                logger.warn(`Cache error ${cachedContentName}, retrying without cache...`);
+                // Clear from map
+                for (const [key, val] of this.remoteCacheMap.entries()) {
+                    if (val.name === cachedContentName) {
+                        this.remoteCacheMap.delete(key);
+                        break;
+                    }
+                }
+                // Recursive retry with same args? 
+                // Careful with infinite loop. 
+                // We'll just throw for now, or fallback manually.
+                // Fallback manually is complex because we need to reconstruct the non-cached call.
+                // Simpler: Just throw, next retry in CollaborativeFlow will pick it up (and maybe we cleared the map so it works next time).
+            }
+            throw error;
+        }
     }
 
     /**
@@ -963,57 +940,6 @@ class AIService {
             allow_fallbacks: true,
             require_parameters: true,
         };
-
-        const providerSort = String(process.env.OPENROUTER_PROVIDER_SORT || '').trim().toLowerCase();
-        if (providerSort === 'price' || providerSort === 'throughput' || providerSort === 'latency') {
-            providerPrefs.sort = providerSort;
-        }
-
-        const providerOrderRaw = String(process.env.OPENROUTER_PROVIDER_ORDER || '').trim();
-        if (providerOrderRaw) {
-            const parseProviderOrder = (raw: string): string[] => {
-                const trimmed = raw.trim();
-                if (!trimmed) return [];
-
-                if (trimmed.startsWith('[')) {
-                    try {
-                        const parsed = JSON.parse(trimmed);
-                        if (Array.isArray(parsed)) {
-                            return parsed
-                                .map(v => String(v ?? '').trim())
-                                .map(v => v.replace(/^["']|["']$/g, '').trim())
-                                .map(v => v.toLowerCase())
-                                .filter(Boolean);
-                        }
-                    } catch { }
-                }
-
-                return trimmed
-                    .split(/[,\n;]/g)
-                    .map(s => s.trim())
-                    .map(s => s.replace(/^["']|["']$/g, '').trim())
-                    .map(s => s.toLowerCase())
-                    .filter(Boolean);
-            };
-
-            const providerOrder = Array.from(new Set(parseProviderOrder(providerOrderRaw)));
-            if (providerOrder.length > 0) {
-                providerPrefs.order = providerOrder;
-            }
-        }
-
-        const allowFallbacksRaw = String(process.env.OPENROUTER_ALLOW_FALLBACKS || '').trim().toLowerCase();
-        if (allowFallbacksRaw === 'true') providerPrefs.allow_fallbacks = true;
-        if (allowFallbacksRaw === 'false') providerPrefs.allow_fallbacks = false;
-
-        const requireParametersRaw = String(process.env.OPENROUTER_REQUIRE_PARAMETERS || '').trim().toLowerCase();
-        if (requireParametersRaw === 'true') providerPrefs.require_parameters = true;
-        if (requireParametersRaw === 'false') providerPrefs.require_parameters = false;
-
-        const dataCollectionRaw = String(process.env.OPENROUTER_DATA_COLLECTION || '').trim().toLowerCase();
-        if (dataCollectionRaw === 'allow' || dataCollectionRaw === 'deny') {
-            providerPrefs.data_collection = dataCollectionRaw;
-        }
 
         const requestBody: any = {
             model: config.ai.openRouterModel,
@@ -1264,18 +1190,6 @@ class AIService {
      * Check if the service is configured
      */
     isConfigured(): boolean {
-        if (config.ai.hybridMode) {
-            // In hybrid mode, check which providers are needed
-            const needsGemini = Object.values(config.ai.analystProviders).includes('gemini') ||
-                config.ai.judgeProvider === 'gemini';
-            const needsOpenRouter = Object.values(config.ai.analystProviders).includes('openrouter') ||
-                config.ai.judgeProvider === 'openrouter';
-
-            if (needsGemini && !config.geminiApiKey) return false;
-            if (needsOpenRouter && !config.openRouterApiKey) return false;
-            return true;
-        }
-
         if (config.ai.provider === 'openrouter') {
             return !!config.openRouterApiKey;
         }
@@ -1287,13 +1201,6 @@ class AIService {
      */
     getProvider(): 'gemini' | 'openrouter' {
         return config.ai.provider;
-    }
-
-    /**
-     * Check if hybrid mode is enabled
-     */
-    isHybridMode(): boolean {
-        return config.ai.hybridMode;
     }
 
     /**
@@ -1313,8 +1220,6 @@ class AIService {
         this.geminiModel = null;
         this.genAI = null;
         this.initializingPromise = null;
-        this.geminiInitialized = false;
-        this.openRouterValidated = false;
         this.cache.clear();
         this.labelStats.clear();
         logger.debug('AIService cleaned up');

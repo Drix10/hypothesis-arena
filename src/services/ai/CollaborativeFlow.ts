@@ -1,10 +1,11 @@
 /**
  * Collaborative Trading Flow - Simplified pipeline with PARALLEL ANALYSIS
  * 1. Market Scan - Fetch data for all coins + indicators
- * 2. Parallel Analysis - 4 analysts analyze independently in parallel
+ * 2. Parallel Analysis - 4 analysts analyze independently in parallel (or 1 combined call)
  * 3. Judge Decision - Compare all 4 and pick winner
  * 4. Execution - Place trade on WEEX
- * AI CALLS: 5 (4 analysts + 1 judge), LATENCY: ~25 seconds
+ * AI CALLS: 2 (1 combined analyst + 1 judge), LATENCY: ~25 seconds
+ * Note: Combined analyst call optimization replaces 4 independent analyst calls.
  */
 
 import { config } from '../../config';
@@ -21,8 +22,9 @@ import {
     normalizeAnalystOutput,
     validateJudgeOutput,
 } from '../../types/analyst';
-import { TradingContext } from '../../types/context';
-import { buildAnalystPrompt, buildAnalystUserMessage, AnalystPromptVars } from '../../constants/prompts/analystPrompt';
+import { TradingContext, MarketDataWithIndicators } from '../../types/context';
+import { stableStringify } from '../../utils/json';
+import { ANALYST_SYSTEM_PROMPT, getAnalystPersona, getCombinedAnalystPersona, buildAnalystUserMessage, AnalystPromptVars } from '../../constants/prompts/analystPrompt';
 import { buildJudgeSystemPrompt, buildJudgeUserMessage } from '../../constants/prompts/judgePrompt';
 import { getAntiChurnService } from '../trading/AntiChurnService';
 import { getContextBuilder } from '../context/ContextBuilder';
@@ -85,6 +87,7 @@ const ANALYST_RECOMMENDATION_SCHEMA: ResponseSchema = {
     properties: {
         action: {
             type: SchemaType.STRING,
+            format: 'enum',
             enum: ['BUY', 'SELL', 'HOLD', 'CLOSE', 'REDUCE'],
             description: 'Trading action to take',
         },
@@ -149,10 +152,24 @@ const ANALYST_OUTPUT_RESPONSE_SCHEMA: ResponseSchema = {
                 expected_value: { type: SchemaType.NUMBER, nullable: true, description: 'Expected value of the trade' },
                 sharpe: { type: SchemaType.NUMBER, nullable: true, description: 'Sharpe ratio of the trade' },
             },
-            required: ['q_long', 'q_short', 'q_hold', 'regret'],
+            required: ['q_long', 'q_short', 'q_hold', 'regret', 'expected_value', 'sharpe'],
         },
     },
-    required: ['reasoning', 'recommendation'],
+    required: ['reasoning', 'recommendation', 'rl_validation'],
+};
+
+/**
+ * Combined analyst output schema for single-call optimization
+ */
+const COMBINED_ANALYST_OUTPUT_SCHEMA: ResponseSchema = {
+    type: SchemaType.OBJECT,
+    properties: {
+        jim: ANALYST_OUTPUT_RESPONSE_SCHEMA,
+        ray: ANALYST_OUTPUT_RESPONSE_SCHEMA,
+        karen: ANALYST_OUTPUT_RESPONSE_SCHEMA,
+        quant: ANALYST_OUTPUT_RESPONSE_SCHEMA,
+    },
+    required: ['jim', 'ray', 'karen', 'quant'],
 };
 
 /**
@@ -164,21 +181,26 @@ const JUDGE_ADJUSTMENTS_SCHEMA: ResponseSchema = {
     properties: {
         leverage: {
             type: SchemaType.NUMBER,
+            nullable: true,
             description: 'Adjusted leverage (1-20). Only for BUY/SELL.',
         },
         allocation_usd: {
             type: SchemaType.NUMBER,
+            nullable: true,
             description: 'Adjusted allocation in USD. Only for BUY/SELL.',
         },
         sl_price: {
             type: SchemaType.NUMBER,
+            nullable: true,
             description: 'Adjusted stop loss price. Only for BUY/SELL.',
         },
         tp_price: {
             type: SchemaType.NUMBER,
+            nullable: true,
             description: 'Adjusted take profit price. Only for BUY/SELL.',
         },
     },
+    required: ['leverage', 'allocation_usd', 'sl_price', 'tp_price'],
 };
 
 /**
@@ -189,6 +211,7 @@ const JUDGE_OUTPUT_RESPONSE_SCHEMA: ResponseSchema = {
     properties: {
         winner: {
             type: SchemaType.STRING,
+            format: 'enum',
             enum: ['jim', 'ray', 'karen', 'quant', 'NONE'],
             description: 'Winning analyst ID or NONE',
         },
@@ -204,6 +227,7 @@ const JUDGE_OUTPUT_RESPONSE_SCHEMA: ResponseSchema = {
         },
         final_action: {
             type: SchemaType.STRING,
+            format: 'enum',
             enum: ['BUY', 'SELL', 'HOLD', 'CLOSE', 'REDUCE'],
             description: 'Final trading action',
         },
@@ -239,18 +263,12 @@ export class CollaborativeFlowService {
             throw new Error(`AI provider ${config.ai.provider} not configured. Check API keys in .env`);
         }
 
-        // Initialize hybrid mode if enabled
-        if (config.ai.hybridMode) {
-            await aiService.initializeHybridMode();
-        }
+        // Initialize AI service
+        // (Single provider initialization is handled automatically on first use)
 
         this.initialized = true;
 
-        if (aiService.isHybridMode()) {
-            logger.info(`CollaborativeFlowService initialized in HYBRID mode`);
-        } else {
-            logger.info(`CollaborativeFlowService initialized with ${aiService.getProvider()} provider`);
-        }
+        logger.info(`CollaborativeFlowService initialized with ${aiService.getProvider()} provider`);
     }
 
     /**
@@ -390,6 +408,52 @@ export class CollaborativeFlowService {
 
             logger.info(`📊 Context built with ${context.market_data.length} assets, ${context.account.positions.length} positions`);
 
+            // --- TECHNICAL PRE-FILTER ---
+            // Reduce AI calls by skipping assets with no interesting signals (unless we have a position)
+            const originalAssetCount = context.market_data.length;
+            const filteredAssets = this.filterInterestingAssets(context);
+            context.market_data = filteredAssets;
+
+            if (filteredAssets.length < originalAssetCount) {
+                logger.info(`🔍 Technical Pre-filter: Reduced assets from ${originalAssetCount} to ${filteredAssets.length} (keeping open positions + signals)`);
+            }
+
+            if (filteredAssets.length === 0) {
+                logger.info('💤 No interesting assets found and no open positions. Skipping AI analysis.');
+                const skippedDuration = Date.now() - startTime;
+                logger.debug(`Skipped analysis duration: ${skippedDuration}ms`);
+                return {
+                    action: 'HOLD',
+                    symbol: '',
+                    allocation_usd: 0,
+                    leverage: 0,
+                    tp_price: null,
+                    sl_price: null,
+                    exit_plan: '',
+                    confidence: 0,
+                    rationale: 'Technical pre-filter: No interesting signals or open positions',
+                    winner: 'NONE',
+                    warnings: ['Skipped AI analysis due to lack of technical signals'],
+                    analysisResult: {
+                        jim: null,
+                        ray: null,
+                        karen: null,
+                        quant: null,
+                        timestamp: Date.now(),
+                        errors: [],
+                    },
+                    judgeDecision: {
+                        winner: 'NONE',
+                        reasoning: 'No interesting assets to analyze',
+                        adjustments: null,
+                        warnings: [],
+                        final_action: 'HOLD',
+                        final_recommendation: null,
+                    },
+                    debateResult: null,
+                };
+            }
+
             const analysisResult = await this.runAllAnalysts(context);
             const analysisTime = Date.now() - startTime;
             logger.info(`📊 Parallel analysis completed in ${analysisTime}ms`);
@@ -486,18 +550,114 @@ export class CollaborativeFlowService {
     }
 
     /**
-     * Run all 4 analysts in parallel
+     * Filter assets to only include those with interesting technical signals or open positions.
+     * This reduces AI call costs and processing time.
+     */
+    private filterInterestingAssets(context: TradingContext): MarketDataWithIndicators[] {
+        const { market_data, account } = context;
+        // Create set of symbols we currently hold positions in - MUST be analyzed
+        const openPositionSymbols = new Set(account.positions.map(p => p.symbol));
+
+        return market_data.filter(asset => {
+            // ALWAYS keep assets with open positions to manage them (close/hold)
+            if (openPositionSymbols.has(asset.asset)) {
+                return true;
+            }
+
+            const s = asset.signals;
+            if (!s) return false; // Safety check for missing signals
+
+            // Keep if any interesting signal is present
+            const hasEma = s.ema_crossover === 'golden' || s.ema_crossover === 'death';
+            const hasRsi = s.rsi_signal === 'overbought' || s.rsi_signal === 'oversold';
+            const hasMacd = s.macd_signal === 'bullish' || s.macd_signal === 'bearish';
+
+            // Bollinger: 'expansion' is often late/noisy, but squeeze/touches are actionable setups
+            const hasBollinger = s.bollinger_signal === 'upper_touch' ||
+                s.bollinger_signal === 'lower_touch' ||
+                s.bollinger_signal === 'squeeze';
+
+            const hasVol = s.volatility === 'high';
+
+            return hasEma || hasRsi || hasMacd || hasBollinger || hasVol;
+        });
+    }
+
+    /**
+     * Run all 4 analysts in parallel using a single combined LLM call for efficiency.
+     * Falls back to individual parallel calls if the combined call fails.
      */
     private async runAllAnalysts(context: TradingContext): Promise<ParallelAnalysisResult> {
         const promptVars = context.prompt_vars;
         const cleanContext = { ...context };
         delete (cleanContext as any).prompt_vars;
 
-        const contextJson = JSON.stringify(cleanContext, null, 2);
+        const contextJson = stableStringify(cleanContext, 2);
         logger.info(`📊 Context built: ${context.market_data.length} assets, ${context.account.positions.length} positions, JSON size: ${(contextJson.length / 1024).toFixed(2)} KB`);
+
+        // Attempt 1: Run Combined Call (Optimization)
+        // This saves ~75% of input tokens and guarantees cache consistency
+        const startTime = Date.now();
+        const combinedResult = await this.runCombinedAnalysts(contextJson, promptVars);
+
+        if (combinedResult) {
+            const duration = Date.now() - startTime;
+            logger.info(`⏱️ All analysts completed in ${duration}ms (combined single-shot)`);
+
+            // Check for missing analysts and retry them individually
+            const finalResult: ParallelAnalysisResult = {
+                jim: combinedResult.jim,
+                ray: combinedResult.ray,
+                karen: combinedResult.karen,
+                quant: combinedResult.quant,
+                timestamp: Date.now(),
+                errors: [],
+            };
+
+            const missingAnalysts: AnalystId[] = [];
+            if (!finalResult.jim) missingAnalysts.push('jim');
+            if (!finalResult.ray) missingAnalysts.push('ray');
+            if (!finalResult.karen) missingAnalysts.push('karen');
+            if (!finalResult.quant) missingAnalysts.push('quant');
+
+            if (missingAnalysts.length > 0) {
+                logger.warn(`Missing results for [${missingAnalysts.join(', ')}] in combined call. Retrying individually...`);
+
+                const retryPromises = missingAnalysts.map(async (id) => {
+                    try {
+                        const TIMEOUT_MS = 60000; // 60s timeout for individual retry
+                        const res = await Promise.race([
+                            this.runSingleAnalyst(id, contextJson, promptVars),
+                            new Promise<null>((_, reject) => setTimeout(() => reject(new Error(`Timeout after ${TIMEOUT_MS}ms`)), TIMEOUT_MS))
+                        ]);
+                        return { id, result: res, error: null };
+                    } catch (err) {
+                        return { id, result: null, error: err instanceof Error ? err.message : String(err) };
+                    }
+                });
+
+                const retries = await Promise.all(retryPromises);
+
+                for (const retry of retries) {
+                    const { id, result, error } = retry;
+                    if (result) {
+                        finalResult[id] = result;
+                        logger.info(`✅ Analyst ${id} recovered via individual retry`);
+                    } else {
+                        finalResult.errors.push({ analyst: id, error: error || 'Failed after retry' });
+                        logger.warn(`❌ Analyst ${id} failed after individual retry: ${error}`);
+                    }
+                }
+            }
+
+            return finalResult;
+        }
+
+        logger.warn(`Combined analyst call failed, falling back to parallel execution...`);
+
+        // Attempt 2: Fallback to Parallel Execution
         const analysts: AnalystId[] = ['jim', 'ray', 'karen', 'quant'];
 
-        const startTime = Date.now();
         const promises = analysts.map(async (analystId) => {
             const analystStart = Date.now();
             const result = await this.runSingleAnalyst(analystId, contextJson, promptVars);
@@ -512,7 +672,7 @@ export class CollaborativeFlowService {
 
         const results = await Promise.allSettled(promises);
         const totalDuration = Date.now() - startTime;
-        logger.info(`⏱️ All analysts completed in ${totalDuration}ms (parallel)`);
+        logger.info(`⏱️ All analysts completed in ${totalDuration}ms (fallback parallel)`);
 
         const analysisResult: ParallelAnalysisResult = {
             jim: null,
@@ -541,46 +701,86 @@ export class CollaborativeFlowService {
     }
 
     /**
+     * Run all 4 analysts in a single LLM call
+     */
+    private async runCombinedAnalysts(contextJson: string, promptVars: AnalystPromptVars = {}): Promise<{ jim: AnalystOutput | null, ray: AnalystOutput | null, karen: AnalystOutput | null, quant: AnalystOutput | null } | null> {
+        const systemPrompt = ANALYST_SYSTEM_PROMPT;
+        const personaPrompt = getCombinedAnalystPersona();
+        const baseUserMessage = buildAnalystUserMessage(contextJson, promptVars);
+
+        // OPTIMIZATION: Move persona to system prompt section for better caching with OpenRouter/Anthropic
+        const fullPrompt = `${systemPrompt}\n\n${personaPrompt}\n\n---USER---\n\n${baseUserMessage}`;
+
+        try {
+            // Use configured provider
+            const provider = config.ai.provider;
+
+            const result = await aiService.generateContent({
+                prompt: fullPrompt,
+                schema: COMBINED_ANALYST_OUTPUT_SCHEMA,
+                temperature: config.ai.temperature,
+                maxOutputTokens: 16384, // Increased for 4x output + strict schema
+                label: `Analysts-Combined`,
+                provider: provider,
+                model: provider === 'gemini' ? config.ai.model : config.ai.openRouterModel,
+            });
+
+            const parsed = this.parseJSON(result.text);
+            if (!parsed) return null;
+
+            const processOutput = (out: unknown): AnalystOutput | null => {
+                if (!out) return null;
+                const normalized = normalizeAnalystOutput(out);
+                if (validateAnalystOutput(normalized)) {
+                    return normalized;
+                }
+                return null;
+            };
+
+            return {
+                jim: processOutput(parsed.jim),
+                ray: processOutput(parsed.ray),
+                karen: processOutput(parsed.karen),
+                quant: processOutput(parsed.quant),
+            };
+        } catch (error) {
+            logger.warn('Combined analyst run encountered error (will fallback):', error);
+            return null;
+        }
+    }
+
+    /**
      * Run a single analyst using centralized AIService with strict JSON schema
      * Routes to provider based on AI_HYBRID_MODE setting
      */
     private async runSingleAnalyst(analystId: AnalystId, contextJson: string, promptVars: AnalystPromptVars = {}): Promise<AnalystOutput | null> {
-        const systemPrompt = buildAnalystPrompt(analystId);
-        // CRITICAL: We pass promptVars to buildAnalystUserMessage so it's part of the dynamic user message
-        const userMessage = buildAnalystUserMessage(contextJson, promptVars);
+        // Use static system prompt for better caching
+        const systemPrompt = ANALYST_SYSTEM_PROMPT;
+
+        // Get analyst persona (methodology)
+        const personaPrompt = getAnalystPersona(analystId);
+        const baseUserMessage = buildAnalystUserMessage(contextJson, promptVars);
 
         // CRITICAL: Add separator for prompt caching - system prompt will be cached
         // The system prompt is now static (promptVars moved to userMessage), maximizing cache hits
-        const fullPrompt = systemPrompt + '\n\n---USER---\n\n' + userMessage;
+        // We include personaPrompt in system section for better caching
+        const fullPrompt = `${systemPrompt}\n\n${personaPrompt}\n\n---USER---\n\n${baseUserMessage}`;
 
         for (let attempt = 1; attempt <= config.ai.maxRetries; attempt++) {
             try {
                 let resultText: string;
                 let modelUsed: string;
 
-                if (config.ai.hybridMode) {
-                    // Hybrid mode: route to provider based on analyst assignment
-                    const result = await aiService.generateContentForAnalyst(analystId, {
-                        prompt: fullPrompt,
-                        schema: ANALYST_OUTPUT_RESPONSE_SCHEMA,
-                        temperature: config.ai.temperature,
-                        maxOutputTokens: 2048, // Reduced from config.ai.maxOutputTokens (65k) for latency
-                        label: `Analyst-${analystId}`,
-                    });
-                    resultText = result.text;
-                    modelUsed = result.provider === 'gemini' ? config.ai.model : config.ai.openRouterModel;
-                } else {
-                    // Single provider mode - all analysts use same provider
-                    const result = await aiService.generateContent({
-                        prompt: fullPrompt,
-                        schema: ANALYST_OUTPUT_RESPONSE_SCHEMA,
-                        temperature: config.ai.temperature,
-                        maxOutputTokens: 2048, // Reduced from config.ai.maxOutputTokens (65k) for latency
-                        label: `Analyst-${analystId}`,
-                    });
-                    resultText = result.text;
-                    modelUsed = config.ai.provider === 'gemini' ? config.ai.model : config.ai.openRouterModel;
-                }
+                // Single provider mode - all analysts use same provider
+                const result = await aiService.generateContent({
+                    prompt: fullPrompt,
+                    schema: ANALYST_OUTPUT_RESPONSE_SCHEMA,
+                    temperature: config.ai.temperature,
+                    maxOutputTokens: 8192, // Increased from 2048 for strict schema verbosity
+                    label: `Analyst-${analystId}`,
+                });
+                resultText = result.text;
+                modelUsed = config.ai.provider === 'gemini' ? config.ai.model : config.ai.openRouterModel;
 
                 const parsed = this.parseJSON(resultText);
                 const normalized = normalizeAnalystOutput(parsed);
@@ -615,7 +815,6 @@ export class CollaborativeFlowService {
 
     /**
      * Run judge to compare all analyst outputs using centralized AIService with strict JSON schema
-     * Uses hybrid mode routing when AI_HYBRID_MODE=true
      */
     private async runJudge(
         context: TradingContext,
@@ -627,12 +826,12 @@ export class CollaborativeFlowService {
         const cleanContext = { ...context };
         delete (cleanContext as any).prompt_vars;
 
-        const contextJson = JSON.stringify(cleanContext, null, 2);
+        const contextJson = stableStringify(cleanContext, 2);
 
-        const jimOutput = analysisResult.jim ? JSON.stringify(analysisResult.jim, null, 2) : null;
-        const rayOutput = analysisResult.ray ? JSON.stringify(analysisResult.ray, null, 2) : null;
-        const karenOutput = analysisResult.karen ? JSON.stringify(analysisResult.karen, null, 2) : null;
-        const quantOutput = analysisResult.quant ? JSON.stringify(analysisResult.quant, null, 2) : null;
+        const jimOutput = analysisResult.jim ? stableStringify(analysisResult.jim, 2) : null;
+        const rayOutput = analysisResult.ray ? stableStringify(analysisResult.ray, 2) : null;
+        const karenOutput = analysisResult.karen ? stableStringify(analysisResult.karen, 2) : null;
+        const quantOutput = analysisResult.quant ? stableStringify(analysisResult.quant, 2) : null;
 
         const analystWeights = getAnalystWeights();
         const hasNonDefaultWeights = Array.from(analystWeights.values()).some(w => w !== 1.0);
@@ -655,32 +854,16 @@ export class CollaborativeFlowService {
         // CRITICAL: Add separator for prompt caching - system prompt will be cached
         const fullPrompt = buildJudgeSystemPrompt() + '\n\n---USER---\n\n' + userMessage;
 
-        // Determine which mode to use for judge
-        const useHybridMode = config.ai.hybridMode;
-
         for (let attempt = 1; attempt <= config.ai.maxRetries; attempt++) {
             try {
-                let result;
-
-                if (useHybridMode) {
-                    // Hybrid mode: use judge-specific provider
-                    result = await aiService.generateContentForJudge({
-                        prompt: fullPrompt,
-                        schema: JUDGE_OUTPUT_RESPONSE_SCHEMA,
-                        temperature: 0.3,
-                        maxOutputTokens: 2048, // Reduced from config.ai.maxOutputTokens for latency
-                        label: 'Judge',
-                    });
-                } else {
-                    // Single provider mode
-                    result = await aiService.generateContent({
-                        prompt: fullPrompt,
-                        schema: JUDGE_OUTPUT_RESPONSE_SCHEMA,
-                        temperature: 0.3,
-                        maxOutputTokens: 2048, // Reduced from config.ai.maxOutputTokens for latency
-                        label: 'Judge',
-                    });
-                }
+                // Single provider mode
+                const result = await aiService.generateContent({
+                    prompt: fullPrompt,
+                    schema: JUDGE_OUTPUT_RESPONSE_SCHEMA,
+                    temperature: 0.3,
+                    maxOutputTokens: 8192, // Increased from 2048 for strict schema
+                    label: 'Judge',
+                });
 
                 const parsed = this.parseJSON(result.text);
 

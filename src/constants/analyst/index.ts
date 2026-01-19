@@ -38,7 +38,8 @@ export { RISK_COUNCIL_VETO_TRIGGERS } from './riskCouncil';
 // v5.0.0: Export prompt building functions
 // NOTE: These are imported from analystPrompt.ts which has its own import of ANALYST_PROFILES
 export {
-    buildAnalystPrompt,
+    ANALYST_SYSTEM_PROMPT,
+    getAnalystPersona,
     buildAnalystUserMessage,
     ANTI_CHURN_RULES,
     LEVERAGE_POLICY,

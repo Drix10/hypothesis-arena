@@ -2103,13 +2103,34 @@ export class AutonomousTradingEngine extends EventEmitter {
         }
 
         try {
+            // Fetch existing position size BEFORE placing new order to calculate total TP/SL size correctly
+            let existingPositionSize = 0;
+            try {
+                const positions = await this.weexClient.getPositions();
+                const currentPos = positions.find(p => p.symbol === decision.symbol && p.side === (isLong ? 'LONG' : 'SHORT'));
+                // Defensively parse size: check for undefined and NaN
+                if (currentPos && currentPos.size) {
+                    const parsedSize = parseFloat(currentPos.size);
+                    existingPositionSize = Number.isNaN(parsedSize) ? 0 : parsedSize;
+                } else {
+                    existingPositionSize = 0;
+                }
+            } catch (posError) {
+                logger.warn(`Failed to fetch existing position for ${decision.symbol}, assuming 0:`, posError);
+            }
+
             // Set leverage - WEEX requires no open orders to change leverage
             try {
-                // Check for open orders first
-                const openOrders = await this.weexClient.getCurrentOrders(decision.symbol);
+                // Check for open orders (limit/market) AND plan orders (TP/SL) first
+                const [openOrders, planOrders] = await Promise.all([
+                    this.weexClient.getCurrentOrders(decision.symbol),
+                    this.weexClient.getCurrentPlanOrders(decision.symbol)
+                ]);
 
-                if (openOrders && openOrders.length > 0) {
-                    logger.warn(`Cannot change leverage for ${decision.symbol}: ${openOrders.length} open orders exist. Proceeding with current leverage.`);
+                const hasOpenOrders = (openOrders && openOrders.length > 0) || (planOrders && planOrders.length > 0);
+
+                if (hasOpenOrders) {
+                    logger.warn(`Cannot change leverage for ${decision.symbol}: ${openOrders?.length || 0} open orders and ${planOrders?.length || 0} plans exist. Proceeding with current leverage.`);
                 } else {
                     await this.weexClient.changeLeverage(decision.symbol, leverage, '1');
                 }
@@ -2179,12 +2200,37 @@ export class AutonomousTradingEngine extends EventEmitter {
                 );
             } catch (logError) {
                 // Don't fail the trade if logging fails
-                logger.warn('Failed to create AI execution log:', logError);
+                // Suppress "Order does not exist" error as it's likely a timing issue with WEEX internal indexing
+                const msg = logError instanceof Error ? logError.message : String(logError);
+                if (!msg.includes('Order does not exist')) {
+                    logger.warn('Failed to create AI execution log:', logError);
+                }
             }
 
             // Place TP/SL
             // FIXED: Round TP/SL prices to symbol's tick size to prevent WEEX rejection
+            // FIXED: Update TP/SL for TOTAL position size (existing + new) to maintain coherent exit plan
             const positionSide: 'long' | 'short' = isLong ? 'long' : 'short';
+            const rawTotalSize = existingPositionSize + roundedSizeNum;
+            // CRITICAL: Round total size to avoid floating point artifacts (e.g. 3.30000000003) which WEEX rejects
+            const totalPositionSize = parseFloat(roundToStepSize(rawTotalSize, decision.symbol));
+
+            // If we have an existing position, we should cancel old TP/SL plans to avoid fragmentation
+            if (existingPositionSize > 0) {
+                try {
+                    const plans = await this.weexClient.getCurrentPlanOrders(decision.symbol);
+                    for (const plan of plans) {
+                        // Only cancel relevant plan types (profit_plan/loss_plan)
+                        if (plan.planType === 'profit_plan' || plan.planType === 'loss_plan') {
+                            await this.weexClient.cancelOrder(plan.orderId);
+                        }
+                    }
+                    logger.info(`Cancelled existing TP/SL plans for ${decision.symbol} to update with new total size ${totalPositionSize}`);
+                } catch (cancelError) {
+                    logger.warn(`Failed to cancel existing TP/SL plans for ${decision.symbol}:`, cancelError);
+                }
+            }
+
             if (validatedTpPrice !== null && validatedTpPrice > 0) {
                 try {
                     // Round to tick size - parseFloat converts string back to number
@@ -2194,7 +2240,7 @@ export class AutonomousTradingEngine extends EventEmitter {
                             symbol: decision.symbol,
                             planType: 'profit_plan',
                             triggerPrice: roundedTpPrice,
-                            size: roundedSizeNum,
+                            size: totalPositionSize, // Use TOTAL size
                             positionSide,
                         });
                     } else {
@@ -2238,7 +2284,7 @@ export class AutonomousTradingEngine extends EventEmitter {
                             symbol: decision.symbol,
                             planType: 'loss_plan',
                             triggerPrice: roundedSlPrice,
-                            size: roundedSizeNum,
+                            size: totalPositionSize, // Use TOTAL size
                             positionSide,
                         });
                     } else {

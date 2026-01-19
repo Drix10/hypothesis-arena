@@ -21,16 +21,18 @@ Hypothesis Arena is an autonomous AI-powered trading system for WEEX perpetual f
 │   • Run regime detection (ADX, BB, ATR rules)                   │
 │   • Build rich context object for AI analysts                   │
 │                                                                  │
-│   STAGE 2: PARALLEL ANALYSIS                    (~10 seconds)   │
+│   STAGE 2: PARALLEL ANALYSIS (OPTIMIZED)        (~10 seconds)   │
 │   ─────────────────────────────────────────────────────────────  │
 │   ┌─────────────────────────────────────────────────────────┐   │
-│   │  4 analysts receive IDENTICAL full context              │   │
-│   │  Each responds INDEPENDENTLY in parallel                │   │
-│   │                                                          │   │
+│   │  COMBINED ANALYST CALL (Optimization)                   │   │
+│   │  All 4 analysts run in 1 single LLM request             │   │
+│   │                                                         │   │
 │   │  Jim (Statistical Arbitrage) ──┐                        │   │
 │   │  Ray (AI/ML Signals) ──────────┼──→ 4 recommendations   │   │
 │   │  Karen (Multi-Strategy Risk) ──┤                        │   │
 │   │  Quant (Liquidity & Arb) ──────┘                        │   │
+│   │                                                         │   │
+│   │  *Fallback: Retry individual analysts if combined fails │   │
 │   └─────────────────────────────────────────────────────────┘   │
 │                                                                  │
 │   STAGE 3: JUDGE DECISION                        (~5 seconds)   │
@@ -48,7 +50,7 @@ Hypothesis Arena is an autonomous AI-powered trading system for WEEX perpetual f
 │   • Set TP/SL, store exit plan                                  │
 │   • Log to database + WEEX compliance                           │
 │                                                                  │
-│   TOTAL: ~25 seconds per cycle | AI CALLS: 5                    │
+│   TOTAL: ~25 seconds per cycle | AI CALLS: 2 (1 Combined+Judge) │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -71,8 +73,8 @@ Split analysts across providers for diversity and resilience:
 
 **Hybrid Mode** (`AI_HYBRID_MODE=true`):
 
-- jim, ray → OpenRouter (DeepSeek)
-- karen, quant, judge → Gemini
+- Combined Analyst Call (Jim/Ray/Karen/Quant) → Gemini (Strongest Model)
+- Judge → Gemini or OpenRouter (DeepSeek/Claude) depending on config
 
 Cross-provider fallback: If primary fails, automatically tries the other provider.
 
@@ -241,6 +243,7 @@ Each trade includes an `exit_plan` specifying invalidation conditions:
 | Fear & Greed | 1 hour    | Updates daily              |
 | Reddit       | 30 min    | Rate limit protection      |
 | Quant        | 5 min     | Aligned with trading cycle |
+| **Prompt**   | Dynamic   | Provider Context Caching   |
 
 ## API Endpoints
 

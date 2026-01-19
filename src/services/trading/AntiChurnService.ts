@@ -42,17 +42,12 @@ export class AntiChurnService {
         this.cooldownBeforeFlipMs = antiChurn.cooldownBeforeFlipMs || 1800000;
         this.hysteresisMultiplier = antiChurn.hysteresisMultiplier ?? 1.2;
 
-        const deprecatedMaxTrades = (antiChurn as Record<string, unknown>).maxTradesPerDay as number | undefined;
         let rawMaxTradesPerDay: number;
         let configField: string;
 
         if (config.trading?.maxDailyTrades !== undefined) {
             rawMaxTradesPerDay = config.trading.maxDailyTrades;
             configField = 'config.trading.maxDailyTrades';
-        } else if (deprecatedMaxTrades !== undefined) {
-            logger.warn('⚠️ DEPRECATED: antiChurn.maxTradesPerDay is deprecated. Please migrate to trading.maxDailyTrades in your config.');
-            rawMaxTradesPerDay = deprecatedMaxTrades;
-            configField = 'config.antiChurn.maxTradesPerDay';
         } else {
             rawMaxTradesPerDay = 20;
             configField = 'config.trading.maxDailyTrades (using default)';
