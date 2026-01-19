@@ -42,7 +42,13 @@ const DB_CONFIG = {
 function buildClient(): PrismaClient {
     let client: PrismaClient;
 
+    logger.debug('🔧 Building Prisma client...');
+    logger.debug(`  shouldUseTurso: ${shouldUseTurso}`);
+    logger.debug(`  tursoUrl: ${tursoUrl ? 'SET' : 'NOT SET'}`);
+    logger.debug(`  authToken: ${authToken ? 'SET (length: ' + authToken.length + ')' : 'NOT SET'}`);
+
     if (shouldUseTurso) {
+        logger.debug('📡 Initializing Turso/libSQL adapter...');
         // Turso / libSQL adapter with embedded replica sync
         const adapter = new PrismaLibSQL({
             url: tursoUrl!, // validated by shouldUseTurso
@@ -51,12 +57,15 @@ function buildClient(): PrismaClient {
             syncUrl: tursoUrl!, // Use the same URL for sync
             syncInterval: 60, // Sync every 60 seconds (reduced from 5s to minimize connection churn)
         });
+        logger.debug('✅ Turso adapter created');
 
+        logger.debug('🔨 Creating PrismaClient with Turso adapter...');
         client = new PrismaClient({
             adapter,
         });
         logger.info('Prisma initialized with Turso/libSQL adapter (embedded replica sync enabled)');
     } else {
+        logger.debug('💾 Initializing local SQLite...');
         // Local SQLite (datasource url from schema/env)
         client = new PrismaClient({
             log: isProduction ? ['error'] : ['warn', 'error'],
@@ -64,6 +73,7 @@ function buildClient(): PrismaClient {
         logger.info('Prisma initialized with local SQLite');
     }
 
+    logger.debug('🔍 Setting up slow query logging...');
     // Add slow query logging using Prisma extensions if enabled
     if (DB_CONFIG.logSlowQueries) {
         const extendedClient = client.$extends({
@@ -71,6 +81,7 @@ function buildClient(): PrismaClient {
                 $allModels: {
                     async $allOperations({ model, operation, args, query }) {
                         const start = Date.now();
+                        logger.debug(`📊 DB Query: ${model}.${operation}`);
                         const result = await query(args);
                         const duration = Date.now() - start;
 
@@ -82,6 +93,8 @@ function buildClient(): PrismaClient {
                                 threshold: `${DB_CONFIG.slowQueryThreshold}ms`,
                                 args: args ? Object.keys(args) : undefined
                             });
+                        } else {
+                            logger.debug(`✅ DB Query completed: ${model}.${operation} (${duration}ms)`);
                         }
 
                         return result;
@@ -93,9 +106,11 @@ function buildClient(): PrismaClient {
         // FIXED: Return the extended client cast to PrismaClient
         // The extension maintains compatibility and doesn't create memory issues
         // because it's still a singleton in the global scope
+        logger.debug('✅ Slow query logging enabled');
         return extendedClient as unknown as PrismaClient;
     }
 
+    logger.debug('✅ Prisma client built successfully');
     return client;
 }
 

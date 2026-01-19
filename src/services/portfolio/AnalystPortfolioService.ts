@@ -28,12 +28,14 @@ export class AnalystPortfolioService {
 
         for (const analystId of ANALYST_IDS) {
             try {
+                logger.info(`  Initializing portfolio for ${analystId}...`);
                 const profile = Object.values(ANALYST_PROFILES).find(p => p.id === analystId);
                 if (!profile) {
                     logger.warn(`No profile found for analyst: ${analystId}`);
                     continue;
                 }
 
+                logger.debug(`  Upserting portfolio record for ${analystId}...`);
                 await prisma.portfolio.upsert({
                     where: { agentId: analystId },
                     update: {

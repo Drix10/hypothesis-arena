@@ -99,10 +99,20 @@ async function start() {
             logger.warn('Sentiment service initialization failed (will retry on demand):', error);
         }
 
-        server.listen(PORT, () => {
+        server.listen(PORT, async () => {
             logger.info(`Server running on port ${PORT}`);
             logger.info(`Environment: ${config.nodeEnv}`);
             logger.info(`Database: ${dbOk ? 'connected' : 'disconnected'}`);
+
+            // Auto-start autonomous trading engine
+            try {
+                logger.info('🚀 Starting autonomous trading engine...');
+                const engine = getAutonomousTradingEngine();
+                await engine.start();
+                logger.info('✅ Autonomous trading engine started successfully');
+            } catch (error) {
+                logger.error('❌ Failed to start autonomous trading engine:', error);
+            }
         });
     } catch (error) {
         logger.error('Failed to start server:', error);

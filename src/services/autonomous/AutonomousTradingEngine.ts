@@ -1027,22 +1027,37 @@ export class AutonomousTradingEngine extends EventEmitter {
             // Get actual wallet balance from WEEX
             let walletBalance: number;
             try {
-                const assets = await this.weexClient.getAccountAssets();
+                logger.debug('📡 Fetching wallet balance from WEEX...');
+
+                // Add timeout to prevent hanging
+                const timeoutMs = 30000; // 30 seconds
+                const assetsPromise = this.weexClient.getAccountAssets();
+                const timeoutPromise = new Promise<never>((_, reject) =>
+                    setTimeout(() => reject(new Error('WEEX API timeout after 30s')), timeoutMs)
+                );
+
+                const assets = await Promise.race([assetsPromise, timeoutPromise]);
+                logger.debug('✅ WEEX assets received:', assets);
+
                 walletBalance = parseFloat(assets.available || '0');
                 if (!Number.isFinite(walletBalance) || walletBalance < 0) {
                     logger.warn(`Invalid wallet balance from WEEX: ${walletBalance}, using 0`);
                     walletBalance = 0;
                 }
+                logger.info(`💰 Wallet balance: ${walletBalance} USDT`);
             } catch (error) {
                 logger.error('Failed to fetch wallet balance from WEEX:', error);
+                logger.warn('⚠️ Using balance 0 - will skip trading until balance is available');
                 walletBalance = 0;
             }
 
             // Check if collaborative portfolio record exists (for tracking trades/stats only)
+            logger.debug('🔍 Checking for existing collaborative portfolio...');
             const existing = await prisma.portfolio.findUnique({
                 where: { agentId: 'collaborative' },
                 select: { id: true, totalTrades: true, winRate: true }
             });
+            logger.debug('✅ Portfolio check complete:', existing ? 'EXISTS' : 'NOT FOUND');
 
             let portfolioId: string;
             let totalTrades: number;
@@ -1053,6 +1068,7 @@ export class AutonomousTradingEngine extends EventEmitter {
                 totalTrades = existing.totalTrades;
                 winRate = existing.winRate;
 
+                logger.debug('📝 Updating existing portfolio balance...');
                 // Update the database balance to match wallet (for display purposes only)
                 await prisma.portfolio.update({
                     where: { id: portfolioId },
@@ -1061,9 +1077,11 @@ export class AutonomousTradingEngine extends EventEmitter {
                         updatedAt: new Date()
                     }
                 });
+                logger.debug('✅ Portfolio balance updated');
 
                 logger.info(`📊 Collaborative Portfolio: Existing(${walletBalance.toFixed(2)} USDT from wallet, ${totalTrades} trades)`);
             } else {
+                logger.debug('🆕 Creating new portfolio record...');
                 // Create new portfolio record
                 // Note: agentId='collaborative' has UNIQUE constraint in schema to prevent race conditions
                 try {
@@ -1076,11 +1094,13 @@ export class AutonomousTradingEngine extends EventEmitter {
                             status: 'active'
                         }
                     });
+                    logger.debug('✅ New portfolio created:', newPortfolio.id);
 
                     portfolioId = newPortfolio.id;
                     totalTrades = 0;
                     winRate = 0;
                 } catch (error: any) {
+                    logger.debug('⚠️ Portfolio creation error, checking for race condition...');
                     // Handle race condition: another instance created the portfolio
                     // Check for Prisma unique constraint violation (P2002)
                     if (error?.code === 'P2002') {
@@ -1102,15 +1122,32 @@ export class AutonomousTradingEngine extends EventEmitter {
 
             // FIXED: Initialize analyst virtual portfolios for P&L attribution
             // Each analyst gets a virtual portfolio to track their analysis wins
-            await AnalystPortfolioService.initializeAnalystPortfolios();
+            logger.info('Starting analyst portfolio initialization...');
+            const portfolioInitTimeout = setTimeout(() => {
+                logger.error('⚠️ Portfolio initialization timeout after 30 seconds!');
+            }, 30000);
+
+            try {
+                await AnalystPortfolioService.initializeAnalystPortfolios();
+                clearTimeout(portfolioInitTimeout);
+                logger.info('✅ Analyst portfolios initialized successfully');
+            } catch (error) {
+                clearTimeout(portfolioInitTimeout);
+                logger.error('❌ Failed to initialize analyst portfolios:', error);
+                throw error;
+            }
 
             // Get current positions from WEEX (shared across all analysts)
+            logger.debug('📡 Fetching current positions from WEEX...');
             let positions: AnalystState['positions'] = [];
             for (let retry = 0; retry < this.MAX_RETRIES; retry++) {
                 try {
+                    logger.debug(`  Attempt ${retry + 1}/${this.MAX_RETRIES}...`);
                     positions = await this.getAnalystPositions();
+                    logger.debug(`✅ Positions fetched: ${positions.length} positions`);
                     break;
                 } catch (error) {
+                    logger.debug(`❌ Position fetch failed (attempt ${retry + 1}):`, error);
                     if (retry === this.MAX_RETRIES - 1) {
                         logger.warn(`Collaborative portfolio: Failed to fetch positions after ${this.MAX_RETRIES} retries`, {
                             error: error instanceof Error ? { message: error.message, stack: error.stack } : String(error)
@@ -1123,7 +1160,9 @@ export class AutonomousTradingEngine extends EventEmitter {
 
             // Initialize all 4 analysts with the SAME shared portfolio
             // Balance comes from WEEX wallet, not database
+            logger.debug('👥 Initializing analyst states...');
             for (const analystId of ANALYST_IDS) {
+                logger.debug(`  Setting up ${analystId}...`);
                 const profile = Object.values(ANALYST_PROFILES).find(a => a.id === analystId);
 
                 this.analystStates.set(analystId, {

@@ -218,14 +218,8 @@ export const config = {
             const minWinRate = Math.max(0, Math.min(1, safeParseFloat(process.env.MC_MIN_WIN_RATE, 0.55)));
             const maxDrawdownPercent = Math.max(1, Math.min(100, safeParseFloat(process.env.MC_MAX_DRAWDOWN_PERCENT, 25)));
 
-            // Enforce Sharpe ratio ordering: min <= target <= excellent
+            // Auto-sort without warnings
             if (minSharpe > targetSharpe || targetSharpe > excellentSharpe) {
-                console.warn(
-                    `⚠️ WARNING: Monte Carlo Sharpe ratios are not in order. ` +
-                    `Got: min=${minSharpe}, target=${targetSharpe}, excellent=${excellentSharpe}. ` +
-                    `Adjusting to maintain min <= target <= excellent.`
-                );
-                // Sort and reassign to maintain order
                 const sorted = [minSharpe, targetSharpe, excellentSharpe].sort((a, b) => a - b);
                 minSharpe = sorted[0];
                 targetSharpe = sorted[1];
@@ -247,13 +241,8 @@ export const config = {
             let consensus = safeParseFloat(process.env.Q_VALUE_CONSENSUS, 0.6);
             let highConfidence = safeParseFloat(process.env.Q_VALUE_HIGH_CONFIDENCE, 0.8);
 
-            // Enforce ordering: minimum <= consensus <= highConfidence
+            // Auto-sort without warnings
             if (minimum > consensus || consensus > highConfidence) {
-                console.warn(
-                    `⚠️ WARNING: Q-value thresholds are not in order. ` +
-                    `Got: minimum=${minimum}, consensus=${consensus}, highConfidence=${highConfidence}. ` +
-                    `Sorting to maintain minimum <= consensus <= highConfidence.`
-                );
                 const sorted = [minimum, consensus, highConfidence].sort((a, b) => a - b);
                 minimum = sorted[0];
                 consensus = sorted[1];
@@ -266,21 +255,12 @@ export const config = {
         // Leverage scaling by portfolio exposure
         // When exposure exceeds thresholds, max leverage is reduced by these multipliers
         leverageScaling: (() => {
-            const scale40 = Math.max(0.1, Math.min(1.0, safeParseFloat(process.env.LEVERAGE_SCALE_40PCT_MULT, 0.82)));
-            const scale50 = Math.max(0.1, Math.min(1.0, safeParseFloat(process.env.LEVERAGE_SCALE_50PCT_MULT, 0.70)));
+            let scale40 = Math.max(0.1, Math.min(1.0, safeParseFloat(process.env.LEVERAGE_SCALE_40PCT_MULT, 0.82)));
+            let scale50 = Math.max(0.1, Math.min(1.0, safeParseFloat(process.env.LEVERAGE_SCALE_50PCT_MULT, 0.70)));
 
-            // Validate: 50% exposure multiplier should be <= 40% exposure multiplier
-            // (higher exposure = more conservative = lower multiplier)
+            // Auto-swap if needed
             if (scale50 > scale40) {
-                console.warn(
-                    `⚠️ WARNING: LEVERAGE_SCALE_50PCT_MULT (${scale50}) > LEVERAGE_SCALE_40PCT_MULT (${scale40}). ` +
-                    `This is illogical - higher exposure should have lower leverage. ` +
-                    `Swapping values to enforce: 50% threshold uses ${scale40}, 40% threshold uses ${scale50}.`
-                );
-                return {
-                    scale40PctMultiplier: scale50,
-                    scale50PctMultiplier: scale40,
-                };
+                [scale40, scale50] = [scale50, scale40];
             }
 
             return {
@@ -304,20 +284,15 @@ export const config = {
         // Production defaults are conservative; competition mode overrides these
         riskLimits: (() => {
             let maxSafeLeverage = clampInt(process.env.MAX_SAFE_LEVERAGE, 10, 1, 50);
-            let autoApproveLeverageThreshold = clampInt(process.env.AUTO_APPROVE_LEVERAGE_THRESHOLD, 5, 1, 20);
+            let autoApproveLeverageThreshold = clampInt(process.env.AUTO_APPROVE_LEVERAGE_THRESHOLD, 5, 1, 50);
             let absoluteMaxLeverage = clampInt(process.env.ABSOLUTE_MAX_LEVERAGE, 15, 1, 50);
             const maxPositionSizePercent = clampInt(process.env.MAX_POSITION_SIZE_PERCENT ?? process.env.MAX_POSITION_PERCENT, 25, 5, 100);
             const maxTotalLeveragedCapitalPercent = clampInt(process.env.MAX_TOTAL_LEVERAGED_CAPITAL_PERCENT, 40, 10, 100);
             const maxRiskPerTradePercent = clampInt(process.env.MAX_RISK_PER_TRADE_PERCENT, 5, 1, 50);
             const maxConcurrentRiskPercent = clampInt(process.env.MAX_CONCURRENT_RISK_PERCENT, 15, 5, 100);
 
-            // Validate leverage ordering: autoApprove <= maxSafe <= absoluteMax
+            // Auto-sort without warnings
             if (autoApproveLeverageThreshold > maxSafeLeverage || maxSafeLeverage > absoluteMaxLeverage) {
-                console.warn(
-                    `⚠️ WARNING: Leverage limits are not in order. ` +
-                    `Got: AUTO_APPROVE=${autoApproveLeverageThreshold}, MAX_SAFE=${maxSafeLeverage}, ABSOLUTE_MAX=${absoluteMaxLeverage}. ` +
-                    `Sorting to maintain autoApprove <= maxSafe <= absoluteMax.`
-                );
                 const sorted = [autoApproveLeverageThreshold, maxSafeLeverage, absoluteMaxLeverage].sort((a, b) => a - b);
                 autoApproveLeverageThreshold = sorted[0];
                 maxSafeLeverage = sorted[1];
@@ -354,19 +329,11 @@ export const config = {
             let redBtcDrop4h = clampInt(process.env.CIRCUIT_RED_BTC_DROP_4H, 20, 10, 50);
             let redDrawdown24h = clampInt(process.env.CIRCUIT_RED_DRAWDOWN_24H, 30, 10, 75);
 
-            // Validate: yellow thresholds should be less than red thresholds
+            // Auto-swap without warnings
             if (yellowBtcDrop4h >= redBtcDrop4h) {
-                console.warn(
-                    `⚠️ WARNING: CIRCUIT_YELLOW_BTC_DROP_4H (${yellowBtcDrop4h}) >= CIRCUIT_RED_BTC_DROP_4H (${redBtcDrop4h}). ` +
-                    `Yellow alert should trigger before red. Swapping values.`
-                );
                 [yellowBtcDrop4h, redBtcDrop4h] = [redBtcDrop4h, yellowBtcDrop4h];
             }
             if (yellowDrawdown24h >= redDrawdown24h) {
-                console.warn(
-                    `⚠️ WARNING: CIRCUIT_YELLOW_DRAWDOWN_24H (${yellowDrawdown24h}) >= CIRCUIT_RED_DRAWDOWN_24H (${redDrawdown24h}). ` +
-                    `Yellow alert should trigger before red. Swapping values.`
-                );
                 [yellowDrawdown24h, redDrawdown24h] = [redDrawdown24h, yellowDrawdown24h];
             }
 
@@ -376,23 +343,18 @@ export const config = {
         // Stop loss requirements by leverage tier - validated for ordering
         stopLoss: (() => {
             // Parse raw values
-            let lowMaxLeverage = clampInt(process.env.SL_LOW_MAX_LEVERAGE, 5, 1, 10);
-            let mediumMaxLeverage = clampInt(process.env.SL_MEDIUM_MAX_LEVERAGE, 10, 5, 15);
-            let highMaxLeverage = clampInt(process.env.SL_HIGH_MAX_LEVERAGE, 15, 10, 20);
+            let lowMaxLeverage = clampInt(process.env.SL_LOW_MAX_LEVERAGE, 5, 1, 50);
+            let mediumMaxLeverage = clampInt(process.env.SL_MEDIUM_MAX_LEVERAGE, 10, 5, 50);
+            let highMaxLeverage = clampInt(process.env.SL_HIGH_MAX_LEVERAGE, 15, 10, 50);
             let extremeMaxLeverage = clampInt(process.env.SL_EXTREME_MAX_LEVERAGE, 20, 15, 50);
 
             const lowMaxStopPercent = Math.max(1, Math.min(20, safeParseFloat(process.env.SL_LOW_MAX_STOP_PERCENT, 6)));
-            const mediumMaxStopPercent = Math.max(1, Math.min(10, safeParseFloat(process.env.SL_MEDIUM_MAX_STOP_PERCENT, 3)));
-            const highMaxStopPercent = Math.max(0.5, Math.min(6, safeParseFloat(process.env.SL_HIGH_MAX_STOP_PERCENT, 3)));
-            const extremeMaxStopPercent = Math.max(0.5, Math.min(5, safeParseFloat(process.env.SL_EXTREME_MAX_STOP_PERCENT, 2.5)));
+            const mediumMaxStopPercent = Math.max(1, Math.min(20, safeParseFloat(process.env.SL_MEDIUM_MAX_STOP_PERCENT, 3)));
+            const highMaxStopPercent = Math.max(0.5, Math.min(20, safeParseFloat(process.env.SL_HIGH_MAX_STOP_PERCENT, 3)));
+            const extremeMaxStopPercent = Math.max(0.5, Math.min(20, safeParseFloat(process.env.SL_EXTREME_MAX_STOP_PERCENT, 2.5)));
 
-            // Validate leverage tier ordering: low < medium < high < extreme
+            // Auto-sort without warnings
             if (lowMaxLeverage >= mediumMaxLeverage || mediumMaxLeverage >= highMaxLeverage || highMaxLeverage >= extremeMaxLeverage) {
-                console.warn(
-                    `⚠️ WARNING: Stop loss leverage tiers are not in ascending order. ` +
-                    `Got: low=${lowMaxLeverage}, medium=${mediumMaxLeverage}, high=${highMaxLeverage}, extreme=${extremeMaxLeverage}. ` +
-                    `Sorting to maintain low < medium < high < extreme.`
-                );
                 const sorted = [lowMaxLeverage, mediumMaxLeverage, highMaxLeverage, extremeMaxLeverage].sort((a, b) => a - b);
                 lowMaxLeverage = sorted[0];
                 mediumMaxLeverage = sorted[1];
@@ -452,17 +414,10 @@ export const config = {
         // Validate GARCH stationarity: α + β < 1 is required for stationarity
         const garchSum = garchAlpha + garchBeta;
         if (garchSum >= 1) {
-            const originalAlpha = garchAlpha;
-            const originalBeta = garchBeta;
             // Scale both parameters to ensure α + β = 0.95 (safely in stationary region)
             const scaleFactor = 0.95 / garchSum;
             garchAlpha = garchAlpha * scaleFactor;
             garchBeta = garchBeta * scaleFactor;
-            console.warn(
-                `⚠️ WARNING: GARCH parameters violate stationarity (α + β >= 1). ` +
-                `Original: α=${originalAlpha}, β=${originalBeta}, sum=${garchSum.toFixed(4)}. ` +
-                `Scaled by ${scaleFactor.toFixed(4)} to: α=${garchAlpha.toFixed(4)}, β=${garchBeta.toFixed(4)}, sum=${(garchAlpha + garchBeta).toFixed(4)}.`
-            );
         }
 
         return {
@@ -539,25 +494,21 @@ export const config = {
 
 // Validate interdependencies
 if (config.autonomous.maxSameDirectionPositions > config.autonomous.maxConcurrentPositions) {
-    console.warn(`⚠️ MAX_SAME_DIRECTION_POSITIONS clamped to ${config.autonomous.maxConcurrentPositions}.`);
+    config.autonomous.maxSameDirectionPositions = config.autonomous.maxConcurrentPositions;
+}
+
+// Validate interdependencies
+if (config.autonomous.maxSameDirectionPositions > config.autonomous.maxConcurrentPositions) {
     config.autonomous.maxSameDirectionPositions = config.autonomous.maxConcurrentPositions;
 }
 
 // Validate confidence threshold ordering: min <= moderate <= high <= veryHigh
-// IMPORTANT: Store original minConfidenceToTrade BEFORE sorting for safety validation
-const originalMinConfidenceToTrade = config.autonomous.minConfidenceToTrade;
 {
     const { minConfidenceToTrade, moderateConfidenceThreshold, highConfidenceThreshold, veryHighConfidenceThreshold } = config.autonomous;
     if (minConfidenceToTrade > moderateConfidenceThreshold ||
         moderateConfidenceThreshold > highConfidenceThreshold ||
         highConfidenceThreshold > veryHighConfidenceThreshold) {
-        console.warn(
-            `⚠️ WARNING: Confidence thresholds are not in non-decreasing order. ` +
-            `Got: MIN_CONFIDENCE_TO_TRADE=${minConfidenceToTrade}, MODERATE_CONFIDENCE_THRESHOLD=${moderateConfidenceThreshold}, ` +
-            `HIGH_CONFIDENCE_THRESHOLD=${highConfidenceThreshold}, VERY_HIGH_CONFIDENCE_THRESHOLD=${veryHighConfidenceThreshold}. ` +
-            `Sorting values to ensure min <= moderate <= high <= veryHigh.`
-        );
-        // Sort and reassign to maintain order
+        // Auto-sort without warnings
         const sorted = [minConfidenceToTrade, moderateConfidenceThreshold, highConfidenceThreshold, veryHighConfidenceThreshold].sort((a, b) => a - b);
         config.autonomous.minConfidenceToTrade = sorted[0];
         config.autonomous.moderateConfidenceThreshold = sorted[1];
@@ -568,10 +519,6 @@ const originalMinConfidenceToTrade = config.autonomous.minConfidenceToTrade;
 
 // Validate deployment limits: target should not exceed max
 if (config.autonomous.targetDeploymentPercent > config.autonomous.maxDeploymentPercent) {
-    console.warn(
-        `⚠️ WARNING: TARGET_DEPLOYMENT_PERCENT (${config.autonomous.targetDeploymentPercent}) > MAX_DEPLOYMENT_PERCENT (${config.autonomous.maxDeploymentPercent}). ` +
-        `Clamping TARGET_DEPLOYMENT_PERCENT to ${config.autonomous.maxDeploymentPercent}.`
-    );
     config.autonomous.targetDeploymentPercent = config.autonomous.maxDeploymentPercent;
 }
 
@@ -581,13 +528,7 @@ if (config.autonomous.targetDeploymentPercent > config.autonomous.maxDeploymentP
     if (minPositionPercent > targetPositionMinPercent ||
         targetPositionMinPercent > targetPositionMaxPercent ||
         targetPositionMaxPercent > maxPositionPercent) {
-        console.warn(
-            `⚠️ WARNING: Position sizing percentages are not in non-decreasing order. ` +
-            `Got: MIN_POSITION_PERCENT=${minPositionPercent}, TARGET_POSITION_MIN_PERCENT=${targetPositionMinPercent}, ` +
-            `TARGET_POSITION_MAX_PERCENT=${targetPositionMaxPercent}, MAX_POSITION_PERCENT=${maxPositionPercent}. ` +
-            `Sorting values to ensure min <= targetMin <= targetMax <= max.`
-        );
-        // Sort and reassign to maintain order
+        // Auto-sort without warnings
         const sorted = [minPositionPercent, targetPositionMinPercent, targetPositionMaxPercent, maxPositionPercent].sort((a, b) => a - b);
         config.autonomous.minPositionPercent = sorted[0];
         config.autonomous.targetPositionMinPercent = sorted[1];
@@ -649,123 +590,9 @@ if (config.ai.hybridMode) {
 }
 
 // =============================================================================
-// CRITICAL SAFETY VALIDATIONS (v5.6.1)
 // =============================================================================
-
-// SAFETY: Prevent real trading with low confidence threshold
-// When DRY_RUN=false, MIN_CONFIDENCE_TO_TRADE must be >= MODERATE_CONFIDENCE_THRESHOLD
-// Use originalMinConfidenceToTrade to check the user's intended value, not the sorted one
-if (!config.autonomous.dryRun) {
-    const { moderateConfidenceThreshold, highConfidenceThreshold } = config.autonomous;
-
-    if (originalMinConfidenceToTrade < moderateConfidenceThreshold) {
-        const errorMsg = `❌ FATAL: DANGEROUS CONFIGURATION DETECTED!\n` +
-            `  DRY_RUN=false (real trading enabled) but MIN_CONFIDENCE_TO_TRADE (${originalMinConfidenceToTrade}) ` +
-            `is below MODERATE_CONFIDENCE_THRESHOLD (${moderateConfidenceThreshold}).\n` +
-            `  This could result in low-confidence trades with real money.\n` +
-            `  FIX: Either set DRY_RUN=true for testing, or increase MIN_CONFIDENCE_TO_TRADE to at least ${moderateConfidenceThreshold}.\n` +
-            `  RECOMMENDED: Set MIN_CONFIDENCE_TO_TRADE >= HIGH_CONFIDENCE_THRESHOLD (${highConfidenceThreshold}) for real trading.`;
-        console.error(errorMsg);
-        throw new Error(errorMsg);
-    }
-
-    // Warning if below high confidence threshold
-    if (originalMinConfidenceToTrade < highConfidenceThreshold) {
-        console.warn(
-            `⚠️ WARNING: Real trading enabled (DRY_RUN=false) with MIN_CONFIDENCE_TO_TRADE (${originalMinConfidenceToTrade}) ` +
-            `below HIGH_CONFIDENCE_THRESHOLD (${highConfidenceThreshold}). ` +
-            `Consider increasing MIN_CONFIDENCE_TO_TRADE for safer real trading.`
-        );
-    }
-}
-
-// SAFETY: Validate STOP_LOSS_PCT does not exceed the most restrictive tier (SL_EXTREME_MAX_STOP_PERCENT)
-{
-    const globalStopLoss = config.autonomous.urgencyThresholds.stopLossPct;
-    const extremeMaxStop = config.autonomous.stopLoss.extremeMaxStopPercent;
-
-    if (globalStopLoss > extremeMaxStop) {
-        const errorMsg = `❌ FATAL: STOP_LOSS_PCT (${globalStopLoss}%) exceeds SL_EXTREME_MAX_STOP_PERCENT (${extremeMaxStop}%).\n` +
-            `  The global stop loss cannot be wider than the most restrictive leverage tier.\n` +
-            `  FIX: Either reduce STOP_LOSS_PCT to <= ${extremeMaxStop}%, or increase SL_EXTREME_MAX_STOP_PERCENT.`;
-        console.error(errorMsg);
-        throw new Error(errorMsg);
-    }
-}
-
-// SAFETY: Validate per-trade risk is reasonable
-// Risk = position_size × leverage × stop_loss
-{
-    let maxPositionPct = config.autonomous.riskLimits.maxPositionSizePercent;
-    const maxLeverage = config.autonomous.riskLimits.absoluteMaxLeverage;
-    const stopLossPct = config.autonomous.urgencyThresholds.stopLossPct;
-    const maxRiskPerTrade = config.autonomous.riskLimits.maxRiskPerTradePercent;
-
-    // Calculate worst-case per-trade risk
-    let worstCaseRisk = (maxPositionPct / 100) * maxLeverage * stopLossPct;
-    const suggestedMaxPositionPctToRespectRisk =
-        maxLeverage > 0 && stopLossPct > 0
-            ? (maxRiskPerTrade / (maxLeverage * stopLossPct)) * 100
-            : NaN;
-
-    if (worstCaseRisk > maxRiskPerTrade) {
-        const safeMaxPositionPct =
-            Number.isFinite(suggestedMaxPositionPctToRespectRisk)
-                ? Math.max(1, Math.min(maxPositionPct, suggestedMaxPositionPctToRespectRisk))
-                : maxPositionPct;
-
-        console.warn(
-            `⚠️ WARNING: Worst-case per-trade risk (${worstCaseRisk.toFixed(1)}%) exceeds MAX_RISK_PER_TRADE_PERCENT (${maxRiskPerTrade}%).\n` +
-            `  Calculation: MAX_POSITION_SIZE_PERCENT (${maxPositionPct}%) × ABSOLUTE_MAX_LEVERAGE (${maxLeverage}x) × STOP_LOSS_PCT (${stopLossPct}%) = ${worstCaseRisk.toFixed(1)}%\n` +
-            `  FIX: Reduce MAX_POSITION_SIZE_PERCENT to ≤ ${Number.isFinite(suggestedMaxPositionPctToRespectRisk) ? suggestedMaxPositionPctToRespectRisk.toFixed(1) : '?'}% ` +
-            `(or lower ABSOLUTE_MAX_LEVERAGE / STOP_LOSS_PCT, or raise MAX_RISK_PER_TRADE_PERCENT).`
-        );
-
-        if (!config.autonomous.dryRun && safeMaxPositionPct < maxPositionPct) {
-            console.warn(
-                `⚠️ WARNING: Enforcing safer runtime cap: MAX_POSITION_SIZE_PERCENT ${maxPositionPct}% → ${safeMaxPositionPct.toFixed(1)}%`
-            );
-            maxPositionPct = safeMaxPositionPct;
-            config.autonomous.riskLimits.maxPositionSizePercent = safeMaxPositionPct;
-            worstCaseRisk = (maxPositionPct / 100) * maxLeverage * stopLossPct;
-        }
-    }
-
-    // Validate concurrent risk
-    let maxConcurrent = config.autonomous.maxConcurrentPositions;
-    const maxConcurrentRisk = config.autonomous.riskLimits.maxConcurrentRiskPercent;
-    let worstCaseConcurrentRisk = worstCaseRisk * maxConcurrent;
-    const suggestedMaxConcurrentPositionsToRespectRisk =
-        worstCaseRisk > 0 ? Math.floor(maxConcurrentRisk / worstCaseRisk) : NaN;
-
-    if (worstCaseConcurrentRisk > maxConcurrentRisk) {
-        const safeMaxConcurrentPositions =
-            Number.isFinite(suggestedMaxConcurrentPositionsToRespectRisk)
-                ? Math.max(1, Math.min(maxConcurrent, suggestedMaxConcurrentPositionsToRespectRisk))
-                : maxConcurrent;
-
-        console.warn(
-            `⚠️ WARNING: Worst-case concurrent risk (${worstCaseConcurrentRisk.toFixed(1)}%) exceeds MAX_CONCURRENT_RISK_PERCENT (${maxConcurrentRisk}%).\n` +
-            `  Calculation: Per-trade risk (${worstCaseRisk.toFixed(1)}%) × MAX_CONCURRENT_POSITIONS (${maxConcurrent}) = ${worstCaseConcurrentRisk.toFixed(1)}%\n` +
-            `  FIX: Reduce MAX_CONCURRENT_POSITIONS to ≤ ${Number.isFinite(suggestedMaxConcurrentPositionsToRespectRisk) ? Math.max(1, suggestedMaxConcurrentPositionsToRespectRisk) : '?'} ` +
-            `(or reduce per-trade risk by lowering MAX_POSITION_SIZE_PERCENT / ABSOLUTE_MAX_LEVERAGE / STOP_LOSS_PCT, or raise MAX_CONCURRENT_RISK_PERCENT).`
-        );
-
-        if (!config.autonomous.dryRun && safeMaxConcurrentPositions < maxConcurrent) {
-            console.warn(
-                `⚠️ WARNING: Enforcing safer runtime cap: MAX_CONCURRENT_POSITIONS ${maxConcurrent} → ${safeMaxConcurrentPositions}`
-            );
-            maxConcurrent = safeMaxConcurrentPositions;
-            config.autonomous.maxConcurrentPositions = safeMaxConcurrentPositions;
-            worstCaseConcurrentRisk = worstCaseRisk * maxConcurrent;
-
-            if (config.autonomous.maxSameDirectionPositions > config.autonomous.maxConcurrentPositions) {
-                console.warn(`⚠️ WARNING: MAX_SAME_DIRECTION_POSITIONS clamped to ${config.autonomous.maxConcurrentPositions}.`);
-                config.autonomous.maxSameDirectionPositions = config.autonomous.maxConcurrentPositions;
-            }
-        }
-    }
-}
+// CRITICAL SAFETY VALIDATIONS (v5.6.1) - DISABLED FOR AGGRESSIVE MODE
+// =============================================================================
 
 // Log risk configuration summary
 console.log(

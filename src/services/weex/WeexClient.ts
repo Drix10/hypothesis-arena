@@ -211,7 +211,6 @@ export class WeexClient {
     private async syncServerTime(): Promise<void> {
         // Prevent concurrent sync operations (race condition fix)
         if (this.syncInProgress) {
-            logger.debug('Server time sync already in progress, skipping');
             return;
         }
 
@@ -311,12 +310,20 @@ export class WeexClient {
             }
 
             // ACQUIRE MUTEX for bucket check and decrement
-            // FIXED: Use while loop to re-check lock availability after waiting (v6.0.0)
-            while (this.consumeLock) {
+            // CRITICAL FIX: Use single check with timeout instead of infinite loop
+            if (this.consumeLock) {
+                const lockWaitStart = Date.now();
                 try {
-                    await this.consumeLock;
-                } catch {
-                    // Ignore errors from previous lock holders
+                    // Wait for existing lock with 5s timeout
+                    await Promise.race([
+                        this.consumeLock,
+                        new Promise((_, reject) => setTimeout(() => reject(new Error('Lock timeout')), 5000))
+                    ]);
+                } catch (error) {
+                    // Lock timeout or error - force release and continue
+                    const waitTime = Date.now() - lockWaitStart;
+                    logger.error(`[WEEX] Lock wait timeout/error after ${waitTime}ms, forcing lock release`);
+                    this.consumeLock = null;
                 }
             }
 
@@ -355,7 +362,9 @@ export class WeexClient {
                         logger.warn(`UID rate limit tokens low: ${this.uidBucket.tokens.toFixed(0)}/${DEFAULT_RATE_LIMITS.uidLimit}`);
                     }
 
-                    // Success - return and release lock
+                    // CRITICAL FIX: Release lock before returning to prevent memory leak
+                    resolveLock();
+                    this.consumeLock = null;
                     return;
                 }
 
@@ -374,8 +383,13 @@ export class WeexClient {
                 // Add exponential backoff factor
                 const waitTime = Math.min(baseWaitTime * Math.pow(1.5, attempts), 30000); // Cap at 30 seconds
 
+                if (attempts === 0) {
+                    logger.debug(`[WEEX] Rate limited, waiting ${waitTime.toFixed(0)}ms`);
+                }
+
                 // RELEASE LOCK before waiting to allow other requests to try
                 resolveLock();
+                this.consumeLock = null;
 
                 await new Promise(resolve => setTimeout(resolve, waitTime));
                 attempts++;
@@ -430,15 +444,18 @@ export class WeexClient {
                 bodyString
             );
 
-            // Debug logging - only in development
-            if (process.env.NODE_ENV === 'development' && process.env.DEBUG_WEEX === 'true') {
+            // Debug logging when DEBUG_WEEX is enabled
+            if (process.env.DEBUG_WEEX === 'true') {
                 logger.debug(`[WEEX] ${method} ${endpoint}${queryString}`);
                 logger.debug(`[WEEX] Timestamp: ${timestamp}`);
+                logger.debug(`[WEEX] Headers: ACCESS-KEY=${this.credentials.apiKey.substring(0, 10)}...`);
             }
         }
 
         // For URL: queryString already has "?" if present
         const url = queryString ? `${endpoint}${queryString}` : endpoint;
+
+        const requestStart = Date.now();
 
         try {
             const response = method === 'GET'
@@ -451,8 +468,17 @@ export class WeexClient {
                     timeout: WEEX_REQUEST_TIMEOUT, // Configurable timeout per request
                 });
 
+            const requestDuration = Date.now() - requestStart;
+
+            // Only log slow requests (>1s) or order requests
+            if (requestDuration > 1000 || isOrderRequest) {
+                logger.debug(`[WEEX] ${method} ${endpoint} completed in ${requestDuration}ms`);
+            }
+
             return response.data;
         } catch (error: any) {
+            const requestDuration = Date.now() - requestStart;
+
             // Extract useful error info without circular references
             const errorInfo = {
                 method,
@@ -461,6 +487,7 @@ export class WeexClient {
                 code: error.response?.data?.code,
                 message: error.response?.data?.msg || error.message,
                 isPrivate,
+                duration: requestDuration,
             };
             logger.error(`WEEX API error:`, errorInfo);
 
@@ -587,6 +614,9 @@ export class WeexClient {
     }
 
     async getAccountAssets(): Promise<WeexAccountAssets> {
+        logger.debug('🌐 WEEX API: Calling /capi/v2/account/assets...');
+        const startTime = Date.now();
+
         const response = await this.request<any>(
             'GET',
             '/capi/v2/account/assets',
@@ -594,9 +624,14 @@ export class WeexClient {
             undefined,
             true
         );
+
+        const duration = Date.now() - startTime;
+        logger.debug(`✅ WEEX API: /capi/v2/account/assets completed in ${duration}ms`);
+
         // Response is an array of assets, convert to expected format
         if (Array.isArray(response)) {
             const usdt = response.find((a: any) => a.coinName === 'USDT') || response[0] || {};
+            logger.debug(`💰 WEEX Assets: available=${usdt.available}, equity=${usdt.equity}`);
             return {
                 marginCoin: usdt.coinName || 'USDT',
                 locked: usdt.frozen || '0',
