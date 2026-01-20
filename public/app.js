@@ -130,6 +130,26 @@ function attachEventListeners() {
       const pnl = parseFloat(btn.dataset.pnl) || 0;
       const entryPrice = parseFloat(btn.dataset.entry) || 0;
       closePosition(symbol, side, size, pnl, entryPrice);
+      return;
+    }
+
+    const btnTpsl = e.target.closest(".btn-edit-tpsl");
+    if (btnTpsl) {
+      e.preventDefault();
+      const symbol = btnTpsl.dataset.symbol;
+      const side = btnTpsl.dataset.side;
+      // Pass entry price and size for PnL calculation
+      const entry = parseFloat(btnTpsl.dataset.entry) || 0;
+      const size = parseFloat(btnTpsl.dataset.size) || 0;
+      openTpslModal(symbol, side, entry, size);
+      return;
+    }
+
+    const btnMargin = e.target.closest(".btn-adjust-margin");
+    if (btnMargin) {
+      e.preventDefault();
+      openMarginModal(btnMargin.dataset.symbol, btnMargin.dataset.id);
+      return;
     }
   });
 
@@ -143,8 +163,28 @@ function attachEventListeners() {
     .getElementById("btn-close-modal")
     ?.addEventListener("click", closeModal);
   document
-    .querySelector(".modal-backdrop")
-    ?.addEventListener("click", closeModal);
+    .getElementById("btn-close-tpsl-modal")
+    ?.addEventListener("click", closeTpslModal);
+  document
+    .getElementById("btn-close-margin-modal")
+    ?.addEventListener("click", closeMarginModal);
+
+  document
+    .getElementById("btn-save-tpsl")
+    ?.addEventListener("click", handleSaveTpsl);
+  document
+    .getElementById("btn-save-margin")
+    ?.addEventListener("click", handleSaveMargin);
+
+  document.querySelectorAll(".modal-backdrop").forEach(backdrop => {
+    backdrop.addEventListener("click", (e) => {
+      if (e.target === e.currentTarget) {
+        closeModal();
+        closeTpslModal();
+        closeMarginModal();
+      }
+    });
+  });
 
   // Analyst cards
   document.querySelectorAll(".analyst-card").forEach((card) => {
@@ -406,11 +446,11 @@ function renderMarketCard(market) {
   // SECURITY: Escape ALL user-controlled data including aria-label to prevent XSS
   return `
     <div class="market-card" onclick="showMarketInfo('${escapeHtml(
-      market.symbol
-    )}')" 
+    market.symbol
+  )}')" 
          role="listitem" tabindex="0" aria-label="${escapeHtml(
-           market.symbol
-         )} price ${formatPrice(
+    market.symbol
+  )} price ${formatPrice(
     market.price
   )}, ${changeSign}${market.change24h.toFixed(2)}%">
       <span class="market-symbol">${escapeHtml(market.symbol)}</span>
@@ -486,6 +526,32 @@ function renderPositionCard(pos) {
   const safePnl = Number.isFinite(pnl) ? pnl : 0;
   const safeEntryPrice = Number.isFinite(entryPrice) ? entryPrice : 0;
 
+  // Check margin mode (default to SHARED/Cross if missing)
+  const marginMode = pos.marginMode || 'SHARED';
+  const isIsolated = marginMode === 'ISOLATED';
+
+  // Strict check: Margin adjustment is ONLY for Isolated positions
+  const canAdjustMargin = isIsolated && pos.isolatedPositionId;
+
+  // UI Logic:
+  // If Cross Mode: Show "Cross" badge-like button that explains the auto-protection
+  // If Isolated: Show "Margin" button (enabled/disabled based on ID)
+  const marginBtnText = isIsolated ? 'Margin' : 'Cross 🛡️';
+  const marginBtnAttr = canAdjustMargin ? '' : 'disabled';
+
+  // Dynamic styling and tooltip
+  let marginBtnStyle = canAdjustMargin ? '' : 'opacity: 0.7; cursor: help;'; // Higher opacity for Cross mode to look like a badge
+  let marginBtnTitle = '';
+
+  if (isIsolated) {
+    marginBtnTitle = !pos.isolatedPositionId ? 'Position ID missing' : 'Adjust Isolated Margin';
+    if (!canAdjustMargin) marginBtnStyle = 'opacity: 0.5; cursor: not-allowed;';
+  } else {
+    marginBtnTitle = 'Auto-Margin Active: Your wallet balance automatically protects this position against liquidation.';
+    // Make it look more like a status indicator than a disabled button
+    marginBtnStyle += 'background-color: #2c3e50; border-color: #4a6fa5; color: #aab;';
+  }
+
   return `
     <div class="position-card" role="listitem">
       <div class="position-header">
@@ -506,13 +572,29 @@ function renderPositionCard(pos) {
   )}</span>
         </div>
         <div class="position-detail">
-          <span class="label">SL</span>
-          <span class="value negative">${slInfo}</span>
+          <span class="label">Targets</span>
+          <div class="tpsl-group">
+            <div class="tpsl-row">
+              <span class="tpsl-label">TP</span>
+              <span class="tpsl-value positive">${tpInfo}</span>
+            </div>
+            <div class="tpsl-row">
+              <span class="tpsl-label">SL</span>
+              <span class="tpsl-value negative">${slInfo}</span>
+            </div>
+          </div>
         </div>
-        <div class="position-detail">
-          <span class="label">TP</span>
-          <span class="value positive">${tpInfo}</span>
-        </div>
+      </div>
+      <div class="position-actions">
+          <button class="btn btn-small btn-action-primary btn-edit-tpsl" data-symbol="${rawSymbol}" data-side="${rawSide}" data-entry="${safeEntryPrice}" data-size="${safeSize}">Edit TP/SL</button>
+          <button class="btn btn-small btn-action-gold btn-adjust-margin" 
+              data-symbol="${rawSymbol}" 
+              data-id="${escapeHtml(pos.isolatedPositionId || '')}"
+              ${marginBtnAttr}
+              title="${escapeHtml(marginBtnTitle)}"
+              style="${marginBtnStyle}">
+              ${marginBtnText}
+          </button>
       </div>
     </div>
   `;
@@ -558,11 +640,10 @@ function renderActivityItem(item) {
       <div class="activity-info">
         <span class="activity-symbol">${escapeHtml(symbol)}</span>
         <span class="activity-action">${escapeHtml(action)}</span>
-        ${
-          item.result
-            ? `<span class="activity-result">${escapeHtml(item.result)}</span>`
-            : ""
-        }
+        ${item.result
+      ? `<span class="activity-result">${escapeHtml(item.result)}</span>`
+      : ""
+    }
       </div>
       <span class="activity-time">${time}</span>
     </div>
@@ -669,14 +750,14 @@ function renderAnalystStats(stats, recentTrades) {
       <div class="stat-card">
         <span class="label">Best Trade</span>
         <span class="value positive">${formatCurrency(
-          stats.bestTrade || 0
-        )}</span>
+    stats.bestTrade || 0
+  )}</span>
       </div>
       <div class="stat-card">
         <span class="label">Worst Trade</span>
         <span class="value negative">${formatCurrency(
-          stats.worstTrade || 0
-        )}</span>
+    stats.worstTrade || 0
+  )}</span>
       </div>
       <div class="stat-card">
         <span class="label">Winning</span>
@@ -688,17 +769,16 @@ function renderAnalystStats(stats, recentTrades) {
       </div>
     </div>
     
-    ${
-      stats.favoriteSymbol
-        ? `
-      <div class="stat-card" style="margin-bottom: var(--space-lg);">
+    ${stats.favoriteSymbol
+      ? `
+      <div class="stat-card favorite">
         <span class="label">Favorite Symbol</span>
-        <span class="value" style="color: var(--gold);">${escapeHtml(
-          formatSymbol(stats.favoriteSymbol)
-        )}</span>
+        <span class="value">${escapeHtml(
+        formatSymbol(stats.favoriteSymbol)
+      )}</span>
       </div>
     `
-        : ""
+      : ""
     }
     
     ${recentTrades.length > 0 ? renderRecentTrades(recentTrades) : ""}
@@ -711,32 +791,32 @@ function renderRecentTrades(trades) {
       <h4 class="section-title">📜 Recent Trades</h4>
       <div class="recent-trades-list" role="list">
         ${trades
-          .slice(0, 5)
-          .map((trade) => {
-            // Handle both camelCase (API) and snake_case (DB) field names
-            // null/undefined = entry trade (still open), number = closed trade
-            const rawPnl = trade.realizedPnl ?? trade.realized_pnl;
-            const isEntryTrade = rawPnl === null || rawPnl === undefined;
-            const pnl = isEntryTrade ? 0 : parseFloat(rawPnl) || 0;
-            const symbol = formatSymbol(trade.symbol);
-            const side = (trade.side || "").toLowerCase();
-            const pnlClass = pnl >= 0 ? "positive" : "negative";
-            // Show "OPEN" for entry trades (no realized P&L yet)
-            const pnlDisplay = isEntryTrade ? "OPEN" : formatCurrency(pnl);
+      .slice(0, 5)
+      .map((trade) => {
+        // Handle both camelCase (API) and snake_case (DB) field names
+        // null/undefined = entry trade (still open), number = closed trade
+        const rawPnl = trade.realizedPnl ?? trade.realized_pnl;
+        const isEntryTrade = rawPnl === null || rawPnl === undefined;
+        const pnl = isEntryTrade ? 0 : parseFloat(rawPnl) || 0;
+        const symbol = formatSymbol(trade.symbol);
+        const side = (trade.side || "").toLowerCase();
+        const pnlClass = pnl >= 0 ? "positive" : "negative";
+        // Show "OPEN" for entry trades (no realized P&L yet)
+        const pnlDisplay = isEntryTrade ? "OPEN" : formatCurrency(pnl);
 
-            return `
+        return `
             <div class="trade-item" role="listitem">
               <div class="trade-info">
                 <span class="trade-symbol">${escapeHtml(symbol)}</span>
                 <span class="trade-side ${side}">${escapeHtml(
-              trade.side || ""
-            )}</span>
+          trade.side || ""
+        )}</span>
               </div>
               <span class="trade-pnl ${pnlClass}">${pnlDisplay}</span>
             </div>
           `;
-          })
-          .join("")}
+      })
+      .join("")}
       </div>
     </div>
   `;
@@ -756,6 +836,308 @@ function closeModal() {
       state.lastFocusedElement.focus();
       state.lastFocusedElement = null;
     }
+  }
+}
+
+// ============================================================================
+// MANUAL TRADING MODALS
+// ============================================================================
+
+// TP/SL Modal
+function openTpslModal(symbol, side, entry, size) {
+  const modal = document.getElementById('tpsl-modal');
+  if (!modal) return;
+
+  // Save context for calculations and saving
+  modal.dataset.symbol = symbol;
+  modal.dataset.side = side;
+  modal.dataset.entry = entry || 0;
+  modal.dataset.size = size || 0;
+
+  state.lastFocusedElement = document.activeElement;
+  modal.classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+
+  // Reset form
+  const tpInput = document.getElementById('tp-trigger-price');
+  const slInput = document.getElementById('sl-trigger-price');
+  const executeInput = document.getElementById('tpsl-execute-price');
+  const tpIdInput = document.getElementById('tp-order-id');
+  const slIdInput = document.getElementById('sl-order-id');
+
+  if (tpInput) { tpInput.value = ''; tpInput.oninput = updateEstPnl; }
+  if (slInput) { slInput.value = ''; slInput.oninput = updateEstPnl; }
+  if (executeInput) { executeInput.value = ''; }
+  if (tpIdInput) { tpIdInput.value = ''; }
+  if (slIdInput) { slIdInput.value = ''; }
+
+  updateEstPnl(); // Reset display
+
+  // Fetch orders
+  fetchPlanOrders(symbol, side);
+}
+
+function updateEstPnl() {
+  const modal = document.getElementById('tpsl-modal');
+  if (!modal) return;
+
+  const entry = parseFloat(modal.dataset.entry) || 0;
+  const size = parseFloat(modal.dataset.size) || 0;
+  const side = modal.dataset.side; // LONG or SHORT
+
+  const tpInput = document.getElementById('tp-trigger-price');
+  const slInput = document.getElementById('sl-trigger-price');
+  const tpDisplay = document.getElementById('tp-est-pnl');
+  const slDisplay = document.getElementById('sl-est-pnl');
+
+  const updateSingleDisplay = (price, display, type) => {
+    if (!display) return;
+    display.classList.remove('text-bull', 'text-bear', 'text-secondary');
+    display.style.color = ''; // Remove inline override
+
+    if (!price || !entry || !size) {
+      display.textContent = '--';
+      display.classList.add('text-secondary');
+      return;
+    }
+
+    let pnl = 0;
+    let percent = 0;
+
+    if (side === 'LONG') {
+      pnl = (price - entry) * size;
+      percent = ((price - entry) / entry) * 100;
+    } else {
+      // Short: Entry - Price
+      pnl = (entry - price) * size;
+      percent = ((entry - price) / entry) * 100;
+    }
+
+    const sign = pnl >= 0 ? '+' : '';
+    const colorClass = pnl >= 0 ? 'text-bull' : 'text-bear';
+
+    display.textContent = `${type} P&L: ${sign}$${pnl.toFixed(2)} (${sign}${percent.toFixed(2)}%)`;
+    display.classList.add(colorClass);
+  };
+
+  if (tpInput) updateSingleDisplay(parseFloat(tpInput.value), tpDisplay, 'TP');
+  if (slInput) updateSingleDisplay(parseFloat(slInput.value), slDisplay, 'SL');
+}
+
+function closeTpslModal() {
+  const modal = document.getElementById('tpsl-modal');
+  if (modal) {
+    modal.classList.add('hidden');
+    document.body.style.overflow = '';
+
+    if (state.lastFocusedElement && typeof state.lastFocusedElement.focus === 'function') {
+      state.lastFocusedElement.focus();
+      state.lastFocusedElement = null;
+    }
+  }
+}
+
+async function fetchPlanOrders(symbol, positionSide) {
+  // Inputs
+  const tpInput = document.getElementById('tp-trigger-price');
+  const slInput = document.getElementById('sl-trigger-price');
+  const tpIdInput = document.getElementById('tp-order-id');
+  const slIdInput = document.getElementById('sl-order-id');
+  const executeInput = document.getElementById('tpsl-execute-price');
+
+  try {
+    const modal = document.getElementById('tpsl-modal');
+    // Guard: Modal closed or symbol changed
+    if (!modal || modal.classList.contains('hidden') || modal.dataset.symbol !== symbol) return;
+
+    const res = await fetch(`${CONFIG.API_BASE}/trading/orders/plan?symbol=${symbol}`);
+    const data = await res.json();
+
+    // Guard: Modal closed or symbol changed during fetch
+    if (!modal || modal.classList.contains('hidden') || modal.dataset.symbol !== symbol) return;
+
+    if (data.success && data.orders && data.orders.length > 0) {
+      const relevantOrders = data.orders.filter(o => o.symbol === symbol);
+
+      // Find TP (profit_plan)
+      const tpOrder = relevantOrders.find(o => o.planType === 'profit_plan');
+      if (tpOrder) {
+        if (tpInput) tpInput.value = tpOrder.triggerPrice;
+        if (tpIdInput) tpIdInput.value = tpOrder.orderId;
+        if (executeInput && tpOrder.executePrice) executeInput.value = tpOrder.executePrice;
+      }
+
+      // Find SL (loss_plan)
+      const slOrder = relevantOrders.find(o => o.planType === 'loss_plan');
+      if (slOrder) {
+        if (slInput) slInput.value = slOrder.triggerPrice;
+        if (slIdInput) slIdInput.value = slOrder.orderId;
+        if (executeInput && !executeInput.value && slOrder.executePrice) executeInput.value = slOrder.executePrice;
+      }
+
+      updateEstPnl();
+    }
+  } catch (err) {
+    console.error('Failed to load plan orders:', err);
+    showAlert('Failed to load existing TP/SL', 'error');
+  }
+}
+
+async function handleSaveTpsl() {
+  const modal = document.getElementById('tpsl-modal');
+  const symbol = modal.dataset.symbol;
+  const side = modal.dataset.side; // LONG or SHORT
+  const size = modal.dataset.size;
+
+  const executePrice = document.getElementById('tpsl-execute-price').value;
+
+  const tpId = document.getElementById('tp-order-id').value;
+  const tpPrice = document.getElementById('tp-trigger-price').value;
+
+  const slId = document.getElementById('sl-order-id').value;
+  const slPrice = document.getElementById('sl-trigger-price').value;
+
+  // Validation
+  if (tpPrice && parseFloat(tpPrice) <= 0) {
+    showAlert('Take Profit price must be positive', 'error');
+    return;
+  }
+  if (slPrice && parseFloat(slPrice) <= 0) {
+    showAlert('Stop Loss price must be positive', 'error');
+    return;
+  }
+  if (executePrice && parseFloat(executePrice) <= 0) {
+    showAlert('Execute price must be positive', 'error');
+    return;
+  }
+
+  const updates = [];
+
+  // Prepare TP update
+  if (tpPrice) {
+    updates.push({
+      orderId: tpId || '',
+      triggerPrice: tpPrice,
+      executePrice,
+      symbol,
+      planType: 'profit_plan',
+      side,
+      size
+    });
+  }
+
+  // Prepare SL update
+  if (slPrice) {
+    updates.push({
+      orderId: slId || '',
+      triggerPrice: slPrice,
+      executePrice,
+      symbol,
+      planType: 'loss_plan',
+      side,
+      size
+    });
+  }
+
+  if (updates.length === 0) {
+    showAlert('Nothing to update (enter a price)', 'info');
+    return;
+  }
+
+  let successCount = 0;
+  let errors = [];
+
+  for (const update of updates) {
+    try {
+      const res = await fetch(`${CONFIG.API_BASE}/trading/manual/tpsl/modify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(update)
+      });
+      const data = await res.json();
+      if (data.success) successCount++;
+      else errors.push(data.error || 'Unknown error');
+    } catch (err) {
+      errors.push(err.message);
+    }
+  }
+
+  if (successCount > 0) {
+    showAlert(`Successfully updated/created ${successCount} order(s)`, 'success');
+    closeTpslModal();
+    refreshAll();
+  } else {
+    showAlert('Failed to update: ' + errors.join(', '), 'error');
+  }
+}
+
+// Margin Modal
+function openMarginModal(symbol, isolatedPositionId) {
+  if (!isolatedPositionId) {
+    showAlert('Cannot adjust margin for this position (ID missing)', 'error');
+    return;
+  }
+
+  const modal = document.getElementById('margin-modal');
+  if (!modal) return;
+
+  state.lastFocusedElement = document.activeElement;
+  modal.classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+
+  document.getElementById('margin-position-id').value = isolatedPositionId;
+  document.getElementById('margin-symbol').value = symbol;
+  document.getElementById('margin-amount').value = '';
+}
+
+function closeMarginModal() {
+  const modal = document.getElementById('margin-modal');
+  if (modal) {
+    modal.classList.add('hidden');
+    document.body.style.overflow = '';
+
+    if (state.lastFocusedElement && typeof state.lastFocusedElement.focus === 'function') {
+      state.lastFocusedElement.focus();
+      state.lastFocusedElement = null;
+    }
+  }
+}
+
+async function handleSaveMargin() {
+  const isolatedPositionId = document.getElementById('margin-position-id').value;
+  const amount = document.getElementById('margin-amount').value;
+  const symbol = document.getElementById('margin-symbol').value;
+
+  if (!isolatedPositionId) {
+    showAlert('Missing position ID', 'error');
+    return;
+  }
+  if (!amount || parseFloat(amount) === 0) {
+    showAlert('Please enter a valid amount', 'error');
+    return;
+  }
+
+  try {
+    const res = await fetch(`${CONFIG.API_BASE}/trading/manual/margin/adjust`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        isolatedPositionId,
+        collateralAmount: amount,
+        symbol
+      })
+    });
+    const data = await res.json();
+
+    if (data.success) {
+      showAlert('Margin Adjusted Successfully', 'success');
+      closeMarginModal();
+      refreshAll();
+    } else {
+      showAlert(data.error || 'Failed to adjust margin', 'error');
+    }
+  } catch (err) {
+    showAlert('Failed to adjust margin: ' + err.message, 'error');
   }
 }
 
@@ -1305,8 +1687,8 @@ function renderJournalEntries(entries) {
         entry.outcome === "win"
           ? "positive"
           : entry.outcome === "loss"
-          ? "negative"
-          : "";
+            ? "negative"
+            : "";
 
       // FIXED: Safe number formatting with null/NaN checks
       const zScoreDisplay =
@@ -1322,16 +1704,16 @@ function renderJournalEntries(entries) {
       <div class="debug-entry">
         <div class="debug-entry-header">
           <span class="debug-entry-id">${escapeHtml(
-            entry.tradeId || entry.id || "N/A"
-          )}</span>
+        entry.tradeId || entry.id || "N/A"
+      )}</span>
           <span class="debug-entry-time">${formatTime(entry.createdAt)}</span>
         </div>
         <div class="debug-entry-details">
           <div class="debug-detail">
             <span class="debug-detail-label">Regime</span>
             <span class="debug-detail-value">${escapeHtml(
-              entry.entryRegime || "--"
-            )}</span>
+        entry.entryRegime || "--"
+      )}</span>
           </div>
           <div class="debug-detail">
             <span class="debug-detail-label">Z-Score</span>
@@ -1348,15 +1730,14 @@ function renderJournalEntries(entries) {
             <span class="debug-detail-value">${holdTimeDisplay}</span>
           </div>
         </div>
-        ${
-          entry.lessonsLearned
-            ? `<div class="debug-detail" style="margin-top: var(--space-xs);">
+        ${entry.lessonsLearned
+          ? `<div class="debug-detail extra">
             <span class="debug-detail-label">Lesson</span>
             <span class="debug-detail-value">${escapeHtml(
-              entry.lessonsLearned
-            )}</span>
+            entry.lessonsLearned
+          )}</span>
           </div>`
-            : ""
+          : ""
         }
       </div>
     `;
@@ -1386,8 +1767,8 @@ function renderTrackedTrades(trades) {
       <div class="debug-entry">
         <div class="debug-entry-header">
           <span class="debug-entry-id">${escapeHtml(
-            formatSymbol(trade.symbol)
-          )}</span>
+        formatSymbol(trade.symbol)
+      )}</span>
           <span class="debug-entry-time">${formatTime(trade.entryTime)}</span>
         </div>
         <div class="debug-entry-details">
@@ -1400,35 +1781,32 @@ function renderTrackedTrades(trades) {
           <div class="debug-detail">
             <span class="debug-detail-label">Entry</span>
             <span class="debug-detail-value">${formatPrice(
-              trade.entryPrice
-            )}</span>
+        trade.entryPrice
+      )}</span>
           </div>
           <div class="debug-detail">
             <span class="debug-detail-label">Size</span>
-            <span class="debug-detail-value">${
-              trade.size != null && Number.isFinite(Number(trade.size))
-                ? escapeHtml(String(trade.size))
-                : "--"
-            }</span>
+            <span class="debug-detail-value">${trade.size != null && Number.isFinite(Number(trade.size))
+          ? escapeHtml(String(trade.size))
+          : "--"
+        }</span>
           </div>
           <div class="debug-detail">
             <span class="debug-detail-label">Leverage</span>
-            <span class="debug-detail-value">${
-              trade.leverage != null && Number.isFinite(Number(trade.leverage))
-                ? escapeHtml(String(trade.leverage)) + "x"
-                : "--"
-            }</span>
+            <span class="debug-detail-value">${trade.leverage != null && Number.isFinite(Number(trade.leverage))
+          ? escapeHtml(String(trade.leverage)) + "x"
+          : "--"
+        }</span>
           </div>
         </div>
-        ${
-          trade.exitPlan
-            ? `<div class="debug-detail" style="margin-top: var(--space-xs);">
+        ${trade.exitPlan
+          ? `<div class="debug-detail extra">
             <span class="debug-detail-label">Exit Plan</span>
             <span class="debug-detail-value">${escapeHtml(
-              trade.exitPlan
-            )}</span>
+            trade.exitPlan
+          )}</span>
           </div>`
-            : ""
+          : ""
         }
       </div>
     `;
@@ -1449,8 +1827,8 @@ function renderSentiment(data) {
     fearGreedIndex != null && fearGreedIndex < 30
       ? "negative"
       : fearGreedIndex != null && fearGreedIndex > 70
-      ? "positive"
-      : "";
+        ? "positive"
+        : "";
   const fearGreedDisplay = fearGreedIndex != null ? fearGreedIndex : "--";
   const fearGreedClassification = s.market?.fearGreedClassification || "--";
   const btcScore = parseFloat(s.btc?.score);
@@ -1472,35 +1850,32 @@ function renderSentiment(data) {
         </div>
         <div class="debug-detail">
           <span class="debug-detail-label">BTC Sentiment</span>
-          <span class="debug-detail-value">${
-            btcScore != null && Number.isFinite(btcScore)
-              ? btcScore.toFixed(2)
-              : "--"
-          }</span>
+          <span class="debug-detail-value">${btcScore != null && Number.isFinite(btcScore)
+      ? btcScore.toFixed(2)
+      : "--"
+    }</span>
         </div>
         <div class="debug-detail">
           <span class="debug-detail-label">ETH Sentiment</span>
-          <span class="debug-detail-value">${
-            ethScore != null && Number.isFinite(ethScore)
-              ? ethScore.toFixed(2)
-              : "--"
-          }</span>
+          <span class="debug-detail-value">${ethScore != null && Number.isFinite(ethScore)
+      ? ethScore.toFixed(2)
+      : "--"
+    }</span>
         </div>
         <div class="debug-detail">
           <span class="debug-detail-label">Trend</span>
           <span class="debug-detail-value">${escapeHtml(sentimentTrend)}</span>
         </div>
       </div>
-      ${
-        data.formatted
-          ? `<div class="debug-detail" style="margin-top: var(--space-xs);">
+      ${data.formatted
+      ? `<div class="debug-detail extra">
           <span class="debug-detail-label">Formatted</span>
-          <span class="debug-detail-value" style="font-size: 0.65rem; white-space: pre-wrap;">${escapeHtml(
-            data.formatted
-          )}</span>
+          <span class="debug-detail-value raw">${escapeHtml(
+        data.formatted
+      )}</span>
         </div>`
-          : ""
-      }
+      : ""
+    }
     </div>
   `;
 }
@@ -1528,14 +1903,14 @@ function renderRegime(data) {
     overallRegime === "trending"
       ? "positive"
       : overallRegime === "volatile"
-      ? "negative"
-      : "";
+        ? "negative"
+        : "";
   const difficultyClass =
     tradingDifficulty === "easy"
       ? "positive"
       : tradingDifficulty === "hard" || tradingDifficulty === "extreme"
-      ? "negative"
-      : "";
+        ? "negative"
+        : "";
 
   return `
     <div class="debug-entry">
@@ -1558,33 +1933,30 @@ function renderRegime(data) {
         </div>
         <div class="debug-detail">
           <span class="debug-detail-label">ADX</span>
-          <span class="debug-detail-value">${
-            Number.isFinite(adx) ? adx.toFixed(1) : "--"
-          }</span>
+          <span class="debug-detail-value">${Number.isFinite(adx) ? adx.toFixed(1) : "--"
+    }</span>
         </div>
         <div class="debug-detail">
           <span class="debug-detail-label">Volatility</span>
           <span class="debug-detail-value">${escapeHtml(volatilityState)}</span>
         </div>
       </div>
-      ${
-        recommendation
-          ? `<div class="debug-detail" style="margin-top: var(--space-xs);">
+      ${recommendation
+      ? `<div class="debug-detail extra">
           <span class="debug-detail-label">Recommendation</span>
           <span class="debug-detail-value">${escapeHtml(recommendation)}</span>
         </div>`
-          : ""
-      }
-      ${
-        data.formatted
-          ? `<div class="debug-detail" style="margin-top: var(--space-xs);">
+      : ""
+    }
+      ${data.formatted
+      ? `<div class="debug-detail extra">
           <span class="debug-detail-label">Formatted</span>
-          <span class="debug-detail-value" style="font-size: 0.65rem; white-space: pre-wrap;">${escapeHtml(
-            data.formatted
-          )}</span>
+          <span class="debug-detail-value raw">${escapeHtml(
+        data.formatted
+      )}</span>
         </div>`
-          : ""
-      }
+      : ""
+    }
     </div>
   `;
 }

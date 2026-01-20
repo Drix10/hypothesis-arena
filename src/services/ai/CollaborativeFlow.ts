@@ -471,8 +471,8 @@ export class CollaborativeFlowService {
             const debateStart = Date.now();
             let debateResult: TournamentResult | null = null;
 
-            // Hard timeout for debate phase (reduced to align with <25s pipeline target)
-            const DEBATE_TIMEOUT_MS = Number(process.env.DEBATE_TIMEOUT_MS) || 15000;
+            // Hard timeout for debate phase (increased for stability)
+            const DEBATE_TIMEOUT_MS = Number(process.env.DEBATE_TIMEOUT_MS) || 120000;
 
             try {
                 // Determine the best symbol to debate (the one with the most conflict or highest conviction)
@@ -579,7 +579,7 @@ export class CollaborativeFlowService {
 
             const hasVol = s.volatility === 'high';
             const hasFunding = s.funding_bias !== 'neutral';
-            
+
             // Check for strong trends (0-100 scale, <20 is strong bear, >80 is strong bull)
             // Note: trend_strength is calculated on 5m data despite being in long_term object
             const trendStrength = asset.long_term.trend_strength;
@@ -782,7 +782,7 @@ export class CollaborativeFlowService {
                     prompt: fullPrompt,
                     schema: ANALYST_OUTPUT_RESPONSE_SCHEMA,
                     temperature: config.ai.temperature,
-                    maxOutputTokens: 8192, // Increased from 2048 for strict schema verbosity
+                    maxOutputTokens: Math.max(16384, config.ai.maxOutputTokens), // Increased from 8192 for strict schema verbosity
                     label: `Analyst-${analystId}`,
                 });
                 resultText = result.text;

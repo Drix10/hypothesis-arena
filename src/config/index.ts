@@ -137,14 +137,14 @@ export const config = {
         veryHighConfidenceThreshold: clampInt(process.env.VERY_HIGH_CONFIDENCE_THRESHOLD, 80, 0, 100),
 
         // Deployment limits (percentage of capital) - validated after config object
-        targetDeploymentPercent: clampInt(process.env.TARGET_DEPLOYMENT_PERCENT, 50, 10, 100),
-        maxDeploymentPercent: clampInt(process.env.MAX_DEPLOYMENT_PERCENT, 60, 10, 100),
+        targetDeploymentPercent: clampInt(process.env.TARGET_DEPLOYMENT_PERCENT, 80, 10, 100),
+        maxDeploymentPercent: clampInt(process.env.MAX_DEPLOYMENT_PERCENT, 95, 10, 100),
 
         // Position sizing (percentage of starting balance)
-        minPositionPercent: clampInt(process.env.MIN_POSITION_PERCENT, 10, 5, 50),
-        targetPositionMinPercent: clampInt(process.env.TARGET_POSITION_MIN_PERCENT, 12, 5, 50),
-        targetPositionMaxPercent: clampInt(process.env.TARGET_POSITION_MAX_PERCENT, 15, 5, 50),
-        maxPositionPercent: clampInt(process.env.MAX_POSITION_PERCENT, 20, 10, 50),
+        minPositionPercent: clampInt(process.env.MIN_POSITION_PERCENT, 25, 5, 50),
+        targetPositionMinPercent: clampInt(process.env.TARGET_POSITION_MIN_PERCENT, 30, 5, 50),
+        targetPositionMaxPercent: clampInt(process.env.TARGET_POSITION_MAX_PERCENT, 35, 5, 50),
+        maxPositionPercent: clampInt(process.env.MAX_POSITION_PERCENT, 40, 10, 50),
 
         // Retry limits - clamped to [1, 10] for safety
         maxRetries: clampInt(process.env.MAX_RETRIES, 3, 1, 10),
@@ -155,10 +155,14 @@ export const config = {
         urgencyThresholds: {
             // Target profit % to trigger VERY_URGENT (take profit zone)
             targetProfitPct: (() => {
-                const value = safeParseFloat(process.env.TARGET_PROFIT_PCT, 5);
-                if (!process.env.TARGET_PROFIT_PCT) {
-                    console.warn('⚠️ TARGET_PROFIT_PCT not set, using default: 5%');
+                const rawValue = process.env.TARGET_PROFIT_PCT;
+                // Default to 2 if not set
+                const value = safeParseFloat(rawValue, 2);
+
+                if (!rawValue) {
+                    console.warn('⚠️ TARGET_PROFIT_PCT not set, using default: 2%');
                 }
+
                 if (value <= 0 || value > 100) {
                     throw new Error(`❌ FATAL: TARGET_PROFIT_PCT must be between 0 and 100, got: ${value}`);
                 }
@@ -166,9 +170,9 @@ export const config = {
             })(),
             // Stop loss % to trigger VERY_URGENT (cut losses)
             stopLossPct: (() => {
-                const value = safeParseFloat(process.env.STOP_LOSS_PCT, 2.5);
+                const value = safeParseFloat(process.env.STOP_LOSS_PCT, 1);
                 if (!process.env.STOP_LOSS_PCT) {
-                    console.warn('⚠️ STOP_LOSS_PCT not set, using default: 2.5%');
+                    console.warn('⚠️ STOP_LOSS_PCT not set, using default: 1%');
                 }
                 if (value <= 0 || value > 100) {
                     throw new Error(`❌ FATAL: STOP_LOSS_PCT must be between 0 and 100, got: ${value}`);
@@ -177,9 +181,9 @@ export const config = {
             })(),
             // Max hold hours before VERY_URGENT
             maxHoldHours: (() => {
-                const value = safeParseFloat(process.env.MAX_HOLD_HOURS, 72);
+                const value = safeParseFloat(process.env.MAX_HOLD_HOURS, 24);
                 if (!process.env.MAX_HOLD_HOURS) {
-                    console.warn('⚠️ MAX_HOLD_HOURS not set, using default: 72 hours');
+                    console.warn('⚠️ MAX_HOLD_HOURS not set, using default: 24 hours');
                 }
                 if (value <= 0 || value > 168) {
                     throw new Error(`❌ FATAL: MAX_HOLD_HOURS must be between 0 and 168 (1 week), got: ${value}`);
@@ -187,7 +191,7 @@ export const config = {
                 return value;
             })(),
             // Partial take profit threshold for MODERATE urgency
-            partialTpPct: safeParseFloat(process.env.PARTIAL_TP_PCT, 3),
+            partialTpPct: safeParseFloat(process.env.PARTIAL_TP_PCT, 1),
             // Hours before position is considered stale (competition mode only)
             stalePositionHours: safeParseFloat(process.env.STALE_POSITION_HOURS, 6),
             // P&L threshold below which position is considered stale
@@ -268,13 +272,13 @@ export const config = {
         // Global risk limits (used in riskLimits.ts) - validated for ordering
         // Production defaults are conservative; competition mode overrides these
         riskLimits: (() => {
-            let maxSafeLeverage = clampInt(process.env.MAX_SAFE_LEVERAGE, 10, 1, 50);
-            let autoApproveLeverageThreshold = clampInt(process.env.AUTO_APPROVE_LEVERAGE_THRESHOLD, 5, 1, 50);
-            let absoluteMaxLeverage = clampInt(process.env.ABSOLUTE_MAX_LEVERAGE, 15, 1, 50);
-            const maxPositionSizePercent = clampInt(process.env.MAX_POSITION_SIZE_PERCENT ?? process.env.MAX_POSITION_PERCENT, 25, 5, 100);
-            const maxTotalLeveragedCapitalPercent = clampInt(process.env.MAX_TOTAL_LEVERAGED_CAPITAL_PERCENT, 40, 10, 100);
-            const maxRiskPerTradePercent = clampInt(process.env.MAX_RISK_PER_TRADE_PERCENT, 5, 1, 50);
-            const maxConcurrentRiskPercent = clampInt(process.env.MAX_CONCURRENT_RISK_PERCENT, 15, 5, 100);
+            let maxSafeLeverage = clampInt(process.env.MAX_SAFE_LEVERAGE, 20, 1, 50);
+            let autoApproveLeverageThreshold = clampInt(process.env.AUTO_APPROVE_LEVERAGE_THRESHOLD, 10, 1, 50);
+            let absoluteMaxLeverage = clampInt(process.env.ABSOLUTE_MAX_LEVERAGE, 25, 1, 50);
+            const maxPositionSizePercent = clampInt(process.env.MAX_POSITION_SIZE_PERCENT ?? process.env.MAX_POSITION_PERCENT, 20, 5, 100);
+            const maxTotalLeveragedCapitalPercent = clampInt(process.env.MAX_TOTAL_LEVERAGED_CAPITAL_PERCENT, 70, 10, 100);
+            const maxRiskPerTradePercent = clampInt(process.env.MAX_RISK_PER_TRADE_PERCENT, 10, 1, 50);
+            const maxConcurrentRiskPercent = clampInt(process.env.MAX_CONCURRENT_RISK_PERCENT, 30, 5, 100);
 
             // Auto-sort without warnings
             if (autoApproveLeverageThreshold > maxSafeLeverage || maxSafeLeverage > absoluteMaxLeverage) {
@@ -331,12 +335,12 @@ export const config = {
             let lowMaxLeverage = clampInt(process.env.SL_LOW_MAX_LEVERAGE, 5, 1, 50);
             let mediumMaxLeverage = clampInt(process.env.SL_MEDIUM_MAX_LEVERAGE, 10, 5, 50);
             let highMaxLeverage = clampInt(process.env.SL_HIGH_MAX_LEVERAGE, 15, 10, 50);
-            let extremeMaxLeverage = clampInt(process.env.SL_EXTREME_MAX_LEVERAGE, 20, 15, 50);
+            let extremeMaxLeverage = clampInt(process.env.SL_EXTREME_MAX_LEVERAGE, 25, 15, 50);
 
             const lowMaxStopPercent = Math.max(1, Math.min(20, safeParseFloat(process.env.SL_LOW_MAX_STOP_PERCENT, 6)));
             const mediumMaxStopPercent = Math.max(1, Math.min(20, safeParseFloat(process.env.SL_MEDIUM_MAX_STOP_PERCENT, 3)));
             const highMaxStopPercent = Math.max(0.5, Math.min(20, safeParseFloat(process.env.SL_HIGH_MAX_STOP_PERCENT, 3)));
-            const extremeMaxStopPercent = Math.max(0.5, Math.min(20, safeParseFloat(process.env.SL_EXTREME_MAX_STOP_PERCENT, 2.5)));
+            const extremeMaxStopPercent = Math.max(0.5, Math.min(20, safeParseFloat(process.env.SL_EXTREME_MAX_STOP_PERCENT, 2)));
 
             // Auto-sort without warnings
             if (lowMaxLeverage >= mediumMaxLeverage || mediumMaxLeverage >= highMaxLeverage || highMaxLeverage >= extremeMaxLeverage) {

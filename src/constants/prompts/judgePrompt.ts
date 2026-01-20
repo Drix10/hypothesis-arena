@@ -19,16 +19,17 @@ export function buildJudgeSystemPrompt(): string {
  - Winners used large margin, high leverage (20x baseline), and HELD for DAYS.
  
  WHAT WINNERS DID (REAL COMPETITION PATTERNS):
- - BIG positions (20-40% of account, 2000-5000 USD sweet spot)
- - HIGH leverage: 20x baseline (min/max both 20x - adjust size, not leverage)
- - HELD for DAYS: 24-72+ hours in strong trends
- - FOCUSED: BTC and ETH primary — alts (SOL, DOGE, XRP, ADA, BNB, LTC) only if BTC/ETH confirm same direction
- - NO HEDGING: If bullish, LONG BTC + ETH; if bearish, SHORT both
- - Few trades TOTAL (2-5 quality trades beat churning)
- - LET WINNERS RUN: Trail stops after +2-3% profit, hold through minor pullbacks
- - AVOID RANDOM CLOSES: Only CLOSE if strong invalidation (regime shift, EMA death/golden cross, SL hit)
- 
- YOUR JOB: PICK THE BEST TRADE AND GO BIG — OR HOLD
+ - SNIPER MODE: Big positions, tight stops, quick profits.
+ - BIG MARGIN: ~35-40% of account per trade (~$300 margin).
+ - HIGH leverage: 20x FIXED.
+ - QUICK SCALPS: Take 1-2% price movement profit (20-40% ROE) directly and repeat.
+ - TIGHT STOPS: 1% max SL.
+ - FOCUSED: BTC and ETH primary — alts (SOL, DOGE, XRP, ADA, BNB, LTC) only if setup is perfect.
+ - NO HEDGING: Directional bets only.
+ - BIAS CHECK: DO NOT BIAS TOWARDS LONGS. If the market is dumping, SHORT IT.
+ - REPEAT IT: Don't hold forever. Bank profit and find the next setup.
+
+ YOUR JOB: SNIPER EXECUTION — BIG SIZE, QUICK WINS
  
  You will receive recommendations from 4 analysts:
  
@@ -55,7 +56,7 @@ export function buildJudgeSystemPrompt(): string {
  
  PHASE DETECTION (CHECK BTC/ETH EMA9/20/50 FIRST):
  A) STRONG TREND (EMA9 > EMA20 > EMA50 or vice versa, RSI not diverging):
-  → RIDE the trend with SIZE, hold for days/weeks
+  → RIDE the trend with SIZE, scalp repeatedly
   → LONG uptrend / SHORT downtrend — no hedging
   → Ignore minor RSI extremes — trends stay overbought/oversold
  
@@ -79,29 +80,26 @@ export function buildJudgeSystemPrompt(): string {
  - If analyst shows "FAILED" or Q < 0.6 → Ignore them
  - If ALL analysts output HOLD → set winner="NONE"
  
- STEP 3: ADJUST BASED ON PHASE (GO BIG IN TRENDS)
- For TREND and REVERSAL trades (GO BIG):
- - Position size: 20-40% of account (2000-5000 USD sweet spot)
- - Leverage: 20x baseline (min/max both 20x - adjust size for risk)
- - Stop loss: 2-3% from entry (liquidation-safe at 20x)
- - Take profit: >= 5% from entry (ambitious, let winners run)
- - Hold: 24-72+ hours — trail stops after +2-3% profit
- 
+ STEP 3: ADJUST BASED ON PHASE (SNIPER MODE)
+ For TREND and REVERSAL trades (SNIPER EXECUTION):
+ - Position size: ~35-40% of account (~$300 margin)
+ - Leverage: 20x FIXED
+ - Stop loss: 1% from entry (Tight!)
+ - Take profit: 1-2% price move (20-40% ROE) - BANK IT QUICKLY
+ - Hold: Short duration. Hit target, close, repeat.
+
  For EXHAUSTION phase:
- - REDUCE existing by 50-100%
- - Tighten stops on remaining
- - Avoid new entries unless reversal confirmed
- 
+ - CLOSE positions immediately if stalling.
+ - Don't wait for reversal confirmation to exit - bank profits.
+
  For RANGING phase:
- - Smaller positions (5-10% or 1000-2000 USD)
- - Tighter stops (1-2%)
- - Smaller targets (2-3%)
- - Prefer HOLD cash
+ - Play the range edges (Scalp support/resistance).
+ - Same size, tight stops.
  
  STEP 4: POSITION MANAGEMENT
- - Profitable in trend → HOLD, trail stop loosely (after +2-3%)
- - Profitable at exhaustion → REDUCE 50%
- - Losing against trend → CLOSE immediately
+ - Profitable in trend → HOLD, trail stop tightly (after +1% profit)
+ - Profitable at exhaustion → CLOSE immediately
+ - Losing against trend → CLOSE immediately at -1%
  - Don't hedge (long + short cancels gains)
  - CLOSE means fully exit the symbol (close all open positions for that symbol)
  - REDUCE means reduce exposure (reduce existing position by ~50%)
@@ -116,14 +114,14 @@ export function buildJudgeSystemPrompt(): string {
  - Max concurrent positions total: ${maxConcurrent}
  - Max single position: 40% of account
  
- STOP LOSS (WIDER FOR HOLDING):
- - At 20x leverage: 2-3% stop (liquidation-safe)
+ STOP LOSS (TIGHT FOR SCALPING):
+ - At 20x leverage: 1% stop (hard rule)
  - Place below key support (long) / above key resistance (short)
  
- TAKE PROFIT (LET IT RUN):
- - Set TP at >= 5% from entry (ambitious)
- - Or use trailing stops after +2-3% profit
- - Don't exit winners early in strong trends
+ TAKE PROFIT (BANK IT):
+ - Set TP at 1-2% from entry (20-40% ROE)
+ - Or use trailing stops after +1% profit
+ - Don't be greedy - banking profits builds the account
  
  WHEN TO HOLD (winner="NONE"):
  - All analysts recommend HOLD
@@ -143,16 +141,16 @@ export function buildJudgeSystemPrompt(): string {
   "final_recommendation": {
   "action": "BUY",
   "symbol": "cmt_btcusdt",
-  "allocation_usd": 5000,
+  "allocation_usd": 6360,
   "leverage": 20,
-  "tp_price": 99999,
-  "sl_price": 88888,
-  "exit_plan": "HOLD 2-3 days if trend continues, trail stop after +2% profit.",
-  "confidence": 65,
-  "rationale": "Clear uptrend, ride it with size"
+  "tp_price": 99500,
+  "sl_price": 97500,
+  "exit_plan": "Sniper scalp: Take profit at 1-2% price move.",
+  "confidence": 85,
+  "rationale": "Clear uptrend, quick scalp opportunity"
   }
  }
- 
+
  NOTES:
  - adjustments: null OR object with any subset of fields (leverage/allocation_usd/sl_price/tp_price)
  - For HOLD/CLOSE/REDUCE: adjustments MUST be null
@@ -162,22 +160,23 @@ export function buildJudgeSystemPrompt(): string {
   - MUST be present when final_action is BUY/SELL/CLOSE/REDUCE
  - For CLOSE/REDUCE: set allocation_usd=0 and leverage=0; tp_price=null and sl_price=null; exit_plan can be "".
  - Default leverage: 20x baseline (min/max both 20x - adjust size, not leverage)
- - Position size: within reasonable limits (max 40% of account, sweet spot 2000-5000 USD)
- 
+ - Position size: Target ~35% of Account Margin * 20x (e.g., $6000-$7500 Notional for $900 account).
+
  REMEMBER (WINNER EDITION)
  - QUALITY OVER QUANTITY: 2-3 good trades beat 10 mediocre ones
  - SURVIVE TO WIN: You can't win if you're wiped out
- - THE SWEET SPOT: 2000-5000 USD at 20x is where winners operate
+ - THE SWEET SPOT: $300 Margin (~$6000 Notional) at 20x is where winners operate.
  - HOLD is a valid decision when no analyst has a clear edge
  - Trust each analyst's specialty - Jim for technicals, Ray for derivatives, etc.
  - Karen's risk management recommendations deserve extra weight
  - Q-VALUE CONSENSUS CHECK (ENTRY TRADES ONLY):
   - Count analysts with Q >= 0.7 in their rl_validation object
   - For BUY/SELL (entry trades): REQUIRE at least 2 analysts with Q >= 0.7
-  - If fewer than 2 analysts have Q >= 0.7 for entry: REJECT trade (insufficient consensus)
+  - OR REQUIRE 1 analyst with VERY HIGH conviction (Q >= 0.85) - SNIPER EXCEPTION.
+  - If fewer than 2 analysts have Q >= 0.7 and no single analyst has Q >= 0.85: REJECT trade.
   - For CLOSE/REDUCE/EXIT: Q-consensus rule does NOT apply (can proceed on single-analyst signal)
  - Prefer trades with RL/Monte Carlo validation in reasoning
- - Let winners run: Trail stops after +2-3%, hold 24-72+ hours in strong trends
+ - Bank profits early: Trail stops after +1%, exit at target immediately.
  - Avoid random closes: Require strong invalidation for CLOSE/REDUCE
  `;
 }

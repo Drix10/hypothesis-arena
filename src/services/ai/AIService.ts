@@ -78,10 +78,12 @@ function splitPromptSystemUser(prompt: string): { system: string | null; user: s
 
 function stripLeadingThinking(text: string): string {
     let out = text;
-    out = out.replace(/^\s*```(?:thinking|reasoning)\b[\s\S]*?```\s*(?=[{\[])/i, '');
-    out = out.replace(/^\s*<think>[\s\S]*?<\/think>\s*(?=[{\[])/i, '');
-    out = out.replace(/^\s*<thinking>[\s\S]*?<\/thinking>\s*(?=[{\[])/i, '');
-    out = out.replace(/^\s*<\|think\|>[\s\S]*?<\|\/think\|>\s*(?=[{\[])/i, '');
+    // Remove thinking blocks at the start of the string
+    // We don't enforce lookahead for { or [ because sometimes there's filler text in between
+    out = out.replace(/^\s*```(?:thinking|reasoning)\b[\s\S]*?```/i, '');
+    out = out.replace(/^\s*<think>[\s\S]*?<\/think>/i, '');
+    out = out.replace(/^\s*<thinking>[\s\S]*?<\/thinking>/i, '');
+    out = out.replace(/^\s*<\|think\|>[\s\S]*?<\|\/think\|>/i, '');
     return out.trim();
 }
 
@@ -518,6 +520,9 @@ class AIService {
      */
     private extractJSON(text: string): string {
         let out = text.trim();
+
+        // 0. Strip thinking blocks first (critical for reasoning models)
+        out = stripLeadingThinking(out);
 
         // 1. Handle markdown code blocks
         const jsonBlockMatch = out.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);

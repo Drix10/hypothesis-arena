@@ -1,4 +1,5 @@
 import { logger } from '../../utils/logger';
+import { config } from '../../config';
 import {
     AnalystId,
     AnalystOutput,
@@ -28,13 +29,9 @@ const DEBATE_TURN_SCHEMA: ResponseSchema = {
             type: SchemaType.ARRAY,
             items: { type: SchemaType.STRING },
             description: 'List of data points/metrics referenced in the argument'
-        },
-        keyPoint: {
-            type: SchemaType.STRING,
-            description: 'The single most important point in this argument'
         }
     },
-    required: ['argument', 'dataPointsReferenced', 'keyPoint']
+    required: ['argument', 'dataPointsReferenced']
 };
 
 // =============================================================================
@@ -293,7 +290,7 @@ ${marketDataStr}
                 const result = await aiService.generateContent({
                     prompt: `${systemPrompt}\n\n---USER---\n\n${userPrompt}`,
                     schema: DEBATE_TURN_SCHEMA,
-                    maxOutputTokens: 4096, // Increased limit for safer output
+                    maxOutputTokens: Math.max(16384, config.ai.maxOutputTokens), // Increased limit for safer output
                     label: `Debate-${analystId}-Attempt${attempt}`
                 });
 
@@ -305,8 +302,7 @@ ${marketDataStr}
                     if (attempt === MAX_ATTEMPTS) {
                         parsed = {
                             argument: result.text.length > 50 ? result.text : 'No coherent argument provided.',
-                            dataPointsReferenced: [],
-                            keyPoint: 'Failed to extract key point'
+                            dataPointsReferenced: []
                         };
                     } else {
                         continue; // Retry

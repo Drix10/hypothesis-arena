@@ -86,6 +86,22 @@ const PORT = config.port;
 
 async function start() {
     try {
+        // Validation: Check for required API keys in production/non-dry-run
+        if (process.env.NODE_ENV === 'production' && !config.autonomous.dryRun) {
+            if (!config.weex.apiKey || !config.weex.secretKey || !config.weex.passphrase) {
+                logger.error('CRITICAL: Weex API credentials missing in production mode!');
+                process.exit(1);
+            }
+        }
+
+        // Validation: Check for AI keys
+        if (config.ai.provider === 'gemini' && !config.geminiApiKey) {
+            logger.warn('WARNING: Gemini API Key missing, AI features will fail');
+        }
+        if (config.ai.provider === 'openrouter' && !config.openRouterApiKey) {
+            logger.warn('WARNING: OpenRouter API Key missing, AI features will fail');
+        }
+
         const dbOk = await checkDatabaseHealth();
         if (!dbOk) {
             logger.warn('Database connection failed - some features may not work');
@@ -103,16 +119,6 @@ async function start() {
             logger.info(`Server running on port ${PORT}`);
             logger.info(`Environment: ${config.nodeEnv}`);
             logger.info(`Database: ${dbOk ? 'connected' : 'disconnected'}`);
-
-            // Auto-start autonomous trading engine
-            try {
-                logger.info('🚀 Starting autonomous trading engine...');
-                const engine = getAutonomousTradingEngine();
-                await engine.start();
-                logger.info('✅ Autonomous trading engine started successfully');
-            } catch (error) {
-                logger.error('❌ Failed to start autonomous trading engine:', error);
-            }
         });
     } catch (error) {
         logger.error('Failed to start server:', error);

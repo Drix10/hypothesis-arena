@@ -144,7 +144,10 @@ router.get('/positions', async (_req: Request, res: Response, next: NextFunction
                     currentPrice: Number.isFinite(currentPrice) ? currentPrice : entryPrice, // Keep for compatibility
                     liquidationPrice: validLiqPrice,
                     leverage: validLeverage,
-                    pnl: Number.isFinite(unrealizePnl) ? unrealizePnl : 0
+                    pnl: Number.isFinite(unrealizePnl) ? unrealizePnl : 0,
+                    isolatedPositionId: p.isolatedPositionId,
+                    marginMode: p.marginMode,
+                    id: p.id
                 };
             });
 

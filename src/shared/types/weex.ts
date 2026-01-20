@@ -50,8 +50,8 @@ export interface WeexOrderResponse {
  * Response item from /capi/v2/order/closePositions
  */
 export interface WeexClosePositionsResult {
-    positionId: number;
-    successOrderId: number;
+    positionId: string | number;
+    successOrderId: string | number;
     errorMessage: string;
     success: boolean;
 }
@@ -65,8 +65,8 @@ export type WeexClosePositionsResponse = WeexClosePositionsResult[];
  * Use `normalizeWeexPosition()` to convert API responses to this canonical shape.
  */
 export interface WeexPosition {
-    id?: number;                       // Position ID
-    isolatedPositionId?: number;       // Isolated position ID (for margin adjustment)
+    id?: number | string;              // Position ID
+    isolatedPositionId?: number | string; // Isolated position ID (for margin adjustment)
     symbol: string;                    // Trading pair (required)
     side: 'LONG' | 'SHORT';            // Position direction (required, normalized to uppercase)
     size: string;                      // Current position size (required)
@@ -85,14 +85,16 @@ export interface WeexPosition {
  * Internal type - use normalizeWeexPosition() to convert to WeexPosition
  */
 export interface WeexPositionRaw {
-    id?: number;                       // Position ID
-    isolated_position_id?: number;     // Isolated position ID (for margin adjustment)
+    id?: number | string;              // Position ID
+    isolated_position_id?: number | string; // Isolated position ID (for margin adjustment)
+    isolatedPositionId?: number | string;   // Alternative key (camelCase)
     symbol: string;                    // Trading pair (required)
     side: string;                      // 'LONG' | 'SHORT' (required, uppercase from API)
     size: string;                      // Current position size (required)
     leverage: string;                  // Position leverage (required)
     open_value?: string;               // Initial value at position opening
-    margin_mode?: string;              // 'SHARED' (cross) or 'ISOLATED'
+    margin_mode?: string | number;     // 'SHARED' (cross) or 'ISOLATED', or 1/3
+    marginMode?: string | number;      // Alternative key (camelCase)
     marginSize?: string;               // Margin amount (note: camelCase in API response)
     unrealizePnl?: string;             // Unrealized PnL (note: camelCase in API response)
     liquidatePrice?: string;           // Estimated liquidation price (note: camelCase in API response)
@@ -151,15 +153,28 @@ export function normalizeWeexPosition(raw: WeexPositionRaw): WeexPosition {
         }
     }
 
+    // Normalize margin mode
+    let marginMode = 'SHARED'; // Default to SHARED
+    const rawMode = raw.margin_mode || raw.marginMode;
+    if (rawMode) {
+        const modeStr = String(rawMode).toUpperCase();
+        if (modeStr === 'ISOLATED' || modeStr === '3') {
+            marginMode = 'ISOLATED';
+        } else if (modeStr === 'SHARED' || modeStr === 'CROSS' || modeStr === '1') {
+            marginMode = 'SHARED';
+        }
+    }
+
     return {
         id: raw.id,
-        isolatedPositionId: raw.isolated_position_id, symbol: raw.symbol,
+        isolatedPositionId: raw.isolated_position_id || raw.isolatedPositionId || raw.id,
+        symbol: raw.symbol,
         side,
         size: raw.size,
         leverage: raw.leverage,
         openValue: raw.open_value,
         entryPrice,
-        marginMode: raw.margin_mode,
+        marginMode,
         marginSize: raw.marginSize,
         unrealizePnl: raw.unrealizePnl,
         liquidationPrice: raw.liquidatePrice,
@@ -293,6 +308,32 @@ export interface WeexOrderDetail {
     totalProfits: string;
 }
 
+/**
+ * WEEX Plan Order (TP/SL/Trigger)
+ * Matches /capi/v2/order/currentPlan response
+ */
+export interface WeexPlanOrder {
+    symbol: string;
+    size: string;
+    client_oid: string;
+    createTime: string;
+    filled_qty: string;
+    fee: string;
+    order_id: string;
+    price: string;
+    price_avg: string;
+    status: string;
+    type: string;
+    order_type: string;
+    totalProfits: string;
+    triggerPrice: string;
+    triggerPriceType: string;
+    triggerTime: string;
+    presetTakeProfitPrice: string | null;
+    presetStopLossPrice: string | null;
+    planType?: 'profit_plan' | 'loss_plan'; // Inferred from client_oid or context
+}
+
 export interface WeexFill {
     tradeId: string;
     symbol: string;
@@ -354,6 +395,10 @@ export const ENDPOINT_WEIGHTS: Record<string, number> = {
     '/capi/v2/account/position/allPosition': 10,
     '/capi/v2/account/position/singlePosition': 2,
     '/capi/v2/order/placeOrder': 2,
+    '/capi/v2/order/placeTpSlOrder': 5,
+    '/capi/v2/order/modifyTpSlOrder': 5,
+    '/capi/v2/order/currentPlan': 3,
+    '/capi/v2/order/historyPlan': 3,
     '/capi/v2/order/cancel_order': 2,
     '/capi/v2/order/closePositions': 40,
     '/capi/v2/order/detail': 2,

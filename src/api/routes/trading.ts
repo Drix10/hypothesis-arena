@@ -325,6 +325,255 @@ router.post('/manual/close', async (req: Request, res: Response, next: NextFunct
     }
 });
 
+// POST /api/trading/manual/tpsl/modify - Modify TP/SL via AI decision (or Create if no ID)
+router.post('/manual/tpsl/modify', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+        const { orderId, triggerPrice, executePrice, triggerPriceType, symbol, planType, size, side } = req.body;
+        const weexClient = getWeexClient();
+        const selectedAnalyst = 'autonomous-engine';
+
+        if (!triggerPrice || isNaN(parseFloat(triggerPrice))) {
+            res.status(400).json({ success: false, error: 'Valid trigger price is required' });
+            return;
+        }
+
+        try {
+            if (orderId) {
+                // ==========================================
+                // MODIFY EXISTING ORDER
+                // ==========================================
+                const typeInput = triggerPriceType ? parseInt(triggerPriceType) : 1;
+                const validatedType: 1 | 3 = (typeInput === 1 || typeInput === 3) ? typeInput : 1;
+
+                const params: {
+                    orderId: string;
+                    triggerPrice: number;
+                    executePrice?: number;
+                    triggerPriceType?: 1 | 3;
+                } = {
+                    orderId: String(orderId),
+                    triggerPrice: parseFloat(triggerPrice),
+                    executePrice: undefined,
+                    triggerPriceType: validatedType
+                };
+
+                if (executePrice) {
+                    const execPriceNum = parseFloat(executePrice);
+                    if (isNaN(execPriceNum) || !Number.isFinite(execPriceNum)) {
+                        res.status(400).json({ success: false, error: 'Invalid executePrice' });
+                        return;
+                    }
+                    params.executePrice = execPriceNum;
+                }
+
+                await weexClient.modifyTpSlOrder(params);
+
+                // Log the action
+                const rationale = `Modified TP/SL order ${orderId} to trigger at ${triggerPrice} per AI risk management update.`;
+                try {
+                    await aiLogService.createLog(
+                        'position_management',
+                        selectedAnalyst,
+                        {
+                            action: 'MODIFY_TPSL',
+                            symbol: symbol || 'UNKNOWN',
+                            orderId,
+                            triggerPrice
+                        },
+                        { status: 'MODIFIED', orderId },
+                        rationale,
+                        String(orderId)
+                    );
+                } catch (logError) {
+                    logger.warn('Failed to create AI log for TP/SL modification:', logError);
+                }
+
+                res.json({
+                    success: true,
+                    message: `TP/SL order modified by ${selectedAnalyst}`
+                });
+
+            } else {
+                // ==========================================
+                // CREATE NEW ORDER
+                // ==========================================
+                if (!symbol || !planType || !size || !side) {
+                    res.status(400).json({ success: false, error: 'Missing required fields for new TP/SL (symbol, planType, size, side)' });
+                    return;
+                }
+
+                // 1. Validate Symbol
+                // Normalize input to match APPROVED_SYMBOLS format (cmt_xxxusdt)
+                // Handle inputs like 'BTC', 'BTCUSDT', 'cmt_btcusdt'
+                const cleanSymbol = symbol.toLowerCase().replace(/^cmt_/, '').replace(/usdt$/, '');
+                const normalizedSymbol = `cmt_${cleanSymbol}usdt`;
+
+                const isValidSymbol = APPROVED_SYMBOLS.includes(normalizedSymbol as any);
+                if (!isValidSymbol) {
+                    res.status(400).json({ success: false, error: `Invalid symbol: ${symbol}. Must be one of: ${APPROVED_SYMBOLS.map(s => s.replace('cmt_', '').replace('usdt', '').toUpperCase()).join(', ')}` });
+                    return;
+                }
+
+                // 2. Validate planType
+                if (planType !== 'profit_plan' && planType !== 'loss_plan') {
+                    res.status(400).json({ success: false, error: `Invalid planType: ${planType}. Must be 'profit_plan' or 'loss_plan'` });
+                    return;
+                }
+
+                // 3. Validate size
+                const sizeNum = parseFloat(size);
+                if (isNaN(sizeNum) || !Number.isFinite(sizeNum) || sizeNum <= 0) {
+                    res.status(400).json({ success: false, error: `Invalid size: ${size}. Must be a positive number.` });
+                    return;
+                }
+
+                // 4. Validate positionSide
+                if (typeof side !== 'string') {
+                    res.status(400).json({ success: false, error: 'Invalid side: must be a string' });
+                    return;
+                }
+                const positionSide = side.toLowerCase();
+                if (positionSide !== 'long' && positionSide !== 'short') {
+                    res.status(400).json({ success: false, error: `Invalid side: ${side}. Must be 'LONG' or 'SHORT'` });
+                    return;
+                }
+
+                // 5. Validate executePrice (if provided)
+                let executePriceNum: number | undefined;
+                if (executePrice !== undefined && executePrice !== '' && executePrice !== null) {
+                    executePriceNum = parseFloat(executePrice);
+                    if (isNaN(executePriceNum) || !Number.isFinite(executePriceNum) || executePriceNum <= 0) {
+                        res.status(400).json({ success: false, error: `Invalid executePrice: ${executePrice}. Must be a positive number.` });
+                        return;
+                    }
+                }
+
+                // Construct params only after all validations pass
+                const createParams = {
+                    symbol: normalizedSymbol,
+                    planType: planType as 'profit_plan' | 'loss_plan',
+                    triggerPrice: parseFloat(triggerPrice),
+                    size: sizeNum,
+                    positionSide: positionSide as 'long' | 'short',
+                    executePrice: executePriceNum
+                };
+
+                const result = await weexClient.placeTpSlOrder(createParams);
+
+                // Log the action
+                const rationale = `Created new ${planType} for ${symbol} at ${triggerPrice}.`;
+                try {
+                    await aiLogService.createLog(
+                        'position_management',
+                        selectedAnalyst,
+                        {
+                            action: 'CREATE_TPSL',
+                            symbol,
+                            planType,
+                            triggerPrice
+                        },
+                        { status: 'CREATED', result },
+                        rationale
+                    );
+                } catch (logError) {
+                    logger.warn('Failed to create AI log for TP/SL creation:', logError);
+                }
+
+                res.json({
+                    success: true,
+                    message: `TP/SL order created by ${selectedAnalyst}`,
+                    result
+                });
+            }
+        } catch (error) {
+            logger.error('Failed to update TP/SL order:', error);
+            res.status(500).json({
+                success: false,
+                error: error instanceof Error ? error.message : 'Failed to update TP/SL order'
+            });
+        }
+    } catch (error) {
+        next(error);
+    }
+});
+
+// POST /api/trading/manual/margin/adjust - Adjust position margin via AI decision
+router.post('/manual/margin/adjust', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+        const { isolatedPositionId, collateralAmount, symbol } = req.body;
+
+        if (!isolatedPositionId) {
+            res.status(400).json({ success: false, error: 'Isolated Position ID is required' });
+            return;
+        }
+
+        // Validate isolatedPositionId
+        if (!isolatedPositionId) {
+            res.status(400).json({ success: false, error: 'Isolated Position ID is required' });
+            return;
+        }
+
+        // Relaxed validation: Allow any string/number ID, just ensure it's not empty or zero
+        // WEEX IDs can be large numeric strings
+        if (typeof isolatedPositionId === 'number' && (!Number.isFinite(isolatedPositionId) || isolatedPositionId <= 0)) {
+            res.status(400).json({ success: false, error: 'Invalid isolatedPositionId value' });
+            return;
+        }
+
+        if (!collateralAmount || isNaN(parseFloat(collateralAmount)) || parseFloat(collateralAmount) === 0) {
+            res.status(400).json({ success: false, error: 'Valid non-zero collateral amount is required' });
+            return;
+        }
+
+        const weexClient = getWeexClient();
+
+        try {
+            await weexClient.adjustPositionMargin({
+                isolatedPositionId: isolatedPositionId,
+                collateralAmount: String(collateralAmount)
+            });
+
+            // Log the action
+            const selectedAnalyst = 'autonomous-engine';
+            const action = parseFloat(collateralAmount) > 0 ? 'Added' : 'Reduced';
+            const rationale = `${action} margin (${collateralAmount}) for position ${isolatedPositionId} per AI risk management update.`;
+
+            try {
+                await aiLogService.createLog(
+                    'position_management',
+                    selectedAnalyst,
+                    {
+                        action: 'ADJUST_MARGIN',
+                        symbol: symbol || 'UNKNOWN',
+                        isolatedPositionId,
+                        amount: collateralAmount
+                    },
+                    {
+                        status: 'ADJUSTED',
+                        isolatedPositionId
+                    },
+                    rationale
+                );
+            } catch (logError) {
+                logger.warn('Failed to create AI log for margin adjustment:', logError);
+            }
+
+            res.json({
+                success: true,
+                message: `Margin adjusted by ${selectedAnalyst}`
+            });
+        } catch (error) {
+            logger.error('Failed to adjust margin:', error);
+            res.status(500).json({
+                success: false,
+                error: error instanceof Error ? error.message : 'Failed to adjust margin'
+            });
+        }
+    } catch (error) {
+        next(error);
+    }
+});
+
 // GET /api/trading/candles/:symbol - Get candlestick data
 // Rate limited: 30 requests/minute per IP to protect external WEEX API
 router.get('/candles/:symbol', candlesRateLimiter, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -489,6 +738,35 @@ router.get('/comparative-stats', async (_req: Request, res: Response, next: Next
         });
     } catch (error) {
         logger.error('Failed to get comparative stats:', error);
+        next(error);
+    }
+});
+
+// GET /api/trading/orders/plan - Get current plan orders (TP/SL)
+router.get('/orders/plan', async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+        const { symbol } = req.query;
+
+        if (!symbol || typeof symbol !== 'string') {
+            res.status(400).json({ success: false, error: 'Symbol is required' });
+            return;
+        }
+
+        const normalizedSymbol = symbol.toLowerCase().trim();
+        if (!isApprovedSymbol(normalizedSymbol)) {
+            res.status(400).json({ success: false, error: `Symbol not approved: ${symbol}` });
+            return;
+        }
+
+        const weexClient = getWeexClient();
+        const orders = await weexClient.getCurrentPlanOrders(normalizedSymbol);
+
+        res.json({
+            success: true,
+            orders
+        });
+    } catch (error) {
+        logger.error('Failed to get plan orders:', error);
         next(error);
     }
 });

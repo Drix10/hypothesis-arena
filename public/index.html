@@ -1,42 +1,49 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <meta name="description" content="Hypothesis Arena - AI-powered autonomous crypto trading platform with 4 analyst agents analyzing in parallel on WEEX Futures">
+    <meta name="description"
+        content="Hypothesis Arena - AI-powered autonomous crypto trading platform with 4 analyst agents analyzing in parallel on WEEX Futures">
     <meta name="keywords" content="AI trading, crypto, WEEX, futures, autonomous trading, machine learning">
     <meta name="author" content="Hypothesis Arena">
     <meta name="theme-color" content="#00d4ff">
     <meta name="color-scheme" content="dark">
-    
+
     <!-- Open Graph -->
     <meta property="og:title" content="Hypothesis Arena | AI Trading Platform">
     <meta property="og:description" content="4 AI Analysts analyzing in parallel to trade WEEX Futures">
     <meta property="og:type" content="website">
     <meta property="og:image" content="/og-image.png">
-    
+
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Hypothesis Arena">
     <meta name="twitter:description" content="AI-powered autonomous crypto trading">
-    
+
     <title>Hypothesis Arena | AI Trading Platform</title>
-    
+
     <!-- Favicon - Properly encoded SVG data URIs -->
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E⚔️%3C/text%3E%3C/svg%3E">
-    <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E⚔️%3C/text%3E%3C/svg%3E">
-    
+    <link rel="icon"
+        href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E⚔️%3C/text%3E%3C/svg%3E">
+    <link rel="apple-touch-icon"
+        href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E⚔️%3C/text%3E%3C/svg%3E">
+
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-    
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+        rel="stylesheet">
+
     <!-- Styles -->
     <link rel="stylesheet" href="/styles.css">
-    
+
     <!-- Preload critical resources -->
     <link rel="preload" href="/app.js" as="script">
 </head>
+
 <body>
     <!-- Premium Background Effects -->
     <div class="bg-effects" aria-hidden="true">
@@ -105,24 +112,26 @@
                         </div>
                     </div>
                     <div class="engine-controls" role="group" aria-label="Engine controls">
-                        <button id="btn-start" class="btn btn-glow btn-success" type="button" aria-describedby="start-desc">
+                        <button id="btn-start" class="btn btn-glow btn-success" type="button"
+                            aria-describedby="start-desc">
                             <span class="btn-icon" aria-hidden="true">▶</span>
                             <span>Start Engine</span>
                         </button>
                         <span id="start-desc" class="sr-only">Start the autonomous trading engine</span>
-                        
-                        <button id="btn-stop" class="btn btn-danger" type="button" disabled aria-describedby="stop-desc">
+
+                        <button id="btn-stop" class="btn btn-danger" type="button" disabled
+                            aria-describedby="stop-desc">
                             <span class="btn-icon" aria-hidden="true">⏹</span>
                             <span>Stop</span>
                         </button>
                         <span id="stop-desc" class="sr-only">Stop the trading engine</span>
-                        
+
                         <button id="btn-trigger" class="btn btn-primary" type="button" aria-describedby="trigger-desc">
                             <span class="btn-icon" aria-hidden="true">⚡</span>
                             <span>Trigger Cycle</span>
                         </button>
                         <span id="trigger-desc" class="sr-only">Manually trigger a trading cycle</span>
-                        
+
                         <button id="btn-refresh" class="btn btn-ghost" type="button" aria-label="Refresh all data">
                             <span class="btn-icon" aria-hidden="true">↻</span>
                             <span>Refresh</span>
@@ -154,11 +163,13 @@
                             </div>
                             <div class="portfolio-card">
                                 <span class="portfolio-label">Unrealized P&L</span>
-                                <span class="portfolio-value pnl" id="unrealized-pnl" aria-label="Unrealized profit and loss">$0.00</span>
+                                <span class="portfolio-value pnl" id="unrealized-pnl"
+                                    aria-label="Unrealized profit and loss">$0.00</span>
                             </div>
                             <div class="portfolio-card">
                                 <span class="portfolio-label">Total P&L</span>
-                                <span class="portfolio-value pnl" id="total-pnl" aria-label="Total profit and loss since start">$0.00</span>
+                                <span class="portfolio-value pnl" id="total-pnl"
+                                    aria-label="Total profit and loss since start">$0.00</span>
                             </div>
                         </div>
                     </div>
@@ -199,25 +210,29 @@
                 </div>
                 <div class="panel-body">
                     <div class="analysts-grid" id="analysts-grid" role="list" aria-label="AI trading analysts">
-                        <button class="analyst-card" data-analyst-id="jim" type="button" aria-label="View Jim's statistics - Technical analysis style">
+                        <button class="analyst-card" data-analyst-id="jim" type="button"
+                            aria-label="View Jim's statistics - Technical analysis style">
                             <span class="analyst-avatar" aria-hidden="true">📊</span>
                             <span class="analyst-name">Jim</span>
                             <span class="analyst-style">Technical</span>
                             <span class="analyst-glow" aria-hidden="true"></span>
                         </button>
-                        <button class="analyst-card" data-analyst-id="ray" type="button" aria-label="View Ray's statistics - Macro analysis style">
+                        <button class="analyst-card" data-analyst-id="ray" type="button"
+                            aria-label="View Ray's statistics - Macro analysis style">
                             <span class="analyst-avatar" aria-hidden="true">🌍</span>
                             <span class="analyst-name">Ray</span>
                             <span class="analyst-style">Macro</span>
                             <span class="analyst-glow" aria-hidden="true"></span>
                         </button>
-                        <button class="analyst-card" data-analyst-id="karen" type="button" aria-label="View Karen's statistics - Risk management style">
+                        <button class="analyst-card" data-analyst-id="karen" type="button"
+                            aria-label="View Karen's statistics - Risk management style">
                             <span class="analyst-avatar" aria-hidden="true">🛡️</span>
                             <span class="analyst-name">Karen</span>
                             <span class="analyst-style">Risk</span>
                             <span class="analyst-glow" aria-hidden="true"></span>
                         </button>
-                        <button class="analyst-card" data-analyst-id="quant" type="button" aria-label="View Quant's statistics - Quantitative analysis style">
+                        <button class="analyst-card" data-analyst-id="quant" type="button"
+                            aria-label="View Quant's statistics - Quantitative analysis style">
                             <span class="analyst-avatar" aria-hidden="true">🤖</span>
                             <span class="analyst-name">Quant</span>
                             <span class="analyst-style">Quantitative</span>
@@ -322,7 +337,8 @@
                     <div id="debug-output" class="debug-output hidden" role="region" aria-label="Debug output">
                         <div class="debug-output-header">
                             <span id="debug-output-title">Output</span>
-                            <button id="btn-close-debug" class="btn-close-debug" type="button" aria-label="Close debug output">×</button>
+                            <button id="btn-close-debug" class="btn-close-debug" type="button"
+                                aria-label="Close debug output">×</button>
                         </div>
                         <div id="debug-output-content" class="debug-output-content"></div>
                     </div>
@@ -343,7 +359,8 @@
     </div>
 
     <!-- Analyst Stats Modal -->
-    <div id="analyst-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title" aria-describedby="modal-desc">
+    <div id="analyst-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title"
+        aria-describedby="modal-desc">
         <div class="modal-backdrop" aria-hidden="true"></div>
         <div class="modal-container">
             <div class="modal-header">
@@ -352,21 +369,96 @@
                     <span id="modal-analyst-name">Analyst</span>
                     <span id="modal-analyst-style" class="modal-style-badge">Style</span>
                 </h3>
-                <button id="btn-close-modal" class="modal-close" type="button" aria-label="Close modal">
-                    <span aria-hidden="true">×</span>
-                </button>
+                <button id="btn-close-modal" class="btn-close-modal" type="button" aria-label="Close modal">×</button>
             </div>
-            <div class="modal-body" id="modal-content">
-                <p id="modal-desc" class="sr-only">Analyst performance statistics and recent trades</p>
-                <div class="modal-loading">
-                    <div class="spinner" aria-hidden="true"></div>
-                    <span>Loading statistics...</span>
+            <div id="modal-content" class="modal-content">
+                <!-- Content injected via JS -->
+            </div>
+        </div>
+    </div>
+
+    <!-- TP/SL Edit Modal -->
+    <div id="tpsl-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="tpsl-modal-title">
+        <div class="modal-backdrop" aria-hidden="true"></div>
+        <div class="modal-container">
+            <div class="modal-header">
+                <h3 id="tpsl-modal-title" class="modal-title">
+                    <span aria-hidden="true">⚙️</span>
+                    Modify TP/SL
+                </h3>
+                <button id="btn-close-tpsl-modal" class="btn-close-modal" type="button"
+                    aria-label="Close modal">×</button>
+            </div>
+            <div id="tpsl-modal-content" class="modal-content">
+                <div class="info-box mb-md">
+                    <p><strong>Stop Loss (SL):</strong> Limits your loss if the price moves against you.</p>
+                    <p><strong>Take Profit (TP):</strong> Secures your profit when the price reaches your goal.</p>
+                </div>
+
+                <div class="tpsl-inputs-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                    <!-- Take Profit Section -->
+                    <div class="form-group">
+                        <label for="tp-trigger-price" style="color: var(--bull);">Take Profit (TP)</label>
+                        <input type="number" id="tp-trigger-price" class="form-control" step="0.0001" min="0"
+                            placeholder="Price">
+                        <input type="hidden" id="tp-order-id">
+                        <div id="tp-est-pnl" class="est-pnl-small"
+                            style="font-size: 0.8rem; margin-top: 4px; min-height: 1.2em; color: var(--text-muted);">--
+                        </div>
+                    </div>
+
+                    <!-- Stop Loss Section -->
+                    <div class="form-group">
+                        <label for="sl-trigger-price" style="color: var(--bear);">Stop Loss (SL)</label>
+                        <input type="number" id="sl-trigger-price" class="form-control" step="0.0001" min="0"
+                            placeholder="Price">
+                        <input type="hidden" id="sl-order-id">
+                        <div id="sl-est-pnl" class="est-pnl-small"
+                            style="font-size: 0.8rem; margin-top: 4px; min-height: 1.2em; color: var(--text-muted);">--
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-group" style="margin-top: 16px;">
+                    <label for="tpsl-execute-price">Execute Price (Optional)</label>
+                    <input type="number" id="tpsl-execute-price" class="form-control" step="0.0001" min="0"
+                        placeholder="Leave empty for Market (Recommended)">
+                </div>
+
+                <div class="form-actions">
+                    <button id="btn-save-tpsl" class="btn btn-primary">Update Orders</button>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- App Script -->
-    <script src="/app.js" defer></script>
+    <!-- Margin Adjust Modal -->
+    <div id="margin-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="margin-modal-title">
+        <div class="modal-backdrop" aria-hidden="true"></div>
+        <div class="modal-container">
+            <div class="modal-header">
+                <h3 id="margin-modal-title" class="modal-title">
+                    <span aria-hidden="true">💰</span>
+                    Adjust Margin
+                </h3>
+                <button id="btn-close-margin-modal" class="btn-close-modal" type="button"
+                    aria-label="Close modal">×</button>
+            </div>
+            <div id="margin-modal-content" class="modal-content">
+                <input type="hidden" id="margin-position-id">
+                <input type="hidden" id="margin-symbol">
+                <div class="form-group">
+                    <label for="margin-amount">Amount (Positive to Add, Negative to Reduce)</label>
+                    <input type="number" id="margin-amount" class="form-control" step="0.1">
+                </div>
+                <div class="form-actions">
+                    <button id="btn-save-margin" class="btn btn-primary">Adjust Margin</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/app.js"></script>
 </body>
+
 </html>

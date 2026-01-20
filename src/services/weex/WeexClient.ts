@@ -76,6 +76,32 @@ export class WeexClient {
             baseURL: config.weex.baseUrl,
             timeout: WEEX_REQUEST_TIMEOUT, // Configurable timeout for slow proxy/WEEX responses
             headers: defaultHeaders,
+            transformResponse: [(data) => {
+                // WEEX API Inconsistency Fix:
+                // Some endpoints return large IDs (orderId, positionId) as numbers which exceed JS safe integer limits.
+                // Others return them as strings.
+                // We use regex to pre-process the raw JSON string and wrap large integers in quotes
+                // to prevent precision loss during JSON.parse().
+                if (typeof data === 'string') {
+                    try {
+                        // Match specific keys followed by unquoted large numbers (15+ digits)
+                        // Keys: orderId, order_id, positionId, isolatedPositionId, successOrderId, id
+                        // Only match whole numbers (not followed by decimal point)
+                        const protectedData = data.replace(
+                            /"(orderId|order_id|positionId|isolatedPositionId|isolated_position_id|successOrderId)"\s*:\s*(\d{15,})(?![.\d])/g,
+                            '"$1":"$2"'
+                        ); return JSON.parse(protectedData);
+                    } catch (e) {
+                        // Fallback to standard parse if regex fails or JSON is invalid
+                        try {
+                            return JSON.parse(data);
+                        } catch (parseError) {
+                            return data; // Return raw string if not JSON
+                        }
+                    }
+                }
+                return data;
+            }],
         });
 
         // Validate rate limit configuration to prevent infinite loops
@@ -304,6 +330,11 @@ export class WeexClient {
         }
 
         while (attempts < MAX_ATTEMPTS) {
+            // Check if client has been cleaned up during wait
+            if (this.isCleanedUp) {
+                throw new Error('WeexClient has been cleaned up - aborting rate limit wait');
+            }
+
             // Check if we've exceeded total wait time
             if (Date.now() - startTime > MAX_TOTAL_WAIT_MS) {
                 throw new RateLimitError(`Rate limit retry timeout after ${MAX_TOTAL_WAIT_MS}ms`);
@@ -887,7 +918,7 @@ export class WeexClient {
         size: number;
         positionSide: 'long' | 'short';
         marginMode?: 1 | 3;
-    }): Promise<{ orderId: number; success: boolean }[]> {
+    }): Promise<{ orderId: string | number; success: boolean }[]> {
         // Validate inputs
         if (!params.symbol || typeof params.symbol !== 'string') {
             throw new Error('Invalid symbol for TP/SL order');
@@ -931,7 +962,7 @@ export class WeexClient {
             positionSide: params.positionSide
         });
 
-        const response = await this.request<{ orderId: number; success: boolean }[]>(
+        const response = await this.request<{ orderId: string | number; success: boolean }[]>(
             'POST',
             '/capi/v2/order/placeTpSlOrder',
             undefined,
@@ -1022,14 +1053,24 @@ export class WeexClient {
      * @returns Response with success status
      */
     async adjustPositionMargin(params: {
-        isolatedPositionId: number;
+        isolatedPositionId: string | number;
         collateralAmount: string; // Positive = add, negative = reduce
         coinId?: number; // Default: 2 (USDT)
     }): Promise<any> {
         // Validate inputs
-        if (!Number.isFinite(params.isolatedPositionId) || params.isolatedPositionId <= 0) {
-            throw new Error(`Invalid isolatedPositionId: ${params.isolatedPositionId}`);
+        // Allow string IDs to support large integers
+        if (typeof params.isolatedPositionId === 'number') {
+            if (!Number.isFinite(params.isolatedPositionId) || params.isolatedPositionId <= 0) {
+                throw new Error(`Invalid isolatedPositionId: ${params.isolatedPositionId}`);
+            }
+        } else if (typeof params.isolatedPositionId === 'string') {
+            if (!params.isolatedPositionId || !/^\d+$/.test(params.isolatedPositionId)) {
+                throw new Error(`Invalid isolatedPositionId string: ${params.isolatedPositionId}`);
+            }
+        } else {
+            throw new Error(`Invalid isolatedPositionId type: ${typeof params.isolatedPositionId}`);
         }
+
         if (!params.collateralAmount || typeof params.collateralAmount !== 'string') {
             throw new Error(`Invalid collateralAmount: ${params.collateralAmount}`);
         }
@@ -1046,7 +1087,7 @@ export class WeexClient {
         });
 
         const body = {
-            isolatedPositionId: params.isolatedPositionId,
+            isolatedPositionId: params.isolatedPositionId, // Will be number or string, both fine for JSON (if string, it's quoted)
             collateralAmount: params.collateralAmount,
             coinId: params.coinId || 2 // Default to USDT
         };
