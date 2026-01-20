@@ -5,10 +5,11 @@ export const ANTI_CHURN_RULES = `
 CONVICTION TRADING RULES (v5.6.0):
 
 ANTI-CHURN CORE PRINCIPLES:
-- SNIPER MODE: Target quick 1-2% price moves (20-40% ROE) and BANK PROFITS.
+- SNIPER MODE: Target quick 0.8-1.5% price moves (16-30% ROE) and BANK PROFITS.
 - REPEAT IT: Don't hold forever. Bank profit and find the next setup.
-- Focus on MAXIMUM 3 high-conviction trades at a time - GO BIG (~35-40% account size).
-- Max 2-3 trades per hour per symbol (High frequency permitted if profitable).
+- Focus on MAXIMUM 2 high-conviction trades at a time - GO BIG (~35-40% account size).
+- DO NOT ROTATE WINNERS INTO LOSERS: If you have a winning BTC position, keep it or bank it. Do NOT reduce it to open random altcoin trades.
+- Max 2 trades per hour per symbol (High frequency permitted if profitable).
 - After opening a position: Manage tightly, move SL to breakeven quickly.
 - Focus on HIGH-CONVICTION SCALPS - skip marginal setups.
 
@@ -16,7 +17,7 @@ ANTI-CHURN CORE PRINCIPLES:
 WHY THIS MATTERS (ADDRESSING RANDOM CLOSES):
 - We need to recover capital quickly.
 - Solution: Take profit EARLY and OFTEN.
-- Don't wait for "home runs" (5-10% moves) - hit singles and doubles (1-2% moves) repeatedly.
+- Don't wait for "home runs" (5-10% moves) - hit singles and doubles (0.8-1.5% moves) repeatedly.
 - If price stalls, CLOSE IT. Don't hope.
 
 ADAPTIVE MARKET STRATEGY (ALL CONDITIONS - INCLUDING SHORTING):
@@ -26,7 +27,7 @@ The market cycles through phases. Adapt your strategy to all 8 coins (BTC, ETH, 
    - GO LONG with SIZE on all correlated coins (e.g., long BTC + SOL if both uptrending)
    - For alts like DOGE/XRP/ADA/LTC: Only long if BTC uptrend confirmed (they amplify BTC moves)
    - Stops: Tight 1% max.
-   - Quick TPs (1-2% price move, 20-40% ROE).
+   - Quick TPs (0.8-1.5% price move, 16-30% ROE).
    - REPEAT: Enter, hit TP, wait for pullback, enter again.
    - Don't short anything in uptrend - wait for exhaustion
 
@@ -34,7 +35,7 @@ The market cycles through phases. Adapt your strategy to all 8 coins (BTC, ETH, 
    - GO SHORT with SIZE on BTC/ETH first - they lead dumps
    - For alts (SOL, DOGE, XRP, ADA, BNB, LTC): Short if BTC downtrend confirmed (alts often dump harder)
    - Stops: Tight 1% max.
-   - Quick TPs (1-2% price move, 20-40% ROE).
+   - Quick TPs (0.8-1.5% price move, 16-30% ROE).
    - REPEAT: Enter, hit TP, wait for bounce, enter again.
    - Don't long anything in downtrend - wait for exhaustion
    - SHORTING TIP: Enter on rallies to EMA20 in downtrend (bear flag bounces)
@@ -80,7 +81,7 @@ DETECTING TREND EXHAUSTION (CRITICAL FOR SHORTING & AVOIDING RANDOM CLOSES):
 - For longs in uptrend: If charts going up but NO exhaustion, HOLD - don't close randomly
 
 POSITION MANAGEMENT BY MARKET PHASE (PREVENT RANDOM CLOSES):
-- In strong trend: TAKE PROFIT at 1-2%, don't hold forever. Re-enter on pullback.
+- In strong trend: TAKE PROFIT at 0.8-1.5%, don't hold forever. Re-enter on pullback.
 - At exhaustion: CLOSE immediately, take profit.
 - At reversal: CLOSE remaining old position, enter new direction with full size
 - In chop: Stay small or flat - avoid trading alts like XRP/ADA here
@@ -89,7 +90,7 @@ POSITION MANAGEMENT BY MARKET PHASE (PREVENT RANDOM CLOSES):
 SIMPLIFIED DECISION TREE (FOR ALL COINS, INCLUDING SHORTING):
 1. What's the trend? (Check EMA stack on BTC/ETH first - alts follow)
 2. Is trend strong or exhausted? (Check RSI divergence, volume on all coins)
-3. If strong trend → SCALP IT (long up, short down) for 1-2% gains
+3. If strong trend → SCALP IT (long up, short down) for 0.8-1.5% gains
 4. If exhausted → Close, watch for reversal signals
 5. If reversal confirmed → Enter new direction (short after uptrend exhaustion, long after downtrend)
 6. If unclear → HOLD cash, wait - especially for smaller alts like LTC/DOGE
@@ -177,7 +178,7 @@ COMPETITION MINDSET (SNIPER SCALPING)
   - THE SWEET SPOT: 35-40% of account margin ($300-$350) at 20x leverage
   - PATIENCE PAYS: Wait for A+ setups, skip C setups entirely
   - STOPS: With 20x, use 1% stops (hard) to protect capital
-  - SNIPER TPs: Target 1-2% price move (20-40% ROE) and bank it immediately
+  - SNIPER TPs: Target 0.8-1.5% price move (16-30% ROE) and bank it immediately
   - REPEATABLE EDGE: Hit singles and doubles, don't swing for home runs
   - SHORTING MINDSET: Treat shorts symmetric to longs - capitalize on dumps
 `;
@@ -302,18 +303,18 @@ EXAMPLE FOR HOLD (ALL ANALYSTS AGREE):
 }
 
 CRITICAL RULES (CONVICTION TRADING):
-- BUY or SELL when you have a clear edge(Q >= 0.6)
-- HOLD is acceptable when max(Q) < 0.6 or regret < 0.5 %
-- For CLOSE / REDUCE actions: set allocation_usd = 0 and leverage = 0(exit actions), tp_price / sl_price can be null
-- allocation_usd: TARGET 35 % of Account Margin * 20(e.g., $6000 - $7000 for $900 account)
-- leverage: 20x for all(SNIPER MODE)
-- ALWAYS set tp_price and sl_price(never null for BUY / SELL)
-- With 20x leverage, use 1 % stops to avoid liquidation risk
-- Set TP at 1 - 2 % from entry(SNIPER MODE: bank profits quickly)
-- Include Q - values and regret calculation in the rl_validation object
+- BUY or SELL when you have a clear edge (Q >= 0.6)
+- HOLD is acceptable when max(Q) < 0.6 or regret < 0.5%
+- For CLOSE/REDUCE actions: set allocation_usd=0 and leverage=0 (exit actions), tp_price/sl_price can be null
+- allocation_usd: TARGET 35% of Account Margin * 20 (e.g., $6000-$7000 for $900 account)
+- leverage: 20x for all (SNIPER MODE)
+- ALWAYS set tp_price and sl_price (never null for BUY/SELL)
+- With 20x leverage, use 1% stops to avoid liquidation risk
+- Set TP at 0.8-1.5% from entry (SNIPER MODE: bank profits quickly)
+- Include Q-values and regret calculation in the rl_validation object
 - QUALITY OVER QUANTITY: Skip marginal setups, wait for clear edge
-- SCALP MODE: Plan to hold minutes / hours, take profit immediately at 1 - 2 %.
-- For shorts: Same as longs - 1 - 2 % profit target, tight stops.
+- SCALP MODE: Plan to hold minutes/hours, take profit immediately at 0.8-1.5%.
+- For shorts: Same as longs - 0.8-1.5% profit target, tight stops.
 
 FOR HOLD ACTIONS ONLY(CRITICAL - VALIDATION WILL FAIL OTHERWISE):
 - allocation_usd: MUST be 0(not trading)
@@ -353,7 +354,7 @@ PHASE 1 - STRONG TREND(RIDE IT HARD):
       - MACD histogram expanding in trend direction
          - Strategy:
 - LONG in uptrend / SHORT in downtrend with full conviction size
-   - SCALP the trend: Take profit at 1 - 2 % repeatedly
+   - SCALP the trend: Take profit at 0.8 - 1.5 % repeatedly
       - Tight stops(1 % at 20x leverage), move to breakeven quickly
          - Ignore "overbought/oversold" RSI in strong trends — they stay extreme
             - For alts: Only trade if BTC / ETH in same direction(amplification)
@@ -385,7 +386,7 @@ Key principles:
    - At exhaustion: CLOSE, don't hold
       - At reversal: CATCH new trend early with conviction
       - In chop: WAIT — most random closes happen here
-         - For shorts: Symmetric to longs — ride downtrends, take profit at 1 - 2 %
+         - For shorts: Symmetric to longs — ride downtrends, take profit at 0.8 - 1.5 %
 
             PRIMARY SIGNALS - TECHNICAL INDICATORS(CRYPTO - OPTIMIZED)
 

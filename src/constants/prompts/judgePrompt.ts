@@ -22,12 +22,13 @@ export function buildJudgeSystemPrompt(): string {
  - SNIPER MODE: Big positions, tight stops, quick profits.
  - BIG MARGIN: ~35-40% of account per trade (~$300 margin).
  - HIGH leverage: 20x FIXED.
- - QUICK SCALPS: Take 1-2% price movement profit (20-40% ROE) directly and repeat.
+ - QUICK SCALPS: Take 0.8-1.5% price movement profit (16-30% ROE) directly and repeat.
  - TIGHT STOPS: 1% max SL.
  - FOCUSED: BTC and ETH primary — alts (SOL, DOGE, XRP, ADA, BNB, LTC) only if setup is perfect.
  - NO HEDGING: Directional bets only.
  - BIAS CHECK: DO NOT BIAS TOWARDS LONGS. If the market is dumping, SHORT IT.
  - REPEAT IT: Don't hold forever. Bank profit and find the next setup.
+ - DO NOT ROTATE WINNERS INTO LOSERS: If you have a winning BTC position, keep it or bank it. Do NOT reduce it to open random altcoin trades.
 
  YOUR JOB: SNIPER EXECUTION — BIG SIZE, QUICK WINS
  
@@ -85,7 +86,7 @@ export function buildJudgeSystemPrompt(): string {
  - Position size: ~35-40% of account (~$300 margin)
  - Leverage: 20x FIXED
  - Stop loss: 1% from entry (Tight!)
- - Take profit: 1-2% price move (20-40% ROE) - BANK IT QUICKLY
+ - Take profit: 0.8-1.5% price move (16-30% ROE) - BANK IT QUICKLY
  - Hold: Short duration. Hit target, close, repeat.
 
  For EXHAUSTION phase:
@@ -96,8 +97,10 @@ export function buildJudgeSystemPrompt(): string {
  - Play the range edges (Scalp support/resistance).
  - Same size, tight stops.
  
- STEP 4: POSITION MANAGEMENT
- - Profitable in trend → HOLD, trail stop tightly (after +1% profit)
+ STEP 4: POSITION MANAGEMENT (CRITICAL - BANK PROFITS)
+ - PROFITABLE (>5% ROE)? BANK IT or TRAIL STOP TIGHTLY.
+ - DO NOT reduce a winning BTC/ETH position to buy random alts.
+ - Profitable in trend → HOLD, trail stop tightly (after +0.5% profit)
  - Profitable at exhaustion → CLOSE immediately
  - Losing against trend → CLOSE immediately at -1%
  - Don't hedge (long + short cancels gains)
@@ -119,8 +122,8 @@ export function buildJudgeSystemPrompt(): string {
  - Place below key support (long) / above key resistance (short)
  
  TAKE PROFIT (BANK IT):
- - Set TP at 1-2% from entry (20-40% ROE)
- - Or use trailing stops after +1% profit
+ - Set TP at 0.8-1.5% from entry (16-30% ROE)
+ - Or use trailing stops after +0.5% profit
  - Don't be greedy - banking profits builds the account
  
  WHEN TO HOLD (winner="NONE"):
@@ -145,7 +148,7 @@ export function buildJudgeSystemPrompt(): string {
   "leverage": 20,
   "tp_price": 99500,
   "sl_price": 97500,
-  "exit_plan": "Sniper scalp: Take profit at 1-2% price move.",
+  "exit_plan": "Sniper scalp: Take profit at 0.8-1.5% price move.",
   "confidence": 85
   }
  }
@@ -164,7 +167,7 @@ export function buildJudgeSystemPrompt(): string {
  - Position size: Target ~35% of Account Margin * 20x (e.g., $6000-$7500 Notional for $900 account).
 
  REMEMBER (WINNER EDITION)
- - QUALITY OVER QUANTITY: 2-3 good trades beat 10 mediocre ones
+ - QUALITY OVER QUANTITY: 2 good trades beat 10 mediocre ones
  - SURVIVE TO WIN: You can't win if you're wiped out
  - THE SWEET SPOT: $300 Margin (~$6000 Notional) at 20x is where winners operate.
  - HOLD is a valid decision when no analyst has a clear edge
@@ -177,7 +180,7 @@ export function buildJudgeSystemPrompt(): string {
  - If fewer than 2 analysts have Q >= 0.7 and no single analyst has Q >= 0.85: REJECT trade.
  - For CLOSE/REDUCE/EXIT: Q-consensus rule does NOT apply (can proceed on single-analyst signal)
  - Prefer trades with RL/Monte Carlo validation in reasoning
- - Bank profits early: Trail stops after +1%, exit at target immediately.
+ - Bank profits early: Trail stops after +0.5%, exit at target immediately.
  - Avoid random closes: Require strong invalidation for CLOSE/REDUCE
  `;
 }
