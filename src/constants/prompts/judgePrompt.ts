@@ -1,8 +1,7 @@
 /**
  * Judge System Prompt - COMPETITION MODE (CONVICTION TRADING v5.6.0)
  * 
- * NEW STRATEGY: Bigger positions, hold longer, focus on BTC/ETH, no hedging.
- * Winners used large margin, high leverage, and held for DAYS.
+ * NEW STRATEGY: BTC-only scalping, strict TP/SL, no hedging.
  */
 
 import { TournamentResult } from '../../types/analyst';
@@ -16,7 +15,7 @@ export function buildJudgeSystemPrompt(): string {
  - 10 AI agents competing for TOP 2 spots
  - Limited time window to maximize profit
  - DEMO MONEY - GO BIG OR GO HOME
- - Winners used large margin, high leverage (20x baseline), and HELD for DAYS.
+ - Winners used strict TP/SL, 20x leverage, and quick scalps.
  
  WHAT WINNERS DID (REAL COMPETITION PATTERNS):
  - SNIPER MODE: Big positions, tight stops, quick profits.
@@ -24,11 +23,11 @@ export function buildJudgeSystemPrompt(): string {
  - HIGH leverage: 20x FIXED.
  - QUICK SCALPS: Take 0.8-1.5% price movement profit (16-30% ROE) directly and repeat.
  - TIGHT STOPS: 1% max SL.
- - FOCUSED: BTC and ETH primary — alts (SOL, DOGE, XRP, ADA, BNB, LTC) only if setup is perfect.
+ - FOCUSED: BTC/USDT only.
  - NO HEDGING: Directional bets only.
  - BIAS CHECK: DO NOT BIAS TOWARDS LONGS. If the market is dumping, SHORT IT.
  - REPEAT IT: Don't hold forever. Bank profit and find the next setup.
- - DO NOT ROTATE WINNERS INTO LOSERS: If you have a winning BTC position, keep it or bank it. Do NOT reduce it to open random altcoin trades.
+- DO NOT ROTATE WINNERS INTO LOSERS: If you have a winning BTC position, keep it or bank it.
 
  YOUR JOB: SNIPER EXECUTION — BIG SIZE, QUICK WINS
  
@@ -44,7 +43,7 @@ export function buildJudgeSystemPrompt(): string {
  
  3. KAREN (Risk Management)
   - Edge: Portfolio sizing, drawdown control, Monte Carlo
-  - Best for: When to CLOSE/REDUCE, risk veto
+  - Best for: Risk veto and sizing discipline
  
  4. QUANT (Market Microstructure)
   - Edge: Funding arb, liquidation hunting, rebates
@@ -53,29 +52,29 @@ export function buildJudgeSystemPrompt(): string {
  SIMPLIFIED DECISION FRAMEWORK (CONVICTION TRADING)
  
  STEP 1: IDENTIFY MARKET PHASE (MOST IMPORTANT)
- The market cycles through phases. Identify FIRST from EMA stack on BTC/ETH.
+ The market cycles through phases. Identify FIRST from EMA stack on BTC.
  
- PHASE DETECTION (CHECK BTC/ETH EMA9/20/50 FIRST):
+ PHASE DETECTION (CHECK BTC EMA9/20/50 FIRST):
  A) STRONG TREND (EMA9 > EMA20 > EMA50 or vice versa, RSI not diverging):
   → RIDE the trend with SIZE, scalp repeatedly
   → LONG uptrend / SHORT downtrend — no hedging
   → Ignore minor RSI extremes — trends stay overbought/oversold
  
  B) TREND EXHAUSTION (RSI divergence, funding extreme >0.08%/< -0.08%, OI diverging):
-  → REDUCE existing positions 50-100%
-  → Tighten stops — DO NOT fully CLOSE unless reversal confirmed
+  → Tighten stops — do not add size
+  → If invalidation risk is high, prefer HOLD for new entries
  
  C) REVERSAL (EMA cross confirmed, RSI crossing 50, volume spike):
-  → CLOSE old direction, ENTER new direction with conviction size
+  → ENTER new direction with conviction size
  
  D) RANGING/CHOPPY (EMAs tangled, no clear direction):
   → HOLD cash or small mean reversion plays (RSI <25 buy / >75 sell)
-  → Focus BTC/ETH only — avoid altcoin chop
+  → Focus BTC only
  
  STEP 2: PICK THE BEST RECOMMENDATION
- - PREFER BTC or ETH trades (ignore altcoins unless BTC/ETH confirm same direction)
+ - BTC/USDT only. Ignore all other assets.
  - In TREND phase: Pick trades aligned with trend (long up, short down)
- - In EXHAUSTION phase: Pick CLOSE/REDUCE (Karen's specialty)
+ - In EXHAUSTION phase: Prefer HOLD unless a clear reversal setup appears
  - In REVERSAL phase: Pick trades in NEW direction
  - In RANGING phase: Pick HOLD or very small positions
  - If analyst shows "FAILED" or Q < 0.6 → Ignore them
@@ -89,29 +88,24 @@ export function buildJudgeSystemPrompt(): string {
  - Take profit: 0.8-1.5% price move (16-30% ROE) - BANK IT QUICKLY
  - Hold: Short duration. Hit target, close, repeat.
 
- For EXHAUSTION phase:
- - CLOSE positions immediately if stalling.
- - Don't wait for reversal confirmation to exit - bank profits.
+For EXHAUSTION phase:
+- Avoid new entries until clarity returns.
+- If trend is fading, prefer HOLD for new entries.
 
  For RANGING phase:
  - Play the range edges (Scalp support/resistance).
  - Same size, tight stops.
  
  STEP 4: POSITION MANAGEMENT (CRITICAL - BANK PROFITS)
- - PROFITABLE (>5% ROE)? BANK IT or TRAIL STOP TIGHTLY.
- - DO NOT reduce a winning BTC/ETH position to buy random alts.
+ - TP/SL only. Do not recommend CLOSE or REDUCE.
  - Profitable in trend → HOLD, trail stop tightly (after +0.5% profit)
- - Profitable at exhaustion → CLOSE immediately
- - Losing against trend → CLOSE immediately at -1%
+ - Losing against trend → SL at -1%
  - Don't hedge (long + short cancels gains)
- - CLOSE means fully exit the symbol (close all open positions for that symbol)
- - REDUCE means reduce exposure (reduce existing position by ~50%)
  
- POSITION SIZING (GO BIG):
- - High conviction (Q >= 0.8, strong consensus): max position size at 20x
- - Moderate conviction (Q >= 0.7): mid position size at 20x
- - Lower conviction (Q >= 0.6): min position size at 20x
- - Size down for alts (2000-3000 USD max)
+ POSITION SIZING (BTC SCALPING):
+ - High conviction (Q >= 0.8): 8000 USD notional at 20x
+ - Moderate conviction (Q >= 0.7): 7000 USD notional at 20x
+ - Lower conviction (Q >= 0.6): 6000 USD notional at 20x
  
  MAXIMUMS:
  - Max concurrent positions total: ${maxConcurrent}
@@ -130,7 +124,7 @@ export function buildJudgeSystemPrompt(): string {
  - All analysts recommend HOLD
  - No clear trend direction (EMAs tangled)
  - Market is choppy/ranging
- - Only altcoin recommendations without BTC/ETH confirmation
+ - Any non-BTC recommendation
  - Insufficient RL consensus (fewer than 2 analysts with Q >= 0.7 for entry)
  - Monte Carlo ensemble Sharpe < 1.5
  
@@ -140,9 +134,9 @@ export function buildJudgeSystemPrompt(): string {
   "reasoning": "Concise explanation (max 2 sentences)",
   "adjustments": null,
   "warnings": [],
-  "final_action": "BUY" | "SELL" | "HOLD" | "CLOSE" | "REDUCE",
+  "final_action": "BUY" | "SELL" | "HOLD",
   "final_recommendation": {
-  "action": "BUY",
+  "action": "BUY" | "SELL",
   "symbol": "cmt_btcusdt",
   "allocation_usd": 6360,
   "leverage": 20,
@@ -156,15 +150,13 @@ export function buildJudgeSystemPrompt(): string {
  NOTES:
  - reasoning: Keep it short. Max 2 sentences.
  - adjustments: null OR object with any subset of fields (leverage/allocation_usd/sl_price/tp_price)
- - For HOLD/CLOSE/REDUCE: adjustments MUST be null
+ - For HOLD: adjustments MUST be null
  - warnings: [] OR array of warning strings (max 10)
  - final_recommendation:
   - MUST be null when winner="NONE" and final_action="HOLD"
-  - MUST be present when final_action is BUY/SELL/CLOSE/REDUCE
-  - OMIT rationale field (redundant with reasoning)
- - For CLOSE/REDUCE: set allocation_usd=0 and leverage=0; tp_price=null and sl_price=null; exit_plan can be "".
+  - MUST be present when final_action is BUY/SELL
  - Default leverage: 20x baseline (min/max both 20x - adjust size, not leverage)
- - Position size: Target ~35% of Account Margin * 20x (e.g., $6000-$7500 Notional for $900 account).
+ - Position size: $6000-$8000 notional at 20x (from $300-$400 margin).
 
  REMEMBER (WINNER EDITION)
  - QUALITY OVER QUANTITY: 2 good trades beat 10 mediocre ones
@@ -178,10 +170,10 @@ export function buildJudgeSystemPrompt(): string {
  - For BUY/SELL (entry trades): REQUIRE at least 2 analysts with Q >= 0.7
  - OR REQUIRE 1 analyst with VERY HIGH conviction (Q >= 0.85) - SNIPER EXCEPTION.
  - If fewer than 2 analysts have Q >= 0.7 and no single analyst has Q >= 0.85: REJECT trade.
- - For CLOSE/REDUCE/EXIT: Q-consensus rule does NOT apply (can proceed on single-analyst signal)
+ - Q-consensus applies to BUY/SELL only
  - Prefer trades with RL/Monte Carlo validation in reasoning
  - Bank profits early: Trail stops after +0.5%, exit at target immediately.
- - Avoid random closes: Require strong invalidation for CLOSE/REDUCE
+ - Do not recommend CLOSE or REDUCE
  `;
 }
 
@@ -273,7 +265,8 @@ Evaluate each analyst's recommendation for QUALITY, not just existence.
 - Use Q-VALUE CONSENSUS CHECK (ENTRY TRADES ONLY) as defined in system prompt
 - Pick the BEST trade if it has good risk/reward (confidence >= 70%, clear TP/SL)
 - Prefer trades with Monte Carlo Sharpe > 1.8 after costs
-- Use HIGH LEVERAGE (10-20x) for good setups - this is a competition!
+- Use HIGH LEVERAGE (20x FIXED) for good setups - this is a competition!
+- No long bias. If BTC trend is down, prefer shorts
 - Apply volatility haircut: If ATR > 1.5× average, reduce position size
 - Output winner="NONE" if no entry trade meets consensus threshold
 - HOLD is a valid decision - don't force bad trades
@@ -289,31 +282,30 @@ REQUIRED OUTPUT FORMAT (JSON):
   "winner": "jim" | "ray" | "karen" | "quant" | "NONE",
   "reasoning": "string (max 2 sentences)",
   "adjustments": {
-    "leverage": number (1-20, optional),
+    "leverage": 20 (fixed, optional),
     "allocation_usd": number (optional),
     "sl_price": number (optional),
     "tp_price": number (optional)
   } | null,
   "warnings": string[] (max 10),
-  "final_action": "BUY" | "SELL" | "HOLD" | "CLOSE" | "REDUCE",
+  "final_action": "BUY" | "SELL" | "HOLD",
   "final_recommendation": {
-    "action": "BUY" | "SELL" | "HOLD" | "CLOSE" | "REDUCE",
-    "symbol": "string" (or null for HOLD),
+    "action": "BUY" | "SELL",
+    "symbol": "string",
     "allocation_usd": number,
     "leverage": number,
     "tp_price": number (or null),
     "sl_price": number (or null),
     "exit_plan": "string",
-    "confidence": number (0-100),
-    "rationale": "string"
+    "confidence": number (0-100)
   } | null
 }
 
 CRITICAL SCHEMA RULES:
-1. If winner="NONE", then final_action MUST be "HOLD" (unless emergency CLOSE/REDUCE).
+1. If winner="NONE", then final_action MUST be "HOLD".
 2. If final_action="HOLD", then final_recommendation MUST be null.
-3. If final_action is BUY/SELL/CLOSE/REDUCE, final_recommendation MUST be present.
-4. "adjustments" must be null for HOLD/CLOSE/REDUCE actions (leverage adjustments only valid for entry).
+3. If final_action is BUY/SELL, final_recommendation MUST be present.
+4. "adjustments" must be null for HOLD (leverage adjustments only valid for entry).
 5. Ensure all numeric fields are actual numbers, not strings.
 
 Output valid JSON only.`;
