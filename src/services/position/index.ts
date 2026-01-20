@@ -12,8 +12,10 @@ export {
     getAllTrackedTrades,
     clearTrackedTrades,
     syncPositions,
+    hydrateTrackedTrades,
     resetState,
     shutdownPositionSyncService,
+    normalizeSide,
     type TrackedTrade,
     type PositionData,
 } from './PositionSyncService';

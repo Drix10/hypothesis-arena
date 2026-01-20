@@ -21,6 +21,7 @@ import {
     validateAnalystOutput,
     normalizeAnalystOutput,
     validateJudgeOutput,
+    normalizeJudgeDecision,
 } from '../../types/analyst';
 import { TradingContext, MarketDataWithIndicators } from '../../types/context';
 import { stableStringify } from '../../utils/json';
@@ -131,6 +132,53 @@ const ANALYST_RECOMMENDATION_SCHEMA: ResponseSchema = {
 };
 
 /**
+ * Judge recommendation schema (simplified - removes rationale to save tokens)
+ */
+const JUDGE_RECOMMENDATION_SCHEMA: ResponseSchema = {
+    type: SchemaType.OBJECT,
+    properties: {
+        action: {
+            type: SchemaType.STRING,
+            format: 'enum',
+            enum: ['BUY', 'SELL', 'HOLD', 'CLOSE', 'REDUCE'],
+            description: 'Trading action to take',
+        },
+        symbol: {
+            type: SchemaType.STRING,
+            nullable: true,
+            description: 'Trading symbol (e.g., cmt_btcusdt). Can be null for HOLD.',
+        },
+        allocation_usd: {
+            type: SchemaType.NUMBER,
+            description: 'Notional exposure in USD (MUST be 0 for HOLD)',
+        },
+        leverage: {
+            type: SchemaType.NUMBER,
+            description: 'Leverage multiplier (1-20, MUST be 0 for HOLD)',
+        },
+        tp_price: {
+            type: SchemaType.NUMBER,
+            nullable: true,
+            description: 'Take profit price (MUST be null for HOLD)',
+        },
+        sl_price: {
+            type: SchemaType.NUMBER,
+            nullable: true,
+            description: 'Stop loss price (MUST be null for HOLD)',
+        },
+        exit_plan: {
+            type: SchemaType.STRING,
+            description: 'Exit conditions and invalidation triggers (can be empty for HOLD)',
+        },
+        confidence: {
+            type: SchemaType.NUMBER,
+            description: 'Confidence level 0-100',
+        },
+    },
+    required: ['action', 'symbol', 'allocation_usd', 'leverage', 'tp_price', 'sl_price', 'exit_plan', 'confidence'],
+};
+
+/**
  * Full analyst output schema
  */
 const ANALYST_OUTPUT_RESPONSE_SCHEMA: ResponseSchema = {
@@ -232,7 +280,7 @@ const JUDGE_OUTPUT_RESPONSE_SCHEMA: ResponseSchema = {
             description: 'Final trading action',
         },
         final_recommendation: {
-            ...ANALYST_RECOMMENDATION_SCHEMA,
+            ...JUDGE_RECOMMENDATION_SCHEMA,
             nullable: true,
             description: 'Final recommendation (null if HOLD with no winner)',
         },
@@ -595,8 +643,8 @@ export class CollaborativeFlowService {
      */
     private async runAllAnalysts(context: TradingContext): Promise<ParallelAnalysisResult> {
         const promptVars = context.prompt_vars;
-        const cleanContext = { ...context };
-        delete (cleanContext as any).prompt_vars;
+        // Create a copy of context without prompt_vars to reduce redundant data
+        const { prompt_vars: _pv, ...cleanContext } = context;
 
         const contextJson = stableStringify(cleanContext, 2);
         logger.info(`📊 Context built: ${context.market_data.length} assets, ${context.account.positions.length} positions, JSON size: ${(contextJson.length / 1024).toFixed(2)} KB`);
@@ -784,6 +832,7 @@ export class CollaborativeFlowService {
                     temperature: config.ai.temperature,
                     maxOutputTokens: Math.max(16384, config.ai.maxOutputTokens), // Increased from 8192 for strict schema verbosity
                     label: `Analyst-${analystId}`,
+                    bypassCache: attempt > 1, // Bypass cache on retries to avoid getting the same invalid result
                 });
                 resultText = result.text;
                 modelUsed = config.ai.provider === 'gemini' ? config.ai.model : config.ai.openRouterModel;
@@ -797,9 +846,9 @@ export class CollaborativeFlowService {
                 } else {
                     logger.warn(`${analystId} output validation failed on attempt ${attempt} (model: ${modelUsed})`);
                     logger.warn(`${analystId} raw response (first 500 chars): ${resultText.slice(0, 500)}`);
-                    if (parsed) {
-                        const rec = (parsed as any).recommendation;
-                        logger.warn(`${analystId} parsed fields: reasoning=${typeof (parsed as any).reasoning}, rec.action=${rec?.action}, rec.symbol=${rec?.symbol}, rec.allocation_usd=${rec?.allocation_usd}, rec.leverage=${rec?.leverage}, rec.confidence=${rec?.confidence}, rec.tp_price=${rec?.tp_price}, rec.sl_price=${rec?.sl_price}, rec.exit_plan=${typeof rec?.exit_plan}, rec.rationale=${typeof rec?.rationale}`);
+                    if (parsed && typeof parsed === 'object') {
+                        const rec = (parsed as Record<string, any>).recommendation;
+                        logger.warn(`${analystId} parsed fields: reasoning=${typeof (parsed as Record<string, any>).reasoning}, rec.action=${rec?.action}, rec.symbol=${rec?.symbol}, rec.allocation_usd=${rec?.allocation_usd}, rec.leverage=${rec?.leverage}, rec.confidence=${rec?.confidence}, rec.tp_price=${rec?.tp_price}, rec.sl_price=${rec?.sl_price}, rec.exit_plan=${typeof rec?.exit_plan}, rec.rationale=${typeof rec?.rationale}`);
                     } else {
                         logger.warn(`${analystId} parsed is null/undefined`);
                     }
@@ -829,8 +878,7 @@ export class CollaborativeFlowService {
     ): Promise<JudgeDecision> {
         const promptVars = context.prompt_vars;
         // Create a copy of context without prompt_vars to reduce redundant data
-        const cleanContext = { ...context };
-        delete (cleanContext as any).prompt_vars;
+        const { prompt_vars: _pv, ...cleanContext } = context;
 
         const contextJson = stableStringify(cleanContext, 2);
 
@@ -869,11 +917,14 @@ export class CollaborativeFlowService {
                     temperature: 0.3,
                     maxOutputTokens: 8192, // Increased from 2048 for strict schema
                     label: 'Judge',
+                    bypassCache: attempt > 1, // Bypass cache on retries to avoid getting the same invalid result
                 });
 
                 const parsed = this.parseJSON(result.text);
 
-                const normalized = this.normalizeJudgeDecision(parsed);
+                // Use the centralized normalization function from types/analyst
+                // This ensures consistency between validation and testing
+                const normalized = normalizeJudgeDecision(parsed);
 
                 if (validateJudgeOutput(normalized)) {
                     if (normalized.winner === 'NONE' && normalized.final_action !== 'CLOSE' && normalized.final_action !== 'REDUCE') {
@@ -911,24 +962,6 @@ export class CollaborativeFlowService {
             final_action: 'HOLD',
             final_recommendation: null,
         };
-    }
-
-    private normalizeJudgeDecision(value: unknown): any {
-        if (!value || typeof value !== 'object') return value;
-
-        const v = value as any;
-        const finalAction = v.final_action;
-        if (finalAction === 'CLOSE' || finalAction === 'REDUCE') {
-            v.adjustments = null;
-
-            if (v.final_recommendation && typeof v.final_recommendation === 'object') {
-                v.final_recommendation.leverage = 0;
-            }
-        } else if (finalAction === 'HOLD') {
-            v.adjustments = null;
-        }
-
-        return v;
     }
 
     /**
@@ -973,7 +1006,7 @@ export class CollaborativeFlowService {
                     sl_price: null,
                     exit_plan: rec.exit_plan,
                     confidence: rec.confidence,
-                    rationale: rec.rationale,
+                    rationale: judgeDecision.reasoning,
                     winner: 'NONE',
                     warnings,
                     analysisResult,
@@ -1177,8 +1210,9 @@ export class CollaborativeFlowService {
     private sleep(ms: number): Promise<void> {
         return new Promise((resolve) => {
             const timeoutId = setTimeout(resolve, ms);
-            if ((timeoutId as any).unref) {
-                (timeoutId as any).unref();
+            // Safe unref for Node.js environment to prevent keeping process alive
+            if (typeof timeoutId === 'object' && timeoutId !== null && 'unref' in timeoutId) {
+                (timeoutId as unknown as { unref: () => void }).unref();
             }
         });
     }

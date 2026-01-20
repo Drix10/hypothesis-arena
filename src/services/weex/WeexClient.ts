@@ -130,15 +130,15 @@ export class WeexClient {
                     throw new RateLimitError('WEEX rate limit exceeded');
                 }
 
-                const data = error.response?.data as any;
-                if (data?.code) {
-                    throw new WeexApiError(data.code, data.msg || 'WEEX API error');
+                const data = error.response?.data;
+                if (data && typeof data === 'object' && 'code' in data) {
+                    throw new WeexApiError((data as any).code, (data as any).msg || 'WEEX API error');
                 }
 
                 // Create a clean error without circular references
-                const cleanError = new Error(error.message);
-                (cleanError as any).status = error.response?.status;
-                (cleanError as any).code = data?.code;
+                const cleanError = new Error(error.message) as Error & { status?: number; code?: any };
+                cleanError.status = error.response?.status;
+                cleanError.code = (data as any)?.code;
                 throw cleanError;
             }
         );
@@ -699,6 +699,13 @@ export class WeexClient {
         );
         // Handle both response formats and normalize to canonical camelCase shape
         const rawPositions = Array.isArray(response) ? response : (response as any).data || [];
+
+        // Log raw count to help debug missing positions
+        if (rawPositions.length === 0) {
+            logger.debug('WEEX API returned 0 raw positions');
+        } else {
+            logger.debug(`Fetched ${rawPositions.length} raw positions from WEEX API`);
+        }
 
         // Filter and normalize positions, skipping invalid ones
         const positions: WeexPosition[] = [];

@@ -43,6 +43,8 @@ export interface PositionData {
     entryPrice: number;
     unrealizedPnl: number;
     leverage: number;
+    tpPrice?: number | null;
+    slPrice?: number | null;
 }
 
 interface CloseResult {
@@ -55,14 +57,13 @@ interface CloseResult {
 
 const trackedTrades = new Map<string, TrackedTrade>();
 const MAX_TRACKED_TRADES = config.positionSync.maxTrackedTrades;
-const STALE_TRADE_HOURS = config.positionSync.staleTradeHours;
 const POSITION_OUTCOME_THRESHOLD_PERCENT = config.positionSync.outcomeThresholdPct;
 const MIN_ABS_PRICE_DIFF = 1e-6;
 const inProgressTradeIds = new Set<string>();
 const notSeenCounts = new Map<string, number>();
 const MISSING_CYCLE_THRESHOLD = config.positionSync.missingCycleThreshold;
 
-function normalizeSide(side: string): 'BUY' | 'SELL' | null {
+export function normalizeSide(side: string): 'BUY' | 'SELL' | null {
     if (!side || typeof side !== 'string') {
         logger.error(`Invalid side value: ${side} (type: ${typeof side})`);
         return null;
@@ -79,6 +80,68 @@ function normalizeSide(side: string): 'BUY' | 'SELL' | null {
     // Unknown side format - return null instead of defaulting
     logger.error(`Unknown side format: "${side}" - cannot normalize`);
     return null;
+}
+
+/**
+ * Hydrate tracked trades from database on startup
+ * This prevents "zombie trades" that are lost from memory after a restart
+ */
+export async function hydrateTrackedTrades(): Promise<void> {
+    try {
+        const openTrades = await prisma.trade.findMany({
+            where: {
+                status: 'FILLED',
+                realizedPnl: null,
+                weexOrderId: { not: null }
+            }
+        });
+
+        let hydratedCount = 0;
+        for (const trade of openTrades) {
+            if (trackedTrades.has(trade.id)) continue;
+            if (!trade.weexOrderId) continue;
+
+            const normalizedSide = normalizeSide(trade.side);
+            if (!normalizedSide) {
+                logger.error(`Skipping hydration for trade ${trade.id}: Invalid side "${trade.side}"`);
+                continue;
+            }
+
+            const tracked: TrackedTrade = {
+                tradeId: trade.id,
+                orderId: trade.weexOrderId,
+                symbol: trade.symbol,
+                side: normalizedSide,
+                entryPrice: trade.entryPrice || 0,
+                size: trade.size,
+                leverage: trade.leverage || 1,
+                tpPrice: trade.takeProfit,
+                slPrice: trade.stopLoss,
+                entryFee: 0,
+                exitFee: 0,
+                fundingPaid: 0,
+                entryRegime: null,
+                entryZScore: null,
+                entryFunding: null,
+                entrySentiment: null,
+                entrySignals: {},
+                winningAnalyst: trade.championId,
+                analystScores: {},
+                judgeReasoning: trade.entryThesis,
+                openedAt: trade.executedAt ? trade.executedAt.getTime() : Date.now(),
+                lastSyncAt: Date.now()
+            };
+
+            trackedTrades.set(trade.id, tracked);
+            hydratedCount++;
+        }
+
+        if (hydratedCount > 0) {
+            logger.info(`✅ Hydrated ${hydratedCount} open trades from database`);
+        }
+    } catch (error) {
+        logger.error('Failed to hydrate tracked trades:', error);
+    }
 }
 
 export function trackOpenTrade(trade: Omit<TrackedTrade, 'lastSyncAt' | 'entryFee' | 'exitFee' | 'fundingPaid'>): void {
@@ -216,35 +279,53 @@ export async function syncPositions(
         currentPositionMap.set(key, pos);
     }
 
+    // Update SL/TP for existing tracked trades
+    for (const tracked of trackedTrades.values()) {
+        const trackedKey = `${tracked.symbol}:${tracked.side}`;
+        const currentPos = currentPositionMap.get(trackedKey);
+
+        if (currentPos) {
+            // Update SL/TP if provided in current position data
+            if (currentPos.tpPrice !== undefined) tracked.tpPrice = currentPos.tpPrice;
+            if (currentPos.slPrice !== undefined) tracked.slPrice = currentPos.slPrice;
+        }
+    }
+
     const tradesToProcess: Array<{ tradeId: string; tracked: TrackedTrade }> = [];
-    const tradesToUpdateSyncTime: string[] = [];
+
     for (const [tradeId, tracked] of trackedTrades.entries()) {
-        // Create composite key for this tracked trade
         const trackedKey = `${tracked.symbol}:${tracked.side}`;
 
-        // Skip if position still exists with matching symbol AND side
+        // Case 1: Position exists in current map
         if (currentPositionMap.has(trackedKey)) {
-            // Mark for sync time update (don't modify during iteration)
-            tradesToUpdateSyncTime.push(tradeId);
-            continue;
-        }
-
-        if (inProgressTradeIds.has(tradeId)) {
-            logger.debug(`Trade ${tradeId} already being processed, skipping`);
-            continue;
-        }
-
-        inProgressTradeIds.add(tradeId);
-        tradesToProcess.push({ tradeId, tracked });
-    }
-
-    for (const tradeId of tradesToUpdateSyncTime) {
-        const tracked = trackedTrades.get(tradeId);
-        if (tracked) {
             tracked.lastSyncAt = now;
+            notSeenCounts.delete(tradeId);
+            continue;
         }
-        notSeenCounts.delete(tradeId);
+
+        // Case 2: Position is missing - check threshold
+        const currentCount = notSeenCounts.get(tradeId) || 0;
+        const newCount = currentCount + 1;
+        notSeenCounts.set(tradeId, newCount);
+
+        // Only process closure if we've missed it for enough cycles
+        // This prevents closing trades due to transient API glitches
+        if (newCount >= MISSING_CYCLE_THRESHOLD) {
+            if (inProgressTradeIds.has(tradeId)) {
+                logger.debug(`Trade ${tradeId} already being processed, skipping`);
+                continue;
+            }
+            inProgressTradeIds.add(tradeId);
+            tradesToProcess.push({ tradeId, tracked });
+        } else {
+            if (newCount === 1) {
+                logger.warn(`⚠️ Trade ${tracked.symbol} missing from API response (1/${MISSING_CYCLE_THRESHOLD}). Holding open to prevent zombie trade...`);
+            } else {
+                logger.debug(`Trade ${tracked.symbol} missing for ${newCount}/${MISSING_CYCLE_THRESHOLD} cycles`);
+            }
+        }
     }
+
     for (const { tradeId, tracked } of tradesToProcess) {
         logger.info(`Position closed detected: ${tracked.symbol} ${tracked.side} (tradeId: ${tradeId})`);
 
@@ -258,35 +339,6 @@ export async function syncPositions(
             logger.error(`Failed to process closed position ${tracked.symbol}:`, error);
         } finally {
             inProgressTradeIds.delete(tradeId);
-        }
-    }
-
-    const staleTradeIds: string[] = [];
-    const staleThreshold = now - (STALE_TRADE_HOURS * 60 * 60 * 1000);
-    for (const [tradeId, tracked] of trackedTrades.entries()) {
-        const trackedKey = `${tracked.symbol}:${tracked.side}`;
-        const isOldEnough = tracked.openedAt < staleThreshold;
-        const isNotInPositions = !currentPositionMap.has(trackedKey);
-
-        if (isNotInPositions) {
-            const currentCount = notSeenCounts.get(tradeId) || 0;
-            notSeenCounts.set(tradeId, currentCount + 1);
-
-            if (isOldEnough && currentCount + 1 >= MISSING_CYCLE_THRESHOLD) {
-                staleTradeIds.push(tradeId);
-            }
-        } else {
-            notSeenCounts.delete(tradeId);
-        }
-    }
-
-    for (const tradeId of staleTradeIds) {
-        const tracked = trackedTrades.get(tradeId);
-        if (tracked) {
-            const missingCount = notSeenCounts.get(tradeId) || 0;
-            logger.warn(`Removing stale tracked trade: ${tracked.symbol} ${tracked.side} (tradeId: ${tradeId}, opened ${STALE_TRADE_HOURS}+ hours ago, missing for ${missingCount} cycles)`);
-            trackedTrades.delete(tradeId);
-            notSeenCounts.delete(tradeId);
         }
     }
 
@@ -418,10 +470,9 @@ async function handlePositionClosed(
         const updateResult = await prisma.trade.updateMany({
             where: {
                 weexOrderId: tracked.orderId,
-                status: { not: 'FILLED' }
+                realizedPnl: null
             },
             data: {
-                status: 'FILLED',
                 realizedPnl,
                 realizedPnlPercent,
             },
@@ -509,6 +560,7 @@ export default {
     removeTrackedTrade,
     getAllTrackedTrades,
     clearTrackedTrades,
+    hydrateTrackedTrades,
     syncPositions,
     resetState,
     shutdownPositionSyncService,

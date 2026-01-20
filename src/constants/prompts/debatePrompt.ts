@@ -50,6 +50,12 @@ export const DEBATE_TURN_PROMPT = (position: 'bull' | 'bear', previousTurn: stri
 [DEBATE TURN: ${role}]
 ${context}
 
-Present your ${role} argument now. Remember to follow the JSON schema for your output.
+Present your ${role} argument now.
+
+REQUIRED JSON OUTPUT FORMAT:
+{
+  "argument": "Your concise 100-150 word debate argument here",
+  "dataPointsReferenced": ["RSI 70", "Funding 0.01%", "EMA20 support"]
+}
 `;
 };

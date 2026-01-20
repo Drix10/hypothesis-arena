@@ -41,6 +41,8 @@ export interface AIGenerateOptions {
     presencePenalty?: number;
     frequencyPenalty?: number;
     stop?: string[];
+    /** Force a fresh API call, bypassing local and remote caches */
+    bypassCache?: boolean;
 }
 
 export interface AIGenerateResult {
@@ -156,8 +158,8 @@ function convertToOpenRouterSchema(geminiSchema: ResponseSchema): any {
             baseResult.description = schema.description;
         }
 
-        if ((schema as any).enum) {
-            baseResult.enum = (schema as any).enum;
+        if ('enum' in schema && Array.isArray((schema as { enum: string[] }).enum)) {
+            baseResult.enum = (schema as { enum: string[] }).enum;
         }
 
         // Handle object properties
@@ -437,17 +439,22 @@ class AIService {
 
         // Check local cache
         const cacheKey = this.getCacheKey(options);
-        const cached = this.cache.get(cacheKey);
-        if (cached && (Date.now() - cached.timestamp < this.CACHE_TTL)) {
-            this.cacheHits++;
-            stats.hits++;
-            cached.lastAccessed = Date.now();
-            const hitRate = ((stats.hits / (stats.hits + stats.misses)) * 100).toFixed(1);
-            logger.info(`${logLabel} Local Response Cache HIT - Rate: ${hitRate}% - returning cached result`);
-            return {
-                ...cached.result,
-                requestId // Update requestId to current one for logging consistency
-            };
+
+        if (!options.bypassCache) {
+            const cached = this.cache.get(cacheKey);
+            if (cached && (Date.now() - cached.timestamp < this.CACHE_TTL)) {
+                this.cacheHits++;
+                stats.hits++;
+                cached.lastAccessed = Date.now();
+                const hitRate = ((stats.hits / (stats.hits + stats.misses)) * 100).toFixed(1);
+                logger.info(`${logLabel} Local Response Cache HIT - Rate: ${hitRate}% - returning cached result`);
+                return {
+                    ...cached.result,
+                    requestId // Update requestId to current one for logging consistency
+                };
+            }
+        } else {
+            logger.info(`${logLabel} Bypassing local cache (forced refresh)`);
         }
 
         this.cacheMisses++;

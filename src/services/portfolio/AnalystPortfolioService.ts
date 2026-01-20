@@ -522,8 +522,8 @@ export class AnalystPortfolioService {
     }
 
     static async getAnalystStats(analystId: string) {
-        // FIXED: Validate analystId
-        if (!ANALYST_IDS.includes(analystId as any)) {
+        // FIXED: Validate analystId safely
+        if (!(ANALYST_IDS as readonly string[]).includes(analystId)) {
             logger.warn(`Invalid analyst ID requested: ${analystId}`);
             return null;
         }

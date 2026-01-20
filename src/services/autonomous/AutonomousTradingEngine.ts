@@ -29,7 +29,7 @@ import {
 import { roundToStepSize, roundToTickSize, updateContractSpecs, getContractSpecs, clearContractSpecs } from '../../shared/utils/weex';
 import { APPROVED_SYMBOLS } from '../../shared/types/weex';
 import { validateTradeWithMonteCarlo } from '../quant';
-import { trackOpenTrade, syncPositions, type PositionData } from '../position';
+import { trackOpenTrade, syncPositions, hydrateTrackedTrades, type PositionData, normalizeSide } from '../position';
 import { getSymbolSentimentScore, shutdownSentimentService, shutdownRedditService } from '../sentiment';
 import { aiService } from '../ai/AIService';
 import { resetTechnicalIndicatorService } from '../indicators/TechnicalIndicatorService';
@@ -787,6 +787,14 @@ export class AutonomousTradingEngine extends EventEmitter {
 
                 // Fetch and cache contract specifications from WEEX with retry logic
                 logger.info('📋 Fetching contract specifications from WEEX...');
+
+                // v5.3.0: Hydrate tracked trades from database to prevent zombie trades
+                try {
+                    await hydrateTrackedTrades();
+                } catch (error) {
+                    logger.error('Failed to hydrate tracked trades on startup:', error);
+                }
+
                 const weexClient = getWeexClient();
 
                 let contracts: any[] = [];
@@ -1187,6 +1195,48 @@ export class AutonomousTradingEngine extends EventEmitter {
     }
 
     /**
+     * Helper to fetch and extract TP/SL levels for a specific position from active plan orders
+     * Returns null if explicitly not found (to clear existing values), undefined if check failed (to keep existing)
+     */
+    private async getTpSlForPosition(symbol: string, side: 'LONG' | 'SHORT'): Promise<{ tp?: number | null, sl?: number | null }> {
+        try {
+            const planOrders = await this.weexClient.getCurrentPlanOrders(symbol);
+
+            // If API call succeeds but returns null/empty, it means NO plan orders exist.
+            // We return null to explicitly clear any stale TP/SL values.
+            if (!planOrders || !Array.isArray(planOrders) || planOrders.length === 0) {
+                return { tp: null, sl: null };
+            }
+
+            let tp: number | null = null;
+            let sl: number | null = null;
+
+            for (const order of planOrders) {
+                const planType = String(order.planType || order.plan_type || '');
+                // Normalize side from WEEX (usually 'long'/'short')
+                const orderPosSide = String(order.positionSide || order.position_side || '').toUpperCase();
+
+                // Check if this plan order matches our position side
+                if (orderPosSide !== side) continue;
+
+                const triggerPrice = parseFloat(String(order.triggerPrice || order.trigger_price || '0'));
+                if (!Number.isFinite(triggerPrice) || triggerPrice <= 0) continue;
+
+                if (planType === 'profit_plan') {
+                    tp = triggerPrice;
+                } else if (planType === 'loss_plan') {
+                    sl = triggerPrice;
+                }
+            }
+            return { tp, sl };
+        } catch (error) {
+            // On error (e.g. API failure), return empty object so values are undefined
+            // This ensures we don't wipe out existing TP/SL values during API glitches
+            return {};
+        }
+    }
+
+    /**
      * Main trading loop
      */
     private async runMainLoop(): Promise<void> {
@@ -1345,6 +1395,8 @@ export class AutonomousTradingEngine extends EventEmitter {
 
         // Convert positions to FlowPosition format
         const flowPositions: FlowPosition[] = [];
+        const tpSlMap = new Map<string, { tp?: number | null, sl?: number | null }>(); // v5.3.0: Track TP/SL for sync
+
         try {
             const weexPositions = await this.weexClient.getPositions();
             for (const pos of weexPositions) {
@@ -1359,6 +1411,17 @@ export class AutonomousTradingEngine extends EventEmitter {
                     const marketData = marketDataMap.get(pos.symbol);
                     const marketPrice = marketData?.currentPrice;
                     const currentPrice = deriveCurrentPrice(entryPrice, posSize, unrealizedPnl, isLong, marketPrice);
+
+                    // v5.3.0: Fetch TP/SL data for position sync
+                    try {
+                        const sideStr = isLong ? 'LONG' : 'SHORT';
+                        const { tp, sl } = await this.getTpSlForPosition(pos.symbol, sideStr);
+                        if (tp !== undefined || sl !== undefined) {
+                            tpSlMap.set(`${pos.symbol}:${sideStr}`, { tp, sl });
+                        }
+                    } catch (err) {
+                        // Ignore errors to not block loop
+                    }
 
                     flowPositions.push({
                         symbol: pos.symbol,
@@ -1382,6 +1445,8 @@ export class AutonomousTradingEngine extends EventEmitter {
                     entryPrice: p.entryPrice,
                     unrealizedPnl: p.unrealizedPnl,
                     leverage: p.leverage,
+                    tpPrice: tpSlMap.get(`${p.symbol}:${p.side}`)?.tp,
+                    slPrice: tpSlMap.get(`${p.symbol}:${p.side}`)?.sl,
                 }));
                 const closedCount = await syncPositions(this.weexClient, positionData);
                 if (closedCount > 0) {
@@ -2821,7 +2886,11 @@ export class AutonomousTradingEngine extends EventEmitter {
 
                         // Record the closure trade
                         const tradeId = crypto.randomUUID();
-                        const closeSide = orderSide === 'BUY' ? 'BUY' : 'SELL';
+                        const normalizedCloseSide = normalizeSide(orderSide);
+                        if (!normalizedCloseSide) {
+                            logger.warn(`Skipping closure trade for ${symbol}: Invalid side "${orderSide}"`);
+                            continue;
+                        }
 
                         // NOTE: For closure trades, entryPrice/price store the CLOSE price (execution price),
                         // not the original entry price. This is intentional because:
@@ -2835,7 +2904,7 @@ export class AutonomousTradingEngine extends EventEmitter {
                                 id: tradeId,
                                 portfolioId: portfolioId,
                                 symbol: symbol,
-                                side: closeSide as 'BUY' | 'SELL',
+                                side: normalizedCloseSide,
                                 type: 'MARKET',
                                 size: closeSize,
                                 entryPrice: closePrice, // Execution price of this closure trade
@@ -2855,7 +2924,7 @@ export class AutonomousTradingEngine extends EventEmitter {
                         syncedCount++;
 
                         const pnlSign = totalProfits >= 0 ? '+' : '';
-                        logger.info(`📊 Synced closed order: ${symbol} ${closeSide} P & L: ${pnlSign}${totalProfits.toFixed(2)} (${bestMatch.championId})`);
+                        logger.info(`📊 Synced closed order: ${symbol} ${normalizedCloseSide} P & L: ${pnlSign}${totalProfits.toFixed(2)} (${bestMatch.championId})`);
                     }
                 } catch (symbolError) {
                     logger.debug(`Failed to sync orders for ${symbol}: `, symbolError);

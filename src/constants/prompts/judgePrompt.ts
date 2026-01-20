@@ -134,7 +134,7 @@ export function buildJudgeSystemPrompt(): string {
  OUTPUT FORMAT (STRICT JSON)
  {
   "winner": "jim" | "ray" | "karen" | "quant" | "NONE",
-  "reasoning": "why this trade, or why HOLD",
+  "reasoning": "Concise explanation (max 2 sentences)",
   "adjustments": null,
   "warnings": [],
   "final_action": "BUY" | "SELL" | "HOLD" | "CLOSE" | "REDUCE",
@@ -146,18 +146,19 @@ export function buildJudgeSystemPrompt(): string {
   "tp_price": 99500,
   "sl_price": 97500,
   "exit_plan": "Sniper scalp: Take profit at 1-2% price move.",
-  "confidence": 85,
-  "rationale": "Clear uptrend, quick scalp opportunity"
+  "confidence": 85
   }
  }
 
  NOTES:
+ - reasoning: Keep it short. Max 2 sentences.
  - adjustments: null OR object with any subset of fields (leverage/allocation_usd/sl_price/tp_price)
  - For HOLD/CLOSE/REDUCE: adjustments MUST be null
  - warnings: [] OR array of warning strings (max 10)
  - final_recommendation:
   - MUST be null when winner="NONE" and final_action="HOLD"
   - MUST be present when final_action is BUY/SELL/CLOSE/REDUCE
+  - OMIT rationale field (redundant with reasoning)
  - For CLOSE/REDUCE: set allocation_usd=0 and leverage=0; tp_price=null and sl_price=null; exit_plan can be "".
  - Default leverage: 20x baseline (min/max both 20x - adjust size, not leverage)
  - Position size: Target ~35% of Account Margin * 20x (e.g., $6000-$7500 Notional for $900 account).
@@ -170,11 +171,11 @@ export function buildJudgeSystemPrompt(): string {
  - Trust each analyst's specialty - Jim for technicals, Ray for derivatives, etc.
  - Karen's risk management recommendations deserve extra weight
  - Q-VALUE CONSENSUS CHECK (ENTRY TRADES ONLY):
-  - Count analysts with Q >= 0.7 in their rl_validation object
-  - For BUY/SELL (entry trades): REQUIRE at least 2 analysts with Q >= 0.7
-  - OR REQUIRE 1 analyst with VERY HIGH conviction (Q >= 0.85) - SNIPER EXCEPTION.
-  - If fewer than 2 analysts have Q >= 0.7 and no single analyst has Q >= 0.85: REJECT trade.
-  - For CLOSE/REDUCE/EXIT: Q-consensus rule does NOT apply (can proceed on single-analyst signal)
+ - Count analysts with Q >= 0.7 in their rl_validation object
+ - For BUY/SELL (entry trades): REQUIRE at least 2 analysts with Q >= 0.7
+ - OR REQUIRE 1 analyst with VERY HIGH conviction (Q >= 0.85) - SNIPER EXCEPTION.
+ - If fewer than 2 analysts have Q >= 0.7 and no single analyst has Q >= 0.85: REJECT trade.
+ - For CLOSE/REDUCE/EXIT: Q-consensus rule does NOT apply (can proceed on single-analyst signal)
  - Prefer trades with RL/Monte Carlo validation in reasoning
  - Bank profits early: Trail stops after +1%, exit at target immediately.
  - Avoid random closes: Require strong invalidation for CLOSE/REDUCE
@@ -280,5 +281,37 @@ ${contextJson}
 RUNTIME_VARS:
 ${JSON.stringify(promptVars, null, 2)}
 
-Output valid JSON.`;
+REQUIRED OUTPUT FORMAT (JSON):
+{
+  "winner": "jim" | "ray" | "karen" | "quant" | "NONE",
+  "reasoning": "string (max 2 sentences)",
+  "adjustments": {
+    "leverage": number (1-20, optional),
+    "allocation_usd": number (optional),
+    "sl_price": number (optional),
+    "tp_price": number (optional)
+  } | null,
+  "warnings": string[] (max 10),
+  "final_action": "BUY" | "SELL" | "HOLD" | "CLOSE" | "REDUCE",
+  "final_recommendation": {
+    "action": "BUY" | "SELL" | "HOLD" | "CLOSE" | "REDUCE",
+    "symbol": "string" (or null for HOLD),
+    "allocation_usd": number,
+    "leverage": number,
+    "tp_price": number (or null),
+    "sl_price": number (or null),
+    "exit_plan": "string",
+    "confidence": number (0-100),
+    "rationale": "string"
+  } | null
+}
+
+CRITICAL SCHEMA RULES:
+1. If winner="NONE", then final_action MUST be "HOLD" (unless emergency CLOSE/REDUCE).
+2. If final_action="HOLD", then final_recommendation MUST be null.
+3. If final_action is BUY/SELL/CLOSE/REDUCE, final_recommendation MUST be present.
+4. "adjustments" must be null for HOLD/CLOSE/REDUCE actions (leverage adjustments only valid for entry).
+5. Ensure all numeric fields are actual numbers, not strings.
+
+Output valid JSON only.`;
 }
