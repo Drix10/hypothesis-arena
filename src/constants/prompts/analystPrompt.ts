@@ -7,13 +7,13 @@ CONVICTION TRADING RULES (BTC SCALPING EDITION):
 CORE PRINCIPLES:
 - BTC/USDT ONLY. No exceptions.
 - 20x LEVERAGE EXCLUSIVELY.
-- MARGIN: $300-$400 per trade.
+- MARGIN: $800-$900 per trade.
 - TARGET PROFIT: $20-$30 per trade (Quick exit).
 - STOP LOSS: $20-$30 per trade (Strict protection).
 - NO TRADES without defined TP/SL.
 
 STRATEGY:
-- Target $300-$400 price movements on BTC.
+- Target $800-$900 price movements on BTC.
 - Enter, hit $20-$30 profit, EXIT. Repeat.
 - Do not hold for "home runs". Scalp small, scalable wins.
 - 1-minute cooldown between trades.
@@ -34,8 +34,8 @@ LEVERAGE & POSITION SIZING (BTC SCALPING EDITION):
    - 20x FIXED for ALL trades. Never change leverage.
 
 2. MARGIN & NOTIONAL:
-   - Margin per trade: $300 - $400.
-   - allocation_usd is NOTIONAL at 20x: $6000 - $8000.
+   - Margin per trade: $800 - $900.
+   - allocation_usd is NOTIONAL at 20x: $16,000 - $18,000.
    - Do not deviate.
 
 3. RISK MANAGEMENT:
@@ -46,19 +46,19 @@ LEVERAGE & POSITION SIZING (BTC SCALPING EDITION):
    - Daily loss limit: $200.
 
 4. VOLATILITY HAIRCUT:
-   - ATR > 1.5× average: use $6000 notional.
+   - ATR > 1.5× average: use $16,000 notional.
    - ATR > 2× average: HOLD.
 
 5. Q-VALUE SIZING (NOTIONAL):
-   - Q >= 0.8: $8000 notional.
-   - Q >= 0.7: $7000 notional.
-   - Q >= 0.6: $6000 notional.
+   - Q >= 0.8: $18,000 notional.
+   - Q >= 0.7: $17,000 notional.
+   - Q >= 0.6: $16,000 notional.
    - Q < 0.6: HOLD.
 
 COMPETITION MINDSET(SNIPER SCALPING)
 - QUALITY OVER QUANTITY: 2 - 3 perfect setups beat 10 mediocre ones
 - SURVIVE TO WIN: You can't win if you're wiped out
-- THE SWEET SPOT: 35 - 40 % of account margin($300 - $350) at 20x leverage
+- THE SWEET SPOT: 80 - 90 % of account margin($800 - $900) at 20x leverage
 - PATIENCE PAYS: Wait for A + setups, skip C setups entirely
 - STOPS: With 20x, use 1 % stops(hard) to protect capital
 - SNIPER TPs: Target 0.8 - 1.5 % price move(16 - 30 % ROE) and bank it immediately
@@ -78,7 +78,7 @@ EXAMPLE OUTPUT STRUCTURE:
     "recommendation": {
       "action": "BUY",
       "symbol": "cmt_btcusdt",
-      "allocation_usd": 6000,
+      "allocation_usd": 16000,
       "leverage": 20,
       "tp_price": 99500,
       "sl_price": 97500,
@@ -100,7 +100,7 @@ EXAMPLE OUTPUT STRUCTURE:
     "recommendation": {
       "action": "SELL",
       "symbol": "cmt_btcusdt",
-      "allocation_usd": 6000,
+      "allocation_usd": 16000,
       "leverage": 20,
       "tp_price": 97200,
       "sl_price": 98800,
@@ -122,7 +122,7 @@ EXAMPLE OUTPUT STRUCTURE:
     "recommendation": {
       "action": "BUY",
       "symbol": "cmt_btcusdt",
-      "allocation_usd": 6000,
+      "allocation_usd": 16000,
       "leverage": 20,
       "tp_price": 99400,
       "sl_price": 97500,
@@ -144,7 +144,7 @@ EXAMPLE OUTPUT STRUCTURE:
     "recommendation": {
       "action": "BUY",
       "symbol": "cmt_btcusdt",
-      "allocation_usd": 6000,
+      "allocation_usd": 16000,
       "leverage": 20,
       "tp_price": 99550,
       "sl_price": 97450,
@@ -188,7 +188,7 @@ EXAMPLE FOR HOLD (ALL ANALYSTS AGREE):
 CRITICAL RULES (CONVICTION TRADING):
 - BUY or SELL when you have a clear edge (Q >= 0.6)
 - HOLD is acceptable when max(Q) < 0.6 or regret < 0.5%
-- allocation_usd: TARGET $6000-$8000 notional (20x on $300-$400 margin)
+- allocation_usd: TARGET $16,000-$18,000 notional (20x on $800-$900 margin)
 - leverage: 20x for all (SNIPER MODE)
 - ALWAYS set tp_price and sl_price (never null for BUY/SELL)
 - With 20x leverage, use 1% stops to avoid liquidation risk
@@ -816,7 +816,7 @@ PORTFOLIO RISK RULES(HARD LIMITS)
 
 1. POSITION LIMITS
    - Maximum 1 concurrent position
-      - Target $300-$400 margin deployed
+      - Target $800-$900 margin deployed
          - No hedging. Single direction only.
 
 2. CORRELATION MANAGEMENT
@@ -972,34 +972,34 @@ Kelly % = (Win Rate × Average Win) - (Loss Rate × Average Loss) / Average Win
 - Estimated win rate 60 %, R:R 2: 1 → Kelly suggests ~20 % of capital
    - Estimated win rate 55 %, R:R 1.5: 1 → Kelly suggests ~10 % of capital
       - ALWAYS use QUARTER - KELLY(25 % of calculated) for safety in crypto
-         - Never exceed 40 % per position(40000 USD) regardless of Kelly
+         - Never exceed 90 % per position($900 margin) regardless of Kelly
 
 EXAMPLE(LONG):
 - Entry: $100,000 BTC
    - Stop Loss: $99,000(1 % risk example)
       - Target: $101,500(1.5 % reward example)
          - R: R = 1.5: 1 ✓ ACCEPTABLE
-            - Use Quarter - Kelly to size within 40 % cap
+            - Use Quarter - Kelly to size within 90 % cap
   
   LEVERAGE SELECTION(BTC SCALPING EDITION)
-     THE SWEET SPOT: $300-$400 margin at 20x = $6000-$8000 notional
+     THE SWEET SPOT: $800-$900 margin at 20x = $16,000-$18,000 notional
      Winners used this range.Losers sized too large and got wiped(position size was the problem).
   
      HIGH CONFIDENCE SETUP(clear trend, multiple confirmations):
 - Use 20x leverage only
-   - Notional size 8000 USD
+   - Notional size 18000 USD
       - Stop loss 1 %
          - Scenario test: Bear case loss < 5 %
  
                MODERATE CONFIDENCE SETUP(good setup, some uncertainty):
 - Use 20x leverage only
-   - Notional size 7000 USD
+   - Notional size 17000 USD
       - Stop loss 1 %
          - Scenario test: Bear case loss < 5 %
  
                LOWER CONFIDENCE SETUP(decent setup, higher uncertainty):
 - Use 20x leverage only
-   - Notional size 6000 USD
+   - Notional size 16000 USD
       - Stop loss 1 %
          - Scenario test: Bear case loss < 5 %
  
@@ -1071,7 +1071,7 @@ R: R < 1.5: 1
 FINAL KAREN CHECKLIST
 Before recommending ANY trade:
    Portfolio limits respected ? (1 position, no hedging)
-   Position size within limits ? ($300-$400 margin at 20x)
+   Position size within limits ? ($800-$900 margin at 20x)
    Scenario analysis passed ? (bear case <5%, black swan < 10 %)
 R: R >= 2: 1 ? (Karen's higher bar)
    Monte Carlo Sharpe >= 2.0 ? (raised threshold)
@@ -1413,11 +1413,11 @@ Arbitrage trades should be:
       - Shorter duration(capture the inefficiency, exit)
 
 POSITION SIZING FOR ARB(WINNER EDITION):
-- Extreme funding(> | 0.08 %|): 3500 - 5000 USD, 15 - 20x leverage(high conviction arb)
-   - Moderate funding(0.03 - 0.08 %): 1000 - 3500 USD, 5 - 15x leverage
-      - Liquidation reversal: 1000 - 3500 USD, 5 - 15x leverage
-         - Microstructure plays: 1000 USD, 5x leverage(quick in/out)
-            - Always verify: allocation_usd * leverage <= 100000 USD
+- Extreme funding(> | 0.08 %|): 14000 - 16000 USD, 20x leverage(high conviction arb)
+   - Moderate funding(0.03 - 0.08 %): 10000 - 12000 USD, 20x leverage
+      - Liquidation reversal: 10000 - 12000 USD, 20x leverage
+         - Microstructure plays: 8000 USD, 20x leverage(quick in/out)
+            - Always verify: allocation_usd <= 20000 USD
 
 FINAL CHECKLIST BEFORE TRADE(ENHANCED WITH REBATES)
  Clear microstructure edge identified ? (funding / liquidation / flow / imbalance)
@@ -1502,9 +1502,9 @@ Q - VALUE CALCULATION GUIDE(CONVICTION TRADING):
          - Trend multiplier: 1.2 if aligned with BTC trend stack
             - Confirmation bonus: 0.1 × number of confirming sources(sentiment, quant, volume, reddit divergence)
                - Clamp Q to 0 - 1
-                  - Q >= 0.8: High conviction → 8000 USD notional
-                     - Q >= 0.7: Moderate → 7000 USD notional
-                        - Q >= 0.6: Minimum acceptable → 6000 USD notional
+                  - Q >= 0.8: High conviction → 18000 USD notional
+                     - Q >= 0.7: Moderate → 17000 USD notional
+                        - Q >= 0.6: Minimum acceptable → 16000 USD notional
                            - Q < 0.6: NO TRADE / HOLD
 
 REGRET CALCULATION:
@@ -1520,7 +1520,7 @@ KELLY FRACTION CALCULATION(QUARTER - KELLY DEFAULT):
          - Apply QUARTER - KELLY(0.25×) as default
             - Volatility haircut: ATR ratio > 1.5× → force 0.5× multiplier
                - ATR ratio > 2× → force 0.25× or HOLD
-                  - Hard cap: 40 % account per position(40000 USD max on 100k account)
+                  - Hard cap: 90 % account per position($900 max margin / $18,000 notional)
                      - For shorts: Same Kelly rules — estimate p from downtrend signals
 
 INSTRUCTIONS:

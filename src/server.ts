@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import compression from 'compression';
 import rateLimit from 'express-rate-limit';
 import { createServer } from 'http';
+import { WebSocketServer, WebSocket } from 'ws';
 import { config } from './config';
 import { apiRouter } from './api/routes';
 import { errorHandler, notFoundHandler } from './api/middleware/errorHandler';
@@ -11,9 +12,97 @@ import { getAutonomousTradingEngine } from './services/autonomous/AutonomousTrad
 import { closeDatabasePool, checkDatabaseHealth } from './config/database';
 import { logger } from './utils/logger';
 import { cleanupTradingRoutes } from './api/routes/trading';
+import { weexWebsocketService } from './services/weex/WeexWebsocketService';
 
 const app = express();
 const server = createServer(app);
+const wss = new WebSocketServer({ server });
+
+// Heartbeat to detect stale connections
+const interval = setInterval(() => {
+    wss.clients.forEach((ws: any) => {
+        if (ws.isAlive === false) {
+            logger.info('Terminating stale WebSocket connection');
+            return ws.terminate();
+        }
+
+        ws.isAlive = false;
+        try {
+            ws.ping();
+        } catch (err) {
+            logger.error('Error sending ping to client:', err);
+            ws.terminate();
+        }
+    });
+}, 30000);
+
+wss.on('close', () => {
+    clearInterval(interval);
+});
+
+// Handle frontend WebSocket connections
+wss.on('connection', (ws: WebSocket & { isAlive: boolean }) => {
+    try {
+        logger.info('Frontend client connected via WebSocket');
+
+        ws.isAlive = true;
+        ws.on('pong', () => {
+            ws.isAlive = true;
+        });
+
+        // Send initial ping to verify connection
+        ws.send(JSON.stringify({ type: 'ping', timestamp: Date.now(), status: 'connected' }));
+
+        ws.on('message', (data) => {
+            try {
+                const message = JSON.parse(data.toString());
+                if (message.type === 'pong') {
+                    ws.isAlive = true;
+                }
+            } catch (err) {
+                // Ignore non-JSON or invalid messages
+            }
+        });
+
+        ws.on('error', (err) => {
+            logger.error('Frontend WebSocket error:', err);
+        });
+
+        ws.on('close', () => {
+            logger.info('Frontend client disconnected');
+        });
+    } catch (err) {
+        logger.error('Error handling new WebSocket connection:', err);
+        ws.terminate();
+    }
+});
+
+// Broadcast real-time data to all connected frontend clients
+weexWebsocketService.onTickerUpdate((payload) => {
+    if (!payload.data || payload.data.length === 0) return;
+
+    const message = JSON.stringify({
+        type: 'ticker',
+        data: payload.data[0] // WEEX ticker payload data is an array
+    });
+
+    let clientsNotified = 0;
+    wss.clients.forEach((client) => {
+        if (client.readyState === WebSocket.OPEN) {
+            try {
+                client.send(message);
+                clientsNotified++;
+            } catch (err) {
+                logger.error('Error broadcasting to client:', err);
+                client.terminate();
+            }
+        }
+    });
+
+    if (clientsNotified > 0) {
+        logger.debug(`Broadcasted ticker ${payload.data[0].symbol} to ${clientsNotified} clients`);
+    }
+});
 
 // Trust proxy for accurate IP resolution behind reverse proxies (nginx, load balancers, etc.)
 // Required for express-rate-limit to use req.ip correctly instead of always seeing proxy IP
@@ -35,12 +124,18 @@ app.use(helmet({
 
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 500,
+    max: 5000, // Increased from 500 to 5000 to accommodate frequent auto-refreshes and multiple users
     standardHeaders: true,
     legacyHeaders: false,
     skip: (req) => {
         const path = req.path || req.url?.split('?')[0] || '';
-        return path === '/health' || path === '/api/autonomous/events';
+        // Skip rate limiting for critical health checks, autonomous events, and manual trading actions
+        return (
+            path === '/health' ||
+            path === '/api/autonomous/events' ||
+            path.includes('/api/trading/manual/') ||
+            path.includes('/api/weex/close')
+        );
     },
     message: { success: false, error: 'Too many requests, please try again later' },
 });
@@ -119,6 +214,10 @@ async function start() {
             logger.info(`Server running on port ${PORT}`);
             logger.info(`Environment: ${config.nodeEnv}`);
             logger.info(`Database: ${dbOk ? 'connected' : 'disconnected'}`);
+
+            // Start WEEX WebSocket service
+            weexWebsocketService.connect();
+
         });
     } catch (error) {
         logger.error('Failed to start server:', error);
@@ -134,155 +233,122 @@ const shutdown = async (signal: string) => {
 
     logger.info(`${signal} received. Starting graceful shutdown...`);
 
-    server.close(() => {
-        logger.info('HTTP server closed');
-    });
-
-    try {
-        const engine = getAutonomousTradingEngine();
-        await engine.cleanup();
-        logger.info('Autonomous trading engine stopped');
-    } catch (error) {
-        logger.warn('Error stopping autonomous engine:', error);
-    }
-
-    try {
-        const { resetWeexClient } = await import('./services/weex/WeexClient');
-        resetWeexClient();
-        logger.info('WeexClient cleanup complete');
-    } catch (error) {
-        logger.warn('Error cleaning up WeexClient:', error);
-    }
-
-    // FIXED: Cleanup additional singleton services to prevent memory leaks
-    // CLEANUP ORDER: Services are cleaned up in dependency order (leaf services first).
-    // All reset functions are SYNCHRONOUS - try-catch handles import failures only.
-    try {
-        const { resetTechnicalIndicatorService } = await import('./services/indicators/TechnicalIndicatorService');
-        resetTechnicalIndicatorService(); // Sync: clears cache and stops prune interval
-        logger.info('TechnicalIndicatorService cleanup complete');
-    } catch (error) {
-        logger.warn('Error cleaning up TechnicalIndicatorService:', error);
-    }
-
-    try {
-        const { resetAntiChurnService } = await import('./services/trading/AntiChurnService');
-        resetAntiChurnService(); // Sync: clears cooldowns and resets counters
-        logger.info('AntiChurnService cleanup complete');
-    } catch (error) {
-        logger.warn('Error cleaning up AntiChurnService:', error);
-    }
-
-    try {
-        const { resetCollaborativeFlow } = await import('./services/ai/CollaborativeFlow');
-        resetCollaborativeFlow(); // Sync: clears AI model references
-        logger.info('CollaborativeFlow cleanup complete');
-    } catch (error) {
-        logger.warn('Error cleaning up CollaborativeFlow:', error);
-    }
-
-    try {
-        const { resetContextBuilder } = await import('./services/context/ContextBuilder');
-        resetContextBuilder(); // Sync: clears singleton instance
-        logger.info('ContextBuilder cleanup complete');
-    } catch (error) {
-        logger.warn('Error cleaning up ContextBuilder:', error);
-    }
-
-    try {
-        const { shutdownSentimentService } = await import('./services/sentiment');
-        shutdownSentimentService(); // Sync: clears cache and stops cleanup timer
-        logger.info('SentimentService cleanup complete');
-    } catch (error) {
-        logger.warn('Error cleaning up SentimentService:', error);
-    }
-
-    try {
-        const { shutdownQuantService } = await import('./services/quant');
-        shutdownQuantService(); // Sync: clears cache and stops cleanup timer
-        logger.info('QuantService cleanup complete');
-    } catch (error) {
-        logger.warn('Error cleaning up QuantService:', error);
-    }
-
-    try {
-        const { shutdownRedditService } = await import('./services/sentiment');
-        shutdownRedditService(); // Sync: clears cache and stops cleanup timer
-        logger.info('RedditSentimentService cleanup complete');
-    } catch (error) {
-        logger.warn('Error cleaning up RedditSentimentService:', error);
-    }
-
-    try {
-        const { shutdownJournalService } = await import('./services/journal');
-        shutdownJournalService(); // Sync: clears in-memory journal
-        logger.info('JournalService cleanup complete');
-    } catch (error) {
-        logger.warn('Error cleaning up JournalService:', error);
-    }
-
-    try {
-        const { shutdownPositionSyncService } = await import('./services/position');
-        shutdownPositionSyncService(); // Sync: clears tracked trades
-        logger.info('PositionSyncService cleanup complete');
-    } catch (error) {
-        logger.warn('Error cleaning up PositionSyncService:', error);
-    }
-
-    try {
-        const { shutdownRegimeDetector } = await import('./services/quant');
-        shutdownRegimeDetector(); // Sync: clears regime history and stops cleanup timer
-        logger.info('RegimeDetector cleanup complete');
-    } catch (error) {
-        logger.warn('Error cleaning up RegimeDetector:', error);
-    }
-
-    try {
-        const { aiLogService } = await import('./services/compliance/AILogService');
-        aiLogService.cleanup(); // Sync: clears failed uploads tracking and retry state
-        logger.info('AILogService cleanup complete');
-    } catch (error) {
-        logger.warn('Error cleaning up AILogService:', error);
-    }
-
-    try {
-        const { aiService } = await import('./services/ai/AIService');
-        aiService.cleanup(); // Sync: clears Gemini model references
-        logger.info('AIService cleanup complete');
-    } catch (error) {
-        logger.warn('Error cleaning up AIService:', error);
-    }
-
-    try {
-        cleanupTradingRoutes(); // Sync: clears route-level state
-        logger.info('Trading routes cleanup complete');
-    } catch (error) {
-        logger.warn('Error cleaning up trading routes:', error);
-    }
-
-    try {
-        const { stopDatabaseHealthCheck } = await import('./config/database');
-        stopDatabaseHealthCheck();
-        logger.info('Database health check stopped');
-    } catch (error) {
-        logger.warn('Error stopping database health check:', error);
-    }
-
-    await closeDatabasePool();
-
-    logger.info('Graceful shutdown complete');
-    process.exit(0);
-};
-
-const forceExit = () => {
-    setTimeout(() => {
-        logger.error('Forced shutdown after timeout');
+    // Force exit after 10 seconds if graceful shutdown fails
+    const forceExitTimeout = setTimeout(() => {
+        logger.error('Graceful shutdown timed out, forcing exit');
         process.exit(1);
-    }, 30000).unref();
+    }, 10000);
+    forceExitTimeout.unref();
+
+    try {
+        // 1. Close HTTP server (stops new requests)
+        await new Promise<void>((resolve) => {
+            server.close(() => {
+                logger.info('HTTP server closed');
+                resolve();
+            });
+        });
+
+        // 2. Close all frontend WebSocket clients and the server
+        logger.info('Closing frontend WebSocket server...');
+        wss.clients.forEach((client) => {
+            client.terminate();
+        });
+        await new Promise<void>((resolve) => {
+            wss.close((err) => {
+                if (err) logger.error('Error closing WebSocket server:', err);
+                else logger.info('WebSocket server closed');
+                resolve();
+            });
+        });
+
+        // 3. Disconnect from WEEX WebSocket
+        try {
+            logger.info('Disconnecting from WEEX WebSocket...');
+            weexWebsocketService.disconnect();
+            logger.info('WEEX WebSocket disconnected');
+        } catch (error) {
+            logger.error('Error disconnecting from WEEX WebSocket:', error);
+        }
+
+        // 4. Cleanup trading engine
+        try {
+            const engine = getAutonomousTradingEngine();
+            await engine.cleanup();
+            logger.info('Autonomous trading engine stopped');
+        } catch (error) {
+            logger.warn('Error stopping autonomous engine:', error);
+        }
+
+        // 5. Cleanup singletons
+        const cleanupTasks = [
+            { name: 'WeexClient', import: './services/weex/WeexClient', func: 'resetWeexClient' },
+            { name: 'TechnicalIndicatorService', import: './services/indicators/TechnicalIndicatorService', func: 'resetTechnicalIndicatorService' },
+            { name: 'AntiChurnService', import: './services/trading/AntiChurnService', func: 'resetAntiChurnService' },
+            { name: 'CollaborativeFlow', import: './services/ai/CollaborativeFlow', func: 'resetCollaborativeFlow' },
+            { name: 'ContextBuilder', import: './services/context/ContextBuilder', func: 'resetContextBuilder' },
+            { name: 'SentimentService', import: './services/sentiment', func: 'shutdownSentimentService' },
+            { name: 'QuantService', import: './services/quant', func: 'shutdownQuantService' },
+            { name: 'RedditService', import: './services/sentiment', func: 'shutdownRedditService' },
+            { name: 'JournalService', import: './services/journal', func: 'shutdownJournalService' },
+            { name: 'PositionSyncService', import: './services/position', func: 'shutdownPositionSyncService' },
+            { name: 'RegimeDetector', import: './services/quant', func: 'shutdownRegimeDetector' },
+            { name: 'AILogService', import: './services/compliance/AILogService', func: 'aiLogService.cleanup' },
+            { name: 'AIService', import: './services/ai/AIService', func: 'aiService.cleanup' }
+        ];
+
+        for (const task of cleanupTasks) {
+            try {
+                const module = await import(task.import);
+                if (task.func.includes('.')) {
+                    const [obj, method] = task.func.split('.');
+                    if (module[obj] && module[obj][method]) {
+                        module[obj][method]();
+                        logger.info(`${task.name} cleanup complete`);
+                    }
+                } else if (module[task.func]) {
+                    module[task.func]();
+                    logger.info(`${task.name} cleanup complete`);
+                }
+            } catch (error) {
+                logger.warn(`Error cleaning up ${task.name}:`, error);
+            }
+        }
+
+        // 6. Stop route-level state and health checks
+        try {
+            cleanupTradingRoutes();
+            logger.info('Trading routes cleanup complete');
+        } catch (error) {
+            logger.warn('Error cleaning up trading routes:', error);
+        }
+
+        try {
+            const { stopDatabaseHealthCheck } = await import('./config/database');
+            stopDatabaseHealthCheck();
+            logger.info('Database health check stopped');
+        } catch (error) {
+            logger.warn('Error stopping database health check:', error);
+        }
+
+        // 7. Close database pool
+        try {
+            await closeDatabasePool();
+            logger.info('Database connection closed');
+        } catch (error) {
+            logger.error('Error closing database pool:', error);
+        }
+
+        logger.info('Graceful shutdown complete');
+        process.exit(0);
+    } catch (error) {
+        logger.error('Error during shutdown:', error);
+        process.exit(1);
+    }
 };
 
-process.on('SIGTERM', () => { forceExit(); shutdown('SIGTERM'); });
-process.on('SIGINT', () => { forceExit(); shutdown('SIGINT'); });
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 process.on('uncaughtException', (err) => {
     logger.error('Uncaught exception:', err);

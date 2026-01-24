@@ -252,7 +252,10 @@ export class AILogService {
             const deleted = await prisma.aILog.deleteMany({
                 where: {
                     timestamp: { lt: thirtyDaysAgo },
-                    uploadedToWeex: true // Only delete successfully uploaded logs
+                    OR: [
+                        { uploadedToWeex: true },
+                        { weexLogId: { startsWith: 'FAILED_AFTER_' } }
+                    ]
                 }
             });
 

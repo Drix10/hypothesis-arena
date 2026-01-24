@@ -34,6 +34,23 @@ const state = {
   lastEngineStatus: null,
   lastFocusedElement: null,
 
+  // WebSocket state
+  ws: null,
+  reconnectAttempts: 0,
+  maxReconnectAttempts: 5,
+  reconnectDelay: 2000,
+  markets: new Map(), // symbol -> { price, change24h }
+  positions: [], // Store active positions for real-time PnL
+  assets: {
+    available: 0,
+    equity: 0,
+    unrealizedPL: 0,
+    totalWalletPnl: 0,
+    totalWalletPnlPercent: 0,
+    startBalance: 1000,
+    walletBalance: 0, // Equity - Unrealized P&L
+  },
+
   // Request management
   abortControllers: new Map(),
 };
@@ -67,8 +84,11 @@ function initializeApp() {
   // Initial data fetch
   refreshAll();
 
-  // Start auto-refresh
+  // Start auto-refresh (kept for everything except prices)
   startAutoRefresh();
+
+  // Start WebSocket for real-time prices
+  initWebSocket();
 
   // Cleanup on page unload
   window.addEventListener("beforeunload", cleanup);
@@ -79,6 +99,16 @@ function cleanup() {
   // Clear all timeouts
   clearTimeout(state.alertTimeout);
   clearInterval(state.refreshInterval);
+
+  // Close WebSocket to prevent leaks
+  if (state.ws) {
+    state.ws.onopen = null;
+    state.ws.onmessage = null;
+    state.ws.onclose = null;
+    state.ws.onerror = null;
+    state.ws.close();
+    state.ws = null;
+  }
 
   // Abort all pending requests
   state.abortControllers.forEach((controller) => controller.abort());
@@ -351,31 +381,18 @@ async function fetchPortfolio() {
     const data = await res.json();
     const assets = data.assets || data.data || {};
 
-    // Update balance displays
-    updateText("balance", formatCurrency(assets.available || 0));
-    updateText("equity", formatCurrency(assets.equity || 0));
+    // Store in state for real-time updates
+    state.assets = {
+      available: parseFloat(assets.available || 0),
+      equity: parseFloat(assets.equity || 0),
+      unrealizedPL: parseFloat(assets.unrealizedPL || 0),
+      totalWalletPnl: parseFloat(assets.totalWalletPnl || 0),
+      totalWalletPnlPercent: parseFloat(assets.totalWalletPnlPercent || 0),
+      startBalance: parseFloat(assets.startBalance || 1000),
+      walletBalance: parseFloat(assets.equity || 0) - parseFloat(assets.unrealizedPL || 0),
+    };
 
-    // Update Unrealized P&L (from open positions)
-    const unrealizedPnl = parseFloat(assets.unrealizedPL) || 0;
-    const unrealizedPnlEl = document.getElementById("unrealized-pnl");
-    if (unrealizedPnlEl) {
-      unrealizedPnlEl.textContent = formatCurrency(unrealizedPnl);
-      unrealizedPnlEl.classList.toggle("positive", unrealizedPnl >= 0);
-      unrealizedPnlEl.classList.toggle("negative", unrealizedPnl < 0);
-    }
-
-    // Update Total Wallet P&L (since starting balance)
-    const totalPnl = parseFloat(assets.totalWalletPnl) || 0;
-    const totalPnlPercent = parseFloat(assets.totalWalletPnlPercent) || 0;
-    const totalPnlEl = document.getElementById("total-pnl");
-    if (totalPnlEl) {
-      const sign = totalPnl >= 0 ? "+" : "";
-      totalPnlEl.textContent = `${sign}$${Math.abs(totalPnl).toFixed(
-        2
-      )} (${sign}${totalPnlPercent.toFixed(1)}%)`;
-      totalPnlEl.classList.toggle("positive", totalPnl >= 0);
-      totalPnlEl.classList.toggle("negative", totalPnl < 0);
-    }
+    recalculatePortfolio();
   } catch (err) {
     if (err.name !== "AbortError") {
       // Silent failure - portfolio will show stale data
@@ -383,9 +400,203 @@ async function fetchPortfolio() {
   }
 }
 
+function renderPortfolio() {
+  const assets = state.assets;
+
+  // Update balance displays
+  updateText("balance", formatCurrency(assets.available || 0));
+  updateText("equity", formatCurrency(assets.equity || 0));
+
+  // Update Unrealized P&L
+  const unrealizedPnl = assets.unrealizedPL || 0;
+  const unrealizedPnlEl = document.getElementById("unrealized-pnl");
+  if (unrealizedPnlEl) {
+    unrealizedPnlEl.textContent = formatCurrency(unrealizedPnl);
+    unrealizedPnlEl.classList.toggle("positive", unrealizedPnl >= 0);
+    unrealizedPnlEl.classList.toggle("negative", unrealizedPnl < 0);
+  }
+
+  // Update Total Wallet P&L
+  const totalPnl = assets.totalWalletPnl || 0;
+  const totalPnlPercent = assets.totalWalletPnlPercent || 0;
+  const totalPnlEl = document.getElementById("total-pnl");
+  if (totalPnlEl) {
+    const sign = totalPnl >= 0 ? "+" : "";
+    totalPnlEl.textContent = `${sign}$${Math.abs(totalPnl).toFixed(2)} (${sign}${totalPnlPercent.toFixed(1)}%)`;
+    totalPnlEl.classList.toggle("positive", totalPnl >= 0);
+    totalPnlEl.classList.toggle("negative", totalPnl < 0);
+  }
+}
+
 // ============================================================================
 // MARKET OVERVIEW
 // ============================================================================
+
+function initWebSocket() {
+  if (state.ws) {
+    if (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING) {
+      return;
+    }
+    // If it's in any other state, clean it up before creating a new one
+    state.ws.onopen = null;
+    state.ws.onmessage = null;
+    state.ws.onclose = null;
+    state.ws.onerror = null;
+    state.ws.close();
+    state.ws = null;
+  }
+
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const wsUrl = `${protocol}//${window.location.host}`;
+
+  try {
+    state.ws = new WebSocket(wsUrl);
+
+    state.ws.onopen = () => {
+      console.log("WebSocket connected");
+      // Reset attempts only on successful connection
+      state.reconnectAttempts = 0;
+      state.reconnectDelay = 2000;
+    };
+
+    state.ws.onmessage = (event) => {
+      try {
+        const message = JSON.parse(event.data);
+        if (message.type === "ticker") {
+          updateMarketData(message.data);
+        }
+      } catch (err) {
+        console.error("Error parsing WS message:", err);
+      }
+    };
+
+    state.ws.onclose = () => {
+      console.log("WebSocket disconnected");
+      state.ws = null;
+
+      if (state.reconnectAttempts < state.maxReconnectAttempts) {
+        const delay = state.reconnectDelay;
+        state.reconnectAttempts++;
+        state.reconnectDelay = Math.min(state.reconnectDelay * 2, 30000); // Exponential backoff
+
+        console.log(`Reconnecting in ${delay}ms (attempt ${state.reconnectAttempts}/${state.maxReconnectAttempts})`);
+        setTimeout(initWebSocket, delay);
+      } else {
+        console.error("Max WebSocket reconnection attempts reached");
+      }
+    };
+
+    state.ws.onerror = (err) => {
+      console.error("WebSocket error:", err);
+      // Let onclose handle the reconnection
+    };
+  } catch (err) {
+    console.error("Failed to create WebSocket:", err);
+  }
+}
+
+// Throttled version of UI updates
+const throttleUIUpdates = throttle(() => {
+  recalculatePortfolio();
+  renderMarketOverview();
+}, 500);
+
+function updateMarketData(tickerData) {
+  if (!tickerData || !tickerData.symbol || tickerData.lastPrice === undefined || tickerData.lastPrice === null) {
+    return;
+  }
+
+  const price = parseFloat(tickerData.lastPrice);
+  if (isNaN(price)) return;
+
+  const symbol = formatSymbol(tickerData.symbol);
+
+  // WEEX WS ticker usually provides priceChangePercent as a string like "2.5" (meaning 2.5%)
+  // or "0.025" (meaning 0.025, which we treat as 2.5%).
+  let rawChange = parseFloat(tickerData.priceChangePercent);
+  if (isNaN(rawChange)) rawChange = 0;
+
+  // Normalization logic: if it's a small decimal (ratio), multiply by 100 to get percent
+  let change24h = rawChange;
+  if (Math.abs(rawChange) > 0 && Math.abs(rawChange) < 1.0) {
+    change24h = rawChange * 100;
+  }
+
+  state.markets.set(symbol, { symbol, price, change24h });
+
+  // Use throttled UI updates to batch recalculations and renders
+  throttleUIUpdates();
+}
+
+function recalculatePortfolio() {
+  if (state.positions.length === 0) {
+    // If no positions, just render current assets state
+    renderPortfolio();
+    return;
+  }
+
+  let totalUnrealizedPnl = 0;
+
+  // Recalculate PnL for each position based on live market price
+  state.positions = state.positions.map(pos => {
+    const symbol = formatSymbol(pos.symbol);
+    const market = state.markets.get(symbol);
+
+    // Default to existing PnL if no live price yet
+    if (!market) {
+      totalUnrealizedPnl += parseFloat(pos.unrealizedPL || 0);
+      return pos;
+    }
+
+    const currentPrice = market.price;
+    const entryPrice = parseFloat(pos.entryPrice || pos.avgPrice || 0);
+    const size = parseFloat(pos.size || 0);
+    const side = (pos.side || '').toUpperCase();
+
+    let pnl = 0;
+
+    if (side === 'LONG') {
+      pnl = (currentPrice - entryPrice) * size;
+    } else if (side === 'SHORT') {
+      pnl = (entryPrice - currentPrice) * size;
+    }
+
+    totalUnrealizedPnl += pnl;
+
+    // Update position object with new PnL (for display)
+    return {
+      ...pos,
+      unrealizedPL: pnl.toFixed(4),
+      marketPrice: currentPrice // Optional: store for position card updates
+    };
+  });
+
+  // Update Global Asset State
+  state.assets.unrealizedPL = totalUnrealizedPnl;
+  state.assets.equity = state.assets.walletBalance + totalUnrealizedPnl;
+
+  state.assets.totalWalletPnl = state.assets.equity - state.assets.startBalance;
+  state.assets.totalWalletPnlPercent = (state.assets.startBalance > 0)
+    ? (state.assets.totalWalletPnl / state.assets.startBalance) * 100
+    : 0;
+
+  // Re-render UI components
+  renderPortfolio();
+  renderPositions();
+}
+
+function renderMarketOverview() {
+  const container = document.getElementById("market-overview");
+  if (!container) return;
+
+  const marketsArray = Array.from(state.markets.values());
+  if (marketsArray.length > 0) {
+    // Sort by symbol for consistent UI
+    marketsArray.sort((a, b) => a.symbol.localeCompare(b.symbol));
+    container.innerHTML = marketsArray.map(renderMarketCard).join("");
+    updateText("market-updated", formatTime(new Date()));
+  }
+}
 
 async function fetchMarketOverview() {
   const container = document.getElementById("market-overview");
@@ -402,40 +613,67 @@ async function fetchMarketOverview() {
     "cmt_bnbusdt",
     "cmt_ltcusdt",
   ];
-  const markets = [];
+
+  // If we already have market data (likely from WebSocket), 
+  // we can skip the heavy parallel REST calls to save on rate limits.
+  // We'll still fetch if the data is older than 60 seconds.
+  const now = Date.now();
+  const lastUpdate = state.lastMarketRestFetch || 0;
+
+  // v5.3.1 Optimization: If WebSocket is connected and we have data, skip REST polling entirely.
+  // This prevents backend rate limiting during active trading.
+  const isWsConnected = state.ws && state.ws.readyState === WebSocket.OPEN;
+  const hasMarketData = state.markets.size >= symbols.length;
+
+  // Only poll REST if we lack data OR it's very stale (5 mins) OR WS is down
+  const cacheDuration = isWsConnected ? 300000 : 30000; // 5 mins if WS is up, 30s if down
+
+  if (hasMarketData && (now - lastUpdate) < cacheDuration) {
+    renderMarketOverview();
+    return;
+  }
 
   try {
-    // Fetch all tickers in parallel
-    const results = await Promise.allSettled(
-      symbols.map(async (symbol) => {
-        const res = await fetch(`${CONFIG.API_BASE}/weex/ticker/${symbol}`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        const ticker = data.ticker || data.data || data;
+    // Throttled batch fetching: process symbols in chunks to avoid rate limiting
+    const chunkSize = 2; // Reduced concurrent requests
+    const results = [];
 
-        return {
-          symbol: formatSymbol(symbol),
-          price: parseFloat(ticker.last || 0),
-          change24h: parseFloat(ticker.priceChangePercent || 0) * 100,
-        };
-      })
-    );
+    for (let i = 0; i < symbols.length; i += chunkSize) {
+      const chunk = symbols.slice(i, i + chunkSize);
+      const chunkResults = await Promise.allSettled(
+        chunk.map(async (symbol) => {
+          const res = await fetch(`${CONFIG.API_BASE}/weex/ticker/${symbol}`);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const data = await res.json();
+          const ticker = data.ticker || data.data || data;
 
-    // Collect successful results
+          return {
+            symbol: formatSymbol(symbol),
+            price: parseFloat(ticker.last || 0),
+            change24h: parseFloat(ticker.priceChangePercent || 0) * 100,
+          };
+        })
+      );
+      results.push(...chunkResults);
+      // Small delay between chunks
+      if (i + chunkSize < symbols.length) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+    }
+
+    // Collect successful results into state
     results.forEach((result) => {
       if (result.status === "fulfilled") {
-        markets.push(result.value);
+        state.markets.set(result.value.symbol, result.value);
       }
     });
 
-    if (markets.length > 0) {
-      container.innerHTML = markets.map(renderMarketCard).join("");
-      updateText("market-updated", formatTime(new Date()));
-    } else {
-      container.innerHTML = renderEmptyState("📉", "Failed to load markets");
-    }
+    state.lastMarketRestFetch = now;
+    renderMarketOverview();
   } catch (err) {
-    container.innerHTML = renderEmptyState("📉", "Market data unavailable");
+    if (state.markets.size === 0) {
+      container.innerHTML = renderEmptyState("📉", "Market data unavailable");
+    }
   }
 }
 
@@ -481,19 +719,24 @@ async function fetchPositions() {
 
     const data = await res.json();
     const positions = data.positions || data.data || [];
-    const activePositions = positions.filter((p) => parseFloat(p.size) > 0);
+    state.positions = positions.filter((p) => parseFloat(p.size) > 0);
 
-    if (countEl) countEl.textContent = activePositions.length;
+    if (countEl) countEl.textContent = state.positions.length;
 
-    if (activePositions.length > 0) {
-      // FIXED: No need to attach listeners - using event delegation on container
-      container.innerHTML = activePositions.map(renderPositionCard).join("");
+    if (state.positions.length > 0) {
+      renderPositions();
     } else {
       container.innerHTML = renderEmptyState("📭", "No open positions");
     }
   } catch (err) {
     container.innerHTML = renderEmptyState("⚠️", "Failed to load positions");
   }
+}
+
+function renderPositions() {
+  const container = document.getElementById("positions-list");
+  if (!container || state.positions.length === 0) return;
+  container.innerHTML = state.positions.map(renderPositionCard).join("");
 }
 
 function renderPositionCard(pos) {
@@ -561,6 +804,10 @@ function renderPositionCard(pos) {
         <button class="btn-close-position" data-symbol="${rawSymbol}" data-side="${rawSide}" data-size="${safeSize}" data-pnl="${safePnl}" data-entry="${safeEntryPrice}" title="Close position">×</button>
       </div>
       <div class="position-details">
+        <div class="position-detail">
+          <span class="label">Mark Price</span>
+          <span class="value">${pos.marketPrice ? formatPrice(pos.marketPrice) : '--'}</span>
+        </div>
         <div class="position-detail">
           <span class="label">Invested</span>
           <span class="value">$${investedAmount.toFixed(2)}</span>
@@ -2111,6 +2358,18 @@ function debounce(fn, delay) {
   return function (...args) {
     clearTimeout(timeoutId);
     timeoutId = setTimeout(() => fn.apply(this, args), delay);
+  };
+}
+
+// Throttle utility
+function throttle(fn, limit) {
+  let inThrottle;
+  return function (...args) {
+    if (!inThrottle) {
+      fn.apply(this, args);
+      inThrottle = true;
+      setTimeout(() => inThrottle = false, limit);
+    }
   };
 }
 

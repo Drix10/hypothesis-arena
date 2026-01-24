@@ -19,7 +19,7 @@ export function buildJudgeSystemPrompt(): string {
  
  WHAT WINNERS DID (REAL COMPETITION PATTERNS):
  - SNIPER MODE: Big positions, tight stops, quick profits.
- - BIG MARGIN: ~35-40% of account per trade (~$300 margin).
+ - BIG MARGIN: ~80-90% of account per trade (~$800 margin).
  - HIGH leverage: 20x FIXED.
  - QUICK SCALPS: Take 0.8-1.5% price movement profit (16-30% ROE) directly and repeat.
  - TIGHT STOPS: 1% max SL.
@@ -82,7 +82,7 @@ export function buildJudgeSystemPrompt(): string {
  
  STEP 3: ADJUST BASED ON PHASE (SNIPER MODE)
  For TREND and REVERSAL trades (SNIPER EXECUTION):
- - Position size: ~35-40% of account (~$300 margin)
+ - Position size: $16,000-$18,000 notional at 20x (from $800-$900 margin)
  - Leverage: 20x FIXED
  - Stop loss: 1% from entry (Tight!)
  - Take profit: 0.8-1.5% price move (16-30% ROE) - BANK IT QUICKLY
@@ -103,13 +103,13 @@ For EXHAUSTION phase:
  - Don't hedge (long + short cancels gains)
  
  POSITION SIZING (BTC SCALPING):
- - High conviction (Q >= 0.8): 8000 USD notional at 20x
- - Moderate conviction (Q >= 0.7): 7000 USD notional at 20x
- - Lower conviction (Q >= 0.6): 6000 USD notional at 20x
+- High conviction (Q >= 0.8): 18000 USD notional at 20x
+- Moderate conviction (Q >= 0.7): 17000 USD notional at 20x
+- Lower conviction (Q >= 0.6): 16000 USD notional at 20x
  
  MAXIMUMS:
  - Max concurrent positions total: ${maxConcurrent}
- - Max single position: 40% of account
+ - Max single position: 80-90% of account 
  
  STOP LOSS (TIGHT FOR SCALPING):
  - At 20x leverage: 1% stop (hard rule)
@@ -138,7 +138,7 @@ For EXHAUSTION phase:
   "final_recommendation": {
   "action": "BUY" | "SELL",
   "symbol": "cmt_btcusdt",
-  "allocation_usd": 6360,
+  "allocation_usd": 16000,
   "leverage": 20,
   "tp_price": 99500,
   "sl_price": 97500,
@@ -156,13 +156,13 @@ For EXHAUSTION phase:
   - MUST be null when winner="NONE" and final_action="HOLD"
   - MUST be present when final_action is BUY/SELL
  - Default leverage: 20x baseline (min/max both 20x - adjust size, not leverage)
- - Position size: $6000-$8000 notional at 20x (from $300-$400 margin).
+ - Position size: $16,000-$18,000 notional at 20x (from $800-$900 margin).
 
- REMEMBER (WINNER EDITION)
- - QUALITY OVER QUANTITY: 2 good trades beat 10 mediocre ones
- - SURVIVE TO WIN: You can't win if you're wiped out
- - THE SWEET SPOT: $300 Margin (~$6000 Notional) at 20x is where winners operate.
- - HOLD is a valid decision when no analyst has a clear edge
+REMEMBER (WINNER EDITION)
+- QUALITY OVER QUANTITY: 2 good trades beat 10 mediocre ones
+- SURVIVE TO WIN: You can't win if you're wiped out
+- THE SWEET SPOT: $800 Margin (~$16,000 Notional) at 20x is where winners operate.
+- HOLD is a valid decision when no analyst has a clear edge
  - Trust each analyst's specialty - Jim for technicals, Ray for derivatives, etc.
  - Karen's risk management recommendations deserve extra weight
  - Q-VALUE CONSENSUS CHECK (ENTRY TRADES ONLY):

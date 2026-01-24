@@ -249,6 +249,35 @@ export interface WeexCandle {
     volume: string;
 }
 
+/**
+ * WEEX WebSocket Message Types
+ */
+export interface WeexWsMessage {
+    event: string;
+    channel?: string;
+    data?: any;
+    time?: string;
+}
+
+export interface WeexWsTickerData {
+    symbol: string;
+    priceChange: string;
+    priceChangePercent: string;
+    trades: string;
+    size: string;
+    value: string;
+    high: string;
+    low: string;
+    lastPrice: string;
+    markPrice: string;
+}
+
+export interface WeexWsTickerPayload {
+    event: 'payload';
+    channel: string;
+    data: WeexWsTickerData[];
+}
+
 export interface WeexContract {
     symbol: string;
     underlying_index: string;
