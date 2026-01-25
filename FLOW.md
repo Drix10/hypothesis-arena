@@ -176,24 +176,25 @@ Prevents concentrated BTC exposure:
 
 ## Dynamic Leverage
 
-### Production Mode (2x–5x)
+### Production Mode (5x–15x)
 
 | Leverage | Position Size  | Stop Loss | Use Case                       |
 | -------- | -------------- | --------- | ------------------------------ |
-| 2-3x     | 20-30% account | 4-5%      | Default, position-size led     |
-| 3-5x     | 15-25% account | 3-4%      | High confidence only           |
+| 5-8x     | 20-30% account | 4-5%      | Conservative, larger positions |
+| 8-12x    | 15-25% account | 3-4%      | Standard, medium positions     |
+| 12-15x   | 10-20% account | 2.5-3%    | Moderate, smaller positions    |
 
-### Competition Mode (3x–5x)
+### Competition Mode (15x–20x)
 
 | Leverage | Position Size  | Stop Loss | Use Case                 |
 | -------- | -------------- | --------- | ------------------------ |
-| 3-4x     | 20-30% account | 3-4%      | Active demo trading      |
-| 4-5x     | 15-25% account | 2-3%      | High-confidence demo     |
+| 15-16x   | 12-15% account | 2-2.5%    | Conservative             |
+| 17-18x   | 10-14% account | 1.8-2%    | Moderate                 |
+| 19-20x   | 10-12% account | 1.5%      | Optimal for competitions |
 
 **Hard Limits:**
 
-- Default leverage: 2-3x
-- Maximum leverage: 5x (only if confidence > 80%)
+- Maximum leverage: 20x
 - Maximum notional: 3x account balance per trade
 - Stop loss inversely proportional to leverage
 
@@ -214,8 +215,8 @@ WEEX_ACCOUNT_TYPE=demo
 | --------------------- | ---------- | ----------- |
 | Max Daily Trades | 20 | 50 |
 | Cooldown After Trade | 15 min | 5 min |
-| Leverage Range | 2-5x | 3-5x |
-| Max Position Size | 25% | 35% |
+| Leverage Range | 5-15x | 15-20x |
+| Max Position Size | 25% | 50% (hard cap, typical 10-15%) |
 | Weekly Drawdown Limit | 10% | 25% |
 
 ## Cycle Flow

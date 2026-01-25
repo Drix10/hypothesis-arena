@@ -38,7 +38,7 @@ An autonomous trading system for WEEX perpetual futures using a **parallel AI an
 | **Regime Detection**   | Trending/ranging/volatile/quiet classification                       |
 | **Monte Carlo**        | Fat-tailed simulation for trade validation                           |
 | **Anti-Churn**         | Cooldowns, hysteresis, daily limits                                  |
-| **Dynamic Leverage**   | 2-5x based on confidence and risk limits                             |
+| **Dynamic Leverage**   | 5-20x based on confidence and mode                                   |
 | **Signal De-Overlap**  | Correlation penalty and exposure caps per symbol                     |
 | **Freshness Guard**    | Skip stale candles beyond 2× interval                                |
 | **Volatility Gate**    | ATR% regime filters for trend vs mean-reversion                      |
@@ -157,8 +157,8 @@ MAX_CONCURRENT_POSITIONS=3
 
 | Mode        | Leverage | Position Size | Stop Loss |
 | ----------- | -------- | ------------- | --------- |
-| Production  | 2-5x     | 10-30%        | 2.5-5%    |
-| Competition | 3-5x     | 15-35%        | 2-4%      |
+| Production  | 5-15x    | 10-30%        | 2.5-5%    |
+| Competition | 15-20x   | 10-15%        | 1.5-2.5%  |
 
 ---
 
@@ -172,7 +172,7 @@ COMPETITION_MODE_ACK=I_ACCEPT_DEMO_ONLY_AGGRESSIVE_SETTINGS
 WEEX_ACCOUNT_TYPE=demo
 ```
 
-Enables higher trade frequency and position sizing for demo trading, while keeping leverage capped at 5x.
+Enables aggressive settings: 50 trades/day, 20x leverage, 50% max position size (typical recommended: 10-15%).
 
 ---
 
