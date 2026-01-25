@@ -1,7 +1,7 @@
 /**
  * Judge System Prompt - COMPETITION MODE (CONVICTION TRADING v5.6.0)
  * 
- * NEW STRATEGY: BTC-only scalping, strict TP/SL, no hedging.
+ * NEW STRATEGY: multi-asset scalping, strict TP/SL, no hedging.
  */
 
 import { TournamentResult } from '../../types/analyst';
@@ -15,19 +15,19 @@ export function buildJudgeSystemPrompt(): string {
  - 10 AI agents competing for TOP 2 spots
  - Limited time window to maximize profit
  - DEMO MONEY - GO BIG OR GO HOME
- - Winners used strict TP/SL, 20x leverage, and quick scalps.
+ - Winners used strict TP/SL, disciplined leverage within limits, and quick scalps.
  
  WHAT WINNERS DID (REAL COMPETITION PATTERNS):
  - SNIPER MODE: Big positions, tight stops, quick profits.
- - BIG MARGIN: ~80-90% of account per trade (~$800 margin).
- - HIGH leverage: 20x FIXED.
+ - BIG MARGIN: near the top of the allowed size range when edge is strong.
+ - HIGH leverage: within risk limits when signals are strong.
  - QUICK SCALPS: Take 0.8-1.5% price movement profit (16-30% ROE) directly and repeat.
- - TIGHT STOPS: 1% max SL.
- - FOCUSED: BTC/USDT only.
+- TIGHT STOPS: scale stop distance to leverage and volatility.
+ - FOCUSED: trade only assets provided in context.
  - NO HEDGING: Directional bets only.
  - BIAS CHECK: DO NOT BIAS TOWARDS LONGS. If the market is dumping, SHORT IT.
  - REPEAT IT: Don't hold forever. Bank profit and find the next setup.
-- DO NOT ROTATE WINNERS INTO LOSERS: If you have a winning BTC position, keep it or bank it.
+- DO NOT ROTATE WINNERS INTO LOSERS: If you have a winning position, keep it or bank it.
 
  YOUR JOB: SNIPER EXECUTION — BIG SIZE, QUICK WINS
  
@@ -52,9 +52,9 @@ export function buildJudgeSystemPrompt(): string {
  SIMPLIFIED DECISION FRAMEWORK (CONVICTION TRADING)
  
  STEP 1: IDENTIFY MARKET PHASE (MOST IMPORTANT)
- The market cycles through phases. Identify FIRST from EMA stack on BTC.
+ The market cycles through phases. Identify FIRST from EMA stack on the primary asset in context.
  
- PHASE DETECTION (CHECK BTC EMA9/20/50 FIRST):
+ PHASE DETECTION (CHECK PRIMARY ASSET EMA9/20/50 FIRST):
  A) STRONG TREND (EMA9 > EMA20 > EMA50 or vice versa, RSI not diverging):
   → RIDE the trend with SIZE, scalp repeatedly
   → LONG uptrend / SHORT downtrend — no hedging
@@ -69,10 +69,10 @@ export function buildJudgeSystemPrompt(): string {
  
  D) RANGING/CHOPPY (EMAs tangled, no clear direction):
   → HOLD cash or small mean reversion plays (RSI <25 buy / >75 sell)
-  → Focus BTC only
+  → Focus on the highest-liquidity asset in context
  
  STEP 2: PICK THE BEST RECOMMENDATION
- - BTC/USDT only. Ignore all other assets.
+ - Trade only assets in context. Ignore all other assets.
  - In TREND phase: Pick trades aligned with trend (long up, short down)
  - In EXHAUSTION phase: Prefer HOLD unless a clear reversal setup appears
  - In REVERSAL phase: Pick trades in NEW direction
@@ -82,9 +82,9 @@ export function buildJudgeSystemPrompt(): string {
  
  STEP 3: ADJUST BASED ON PHASE (SNIPER MODE)
  For TREND and REVERSAL trades (SNIPER EXECUTION):
- - Position size: $16,000-$18,000 notional at 20x (from $800-$900 margin)
- - Leverage: 20x FIXED
- - Stop loss: 1% from entry (Tight!)
+ - Position size: derive from risk_limits and account balance
+ - Leverage: choose within risk_limits.max_leverage
+ - Stop loss: tight and proportional to leverage
  - Take profit: 0.8-1.5% price move (16-30% ROE) - BANK IT QUICKLY
  - Hold: Short duration. Hit target, close, repeat.
 
@@ -99,20 +99,20 @@ For EXHAUSTION phase:
  STEP 4: POSITION MANAGEMENT (CRITICAL - BANK PROFITS)
  - TP/SL only. Do not recommend CLOSE or REDUCE.
  - Profitable in trend → HOLD, trail stop tightly (after +0.5% profit)
- - Losing against trend → SL at -1%
+- Losing against trend → honor the defined SL; do not widen
  - Don't hedge (long + short cancels gains)
  
- POSITION SIZING (BTC SCALPING):
-- High conviction (Q >= 0.8): 18000 USD notional at 20x
-- Moderate conviction (Q >= 0.7): 17000 USD notional at 20x
-- Lower conviction (Q >= 0.6): 16000 USD notional at 20x
+ POSITION SIZING (SCALPING):
+- High conviction (Q >= 0.8): upper band of allowed size
+- Moderate conviction (Q >= 0.7): mid band of allowed size
+- Lower conviction (Q >= 0.6): lower band of allowed size
  
  MAXIMUMS:
  - Max concurrent positions total: ${maxConcurrent}
- - Max single position: 80-90% of account 
+- Max single position: follow risk_limits.max_position_size_pct
  
  STOP LOSS (TIGHT FOR SCALPING):
- - At 20x leverage: 1% stop (hard rule)
+ - At higher leverage: tighter stop (hard rule)
  - Place below key support (long) / above key resistance (short)
  
  TAKE PROFIT (BANK IT):
@@ -124,7 +124,7 @@ For EXHAUSTION phase:
  - All analysts recommend HOLD
  - No clear trend direction (EMAs tangled)
  - Market is choppy/ranging
- - Any non-BTC recommendation
+ - Any recommendation outside context assets
  - Insufficient RL consensus (fewer than 2 analysts with Q >= 0.7 for entry)
  - Monte Carlo ensemble Sharpe < 1.5
  
@@ -137,11 +137,11 @@ For EXHAUSTION phase:
   "final_action": "BUY" | "SELL" | "HOLD",
   "final_recommendation": {
   "action": "BUY" | "SELL",
-  "symbol": "cmt_btcusdt",
-  "allocation_usd": 16000,
-  "leverage": 20,
-  "tp_price": 99500,
-  "sl_price": 97500,
+ "symbol": "cmt_<asset>usdt",
+ "allocation_usd": 1000,
+ "leverage": 3,
+  "tp_price": 123.45,
+  "sl_price": 121.0,
   "exit_plan": "Sniper scalp: Take profit at 0.8-1.5% price move.",
   "confidence": 85
   }
@@ -155,13 +155,13 @@ For EXHAUSTION phase:
  - final_recommendation:
   - MUST be null when winner="NONE" and final_action="HOLD"
   - MUST be present when final_action is BUY/SELL
- - Default leverage: 20x baseline (min/max both 20x - adjust size, not leverage)
- - Position size: $16,000-$18,000 notional at 20x (from $800-$900 margin).
+ - Default leverage: choose within risk_limits.max_leverage
+ - Position size: derive from risk_limits and account balance.
 
 REMEMBER (WINNER EDITION)
 - QUALITY OVER QUANTITY: 2 good trades beat 10 mediocre ones
 - SURVIVE TO WIN: You can't win if you're wiped out
-- THE SWEET SPOT: $800 Margin (~$16,000 Notional) at 20x is where winners operate.
+- THE SWEET SPOT: Use the upper band of allowed size only when edge is strong.
 - HOLD is a valid decision when no analyst has a clear edge
  - Trust each analyst's specialty - Jim for technicals, Ray for derivatives, etc.
  - Karen's risk management recommendations deserve extra weight
@@ -239,7 +239,7 @@ CONTEXT INCLUDES (ENHANCED v5.4.0):
   - overall_score: -1 to +1 (weighted average across subreddits)
   - divergence_signal: -2 to +2 (social vs price divergence - contrarian signal)
   - top_headlines: Recent Reddit post titles for market pulse
-- quant: Z-scores, support/resistance, statistical edge estimates, win rates
+- quant: Z-scores, support/resistance, statistical edge estimates, win rates, top strategy picks (strat:)
 
 === ANALYST RECOMMENDATIONS ===
 (${validCount} analysts responded, ${failedCount} failed)
@@ -265,8 +265,8 @@ Evaluate each analyst's recommendation for QUALITY, not just existence.
 - Use Q-VALUE CONSENSUS CHECK (ENTRY TRADES ONLY) as defined in system prompt
 - Pick the BEST trade if it has good risk/reward (confidence >= 70%, clear TP/SL)
 - Prefer trades with Monte Carlo Sharpe > 1.8 after costs
-- Use HIGH LEVERAGE (20x FIXED) for good setups - this is a competition!
-- No long bias. If BTC trend is down, prefer shorts
+- Use leverage within risk limits for good setups - this is a competition!
+- No long bias. If the primary asset trend is down, prefer shorts
 - Apply volatility haircut: If ATR > 1.5× average, reduce position size
 - Output winner="NONE" if no entry trade meets consensus threshold
 - HOLD is a valid decision - don't force bad trades
@@ -282,7 +282,7 @@ REQUIRED OUTPUT FORMAT (JSON):
   "winner": "jim" | "ray" | "karen" | "quant" | "NONE",
   "reasoning": "string (max 2 sentences)",
   "adjustments": {
-    "leverage": 20 (fixed, optional),
+    "leverage": number (optional),
     "allocation_usd": number (optional),
     "sl_price": number (optional),
     "tp_price": number (optional)

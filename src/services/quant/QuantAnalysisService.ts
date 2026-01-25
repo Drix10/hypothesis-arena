@@ -9,12 +9,34 @@ import { WeexCandle } from '../../shared/types/weex';
 import { logger } from '../../utils/logger';
 import { config } from '../../config';
 import { detectRegime, clearRegimeHistory, type MarketRegime, type RegimeInput } from './RegimeDetector';
+import { getSentimentAnalysis } from '../sentiment/SentimentService';
 
 export interface QuantSignal {
     direction: 'long' | 'short' | 'neutral';
     strength: number;
     confidence: number;
     reason: string;
+}
+
+export interface StrategySignal {
+    name: string;
+    direction: 'long' | 'short' | 'neutral';
+    strength: number;
+    confidence: number;
+    reason: string;
+}
+
+export interface StrategySignals {
+    ann: StrategySignal;
+    naive_bayes: StrategySignal;
+    knn: StrategySignal;
+    ibs: StrategySignal;
+    stat_arb: StrategySignal;
+    alpha_combo: StrategySignal;
+    ma_crossover: StrategySignal;
+    donchian: StrategySignal;
+    pivot_points: StrategySignal;
+    multi_asset_trend: StrategySignal;
 }
 
 export interface StatisticalMetrics {
@@ -81,6 +103,7 @@ export interface AssetQuantAnalysis {
     // Risk assessment
     riskLevel: 'low' | 'medium' | 'high' | 'extreme';
     riskScore: number;       // 0-100
+    strategies: StrategySignals;
 }
 
 /**
@@ -791,6 +814,565 @@ function calculateEMA(prices: number[], period: number): number {
     return Number.isFinite(ema) ? ema : prices[prices.length - 1];
 }
 
+function calculateEMASeries(prices: number[], period: number): number[] {
+    if (!Array.isArray(prices) || prices.length < period) {
+        return prices.length > 0 ? [prices[prices.length - 1]] : [0];
+    }
+    const multiplier = 2 / (period + 1);
+    const series: number[] = [];
+    let ema = prices.slice(0, period).reduce((a, b) => a + b, 0) / period;
+    series.push(ema);
+    for (let i = period; i < prices.length; i++) {
+        ema = (prices[i] - ema) * multiplier + ema;
+        if (Number.isFinite(ema)) series.push(ema);
+    }
+    return series;
+}
+
+function calculateRSI(prices: number[], period: number): number {
+    if (!Array.isArray(prices) || prices.length < period + 1) return 50;
+    let gains = 0;
+    let losses = 0;
+    for (let i = 1; i <= period; i++) {
+        const change = prices[i] - prices[i - 1];
+        if (change >= 0) gains += change;
+        else losses -= change;
+    }
+    let avgGain = gains / period;
+    let avgLoss = losses / period;
+    for (let i = period + 1; i < prices.length; i++) {
+        const change = prices[i] - prices[i - 1];
+        const gain = change > 0 ? change : 0;
+        const loss = change < 0 ? -change : 0;
+        avgGain = (avgGain * (period - 1) + gain) / period;
+        avgLoss = (avgLoss * (period - 1) + loss) / period;
+    }
+    if (avgLoss === 0) return 100;
+    const rs = avgGain / avgLoss;
+    const rsi = 100 - (100 / (1 + rs));
+    return Number.isFinite(rsi) ? rsi : 50;
+}
+
+function calculateReturns(prices: number[]): number[] {
+    if (!Array.isArray(prices) || prices.length < 2) return [];
+    const returns: number[] = [];
+    for (let i = 1; i < prices.length; i++) {
+        const prev = prices[i - 1];
+        const curr = prices[i];
+        if (prev > 0 && Number.isFinite(prev) && Number.isFinite(curr)) {
+            returns.push((curr - prev) / prev);
+        }
+    }
+    return returns;
+}
+
+function calculateDonchianBounds(candles: WeexCandle[], period: number): { upper: number; lower: number } {
+    if (!Array.isArray(candles) || candles.length < period) {
+        return { upper: 0, lower: 0 };
+    }
+    const window = candles.slice(-period);
+    let upper = -Infinity;
+    let lower = Infinity;
+    for (const candle of window) {
+        const high = safeParseFloat(candle.high);
+        const low = safeParseFloat(candle.low);
+        if (high > 0 && low > 0) {
+            if (high > upper) upper = high;
+            if (low < lower) lower = low;
+        }
+    }
+    if (!Number.isFinite(upper) || !Number.isFinite(lower)) return { upper: 0, lower: 0 };
+    return { upper, lower };
+}
+
+function calculatePivotPoints(candles: WeexCandle[]): { pivot: number; resistance: number; support: number } {
+    if (!Array.isArray(candles) || candles.length < 25) {
+        return { pivot: 0, resistance: 0, support: 0 };
+    }
+    const window = candles.slice(-25, -1);
+    let high = -Infinity;
+    let low = Infinity;
+    let close = safeParseFloat(window[window.length - 1].close);
+    for (const candle of window) {
+        const h = safeParseFloat(candle.high);
+        const l = safeParseFloat(candle.low);
+        if (h > 0) high = Math.max(high, h);
+        if (l > 0) low = Math.min(low, l);
+    }
+    if (!Number.isFinite(high) || !Number.isFinite(low) || high <= 0 || low <= 0 || !Number.isFinite(close) || close <= 0) {
+        return { pivot: 0, resistance: 0, support: 0 };
+    }
+    const pivot = (high + low + close) / 3;
+    const resistance = 2 * pivot - low;
+    const support = 2 * pivot - high;
+    return {
+        pivot: Number.isFinite(pivot) ? pivot : 0,
+        resistance: Number.isFinite(resistance) ? resistance : 0,
+        support: Number.isFinite(support) ? support : 0,
+    };
+}
+
+function calculateIBS(high: number, low: number, close: number): number {
+    if (!Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close)) return 0.5;
+    const range = high - low;
+    if (range <= 0) return 0.5;
+    const ibs = (close - low) / range;
+    return Number.isFinite(ibs) ? Math.max(0, Math.min(1, ibs)) : 0.5;
+}
+
+function createNeutralStrategySignal(name: string, reason: string): StrategySignal {
+    return { name, direction: 'neutral', strength: 0, confidence: 50, reason };
+}
+
+async function computeNaiveBayesSignal(symbol: string, trendDirection: 'up' | 'down' | 'sideways'): Promise<StrategySignal> {
+    const name = 'naive_bayes';
+    try {
+        const analysis = await getSentimentAnalysis(symbol);
+        const score = Number.isFinite(analysis?.overallScore) ? analysis.overallScore : 0;
+        const count = Number.isFinite(analysis?.newsCount) ? analysis.newsCount : 0;
+        if (count < 3) {
+            return createNeutralStrategySignal(name, 'insufficient sentiment volume');
+        }
+        const baseStrength = Math.min(100, Math.abs(score) * 120);
+        const confidence = Math.min(85, 40 + Math.min(40, count * 5) + Math.abs(score) * 40);
+        if (score >= 0.7 && trendDirection === 'down') {
+            return { name, direction: 'short', strength: Math.min(100, Math.max(60, baseStrength)), confidence, reason: 'sentiment extreme bullish vs downtrend' };
+        }
+        if (score <= -0.7 && trendDirection === 'up') {
+            return { name, direction: 'long', strength: Math.min(100, Math.max(60, baseStrength)), confidence, reason: 'sentiment extreme bearish vs uptrend' };
+        }
+        if (score > 0.25) {
+            return { name, direction: 'long', strength: baseStrength, confidence, reason: 'sentiment skewed positive' };
+        }
+        if (score < -0.25) {
+            return { name, direction: 'short', strength: baseStrength, confidence, reason: 'sentiment skewed negative' };
+        }
+        return createNeutralStrategySignal(name, 'sentiment neutral');
+    } catch (error) {
+        logger.warn(`naive_bayes sentiment unavailable for ${symbol}`, error);
+        return createNeutralStrategySignal(name, 'sentiment unavailable');
+    }
+}
+
+function computeMaCrossoverSignal(closes: number[]): StrategySignal {
+    const name = 'ma_crossover';
+    if (!Array.isArray(closes) || closes.length < 60) {
+        return createNeutralStrategySignal(name, 'insufficient data');
+    }
+    const ema20Series = calculateEMASeries(closes, 20);
+    const ema50Series = calculateEMASeries(closes, 50);
+    const ema200 = calculateEMA(closes, 200);
+    const ema20 = ema20Series[ema20Series.length - 1] ?? 0;
+    const ema50 = ema50Series[ema50Series.length - 1] ?? 0;
+    const prevEma20 = ema20Series[ema20Series.length - 2] ?? ema20;
+    const prevEma50 = ema50Series[ema50Series.length - 2] ?? ema50;
+    const golden = prevEma20 <= prevEma50 && ema20 > ema50;
+    const death = prevEma20 >= prevEma50 && ema20 < ema50;
+    const trendFilterLong = ema200 > 0 && ema20 > ema200 && ema50 > ema200;
+    const trendFilterShort = ema200 > 0 && ema20 < ema200 && ema50 < ema200;
+    if (golden && trendFilterLong) {
+        return { name, direction: 'long', strength: 80, confidence: 70, reason: 'ema20 crossed above ema50 with ema200 filter' };
+    }
+    if (death && trendFilterShort) {
+        return { name, direction: 'short', strength: 80, confidence: 70, reason: 'ema20 crossed below ema50 with ema200 filter' };
+    }
+    return createNeutralStrategySignal(name, 'no crossover edge');
+}
+
+function computeDonchianSignal(candles: WeexCandle[]): StrategySignal {
+    const name = 'donchian';
+    if (!Array.isArray(candles) || candles.length < 20) {
+        return createNeutralStrategySignal(name, 'insufficient data');
+    }
+    const bounds = calculateDonchianBounds(candles, 20);
+    const last = candles[candles.length - 1];
+    const close = safeParseFloat(last.close);
+    if (!Number.isFinite(close) || close <= 0 || bounds.upper <= 0 || bounds.lower <= 0) {
+        return createNeutralStrategySignal(name, 'invalid price');
+    }
+    const breakoutLong = close > bounds.upper;
+    const breakoutShort = close < bounds.lower;
+    if (breakoutLong) {
+        return { name, direction: 'long', strength: 85, confidence: 75, reason: 'breakout above donchian upper' };
+    }
+    if (breakoutShort) {
+        return { name, direction: 'short', strength: 85, confidence: 75, reason: 'breakdown below donchian lower' };
+    }
+    const nearUpper = Math.abs(close - bounds.upper) / bounds.upper < 0.003;
+    const nearLower = Math.abs(close - bounds.lower) / bounds.lower < 0.003;
+    if (nearUpper) {
+        return { name, direction: 'short', strength: 55, confidence: 55, reason: 'mean reversion at upper band' };
+    }
+    if (nearLower) {
+        return { name, direction: 'long', strength: 55, confidence: 55, reason: 'mean reversion at lower band' };
+    }
+    return createNeutralStrategySignal(name, 'inside channel');
+}
+
+function computePivotSignal(candles: WeexCandle[], trendDirection: 'up' | 'down' | 'sideways'): StrategySignal {
+    const name = 'pivot_points';
+    const pivot = calculatePivotPoints(candles);
+    const close = candles.length > 0 ? safeParseFloat(candles[candles.length - 1].close) : 0;
+    if (pivot.pivot <= 0 || close <= 0) {
+        return createNeutralStrategySignal(name, 'insufficient pivot data');
+    }
+    if (close > pivot.pivot && trendDirection !== 'down') {
+        return { name, direction: 'long', strength: 70, confidence: 65, reason: 'price above pivot with trend support' };
+    }
+    if (close < pivot.pivot && trendDirection !== 'up') {
+        return { name, direction: 'short', strength: 70, confidence: 65, reason: 'price below pivot with trend support' };
+    }
+    return createNeutralStrategySignal(name, 'pivot neutral');
+}
+
+function computeIbsSignal(candles: WeexCandle[]): StrategySignal {
+    const name = 'ibs';
+    if (!Array.isArray(candles) || candles.length < 30) {
+        return createNeutralStrategySignal(name, 'insufficient data');
+    }
+    const dailySlices: number[] = [];
+    for (let i = 24; i < candles.length; i += 24) {
+        const window = candles.slice(i - 24, i);
+        const high = Math.max(...window.map(c => safeParseFloat(c.high)).filter(v => v > 0));
+        const low = Math.min(...window.map(c => safeParseFloat(c.low)).filter(v => v > 0));
+        const close = safeParseFloat(window[window.length - 1].close);
+        if (high > 0 && low > 0 && close > 0) {
+            dailySlices.push(calculateIBS(high, low, close));
+        }
+    }
+    if (dailySlices.length < 3) {
+        return createNeutralStrategySignal(name, 'insufficient daily windows');
+    }
+    const lastWindow = candles.slice(-24);
+    const high = Math.max(...lastWindow.map(c => safeParseFloat(c.high)).filter(v => v > 0));
+    const low = Math.min(...lastWindow.map(c => safeParseFloat(c.low)).filter(v => v > 0));
+    const close = safeParseFloat(lastWindow[lastWindow.length - 1].close);
+    const ibs = calculateIBS(high, low, close);
+    const sorted = [...dailySlices].sort((a, b) => a - b);
+    const percentile = calculatePercentile(ibs, sorted);
+    if (percentile <= 10) {
+        return { name, direction: 'long', strength: 75, confidence: 70, reason: 'ibs in bottom decile' };
+    }
+    if (percentile >= 90) {
+        return { name, direction: 'short', strength: 75, confidence: 70, reason: 'ibs in top decile' };
+    }
+    return createNeutralStrategySignal(name, 'ibs mid range');
+}
+
+function computeKnnSignal(closes: number[]): StrategySignal {
+    const name = 'knn';
+    if (!Array.isArray(closes) || closes.length < 60) {
+        return createNeutralStrategySignal(name, 'insufficient data');
+    }
+    const returns = calculateReturns(closes);
+    const rsi = calculateRSI(closes, 14);
+    const ema20 = calculateEMA(closes, 20);
+    const ema50 = calculateEMA(closes, 50);
+    const vol = calculateStdDev(returns.slice(-20), calculateMean(returns.slice(-20)));
+    const featureVectors: Array<{ vector: number[]; forward: number }> = [];
+    for (let i = 5; i < returns.length - 1; i++) {
+        const recent = returns.slice(i - 5, i);
+        const meanRet = calculateMean(recent);
+        const stdRet = calculateStdDev(recent, meanRet);
+        const forward = returns[i];
+        const vector = [
+            meanRet,
+            stdRet,
+            rsi / 100,
+            ema20 > 0 && ema50 > 0 ? ema20 / ema50 : 1,
+        ];
+        if (vector.every(v => Number.isFinite(v)) && Number.isFinite(forward)) {
+            featureVectors.push({ vector, forward });
+        }
+    }
+    if (featureVectors.length < 10) {
+        return createNeutralStrategySignal(name, 'insufficient knn history');
+    }
+    const latestVector = [
+        calculateMean(returns.slice(-5)),
+        calculateStdDev(returns.slice(-5), calculateMean(returns.slice(-5))),
+        rsi / 100,
+        ema20 > 0 && ema50 > 0 ? ema20 / ema50 : 1,
+    ];
+    const distances = featureVectors.map(item => {
+        let sum = 0;
+        for (let i = 0; i < latestVector.length; i++) {
+            const d = latestVector[i] - item.vector[i];
+            sum += d * d;
+        }
+        return { dist: Math.sqrt(sum), forward: item.forward };
+    }).filter(d => Number.isFinite(d.dist));
+    distances.sort((a, b) => a.dist - b.dist);
+    const k = Math.min(7, distances.length);
+    const neighbors = distances.slice(0, k);
+    const avgReturn = calculateMean(neighbors.map(n => n.forward));
+    const threshold = Math.max(0.001, Math.abs(vol) * 0.5);
+    if (avgReturn > threshold) {
+        return { name, direction: 'long', strength: Math.min(100, (avgReturn / threshold) * 60 + 40), confidence: 60, reason: 'knn predicts positive return' };
+    }
+    if (avgReturn < -threshold) {
+        return { name, direction: 'short', strength: Math.min(100, (Math.abs(avgReturn) / threshold) * 60 + 40), confidence: 60, reason: 'knn predicts negative return' };
+    }
+    return createNeutralStrategySignal(name, 'knn neutral');
+}
+
+type AnnModel = { weights1: number[][]; bias1: number[]; weights2: number[][]; bias2: number[]; lastTrained: number };
+const annModels = new Map<string, AnnModel>();
+
+function softmax(values: number[]): number[] {
+    const max = Math.max(...values);
+    const exps = values.map(v => Math.exp(v - max));
+    const sum = exps.reduce((a, b) => a + b, 0);
+    return sum > 0 ? exps.map(v => v / sum) : values.map(() => 1 / values.length);
+}
+
+function computeAnnSignal(symbol: string, closes: number[]): StrategySignal {
+    const name = 'ann';
+    const normalized = symbol.toLowerCase().replace('cmt_', '').replace('usdt', '');
+    if (normalized !== 'btc') {
+        return createNeutralStrategySignal(name, 'ann scoped to btc');
+    }
+    if (!Array.isArray(closes) || closes.length < 120) {
+        return createNeutralStrategySignal(name, 'insufficient data');
+    }
+    const returns = calculateReturns(closes);
+    const features: number[][] = [];
+    const labels: number[] = [];
+    const maxIndex = returns.length - 2;
+    for (let i = 20; i < maxIndex; i++) {
+        const window = closes.slice(i - 20, i + 1);
+        const rsi = calculateRSI(window, 14) / 100;
+        const ema20 = calculateEMA(window, 20);
+        const ema50 = calculateEMA(window, 50);
+        const vol = calculateStdDev(returns.slice(i - 10, i), calculateMean(returns.slice(i - 10, i)));
+        const feat = [
+            returns[i],
+            calculateMean(returns.slice(i - 5, i)),
+            ema20 > 0 && ema50 > 0 ? ema20 / ema50 : 1,
+            rsi,
+            Number.isFinite(vol) ? vol : 0,
+        ];
+        if (feat.every(v => Number.isFinite(v))) {
+            features.push(feat);
+            labels.push(returns[i + 1]);
+        }
+    }
+    if (features.length < 30) {
+        return createNeutralStrategySignal(name, 'insufficient feature history');
+    }
+    const labelSorted = [...labels].sort((a, b) => a - b);
+    const q1 = labelSorted[Math.floor(labelSorted.length * 0.33)] ?? 0;
+    const q2 = labelSorted[Math.floor(labelSorted.length * 0.66)] ?? 0;
+    const classes = labels.map(v => v <= q1 ? 0 : v >= q2 ? 2 : 1);
+    const inputSize = features[0].length;
+    const hiddenSize = 6;
+    const outputSize = 3;
+    let model = annModels.get(normalized);
+    if (!model || Date.now() - model.lastTrained > 6 * 60 * 60 * 1000) {
+        const weights1 = Array.from({ length: inputSize }, (_, i) =>
+            Array.from({ length: hiddenSize }, (_, j) => ((i + 1) * (j + 1)) / 1000)
+        );
+        const bias1 = Array.from({ length: hiddenSize }, () => 0);
+        const weights2 = Array.from({ length: hiddenSize }, (_, i) =>
+            Array.from({ length: outputSize }, (_, j) => ((i + 1) * (j + 2)) / 1000)
+        );
+        const bias2 = Array.from({ length: outputSize }, () => 0);
+        const lr = 0.05;
+        const epochs = 8;
+        for (let epoch = 0; epoch < epochs; epoch++) {
+            for (let idx = 0; idx < features.length; idx++) {
+                const x = features[idx];
+                const y = classes[idx];
+                const hidden = bias1.map((b, h) => {
+                    let sum = b;
+                    for (let i = 0; i < inputSize; i++) sum += x[i] * weights1[i][h];
+                    return Math.max(0, sum);
+                });
+                const logits = bias2.map((b, o) => {
+                    let sum = b;
+                    for (let h = 0; h < hiddenSize; h++) sum += hidden[h] * weights2[h][o];
+                    return sum;
+                });
+                const probs = softmax(logits);
+                for (let o = 0; o < outputSize; o++) {
+                    const grad = probs[o] - (o === y ? 1 : 0);
+                    bias2[o] -= lr * grad;
+                    for (let h = 0; h < hiddenSize; h++) {
+                        weights2[h][o] -= lr * grad * hidden[h];
+                    }
+                }
+                for (let h = 0; h < hiddenSize; h++) {
+                    if (hidden[h] <= 0) continue;
+                    let gradHidden = 0;
+                    for (let o = 0; o < outputSize; o++) {
+                        const grad = probs[o] - (o === y ? 1 : 0);
+                        gradHidden += grad * weights2[h][o];
+                    }
+                    bias1[h] -= lr * gradHidden;
+                    for (let i = 0; i < inputSize; i++) {
+                        weights1[i][h] -= lr * gradHidden * x[i];
+                    }
+                }
+            }
+        }
+        model = { weights1, bias1, weights2, bias2, lastTrained: Date.now() };
+        annModels.set(normalized, model);
+    }
+    const latestWindow = closes.slice(-21);
+    const latestReturns = calculateReturns(latestWindow);
+    const latestFeat = [
+        latestReturns[latestReturns.length - 1] ?? 0,
+        calculateMean(latestReturns.slice(-5)),
+        (() => {
+            const e20 = calculateEMA(latestWindow, 20);
+            const e50 = calculateEMA(latestWindow, 50);
+            return e20 > 0 && e50 > 0 ? e20 / e50 : 1;
+        })(),
+        calculateRSI(latestWindow, 14) / 100,
+        calculateStdDev(latestReturns.slice(-10), calculateMean(latestReturns.slice(-10))),
+    ];
+    if (!latestFeat.every(v => Number.isFinite(v))) {
+        return createNeutralStrategySignal(name, 'invalid ann features');
+    }
+    const hidden = model.bias1.map((b, h) => {
+        let sum = b;
+        for (let i = 0; i < inputSize; i++) sum += latestFeat[i] * model.weights1[i][h];
+        return Math.max(0, sum);
+    });
+    const logits = model.bias2.map((b, o) => {
+        let sum = b;
+        for (let h = 0; h < hiddenSize; h++) sum += hidden[h] * model.weights2[h][o];
+        return sum;
+    });
+    const probs = softmax(logits);
+    const maxProb = Math.max(...probs);
+    const maxIdx = probs.indexOf(maxProb);
+    if (maxIdx === 2) {
+        return { name, direction: 'long', strength: Math.round(maxProb * 100), confidence: Math.round(maxProb * 100), reason: 'ann predicts upper quantile' };
+    }
+    if (maxIdx === 0) {
+        return { name, direction: 'short', strength: Math.round(maxProb * 100), confidence: Math.round(maxProb * 100), reason: 'ann predicts lower quantile' };
+    }
+    return createNeutralStrategySignal(name, 'ann neutral');
+}
+
+function computeAlphaComboSignal(closes: number[], volumes: number[]): StrategySignal {
+    const name = 'alpha_combo';
+    if (!Array.isArray(closes) || closes.length < 60) {
+        return createNeutralStrategySignal(name, 'insufficient data');
+    }
+    const returns = calculateReturns(closes);
+    const alphas: number[][] = [];
+    const forward: number[] = [];
+    const maxIndex = returns.length - 2;
+    for (let i = 10; i < maxIndex; i++) {
+        const momentum = calculateMean(returns.slice(i - 5, i));
+        const mean = calculateMean(closes.slice(i - 20, i));
+        const std = calculateStdDev(closes.slice(i - 20, i), mean);
+        const z = std > 0 ? (closes[i] - mean) / std : 0;
+        const vol = calculateStdDev(returns.slice(i - 10, i), calculateMean(returns.slice(i - 10, i)));
+        const volChange = volumes.length > i && volumes[i - 1] > 0 ? (volumes[i] - volumes[i - 1]) / volumes[i - 1] : 0;
+        const alpha = [momentum, -z, vol, volChange];
+        if (alpha.every(v => Number.isFinite(v)) && Number.isFinite(returns[i + 1])) {
+            alphas.push(alpha);
+            forward.push(returns[i + 1]);
+        }
+    }
+    if (alphas.length < 20) {
+        return createNeutralStrategySignal(name, 'insufficient alpha history');
+    }
+    const weights = [0, 0, 0, 0];
+    for (let j = 0; j < weights.length; j++) {
+        const series = alphas.map(a => a[j]);
+        const corr = calculateCorrelation(series, forward);
+        weights[j] = Number.isFinite(corr) ? corr : 0;
+    }
+    const latestMomentum = calculateMean(returns.slice(-5));
+    const mean = calculateMean(closes.slice(-20));
+    const std = calculateStdDev(closes.slice(-20), mean);
+    const z = std > 0 ? (closes[closes.length - 1] - mean) / std : 0;
+    const vol = calculateStdDev(returns.slice(-10), calculateMean(returns.slice(-10)));
+    const volChange = volumes.length > 1 && volumes[volumes.length - 2] > 0 ? (volumes[volumes.length - 1] - volumes[volumes.length - 2]) / volumes[volumes.length - 2] : 0;
+    const latest = [latestMomentum, -z, vol, volChange];
+    const score = latest.reduce((sum, v, i) => sum + v * weights[i], 0);
+    if (score > 0.001) {
+        return { name, direction: 'long', strength: Math.min(100, Math.abs(score) * 5000), confidence: 60, reason: 'alpha combo bullish' };
+    }
+    if (score < -0.001) {
+        return { name, direction: 'short', strength: Math.min(100, Math.abs(score) * 5000), confidence: 60, reason: 'alpha combo bearish' };
+    }
+    return createNeutralStrategySignal(name, 'alpha combo neutral');
+}
+
+function computeStatArbSignalFromResidual(residuals: number[]): StrategySignal {
+    const name = 'stat_arb';
+    if (!Array.isArray(residuals) || residuals.length < 20) {
+        return createNeutralStrategySignal(name, 'insufficient residual history');
+    }
+    const mean = calculateMean(residuals);
+    const std = calculateStdDev(residuals, mean);
+    const latest = residuals[residuals.length - 1];
+    const z = std > 0 ? (latest - mean) / std : 0;
+    if (z > 1.5) {
+        return { name, direction: 'short', strength: Math.min(100, Math.abs(z) * 30), confidence: 65, reason: 'positive residual mean reversion' };
+    }
+    if (z < -1.5) {
+        return { name, direction: 'long', strength: Math.min(100, Math.abs(z) * 30), confidence: 65, reason: 'negative residual mean reversion' };
+    }
+    return createNeutralStrategySignal(name, 'stat arb neutral');
+}
+
+function computeMultiAssetTrendSignal(momentumRank: number, total: number, momentum: number): StrategySignal {
+    const name = 'multi_asset_trend';
+    if (total <= 1) {
+        return createNeutralStrategySignal(name, 'insufficient cross-asset data');
+    }
+    const percentile = total > 1 ? (momentumRank / (total - 1)) * 100 : 50;
+    if (momentum > 0 && percentile >= 70) {
+        return { name, direction: 'long', strength: Math.min(100, percentile), confidence: 70, reason: 'top momentum cohort' };
+    }
+    if (momentum < 0 && percentile <= 30) {
+        return { name, direction: 'short', strength: Math.min(100, 100 - percentile), confidence: 65, reason: 'bottom momentum cohort' };
+    }
+    return createNeutralStrategySignal(name, 'momentum neutral');
+}
+
+function calculateRegressionResiduals(targetReturns: number[], baseReturns: number[]): number[] {
+    if (!Array.isArray(targetReturns) || !Array.isArray(baseReturns)) return [];
+    const n = Math.min(targetReturns.length, baseReturns.length);
+    if (n < 10) return [];
+    const t = targetReturns.slice(-n);
+    const b = baseReturns.slice(-n);
+    const meanT = calculateMean(t);
+    const meanB = calculateMean(b);
+    let cov = 0;
+    let varB = 0;
+    for (let i = 0; i < n; i++) {
+        const dt = t[i] - meanT;
+        const db = b[i] - meanB;
+        cov += dt * db;
+        varB += db * db;
+    }
+    if (varB === 0) return [];
+    const beta = cov / varB;
+    const alpha = meanT - beta * meanB;
+    const residuals: number[] = [];
+    for (let i = 0; i < n; i++) {
+        const predicted = alpha + beta * b[i];
+        const residual = t[i] - predicted;
+        if (Number.isFinite(residual)) residuals.push(residual);
+    }
+    return residuals;
+}
+
+function calculateMomentum(closes: number[], lookback: number): number {
+    if (!Array.isArray(closes) || closes.length < lookback + 1) return 0;
+    const end = closes[closes.length - 1];
+    const start = closes[closes.length - 1 - lookback];
+    if (!Number.isFinite(end) || !Number.isFinite(start) || start <= 0) return 0;
+    return (end - start) / start;
+}
+
 /**
  * Calculate ATR history for regime detection
  */
@@ -1436,6 +2018,19 @@ function normalizeSymbolForCache(symbol: string): string {
     return symbol.toLowerCase().trim();
 }
 
+const MAX_CANDLE_AGE_MS = 2 * 60 * 60 * 1000;
+
+function isCandleDataFresh(candles: WeexCandle[], maxAgeMs: number): boolean {
+    if (!Array.isArray(candles) || candles.length === 0) return false;
+    const last = candles[candles.length - 1];
+    const ts = Number(last?.timestamp);
+    if (!Number.isFinite(ts) || ts <= 0) {
+        logger.warn('Candle timestamp invalid, skipping freshness check');
+        return true;
+    }
+    return Date.now() - ts <= maxAgeMs;
+}
+
 /**
  * Internal function to analyze a single asset and return both analysis and closes
  * Used by getQuantContext to avoid duplicate candle fetches
@@ -1466,6 +2061,10 @@ async function analyzeAssetInternal(symbol: string): Promise<AnalyzeAssetResult 
 
         if (!Array.isArray(candles) || candles.length < 50) {
             logger.warn(`Insufficient candle data for ${symbol}: ${candles?.length ?? 0} candles`);
+            return null;
+        }
+        if (!isCandleDataFresh(candles, MAX_CANDLE_AGE_MS)) {
+            logger.warn(`Stale candle data for ${symbol}, skipping analysis`);
             return null;
         }
 
@@ -1587,6 +2186,19 @@ async function analyzeAssetInternal(symbol: string): Promise<AnalyzeAssetResult 
         const volume = analyzeVolume(candles);
         const patterns = detectPatterns(candles, currentPrice);
 
+        const strategies: StrategySignals = {
+            ann: computeAnnSignal(symbol, closes),
+            naive_bayes: await computeNaiveBayesSignal(symbol, trend.direction),
+            knn: computeKnnSignal(closes),
+            ibs: computeIbsSignal(candles),
+            stat_arb: createNeutralStrategySignal('stat_arb', 'pending cross-asset data'),
+            alpha_combo: computeAlphaComboSignal(closes, volumes),
+            ma_crossover: computeMaCrossoverSignal(closes),
+            donchian: computeDonchianSignal(candles),
+            pivot_points: computePivotSignal(candles, trend.direction),
+            multi_asset_trend: createNeutralStrategySignal('multi_asset_trend', 'pending cross-asset data'),
+        };
+
         const patternAnalysis: PatternAnalysis = {
             nearestSupport,
             nearestResistance,
@@ -1700,6 +2312,7 @@ async function analyzeAssetInternal(symbol: string): Promise<AnalyzeAssetResult 
             secondarySignals,
             riskLevel,
             riskScore,
+            strategies,
         };
 
         setCache(cacheKey, analysis);
@@ -1898,6 +2511,18 @@ export async function getQuantContext(symbols: string[]): Promise<QuantContext> 
                                     const weexClient = getWeexClient();
                                     const candles = await weexClient.getCandles(symbol, '1h', 100);
                                     if (Array.isArray(candles) && candles.length > 0) {
+                                        if (!isCandleDataFresh(candles, MAX_CANDLE_AGE_MS)) {
+                                            return {
+                                                symbol,
+                                                result: {
+                                                    analysis: cachedAnalysis,
+                                                    closes: null,
+                                                    highs: null,
+                                                    lows: null,
+                                                    volumes: null,
+                                                }
+                                            };
+                                        }
                                         // CRITICAL: Filter candles ONCE where ALL OHLCV fields are valid to prevent array desync
                                         // This ensures closes[i], highs[i], lows[i], volumes[i] all refer to the same candle
                                         const validCandles = candles.filter(c => {
@@ -1987,6 +2612,73 @@ export async function getQuantContext(symbols: string[]): Promise<QuantContext> 
 
             // Cross-asset analysis
             const crossAsset = await analyzeCrossAsset(assets, allCandles);
+
+            const momentumEntries = Array.from(allCandles.entries()).map(([symbol, closes]) => ({
+                symbol,
+                momentum: calculateMomentum(closes, 20),
+            })).sort((a, b) => b.momentum - a.momentum);
+
+            const momentumRankMap = new Map<string, { rank: number; total: number; momentum: number }>();
+            for (let i = 0; i < momentumEntries.length; i++) {
+                const entry = momentumEntries[i];
+                momentumRankMap.set(entry.symbol, { rank: i, total: momentumEntries.length, momentum: entry.momentum });
+            }
+
+            let btcReturns: number[] = [];
+            for (const [sym, closes] of allCandles.entries()) {
+                const normalized = sym.toLowerCase().replace(/^cmt_/, '').replace(/usdt$/, '');
+                if (normalized === 'btc') {
+                    btcReturns = calculateReturns(closes);
+                    break;
+                }
+            }
+
+            for (const [symbol, analysis] of assets) {
+                const momentumInfo = momentumRankMap.get(symbol);
+                const multiAssetTrend = momentumInfo
+                    ? computeMultiAssetTrendSignal(momentumInfo.rank, momentumInfo.total, momentumInfo.momentum)
+                    : createNeutralStrategySignal('multi_asset_trend', 'insufficient cross-asset data');
+
+                let statArb = createNeutralStrategySignal('stat_arb', 'insufficient cross-asset data');
+                const closes = allCandles.get(symbol);
+                const normalizedSymbol = symbol.toLowerCase().replace(/^cmt_/, '').replace(/usdt$/, '');
+                if (normalizedSymbol === 'btc') {
+                    statArb = createNeutralStrategySignal('stat_arb', 'btc baseline');
+                } else if (btcReturns.length > 0 && closes && closes.length > 10) {
+                    const targetReturns = calculateReturns(closes);
+                    const residuals = calculateRegressionResiduals(targetReturns, btcReturns);
+                    statArb = residuals.length > 0
+                        ? computeStatArbSignalFromResidual(residuals)
+                        : createNeutralStrategySignal('stat_arb', 'insufficient residual history');
+                }
+
+                const baseStrategies: StrategySignals = analysis.strategies ?? {
+                    ann: createNeutralStrategySignal('ann', 'missing'),
+                    naive_bayes: createNeutralStrategySignal('naive_bayes', 'missing'),
+                    knn: createNeutralStrategySignal('knn', 'missing'),
+                    ibs: createNeutralStrategySignal('ibs', 'missing'),
+                    stat_arb: createNeutralStrategySignal('stat_arb', 'missing'),
+                    alpha_combo: createNeutralStrategySignal('alpha_combo', 'missing'),
+                    ma_crossover: createNeutralStrategySignal('ma_crossover', 'missing'),
+                    donchian: createNeutralStrategySignal('donchian', 'missing'),
+                    pivot_points: createNeutralStrategySignal('pivot_points', 'missing'),
+                    multi_asset_trend: createNeutralStrategySignal('multi_asset_trend', 'missing'),
+                };
+
+                const updatedAnalysis: AssetQuantAnalysis = {
+                    ...analysis,
+                    strategies: {
+                        ...baseStrategies,
+                        stat_arb: statArb,
+                        multi_asset_trend: multiAssetTrend,
+                    },
+                };
+
+                assets.set(symbol, updatedAnalysis);
+                if (normalizedSymbol) {
+                    setCache(`quant:${normalizedSymbol}`, updatedAnalysis);
+                }
+            }
 
             // Funding rate analysis (v5.1.0) - fetch funding rates for all symbols
             const fundingAnalysis = new Map<string, FundingRateAnalysis>();
@@ -2324,12 +3016,30 @@ export function formatQuantForPrompt(context: QuantContext): string {
         const fundingStr = funding
             ? ` funding:${safeToFixed(funding.percentile, 0)}pctl${funding.isPersistent ? '*' : ''}`
             : '';
+        const corrRow = context.crossAsset?.correlationMatrix?.get(symbol) ||
+            context.crossAsset?.correlationMatrix?.get(symbol.toLowerCase()) ||
+            context.crossAsset?.correlationMatrix?.get(symbol.toLowerCase().replace(/^cmt_/, ''));
+        const corrToBtc = corrRow
+            ? (corrRow.get('btc') || corrRow.get('btcusdt') || corrRow.get('cmt_btcusdt') || 0)
+            : 0;
+        const corrPenalty = Math.max(0, Math.min(1, Math.abs(corrToBtc)));
+        const adjustedStrength = Math.max(0, s.strength * (1 - corrPenalty));
 
         lines.push(
-            `${sym}: ${s.direction}(${safeToFixed(s.strength, 0)}) z=${safeToFixed(st.zScore, 1)} ` +
+            `${sym}: ${s.direction}(${safeToFixed(adjustedStrength, 0)}) z=${safeToFixed(st.zScore, 1)} ` +
             `entry=${p.entryQuality} risk=${analysis.riskLevel || 'medium'} ` +
             `win:L${safeToFixed(p.longWinRate, 0)}%/S${safeToFixed(p.shortWinRate, 0)}%${fundingStr}`
         );
+        if (analysis.strategies) {
+            const picks = Object.values(analysis.strategies)
+                .filter(sg => sg && sg.direction !== 'neutral' && sg.strength > 0)
+                .sort((a, b) => b.strength - a.strength)
+                .slice(0, 2)
+                .map(sg => `${sg.name}:${sg.direction === 'long' ? 'L' : 'S'}${safeToFixed(sg.strength, 0)}`);
+            if (picks.length > 0) {
+                lines.push(`  strat:${picks.join(' ')}`);
+            }
+        }
     }
 
     // Add funding signals section if any are persistent

@@ -461,6 +461,9 @@ export class CollaborativeFlowService {
             const originalAssetCount = context.market_data.length;
             const filteredAssets = this.filterInterestingAssets(context);
             context.market_data = filteredAssets;
+            if (context.instructions && Array.isArray(context.instructions.assets)) {
+                context.instructions.assets = filteredAssets.map(asset => asset.asset);
+            }
 
             if (filteredAssets.length < originalAssetCount) {
                 logger.info(`🔍 Technical Pre-filter: Reduced assets from ${originalAssetCount} to ${filteredAssets.length} (keeping open positions + signals)`);

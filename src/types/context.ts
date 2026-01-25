@@ -297,6 +297,9 @@ export interface LongTermIndicators {
     bollinger_upper: number;
     bollinger_middle: number;
     bollinger_lower: number;
+    donchian_upper: number;
+    donchian_middle: number;
+    donchian_lower: number;
 
     // Trend classification
     trend: 'bullish' | 'bearish' | 'neutral';
@@ -517,6 +520,9 @@ export function convertIndicatorsToMarketData(
             bollinger_upper: indicators.longTerm.bollingerBands.upper,
             bollinger_middle: indicators.longTerm.bollingerBands.middle,
             bollinger_lower: indicators.longTerm.bollingerBands.lower,
+            donchian_upper: indicators.longTerm.donchian.upper,
+            donchian_middle: indicators.longTerm.donchian.middle,
+            donchian_lower: indicators.longTerm.donchian.lower,
             trend: indicators.longTerm.trend,
             trend_strength: indicators.signals.trendStrength,
             price_vs_ema20: lt_ema20_valid && currentPrice > indicators.longTerm.ema20 ? 'above' : 'below',

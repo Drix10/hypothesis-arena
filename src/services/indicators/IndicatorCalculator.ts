@@ -415,4 +415,47 @@ export class IndicatorCalculator {
             lower,
         };
     }
+
+    calculateDonchianChannel(candles: WeexCandle[], period: number = 20): { upper: number; middle: number; lower: number } {
+        if (!Array.isArray(candles)) {
+            throw new Error('Donchian: candles must be an array');
+        }
+        if (!Number.isInteger(period) || period <= 0) {
+            throw new Error(`Donchian: period must be a positive integer, got ${period}`);
+        }
+        if (candles.length < period) {
+            throw new Error(`Not enough data for Donchian(${period}): need ${period}, got ${candles.length}`);
+        }
+
+        const window = candles.slice(-period);
+        let upper = -Infinity;
+        let lower = Infinity;
+
+        for (let i = 0; i < window.length; i++) {
+            const high = parseFloat(window[i].high);
+            const low = parseFloat(window[i].low);
+            if (!Number.isFinite(high) || high <= 0) {
+                throw new Error(`Donchian: Invalid high at index ${i}: ${window[i].high}`);
+            }
+            if (!Number.isFinite(low) || low <= 0) {
+                throw new Error(`Donchian: Invalid low at index ${i}: ${window[i].low}`);
+            }
+            if (high < low) {
+                throw new Error(`Donchian: High (${high}) < Low (${low}) at index ${i}`);
+            }
+            if (high > upper) upper = high;
+            if (low < lower) lower = low;
+        }
+
+        if (!Number.isFinite(upper) || !Number.isFinite(lower)) {
+            throw new Error(`Donchian: Calculated bounds invalid - upper: ${upper}, lower: ${lower}`);
+        }
+
+        const middle = (upper + lower) / 2;
+        if (!Number.isFinite(middle)) {
+            throw new Error(`Donchian: Calculated middle is invalid: ${middle}`);
+        }
+
+        return { upper, middle, lower };
+    }
 }

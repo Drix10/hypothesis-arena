@@ -16,8 +16,8 @@ RULES OF ENGAGEMENT (CONVICTION TRADING v5.6.0 - SNIPER MODE):
 5. CONCISE: Keep arguments sharp and impactful (100-150 words max).
 6. SNIPER MINDSET: Focus on QUICK PROFITS (1-2% moves). Bank profits immediately. Do not defend holding forever.
 7. SHORTING SYMMETRY: Treat shorts as equivalent to longs.
-8. LEVERAGE BASELINE: Defend 20x leverage as standard for conviction setups.
-9. ALL COINS FOCUS: Prefer BTC/ETH but defend alts if setups are perfect.
+8. LEVERAGE BASELINE: Defend leverage within risk limits for conviction setups.
+9. ALL COINS FOCUS: Prefer highest-liquidity assets in context but defend others if setups are perfect.
 
 SPECIAL INSTRUCTIONS FOR SAME-BIAS DEBATES:
 - If both you and your opponent have the same bias (e.g., both BULLISH), focus on:
@@ -43,7 +43,7 @@ export const DEBATE_TURN_PROMPT = (position: 'bull' | 'bear', previousTurn: stri
     : previousTurn;
 
   const context = round === 1
-    ? "This is the OPENING ROUND. State your strongest case clearly — defend 20x leverage, SNIPER execution (1-2% profit), and tight 1% stops."
+    ? "This is the OPENING ROUND. State your strongest case clearly — defend leverage within risk limits, SNIPER execution (1-2% profit), and tight stops."
     : `This is round ${round}. Respond directly to the previous point: "${previousTurnPreview}". Attack weaknesses, defend your thesis, and push for better precision on entry or immediate profit taking.`.trim().replace(/\s+/g, ' ');
 
   return `

@@ -28,6 +28,11 @@ export interface TechnicalIndicators {
         macd: MACDResult;
         rsi14: number;
         bollingerBands: BollingerBandsResult;
+        donchian: {
+            upper: number;
+            middle: number;
+            lower: number;
+        };
         trend: 'bullish' | 'bearish' | 'neutral';
     };
     signals: {
@@ -67,6 +72,17 @@ export class TechnicalIndicatorService {
         if (this.pruneIntervalId.unref) {
             this.pruneIntervalId.unref();
         }
+    }
+
+    private getCandleTimestampMs(candle: { timestamp?: string } | null | undefined): number {
+        if (!candle || candle.timestamp === undefined || candle.timestamp === null) return 0;
+        const parsed = Number.parseInt(String(candle.timestamp), 10);
+        return Number.isFinite(parsed) ? parsed : 0;
+    }
+
+    private isCandleFresh(timestampMs: number, maxAgeMs: number): boolean {
+        if (!Number.isFinite(timestampMs) || timestampMs <= 0) return false;
+        return (Date.now() - timestampMs) <= maxAgeMs;
     }
 
     async getIndicators(symbol: string): Promise<TechnicalIndicators> {
@@ -235,6 +251,24 @@ export class TechnicalIndicatorService {
             throw new Error(`Insufficient 4h candle data for ${symbol}: got ${candles4h.length}, need exactly 200 for EMA(200)`);
         }
 
+        const last5mCandle = candles5m[candles5m.length - 1];
+        const last5mTimestamp = this.getCandleTimestampMs(last5mCandle);
+        const max5mAgeMs = 15 * 60 * 1000;
+        if (!this.isCandleFresh(last5mTimestamp, max5mAgeMs)) {
+            const ageSec = last5mTimestamp > 0 ? Math.round((now - last5mTimestamp) / 1000) : -1;
+            throw new Error(`Stale 5m candles for ${symbol}: age ${ageSec}s`);
+        }
+
+        if (!useCachedLongTerm) {
+            const last4hCandle = candles4h[candles4h.length - 1];
+            const last4hTimestamp = this.getCandleTimestampMs(last4hCandle);
+            const max4hAgeMs = 6 * 60 * 60 * 1000;
+            if (!this.isCandleFresh(last4hTimestamp, max4hAgeMs)) {
+                const ageSec = last4hTimestamp > 0 ? Math.round((now - last4hTimestamp) / 1000) : -1;
+                throw new Error(`Stale 4h candles for ${symbol}: age ${ageSec}s`);
+            }
+        }
+
         // Extract close prices for 5m
         const closes5m: number[] = candles5m.map(c => parseFloat(c.close));
         const currentPrice = closes5m[closes5m.length - 1];
@@ -254,6 +288,7 @@ export class TechnicalIndicatorService {
             const rsi14_4h = this.calculator.calculateRSI(closes4h, 14);
             const bb_4h = this.calculator.calculateBollingerBands(closes4h, 20, 2);
             const atr_4h = this.calculator.calculateATR(candles4h, 14);
+            const donchian_4h = this.calculator.calculateDonchianChannel(candles4h, 20);
 
             const lastEma20_4h = ema20_4h[ema20_4h.length - 1];
             const lastEma50_4h = ema50_4h[ema50_4h.length - 1];
@@ -267,6 +302,7 @@ export class TechnicalIndicatorService {
                 macd: macd_4h,
                 rsi14: rsi14_4h[rsi14_4h.length - 1],
                 bollingerBands: bb_4h,
+                donchian: donchian_4h,
                 trend: lastEma20_4h > lastEma50_4h && lastEma50_4h > lastEma200_4h ? 'bullish' :
                     lastEma20_4h < lastEma50_4h && lastEma50_4h < lastEma200_4h ? 'bearish' : 'neutral'
             };
@@ -352,9 +388,11 @@ export class TechnicalIndicatorService {
             // Normalize symbol for consistent cache key lookup
             const normalizedSymbol = symbol.trim().toLowerCase();
             this.cache.delete(normalizedSymbol);
+            this.longTermCache.delete(normalizedSymbol);
             logger.debug(`Cleared indicator cache for ${normalizedSymbol}`);
         } else {
             this.cache.clear();
+            this.longTermCache.clear();
             logger.debug('Cleared all indicator cache');
         }
     }

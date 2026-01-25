@@ -59,7 +59,7 @@ wss.on('connection', (ws: WebSocket & { isAlive: boolean }) => {
                 if (message.type === 'pong') {
                     ws.isAlive = true;
                 }
-            } catch (err) {
+            } catch (_err) {
                 // Ignore non-JSON or invalid messages
             }
         });

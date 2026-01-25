@@ -93,7 +93,9 @@ Cross-provider fallback: If primary fails, automatically tries the other provide
 1. **Minimum Confidence**: >= `MIN_CONFIDENCE_TO_TRADE` (default: 50%)
 2. **Anti-Churn Rules**: Cooldowns and daily limits
 3. **Risk Limits**: Position size, leverage, exposure limits
-4. **Monte Carlo Validation**: For confidence >65%, requires Sharpe >= 1.2
+4. **Freshness Guard**: Skip stale candles older than 2× interval
+5. **Inference Timeout**: 200ms per strategy with cached fallback to HOLD
+6. **Monte Carlo Validation**: For confidence >65%, requires Sharpe >= 1.2
 
 ## Anti-Churn Rules
 
@@ -117,6 +119,7 @@ Cross-provider fallback: If primary fails, automatically tries the other provide
 
 - RSI: Oversold < 25, Overbought > 75
 - Funding: Extreme ±0.08%, Moderate ±0.03%
+- Volatility Regime Gate: ATR% < 2% disables trend strategies; ATR% > 5% disables mean-reversion
 
 ## Sentiment Analysis
 
@@ -166,30 +169,31 @@ Fat-tailed simulation for trade validation:
 Prevents concentrated BTC exposure:
 
 - Tracks pairwise correlations (30-day rolling)
+- Apply 0.5x weight reduction when correlation > 0.7
+- Cap aggregate directional exposure per symbol at 3x base capital
 - Max 2 highly-correlated positions (>80% correlation)
 - Warns if portfolio >85% correlated to BTC
 
 ## Dynamic Leverage
 
-### Production Mode (5x–15x)
+### Production Mode (2x–5x)
 
 | Leverage | Position Size  | Stop Loss | Use Case                       |
 | -------- | -------------- | --------- | ------------------------------ |
-| 5-8x     | 20-30% account | 4-5%      | Conservative, larger positions |
-| 8-12x    | 15-25% account | 3-4%      | Standard, medium positions     |
-| 12-15x   | 10-20% account | 2.5-3%    | Moderate, smaller positions    |
+| 2-3x     | 20-30% account | 4-5%      | Default, position-size led     |
+| 3-5x     | 15-25% account | 3-4%      | High confidence only           |
 
-### Competition Mode (15x–20x)
+### Competition Mode (3x–5x)
 
 | Leverage | Position Size  | Stop Loss | Use Case                 |
 | -------- | -------------- | --------- | ------------------------ |
-| 15-16x   | 12-15% account | 2-2.5%    | Conservative             |
-| 17-18x   | 10-14% account | 1.8-2%    | Moderate                 |
-| 19-20x   | 10-12% account | 1.5%      | Optimal for competitions |
+| 3-4x     | 20-30% account | 3-4%      | Active demo trading      |
+| 4-5x     | 15-25% account | 2-3%      | High-confidence demo     |
 
 **Hard Limits:**
 
-- Maximum leverage: 20x
+- Default leverage: 2-3x
+- Maximum leverage: 5x (only if confidence > 80%)
 - Maximum notional: 3x account balance per trade
 - Stop loss inversely proportional to leverage
 
@@ -210,8 +214,8 @@ WEEX_ACCOUNT_TYPE=demo
 | --------------------- | ---------- | ----------- |
 | Max Daily Trades | 20 | 50 |
 | Cooldown After Trade | 15 min | 5 min |
-| Leverage Range | 5-15x | 15-20x |
-| Max Position Size | 25% | 50% (hard cap, typical 10-15%) |
+| Leverage Range | 2-5x | 3-5x |
+| Max Position Size | 25% | 35% |
 | Weekly Drawdown Limit | 10% | 25% |
 
 ## Cycle Flow

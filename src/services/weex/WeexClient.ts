@@ -91,11 +91,11 @@ export class WeexClient {
                             /"(orderId|order_id|positionId|isolatedPositionId|isolated_position_id|successOrderId)"\s*:\s*(\d{15,})(?![.\d])/g,
                             '"$1":"$2"'
                         ); return JSON.parse(protectedData);
-                    } catch (e) {
+                    } catch (_e) {
                         // Fallback to standard parse if regex fails or JSON is invalid
                         try {
                             return JSON.parse(data);
-                        } catch (parseError) {
+                        } catch (_parseError) {
                             return data; // Return raw string if not JSON
                         }
                     }

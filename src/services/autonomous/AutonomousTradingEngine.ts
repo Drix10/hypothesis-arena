@@ -28,6 +28,7 @@ import {
 } from '../../constants/analyst/riskLimits';
 import { roundToStepSize, roundToTickSize, updateContractSpecs, getContractSpecs, clearContractSpecs } from '../../shared/utils/weex';
 import { APPROVED_SYMBOLS } from '../../shared/types/weex';
+import { normalizeAndValidateSymbol } from '../../shared/utils/validation';
 import { validateTradeWithMonteCarlo } from '../quant';
 import { trackOpenTrade, syncPositions, hydrateTrackedTrades, type PositionData, normalizeSide } from '../position';
 import { getSymbolSentimentScore, shutdownSentimentService, shutdownRedditService } from '../sentiment';
@@ -1210,14 +1211,21 @@ export class AutonomousTradingEngine extends EventEmitter {
 
             let tp: number | null = null;
             let sl: number | null = null;
+            let hasExplicitSide = false;
+            let hasAmbiguousSide = false;
 
             for (const order of planOrders) {
-                const planType = String(order.planType || order.plan_type || '');
+                const planType = String(order.planType || order.plan_type || '').toLowerCase();
                 // Normalize side from WEEX (usually 'long'/'short')
                 const orderPosSide = String(order.positionSide || order.position_side || '').toUpperCase();
 
                 // Check if this plan order matches our position side
-                if (orderPosSide !== side) continue;
+                if (orderPosSide) {
+                    hasExplicitSide = true;
+                    if (orderPosSide !== side) continue;
+                } else {
+                    hasAmbiguousSide = true;
+                }
 
                 const triggerPrice = parseFloat(String(order.triggerPrice || order.trigger_price || '0'));
                 if (!Number.isFinite(triggerPrice) || triggerPrice <= 0) continue;
@@ -1228,8 +1236,11 @@ export class AutonomousTradingEngine extends EventEmitter {
                     sl = triggerPrice;
                 }
             }
+            if (tp === null && sl === null && hasAmbiguousSide && !hasExplicitSide) {
+                return {};
+            }
             return { tp, sl };
-        } catch (error) {
+        } catch (_error) {
             // On error (e.g. API failure), return empty object so values are undefined
             // This ensures we don't wipe out existing TP/SL values during API glitches
             return {};
@@ -1419,7 +1430,7 @@ export class AutonomousTradingEngine extends EventEmitter {
                         if (tp !== undefined || sl !== undefined) {
                             tpSlMap.set(`${pos.symbol}:${sideStr}`, { tp, sl });
                         }
-                    } catch (err) {
+                    } catch (_err) {
                         // Ignore errors to not block loop
                     }
 
@@ -1644,14 +1655,24 @@ export class AutonomousTradingEngine extends EventEmitter {
             this.consecutiveHolds = 0;
 
             let executedAction: 'CLOSE' | 'REDUCE' = decision.action;
-            const decisionSymbol = typeof decision.symbol === 'string' ? decision.symbol : '';
-            if (!decisionSymbol) {
+            const rawDecisionSymbol = typeof decision.symbol === 'string' ? decision.symbol : '';
+            if (!rawDecisionSymbol) {
                 logger.warn(`Cannot ${executedAction}: Invalid symbol in decision`);
                 await this.updateLeaderboard();
                 await this.completeCycle(cycleStart, `invalid symbol for ${executedAction}`);
                 return;
             }
 
+            const normalizedDecisionSymbol = normalizeAndValidateSymbol(rawDecisionSymbol);
+            if (!normalizedDecisionSymbol) {
+                logger.warn(`Cannot ${executedAction}: Unapproved symbol ${rawDecisionSymbol}`);
+                await this.updateLeaderboard();
+                await this.completeCycle(cycleStart, `invalid symbol for ${executedAction}`);
+                return;
+            }
+
+            decision.symbol = normalizedDecisionSymbol;
+            const decisionSymbol = normalizedDecisionSymbol;
             const position = flowPositions.find(p => p.symbol.toLowerCase() === decisionSymbol.toLowerCase());
             if (position) {
                 try {
@@ -1925,9 +1946,26 @@ export class AutonomousTradingEngine extends EventEmitter {
         decision: FinalDecision,
         marketDataMap: Map<string, ExtendedMarketData>
     ): Promise<boolean> {
-        const symbolData = marketDataMap.get(decision.symbol);
+        const rawSymbol = typeof decision.symbol === 'string' ? decision.symbol : '';
+        const normalizedSymbol = normalizeAndValidateSymbol(rawSymbol);
+        if (!normalizedSymbol) {
+            logger.error(`Invalid symbol from decision: ${rawSymbol}`);
+            return false;
+        }
+        decision.symbol = normalizedSymbol;
+
+        const symbolData = marketDataMap.get(normalizedSymbol);
         if (!symbolData) {
             logger.error(`No market data for ${decision.symbol}`);
+            return false;
+        }
+
+        const now = Date.now();
+        const fetchTimestamp = symbolData.fetchTimestamp;
+        const maxMarketDataAgeMs = Math.max(60000, Math.floor(config.autonomous.cycleIntervalMs * 2));
+        const marketDataAgeMs = Number.isFinite(fetchTimestamp) ? (now - fetchTimestamp) : Infinity;
+        if (!Number.isFinite(fetchTimestamp) || marketDataAgeMs > maxMarketDataAgeMs) {
+            logger.warn(`Market data too old for ${decision.symbol}: age ${Math.round(marketDataAgeMs / 1000)}s`);
             return false;
         }
 
@@ -1950,6 +1988,7 @@ export class AutonomousTradingEngine extends EventEmitter {
         // The AI decides leverage based on confidence, volatility, funding rate
         const specs = getContractSpecs(decision.symbol);
         let leverage = decision.leverage;
+        let adjustedAllocation = decision.allocation_usd;
 
         // Basic validation - invalid leverage should have been caught by CollaborativeFlow
         // but we check again as a defensive measure
@@ -1974,7 +2013,7 @@ export class AutonomousTradingEngine extends EventEmitter {
         // This prevents over-leveraging when already heavily exposed
         try {
             const assets = await this.weexClient.getAccountAssets();
-            const equity = parseFloat(assets.equity || '0');
+            const equity = parseFloat(assets.equity || assets.available || '0');
             const positions = await this.weexClient.getPositions();
 
             // Calculate current total notional exposure
@@ -1982,17 +2021,61 @@ export class AutonomousTradingEngine extends EventEmitter {
             // We sum openValue directly to get total notional exposure
             // Then divide by equity to get exposure percentage
             let totalNotionalExposure = 0;
+            let longExposure = 0;
+            let shortExposure = 0;
             for (const pos of positions) {
                 const posSize = parseFloat(String(pos.size)) || 0;
                 const openValue = parseFloat(String(pos.openValue)) || 0;
                 if (posSize > 0 && openValue > 0) {
                     // openValue IS the notional - don't multiply by leverage again
                     totalNotionalExposure += openValue;
+                    const side = String(pos.side || '').toUpperCase();
+                    if (side === 'LONG') {
+                        longExposure += openValue;
+                    } else if (side === 'SHORT') {
+                        shortExposure += openValue;
+                    }
                 }
             }
 
             // currentExposurePct = (total notional / equity) * 100
             // This represents how much notional exposure we have relative to equity
+            if (equity > 0) {
+                const maxPositionUsd = equity * (GLOBAL_RISK_LIMITS.MAX_POSITION_SIZE_PERCENT / 100);
+                const maxTotalLeveragedUsd = equity * (GLOBAL_RISK_LIMITS.MAX_TOTAL_LEVERAGED_CAPITAL_PERCENT / 100);
+                const remainingTotal = maxTotalLeveragedUsd - totalNotionalExposure;
+                const netLimits = RISK_COUNCIL_VETO_TRIGGERS.NET_EXPOSURE_LIMITS;
+                const netLimitPct = isLong ? netLimits.LONG : netLimits.SHORT;
+                const currentDirectional = isLong ? longExposure : shortExposure;
+                const remainingDirectional = Number.isFinite(netLimitPct) && netLimitPct > 0
+                    ? (equity * (netLimitPct / 100)) - currentDirectional
+                    : Infinity;
+
+                if (remainingTotal <= 0) {
+                    logger.warn(`Allocation blocked for ${decision.symbol}: total exposure cap reached`);
+                    return false;
+                }
+
+                if (Number.isFinite(remainingDirectional) && remainingDirectional <= 0) {
+                    logger.warn(`Allocation blocked for ${decision.symbol}: net exposure cap reached`);
+                    return false;
+                }
+
+                const caps = [maxPositionUsd, remainingTotal, remainingDirectional].filter(v => Number.isFinite(v) && v > 0);
+                if (caps.length > 0) {
+                    const allowedAllocation = Math.min(...caps);
+                    if (adjustedAllocation > allowedAllocation) {
+                        logger.warn(`Allocation capped for ${decision.symbol}: ${adjustedAllocation} -> ${Math.max(0, allowedAllocation)}`);
+                        adjustedAllocation = Math.max(0, allowedAllocation);
+                    }
+                }
+
+                if (!Number.isFinite(adjustedAllocation) || adjustedAllocation <= 0) {
+                    logger.warn(`Allocation blocked for ${decision.symbol}: ${adjustedAllocation}`);
+                    return false;
+                }
+            }
+
             const currentExposurePct = equity > 0 ? (totalNotionalExposure / equity) * 100 : 0;
             const maxAllowedLeverage = getMaxLeverageForExposure(currentExposurePct);
 
@@ -2002,6 +2085,10 @@ export class AutonomousTradingEngine extends EventEmitter {
             }
         } catch (exposureError) {
             logger.debug('Could not check exposure for leverage limit:', exposureError instanceof Error ? exposureError.message : 'unknown');
+        }
+
+        if (adjustedAllocation !== decision.allocation_usd) {
+            decision.allocation_usd = adjustedAllocation;
         }
 
         // Only clamp to exchange-specific limits (not our conservative limits)
