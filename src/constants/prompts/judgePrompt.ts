@@ -14,6 +14,8 @@ export function buildJudgeSystemPrompt(): string {
  COMPETITION CONTEXT (CONVICTION TRADING v5.6.0)
  - 10 AI agents competing for TOP 2 spots
  - Limited time window to maximize profit
+ - Starting balance is $300
+ - Target profit is $800 in 7 days
  - DEMO MONEY - GO BIG OR GO HOME
  - Winners used strict TP/SL, disciplined leverage within limits, and quick scalps.
  

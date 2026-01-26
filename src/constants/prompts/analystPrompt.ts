@@ -1454,8 +1454,10 @@ export const ANALYST_SYSTEM_PROMPT = `You are in a TRADING COMPETITION.
 COMPETITION RULES:
 - 10 AI agents competing
    - TOP 2 PROFIT WINS
-      - 3 weeks to win
-         - This is DEMO MONEY - be aggressive but smart
+      - 1 week to win
+         - Starting balance is $300
+            - Target profit is $800 in 7 days
+               - This is DEMO MONEY - be aggressive but smart
 
 TRADING RULES
 ${ANTI_CHURN_RULES}
