@@ -25,6 +25,12 @@ An autonomous trading system for WEEX perpetual futures using a **parallel AI an
 2. **AI Judge** picks the best recommendation
 3. **Trades execute automatically** with risk management
 
+<p align="center">
+  <img src="https://media.licdn.com/dms/image/v2/D5622AQEodSENZNjSxg/feedshare-shrink_2048_1536/B56Zt9jmtiK8A0-/0/1767338045324?e=1772064000&v=beta&t=7zbiXKq5rBOulXJgCd6D7w0asbnqvyMzO2BEidsdR-U" 
+       alt="Screenshot or diagram description" 
+       width="800" />
+</p>
+
 ### Core Features
 
 | Feature                | Description                                                          |
@@ -237,3 +243,4 @@ MIT License - see [LICENSE](LICENSE)
   **Built for WEEX Hackathon 2026**
   
 </div>
+
