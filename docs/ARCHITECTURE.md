@@ -1,4 +1,4 @@
-# Hypothesis Arena - AI-Native Quant Hedge Fund Infrastructure
+# MiroHedge - AI-Native Quant Hedge Fund Infrastructure
 
 ## Table of Contents
 
@@ -27,7 +27,7 @@
 
 ## What We Do
 
-**Hypothesis Arena is a production-grade AI-native quant hedge fund infrastructure inspired by Abundance (Apoorva Mehta's $100M AI capital allocator).** We combine centralized market intelligence with distributed autonomous agents that research, debate, execute, and self-improve 24/7. Our system runs persistent AI agents with memory, tool-use, and reinforcement learning feedback loops — designed for systematic medium-frequency trading today with a clear path to sub-millisecond HFT execution.
+**MiroHedge is a production-grade AI-native quant hedge fund infrastructure.** We combine centralized market intelligence with distributed autonomous agents that research, debate, execute, and self-improve 24/7. Our system runs persistent AI agents with memory, tool-use, and reinforcement learning feedback loops — designed for systematic medium-frequency trading today with a clear path to sub-millisecond HFT execution.
 
 **Core Capabilities:**
 
@@ -43,7 +43,7 @@
 
 ### From SaaS Bot to AI-Native Quant Fund
 
-We're building beyond a "trading bot" toward something closer to **Abundance**: a robust, self-improving system of agents that can handle massive data, run long-running strategies, and make consistent high-quality decisions.
+We're building beyond a "trading bot" toward a robust, self-improving system of agents that can handle massive data, run long-running strategies, and make consistent high-quality decisions.
 
 **Key Principles:**
 
@@ -150,7 +150,7 @@ We're building beyond a "trading bot" toward something closer to **Abundance**: 
 
 ## Production Workflows
 
-These are the real, production-grade workflows that run 24/7 in a 2026 AI-native quant hedge fund. Directly inspired by Abundance's agent-heavy approach.
+These are the real, production-grade workflows that run 24/7 in a 2026 AI-native quant hedge fund.
 
 ### 1. Master Intelligence Loop
 
