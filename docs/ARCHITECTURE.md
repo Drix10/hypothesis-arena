@@ -1,63 +1,342 @@
-# Hypothesis Arena - System Architecture
+# Hypothesis Arena - AI-Native Quant Hedge Fund Infrastructure
 
 ## Table of Contents
 
 1. [What We Do](#what-we-do)
-2. [Glossary](#glossary)
-3. [Architecture Overview](#architecture-overview)
-   - [High-Level System Architecture](#high-level-system-architecture)
-   - [System Components Overview](#system-components-overview)
-4. [End-to-End User Journey](#end-to-end-user-journey)
-5. [Core Components](#core-components)
-   - [Master Intelligence Engine](#1-master-intelligence-engine)
-   - [Tenant Workers](#2-tenant-workers)
-   - [Data Layer](#3-data-layer)
-   - [Communication Layer](#4-communication-layer)
-6. [Data Flow](#data-flow)
-   - [Complete System Flow](#complete-system-flow)
-   - [Master Engine Cycle](#master-engine-cycle-every-5-minutes)
-   - [Tenant Worker Cycle](#tenant-worker-cycle-on-context-received)
-7. [AI Analyst System](#ai-analyst-system)
-   - [Collaborative AI Decision Making](#collaborative-ai-decision-making)
-   - [Individual Analyst Workflows](#individual-analyst-workflows)
-   - [Judge Decision Process](#judge-decision-process)
-8. [Technology Stack](#technology-stack)
-9. [Pricing Tiers](#pricing-tiers)
-10. [Deployment Architecture](#deployment-architecture)
-11. [Scalability](#scalability)
-12. [Security Architecture](#security-architecture)
-13. [Monitoring & Observability](#monitoring--observability)
-14. [Success Metrics](#success-metrics)
+2. [Philosophy & Vision](#philosophy--vision)
+3. [Glossary](#glossary)
+4. [Architecture Overview](#architecture-overview)
+5. [Latency Budget & Performance Targets](#latency-budget--performance-targets)
+6. [Production Workflows](#production-workflows)
+   - [Master Intelligence Loop](#1-master-intelligence-loop)
+   - [Strategy Agent Cycle](#2-strategy-agent-cycle)
+   - [Post-Trade Reflection & Self-Improvement](#3-post-trade-reflection--self-improvement)
+   - [Portfolio & Risk Oversight](#4-portfolio--risk-oversight)
+   - [Daily Operational Rhythm](#5-daily-operational-rhythm)
+7. [Core Components](#core-components)
+8. [AI Agent System](#ai-agent-system)
+9. [Technology Stack](#technology-stack)
+10. [Data Infrastructure](#data-infrastructure)
+11. [Execution Infrastructure](#execution-infrastructure)
+12. [Deployment Architecture](#deployment-architecture)
+13. [Security & Compliance](#security--compliance)
+14. [Monitoring & Observability](#monitoring--observability)
+15. [Evolution Path: Medium-Freq → HFT](#evolution-path-medium-freq--hft)
 
 ---
 
 ## What We Do
 
-**Hypothesis Arena is an AI-powered autonomous trading platform that democratizes institutional-grade trading strategies for retail investors.** Our platform uses a collaborative AI system where four specialized analysts (Statistical, ML Signals, Risk, and Liquidity) debate market opportunities, with a judge selecting the best trade. We support stocks, forex, crypto, and commodities across multiple brokers, delivering 24/7 automated trading with institutional-level risk management.
+**Hypothesis Arena is a production-grade AI-native quant hedge fund infrastructure inspired by Abundance (Apoorva Mehta's $100M AI capital allocator).** We combine centralized market intelligence with distributed autonomous agents that research, debate, execute, and self-improve 24/7. Our system runs persistent AI agents with memory, tool-use, and reinforcement learning feedback loops — designed for systematic medium-frequency trading today with a clear path to sub-millisecond HFT execution.
+
+**Core Capabilities:**
+
+- **Autonomous Agent Council:** 4 specialized AI analysts (Statistical, ML Signals, Risk, Liquidity) + Judge with long-running memory and self-improvement
+- **Centralized Intelligence:** Single Master Engine gathers all market data once, broadcasts to thousands of strategy agents (83% cost savings)
+- **Multi-Asset Coverage:** Stocks, forex, crypto, commodities with unified risk management
+- **Self-Improving System:** Post-trade reflection loop with reinforcement learning and model fine-tuning
+- **Production-Grade:** Sub-second latency paths, FPGA-ready architecture, institutional risk controls
+
+---
+
+## Philosophy & Vision
+
+### From SaaS Bot to AI-Native Quant Fund
+
+We're building beyond a "trading bot" toward something closer to **Abundance**: a robust, self-improving system of agents that can handle massive data, run long-running strategies, and make consistent high-quality decisions.
+
+**Key Principles:**
+
+1. **Centralized Intelligence + Distributed Execution**
+   - Master Engine gathers data once (cost-efficient, consistent)
+   - Strategy Agents execute independently (scalable, isolated)
+   - Hybrid model balances cost, consistency, and speed
+
+2. **Persistent Agents with Memory**
+   - Not stateless API calls — long-running agents with vector memory
+   - Learn from past trades, adapt strategies, improve over time
+   - Tool-use capability (code execution sandbox for custom quant calculations)
+
+3. **Self-Improvement Loop**
+   - Every trade generates feedback signal
+   - Offline training on outcomes → fine-tune models → online deployment
+   - Recursive improvement: agents write and test their own improvements
+
+4. **Latency-Aware Architecture**
+   - Start medium-frequency (seconds to minutes)
+   - Every component designed for HFT evolution (sub-ms via FPGA/GPU offload)
+   - Clear upgrade path without rewriting core logic
+
+5. **Robustness & Measurability**
+   - Agent supervision (watchdog + rollback)
+   - Full audit trail + immutable decision ledger
+   - Real-time attribution per agent, per strategy, per regime
 
 ---
 
 ## Glossary
 
-**Key Terms:**
+**Core Concepts:**
 
-- **Master Engine Cycle:** The 5-minute interval at which the Master Engine gathers market data and broadcasts to all tenants (288 cycles/day)
-- **Trading Cycle:** The plan-specific interval at which a tenant worker processes market context and potentially executes trades
-  - Starter: Every 60 minutes (24 trading cycles/day)
-  - Pro: Every 20 minutes (72 trading cycles/day)
-  - Enterprise: Every 10 minutes (144 trading cycles/day)
-- **Market Context:** The comprehensive package of market data, news, sentiment, and indicators broadcast by the Master Engine
-- **Tenant Worker:** An isolated worker thread that processes market context for a single tenant according to their plan tier
-- **Broadcast:** The act of publishing market context via Redis pub/sub to all tenant workers
-- **Throttling:** Plan-based filtering that determines whether a tenant worker should process a received broadcast
+- **Master Intelligence Engine:** Centralized system that gathers all market data, news, sentiment, and alternative data once per cycle and broadcasts to all strategy agents. Runs every 5 minutes (medium-freq) or sub-second (HFT path).
 
-**Important:** All tenant workers receive every Master Engine broadcast (every 5 minutes), but only process them according to their plan tier's trading cycle frequency.
+- **Strategy Agent:** Persistent AI agent (not stateless worker) that receives market context, maintains memory of past trades, runs analysis, and executes trades. Each agent has vector memory, tool-use capability, and learns from outcomes.
+
+- **Agent Council:** The 4 specialized analysts (Jim, Ray, Karen, Quant) that debate every opportunity in parallel. Each is a long-running autonomous agent with domain expertise.
+
+- **Judge Agent:** Meta-agent that evaluates all analyst recommendations, applies risk constraints, and makes final execution decisions. Has veto power and adjusts sizing.
+
+- **Market Context:** Rich JSONB package containing: raw market data, technical indicators, order book depth, funding rates, news sentiment, social signals, regime detection, cross-asset correlations. Broadcast via Redis pub/sub.
+
+- **Reflection Loop:** Post-trade analysis where agents examine outcomes, generate feedback signals, and trigger model fine-tuning. Runs after every trade + nightly batch.
+
+- **Self-Improvement Cycle:** Offline training pipeline that takes trade outcomes → fine-tunes smaller models (distilled from Gemini/Claude) → deploys new versions after shadow testing.
+
+- **Latency Path:** Execution route optimized for speed. Medium-freq (Node.js, <1s), Low-latency (Rust/C++, <50ms), HFT (FPGA offload, <100µs tick-to-trade).
+
+- **Regime Detection:** ML-based classification of market state (trending, mean-reverting, high-vol, low-vol, risk-on, risk-off). Agents adapt strategies per regime.
+
+- **Tool-Use:** Agent capability to execute Python/R code in sandboxed environment for custom quant calculations (Monte Carlo, optimization, backtesting).
+
+**Latency Tiers:**
+
+- **Medium-Frequency:** 1-60 second execution (current Node.js implementation)
+- **Low-Latency:** 10-500ms execution (Rust/C++ + GPU inference)
+- **HFT:** <100µs tick-to-trade (FPGA offload + co-location)
 
 ---
 
-## Architecture Overview
+## Latency Budget & Performance Targets
 
-Hypothesis Arena uses a **Centralized Intelligence Model** where one Master Engine gathers all market data and broadcasts it to thousands of tenant workers. This architecture delivers 83% cost savings compared to per-tenant data gathering while ensuring consistent, real-time market intelligence across all users.
+### End-to-End Tick-to-Trade Breakdown (2026 SOTA)
+
+| Stage                                | Current (5-min) | Realistic Quant Target | True HFT Target | How to Achieve                                              |
+| ------------------------------------ | --------------- | ---------------------- | --------------- | ----------------------------------------------------------- |
+| **Market Data Ingestion**            | ~seconds        | <50ms                  | <1ms            | Direct exchange feeds, co-location, FPGA/UDP multicast      |
+| **Feature Calculation**              | ~seconds        | <20ms                  | <100µs          | GPU/FPGA offload, pre-computed indicators                   |
+| **AI Analysis (4 Analysts + Judge)** | ~10-25s         | <500ms                 | <5ms            | ONNX/TensorRT, smaller distilled models, parallel inference |
+| **Decision & Risk Check**            | ~seconds        | <10ms                  | <1ms            | Rule engine + lock-free data structures                     |
+| **Order Execution**                  | ~seconds        | <50ms                  | <10µs           | DMA (Direct Market Access) + co-location                    |
+| **Total Tick-to-Trade**              | Minutes         | <1 second              | <100µs          | Hybrid path: Node.js → Rust → FPGA                          |
+
+### Performance Targets by Mode
+
+**Medium-Frequency (Current Production):**
+
+- Master Engine cycle: <60 seconds (target: 45s)
+- Strategy Agent processing: <30 seconds (target: 22s)
+- Broadcast latency: <1 second
+- Trade execution: <5 seconds
+- Uptime: 99.9%
+
+**Low-Latency (6-Month Target):**
+
+- Master Engine cycle: <5 seconds
+- Strategy Agent processing: <500ms
+- Broadcast latency: <10ms
+- Trade execution: <50ms
+- Uptime: 99.95%
+
+**HFT (12-Month Target):**
+
+- Market data to decision: <5ms
+- Order placement: <10µs
+- Co-located execution: <100µs tick-to-trade
+- Uptime: 99.99%
+
+---
+
+---
+
+## Production Workflows
+
+These are the real, production-grade workflows that run 24/7 in a 2026 AI-native quant hedge fund. Directly inspired by Abundance's agent-heavy approach.
+
+### 1. Master Intelligence Loop
+
+**Frequency:** Every 5 minutes (medium-freq) or sub-second (HFT path)  
+**Purpose:** Centralized data gathering and context creation  
+**Latency Target:** <60s today → <50ms on HFT path
+
+```
+MASTER INTELLIGENCE LOOP (Every 5 Minutes)
+
+Timer Trigger (5-min interval)
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ STAGE 1: RAW FEED INGESTION (Parallel)                     │
+│                                                             │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐       │
+│  │  Exchange   │  │  Premium    │  │  Alternative│       │
+│  │  Direct     │  │  Aggregator │  │    Data     │       │
+│  │  Feeds      │  │  (Exegy,    │  │  Providers  │       │
+│  │             │  │  Bloomberg) │  │             │       │
+│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘       │
+│         │                │                │               │
+│         └────────────────┼────────────────┘               │
+│                          │                                 │
+└──────────────────────────┼─────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│ STAGE 2: NORMALIZATION & TIMESTAMPING                      │
+│                                                             │
+│  • Nanosecond precision timestamps                          │
+│  • Symbol normalization across exchanges                    │
+│  • FPGA/UDP multicast for HFT path                         │
+│  • Quality checks (stale data, outliers)                   │
+│                                                             │
+│  Output: Unified tick stream                               │
+└──────────────────────────┬─────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│ STAGE 3: FEATURE EXTRACTION (GPU-Accelerated)              │
+│                                                             │
+│  Technical Indicators:                                      │
+│  ├─ RSI, MACD, EMA, Bollinger Bands                       │
+│  ├─ Order book imbalance, depth analysis                   │
+│  ├─ Funding rates, open interest (crypto)                  │
+│  └─ Cross-asset correlations (rolling windows)            │
+│                                                             │
+│  Market Microstructure:                                     │
+│  ├─ Bid-ask spread, liquidity metrics                     │
+│  ├─ Trade flow toxicity                                    │
+│  └─ VWAP, TWAP benchmarks                                 │
+│                                                             │
+│  Regime Detection:                                          │
+│  └─ ML classifier (trending/mean-reverting/high-vol)      │
+│                                                             │
+│  Output: Feature vectors per symbol                        │
+└──────────────────────────┬─────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│ STAGE 4: ALTERNATIVE DATA LAYER (Parallel Scraping)        │
+│                                                             │
+│  News & Sentiment:                                          │
+│  ├─ Reuters, Bloomberg, AP (via Playwright/Browserless)   │
+│  ├─ Reddit, Twitter/X, StockTwits sentiment               │
+│  ├─ Earnings transcripts, SEC filings                     │
+│  └─ NLP sentiment scoring (FinBERT, custom models)        │
+│                                                             │
+│  Economic Data:                                             │
+│  ├─ Fed, ECB, BoJ announcements                           │
+│  ├─ Macro indicators (CPI, NFP, GDP)                      │
+│  └─ Central bank policy signals                            │
+│                                                             │
+│  Exotic Data (Optional):                                    │
+│  ├─ Satellite imagery (retail traffic, oil storage)       │
+│  ├─ Credit card transaction data                          │
+│  └─ Supply chain signals                                   │
+│                                                             │
+│  Output: Enriched context with sentiment scores            │
+└──────────────────────────┬─────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│ STAGE 5: CONTEXT PACKAGER                                  │
+│                                                             │
+│  Builds rich JSONB object:                                  │
+│  {                                                          │
+│    "timestamp": "2026-04-27T12:00:00.000Z",               │
+│    "sequence": 12345,                                      │
+│    "regime": "trending_bullish",                           │
+│    "markets": {                                            │
+│      "BTC/USD": {                                          │
+│        "price": 67500.00,                                  │
+│        "indicators": {...},                                │
+│        "order_book": {...},                                │
+│        "sentiment": 0.72                                   │
+│      },                                                    │
+│      ...                                                   │
+│    },                                                      │
+│    "correlations": {...},                                  │
+│    "news_summary": [...],                                  │
+│    "metadata": {                                           │
+│      "cycle_time_ms": 45000,                              │
+│      "data_points": 15000                                 │
+│    }                                                       │
+│  }                                                         │
+│                                                             │
+│  Compression: gzip for large contexts                      │
+└──────────────────────────┬─────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│ STAGE 6: REDIS BROADCAST                                   │
+│                                                             │
+│  Primary: Pub/Sub to "market:updates" channel              │
+│  ├─ All strategy agents subscribed                         │
+│  └─ Sub-millisecond fanout                                 │
+│                                                             │
+│  Backup: Cache in "market:context:latest" (5-min TTL)     │
+│  └─ Polling fallback for missed broadcasts                 │
+│                                                             │
+│  Sequence Tracking:                                         │
+│  └─ Agents detect gaps and request missing contexts        │
+└──────────────────────────┬─────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│ STAGE 7: PERSISTENCE & METRICS                             │
+│                                                             │
+│  Store in TimescaleDB/ClickHouse:                          │
+│  ├─ Full context for backtesting                           │
+│  ├─ Compressed historical ticks                            │
+│  └─ Retention: 90 days hot, 2 years cold storage          │
+│                                                             │
+│  Update Metrics:                                            │
+│  ├─ Cycle time (Prometheus histogram)                     │
+│  ├─ Data quality score                                     │
+│  ├─ Broadcast latency (P50, P95, P99)                     │
+│  └─ Alert if cycle time > 60s                             │
+└─────────────────────────────────────────────────────────────┘
+
+END (Wait for next 5-min trigger)
+```
+
+**Key Implementation Details:**
+
+- **Parallel Execution:** Stages 1, 3, 4 run in parallel (Promise.all)
+- **Error Handling:** Retry with exponential backoff (max 3 attempts)
+- **Circuit Breakers:** Skip failing data sources, continue with partial context
+- **Monitoring:** Every stage emits metrics (latency, success rate, data quality)
+- **Failover:** Hot standby Master Engine takes over via Redis distributed lock
+
+**Code Structure:**
+
+```typescript
+// src/services/master/MasterIntelligenceEngine.ts
+class MasterIntelligenceEngine {
+  private cycleInterval = 300000; // 5 minutes
+
+  async runCycle(): Promise<void> {
+    const startTime = Date.now();
+
+    // Stage 1-4: Parallel data gathering
+    const [rawFeeds, altData] = await Promise.all([
+      this.ingestRawFeeds(),
+      this.gatherAlternativeData(),
+    ]);
+
+    // Stage 2-3: Sequential processing
+    const normalized = await this.normalizeAndTimestamp(rawFeeds);
+    const features = await this.extractFeatures(normalized);
+
+    // Stage 5: Package context
+    const context = this.packageContext(features, altData);
+
+    // Stage 6-7: Broadcast and persist
+    await Promise.all([
+      this.broadcastToRedis(context),
+      this.persistContext(context),
+      this.updateMetrics(Date.now() - startTime),
+    ]);
+  }
+}
+```
 
 ### High-Level System Architecture
 
