@@ -210,4 +210,4 @@ STAGE ATTEST HASH: <sha256>
 
 - (empty — first entry closes phase 0)
 - Phase 0 freeze | Drix10 | 2026-09-18 | plan frozen; G0 STAGE + keys at build; Phase 1 unblocked
-- Phase 0 freeze v2 (Bucket 1 rework) | Drix10 | 2026-09-18 | architectural repairs before implementation: broker-native protection, JEV v3, risk-budget sizing, evidence levels, Ed25519 manifests, X out of v1, baseline doc 12, manifest. Re-signs v1, does not reopen it.
+- Phase 0 freeze v2 signed off. Bucket 1 complete; JEV v3 semantics frozen; X removed from production v1; Phase 1 unblocked. | Drix10 | 2026-09-18

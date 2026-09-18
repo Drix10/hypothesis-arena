@@ -4,7 +4,7 @@ Legend: `[B]` needs real-browser control (X login, JS pages, portals) · `[W]` n
 
 ## 0. Housekeeping
 - [x] 0.1 Plan docs frozen-consistent (00-11 + README), pushed to main
-- [x] 0.2 DONE 2026-09-18: Phase 0 signed off (Drix10, doc 07 log); remaining opens deferred/blocked/human-side with reasons below
+- [x] 0.2 DONE 2026-09-18: Phase 0 closed at freeze v2 (Drix10 sign-off, doc 07 log); Phase 1/P1.1 unblocked
 
 ## 1. X-Lists research (HISTORY — X out of v1 production per doc 02 §2.6; kept for the record)
 - [x] 1.1 DONE 2026-09-18: recovered 55-ID folders table from old MVP config; ~46 Scobleizer AI/tech lists, all live
@@ -49,8 +49,8 @@ Legend: `[B]` needs real-browser control (X login, JS pages, portals) · `[W]` n
 - [x] 7.2 DONE 2026-09-18: R1–R9 literals + §5.1a methods + paper fill rule (06 Locked) frozen; R10–R17 as constants; owners = ARCHITECTURE §2/§7
 
 ## 8. Freeze sign-off (doc 07)
-- [x] 8.1 DONE 2026-09-18: zero TBDs outside "tune later"; opens = 1.4 deferred, 2.1/2.2 BLOCKED (not needed for Phase 1), 5.2 human-side (not needed for Phase 1 start), 6.1 build-time human step
-- [x] 8.2 DONE 2026-09-18: Drix10 signed Phase 0 freeze in doc 07 log; Phase 1 unblocked
+- [x] 8.1 DONE 2026-09-18 (freeze v2): zero TBDs outside "tune later"; opens = 1.4 deferred, 2.1/2.2 BLOCKED (not needed for Phase 1), 5.2 human-side (not needed for Phase 1 start), 6.1 build-time human step
+- [x] 8.2 DONE 2026-09-18: Drix10 signed Phase 0 freeze v2 in doc 07 log — "Bucket 1 complete; JEV v3 semantics frozen; X removed from production v1; Phase 1 unblocked"; Phase 1/P1.1 may begin on human start
 
 ## 9+. Build phases
 ### Phase 1 start checklist (unblocked, non-X sources, no code until human says start)
