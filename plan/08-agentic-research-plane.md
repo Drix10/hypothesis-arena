@@ -84,8 +84,23 @@ on a machine that can move money.
 `CodeAgent` runs with `executor_type="docker"` only: non-root user, read-only
 rootfs, dropped capabilities, explicit CPU/RAM limits, and network egress limited
 to the Phase-0 allow-listed endpoints (source APIs + the model provider, nothing
-else). Import allowlist pinned to the minimum (stdlib subset + requests +
-BeautifulSoup + pydantic + companyfacts parsers — exact list frozen in Phase 0).
+else). Import allowlist (LOCKED 2026-09-18, exact — nothing else imports): stdlib
+`json, re, datetime, urllib, xml, html, math, statistics, collections,
+itertools, hashlib, base64` + `requests` + `bs4` (BeautifulSoup) + `lxml`
+(parser only) + `pydantic` + `pandas` (frames parsing, no eval) + `feedparser`
+(RSS). No `subprocess`, no `os.system`, no `socket` raw, no `pickle`, no
+`yaml.load` (safe_load only if yaml ever added — it is not on the list).
+
+OS isolation design (LOCKED 2026-09-18, enforced at build, proven by the §8.6
+isolation test): three users, no shared groups. `mirotrade` runs the C++ core
+and owns journal/HALT/STAGE/broker keys (mode 600, group `mirotrade`).
+`miroresearch` runs the plane + sidecars and owns `features.jsonl` +
+`signals.jsonl` only; no read on `mirotrade` home, no sudo, no docker group
+(the container runtime is driven by the supervisor, not by the agent user).
+`mirohuman` (you) owns the `STAGE` file signatures. Credentials live in
+`mirotrade` home or the sidecar env owned by `miroresearch` (X session for
+twikit-rss) — never in git, never world-readable, inventoried in the Phase-1
+credential-placement note.
 `LocalPythonExecutor` is **forbidden** on any host or container that can reach
 trading credentials, the journal, `HALT`, or `STAGE` — upstream documents it as
 best-effort sandboxing with known escapes, which is not sandboxing.
@@ -262,7 +277,7 @@ Hard rules on this record:
 - `LocalPythonExecutor` is forbidden wherever trading credentials, journal, `HALT`,
   or `STAGE` are reachable. Recovery requires checkpoint + external supervisor +
   idempotent nodes — checkpoints alone are not durability.
-- Version pins (Phase-0 proposal, researched 2026-09-18 — human must accept):
+- Version pins (LOCKED 2026-09-18, human-accepted):
   `langgraph==1.1.6`, `smolagents==1.26.0`, self-hosted Langfuse (`langfuse==4.15.4`
   client). Installability is verified at build; any upgrade is a D3 version bump
   with a fresh paper window, never a silent pip update.

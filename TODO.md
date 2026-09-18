@@ -17,27 +17,27 @@ Legend: `[B]` needs real-browser control (X login, JS pages, portals) · `[W]` n
 
 ## 2. Decision-layer proof (doc 03)
 - [ ] 2.1 [HUMAN] Obtain `OPENROUTER_API_KEY` — nothing in 2.2 can run without it
-- [ ] 2.2 [W] Confirm Decisions endpoint shape + exact model revision string; record pinned string into doc 03 (BLOCKED on 2.1)
+- [ ] 2.2 [BLOCKED] 2026-09-18: needs OPENROUTER_API_KEY in env (human skipped); then confirm Decisions endpoint + pin exact revision into doc 03
 - [x] 2.3 DONE 2026-09-18: 20 hand-worked cases in doc 03 §3.7 (all HOLD rows + boundaries 17-20); §3.6 box checked
 
 ## 3. Venues (doc 01)
 - [x] 3.1 DONE 2026-09-18: OANDA v20 practice primary, FXCM demo fallback (REST + streaming, free demo, same shape as live)
 - [x] 3.2 DONE 2026-09-18: Alpaca paper primary (free, live-price sim, REST + WS, resettable, no deposit)
 - [x] 3.3 DONE 2026-09-18: exchange/broker calendars (fail-closed) + FRED/ALFRED + Fed/ECB pages + EDGAR-derived earnings; all free
-- [x] 3.4 DONE 2026-09-18: proposal written into doc 01 — [HUMAN] accept (or amend) to lock venue names
+- [x] 3.4 DONE 2026-09-18: venue names LOCKED in doc 01 ([HUMAN] ACCEPTED)
 
 ## 4. Research-plane freeze (doc 08)
-- [x] 4.1 DONE 2026-09-18: langgraph==1.1.6, smolagents==1.26.0, langfuse==4.15.4 (self-hosted); installability verified at build
-- [x] 4.2 DONE 2026-09-18: versions in 08 locked decisions; six-node topology + failure defaults already in 08 §8.3; checkpoint store SQLite(G0/G1)->Postgres(G2+) unchanged
-- [ ] 4.3 [D] Write Docker spec (non-root, read-only rootfs, caps, limits, egress allow-list) + import allowlist + OS users/permissions design
-- [ ] 4.4 [D] Freeze `features.jsonl` schema + R15 numbers
+- [x] 4.1 DONE 2026-09-18 ([HUMAN] ACCEPTED): langgraph==1.1.6, smolagents==1.26.0, langfuse==4.15.4 (self-hosted); installability verified at build
+- [x] 4.2 DONE 2026-09-18 ([HUMAN] ACCEPTED): versions in 08 locked decisions; six-node topology + failure defaults already in 08 §8.3; checkpoint store SQLite(G0/G1)->Postgres(G2+) unchanged
+- [x] 4.3 DONE 2026-09-18: exact import allowlist + 3-user OS design (mirotrade/miroresearch/mirohuman) locked in 08 §8.2
+- [x] 4.4 DONE 2026-09-18: features.jsonl schema f1 (§8.5) + R15 table (§8.4) confirmed frozen, no changes needed
 
 ## 5. Sources classification (doc 09)
-- [ ] 5.1 [D] Every source TRIGGER/CONTEXT/NULL, no blanks
-- [ ] 5.2 [B/H] Obtain free keys: FRED, NASA FIRMS, (AISStream/TomTom only if used)
-- [ ] 5.3 [W] Record EDGAR User-Agent + rate limit + polling cadence
-- [ ] 5.4 [D] Per-source TTL, cadence, heartbeat threshold, failure default
-- [ ] 5.5 [D] ALFRED-vs-FRED replay decision; Tier D evidence bar + `lessons.jsonl` schema
+- [x] 5.1 DONE 2026-09-18: Tier tables + finance-first X universe (doc 02 §2.4) leave no blanks; every source has class + failure default
+- [ ] 5.2 [HUMAN] Obtain free keys: FRED (signup, 1 key), NASA FIRMS (email token); AISStream/TomTom only if used — say which you want
+- [x] 5.3 DONE 2026-09-18: EDGAR UA + 10 req/s ceiling locked in 09 §9.2
+- [x] 5.4 DONE 2026-09-18: §9.3 heartbeat (>3x cadence = stale) + per-tier failure defaults in §9.1 table; calendar fail-closed
+- [x] 5.5 DONE 2026-09-18: ALFRED vintages for replay (locked in 01); Tier D bar + lessons.jsonl already in 09 §9.1/§9.4
 
 ## 6. Capital / kill / spend (doc 10)
 - [ ] 6.1 [D] Freeze STAGE format + attestation chain; create and sign G0 file
@@ -58,4 +58,4 @@ Legend: `[B]` needs real-browser control (X login, JS pages, portals) · `[W]` n
 ## A. Agent orientation files (Phase-0, new)
 - [x] A.1 DONE 2026-09-18: ARCHITECTURE.md (8 questions, MiroHedge-mapped) at root
 - [x] A.2 DONE 2026-09-18: AGENTS.md session rules (read ARCH+00, TODO discipline, no secrets, fail closed) at root
-- [ ] A.3 [HUMAN] Confirm pi-harness loads AGENTS.md every turn (or point to the harness rules file to use instead)
+- [x] A.3 DONE 2026-09-18: pi harness loads AGENTS.md every turn (human-confirmed)

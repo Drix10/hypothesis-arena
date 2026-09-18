@@ -124,6 +124,10 @@ Evidence bar, applied before anything is recorded:
   limiter, jittered backoff (3 retries, ~15 s base, ±20% jitter — same semantics
   as doc 02 §2.5), and an on-disk cache keyed by source ETag/Last-Modified. A 429
   halves that source's poll rate for an hour.
+- **EDGAR specifics (LOCKED 2026-09-18):** UA `MiroHedge/phase0 contact=<human fills
+  at build>`, hard ceiling 10 req/s (SEC limit), submissions JSON + companyfacts
+  only — no full-text crawl beyond the filing index. Zero 403s over the 7-day
+  soak or the poller does not ship (§9.4).
 - **Timestamps:** `observed_at_ns` comes from the source's own publication field
   when it exists; when it does not, the feature is marked `observed_at_estimated`
   and is CONTEXT-capped forever. Publication-time-vs-availability-time mismatch is

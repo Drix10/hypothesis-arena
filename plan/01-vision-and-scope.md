@@ -87,7 +87,7 @@ boundary is enforced by OS permissions, not convention (doc 08 §8.1, R11).
 - Isolation: the research plane cannot write the journal, the `HALT` file, or the
   `STAGE` file. Proven by test, not asserted.
 
-## Venue + data proposal (Phase-0 proposal — human must accept)
+## Venue + data (LOCKED 2026-09-18, human-accepted)
 
 Researched 2026-09-18. Free/paper only, no paid data invented. Nothing here is
 approved until a human signs it; approval writes these names into the Locked
@@ -117,8 +117,10 @@ decisions below.
 - Language for hot path: C++ (no debate).
 - Decision calibration: JEV `typesafe/jev-1.13` via OpenRouter Decisions API.
 - Instruments: forex majors + US-listed stocks. No crypto in v1.
-- Venue/data: broker(s) + feed chosen in Phase 0 (paper/sandbox first); names written
-  into this doc before any build.
+- Venue/data (locked 2026-09-18): forex = OANDA v20 practice (FXCM demo
+  fallback); stocks = Alpaca paper; broker WS + 15-min REST reconcile; no FIX
+  in v1; stocks 09:30–16:00 ET; calendars = exchange/broker (fail-closed) +
+  FRED/ALFRED + Fed/ECB + EDGAR-derived earnings, all free.
 - Capital mode: paper until 30 clean days + human sign-off. Four stages
   (G0_PAPER → G1_TINY → G2_SCALED → G3_FULL), human-signed, never auto-promoted;
   demotion is automatic and cannot be vetoed (doc 10).
