@@ -1,0 +1,192 @@
+# 10 — Capital Gates, Kill Switches, and Spend Control
+
+Full autonomy is granted *inside a box*. This doc defines the box: which stage the
+system is in, what that stage permits, who may change it (a human, always), how it
+is shut down, and how much it may spend on AI to earn what it earns.
+
+The system is autonomous in **research, decision, and execution**. It is never
+autonomous in **capital escalation**.
+
+## 10.1 The stage file (the box)
+
+One file, `STAGE`, read at startup and re-read at every cycle boundary:
+
+```
+stage:        G0_PAPER | G1_TINY | G2_SCALED | G3_FULL
+approved_by:  <human name>
+approved_at:  <ISO8601>
+capital_usd:  <number>
+attest_hash:  <sha256(stage ‖ approved_by ‖ approved_at ‖ capital_usd ‖ prev_attest)>
+```
+
+- `attest_hash` chains to the previous attestation and into the journal. A `STAGE`
+  file whose chain does not verify → the system starts in **G0_PAPER**, alerts,
+  and refuses live orders. Corruption fails toward paper, never toward capital.
+- The trading process may **read** `STAGE`. It may **write** only demotions.
+  Promotions are written by a human, out of band, with the process stopped.
+- The research plane cannot read or write `STAGE` (doc 08 §8.1, R11).
+- **R17 (new):** no code path exists that raises a stage. Promotion is a human
+  editing a file while the system is down. This is deliberate friction, exactly
+  like resume-from-HALT (doc 06 §6.4, locked).
+
+## 10.2 Stage table (locked)
+
+`R-multiplier` scales every numeric limit in doc 05 §5.1 (positions, exposure,
+trades/day, sizes). It never scales the *rules* — R1–R9 always apply.
+
+| | G0_PAPER | G1_TINY | G2_SCALED | G3_FULL |
+|---|---|---|---|---|
+| Capital | paper only | ≤ 2% of intended capital | ≤ 25% | 100% |
+| Symbols | ≤ 5 | **1** | ≤ 3 | ≤ 5 |
+| R-multiplier | 1.0 | **0.25** | 0.5 | 1.0 |
+| Max daily loss | n/a | 1% of stage capital | 1.5% | 2% |
+| Max position | per R2 | R2 × 0.25 | R2 × 0.5 | R2 |
+| Leverage | doc 05 §5.2 | forex ≤ 1× (single symbol is forex, see below) | forex ≤ 2×, stocks ≤ 1× | doc 05 §5.2 |
+| Human review | weekly | **daily** | weekly | weekly |
+| Research plane | full | full | full | full |
+
+**G1_TINY symbol choice (locked):** the single G1 symbol must be a forex major,
+never a US equity. A live account at 2% of intended capital will almost always
+sit under the $25k PDT threshold, and R9 caps a sub-$25k margin account at 3
+day-trades per 5 sessions — which would throttle the sample size the G1 → G2
+promotion criteria need, not the risk (forex has none of this: R9's PDT clause
+is equities-only, and forex runs 24/5). Equities re-enter at G2, where ≤3
+symbols and a larger likely capital base make the PDT constraint bind less.
+
+### Promotion criteria (necessary, never sufficient)
+
+Every box must be true **and** a human must then sign the file. Meeting the
+criteria grants the *right to ask*, nothing more.
+
+**G0 → G1** — 30 consecutive clean paper days; zero R-rule violations; replay
+determinism green every week (D1); JEV calibration at or better than the
+base-rate baseline over ≥ 200 decisions (doc 11); AI spend within the G0 absolute
+cap; kill-switch, reconcile, and isolation drills all passed.
+
+**G1 → G2** — 30 consecutive live days at G1; zero R-rule violations; realized
+slippage within 1.5× the paper fill model; live-vs-paper divergence < 30% (S3);
+AI-spend ratio test passing for 30 days (§10.4); calibration still ≥ baseline.
+
+**G2 → G3** — 60 consecutive live days at G2; the above sustained; max drawdown
+< 5% over the window; ≥ 100 closed trades so the statistics mean something.
+
+### Automatic demotion (no human needed, and no human can veto it)
+
+| Trigger | Action |
+|---|---|
+| Any R-rule violation | Demote one stage + HALT entries + alert |
+| Drawdown > 10% from peak (R5) | Demote to G0_PAPER + flatten via stops + alert |
+| Daily loss limit breached | Entries halted for the session; second breach in 5 sessions → demote |
+| Calibration below baseline by >0.02 Brier, ≥20-outcome minimum met (R13) | Entries halted, demote one stage |
+| Determinism/replay failure (D1) | Demote to G0_PAPER immediately |
+| Journal hash-chain break | Demote to G0_PAPER, HARD kill, forensics before restart |
+| Spend circuit breaker at tier 3 (§10.4) | Entries halted, demote one stage |
+
+Demotion is written to `STAGE` by the process, chained, journaled, and alerted.
+Re-promotion is the full human gate again. There is no "temporary" demotion.
+
+## 10.3 Kill-switch hierarchy (R16, locked)
+
+Three levels. Agents can invoke none of them and can override none of them.
+
+| Level | Trigger | Effect | Resume |
+|---|---|---|---|
+| **SOFT** | `HALT` file; S5 JEV streak; feed stale > 30 s; spend tier 2; research plane paused past TTL | **Entries stop within 1 cycle.** Exits, stops, TP, reconcile all continue normally. Positions are managed, not abandoned. | Manual: remove file **and** restart with flag (doc 06 §6.4 — deleting the file alone does nothing) |
+| **MEDIUM** | R5 drawdown; daily loss breach; R-rule violation; calibration breach; spend tier 3 | Entries stop. **Then, conditionally:** if the venue is open and the spread is within the normal band, flatten every open position via market order now. If not (venue closed, spread abnormal, or the flatten order itself fails), do **not** force a bad-condition exit — leave the existing hard stop/TP in place exactly as under normal operation, and re-attempt the flatten every cycle until conditions allow or the position closes on its own stop/TP first. Stage demoted immediately either way. | Human review + stage re-approval |
+| **HARD** | Journal chain break; reconcile drift unresolvable; broker auth failure; determinism failure; suspected compromise of the research-plane sandbox | Cancel-all via REST; **broker credentials revoked from the running process**; trading process exits non-zero; supervisor does **not** restart it | Human, on the host, after forensics |
+
+Rules that hold at every level:
+- **Exits never depend on JEV, the research plane, agents, or WS health**
+  (doc 06, locked). A kill switch stops *new risk*; it never strands old risk.
+- The kill path is pure C++ in the hot process. It does not call an LLM, does not
+  read `features.jsonl`, and does not wait on the network for its decision.
+- MEDIUM and HARD are reachable from a physical operator action (file + signal) in
+  under 5 seconds, and that path is drilled monthly.
+
+## 10.4 AI spend control (R10, locked)
+
+**The rule:** AI spend is an operating cost that must stay far below realized
+profit. During paper there is no profit, so the cap is absolute. Once live, it is
+both absolute and proportional.
+
+Measured continuously from Langfuse (doc 08) + provider billing, per model, per
+node, per cycle. The trading process holds a running spend counter; the counter
+is journaled hourly and survives restart.
+
+| Stage | Absolute cap | Ratio cap |
+|---|---|---|
+| G0_PAPER | **$150 / 30 days** | none (no profit exists — do not compute a ratio against zero) |
+| G1_TINY | $150 / 30 days | none (stage capital is too small for a meaningful ratio; absolute cap governs) |
+| G2_SCALED | $400 / 30 days | rolling-30d AI spend ≤ **20%** of trailing-90d realized net profit† |
+| G3_FULL | $1,000 / 30 days | same 20% test |
+
+Defaults above are Phase-0 freeze values, editable only by doc edit + fresh paper
+window (doc 05, locked). Both caps apply; the binding one wins.
+
+† **The ratio is undefined, not automatically failed, when trailing-90d net
+profit ≤ $0.** 20% of a loss is a negative number, and testing spend against a
+negative cap would make the ratio test fail from the first dollar spent during
+any ordinary drawdown — not because AI spend did anything wrong, but because
+the denominator went negative. When trailing-90d profit ≤ $0: the ratio test is
+**suspended** (not evaluated, not deemed passed or failed), the absolute cap
+alone governs, and the daily summary flags `ratio_test: suspended (unprofitable
+window)`. This is a visibility flag only — it is not itself a demotion trigger.
+A drawdown that is actually a problem is caught by R5 (drawdown halt) or R13
+(calibration floor) on its own terms; spend control's job is spend, not
+performance, and conflating the two would fire the wrong circuit breaker for
+the wrong reason.
+
+### Throttle tiers (automatic, graded, logged)
+
+Evaluated hourly against the *projected* 30-day spend (trailing 7-day run rate
+extrapolated), so the brake is applied before the wall, not at it.
+
+| Tier | Condition | Automatic response |
+|---|---|---|
+| **0 — normal** | projection < 60% of cap | Full research depth |
+| **1 — trim** | ≥ 60% | Research cycle interval doubled; `critique` node runs on TRIGGER-class symbols only; NULL-class source extraction suspended |
+| **2 — cheap** | ≥ 80% | Non-JEV LLM work switches to the cheapest configured model; `hypothesize` prose capped at 200 chars; watchlist cut to the 2 best-calibrated symbols; **SOFT kill: no new entries** |
+| **3 — stop** | ≥ 100%, or ratio test failed 3 consecutive days at G2/G3 | **MEDIUM kill**: entries halted, positions flattened in an orderly way, stage demoted, alert. Exits and reconcile stay live. |
+
+- **JEV is never throttled away.** It is the calibrated decision gate and is cheap
+  relative to research; if spend is a problem, the fix is less *research*, not a
+  less-calibrated *decision*. Throttling degrades what we know, never whether we
+  check.
+- Tier changes are journaled with the projection that caused them. A tier can
+  fall back only after 6 consecutive hours below the lower threshold (anti-flap).
+- A provider price change that lifts projected spend past a tier acts exactly like
+  usage growth. No exception path exists.
+
+### Cost accounting rules
+
+- Every LLM call is tagged `{stage, cycle_id, symbol, node, model,
+  prompt_tokens, completion_tokens, usd}`. Untagged calls are a build failure.
+- The daily summary (doc 06 §6.3) reports: spend, projection, tier, spend per
+  closed trade, and — from G2 — the spend/profit ratio.
+- Cost per *decision* and cost per *closed trade* are first-class metrics. A
+  strategy that is profitable gross of AI cost and unprofitable net of it is a
+  losing strategy, and the daily summary is written to make that impossible to
+  miss.
+
+## 10.5 What "done" means
+
+- [ ] `STAGE` chain verification tested, including a deliberately corrupted file
+      (must land in G0_PAPER, not in live).
+- [ ] Promotion requires a stopped process + human edit; proven by attempting a
+      programmatic promotion and observing it fail.
+- [ ] Demotion drill: force an R-rule violation in paper → automatic demotion,
+      journaled, alerted.
+- [ ] SOFT / MEDIUM / HARD drills each pass, including "exits still work" under
+      all three.
+- [ ] Spend counter survives process restart; tier transitions journaled.
+- [ ] A forced spend spike walks tier 0 → 1 → 2 → 3 with the documented effects.
+- [ ] Daily summary shows spend, projection, tier, and cost per closed trade.
+
+## Locked decisions
+
+- Four stages, human-signed, chained. No code path promotes. Demotion is automatic
+  and cannot be vetoed.
+- Corruption, doubt, and failure all resolve toward paper.
+- Three kill levels; none reachable by an agent; exits never blocked by any of them.
+- AI spend: absolute cap always; ratio cap from G2. Both apply. Throttling reduces
+  research, never decision calibration.

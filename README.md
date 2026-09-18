@@ -27,7 +27,13 @@ A systematic trading fund for **forex majors + US-listed stocks** (no crypto in 
 3. **JEV decision layer** answers 4 typed questions per cycle — calibrated, no prose
 4. **C++ core** snapshots, risk-gates, and executes — or holds, with a journal row either way
 
-Two inputs, one output: **BUY / SELL / HOLD + size + stop**. Paper capital until 30 clean days + human sign-off.
+Two inputs, one output — plus a box they operate inside: **BUY / SELL / HOLD + size + stop**. Paper capital until 30 clean days + human sign-off.
+
+- **Input A (slow, rich):** the agentic research plane — free OSINT, SEC filings, macro releases, X-List sentiment, fused into typed features (docs 08, 09)
+- **Input B (fast, thin):** broker quotes / trades / account state (forex majors + US-listed stocks)
+- **Input C (governing):** the stage file, risk constants, spend counters (doc 10)
+
+**The primary edge is statistical, not linguistic.** Indicators, regime detection, and the risk table do the work; JEV gates; research supplies context and disconfirmation. If the AI layer can't beat the plain statistical baseline net of its own cost, it gets removed, not tuned (doc 11).
 
 ### Who decides what
 
@@ -37,6 +43,9 @@ Two inputs, one output: **BUY / SELL / HOLD + size + stop**. Paper capital until
 | Routing, ranking, gating | Calibrated yes/no, pick-winner, conviction | JEV `typesafe/jev-1.13` via OpenRouter Decisions API |
 | Snapshot, risk, execution | Fast, deterministic, auditable | C++ from scratch |
 | Knowledge feed | Curated signals from X Lists | Sidecar (API/RSS, never Selenium in C++) |
+| Research, OSINT fusion, hypotheses | Typed features + capped prose, never orders | Research plane: LangGraph + smolagents, sandboxed (doc 08) |
+| Capital stage, kill switches, spend | Permit or forbid; never expand | `STAGE` file + C++ constants + human signature (doc 10) |
+| Calibration + promotion | Score answers, judge challengers | Offline harness + human sign-off (doc 11) |
 
 > Hot path never blocks on prose LLM. Hot path may read cached JEV answers.
 > Risk gates are local and unconditional — they run even if JEV is down (default: **HOLD**).
@@ -88,9 +97,10 @@ OPENROUTER_API_KEY=your_key          # Decisions endpoint access confirmed
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│   SIGNAL SIDECAR (15-min cadence, off hot path)                 │
-│   • X Lists → filter → dedupe → signals.jsonl + SQLite          │
-│   • Gemini thesis loop → thesis.json every 5 min (advisory)     │
+│   SIGNAL + RESEARCH PLANE (off hot path)                               │
+│   • X Lists → filter → dedupe → signals.jsonl                           │
+│   • LangGraph + smolagents → typed features.jsonl (bounded, TTL'd)      │
+│   • STAGE file (human-signed) + spend counters govern everything        │
 ├─────────────────────────────────────────────────────────────────┤
 │   C++ CORE (per-symbol decision cycle, 60 s staggered)          │
 │   • feed/   broker quotes → lock-free ring, gap detection       │
@@ -131,6 +141,7 @@ OPENROUTER_API_KEY=your_key          # Decisions endpoint access confirmed
 | Correlation | > 0.9 same direction → close newest |
 | Sessions | Stocks 09:30–16:00 ET only, PDT counted locally, forex needs open venue feed |
 | Leverage | Forex ≤ 5×, stocks ≤ 2× (1× cash) — unlocks only after Phase-5 review |
+| Autonomy (R10–R17) | AI spend breaker, plane isolation, no lookahead, calibration floor, conflict→HOLD, runaway caps, kill hierarchy, no auto-escalation |
 
 ### Latency budget (local, excl. network/API)
 
@@ -145,16 +156,29 @@ OPENROUTER_API_KEY=your_key          # Decisions endpoint access confirmed
 
 ---
 
-## Build Roadmap (phases run in order, none starts early)
+## Capital stages (never auto-promoted, auto-demoted on any trip)
+
+| | G0_PAPER | G1_TINY | G2_SCALED | G3_FULL |
+|---|---|---|---|---|
+| Capital | paper only | ≤ 2% (forex only, 1 symbol) | ≤ 25%, ≤ 3 symbols | 100%, ≤ 5 symbols |
+| AI spend cap | $150/30d | $150/30d | $400/30d + 20%-of-profit ratio | $1,000/30d + ratio |
+| Kill levels | SOFT / MEDIUM / HARD — none reachable by an agent, exits survive all three |
+
+Details: [`plan/10-capital-gates-and-spend-control.md`](./plan/10-capital-gates-and-spend-control.md).
+
+## Build Roadmap (phases 0–7, mapped to stages G0→G3)
 
 | Phase | Work | Exit |
 |---|---|---|
 | **0 — Freeze spec** | Verify list IDs, classify TRIGGER/CONTEXT, 20 JEV cases, freeze numbers, name venues | Zero TBDs outside "tune later" |
 | **1 — Signal sidecar** | Collector → `signals.jsonl` + SQLite + dedupe | 7-day soak, <10% noise |
 | **2 — JEV sidecar** | `jev.py`: stdin state → batched call → answers + log | 20 cases green, cache hits > 50% |
-| **3 — C++ core** | `core` + `risk` first, then `feed`, `ctx`, `exec`, `journal` | Soak + hash-stability + veto suite green |
-| **4 — Paper loop** | Full loop on broker paper/sandbox, daily summaries, replay checks | 30 clean days, zero R-violations, human sign-off |
-| **5 — Live gate** | Tiny size, 1 symbol, halved limits, daily human review | 30 live days green → scale per doc 05 only |
+| **2.5 — Research plane** | LangGraph graph, Docker sandbox, Tier A pollers, isolation + R12 tests | Docs 08 §8.6 / 09 §9.4 boxes checked |
+| **3 — C++ core** | `core` + `risk` first, then `ingest`, `kill`, `feed`, `ctx`, `exec`, `journal` | Soak + hash-stability + veto suite green |
+| **4 — Paper loop (G0)** | Full loop + research attached, baseline + calibration harness live | 30 clean days, spend in cap, human sign-off |
+| **5 — G1_TINY** | Human-signed STAGE, 1 forex symbol, 0.25× limits, daily review | G1→G2 criteria + signature |
+| **6 — G2_SCALED** | Postgres checkpoints, shadow challengers, 20% spend ratio live | 60 days, ≥100 trades, DD < 5% |
+| **7 — G3_FULL** | Full limits, deposit-and-walk-away verified | 30 intervention-free days, ongoing weekly review |
 
 Full checklist with per-phase boxes: [`plan/07-build-roadmap.md`](./plan/07-build-roadmap.md).
 
@@ -169,6 +193,10 @@ Full checklist with per-phase boxes: [`plan/07-build-roadmap.md`](./plan/07-buil
 5. No portfolio UI / investor dashboard in phase 1. Logs + journal files only.
 6. No auto fine-tuning of models with live capital. Shadow + human promote only.
 7. No leverage above the risk table. No exceptions, no "just this once".
+8. No paid data subscriptions for core operation (doc 09).
+9. No self-modifying agents, no online learning on the live path (doc 11).
+10. No chat-gateway agent frameworks on the trading host (doc 08).
+11. No automatic capital escalation. Ever (doc 10).
 
 ## Plan docs (read in order)
 
@@ -181,7 +209,11 @@ plan/
 ├── 04-cpp-hft-architecture.md# C++ core: modules, data rules, latency
 ├── 05-risk-and-determinism.md# R1–R9, stops, determinism, self-correction
 ├── 06-execution-and-ops.md   # order lifecycle, journal, kill switch
-└── 07-build-roadmap.md       # the only to-do list (phases 0–5)
+├── 07-build-roadmap.md       # the only to-do list (phases 0–7)
+├── 08-agentic-research-plane.md # LangGraph + smolagents, isolation, runaway caps
+├── 09-osint-and-free-data.md  # free sources ranked, TRIGGER/CONTEXT/NULL
+├── 10-capital-gates-and-spend-control.md # stages, kill hierarchy, spend caps
+└── 11-calibration-and-self-improvement.md # Brier scoring, shadow challengers, promotion gate
 ```
 
 > If it's not in `plan/`, we don't build it. New idea → doc section first, then build.
@@ -195,3 +227,7 @@ plan/
 - Determinism: same logged context replayed → same decision (proven by replay test)
 - Risk: zero trades violating `plan/05-risk-and-determinism.md` — one violation = halt
 - Latency: context snapshot → order intent < 1 ms local (excludes network calls)
+- Calibration: JEV `enter` and `veto` beat base rate on Brier over ≥ 200 decisions (doc 11)
+- Autonomy: 30 days with no required human intervention, every intervention logged with cause
+- Cost: AI spend within stage cap, cost per closed trade reported daily (doc 10)
+- Isolation: research plane can't write journal, `HALT`, or `STAGE` — proven by test
