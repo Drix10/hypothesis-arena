@@ -54,7 +54,7 @@ Legend: `[B]` needs real-browser control (X login, JS pages, portals) · `[W]` n
 
 ## 9+. Build phases
 ### Phase 1 start checklist (unblocked, non-X sources, no code until human says start)
-- [ ] P1.1 `scripts/freeze-check.sh` first: verify manifest values (KNOWN-BY-FREEZE exact: v3/f2/risk/R1–R17/stages/venues; BUILD-TIME placeholders allowed: jev_provider, research_models, G0 file; INTENTIONALLY-DEFERRED: plan_hash, live venues)
+- [ ] P1.1 `scripts/freeze-check.sh` first: verify manifest values (KNOWN-BY-FREEZE exact: v3/f2/risk/R1–R17/stages/venues; BUILD-TIME placeholders allowed: jev_provider, research_models, G0 file; INTENTIONALLY-DEFERRED: plan_hash, live venues) — STATUS 2026-09-18: FAIL on 1 item, `research_graph_version: g1` in manifest has no counterpart declaration in doc 08; all 38 other checks pass; awaiting human ruling, P1.2+ blocked
 - [ ] P1.2 Collector: EDGAR + FRED/ALFRED + official macro feeds + calendars → `signals.jsonl` (atomic rename, per-source poller/TTL/heartbeat per §9)
 - [ ] P1.3 SQLite index + dedupe + TRIGGER/CONTEXT tagging at write time (incremental-edge rule, doc 09)
 - [ ] P1.4 7-day soak + noise grade (<10% off-topic)
