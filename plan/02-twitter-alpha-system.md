@@ -58,14 +58,35 @@ No scores here. Scoring happens in the JEV layer (doc 03), which reads the raw
 texts inline. No polarity field on the record — deliberate (see doc 03 §3.4).
 This system only collects, filters, dedupes, and stores.
 
-## 2.4 Universe (from old config — verify IDs before build)
+## 2.4 Universe (verified 2026-09-18, Phase 0 box 1.3 closed)
 
-Port the full `folders[]` table from `Twitter-Gemini-GitHub-MVP/config/index.js`.
-Columns: domain name → list ID(s) → class (TRIGGER or CONTEXT) → polling weight.
-TRIGGER lists are macro/FX/earnings-native and may place texts into JEV state; CONTEXT lists
-inform regime only and never trigger entries (locked, §2.4 rule). Classification
-is a Phase-0 exit item — every list gets a class before any build. Polling weight
-starts equal; reweight only with 2 weeks of measured hit-rate data.
+All 55 list IDs from the old `folders[]` table were opened logged-in and resolve;
+0 dead, all showed posts within ~24h on recheck. Full per-list record (name, owner,
+members, followers, recency) is Phase-0 evidence, kept with the sign-off log.
+Summary of what was found:
+
+- ~46 IDs are @Scobleizer AI/tech lists (dev tools, founders, companies,
+  robotics, policy, education, health, media, AR/VR, quantum, etc.).
+  Class: **CONTEXT** (REGIME only, never trigger entries).
+- 2 IDs are crypto/Web3 lists (`952969256903168000`, `1837926936586473655`).
+  **Dropped** — no crypto in v1 (doc 01).
+- Non-tech lists (`World News`, `U.S. News`, `Non Tech News`, `Climate and
+  Weather`, `Cybersecurity`, `Marketing`) are CONTEXT; the two news lists
+  (`1297881495701397504`, `1325322395335315457`) are macro-adjacent and may be
+  promoted to TRIGGER only by measured hit-rate + human review (doc 09 rule).
+- No public macro/FX *list* with a reusable ID was found (checked curator
+  Lists tabs: none published; RePEc pages link individuals, not lists).
+  Macro TRIGGER coverage therefore comes from a fixed account roster (below),
+  not from list IDs. This is allowed: the transport supports user timelines.
+
+**Macro TRIGGER roster (all 6 accounts verified live 2026-09-18, none
+suspended):** `@DeItaone`, `@Fxhedgers`, `@FirstSquawk`, `@LiveSquawk`,
+`@elerianm`, `@MacroAlf` — newswires + macro strategists, FX/rates/central-bank
+native. Polled as user-timeline feeds; entries only via the JEV table, and
+promotion/retention follows the doc 09 hit-rate rule.
+
+Polling weight starts equal; reweight only with 2 weeks of measured hit-rate
+data.
 
 Macro relevance overlay (locked): lists about AI/infra/dev are REGIME context
 (risk-on, tech sentiment); they never directly trigger a symbol entry. Only
@@ -83,11 +104,14 @@ covered names) + price feeds can trigger entries. This prevents
   paid data subscription in substance even if billed as usage, and doc 01
   forbids that for core operation — so the API is **not used**, full stop, not
   "used carefully."
-  - Transport is therefore **public RSS/mirror feeds only, best-effort**, at
-    whatever cadence the mirror publishes (no 15-min SLA can be assumed against
-    a source we do not control). This is a real reduction in freshness and
-    coverage from the original scrape-based pipeline, accepted deliberately in
-    exchange for zero cost and zero fragility to a scraper breaking.
+  - Transport is therefore **self-hosted mirror feeds, best-effort**: Phase-0
+    research selected `twikit-rss` (MIT, `GET /list/{id}/rss` + `/user/{name}/rss`,
+    cookie-persisted session, no X API key). It authenticates as a normal logged-in
+    session, so X-credential placement on the sidecar host is a Phase-1 design
+    item (never in git, never on the trading host). No 15-min SLA can be assumed
+    against X's frontend; this is a real reduction in freshness and coverage
+    from the original scrape-based pipeline, accepted deliberately in exchange
+    for zero cost and zero fragility to a scraper breaking.
   - **CONTEXT-capped permanently by transport, independent of the doc §2.4
     TRIGGER/CONTEXT list classification.** §2.4's TRIGGER/CONTEXT split is about
     which *lists* are logically eligible to influence entries; this rule is
