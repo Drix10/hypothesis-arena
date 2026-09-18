@@ -74,6 +74,16 @@ def cycle():
             print(f"audit -> {audit_path}")
         except ValueError:
             print(f"audit failed: {r3.stderr[-300:]}")
+    # daily objective evidence: pre-grade triage + acceptance checks (read-only)
+    clf = os.path.join(ROOT, "data", "classified", f"{day}.jsonl")
+    if os.path.exists(clf):
+        for tool, args in (("pregrade.py", [clf]), ("soak_check.py", [day])):
+            r4 = subprocess.run(
+                [sys.executable, os.path.join(HERE, tool)] + args,
+                capture_output=True, text=True, timeout=600)
+            tail = (r4.stdout.strip().splitlines() or [""])[-3:]
+            print(f"[{tool} exit={r4.returncode}]")
+            print("\n".join(tail))
     return hb
 
 
