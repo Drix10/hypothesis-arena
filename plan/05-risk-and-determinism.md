@@ -131,7 +131,7 @@ intent carries a stop or it is rejected by `veto.cpp`.
 
 - D1. Same `context_hash` + same question version → same answers (cache) → same
   decision. Replay test proves it weekly on sampled rows.
-- D2. No RNG in decision path. Tie-breaks alphabetical (analyst id).
+- D2. No RNG in decision path. Tie-breaks by fixed edge_family order (execution last, others alphabetical).
 - D3. Model/prompt versions pinned per deployment; logged per row; mid-session
   updates forbidden. This extends to every agent prompt, tool definition, and
   graph topology in doc 08. **Runtime self-modification of prompts, tools, or

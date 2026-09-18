@@ -57,12 +57,13 @@ STAGE (human-signed, doc 10) ─────────────┤
 3. `ctx/context.cpp` — builds the frozen `Snapshot`: mark prices, spread, session,
    change, indicator values (RSI/z-score/VWAP/ATR ported from
    `TechnicalIndicatorService`), regime (ported `RegimeDetector`), sentiment tail
-   (last N TRIGGER signals + staleness flag), VaR/correlation flags per doc 05 §5.1a,
-   portfolio view, thesis + critique text attach (two fixed 512-byte buffers,
-   missing/corrupt file → empty, never a crash), the bounded feature set from
-   `ingest/`, the `features_absent` list, the current stage, and the rolling
+   signal buckets, VaR/correlation flags per doc 05 §5.1a,
+   portfolio view (equity, exposure, pending, buying power), the last complete
+   feature bundle from `ingest/` (never partials), per-source `source_status`,
+   the current stage, research_revision, and the rolling
    calibration summary (doc 11), then `context_hash` (SHA-256 of canonical
    serialization over **all** of it — features included, or replay is a lie).
+   No raw texts, no prose: the digest is not snapshot material.
 4. `risk/veto.cpp` — pure functions `Snapshot+AnswerSet → HOLD/PROCEED + reason`.
    Implements doc 05 limits (R1–R17) + doc 03 §3.2 table + the stage multiplier
    from doc 10 §10.2. No I/O, fully unit-tested. **The stage multiplier is applied
