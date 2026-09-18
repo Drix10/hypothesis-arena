@@ -179,7 +179,7 @@ def main():
     cfg = load_config()
     if cfg["status"] == "MISSING_REQUIRED_CONFIG":
         print(f"MISSING_REQUIRED_CONFIG: {','.join(cfg['missing_required'])} "
-              f"-- see config/README.md; refusing to poll", file=sys.stderr)
+              f"-- set MIRO_CONTACT (see .env.example); refusing to poll", file=sys.stderr)
         return 2
     sources = json.load(open(os.path.join(HERE, "sources.json")))
     total = 0
