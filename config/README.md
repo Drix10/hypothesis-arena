@@ -1,8 +1,9 @@
 # Environment / secrets contract
 
-Process environment is the only configuration source. Python reads
-`os.environ` via `collector/config.py`; there is no dotenv loader
-(stdlib only), no secret defaults, no tracked values.
+The repo-root `.env` holds real values and is auto-loaded by
+`collector/config.py` on every run (stdlib parser, no dependency).
+Exported variables always override `.env`. `.env` is gitignored and never
+committed; `.env.example` is the only committed template.
 
 ## Variables
 
@@ -17,7 +18,7 @@ needs an owner, a consumer, a scope, and a lifecycle before it is introduced.
 
 ## Layouts
 
-Developer machine:
+Developer and soak machine (same layout, no separate secrets setup):
 
 ```text
 hypothesis-arena/
@@ -25,12 +26,10 @@ hypothesis-arena/
   .env.example    # safe template, committed
 ```
 
-Load locally with `set -a; source .env; set +a`.
-
-Soak host (7-day process, no interactive shell): environment file with
-restricted permissions (e.g. `/etc/hypothesis-arena/soak.env`, mode 600),
-referenced by the service manager (`EnvironmentFile=` under systemd).
-Values live in the process environment, never in the repo or tracked config.
+No `export`, no `source`, no `/etc` file needed: running any collector
+entry point from the repo picks up `.env` automatically. (A service
+manager with its own env file remains an option if we later decide
+to move secrets out of the repo directory; not required now.)
 
 ## Startup states
 
