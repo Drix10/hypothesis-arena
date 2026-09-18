@@ -288,7 +288,9 @@ Hard rules on this record:
 - LangGraph orchestrates; smolagents does leaf extraction inside a Docker sandbox.
 - Observability is self-hosted Langfuse + OpenTelemetry. No paid tier, ever, for
   core operation.
-- Agents produce typed features and two capped prose fields. Nothing else.
+- Agents produce validated feature bundles (`features.jsonl`) plus the human-only
+  digest (`research_digest.jsonl`). Only the former may cross into C++; the
+  latter never enters the trading boundary. Nothing else.
 - Agents cannot size, order, veto, resume, or promote. One-way boundary, enforced
   by OS permissions.
 - Self-modifying / self-improving agent frameworks are banned from the trading

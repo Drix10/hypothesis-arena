@@ -36,7 +36,7 @@ inference cost, doc 11 requires removing it, not tuning it.
 | Routing, ranking, gating | Calibrated yes/no, pick-winner, conviction | JEV via OpenRouter Decisions API |
 | Snapshot, risk, execution | Fast, deterministic, auditable | C++ from scratch |
 | Knowledge feed | Curated signals from X Lists | Sidecar (API/RSS, never Selenium in C++) |
-| Research, OSINT fusion, hypotheses, self-critique | Produce typed features + capped prose | Research plane: LangGraph + smolagents, sandboxed, off hot path (doc 08) |
+| Research, OSINT fusion, hypotheses, self-critique | Produce typed features only (bundle transactions); prose → research_digest.jsonl, outside the trading boundary | Research plane: LangGraph + smolagents, sandboxed, off hot path (doc 08) |
 | Capital stage, kill switches, spend | Permit or forbid; never expand | `STAGE` file + C++ constants + human signature (doc 10) |
 | Calibration + promotion | Score answers, judge challengers | Offline harness + human sign-off (doc 11) |
 

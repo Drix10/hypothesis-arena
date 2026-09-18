@@ -39,7 +39,7 @@ Three inputs, one output, inside a box:
 
 | Layer | Job | Technology |
 |---|---|---|
-| Research, OSINT fusion, hypotheses | Typed features and capped prose, never orders | LangGraph + smolagents, sandboxed, off hot path (doc 08) |
+| Research, OSINT fusion, hypotheses | Typed, validated, bounded features only; prose → research_digest.jsonl, outside the trading boundary | LangGraph + smolagents, sandboxed, off hot path (doc 08) |
 | Routing, ranking, gating | Calibrated edge/family/conviction/latent-risk (v3) | JEV `typesafe/jev-1.13` via OpenRouter Decisions API (doc 03) |
 | Snapshot, risk, execution | Fast, deterministic, auditable | C++ from scratch (doc 04) |
 | Capital stage, kill switches, spend | Permit or forbid, never expand | `STAGE` file + C++ constants + human signature (doc 10) |

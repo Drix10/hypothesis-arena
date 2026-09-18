@@ -131,6 +131,10 @@ a human. A lesson can only ever become a
 
 ## 9.2 Ingestion rules (all sources)
 
+- **Boundary law (same in README, 00, 04, 08, 09):** research feeds the hot
+  path typed, validated, bounded features only (`features.jsonl`, bundle
+  transactions). Research prose goes to `research_digest.jsonl`, outside the
+  trading boundary — never into C++, never into JEV state.
 - **Primary sources only.** If the regulator, the central bank, or the exchange
   publishes it, we read it there. Aggregators are excluded — they add latency and
   an unlogged editorial layer.

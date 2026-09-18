@@ -30,7 +30,7 @@ Legend: `[B]` needs real-browser control (X login, JS pages, portals) · `[W]` n
 - [x] 4.1 DONE 2026-09-18 ([HUMAN] ACCEPTED): langgraph==1.1.6, smolagents==1.26.0, langfuse==4.15.4 (self-hosted); installability verified at build
 - [x] 4.2 DONE 2026-09-18 ([HUMAN] ACCEPTED): versions in 08 locked decisions; six-node topology + failure defaults already in 08 §8.3; checkpoint store SQLite(G0/G1)->Postgres(G2+) unchanged
 - [x] 4.3 DONE 2026-09-18: exact import allowlist + 3-user OS design (mirotrade/miroresearch/mirohuman) locked in 08 §8.2
-- [x] 4.4 DONE 2026-09-18: features.jsonl schema f1 (§8.5) + R15 table (§8.4) confirmed frozen, no changes needed
+- [x] 4.4 DONE 2026-09-18, CORRECTED (reconciliation): features.jsonl schema f2 (§8.5) + R15 table (§8.4) confirmed frozen, no changes needed
 
 ## 5. Sources classification (doc 09)
 - [x] 5.1 DONE 2026-09-18: Tier tables + finance-first X universe (doc 02 §2.4) leave no blanks; every source has class + failure default
@@ -54,7 +54,7 @@ Legend: `[B]` needs real-browser control (X login, JS pages, portals) · `[W]` n
 
 ## 9+. Build phases
 ### Phase 1 start checklist (unblocked, non-X sources, no code until human says start)
-- [ ] P1.1 `scripts/freeze-check.sh` first: verify manifest values (R1–R17, versions, stages, 4 questions, f2, v3, venues)
+- [ ] P1.1 `scripts/freeze-check.sh` first: verify manifest values (KNOWN-BY-FREEZE exact: v3/f2/risk/R1–R17/stages/venues; BUILD-TIME placeholders allowed: jev_provider, research_models, G0 file; INTENTIONALLY-DEFERRED: plan_hash, live venues)
 - [ ] P1.2 Collector: EDGAR + FRED/ALFRED + official macro feeds + calendars → `signals.jsonl` (atomic rename, per-source poller/TTL/heartbeat per §9)
 - [ ] P1.3 SQLite index + dedupe + TRIGGER/CONTEXT tagging at write time (incremental-edge rule, doc 09)
 - [ ] P1.4 7-day soak + noise grade (<10% off-topic)

@@ -31,8 +31,10 @@ STAGE (human-signed, doc 10) ─────────────┤
   staggered. JEV is called at most once per symbol per cycle, and only on slow-key
   change or TTL expiry — not per tick.
 - Watchlist ≤ 5 symbols in v1. More symbols = more JEV calls = cost without proof.
-- Thesis + critique: the research plane's `hypothesize`/`critique` nodes emit capped
-  prose into `features.jsonl`; `ctx/` attaches them verbatim or empty. Never blocks.
+- Boundary law: `features.jsonl` is the ONLY research artifact that may cross
+  into C++. `research_digest.jsonl`, thesis prose, critique prose, raw texts —
+  never consumed, never attached, never snapshot material. `ctx/` rejects any
+  row carrying text fields instead of consuming it (quarantine, alert, HOLD).
 - Feature file: `features.jsonl` is tailed like `signals.jsonl` (same atomic
   rename + inode-tracking rules, doc 02 §2.5). Missing or stale beyond TTL → the
   features are **absent**, which is a distinct snapshot state from neutral.

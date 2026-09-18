@@ -65,7 +65,7 @@ without a human. In all of them: **exits, stops, TP, and reconcile keep working.
 | Broker outage | auth/API failure | Entries stop; exit attempts via REST; unresolvable drift → HARD kill (S9) | Yes, at HARD |
 | JEV / LLM provider outage | timeout, 5xx, malformed | 1 retry → HOLD; S5 streak → SOFT kill | At S5 alert |
 | Research plane down or stale | no fresh `features.jsonl` past TTL | Features **absent**; entries needing a TRIGGER feature HOLD (S6) | If > 6 h |
-| Runaway research loop | R15 caps | Cycle aborted; 3 aborts → plane paused (R15) | At pause |
+| Runaway research loop | R15 state-machine response (doc 08 §8.4 — per-symbol pause, systemic plane pause only on majority-in-window) | At pause |
 | Conflicting agent conclusions | `disagreement=true` | HOLD (R14). Never averaged, never resolved by a tiebreak toward action | No |
 | Spend spike | hourly projection | Tier 1 → 2 → 3 (R10), ending in MEDIUM kill + demote | At tier 3 |
 | Calibration decay | trailing-200 Brier vs baseline | Entries halt, demote (R13) | Yes |

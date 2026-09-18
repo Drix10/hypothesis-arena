@@ -1,9 +1,15 @@
-# 02 — Twitter Alpha System (knowledge / sentiment feed)
+# 02 — Knowledge / Signal Ingestion
+
+> STATUS (freeze v2, locked 2026-09-18): this file has TWO parts. Production v1
+> is the **non-X collector** (§2.7 + doc 09: EDGAR/FRED/official
+> feeds/calendars). Sections 2.1–2.5 are **NON-PRODUCTION / HISTORICAL** — the
+> archived X-system design and verified list universe, kept for reference only.
+> Nothing in §§2.1–2.5 authorizes a build; Phase 1 builds §2.7.
 
 Ported from `Twitter-Gemini-GitHub-MVP`. This doc is the full spec so the old
 repo is never re-read during the build.
 
-## 2.1 What the old system did (all of it)
+## 2.1 What the old system did (HISTORICAL — archived design, not built)
 
 ```
 cron (schedule)
@@ -58,7 +64,7 @@ No scores here. Scoring happens in the JEV layer (doc 03), which reads the raw
 texts inline. No polarity field on the record — deliberate (see doc 03 §3.4).
 This system only collects, filters, dedupes, and stores.
 
-## 2.4 Universe (verified 2026-09-18, Phase 0 boxes 1.2/1.3 closed)
+## 2.4 Universe (HISTORICAL — verified 2026-09-18, kept as research history; not polled in v1)
 
 Finance-first. All IDs below were opened logged-in and resolve; all showed
 posts within ~24h. Full per-list record (name, owner, members, followers,
@@ -111,7 +117,7 @@ macro/FX/earnings-native lists + calendar events (Fed/ECB, CPI, NFP, earnings fo
 covered names) + price feeds can trigger entries. This prevents
 "AI hype tweet → long EURUSD" nonsense.
 
-## 2.5 Collector design (sidecar, not C++)
+## 2.5 Collector design (HISTORICAL — the archived X-sidecar shape; production collector is §2.7 + doc 09)
 
 - **Transport (locked, corrected from an earlier draft of this doc): there is
   no free X API tier to build on.** As of 2026, X eliminated the free and
@@ -179,9 +185,10 @@ The verified list universe (§2.4) and this doc's filter design stay in the
 repo as research history; X returns only through an explicitly authorized and
 reproducible interface, as a new doc version.
 
-## 2.7 What "done" means for this part (non-X Phase 1 collector)
+## 2.7 What "done" means for this part (non-X Phase 1 collector, PRODUCTION)
 
-- [ ] List-ID table verified (every ID resolves).
+- [ ] Source-coverage table verified (every §9 poller resolves: EDGAR, FRED/
+      ALFRED, Treasury/BLS/BEA, Fed/ECB, earnings/calendar).
 - [ ] 7-day soak: collector runs, dedupe holds, zero dupes emitted, noise sample
       manually graded <10% off-topic leakage.
 - [ ] `signals.jsonl` schema frozen and consumed by a stub context reader.
@@ -192,8 +199,5 @@ reproducible interface, as a new doc version.
 - Output = filtered signal JSONL. No scores, no trades, no posts.
 - No Selenium anywhere in the fund. No automated X collection in v1 (§2.6).
 - Macro/FX/earnings sources trigger; tech context informs. Never the reverse.
-- No X API of any kind — free tier does not exist as of 2026, and metered
-  pay-per-use is a paid subscription in substance and is excluded by doc 01.
-  Transport is public RSS/mirror only, timestamp-gated by R12 independently of
-  list classification, no browser automation, and no dependency: the system
-  trades normally with this feed entirely absent.
+- Production transport = APIs first per doc 09 §9.2. The RSS/mirror design in
+  §§2.4–2.5 is historical record, not a production transport.
