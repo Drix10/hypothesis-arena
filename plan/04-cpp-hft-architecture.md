@@ -27,8 +27,8 @@ STAGE (human-signed, doc 10) ─────────────┤
   staggered. JEV is called at most once per symbol per cycle, and only on slow-key
   change or TTL expiry — not per tick.
 - Watchlist ≤ 5 symbols in v1. More symbols = more JEV calls = cost without proof.
-- Thesis file: the research plane drops `thesis.json` (thesis + critique +
-  `disagreement`) every 5 min; context includes it verbatim or empty. Never blocks.
+- Thesis + critique: the research plane's `hypothesize`/`critique` nodes emit capped
+  prose into `features.jsonl`; `ctx/` attaches them verbatim or empty. Never blocks.
 - Feature file: `features.jsonl` is tailed like `signals.jsonl` (same atomic
   rename + inode-tracking rules, doc 02 §2.5). Missing or stale beyond TTL → the
   features are **absent**, which is a distinct snapshot state from neutral.
@@ -66,7 +66,7 @@ STAGE (human-signed, doc 10) ─────────────┤
 4a. `kill/switch.cpp` — SOFT / MEDIUM / HARD levels (doc 10 §10.3). Pure C++, no
    LLM, no network dependency for the decision itself, reachable from a file plus
    a signal in < 5 s. Exits, stops, TP, and reconcile survive every level.
-5. `exec/router.cpp` — sizing (from conviction), stop calc (from leverage table),
+5. `exec/router.cpp` — sizing (from conviction), stop calc (1.5×ATR rule, doc 05 §5.2),
    idempotent client-order-IDs (`hash(context_hash, symbol, side)` — no attempt
    field; retries reuse the ID, see doc 06), retry-once,
    position reconcile vs broker every 15 min.

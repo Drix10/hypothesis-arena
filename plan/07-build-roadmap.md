@@ -16,8 +16,8 @@ must exist on paper before a line of code.
 **Decision layer (doc 03)**
 - [ ] Hand-work 20 JEV decision-table cases, including the four new HOLD rows
       (disagreement, event window, calibration, veto).
-- [ ] Get `OPENROUTER_API_KEY`, confirm the Decisions endpoint and the exact model
-      string (`typesafe/jev-1.13` or `jev-latest`), and pin it in doc 03.
+- [ ] Get `OPENROUTER_API_KEY`, confirm the Decisions endpoint and pin the exact
+      model string (`typesafe/jev-1.13` — floating aliases forbidden, doc 03).
 - [ ] `question_set_version = v2` pinned; slow-key fields (incl. `disagreement`,
       feature-count bucket) frozen.
 - [ ] Freeze the JEV state schema, including feature caps (16 in payload, 64 in

@@ -80,6 +80,16 @@ sandboxed because code-writing agents are a security surface.
 autonomous assistants with host access and inbound chat control. Neither belongs
 on a machine that can move money.
 
+**Container spec (locked — "runs in Docker" is not a spec):** smolagents
+`CodeAgent` runs with `executor_type="docker"` only: non-root user, read-only
+rootfs, dropped capabilities, explicit CPU/RAM limits, and network egress limited
+to the Phase-0 allow-listed endpoints (source APIs + the model provider, nothing
+else). Import allowlist pinned to the minimum (stdlib subset + requests +
+BeautifulSoup + pydantic + companyfacts parsers — exact list frozen in Phase 0).
+`LocalPythonExecutor` is **forbidden** on any host or container that can reach
+trading credentials, the journal, `HALT`, or `STAGE` — upstream documents it as
+best-effort sandboxing with known escapes, which is not sandboxing.
+
 ## 8.3 Agent topology (locked)
 
 One LangGraph graph, run as a supervised loop. Six nodes, all off the hot path.
@@ -96,6 +106,15 @@ One LangGraph graph, run as a supervised loop. Six nodes, all off the hot path.
 - The graph is **checkpointed after every node**. A crash resumes at the last
   completed node, not at the start of the cycle. This is the whole reason
   LangGraph was chosen.
+- Checkpoints alone are not recovery. Durability = checkpoint + an **external
+  process supervisor** (systemd unit or equivalent watchdog) that detects the
+  crash and restarts the plane with the same thread_id. No supervisor, no
+  durability claim — an unobserved crash is just a silent halt.
+- Nodes with external side effects must be **idempotent** (idempotency keys on
+  every write; re-executed nodes converge, never duplicate). Side-effecting
+  nodes are enumerated in Phase 0; any new one needs its key design reviewed.
+- Checkpoint retention is 30 days, mandatory, then pruned. Replay older than
+  retention is unsupported and must fail loudly, not silently.
 - `critique` disagreeing with `hypothesize` sets `state.disagreement=true`, which
   is an input to JEV and a hard input to R14: **conflicting agent conclusions
   never produce a larger position; they produce HOLD or nothing.**
@@ -136,6 +155,35 @@ why that does not blow the spend caps in doc 10 §10.4.
   whole plane pauses only if a majority of watchlist symbols are aborting
   simultaneously, which is treated as a systemic failure (e.g. the sandbox or
   the LLM provider is down) rather than a per-symbol data problem.
+
+## 8.3b Known residual risks (named so they can be watched, not solved by prose)
+
+1. **Prompt injection via harvested content.** Filings, web pages, and posts are
+   attacker-influenced text fed to `hypothesize`/`critique`. Mitigations, in
+   order: schema validation drops anything that is not typed data (injection
+   cannot become a number because numbers only come from enums/buckets/counts);
+   the `critique` node is explicitly tasked to distrust single-source claims;
+   prose never sizes (doc 03 §3.3); R15 bounds a compromised loop's spend. What
+   is *not* claimed: that any of this stops a clever injection from biasing a
+   thesis. Thesis bias that survives must still pass JEV bands, consensus, and
+   R1–R9 — that defense in depth is the actual control.
+2. **Correlated model failure.** One bad JEV regime read can hit every symbol at
+   once (same model, same macro weather). Blast-radius controls: per-symbol
+   slow keys (a shared thesis does not force shared answers), R2 exposure caps
+   bound total loss, R13 sliced by regime catches the regime where it breaks,
+   and the `veto` question is scored independently of `enter`. No averaging
+   across symbols is ever used to dilute a veto.
+3. **Feature schema evolution.** `schema_version` (`f1`, `f2`…) is bumped on any
+   change; `ctx/` rejects unknown versions loudly. Journal rows keep the raw
+   feature bytes so old rows stay readable; replay pins the schema version it
+   was recorded with. A version bump forces the same fresh-paper-window rule as
+   any limit change.
+4. **Human sign-off fatigue.** G1's daily review is the highest-fatigue gate in
+   the system and fatigue approves things. Control: the review is a fixed
+   ≤15-minute checklist (drill states, R-trips, spend tier, calibration delta),
+   not an open-ended read-through — checklist frozen in Phase 0. Skipped or
+   rubber-stamped reviews are a promotion blocker, verified from the sign-off
+   log, not trusted on assertion.
 
 ## 8.4 Runaway-loop limits (R15, hard)
 
@@ -211,3 +259,6 @@ Hard rules on this record:
   by OS permissions.
 - Self-modifying / self-improving agent frameworks are banned from the trading
   host (D3, and the human-promote-only rule in doc 11).
+- `LocalPythonExecutor` is forbidden wherever trading credentials, journal, `HALT`,
+  or `STAGE` are reachable. Recovery requires checkpoint + external supervisor +
+  idempotent nodes — checkpoints alone are not durability.

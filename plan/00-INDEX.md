@@ -27,3 +27,19 @@ One folder. Everything lives here. No code until the plan is complete.
   change the system. Nothing in 08–11 may weaken a rule in 01–07.
 - One-way rule: the research plane (08) feeds the hot path (04) typed features and
   nothing else. It never sizes, orders, vetoes, resumes, or promotes.
+
+## Global locked decisions (one page, no exceptions)
+
+- C++ owns every decision that can lose money. Agents produce evidence, never orders.
+- JEV (`typesafe/jev-1.13`, pinned, never floating) is the sole calibrator: 4
+  questions, banded table, raw probability never acts alone.
+- R1–R17 are code constants. Any change = doc edit + version bump + fresh paper window.
+- Research writes `features.jsonl` only (R11, OS-enforced). No broker keys, no
+  journal/`HALT`/`STAGE` access. `LocalPythonExecutor` forbidden near capital.
+- No code path promotes a stage (R17). Demotion is automatic and unvetoable.
+- Free data only. Every non-price source starts CONTEXT/NULL; TRIGGER needs
+  measured hit-rate + human sign-off. Absent data is never neutral data.
+- The statistical baseline is permanent. The AI layer beats it net of cost or is
+  removed, not tuned.
+- Exits survive everything: kills, outages, stale feeds, dead JEV, paused research.
+  New risk stops; old risk stays managed; the system fails toward paper.

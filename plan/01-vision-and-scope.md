@@ -32,7 +32,7 @@ inference cost, doc 11 requires removing it, not tuning it.
 
 | Layer | Job | Technology |
 |---|---|---|
-| Thesis text | Write the "why" in prose | Gemini / LLM (5-min loop, out of hot path) |
+| Thesis text | Write the "why" in prose | Research plane `hypothesize` node (capped, advisory only) |
 | Routing, ranking, gating | Calibrated yes/no, pick-winner, conviction | JEV via OpenRouter Decisions API |
 | Snapshot, risk, execution | Fast, deterministic, auditable | C++ from scratch |
 | Knowledge feed | Curated signals from X Lists | Sidecar (API/RSS, never Selenium in C++) |

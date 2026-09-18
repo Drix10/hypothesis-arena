@@ -1,8 +1,10 @@
 # 03 — JEV Decision Layer
 
-Model: `typesafe/jev-1.13` (or `jev-latest`) via `POST https://openrouter.ai/api/alpha/decisions`,
+Model: `typesafe/jev-1.13` via `POST https://openrouter.ai/api/alpha/decisions`,
 or direct TypeSafe. Endpoint, model string, and access are verified in Phase 0
 before any build; the pinned string is written here and never floats (D3).
+`jev-latest` or any floating alias is forbidden — a silent version change breaks
+replay (D3) and invalidates every calibration curve in doc 11.
 JEV writes no text. It answers typed questions about a `state` with calibrated
 probabilities. Our code owns the workflow and acts on the answers.
 

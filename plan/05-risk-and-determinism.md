@@ -131,7 +131,8 @@ Every order intent carries a stop or it is rejected by `veto.cpp`.
 
 ## 5.5 Audit
 
-- Every decision row: ts_ns, context_hash, JEV answers+probs, veto verdict,
+- Every decision row: ts_ns, context_hash, features hash, JEV answers+probs,
+  disagreement flag, calibration snapshot, stage, spend tier, veto verdict,
   order intent or HOLD reason, chained hash. Append-only, daily backup.
 - Weekly: verify hash chain + replay 100 sampled rows.
 

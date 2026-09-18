@@ -109,8 +109,9 @@ covered names) + price feeds can trigger entries. This prevents
   beyond 90 days. Dedupe check before write. Sidecar writes via temp-file +
   atomic rename; the C++ tailer tracks inodes so midnight rotation can't drop
   or double-read a row.
-- Delivery to C++: sidecar writes `signals.jsonl`; C++ context builder tails it.
-  No sockets, no shared memory for this path — 15-min freshness doesn't need it.
+- Delivery: sidecar writes `signals.jsonl`; the research plane's `harvest` node tails
+  it as one input among many (doc 08 §8.3). `ctx/` never consumes raw signals — only
+  validated features. No sockets, no shared memory for this path.
 - Failure default: stale signals expire after 6 h; context builder marks
   sentiment `stale=true` and sets `signal_count_6h=0`. **Stale/absent sentiment is
   reported as absent, never as a neutral score** — a missing input and a
