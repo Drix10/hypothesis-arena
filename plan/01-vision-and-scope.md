@@ -3,13 +3,13 @@
 ## What we are building
 
 An AI hedge fund: a system that turns curated X/Twitter knowledge + market data
-into systematic crypto-futures trading decisions, executed by a C++ core at
+into systematic forex + US-stock trading decisions, executed by a C++ core at
 low latency, with every decision calibrated (JEV) and risk-gated.
 
 Two inputs, one output:
 - **Input A (slow, rich):** curated technical knowledge + sentiment from X Lists
   (ported from the Twitter-Gemini-GitHub-MVP pipeline).
-- **Input B (fast, thin):** WEEX orderbook / trades / account state.
+- **Input B (fast, thin):** Broker quotes / trades / account state (forex majors + US-listed stocks).
 - **Output:** BUY / SELL / HOLD + size + stop, executed or paper-logged.
 
 ## Who decides what (locked)
@@ -32,7 +32,7 @@ Risk gates are local and unconditional — they run even if JEV is down
 2. No LinkedIn/blog syndication in the fund. That was the content pipeline's
    job; it does not ship with trading capital.
 3. No FPGA/GPU in phase 1. CPU C++ first, measure, then decide.
-4. No new exchange integrations in phase 1. WEEX only.
+4. No new venues in phase 1. Phase-0 brokers only.
 5. No portfolio UI / investor dashboard in phase 1. Logs + journal files only.
 6. No auto fine-tuning of models with live capital in phase 1. Shadow + human
    promote only.
@@ -44,11 +44,14 @@ Risk gates are local and unconditional — they run even if JEV is down
   risk verdict, fill or HOLD reason.
 - Determinism: same logged context replayed → same decision. Proven by replay test.
 - Risk: zero trades violating `05-risk-and-determinism.md`. One violation = halt.
-- Latency: context snapshot → order intent < 1 ms local (excl. network + JEV cache read).
+- Latency: context snapshot → order intent < 1 ms local, including the cached-JEV
+  read. Excludes all network calls (JEV fetch, order send, reconcile).
 
 ## Locked decisions
 
 - Language for hot path: C++ (no debate).
 - Decision calibration: JEV `typesafe/jev-1.13` via OpenRouter Decisions API.
-- Exchange: WEEX only, phase 1.
+- Instruments: forex majors + US-listed stocks. No crypto in v1.
+- Venue/data: broker(s) + feed chosen in Phase 0 (paper/sandbox first); names written
+  into this doc before any build.
 - Capital mode: paper until 30 clean days + human sign-off.

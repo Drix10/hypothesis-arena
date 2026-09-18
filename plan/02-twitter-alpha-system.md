@@ -54,19 +54,24 @@ Every accepted item emits exactly one JSON record:
 }
 ```
 
-No scores here. Scoring happens in the JEV layer (doc 03). This system only
-collects, filters, dedupes, and stores.
+No scores here. Scoring happens in the JEV layer (doc 03), which reads the raw
+texts inline. No polarity field on the record — deliberate (see doc 03 §3.4).
+This system only collects, filters, dedupes, and stores.
 
 ## 2.4 Universe (from old config — verify IDs before build)
 
 Port the full `folders[]` table from `Twitter-Gemini-GitHub-MVP/config/index.js`.
-Columns: domain name → list ID(s) → polling weight. Polling weight starts equal;
-reweight only with 2 weeks of measured hit-rate data. No vibes-based weighting.
+Columns: domain name → list ID(s) → class (TRIGGER or CONTEXT) → polling weight.
+TRIGGER lists are macro/FX/earnings-native and may place texts into JEV state; CONTEXT lists
+inform regime only and never trigger entries (locked, §2.4 rule). Classification
+is a Phase-0 exit item — every list gets a class before any build. Polling weight
+starts equal; reweight only with 2 weeks of measured hit-rate data.
 
-Crypto relevance overlay (locked): lists about AI/infra/dev are REGIME context
+Macro relevance overlay (locked): lists about AI/infra/dev are REGIME context
 (risk-on, tech sentiment); they never directly trigger a symbol entry. Only
-crypto-native lists + price/liquidation feeds can trigger entries. This prevents
-"AI hype tweet → long BTC" nonsense.
+macro/FX/earnings-native lists + calendar events (Fed/ECB, CPI, NFP, earnings for
+covered names) + price feeds can trigger entries. This prevents
+"AI hype tweet → long EURUSD" nonsense.
 
 ## 2.5 Collector design (sidecar, not C++)
 
@@ -74,8 +79,10 @@ crypto-native lists + price/liquidation feeds can trigger entries. This prevents
   list curation. Decision made in roadmap phase 0, documented here before build.
 - Polling: each list every 15 min, staggered; obey rate limits; jittered backoff
   (port `withJsonRetry` semantics: 3 retries, ~15 s base, jitter ±20%).
-- Storage: append-only JSONL per day + SQLite index by (list, tweet_id).
-  Dedupe check before write.
+- Storage: append-only JSONL per day + SQLite index by (list, tweet_id), pruned
+  beyond 90 days. Dedupe check before write. Sidecar writes via temp-file +
+  atomic rename; the C++ tailer tracks inodes so midnight rotation can't drop
+  or double-read a row.
 - Delivery to C++: sidecar writes `signals.jsonl`; C++ context builder tails it.
   No sockets, no shared memory for this path — 15-min freshness doesn't need it.
 - Failure default: stale signals expire after 6 h; context builder marks
@@ -87,9 +94,10 @@ crypto-native lists + price/liquidation feeds can trigger entries. This prevents
 - [ ] 7-day soak: collector runs, dedupe holds, zero dupes emitted, noise sample
       manually graded <10% off-topic leakage.
 - [ ] `signals.jsonl` schema frozen and consumed by a stub context reader.
+- [ ] Rotation + prune proven: no lost/duped rows across a midnight rollover.
 
 ## Locked decisions
 
 - Output = filtered signal JSONL. No scores, no trades, no posts.
 - No Selenium anywhere in the fund.
-- Crypto lists trigger; tech lists contextualize. Never the reverse.
+- Macro/FX/earnings lists trigger; tech lists contextualize. Never the reverse.

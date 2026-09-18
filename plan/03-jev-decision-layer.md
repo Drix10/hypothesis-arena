@@ -14,7 +14,7 @@ context JSON (from C++ snapshot, serialized by the sidecar):
   - criteria.false: "Wait or stay flat; edge unclear or timing off"
 - `analyst` (choice): "Whose thesis wins this cycle?"
   - jim: "Mean reversion / z-score / regime"
-  - ray: "ML momentum / funding / liquidation"
+  - ray: "ML momentum / macro surprises / flows"
   - karen: "Risk veto / hold / reduce"
   - quant: "Liquidity / slippage / VWAP execution"
 - `conviction` (score): "Position conviction?"
@@ -29,19 +29,21 @@ Response fields used: `answers.enter.noul`, `answers.analyst.choice`
 ## 3.2 Decision table (locked — code implements exactly this)
 
 ```
-veto.noul > 0.5            → HOLD (risk veto, unconditional, logged)
-else enter.noul < 0.5      → HOLD (no edge)
-else analyst == karen      → HOLD (judge voted risk)
-else conviction == flat    → HOLD
-else conviction == lean    → size = min_size
-else conviction == strong  → size = standard_size
-else conviction == max     → size = standard_size AND requires 3/4 analyst
-                              agreement (see 3.3), else downgrade to strong
+veto.noul > 0.5                → HOLD (risk veto, unconditional, logged)
+enter.noul < 0.5                → HOLD (no edge)
+enter 0.5–0.8 + (analyst == karen
+  OR conviction < strong)       → HOLD (mid-band needs strong non-karen)
+analyst == karen                → HOLD (judge voted risk)
+conviction == flat              → HOLD
+conviction == lean              → size 5% notional/equity
+conviction == strong            → size 10–15% notional/equity
+conviction == max               → size up to 25% IF §3.3 distribution test
+                                  passes, else downgrade to strong
 ```
 
-Thresholds `0.5 / 0.8` for enter: `>0.8` = act now, `0.5–0.8` = act only if
-`analyst != karen` and conviction ≥ strong, `<0.5` = HOLD. Tune only with
-logged data, never intraday.
+`enter` bands: `>0.8` = act on any passing row; `0.5–0.8` = act only via the
+mid-band row above; `<0.5` = HOLD. Sizes are % notional/equity at the leverage
+from doc 05 §5.2 (still capped by R2). Tune only with logged data, never intraday.
 
 ## 3.3 Consensus rule (ported from hypothesis-arena)
 
@@ -56,22 +58,38 @@ logged data, never intraday.
 ```json
 {
   "context_hash": "sha256 of canonical context",
-  "symbol": "BTCUSDT",
-  "price": 0, "funding": 0, "oi_change": 0,
-  "indicators": {"rsi": 0, "zscore": 0, "regime": "trend|range|volatile"},
-  "sentiment": {"score": 0, "stale": false, "top_signals": ["id..."]},
+  "symbol": "EURUSD",
+  "price": 0, "spread_bps": 0, "session": "asia|london|new_york|us_open|closed",
+  "indicators": {"rsi": 0, "zscore": 0, "atr": 0, "regime": "trend|range|volatile"},
+  "sentiment": {"stale": false, "signal_count_6h": 0},
+  "signals": [{"id": "...", "list": "...", "text": "<=280 chars"}],
   "portfolio": {"equity": 0, "exposure_pct": 0, "open_positions": 0},
   "thesis_text": "≤500 chars from Gemini 5-min loop, may be empty",
   "risk_flags": {"var_breach": false, "corr_breach": false}
 }
 ```
 
+No numeric sentiment score in v1 — deliberate. Nothing upstream produces polarity
+(signal records are raw text), and a keyword-guessed score would be fake precision.
+JEV reads the inline signal texts directly (max 5, newest first, TRIGGER-classified
+lists only, doc 02 §2.4). If scored sentiment is ever wanted, it arrives as a new
+versioned question, not a smuggled float.
+
 ## 3.5 Caching, failure, determinism
 
-- Cache key = `context_hash + question_set_version`. Same hash → cached answers,
-  no API call. TTL 60 s.
-- JEV down / timeout (>10 s) / malformed response → HOLD + log `jev_error`.
+Cache key = `jev_slow_key + question_set_version`, NOT the full context_hash.
+The full hash changes every tick (price moves), so keying on it would guarantee
+zero cache hits and spam the API. Slow key fields only: `symbol ‖ regime ‖
+signal-count bucket (0/1–2/3–5/6+) ‖ exposure bucket (0–25/25–50/50–75%) ‖
+thesis hash (first 16 hex) ‖ question version`. TTL 60 s. The full `context_hash`
+is still logged per decision for replay.
+- JEV down / timeout (>10 s) / malformed response → exactly 1 retry after ~5 s,
+  then HOLD + log `jev_error`. Every failure increments the S5 streak counter.
   Risk gates still run locally.
+- Daily call cap (default 500, alert at 80%). Breaching it pauses entries exactly
+  like S5; exits stay live.
+- Redaction: logged state rows carry signal texts (≤280 chars) but never API keys,
+  tokens, or full thesis dumps. Verified by grep before any log leaves the machine.
 - `question_set_version` pinned in code (starts at `v1`). Any criteria change
   bumps version, invalidates cache, logged in journal.
 - Every cycle logs: context_hash, answers, probabilities, thresholds applied,
@@ -82,7 +100,8 @@ logged data, never intraday.
 - [ ] `jev.py` sidecar: stdin state → 1 batched call → stdout answers + log row.
 - [ ] Threshold/consensus table unit-tested with 20 hand-worked cases.
 - [ ] Cache + failure-path tests (timeout, 500, malformed → HOLD).
-- [ ] 7-day paper log showing answer distributions (no degenerate all-0.99).
+- [ ] Replay of 200 recorded/synthetic states: distribution sane
+      (no degenerate all-0.99), cache hit rate > 50% on slow key.
 
 ## Locked decisions
 

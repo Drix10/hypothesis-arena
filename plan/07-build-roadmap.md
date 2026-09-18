@@ -9,6 +9,12 @@ met and checked off here. Paper capital only until phase 5 sign-off.
 - [ ] Decide collector transport (X API vs RSS mirror). Write it into doc 02 §2.5.
 - [ ] Hand-work 20 JEV decision-table cases for doc 03 §3.6.
 - [ ] Get `OPENROUTER_API_KEY` + confirm Decisions endpoint access.
+- [ ] Every X list classified TRIGGER vs CONTEXT (doc 02 §2.4 table complete).
+- [ ] Freeze: sizing % (doc 05 §5.1a), VaR/corr/vol methods, paper fill model.
+  Nothing downstream builds on moving numbers.
+- [ ] Venue + data decided and written into doc 01: forex broker/paper + US equities
+  broker/paper, feed protocol (WS or poll), session hours table, calendar source
+  (macro + earnings). No code before names exist on paper.
 - [ ] Exit: all boxes in phases updated, no TBDs outside "tune later" items.
 
 ## Phase 1 — Signal sidecar (doc 02)
@@ -22,7 +28,7 @@ met and checked off here. Paper capital only until phase 5 sign-off.
 
 - [ ] `jev.py`: stdin state → batched call → stdout answers + log row.
 - [ ] Cache + failure paths (timeout/500/malformed → HOLD).
-- [ ] 20 hand-worked cases green; 7-day paper answer distribution sane.
+- [ ] 20 hand-worked cases green; replay of 200 recorded/synthetic states sane.
 - [ ] Exit: §3.6 boxes checked.
 
 ## Phase 3 — C++ core (docs 04–06)
@@ -35,8 +41,9 @@ met and checked off here. Paper capital only until phase 5 sign-off.
 
 ## Phase 4 — Paper loop (everything together)
 
-- [ ] Full loop paper-trading, WEEX testnet/sandbox if available else shadow.
+- [ ] Full loop paper-trading on broker paper/sandbox accounts (forex + stocks).
 - [ ] Daily summaries + weekly replay checks running.
+- [ ] Baseline stats frozen for S3 (win rate, per-regime PnL over the paper window).
 - [ ] 30 clean days, zero R-rule violations.
 - [ ] Exit: human sign-off recorded in this file (name + date).
 
@@ -52,6 +59,7 @@ met and checked off here. Paper capital only until phase 5 sign-off.
 - New indicator? → Must displace an old one (one in, one out) + backtest note.
 - Fine-tuning models? → Phase 5. Shadow only. Never with live capital in v1.
 - UI/dashboard? → Logs suffice until phase 5 exit.
+- New JEV question? → version bump + 20 fresh hand-worked cases first (doc 03).
 - "Just one manual trade"? → No. The journal is the trader now.
 
 Sign-off log:
