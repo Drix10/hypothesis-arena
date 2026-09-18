@@ -87,6 +87,31 @@ boundary is enforced by OS permissions, not convention (doc 08 §8.1, R11).
 - Isolation: the research plane cannot write the journal, the `HALT` file, or the
   `STAGE` file. Proven by test, not asserted.
 
+## Venue + data proposal (Phase-0 proposal — human must accept)
+
+Researched 2026-09-18. Free/paper only, no paid data invented. Nothing here is
+approved until a human signs it; approval writes these names into the Locked
+decisions below.
+
+- **Forex majors (paper first): OANDA v20 practice.** Free demo, REST +
+  streaming pricing, `api-fxpractice.oanda.com`, personal token from the
+  practice portal. Same API shape as live, so paper-to-live is a URL + token
+  swap. Fallback if signup frictions: FXCM demo (FIX/ForexConnect).
+- **US stocks (paper first): Alpaca paper.** Free, live-market-price
+  simulation, REST + WebSocket, resettable, no deposit. Same key-swap path to
+  live. Stocks trade 09:30–16:00 ET only (R9); sub-$25k counts day-trades
+  locally in `risk/` regardless of broker pattern-day-trader flagging.
+- **Feed protocol:** broker WebSocket/REST poller in `feed/` (OANDA streaming
+  quotes, Alpaca WS); REST reconcile every 15 min (S2). No FIX in v1.
+- **Sessions:** forex needs an open venue feed (no closed-market entries);
+  stocks hard window 09:30–16:00 ET. Session calendar source: exchange + broker
+  holiday calendars, free, fail-closed (unknown = closed).
+- **Macro calendar (free):** FRED/ALFRED release coverage + Fed/ECB calendars
+  (primary web pages + ICS feeds where offered). ALFRED vintages for anything
+  replayed (no revised-data lookahead).
+- **Earnings calendar (free):** EDGAR-derived (8-K item 2.02 / earnings-release
+  exhibits) + company IR pages. No paid earnings API.
+
 ## Locked decisions
 
 - Language for hot path: C++ (no debate).

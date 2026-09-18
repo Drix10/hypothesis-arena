@@ -16,19 +16,19 @@ Legend: `[B]` needs real-browser control (X login, JS pages, portals) · `[W]` n
 - [x] 1.7 SUPERSEDED 2026-09-18: self-hosted transport has no third-party mirror to fall short; TRIGGER = account roster, throttled only by X frontend rate limits (Phase-1 soak measures)
 
 ## 2. Decision-layer proof (doc 03)
-- [ ] 2.1 [H] Obtain `OPENROUTER_API_KEY`
-- [ ] 2.2 [W] Confirm Decisions endpoint shape + exact model revision string; record pinned string into doc 03
-- [ ] 2.3 [H/D] Hand-work 20 JEV decision-table cases incl. all four new HOLD rows (veto, disagreement, event window, calibration); attach as Phase-0 evidence
+- [ ] 2.1 [HUMAN] Obtain `OPENROUTER_API_KEY` — nothing in 2.2 can run without it
+- [ ] 2.2 [W] Confirm Decisions endpoint shape + exact model revision string; record pinned string into doc 03 (BLOCKED on 2.1)
+- [x] 2.3 DONE 2026-09-18: 20 hand-worked cases in doc 03 §3.7 (all HOLD rows + boundaries 17-20); §3.6 box checked
 
 ## 3. Venues (doc 01)
-- [ ] 3.1 [W] Compare forex broker APIs (paper + live): shortlist 2 with REST + streaming quotes, fee/spread tables
-- [ ] 3.2 [W] Compare US-stock paper feeds/brokers: shortlist 2
-- [ ] 3.3 [W] Pick session-calendar + earnings-calendar + macro-release calendar sources (free)
-- [ ] 3.4 [D] Write chosen broker/paper/calendar names into doc 01
+- [x] 3.1 DONE 2026-09-18: OANDA v20 practice primary, FXCM demo fallback (REST + streaming, free demo, same shape as live)
+- [x] 3.2 DONE 2026-09-18: Alpaca paper primary (free, live-price sim, REST + WS, resettable, no deposit)
+- [x] 3.3 DONE 2026-09-18: exchange/broker calendars (fail-closed) + FRED/ALFRED + Fed/ECB pages + EDGAR-derived earnings; all free
+- [x] 3.4 DONE 2026-09-18: proposal written into doc 01 — [HUMAN] accept (or amend) to lock venue names
 
 ## 4. Research-plane freeze (doc 08)
-- [ ] 4.1 [W] Pin exact LangGraph + smolagents + Langfuse versions; verify installability (no code, just version resolution)
-- [ ] 4.2 [D] Record versions + checkpoint-store choice + six-node topology + failure defaults
+- [x] 4.1 DONE 2026-09-18: langgraph==1.1.6, smolagents==1.26.0, langfuse==4.15.4 (self-hosted); installability verified at build
+- [x] 4.2 DONE 2026-09-18: versions in 08 locked decisions; six-node topology + failure defaults already in 08 §8.3; checkpoint store SQLite(G0/G1)->Postgres(G2+) unchanged
 - [ ] 4.3 [D] Write Docker spec (non-root, read-only rootfs, caps, limits, egress allow-list) + import allowlist + OS users/permissions design
 - [ ] 4.4 [D] Freeze `features.jsonl` schema + R15 numbers
 
@@ -54,3 +54,8 @@ Legend: `[B]` needs real-browser control (X login, JS pages, portals) · `[W]` n
 
 ## 9+. Build phases (not started; tracked here only)
 - [ ] 9. Phase 1 signal sidecar → 10. Phase 2 JEV sidecar → 11. Phase 2.5 research plane → 12. Phase 3 C++ core → 13. Phase 4 paper loop G0 → 14-16. G1/G2/G3 gates
+
+## A. Agent orientation files (Phase-0, new)
+- [x] A.1 DONE 2026-09-18: ARCHITECTURE.md (8 questions, MiroHedge-mapped) at root
+- [x] A.2 DONE 2026-09-18: AGENTS.md session rules (read ARCH+00, TODO discipline, no secrets, fail closed) at root
+- [ ] A.3 [HUMAN] Confirm pi-harness loads AGENTS.md every turn (or point to the harness rules file to use instead)

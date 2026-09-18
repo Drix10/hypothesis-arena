@@ -262,3 +262,7 @@ Hard rules on this record:
 - `LocalPythonExecutor` is forbidden wherever trading credentials, journal, `HALT`,
   or `STAGE` are reachable. Recovery requires checkpoint + external supervisor +
   idempotent nodes — checkpoints alone are not durability.
+- Version pins (Phase-0 proposal, researched 2026-09-18 — human must accept):
+  `langgraph==1.1.6`, `smolagents==1.26.0`, self-hosted Langfuse (`langfuse==4.15.4`
+  client). Installability is verified at build; any upgrade is a D3 version bump
+  with a fresh paper window, never a silent pip update.

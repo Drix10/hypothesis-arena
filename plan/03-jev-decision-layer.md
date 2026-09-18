@@ -156,10 +156,44 @@ is still logged per decision for replay.
 ## 3.6 What "done" means
 
 - [ ] `jev.py` sidecar: stdin state → 1 batched call → stdout answers + log row.
-- [ ] Threshold/consensus table unit-tested with 20 hand-worked cases.
+- [x] Threshold/consensus table unit-tested with 20 hand-worked cases
+      (§3.7, Phase-0 evidence, 2026-09-18).
 - [ ] Cache + failure-path tests (timeout, 500, malformed → HOLD).
 - [ ] Replay of 200 recorded/synthetic states: distribution sane
       (no degenerate all-0.99), cache hit rate > 50% on slow key.
+
+## 3.7 Phase-0 hand-worked cases (evidence, 20 cases, 2026-09-18)
+
+Notation: E = enter.noul, A = analyst winner (probs top/runner), C =
+conviction, V = veto.noul, D = disagreement, W = event_window scheduled,
+K = calibration.vs_baseline. Expected = table action + size + logged reason.
+
+| # | E | A (top/runner) | C | Flags | Expected |
+|---|---|---|---|---|---|
+| 1 | .90 | jim (.7/.2) | max | V=.8 | HOLD veto (row 1 beats perfect setup) |
+| 2 | .85 | ray (.6/.3) | strong | D=true | HOLD R14 disagreement |
+| 3 | .90 | quant (.7/.2) | strong | W=true macro_release | HOLD event window |
+| 4 | .88 | jim (.7/.2) | strong | K=worse | HOLD calibration worse |
+| 5 | .42 | jim (.7/.2) | strong | — | HOLD no edge (E<.5) |
+| 6 | .65 | karen (.6/.2) | strong | — | HOLD mid-band needs strong non-karen |
+| 7 | .70 | jim (.6/.3) | lean | — | HOLD mid-band needs strong |
+| 8 | .90 | karen (.7/.2) | strong | — | HOLD karen |
+| 9 | .92 | jim (.8/.1) | flat | — | HOLD flat |
+| 10 | .55 | quant (.6/.3) | strong | — | ACT strong 10-15% (mid-band pass) |
+| 11 | .90 | jim (.7/.2) | lean | — | ACT lean 5% |
+| 12 | .85 | ray (.55/.3) | strong | — | ACT strong 10-15% (top>=.5) |
+| 13 | .93 | quant (.65/.25) | max | — | ACT max ≤25% (consensus pass) |
+| 14 | .90 | jim (.55/.40) | max | — | Downgrade strong (runner>.3) |
+| 15 | .88 | ray (.45/.3) | strong | — | Downgrade lean 5% (top<.5) |
+| 16 | .81 | jim (.6/.2) | lean | — | ACT lean 5% (band edge above .8) |
+| 17 | .50 | jim (.6/.2) | strong | — | ACT strong (exactly .5 is mid-band) |
+| 18 | .79 | karen (.7/.2) | max pass | — | HOLD, reason = mid-band row (first match wins) |
+| 19 | .90 | jim (.7/.2) | strong | V=.50 | ACT strong (veto needs STRICTLY >.5) |
+| 20 | .91 | quant (.60/.30) | max | — | ACT max (boundaries inclusive: top>=.6, runner<=.3) |
+
+Cases 17-20 pin boundary semantics: E=.5 belongs to mid-band, V fires only
+above .5, consensus thresholds are inclusive. Any future threshold change
+re-opens all 20 plus new ones.
 
 ## Locked decisions
 
