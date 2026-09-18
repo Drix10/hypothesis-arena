@@ -121,6 +121,10 @@ def to_record(source, it):
 
 
 def heartbeat(name, status, detail="", count=0):
+    """Source-status vocabulary (doc 09 source_status, P1.3 invariant #7):
+    ok | EMPTY_SUCCESS | SKIPPED_CONFIG | SOURCE_DOWN | AUTH_FAILURE |
+    RATE_LIMITED | PARSE_FAILURE | STALE. SKIPPED_CONFIG (FRED, no key) is a
+    config state, never data absence: it must not become features_absent."""
     os.makedirs(STATE, exist_ok=True)
     json.dump({
         "source": name, "status": status, "detail": detail[:300],
@@ -145,11 +149,11 @@ def run_json_source(src):
     if status == "not-modified":
         heartbeat(src["name"], "ok", "not-modified"); return []
     if status == "error":
-        heartbeat(src["name"], "error", body.decode()[:200]); return []
+        heartbeat(src["name"], "SOURCE_DOWN", body.decode()[:200]); return []
     try:
         payload = json.loads(body)
     except ValueError as e:
-        heartbeat(src["name"], "error", f"bad json: {e}"); return []
+        heartbeat(src["name"], "PARSE_FAILURE", f"bad json: {e}"); return []
     items = payload
     for key in src.get("drill", []):
         items = items.get(key, []) if isinstance(items, dict) else []
@@ -173,19 +177,27 @@ def main():
     total = 0
     for src in sources:
         if src.get("needs_key") and not os.environ.get(src["needs_key"]):
-            heartbeat(src["name"], "skipped_no_key", f"needs {src['needs_key']} (build-time)")
+            heartbeat(src["name"], "SKIPPED_CONFIG", f"needs {src['needs_key']} (build-time)")
             continue
         if src["kind"] in ("rss", "atom"):
             status, body, _ = fetch(src["url"], src["name"])
             if status == "not-modified":
                 heartbeat(src["name"], "ok", "not-modified"); continue
             if status == "error":
-                heartbeat(src["name"], "error", body.decode()[:200]); continue
+                msg = body.decode()[:200]
+                code = msg.split()[1] if msg.startswith("HTTP") else ""
+                if code == "403":
+                    heartbeat(src["name"], "AUTH_FAILURE", msg)
+                elif code == "429":
+                    heartbeat(src["name"], "RATE_LIMITED", msg)
+                else:
+                    heartbeat(src["name"], "SOURCE_DOWN", msg)
+                continue
             try:
                 recs = [to_record(src["name"], it) for it in parse_feed(body)[: src.get("limit", 50)]]
             except ET.ParseError as e:
-                heartbeat(src["name"], "error", f"bad xml: {e}"); continue
-            heartbeat(src["name"], "ok", count=len(recs))
+                heartbeat(src["name"], "PARSE_FAILURE", f"bad xml: {e}"); continue
+            heartbeat(src["name"], "ok" if recs else "EMPTY_SUCCESS", count=len(recs))
         elif src["kind"] == "json":
             recs = run_json_source(src)
         else:

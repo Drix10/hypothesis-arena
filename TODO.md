@@ -55,8 +55,8 @@ Legend: `[B]` needs real-browser control (X login, JS pages, portals) · `[W]` n
 ## 9+. Build phases
 ### Phase 1 start checklist (unblocked, non-X sources, no code until human says start)
 - [x] P1.1 DONE 2026-09-18: `scripts/freeze-check.sh` 39/39 PASS (human ruling (a): `research_graph_version: g1` declared in doc 08 §8.3; manifest untouched, no version bump, Phase 0 stays closed)
-- [x] P1.2 DONE 2026-09-18: `collector/collect.py` (stdlib-only) + `sources.json` (5 keyless pollers live on first run: 105 records; FRED key-gated skip) + session calendar seed; `data/` gitignored, heartbeats per source
-- [ ] P1.3 SQLite index + dedupe + TRIGGER/CONTEXT tagging at write time (incremental-edge rule, doc 09)
+- [x] P1.2 DONE 2026-09-18: core collector complete (`collector/collect.py` stdlib-only, 5 keyless pollers live, session calendar seed); FRED adapter implemented but key-gated (`SKIPPED_CONFIG`, not failure)
+- [x] P1.3 DONE 2026-09-18: `collector/classify.py` (SQLite canonical, revision-aware dedupe, deterministic rules_v1, provenance, 4-timestamp semantics) + `audit.py` + `test_pipeline.py` (9 checks pass, incl. race fix via INSERT OR IGNORE). Baseline 105-sample: 105 unique, 0 dup, 40 TRIGGER_CANDIDATE (38 item-based EDGAR + 2 FOMC), 42 CONTEXT, 23 STALE-archaeology. No LLM in classification; `classified/` is candidate feed, NOT features.jsonl (research plane emit owns that).
 - [ ] P1.4 7-day soak + noise grade (<10% off-topic)
 - [ ] P1.5 Stub `ctx/` reader consumes bundle schema (§2.7 exit)
 - [ ] Later: 10. Phase 2 JEV sidecar (v3 + Ed25519) → 11. Phase 2.5 research plane (bundle model, sandbox image) → 12. Phase 3 C++ core (adapters, protection, FSM) → 13. Phase 4 paper loop G0 → 14-16. G1/G2/G3 gates

@@ -1,24 +1,68 @@
 [
-  {"name": "edgar_8k", "kind": "atom", "limit": 40, "class_hint": "TRIGGER-equities",
-   "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K&count=40&output=atom",
-   "note": "UA contact required; zero 403s over soak or this poller does not ship (doc 09 S9.4)"},
-  {"name": "fed_monetary", "kind": "rss", "limit": 30, "class_hint": "TRIGGER-macro",
-   "url": "https://www.federalreserve.gov/feeds/press_monetary.xml"},
-  {"name": "ecb_mid", "kind": "rss", "limit": 30, "class_hint": "TRIGGER-macro",
-   "url": "https://mid.ecb.europa.eu/rss/mid.xml",
-   "note": "documented MID feed URL; soak proves parse"},
-  {"name": "treasury_auctions", "kind": "json", "limit": 20, "class_hint": "TRIGGER-macro",
-   "url": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/accounting/od/auctions_query?sort=-record_date&page%5Bsize%5D=20",
-   "drill": ["data"], "id_field": "cusip",
-   "title_field": "security_type", "date_field": "auction_date",
-   "text_fields": ["security_term", "auction_date", "avg_med_discnt_rate", "avg_med_investment_rate"],
-   "link_template": "https://fiscaldata.treasury.gov/"},
-  {"name": "bls_empsit", "kind": "rss", "limit": 10, "class_hint": "TRIGGER-macro",
-   "url": "https://www.bls.gov/feed/empsit.rss",
-   "note": "candidate URL; soak proves reachability, else BLS public API"},
-  {"name": "fred_macro", "kind": "json", "limit": 10, "class_hint": "TRIGGER-macro",
-   "needs_key": "FRED_API_KEY",
-   "url": "FRED_API_KEY-gated (configured at build; skipped until then)",
-   "drill": [], "id_field": "id", "title_field": "title", "date_field": "date",
-   "text_fields": [], "link_template": ""}
+ {
+  "name": "edgar_8k",
+  "kind": "atom",
+  "limit": 40,
+  "class_hint": "SOURCE_FACT-default-CONTEXT; item table promotes (rules_v1)",
+  "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K&count=40&output=atom",
+  "note": "UA contact required; zero 403s over soak or this poller does not ship (doc 09 S9.4)"
+ },
+ {
+  "name": "fed_monetary",
+  "kind": "rss",
+  "limit": 30,
+  "class_hint": "TRIGGER-macro",
+  "url": "https://www.federalreserve.gov/feeds/press_monetary.xml"
+ },
+ {
+  "name": "ecb_mid",
+  "kind": "rss",
+  "limit": 30,
+  "class_hint": "CONTEXT-infra",
+  "url": "https://mid.ecb.europa.eu/rss/mid.xml",
+  "note": "MID collateral/eligibility reference data, NOT press releases; never TRIGGER (verified 2026-09-18 sample)"
+ },
+ {
+  "name": "treasury_auctions",
+  "kind": "json",
+  "limit": 20,
+  "class_hint": "TRIGGER-macro",
+  "url": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/accounting/od/auctions_query?sort=-record_date&page%5Bsize%5D=20",
+  "drill": [
+   "data"
+  ],
+  "id_field": "cusip",
+  "title_field": "security_type",
+  "date_field": "auction_date",
+  "text_fields": [
+   "security_term",
+   "auction_date",
+   "avg_med_discnt_rate",
+   "avg_med_investment_rate"
+  ],
+  "link_template": "https://fiscaldata.treasury.gov/",
+  "note": "rate/allocation fields recorded; auction interpretation undefined -> no direction at ingestion"
+ },
+ {
+  "name": "bls_empsit",
+  "kind": "rss",
+  "limit": 10,
+  "class_hint": "TRIGGER-macro",
+  "url": "https://www.bls.gov/feed/empsit.rss",
+  "note": "headline+link only; values unresolved -> values_pending, no direction at ingestion"
+ },
+ {
+  "name": "fred_macro",
+  "kind": "json",
+  "limit": 10,
+  "class_hint": "TRIGGER-macro",
+  "needs_key": "FRED_API_KEY",
+  "url": "FRED_API_KEY-gated (configured at build; skipped until then)",
+  "drill": [],
+  "id_field": "id",
+  "title_field": "title",
+  "date_field": "date",
+  "text_fields": [],
+  "link_template": ""
+ }
 ]
