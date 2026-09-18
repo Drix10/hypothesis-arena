@@ -32,7 +32,22 @@ SOURCE_TTL = {
 }
 # 8-K items that may become TRIGGER candidates (deterministic table, rules_v1).
 TRIGGER_ITEMS = {"1.01", "1.02", "2.02", "2.06", "5.02", "7.01", "8.01"}
-ITEM_RE = re.compile(r"Item\s+(\d+\.\d+)", re.IGNORECASE)
+# Header-anchored detection (rules_v1): an item promotes only as a section
+# header — line start, after <br>/newline/`>`, or after `;` — followed by
+# `:` or `-`. Narrative mentions ("discussion of Item 2.02 in...") do not.
+ITEM_HEADER_RE = re.compile(
+    r"(?:^|[\n\r>]|<br\s*/?>|;\s*)\s*Item\s+(\d+\.\d+)\s*[:\-\u2013\u2014]",
+    re.IGNORECASE)
+
+
+def detect_amendment(source, rec):
+    """rules_v1 scope (explicit limitation): EDGAR-only heuristic. An 8-K/A
+    accession amends its base accession. Any other source, or any EDGAR record
+    not matching this contract, is at most a revision — never a correction."""
+    if source != "edgar_8k":
+        return False
+    title = rec.get("title", "") or ""
+    return "/A" in title.split("(")[0] or (rec.get("source_id", "") or "").endswith("/A")
 FED_TRIGGER_RE = re.compile(
     r"FOMC statement|monetary policy|discount rate|Federal Open Market|target range",
     re.IGNORECASE)
@@ -58,9 +73,33 @@ def parse_ts(s):
 
 
 def content_hash(rec):
+    """Hash over the canonical authoritative payload.
+    Excluded (volatile transport, changes every poll): observed_at.
+    Everything else a source can authoritatively correct — title, text, url,
+    links, published_at — is hashed, so metadata-only changes become revisions."""
     h = hashlib.sha256()
-    h.update(json.dumps({k: rec.get(k) for k in ("title", "text", "url")}, sort_keys=True).encode())
+    payload = {k: rec.get(k) for k in
+               ("source", "source_id", "title", "text", "url", "links", "published_at")}
+    h.update(json.dumps(payload, sort_keys=True, default=str).encode())
     return h.hexdigest()[:24]
+
+
+REQUIRED_FIELDS = ("id", "source", "source_id")
+
+
+def validate_record(rec):
+    """Structural schema gate. Returns None if valid, else a reason string.
+    Runs BEFORE ingest_signal touches rec[...] so malformed schema can never
+    raise KeyError or enter SQLite as a canonical event."""
+    if not isinstance(rec, dict):
+        return "not-an-object"
+    for f in REQUIRED_FIELDS:
+        v = rec.get(f)
+        if not isinstance(v, str) or not v:
+            return f"missing-or-null-{f}"
+    if not (rec.get("title") or rec.get("text") or rec.get("url")):
+        return "no-content-at-all"
+    return None
 
 
 def init_db(con):
@@ -74,16 +113,19 @@ def init_db(con):
 
 
 def ingest_signal(con, rec, retrieved_at):
-    """Revision-aware dedupe. Returns (verdict, row_key)."""
+    """Revision-aware dedupe. Caller MUST run validate_record() first.
+    Returns (verdict, content_hash, first_seen_at, revision_of)."""
     ch = content_hash(rec)
     cur = con.execute(
-        "SELECT content_hash, verdict FROM records WHERE source=? AND source_id=?",
+        "SELECT content_hash, verdict FROM records WHERE source=? AND source_id=? "
+        "ORDER BY first_seen_at",
         (rec["source"], rec["source_id"]))
     prior = cur.fetchall()
     pub, estimated = parse_ts(rec.get("published_at"))
     if estimated and rec.get("published_at"):
         pub = None  # unparseable counts as missing, never as a guessed time
-    is_amend = "/A" in (rec.get("title", "") or "") or rec["source_id"].endswith("/A")
+    is_amend = detect_amendment(rec["source"], rec)
+    revision_of = prior[-1][0] if prior else None
     if any(p[0] == ch for p in prior):
         con.execute(
             "UPDATE records SET last_seen_at=? WHERE source=? AND source_id=? AND content_hash=?",
@@ -91,7 +133,7 @@ def ingest_signal(con, rec, retrieved_at):
         row = con.execute(
             "SELECT first_seen_at FROM records WHERE source=? AND source_id=? AND content_hash=?",
             (rec["source"], rec["source_id"], ch)).fetchone()
-        return "duplicate", ch, (row[0] if row else retrieved_at)
+        return "duplicate", ch, (row[0] if row else retrieved_at), None
     if prior and is_amend:
         verdict = "correction"
     elif prior:
@@ -103,7 +145,7 @@ def ingest_signal(con, rec, retrieved_at):
     cur = con.execute(
         "INSERT OR IGNORE INTO records VALUES(?,?,?,?,?,?,?,?,?,?,?)",
         (rec["source"], rec["source_id"], ch, retrieved_at, retrieved_at,
-         pub, rec.get("observed_at", retrieved_at),
+         pub, retrieved_at,
          rec["source_id"] if is_amend else None, verdict,
          json.dumps(rec, ensure_ascii=False), PARSER_VERSION))
     if cur.rowcount == 0:
@@ -114,7 +156,7 @@ def ingest_signal(con, rec, retrieved_at):
         row = con.execute(
             "SELECT first_seen_at FROM records WHERE source=? AND source_id=? AND content_hash=?",
             (rec["source"], rec["source_id"], ch)).fetchone()
-        return "duplicate", ch, (row[0] if row else retrieved_at)
+        return "duplicate", ch, (row[0] if row else retrieved_at), None
     if verdict == "correction":
         base = rec["source_id"].replace("/A", "")
         con.execute("INSERT OR IGNORE INTO corrections VALUES(?,?,?,?)",
@@ -122,7 +164,7 @@ def ingest_signal(con, rec, retrieved_at):
     row = con.execute(
         "SELECT first_seen_at FROM records WHERE source=? AND source_id=? AND content_hash=?",
         (rec["source"], rec["source_id"], ch)).fetchone()
-    return verdict, ch, (row[0] if row else retrieved_at)
+    return verdict, ch, (row[0] if row else retrieved_at), revision_of
 
 
 ARCHAEOLOGY_DAYS = 7
@@ -150,7 +192,7 @@ def is_fresh(first_seen_at, source):
     return age <= SOURCE_TTL.get(source, 21600)
 
 
-def classify(source, rec, verdict, published_at, estimated, fresh=True):
+def classify(source, rec, verdict, published_at, estimated, fresh=True, retrieved_at=None):
     """Deterministic eligibility. Returns (eligibility, effect, confidence, reason)."""
     if verdict == "malformed":
         return "REJECTED", None, 1.0, "empty-record"
@@ -160,6 +202,11 @@ def classify(source, rec, verdict, published_at, estimated, fresh=True):
         return "CONTEXT", {"corrects": True}, 1.0, "amendment-never-triggers"
     if is_archaeology(published_at):
         return "STALE", None, 1.0, "archaeology"
+    effective = published_at or retrieved_at
+    if retrieved_at and effective and effective > retrieved_at:
+        # Hard lookahead invariant: economically-effective time after our own
+        # observation time is never downstream-eligible, no exceptions.
+        return "REJECTED", None, 1.0, "future-timestamp"
     elig, effect, conf, reason = _base_classify(source, rec, estimated)
     if elig == "TRIGGER_CANDIDATE" and not fresh:
         effect = dict(effect or {});
@@ -171,7 +218,7 @@ def classify(source, rec, verdict, published_at, estimated, fresh=True):
 def _base_classify(source, rec, estimated):
     title, text = rec.get("title", ""), rec.get("text", "")
     if source == "edgar_8k":
-        items = sorted(set(ITEM_RE.findall(text + " " + title)))
+        items = sorted(set(ITEM_HEADER_RE.findall(text + " " + title)))
         if not items:
             return "CONTEXT", {"items_unknown": True}, 0.5, "no-parsable-items"
         if estimated:
@@ -213,16 +260,34 @@ def run(signals_path):
             except ValueError:
                 stats["malformed_lines"] = stats.get("malformed_lines", 0) + 1
                 continue
-            retrieved_at = now_iso()
-            verdict, ch, first_seen = ingest_signal(con, rec, retrieved_at)
+            try:
+                schema_problem = validate_record(rec)
+            except Exception:
+                schema_problem = "validator-crash"
+            if schema_problem:
+                stats["schema_invalid"] = stats.get("schema_invalid", 0) + 1
+                s = stats["per_source"].setdefault(
+                    rec.get("source", "unknown") if isinstance(rec, dict) else "unknown", {})
+                s["REJECTED"] = s.get("REJECTED", 0) + 1
+                s[f"reason:schema-{schema_problem}"] = \
+                    s.get(f"reason:schema-{schema_problem}", 0) + 1
+                continue  # structurally invalid: never SQLite, never emitted
+            try:
+                retrieved_at = now_iso()  # OUR processing time, not the source's
+                verdict, ch, first_seen, revision_of = ingest_signal(con, rec, retrieved_at)
+            except Exception as e:
+                stats["ingest_crash"] = stats.get("ingest_crash", 0) + 1
+                stats["ingest_crash_last"] = f"{type(e).__name__}: {e}"[:200]
+                continue  # one bad row never kills the batch
             pub_row = con.execute(
                 "SELECT published_at FROM records WHERE source=? AND source_id=? AND content_hash=?",
                 (rec["source"], rec["source_id"], ch)).fetchone()
             published_at = pub_row[0] if pub_row else None
             estimated = published_at is None
+            effective_at = published_at or retrieved_at
             fresh = is_fresh(first_seen, rec["source"])
             elig, effect, conf, reason = classify(
-                rec["source"], rec, verdict, published_at, estimated, fresh)
+                rec["source"], rec, verdict, published_at, estimated, fresh, retrieved_at)
             s = stats["per_source"].setdefault(rec["source"], {})
             s[verdict] = s.get(verdict, 0) + 1
             s[elig] = s.get(elig, 0) + 1
@@ -233,12 +298,14 @@ def run(signals_path):
                     "eligibility": elig, "effect": effect, "confidence": conf,
                     "reason": reason,
                     "timestamps": {"published_at": published_at,
-                                   "retrieved_at": rec.get("observed_at", retrieved_at),
-                                   "effective_at": published_at or rec.get("observed_at", retrieved_at),
+                                   "retrieved_at": retrieved_at,
+                                   "source_observed_at": rec.get("observed_at"),
+                                   "effective_at": effective_at,
+                                   "first_seen_at": first_seen,
                                    "published_estimated": estimated},
                     "provenance": {"raw_hash": ch, "parser_version": PARSER_VERSION,
                                    "rule_version": RULES_VERSION, "created_at": retrieved_at,
-                                   "revision_of": None},
+                                   "revision_of": revision_of},
                 }, ensure_ascii=False) + "\n")
     con.commit()
     con.close()
