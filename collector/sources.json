@@ -5,14 +5,16 @@
   "limit": 40,
   "class_hint": "SOURCE_FACT-default-CONTEXT; item table promotes (rules_v1)",
   "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K&count=40&output=atom",
-  "note": "UA contact required; zero 403s over soak or this poller does not ship (doc 09 S9.4)"
+  "note": "UA contact required; zero 403s over soak or this poller does not ship (doc 09 S9.4)",
+  "poll_min": 15
  },
  {
   "name": "fed_monetary",
   "kind": "rss",
   "limit": 30,
   "class_hint": "TRIGGER-macro",
-  "url": "https://www.federalreserve.gov/feeds/press_monetary.xml"
+  "url": "https://www.federalreserve.gov/feeds/press_monetary.xml",
+  "poll_min": 60
  },
  {
   "name": "ecb_mid",
@@ -20,7 +22,8 @@
   "limit": 30,
   "class_hint": "CONTEXT-infra",
   "url": "https://mid.ecb.europa.eu/rss/mid.xml",
-  "note": "MID collateral/eligibility reference data, NOT press releases; never TRIGGER (verified 2026-09-18 sample)"
+  "note": "MID collateral/eligibility reference data, NOT press releases; never TRIGGER (verified 2026-09-18 sample)",
+  "poll_min": 60
  },
  {
   "name": "treasury_auctions",
@@ -41,7 +44,8 @@
    "avg_med_investment_rate"
   ],
   "link_template": "https://fiscaldata.treasury.gov/",
-  "note": "rate/allocation fields recorded; auction interpretation undefined -> no direction at ingestion"
+  "note": "rate/allocation fields recorded; auction interpretation undefined -> no direction at ingestion",
+  "poll_min": 360
  },
  {
   "name": "bls_empsit",
@@ -49,7 +53,8 @@
   "limit": 10,
   "class_hint": "TRIGGER-macro",
   "url": "https://www.bls.gov/feed/empsit.rss",
-  "note": "headline+link only; values unresolved -> values_pending, no direction at ingestion"
+  "note": "headline+link only; values unresolved -> values_pending, no direction at ingestion",
+  "poll_min": 360
  },
  {
   "name": "fred_macro",
@@ -63,6 +68,7 @@
   "title_field": "title",
   "date_field": "date",
   "text_fields": [],
-  "link_template": ""
+  "link_template": "",
+  "poll_min": 360
  }
 ]

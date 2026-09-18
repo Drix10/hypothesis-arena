@@ -57,6 +57,7 @@ Legend: `[B]` needs real-browser control (X login, JS pages, portals) · `[W]` n
 - [x] P1.1 DONE 2026-09-18: `scripts/freeze-check.sh` 39/39 PASS (human ruling (a): `research_graph_version: g1` declared in doc 08 §8.3; manifest untouched, no version bump, Phase 0 stays closed)
 - [x] P1.2 DONE 2026-09-18: core collector complete (`collector/collect.py` stdlib-only, 5 keyless pollers live, session calendar seed); FRED adapter implemented but key-gated (`SKIPPED_CONFIG`, not failure)
 - [x] P1.3 FROZEN 2026-09-18: corrective commit (future-check first, canonical effective_at 5-tuple, EDGAR-only amendment contract + unlinked CONTEXT, pinned REF + audit as_of). 19 checks pass; 105-baseline identical (40/42/23). P1.4 may begin.
+- [ ] P1.4 STARTED 2026-09-18: 7-day soak (`collector/soak.py --loop`, 15-min cycles, rules_v1 FROZEN). Entry evidence: validation cycle ok, replay dedupe proven live (225 inputs → 105 unique, 120 dupes absorbed, verdicts unchanged), heartbeats all ok/SKIPPED_CONFIG. Needs: `MIRO_CONTACT` with real contact for the zero-403 gate; host to run the loop; manual noise grade at end (`collector/SOAK_REPORT.md`).
 - [ ] P1.4 7-day soak + noise grade (<10% off-topic)
 - [ ] P1.5 Stub `ctx/` reader consumes bundle schema (§2.7 exit)
 - [ ] Later: 10. Phase 2 JEV sidecar (v3 + Ed25519) → 11. Phase 2.5 research plane (bundle model, sandbox image) → 12. Phase 3 C++ core (adapters, protection, FSM) → 13. Phase 4 paper loop G0 → 14-16. G1/G2/G3 gates
