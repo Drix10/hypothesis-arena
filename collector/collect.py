@@ -19,7 +19,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 DATA = os.path.join(ROOT, "data", "signals")
 STATE = os.path.join(ROOT, "data", "state")
-CONTACT = os.environ.get("MIRO_CONTACT", "unconfigured-local-soak")
+from config import load as load_config
+
+_cfg = load_config()
+CONTACT = _cfg["values"].get("MIRO_CONTACT", "")
 UA = f"MiroHedge/phase0 contact={CONTACT}"
 
 
@@ -173,6 +176,11 @@ def run_json_source(src):
 
 
 def main():
+    cfg = load_config()
+    if cfg["status"] == "MISSING_REQUIRED_CONFIG":
+        print(f"MISSING_REQUIRED_CONFIG: {','.join(cfg['missing_required'])} "
+              f"-- see config/README.md; refusing to poll", file=sys.stderr)
+        return 2
     sources = json.load(open(os.path.join(HERE, "sources.json")))
     total = 0
     for src in sources:

@@ -142,7 +142,17 @@ def main():
             viol.append(f)
     C.append(verdict("boundary-intact", not viol, f"violations={len(viol)}"))
 
-    # 5. aggregate rates from the latest soak audit
+    # 6. config hygiene: template committed, real values untracked + present
+    tracked = subprocess.run(["git", "-C", ROOT, "ls-files"],
+                             capture_output=True, text=True).stdout.split()
+    secret_leak = [f for f in tracked
+                   if os.path.basename(f) == ".env" or f.endswith(".env")]
+    tmpl_ok = os.path.exists(os.path.join(ROOT, ".env.example"))
+    contact_ok = bool(os.environ.get("MIRO_CONTACT", "").strip())
+    hyg_ok = (not secret_leak and tmpl_ok and contact_ok)
+    C.append(verdict("config-hygiene", hyg_ok,
+                     f"template={tmpl_ok} tracked_envs={secret_leak or 'none'} "
+                     f"contact_in_env={contact_ok}"))
     audits = sorted(glob.glob(os.path.join(SOAK, "audit-*.json")))
     if audits:
         a = json.load(open(audits[-1]))

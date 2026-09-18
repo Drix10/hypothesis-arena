@@ -41,3 +41,7 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+# local secrets / deployment config (template .env.example is committed)
+.env
+.env.*
+!.env.example

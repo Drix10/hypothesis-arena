@@ -91,6 +91,13 @@ def main():
     if "--once" in sys.argv:
         cycle()
     elif "--loop" in sys.argv:
+        sys.path.insert(0, HERE)
+        from config import load as load_config
+        cfg = load_config()
+        if cfg["status"] == "MISSING_REQUIRED_CONFIG":
+            print(f"MISSING_REQUIRED_CONFIG: {','.join(cfg['missing_required'])} "
+                  f"-- refusing 7-day loop", file=sys.stderr)
+            return 2
         end = time.time() + 7 * 24 * 3600
         while time.time() < end:
             cycle()
@@ -101,4 +108,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
