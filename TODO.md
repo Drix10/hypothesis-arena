@@ -55,7 +55,7 @@ Legend: `[B]` needs real-browser control (X login, JS pages, portals) · `[W]` n
 ## 9+. Build phases
 ### Phase 1 start checklist (unblocked, non-X sources, no code until human says start)
 - [x] P1.1 DONE 2026-09-18: `scripts/freeze-check.sh` 39/39 PASS (human ruling (a): `research_graph_version: g1` declared in doc 08 §8.3; manifest untouched, no version bump, Phase 0 stays closed)
-- [ ] P1.2 Collector: EDGAR + FRED/ALFRED + official macro feeds + calendars → `signals.jsonl` (atomic rename, per-source poller/TTL/heartbeat per §9)
+- [x] P1.2 DONE 2026-09-18: `collector/collect.py` (stdlib-only) + `sources.json` (5 keyless pollers live on first run: 105 records; FRED key-gated skip) + session calendar seed; `data/` gitignored, heartbeats per source
 - [ ] P1.3 SQLite index + dedupe + TRIGGER/CONTEXT tagging at write time (incremental-edge rule, doc 09)
 - [ ] P1.4 7-day soak + noise grade (<10% off-topic)
 - [ ] P1.5 Stub `ctx/` reader consumes bundle schema (§2.7 exit)
