@@ -4,13 +4,13 @@ Legend: `[B]` needs real-browser control (X login, JS pages, portals) · `[W]` n
 
 ## 0. Housekeeping
 - [x] 0.1 Plan docs frozen-consistent (00-11 + README), pushed to main
-- [ ] 0.2 This TODO tracked to zero; every box below checked or explicitly deferred with reason
+- [x] 0.2 DONE 2026-09-18: Phase 0 signed off (Drix10, doc 07 log); remaining opens deferred/blocked/human-side with reasons below
 
 ## 1. X-Lists research (our lists are AI/tech mostly)
 - [x] 1.1 DONE 2026-09-18: recovered 55-ID folders table from old MVP config; ~46 Scobleizer AI/tech lists, all live
 - [x] 1.2 DONE 2026-09-18: no reusable public macro list IDs exist; TRIGGER coverage = 6-account roster, all verified live
 - [x] 1.3 DONE 2026-09-18: 55/55 live, 0 dead, all active; evidence in sign-off log
-- [ ] 1.4 [B/W] For each live list: note top 10 recurring posters (keywords, not handles, for the doc table)
+- [ ] 1.4 DEFERRED to Phase-1 soak: top posters recorded empirically by the sidecar, not by hand
 - [x] 1.5 DONE 2026-09-18: self-hosted twikit-rss selected (MIT, list+user endpoints, no X API key); credential placement = Phase-1 item
 - [x] 1.6 DONE 2026-09-18, REVISED per user: finance-first universe in 02 §2.4 — 9 finance TRIGGER lists + 6-account roster + 13 market-moving AI/tech CONTEXT; ~40 non-moving IDs dropped from polling (on record in history)
 - [x] 1.7 SUPERSEDED 2026-09-18: self-hosted transport has no third-party mirror to fall short; TRIGGER = account roster, throttled only by X frontend rate limits (Phase-1 soak measures)
@@ -49,11 +49,18 @@ Legend: `[B]` needs real-browser control (X login, JS pages, portals) · `[W]` n
 - [x] 7.2 DONE 2026-09-18: R1–R9 literals + §5.1a methods + paper fill rule (06 Locked) frozen; R10–R17 as constants; owners = ARCHITECTURE §2/§7
 
 ## 8. Freeze sign-off (doc 07)
-- [ ] 8.1 [D] Zero TBDs outside "tune later"; all boxes above checked
-- [ ] 8.2 [H] Human sign-off logged in doc 07; Phase 1 (signal sidecar) unblocked
+- [x] 8.1 DONE 2026-09-18: zero TBDs outside "tune later"; opens = 1.4 deferred, 2.1/2.2 BLOCKED (not needed for Phase 1), 5.2 human-side (not needed for Phase 1 start), 6.1 build-time human step
+- [x] 8.2 DONE 2026-09-18: Drix10 signed Phase 0 freeze in doc 07 log; Phase 1 unblocked
 
-## 9+. Build phases (not started; tracked here only)
-- [ ] 9. Phase 1 signal sidecar → 10. Phase 2 JEV sidecar → 11. Phase 2.5 research plane → 12. Phase 3 C++ core → 13. Phase 4 paper loop G0 → 14-16. G1/G2/G3 gates
+## 9+. Build phases
+### Phase 1 start checklist (unblocked, no code until human says start)
+- [ ] P1.1 X-session credential placement note (sidecar host, never git) + twikit-rss pinned version
+- [ ] P1.2 Collector: 9 finance lists + 13 CONTEXT lists + 6-account roster → `signals.jsonl` (atomic rename, inode tracking per §2.5)
+- [ ] P1.3 SQLite index (list, tweet_id) + dedupe (10k ID cap, doc 02 filters: spam/NON_TECH, ≥30 words or ≥15 w/link)
+- [ ] P1.4 TRIGGER vs CONTEXT tagging at write time (macro/FX/earnings-native only)
+- [ ] P1.5 7-day soak + noise grade (<10% off-topic) + 1.4 empirical top-posters
+- [ ] P1.6 Stub `ctx/` reader consumes schema (§2.6 exit)
+- [ ] Later: 10. Phase 2 JEV sidecar → 11. Phase 2.5 research plane → 12. Phase 3 C++ core → 13. Phase 4 paper loop G0 → 14-16. G1/G2/G3 gates
 
 ## A. Agent orientation files (Phase-0, new)
 - [x] A.1 DONE 2026-09-18: ARCHITECTURE.md (8 questions, MiroHedge-mapped) at root

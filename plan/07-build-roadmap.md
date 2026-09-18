@@ -197,3 +197,4 @@ STAGE ATTEST HASH: <sha256>
 ```
 
 - (empty — first entry closes phase 0)
+- Phase 0 freeze | Drix10 | 2026-09-18 | plan frozen; G0 STAGE + keys at build; Phase 1 unblocked
