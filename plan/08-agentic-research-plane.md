@@ -110,6 +110,7 @@ best-effort sandboxing with known escapes, which is not sandboxing.
 
 ## 8.3 Agent topology (locked)
 
+`research_graph_version: g1` (matches `plan/system-manifest.yaml`).
 One LangGraph graph, run as a supervised loop. Six nodes, all off the hot path.
 
 | Node | Job | Output | Default on failure |
