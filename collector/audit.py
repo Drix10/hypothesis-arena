@@ -21,7 +21,9 @@ from classify import run  # noqa: E402
 
 
 def main():
-    out_path, stats = run(sys.argv[1])
+    from datetime import datetime, timezone
+    as_of = datetime.now(timezone.utc).isoformat()
+    out_path, stats = run(sys.argv[1], as_of=as_of)
     agg = {"input_records": 0, "unique_event_keys": 0, "unique_content_versions": 0,
            "duplicates": 0, "revisions": 0, "corrections": 0,
            "malformed": 0, "stale": 0, "trigger_candidates": 0,
@@ -72,6 +74,7 @@ def main():
     agg["input_records"] += stats.get("malformed_lines", 0) + stats.get("schema_invalid", 0)
     agg["total"] = agg["input_records"]
     agg["unique"] = agg["unique_content_versions"]
+    agg["as_of"] = as_of
     agg["classified_file"] = out_path
     print(json.dumps(agg, indent=1))
 

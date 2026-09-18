@@ -32,3 +32,12 @@ dist-ssr
 *.tsbuildinfo
 data/
 __pycache__/
+# Python
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+# OS
+.DS_Store
+Thumbs.db

@@ -102,7 +102,7 @@ print("ok replay")
 
 # 7. lookahead: estimated timestamp never becomes a candidate
 hot = rec(source_id="hot1", text="<br>Item 2.02: blowout quarter", published_at=None)
-e, eff, conf, reason = classify("edgar_8k", hot, "new", None, True)
+e, eff, conf, reason, _ = classify("edgar_8k", hot, "new", None, True)
 assert e == "CONTEXT" and "estimated" in reason, (e, reason)
 print("ok lookahead")
 
@@ -139,7 +139,7 @@ old_seen = rec(source_id="aged1", text="<br>Item 2.02: blowout quarter",
 v, _, fs, _ = ingest_signal(con, old_seen, "2026-09-18T17:51:00+00:00")
 assert is_fresh("2000-01-01T00:00:00+00:00", "edgar_8k") is False
 assert is_fresh(datetime.now(timezone.utc).isoformat(), "edgar_8k") is True
-e, eff, conf, reason = classify("edgar_8k", old_seen, v,
+e, eff, conf, reason, _ = classify("edgar_8k", old_seen, v,
                                 "2026-09-18T17:51:00+00:00", False, fresh=False)
 assert e == "CONTEXT" and (eff or {}).get("aged") is True and reason == "candidate-expired", (e, eff, reason)
 print("ok aged-candidate")
@@ -160,7 +160,7 @@ assert e in ("TRIGGER_CANDIDATE", "CONTEXT"), e
 print("ok equal-timestamps")
 
 # 12. malformed timezone / unparseable published -> estimated, CONTEXT-capped
-e, eff, conf, reason = classify(
+e, eff, conf, reason, _ = classify(
     "edgar_8k", rec(source_id="tz1", text="<br>Item 8.01: Something"), "new",
     None, True, True, "2026-09-18T18:00:00+00:00")
 assert e == "CONTEXT" and "estimated" in reason, (e, reason)
@@ -213,3 +213,61 @@ assert e == "CONTEXT", e
 print("ok amendment-never-candidate")
 
 print("ALL HARDENED CHECKS PASS")
+
+RT = "2026-09-18T18:00:00+00:00"
+FUT = "2999-01-01T00:00:00+00:00"
+
+# 17. future matrix: revision, correction, archaeology+future all REJECTED
+con = fresh()
+base = rec(source_id="fm1", text="<br>Item 8.01: v1", published_at="2026-09-18T17:00:00+00:00")
+ingest_signal(con, base, RT)
+rev = rec(source_id="fm1", text="<br>Item 8.01: v2", published_at=FUT)
+v, _, _, _ = ingest_signal(con, rev, RT)
+assert v == "revision", v
+e, *_ = classify("edgar_8k", rev, v, FUT, False, True, RT)
+assert e == "REJECTED", ("future-revision", e)
+
+con = fresh()
+b2 = rec(source_id="fm2", title="8-K ACME", text="<br>Item 2.02: x",
+         published_at="2026-09-18T16:00:00+00:00")
+ingest_signal(con, b2, RT)
+a2 = rec(source_id="fm2", title="8-K/A ACME", text="<br>Item 2.02: y", published_at=FUT)
+v, _, _, _ = ingest_signal(con, a2, RT)
+assert v == "correction", v
+e, *_ = classify("edgar_8k", a2, v, FUT, False, True, RT)
+assert e == "REJECTED", ("future-correction", e)
+
+old_fut = rec(source_id="fm3", published_at=FUT)
+e, *_ = classify("edgar_8k", old_fut, "new", FUT, False, False, RT)
+assert e == "REJECTED", ("future-beats-everything", e)
+print("ok future-matrix")
+
+# 18. cross-accession amendment: different IDs, no fabricated linkage
+con = fresh()
+base = rec(source_id="urn:acc-123", title="8-K ACME (0001234)",
+           text="<br>Item 2.02: Results", published_at="2026-09-18T16:00:00+00:00")
+v1, _, _, ro1 = ingest_signal(con, base, RT)
+amd = rec(source_id="urn:acc-456", title="8-K/A ACME (0001234)",
+          text="<br>Item 2.02: Restated", published_at="2026-09-18T17:00:00+00:00")
+v2, _, _, ro2 = ingest_signal(con, amd, RT)
+# different source_id, no prior under amendment id: verdict is new (honest),
+# revision_of is None (never fabricated)...
+assert (v1, v2) == ("new", "new"), (v1, v2)
+assert ro2 is None, ro2
+# ...but eligibility still refuses candidacy for the unlinked amendment
+e, eff, *_ = classify("edgar_8k", amd, v2, "2026-09-18T17:00:00+00:00",
+                      False, True, RT)
+assert e == "CONTEXT" and (eff or {}).get("amendment_unlinked") is True, (e, eff)
+print("ok cross-accession-amendment")
+
+# 19. pinned reference time makes archaeology deterministic
+import classify as C  # noqa: E402
+C.REF["t"] = "2026-09-20T00:00:00+00:00"
+assert C.is_archaeology("2026-09-10T00:00:00+00:00") is True
+assert C.is_archaeology("2026-09-19T12:00:00+00:00") is False
+assert C.is_fresh("2026-09-19T23:50:00+00:00", "edgar_8k") is True
+assert C.is_fresh("2026-09-19T23:00:00+00:00", "edgar_8k") is False
+C.REF["t"] = None
+print("ok pinned-reference-time")
+
+print("ALL CORRECTIVE CHECKS PASS")

@@ -41,9 +41,13 @@ ITEM_HEADER_RE = re.compile(
 
 
 def detect_amendment(source, rec):
-    """rules_v1 scope (explicit limitation): EDGAR-only heuristic. An 8-K/A
-    accession amends its base accession. Any other source, or any EDGAR record
-    not matching this contract, is at most a revision — never a correction."""
+    """rules_v1 amendment contract (explicit scope, no SEC parser):
+    EDGAR-only. Matches when the feed entry itself carries the amendment
+    marker (8-K/A in the title prefix, or source_id ending /A).
+    Cross-accession linkage (amendment accession -> base accession) is NOT
+    determinable from the Atom feed, so a first-seen amendment can never
+    claim correction linkage: it stays CONTEXT until its base is observed
+    under the same source_id, and revision_of is never fabricated."""
     if source != "edgar_8k":
         return False
     title = rec.get("title", "") or ""
@@ -168,6 +172,13 @@ def ingest_signal(con, rec, retrieved_at):
 
 
 ARCHAEOLOGY_DAYS = 7
+REF = {"t": None}  # explicit reference time; run()/audit set it, tests can pin it
+
+
+def _now():
+    if REF["t"] is not None:
+        return datetime.fromisoformat(REF["t"])
+    return datetime.now(timezone.utc)
 
 
 def is_archaeology(published_at):
@@ -175,7 +186,7 @@ def is_archaeology(published_at):
     if not published_at:
         return False
     try:
-        age = (datetime.now(timezone.utc) - datetime.fromisoformat(published_at)).total_seconds()
+        age = (_now() - datetime.fromisoformat(published_at)).total_seconds()
     except ValueError:
         return False
     return age > ARCHAEOLOGY_DAYS * 86400
@@ -186,7 +197,7 @@ def is_fresh(first_seen_at, source):
     not on publication age: a fact discovered late is actionable late,
     with published_at preserved for the lookahead audit."""
     try:
-        age = (datetime.now(timezone.utc) - datetime.fromisoformat(first_seen_at)).total_seconds()
+        age = (_now() - datetime.fromisoformat(first_seen_at)).total_seconds()
     except (ValueError, TypeError):
         return False
     return age <= SOURCE_TTL.get(source, 21600)
@@ -194,30 +205,37 @@ def is_fresh(first_seen_at, source):
 
 def classify(source, rec, verdict, published_at, estimated, fresh=True, retrieved_at=None):
     """Deterministic eligibility. Returns (eligibility, effect, confidence, reason)."""
+    # Timestamp validity FIRST: no branch below may bypass it. effective_at is
+    # derived here, once, as the single canonical calculation.
+    effective_at = published_at or retrieved_at
+    if retrieved_at and effective_at and effective_at > retrieved_at:
+        return "REJECTED", None, 1.0, "future-timestamp", effective_at
     if verdict == "malformed":
-        return "REJECTED", None, 1.0, "empty-record"
+        return "REJECTED", None, 1.0, "empty-record", effective_at
     if verdict in ("duplicate",):
-        return "REJECTED", None, 1.0, "duplicate"
+        return "REJECTED", None, 1.0, "duplicate", effective_at
     if verdict == "correction":
-        return "CONTEXT", {"corrects": True}, 1.0, "amendment-never-triggers"
+        return "CONTEXT", {"corrects": True}, 1.0, "amendment-never-triggers", effective_at
     if is_archaeology(published_at):
-        return "STALE", None, 1.0, "archaeology"
-    effective = published_at or retrieved_at
-    if retrieved_at and effective and effective > retrieved_at:
-        # Hard lookahead invariant: economically-effective time after our own
-        # observation time is never downstream-eligible, no exceptions.
-        return "REJECTED", None, 1.0, "future-timestamp"
+        return "STALE", None, 1.0, "archaeology", effective_at
     elig, effect, conf, reason = _base_classify(source, rec, estimated)
     if elig == "TRIGGER_CANDIDATE" and not fresh:
         effect = dict(effect or {});
         effect["aged"] = True
-        return "CONTEXT", effect, conf, "candidate-expired"
-    return elig, effect, conf, reason
+        return "CONTEXT", effect, conf, "candidate-expired", effective_at
+    return elig, effect, conf, reason, effective_at
 
 
 def _base_classify(source, rec, estimated):
     title, text = rec.get("title", ""), rec.get("text", "")
     if source == "edgar_8k":
+        if detect_amendment(source, rec):
+            # First-seen (or cross-accession) amendment: base not established
+            # under this source_id, so correction linkage cannot be claimed.
+            # CONTEXT, never a candidate. (Same-id amendments with prior rows
+            # take the correction path in classify() before reaching here.)
+            return "CONTEXT", {"amendment_unlinked": True}, 1.0, \
+                "amendment-needs-base"
         items = sorted(set(ITEM_HEADER_RE.findall(text + " " + title)))
         if not items:
             return "CONTEXT", {"items_unknown": True}, 0.5, "no-parsable-items"
@@ -243,7 +261,8 @@ def _base_classify(source, rec, estimated):
     return "CONTEXT", None, 0.5, "default-context"
 
 
-def run(signals_path):
+def run(signals_path, as_of=None):
+    REF["t"] = as_of or now_iso()
     os.makedirs(CLASSIFIED, exist_ok=True)
     con = sqlite3.connect(DB, timeout=30)
     init_db(con)
@@ -284,9 +303,8 @@ def run(signals_path):
                 (rec["source"], rec["source_id"], ch)).fetchone()
             published_at = pub_row[0] if pub_row else None
             estimated = published_at is None
-            effective_at = published_at or retrieved_at
             fresh = is_fresh(first_seen, rec["source"])
-            elig, effect, conf, reason = classify(
+            elig, effect, conf, reason, effective_at = classify(
                 rec["source"], rec, verdict, published_at, estimated, fresh, retrieved_at)
             s = stats["per_source"].setdefault(rec["source"], {})
             s[verdict] = s.get(verdict, 0) + 1
