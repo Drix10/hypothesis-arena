@@ -58,35 +58,52 @@ No scores here. Scoring happens in the JEV layer (doc 03), which reads the raw
 texts inline. No polarity field on the record — deliberate (see doc 03 §3.4).
 This system only collects, filters, dedupes, and stores.
 
-## 2.4 Universe (verified 2026-09-18, Phase 0 box 1.3 closed)
+## 2.4 Universe (verified 2026-09-18, Phase 0 boxes 1.2/1.3 closed)
 
-All 55 list IDs from the old `folders[]` table were opened logged-in and resolve;
-0 dead, all showed posts within ~24h on recheck. Full per-list record (name, owner,
-members, followers, recency) is Phase-0 evidence, kept with the sign-off log.
-Summary of what was found:
+Finance-first. All IDs below were opened logged-in and resolve; all showed
+posts within ~24h. Full per-list record (name, owner, members, followers,
+recency) is Phase-0 evidence, kept with the sign-off log.
 
-- ~46 IDs are @Scobleizer AI/tech lists (dev tools, founders, companies,
-  robotics, policy, education, health, media, AR/VR, quantum, etc.).
-  Class: **CONTEXT** (REGIME only, never trigger entries).
-- 2 IDs are crypto/Web3 lists (`952969256903168000`, `1837926936586473655`).
-  **Dropped** — no crypto in v1 (doc 01).
-- Non-tech lists (`World News`, `U.S. News`, `Non Tech News`, `Climate and
-  Weather`, `Cybersecurity`, `Marketing`) are CONTEXT; the two news lists
-  (`1297881495701397504`, `1325322395335315457`) are macro-adjacent and may be
-  promoted to TRIGGER only by measured hit-rate + human review (doc 09 rule).
-- No public macro/FX *list* with a reusable ID was found (checked curator
-  Lists tabs: none published; RePEc pages link individuals, not lists).
-  Macro TRIGGER coverage therefore comes from a fixed account roster (below),
-  not from list IDs. This is allowed: the transport supports user timelines.
+**A. Finance TRIGGER-eligible (macro/FX/stocks native, 9 lists).** Found via
+X Lists-tab search from the user's own page (curator profiles publish almost
+no public lists, so search beats curation):
 
-**Macro TRIGGER roster (all 6 accounts verified live 2026-09-18, none
-suspended):** `@DeItaone`, `@Fxhedgers`, `@FirstSquawk`, `@LiveSquawk`,
-`@elerianm`, `@MacroAlf` — newswires + macro strategists, FX/rates/central-bank
-native. Polled as user-timeline feeds; entries only via the JEV table, and
-promotion/retention follows the doc 09 hit-rate rule.
+- `1723341818878644456` Macro, @dampedspring (Andy Constan), 40 members —
+  highest-quality macro voice in the set.
+- `1470525121328726018` Investing-Macro, 23 members / 1.8K followers.
+- `1628861381368766464` Forex Traders, 30 members.
+- `1541896891553693697` FOREX TRADING, 31 members / 2.3K followers.
+- `1515014054028349447` Macro, 23 members.
+- `1309044074394128384` Macro Finance, 31 members.
+- `1268950103206891521` Stocks, 30 members / 1.3K followers.
+- `1249584239068110849` Stocks market, 21 members / 4.7K followers.
+- `1309396858633158658` Stocks, 60 members.
 
-Polling weight starts equal; reweight only with 2 weeks of measured hit-rate
-data.
+Plus the fixed account roster (all 6 verified live 2026-09-18): `@DeItaone`,
+`@Fxhedgers`, `@FirstSquawk`, `@LiveSquawk`, `@elerianm`, `@MacroAlf` —
+polled as user-timeline feeds through the same transport.
+
+**B. Market-moving AI/tech CONTEXT (13 lists, regime + Mag7/semiconductor
+sentiment — kept because this news moves our symbols, not for tech curiosity):**
+AI Companies #1+#2 (`1696336383231525354`, `1811755253970112761`), AI
+Leaders/Founders #1+#2 (`1744564719309279599`, `1828820239175590166`),
+Tech Companies & News (`1272237719733796866`), Tech Journalists & VIPs
+(`1272593321181851648`), AI Policy (`1805777808330781114`, regulation moves
+markets), AI Orgs & Events (`1741902685669113995`), OpenAI folks
+(`1676646159539130369`, 148 members), World News (`1297881495701397504`),
+U.S. News (`1325322395335315457`), VC Firms (`1219428908283514881`), Investors
+#2 (`1751865298263932998`).
+
+**C. Dropped from the universe.** The remaining ~40 old IDs (dev tools, music,
+art, film, real estate, education, health, AR/VR, quantum, climate, cyber,
+crypto/Web3, etc.) stay on record in git history but are NOT polled — they
+cannot move forex majors or US stocks and only cost tokens. The 2 crypto
+lists are additionally excluded by the no-crypto rule (doc 01).
+
+TRIGGER vs CONTEXT reminder: a TRIGGER-classified list is only *eligible* to
+influence entries; each record must still pass the R12 timestamp gate (most
+mirror records land CONTEXT regardless — §2.5). Polling weight starts equal;
+reweight only with 2 weeks of measured hit-rate data.
 
 Macro relevance overlay (locked): lists about AI/infra/dev are REGIME context
 (risk-on, tech sentiment); they never directly trigger a symbol entry. Only

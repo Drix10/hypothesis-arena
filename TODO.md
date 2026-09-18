@@ -12,7 +12,7 @@ Legend: `[B]` needs real-browser control (X login, JS pages, portals) · `[W]` n
 - [x] 1.3 DONE 2026-09-18: 55/55 live, 0 dead, all active; evidence in sign-off log
 - [ ] 1.4 [B/W] For each live list: note top 10 recurring posters (keywords, not handles, for the doc table)
 - [x] 1.5 DONE 2026-09-18: self-hosted twikit-rss selected (MIT, list+user endpoints, no X API key); credential placement = Phase-1 item
-- [x] 1.6 DONE 2026-09-18: 02 rewritten with verified classes; 2 crypto lists dropped, news lists CONTEXT-until-measured
+- [x] 1.6 DONE 2026-09-18, REVISED per user: finance-first universe in 02 §2.4 — 9 finance TRIGGER lists + 6-account roster + 13 market-moving AI/tech CONTEXT; ~40 non-moving IDs dropped from polling (on record in history)
 - [x] 1.7 SUPERSEDED 2026-09-18: self-hosted transport has no third-party mirror to fall short; TRIGGER = account roster, throttled only by X frontend rate limits (Phase-1 soak measures)
 
 ## 2. Decision-layer proof (doc 03)
