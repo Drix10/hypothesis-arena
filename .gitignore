@@ -31,3 +31,4 @@ dist-ssr
 # TypeScript build info
 *.tsbuildinfo
 data/
+__pycache__/
