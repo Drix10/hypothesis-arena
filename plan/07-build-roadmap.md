@@ -9,60 +9,69 @@ Nothing downstream builds on a moving number. Every box below is a decision that
 must exist on paper before a line of code.
 
 **Signal feed (doc 02)**
-- [ ] Verify every X list ID in doc 02 §2.4 resolves. Mark dead ones.
-- [ ] Every X list classified TRIGGER vs CONTEXT (doc 02 §2.4 table complete).
-- [ ] Confirm RSS/mirror coverage for the TRIGGER lists (no X API of any kind per doc 02 §2.5); record the reduced list set here if mirrors fall short.
+- [x] Verify every X list ID in doc 02 §2.4 resolves. Mark dead ones.
+      (2026-09-18: 55/55 live + 10 finance/AI lists found via Lists search,
+      finance-first universe locked, no swaps.)
+- [x] Every X list classified TRIGGER vs CONTEXT (doc 02 §2.4 complete).
+- [x] RSS/mirror coverage confirmed: self-hosted twikit-rss (MIT, no X API);
+      X-credential placement is a Phase-1 item.
 
 **Decision layer (doc 03)**
-- [ ] Hand-work 20 JEV decision-table cases, including the four new HOLD rows
-      (disagreement, event window, calibration, veto).
+- [x] 20 hand-worked cases in §3.7 (all HOLD rows + boundaries).
 - [ ] Get `OPENROUTER_API_KEY`, confirm the Decisions endpoint and pin the exact
-      model string (`typesafe/jev-1.13` — floating aliases forbidden, doc 03).
-- [ ] `question_set_version = v2` pinned; slow-key fields (incl. `disagreement`,
-      feature-count bucket) frozen.
-- [ ] Freeze the JEV state schema, including feature caps (16 in payload, 64 in
-      snapshot) and the absent-vs-neutral representation.
+      model revision string (BLOCKED 2026-09-18: no key; doc 03 pins
+      `typesafe/jev-1.13`, revision string pending key).
+- [x] `question_set_version = v2` pinned; slow-key fields (incl. `disagreement`,
+      feature-count bucket) frozen (doc 03 §3.5).
+- [x] JEV state schema frozen: feature caps (16 payload / 64 snapshot) +
+      absent-vs-neutral (doc 03 §3.4).
 
 **Research plane (doc 08)**
-- [ ] Framework stack confirmed installable and pinned: LangGraph + smolagents +
-      self-hosted Langfuse, exact versions recorded.
-- [ ] Checkpoint store decided per stage (SQLite for G0/G1, Postgres from G2).
-- [ ] Agent topology frozen: the six nodes, their outputs, their failure defaults.
-- [ ] R15 caps frozen (LLM calls, tool calls, tokens, wall clock, depth).
-- [ ] Sandbox decided (Docker) and the smolagents import allowlist written down.
-- [ ] OS-level isolation designed: users, groups, file permissions, which
-      credentials live where.
-- [ ] `features.jsonl` schema (doc 08 §8.5) frozen.
+- [x] Stack pinned (human-accepted 2026-09-18): langgraph==1.1.6,
+      smolagents==1.26.0, self-hosted Langfuse 4.15.4; installability at build.
+- [x] Checkpoint store per stage: SQLite (G0/G1), Postgres (G2+).
+- [x] Topology frozen: six nodes, outputs, failure defaults (§8.3).
+- [x] R15 caps frozen (§8.4).
+- [x] Sandbox (Docker, §8.2 container spec) + exact import allowlist locked.
+- [x] OS isolation designed: mirotrade / miroresearch / mirohuman (§8.2).
+- [x] `features.jsonl` schema f1 frozen (§8.5).
 
 **Data sources (doc 09)**
-- [ ] Every source classified TRIGGER / CONTEXT / NULL. No blanks.
-- [ ] Free keys obtained where needed (FRED, FIRMS, AISStream, TomTom if used).
-- [ ] EDGAR User-Agent string and rate limit recorded; polling cadence decided.
-- [ ] Per-source TTL, cadence, heartbeat threshold, and failure default written in.
-- [ ] Point-in-time macro decided: ALFRED vintages for anything replayed.
-- [ ] Tier D evidence bar written down; `lessons.jsonl` schema frozen.
+- [x] Every source classified TRIGGER / CONTEXT / NULL. No blanks.
+- [ ] Free keys obtained (FRED, FIRMS — human, when convenient; no
+      AISStream/TomTom in v1).
+- [x] EDGAR UA + 10 req/s ceiling recorded (§9.2).
+- [x] Per-source TTL, cadence, heartbeat (>3× = stale), failure default (§§9.1–9.3).
+- [x] ALFRED vintages for anything replayed (locked in doc 01).
+- [x] Tier D evidence bar + `lessons.jsonl` (§9.1, §9.4).
 
 **Capital, kill switches, spend (doc 10)**
-- [ ] `STAGE` file format + attestation chain frozen; G0 file created and signed.
-- [ ] Stage table numbers frozen (capital, symbols, R-multiplier, daily loss caps).
-- [ ] Promotion criteria and automatic demotion triggers agreed and written in.
-- [ ] Kill-switch levels (SOFT/MEDIUM/HARD) and their triggers frozen.
-- [ ] Spend caps frozen: absolute per stage, 20% ratio test from G2, tier
-      thresholds (60/80/100%), anti-flap window.
-- [ ] Out-of-band alert channel chosen and tested.
+- [x] `STAGE` format + attestation chain frozen (pipe-delimited hash, GENESIS,
+      G0 capital 0, alerts = alerts.jsonl); G0 file creation + signature is
+      human at build (§10.5 steps).
+- [x] Stage table numbers frozen (capital, symbols, R-multiplier, daily loss caps).
+- [x] Promotion criteria (necessary, never sufficient) + automatic demotion
+      triggers written in (§10.2).
+- [x] Kill-switch levels (SOFT/MEDIUM/HARD) and triggers frozen (§10.3).
+- [x] Spend caps frozen: absolute per stage, 20% ratio test from G2, tier
+      thresholds (60/80/100%), anti-flap window (§10.4).
+- [x] Alert channel: `alerts.jsonl` + exit status; no messaging integrations
+      in v1 (locked in doc 10 §10.1).
 
 **Calibration and promotion (doc 11)**
-- [ ] Resolution rules per question frozen (horizons, counterfactual HOLD scoring).
-- [ ] Base-rate baseline definition + R13 threshold frozen.
-- [ ] Non-LLM baseline strategy specified — it is a permanent fixture.
-- [ ] Promotion gate criteria written into the sign-off log template.
+- [x] Resolution rules per question frozen (horizons, counterfactual HOLD scoring).
+- [x] Base-rate baseline definition + R13 threshold frozen.
+- [x] Non-LLM baseline specified: indicators + regime + risk table, no JEV,
+      no research plane (doc 11 §11.3).
+- [x] Promotion gate criteria written into the sign-off log template below.
 
 **Risk and venue (docs 01, 05)**
-- [ ] Freeze: sizing % (doc 05 §5.1a), VaR/corr/vol methods, paper fill model.
-- [ ] R10–R17 reviewed as code constants; owners named for each.
-- [ ] Venue + data decided and written into doc 01: forex broker/paper + US equities
-      broker/paper, feed protocol (WS or poll), session hours table, calendar source
-      (macro + earnings). No code before names exist on paper.
+- [x] Frozen: sizing % + VaR/corr/vol methods (doc 05 §5.1a), paper fill model
+      (doc 06 Locked decisions).
+- [x] R10–R17 reviewed as code constants; owners = module table in
+      ARCHITECTURE.md §2/§7.
+- [x] Venue + data locked in doc 01 (human-accepted 2026-09-18): OANDA v20
+      practice + Alpaca paper, WS + 15-min REST reconcile, free calendars.
 - [ ] Exit: all boxes in phases updated, no TBDs outside "tune later" items.
 
 ## Phase 1 — Signal sidecar (doc 02)
@@ -172,5 +181,19 @@ path for a trade.
 Sign-off log:
 
 Each entry: phase or stage, name, date, `STAGE` attest hash, and the window judged.
+
+Promotion sign-off template (copy per promotion; all lines required):
+
+```
+PROMOTION: <G0→G1 | G1→G2 | G2→G3 | challenger <id> to live>
+DECIDED BY: <human name>   DATE: <ISO8601>   WINDOW JUDGED: <dates>
+CRITERIA (doc 10 §10.2 or doc 11 §11.3 — every box true, evidence linked):
+  [ ] clean-day count  [ ] zero R-violations  [ ] determinism green
+  [ ] calibration ≥ baseline (Brier, n≥200)  [ ] spend in cap (+ ratio if G2+)
+  [ ] drills passed (kill / reconcile / isolation)  [ ] non-LLM baseline beaten
+PROCESS: stopped before signing, swapped after; question_set_version bumped;
+  fresh paper window opened (no inherited stage).
+STAGE ATTEST HASH: <sha256>
+```
 
 - (empty — first entry closes phase 0)

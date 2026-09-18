@@ -107,3 +107,7 @@ system fails toward paper.**
   (hard stop/TP local; REST fallback). Only entries may wait on data.
 - Resume-from-HALT is manual. Always. So is every stage promotion (doc 10).
 - Every outage default stops new risk and keeps old risk managed.
+- Paper fill rule (LOCKED 2026-09-18): fill at mid + one spread adverse
+  (min 1bp), full size, flagged `simulated`, no partials in paper. Without
+  this, paper PnL is fiction; G1→G2 compares live slippage against exactly
+  this model (doc 10 §10.2).

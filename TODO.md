@@ -40,13 +40,13 @@ Legend: `[B]` needs real-browser control (X login, JS pages, portals) · `[W]` n
 - [x] 5.5 DONE 2026-09-18: ALFRED vintages for replay (locked in 01); Tier D bar + lessons.jsonl already in 09 §9.1/§9.4
 
 ## 6. Capital / kill / spend (doc 10)
-- [ ] 6.1 [D] Freeze STAGE format + attestation chain; create and sign G0 file
-- [ ] 6.2 [D] Freeze stage table numbers, promotion criteria, demotion triggers
-- [ ] 6.3 [D] Freeze SOFT/MEDIUM/HARD triggers; freeze spend caps + 20% ratio + 60/80/100% tiers + anti-flap window
+- [x] 6.1 DONE 2026-09-18: STAGE format + chain frozen in text (pipe-delimited hash, GENESIS, G0 capital 0, alert = alerts.jsonl); [HUMAN] create + sign the G0 file at build per §10.5 steps
+- [x] 6.2 DONE 2026-09-18: stage numbers, promotion criteria (necessary-never-sufficient), demotion table, UTC-day rule — all frozen in §10.2
+- [x] 6.3 DONE 2026-09-18: SOFT/MEDIUM/HARD (§10.3) + caps/ratio/tiers/anti-flap (§10.4) frozen; §10.5 drills stay build-time boxes
 
 ## 7. Calibration + risk constants (docs 11, 05)
-- [ ] 7.1 [D] Freeze resolution rules, base-rate baseline, non-LLM baseline, promotion template
-- [ ] 7.2 [D] R10-R17 as literal numbers; confirm R1-R9 unchanged
+- [x] 7.1 DONE 2026-09-18: resolution table (§11.1), base-rate + R13 (§11.1), non-LLM baseline (§11.3), promotion sign-off template (07 log)
+- [x] 7.2 DONE 2026-09-18: R1–R9 literals + §5.1a methods + paper fill rule (06 Locked) frozen; R10–R17 as constants; owners = ARCHITECTURE §2/§7
 
 ## 8. Freeze sign-off (doc 07)
 - [ ] 8.1 [D] Zero TBDs outside "tune later"; all boxes above checked

@@ -16,7 +16,8 @@ stage:        G0_PAPER | G1_TINY | G2_SCALED | G3_FULL
 approved_by:  <human name>
 approved_at:  <ISO8601>
 capital_usd:  <number>
-attest_hash:  <sha256(stage ‖ approved_by ‖ approved_at ‖ capital_usd ‖ prev_attest)>
+attest_hash:  <sha256 of "stage|approved_by|approved_at|capital_usd|prev_attest"
+              (pipe-delimited, exact field order; genesis prev_attest = "GENESIS")>
 ```
 
 - `attest_hash` chains to the previous attestation and into the journal. A `STAGE`
@@ -24,6 +25,13 @@ attest_hash:  <sha256(stage ‖ approved_by ‖ approved_at ‖ capital_usd ‖ 
   and refuses live orders. Corruption fails toward paper, never toward capital.
 - The trading process may **read** `STAGE`. It may **write** only demotions.
   Promotions are written by a human, out of band, with the process stopped.
+- `capital_usd` is 0 at G0 (paper — no real capital exists). At G1+ the human
+  writes the real stage capital at signing; "2% of intended capital" is defined
+  by that number, not by anything the system infers.
+- Alerts (every "alert" in this doc and in §§10.2–10.4) mean: append to
+  `alerts.jsonl` + non-zero exit status where the process stops. No messaging
+  integrations (Telegram/Discord/email) in v1 — those are chat-gateway paths
+  and doc 08 bans them from the trading host.
 - The research plane cannot read or write `STAGE` (doc 08 §8.1, R11).
 - **R17 (new):** no code path exists that raises a stage. Promotion is a human
   editing a file while the system is down. This is deliberate friction, exactly
@@ -44,6 +52,9 @@ trades/day, sizes). It never scales the *rules* — R1–R9 always apply.
 | Leverage | doc 05 §5.2 | forex ≤ 1× (single symbol is forex, see below) | forex ≤ 2×, stocks ≤ 1× | doc 05 §5.2 |
 | Human review | weekly | **daily** | weekly | weekly |
 | Research plane | full | full | full | full |
+
+Day-boundary rule (locked): every "daily" limit and every "session" count in
+this doc and in doc 05 uses the UTC calendar day. No venue-local accounting.
 
 **G1_TINY symbol choice (locked):** the single G1 symbol must be a forex major,
 never a US equity. A live account at 2% of intended capital will almost always
@@ -169,6 +180,13 @@ extrapolated), so the brake is applied before the wall, not at it.
   miss.
 
 ## 10.5 What "done" means
+
+G0 file creation (human, at build — the one piece of §10.1 no doc edit can do
+for you): copy the §10.1 template, set `stage: G0_PAPER`, `capital_usd: 0`,
+fill `approved_by`/`approved_at`, compute `attest_hash` with
+`printf '%s' "G0_PAPER|<name>|<iso8601>|0|GENESIS" | sha256sum`, place the file
+where the process reads it, and log the signing in doc 07. Until that file
+exists and verifies, nothing starts — there is no default STAGE.
 
 - [ ] `STAGE` chain verification tested, including a deliberately corrupted file
       (must land in G0_PAPER, not in live).
