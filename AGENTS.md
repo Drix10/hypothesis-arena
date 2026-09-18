@@ -1,4 +1,4 @@
-# AGENTS.md — session rules (pi harness)
+# AGENTS.md: session rules (pi harness)
 
 1. Read `ARCHITECTURE.md` + `plan/00-INDEX.md` before any code change.
 2. `plan/` is source of truth. Code implements plan; it never invents plan.

@@ -1,7 +1,7 @@
-# ARCHITECTURE.md — MiroHedge
+# ARCHITECTURE.md: MiroHedge
 
 Agent-facing build intent. Full detail lives in `plan/`. If this file and
-`plan/` disagree, `plan/` wins — then fix this file.
+`plan/` disagree, `plan/` wins, then fix this file.
 
 ## 1 | What is in the system?
 
