@@ -1,25 +1,42 @@
 # 06 — Execution and Ops
 
-## 6.1 Order lifecycle (locked)
+## 6.1 Order lifecycle (locked, v2: broker-native protection)
+
+Local C++ stops are the active controller, never the disaster protection. A
+position the broker cannot protect on its own is a position the process cannot
+survive losing — so protection is established broker-side first:
 
 ```
-intent (risk PASS) → re-check HALT file → journal row → send (idempotent ID)
- → ack/timeout → query once:
-   filled          → journal fill → attach stop+TP → track
-   partial         → journal partial → attach stop+TP on filled qty →
+intent (risk PASS) → re-check HALT file → journal row → send entry +
+  protective SL/TP atomically (OANDA stopLossOnFill/takeProfitOnFill;
+  Alpaca bracket legs) → ack/timeout → query once:
+   filled + protection acked → journal fill → PROTECTED → track
+   filled, protection missing → PROTECTIVE_ORDER_MISSING: establish now or
+     flatten immediately; never hold naked awaiting a retry loop
+   partial         → journal partial → protection on filled qty →
                        cancel remainder → journal cancel
    nothing         → cancel → confirm cancelled → journal cancel
-   cancel failed   → treat as filled (reconcile at next S2) → alert
- → exit (stop, TP, or flip rule below) → journal + reflection row
+   cancel failed   → UNKNOWN_EXECUTION (never "filled"): freeze new orders
+     for the symbol, query broker, reconcile per §5.4 S2, preserve or
+     establish protection first
+ → exit (stop, TP, time_exit, or flip rule below) → journal + reflection row
 ```
 
+- Durable order state machine (survives restarts): intent_id + client order ID
+  + send_attempt + broker_ack_state persisted before send. After any crash the
+  process reconciles ack state with the broker BEFORE issuing anything new —
+  a restart must never double-send what the dead process already sent.
 - Client order ID = `hex(sha256(context_hash ‖ symbol ‖ side))[:24]` — one intent,
   one ID, no attempt counter. (An `attempt` field in the hash was a duplicate-order
   bug: every retry would mint a fresh ID and double-fill. Retries reuse the ID.)
 - One send attempt + one status query. No martingale re-sends.
-- Stops are attached at entry or the entry is rejected. No trailing in v1 — fixed
-  stop + fixed take-profit at 2× stop distance (2R). Stop floor 0.1% ⇒ min TP
-  0.2% (20bp), which clears fees/slippage by construction.
+- Stops are attached at entry or the entry is rejected. exit_profile_v1
+  (doc 03 §3.3): fixed stop + fixed 2R take-profit + mandatory time_exit.
+  Stop floor 0.1% ⇒ min TP 0.2% (20bp), which clears fees/slippage by construction.
+- Journal-before-order is absolute for entries. Emergency exits invert it: if
+  the journal write fails mid-emergency, execute first, then append through the
+  emergency buffer — a delayed exit is worse than a delayed row, and the row
+  still lands.
 - Discretionary exit: each open position is re-evaluated per cycle with the same
   `enter` question; `enter.noul < 0.3` on two consecutive cycles → market exit.
   Uses cached answers only — stale/missing JEV never forces an exit; the hard
@@ -32,8 +49,8 @@ intent (risk PASS) → re-check HALT file → journal row → send (idempotent I
 ## 6.2 Reflection (after every closed trade)
 
 Row appended: entry context_hash, exit context_hash, PnL, slippage vs intent,
-regime, analyst pick, conviction, what JEV got right/wrong (auto fields only —
-no LLM prose in v1). Weekly human review aggregates: per-analyst hit rate,
+regime, edge_family pick, conviction, what JEV got right/wrong (auto fields only —
+no LLM prose in v1). Weekly human review aggregates: per-family hit rate,
 per-regime PnL, threshold sensitivity. Threshold changes come from this review,
 never from gut feel.
 

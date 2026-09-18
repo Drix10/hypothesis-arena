@@ -12,10 +12,17 @@ happened. Scored per question, per regime, per symbol class, on a rolling window
 
 | Question | Resolves against | Horizon |
 |---|---|---|
-| `enter.noul` | Did the trade, had it been taken at the snapshot price, reach +1R before −1R? | min(stop/TP hit, 24 h) |
-| `veto.noul` | Was any R-rule or limit actually breached in the following hour? | 1 h |
-| `analyst.choice` | Which analyst's thesis matched the realized path (rule-based classifier, no LLM)? | trade lifetime |
+| `enter.noul` | Did the trade, taken at the snapshot price with exit_profile_v1, reach +1R before −1R? | min(stop/TP/time_exit hit, 24 h) |
+| `latent_risk.noul` | Did a material adverse event occur that NO deterministic flag caught (gap through stop, unflagged halt, overnight shock without event blackout)? Counterfactual trade at snapshot size. | 24 h |
+| `edge_family.choice` | Which family's evidence matched the realized path (rule-based classifier, no LLM)? Family-fit only — never scored as success probability. | trade lifetime |
 | `conviction.score` | Realized R-multiple bucket | trade lifetime |
+
+Outcome-resolution protocol (locked — labels are code, not judgment): both
+stop and TP touched in one candle → stop-first (loss); gap over stop → loss
+at first tradable print beyond the gap; neither hit by horizon → censored
+(excluded from Brier, counted separately); halt/close before resolution →
+excluded; stocks resolve within the session, forex within 24 h. Censored is a
+third class, never silently a win or a loss.
 
 - **HOLDs are scored too, sampled.** A system that only scores trades it took
   cannot discover that it is systematically too cautious — or that its `enter`
@@ -29,20 +36,23 @@ happened. Scored per question, per regime, per symbol class, on a rolling window
   same stop/TP rules, marked `counterfactual=true`, and is never mixed into PnL.
 - Metrics: **Brier score**, **log-loss**, and a 10-bin **reliability curve** per
   question, over trailing 200 and 1000 decisions.
-- **Baseline: the base-rate predictor** — always answer the observed base rate of
-  the outcome over the same window. This is the bar that matters. Beating a coin
-  flip is not evidence; beating the base rate is the minimum.
+- **Baseline: the point-in-time base-rate predictor** — at each prediction
+  timestamp, the observed base rate of the outcome using only information
+  available *before* t. Never a rolling window that includes future outcomes
+  (that leaks). Scored model_t vs base_rate_t, with confidence intervals
+  alongside the 0.02 R13 margin — the margin is the circuit breaker, the
+  intervals are the judgment.
 - **R13 (new, hard), with a noise floor.** If Brier over the trailing 200
   decisions is worse than the base-rate baseline **by more than a 0.02 margin**,
   entries halt and the stage demotes one level (doc 10 §10.2). Exits continue.
   Resume needs human review. The margin and a minimum-sample gate both exist
   because a raw "any amount worse" comparison is not statistically meaningful on
-  a rare-event question: `veto` breaches are uncommon by design (that is the
-  point of the risk table), so a trivial baseline can look artificially good on
+  a rare-event question: unflagged adverse events are uncommon by design (that is
+  the point of the risk table), so a trivial baseline can look artificially good on
   a small sample purely from low variance, and a couple of unlucky calls could
   otherwise trip R13 on noise rather than a real calibration failure. **R13 is
   evaluated only once the window holds ≥20 realized outcomes of the resolving
-  class** (≥20 actual breach/no-breach resolutions for `veto`; ≥20 closed or
+  class** (≥20 unflagged-event resolutions for `latent_risk`; ≥20 closed or
   sampled-counterfactual resolutions for `enter`) **in addition to** the 200-
   decision window. Below that count, the daily summary reports
   `R13: insufficient sample` rather than a pass/fail verdict, and entries are not
@@ -69,6 +79,11 @@ Everything not live runs in shadow, permanently:
   Challengers place no orders and hold no capital.
 - Challengers get their own `question_set_version` and their own cost tag, so
   their AI spend is visible and counts against the caps in doc 10 §10.4.
+- Every challenger carries registry metadata (interface now, full system in its
+  build phase): experiment_id, parent strategy, hypothesis, created_at,
+  creator version, search family + budget, feature set, model + prompt hashes,
+  training/validation/holdout windows, cost budget, result, promotion status,
+  human signature. Unauditable experiments do not promote.
 - A challenger that would have breached any R-rule is disqualified on the spot and
   logged. "It would have made money by taking more risk than we permit" is not a
   result; it is a disqualification.
@@ -79,9 +94,12 @@ A challenger may be proposed for promotion only when **all** of the following ho
 
 1. **≥ 200 decisions and ≥ 60 closed simulated trades** in shadow. Short windows
    guarantee out-of-sample decay.
-2. **Forward-only evaluation.** The challenger was defined before the data it is
-   evaluated on existed. Retro-fitting a variant to a window already on disk is
-   prohibited and is detectable from the definition timestamp in the journal.
+2. **Forward-only evaluation with walk-forward discipline.** The challenger was
+   defined before the data it is evaluated on existed. Time-series splits are
+   walk-forward with purged/embargoed boundaries where labels overlap, and the
+   final verdict comes from an untouched holdout never used for selection.
+   Retro-fitting a variant to a window already on disk is prohibited and is
+   detectable from the definition timestamp in the journal.
 3. **Net of costs** — the paper fill model plus its share of AI spend. Gross
    results are not reported and not considered.
 4. **Search budget declared.** The number of variants tried in this family is
@@ -93,9 +111,10 @@ A challenger may be proposed for promotion only when **all** of the following ho
 5. **Beats the champion on the primary metric and does not lose on the guardrails**:
    primary = risk-adjusted return net of all costs; guardrails = max drawdown,
    trade count (over-trading check), calibration (Brier), and R-rule proximity.
-6. **A non-LLM baseline is beaten.** The challenger must beat the plain
-   statistical strategy (indicators + regime + risk table, no JEV, no research
-   plane) on the same window. If it does not, the AI layer is costing money to
+6. **A non-LLM baseline is beaten.** The challenger must beat the frozen
+   statistical baseline (doc 12: exact universe, features, entries, exits,
+   costs — indicators + regime + risk table, no JEV, no research plane) on the
+   same window, including under 1.5×/2×/3× cost stress. If it does not, the AI layer is costing money to
    subtract value, and the honest response is to remove it rather than tune it.
 7. **Human review and sign-off**, recorded in doc 07's sign-off log with name,
    date, challenger ID, and the window it was judged on.
@@ -124,7 +143,7 @@ adds the bounded loop on top:
 
 ## 11.5 What "done" means
 
-- [ ] Calibration harness scores `enter` and `veto` including counterfactual HOLDs.
+- [ ] Calibration harness scores `enter` and `latent_risk` including counterfactual HOLDs.
 - [ ] Reliability curves render weekly, sliced by regime.
 - [ ] Base-rate baseline computed on the same window; R13 breach drill demotes.
 - [ ] Champion + 3 challengers run on identical snapshots for 7 days; cost per

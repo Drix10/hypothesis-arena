@@ -26,8 +26,12 @@ it is bad:
 
 Consequences, baked into this plan rather than noted and ignored:
 1. **No source is assumed to have edge.** Every non-price source enters as CONTEXT
-   (doc 02 §2.4 semantics) and can only be promoted to TRIGGER by measured
-   hit-rate over a full paper window, human-reviewed (doc 11).
+   and can only be promoted to TRIGGER by *incremental* edge over the frozen
+   baseline (doc 12) with everything else already known — Δ expectancy and Δ
+   Sharpe/utility net of cost, information coefficient, coverage, false-positive
+   rate, latency-adjusted edge — over a full paper window, human-reviewed
+   (doc 11). Standalone hit-rate is not evidence: a source that predicts what
+   price momentum already predicts adds nothing.
 2. **The statistical layer is the primary edge**, not the LLM. Indicators, regime
    detection, and the risk table do the work; JEV supplies a calibrated gate; the
    research plane supplies context and disconfirmation.
@@ -53,7 +57,7 @@ until promoted.
 | US Treasury *FiscalData*, BLS, BEA | Auctions, yields, CPI/NFP detail | per release | free | TRIGGER (macro) | Direct release data, no vendor interpretation | low | as above |
 | Exchange + venue session/holiday calendars | `session`, PDT counting, early closes | static + updates | free | TRIGGER (veto side) | Not alpha — a hard veto input (R9). Load-bearing. | none | **Missing calendar = no entries.** Fail closed. |
 | Earnings calendar (free tier / EDGAR-derived) | Scheduled event risk | daily | free | TRIGGER (veto side) | Used to *suppress* entries into known events, not to predict them | low | Unknown → treat as event-present → no entry |
-| X-Lists sentiment tail (doc 02) | Text tail, TRIGGER-eligible lists | best-effort, mirror-dependent | free (RSS/mirror only — **no X API of any kind**; the free API tier does not exist as of 2026 and metered pay-per-use is excluded as a paid subscription, doc 02 §2.5) | per doc 02, R12-capped by transport | Unproven; kept because doc 02 already gates it hard | high | stale >6 h → **absent** (never neutral — doc 02 §2.5, doc 09 §9.3) |
+| X-Lists tail (doc 02) | DISABLED in v1 (§2.6: terms conflict, no authorized interface). History kept in repo; returns only via authorized reproducible interface. | n/a | n/a | NULL in v1 | Removed from production, not fought for. The fund is complete without it. |
 
 ### Tier B — situational, event-driven, CONTEXT by default
 
@@ -63,7 +67,7 @@ never, until promoted.
 
 | Source | Gives | Latency | Cost | Class | Honest assessment |
 |---|---|---|---|---|---|
-| **USGS earthquakes** (GEV) | Global M≥4.5, 24 h | ~minutes | free | CONTEXT | Only a major quake in a major economy moves JPY or an insurer. ~Handful of relevant events per year. Cheap to carry; used to *widen stops / block entries*, not to enter. |
+| **USGS earthquakes** (GEV) | Global M≥4.5, 24 h | ~minutes | free | CONTEXT | Only a major quake in a major economy moves JPY or an insurer. ~Handful of relevant events per year. Cheap to carry; may *block entries only* — OSINT never widens, narrows, or moves stops (stops are the frozen exit profile, doc 03 §3.3; any modifier needs its own proven profile). |
 | **NASA FIRMS** active fires (GEV) | Fire detections, 24 h | ~3 h (satellite pass) | free 🔑 | CONTEXT | Utility/insurer tail risk (e.g. CA). 3 h latency means the market has already moved — this is a risk flag, never a trade trigger. |
 | **Open-Meteo / NOAA** weather | Temps, storms, HDD/CDD | hourly | free, no key | CONTEXT | Real edge exists in nat-gas and ags — **neither is in our instrument set**. Carried only for storm-driven US utility/insurer risk-off. Low priority. |
 | **Launch Library 2** (GEV) | Launch schedule/outcomes | daily | free | NULL | Relevant to a handful of space-adjacent tickers. Declared null; measured. |
@@ -107,9 +111,23 @@ Evidence bar, applied before anything is recorded:
   size-on-losses, regime blindness, uncalibrated confidence, lookahead via
   publication timestamps, episodic-memory outcome leakage ("oracle fallacy"),
   crowding/alpha decay, and evaluating gross of costs.
-- Output: `lessons.jsonl`, human-reviewed weekly. A lesson can only ever become a
+- Output: `research-home/lessons/lessons.jsonl` — the offline research/evaluation
+environment, NOT the trading tree. The research plane's only trading-tree
+output stays `features.jsonl` (R11 exact, no exceptions). Reviewed weekly by
+a human. A lesson can only ever become a
   code or threshold change through doc 11's promotion gate. **Lessons never reach
   the live decision path automatically.**
+
+### Data license matrix (locked 2026-09-18 — "free" is not a license)
+
+| Source | Access | Commercial/auto use | Redistribution | Storage/derived |
+|---|---|---|---|---|
+| SEC EDGAR | free, no key, 10 req/s fair-access | public filings, automated collection allowed within fair access | no bulk resale; derived features ours | 90-day prune (§9.2) |
+| FRED/ALFRED | free, key required | allowed with attribution | no redistribution of bulk downloads | vintages kept for replay |
+| Treasury/BLS/BEA/Fed/ECB | free, no key | US/EU public data, automated use allowed | link, don't mirror | same prune |
+| Broker paper data (OANDA/Alpaca) | account required | per broker account terms; re-verify at G1 | never | journal keeps fills, not full depth |
+| USGS/FIRMS/Open-Meteo | free (FIRMS email token) | allowed | attribution | same prune |
+| X | EXCLUDED v1 | n/a | n/a | history only |
 
 ## 9.2 Ingestion rules (all sources)
 

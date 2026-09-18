@@ -5,9 +5,9 @@ One folder. Everything lives here. No code until the plan is complete.
 ## Files (read in order)
 
 1. `01-vision-and-scope.md` — what we are building, what we are NOT building. Locked scope.
-2. `02-twitter-alpha-system.md` — the X-Lists knowledge/signal feed (from Twitter-Gemini pipeline).
-3. `03-jev-decision-layer.md` — JEV Decisions API: every question, threshold, mapping.
-4. `04-cpp-hft-architecture.md` — the C++ system: processes, modules, data flow, latency budget.
+2. `02-twitter-alpha-system.md` — signal-sidecar spec + X-list research history (X disabled in v1 production, §2.6).
+3. `03-jev-decision-layer.md` — JEV Decisions API v3 (enter / edge_family / conviction / latent_risk), table, risk-budget sizing, cache fingerprints.
+4. `04-cpp-deterministic-core.md` — the C++ system: processes, modules, data flow, latency budget.
 5. `05-risk-and-determinism.md` — risk limits, vetoes, determinism, self-correction. Hard rules.
 6. `06-execution-and-ops.md` — execution, journaling, ops rhythm, monitoring.
 7. `07-build-roadmap.md` — phased build order with exit criteria per phase.
@@ -15,6 +15,8 @@ One folder. Everything lives here. No code until the plan is complete.
 9. `09-osint-and-free-data.md` — every free information source, ranked by edge/latency/noise, with TRIGGER/CONTEXT/NULL classes.
 10. `10-capital-gates-and-spend-control.md` — capital stages, kill-switch hierarchy, AI spend circuit breakers.
 11. `11-calibration-and-self-improvement.md` — calibration scoring, shadow challengers, the promotion gate.
+12. `12-statistical-baseline.md` — the frozen permanent champion the AI layer must beat.
+13. `system-manifest.yaml` — canonical build fingerprint code verifies against.
 
 ## Rules of this folder
 

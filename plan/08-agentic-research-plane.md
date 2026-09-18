@@ -97,10 +97,13 @@ and owns journal/HALT/STAGE/broker keys (mode 600, group `mirotrade`).
 `miroresearch` runs the plane + sidecars and owns `features.jsonl` +
 `signals.jsonl` only; no read on `mirotrade` home, no sudo, no docker group
 (the container runtime is driven by the supervisor, not by the agent user).
-`mirohuman` (you) owns the `STAGE` file signatures. Credentials live in
-`mirotrade` home or the sidecar env owned by `miroresearch` (X session for
-twikit-rss) — never in git, never world-readable, inventoried in the Phase-1
-credential-placement note.
+`mirojev` runs the JEV sidecar only: read-only snapshot in, Ed25519-signed
+answers out (doc 03 §3.5); no research tools, no network except the provider.
+`mirohuman` (you) writes `PROMOTION_MANIFEST` files; the process never runs as
+you. Credentials live in `mirotrade` home or the sidecar env owned by
+`miroresearch` — never in git, never world-readable, inventoried in the
+Phase-1 credential-placement note. (No X session exists anywhere in v1: X is
+out of the production path, doc 02.)
 `LocalPythonExecutor` is **forbidden** on any host or container that can reach
 trading credentials, the journal, `HALT`, or `STAGE` — upstream documents it as
 best-effort sandboxing with known escapes, which is not sandboxing.
@@ -111,10 +114,10 @@ One LangGraph graph, run as a supervised loop. Six nodes, all off the hot path.
 
 | Node | Job | Output | Default on failure |
 |---|---|---|---|
-| `harvest` | Pull the free sources in doc 09 on their own cadences. Pure I/O, no LLM. | raw records + `observed_at_ns` | Source marked `stale`; never blocks |
+| `harvest` | Pull the doc-09 sources on their cadences (EDGAR, FRED/ALFRED, official macro feeds, calendars; NO X in v1). Pure I/O, no LLM. | raw records + `observed_at_ns` | Source marked `stale`; never blocks |
 | `extract` | smolagents `CodeAgent`: parse filings/calendars/OSINT into typed candidate features | candidate features | Drop + count |
 | `fuse` | Deterministic Python (no LLM): join candidates to symbols, dedupe, bucket | joined features | Drop + count |
-| `hypothesize` | LLM: write ≤500-char thesis per watchlist symbol (replaces the Gemini 5-min loop in doc 04) | `thesis_text` | Empty thesis — never a crash (doc 04 §4.1 already handles this) |
+| `hypothesize` | LLM: write ≤500-char thesis per watchlist symbol into the research digest (never into JEV state) | digest entry | Empty thesis — never a crash |
 | `critique` | LLM: adversarial pass. Names the strongest disconfirming evidence and a regime-change check | `critique_text`, `disagreement` flag | `disagreement=true` (the safe value) |
 | `emit` | Schema-validate, bound, write `features.jsonl` atomically | `features.jsonl` | Nothing written; last file ages out via TTL |
 
@@ -211,43 +214,59 @@ supervisor independently:
 | Tool calls per cycle | 120 | Same |
 | Wall clock per cycle | 8 min | Same |
 | Tokens per cycle | 250k | Same |
-| Consecutive aborted cycles | 3 | Research plane paused, alert, entries continue on cached features until TTL, then HOLD |
+| Consecutive aborted cycles | 3 same-symbol → symbol paused; majority-of-watchlist in-window → plane degraded | Alert; last complete bundle stands (never partials); entries needing fresh research HOLD |
 | Recursion / graph depth | 25 | Hard stop (LangGraph `recursion_limit`) |
 
 A cycle that aborts is not retried within the same interval. There is no
 exponential-retry path that can spend money without bound — that is the failure
 mode that kills unattended agent systems, and it is capped in three places.
 
-## 8.5 Feature contract (the only thing that crosses the boundary)
+## 8.5 Feature contract v2 (locked — the only thing that crosses the boundary)
+
+`features.jsonl` carries typed feature records in complete bundles. One
+`emit` writes one bundle: `research_epoch` + `bundle_id` + source watermarks
++ feature list + `BUNDLE_COMMIT`. C++ consumes the last *complete* bundle
+only — a runaway-aborted cycle that never reaches `emit` publishes nothing,
+so partial epochs can never mix (R15). Thesis/critique prose is NOT a feature:
+it goes to `research_digest.jsonl` (human + critique-node reading, advisory
+only, never into JEV state — doc 03 §3.4).
 
 ```json
 {
-  "schema_version": "f1",
+  "schema_version": "f2",
+  "research_epoch": 412, "bundle_id": "...", "commit": true,
   "feature_id": "edgar:0000320193:8-K:2026-09-18T20:14:02Z",
   "kind": "filing_event|macro_release|calendar_ahead|osint_event|sentiment_tail|regime_hint",
   "symbols": ["AAPL"],
-  "observed_at_ns": 0,
-  "ingested_at_ns": 0,
-  "ttl_s": 3600,
+  "observed_at_ns": 0, "ingested_at_ns": 0, "ttl_s": 3600,
   "value": {"type": "enum|bucket|bool|count", "v": "..."},
+  "effect": "bullish|bearish|risk_up|risk_down|neutral|unknown",
+  "evidence": "source|derived|inference",
   "confidence_bucket": "low|medium|high",
-  "source_id": "edgar_submissions",
-  "provenance_url": "https://...",
-  "disagreement": false
+  "source_id": "edgar_submissions", "provenance_url": "https://..."
 }
 ```
 
 Hard rules on this record:
-- **No free-form floats.** Values are enums, booleans, counts, or buckets. A
-  model-produced float is fake precision (this is the same reasoning that kept a
-  numeric sentiment score out of doc 03 §3.4, and it holds here).
-- **No prose** except `thesis_text`/`critique_text`, which are separately capped
-  at 500 chars each and are advisory only (doc 03 §3.3 already says prose never
-  overrides the table).
-- Max 64 features per snapshot, newest first. Overflow is dropped, counted, and
-  logged — never truncated mid-record.
+- **Evidence levels, not vibes.** `source` = deterministic parser over a
+  primary source (only these are TRIGGER-eligible). `derived` = deterministic
+  transform of source facts. `inference` = model-produced: CONTEXT-only until
+  the producing *rule* earns promotion by measured track record — never the
+  individual claim. Schema-valid but fabricated is still fabricated; levels
+  are what stop it reaching entries.
+- **`effect` is assigned by a deterministic interpretation table per kind**
+  (frozen with the schema), never invented per-record. C++ derives
+  `disagreement` from opposite TRIGGER effects (doc 03 §3.4).
+- **`confidence_bucket` is computed** (source reliability × timestamp quality ×
+  parser confidence × corroboration), never self-reported by the model.
+- **No free-form floats.** Values are enums, booleans, counts, or buckets.
+- **No prose** in this file, at all. Prose lives in the digest.
+- Max 64 features per snapshot, newest first. Overflow dropped, counted, logged.
 - `ctx/` rejects any record failing schema, bounds, or R12 timestamp checks, and
-  increments `features_rejected`. A rejection rate > 5% over an hour is an alert.
+  increments `features_rejected`. Rejection rate > 5%/hour alerts.
+- Source health is `source_status` per source (healthy/stale/failed/
+  not_scheduled/unavailable/na — doc 03 §3.4), not a single absent-list.
+  `not_scheduled` (nothing expected) is never a negative signal.
 
 ## 8.6 What "done" means
 
@@ -279,5 +298,23 @@ Hard rules on this record:
   idempotent nodes — checkpoints alone are not durability.
 - Version pins (LOCKED 2026-09-18, human-accepted):
   `langgraph==1.1.6`, `smolagents==1.26.0`, self-hosted Langfuse (`langfuse==4.15.4`
-  client). Installability is verified at build; any upgrade is a D3 version bump
+  client). Rationale recorded (not hype): 1.1.6 is the tested pin, not a
+  best-version claim — upgrades re-pin with measured regression results,
+  never release announcements. Any upgrade is a D3 version bump
   with a fresh paper window, never a silent pip update.
+- Research models are pinned per node at build (no provider is chosen until the
+  key exists): `research_model_id`, provider, revision, temperature, reasoning
+  mode, tool-schema hash, system-prompt hash, container image digest,
+  dependency lock hash. An unpinned research call is a build failure (D3).
+- Deterministic-first topology: harvest/parse/normalize/fuse are deterministic
+  code; LLM nodes are hypothesize/critique only. The LLM never parses, joins,
+  maps symbols, validates timestamps, or classifies — code does that.
+- The §8.2 framework scores are selection judgment, not benchmarks. §8.6 proves
+  the workload (crash recovery, duplicates, tokens, wall time, sandbox escape
+  tests) with measurements.
+- Sandbox build requirements (Phase 2.5 implements, listed so the image is not
+  improvised): immutable digest + SBOM + vuln scan, seccomp + AppArmor,
+  no Docker socket, no host mounts (read-only binds only), PID/fd/process
+  limits, CPU/RAM/disk quotas, DNS/egress via a fetch proxy — generated code
+gets tool functions (SEC/FRED/RSS fetchers, parser, validator), not general
+  HTTP.

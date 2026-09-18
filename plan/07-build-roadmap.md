@@ -74,12 +74,20 @@ must exist on paper before a line of code.
       practice + Alpaca paper, WS + 15-min REST reconcile, free calendars.
 - [ ] Exit: all boxes in phases updated, no TBDs outside "tune later" items.
 
-## Phase 1 — Signal sidecar (doc 02)
+## Phase 1 — Signal sidecar, non-X sources (docs 02/09, freeze v2)
 
-- [ ] Collector → `signals.jsonl` + SQLite index + dedupe.
+X is out of the production path (doc 02 §2.6). The collector covers broker
+market data, SEC/EDGAR, FRED/ALFRED, Treasury/BLS/BEA, Fed/ECB
+official feeds, and earnings/calendar data — each with its §9 poller, TTL,
+heartbeat, and failure default.
+
+- [ ] Collector → `signals.jsonl` + SQLite index + dedupe (schema per §2.3).
+- [ ] First artifact out of the gate: `scripts/freeze-check.sh` — verifies
+      R1–R17, versions, stage names, question count (4), schema f2,
+      question_set v3, venues, manifest values against `plan/system-manifest.yaml`.
 - [ ] 7-day soak + noise grade (<10% off-topic).
 - [ ] Stub context reader consumes the schema.
-- [ ] Exit: §2.6 boxes checked.
+- [ ] Exit: §2.7 boxes checked.
 
 ## Phase 2 — JEV sidecar (doc 03)
 
@@ -154,7 +162,11 @@ path for a trade.
 ## Phase 7 — G3_FULL
 
 - [ ] Full stage limits per doc 05 §5.1 and doc 05 §5.2.
-- [ ] Deposit-and-walk-away verified: 30 consecutive days with zero required human
+- [ ] Deposit-and-walk-away verified: 30 consecutive days with zero *required*
+      human intervention (weekly review continues as post-hoc inspection — the
+      system must not depend on it; REQUIRED-LIVE vs POST-HOC per §10.3-linked
+      rule: only hard kill, capital escalation, and strategy promotion may
+      ever require a human).
       intervention, every intervention that did occur logged with its cause.
 - [ ] Ongoing: weekly calibration review, promotion gate for any change.
 
@@ -198,3 +210,4 @@ STAGE ATTEST HASH: <sha256>
 
 - (empty — first entry closes phase 0)
 - Phase 0 freeze | Drix10 | 2026-09-18 | plan frozen; G0 STAGE + keys at build; Phase 1 unblocked
+- Phase 0 freeze v2 (Bucket 1 rework) | Drix10 | 2026-09-18 | architectural repairs before implementation: broker-native protection, JEV v3, risk-budget sizing, evidence levels, Ed25519 manifests, X out of v1, baseline doc 12, manifest. Re-signs v1, does not reopen it.

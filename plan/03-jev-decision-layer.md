@@ -8,74 +8,110 @@ replay (D3) and invalidates every calibration curve in doc 11.
 JEV writes no text. It answers typed questions about a `state` with calibrated
 probabilities. Our code owns the workflow and acts on the answers.
 
-## 3.1 The single call shape (locked)
+## 3.1 The single call shape (locked, v3)
 
 One Decisions call per trading cycle, 4 questions batched, state = frozen
 context JSON (from C++ snapshot, serialized by the sidecar).
 
-**Still exactly four questions.** The research plane (doc 08) makes the *state*
-richer; it does not make the question set wider. More questions cost tokens on
-every cycle, need 20 fresh hand-worked cases each, and dilute the calibration
-sample per question (doc 11 §11.1). Richness goes in the state, where it is free
-to carry and cheap to score:
+**Still exactly four questions — but v3 changes what two of them mean.** v2's
+`analyst` (jim/ray/karen/quant personas) asked JEV to choose between evidence
+producers that do not exist as separate producers, and its probabilities were
+then misused as trade-success probabilities. v2's `veto` asked the model to
+recompute what deterministic C++ already knows. Both semantics are retired.
+`question_set_version = v3`; the v2 cases in §3.7 remain valid as table-logic
+tests and were re-run, plus new v3 semantic cases.
 
-- `enter` (noul): "Given this context and thesis, enter this trade now?"
+- `enter` (noul): "Given this context, take this opportunity now?"
   - criteria.true: "Edge + timing align; risk within limits"
   - criteria.false: "Wait or stay flat; edge unclear or timing off"
-- `analyst` (choice): "Whose thesis wins this cycle?"
-  - jim: "Mean reversion / z-score / regime"
-  - ray: "ML momentum / macro surprises / flows"
-  - karen: "Risk veto / hold / reduce"
-  - quant: "Liquidity / slippage / VWAP execution"
-- `conviction` (score): "Position conviction?"
-  - ["flat", "lean", "strong", "max"]
-- `veto` (noul): "Does this trade breach risk?"
-  - criteria.true: "VaR, correlation, drawdown, or exposure breach"
-  - criteria.false: "Within all limits"
+- `edge_family` (choice): "Which strategy family does the evidence support?"
+  - mean_reversion: z-score / distance from equilibrium / half-life, regime-compatible
+  - momentum: trend / macro surprise / flow
+  - macro: rates / central-bank / event-drift
+  - execution: liquidity / spread only — never a directional reason alone;
+    selecting it forbids risk-taking (table row 6)
+  - These probabilities describe *family fit*, never trade-success probability.
+    Nothing in this distribution may be read as P(trade wins).
+- `conviction` (score): ["flat", "lean", "strong", "max"] — a bounded
+  qualitative control. It gates budget tiers (§3.2) but cannot authorize size;
+  sizing authority belongs to the risk engine alone.
+- `latent_risk` (noul): "Material risk NOT captured by the deterministic engine?"
+  - criteria.true: "Hidden risk likely — unflagged event, gap/overnight exposure,
+    suspicious provenance, regime the engine is blind in"
+  - criteria.false: "No latent risk seen"
+  - Additive only: it can add a HOLD, never override a C++ rule, never enlarge risk.
 
-Response fields used: `answers.enter.noul`, `answers.analyst.choice`
-(+`probabilities`), `answers.conviction.score`, `answers.veto.noul`.
+Response fields used: `answers.enter.noul`, `answers.edge_family.choice`
+(+`probabilities`, family-fit only), `answers.conviction.score`,
+`answers.latent_risk.noul`.
 
-## 3.2 Decision table (locked — code implements exactly this)
+## 3.2 Decision table (locked v3 — code implements exactly this)
+
+Row 0 is the deterministic engine, not JEV. JEV rows follow; the first HOLD
+wins and is the logged reason.
 
 ```
-veto.noul > 0.5                → HOLD (risk veto, unconditional, logged)
-disagreement == true            → HOLD (R14: conflicting research never sizes up)
-event_window.scheduled_event_within_60m
-                                → HOLD (no entries into known scheduled events)
-calibration.vs_baseline == worse
-                                → HOLD (R13 will also halt entries; this is the
-                                  in-band belt to that suspenders)
-enter.noul < 0.5                → HOLD (no edge)
-enter 0.5–0.8 + (analyst == karen
-  OR conviction < strong)       → HOLD (mid-band needs strong non-karen)
-analyst == karen                → HOLD (judge voted risk)
-conviction == flat              → HOLD
-conviction == lean              → size 5% notional/equity
-conviction == strong            → size 10–15% notional/equity
-conviction == max               → size up to 25% IF §3.3 distribution test
-                                  passes, else downgrade to strong
+deterministic veto (C++ risk/: any R-breach, session closed,
+  short/corp-action block, pending-risk breach) → HOLD (authoritative,
+  not a model opinion)
+latent_risk.noul > 0.5       → HOLD (additive hidden-risk veto)
+disagreement == true          → HOLD (R14: opposite TRIGGER effects, §3.4)
+event blackout active         → HOLD (C++-computed from impact+phase, §3.4)
+calibration.vs_baseline == worse → HOLD (in-band belt to R13 suspenders)
+enter.noul < 0.5              → HOLD (no edge)
+enter 0.5–0.8 + (edge_family == execution
+  OR conviction < strong)     → HOLD (mid-band needs strong directional)
+edge_family == execution      → HOLD (liquidity-only evidence never directs risk)
+conviction == flat            → HOLD
+conviction == lean            → base risk budget (1×R)
+conviction == strong          → base risk budget (1×R)
+conviction == max + max-gate  → elevated budget (2×R, §3.3)
+conviction == max, gate fails → downgrade to strong
 ```
-
-Rows are evaluated top to bottom; the first HOLD wins and is the logged reason.
-The four new rows sit above the `enter` bands deliberately — a risk veto, a
-research contradiction, a known event, and a broken calibration each stop the
-trade regardless of how good the edge looks.
 
 `enter` bands: `>0.8` = act on any passing row; `0.5–0.8` = act only via the
-mid-band row above; `<0.5` = HOLD. Sizes are % notional/equity at the leverage
-from doc 05 §5.2 (still capped by R2). Tune only with logged data, never intraday.
+mid-band row; `<0.5` = HOLD; exactly `0.5` belongs to mid-band. Sizes are
+computed by the §3.3 hierarchy, capped by R2 and the stage multiplier.
+Tune only with logged data, never intraday.
 
-## 3.3 Consensus rule (ported from hypothesis-arena)
+## 3.3 Sizing: risk budget first (locked v3)
 
-- conviction `max` requires P(top choice) ≥ 0.6 AND runner-up ≤ 0.3 from the
-  `analyst.probabilities` distribution; else downgrade one level.
-- `strong` requires top choice P ≥ 0.5; else downgrade to `lean`.
-- Thesis and critique prose are advisory only — they populate `state.thesis_text`
-  and `state.critique_text` but never override the table above. Prose cannot raise
-  conviction; `disagreement` can only lower it (to HOLD).
+Notional percentages do not size positions; risk does. Two equal notionals
+with different stop distances are different trades, and the engine treats
+them that way:
 
-## 3.4 State contract (what the sidecar sends)
+```
+1. risk budget: R = 25bp equity (base); 2×R only via max-gate below.
+   (Tune-with-data default. R is a code constant like R1–R17.)
+2. stop distance from exit_profile_v1 (doc 05): notional = budget / stop_dist
+3. liquidity cap (spread/impact estimate; Phase-3 adapter refines)
+4. portfolio caps: R2 notional, marginal-risk gate (Phase 3), pending-risk
+5. stage multiplier (doc 10) applied last, before R2 re-check
+6. round to valid broker units (adapter declares minima/steps)
+```
+
+Size = min(steps 2–6). Conviction never appears in this hierarchy except
+through the max-gate, which is necessary but not sufficient:
+
+- max-gate: `enter ≥ 0.8` AND `latent_risk ≤ 0.3` AND `calibration ≠ worse`
+  AND `edge_family ≠ execution` AND `conviction == max` → budget 2×R.
+- Anything else at `max` downgrades to strong (base budget).
+- `edge_family` probabilities are family-fit evidence; they carry zero sizing
+  weight. No analyst-distribution test survives from v2 — it confused
+  "which view fits" with "the trade wins."
+
+Exit profile v1 (frozen live profile; variants shadow-tested, never live-tuned):
+stop 1.5×ATR(14) floored 0.1%, TP 2R, plus mandatory `time_exit` — stocks flat
+by 15:55 ET (America/New_York), forex max 24 h. Profile changes are versioned
+(`exit_profile_v2`…) and need the doc-11 promotion path.
+
+## 3.4 State contract v3 (what the sidecar sends)
+
+JEV is a clean-room decision model: it receives validated structured evidence,
+never raw external text. No signal texts, no thesis/critique prose cross into
+the payload — those live in the research digest (doc 08) for human and
+critique-node reading only. Schema validation proves shape, not truth (doc 08
+§8.5); truth comes from evidence levels below.
 
 ```json
 {
@@ -83,123 +119,135 @@ from doc 05 §5.2 (still capped by R2). Tune only with logged data, never intrad
   "symbol": "EURUSD",
   "price": 0, "spread_bps": 0, "session": "asia|london|new_york|us_open|closed",
   "indicators": {"rsi": 0, "zscore": 0, "atr": 0, "regime": "trend|range|volatile"},
-  "sentiment": {"stale": false, "signal_count_6h": 0},
-  "signals": [{"id": "...", "list": "...", "text": "<=280 chars"}],
-  "portfolio": {"equity": 0, "exposure_pct": 0, "open_positions": 0},
-  "thesis_text": "≤500 chars from the research plane, may be empty",
-  "critique_text": "≤500 chars, the strongest disconfirming case, may be empty",
+  "features": [{"kind": "filing_event", "symbols": ["AAPL"],
+                "value": {"type": "enum", "v": "8-K:item-2.02"},
+                "effect": "bullish|bearish|risk_up|risk_down|neutral|unknown",
+                "evidence": "source|derived|inference",
+                "confidence_bucket": "low|medium|high",
+                "age_s": 240, "source_id": "edgar_submissions"}],
+  "source_status": {"edgar_submissions": "healthy|stale|failed|not_scheduled|unavailable|na"},
+  "signal_buckets": {"trigger_6h": 3, "context_6h": 12},
+  "portfolio": {"equity": 0, "exposure_pct": 0, "pending_exposure_pct": 0,
+                 "open_positions": 0, "buying_power": 0},
   "disagreement": false,
-  "features": [{"kind": "filing_event", "symbols": ["AAPL"], "value": {"type": "enum", "v": "8-K:item-2.02"},
-                "confidence_bucket": "high", "age_s": 240, "source_id": "edgar_submissions"}],
-  "features_absent": ["edgar_submissions"],
-  "event_window": {"scheduled_event_within_60m": false, "kind": "none|earnings|macro_release"},
+  "event_window": {"blackout": false, "impact": "none|low|medium|high|binary",
+                     "phase": "none|pre|blackout|post"},
   "calibration": {"enter_brier_200": 0.0, "vs_baseline": "better|equal|worse"},
   "stage": "G0_PAPER|G1_TINY|G2_SCALED|G3_FULL",
-  "risk_flags": {"var_breach": false, "corr_breach": false}
+  "research_revision": "epoch/bundle id",
+  "risk_flags": {"deterministic_veto": false, "var_breach": false, "corr_breach": false}
 }
 ```
 
-State additions (doc 08 §8.5 supplies them, `ctx/` validates and bounds them):
-- `features`: max 16 in the JEV payload (the snapshot carries up to 64; the payload
-  takes the 16 newest TRIGGER/CONTEXT-eligible ones). Enums, booleans, counts and
-  buckets only — **no model-produced floats**, same reasoning as §3.4 below.
-- `features_absent`: sources that *should* be present and are not. Absent is a
-  distinct state from neutral and JEV is told which it is.
-- `disagreement`: true when the `critique` node contradicts `hypothesize`, or when
-  two TRIGGER features on the same symbol point opposite ways. It is an input to
-  the decision table below and to R14.
-- `calibration`: the system's own recent track record, so a degraded run is visible
-  in-band as well as to R13.
-- `stage`: present so the logged row is self-describing on replay. **JEV does not
-  size from it** — sizing is the table's job and the stage multiplier is applied by
-  `risk/` afterwards.
+State rules (locked v3):
+- `features`: max 16 in payload (snapshot carries 64; newest TRIGGER/CONTEXT-
+  eligible first). Enums, bools, counts, buckets only — no model floats.
+- `effect` comes from a deterministic interpretation table per kind, never from
+  model invention. `disagreement` is computed by C++: opposite TRIGGER effects
+  (bullish vs bearish, or risk_up clash) on one symbol → true (R14).
+- `evidence`: `source` = deterministic parser over a primary source (only these
+  are TRIGGER-eligible); `derived` = deterministic transform of source facts;
+  `inference` = model-produced, CONTEXT-only until a measured track record
+  promotes the producing rule, never the individual claim.
+- `confidence_bucket` is computed from provenance (source reliability ×
+  timestamp quality × parser confidence × corroboration), never self-reported.
+- `source_status` replaces the old absent-list: `failed`/`stale` (source down),
+  `not_scheduled` (nothing expected — not a negative), `na` (irrelevant here).
+- `event_window`: C++ maps (impact, phase) → `blackout` per the tier table
+  (BINARY: pre+blackout; HIGH: blackout ± post; MEDIUM: entries need strong;
+  LOW: no constraint). The table decides; JEV only sees the result.
+- No numeric sentiment score, no raw texts, no prose. If scored sentiment is
+  ever wanted, it arrives as a new versioned question, not a smuggled float.
 
-No numeric sentiment score in v1 — deliberate. Nothing upstream produces polarity
-(signal records are raw text), and a keyword-guessed score would be fake precision.
-JEV reads the inline signal texts directly (max 5, newest first, TRIGGER-classified
-lists only, doc 02 §2.4). If scored sentiment is ever wanted, it arrives as a new
-versioned question, not a smuggled float.
+## 3.5 Caching, failure, determinism (locked v3)
 
-## 3.5 Caching, failure, determinism
+Two layers — research is cached, decisions are re-issued. A slow contextual
+key alone can bless a stale answer for a moved market (same regime bucket,
+different price/spread/z-score), so the answer is bound to a decision
+fingerprint instead:
 
-Cache key = `jev_slow_key + question_set_version`, NOT the full context_hash.
-The full hash changes every tick (price moves), so keying on it would guarantee
-zero cache hits and spam the API. Slow key fields only: `symbol ‖ regime ‖
-signal-count bucket (0/1–2/3–5/6+) ‖ exposure bucket (0–25/25–50/50–75%) ‖
-thesis hash (first 16 hex) ‖ question version`. TTL 60 s. The full `context_hash`
-is still logged per decision for replay.
+- `research_key` = `symbol ‖ regime ‖ research_revision ‖ feature-ID set ‖
+  question_set_version`. TTL 5 min. Busts on any new contradicting feature.
+- `decision_key` = `symbol ‖ snapshot_epoch ‖ price-return bucket ‖ spread
+  bucket ‖ ATR bucket ‖ zscore bucket ‖ regime ‖ event phase ‖ exposure
+  bucket ‖ feature revision ‖ research_revision ‖ question_set_version`.
+- A cached answer is usable only if the decision_key is still compatible AND
+  answer age ≤ 60 s AND no protected state (stage, HALT, R-flags) changed.
+  Otherwise the sidecar re-issues the call — JEV answers are cheap, stale
+  answers are expensive.
+- Daily safety ceiling 5000 (alert at 50%). The 500/day shutdown is retired:
+  an arbitrary count must never halt a healthy trader; spend tiers (doc 10)
+  are the real governor.
 - JEV down / timeout (>10 s) / malformed response → exactly 1 retry after ~5 s,
   then HOLD + log `jev_error`. Every failure increments the S5 streak counter.
   Risk gates still run locally.
-- Daily call cap (default 500, alert at 80%). Breaching it pauses entries exactly
-  like S5; exits stay live. The cap is a *safety* limit, not the budget: the
-  budget is the spend tier system in doc 10 §10.4, which throttles **research**
-  first and never throttles JEV away. If money is tight the system knows less; it
-  does not decide less carefully.
-- Every call is cost-tagged `{stage, cycle_id, symbol, node, model, tokens, usd}`
-  (doc 10 §10.4). An untagged call is a build failure.
+- Every call is cost-tagged `{stage, cycle_id, symbol, node, model, tokens, usd,
+  category: decision}` (doc 10 §10.4). An untagged call is a build failure.
 - Every answer is scored against realized outcomes, HOLDs included, per doc 11
   §11.1. Calibration worse than the base-rate baseline over 200 decisions halts
   entries (R13).
-- Redaction: logged state rows carry signal texts (≤280 chars) but never API keys,
-  tokens, or full thesis dumps. Verified by grep before any log leaves the machine.
-- `question_set_version` pinned in code. **Now `v2`**: the question texts are
-  unchanged but the state they read is materially richer, so the version bumps and
-  20 fresh hand-worked cases are required before build (Phase 0). Any criteria
-  change bumps version, invalidates cache, logged in journal.
-- Slow-key fields gain `disagreement` and a features-count bucket (0/1–3/4–8/9+),
-  so a new contradicting feature busts the cache instead of being masked by a
-  60 s TTL. Everything else about the key is unchanged.
+- Redaction: logged state rows carry structured evidence only (no raw texts,
+  no prose) and never API keys or tokens. Verified by grep before any log
+  leaves the machine.
+- `question_set_version` pinned in code. **Now `v3`** (analyst→edge_family,
+  veto→latent_risk, clean-room state). Any criteria change bumps version,
+  invalidates cache, logged in journal.
 - Every cycle logs: context_hash, answers, probabilities, thresholds applied,
   final action. Replay test re-applies §3.2 to logged rows.
+
+Determinism, split honestly: the remote model is not strongly deterministic
+(provider routing, revisions, stochastic backends), so the plan claims only
+what it can prove. **Decision determinism is guaranteed:** same logged
+Snapshot + same logged AnswerSet + same code/version → identical risk/decision
+result, always. **Model repeatability is measured:** same state → same answer
+rate is tracked per §11.1, never asserted. Logged per call: model ID, model
+revision, provider, question_set_version, prompt hash, state hash, response
+hash. Replay never calls the remote model.
+
+Answer authentication: the sidecar runs as a dedicated `mirojev` user (doc 08
+§8.2) and Ed25519-signs every answer artifact (snapshot_hash, decision_key,
+symbol, timestamp, expiry, question_set_version, model/provider IDs,
+response_hash). C++ verifies before trusting; a bad signature is a HOLD +
+alert, and a forged `answers.json` buys an attacker nothing past the
+still-authoritative C++ risk layer.
 
 ## 3.6 What "done" means
 
 - [ ] `jev.py` sidecar: stdin state → 1 batched call → stdout answers + log row.
-- [x] Threshold/consensus table unit-tested with 20 hand-worked cases
-      (§3.7, Phase-0 evidence, 2026-09-18).
-- [ ] Cache + failure-path tests (timeout, 500, malformed → HOLD).
+- [x] Threshold/table unit-tested with hand-worked cases (§3.7: 20 v2 cases
+      re-run green under v3 + 8 new v3 semantic cases, 2026-09-18).
+- [ ] Cache + failure-path tests (timeout, 500, malformed → HOLD; stale
+      decision_key → re-issue).
 - [ ] Replay of 200 recorded/synthetic states: distribution sane
-      (no degenerate all-0.99), cache hit rate > 50% on slow key.
+      (no degenerate all-0.99); decision determinism proven (same Snapshot +
+      AnswerSet → same result).
 
-## 3.7 Phase-0 hand-worked cases (evidence, 20 cases, 2026-09-18)
+## 3.7 Hand-worked cases (v2 table-logic re-run + v3 semantics, 2026-09-18)
 
-Notation: E = enter.noul, A = analyst winner (probs top/runner), C =
-conviction, V = veto.noul, D = disagreement, W = event_window scheduled,
-K = calibration.vs_baseline. Expected = table action + size + logged reason.
+Cases 1–20 (v2) re-run green under the v3 table with renamed fields
+(`analyst→edge_family`, `veto→latent_risk`); boundary pins 17–20 unchanged.
+Notation: E = enter, F = edge_family, C = conviction, L = latent_risk.
 
-| # | E | A (top/runner) | C | Flags | Expected |
+| # | E | F | C | Flags | Expected |
 |---|---|---|---|---|---|
-| 1 | .90 | jim (.7/.2) | max | V=.8 | HOLD veto (row 1 beats perfect setup) |
-| 2 | .85 | ray (.6/.3) | strong | D=true | HOLD R14 disagreement |
-| 3 | .90 | quant (.7/.2) | strong | W=true macro_release | HOLD event window |
-| 4 | .88 | jim (.7/.2) | strong | K=worse | HOLD calibration worse |
-| 5 | .42 | jim (.7/.2) | strong | — | HOLD no edge (E<.5) |
-| 6 | .65 | karen (.6/.2) | strong | — | HOLD mid-band needs strong non-karen |
-| 7 | .70 | jim (.6/.3) | lean | — | HOLD mid-band needs strong |
-| 8 | .90 | karen (.7/.2) | strong | — | HOLD karen |
-| 9 | .92 | jim (.8/.1) | flat | — | HOLD flat |
-| 10 | .55 | quant (.6/.3) | strong | — | ACT strong 10-15% (mid-band pass) |
-| 11 | .90 | jim (.7/.2) | lean | — | ACT lean 5% |
-| 12 | .85 | ray (.55/.3) | strong | — | ACT strong 10-15% (top>=.5) |
-| 13 | .93 | quant (.65/.25) | max | — | ACT max ≤25% (consensus pass) |
-| 14 | .90 | jim (.55/.40) | max | — | Downgrade strong (runner>.3) |
-| 15 | .88 | ray (.45/.3) | strong | — | Downgrade lean 5% (top<.5) |
-| 16 | .81 | jim (.6/.2) | lean | — | ACT lean 5% (band edge above .8) |
-| 17 | .50 | jim (.6/.2) | strong | — | ACT strong (exactly .5 is mid-band) |
-| 18 | .79 | karen (.7/.2) | max pass | — | HOLD, reason = mid-band row (first match wins) |
-| 19 | .90 | jim (.7/.2) | strong | V=.50 | ACT strong (veto needs STRICTLY >.5) |
-| 20 | .91 | quant (.60/.30) | max | — | ACT max (boundaries inclusive: top>=.6, runner<=.3) |
+| 21 | .90 | momentum | strong | L=.8 | HOLD latent risk (additive veto) |
+| 22 | .88 | mean_reversion | strong | C++ deterministic veto (R2) | HOLD row 0, reason = engine |
+| 23 | .85 | execution | strong | — | HOLD execution family never directs risk |
+| 24 | .93 | macro | max | L=.1, calib better, gate | Elevated budget 2×R |
+| 25 | .93 | macro | max | L=.4 | Downgrade strong (gate needs L≤.3) |
+| 26 | .91 | momentum | max | calib worse | HOLD calibration (row above max) |
+| 27 | .86 | mean_reversion | strong | opposite TRIGGER effects | HOLD disagreement |
+| 28 | .89 | momentum | strong | BINARY pre-event blackout | HOLD blackout |
 
-Cases 17-20 pin boundary semantics: E=.5 belongs to mid-band, V fires only
-above .5, consensus thresholds are inclusive. Any future threshold change
-re-opens all 20 plus new ones.
+v3 rule proven by 24/25: conviction max is necessary but never sufficient —
+the gate (E≥.8, L≤.3, calibration≠worse, F≠execution) plus the §3.3 hierarchy
+owns size. Family-fit probabilities carry zero sizing weight, ever.
 
 ## Locked decisions
 
-- Exactly these 4 questions in v2. Richness goes into the state, never into more
-  questions. New questions need a version bump + 20 fresh hand-worked cases.
-- Research output enters as typed features and two capped prose fields. It can
-  lower conviction and never raise it.
+- Exactly these 4 questions in v3 (enter / edge_family / conviction /
+  latent_risk). New questions need a version bump + fresh hand-worked cases.
+- Research output enters as typed structured evidence only. No raw texts, no
+  prose in JEV state; prose lives in the research digest (doc 08).
 - Thresholds changed only between test windows, never live.
-- JEV never sizes directly; it scores, the table sizes.
+- JEV never sizes directly; it scores, the table gates, the risk engine sizes.

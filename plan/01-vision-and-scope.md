@@ -104,8 +104,14 @@ decisions below.
 - **Feed protocol:** broker WebSocket/REST poller in `feed/` (OANDA streaming
   quotes, Alpaca WS); REST reconcile every 15 min (S2). No FIX in v1.
 - **Sessions:** forex needs an open venue feed (no closed-market entries);
-  stocks hard window 09:30–16:00 ET. Session calendar source: exchange + broker
-  holiday calendars, free, fail-closed (unknown = closed).
+  stocks hard window 09:30–16:00 America/New_York (IANA, exchange calendar).
+  Session calendar source: exchange + broker holiday calendars, free,
+  fail-closed (unknown = closed).
+- **Compliance:** broker rules enter the system as a `broker_compliance_policy`
+  adapter table (broker, account type, effective date, margin/day-trade/short/
+  session rules — doc 05 R9). Regulation changes are data updates with
+effective dates, never rewrites. Code speaks to `FXBrokerAdapter` /
+  `EquityBrokerAdapter`, implemented by OANDA/Alpaca first (doc 04 §4.2).
 - **Macro calendar (free):** FRED/ALFRED release coverage + Fed/ECB calendars
   (primary web pages + ICS feeds where offered). ALFRED vintages for anything
   replayed (no revised-data lookahead).

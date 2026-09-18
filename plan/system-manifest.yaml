@@ -1,0 +1,33 @@
+# system-manifest.yaml — canonical build fingerprint (locked 2026-09-18, freeze v2)
+# Markdown docs stay human-readable. This file is what code verifies against.
+# Any value change = doc edit + version bump + fresh paper window.
+
+plan_hash: "TO_BE_COMPUTED_AT_FREEZE"  # sha256 over plan/00-11 + 12 (see freeze-check)
+strategy_version: baseline_v1
+question_set_version: v3
+feature_schema_version: f2
+risk_version: R1-R17+v2-amendments  # R4-symmetric, R5-HWM, R6-like-for-like, R7-prevent, R15-two-counter, R9-adapter
+exit_profile: exit_profile_v1
+research_graph_version: g1  # six nodes, deterministic-first
+jev_model: typesafe/jev-1.13
+jev_provider: TBD_AT_KEY  # BLOCKED: 2.2
+research_models: TBD_AT_BUILD  # per-node pins required by doc 08 (D3)
+venues:
+  forex_paper: OANDA-v20-practice
+  stocks_paper: Alpaca-paper
+  forex_live: TBD_AT_G1_MANIFEST
+  stocks_live: TBD_AT_G2_MANIFEST
+universe:
+  execution_max: 5
+  research_candidates: 50
+  scan: deterministic-full
+stage_definitions: [G0_PAPER, G1_TINY, G2_SCALED, G3_FULL]
+cost_caps:
+  G0_PAPER: { absolute_usd_30d: 150, ratio: none }
+  G1_TINY: { absolute_usd_30d: 150, ratio: none }
+  G2_SCALED: { absolute_usd_30d: 400, ratio: 0.20 }
+  G3_FULL: { absolute_usd_30d: 1000, ratio: 0.20 }
+framework_pins:
+  langgraph: 1.1.6
+  smolagents: 1.26.0
+  langfuse_client: 4.15.4

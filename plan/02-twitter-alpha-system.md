@@ -166,7 +166,20 @@ covered names) + price feeds can trigger entries. This prevents
   this is an unproven source carried cheaply either way, and doc 11's promotion
   gate is the only way it becomes more than that.
 
-## 2.6 What "done" means for this part
+## 2.6 v1 status: X disabled as a production input (locked 2026-09-18)
+
+Automated X collection — including the self-hosted session-mirror transport —
+is out of v1. It conflicts with X's terms (no scraping without permission),
+and the pay-per-use API is a paid subscription in substance, excluded by
+doc 01. No replacement with hand-pasted X context either: manual inputs are
+non-reproducible, timing-ambiguous, and another raw-text path into decisions.
+Production Phase 1 collects broker market data, SEC/EDGAR, FRED/ALFRED,
+Treasury/BLS/BEA, Fed/ECB official feeds, and earnings/calendar data only.
+The verified list universe (§2.4) and this doc's filter design stay in the
+repo as research history; X returns only through an explicitly authorized and
+reproducible interface, as a new doc version.
+
+## 2.7 What "done" means for this part (non-X Phase 1 collector)
 
 - [ ] List-ID table verified (every ID resolves).
 - [ ] 7-day soak: collector runs, dedupe holds, zero dupes emitted, noise sample
@@ -177,8 +190,8 @@ covered names) + price feeds can trigger entries. This prevents
 ## Locked decisions
 
 - Output = filtered signal JSONL. No scores, no trades, no posts.
-- No Selenium anywhere in the fund.
-- Macro/FX/earnings lists trigger; tech lists contextualize. Never the reverse.
+- No Selenium anywhere in the fund. No automated X collection in v1 (§2.6).
+- Macro/FX/earnings sources trigger; tech context informs. Never the reverse.
 - No X API of any kind — free tier does not exist as of 2026, and metered
   pay-per-use is a paid subscription in substance and is excluded by doc 01.
   Transport is public RSS/mirror only, timestamp-gated by R12 independently of

@@ -1,4 +1,4 @@
-# MiroHedge Phase 0 TODO (0 to done)
+# MiroHedge Phase 0 TODO (freeze v2, 2026-09-18: Bucket-1 repairs, X out of v1, JEV v3)
 
 Legend: `[B]` needs real-browser control (X login, JS pages, portals) · `[W]` normal web search · `[H]` human action · `[D]` doc edit in `plan/`
 
@@ -6,7 +6,7 @@ Legend: `[B]` needs real-browser control (X login, JS pages, portals) · `[W]` n
 - [x] 0.1 Plan docs frozen-consistent (00-11 + README), pushed to main
 - [x] 0.2 DONE 2026-09-18: Phase 0 signed off (Drix10, doc 07 log); remaining opens deferred/blocked/human-side with reasons below
 
-## 1. X-Lists research (our lists are AI/tech mostly)
+## 1. X-Lists research (HISTORY — X out of v1 production per doc 02 §2.6; kept for the record)
 - [x] 1.1 DONE 2026-09-18: recovered 55-ID folders table from old MVP config; ~46 Scobleizer AI/tech lists, all live
 - [x] 1.2 DONE 2026-09-18: no reusable public macro list IDs exist; TRIGGER coverage = 6-account roster, all verified live
 - [x] 1.3 DONE 2026-09-18: 55/55 live, 0 dead, all active; evidence in sign-off log
@@ -18,7 +18,7 @@ Legend: `[B]` needs real-browser control (X login, JS pages, portals) · `[W]` n
 ## 2. Decision-layer proof (doc 03)
 - [ ] 2.1 [HUMAN] Obtain `OPENROUTER_API_KEY` — nothing in 2.2 can run without it
 - [ ] 2.2 [BLOCKED] 2026-09-18: needs OPENROUTER_API_KEY in env (human skipped); then confirm Decisions endpoint + pin exact revision into doc 03
-- [x] 2.3 DONE 2026-09-18: 20 hand-worked cases in doc 03 §3.7 (all HOLD rows + boundaries 17-20); §3.6 box checked
+- [x] 2.3 DONE, RE-RUN 2026-09-18 (freeze v2): 20 v2 cases green under v3 table + 8 new v3 semantic cases (21–28) in doc 03 §3.7
 
 ## 3. Venues (doc 01)
 - [x] 3.1 DONE 2026-09-18: OANDA v20 practice primary, FXCM demo fallback (REST + streaming, free demo, same shape as live)
@@ -53,14 +53,13 @@ Legend: `[B]` needs real-browser control (X login, JS pages, portals) · `[W]` n
 - [x] 8.2 DONE 2026-09-18: Drix10 signed Phase 0 freeze in doc 07 log; Phase 1 unblocked
 
 ## 9+. Build phases
-### Phase 1 start checklist (unblocked, no code until human says start)
-- [ ] P1.1 X-session credential placement note (sidecar host, never git) + twikit-rss pinned version
-- [ ] P1.2 Collector: 9 finance lists + 13 CONTEXT lists + 6-account roster → `signals.jsonl` (atomic rename, inode tracking per §2.5)
-- [ ] P1.3 SQLite index (list, tweet_id) + dedupe (10k ID cap, doc 02 filters: spam/NON_TECH, ≥30 words or ≥15 w/link)
-- [ ] P1.4 TRIGGER vs CONTEXT tagging at write time (macro/FX/earnings-native only)
-- [ ] P1.5 7-day soak + noise grade (<10% off-topic) + 1.4 empirical top-posters
-- [ ] P1.6 Stub `ctx/` reader consumes schema (§2.6 exit)
-- [ ] Later: 10. Phase 2 JEV sidecar → 11. Phase 2.5 research plane → 12. Phase 3 C++ core → 13. Phase 4 paper loop G0 → 14-16. G1/G2/G3 gates
+### Phase 1 start checklist (unblocked, non-X sources, no code until human says start)
+- [ ] P1.1 `scripts/freeze-check.sh` first: verify manifest values (R1–R17, versions, stages, 4 questions, f2, v3, venues)
+- [ ] P1.2 Collector: EDGAR + FRED/ALFRED + official macro feeds + calendars → `signals.jsonl` (atomic rename, per-source poller/TTL/heartbeat per §9)
+- [ ] P1.3 SQLite index + dedupe + TRIGGER/CONTEXT tagging at write time (incremental-edge rule, doc 09)
+- [ ] P1.4 7-day soak + noise grade (<10% off-topic)
+- [ ] P1.5 Stub `ctx/` reader consumes bundle schema (§2.7 exit)
+- [ ] Later: 10. Phase 2 JEV sidecar (v3 + Ed25519) → 11. Phase 2.5 research plane (bundle model, sandbox image) → 12. Phase 3 C++ core (adapters, protection, FSM) → 13. Phase 4 paper loop G0 → 14-16. G1/G2/G3 gates
 
 ## A. Agent orientation files (Phase-0, new)
 - [x] A.1 DONE 2026-09-18: ARCHITECTURE.md (8 questions, MiroHedge-mapped) at root

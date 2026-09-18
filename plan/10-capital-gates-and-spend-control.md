@@ -7,7 +7,38 @@ is shut down, and how much it may spend on AI to earn what it earns.
 The system is autonomous in **research, decision, and execution**. It is never
 autonomous in **capital escalation**.
 
-## 10.1 The stage file (the box)
+## 10.1 The stage file (the box), v2: signed manifests (locked 2026-09-18)
+
+A hash is not a signature — anyone holding the file can recompute it. v2
+separates the human act from the runtime state:
+
+- `PROMOTION_MANIFEST` (human-owned, human-written, process stopped):
+  from_stage, to_stage, intended_capital_usd, allocated_capital_usd,
+  policy_version, plan_hash, approved_at, evidence_hash, signer_id, plus an
+  Ed25519 `signature` over all of it. The process verifies (valid signature,
+  known signer key, correct plan version, correct prior stage, sane capital)
+  and then — and only then — advances.
+- Runtime stage state (process-owned): current effective stage + chained
+  `DEMOTION_EVENT` records. Demotion appends, journals, alerts; it never
+  edits a manifest.
+- `effective_stage = last verified promotion − automatic demotions.` No shared
+  ownership, no direct human edits to runtime files, no process writes to
+  manifests.
+- Legacy `STAGE` single-file format (§10.1 as frozen in Phase 0 v1) remains the
+  G0 bootstrap only: `capital_usd: 0`, GENESIS chain, alerts.jsonl. First
+  promotion out of G0 moves to manifests.
+
+G1 capital semantics (locked): `intended_capital_usd` (the full size this
+operation targets), `allocated_capital_usd` (actually deposited at the stage),
+`current_equity_usd` (live, from the adapter). "≤2% of intended capital" is
+computed from the manifest's intended number — mechanically enforceable, no
+interpretation.
+
+LIVE JURISDICTION GATE (before any G1 promotion, locked): operator
+jurisdiction, broker authorization in that jurisdiction, instrument legality
+(forex venue vs local law), funding route, tax/reporting treatment — all
+checked, logged, and attached to the manifest as `evidence_hash`. "Broker has
+an API" is not "this deployment is legal."
 
 One file, `STAGE`, read at startup and re-read at every cycle boundary:
 
@@ -104,7 +135,7 @@ Three levels. Agents can invoke none of them and can override none of them.
 |---|---|---|---|
 | **SOFT** | `HALT` file; S5 JEV streak; feed stale > 30 s; spend tier 2; research plane paused past TTL | **Entries stop within 1 cycle.** Exits, stops, TP, reconcile all continue normally. Positions are managed, not abandoned. | Manual: remove file **and** restart with flag (doc 06 §6.4 — deleting the file alone does nothing) |
 | **MEDIUM** | R5 drawdown; daily loss breach; R-rule violation; calibration breach; spend tier 3 | Entries stop. **Then, conditionally:** if the venue is open and the spread is within the normal band, flatten every open position via market order now. If not (venue closed, spread abnormal, or the flatten order itself fails), do **not** force a bad-condition exit — leave the existing hard stop/TP in place exactly as under normal operation, and re-attempt the flatten every cycle until conditions allow or the position closes on its own stop/TP first. Stage demoted immediately either way. | Human review + stage re-approval |
-| **HARD** | Journal chain break; reconcile drift unresolvable; broker auth failure; determinism failure; suspected compromise of the research-plane sandbox | Cancel-all via REST; **broker credentials revoked from the running process**; trading process exits non-zero; supervisor does **not** restart it | Human, on the host, after forensics |
+| **HARD** | Journal chain break; reconcile drift unresolvable; broker auth failure; determinism failure; suspected compromise of the research-plane sandbox | Stop entries → verify broker-native protective orders exist on every open position (re-establish if missing and possible) → attempt flatten/cancel → leave broker-side protection ACTIVE → revoke credentials from the running process → trading process exits non-zero; supervisor does **not** restart it. Never revoke the only credentials that can protect a position before verifying broker-side protection exists. | Human, on the host, after forensics |
 
 Rules that hold at every level:
 - **Exits never depend on JEV, the research plane, agents, or WS health**
@@ -171,7 +202,13 @@ extrapolated), so the brake is applied before the wall, not at it.
 ### Cost accounting rules
 
 - Every LLM call is tagged `{stage, cycle_id, symbol, node, model,
-  prompt_tokens, completion_tokens, usd}`. Untagged calls are a build failure.
+  prompt_tokens, completion_tokens, usd, category}` where category is one of
+  `decision` (JEV — never throttled), `research` (plane — throttled by tiers),
+  `experiment` (shadow/challenger — per-experiment budgets, doc 11),
+  `observability`. Cost per opportunity and per closed trade are reported per
+  category. The 20%-of-profit ratio stays as a capacity governor; experiment
+  spend additionally needs its own expected-incremental-edge justification
+  (doc 11 registry) — profit unlocks capacity, never blind spending.
 - The daily summary (doc 06 §6.3) reports: spend, projection, tier, spend per
   closed trade, and — from G2 — the spend/profit ratio.
 - Cost per *decision* and cost per *closed trade* are first-class metrics. A

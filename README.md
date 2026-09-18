@@ -22,7 +22,7 @@
 
 A systematic trading fund for **forex majors and US-listed stocks** (no crypto in v1):
 
-1. **Research plane** turns free OSINT, SEC filings, macro releases, and X-List sentiment into typed, bounded features
+1. **Research plane** turns free OSINT, SEC filings, macro releases, and official feeds into typed, bounded features (X disabled in v1)
 2. **JEV decision layer** answers 4 typed questions per cycle. Calibrated probabilities, no prose
 3. **C++ core** freezes a hashed snapshot, applies risk gates R1 through R17, and executes. Or holds, with a journal row either way
 
@@ -40,7 +40,7 @@ Three inputs, one output, inside a box:
 | Layer | Job | Technology |
 |---|---|---|
 | Research, OSINT fusion, hypotheses | Typed features and capped prose, never orders | LangGraph + smolagents, sandboxed, off hot path (doc 08) |
-| Routing, ranking, gating | Calibrated yes/no, pick-winner, conviction | JEV `typesafe/jev-1.13` via OpenRouter Decisions API (doc 03) |
+| Routing, ranking, gating | Calibrated edge/family/conviction/latent-risk (v3) | JEV `typesafe/jev-1.13` via OpenRouter Decisions API (doc 03) |
 | Snapshot, risk, execution | Fast, deterministic, auditable | C++ from scratch (doc 04) |
 | Capital stage, kill switches, spend | Permit or forbid, never expand | `STAGE` file + C++ constants + human signature (doc 10) |
 | Calibration + promotion | Score answers, judge challengers | Offline harness + human sign-off (doc 11) |
@@ -72,11 +72,11 @@ git checkout main
 
 # Read the spec in order (this is the build; no code before Phase 0 exits)
 for f in plan/00-INDEX.md plan/01-vision-and-scope.md plan/02-twitter-alpha-system.md \
-         plan/03-jev-decision-layer.md plan/04-cpp-hft-architecture.md \
+         plan/03-jev-decision-layer.md plan/04-cpp-deterministic-core.md \
          plan/05-risk-and-determinism.md plan/06-execution-and-ops.md \
          plan/07-build-roadmap.md plan/08-agentic-research-plane.md \
          plan/09-osint-and-free-data.md plan/10-capital-gates-and-spend-control.md \
-         plan/11-calibration-and-self-improvement.md; do cat "$f"; done
+         plan/11-calibration-and-self-improvement.md plan/12-statistical-baseline.md; do cat "$f"; done
 ```
 
 ### Phase-0 exit requirements (grouped; full boxes in doc 07)
@@ -107,12 +107,12 @@ OPENROUTER_API_KEY=your_key          # Decisions endpoint + exact model string c
 |   * feed/    broker quotes > lock-free ring, gap detection      |
 |   * ingest/  validate features, enforce R12 timestamp rule      |
 |   * ctx/     frozen Snapshot + SHA-256 context_hash             |
-|   * JEV      1 batched call: enter / analyst / conviction / veto|
+|   * JEV      1 batched call: enter / edge_family / conviction / latent_risk|
 |   * risk/    veto.cpp: R1-R17 + decision table + stage multiplier|
 |   * kill/    SOFT / MEDIUM / HARD, pure C++, exits survive all  |
 +-----------------------------------------------------------------+
 |   EXECUTION (journal-before-order, always)                      |
-|   * exec/   sizing from conviction, 1.5xATR stops, 2R targets   |
+|   * exec/   risk-budget sizing, broker-native SL/TP, exit_profile_v1 |
 |   * journal append-only hash-chained row per decision           |
 |   * exits local + immediate, never gated on network/JEV/WS      |
 +-----------------------------------------------------------------+
@@ -120,22 +120,22 @@ OPENROUTER_API_KEY=your_key          # Decisions endpoint + exact model string c
 
 Trust flows one way: research to ctx to risk to exec. Nothing upstream can relax a downstream rule.
 
-### The 4 JEV questions, v2 (one batched call per cycle; richness goes in the state, never in more questions)
+### The 4 JEV questions, v3 (one batched call per cycle; richness goes in the state, never in more questions)
 
 | Question | Type | Decides |
 |---|---|---|
 | **enter** | yes/no | Edge + timing align now? |
-| **analyst** | choice | Whose thesis wins: jim / ray / karen / quant? |
-| **conviction** | score | flat / lean / strong / max, sizes 0% / 5% / 10-15% / up to 25% |
-| **veto** | yes/no | VaR, correlation, drawdown, or exposure breach? |
+| **edge_family** | choice | Which strategy family fits: mean_reversion / momentum / macro / execution? (fit only, never success odds) |
+| **conviction** | score | flat / lean / strong / max: budget gate only, never sizes |
+| **latent_risk** | yes/no | Material risk the deterministic engine missed? (additive HOLD only) |
 
-New HOLD rows sit above the edge bands. Each stops the trade no matter how good it looks:
+Row 0 is the deterministic engine (any R-breach holds, no model involved). Above the edge bands:
 
-- `veto > 0.5` goes HOLD, unconditionally. `disagreement == true` goes HOLD (R14, never averaged)
-- Scheduled event within 60 min goes HOLD. Calibration worse than baseline goes HOLD (R13 in-band)
-- `karen` wins goes HOLD. `max` needs consensus proof (top P at least 0.6, runner-up at most 0.3) or it downgrades
+- `latent_risk > 0.5` goes HOLD, additively. `disagreement == true` goes HOLD (R14, opposite TRIGGER effects, never averaged)
+- Event blackout (BINARY/HIGH tiers) goes HOLD. Calibration worse than baseline goes HOLD (R13 in-band)
+- `execution` family or `flat` goes HOLD. `max` needs the §3.3 gate (enter high, latent low, calibration ok, directional family) or it downgrades. Family probabilities never size.
 
-State now carries typed `features` (max 16 in payload; enums, bools, counts, buckets; no model floats), `features_absent` (absent is not neutral, always), `disagreement`, `event_window`, `calibration`, and `stage`.
+State now carries typed `features` (max 16 in payload; enums, bools, counts, buckets; no model floats; effect + evidence level each), `source_status` (failed is not the same as not-scheduled), `disagreement`, event tiers, `calibration`, and `stage`. No raw texts, no prose in JEV state.
 
 ---
 
@@ -156,7 +156,7 @@ Six nodes: `harvest`, `extract`, `fuse`, `hypothesize`, `critique`, `emit`. Base
 
 | Tier | Sources | Class |
 |---|---|---|
-| **A: real, usable** | Broker feed, SEC EDGAR, FRED/ALFRED, Treasury/BLS/BEA, session calendars, EDGAR-derived earnings calendar, X-Lists tail (RSS/mirror only, no X API of any kind) | TRIGGER-eligible |
+| **A: real, usable** | Broker feed, SEC EDGAR, FRED/ALFRED, Treasury/BLS/BEA, session calendars, EDGAR-derived earnings calendar (X disabled in v1) | TRIGGER-eligible |
 | **B: situational** | USGS quakes, NASA FIRMS fires, weather, launch schedules, official macro/geopolitical RSS | CONTEXT by default. Risk-off first, entries never until promoted |
 | **C: declared nulls** | AISStream, OpenSky, CelesTrak and other globe layers | NULL or excluded. No globe layer is TRIGGER-class in v1 |
 | **D: lessons, not signals** | Public agentic-trading systems, graded accept/hype | `lessons.jsonl`, human-reviewed weekly, never auto-live |
@@ -256,9 +256,9 @@ Full checklist with per-phase boxes: [`plan/07-build-roadmap.md`](./plan/07-buil
 plan/
 +-- 00-INDEX.md               # map of the spec + one-way trust rule
 +-- 01-vision-and-scope.md    # autonomy definition, 3 inputs, statistical-edge-first
-+-- 02-twitter-alpha-system.md# X-Lists feed, RSS/mirror transport, absent is not neutral
++-- 02-twitter-alpha-system.md# signal spec + X history (X disabled v1)
 +-- 03-jev-decision-layer.md  # v2: 4 questions, new HOLD rows, richer state
-+-- 04-cpp-hft-architecture.md# 3 processes, ingest/kill modules, latency budget
++-- 04-cpp-deterministic-core.md# 3 processes, ingest/kill modules, latency budget
 +-- 05-risk-and-determinism.md# R1-R17, S1-S10, D1-D5: the hard rules
 +-- 06-execution-and-ops.md   # order lifecycle, outage playbook, ops rhythm
 +-- 07-build-roadmap.md       # the only to-do list (phases 0-7)
@@ -266,6 +266,8 @@ plan/
 +-- 09-osint-and-free-data.md  # free sources ranked, TRIGGER/CONTEXT/NULL
 +-- 10-capital-gates-and-spend-control.md # stages, kill hierarchy, spend caps
 +-- 11-calibration-and-self-improvement.md # Brier scoring, shadow challengers, promotion gate
++-- 12-statistical-baseline.md # frozen champion the AI must beat
++-- system-manifest.yaml # canonical build fingerprint
 ```
 
 > If it is not in `plan/`, we do not build it. New idea goes to a doc section first, then build.
@@ -280,7 +282,7 @@ plan/
 - Determinism: same logged context replayed gives same decision (proven by replay test)
 - Risk: zero trades violating `plan/05-risk-and-determinism.md`. One violation is halt
 - Latency: context snapshot to order intent under 1 ms local (excludes network calls)
-- Calibration: JEV `enter` and `veto` beat base rate on Brier over at least 200 decisions (doc 11)
+- Calibration: JEV `enter` and `latent_risk` beat point-in-time base rate on Brier over at least 200 decisions (doc 11)
 - Autonomy: 30 days with no required human intervention, every intervention logged with cause
 - Cost: AI spend within stage cap, cost per closed trade reported daily (doc 10)
 - Isolation: research plane cannot write journal, `HALT`, or `STAGE`. Proven by test

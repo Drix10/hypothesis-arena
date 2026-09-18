@@ -1,4 +1,8 @@
-# 04 — C++ HFT Architecture
+# 04 — C++ Deterministic Core (low-latency execution, not HFT alpha)
+
+The <1 ms local budget buys determinism and reliable execution, not market
+latency advantage (venue feeds are seconds-scale). Nothing here assumes HFT
+market-making capability.
 
 From scratch. No TS port. Three processes, one direction of trust.
 
@@ -66,10 +70,21 @@ STAGE (human-signed, doc 10) ─────────────┤
 4a. `kill/switch.cpp` — SOFT / MEDIUM / HARD levels (doc 10 §10.3). Pure C++, no
    LLM, no network dependency for the decision itself, reachable from a file plus
    a signal in < 5 s. Exits, stops, TP, and reconcile survive every level.
-5. `exec/router.cpp` — sizing (from conviction), stop calc (1.5×ATR rule, doc 05 §5.2),
+5. `exec/router.cpp` — risk-budget sizing (§3.3 hierarchy), broker-native
+   protection attach (doc 06 §6.1: no PROTECTED without broker-acked SL/TP),
    idempotent client-order-IDs (`hash(context_hash, symbol, side)` — no attempt
-   field; retries reuse the ID, see doc 06), retry-once,
-   position reconcile vs broker every 15 min.
+   field; retries reuse the ID, see doc 06), durable order state machine
+   (intent/ack persisted, reconcile-before-resend after crashes), retry-once,
+   position reconcile vs broker every 15 min (§5.4 S2 FSM).
+5a. `broker/` adapters — `FXBrokerAdapter` / `EquityBrokerAdapter` interface
+   (Phase 3 implements; OANDA + Alpaca first): submit_entry,
+   attach_protection, cancel/replace/query order, positions, account
+   (equity/cash/margin/buying-power), open orders, shortability/borrow,
+   corporate-event flags. Each adapter declares its semantics (units, partials,
+   precision, sessions); the core never assumes one broker's behavior.
+5b. Universe service — deterministic full scan → eligibility/liquidity/spread/
+   shortability/event filters → ranked candidates (50 research, 5 executable).
+   The 5-symbol execution cap is the end of a funnel, not the start of one.
 6. `log/journal.cpp` — append-only per-decision row + hash chain (prev_hash).
    Nothing trades without a journal row.
 
@@ -77,7 +92,8 @@ STAGE (human-signed, doc 10) ─────────────┤
 
 - Snapshot isolation: decisions read the frozen snapshot, never live state.
 - Nanosecond timestamps on snapshot + decision + order intent.
-- Canonical serialization for hashing: fixed field order, fixed float precision
+- Canonical serialization for hashing: fixed field order, scaled-integer /
+  fixed-point decimals per D6 (never language float formatting).
   (8 dp), UTF-8, no whitespace variance. Hash mismatch = bug, halt paper.
 - No floats for money math in sizing: integer contracts/quote units; floats only
   for indicators.

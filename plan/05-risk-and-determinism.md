@@ -8,31 +8,68 @@ reach any of it.
 
 - R1. Max 3 concurrent positions. Max 2 in the same direction. One open position
   per symbol — a second intent on a held symbol is HOLD until the first closes.
+  Exposure math counts filled exposure PLUS pending executable exposure
+  (unfilled entry orders reserve budget; a system with 0 filled and $500k
+  pending is not at zero exposure). Account inputs are first-class: equity,
+  cash, margin used/available, unrealized/realized PnL, open-order notional —
+  from the broker adapter (Phase 3), paper-equivalents before that.
 - R2. Single position ≤ 25% notional/equity. Total exposure ≤ 75% notional/equity.
   (Notional = size × price; equity = account equity at snapshot time. Both frozen
-  in the snapshot, never re-read at send.)
-- R3. Max 20 trades/day. Max 3 trades/symbol/hour (anti-churn).
-- R4. BUY→SELL→BUY on one symbol < 1 h → force HOLD 2 h on that symbol.
+  in the snapshot, never re-read at send. Pending exposure counts toward both.)
+- R3. Max 20 trades/day. Max 3 trades/symbol/hour (anti-churn). A "trade" =
+a broker-acknowledged fill (not an intent, not an order — unacked orders do not
+  consume churn budget, they consume pending-risk budget under R1/R2).
+- R4. Symmetric flip-lock: LONG→SHORT→LONG or SHORT→LONG→SHORT completions
+  within 1 h on one symbol → force HOLD 2 h on that symbol. A flip completion
+  = two filled direction-changing orders; direction is position sign, entries
+  into flat do not count.
 - R5. Drawdown > 10% from peak → HALT all entries (exits only) until review.
+  Peak = max(daily-close high-water, intraday high-water): equity is sampled
+every cycle and the running maximum persists — an intraday spike-to-trough
+  counts exactly like a close-to-close one.
 - R6. Realized volatility > 3× 20-day baseline → halve sizes until review.
-- R7. Cross-position correlation > 0.9 same direction → close newest.
-- R8. `max` conviction requires §3.3 consensus proof or downgrade. No exceptions.
-- R9. Sessions and broker rules are hard vetoes: no stock entries outside 09:30–16:00
-  ET; no forex entries when the venue feed is closed (weekends/holidays — the
-  `session=closed` flag, not a guess); US margin account under $25k → max 3
-  day-trades per 5 sessions (PDT), counted locally before every stock entry.
+  Like-with-like only: both sides are stdev of 1 h log returns (baseline =
+  trailing 480 points, current = trailing 24). No cross-horizon comparison.
+- R7. Correlation gate at entry + drift rule after. Entry that would create a
+  same-direction pair with Pearson > 0.9 (1 h closes, trailing 30) is HOLD —
+  prevention, not cleanup. If drift creates the breach later, remove the
+  position whose removal cuts portfolio VaR most per unit of unrealized PnL
+  sacrificed (deterministic, computed, logged). Never blindly "newest".
+  (Phase 3 extends this to factor/beta exposure; the gate stays.)
+- R8. `max` budget requires the doc 03 §3.3 max-gate or downgrade. No exceptions.
+- R9. Sessions, broker rules, and corporate plumbing are hard vetoes, via a
+  `broker_compliance_policy` adapter (broker, account type, effective date,
+  margin/day-trade/short/session rules — effective-date-aware, so regulation
+  changes are data updates, not rewrites; internal risk stays stricter than
+  the external rule regardless). No stock entries outside 09:30–16:00
+  America/New_York (IANA, exchange calendar); no forex entries when the venue
+  feed is closed; PDT-style day-trade counting runs locally before every stock
+  entry under whatever rule is currently effective. Shorts: HOLD unless
+  shortable == true with valid borrow/locate, acceptable borrow cost, clean
+  SSR state, and sufficient margin — part of the pre-trade contract from G2
+  (G1 is forex-only). Corporate actions: splits, dividends, ticker changes,
+  mergers, halts normalize BEFORE the feature engine (adjustment layer, Phase 3
+  implements; until then any symbol with a pending corporate event is
+  untradeable), and positions reconcile across symbol events per the §5.4 FSM.
+  Before any live stage (G1+): the LIVE JURISDICTION GATE — operator
+  jurisdiction, broker authorization, instrument legality, funding route,
+  tax/reporting — all checked and logged. "Broker has an API" is not
+  "this deployment is legal."
 
 ## 5.1a Measurement definitions (without these the rules are slogans)
 
 - Peak (R5): running maximum of daily-close equity, persisted to disk. Drawdown =
   peak − current equity, evaluated on snapshot equity each cycle.
-- Volatility baseline (R6): stdev of daily returns over trailing 20 closes,
-  persisted; recomputed at 00:00 UTC. "3× normal" = current 24 h realized stdev
-  > 3 × baseline.
+- Volatility baseline (R6): stdev of 1 h log returns over trailing 480 points
+  (~20 days); current = trailing 24 points. Persisted; recomputed at 00:00 UTC.
 - Correlation (R7): Pearson on 1 h closes, trailing 30 points, per open-pair.
   Computed in `ctx/`, breach flag lands in `state.risk_flags`.
 - VaR (veto question + `risk_flags.var_breach`): parametric 95% on trailing 24 h
-  1 h returns, position-weighted; breach = portfolio VaR > 5% equity.
+  1 h returns, position-weighted; breach = portfolio VaR > 5% equity. VaR is
+  necessary but not sufficient: the engine also carries historical expected
+  shortfall plus precomputed stress scenarios (gap, correlation shock,
+  liquidity stress). C++ consumes bounded precomputed values — no stochastic
+  model runs in the hot path.
 - Conviction sizes (doc 03 table): lean 5%, strong 10–15%, max up to 25% — all
   % notional/equity. Exposure caps from R2 still apply on top.
 
@@ -55,7 +92,7 @@ behavior.
   TTL. Features without a source-published timestamp are permanently CONTEXT-capped.
   *Owner:* `ingest/`. *Default:* drop.
 - **R13. Calibration floor, noise-gated.** If trailing-200-decision Brier for
-  `enter` or `veto` is worse than the base-rate baseline by more than a 0.02
+  `enter` or `latent_risk` is worse than the base-rate baseline by more than a 0.02
   margin, **and** the window holds ≥20 realized outcomes of the resolving class,
   entries halt and the stage demotes (doc 11 §11.1). Below that sample size the
   check reports insufficient-sample rather than pass/fail — a bare "any amount
@@ -66,9 +103,12 @@ behavior.
   Two TRIGGER features pointing opposite ways on one symbol → HOLD. There is no
   averaging, no tie-break toward action. *Owner:* `risk/`. *Default:* HOLD.
 - **R15. Runaway research caps.** Per cycle: ≤40 LLM calls, ≤120 tool calls,
-  ≤250k tokens, ≤8 min wall clock, ≤25 graph depth. Three consecutive aborts pause
-  the plane. *Owner:* orchestrator + supervisor, independently. *Default:* abort
-  the cycle, keep partial features, never retry within the interval.
+  ≤250k tokens, ≤8 min wall clock, ≤25 graph depth. Two counters, no
+  contradiction: 3 consecutive aborts on one symbol → that symbol's research
+  pauses; a majority of watchlist symbols aborting in the same window → the
+  plane degrades/pauses. *Owner:* orchestrator + supervisor, independently.
+  *Default:* abort the cycle, publish nothing (last complete bundle stands),
+  never retry within the interval.
 - **R16. Kill-switch hierarchy.** SOFT / MEDIUM / HARD per doc 10 §10.3. No agent
   can invoke or override any level. Exits, stops, TP, and reconcile survive all
   three. *Owner:* `kill/`. *Default:* the higher level wins.
@@ -81,10 +121,11 @@ behavior.
 v1 caps: forex ≤ 5×, US stocks ≤ 2× (1× on cash account — Reg T, no exceptions).
 Higher leverage unlocks only after a phase-5 review + doc edit, never silently.
 
-Stops are 1.5 × ATR(14) on the entry timeframe, floored at 0.1% of price — one rule
-for both asset classes (a fixed-% stop built for crypto would never trigger on
-EURUSD and would bleed on TSLA). Take-profit stays 2R (doc 06).
-Every order intent carries a stop or it is rejected by `veto.cpp`.
+Stops are `exit_profile_v1` (doc 03 §3.3): 1.5 × ATR(14), floored at 0.1% of
+price, TP 2R, mandatory time_exit — one frozen profile for both asset classes
+(a fixed-% stop built for crypto would never trigger on EURUSD and would bleed
+on TSLA). Profile variants are shadow-tested, never live-tuned. Every order
+intent carries a stop or it is rejected by `veto.cpp`.
 
 ## 5.3 Determinism contract
 
@@ -98,6 +139,12 @@ Every order intent carries a stop or it is rejected by `veto.cpp`.
   self-improving agent frameworks are banned from the host (doc 01, doc 08 §8.2).
 - D4. Portfolio state snapshotted at decision time; execution-time drift only
   narrows (re-check limits at send; shrink-or-hold, never grow).
+- D6. Canonical numbers: every hashed numerical field serializes as scaled
+  integers / fixed-point decimal with explicit precision — never language float
+  formatting. Floats live inside calculations; hashes see fixed-point.
+- D7. One clock discipline: chrony/NTP, skew monitored; wall clock (UTC) for
+  timestamps, monotonic clock for elapsed durations. Skew over threshold →
+  entries HOLD (S11).
 - D5. Research non-determinism is contained, not pretended away: agent runs are
   not reproducible, but their *output* is. Replay uses the logged `features.jsonl`
   rows, never a re-run of the agents. The hash covers the features, so a replay
@@ -106,8 +153,17 @@ Every order intent carries a stop or it is rejected by `veto.cpp`.
 ## 5.4 Self-correction (automatic, logged)
 
 - S1. Feed gap → request/resync, mark decisions `gap=true` until whole.
-- S2. Position reconcile every 15 min vs broker; per-symbol notional drift > 1%
-  with no pending orders → sync to broker + alert; with pending orders → defer 30 s.
+- S2. Position reconcile every 15 min vs broker; the broker is source of truth
+  for execution state, never silently overwritten. States: MATCHED (nothing to
+  do), LOCAL_PENDING (awaiting ack), BROKER_PENDING (ack without local row →
+  adopt + alert), BROKER_ONLY (broker holds what we do not → adopt as an
+  unmanaged position under stops, alert, entries HOLD for the symbol),
+  LOCAL_ONLY (we hold what broker lacks → treat as unprotected, re-establish
+  or flatten, alert), PARTIAL (split accounting, no new risk until resolved),
+  PROTECTIVE_ORDER_MISSING (position without broker-native protection →
+  §6 handling: establish or flatten, never leave naked). Per-symbol notional
+  drift > 1% with no pending orders → adopt broker state + alert; with pending
+  orders → defer 30 s.
 - S3. Backtest/live divergence > 30% over 100 trades → auto-pause entries.
 - S4. Scheduler watchdog: no decision for > 60 s *in session* → restart feed,
   reconcile before resuming. Off-session (US close, forex weekend) the watchdog
@@ -128,12 +184,27 @@ Every order intent carries a stop or it is rejected by `veto.cpp`.
 - S10. Spend-counter loss (restart, corrupt file) → assume the highest tier
   reached in the last 24 h until the counter is rebuilt from provider billing.
   Unknown spend is treated as high spend.
+- S11. Clock skew over threshold → entries HOLD until chrony recovers; exits
+  and reconcile continue. Timestamps from an untrusted clock never gate exits.
+
+Degraded strategy modes (locked — HOLD is safe but total, so the system names
+its partial states): FULL (everything live), DEGRADED_RESEARCH (plane down —
+baseline strategy from doc 12 may continue only if it needs no research input
+and no source-dependent rule is armed), BASELINE_ONLY (JEV down — doc-12
+baseline with frozen parameters, entries capped at lean budgets), ENTRY_HALT
+(entries off, management on), EXIT_ONLY, HARD_STOP. Mode transitions are
+journaled; a mode never widens autonomy, only narrows it.
 
 ## 5.5 Audit
 
 - Every decision row: ts_ns, context_hash, features hash, JEV answers+probs,
   disagreement flag, calibration snapshot, stage, spend tier, veto verdict,
   order intent or HOLD reason, chained hash. Append-only, daily backup.
+- Hash chains detect accidents, not attackers: every 1000 decisions the journal
+  head is Ed25519-signed and the checkpoint stored off-host where the trading
+  process cannot rewrite it. Live backup = local journal + second copy +
+  signed checkpoint. A full-file rewrite without the key is detectable; with
+  the key it is a human act, logged as one.
 - Weekly: verify hash chain + replay 100 sampled rows.
 
 ## Locked decisions
