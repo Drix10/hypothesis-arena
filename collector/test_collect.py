@@ -67,18 +67,23 @@ check("json-malformed", st == "parse-failure" and recs == [])
 st, recs = run_with(json.dumps({"data": {"x": 1}}).encode(), "ok")
 check("json-drill-not-list", st == "parse-failure" and recs == [])
 
-# 9. non-string identity/date/title -> row skipped, never coerced
+# 9. non-string identity/date/title, float/dict summary -> row skipped,
+# never coerced (floats rejected: NaN/Infinity + unstable repr)
 rows = [{"uid": 42, "title": "T"},                       # int id
         {"uid": None, "title": "T"},                     # null id
         {"uid": "u2", "title": 5},                       # int title
         {"uid": "u3", "title": "T", "pub": 12345},       # int date
         {"uid": "u" * 300, "title": "T"},                # overlong id
-        {"uid": "u4", "title": "T", "a": {"nested": 1}}]  # dict summary val
+        {"uid": "u4", "title": "T", "a": {"nested": 1}},  # dict summary
+        {"uid": "u5", "title": "T", "a": 3.5},           # float summary
+        {"uid": "u6", "title": "T", "a": float("nan")}]  # NaN summary
 st, recs = run_with(payload(rows))
-check("no-coercion", st == "ok" and len(recs) == 1
-      and recs[0]["source_id"] == "u4"
-      and "{'nested': 1}" not in recs[0]["text"]
-      and "a=" not in recs[0]["text"])
+check("no-coercion", st == "ok" and recs == [])
+# str/int summaries still flow
+st, recs = run_with(payload([{"uid": "u7", "title": "T", "a": "x"},
+                             {"uid": "u8", "title": "T", "a": 7}]))
+check("scalar-summary", len(recs) == 2 and "a=x" in recs[0]["text"]
+      and "a=7" in recs[1]["text"])
 
 # 10. to_record rejects overlong / non-string identities (no truncation)
 check("record-overlong", collect.to_record("s", {"uid": "x" * 300}) is None)
@@ -170,5 +175,86 @@ for blob, name in [({"sources": []}, "dict-top"),
     except collect.ConfigError:
         raised = True
     check("sources-" + name, raised)
+
+# 15. schedule/cache full-schema validation (valid JSON, malformed entries)
+for blob, name in [({"s": ["garbage"]}, "sched-list-entry"),
+                   ({"s": {"backoff_until": 123}}, "sched-bad-instant"),
+                   ({"s": {"next_due": "yesterday"}}, "sched-bad-parse"),
+                   ({"s": {"bogus": "2026-09-18T00:00:00+00:00"}},
+                    "sched-unknown-key")]:
+    try:
+        collect.validate_schedule(blob)
+        raised = False
+    except collect.ConfigError:
+        raised = True
+    check("sched-" + name.split("-", 1)[1], raised)
+check("sched-valid",
+      collect.validate_schedule(
+          {"s": {"next_due": "2026-09-18T00:00:00+00:00"}}) is not None)
+for blob, name in [({"k": ["x"]}, "cache-list-entry"),
+                   ({"k": {"etag": 5}}, "cache-bad-etag"),
+                   ({"k": {"etag": "e", "zzz": 1}}, "cache-unknown-key")]:
+    try:
+        collect.validate_cache(blob)
+        raised = False
+    except collect.ConfigError:
+        raised = True
+    check(name, raised)
+check("cache-valid",
+      collect.validate_cache({"k": {"etag": "e", "modified": None}})
+      is not None)
+
+# 16. MAIN-LOOP regression: a 304/failed second source must not re-emit the
+# first source's records (per-source `recs` isolation through real main()).
+RSS_ONE = (b'<?xml version="1.0"?><rss version="2.0"><channel>'
+           b'<item><guid>g1</guid><title>T1</title><link>http://l1</link>'
+           b'<pubDate>Thu, 18 Sep 2026 00:00:00 GMT</pubDate>'
+           b'<description>body one</description></item>'
+           b'</channel></rss>')
+
+
+def run_main(status2):
+    srcs = [{"name": "s1", "kind": "rss", "url": "http://s1/",
+             "limit": 10, "poll_min": 15},
+            {"name": "s2", "kind": "rss", "url": "http://s2/",
+             "limit": 10, "poll_min": 15}]
+    calls = {"fetch": 0}
+
+    def fake_fetch(url, key, extra=None):
+        calls["fetch"] += 1
+        if "s1" in url:
+            return "ok", RSS_ONE, {}
+        return status2, b"x", {}
+    appended = []
+    saved = (collect.fetch, collect.load_sources, collect.load_schedule,
+             collect.heartbeat, collect.append_records,
+             collect.save_schedule, collect.load_config,
+             collect.check_cache_usable)
+    collect.fetch = fake_fetch
+    collect.load_sources = lambda: srcs
+    collect.load_schedule = lambda: ({}, True)
+    collect.heartbeat = lambda *a, **k: None
+    collect.append_records = lambda recs: appended.extend(recs) or "p"
+    collect.save_schedule = lambda s: None
+    collect.load_config = lambda: {"status": "CONFIG_OK", "values": {},
+                                   "missing_required": []}
+    collect.check_cache_usable = lambda: True
+    try:
+        with mock.patch("time.sleep", lambda *a: None):
+            collect.main()
+    finally:
+        (collect.fetch, collect.load_sources, collect.load_schedule,
+         collect.heartbeat, collect.append_records,
+         collect.save_schedule, collect.load_config,
+         collect.check_cache_usable) = saved
+    return appended
+
+
+for status2 in ["not-modified", "auth-failure", "rate-limited",
+                "source-down"]:
+    got = run_main(status2)
+    check("main-isolation-" + status2,
+          len(got) == 1 and got[0]["source"] == "s1"
+          and got[0]["source_id"] == "g1")
 
 print("ALL COLLECT CHECKS PASS")

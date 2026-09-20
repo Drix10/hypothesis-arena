@@ -89,6 +89,26 @@ def load_sources():
         return validate_sources_config(json.load(fh))
 
 
+def validate_schedule(sched):
+    """Full schedule schema, not just top-level type. Every entry is a
+    dict with exactly the known keys, each a parseable tz-aware instant.
+    A valid-JSON-but-malformed entry used to degrade to {} and silently
+    reset that source's cadence (fail-open); now it refuses to poll."""
+    if not isinstance(sched, dict):
+        raise ConfigError("schedule-top")
+    for name, entry in sched.items():
+        if not isinstance(entry, dict):
+            raise ConfigError(f"schedule-entry-{name}")
+        for k in entry:
+            if k not in ("backoff_until", "next_due"):
+                raise ConfigError(f"schedule-entry-{name}-key-{k}")
+        for k in ("backoff_until", "next_due"):
+            if k in entry and (not isinstance(entry[k], str)
+                               or parse_instant(entry[k]) is None):
+                raise ConfigError(f"schedule-entry-{name}-bad-{k}")
+    return sched
+
+
 def load_schedule():
     """Returns (schedule, ok). A MISSING file is a normal first run.
     A PRESENT-BUT-CORRUPT file is SOURCE_SCHEDULING_UNKNOWN: callers must
@@ -106,7 +126,29 @@ def load_schedule():
         return {}, False
     if not isinstance(s, dict):
         return {}, False
+    try:
+        validate_schedule(s)
+    except ConfigError:
+        return {}, False
     return s, True
+
+
+def validate_cache(cache):
+    """Full cache schema: every entry a dict with exactly etag/modified,
+    each None or str. A malformed entry used to degrade to {} and silently
+    drop ETag/Last-Modified protection; now it refuses to poll."""
+    if not isinstance(cache, dict):
+        raise ConfigError("cache-top")
+    for k, v in cache.items():
+        if not isinstance(v, dict):
+            raise ConfigError(f"cache-entry-{k}")
+        for f in v:
+            if f not in ("etag", "modified"):
+                raise ConfigError(f"cache-entry-{k}-key-{f}")
+        for f in ("etag", "modified"):
+            if f in v and v[f] is not None and not isinstance(v[f], str):
+                raise ConfigError(f"cache-entry-{k}-bad-{f}")
+    return cache
 
 
 def check_cache_usable():
@@ -118,9 +160,10 @@ def check_cache_usable():
     try:
         with open(CACHE_PATH, encoding="utf-8") as fh:
             c = json.load(fh)
-    except (OSError, ValueError):
+        validate_cache(c)
+    except (OSError, ValueError, ConfigError):
         return False
-    return isinstance(c, dict)
+    return True
 
 
 def save_schedule(sched):
@@ -150,14 +193,16 @@ def fetch(url, cache_key, extra_headers=None):
     cpath = CACHE_PATH
     try:
         with open(cpath, encoding="utf-8") as fh:
-            cache = json.load(fh)
-    except (OSError, ValueError):
+            cache = validate_cache(json.load(fh))
+    except FileNotFoundError:
         cache = {}
-    if not isinstance(cache, dict):
-        cache = {}
+    except (OSError, ValueError, ConfigError) as e:
+        # Pre-validated by main(); corruption appearing mid-run means the
+        # state file changed under us: abort loudly, never silently degrade.
+        raise ConfigError(f"cache-corrupt-mid-run: {e}")
     c = cache.get(cache_key, {})
     if not isinstance(c, dict):
-        c = {}
+        raise ConfigError(f"cache-entry-corrupt-mid-run: {cache_key}")
     if c.get("etag"):
         (extra_headers := extra_headers or {})["If-None-Match"] = c["etag"]
     if c.get("modified"):
@@ -339,15 +384,17 @@ def _opt_str(row, key):
 
 
 def _summary_text(row, keys):
-    """Summary from scalar values only. Dicts/lists are dropped, never
-    stringified into canonical text."""
+    """Summary from str/int scalars only. Floats are REJECTED (row
+    skipped): Python's json accepts nonstandard NaN/Infinity tokens and
+    float repr is unstable canonical text. Dicts/lists/bools likewise
+    rejected, never coerced."""
     parts = []
     for k in keys:
         v = row.get(k)
         if v is None:
             continue
-        if isinstance(v, bool) or not isinstance(v, (str, int, float)):
-            continue
+        if isinstance(v, bool) or not isinstance(v, (str, int)):
+            return None
         parts.append(f"{k}={v}")
     return " ".join(parts)
 
@@ -390,12 +437,16 @@ def run_json_source(src):
         if uid is None or title is False or pub is False:
             skipped += 1
             continue
+        summary = _summary_text(row, src.get("text_fields", []))
+        if summary is None:
+            skipped += 1
+            continue
         rec = to_record(src["name"], {
             "uid": uid,
             "title": title or "",
             "link": safe_link(src, row),
             "published": pub,
-            "summary": _summary_text(row, src.get("text_fields", [])),
+            "summary": summary,
         })
         if rec is None:
             skipped += 1
@@ -431,73 +482,92 @@ def main():
         return 2
     now = datetime.now(timezone.utc)
     total = 0
-    for src in sources:
-        name = src["name"]
-        if src.get("needs_key") and not os.environ.get(src["needs_key"]):
-            heartbeat(name, "SKIPPED_CONFIG", f"needs {src['needs_key']} (build-time)")
-            continue
-        # C9/C10: persisted per-source cadence + 1h 429 backoff.
-        entry = sched.get(name, {})
-        if not isinstance(entry, dict):
-            entry = {}
-        backoff_until = parse_instant(entry.get("backoff_until"))
-        if backoff_until and backoff_until > now:
-            heartbeat(name, "RATE_LIMITED",
-                        f"backoff until {entry['backoff_until']}")
-            continue
-        next_due = parse_instant(entry.get("next_due"))
-        if next_due and next_due > now:
-            heartbeat(name, "ok",
-                        f"cadence-skip next_due={entry['next_due']}")
-            continue
-        if src["kind"] in ("rss", "atom"):
-            status, body, _ = fetch(src["url"], name)
-            if status == "not-modified":
-                heartbeat(name, "ok", "not-modified")
-            elif status != "ok":
-                msg = body.decode(errors="replace")[:200]
-                heartbeat(name, {"auth-failure": "AUTH_FAILURE",
-                                 "rate-limited": "RATE_LIMITED"}.get(
-                                     status, "SOURCE_DOWN"), msg)
-                if status == "rate-limited":
-                    entry["backoff_until"] = \
-                        (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
-            else:
-                try:
-                    items = [r for r in (to_record(name, it) for it in
-                                        parse_feed(body)[: src.get("limit", 50)])
-                             if r is not None]
-                except ET.ParseError as e:
-                    heartbeat(name, "PARSE_FAILURE", f"bad xml: {e}")
-                    items = None
-                if items is not None:
-                    heartbeat(name, "ok" if items else "EMPTY_SUCCESS",
-                                count=len(items))
-                    recs = items
-                else:
-                    recs = []
-        elif src["kind"] == "json":
-            status, recs = run_json_source(src)
+    try:
+        for src in sources:
+            name = src["name"]
+            recs = []  # fresh per source: a 304/failure must never re-emit
+            # a previous source's records (unassigned `recs` used to fall
+            # through to `if recs: append_records(recs)` with stale content).
+            total += _poll_source(src, sched, now, recs)
+    except ConfigError as e:
+        print(f"STATE_CORRUPT_MID_RUN: {e} -- aborting poll",
+              file=sys.stderr)
+        return 2
+    print(f"total: {total} records")
+    return 0
+
+
+def _poll_source(src, sched, now, recs):
+    """One source poll. Returns record count. `recs` is caller-owned fresh
+    state (never reused across sources). May raise ConfigError on mid-run
+    state corruption; early exits return 0."""
+    name = src["name"]
+    recs = []  # local per-source state; caller passes nothing reusable.
+    if src.get("needs_key") and not os.environ.get(src["needs_key"]):
+        heartbeat(name, "SKIPPED_CONFIG", f"needs {src['needs_key']} (build-time)")
+        return 0
+    # C9/C10: persisted per-source cadence + 1h 429 backoff.
+    entry = sched.get(name, {})
+    if not isinstance(entry, dict):
+        entry = {}
+    backoff_until = parse_instant(entry.get("backoff_until"))
+    if backoff_until and backoff_until > now:
+        heartbeat(name, "RATE_LIMITED",
+                    f"backoff until {entry['backoff_until']}")
+        return 0
+    next_due = parse_instant(entry.get("next_due"))
+    if next_due and next_due > now:
+        heartbeat(name, "ok",
+                    f"cadence-skip next_due={entry['next_due']}")
+        return 0
+    if src["kind"] in ("rss", "atom"):
+        status, body, _ = fetch(src["url"], name)
+        if status == "not-modified":
+            heartbeat(name, "ok", "not-modified")
+        elif status != "ok":
+            msg = body.decode(errors="replace")[:200]
+            heartbeat(name, {"auth-failure": "AUTH_FAILURE",
+                             "rate-limited": "RATE_LIMITED"}.get(
+                                 status, "SOURCE_DOWN"), msg)
             if status == "rate-limited":
                 entry["backoff_until"] = \
                     (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
-                recs = []
-            assert isinstance(recs, list), "contract: records only"
         else:
-            heartbeat(name, "PARSE_FAILURE", f"unknown kind {src['kind']}"); continue
-        entry["next_due"] = (datetime.now(timezone.utc) +
-                               timedelta(minutes=src.get("poll_min", 15))).isoformat()
-        bu = parse_instant(entry.get("backoff_until"))
-        if bu and bu <= datetime.now(timezone.utc):
-            entry.pop("backoff_until", None)
-        sched[name] = entry
-        save_schedule(sched)
-        if recs:
-            path = append_records(recs)
-            print(f"{name}: {len(recs)} records -> {path}")
-        total += len(recs)
-        time.sleep(2)  # polite gap between sources
-    print(f"total: {total} records")
+            try:
+                items = [r for r in (to_record(name, it) for it in
+                                    parse_feed(body)[: src.get("limit", 50)])
+                         if r is not None]
+            except ET.ParseError as e:
+                heartbeat(name, "PARSE_FAILURE", f"bad xml: {e}")
+                items = None
+            if items is not None:
+                heartbeat(name, "ok" if items else "EMPTY_SUCCESS",
+                            count=len(items))
+                recs = items
+            else:
+                recs = []
+    elif src["kind"] == "json":
+        status, recs = run_json_source(src)
+        if status == "rate-limited":
+            entry["backoff_until"] = \
+                (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+            recs = []
+        assert isinstance(recs, list), "contract: records only"
+    else:
+        heartbeat(name, "PARSE_FAILURE", f"unknown kind {src['kind']}")
+        return 0
+    entry["next_due"] = (datetime.now(timezone.utc) +
+                           timedelta(minutes=src.get("poll_min", 15))).isoformat()
+    bu = parse_instant(entry.get("backoff_until"))
+    if bu and bu <= datetime.now(timezone.utc):
+        entry.pop("backoff_until", None)
+    sched[name] = entry
+    save_schedule(sched)
+    if recs:
+        path = append_records(recs)
+        print(f"{name}: {len(recs)} records -> {path}")
+    time.sleep(2)  # polite gap between sources
+    return len(recs)
 
 
 if __name__ == "__main__":
