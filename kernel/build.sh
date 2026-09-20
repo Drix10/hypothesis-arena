@@ -20,6 +20,8 @@ g++ $FLAGS -o test_p31 test_p31.cpp
 ./test_p31 fixtures
 g++ $FLAGS -o test_p32 test_p32.cpp
 ./test_p32 vectors
+g++ $FLAGS -o test_p33 test_p33.cpp
+./test_p33 p33 fixtures
 g++ $FLAGS -o fuzz_p31 fuzz_p31.cpp
 ./fuzz_p31 20000
 # Acceptance: no downstream function may accept raw JEV JSON.
@@ -29,14 +31,30 @@ if grep -nE "\b(evaluate|decide|decide_from_json|from_json)\s*\(" jev_validate.h
     echo "GATE FAIL: raw-JSON downstream API present"
     exit 1
 fi
-# No confidence accessor may exist on the decision object (P3.4/b quarantine).
-if grep -nE "confidence\s*\(\s*\)" jev_validate.hpp; then
+# P3.3: the decision table consumes the typed object only (never raw JSON
+# or parsed AnswerSet values smuggled around the validator).
+if grep -nE "EvaluateDecision[^(]*\([^)]*std::string" decision_table.hpp; then
+    echo "GATE FAIL: decision table takes raw strings"
+    exit 1
+fi
+# No confidence accessor may exist on any decision object (P3.4/b quarantine).
+if grep -nE "confidence\s*\(\s*\)" jev_validate.hpp jev_state.hpp kernel_state.hpp decision_table.hpp; then
     echo "GATE FAIL: confidence accessor present"
+    exit 1
+fi
+# Confidence must never be READ on any kernel path (comments may name it).
+if grep -nE "\.confidence|->confidence" jev_state.hpp kernel_state.hpp decision_table.hpp; then
+    echo "GATE FAIL: confidence read on kernel path"
     exit 1
 fi
 # P3.2 interop: test_p32.cpp must never invoke Python (committed files only).
 if grep -nE "popen|system\(|python" test_p32.cpp; then
     echo "GATE FAIL: test_p32 depends on Python"
+    exit 1
+fi
+# P3.3 replay/table suite: committed files only, same rule.
+if grep -nE "popen|system\(|python" test_p33.cpp; then
+    echo "GATE FAIL: test_p33 depends on Python"
     exit 1
 fi
 echo "P3.1 GATE ($MODE): PASS"
