@@ -79,6 +79,59 @@ bool R1CountBreaches(const RiskSnapshot& s, int cap, bool include_pending) {
 bool R1DirBreaches(const RiskSnapshot& s, int cap, bool include_pending) {
     return SameSideOpen(s, s.intent.side, include_pending) + 1 > cap;
 }
+// Stage-aware leverage cap (doc 10 stage table + doc 05 §5.2):
+//   G1: forex 1x (the single G1 symbol is forex; non-forex capped at 1x
+//       too — a stage-violating symbol never gets MORE leverage).
+//   G2: forex 2x, stocks 1x.  G0/G3: §5.2 (forex 5x, stock margin 2x,
+//       stock cash 1x).
+int MaxLeverage(Stage stage, AssetClass asset, AccountType account) {
+    if (stage == Stage::G1_TINY) return 1;
+    if (stage == Stage::G2_SCALED)
+        return (asset == AssetClass::FOREX) ? 2 : 1;
+    if (asset == AssetClass::STOCK)
+        return (account == AccountType::CASH) ? 1 : 2;
+    return 5;
+}
+// Enum boundary validation: every enum field in the snapshot must hold a
+// defined value. A corrupted/underlying-out-of-range field is malformed
+// input (bad-inputs), never silently neutral — and never an exit bypass.
+bool ValidSide(Side side) {
+    return side == Side::LONG || side == Side::SHORT;
+}
+bool ValidEnums(const RiskSnapshot& s) {
+    if (s.intent.kind != IntentKind::ENTRY &&
+        s.intent.kind != IntentKind::EXIT)
+        return false;
+    if (!ValidSide(s.intent.side)) return false;
+    if (s.intent.asset != AssetClass::FOREX &&
+        s.intent.asset != AssetClass::STOCK)
+        return false;
+    if (s.intent.account != AccountType::MARGIN &&
+        s.intent.account != AccountType::CASH)
+        return false;
+    if (s.impact != Impact::NONE && s.impact != Impact::LOW &&
+        s.impact != Impact::MEDIUM && s.impact != Impact::HIGH &&
+        s.impact != Impact::BINARY)
+        return false;
+    if (s.phase != Phase::NONE && s.phase != Phase::PRE &&
+        s.phase != Phase::BLACKOUT && s.phase != Phase::POST)
+        return false;
+    if (s.calib != CalibState::PASS && s.calib != CalibState::INSUFFICIENT &&
+        s.calib != CalibState::BREACH)
+        return false;
+    if (s.kill != KillLevel::NONE && s.kill != KillLevel::SOFT &&
+        s.kill != KillLevel::MEDIUM && s.kill != KillLevel::HARD)
+        return false;
+    return true;
+}
+bool StrEq(const char* a, const char* b) {
+    if (!a || !b) return a == b;
+    while (*a && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
 // R2 exposure breach with / without pending (scaled caps, exact ints).
 bool R2Breaches(const RiskSnapshot& s, int64_t S, bool include_pending,
                 const char*& which) {
@@ -187,17 +240,27 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
     v.stage_num = sc.mult_num;
     v.stage_den = sc.mult_den;
     v.size_scale = s.r6_trip ? 0.5 : 1.0;
-    // Exits bypass everything (doc 10 §10.3): the veto gates new risk only.
-    if (s.intent.kind != IntentKind::ENTRY) {
+    // Exits bypass everything (doc 10 §10.3): the veto gates new risk
+    // only. EXACT match: any other (including corrupted) kind falls
+    // through to enum validation below, which fails it closed.
+    if (s.intent.kind == IntentKind::EXIT) {
         v.proceed = true;
         v.reason = "exit-bypass";
         return v;
     }
     // Collect EVERY armed condition in frozen precedence order; the first
     // one wins the logged reason, none are dropped from reasons_all.
-    std::vector<const char*> armed;
-    // bad-inputs: unevaluable snapshot cannot authorize risk.
-    bool bad = (s.stage == Stage::UNKNOWN || s.equity_cents <= 0 ||
+    // Fixed array (fixed-storage contract): 23 arm sites < 32 slots, the
+    // guard below is unreachable-by-construction defense in depth.
+    const char* armed[VetoVerdict::kMaxArmed];
+    int n_armed = 0;
+    auto arm = [&](const char* code) {
+        if (n_armed < VetoVerdict::kMaxArmed) armed[n_armed++] = code;
+    };
+    // bad-inputs: unevaluable snapshot cannot authorize risk. Invalid
+    // enums join this code (never neutral, never a bypass).
+    bool bad = !ValidEnums(s) || s.intent.kind != IntentKind::ENTRY ||
+               (s.stage == Stage::UNKNOWN || s.equity_cents <= 0 ||
                 s.daily_close_hwm_cents < 0 || s.intraday_hwm_cents < 0 ||
                 s.intent.notional_cents < 0 || s.risk_fraction_bp < 0 ||
                 s.day_count < 0 || s.hour_count < 0);
@@ -206,49 +269,53 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
             ? s.daily_close_hwm_cents
             : s.intraday_hwm_cents;
     if (peak <= 0) bad = true;
+    // Corrupt sides in bookkeeping must not read as neutral (an invalid
+    // side would otherwise be silently ignored by the == comparisons).
     if (!bad) {
         for (auto& p : s.open)
-            if (p.notional_cents < 0) {
+            if (p.notional_cents < 0 || !ValidSide(p.side)) {
                 bad = true;
                 break;
             }
         for (auto& p : s.pending)
-            if (p.notional_cents < 0 || p.margin_cents < 0) {
+            if (p.notional_cents < 0 || p.margin_cents < 0 ||
+                !ValidSide(p.side)) {
                 bad = true;
                 break;
             }
     }
-    if (bad) armed.push_back("bad-inputs");
-    if (R5Trips(s.equity_cents, peak)) armed.push_back("r5-loss-cap");
-    if (!s.intent.has_stop) armed.push_back("no-stop");
+    if (bad) arm("bad-inputs");
+    if (R5Trips(s.equity_cents, peak)) arm("r5-loss-cap");
+    if (!s.intent.has_stop) arm("no-stop");
     {
-        int maxlev = 5;  // forex ≤ 5x (§5.2)
-        if (s.intent.asset == AssetClass::STOCK)
-            maxlev = (s.intent.account == AccountType::CASH) ? 1 : 2;
+        // Stage-aware cap (MaxLeverage): G1 FX 1x, G2 FX 2x / stock 1x,
+        // G0/G3 §5.2. R2 usually binds first; this is the hard ceiling.
+        int maxlev =
+            MaxLeverage(s.stage, s.intent.asset, s.intent.account);
         if ((__int128)s.intent.notional_cents >
             (__int128)maxlev * s.equity_cents)
-            armed.push_back("leverage-cap");
+            arm("leverage-cap");
     }
-    if (!s.session_open) armed.push_back("session-closed");
+    if (!s.session_open) arm("session-closed");
     if (s.intent.asset == AssetClass::STOCK && s.intent.side == Side::SHORT &&
         !s.short_ok)
-        armed.push_back("short-block");
-    if (s.corp_block) armed.push_back("corp-action-block");
+        arm("short-block");
+    if (s.corp_block) arm("corp-action-block");
     if (EventMediumActive(s.impact, s.phase))
-        armed.push_back("event-medium");
-    if (!s.r6_available) armed.push_back("r6-unavailable");
-    if (!s.r7_available) armed.push_back("r7-unavailable");
+        arm("event-medium");
+    if (!s.r6_available) arm("r6-unavailable");
+    if (!s.r7_available) arm("r7-unavailable");
     Caps caps = BuildCaps(sc);
     // R1 with pending-risk attribution (count + direction only; a pure
     // same-symbol collision is a collision, not an exposure breach).
     if (R1CountBreaches(s, caps.pos_cap, true)) {
-        armed.push_back(R1CountBreaches(s, caps.pos_cap, false)
+        arm(R1CountBreaches(s, caps.pos_cap, false)
                             ? "r1-count"
                             : "pending-risk");
     }
-    if (SymbolCollision(s, true)) armed.push_back("r1-symbol");
+    if (SymbolCollision(s, true)) arm("r1-symbol");
     if (R1DirBreaches(s, caps.dir_cap, true)) {
-        armed.push_back(R1DirBreaches(s, caps.dir_cap, false) ? "r1-direction"
+        arm(R1DirBreaches(s, caps.dir_cap, false) ? "r1-direction"
                                                               : "pending-risk");
     }
     {
@@ -256,16 +323,18 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
         if (R2Breaches(s, caps.expo_scale, true, which)) {
             const char* bare = nullptr;
             R2Breaches(s, caps.expo_scale, false, bare);
-            armed.push_back(bare ? which : "pending-risk");
+            arm(bare ? which : "pending-risk");
         }
     }
     {
         int64_t day = s.day_count;
         if (s.day_number != s.now_us / kDayUs) day = 0;  // stale => reset
-        if (day + 1 > caps.day_cap) armed.push_back("r3-day");
+        // Overflow-free: day >= cap asks whether the NEXT trade exceeds
+        // it (day + 1 > cap) without ever computing day + 1.
+        if (day >= caps.day_cap) arm("r3-day");
         int64_t hour = s.hour_count;
         if (s.hour_bucket != s.now_us / kHourUs) hour = 0;
-        if (hour + 1 > caps.hour_cap) armed.push_back("r3-hour");
+        if (hour >= caps.hour_cap) arm("r3-hour");
     }
     if (s.flip_armed) {
         bool locked = true;
@@ -276,32 +345,33 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
         else
             locked = (s.flip_t2_us - s.flip_t1_us <= kFlipWindowUs &&
                       s.now_us - s.flip_t2_us < kFlipLockUs);
-        if (locked) armed.push_back("r4-flip-lock");
+        if (locked) arm("r4-flip-lock");
     }
-    if (s.r7_entry_breach) armed.push_back("r7-correlation");
+    if (s.r7_entry_breach) arm("r7-correlation");
     // R7 drift: a found removal is a management directive, not a hold —
     // attach it and keep evaluating (later holds still fire). No removal
     // that reduces VaR => HOLD new entries + escalate.
     if (s.r7_drift_breach) {
         int idx = DriftSelection(s);
         if (idx < 0) {
-            armed.push_back("r7-drift-no-removal");
+            arm("r7-drift-no-removal");
             v.escalate = true;
         } else {
-            v.drift_remove = s.drift[(size_t)idx].symbol;
+            v.drift_idx = idx;  // index, never a copied string
         }
     }
-    if (s.disagreement) armed.push_back("disagreement");
+    if (s.disagreement) arm("disagreement");
     if (R13FloorTrips(s.brier_delta, s.realized_outcomes))
-        armed.push_back("r13-calibration");
-    if (s.entry_halt) armed.push_back("entry-halt");
+        arm("r13-calibration");
+    if (s.entry_halt) arm("entry-halt");
     if (s.kill != KillLevel::NONE) {
-        armed.push_back(s.kill == KillLevel::HARD    ? "kill-hard"
+        arm(s.kill == KillLevel::HARD    ? "kill-hard"
                         : s.kill == KillLevel::MEDIUM ? "kill-medium"
                                                      : "kill-soft");
     }
-    for (auto r : armed) v.reasons_all.emplace_back(r);
-    if (armed.empty()) {
+    for (int i = 0; i < n_armed; i++) v.reasons_all[i] = armed[i];
+    v.n_reasons = n_armed;
+    if (n_armed == 0) {
         v.proceed = true;
         v.reason = "proceed";
     } else {
@@ -330,21 +400,21 @@ EngineInputs BuildEngineInputs(const RiskSnapshot& s, const VetoVerdict& v) {
         in.exposure_headroom_r2 =
             !R2Breaches(s, caps.expo_scale, true, which);
     }
-    in.pending_risk_breach = (v.reason == std::string("pending-risk"));
+    in.pending_risk_breach = StrEq(v.reason, "pending-risk");
     if (!v.proceed) {
         in.deterministic_veto = true;
-        std::string r = v.reason ? v.reason : "";
-        if (r == "r5-loss-cap")
+        const char* r = v.reason ? v.reason : "";
+        if (StrEq(r, "r5-loss-cap"))
             in.veto_reason = VetoReason::LOSS_CAP_R5;
-        else if (r == "session-closed")
+        else if (StrEq(r, "session-closed"))
             in.veto_reason = VetoReason::SESSION_CLOSED;
-        else if (r == "short-block")
+        else if (StrEq(r, "short-block"))
             in.veto_reason = VetoReason::SHORT_BLOCK;
-        else if (r == "corp-action-block")
+        else if (StrEq(r, "corp-action-block"))
             in.veto_reason = VetoReason::CORP_ACTION_BLOCK;
-        else if (r == "pending-risk")
+        else if (StrEq(r, "pending-risk"))
             in.veto_reason = VetoReason::PENDING_RISK;
-        else if (r == "r6-unavailable")
+        else if (StrEq(r, "r6-unavailable"))
             in.veto_reason = VetoReason::VOL_TRIP_R6;
         else
             in.veto_reason = VetoReason::OTHER_BREACH;

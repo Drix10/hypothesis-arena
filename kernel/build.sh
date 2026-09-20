@@ -76,6 +76,14 @@ for tok in '\.enter\(\)' 'latent_risk\(\)' 'conviction\(\)' 'family\(\)' \
         exit 1
     fi
 done
+# Slice B zero-malloc contract (correction): EvaluateVeto's execution +
+# verdict type allocate nothing. Forbid heap vocabulary in veto.cpp
+# (inputs are adapter-built upstream of the tick path; the verdict itself
+# is proven fixed-storage by static_assert in veto.hpp).
+if grep -nE "std::string|std::vector|malloc|calloc|realloc|strdup|operator new" risk/veto.cpp; then
+    echo "GATE FAIL: heap use in veto execution path"
+    exit 1
+fi
 # Acceptance: no downstream function may accept raw JEV JSON.
 # The header exposes exactly one entry point: validate_jev().
 if grep -nE "\b(evaluate|decide|decide_from_json|from_json)\s*\(" jev_validate.hpp \

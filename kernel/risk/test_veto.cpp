@@ -121,7 +121,7 @@ int main(int argc, char** argv) {
         CHECK("clean-proceed", v.proceed && std::string(v.reason) == "proceed");
         CHECK("clean-scale", v.size_scale == 1.0);
         CHECK("clean-stage", v.stage_num == 1 && v.stage_den == 1);
-        CHECK("clean-all-empty", v.reasons_all.empty());
+        CHECK("clean-all-empty", v.n_reasons == 0);
     }
     // ---- Exit bypass (even under HARD kill + R5 trip) ----
     {
@@ -181,13 +181,13 @@ int main(int argc, char** argv) {
         s.intent.notional_cents = 50000000LL;  // exactly 5x forex
         v = EvaluateVeto(s);
         CHECK("lev5x-exact",
-              !v.proceed && v.reasons_all.size() == 1 &&
+              !v.proceed && v.n_reasons == 1 &&
                   std::string(v.reason) == "r2-single");
         s.intent.notional_cents = 50000001LL;  // over 5x
         v = EvaluateVeto(s);
         // leverage precedes r2 in the frozen order; both preserved
         CHECK("lev5x-over",
-              !v.proceed && v.reasons_all.size() >= 2 &&
+              !v.proceed && v.n_reasons >= 2 &&
                   std::string(v.reasons_all[0]) == "leverage-cap" &&
                   std::string(v.reasons_all[1]) == "r2-single");
         s = Clean();
@@ -197,7 +197,7 @@ int main(int argc, char** argv) {
         v = EvaluateVeto(s);
         CHECK("lev-cash1x",
               !v.proceed && std::string(v.reason) == "r2-single" &&
-                  v.reasons_all.size() == 1);
+                  v.n_reasons == 1);
         s.intent.notional_cents = 10000001LL;  // over 1x: leverage arms
         v = EvaluateVeto(s);
         CHECK("lev-cash-over",
@@ -463,13 +463,16 @@ int main(int argc, char** argv) {
         s5.r7_drift_breach = true;
         v = EvaluateVeto(s5);
         CHECK("drift-directive",
-              v.proceed && v.drift_remove == "EEE" && !v.escalate);
+              v.proceed && v.drift_idx == 0 &&
+                  s5.drift[(size_t)v.drift_idx].symbol == "EEE" &&
+                  !v.escalate);
         // ...and a later hold (R14) still fires with the directive attached
         s5.disagreement = true;
         v = EvaluateVeto(s5);
         CHECK("drift-then-r14",
               !v.proceed && std::string(v.reason) == "disagreement" &&
-                  v.drift_remove == "EEE");
+                  v.drift_idx == 0 &&
+                  s5.drift[(size_t)v.drift_idx].symbol == "EEE");
     }
     // ---- R14 / R13 / halt / kill + precedence ----
     {
@@ -522,8 +525,8 @@ int main(int argc, char** argv) {
         v = EvaluateVeto(s);
         CHECK("prec-kill-r5",
               !v.proceed && std::string(v.reason) == "r5-loss-cap" &&
-                  v.reasons_all.size() == 2 &&
-                  v.reasons_all[1] == "kill-medium");
+                  v.n_reasons == 2 &&
+                  std::strcmp(v.reasons_all[1], "kill-medium") == 0);
         // ...R1 precedes R2, all co-causes preserved in order
         s = Clean();
         AddOpen(s, "A", Side::LONG, 100000LL);
@@ -533,11 +536,124 @@ int main(int argc, char** argv) {
         v = EvaluateVeto(s);
         CHECK("prec-r1-r2",
               !v.proceed && std::string(v.reason) == "r1-count" &&
-                  v.reasons_all.size() >= 3 &&
-                  v.reasons_all[1] == "r1-direction" &&
-                  v.reasons_all[2] == "r2-single");
+                  v.n_reasons >= 3 &&
+                  std::strcmp(v.reasons_all[1], "r1-direction") == 0 &&
+                  std::strcmp(v.reasons_all[2], "r2-single") == 0);
         EngineInputs in2 = BuildEngineInputs(s, v);
         CHECK("prec-enum", in2.veto_reason == VetoReason::OTHER_BREACH);
+    }
+    // ---- stage-aware leverage (doc 10 stage table, correction) ----
+    {
+        // G1 forex: exactly 1x is clean, anything over arms (R2 also
+        // armed at these scales; leverage must come FIRST in the order).
+        RiskSnapshot s = Clean();
+        s.stage = Stage::G1_TINY;
+        s.intent.notional_cents = 10000000LL;  // exactly 1x of $100k
+        VetoVerdict v = EvaluateVeto(s);
+        CHECK("g1-lev1x",
+              !v.proceed && v.n_reasons == 1 &&
+                  std::string(v.reason) == "r2-single");
+        s.intent.notional_cents = 10000001LL;  // over 1x
+        v = EvaluateVeto(s);
+        CHECK("g1-lev-over",
+              !v.proceed && v.n_reasons >= 2 &&
+                  std::string(v.reasons_all[0]) == "leverage-cap" &&
+                  std::string(v.reasons_all[1]) == "r2-single");
+        // G1 non-forex never gets more: stock capped at 1x too.
+        s.intent.asset = AssetClass::STOCK;
+        s.intent.notional_cents = 10000001LL;
+        v = EvaluateVeto(s);
+        CHECK("g1-stock-lev",
+              !v.proceed &&
+                  std::string(v.reasons_all[0]) == "leverage-cap");
+        // G2 forex 2x exact is clean; over arms.
+        s = Clean();
+        s.stage = Stage::G2_SCALED;
+        s.intent.notional_cents = 20000000LL;  // exactly 2x
+        v = EvaluateVeto(s);
+        CHECK("g2-lev2x",
+              !v.proceed && v.n_reasons == 1 &&
+                  std::string(v.reason) == "r2-single");
+        s.intent.notional_cents = 20000001LL;
+        v = EvaluateVeto(s);
+        CHECK("g2-lev-over",
+              !v.proceed &&
+                  std::string(v.reasons_all[0]) == "leverage-cap");
+        // G2 stock 1x: over arms.
+        s.intent.asset = AssetClass::STOCK;
+        s.intent.notional_cents = 10000001LL;
+        v = EvaluateVeto(s);
+        CHECK("g2-stock-lev",
+              !v.proceed &&
+                  std::string(v.reasons_all[0]) == "leverage-cap");
+        // G0/G3 keep §5.2 (forex 5x exact clean — proven in lev5x-exact).
+        s = Clean();
+        s.stage = Stage::G3_FULL;
+        s.intent.notional_cents = 50000000LL;
+        v = EvaluateVeto(s);
+        CHECK("g3-lev5x",
+              !v.proceed && v.n_reasons == 1 &&
+                  std::string(v.reason) == "r2-single");
+    }
+    // ---- invalid enums fail closed (correction: no exit-bypass) ----
+    {
+        RiskSnapshot s = Clean();
+        s.intent.kind = (IntentKind)99;  // corrupted kind is NOT an exit
+        VetoVerdict v = EvaluateVeto(s);
+        CHECK("bad-kind", !v.proceed && std::string(v.reason) == "bad-inputs");
+        s = Clean();
+        s.intent.side = (Side)99;
+        v = EvaluateVeto(s);
+        CHECK("bad-side", !v.proceed && std::string(v.reason) == "bad-inputs");
+        s = Clean();
+        s.intent.asset = (AssetClass)99;
+        v = EvaluateVeto(s);
+        CHECK("bad-asset", !v.proceed && std::string(v.reason) == "bad-inputs");
+        s = Clean();
+        s.intent.account = (AccountType)99;
+        v = EvaluateVeto(s);
+        CHECK("bad-account",
+              !v.proceed && std::string(v.reason) == "bad-inputs");
+        s = Clean();
+        s.impact = (Impact)99;
+        v = EvaluateVeto(s);
+        CHECK("bad-impact", !v.proceed && std::string(v.reason) == "bad-inputs");
+        s = Clean();
+        s.phase = (Phase)99;
+        v = EvaluateVeto(s);
+        CHECK("bad-phase", !v.proceed && std::string(v.reason) == "bad-inputs");
+        s = Clean();
+        s.calib = (CalibState)99;
+        v = EvaluateVeto(s);
+        CHECK("bad-calib", !v.proceed && std::string(v.reason) == "bad-inputs");
+        s = Clean();
+        s.kill = (KillLevel)99;  // corrupted kill is NOT kill-soft
+        v = EvaluateVeto(s);
+        CHECK("bad-kill", !v.proceed && std::string(v.reason) == "bad-inputs");
+        s = Clean();
+        AddOpen(s, "A", (Side)99, 100000LL);  // corrupt bookkeeping side
+        v = EvaluateVeto(s);
+        CHECK("bad-pos-side",
+              !v.proceed && std::string(v.reason) == "bad-inputs");
+        // A valid EXIT still bypasses (regression guard for the fix).
+        s = Clean();
+        s.intent.kind = IntentKind::EXIT;
+        v = EvaluateVeto(s);
+        CHECK("exit-still-bypass",
+              v.proceed && std::string(v.reason) == "exit-bypass");
+    }
+    // ---- R3 overflow-free counters (correction) ----
+    {
+        RiskSnapshot s = Clean();
+        s.day_count = std::numeric_limits<int64_t>::max();
+        VetoVerdict v = EvaluateVeto(s);
+        CHECK("r3-day-max",
+              !v.proceed && std::string(v.reason) == "r3-day");
+        s = Clean();
+        s.hour_count = std::numeric_limits<int64_t>::max();
+        v = EvaluateVeto(s);
+        CHECK("r3-hour-max",
+              !v.proceed && std::string(v.reason) == "r3-hour");
     }
     // ---- headroom + gate mapping on the clean path ----
     {

@@ -30,6 +30,7 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <type_traits>
 #include <vector>
 #include "../decision_table.hpp"
 
@@ -159,16 +160,28 @@ struct RiskSnapshot {
 // Verdict: PROCEED or HOLD with a FROZEN reason code (countable paper
 // analysis). reasons_all preserves every armed condition in precedence
 // order — first-wins never silently drops a co-cause from the journal.
+//
+// ZERO-MALLOC CONTRACT (core tick-path requirement): the verdict is
+// trivially copyable fixed storage — 32 reason slots (23 arm sites, so
+// the cap is unreachable) and a drift CANDIDATE INDEX, never allocated
+// strings or vectors. EvaluateVeto allocates nothing; proven by the
+// static_assert below plus the build.sh allocation grep gate.
 struct VetoVerdict {
     bool proceed = false;
     const char* reason = "bad-inputs";
-    std::vector<std::string> reasons_all;
+    static constexpr int kMaxArmed = 32;
+    const char* reasons_all[kMaxArmed];
+    int n_reasons = 0;
     double size_scale = 1.0;  // R6 trip => 0.5 (H1 applies; veto never sizes)
     int stage_num = 1;        // R-multiplier for H1 (veto never sizes)
     int stage_den = 1;
-    std::string drift_remove;  // R7 drift directive for H1 ("" = none)
-    bool escalate = false;     // drift breach with no VaR-reducing removal
+    int drift_idx = -1;  // R7 drift directive: index into snapshot drift
+                         // (-1 = none). H1 resolves the symbol; the index
+                         // is valid for the snapshot this verdict ran on.
+    bool escalate = false;  // drift breach with no VaR-reducing removal
 };
+static_assert(std::is_trivially_copyable<VetoVerdict>::value,
+              "verdict must stay allocation-free fixed storage");
 
 // Pure entry points (veto.cpp). No I/O, no clock reads, no RNG.
 VetoVerdict EvaluateVeto(const RiskSnapshot& s);
