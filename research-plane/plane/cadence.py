@@ -18,12 +18,39 @@ ESTIMATE_BASE_CALLS_PER_H = 20
 
 
 class CadenceState:
-    def __init__(self, throttled=False):
+    def __init__(self, throttled=False, persist_path=None):
         self.throttled = throttled
+        self.persist_path = persist_path
         self.last_thesis_epoch = {}  # symbol -> epoch of last thesis run
         self.epoch_min = HARVEST_MIN
         self.llm_calls = 0
         self.cycle_count = 0
+        if persist_path:
+            self._load()
+
+    def _load(self):
+        import json
+        try:
+            with open(self.persist_path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            if isinstance(data, dict):
+                self.last_thesis_epoch = {
+                    str(k): int(v) for k, v in data.items()}
+        except (OSError, ValueError, TypeError):
+            pass  # corrupt/missing state = refresh (fail-safe: stale
+            # theses age out on TTL; extra refresh is bounded by R15)
+
+    def _save(self):
+        if not self.persist_path:
+            return
+        import json
+        import os
+        tmp = self.persist_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(self.last_thesis_epoch, fh, sort_keys=True)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, self.persist_path)
 
     @property
     def thesis_ttl_epochs(self):
@@ -43,6 +70,7 @@ class CadenceState:
     def mark_run(self, epoch, symbols):
         for s in symbols:
             self.last_thesis_epoch[s] = epoch
+        self._save()
 
     def record_cycle(self, llm_calls):
         self.llm_calls += llm_calls

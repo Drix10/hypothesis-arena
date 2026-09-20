@@ -12,17 +12,41 @@ import time
 
 
 def append_span(log_path, epoch, node, model_id, calls=1, tokens=0,
-                dollars=0.0):
+                dollars=0.0, span_id=None):
+    """Append one attribution span. Idempotent under checkpoint retry:
+    span_id is the stable logical-call identity
+    ("epoch:node:seq" assigned by the caller, deterministic per cycle);
+    a span_id already present in the file is NOT appended twice, so a
+    crash after attribution but before checkpoint cannot double-count
+    the same logical attempt on node rerun."""
     row = {"ts": int(time.time()), "research_epoch": epoch, "node": node,
            "model_id": model_id, "calls": calls, "tokens": tokens,
            "dollars": dollars}
+    if span_id is not None:
+        row["span_id"] = span_id
     d = os.path.dirname(os.path.abspath(log_path))
     os.makedirs(d, exist_ok=True)
+    if span_id is not None and _has_span(log_path, span_id):
+        return row
     with open(log_path, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(row, sort_keys=True) + "\n")
         fh.flush()
         os.fsync(fh.fileno())
     return row
+
+
+def _has_span(log_path, span_id):
+    try:
+        with open(log_path, encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    if json.loads(line).get("span_id") == span_id:
+                        return True
+                except ValueError:
+                    continue
+    except OSError:
+        pass
+    return False
 
 
 def day_summary(log_path, day_ts=None):

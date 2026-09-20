@@ -12,12 +12,12 @@
   "polls": {
     "edgar_8k": {
       "all_200": true,
-      "p50_ms": 78.0,
-      "p99_ms": 485.0,
+      "p50_ms": 141.0,
+      "p99_ms": 578.0,
       "samples": [
         {
           "bytes": 29455,
-          "latency_ms": 485.0,
+          "latency_ms": 578.0,
           "status": 200
         },
         {
@@ -27,7 +27,7 @@
         },
         {
           "bytes": 29455,
-          "latency_ms": 78.0,
+          "latency_ms": 141.0,
           "status": 200
         }
       ],
@@ -35,7 +35,7 @@
     },
     "fed_monetary": {
       "all_200": true,
-      "p50_ms": 78.0,
+      "p50_ms": 94.0,
       "p99_ms": 328.0,
       "samples": [
         {
@@ -45,7 +45,7 @@
         },
         {
           "bytes": 9645,
-          "latency_ms": 78.0,
+          "latency_ms": 94.0,
           "status": 200
         },
         {
@@ -57,6 +57,6 @@
       "zero_403": true
     }
   },
-  "ts": 1789928579,
+  "ts": 1789929669,
   "ua": "MiroHedge/phase0 contact=research-plane-tier-a"
 }

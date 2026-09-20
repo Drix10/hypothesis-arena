@@ -65,11 +65,24 @@ def run():
         ev["polls"][name] = {"samples": samples, "p50_ms": pct(lats, 0.5),
                              "p99_ms": pct(lats, 0.99),
                              "all_200": ok, "zero_403": no403}
-    fred_key = bool(os.environ.get("FRED_API_KEY"))
-    ev["gates"]["fred_macro"] = ("READY" if fred_key else
-                                 "BLOCKED: FRED_API_KEY not in env")
-    ev["gates"]["alfred_vintage"] = ("READY" if fred_key else
-                                     "BLOCKED: needs FRED_API_KEY")
+    fred_key = os.environ.get("FRED_API_KEY", "")
+    if not fred_key:
+        ev["gates"]["fred_macro"] = "BLOCKED: FRED_API_KEY not in env"
+        ev["gates"]["alfred_vintage"] = "BLOCKED: needs FRED_API_KEY"
+    else:
+        # A present key is UNVERIFIED until a real authenticated request
+        # succeeds: never promote to READY on key existence alone.
+        probe = measure(
+            "https://api.stlouisfed.org/fred/series?series_id=GDP"
+            "&api_key=" + fred_key + "&file_type=json")
+        if probe.get("status") == 200:
+            ev["gates"]["fred_macro"] = "READY (key verified live)"
+            ev["gates"]["alfred_vintage"] = \
+                "READY-pending-vintage-replay (key verified live)"
+        else:
+            ev["gates"]["fred_macro"] = \
+                "DEGRADED: key present but probe failed: %s" % probe
+            ev["gates"]["alfred_vintage"] = "BLOCKED: key unverified"
     try:
         cal = calendars.load_calendar(CALENDAR)
         ev["gates"]["calendar"] = {

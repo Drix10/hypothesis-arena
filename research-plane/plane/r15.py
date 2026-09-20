@@ -67,23 +67,50 @@ class AbortCycle(Exception):
 
 
 class PlaneHealth:
-    """Consecutive-abort tracking across symbols (supervisor side)."""
+    """Consecutive-abort tracking across symbols (supervisor side).
 
-    def __init__(self, watchlist):
+    Two distinct rules (doc 08 sec. 8.3a/8.4):
+    - 3 consecutive aborts on one symbol -> that symbol pauses (count-
+      based; a success clears the count and unpauses).
+    - a majority of watchlist symbols aborting within the trailing
+      HEALTH_WINDOW_S (default 1h, monotonic clock) -> plane degraded.
+      Degraded is RECOMPUTED on every record from current window state:
+      healthy operation ages out and clears it automatically (never
+      sticky). now_s is injectable for deterministic tests.
+    """
+
+    HEALTH_WINDOW_S = 3600
+
+    def __init__(self, watchlist, now_s=None):
         self.watchlist = list(watchlist)
         self.consecutive = {s: 0 for s in self.watchlist}
+        self.last_abort = {}  # symbol -> last abort timestamp
         self.paused = set()
         self.degraded = False
+        self._now = (lambda: now_s) if now_s is not None else None
 
-    def record(self, symbol, aborted):
+    def _t(self, now_s):
+        if now_s is not None:
+            return now_s
+        if self._now is not None:
+            return self._now()
+        import time
+        return time.monotonic()
+
+    def record(self, symbol, aborted, now_s=None):
+        t = self._t(now_s)
         if aborted:
             self.consecutive[symbol] = self.consecutive.get(symbol, 0) + 1
+            self.last_abort[symbol] = t
         else:
             self.consecutive[symbol] = 0
+            self.last_abort.pop(symbol, None)
             self.paused.discard(symbol)
         if self.consecutive.get(symbol, 0) >= ABORTS_PAUSE_SYMBOL:
             self.paused.add(symbol)
-        window = [self.consecutive.get(s, 0) > 0 for s in self.watchlist]
-        if self.watchlist and sum(window) * 2 > len(self.watchlist):
-            self.degraded = True
+        cutoff = t - self.HEALTH_WINDOW_S
+        in_window = sum(1 for s in self.watchlist
+                        if self.last_abort.get(s, float("-inf")) >= cutoff)
+        self.degraded = (bool(self.watchlist) and
+                         in_window * 2 > len(self.watchlist))
         return {"paused": sorted(self.paused), "degraded": self.degraded}
