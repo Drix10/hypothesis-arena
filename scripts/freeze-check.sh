@@ -239,6 +239,47 @@ grep -q 'comma-joined sorted' "$ROOT/plan/03-jev-decision-layer.md" \
 ! grep -q '15:55 ET' "$ROOT/plan/03-jev-decision-layer.md" \
   && ok "03 no hard-coded exit" || bad "03 hard-coded exit back"
 
+# plan/03: exact decision-key recipe, no hard-coded clock exit.
+grep -q 'comma-joined sorted' "$ROOT/plan/03-jev-decision-layer.md" \
+  && ok "03 decision-key recipe" || bad "03 decision-key recipe moved"
+! grep -q '15:55 ET' "$ROOT/plan/03-jev-decision-layer.md" \
+  && ok "03 no hard-coded exit" || bad "03 hard-coded exit back"
+# 2xR demands calibration_gate == pass (insufficient never sizes up).
+grep -q 'calibration_gate == pass' "$ROOT/plan/03-jev-decision-layer.md" \
+  && ok "03 max-gate pass" || bad "03 max-gate weakened"
+! grep -q 'calibration_gate ≠ breach' "$ROOT/plan/03-jev-decision-layer.md" \
+  && ok "03 no weak gate" || bad "03 weak gate back"
+# single promotion minimum: 200 decisions + 100 closed trades.
+grep -q '200 decisions + 100 closed' "$ROOT/README.md" \
+  && ok "README 100-trade gate" || bad "README trade gate stale"
+! grep -q '200 decisions + 60' "$ROOT/README.md" "$ROOT/plan/11-calibration-and-self-improvement.md" \
+  && ok "no 60-trade gate" || bad "60-trade gate back"
+# hardening-3 plumbing.
+grep -q 'recs = \[\]  # fresh per source' "$ROOT/collector/collect.py" \
+  && ok "collect recs isolation" || bad "collect recs isolation moved"
+grep -q 'def validate_schedule' "$ROOT/collector/collect.py" \
+  && ok "schedule schema" || bad "schedule schema moved"
+grep -q 'def validate_cache' "$ROOT/collector/collect.py" \
+  && ok "cache schema" || bad "cache schema moved"
+grep -q '"hold", row' "$ROOT/collector/jev.py" \
+  && ok "money-gate shape" || bad "money-gate shape moved"
+grep -q '_money_gate(state, key, post_fn)' "$ROOT/collector/jev.py" \
+  && ok "money gate serialized" || bad "money gate moved"
+grep -q 'MONEY_GATE_TIMEOUT' "$ROOT/collector/jev.py" \
+  && ok "gate timeout" || bad "gate timeout moved"
+grep -q 'TMP_LEDGER_RE' "$ROOT/collector/jev.py" \
+  && ok "exact temp pattern" || bad "temp pattern moved"
+grep -q 'expires_at.*created' "$ROOT/collector/jev.py" \
+  && ok "cache expiry coherence" || bad "expiry coherence moved"
+grep -q 'SOURCE_KINDS' "$ROOT/collector/ctx_read.py" \
+  && ok "kind registry" || bad "kind registry moved"
+grep -q 'OPTIONAL_BOOL' "$ROOT/collector/classify.py" \
+  && ok "exhaustive types" || bad "exhaustive types moved"
+grep -q 'poll-log-integrity' "$ROOT/collector/soak_check.py" \
+  && ok "poll integrity" || bad "poll integrity moved"
+grep -q '\-\-as-of' "$ROOT/collector/classify.py" \
+  && ok "as-of replay" || bad "as-of replay moved"
+
 echo "---"
 [ "$FAIL" = 0 ] && echo "FREEZE-CHECK: PASS" || echo "FREEZE-CHECK: FAIL"
 exit "$FAIL"

@@ -201,7 +201,7 @@ Promotion criteria are necessary, never sufficient. Then a human signs `STAGE` w
 
 ## Calibration + promotion gate (doc 11)
 
-Every JEV answer is scored against realized outcomes. HOLDs included, through 25% stratified counterfactual sampling. Brier, log-loss, and 10-bin reliability curves, sliced per regime, against a base-rate baseline. Challengers (at most 3) run permanent shadow on identical snapshots with their own cost tags. An R-breach disqualifies on the spot. Promotion needs: at least 200 decisions + 60 simulated trades, forward-only evidence, declared search budget, net-of-all-costs results, a beaten non-LLM baseline, and a human signature. Then a fresh paper window. The AI layer must beat the statistical baseline or be removed.
+Every JEV answer is scored against realized outcomes. HOLDs included, through 25% stratified counterfactual sampling. Brier, log-loss, and 10-bin reliability curves, sliced per regime, against a base-rate baseline. Challengers (at most 3) run permanent shadow on identical snapshots with their own cost tags. An R-breach disqualifies on the spot. Promotion needs: at least 200 decisions + 100 closed simulated trades, forward-only evidence, declared search budget, net-of-all-costs results, a beaten non-LLM baseline, and a human signature. Then a fresh paper window. The AI layer must beat the statistical baseline or be removed.
 
 ## Build Roadmap (phases 0-7, mapped to stages G0 to G3)
 

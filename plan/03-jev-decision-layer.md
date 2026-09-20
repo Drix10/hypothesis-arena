@@ -87,7 +87,7 @@ them that way:
    the deterministic risk engine on independently validated conditions —
    conviction never authorizes size, including here. Engine conditions (all
    observed/logged, none a model output except E/L as bounded inputs):
-   enter ≥ 0.8 AND latent_risk ≤ 0.3 AND calibration_gate ≠ breach AND
+   enter ≥ 0.8 AND latent_risk ≤ 0.3 AND calibration_gate == pass AND
    edge_family ≠ execution AND conviction == max (necessary nominating input,
    not authority) AND no R6 vol trip AND exposure headroom under R2 AND no
    pending-risk breach. Any condition unmet → base budget (max downgrades
@@ -103,9 +103,13 @@ Size = min(steps 2–6). Conviction never appears in this hierarchy except
 through the max-gate, which is necessary but not sufficient:
 
 - max-gate (nomination only): `enter ≥ 0.8` AND `latent_risk ≤ 0.3` AND
-  `calibration_gate ≠ breach` AND `edge_family ≠ execution` AND `conviction == max`
+  `calibration_gate == pass` AND `edge_family ≠ execution` AND `conviction == max`
   → the engine evaluates its independent conditions (step 1) for a 2×R grant.
-  Conviction max is necessary but confers zero authority.
+  Conviction max is necessary but confers zero authority. Rationale: `pass`
+  is required (not merely `≠ breach`) because `insufficient` means the
+  evidence base is too thin to judge calibration — thin evidence must never
+  authorize elevated risk. `insufficient` remains non-blocking for ordinary
+  base-budget entry per R13 policy; only the 2×R multiplier demands `pass`.
 - Anything else at `max` downgrades to strong (base budget).
 - `edge_family` probabilities are family-fit evidence; they carry zero sizing
   weight. No analyst-distribution test survives from v2 — it confused

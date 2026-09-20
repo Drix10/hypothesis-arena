@@ -74,7 +74,12 @@ must exist on paper before a line of code.
       ARCHITECTURE.md §2/§7.
 - [x] Venue + data locked in doc 01 (human-accepted 2026-09-18): OANDA v20
       practice + Alpaca paper, WS + 15-min REST reconcile, free calendars.
-- [ ] Exit: all boxes in phases updated, no TBDs outside "tune later" items.
+- [x] Exit: Phase 0 closed at freeze v2 (signed `2dc8cbd`, reconciled
+      `50d88a7`); this box was the Phase-0 meta-checklist and is superseded
+      by the sign-off log below. Deliberately retained unchecked Phase-1/
+      2.5 items: §2.7 exit (research-plane bundle writer pending),
+      doc 08 §8.6 + doc 09 §9.4 boxes (plane unbuilt), G-gate exits
+      (paper loop not started). No TBDs outside those deferred scopes.
 
 ## Phase 1 — Signal sidecar, non-X sources (docs 02/09, freeze v2)
 
