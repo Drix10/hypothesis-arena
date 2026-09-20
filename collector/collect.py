@@ -34,15 +34,93 @@ def req(url, extra_headers=None):
 
 MAX_BODY = 8 * 1024 * 1024  # hard response cap: reject before parse
 SCHEDULE_PATH = os.path.join(STATE, "schedule.json")
+CACHE_PATH = os.path.join(STATE, "cache.json")
 BACKOFF_S = 3600  # persistent 1h rate reduction after a 429 (C10)
+MAX_IDENTITY_LEN = 256  # overlong identities are rejected, never truncated
+
+
+class ConfigError(Exception):
+    pass
+
+
+def validate_sources_config(raw):
+    """Strict parser for sources.json (top-level LIST, not {"sources":...}).
+    Raises ConfigError on any shape violation. Shared by collect.py main()
+    and soak_check.py so both agree on the configured universe."""
+    if not isinstance(raw, list):
+        raise ConfigError("sources-top-level-list")
+    out = []
+    seen = set()
+    for i, s in enumerate(raw):
+        if not isinstance(s, dict):
+            raise ConfigError(f"sources-entry-{i}-not-object")
+        for k in ("name", "kind", "url"):
+            if not isinstance(s.get(k), str) or not s[k]:
+                raise ConfigError(f"sources-entry-{i}-bad-{k}")
+        if s["name"] in seen:
+            raise ConfigError(f"sources-duplicate-name:{s['name']}")
+        seen.add(s["name"])
+        if s["kind"] not in ("rss", "atom", "json"):
+            raise ConfigError(f"sources-entry-{i}-bad-kind")
+        for k in ("poll_min", "limit"):
+            if k in s and (isinstance(s[k], bool) or not isinstance(s[k], int)
+                            or s[k] < 1):
+                raise ConfigError(f"sources-entry-{i}-bad-{k}")
+        if "needs_key" in s and not isinstance(s["needs_key"], str):
+            raise ConfigError(f"sources-entry-{i}-bad-needs_key")
+        if s["kind"] == "json":
+            if not isinstance(s.get("id_field"), str) or not s["id_field"]:
+                raise ConfigError(f"sources-entry-{i}-bad-id_field")
+            for k in ("title_field", "date_field", "link_template"):
+                if k in s and not isinstance(s[k], str):
+                    raise ConfigError(f"sources-entry-{i}-bad-{k}")
+            for k in ("drill", "text_fields"):
+                if k in s and (not isinstance(s[k], list)
+                                or any(not isinstance(x, str) for x in s[k])):
+                    raise ConfigError(f"sources-entry-{i}-bad-{k}")
+        out.append(s)
+    if not out:
+        raise ConfigError("sources-empty")
+    return out
+
+
+def load_sources():
+    with open(os.path.join(HERE, "sources.json"), encoding="utf-8") as fh:
+        return validate_sources_config(json.load(fh))
 
 
 def load_schedule():
+    """Returns (schedule, ok). A MISSING file is a normal first run.
+    A PRESENT-BUT-CORRUPT file is SOURCE_SCHEDULING_UNKNOWN: callers must
+    refuse to poll (fail closed), never silently reset every cadence."""
     try:
-        s = json.load(open(SCHEDULE_PATH, encoding="utf-8"))
-        return s if isinstance(s, dict) else {}
+        with open(SCHEDULE_PATH, encoding="utf-8") as fh:
+            raw = fh.read()
+    except FileNotFoundError:
+        return {}, True
+    except OSError:
+        return {}, False
+    try:
+        s = json.loads(raw)
+    except ValueError:
+        return {}, False
+    if not isinstance(s, dict):
+        return {}, False
+    return s, True
+
+
+def check_cache_usable():
+    """A missing cache is a normal first run. A present-but-corrupt cache
+    must not silently degrade ETag/Last-Modified protection: refuse to poll
+    until a human repairs or removes it (audited repair)."""
+    if not os.path.exists(CACHE_PATH):
+        return True
+    try:
+        with open(CACHE_PATH, encoding="utf-8") as fh:
+            c = json.load(fh)
     except (OSError, ValueError):
-        return {}
+        return False
+    return isinstance(c, dict)
 
 
 def save_schedule(sched):
@@ -69,9 +147,10 @@ def fetch(url, cache_key, extra_headers=None):
     rate-limited | source-down. HTTP classes mapped once here so every
     source kind reports the same vocabulary."""
     os.makedirs(STATE, exist_ok=True)
-    cpath = os.path.join(STATE, "cache.json")
+    cpath = CACHE_PATH
     try:
-        cache = json.load(open(cpath))
+        with open(cpath, encoding="utf-8") as fh:
+            cache = json.load(fh)
     except (OSError, ValueError):
         cache = {}
     if not isinstance(cache, dict):
@@ -105,8 +184,12 @@ def fetch(url, cache_key, extra_headers=None):
             last_err = f"HTTP {e.code}"
             if e.code == 304:
                 return "not-modified", b"", {}
+            # Non-transient: return IMMEDIATELY, never burn retries/delay
+            # on auth failures or dead endpoints.
             if e.code in (401, 403):
                 return "auth-failure", last_err.encode(), {}
+            if e.code in (400, 404, 405, 410):
+                return "source-down", last_err.encode(), {}
             if e.code == 429:
                 delay *= 2
         except Exception as e:  # network, DNS, timeout: retry, then heartbeat
@@ -155,20 +238,32 @@ def parse_feed(body):
 def to_record(source, it):
     """Feed item -> canonical record, or None when no stable identity
     exists (uid or link required; title fallback removed — two distinct
-    events with identical titles must never collapse into one ID)."""
+    events with identical titles must never collapse into one ID).
+    Overlong identities are REJECTED (counted upstream as skipped), never
+    truncated: silent truncation can collide two distinct events."""
     uid = it.get("uid") or it.get("link") or ""
-    if not uid:
+    if not isinstance(uid, str) or not uid:
+        return None
+    if len(uid) > MAX_IDENTITY_LEN:
         return None
     title = it.get("title", "")
-    body = (it.get("summary") or "")[:2000]
-    links = [it["link"]] if it.get("link") else []
+    if not isinstance(title, str):
+        return None
+    body = it.get("summary") or ""
+    if not isinstance(body, str):
+        return None
+    body = body[:2000]
+    link = it.get("link") or ""
+    if not isinstance(link, str):
+        return None
+    links = [link] if link else []
     wc = len((title + " " + body).split())
     rid = f"{source}:{hashlib.sha256(uid.encode()).hexdigest()[:16]}"
     return {
         "id": rid,
         "source": source,
-        "source_id": uid[:256],
-        "url": it.get("link", ""),
+        "source_id": uid,
+        "url": link,
         "observed_at": datetime.now(timezone.utc).isoformat(),
         "published_at": it.get("published") or None,
         "published_estimated": not bool(it.get("published")),
@@ -222,34 +317,85 @@ def safe_link(src, row):
         return ""
 
 
+def _req_str(row, key):
+    """Required string field: nonempty str, else None (row skipped).
+    Never str(None)/str(42): a malformed upstream schema must not become a
+    seemingly valid identity."""
+    v = row.get(key)
+    if not isinstance(v, str) or not v:
+        return None
+    return v
+
+
+def _opt_str(row, key):
+    """Optional string field: absent/None/empty -> None; wrong type ->
+    INVALID (row skipped), never coerced."""
+    v = row.get(key)
+    if v is None:
+        return None
+    if isinstance(v, bool) or not isinstance(v, str):
+        return False  # INVALID sentinel (None means legitimately absent)
+    return v or None
+
+
+def _summary_text(row, keys):
+    """Summary from scalar values only. Dicts/lists are dropped, never
+    stringified into canonical text."""
+    parts = []
+    for k in keys:
+        v = row.get(k)
+        if v is None:
+            continue
+        if isinstance(v, bool) or not isinstance(v, (str, int, float)):
+            continue
+        parts.append(f"{k}={v}")
+    return " ".join(parts)
+
+
 def run_json_source(src):
+    """Returns (status, records-list). The tuple is structural: main() can
+    NEVER mistake a status string for records (a bare string return used to
+    be iterated char-by-char into the event stream). Only a list reaches
+    append_records()."""
     status, body, _ = fetch(src["url"], src["name"])
     if status == "not-modified":
-        heartbeat(src["name"], "ok", "not-modified"); return []
+        heartbeat(src["name"], "ok", "not-modified")
+        return "not-modified", []
     if status != "ok":
         heartbeat(src["name"], {"auth-failure": "AUTH_FAILURE",
                                   "rate-limited": "RATE_LIMITED"}.get(
                                       status, "SOURCE_DOWN"),
                                   body.decode(errors="replace")[:200])
-        return status  # caller persists backoff on rate-limited
+        return status, []  # caller persists backoff on rate-limited
     try:
         payload = json.loads(body)
     except ValueError as e:
-        heartbeat(src["name"], "PARSE_FAILURE", f"bad json: {e}"); return []
+        heartbeat(src["name"], "PARSE_FAILURE", f"bad json: {e}")
+        return "parse-failure", []
     items = payload
     for key in src.get("drill", []):
         items = items.get(key, []) if isinstance(items, dict) else []
+    if not isinstance(items, list):
+        heartbeat(src["name"], "PARSE_FAILURE",
+                  "drilled payload not a list")
+        return "parse-failure", []
     out, skipped = [], 0
     for row in items[: src.get("limit", 50)]:
         if not isinstance(row, dict):
             skipped += 1
             continue
+        uid = _req_str(row, src["id_field"])
+        title = _opt_str(row, src.get("title_field", ""))
+        pub = _opt_str(row, src.get("date_field", ""))
+        if uid is None or title is False or pub is False:
+            skipped += 1
+            continue
         rec = to_record(src["name"], {
-            "uid": str(row.get(src["id_field"], "")),
-            "title": str(row.get(src.get("title_field", ""), "")),
+            "uid": uid,
+            "title": title or "",
             "link": safe_link(src, row),
-            "published": str(row.get(src.get("date_field", ""), "")) or None,
-            "summary": " ".join(f"{k}={row.get(k)}" for k in src.get("text_fields", [])),
+            "published": pub,
+            "summary": _summary_text(row, src.get("text_fields", [])),
         })
         if rec is None:
             skipped += 1
@@ -257,7 +403,7 @@ def run_json_source(src):
         out.append(rec)
     heartbeat(src["name"], "ok" if out else "EMPTY_SUCCESS",
                 f"skipped_no_identity={skipped}" if skipped else "", count=len(out))
-    return out
+    return "ok", out
 
 
 def main():
@@ -266,8 +412,23 @@ def main():
         print(f"MISSING_REQUIRED_CONFIG: {','.join(cfg['missing_required'])} "
               f"-- set MIRO_CONTACT (see .env.example); refusing to poll", file=sys.stderr)
         return 2
-    sources = json.load(open(os.path.join(HERE, "sources.json")))
-    sched = load_schedule()
+    try:
+        sources = load_sources()
+    except (OSError, ValueError, ConfigError) as e:
+        print(f"SOURCES_CONFIG_INVALID: {e} -- refusing to poll",
+              file=sys.stderr)
+        return 2
+    sched, sched_ok = load_schedule()
+    if not sched_ok:
+        print("SOURCE_SCHEDULING_UNKNOWN: corrupt schedule.json -- "
+              "refusing to poll; repair or remove after audit",
+              file=sys.stderr)
+        return 2
+    if not check_cache_usable():
+        print("CACHE_CORRUPT: state/cache.json present but invalid -- "
+              "refusing to poll; repair or remove after audit",
+              file=sys.stderr)
+        return 2
     now = datetime.now(timezone.utc)
     total = 0
     for src in sources:
@@ -316,13 +477,12 @@ def main():
                 else:
                     recs = []
         elif src["kind"] == "json":
-            res = run_json_source(src)
-            if res == "rate-limited":
+            status, recs = run_json_source(src)
+            if status == "rate-limited":
                 entry["backoff_until"] = \
                     (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
                 recs = []
-            else:
-                recs = res
+            assert isinstance(recs, list), "contract: records only"
         else:
             heartbeat(name, "PARSE_FAILURE", f"unknown kind {src['kind']}"); continue
         entry["next_due"] = (datetime.now(timezone.utc) +

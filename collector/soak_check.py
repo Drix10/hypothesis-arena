@@ -14,6 +14,8 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from collect import validate_sources_config, ConfigError  # noqa: E402
 from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -84,9 +86,14 @@ def main():
     out["edgar_403_samples"] = edgar_403[:5]
 
     # 2. heartbeat vocabulary (day-filtered) + coverage: every configured
-    # source must have at least one heartbeat stamped for `day`.
+    # source must have at least one heartbeat stamped for `day`. Freshness
+    # is judged on the heartbeat file's OWN `heartbeat_at`, never the
+    # snapshot row's `at` (a stale file copied into today's row is not
+    # today's coverage). UNREADABLE always FAILs: broken observability is
+    # evidence of failure, never an exemption.
     unknown, statuses = [], {}
     seen_sources = set()
+    stale_hb = []
     for f in glob.glob(os.path.join(SOAK, "polls.jsonl")):
         for line in open(f, encoding="utf-8"):
             try:
@@ -96,24 +103,64 @@ def main():
             if row_day(row) != day:
                 continue
             for src, h in (row.get("sources") or {}).items():
-                seen_sources.add(src)
+                if not isinstance(h, dict):
+                    continue
                 s = h.get("status")
                 statuses[f"{src}:{s}"] = statuses.get(f"{src}:{s}", 0) + 1
-                if s not in ALLOWED_HB and s != "UNREADABLE":
-                    unknown.append({"at": row.get("at"), "src": src, "status": s})
+                if s == "UNREADABLE":
+                    stale_hb.append({"at": row.get("at"), "src": src,
+                                     "why": "unreadable-heartbeat"})
+                    continue
+                if s not in ALLOWED_HB:
+                    unknown.append({"at": row.get("at"), "src": src,
+                                    "status": s})
+                    continue
+                seen_sources.add(src)
+                hb_at = parse_instant(h.get("heartbeat_at"))
+                if hb_at is None or hb_at.strftime("%Y-%m-%d") != day:
+                    stale_hb.append({"at": row.get("at"), "src": src,
+                                     "why": "heartbeat-not-fresh",
+                                     "heartbeat_at": h.get("heartbeat_at")})
     C.append(verdict("heartbeat-vocabulary", not unknown,
                      f"{len(statuses)} combos seen, unknown={len(unknown)}"))
     out["heartbeat_combos"] = statuses
+    C.append(verdict("heartbeat-freshness", not stale_hb,
+                     f"stale_or_unreadable={len(stale_hb)}"))
+    out["stale_heartbeat_samples"] = stale_hb[:5]
     try:
-        configured = {s.get("name") for s in
-                      json.load(open(os.path.join(HERE, "sources.json"),
-                                     encoding="utf-8")).get("sources", [])}
-        configured.discard(None)
-    except (OSError, ValueError):
+        with open(os.path.join(HERE, "sources.json"),
+                   encoding="utf-8") as fh:
+            configured = {s["name"] for s in
+                           validate_sources_config(json.load(fh))}
+    except (OSError, ValueError, ConfigError) as e:
         configured = set()
+        C.append(verdict("sources-schema", False,
+                         f"{type(e).__name__}: {e}"))
+    else:
+        C.append(verdict("sources-schema", True,
+                         f"{len(configured)} sources"))
     missing_hb = sorted(configured - seen_sources)
     C.append(verdict("heartbeat-coverage", not missing_hb,
                      f"missing={missing_hb or 'none'}"))
+    # 2b. subprocess health: nonzero collect/classify exits recorded in the
+    # day's poll rows fail acceptance (a failed collection that still
+    # "passes" elsewhere is a verification lie).
+    bad_exits = []
+    for f in glob.glob(os.path.join(SOAK, "polls.jsonl")):
+        for line in open(f, encoding="utf-8"):
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if row_day(row) != day:
+                continue
+            for step in ("collect", "classify"):
+                code = (row.get("exits") or {}).get(step)
+                if code is not None and code != 0:
+                    bad_exits.append({"at": row.get("at"), "step": step,
+                                      "exit": code})
+    C.append(verdict("subprocess-health", not bad_exits,
+                     f"failures={bad_exits[:5] or 'none'}"))
 
     # 3a. replay determinism: same input + same as_of -> identical verdicts
     sig = os.path.join(DATA, "signals", f"{day}.jsonl")
@@ -122,16 +169,19 @@ def main():
         try:
             seqs = []
             for i in range(2):
-                tmp = tempfile.mkdtemp()
-                env = dict(os.environ, MIRO_CANONICAL_DB=os.path.join(tmp, "c.db"),
-                           MIRO_CLASSIFIED_DIR=os.path.join(tmp, "cl"))
-                r = subprocess.run(
-                    [sys.executable, os.path.join(HERE, "classify.py"), sig],
-                    capture_output=True, text=True, env=env, timeout=300)
-                lines = r.stdout.strip().splitlines()
-                stats = json.loads("\n".join(lines[1:]))  # skip 'classified ->' line
-                per = stats.get("per_source", {})
-                seqs.append(json.dumps(per, sort_keys=True))
+                with tempfile.TemporaryDirectory() as tmp:
+                    env = dict(os.environ,
+                               MIRO_CANONICAL_DB=os.path.join(tmp, "c.db"),
+                               MIRO_CLASSIFIED_DIR=os.path.join(tmp, "cl"))
+                    r = subprocess.run(
+                        [sys.executable, os.path.join(HERE, "classify.py"), sig],
+                        capture_output=True, text=True, env=env, timeout=300)
+                    if r.returncode != 0:
+                        raise RuntimeError(f"classify exit {r.returncode}")
+                    lines = r.stdout.strip().splitlines()
+                    stats = json.loads("\n".join(lines[1:]))  # skip 'classified ->' line
+                    per = stats.get("per_source", {})
+                    seqs.append(json.dumps(per, sort_keys=True))
             det_ok = seqs[0] == seqs[1]
             det_detail = "identical" if det_ok else f"{seqs[0][:200]} != {seqs[1][:200]}"
         except Exception as e:
@@ -225,7 +275,8 @@ def main():
     if day_audits:
         audits = day_audits
     if audits:
-        a = json.load(open(audits[-1]))
+        with open(audits[-1], encoding="utf-8") as fh:
+            a = json.load(fh)
         out["latest_audit"] = {
             k: a.get(k) for k in ("input_records", "unique_event_keys",
                                   "unique_content_versions", "duplicates",
