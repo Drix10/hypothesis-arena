@@ -517,6 +517,41 @@ int main(int argc, char** argv) {
                  jev::VetoReason::NONE);
         targeted("t_max_downgrade_insuf.json", "BASE", "downgrade-strong",
                  jev::VetoReason::NONE);
+        // Case 29 (doc 03 §3.7): joint JEV error. t_max_elevated is the
+        // maximally optimistic artifact (E .93 / macro / max / L .1,
+        // calib pass, no veto → ELEVATED above). Replayed here against a
+        // forbidding snapshot (R2 pending-risk): correlated model
+        // optimism must still HOLD on row 0 with the coded reason.
+        // Fresh kernel (t_max_elevated already admitted above); no
+        // admission — the decision layer needs the validated object.
+        {
+            jev::KernelState k3;
+            std::string w3;
+            CHECK("c29-kernel",
+                  jev::KernelState::Create({"EURUSD"}, w3, k3));
+            std::string raw = fx(dir, "t_max_elevated.json");
+            jev::JVal art;
+            std::string err;
+            jev::ParseJson(raw, art, err);
+            const jev::JVal* state = jev::ObjGet(art, "state");
+            jev::JEVStateV3 s;
+            std::string why;
+            jev::JEVStateV3::FromJVal(*state, s, why);
+            jev::ValidationRequest q = k3.request_for(
+                validation_bytes(raw), key, s.Serialize(), "EURUSD", 0.0,
+                jev::Mode::REPLAY);
+            jev::ValidationResult r = jev::validate_jev(q);
+            CHECK("c29-valid", r.ok());
+            if (r.ok()) {
+                jev::EngineInputs e = eng_from_state(*state);
+                e.deterministic_veto = true;
+                e.veto_reason = jev::VetoReason::PENDING_RISK;
+                jev::Decision d = jev::EvaluateDecision(*r.get(), e);
+                CHECK("case29-joint-error-hold",
+                      d.action == "HOLD" &&
+                          d.reason == "engine-veto:pending-risk");
+            }
+        }
     }
 
     // ---- H. 200-AnswerSet replay: SHA-256 decision proof (#8) ----
