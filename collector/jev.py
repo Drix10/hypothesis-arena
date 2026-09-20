@@ -13,6 +13,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import sys
 import time
 import urllib.request
@@ -481,9 +482,13 @@ def protected_state(state):
 
 def validate_cached_artifact(state, c, now):
     """Strict cache admission (B6). Returns the artifact or None (miss).
-    Every cached artifact re-proves the full contract: shape, keys, pins,
-    answers, hashes, configured-key signature, state binding, age."""
+    Every cached artifact re-proves the full contract: exact envelope
+    shapes, pins, answers, finite timestamps with coherent
+    created/expires/at semantics, configured-key signature, binding, age."""
     if not isinstance(c, dict):
+        return None
+    if set(c) != {"research_key", "decision_key", "protected",
+                   "artifact", "at"}:
         return None
     try:
         if c.get("research_key") != research_key(state):
@@ -493,16 +498,37 @@ def validate_cached_artifact(state, c, now):
         if c.get("protected") != protected_state(state):
             return None
         at = c.get("at")
-        if isinstance(at, bool) or not isinstance(at, (int, float)):
+        # Finite only: NaN passes every comparison (at > now and
+        # now - at > MAX are both False), so it must be rejected outright.
+        if type(at) not in (int, float) or not math.isfinite(at):
             return None
         if at > now or now - at > ANSWER_MAX_AGE_S:
             return None  # future-dated or stale: miss, never a hit
         art = c.get("artifact")
         if not isinstance(art, dict):
             return None
+        if set(art) != {"payload", "response_hash", "signature",
+                         "pubkey"}:
+            return None
         p = art.get("payload")
         if not isinstance(p, dict):
             return None
+        if set(p) != {"schema_version", "question_set_version", "model",
+                       "revision", "provider", "symbol",
+                       "snapshot_epoch", "state_hash", "decision_key",
+                       "created_at", "expires_at", "answers"}:
+            return None
+        try:
+            created = datetime.fromisoformat(p["created_at"])
+        except (ValueError, TypeError):
+            return None
+        if created.tzinfo is None:
+            return None
+        exp = p["expires_at"]
+        if type(exp) not in (int, float) or not math.isfinite(exp):
+            return None
+        if exp != created.timestamp() + ANSWER_MAX_AGE_S:
+            return None  # expiry must equal created + 60 s, exactly
         if p.get("schema_version") != "answerset_v1":
             return None
         if p.get("question_set_version") != QVERSION:
@@ -687,6 +713,12 @@ def _spend_lock(timeout=30.0):
     return _FileLock(os.path.join(SPEND_DIR, ".lockfile"), timeout)
 
 
+# Writer's exact temp form: <day>.json.tmp-<pid>. Only this pattern (and
+# the lockfile) may be ignored; every other non-day filename is UNKNOWN.
+TMP_LEDGER_RE = re.compile(r"^\d{4}-\d{2}-\d{2}\.json\.tmp-\d+$")
+DAY_LEDGER_RE = re.compile(r"^\d{4}-\d{2}-\d{2}\.json$")
+
+
 def spend_today():
     """Returns (ledger-or-None, path). None = UNKNOWN_SPEND (corrupt or
     schema-invalid): callers must fail closed, never treat as $0.
@@ -706,6 +738,19 @@ def spend_today():
     return s, p
 
 
+def _reserve_now():
+    """Reserve one attempt. Caller MUST hold _spend_lock (see decide's
+    money gate); the public spend_reserve() takes it for standalone use."""
+    s, p = spend_today()
+    if s is None:
+        return "unknown", None
+    if s["calls"] >= DAILY_CALL_CEILING:
+        return "ceiling", s
+    s["calls"] += 1
+    _persist_ledger(s, p)
+    return "ok", s
+
+
 def spend_reserve():
     """Atomically reserve ONE provider attempt BEFORE the network call.
     Returns (status, ledger-or-None): ok | ceiling | unknown | lock-busy.
@@ -713,14 +758,7 @@ def spend_reserve():
     cannot both observe headroom (B4)."""
     try:
         with _spend_lock():
-            s, p = spend_today()
-            if s is None:
-                return "unknown", None
-            if s["calls"] >= DAILY_CALL_CEILING:
-                return "ceiling", s
-            s["calls"] += 1
-            _persist_ledger(s, p)
-            return "ok", s
+            return _reserve_now()
     except TimeoutError:
         return "lock-busy", None
 
@@ -745,22 +783,28 @@ def validate_usage(usage):
     return float(cost), pt, ct, True
 
 
+def _charge_now(cost, prompt_t=0, completion_t=0, known=True):
+    """Charge money/tokens. Caller MUST hold _spend_lock; the public
+    spend_charge() takes it for standalone use."""
+    s, p = spend_today()
+    if s is None:
+        return None
+    if known:
+        s["usd"] = round(s["usd"] + cost, 8)
+        s["prompt_tokens"] += prompt_t
+        s["completion_tokens"] += completion_t
+    else:
+        s["unknown_charges"] = s.get("unknown_charges", 0) + 1
+    _persist_ledger(s, p)
+    return s
+
+
 def spend_charge(cost, prompt_t=0, completion_t=0, known=True):
     """Record a completed call's money/tokens. NEVER increments calls:
     attempts are counted once, at reservation (B2). Unknown cost sets the
     unknown_charges flag that trips the money governor (B8)."""
     with _spend_lock():
-        s, p = spend_today()
-        if s is None:
-            return None
-        if known:
-            s["usd"] = round(s["usd"] + cost, 8)
-            s["prompt_tokens"] += prompt_t
-            s["completion_tokens"] += completion_t
-        else:
-            s["unknown_charges"] = s.get("unknown_charges", 0) + 1
-        _persist_ledger(s, p)
-        return s
+        return _charge_now(cost, prompt_t, completion_t, known)
 
 
 def spend_add(cost, prompt_t=0, completion_t=0):
@@ -788,23 +832,23 @@ def spend_30d(today=None):
     except OSError:
         return 0.0, True  # unreadable ledger dir: unknown
     for fn in files:
-        if fn == ".lockfile" or ".tmp-" in fn:
-            continue  # explicitly permitted lock/temp paths only
+        if fn == ".lockfile" or TMP_LEDGER_RE.match(fn):
+            continue  # exactly the permitted lock/temp forms, nothing more
         full = os.path.join(SPEND_DIR, fn)
         if os.path.isdir(full):
             if fn == ".lock":
                 continue  # legacy mkdir-lock artifact, harmless
             unknown = True
             continue
-        try:
-            day = datetime.strptime(fn[:-5] if fn.endswith(".json") else fn,
-                                    "%Y-%m-%d").date()
-            if not fn.endswith(".json"):
-                raise ValueError("not-a-day-file")
-        except ValueError:
+        if not DAY_LEDGER_RE.match(fn):
             # A malformed ledger filename inside the spend directory must
             # NOT disappear from accounting: S10 unknown spend is
             # high/conservative, never silently $0.
+            unknown = True
+            continue
+        try:
+            day = datetime.strptime(fn[:-5], "%Y-%m-%d").date()
+        except ValueError:
             unknown = True
             continue
         if not (0 <= (today - day).days <= 29):
@@ -911,6 +955,81 @@ def log_row(row):
             pass
 
 
+MONEY_GATE_TIMEOUT = 60.0  # worst-case wait for the serialized money gate
+
+
+def _money_gate(state, key, post_fn):
+    """Runs with the spend lock HELD. Returns ("hold", row) or
+    ("answer", answers, usage, ledger). Never raises on provider failure."""
+    cap = STAGE_30D_CAPS_USD[state["stage"]]  # stage already allowlisted
+    total_30d, unknown_30d = spend_30d()
+    if unknown_30d:
+        row = hold_row(state, "spend-unknown")
+        row["cost"] = cost_tag(state, None)
+        log_row(row)
+        return "hold", row
+    if total_30d >= cap:
+        row = hold_row(state, "spend-stage-cap")
+        row["cost"] = cost_tag(state, None)
+        log_row(row)
+        return "hold", row
+    resp, err, attempts = None, "not-attempted", 0
+    for attempt in range(2):
+        status, _ = _reserve_now()  # lock held: ceiling enforced pre-call
+        if status == "ceiling":
+            row = hold_row(state, "spend-call-ceiling")
+            row["cost"] = cost_tag(state, None)
+            log_row(row)
+            return "hold", row
+        if status == "unknown":
+            row = hold_row(state, "spend-unknown")
+            row["cost"] = cost_tag(state, None)
+            log_row(row)
+            return "hold", row
+        if status == "lock-busy":
+            row = hold_row(state, "spend-lock-busy")
+            row["cost"] = cost_tag(state, None)
+            log_row(row)
+            return "hold", row
+        if attempt:
+            time.sleep(RETRY_DELAY_S)
+        resp, err = post_fn(build_request(state), key)
+        attempts += 1
+        if err is None or not transient_error(err):
+            break  # success, or non-retryable: exactly one attempt
+    if err is not None:
+        row = hold_row(state, "jev_error:" + err)
+        row["cost"] = cost_tag(state, None)  # unknown cost, explicitly shown
+        row["attempts"] = attempts
+        log_row(row)
+        return "hold", row
+    answers, why = validate_response(resp)
+    usage = resp.get("usage") if isinstance(resp, dict) else None
+    cost, pt, ct, known = validate_usage(usage)
+    if answers is None:
+        # Money spent is money recorded, even when answers are unusable.
+        # A failed charge is spend-unknown (HOLD), never a silent loss of
+        # accounting: the governor must stay conservative after an attempt.
+        charged = _charge_now(cost, pt, ct, known=known)
+        if charged is None:
+            row = hold_row(state, "spend-unknown")
+        else:
+            row = hold_row(state, why)
+        row["cost"] = cost_tag(state, resp.get("usage") if isinstance(resp, dict) else None)
+        log_row(row)
+        return "hold", row
+    spent = _charge_now(cost, pt, ct, known=known)
+    if spent is None:
+        # Money accounting failed AFTER a valid provider answer: the answer
+        # must NOT become a signed, cached, reusable decision artifact.
+        # Fail closed (HOLD spend-unknown) before signing or caching.
+        row = hold_row(state, "spend-unknown")
+        row["cost"] = cost_tag(state, usage)
+        log_row(row)
+        return "hold", row
+    return "answer", answers, usage, spent
+
+
 def decide(state, now=None, key=None, post_fn=None):
     '''Single decision cycle. Returns (row, artifact-or-None).
     Never raises on provider failure; never fabricates answers.'''
@@ -935,68 +1054,26 @@ def decide(state, now=None, key=None, post_fn=None):
         row = hold_row(state, "jev_error:no-key")
         log_row(row)
         return row, None
-    cap = STAGE_30D_CAPS_USD[state["stage"]]  # stage already allowlisted
-    total_30d, unknown_30d = spend_30d()
-    if unknown_30d:
-        row = hold_row(state, "spend-unknown")
-        row["cost"] = cost_tag(state, None)
-        log_row(row)
-        return row, None
-    if total_30d >= cap:
-        row = hold_row(state, "spend-stage-cap")
-        row["cost"] = cost_tag(state, None)
-        log_row(row)
-        return row, None
     post_fn = post_fn or post
-    resp, err, attempts = None, "not-attempted", 0
-    for attempt in range(2):
-        status, _ = spend_reserve()  # atomic: ceiling enforced pre-call
-        if status == "ceiling":
-            row = hold_row(state, "spend-call-ceiling")
-            row["cost"] = cost_tag(state, None)
-            log_row(row)
-            return row, None
-        if status == "unknown":
-            row = hold_row(state, "spend-unknown")
-            row["cost"] = cost_tag(state, None)
-            log_row(row)
-            return row, None
-        if status == "lock-busy":
-            row = hold_row(state, "spend-lock-busy")
-            row["cost"] = cost_tag(state, None)
-            log_row(row)
-            return row, None
-        if attempt:
-            time.sleep(RETRY_DELAY_S)
-        resp, err = post_fn(build_request(state), key)
-        attempts += 1
-        if err is None or not transient_error(err):
-            break  # success, or non-retryable: exactly one attempt
-    if err is not None:
-        row = hold_row(state, "jev_error:" + err)
-        row["cost"] = cost_tag(state, None)  # unknown cost, explicitly shown
-        row["attempts"] = attempts
+    # MONEY GATE (serialized): the 30-day USD authorization, the attempt
+    # reservation, the provider call, and the charge all happen inside ONE
+    # OS-lock hold. Checking the cap outside the lock lets two processes
+    # both observe headroom and jointly overshoot; the call ceiling was
+    # already safe (reservation-counted), the money cap was not. Signing
+    # and caching happen AFTER release: crypto needs no money lock.
+    # Lock ordering is spend -> call-log everywhere (log_row's lock is a
+    # different file, always taken inside, never outside, the spend lock).
+    try:
+        with _spend_lock(timeout=MONEY_GATE_TIMEOUT):
+            gate = _money_gate(state, key, post_fn)
+    except TimeoutError:
+        row = hold_row(state, "spend-lock-busy")
+        row["cost"] = cost_tag(state, None)
         log_row(row)
         return row, None
-    answers, why = validate_response(resp)
-    usage = resp.get("usage") if isinstance(resp, dict) else None
-    cost, pt, ct, known = validate_usage(usage)
-    if answers is None:
-        # Money spent is money recorded, even when answers are unusable.
-        spend_charge(cost, pt, ct, known=known)
-        row = hold_row(state, why)
-        row["cost"] = cost_tag(state, resp.get("usage") if isinstance(resp, dict) else None)
-        log_row(row)
-        return row, None
-    spent = spend_charge(cost, pt, ct, known=known)
-    if spent is None:
-        # Money accounting failed AFTER a valid provider answer: the answer
-        # must NOT become a signed, cached, reusable decision artifact.
-        # Fail closed (HOLD spend-unknown) before signing or caching.
-        row = hold_row(state, "spend-unknown")
-        row["cost"] = cost_tag(state, usage)
-        log_row(row)
-        return row, None
+    if gate[0] == "hold":
+        return gate[1], None
+    answers, usage, spent = gate[1], gate[2], gate[3]
     created = datetime.now(timezone.utc).isoformat()
     payload = {"schema_version": "answerset_v1",
                "question_set_version": QVERSION, "model": MODEL,

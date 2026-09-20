@@ -466,11 +466,14 @@ check("future-cache-miss",
 jev.SPEND_DIR = os.path.join(TMP, "spendCharge")
 os.makedirs(jev.SPEND_DIR, exist_ok=True)
 _real_charge = jev.spend_charge
+_real_charge_now = jev._charge_now
 jev.spend_charge = lambda *a, **k: None
+jev._charge_now = lambda *a, **k: None
 calls_z = []
 row, art = jev.decide(state(symbol="XZ"), now=5700.0, key="k",
                       post_fn=mkpost(good_resp(), calls=calls_z))
 jev.spend_charge = _real_charge
+jev._charge_now = _real_charge_now
 check("charge-fail-hold",
       row["action"] == "HOLD" and row["reason"] == "spend-unknown"
       and art is None)
@@ -556,5 +559,124 @@ check("log-rotation-valid",
       len(nonempty) > 0
       and all(json.loads(ln)["i"] >= 0 for ln in nonempty))
 jev.CALL_LOG_MAX_BYTES = 8 * 1024 * 1024
+
+# 26. malformed provider response + failed charge -> spend-unknown
+# (accounting failure after an attempt, not the response's own HOLD)
+jev.SPEND_DIR = os.path.join(TMP, "spendMC")
+os.makedirs(jev.SPEND_DIR, exist_ok=True)
+jev._charge_now = lambda *a, **k: None
+_bad = json.loads(json.dumps(good_resp()))
+_bad["answers"]["enter"]["noul"] = "high"
+row, art = jev.decide(state(symbol="XMC"), now=5900.0, key="k",
+                      post_fn=mkpost(_bad))
+jev._charge_now = _real_charge_now
+check("malformed-charge-fail",
+      row["action"] == "HOLD" and row["reason"] == "spend-unknown"
+      and art is None)
+jev.SPEND_DIR = os.path.join(TMP, "spend")
+
+# 27. cache wrapper hardening: NaN at, extra keys, incoherent expiry
+row, art = jev.decide(state(symbol="XW"), now=6000.0, key="k",
+                      post_fn=mkpost(good_resp()))
+import glob as _glob2
+_cp = _glob2.glob(os.path.join(jev.CACHE_DIR, "*.json"))
+assert _cp, "cache file expected"
+
+
+def _mutate(fn):
+    for _p in _cp:
+        with open(_p, encoding="utf-8") as _fh:
+            _c = json.load(_fh)
+        fn(_c)
+        with open(_p, "w", encoding="utf-8") as _fh:
+            json.dump(_c, _fh)
+
+
+def _fresh_decide():
+    _calls = []
+    _row, _ = jev.decide(state(symbol="XW"), now=6001.0, key="k",
+                         post_fn=mkpost(good_resp(), calls=_calls))
+    return _row, _calls
+
+_mutate(lambda c: c.update(at=float("nan")))
+_r, _cl = _fresh_decide()
+check("cache-nan-at", _r["action"] == "ANSWER" and len(_cl) == 1)
+_mutate(lambda c: c.update(at=6000.5, smuggled=1))
+_r, _cl = _fresh_decide()
+check("cache-extra-key", _r["action"] == "ANSWER" and len(_cl) == 1)
+_mutate(lambda c: c.update(at=6000.5))
+_mutate(lambda c: c["artifact"]["payload"].update(expires_at=999999.0))
+_r, _cl = _fresh_decide()
+check("cache-expiry-incoherent", _r["action"] == "ANSWER"
+      and len(_cl) == 1)
+_mutate(lambda c: c["artifact"].pop("pubkey"))
+_r, _cl = _fresh_decide()
+check("cache-artifact-keys", _r["action"] == "ANSWER" and len(_cl) == 1)
+
+# 28. temp-file pattern is exact: near-misses poison the governor
+jev.SPEND_DIR = os.path.join(TMP, "spendT")
+os.makedirs(jev.SPEND_DIR, exist_ok=True)
+for _fn in ["fraud.tmp-hidden.json", "foo.tmp-contains-real-spend",
+             "2026-09-20.json.tmp-abc", "2026-09-20.json.tmp-"]:
+    open(os.path.join(jev.SPEND_DIR, _fn), "w").write("{}")
+    check("spend-tmp-" + _fn[:12], jev.spend_30d()[1] is True)
+    os.remove(os.path.join(jev.SPEND_DIR, _fn))
+_legit = (jev.datetime.now(jev.timezone.utc).strftime("%Y-%m-%d")
+          + ".json.tmp-12345")
+open(os.path.join(jev.SPEND_DIR, _legit), "w").write("{}")
+check("spend-tmp-legit", jev.spend_30d() == (0.0, False))
+os.remove(os.path.join(jev.SPEND_DIR, _legit))
+jev.SPEND_DIR = os.path.join(TMP, "spend")
+
+# 29. two-process money gate: concurrent racers cannot jointly cross the
+# stage cap (pre-fix, both could observe $149.99 headroom and land $150.01).
+import subprocess as _sp2
+_cap_dir = os.path.join(TMP, "spendCap")
+os.makedirs(_cap_dir, exist_ok=True)
+_day = jev.datetime.now(jev.timezone.utc).strftime("%Y-%m-%d")
+with open(os.path.join(_cap_dir, _day + ".json"), "w",
+          encoding="utf-8") as _fh:
+    json.dump({"usd": 149.99, "calls": 0, "prompt_tokens": 0,
+               "completion_tokens": 0, "unknown_charges": 0}, _fh)
+_child_lines = [
+    "import sys, json, time",
+    "sys.path.insert(0, %r)" % HERE,
+    "import jev",
+    "jev.SPEND_DIR = %r" % _cap_dir,
+    "jev.CACHE_DIR = %r" % os.path.join(TMP, "cacheCap"),
+    "jev.CALL_LOG = %r" % os.path.join(TMP, "callsCap.jsonl"),
+    "jev.KEY_PATH = %r" % jev.KEY_PATH,
+    "jev.RETRY_DELAY_S = 0",
+    "resp = {'model': jev.REVISION, 'provider': jev.PROVIDER, ",
+    "'answers': {'enter': {'type': 'noul', 'noul': 0.9}, ",
+    "'edge_family': {'type': 'choice', 'choice': 'momentum', ",
+    "'probabilities': {'momentum': 0.8}}, ",
+    "'conviction': {'type': 'score', 'score': 'strong'}, ",
+    "'latent_risk': {'type': 'noul', 'noul': 0.1}}, ",
+    "'usage': {'cost': 0.01}}",
+    "def post_fn(body, key):",
+    "    time.sleep(0.5); return (resp, None)",
+    "st = {'context_hash': 'h', 'symbol': sys.argv[1], ",
+    "'stage': 'G0_PAPER', 'question_set_version': 'v3', ",
+    "'snapshot_epoch': 1}",
+    "row, _ = jev.decide(st, now=time.time(), key='k', post_fn=post_fn)",
+    "print(json.dumps({'action': row['action'], ",
+    "'reason': row.get('reason')}))",
+]
+_child = "\n".join(_child_lines)
+_procs = [_sp2.Popen([sys.executable, "-c", _child, sym],
+                      stdout=_sp2.PIPE, text=True)
+          for sym in ("CAPA", "CAPB")]
+_outs = [json.loads(p.communicate()[0]) for p in _procs]
+_saved_spend = jev.SPEND_DIR
+jev.SPEND_DIR = _cap_dir
+_cap_total, _cap_unk = jev.spend_30d()
+jev.SPEND_DIR = _saved_spend
+_actions = sorted(o["action"] for o in _outs)
+check("cap-race-serialized",
+      _actions == ["ANSWER", "HOLD"]
+      and _cap_total <= 150.0 and _cap_unk is False
+      and sum(1 for o in _outs
+              if o.get("reason") == "spend-stage-cap") == 1)
 
 print("ALL JEV CHECKS PASS")
