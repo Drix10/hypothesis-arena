@@ -221,6 +221,38 @@ response_hash). C++ verifies before trusting; a bad signature is a HOLD +
 alert, and a forged `answers.json` buys an attacker nothing past the
 still-authoritative C++ risk layer.
 
+## 3.5a JEVAnswerSetV3 boundary artifact (frozen — the C++ contract)
+
+Python owns slowness (HTTP, retries, cache, signatures, cost); C++ owns
+decisions. They meet only at this artifact. The adapter answers "what did
+the frozen dependency say"; it never answers "how much should we trade".
+
+```
+JEVAnswerSetV3: schema_version | question_set_version=v3 |
+  model | revision | provider | snapshot_epoch | state_hash |
+  response_hash | enter | edge_family | conviction | latent_risk |
+  signature
+```
+
+C++ semantics for every malformed/stale answer (locked — each row is HOLD):
+
+```
+missing answer          → HOLD (jev_absent)
+bad enum / shape        → HOLD (jev_malformed)
+bad signature           → HOLD (jev_unauthenticated) + alert
+wrong revision/provider → HOLD (jev_contract_mismatch)
+wrong state hash        → HOLD (jev_stale_state)
+expired answer (>60 s)  → HOLD (jev_expired)
+evidence == inference   → CONTEXT only, never trigger path
+edge_family == execution→ cannot authorize risk (table row 6)
+latent_risk > 0.5       → HOLD (additive)
+```
+
+Replay never calls the remote provider: snapshot + features + portfolio +
+the logged AnswerSet re-enter C++ and must reproduce the decision bit-for-bit.
+Same inputs + same AnswerSet → identical decision, even if the provider
+disappears tomorrow.
+
 ## 3.6 What "done" means
 
 - [ ] `jev.py` sidecar: stdin state → 1 batched call → stdout answers + log row.

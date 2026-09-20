@@ -63,7 +63,7 @@ def run(features, extra=None, name="b"):
 
 
 def dated(h, ts):
-    return {"h": h, "ts": ts}
+    return {"h": h, "ts": int(ts)}
 
 
 def check(name, cond):
@@ -275,5 +275,42 @@ check("value-extra-key", r["stats"]["reasons"].get("value-shape") == 1)
 # 23. empty symbol string
 r = run([feat(symbols=[""])], name="bd9")
 check("symbols-empty-str", r["stats"]["reasons"].get("symbols-type") == 1)
+
+# 24. exception-safety: entity_ref shapes that once threw
+for bad_ref, name in [([], "ref-list"), (["cik"], "ref-cik-list"),
+                       ("cik", "ref-str"), (None, "ref-null"),
+                       ({"cik": 123}, "ref-cik-int"),
+                       ({"cik": "x", "y": 1}, "ref-extra")]:
+    try:
+        r = run([feat(entity_ref=bad_ref)], name="be-" + name)
+        got = r["stats"]["reasons"]
+        ok = sum(got.values()) == 1 and r["stats"]["accepted"] == 0
+    except (AttributeError, TypeError):
+        ok = False
+    check(name, ok)
+
+# 25. value.type shapes that once relied on membership semantics
+for bad_t, name in [([], "vtype-list"), ({}, "vtype-dict"),
+                     (True, "vtype-bool"), (123, "vtype-int")]:
+    try:
+        r = run([feat(value={"type": bad_t, "v": 1})], name="bv-" + name)
+        got = r["stats"]["reasons"]
+        ok = sum(got.values()) == 1 and r["stats"]["accepted"] == 0
+    except TypeError:
+        ok = False
+    check(name, ok)
+
+# 26. non-object bundles reject deterministically
+for blob, name in [([], "bundle-list"), ("garbage", "bundle-str"),
+                    (123, "bundle-int"), (None, "bundle-null")]:
+    try:
+        p = os.path.join(TMP, "bb-" + name + ".json")
+        json.dump(blob, open(p, "w"))
+        r = read_bundle(p, DB, MAP, NOW)
+        ok = r["accepted"] == [] and \
+            "bundle-not-object" in r["stats"]["reasons"]
+    except AttributeError:
+        ok = False
+    check(name, ok)
 
 print("ALL CTX CHECKS PASS")

@@ -79,11 +79,17 @@ def check_feature(f, con, emap, history, now_ts):
                 and f["evidence"] in EVIDENCE and f["confidence_bucket"] in CONF)
     if not enums_ok:
         return False, "schema-enum"
-    if not isinstance(f["value"], dict) or f["value"].get("type") not in VTYPES:
+    if not isinstance(f["value"], dict):
+        return False, "schema-value"
+    if not isinstance(f["value"].get("type"), str):
+        return False, "value-shape"
+    if f["value"]["type"] not in VTYPES:
         return False, "schema-value"
     v = f["value"]
     vtype_shapes = {"enum": str, "bucket": str, "bool": bool, "count": int}
     if set(v) != {"type", "v"}:
+        return False, "value-shape"
+    if not isinstance(v["type"], str) or v["type"] not in VTYPES:
         return False, "value-shape"
     if "v" not in v or type(v["v"]) is not vtype_shapes[v["type"]]:
         return False, "value-shape"
@@ -136,18 +142,22 @@ def check_feature(f, con, emap, history, now_ts):
     for s in f["symbols"]:
         if s not in tickers and s not in macro and s not in ("USD", "RATES"):
             return False, "entity-unmapped:" + s
-    ref = f.get("entity_ref") or {}
-    if "entity_ref" in f and (set(ref) != {"cik"}
-            or type(ref.get("cik")) is not str):
-        return False, "entity-ref-shape"
-    if "cik" in ref:
-        want = emap.get("cik_to_ticker", {}).get(ref["cik"])
+    if "entity_ref" in f:
+        ref = f["entity_ref"]
+        if not isinstance(ref, dict) or set(ref) != {"cik"}:
+            return False, "entity-ref-shape"
+        if type(ref["cik"]) is not str:
+            return False, "entity-ref-shape"
+        ref_cik = ref["cik"]
+        want = emap.get("cik_to_ticker", {}).get(ref_cik)
         if want is None:
             return False, "entity-ref-unknown"
         if want not in f["symbols"]:
             return False, "entity-contradiction"
     hist = (history or {}).get(f["source_id"], [])
-    if hist and any(not isinstance(e, dict) for e in hist):
+    if hist and any(not isinstance(e, dict) or set(e) != {"h", "ts"}
+                    or not isinstance(e["h"], str)
+                    or type(e["ts"]) is not int for e in hist):
         return False, "history-undated"
     if len(hist) >= FROZEN_N:
         tail = hist[-FROZEN_N:]
@@ -180,6 +190,9 @@ def read_bundle(path, db_path, map_path, now_ts=None):
         now_ts = datetime.now(timezone.utc).timestamp()
     b = json.load(open(path, encoding="utf-8"))
     stats = {"accepted": 0, "rejected": 0, "reasons": {}}
+    if not isinstance(b, dict):
+        stats["reasons"]["bundle-not-object"] = 1
+        return {"bundle_id": None, "accepted": [], "stats": stats}
     complete = b.get("commit") and b.get("bundle_id") and isinstance(
         b.get("features"), list)
     if not complete:
