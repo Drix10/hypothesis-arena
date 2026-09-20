@@ -151,19 +151,38 @@ fail-closed charge, strict confidence/state admission, strict ctx envelope
 Do not modify the sidecar beyond that scope unless integration exposes
 an actual contract defect.
 
-- [x] P3.1 boundary validator DONE and ACCEPTED/FROZEN at `dcd44d4`:
-      21-check AnswerSet gate (schema, pins, response_hash, Ed25519, key
-      trust, state binding, LIVE expiry vs REPLAY mode) + per-check
-      adversarial vectors. FINAL GATE: 102/102 checks, 20,000 fuzz
-      iterations, normal + hardened builds, sidecar byte-identical.
+- [x] P3.1 boundary validator DONE and ACCEPTED/FROZEN at `dcd44d4`,
+      AMENDED at `52ccedb` and RE-SIGNED (human review): ScalarLessL
+      LE L-table was wrong from byte 5 on (false-reject ~6% of valid
+      signatures, never false-accept); fix = the 32-byte constant only,
+      full gates re-run green, no fixture changed. 21-check AnswerSet
+      gate (schema, pins, response_hash, Ed25519, key trust, state
+      binding, LIVE expiry vs REPLAY mode) + per-check adversarial
+      vectors. FINAL GATE: 102/102 checks, 20,000 fuzz iterations,
+      normal + hardened builds, sidecar byte-identical.
       NO further P3.1 changes.
 - [x] P3.2 canonical serialization contract + committed cross-language test
       vector ACCEPTED/FROZEN (37/37 normal+hardened; contract in §13.2).
-- [ ] P3.3 typed `JEVAnswerSetV3` + deterministic decision table (§3.5a/§3.7
-      tests, replay determinism by hash).
-- [ ] §13.4 confidence resolved: contracted (a) or quarantined (b, default).
+- [x] P3.3 typed `JEVAnswerSetV3` + deterministic decision table ACCEPTED
+      (human review at `41f3b66`, correction `7d83974`): full frozen §3.4
+      state (17 keys, full feature records — NOT feature IDs), closed
+      nested schemas, checked integers, int64-micros freshness,
+      expected-symbol binding, non-copyable/mutex KernelState with
+      try_accept() sole gate, universe cap 5, frozen VetoReason codes.
+      78/78 + 200-replay SHA-256 proof + §3.7 21–28 verbatim. Locked
+      rulings: v2 cases 1–20 stay HISTORICAL (no v2->v3 mapping invented);
+      feature_revision stays frozen count-only (content-aware revision
+      needs plan amendment + version bump + new vectors).
+- [x] §13.4 resolved: (b) QUARANTINED (human review) — confidence is
+      structurally validated for artifact compatibility but never stored
+      in, readable from, or acted on by any decision object; enforced by
+      build.sh gates.
 - [ ] P3.5 risk/sizing/execution in docs 04–06 order: veto, features, kills,
       STAGE chain, feed soak, ctx hash-stability, exec/journal/reconcile.
+      Prereq (human hardening note): make the authority boundary
+      mechanically enforceable — ValidationRequest must be constructible
+      ONLY via KernelState::request_for() (compiler-enforced), not merely
+      by convention; close during P3.5 integration, not as P3.3 rework.
 - [x] Freeze-check extended to code pins (jev.py MODEL/REVISION/PROVIDER/
       QVERSION/ceilings/caps/questions), kernel pins, and P3.2 vector
       self-consistency; human sign-off recorded below.

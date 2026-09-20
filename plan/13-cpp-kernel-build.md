@@ -321,12 +321,12 @@ Protocol guard: the canonical form is exactly the frozen `json.dumps` recipe abo
       closed loop (C++ Serialize hashes to sidecar state_hash /
       decision_key, frozen "?" feature_revision reproduced exactly).
       §3.7 21–28 green verbatim; v2 1–20 NOT re-encoded (no v3 mapping
-      in plan; invented nothing). Sidecar untouched. P3.4 defaults to
-      (b), gated. KNOWN QUIRK (frozen, not ours to fix): feature_revision
-      over full states is count-only ("?" per member) — content-aware
-      revision needs a plan amendment + version bump.
-- [ ] §13.4 resolved to (a) with contract or (b) quarantined.
+      in plan; invented nothing). Sidecar untouched. ACCEPTED by human
+      review at `41f3b66` (P3.4 = (b) quarantine, confirmed). Locked
+      rulings: v2 cases 1–20 stay HISTORICAL; feature_revision stays
+      frozen count-only.
+- [x] §13.4 resolved to (b) quarantined (human review).
 - [ ] P3.5 drill boxes (§4.5, §6.5) checked.
-- [ ] Freeze-check extended to cover the kernel pins (model/revision/provider/
+- [x] Freeze-check extended to cover the kernel pins (model/revision/provider/
       qversion/schema) and passing.
-- [ ] Human sign-off recorded in doc 07.
+- [x] Human sign-off recorded in doc 07 (P3.1 re-sign + P3.3 accept).
