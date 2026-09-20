@@ -178,7 +178,9 @@ an actual contract defect.
       in, readable from, or acted on by any decision object; enforced by
       build.sh gates.
 - [ ] P3.5 risk/sizing/execution in docs 04–06 order: veto, features, kills,
-      STAGE chain, feed soak, ctx hash-stability, exec/journal/reconcile.
+      STAGE chain, feed soak, ctx hash-stability, exec/journal/reconcile
+      (slices A–H1 in doc 13 §13.5; H1 implementation/drill gates close
+      P3.5, H2 30-day operational evidence belongs to Phase 4).
       Prereq (human hardening note): make the authority boundary
       mechanically enforceable — ValidationRequest must be constructible
       ONLY via KernelState::request_for() (compiler-enforced), not merely

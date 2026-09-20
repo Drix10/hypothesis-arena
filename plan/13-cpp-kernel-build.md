@@ -243,37 +243,63 @@ G0_PAPER only (§13.6).
   becomes private-immutable (const fields, no setters, no mutable
   accessors) with KernelState friendship; request_for() is the sole
   construction authority, copying an authorized request is allowed but
-  mutation is impossible. Gate: build.sh grep-gates (no public ctor, no
-  setters, friend present) + P3.1/P3.2/P3.3 suites still green unchanged.
+  mutation is impossible. Friend list pinned tight: KernelState +
+  validate_jev(...) only, no other construction-capable friend.
+  Gate [correctness]: P3.1/P3.2/P3.3 suites green unchanged (encapsulation
+  is behavior-preserving) + build.sh grep-gates (no public ctor, no
+  setters, exact friend list) + a compile-test harness proving the
+  boundary (not just grepping it): compile-FAIL snippets for direct
+  construction, direct field mutation, and mutable-accessor acquisition
+  (each failing for the intended reason), compile-PASS for
+  request_for() and validate_jev(const ValidationRequest&). Grep is
+  policy; the negative compile test is the proof.
 - Slice B — `risk/veto.cpp` (doc 05 R1–R17 + doc 03 §3.2 table): pure
   Snapshot+AnswerSet → HOLD/PROCEED + frozen reason; stage multiplier
   applied here after sizing; K6 snapshot formulas; R14/R13 inputs from
-  validated state. Gate: veto unit suite from doc 05 cases.
+  validated state. Gate [correctness]: veto unit suite from doc 05 cases.
 - Slice C — `ingest/features.cpp` (doc 04 §4.2.2a, R12): f2 schema,
   bounds (≤64 retained, ≤16 payload), future/TTL drop, rejection
-  counters, >5%/h alert. Gate: §4.5 rejection tests.
+  counters, >5%/h alert. Gate [correctness]: §4.5 rejection tests.
 - Slice D — `kill/switch.cpp` (doc 10 §10.3): SOFT/MEDIUM/HARD, file +
   signal reachable <5 s, exits/stops/TP/reconcile survive every level.
-  Gate: §4.5 + §6.5 kill drills.
+  Gate [drill]: §4.5 + §6.5 kill drills.
 - Slice E — STAGE chain (doc 10 §10.1): re-read per cycle boundary,
-  hash-chain verify, unverifiable → G0_PAPER. Gate: corruption test.
+  hash-chain verify, unverifiable → G0_PAPER. Gate [correctness]: corruption test.
 - Slice F — `feed/broker.cpp` (doc 04 §4.2.2): lock-free ring, gap
   flags, reconnect backoff, session marking (closed = normal).
-  Gate: 24 h soak, flat RSS, kill/reconnect test (§4.5).
+  Gate [soak]: 24 h soak, flat RSS, kill/reconnect test (§4.5).
 - Slice G — `ctx/context.cpp` (doc 04 §4.2.3): frozen Snapshot over
   marks, spread, session, indicators, regime, buckets, VaR/corr flags,
   portfolio, last complete feature bundle, source_status, stage,
   research_revision, calibration; context_hash (D6 fixed-point) over
-  ALL of it, features included. Gate: 10k identical inputs → 1 hash.
-- Slice H — `exec/router.cpp` + `log/journal.cpp` (doc 06): §3.3 sizing
-  hierarchy, broker-native PROTECTED attach (E1), idempotent order IDs
-  (doc 06 §6.1 recipe), durable intent/ack machine, retry-once,
-  journal-before-order, S2 reconcile FSM, §6.2a outage rows.
-  Gate: §6.5 drills (kill-switch, reconcile, summary-from-journal,
-  paper fill model, retention/redaction, 30 clean days, outage rows,
-  out-of-band alert).
+  ALL of it, features included. Gate [correctness]: 10k identical inputs → 1 hash.
+- Slice H1 — `exec/router.cpp` + `log/journal.cpp` (doc 06, implementation
+  + integration): §3.3 sizing hierarchy, broker-native PROTECTED attach
+  (E1), idempotent order IDs (doc 06 §6.1 recipe), durable intent/ack
+  machine, retry-once, journal-before-order, S2 reconcile FSM,
+  fault-injection outage behavior tests, paper fill model frozen,
+  summary-from-journal, retention/redaction tests, kill-switch +
+  reconcile drills (exits proven alive). Gate [correctness + drill]:
+  §6.5 implementation and drill rows green. H1 green CLOSES P3.5
+  (with §4.5 correctness + drill rows).
+- Slice H2 — Phase 4 operational evidence (NOT P3.5): the live paper
+  loop, 30 clean days, zero R violations, real outage drills with
+  exits alive, out-of-band notification actually received. Gate
+  [operational]: doc 07 Phase 4 exit. H2 owns all time-series evidence;
+  it runs after P3.5 closes and never retro-blocks it. The 30-day bar
+  is unchanged — it simply belongs to the correct phase.
 
-Exit: §4.5, §6.5 drill boxes checked.
+Gate classes (so long evidence never silently serializes the build):
+[correctness] = unit/fixture suites, deterministic, minutes;
+[drill] = fault-injection or procedure runs against built slices;
+[soak]/[operational] = wall-clock evidence (F 24 h feed soak, H2 30 d).
+Sequencing rule: a slice's correctness + drill gates must be green before
+the next slice's correctness work starts; soak/operational gates attach to
+their slice but may complete overlapped with downstream slices. §4.5's
+isolation row belongs to Phase 2.5 (research-plane gate), not P3.5.
+
+Exit: §4.5 + §6.5 correctness/drill boxes checked (H1 closes P3.5).
+Soak/operational evidence tracked per gate class, never retro-blocking.
 
 ## 13.6 Non-goals for Phase 3
 
