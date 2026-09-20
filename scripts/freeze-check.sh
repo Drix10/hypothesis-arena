@@ -220,8 +220,8 @@ grep -q 'try_accept' "$ROOT/kernel/kernel_state.hpp" \
   && ok "compare-and-advance gate" || bad "accept gate moved"
 # Slice A authority pins: negative compile harness + tight friends.
 _n="$(ls "$ROOT/kernel/auth"/neg_*.cpp 2>/dev/null | wc -l | tr -d ' ')"
-[ "$_n" = "5" ] \
-  && ok "auth: 5 negative probes" || bad "auth probes count: $_n"
+[ "$_n" = "6" ] \
+  && ok "auth: 6 negative probes" || bad "auth probes count: $_n"
 [ -f "$ROOT/kernel/auth/pos_authorized.cpp" ] \
   && ok "auth: positive control" || bad "auth positive missing"
 grep -q 'friend class KernelState;' "$ROOT/kernel/jev_validate.hpp" \

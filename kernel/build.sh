@@ -46,15 +46,18 @@ done
 g++ $FLAGS -o /tmp/auth_pos auth/pos_authorized.cpp
 /tmp/auth_pos || { echo "GATE FAIL: authorized path broken"; exit 1; }
 # Friend list pinned tight INSIDE ValidationRequest: exactly the
-# construction authority plus the read-only validator. Any third friend
-# in that region is a second authority (friends elsewhere in the file ,
-# ValidationResult's own , are out of scope for this gate).
-_region="$(sed -n '/^class ValidationRequest {/,/^};/p' jev_validate.hpp)"
-[ "$(echo "$_region" | grep -c 'friend class KernelState;')" = "1" ] || {
+# construction authority plus the read-only validator. Counts are
+# OCCURRENCES, not lines (a smuggled second declaration on one line must
+# still trip the gate), taken over the comment-stripped region (a matching
+# comment must never satisfy a positive check). Any third friend in that
+# region is a second authority. The neg_friendleak probe covers access
+# paths no text gate can name.
+_region="$(sed -n '/^class ValidationRequest {/,/^};/p' jev_validate.hpp | sed 's|//.*||')"
+[ "$(echo "$_region" | grep -o 'friend class KernelState;' | wc -l | tr -d ' ')" = "1" ] || {
     echo "GATE FAIL: KernelState friendship moved"; exit 1; }
-[ "$(echo "$_region" | grep -c 'friend ValidationResult validate_jev(const ValidationRequest&);')" = "1" ] || {
+[ "$(echo "$_region" | grep -o 'friend ValidationResult validate_jev(const ValidationRequest&);' | wc -l | tr -d ' ')" = "1" ] || {
     echo "GATE FAIL: validator friendship moved"; exit 1; }
-[ "$(echo "$_region" | grep -c 'friend ')" = "2" ] || {
+[ "$(echo "$_region" | grep -o 'friend ' | wc -l | tr -d ' ')" = "2" ] || {
     echo "GATE FAIL: unexpected friend (authority leak)"; exit 1; }
 g++ $FLAGS -o fuzz_p31 fuzz_p31.cpp
 ./fuzz_p31 20000
