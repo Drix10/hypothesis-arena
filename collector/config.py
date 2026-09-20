@@ -20,6 +20,7 @@ REQUIRED = {
 }
 OPTIONAL = {
     "FRED_API_KEY": "FRED collector; absent means SKIPPED_CONFIG, not failure",
+    "OPENROUTER_API_KEY": "JEV sidecar; absent means jev_error:no-key HOLD, never a crash",
 }
 KEYS = tuple(list(REQUIRED) + list(OPTIONAL))
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

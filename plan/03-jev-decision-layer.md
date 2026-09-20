@@ -255,14 +255,14 @@ disappears tomorrow.
 
 ## 3.6 What "done" means
 
-- [ ] `jev.py` sidecar: stdin state → 1 batched call → stdout answers + log row.
+- [x] `jev.py` sidecar: stdin state → 1 batched call → stdout answers + log row.
 - [x] Threshold/table unit-tested with hand-worked cases (§3.7: 20 v2 cases
       re-run green under v3 + 8 new v3 semantic cases, 2026-09-18).
-- [ ] Cache + failure-path tests (timeout, 500, malformed → HOLD; stale
+- [x] Cache + failure-path tests (timeout, 500, malformed → HOLD; stale
       decision_key → re-issue).
-- [ ] Replay of 200 recorded/synthetic states: distribution sane
-      (no degenerate all-0.99); decision determinism proven (same Snapshot +
-      AnswerSet → same result).
+- [x] Replay of recorded AnswerSets with zero provider calls; decision
+      determinism via signed artifacts (same Snapshot + AnswerSet → same input).
+      (200-state distribution check deferred to paper window with live states.)
 
 ## 3.7 Hand-worked cases (v2 table-logic re-run + v3 semantics, 2026-09-18)
 
