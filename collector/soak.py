@@ -24,6 +24,64 @@ SOAK = os.path.join(ROOT, "data", "soak")
 POLLS = os.path.join(SOAK, "polls.jsonl")
 CYCLE_S = 15 * 60
 WINDOW_PATH = os.path.join(SOAK, "window.json")
+SOAK_LOCK_PATH = os.path.join(SOAK, "soak.lock")
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
+
+
+class _SingletonLock:
+    """Non-blocking OS-native file lock, held for the whole soak run.
+    Twin of collect.py's guard (kept local: importing collect would drag
+    its config load into the orchestrator). Two --loop (or --once)
+    coordinators would otherwise interleave classify/audit/poll evidence
+    even though the collector itself refuses concurrency."""
+    def __init__(self, path):
+        self.path = path
+        self.fh = None
+
+    def acquire(self):
+        parent = os.path.dirname(self.path)
+        if parent:
+            try:
+                os.makedirs(parent, exist_ok=True)
+            except OSError:
+                return False
+        try:
+            self.fh = open(self.path, "a+b")
+            self.fh.seek(0)
+            if os.name == "nt":
+                msvcrt.locking(self.fh.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                fcntl.flock(self.fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except (OSError, IOError):
+            try:
+                if self.fh is not None:
+                    self.fh.close()
+            except (OSError, ValueError):
+                pass
+            self.fh = None
+            return False
+
+    def release(self):
+        if self.fh is None:
+            return
+        try:
+            if os.name == "nt":
+                self.fh.seek(0)
+                msvcrt.locking(self.fh.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(self.fh.fileno(), fcntl.LOCK_UN)
+        except (OSError, ValueError):
+            pass
+        try:
+            self.fh.close()
+        except (OSError, ValueError):
+            pass
+        self.fh = None
 
 # Missed-cycle semantics (explicit and honest): a hard kill during the
 # 15-min sleep writes NOTHING — a dead process cannot append rows. The
@@ -145,13 +203,18 @@ def ts_now():
     return datetime.now(timezone.utc).isoformat()
 
 
-def snapshot_heartbeats(at, exits=None):
+def snapshot_heartbeats(at, exits=None, started_at=None):
     """Snapshot per-source heartbeats. Each entry preserves the heartbeat
     file's OWN `at` as `heartbeat_at`: checkers validate the heartbeat's
     freshness, never the snapshot row's timestamp (a stale file copied
     into today's row must not read as today's coverage). `exits` records
-    this cycle's subprocess return codes (None = step not run)."""
+    this cycle's subprocess return codes (None = step not run).
+    `at` is the SNAPSHOT-CREATION instant (freshness anchor), never the
+    cycle-start time: heartbeats born during the cycle must not read as
+    future-dated. `started_at` is carried for lag forensics only."""
     row = {"at": at, "sources": {}}
+    if started_at is not None:
+        row["started_at"] = started_at
     if exits:
         row["exits"] = exits
     for f in glob.glob(os.path.join(ROOT, "data", "state", "*.heartbeat.json")):
@@ -199,14 +262,23 @@ def valid_audit_doc(obj):
 
 
 def cycle():
-    at = ts_now()
-    day = at[:10]
+    # Timestamp discipline (explicit): `started_at` marks cycle start for
+    # lag forensics. The EVIDENCE DAY and the snapshot freshness anchor
+    # (`at`) are captured AFTER collection, at snapshot creation: a cycle
+    # starting 23:59:59 whose collector finishes 00:00:10 classifies the
+    # NEW day's file (whatever the collector just wrote is picked up next
+    # cycle — PK-dedupe makes the boundary lossless, never duplicated).
+    # Classifying the previous day's file after a midnight rollover would
+    # silently drop the just-written records from this snapshot's view.
+    started_at = ts_now()
     exits = {}
     r1 = run_step([sys.executable, os.path.join(HERE, "collect.py")], 600)
     exits["collect"] = r1.returncode
     print(r1.stdout[-500:] if r1.stdout else "", end="")
     if r1.returncode != 0:
         print(f"COLLECT EXIT {r1.returncode}: {r1.stderr[-500:]}")
+    at = ts_now()
+    day = at[:10]
     sig = os.path.join(ROOT, "data", "signals", f"{day}.jsonl")
     if os.path.exists(sig):
         r2 = run_step(
@@ -246,8 +318,9 @@ def cycle():
             print("\n".join(tail))
     # Snapshot LAST so the persisted row carries every subprocess exit code
     # of this cycle (a collector/classify failure must be visible to the
-    # acceptance checker, not printed and forgotten).
-    hb = snapshot_heartbeats(at, exits)
+    # acceptance checker, not printed and forgotten). Timestamped at
+    # creation (`at`), not at cycle start.
+    hb = snapshot_heartbeats(at, exits, started_at)
     bad = {k: v["status"] for k, v in hb["sources"].items()
            if v.get("status") not in ("ok", "EMPTY_SUCCESS", "SKIPPED_CONFIG")}
     if bad:
@@ -257,7 +330,16 @@ def cycle():
 
 def main():
     if "--once" in sys.argv:
-        cycle()
+        lock = _SingletonLock(SOAK_LOCK_PATH)
+        if not lock.acquire():
+            print("SOAK_ALREADY_RUNNING: another soak.py holds soak.lock "
+                  "-- refusing concurrent orchestration",
+                  file=sys.stderr)
+            return 3
+        try:
+            cycle()
+        finally:
+            lock.release()
     elif "--loop" in sys.argv:
         sys.path.insert(0, HERE)
         from config import load as load_config
@@ -266,29 +348,42 @@ def main():
             print(f"MISSING_REQUIRED_CONFIG: {','.join(cfg['missing_required'])} "
                   f"-- refusing loop", file=sys.stderr)
             return 2
-        hours = 168.0
-        for i, a in enumerate(sys.argv):
-            if a == "--window-hours" and i + 1 < len(sys.argv):
-                hours = float(sys.argv[i + 1])
-        w = load_window(hours)
-        # A previous incarnation may have died mid-window: derive and
-        # record the dead interval BEFORE the first cycle, so the gap is
-        # explicit evidence rather than silent absence.
-        record_missed_range(ts_now())
-        end = datetime.fromisoformat(w["end"]).timestamp()
-        while time.time() < end:
-            cycle()
-            nxt = (int(time.time() / CYCLE_S) + 1) * CYCLE_S
-            wait = nxt - time.time()
-            if wait > CYCLE_S * 1.5:
-                # Woke over a cycle late but alive: derive the lost
-                # interval from the last poll row (honest count, not one
-                # generic row).
-                record_missed_range(ts_now())
-            time.sleep(max(60, wait))
-        print(f"window closed {w['end']}")
+        lock = _SingletonLock(SOAK_LOCK_PATH)
+        if not lock.acquire():
+            print("SOAK_ALREADY_RUNNING: another soak.py holds soak.lock "
+                  "-- refusing concurrent orchestration",
+                  file=sys.stderr)
+            return 3
+        try:
+            _loop()
+        finally:
+            lock.release()
     else:
         print(__doc__)
+
+
+def _loop():
+    hours = 168.0
+    for i, a in enumerate(sys.argv):
+        if a == "--window-hours" and i + 1 < len(sys.argv):
+            hours = float(sys.argv[i + 1])
+    w = load_window(hours)
+    # A previous incarnation may have died mid-window: derive and
+    # record the dead interval BEFORE the first cycle, so the gap is
+    # explicit evidence rather than silent absence.
+    record_missed_range(ts_now())
+    end = datetime.fromisoformat(w["end"]).timestamp()
+    while time.time() < end:
+        cycle()
+        nxt = (int(time.time() / CYCLE_S) + 1) * CYCLE_S
+        wait = nxt - time.time()
+        if wait > CYCLE_S * 1.5:
+            # Woke over a cycle late but alive: derive the lost
+            # interval from the last poll row (honest count, not one
+            # generic row).
+            record_missed_range(ts_now())
+        time.sleep(max(60, wait))
+    print(f"window closed {w['end']}")
 
 
 if __name__ == "__main__":

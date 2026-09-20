@@ -232,6 +232,28 @@ def main():
             det_ok, det_detail = False, f"{type(e).__name__}: {e}"
     C.append(verdict("replay-determinism", det_ok, det_detail))
 
+    # 3a2. signals-file integrity: the day's evidence stream itself must
+    # parse (classify.py aborts on malformed signals rows, so a present
+    # classified output already implies this — the verdict protects the
+    # day independently of which tool ran first).
+    sig_bad = 0
+    if os.path.exists(sig):
+        with open(sig, encoding="utf-8") as fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    sig_bad += 1
+                    continue
+                if not isinstance(r, dict):
+                    sig_bad += 1
+    C.append(verdict("signals-integrity", sig_bad == 0,
+                     f"malformed_signal_rows={sig_bad}" if sig_bad
+                     else ("no signals file" if not os.path.exists(sig)
+                           else "stream intact")))
+
     # 3b. future-timestamp leakage in the DAY's classified feed, compared as
     # instants (never strings); unparseable timestamps are flagged too.
     # Malformed classified rows are evidence failure (classified-integrity),

@@ -16,7 +16,7 @@ sys.path.insert(0, HERE)
 
 import sqlite3  # noqa: E402
 from classify import init_db, ingest_signal, classify, DB, \
-    temporal_violation  # noqa: E402
+    temporal_violation, run, ClassifyAbort  # noqa: E402
 
 N = 0
 
@@ -331,3 +331,46 @@ assert temporal_violation(
 # absent publication (estimated) only checks observed <= retrieved
 assert temporal_violation(dict(rec(), published_at=None), RET) is None
 print("ok temporal-ordering")
+
+# 25. infrastructure failure aborts the run: no commit, no publish.
+# A locked/broken canonical DB must never become a successful projection
+# with silently missing rows. (fresh() first: earlier fixtures leave an
+# open connection with uncommitted rows; run() opens its own handle.)
+import json as _json
+fresh()
+_sig = os.path.join(tmp, "abort.jsonl")
+with open(_sig, "w") as _fh:
+    _fh.write(_json.dumps(rec(source_id="abort1")) + "\n")
+import classify as _cm
+_saved_ingest = _cm.ingest_signal
+
+def _boom(con, rec, ts):
+    raise sqlite3.OperationalError("database is locked")
+_cm.ingest_signal = _boom
+try:
+    _cm.run(_sig, as_of="2026-09-19T18:00:00+00:00")
+    _aborted = False
+except ClassifyAbort as _e:
+    _aborted = "db-infrastructure" in str(_e)
+finally:
+    _cm.ingest_signal = _saved_ingest
+assert _aborted, "db failure must abort"
+assert not os.path.exists(os.path.join(tmp, "2026-09-19.jsonl")), \
+    "aborted run must not publish"
+print("ok db-failure-aborts")
+
+# 26. malformed signals rows abort the run (evidence intactness).
+# A partial tail line from a crashed append is not "skippable dirt".
+_sig2 = os.path.join(tmp, "abort2.jsonl")
+with open(_sig2, "w") as _fh:
+    _fh.write(_json.dumps(rec(source_id="abort2")) + "\n")
+    _fh.write("{partial crash tail\n")
+try:
+    _cm.run(_sig2, as_of="2026-09-18T19:00:00+00:00")
+    _aborted2 = False
+except ClassifyAbort as _e:
+    _aborted2 = "signals-integrity" in str(_e)
+assert _aborted2, "malformed signals must abort"
+assert not os.path.exists(os.path.join(tmp, "2026-09-18.jsonl")), \
+    "malformed run must not publish"
+print("ok signals-integrity-aborts")

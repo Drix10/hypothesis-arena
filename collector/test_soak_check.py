@@ -218,6 +218,54 @@ _r = _soak.run_step([sys.executable, "-c",
 check("run-step-timeout", _r.returncode == 124)
 _r = _soak.run_step([os.path.join(TMP, "no-such-binary-xyz")], timeout=10)
 check("run-step-spawn", _r.returncode == 127)
+# 12. soak singleton: a held soak.lock refuses a second orchestrator
+import subprocess as _sp
+_saved_ssoak = _soak.SOAK
+_soak.SOAK = os.path.join(TMP, "soakLock")
+_soak.POLLS = os.path.join(_soak.SOAK, "polls.jsonl")
+_soak.WINDOW_PATH = os.path.join(_soak.SOAK, "window.json")
+_soak.SOAK_LOCK_PATH = os.path.join(_soak.SOAK, "soak.lock")
+_holder = _soak._SingletonLock(_soak.SOAK_LOCK_PATH)
+assert _holder.acquire()
+_p = _sp.run(
+    [sys.executable, "-c",
+     "import sys; sys.path.insert(0, %r); import soak; "
+     "soak.SOAK = %r; soak.SOAK_LOCK_PATH = %r; "
+     "sys.exit(0 if soak._SingletonLock("
+     "soak.SOAK_LOCK_PATH).acquire() else 1)"
+     % (HERE, _soak.SOAK, _soak.SOAK_LOCK_PATH)], capture_output=True)
+check("soak-singleton-cross-process", _p.returncode == 1)
+_holder.release()
+_soak.SOAK = _saved_ssoak
+_soak.POLLS = os.path.join(_soak.SOAK, "polls.jsonl")
+_soak.WINDOW_PATH = os.path.join(_soak.SOAK, "window.json")
+_soak.SOAK_LOCK_PATH = os.path.join(_soak.SOAK, "soak.lock")
+# 13. snapshot carries the GIVEN creation instant (freshness anchor),
+# never wall-clock: heartbeat_at born mid-cycle must not read as future.
+_soak.POLLS = os.path.join(SOAK, "polls.jsonl")
+_row = _soak.snapshot_heartbeats("2026-09-18T18:00:00+00:00",
+                                  {"collect": 0},
+                                  "2026-09-18T17:45:00+00:00")
+check("snapshot-at-anchor",
+      _row["at"] == "2026-09-18T18:00:00+00:00"
+      and _row["started_at"] == "2026-09-18T17:45:00+00:00"
+      and _row["exits"] == {"collect": 0})
+# 14. signals-file integrity verdict
+_sigdir = os.path.join(DATA, "signals")
+os.makedirs(_sigdir, exist_ok=True)
+_sigp = os.path.join(_sigdir, DAY + ".jsonl")
+with open(_sigp, "w", encoding="utf-8") as _fh:
+    _fh.write(json.dumps({"id": "s1"}) + "\n")
+    _fh.write("{partial tail\n")
+write_polls([good_row])
+run()
+check("signals-integrity-fails", results()["signals-integrity"] == "FAIL")
+os.remove(_sigp)
+write_polls([good_row])
+run()
+check("signals-integrity-passes", results()["signals-integrity"] == "PASS")
+
+print("ALL SOAK-CHECK TESTS PASS")
 # restart derivation: dead interval becomes an explicit MISSED_RANGE row
 _soak.POLLS = os.path.join(SOAK, "polls.jsonl")
 _old = {"at": "2026-09-18T10:00:00+00:00",

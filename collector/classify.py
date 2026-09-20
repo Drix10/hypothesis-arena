@@ -352,6 +352,16 @@ def _base_classify(source, rec, estimated):
     return "CONTEXT", None, 0.5, "default-context"
 
 
+class ClassifyAbort(Exception):
+    """Infrastructure failure mid-run (DB/I-O, corrupt signals stream).
+    Carries partial stats. The caller must NOT publish output and must
+    exit nonzero: a projection built over failing infrastructure is not
+    evidence. Recovery is audited human repair, never silent skip."""
+    def __init__(self, reason, stats):
+        super().__init__(reason)
+        self.stats = stats
+
+
 def run(signals_path, as_of=None):
     REF["t"] = as_of or now_iso()
     os.makedirs(CLASSIFIED, exist_ok=True)
@@ -401,13 +411,29 @@ def run(signals_path, as_of=None):
                     continue  # inconsistent clocks: never SQLite, never emitted
                 try:
                     verdict, ch, first_seen, revision_of = ingest_signal(con, rec, retrieved_at)
-                except Exception as e:
+                except sqlite3.Error as e:
+                    # Infrastructure, not data: the canonical DB (lock,
+                    # I/O, corruption) failed. Abort the run — continuing
+                    # would publish a projection with silently missing rows
+                    # and still exit 0. No commit, no publish below.
+                    raise ClassifyAbort(
+                        f"db-infrastructure:{type(e).__name__}", stats)
+                except (ValueError, KeyError, TypeError) as e:
+                    # Row-level data surprise on a validated record:
+                    # counted, never fatal to the batch. Anything else
+                    # (including programming bugs) propagates loudly —
+                    # also without publishing, since the raise precedes
+                    # commit.
                     stats["ingest_crash"] = stats.get("ingest_crash", 0) + 1
                     stats["ingest_crash_last"] = f"{type(e).__name__}: {e}"[:200]
                     continue  # one bad row never kills the batch
-                pub_row = con.execute(
-                    "SELECT published_at FROM records WHERE source=? AND source_id=? AND content_hash=?",
-                    (rec["source"], rec["source_id"], ch)).fetchone()
+                try:
+                    pub_row = con.execute(
+                        "SELECT published_at FROM records WHERE source=? AND source_id=? AND content_hash=?",
+                        (rec["source"], rec["source_id"], ch)).fetchone()
+                except sqlite3.Error as e:
+                    raise ClassifyAbort(
+                        f"db-infrastructure:{type(e).__name__}", stats)
                 published_at = pub_row[0] if pub_row else None
                 estimated = published_at is None
                 fresh = is_fresh(first_seen, rec["source"])
@@ -432,11 +458,26 @@ def run(signals_path, as_of=None):
                                        "rule_version": RULES_VERSION, "created_at": retrieved_at,
                                        "revision_of": revision_of},
                     })
+        # Malformed signals rows are EVIDENCE failure, not skippable dirt:
+        # append_records() is append-only, so a collector crash can leave a
+        # partial final line. Classifying "everything parseable" and
+        # exiting 0 would certify a broken stream as intact. Abort instead;
+        # recovery is audited repair (inspect the tail, truncate the
+        # partial line, re-run) — and soak_check's signals-integrity
+        # verdict independently fails the day.
+        if stats.get("malformed_lines"):
+            raise ClassifyAbort(
+                f"signals-integrity:{stats['malformed_lines']}-malformed-lines",
+                stats)
         # Crash-consistent publication: commit the canonical truth FIRST, then
         # write the output to temp + fsync + atomic rename. A crash before the
         # commit leaves neither DB rows nor output; a crash during the file
         # write leaves the previous artifact intact; reruns are PK-idempotent.
-        con.commit()
+        try:
+            con.commit()
+        except sqlite3.Error as e:
+            raise ClassifyAbort(
+                f"db-commit:{type(e).__name__}", stats)
         tmp_path = out_path + f".tmp-{os.getpid()}"
         with open(tmp_path, "w", encoding="utf-8") as out:
             for row in emitted:
@@ -464,6 +505,13 @@ if __name__ == "__main__":
         print(f"usage: classify.py <signals.jsonl> [--as-of ISO]",
               file=sys.stderr)
         sys.exit(2)
-    path, stats = run(argv[0], as_of=as_of)
+    try:
+        path, stats = run(argv[0], as_of=as_of)
+    except ClassifyAbort as e:
+        print(f"CLASSIFY_ABORTED: {e} -- no output published; "
+              f"audited repair required, see stats",
+              file=sys.stderr)
+        print(json.dumps(e.stats, indent=1))
+        sys.exit(3)
     print(f"classified -> {path}")
     print(json.dumps(stats, indent=1))
