@@ -234,15 +234,44 @@ Default is (b). Switching to (a) is a doc edit, not a silent code change.
 
 ## 13.5 P3.5 — Risk engine, sizing, exits, kills (docs 04–06 order)
 
-Only after P3.1–P3.3 are green:
+Only after P3.1–P3.3 are green. Build slices in this exact order; each
+slice is pure-first (no I/O in decision logic), fixture-tested, and
+green before the next starts. No JEV/sidecar changes, no research plane,
+G0_PAPER only (§13.6).
 
-- `core` + `risk/veto.cpp` (R1–R17, stage multiplier, row-0 veto).
-- `ingest/features.cpp` + rejection tests (schema f2, R12 timestamps, TTL).
-- `kill/switch.cpp` + SOFT/MEDIUM/HARD drills, exits proven alive in each.
-- `STAGE` chain verification, corrupted-file -> G0_PAPER test.
-- `feed` + 24 h soak + kill/reconnect drill.
-- `ctx` + hash-stability test (10k identical -> 1 hash).
-- `exec` + `journal` + kill-switch + reconcile drills.
+- Slice A — request authority (prereq, doc 07 ruling): ValidationRequest
+  becomes private-immutable (const fields, no setters, no mutable
+  accessors) with KernelState friendship; request_for() is the sole
+  construction authority, copying an authorized request is allowed but
+  mutation is impossible. Gate: build.sh grep-gates (no public ctor, no
+  setters, friend present) + P3.1/P3.2/P3.3 suites still green unchanged.
+- Slice B — `risk/veto.cpp` (doc 05 R1–R17 + doc 03 §3.2 table): pure
+  Snapshot+AnswerSet → HOLD/PROCEED + frozen reason; stage multiplier
+  applied here after sizing; K6 snapshot formulas; R14/R13 inputs from
+  validated state. Gate: veto unit suite from doc 05 cases.
+- Slice C — `ingest/features.cpp` (doc 04 §4.2.2a, R12): f2 schema,
+  bounds (≤64 retained, ≤16 payload), future/TTL drop, rejection
+  counters, >5%/h alert. Gate: §4.5 rejection tests.
+- Slice D — `kill/switch.cpp` (doc 10 §10.3): SOFT/MEDIUM/HARD, file +
+  signal reachable <5 s, exits/stops/TP/reconcile survive every level.
+  Gate: §4.5 + §6.5 kill drills.
+- Slice E — STAGE chain (doc 10 §10.1): re-read per cycle boundary,
+  hash-chain verify, unverifiable → G0_PAPER. Gate: corruption test.
+- Slice F — `feed/broker.cpp` (doc 04 §4.2.2): lock-free ring, gap
+  flags, reconnect backoff, session marking (closed = normal).
+  Gate: 24 h soak, flat RSS, kill/reconnect test (§4.5).
+- Slice G — `ctx/context.cpp` (doc 04 §4.2.3): frozen Snapshot over
+  marks, spread, session, indicators, regime, buckets, VaR/corr flags,
+  portfolio, last complete feature bundle, source_status, stage,
+  research_revision, calibration; context_hash (D6 fixed-point) over
+  ALL of it, features included. Gate: 10k identical inputs → 1 hash.
+- Slice H — `exec/router.cpp` + `log/journal.cpp` (doc 06): §3.3 sizing
+  hierarchy, broker-native PROTECTED attach (E1), idempotent order IDs
+  (doc 06 §6.1 recipe), durable intent/ack machine, retry-once,
+  journal-before-order, S2 reconcile FSM, §6.2a outage rows.
+  Gate: §6.5 drills (kill-switch, reconcile, summary-from-journal,
+  paper fill model, retention/redaction, 30 clean days, outage rows,
+  out-of-band alert).
 
 Exit: §4.5, §6.5 drill boxes checked.
 

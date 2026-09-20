@@ -189,7 +189,12 @@ an actual contract defect.
       KernelState as construction authority, validator given read access;
       copying an authorized request allowed, manufacturing one from
       arbitrary universe/epoch values impossible. Do NOT move validation
-      into KernelState; no opaque handle.
+      into KernelState; no opaque handle. Refinement (human ruling):
+      "copying allowed" must NOT mean "copy then mutate" — state is
+      immutable after construction (const fields, no setters, no mutable
+      accessors), so a legitimately obtained request cannot be altered
+      into another universe/epoch/symbol. Compiler-enforcement is only
+      satisfied if manufacturing AND mutation are both impossible.
 - [x] Freeze-check extended to code pins (jev.py MODEL/REVISION/PROVIDER/
       QVERSION/ceilings/caps/questions), kernel pins, and P3.2 vector
       self-consistency; human sign-off recorded below.
