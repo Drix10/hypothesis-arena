@@ -269,6 +269,17 @@ JEVAnswerSetV3: schema_version | question_set_version=v3 |
   answers | response_hash | signature
 ```
 
+Frozen hash distinction (`state_hash` vs `context_hash`): `context_hash`
+(kernel-owned, doc 04 `ctx/`) is the SHA-256 of the canonical frozen
+Snapshot. `state_hash` is the SHA-256 of `canon()` over the FULL JEV
+request state object — which embeds `context_hash` as one field alongside
+the question set, indicators, portfolio view, and feature list. Different
+inputs, different digests, different verifiers: the kernel checks the
+Snapshot against `context_hash` and the exact bytes it sent to JEV against
+`state_hash`. Either mismatch is HOLD (wrong snapshot vs wrong question
+— the engine must not conflate them). Python computes `state_hash`; only
+the kernel mints `context_hash`, epochs, and the executable universe.
+
 C++ semantics for every malformed/stale answer (locked — each row is HOLD):
 
 ```

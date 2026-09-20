@@ -57,7 +57,10 @@ until promoted.
 | US Treasury *FiscalData*, BLS, BEA | Auctions, yields, CPI/NFP detail | per release | free | TRIGGER (macro) | Direct release data, no vendor interpretation | low | as above |
 | Exchange + venue session/holiday calendars | `session`, PDT counting, early closes | static + updates | free | TRIGGER (veto side) | Not alpha — a hard veto input (R9). Load-bearing. | none | **Missing calendar = no entries.** Fail closed. |
 | Earnings calendar (free tier / EDGAR-derived) | Scheduled event risk | daily | free | TRIGGER (veto side) | Used to *suppress* entries into known events, not to predict them | low | Unknown → treat as event-present → no entry |
-| X-Lists tail (doc 02) | DISABLED in v1 (§2.6: terms conflict, no authorized interface). History kept in repo; returns only via authorized reproducible interface. | n/a | n/a | NULL in v1 | Removed from production, not fought for. The fund is complete without it. |
+
+**HISTORICAL / NON-PRODUCTION (not Tier A, never TRIGGER-eligible in v1):**
+
+| X-Lists tail (doc 02 history only) | DISABLED in v1 (§2.6: terms conflict, no authorized interface). History kept in repo; returns only via authorized reproducible interface. | n/a | n/a | NULL in v1, no promotion path without a doc-01 scope change | Removed from production, not fought for. The fund is complete without it. |
 
 ### Tier B — situational, event-driven, CONTEXT by default
 

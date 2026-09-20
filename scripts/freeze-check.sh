@@ -263,7 +263,7 @@ grep -q 'def validate_cache' "$ROOT/collector/collect.py" \
   && ok "cache schema" || bad "cache schema moved"
 grep -q '"hold", row' "$ROOT/collector/jev.py" \
   && ok "money-gate shape" || bad "money-gate shape moved"
-grep -q '_money_gate(state, key, post_fn)' "$ROOT/collector/jev.py" \
+grep -q '_money_gate(state, key, post_fn, now)' "$ROOT/collector/jev.py" \
   && ok "money gate serialized" || bad "money gate moved"
 grep -q 'MONEY_GATE_TIMEOUT' "$ROOT/collector/jev.py" \
   && ok "gate timeout" || bad "gate timeout moved"
@@ -279,6 +279,71 @@ grep -q 'poll-log-integrity' "$ROOT/collector/soak_check.py" \
   && ok "poll integrity" || bad "poll integrity moved"
 grep -q '\-\-as-of' "$ROOT/collector/classify.py" \
   && ok "as-of replay" || bad "as-of replay moved"
+
+# hardening-4 plumbing.
+grep -q 'MAX_AUTHORIZED_CALL_USD' "$ROOT/collector/jev.py" \
+  && ok "per-call reservation" || bad "per-call reservation moved"
+grep -q 'exp <= now' "$ROOT/collector/jev.py" \
+  && ok "cache expiry admission" || bad "cache expiry moved"
+grep -q 'CLOCK_SKEW_S' "$ROOT/collector/jev.py" \
+  && ok "artifact skew bound" || bad "skew bound moved"
+grep -q 'ALLOWED_SOURCE_KEYS' "$ROOT/collector/collect.py" \
+  && ok "source allowlist" || bad "source allowlist moved"
+grep -q 'commit_validators' "$ROOT/collector/collect.py" \
+  && ok "deferred validators" || bad "deferred validators moved"
+grep -q '_SingletonLock' "$ROOT/collector/collect.py" \
+  && ok "collector singleton" || bad "singleton moved"
+grep -q 'COLLECT_ALREADY_RUNNING' "$ROOT/collector/collect.py" \
+  && ok "already-running" || bad "already-running moved"
+grep -q 'URLError, OSError, http.client.HTTPException' "$ROOT/collector/collect.py" \
+  && ok "narrow network errors" || bad "narrow errors moved"
+grep -q 'MISSED_RANGE' "$ROOT/collector/soak.py" \
+  && ok "missed-range" || bad "missed-range moved"
+grep -q 'iter_poll_rows' "$ROOT/collector/soak_check.py" \
+  && ok "poll reader" || bad "poll reader moved"
+grep -q 'PRAGMA integrity_check' "$ROOT/collector/soak_check.py" \
+  && ok "pragma check" || bad "pragma moved"
+grep -q 'classified-integrity' "$ROOT/collector/soak_check.py" \
+  && ok "classified integrity" || bad "classified integrity moved"
+grep -q 'audit-present' "$ROOT/collector/soak_check.py" \
+  && ok "audit present" || bad "audit present moved"
+grep -q 'ORDER BY first_seen_at, rowid' "$ROOT/collector/classify.py" \
+  && ok "revision tiebreak" || bad "tiebreak moved"
+grep -q 'temporal_violation' "$ROOT/collector/classify.py" \
+  && ok "temporal ordering" || bad "temporal moved"
+grep -q 'WATERMARK_REQUIRED' "$ROOT/collector/ctx_read.py" \
+  && ok "watermark envelope" || bad "watermark moved"
+grep -q 'history-nonmonotonic' "$ROOT/collector/ctx_read.py" \
+  && ok "history monotonic" || bad "monotonic moved"
+grep -q 'MAX_SYMBOLS' "$ROOT/collector/ctx_read.py" \
+  && ok "symbol bound" || bad "symbol bound moved"
+# pass-4 doc reconciliation pins.
+grep -q 'HISTORICAL / NON-PRODUCTION' "$ROOT/plan/09-osint-and-free-data.md" \
+  && ok "09 X historical" || bad "09 X table back"
+! grep -q '| X-Lists tail (doc 02) |' "$ROOT/plan/09-osint-and-free-data.md" \
+  && ok "09 X row moved" || bad "09 X row still in tier table"
+grep -q 'HISTORICAL / NON-PRODUCTION' "$ROOT/plan/02-twitter-alpha-system.md" \
+  && ok "02 X banner" || bad "02 banner moved"
+grep -q 'broker ‖ account ‖ context_hash' "$ROOT/plan/04-cpp-deterministic-core.md" \
+  && ok "04 intent recipe" || bad "04 intent stale"
+grep -q 'context_hash.*≠.*state_hash\|context_hash` ≠' "$ROOT/plan/04-cpp-deterministic-core.md" \
+  && ok "04 hash distinction" || bad "04 hash distinction moved"
+grep -q 'the kernel mints' "$ROOT/plan/03-jev-decision-layer.md" \
+  && ok "03 hash distinction" || bad "03 hash distinction moved"
+grep -q 'latest input bar must fall within the last 2' "$ROOT/plan/05-risk-and-determinism.md" \
+  && ok "R6 data age" || bad "R6 age moved"
+grep -q 'at least 25 of the last' "$ROOT/plan/05-risk-and-determinism.md" \
+  && ok "R7 coverage" || bad "R7 coverage moved"
+grep -q 'FLATTEN_PENDING' "$ROOT/plan/10-capital-gates-and-spend-control.md" \
+  && ok "medium FSM" || bad "medium FSM moved"
+grep -q 'ONE pooled Holm' "$ROOT/plan/11-calibration-and-self-improvement.md" \
+  && ok "Holm family" || bad "Holm family moved"
+grep -q 'DAILY portfolio returns' "$ROOT/plan/11-calibration-and-self-improvement.md" \
+  && ok "return frequency" || bad "return frequency moved"
+grep -q 'universe_vN' "$ROOT/plan/12-statistical-baseline.md" \
+  && ok "universe artifact" || bad "universe artifact moved"
+grep -q 'FROZEN-DESIGN' "$ROOT/README.md" \
+  && ok "README states" || bad "README states moved"
 
 echo "---"
 [ "$FAIL" = 0 ] && echo "FREEZE-CHECK: PASS" || echo "FREEZE-CHECK: FAIL"

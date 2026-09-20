@@ -205,6 +205,15 @@ Every JEV answer is scored against realized outcomes. HOLDs included, through 25
 
 ## Build Roadmap (phases 0-7, mapped to stages G0 to G3)
 
+Status key used everywhere in this repo: **FROZEN-DESIGN** (spec locked,
+not built) · **IMPLEMENTED** (code exists) · **VERIFIED** (acceptance green).
+The table below lists phase EXIT lines — phases 2.5/4–7 are FROZEN-DESIGN
+(not built): "research attached", "baseline live", "shadow challengers"
+are the exit criteria of their phases, not current capabilities. Current
+position: Phase 0 VERIFIED/closed, P1.1–P1.5 + Phase 2 IMPLEMENTED+VERIFIED,
+P3.1/P3.2 ACCEPTED/FROZEN, P3.3 NOT AUTHORIZED. Research plane:
+FROZEN-DESIGN, NOT IMPLEMENTED.
+
 | Phase | Work | Exit |
 |---|---|---|
 | **0: Freeze spec** | Grouped boxes: feed, decision layer, research plane, sources, capital/kill/spend, calibration, risk + venue | Zero TBDs outside "tune later" |

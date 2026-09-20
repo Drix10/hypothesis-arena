@@ -159,6 +159,15 @@ Rules that hold at every level:
   read `features.jsonl`, and does not wait on the network for its decision.
 - MEDIUM and HARD are reachable from a physical operator action (file + signal) in
   under 5 seconds, and that path is drilled monthly.
+- MEDIUM flatten state machine (frozen, implemented in P3.5): the kill
+  switch persists exactly one of `MEDIUM_ACTIVE` (entries stopped, flatten
+  not yet achieved), `FLATTEN_PENDING` (flatten ordered, awaiting broker
+  ack), `FLATTENED` (broker confirms flat), `PROTECTION_ONLY` (venue or
+  conditions never permitted a flatten; stops/TP own the risk). Re-attempts
+  fire ONLY from `FLATTEN_PENDING` (no blind re-issue loops); a restart
+  reloads the persisted state and reconciles with the broker before acting
+  — it never re-sends what the dead process may already have sent. Stage
+  demotion is immediate on MEDIUM entry and independent of flatten progress.
 
 ## 10.4 AI spend control (R10, locked)
 

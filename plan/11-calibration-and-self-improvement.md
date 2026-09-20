@@ -139,7 +139,12 @@ A challenger may be proposed for promotion only when **all** of the following ho
    inference uses HAC (heteroskedasticity-and-autocorrelation-consistent)
    standard errors with the kernel/bandwidth choice documented per run —
    reported as its own procedure, not attributed to Lo–MacKinlay (whose
-   variance-ratio work is a different methodology). Ties break toward the
+   variance-ratio work is a different methodology). Return sampling frozen:
+   DAILY portfolio returns, marked-to-market at the 16:00 ET equity close
+   (FX sleeve at the 17:00 ET rollover), zero-return days INCLUDED (a flat
+   book is still an observation), no overlapping windows, no annualization
+   games (×sqrt(252) on daily, stated), cash earns exactly 0, open positions
+   marked at the close — never at intra-day favorable prints. Ties break toward the
    champion; any window cherry-picking (start/end chosen after seeing
    results) voids the run. Search correction (CAL8): Holm step-down at
    α=0.05 over the family's tested variants on the primary metric — the
@@ -149,9 +154,12 @@ A challenger may be proposed for promotion only when **all** of the following ho
    H0 = challenger net Sharpe ≤ champion net Sharpe (one-sided, challenger
    must be strictly better); test statistic = paired bootstrap difference
    of net Sharpes on the same window; p-values from the stationary
-   bootstrap (same resampling as the CAL7 CI); family = all variants
-   declared under step 4 for this challenger lineage (cross-family search
-   is accounted by union over families); Holm-adjusted p < 0.05 required.
+   bootstrap (same resampling as the CAL7 CI); family = ONE pooled Holm
+   over the union of ALL variants declared across ALL families evaluated
+   in the promotion run (per-family declarations from step 4 feed the pool;
+   there are no separate per-family Holms whose error rates could combine
+   unaccounted — "union over families" means a single global family, not
+   prose about separate corrections); Holm-adjusted p < 0.05 required.
 6. **A non-LLM baseline is beaten.** The challenger must beat the frozen
    statistical baseline (doc 12: exact universe, features, entries, exits,
    costs — indicators + regime + risk table, no JEV, no research plane) on the

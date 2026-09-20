@@ -70,6 +70,14 @@ Finance-first. All IDs below were opened logged-in and resolve; all showed
 posts within ~24h. Full per-list record (name, owner, members, followers,
 recency) is Phase-0 evidence, kept with the sign-off log.
 
+> HISTORICAL / NON-PRODUCTION (§2.6 locks this): the A/B/C split below is
+> the archived Phase-0 research universe. "TRIGGER-eligible" here MEANT
+> eligible-in-principle under a transport that no longer exists in v1 —
+> no X list, record, or mirror feed is TRIGGER-eligible in v1 production,
+> and no v1 code path polls X. Do not read §2.4 as an active source table;
+> the active v1 source table is doc 09 §9.1 (X listed there as
+> HISTORICAL / NON-PRODUCTION, NULL, no promotion path).
+
 **A. Finance TRIGGER-eligible (macro/FX/stocks native, 9 lists).** Found via
 X Lists-tab search from the user's own page (curator profiles publish almost
 no public lists, so search beats curation):

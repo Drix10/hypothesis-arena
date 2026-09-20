@@ -39,11 +39,21 @@ a broker-acknowledged fill (not an intent, not an order — unacked orders do no
 - R6. Realized volatility > 3× 20-day baseline → halve sizes until review.
   Like-with-like only: both sides are stdev of 1 h log returns (baseline =
   trailing 480 points, current = trailing 24). No cross-horizon comparison.
+  Data-age gate (frozen): the latest input bar must fall within the last 2
+  EXPECTED hourly bars per the venue session calendar (doc 01) — weekends
+  and holidays are excluded BY THE CALENDAR, feed gaps count against the
+  budget. A stale R6 input (older than that) makes R6 UNAVAILABLE and entry
+  is HOLD: an unknown volatility state cannot be sized, and "halve" of an
+  unmeasurable number is not risk control.
 - R7. Correlation gate at entry + drift rule after. Entry that would create a
   same-direction pair with Pearson > 0.9 (1 h closes, trailing 30) is HOLD —
   prevention, not cleanup. Insufficient samples, zero variance, or missing
   bars → correlation UNAVAILABLE → entry HOLD (K4: never assume zero
-  correlation). If drift creates the breach later, remove the position
+  correlation). Freshness (frozen): the latest close must be within the last
+  2 expected hourly bars per the venue calendar AND at least 25 of the last
+  30 expected session hours must be present — 30 stale-but-counted points
+  are not 30 observations. Coverage is measured over expected session time,
+  not over whatever the feed happened to deliver. If drift creates the breach later, remove the position
   maximizing (VaR_reduction / max(sacrificed_unrealized_PnL, epsilon)) with
 epsilon = $1: zero-denominator positions rank by VaR_reduction alone;
   negative-PnL positions are eligible (sacrifice = max(PnL, epsilon) keeps

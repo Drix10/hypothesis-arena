@@ -66,6 +66,11 @@ STAGE (human-signed, doc 10) ─────────────┤
    calibration summary (doc 11), then `context_hash` (SHA-256 of canonical
    serialization over **all** of it — features included, or replay is a lie).
    No raw texts, no prose: the digest is not snapshot material.
+   `context_hash` ≠ JEV `state_hash` (frozen distinction, doc 03 §3.5a):
+   context_hash is the kernel's Snapshot digest; state_hash is the digest
+   of the full JEV request state (which embeds context_hash as one field).
+   C++ verifies both — Snapshot against context_hash, sent-state against
+   state_hash — and either mismatch is HOLD.
 4. `risk/veto.cpp` — pure functions `Snapshot+AnswerSet → HOLD/PROCEED + reason`.
    Implements doc 05 limits (R1–R17) + doc 03 §3.2 table + the stage multiplier
    from doc 10 §10.2. No I/O, fully unit-tested. **The stage multiplier is applied
@@ -75,8 +80,10 @@ STAGE (human-signed, doc 10) ─────────────┤
    a signal in < 5 s. Exits, stops, TP, and reconcile survive every level.
 5. `exec/router.cpp` — risk-budget sizing (§3.3 hierarchy), broker-native
    protection attach (doc 06 §6.1: no PROTECTED without broker-acked SL/TP),
-   idempotent client-order-IDs (`hash(context_hash, symbol, side)` — no attempt
-   field; retries reuse the ID, see doc 06), durable order state machine
+   idempotent client-order-IDs (canonical recipe in doc 06 §6.1:
+   `hex(sha256(broker ‖ account ‖ context_hash ‖ symbol ‖ side ‖
+   intent_id))` — namespaced, one intent one ID, no attempt field;
+   retries reuse the ID, see doc 06), durable order state machine
    (intent/ack persisted, reconcile-before-resend after crashes), retry-once,
    position reconcile vs broker every 15 min (§5.4 S2 FSM).
 5a. `broker/` adapters — `FXBrokerAdapter` / `EquityBrokerAdapter` interface
@@ -88,6 +95,11 @@ STAGE (human-signed, doc 10) ─────────────┤
 5b. Universe service — deterministic full scan → eligibility/liquidity/spread/
    shortability/event filters → ranked candidates (50 research, 5 executable).
    The 5-symbol execution cap is the end of a funnel, not the start of one.
+   Kernel-owned (frozen): the executable universe and `snapshot_epoch` are
+   minted by the kernel only. Sidecars never narrow the executable set,
+   assign epochs, or filter by venue state — they answer about whatever
+   state they are handed. Epoch/allowlist state machine lives in P3.3/P3.5
+   per doc 13; the P3.1/P3.2 validator receives them as read-only inputs.
 6. `log/journal.cpp` — append-only per-decision row + hash chain (prev_hash).
    Nothing trades without a journal row.
 

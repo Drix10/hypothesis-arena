@@ -14,6 +14,13 @@ scored against this exact specification on the same window.
   timestamp from versioned constituent records — today's membership applied
   to history is survivorship bias and voids the run. Filter: median daily
   dollar volume > $50M and spread ≤ 5bp at entry, point-in-time.
+- The point-in-time universe is a VERSIONED ARTIFACT (frozen requirement):
+  `universe_vN` = constituent list + membership intervals + delisting/IPO
+  dates + corporate-action adjustments, content-hashed and pinned per
+  promotion run. The harness loads `universe_vN` BY HASH; "current S&P
+  constituents" is never an input to a historical run, and any run that
+  cannot name its universe hash is void. A new artifact version = new
+  hash = re-validation of every challenger scored against it.
 - No crypto, no OTC, no IPOs younger than 1 year, no symbols with pending
   corporate actions.
 
