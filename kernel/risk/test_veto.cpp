@@ -977,6 +977,12 @@ int main(int argc, char** argv) {
                     CHECK("c29-veto-hold",
                           !v29.proceed &&
                               std::string(v29.reason) == "pending-risk");
+                    // Isolated to that reason: no co-cause may hide
+                    // behind the same first reason in future changes.
+                    CHECK("c29-only-pending-veto",
+                          v29.n_reasons == 1 &&
+                              std::string(v29.reasons_all[0]) ==
+                                  "pending-risk");
                     EngineInputs in29 = BuildEngineInputs(s29, v29);
                     CHECK("c29-inputs",
                           in29.deterministic_veto &&
