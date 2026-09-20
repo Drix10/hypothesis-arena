@@ -216,6 +216,26 @@ distinct from the research-epoch `research_revision`. Do not reword this
 - JEV down / timeout (>10 s) / malformed response → exactly 1 retry after ~5 s,
   then HOLD + log `jev_error`. Every failure increments the S5 streak counter.
   Risk gates still run locally.
+  AMBIGUOUS-TRANSPORT EXCEPTION (frozen, pass-5 durability rule): a timeout
+  / reset / refused / DNS failure with NO provider response is ambiguous —
+  the provider may have billed the POST before the transport died. Such a
+  failure NEVER retries and NEVER refunds: the pre-call reservation stands
+  as conservative spend, the governor trips (`ambiguous-transport` HOLD +
+  `unknown_charges`), and a human reconciles against provider billing
+  before the ledger is repaired. Only failures the provider demonstrably
+  answered (HTTP error statuses, malformed bodies) retry once with a
+  per-attempt refund. A blind retry after an ambiguous POST can
+  double-spend; the $2 reservation protects the local ledger, not the
+  external bill.
+- UNKNOWN-COST EXCEPTION (frozen): a valid provider answer whose usage/cost
+  cannot be reconciled (malformed/negative/non-finite/out-of-bound cost)
+  is HOLD `unknown-cost` — NO answer enters the decision path. An unknown
+  bill is unbounded by the reservation, so the absolute cap cannot bless
+  it. The governor is poisoned for subsequent calls either way.
+- SINGLE-FLIGHT (frozen): the spend lock covers cache-recheck → cap →
+  reserve → call → settle, so one decision_key buys at most one provider
+  call even with concurrent sidecars. The loser of a race serves the
+  winner's cached artifact (CACHED) instead of calling again.
 - Every call is cost-tagged `{stage, cycle_id, symbol, node, model,
   prompt_tokens, completion_tokens, usd, category: decision}` (doc 10 §10.4).
   An untagged call is a build failure. Failed provider attempts are logged

@@ -883,4 +883,16 @@ check("persist-failure-hold",
       and art is None)
 check("log-contained", jev.log_row({"x": 1}) is True)
 
+# 36. future-dated spend ledger is corruption evidence, not ignorable.
+jev.SPEND_DIR = os.path.join(TMP, "spendFuture")
+os.makedirs(jev.SPEND_DIR, exist_ok=True)
+_future_day = (jev.datetime.now(jev.timezone.utc)
+               + __import__("datetime").timedelta(days=400)).strftime("%Y-%m-%d")
+with open(os.path.join(jev.SPEND_DIR, _future_day + ".json"),
+          "w", encoding="utf-8") as _fh:
+    json.dump({"usd": 0.0, "calls": 0, "prompt_tokens": 0,
+               "completion_tokens": 0}, _fh)
+check("spend-future-unknown", jev.spend_30d() == (0.0, True))
+jev.SPEND_DIR = os.path.join(TMP, "spend")
+
 print("ALL JEV CHECKS PASS")

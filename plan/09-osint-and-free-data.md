@@ -166,6 +166,14 @@ a human. A lesson can only ever become a
   a documented lookahead vector; an estimated timestamp never triggers a trade.
 - **Storage:** append-only JSONL per source per day + SQLite index, pruned at 90
   days, atomic temp-file rename (doc 02 §2.5 semantics apply to every source).
+  DURABLE-FIRST commit ordering (frozen, pass-5): the signals file is the
+  commit point — fetch → parse → append+fsync → THEN persist ETag/
+  Last-Modified validators → THEN advance schedule. A failed sink banks
+  nothing downstream (next poll re-fetches with old validators: no 304
+  masking the loss; PK-dedupe in classify absorbs redelivery). Post-commit
+  metadata failures abort loudly (exit 2, audited repair) with the already
+  durable signals kept valid. There is no filesystem transaction across
+  three files; this ordering plus the recovery rule is the transaction.
 - **Key handling:** free-tier keys (AISStream, FIRMS, FRED, TomTom) live in the
   research-plane user's env only. The trading user never sees them; the research
   user never sees broker credentials. Redaction verified by grep before any log

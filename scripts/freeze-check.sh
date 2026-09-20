@@ -283,7 +283,7 @@ grep -q '\-\-as-of' "$ROOT/collector/classify.py" \
 # hardening-4 plumbing.
 grep -q 'MAX_AUTHORIZED_CALL_USD' "$ROOT/collector/jev.py" \
   && ok "per-call reservation" || bad "per-call reservation moved"
-grep -q 'exp <= now' "$ROOT/collector/jev.py" \
+grep -q 'artifact-expired' "$ROOT/collector/jev.py" \
   && ok "cache expiry admission" || bad "cache expiry moved"
 grep -q 'CLOCK_SKEW_S' "$ROOT/collector/jev.py" \
   && ok "artifact skew bound" || bad "skew bound moved"
@@ -344,6 +344,43 @@ grep -q 'universe_vN' "$ROOT/plan/12-statistical-baseline.md" \
   && ok "universe artifact" || bad "universe artifact moved"
 grep -q 'FROZEN-DESIGN' "$ROOT/README.md" \
   && ok "README states" || bad "README states moved"
+# pass-5 durability pins.
+grep -q 'ambiguous-transport' "$ROOT/collector/jev.py" \
+  && ok "ambiguous no-retry" || bad "ambiguous moved"
+grep -q '"cached", row, hit' "$ROOT/collector/jev.py" \
+  && ok "single-flight" || bad "single-flight moved"
+grep -q 'unknown-cost' "$ROOT/collector/jev.py" \
+  && ok "unknown-cost hold" || bad "unknown-cost moved"
+grep -q 'evidence-persist-failed' "$ROOT/collector/jev.py" \
+  && ok "persist containment" || bad "persist moved"
+grep -q '_validate_answerset_artifact' "$ROOT/collector/jev.py" \
+  && ok "shared validator" || bad "shared validator moved"
+grep -q 'signals-append-failed' "$ROOT/collector/collect.py" \
+  && ok "commit point" || bad "commit point moved"
+grep -q 'ClassifyAbort' "$ROOT/collector/classify.py" \
+  && ok "classify abort" || bad "classify abort moved"
+grep -q 'signals-integrity' "$ROOT/collector/classify.py" \
+  && ok "signals abort" || bad "signals abort moved"
+grep -q 'SOAK_ALREADY_RUNNING' "$ROOT/collector/soak.py" \
+  && ok "soak singleton" || bad "soak singleton moved"
+grep -q 'MISSED_RANGE' "$ROOT/collector/soak.py" \
+  && ok "missed-range" || bad "missed-range moved"
+grep -q 'started_at' "$ROOT/collector/soak.py" \
+  && ok "cycle timestamps" || bad "cycle timestamps moved"
+grep -q 'signals-integrity' "$ROOT/collector/soak_check.py" \
+  && ok "signals verdict" || bad "signals verdict moved"
+grep -q 'history-future' "$ROOT/collector/ctx_read.py" \
+  && ok "history future" || bad "history future moved"
+grep -q 'ingested-before-observed' "$ROOT/collector/ctx_read.py" \
+  && ok "provenance order" || bad "provenance order moved"
+grep -q 'BUDGET-DEPENDENT' "$ROOT/plan/13-cpp-kernel-build.md" \
+  && ok "13 gate semantics" || bad "13 gate moved"
+grep -q 'AMBIGUOUS-TRANSPORT EXCEPTION' "$ROOT/plan/03-jev-decision-layer.md" \
+  && ok "03 ambiguity" || bad "03 ambiguity moved"
+grep -q 'DURABLE-FIRST' "$ROOT/plan/09-osint-and-free-data.md" \
+  && ok "09 commit order" || bad "09 order moved"
+grep -q 'Absolute MEANS absolute' "$ROOT/plan/10-capital-gates-and-spend-control.md" \
+  && ok "10 absolute" || bad "10 absolute moved"
 
 echo "---"
 [ "$FAIL" = 0 ] && echo "FREEZE-CHECK: PASS" || echo "FREEZE-CHECK: FAIL"

@@ -518,4 +518,17 @@ check("symbols-cardinality",
 r = run([feat(symbols=["AAPL"] * 16)], name="bsym16")
 check("symbols-16-ok", r["stats"]["accepted"] == 1)
 
+# 38. history-future bound + ingested/observed provenance order
+r = run([feat()],
+        extra={"history": {"edgar_8k": [dated(H1, int(NOW) + 3600)]}},
+        name="bhist-future")
+check("history-future",
+      "history-future" in r["stats"]["reasons"]
+      and r["stats"]["accepted"] == 0)
+r = run([feat(observed_at_ns=IN_SESSION,
+              ingested_at_ns=IN_SESSION - 10 ** 9)], name="bing-ord")
+check("ingested-before-observed",
+      r["stats"]["reasons"].get("ingested-before-observed") == 1
+      and r["stats"]["accepted"] == 0)
+
 print("ALL CTX CHECKS PASS")

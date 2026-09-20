@@ -268,4 +268,9 @@ exists and verifies, nothing starts — there is no default STAGE.
 - Corruption, doubt, and failure all resolve toward paper.
 - Three kill levels; none reachable by an agent; exits never blocked by any of them.
 - AI spend: absolute cap always; ratio cap from G2. Both apply. Throttling reduces
-  research, never decision calibration.
+  research, never decision calibration. Absolute MEANS absolute (frozen,
+  pass-5): the stage cap is enforced PRE-CALL via a frozen per-call
+  reservation (doc 03), so one call cannot overshoot it by learning its
+  cost late; an unknowable bill (unknown-cost) or an ambiguous transport
+  outcome (may-have-been-billed) is UNKNOWN_SPEND → HOLD with no answer
+  admitted — an unbounded charge is never blessed by a bounded reservation.

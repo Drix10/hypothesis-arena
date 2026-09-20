@@ -78,6 +78,8 @@ MAX_SYMBOLS = 16  # mapped tickers per feature: entity resolution,
 # session classification, disagreement, and snapshot build stay bounded.
 # More than 16 tickers on one feature is a basket/index construction that
 # belongs in the Phase 2.5 resolver, not in a single feature row.
+HISTORY_SKEW_S = 60  # history timestamps may not exceed now + skew:
+# a "frozen feed" whose frozen past lies in the future is not frozen.
 MAX_BUNDLE_BYTES = 1024 * 1024  # raw cap before parse (X1)
 MAX_DEPTH = 16
 MAX_NODES = 20000
@@ -256,6 +258,11 @@ def check_feature(f, con, emap, history, now_ts):
             return False, "ingested-range"
         if f["ingested_at_ns"] / 1e9 > now_ts:
             return False, "ingested-future"
+        # Provenance order: ingestion cannot precede observation. An
+        # ingested-before-observed row claims time travel — reject the
+        # lineage rather than reason about it.
+        if f["ingested_at_ns"] < f["observed_at_ns"]:
+            return False, "ingested-before-observed"
     if "provenance_url" in f and not isinstance(f["provenance_url"], str):
         return False, "provenance-type"
     tickers = set(emap.get("cik_to_ticker", {}).values())
@@ -404,6 +411,12 @@ def read_bundle(path, db_path, map_path, now_ts=None):
                 # tail[-1].ts - tail[0].ts is meaningless on reordered or
                 # duplicated timestamps. Equal timestamps are rejected
                 # (duplicates), not deduplicated (rewriting evidence).
+                # Bounded by now + skew like every other provenance
+                # instant: future history cannot freeze a feed.
+                if _e["ts"] > now_ts + HISTORY_SKEW_S:
+                    stats["reasons"]["history-future"] = 1
+                    return {"bundle_id": b["bundle_id"], "accepted": [],
+                            "stats": stats}
                 if _prev is not None and _e["ts"] <= _prev:
                     stats["reasons"]["history-nonmonotonic"] = 1
                     return {"bundle_id": b["bundle_id"], "accepted": [],

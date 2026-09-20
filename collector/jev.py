@@ -1008,7 +1008,13 @@ def spend_30d(now=None):
         except ValueError:
             unknown = True
             continue
-        if not (0 <= (today - day).days <= 29):
+        age_days = (today - day).days
+        if age_days < 0:
+            # Future-dated ledger: clock/state corruption, not spend.
+            # Ignoring it would silently un-count money; fail closed.
+            unknown = True
+            continue
+        if age_days > 29:
             continue
         try:
             with open(os.path.join(SPEND_DIR, fn), encoding="utf-8") as fh:

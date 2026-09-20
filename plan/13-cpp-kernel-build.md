@@ -196,7 +196,15 @@ P3.3 prerequisites (frozen before code starts):
   fabrication in `ComputeDecisionKey`.
 - Timestamps as `int64_t` epoch-microseconds internally (wire format stays
   frozen P3.2); freshness arithmetic becomes integer operations.
-- `calibration_gate` (pass|insufficient|breach) per doc 03; only breach holds.
+- `calibration_gate` (pass|insufficient|breach) per doc 03. Gate semantics
+  are BUDGET-DEPENDENT (frozen — P3.3 must not reintroduce the flat reading):
+  ordinary 1xR entry: `breach` → HOLD, `insufficient` → allowed (evidence too
+  thin to judge is not evidence of miscalibration, per R13 policy);
+  elevated 2xR max-gate: `pass` REQUIRED (`insufficient` is NOT eligible —
+  thin evidence must never authorize elevated risk), `breach` → HOLD.
+  The max-gate rule lives in doc 03 §3.3; this line states the same contract
+  from the kernel side so neither reader can mistake it for "only breach
+  holds, everywhere".
 
 Scope (narrow):
 - Typed `JEVAnswerSetV3` struct: no optional-in-practice fields, no raw JSON
