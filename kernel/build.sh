@@ -61,6 +61,21 @@ _region="$(sed -n '/^class ValidationRequest {/,/^};/p' jev_validate.hpp | sed '
     echo "GATE FAIL: unexpected friend (authority leak)"; exit 1; }
 g++ $FLAGS -o fuzz_p31 fuzz_p31.cpp
 ./fuzz_p31 20000
+# Slice B gate [correctness]: veto unit suite (doc 05 rule boundaries +
+# composed veto+table rows on committed P3.3 artifacts).
+g++ $FLAGS -o test_veto risk/test_veto.cpp risk/veto.cpp
+./test_veto p33 fixtures
+# Slice B JEV isolation: veto.cpp must never read bounded model answers
+# (method calls or the validated type) , the frozen sec.3.2 table is the
+# ONLY path from answers to size. This gate fails the build if any such
+# path is introduced, including via comments naming call syntax.
+for tok in '\.enter\(\)' 'latent_risk\(\)' 'conviction\(\)' 'family\(\)' \
+           'ValidatedJEVAnswerSetV3'; do
+    if grep -nE "$tok" risk/veto.cpp; then
+        echo "GATE FAIL: JEV answer read in veto ($tok)"
+        exit 1
+    fi
+done
 # Acceptance: no downstream function may accept raw JEV JSON.
 # The header exposes exactly one entry point: validate_jev().
 if grep -nE "\b(evaluate|decide|decide_from_json|from_json)\s*\(" jev_validate.hpp \

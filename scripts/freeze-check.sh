@@ -226,6 +226,11 @@ _n="$(ls "$ROOT/kernel/auth"/neg_*.cpp 2>/dev/null | wc -l | tr -d ' ')"
   && ok "auth: positive control" || bad "auth positive missing"
 grep -q 'friend class KernelState;' "$ROOT/kernel/jev_validate.hpp" \
   && ok "authority friend" || bad "authority friend moved"
+# Slice B pins: veto sources present (behavior gated by kernel/build.sh).
+[ -f "$ROOT/kernel/risk/veto.cpp" ] \
+  && ok "veto present" || bad "veto missing"
+[ -f "$ROOT/kernel/risk/test_veto.cpp" ] \
+  && ok "veto suite present" || bad "veto suite missing"
 
 # ---- committed P3.2 vectors are self-consistent (no Python needed) ----
 for _v in v1 v2; do
