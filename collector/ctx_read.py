@@ -71,6 +71,10 @@ def check_feature(f, con, emap, history, now_ts):
         return False, "schema-missing:" + sorted(missing)[0]
     if f["schema_version"] != SCHEMA:
         return False, "schema-version"
+    for _k in ("schema_version", "kind", "effect", "evidence",
+               "confidence_bucket", "source_id"):
+        if not isinstance(f[_k], str):
+            return False, "primitive-type:" + _k
     enums_ok = (f["kind"] in KINDS and f["effect"] in EFFECTS
                 and f["evidence"] in EVIDENCE and f["confidence_bucket"] in CONF)
     if not enums_ok:
@@ -79,17 +83,19 @@ def check_feature(f, con, emap, history, now_ts):
         return False, "schema-value"
     v = f["value"]
     vtype_shapes = {"enum": str, "bucket": str, "bool": bool, "count": int}
-    if "v" not in v or not isinstance(v["v"], vtype_shapes[v["type"]]):
+    if set(v) != {"type", "v"}:
+        return False, "value-shape"
+    if "v" not in v or type(v["v"]) is not vtype_shapes[v["type"]]:
         return False, "value-shape"
     if v["type"] == "count" and v["v"] < 0:
         return False, "value-shape"
     if not isinstance(f["symbols"], list) or not f["symbols"]:
         return False, "symbols-type"
-    if any(not isinstance(s, str) for s in f["symbols"]):
+    if any(not isinstance(s, str) or not s for s in f["symbols"]):
         return False, "symbols-type"
-    if not isinstance(f["observed_at_ns"], int):
+    if type(f["observed_at_ns"]) is not int:
         return False, "observed-type"
-    if not isinstance(f["ttl_s"], int) or f["ttl_s"] <= 0:
+    if type(f["ttl_s"]) is not int or f["ttl_s"] <= 0:
         return False, "ttl-type"
     if not isinstance(f["canonical_hash"], str):
         return False, "hash-format"
@@ -117,6 +123,13 @@ def check_feature(f, con, emap, history, now_ts):
         return False, "future-timestamp"
     if now_ts - obs > f["ttl_s"]:
         return False, "ttl-expired"
+    if "ingested_at_ns" in f:
+        if type(f["ingested_at_ns"]) is not int:
+            return False, "ingested-type"
+        if f["ingested_at_ns"] / 1e9 > now_ts:
+            return False, "ingested-future"
+    if "provenance_url" in f and not isinstance(f["provenance_url"], str):
+        return False, "provenance-type"
     tickers = set(emap.get("cik_to_ticker", {}).values())
     macro = {x for v in emap.get("macro_release_to_symbols", {}).values()
              for x in v}
@@ -124,9 +137,8 @@ def check_feature(f, con, emap, history, now_ts):
         if s not in tickers and s not in macro and s not in ("USD", "RATES"):
             return False, "entity-unmapped:" + s
     ref = f.get("entity_ref") or {}
-    if "entity_ref" in f and (not isinstance(ref, dict)
-            or any(k != "cik" for k in ref)
-            or ("cik" in ref and not isinstance(ref["cik"], str))):
+    if "entity_ref" in f and (set(ref) != {"cik"}
+            or type(ref.get("cik")) is not str):
         return False, "entity-ref-shape"
     if "cik" in ref:
         want = emap.get("cik_to_ticker", {}).get(ref["cik"])

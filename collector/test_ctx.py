@@ -233,4 +233,47 @@ check("entity-ref-shape", r["stats"]["reasons"].get("entity-ref-shape") == 1)
 r = run([feat(canonical_hash=H1, canonical_hashes=[H1, H1])], name="bm10")
 check("hashes-dup", r["stats"]["reasons"].get("hash-format") == 1)
 
+# 18. bool is not int at this boundary
+r = run([feat(observed_at_ns=True)], name="bd1")
+check("observed-bool", r["stats"]["reasons"].get("observed-type") == 1)
+r = run([feat(ttl_s=True)], name="bd2")
+check("ttl-bool", r["stats"]["reasons"].get("ttl-type") == 1)
+r = run([feat(value={"type": "count", "v": True})], name="bd3")
+check("count-bool", r["stats"]["reasons"].get("value-shape") == 1)
+
+# 19. entity_ref must be exactly {cik: str}
+r = run([feat(entity_ref={})], name="bd4")
+check("entity-ref-empty", r["stats"]["reasons"].get("entity-ref-shape") == 1)
+
+# 20. unhashable primitives reject, never raise
+for fld, bad, name in [("kind", [], "kind-list"),
+                        ("effect", {}, "effect-dict"),
+                        ("evidence", [], "evidence-list"),
+                        ("confidence_bucket", True, "conf-bool"),
+                        ("source_id", ["x"], "source-list"),
+                        ("schema_version", [], "schema-list")]:
+    try:
+        r = run([feat(**{fld: bad})], name="bd-" + name)
+        got = r["stats"]["reasons"]
+        ok = sum(got.values()) == 1 and r["stats"]["accepted"] == 0
+    except TypeError:
+        ok = False
+    check(name, ok)
+
+# 21. optional field types
+r = run([feat(ingested_at_ns="now")], name="bd5")
+check("ingested-str", r["stats"]["reasons"].get("ingested-type") == 1)
+r = run([feat(ingested_at_ns=int((NOW + 60) * 1e9))], name="bd6")
+check("ingested-future", r["stats"]["reasons"].get("ingested-future") == 1)
+r = run([feat(provenance_url=123)], name="bd7")
+check("provenance-int", r["stats"]["reasons"].get("provenance-type") == 1)
+
+# 22. value object fail-closed
+r = run([feat(value={"type": "enum", "v": "x", "extra": 1})], name="bd8")
+check("value-extra-key", r["stats"]["reasons"].get("value-shape") == 1)
+
+# 23. empty symbol string
+r = run([feat(symbols=[""])], name="bd9")
+check("symbols-empty-str", r["stats"]["reasons"].get("symbols-type") == 1)
+
 print("ALL CTX CHECKS PASS")
