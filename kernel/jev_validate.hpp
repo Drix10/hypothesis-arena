@@ -964,6 +964,22 @@ inline bool ParseIso8601(const std::u32string& in, double& out) {
     return true;
 }
 
+// Epoch-microseconds conversion for every timestamp crossing into the
+// kernel (blocker #4): wire doubles become validated int64 micros, and
+// ALL internal freshness arithmetic uses the integers. Bounds match the
+// ISO parser's contractual year range (1970..2100). Truncation (not
+// rounding): sub-microsecond wire precision is contract-excluded, and
+// truncation keeps created <= true instant (fail-closed direction for
+// not-yet-valid, conservative for expiry by < 1 us — inside tolerance).
+inline bool UnixMicros(double seconds, int64_t& out) {
+    if (!std::isfinite(seconds) || seconds < -62135596800.0 ||
+        seconds > 4102444800.0) {
+        return false;
+    }
+    out = (int64_t)(seconds * 1000000.0);
+    return true;
+}
+
 // ---- ValidatedJEVAnswerSetV3: constructible ONLY via validate() ----
 struct ValidationRequest;
 struct ValidationResult;
@@ -976,6 +992,11 @@ class ValidatedJEVAnswerSetV3 {
     const std::string& decision_key() const { return decision_key_; }
     double created_at() const { return created_; }
     double expires_at() const { return expires_; }
+    // Integer-microsecond internals (blocker #4): all freshness
+    // arithmetic uses these. The double accessors above preserve the
+    // frozen wire view (exact for realistic micros < 2^53).
+    int64_t created_us() const { return created_us_; }
+    int64_t expires_us() const { return expires_us_; }
     double enter() const { return enter_; }
     double latent_risk() const { return latent_; }
     EdgeFamily family() const { return family_; }
@@ -989,6 +1010,7 @@ class ValidatedJEVAnswerSetV3 {
     ValidatedJEVAnswerSetV3() = default;
     std::string symbol_, state_hash_, decision_key_, response_hash_;
     int64_t epoch_ = 0;
+    int64_t created_us_ = 0, expires_us_ = 0;  // sole freshness inputs
     double created_ = 0, expires_ = 0, enter_ = 0, latent_ = 0;
     EdgeFamily family_ = EdgeFamily::MACRO;
     Conviction conviction_ = Conviction::FLAT;
@@ -1005,6 +1027,9 @@ struct ValidationRequest {
     int64_t previous_epoch = 0;       // (per symbol; unset = first artifact)
     double now_unix = 0;              // live clock; ignored in REPLAY
     Mode mode = Mode::LIVE;
+    std::string expected_symbol;      // kernel-bound symbol (#6): when
+    // non-empty, the artifact MUST name it (checked BEFORE epoch
+    // monotonicity). Empty = legacy behavior (P3.1 vectors unaffected).
 };
 struct ValidationResult {
     // The validated object exists ONLY on success: get() is null on HOLD.
@@ -1199,6 +1224,11 @@ inline ValidationResult validate_jev(const ValidationRequest& q) {
         if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' ||
               c == '/'))
             return fail("symbol");
+    // expected-symbol binding (#6): the kernel names the symbol whose
+    // epoch state admitted this request; the artifact must name the same
+    // one BEFORE monotonicity can be trusted. Empty = legacy (P3.1).
+    if (!q.expected_symbol.empty() && symbol != q.expected_symbol)
+        return fail("symbol-mismatch");
     // exec-universe membership: kernel-owned set, syntax alone never suffices
     {
         bool member = false;
@@ -1239,6 +1269,8 @@ inline ValidationResult validate_jev(const ValidationRequest& q) {
     double created = 0;
     if (!ca || ca->t != JVal::T::STR || !ParseIso8601(ca->s, created))
         return fail("created-at");
+    int64_t created_us = 0;
+    if (!UnixMicros(created, created_us)) return fail("created-at");
     const JVal* ea = payload->find(U8("expires_at"));
     if (!ea || ea->t != JVal::T::NUM) return fail("expires-at");
     double expires = 0;
@@ -1255,7 +1287,13 @@ inline ValidationResult validate_jev(const ValidationRequest& q) {
     }
     if (!(expires == expires) || expires > 1e18 || expires < -1e18)
         return fail("expires-at");
-    if (!(expires >= created + 59.999 && expires <= created + 60.001))
+    int64_t expires_us = 0;
+    if (!UnixMicros(expires, expires_us)) return fail("expires-at");
+    // 60 s window in integer micros (same +-1 ms tolerance the double
+    // comparison allowed; float rounding can shift each endpoint < 1 ms).
+    // Inputs are range-checked above, so the subtraction cannot overflow.
+    int64_t win_us = expires_us - created_us;
+    if (win_us < 60000000 - 1000 || win_us > 60000000 + 1000)
         return fail("expires-window");
     std::string rhs;
     {
@@ -1379,10 +1417,14 @@ inline ValidationResult validate_jev(const ValidationRequest& q) {
                       sigraw))
             return fail("signature-invalid");
     }
-    // 20. freshness (LIVE only)
+    // 20. freshness (LIVE only), in integer micros (blocker #4). now is
+    // kernel clock input: unrepresentable values HOLD, never wrap.
     if (q.mode == Mode::LIVE) {
-        if (!(q.now_unix <= expires)) return fail("expired");
-        if (!(created <= q.now_unix + 300.0)) return fail("not-yet-valid");
+        int64_t now_us = 0;
+        if (!UnixMicros(q.now_unix, now_us))
+            return fail("clock-unrepresentable");
+        if (!(now_us <= expires_us)) return fail("expired");
+        if (!(created_us <= now_us + 300000000LL)) return fail("not-yet-valid");
     }
     // 21. state binding: BOTH keys recomputed from kernel-owned bytes.
     // state_hash = sha256(canonical snapshot); decision_key recomputed
@@ -1403,6 +1445,8 @@ inline ValidationResult validate_jev(const ValidationRequest& q) {
     r.value_.decision_key_ = dk;
     r.value_.created_ = created;
     r.value_.expires_ = expires;
+    r.value_.created_us_ = created_us;
+    r.value_.expires_us_ = expires_us;
     r.value_.enter_ = enter;
     r.value_.latent_ = latent;
     r.value_.family_ = fam;

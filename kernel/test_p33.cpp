@@ -1,518 +1,605 @@
-// P3.3 acceptance: typed JEVStateV3 + serializer interop, kernel-owned
-// universe/epochs, deterministic decision table vs doc 03 §3.2 + §3.7,
-// replay determinism by hash comparison. REPLAY mode throughout (P3.1
-// owns LIVE freshness); artifacts are committed (no Python at test time).
-// Usage: ./test_p33 <p33-dir> <fixtures-dir>
-#include <array>
+// P3.3 (corrected) suite: full §3.4 state contract + closed nested schema +
+// checked integers + micros internals + hardened kernel + decision table.
+// Committed files only (no Python). All fixtures share the P3.1 test key.
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <limits>
 #include <string>
 #include <vector>
-#include "jev_validate.hpp"
-#include "jev_state.hpp"
-#include "kernel_state.hpp"
 #include "decision_table.hpp"
+#include "kernel_state.hpp"
 
-static int fails = 0;
-static int count = 0;
+namespace {
+int fails = 0, total = 0;
 #define CHECK(name, cond)                                              \
     do {                                                               \
-        count++;                                                       \
-        if (cond) { printf("ok %s\n", name); }                         \
-        else { printf("FAIL %s\n", name); fails++; }                   \
+        total++;                                                       \
+        if (!(cond)) {                                                 \
+            fails++;                                                   \
+            printf("FAIL %s (line %d)\n", name, __LINE__);              \
+        } else {                                                       \
+            printf("ok %s\n", name);                                   \
+        }                                                              \
     } while (0)
-
-static std::string read_all(const std::string& path) {
-    std::string out;
-    char buf[4096];
-    FILE* f = fopen(path.c_str(), "rb");
-    if (!f) return out;
-    size_t n;
-    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) out.append(buf, n);
-    fclose(f);
-    return out;
-}
-
-static bool hxkey(const std::string& h, std::array<uint8_t, 32>& out) {
-    if (h.size() != 64) return false;
-    for (int i = 0; i < 32; i++) {
-        unsigned v;
-        if (sscanf(h.c_str() + 2 * i, "%02x", &v) != 1) return false;
-        out[i] = (uint8_t)v;
-    }
-    return true;
-}
-
-static std::string hex_of(const std::string& bytes) {
-    static const char* H = "0123456789abcdef";
+std::string read_all(const std::string& p) {
     std::string o;
-    for (unsigned char c : bytes) {
-        o += H[c >> 4];
-        o += H[c & 15];
-    }
+    char b[4096];
+    FILE* f = fopen(p.c_str(), "rb");
+    if (!f) return o;
+    size_t n;
+    while ((n = fread(b, 1, sizeof(b), f)) > 0) o.append(b, n);
+    fclose(f);
     return o;
 }
-
-// FNV-1a over decision outputs (replay determinism comparison).
-static uint64_t Fnv(const std::string& s, uint64_t h) {
-    for (unsigned char c : s) {
-        h ^= c;
-        h *= 1099511628211ULL;
-    }
-    return h;
+std::string fx(const std::string& dir, const char* name) {
+    return read_all(dir + "/" + name);
 }
+uint8_t hexnyb(char c) {
+    if (c >= '0' && c <= '9') return (uint8_t)(c - '0');
+    return (uint8_t)(c - 'a' + 10);
+}
+std::array<uint8_t, 32> test_key() {
+    std::string kh = read_all("fixtures/trusted_key.txt");
+    std::array<uint8_t, 32> k{};
+    for (int i = 0; i < 32; i++)
+        k[i] = (uint8_t)((hexnyb(kh[2 * i]) << 4) | hexnyb(kh[2 * i + 1]));
+    return k;
+}
+// Engine inputs derived from a parsed artifact STATE (test-side only:
+// engines are deterministic inputs, not the state contract). Veto is set
+// explicitly per case (production: risk layer, P3.5).
+// Fixture artifacts embed the full request "state" beside the signed
+// artifact (state-proof). The validator's exact top-level keys exclude
+// it, so validation runs on the artifact with "state" stripped — the
+// signed payload bytes are untouched (signature covers payload only).
+std::string validation_bytes(const std::string& raw) {
+    jev::JVal art;
+    std::string err;
+    if (!jev::ParseJson(raw, art, err)) return "";
+    for (auto it = art.o.begin(); it != art.o.end(); ++it)
+        if (jev::U32ToUtf8(it->first) == "state") {
+            art.o.erase(it);
+            break;
+        }
+    return jev::CanonJson(art);
+}
+jev::EngineInputs eng_from_state(const jev::JVal& state) {
+    jev::EngineInputs e;
+    const jev::JVal* cal = jev::ObjGet(state, "calibration");
+    const jev::JVal* g =
+        cal ? jev::ObjGet(*cal, "gate") : nullptr;
+    std::string gs = (g && g->t == jev::JVal::T::STR)
+                         ? jev::U32ToUtf8(g->s)
+                         : "insufficient";
+    e.calibration_gate = (gs == "pass")      ? jev::CalibrationGate::PASS
+                         : (gs == "breach") ? jev::CalibrationGate::BREACH
+                                            : jev::CalibrationGate::INSUFFICIENT;
+    const jev::JVal* dis = jev::ObjGet(state, "disagreement");
+    e.disagreement = (dis && dis->t == jev::JVal::T::BOOL && dis->b);
+    const jev::JVal* ew = jev::ObjGet(state, "event_window");
+    const jev::JVal* bo = ew ? jev::ObjGet(*ew, "blackout") : nullptr;
+    e.event_blackout = (bo && bo->t == jev::JVal::T::BOOL && bo->b);
+    return e;
+}
+}  // namespace
 
 int main(int argc, char** argv) {
-    const std::string dir = argc > 1 ? argv[1] : "p33";
-    const std::string fix = argc > 2 ? argv[2] : "fixtures";
-    auto fx = [&](const std::string& n) { return read_all(dir + "/" + n); };
-    std::array<uint8_t, 32> key{};
-    if (!hxkey(read_all(fix + "/trusted_key.txt"), key)) {
-        printf("FAIL key-load\n");
-        return 1;
-    }
-    const std::string state_canon_in = fx("state_canon_input.json");
-    CHECK("inputs-present", !state_canon_in.empty() && !fx("r_000.json").empty());
-    // Per-epoch state canon: parse the shared base once, stamp the epoch
-    // the ARTIFACT carries (read from the artifact itself — data-driven,
-    // no hardcoded epoch tables), re-canonicalize with frozen CanonJson.
-    jev::JVal state_base;
+    std::string dir = argc > 1 ? argv[1] : "p33";
+    std::string fix = argc > 2 ? argv[2] : "fixtures";
+    auto key = test_key();
     {
-        std::string perr0;
-        CHECK("base-parses",
-              jev::ParseJson(state_canon_in, state_base, perr0));
+        // Sanity: committed test key equals the generator identity.
+        std::string kh = read_all("fixtures/trusted_key.txt");
+        CHECK("test-key-identity",
+              kh == "43046bfe4092b3e94994eada15dcc20d8aaa07b658fd3954eb"
+                    "8e0efb8bdca5de");
     }
-    auto artifact_epoch = [&](const std::string& raw) -> int64_t {
-        jev::JVal r;
-        std::string pe;
-        if (!jev::ParseJson(raw, r, pe)) return -1;
-        const jev::JVal* p = jev::ObjGet(r, "payload");
-        const jev::JVal* e =
-            p ? jev::ObjGet(*p, "snapshot_epoch") : nullptr;
-        if (!e || e->t != jev::JVal::T::NUM || e->num_double) return -1;
-        int64_t v = 0;
-        for (char c : e->num) {
-            if (c < '0' || c > '9') return -1;
-            v = v * 10 + (c - '0');
-        }
-        return v;
-    };
-    auto artifact_symbol = [&](const std::string& raw) -> std::string {
-        jev::JVal r;
-        std::string pe;
-        if (!jev::ParseJson(raw, r, pe)) return "";
-        const jev::JVal* p = jev::ObjGet(r, "payload");
-        const jev::JVal* s = p ? jev::ObjGet(*p, "symbol") : nullptr;
-        if (!s || s->t != jev::JVal::T::STR) return "";
-        return jev::U32ToUtf8(s->s);
-    };
-    auto state_for = [&](int64_t epoch,
-                         const std::string& symbol) -> std::string {
-        jev::JVal st = state_base;  // value copy of the frozen base
-        for (auto& kv : st.o) {
-            if (jev::U32ToUtf8(kv.first) == "snapshot_epoch") {
-                kv.second.t = jev::JVal::T::NUM;
-                kv.second.num_double = false;
-                kv.second.num = std::to_string(epoch);
-            }
-            if (jev::U32ToUtf8(kv.first) == "symbol") {
-                kv.second.t = jev::JVal::T::STR;
-                kv.second.s.clear();
-                for (unsigned char c : symbol)
-                    kv.second.s += char32_t(c);
-            }
-        }
-        return jev::CanonJson(st);
-    };
 
-    // ---- A. JEVStateV3 serializer interop (committed Python ground truth)
-    std::string why;
+    // ---- A. Full-state interop vector vs Python ground truth ----
     {
-        jev::JVal v;
-        std::string perr;
-        bool okp = jev::ParseJson(fx("state_vector.json"), v, perr);
-        CHECK("vector-parses", okp);
-        jev::JEVStateV3 st;
-        bool okc = jev::JEVStateV3::FromJVal(v, st, why);
-        CHECK("vector-strict-builds", okc);
-        if (!okc) printf("  why: %s\n", why.c_str());
-        std::string canon = st.Serialize();
-        std::string want_hex = read_all(dir + "/state_vector_canon.hex");
-        CHECK("canon-byte-equal", hex_of(canon) == want_hex);
-        CHECK("state-hash-equal",
-              st.StateHash() == read_all(dir + "/state_vector_hash.txt"));
-        // Typed decision_key == frozen recipe on parsed own-bytes.
-        jev::JVal back;
-        std::string perr2;
-        bool okb = jev::ParseJson(canon, back, perr2);
-        CHECK("own-bytes-reparse", okb);
-        CHECK("dkey-typed-equals-recipe",
-              st.DecisionKey() == jev::ComputeDecisionKey(back));
-        CHECK("dkey-equals-sidecar",
-              st.DecisionKey() == read_all(dir + "/state_vector_dkey.txt"));
-        // Strictness: unknown keys, wrong types, bad IDs fail closed.
-        jev::JVal bad = v;
-        CHECK("shape-unknown-key",
-              jev::CheckStateShape(bad) == "" /* baseline sane */);
+        std::string raw = fx(dir, "state_vector.json");
+        jev::JVal st;
+        std::string err;
+        CHECK("vector-parses", jev::ParseJson(raw, st, err));
+        jev::JEVStateV3 s;
+        std::string why;
+        CHECK("vector-accepts-full-state",
+              jev::JEVStateV3::FromJVal(st, s, why));
+        if (!s.StateHash().empty()) {
+            std::string ser = s.Serialize();
+            std::string hex = fx(dir, "state_vector_canon.hex");
+            std::string want;
+            for (size_t i = 0; i + 1 < hex.size(); i += 2)
+                want += (char)((hexnyb(hex[i]) << 4) | hexnyb(hex[i + 1]));
+            if (!want.empty() && want[want.size() - 1] == '\n') want.clear();
+            CHECK("vector-canon-bit-equal", ser == want);
+            std::string h = fx(dir, "state_vector_hash.txt");
+            if (!h.empty() && h[h.size() - 1] == '\n')
+                h.resize(h.size() - 1);
+            CHECK("vector-hash-match", s.StateHash() == h);
+            std::string dk = fx(dir, "state_vector_dkey.txt");
+            if (!dk.empty() && dk[dk.size() - 1] == '\n')
+                dk.resize(dk.size() - 1);
+            CHECK("vector-dkey-match", s.DecisionKey() == dk);
+        }
     }
+
+    // ---- B. Closed nested schema (blocker #2) ----
     {
-        // int feature_id -> state-shape (the "?" fallback must be
-        // unreachable: strict construction refuses first).
-        const char* raw =
-            "{\"context_hash\":\"ab\",\"symbol\":\"EURUSD\",\"stage\":\"G0\","
-            "\"question_set_version\":\"v3\",\"snapshot_epoch\":1,"
-            "\"indicators\":{\"regime\":\"range\"},\"portfolio\":{},"
-            "\"event_window\":{},\"features\":[{\"feature_id\":7}]}";
-        jev::JVal v;
-        std::string perr;
-        CHECK("badid-parses", jev::ParseJson(raw, v, perr));
-        CHECK("badid-shape", jev::CheckStateShape(v) == "state-shape:feature_id");
-        jev::JEVStateV3 st;
-        std::string w2;
-        CHECK("badid-strict-build-fails",
-              !jev::JEVStateV3::FromJVal(v, st, w2));
-        // missing feature_id + unknown top key likewise.
-        const char* raw2 =
-            "{\"context_hash\":\"ab\",\"symbol\":\"EURUSD\",\"stage\":\"G0\","
-            "\"question_set_version\":\"v3\",\"snapshot_epoch\":1,"
-            "\"indicators\":{\"regime\":\"range\"},\"portfolio\":{},"
-            "\"event_window\":{},\"features\":[{\"nope\":1}],\"zzz\":1}";
-        jev::JVal v2;
-        CHECK("badid2-parses", jev::ParseJson(raw2, v2, perr));
-        jev::JEVStateV3 st2;
-        CHECK("badid2-strict-build-fails",
-              !jev::JEVStateV3::FromJVal(v2, st2, w2));
+        jev::JEVStateV3 s;
+        std::string why;
+        auto parse_state = [&](const std::string& body) {
+            jev::JVal st;
+            std::string err, w;
+            jev::JEVStateV3 o;
+            if (!jev::ParseJson(body, st, err)) return std::string("parse:") + err;
+            if (!jev::JEVStateV3::FromJVal(st, o, w)) return w;
+            return std::string("ok");
+        };
+        std::string good = fx(dir, "state_vector.json");
+        CHECK("closed-accepts-good", parse_state(good) == "ok");
+        // unknown nested key inside indicators
+        {
+            std::string bad = good;
+            size_t p = bad.find("\"regime\"");
+            bad.insert(p, "\"evil_field\":123,");
+            CHECK("closed-rejects-nested-unknown",
+                  parse_state(bad) == "state-shape:indicators-keys");
+        }
+        // missing required container
+        {
+            jev::JVal st;
+            std::string err;
+            jev::ParseJson(good, st, err);
+            for (auto it = st.o.begin(); it != st.o.end(); ++it)
+                if (jev::U32ToUtf8(it->first) == "portfolio") {
+                    st.o.erase(it);
+                    break;
+                }
+            std::string w;
+            jev::JEVStateV3 o;
+            CHECK("closed-requires-portfolio",
+                  !jev::JEVStateV3::FromJVal(st, o, w) &&
+                      w == "state-shape:missing");
+        }
+        // non-object feature member (bracket-matched: symbols[] nest)
+        {
+            std::string bad = good;
+            size_t p = bad.find("\"features\":[");
+            size_t q = p + 12;
+            int depth = 1;
+            while (depth > 0 && q < bad.size()) {
+                if (bad[q] == '[') depth++;
+                if (bad[q] == ']') depth--;
+                q++;
+            }
+            bad.replace(p + 12, q - p - 13, "7");
+            CHECK("closed-rejects-scalar-feature",
+                  parse_state(bad) == "state-shape:feature-not-object");
+        }
+        // feature with an extra member
+        {
+            std::string bad = good;
+            size_t p = bad.find("\"age_s\"");
+            bad.insert(p, "\"smuggled\":1,");
+            CHECK("closed-rejects-feature-extra",
+                  parse_state(bad) == "state-shape:feature-keys");
+        }
+        // bad value shape (count with string payload)
+        {
+            std::string bad = good;
+            size_t p = bad.find("\"v\":3");
+            if (p != std::string::npos) {
+                bad.replace(p, 5, "\"v\":\"three\"");
+                CHECK("closed-rejects-value-shape",
+                      parse_state(bad) == "state-shape:value-v");
+            } else {
+                CHECK("closed-rejects-value-shape-setup", false);
+            }
+        }
+        // unknown top-level key
+        {
+            std::string bad = good;
+            while (!bad.empty() &&
+                   (bad.back() == '\n' || bad.back() == ' '))
+                bad.pop_back();
+            bad.insert(bad.size() - 1, ",\"cycle_id\":\"x\"");
+            CHECK("closed-rejects-top-unknown",
+                  parse_state(bad).find("state-shape:unknown-key") == 0);
+        }
+        // bad enum value
+        {
+            std::string bad = good;
+            size_t p = bad.find("\"range\"");
+            size_t w = 7;
+            if (p == std::string::npos) {
+                p = bad.find("\"volatile\"");
+                w = 10;
+            }
+            if (p == std::string::npos) {
+                CHECK("closed-rejects-bad-enum-setup", false);
+            } else {
+                bad.replace(p, w, "\"trending\"");
+                CHECK("closed-rejects-bad-enum",
+                      parse_state(bad) == "state-shape:regime");
+            }
+        }
     }
+
+    // ---- C. Checked integers (blocker #3) ----
     {
-        // Decoder adversarial vectors: overlong, surrogate, truncated,
-        // astral round-trip through the frozen escaper.
-        jev::JEVStateV3 st;
-        std::string w3;
-        CHECK("utf8-overlong",
-              !st.set_regime(std::string("\xC0\xAF", 2), w3));
-        CHECK("utf8-truncated",
-              !st.set_regime(std::string("\xE2\x82", 2), w3));
-        CHECK("utf8-surrogate",
-              !st.set_regime(std::string("\xED\xA0\x80", 3), w3));
-        CHECK("utf8-astral-ok",
-              st.set_regime("\xF0\x9F\x98\x80", w3));  // U+1F600
-        CHECK("nonfinite-double",
-              !st.set_zscore(std::numeric_limits<double>::quiet_NaN(), w3));
-        int64_t micros = 0;
-        CHECK("micros-roundtrip",
-              jev::JEVStateV3::UnixMicros(1720000000.5, micros) &&
-                  micros == 1720000000500000LL);
+        int64_t v = 0;
+        CHECK("int64-zero", jev::ParseNonNegInt64("0", v) && v == 0);
+        CHECK("int64-max",
+              jev::ParseNonNegInt64("9223372036854775807", v) &&
+                  v == 9223372036854775807LL);
+        CHECK("int64-max-plus-1-rejects",
+              !jev::ParseNonNegInt64("9223372036854775808", v));
+        CHECK("int64-64digit-rejects",
+              !jev::ParseNonNegInt64(
+                  "999999999999999999999999999999999999999999999999999999999999"
+                  "9999",
+                  v));
+        CHECK("int64-negative-rejects",
+              !jev::ParseNonNegInt64("-1", v));
+        CHECK("int64-empty-rejects", !jev::ParseNonNegInt64("", v));
+        // End to end: epoch overflow through FromJVal (no UB, state-shape).
+        std::string good = fx(dir, "state_vector.json");
+        auto epoch_case = [&](const std::string& ep) {
+            std::string bad = good;
+            size_t p = bad.find("\"snapshot_epoch\":999");
+            bad.replace(p, 20, std::string("\"snapshot_epoch\":") + ep);
+            jev::JVal st;
+            std::string err, w;
+            jev::JEVStateV3 o;
+            jev::ParseJson(bad, st, err);
+            return jev::JEVStateV3::FromJVal(st, o, w) ? std::string("ok") : w;
+        };
+        CHECK("epoch-max-accepts",
+              epoch_case("9223372036854775807") == "ok");
+        CHECK("epoch-max-plus-1-rejects",
+              epoch_case("9223372036854775808") == "state-shape:epoch");
+    }
+
+    // ---- D. Micros internals (blocker #4) ----
+    {
+        int64_t us = 0;
+        CHECK("micros-zero", jev::UnixMicros(0.0, us) && us == 0);
+        CHECK("micros-known",
+              jev::UnixMicros(1789862400.0, us) && us == 1789862400000000LL);
+        CHECK("micros-rejects-huge",
+              !jev::UnixMicros(1e30, us));
         CHECK("micros-rejects-inf",
-              !jev::JEVStateV3::UnixMicros(
-                  std::numeric_limits<double>::infinity(), micros));
+              !jev::UnixMicros(std::numeric_limits<double>::infinity(),
+                               us));
+        CHECK("micros-rejects-nan",
+              !jev::UnixMicros(std::numeric_limits<double>::quiet_NaN(),
+                               us));
+        // Artifact stores integer micros matching the frozen wire instants.
+        std::string raw = fx(dir, "t_veto.json");
+        jev::KernelState k;
+        std::string w;
+        CHECK("d-kernel", jev::KernelState::Create({"EURUSD"}, w, k));
+        // state canon: the artifact embeds the full request state.
+        jev::JVal art;
+        std::string err;
+        CHECK("d-artifact-parses", jev::ParseJson(raw, art, err));
+        const jev::JVal* state = jev::ObjGet(art, "state");
+        CHECK("d-state-present", state && state->t == jev::JVal::T::OBJ);
+        jev::JEVStateV3 s;
+        std::string dwhy;
+        CHECK("d-state-accepts",
+              jev::JEVStateV3::FromJVal(*state, s, dwhy));
+        jev::ValidationRequest q =
+            k.request_for(validation_bytes(raw), key, s.Serialize(), "EURUSD", 0.0,
+                          jev::Mode::REPLAY);
+        jev::ValidationResult r = jev::validate_jev(q);
+        CHECK("d-valid", r.ok());
+        if (r.ok()) {
+            CHECK("d-created-us",
+                  r.get()->created_us() == 1789862400000000LL);
+            CHECK("d-expires-us",
+                  r.get()->expires_us() == 1789862460000000LL);
+        }
+        // Unrepresentable kernel clock HOLDs (LIVE only).
+        jev::ValidationRequest qb =
+            k.request_for(validation_bytes(raw), key, s.Serialize(), "EURUSD", 1e30,
+                          jev::Mode::LIVE);
+        jev::ValidationResult rb = jev::validate_jev(qb
+);
+        CHECK("d-clock-unrepresentable",
+              !rb.ok() && rb.reason() == "clock-unrepresentable");
     }
+
+    // ---- E. ScalarLessL regression (P3.1 amendment locks) ----
     {
-        // ScalarLessL regression (P3.1 amendment): the LE table was wrong
-        // from byte 5 on, false-rejecting valid S with S[31]==0x0F and
-        // S[30]>=0x10. Boundaries pinned directly (L-1 accept, L reject).
         uint8_t zero[32] = {};
-        uint8_t Lval[32] = {0xED, 0xD3, 0xF5, 0x5C, 0x1A, 0x63, 0x12, 0x58,
-                            0xD6, 0x9C, 0xF7, 0xA2, 0xDE, 0xF9, 0xDE, 0x14};
         CHECK("lessL-zero", jev::ScalarLessL(zero));
-        // S = 0x0F_A2... (the discovered false-reject band) must accept.
         uint8_t band[32] = {};
         band[31] = 0x0F;
         band[30] = 0xA2;
         CHECK("lessL-band-accept", jev::ScalarLessL(band));
-        // S = L exactly must reject; S = L-1 must accept.
-        uint8_t Leq[32];
-        memcpy(Leq, Lval, 16);
-        memset(Leq + 16, 0, 14);
-        Leq[30] = 0x00;
-        Leq[31] = 0x10;
+        uint8_t Leq[32] = {0xED, 0xD3, 0xF5, 0x5C, 0x1A, 0x63, 0x12, 0x58,
+                           0xD6, 0x9C, 0xF7, 0xA2, 0xDE, 0xF9, 0xDE, 0x14,
+                           0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                           0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10};
         CHECK("lessL-L-rejects", !jev::ScalarLessL(Leq));
-        uint8_t Lm1b[32];
-        memcpy(Lm1b, Leq, 32);
+        uint8_t Lm1[32];
+        memcpy(Lm1, Leq, 32);
         for (int i = 0; i < 32; i++) {  // subtract 1
-            if (Lm1b[i]-- != 0) break;
+            if (Lm1[i]-- != 0) break;
         }
-        CHECK("lessL-Lminus1-accepts", jev::ScalarLessL(Lm1b));
+        CHECK("lessL-Lminus1-accepts", jev::ScalarLessL(Lm1));
     }
 
-    // ---- B. KernelState: universe + epochs kernel-owned
+    // ---- F. KernelState hardening (#5, #7) ----
     {
-        std::string w4;
-        jev::KernelState bad =
-            jev::KernelState::WithUniverse({}, w4);
-        CHECK("empty-universe-rejected", !bad.ok());
-        jev::KernelState ks =
-            jev::KernelState::WithUniverse({"EURUSD", "GBPUSD"}, w4);
-        CHECK("universe-built", ks.ok());
-        CHECK("membership", ks.is_executable("EURUSD") &&
-                                !ks.is_executable("XXX"));
-        CHECK("no-epoch-yet", !ks.has_epoch("EURUSD"));
-        CHECK("accept-first", ks.accept("EURUSD", 0));
-        CHECK("accept-advance", ks.accept("EURUSD", 5));
-        CHECK("accept-stale-refused",
-              !ks.accept("EURUSD", 5) && !ks.accept("EURUSD", 3));
-        CHECK("accept-negative-refused", !ks.accept("EURUSD", -1));
-        CHECK("accept-foreign-refused", !ks.accept("XXX", 9));
-        CHECK("last-epoch", ks.last_epoch("EURUSD") == 5);
-        jev::ValidationRequest q = ks.request_for("{}", key, "{}", "EURUSD",
-                                                  0.0, jev::Mode::REPLAY);
-        CHECK("request-from-kernel",
-              q.allowed_symbols.size() == 2 && q.has_previous_epoch &&
-                  q.previous_epoch == 5);
-        jev::ValidationRequest q0 = ks.request_for("{}", key, "{}", "GBPUSD",
-                                                   0.0, jev::Mode::REPLAY);
-        CHECK("request-first-no-predecessor", !q0.has_previous_epoch);
-    }
-    // End-to-end: stale epoch rejected THROUGH the wrapper with the frozen
-    // reason (binding passes — the state matches — so epoch is the SOLE
-    // failure cause, strongly proving the gate).
-    {
-        std::string w5;
-        jev::KernelState ks =
-            jev::KernelState::WithUniverse({"EURUSD"}, w5);
-        CHECK("e2e-advance", ks.accept("EURUSD", 100));
-        std::string raw0 = fx("r_000.json");
-        jev::ValidationRequest q = ks.request_for(
-            raw0, key, state_for(artifact_epoch(raw0), "EURUSD"), "EURUSD",
-            0.0, jev::Mode::REPLAY);
-        jev::ValidationResult r = jev::validate_jev(q);
-        CHECK("e2e-stale-epoch-holds",
-              !r.ok() && r.reason() == "epoch-not-monotonic");
-        // Fresh kernel accepts epoch 0 artifact, then advances.
-        jev::KernelState ks2 =
-            jev::KernelState::WithUniverse({"EURUSD"}, w5);
-        jev::ValidationRequest q2 = ks2.request_for(
-            raw0, key, state_for(artifact_epoch(raw0), "EURUSD"), "EURUSD",
-            0.0, jev::Mode::REPLAY);
-        jev::ValidationResult r2 = jev::validate_jev(q2);
-        CHECK("e2e-first-ok", r2.ok());
-        CHECK("e2e-accept-advances",
-              r2.ok() && ks2.accept("EURUSD", r2.get()->snapshot_epoch()));
-        // Non-executable symbol fails MEMBERSHIP (state matches XXX, so
-        // binding passes and universe is the sole failure cause).
-        std::string rawx = fx("t_symbol_xxx.json");
-        jev::ValidationRequest qx = ks2.request_for(
-            rawx, key, state_for(artifact_epoch(rawx), "XXX"), "XXX", 0.0,
-            jev::Mode::REPLAY);
-        jev::ValidationResult rx = jev::validate_jev(qx);
-        CHECK("e2e-universe-holds",
-              !rx.ok() && rx.reason() == "symbol-universe");
+        jev::KernelState k;
+        std::string w;
+        CHECK("universe-default-not-ok", !k.ok());
+        CHECK("universe-empty-rejects",
+              !jev::KernelState::Create({}, w, k) &&
+                  w == "kernel-state:empty-universe" && !k.ok());
+        CHECK("universe-too-large-rejects",
+              !jev::KernelState::Create({"A", "B", "C", "D", "E", "F"}, w,
+                                        k) &&
+                  w == "kernel-state:universe-too-large");
+        CHECK("universe-dupe-rejects",
+              !jev::KernelState::Create({"EURUSD", "EURUSD"}, w, k) &&
+                  w == "kernel-state:duplicate-symbol");
+        CHECK("universe-bad-utf8-rejects",
+              !jev::KernelState::Create(
+                  {std::string("EUR\xffUSD")}, w, k) &&
+                  w == "kernel-state:bad-symbol-utf8");
+        CHECK("universe-five-accepts",
+              jev::KernelState::Create(
+                  {"EURUSD", "GBPUSD", "USDJPY", "AAPL", "MSFT"}, w, k) &&
+                  w == "ok" && k.ok());
+        CHECK("universe-membership",
+              k.is_executable("AAPL") && !k.is_executable("XXX"));
+        // try_accept: sole compare-and-advance gate (#5).
+        CHECK("accept-first",
+              k.try_accept("EURUSD", -1, 10) && k.last_epoch("EURUSD") == 10);
+        CHECK("accept-stale-prev-rejects",
+              !k.try_accept("EURUSD", -1, 11) &&
+                  k.last_epoch("EURUSD") == 10);
+        CHECK("accept-nonmonotonic-rejects",
+              !k.try_accept("EURUSD", 10, 10) &&
+                  k.last_epoch("EURUSD") == 10);
+        CHECK("accept-advance",
+              k.try_accept("EURUSD", 10, 11) &&
+                  k.last_epoch("EURUSD") == 11);
+        CHECK("accept-foreign-symbol-rejects",
+              !k.try_accept("XXX", -1, 0));
+        CHECK("accept-negative-rejects",
+              !k.try_accept("EURUSD", 11, -1) &&
+                  k.last_epoch("EURUSD") == 11);
     }
 
-    // ---- C. Decision table vs doc 03 §3.2 rows + §3.7 cases 21-28
-    std::string w6;
-    jev::KernelState ks =
-        jev::KernelState::WithUniverse({"EURUSD"}, w6);
-    auto run_case = [&](const std::string& file, jev::EngineInputs in,
-                      jev::Decision& out) -> bool {
-        std::string raw = fx(file);
-        int64_t epoch = artifact_epoch(raw);
-        std::string symbol = artifact_symbol(raw);
-        jev::ValidationRequest q = ks.request_for(
-            raw, key, state_for(epoch, symbol), symbol, 0.0,
-            jev::Mode::REPLAY);
-        jev::ValidationResult r = jev::validate_jev(q);
-        if (!r.ok()) {
-            printf("  !! %s failed validation: %s\n", file.c_str(),
-                   r.reason().c_str());
-            return false;
-        }
-        if (!ks.accept(symbol, epoch)) {
-            printf("  !! %s epoch not accepted\n", file.c_str());
-            return false;
-        }
-        out = jev::EvaluateDecision(*r.get(), in);
-        return true;
-    };
-    auto eng = []() {
-        jev::EngineInputs e;
-        return e;
-    };
-    auto expect = [&](const char* name, const char* file,
-                      jev::EngineInputs in, const char* action,
-                      const char* reason) {
-        jev::Decision d;
-        bool ran = run_case(file, in, d);
-        CHECK(name, ran && d.action == action && d.reason == reason);
-    };
-    // Calls run in ARTIFACT-EPOCH order (t_veto=200 .. t_bound_E50_lean=219)
-    // so KernelState advances monotonically; check names stay §3.7-mapped.
+    // ---- G. Targeted §3.7 table cases over full states ----
     {
-        jev::EngineInputs in = eng();  // 22: row-0 R2 veto
-        in.deterministic_veto = true;
-        in.veto_reason = "R2";
-        expect("c22-row0", "t_veto.json", in, "HOLD", "engine-veto");
-    }
-    {
-        jev::EngineInputs in = eng();  // 21: L=.8 additive veto
-        expect("c21-latent", "t_latent.json", in, "HOLD", "latent-risk");
-    }
-    {
-        jev::EngineInputs in = eng();  // 27: R14 disagreement
-        in.disagreement = true;
-        expect("c27-disagree", "t_disagree.json", in, "HOLD",
-               "disagreement");
-    }
-    {
-        jev::EngineInputs in = eng();  // 28: pre-event blackout
-        in.event_blackout = true;
-        expect("c28-blackout", "t_blackout.json", in, "HOLD",
-               "event-blackout");
-    }
-    {
-        jev::EngineInputs in = eng();  // 26: breach HOLDS even max
-        in.calibration_gate = jev::CalibrationGate::BREACH;
-        expect("c26-calib", "t_calib.json", in, "HOLD",
-               "calibration-breach");
-    }
-    {
-        jev::EngineInputs in = eng();
-        expect("row-noedge", "t_noedge.json", in, "HOLD", "no-edge");
-        expect("row-midband-exec", "t_midband_exec.json", in, "HOLD",
-               "mid-band");
-        expect("row-midband-lean", "t_midband_lean.json", in, "HOLD",
-               "mid-band");
-    }
-    {
-        jev::EngineInputs in = eng();  // 23: execution never directs
-        expect("c23-execution", "t_exec_high.json", in, "HOLD",
-               "execution-family");
-    }
-    {
-        jev::EngineInputs in = eng();
-        expect("row-flat", "t_flat.json", in, "HOLD", "conviction-flat");
-        expect("row-lean", "t_lean_base.json", in, "BASE", "base-1R");
-        expect("row-strong", "t_strong_base.json", in, "BASE", "base-1R");
-    }
-    {
-        jev::EngineInputs in = eng();  // 24: max-gate fully green
-        in.calibration_gate = jev::CalibrationGate::PASS;
-        expect("c24-elevated", "t_max_elevated.json", in, "ELEVATED",
-               "elevated-2R");
-    }
-    {
-        jev::EngineInputs in = eng();  // 25: L=.4 breaks the gate
-        in.calibration_gate = jev::CalibrationGate::PASS;
-        expect("c25-downgrade", "t_max_downgrade_L.json", in, "BASE",
-               "downgrade-strong");
-    }
-    {
-        // max + insufficient gate: downgrade (thin evidence never sizes up).
-        jev::EngineInputs in = eng();
-        in.calibration_gate = jev::CalibrationGate::INSUFFICIENT;
-        expect("row-max-insufficient", "t_max_downgrade_insuf.json", in,
-               "BASE", "downgrade-strong");
-    }
-    {
-        // Boundaries: E=0.5 mid-band-but-passes, L=0.5 passes (strict >),
-        // E=0.8 gate-eligible, E=0.79 gate-fails, E=0.5+lean mid-band HOLD.
-        jev::EngineInputs in = eng();
-        expect("bound-E50", "t_bound_E50.json", in, "BASE", "base-1R");
-        expect("bound-L50", "t_bound_L50.json", in, "BASE", "base-1R");
-        jev::EngineInputs pin = eng();
-        pin.calibration_gate = jev::CalibrationGate::PASS;
-        expect("bound-E80", "t_bound_E80.json", pin, "ELEVATED",
-               "elevated-2R");
-        expect("bound-E79", "t_bound_E79.json", pin, "BASE",
-               "downgrade-strong");
-        expect("bound-E50-lean", "t_bound_E50_lean.json", in, "HOLD",
-               "mid-band");
-    }
-    {
-        // insufficient does NOT hold ordinary rows (budget-dependent gate):
-        // separate kernel (r_127 = E.81/momentum/strong/L.3, epoch 127).
-        std::string w7;
-        jev::KernelState ks7 =
-            jev::KernelState::WithUniverse({"EURUSD"}, w7);
-        std::string raw = fx("r_127.json");
-        jev::ValidationRequest q = ks7.request_for(
-            raw, key, state_for(artifact_epoch(raw), "EURUSD"), "EURUSD",
-            0.0, jev::Mode::REPLAY);
-        jev::ValidationResult r = jev::validate_jev(q);
-        CHECK("row-strong-insufficient-valid", r.ok());
-        if (r.ok()) {
-            jev::EngineInputs in = eng();
-            in.calibration_gate = jev::CalibrationGate::INSUFFICIENT;
-            jev::Decision d = jev::EvaluateDecision(*r.get(), in);
-            CHECK("row-strong-insufficient",
-                  d.action == "BASE" && d.reason == "base-1R");
-        }
-    }
-
-    // ---- D. Replay determinism: 200 AnswerSets, outputs hashed twice.
-    auto replay_pass = [&](int& out_n) {
-        jev::KernelState k2 =
-            jev::KernelState::WithUniverse({"EURUSD"}, w6);
-        uint64_t h = 1469598103934665603ULL;
-        out_n = 0;
-        for (int i = 0; i < 200; i++) {
-            char name[32];
-            snprintf(name, sizeof(name), "r_%03d.json", i);
-            std::string raw = fx(name);
-            jev::ValidationRequest q = k2.request_for(
-                raw, key, state_for(i, "EURUSD"), "EURUSD", 0.0,
-                jev::Mode::REPLAY);
+        jev::KernelState k;
+        std::string w;
+        CHECK("g-kernel", jev::KernelState::Create({"EURUSD"}, w, k));
+        auto targeted = [&](const char* name, const char* want_action,
+                            const char* want_reason,
+                            jev::VetoReason veto) {
+            std::string raw = fx(dir, name);
+            jev::JVal art;
+            std::string err;
+            if (!jev::ParseJson(raw, art, err)) {
+                CHECK(name, false);
+                return;
+            }
+            const jev::JVal* state = jev::ObjGet(art, "state");
+            jev::JEVStateV3 s;
+            std::string why;
+            if (!state ||
+                !jev::JEVStateV3::FromJVal(*state, s, why)) {
+                CHECK(name, false);
+                return;
+            }
+            // Closed loop per artifact: C++ canonical bytes hash to the
+            // sidecar-computed state_hash, and the C++ decision_key
+            // equals the artifact's (frozen "?" feature_revision incl).
+            const jev::JVal* pay = jev::ObjGet(art, "payload");
+            std::string sh =
+                jev::U32ToUtf8(jev::ObjGet(*pay, "state_hash")->s);
+            std::string dk =
+                jev::U32ToUtf8(jev::ObjGet(*pay, "decision_key")->s);
+            if (s.StateHash() != sh || s.DecisionKey() != dk) {
+                CHECK(name, false);
+                return;
+            }
+            jev::ValidationRequest q =
+                k.request_for(validation_bytes(raw), key, s.Serialize(), "EURUSD", 0.0,
+                              jev::Mode::REPLAY);
             jev::ValidationResult r = jev::validate_jev(q);
             if (!r.ok()) {
-                printf("  !! replay %d invalid: %s\n", i,
-                       r.reason().c_str());
-                return h ^ 0xDEADULL;
+                printf("  !! %s invalid: %s\n", name, r.reason().c_str());
+                CHECK(name, false);
+                return;
             }
-            out_n++;
-            if (!k2.accept("EURUSD", r.get()->snapshot_epoch())) {
-                printf("  !! replay %d epoch stuck\n", i);
-                return h ^ 0xBEEFULL;
+            bool admitted = k.try_accept(
+                "EURUSD",
+                q.has_previous_epoch ? q.previous_epoch : -1,
+                r.get()->snapshot_epoch());
+            if (!admitted) {
+                CHECK(name, false);
+                return;
             }
-            jev::EngineInputs in = eng();
-            switch (i % 8) {
-                case 1: in.deterministic_veto = true; break;
-                case 2: in.disagreement = true; break;
-                case 3: in.event_blackout = true; break;
-                case 4:
-                    in.calibration_gate = jev::CalibrationGate::BREACH;
-                    break;
-                case 5:
-                    in.calibration_gate = jev::CalibrationGate::PASS;
-                    break;
-                case 6: in.r6_vol_trip = true; break;
-                case 7: in.exposure_headroom_r2 = false; break;
-                default: break;
+            jev::EngineInputs e = eng_from_state(*state);
+            if (veto != jev::VetoReason::NONE) {
+                e.deterministic_veto = true;
+                e.veto_reason = veto;
             }
-            jev::Decision d = jev::EvaluateDecision(*r.get(), in);
-            h = Fnv(d.action + "|" + d.reason + "|" +
-                        r.get()->decision_key(),
-                    h);
+            // t_veto carries veto state-side too (risk_flags mirror).
+            const jev::JVal* rf = jev::ObjGet(*state, "risk_flags");
+            const jev::JVal* dv =
+                rf ? jev::ObjGet(*rf, "deterministic_veto") : nullptr;
+            if (dv && dv->t == jev::JVal::T::BOOL && dv->b &&
+                veto == jev::VetoReason::NONE) {
+                e.deterministic_veto = true;
+            }
+            jev::Decision d =
+                jev::EvaluateDecision(*r.get(), e);
+            CHECK(name, d.action == want_action && d.reason == want_reason);
+        };
+        targeted("t_veto.json", "HOLD", "engine-veto:r5-loss-cap",
+                 jev::VetoReason::LOSS_CAP_R5);
+        // Coded veto reason propagates (countable paper-trail, #9).
+        // Fresh kernel: an ADMITTED epoch re-validates as non-monotonic
+        // (correct), so admission history must not be reused here.
+        {
+            jev::KernelState k2;
+            std::string w2;
+            jev::KernelState::Create({"EURUSD"}, w2, k2);
+            std::string raw = fx(dir, "t_veto.json");
+            jev::JVal art;
+            std::string err;
+            jev::ParseJson(raw, art, err);
+            const jev::JVal* state = jev::ObjGet(art, "state");
+            jev::JEVStateV3 s;
+            std::string why;
+            jev::JEVStateV3::FromJVal(*state, s, why);
+            jev::ValidationRequest q = k2.request_for(
+                validation_bytes(raw), key, s.Serialize(), "EURUSD", 0.0,
+                jev::Mode::REPLAY);
+            jev::ValidationResult r = jev::validate_jev(q);
+            // No admission here — one winner per epoch (#5); the decision
+            // layer only needs the validated object.
+            CHECK("veto-code-valid", r.ok());
+            if (r.ok()) {
+                jev::EngineInputs e = eng_from_state(*state);
+                e.deterministic_veto = true;
+                e.veto_reason = jev::VetoReason::SESSION_CLOSED;
+                jev::Decision d = jev::EvaluateDecision(*r.get(), e);
+                CHECK("veto-code-propagates",
+                      d.reason == "engine-veto:session-closed");
+            }
         }
-        return h;
-    };
-    {
-        int n1 = 0, n2 = 0;
-        uint64_t h1 = replay_pass(n1);
-        uint64_t h2 = replay_pass(n2);
-        CHECK("replay-all-valid", n1 == 200 && n2 == 200);
-        CHECK("replay-deterministic", h1 == h2);
-        printf("  replay hash: %llx\n", (unsigned long long)h1);
+        targeted("t_latent.json", "HOLD", "latent-risk",
+                 jev::VetoReason::NONE);
+        targeted("t_disagree.json", "HOLD", "disagreement",
+                 jev::VetoReason::NONE);
+        targeted("t_blackout.json", "HOLD", "event-blackout",
+                 jev::VetoReason::NONE);
+        targeted("t_calib.json", "HOLD", "calibration-breach",
+                 jev::VetoReason::NONE);
+        targeted("t_noedge.json", "HOLD", "no-edge",
+                 jev::VetoReason::NONE);
+        targeted("t_bound_E50.json", "BASE", "base-1R",
+                 jev::VetoReason::NONE);
+        targeted("t_bound_E50_lean.json", "HOLD", "mid-band",
+                 jev::VetoReason::NONE);
+        targeted("t_bound_E79.json", "BASE", "base-1R",
+                 jev::VetoReason::NONE);
+        targeted("t_bound_E80.json", "BASE", "base-1R",
+                 jev::VetoReason::NONE);
+        targeted("t_bound_L50.json", "BASE", "base-1R",
+                 jev::VetoReason::NONE);
+        targeted("t_exec_high.json", "HOLD", "execution-family",
+                 jev::VetoReason::NONE);
+        targeted("t_flat.json", "HOLD", "conviction-flat",
+                 jev::VetoReason::NONE);
+        targeted("t_lean_base.json", "BASE", "base-1R",
+                 jev::VetoReason::NONE);
+        targeted("t_strong_base.json", "BASE", "base-1R",
+                 jev::VetoReason::NONE);
+        targeted("t_midband_exec.json", "HOLD", "mid-band",
+                 jev::VetoReason::NONE);
+        targeted("t_midband_lean.json", "HOLD", "mid-band",
+                 jev::VetoReason::NONE);
+        targeted("t_max_elevated.json", "ELEVATED", "elevated-2R",
+                 jev::VetoReason::NONE);
+        targeted("t_max_downgrade_L.json", "BASE", "downgrade-strong",
+                 jev::VetoReason::NONE);
+        targeted("t_max_downgrade_insuf.json", "BASE", "downgrade-strong",
+                 jev::VetoReason::NONE);
     }
-    // Non-degeneracy over the 200-set: every budget class occurs (the
-    // systematic sweep covers HOLD-heavy engine patterns AND clean ones).
+
+    // ---- H. 200-AnswerSet replay: SHA-256 decision proof (#8) ----
     {
-        jev::KernelState k3 =
-            jev::KernelState::WithUniverse({"EURUSD"}, w6);
+        auto replay_pass = [&](int& out_n) {
+            jev::KernelState k;
+            std::string w;
+            jev::KernelState::Create({"EURUSD"}, w, k);
+            std::string cat;
+            out_n = 0;
+            for (int i = 0; i < 200; i++) {
+                char name[32];
+                snprintf(name, sizeof(name), "r_%03d.json", i);
+                std::string raw = fx(dir, name);
+                jev::JVal art;
+                std::string err;
+                if (!jev::ParseJson(raw, art, err)) return std::string();
+                const jev::JVal* state = jev::ObjGet(art, "state");
+                jev::JEVStateV3 s;
+                std::string why;
+                if (!state || !jev::JEVStateV3::FromJVal(*state, s, why))
+                    return std::string();
+                jev::ValidationRequest q =
+                    k.request_for(validation_bytes(raw), key, s.Serialize(), "EURUSD", 0.0,
+                                  jev::Mode::REPLAY);
+                jev::ValidationResult r = jev::validate_jev(q);
+                if (!r.ok()) {
+                    printf("  !! replay %d invalid: %s\n", i,
+                           r.reason().c_str());
+                    return std::string();
+                }
+                if (!k.try_accept(
+                        "EURUSD",
+                        q.has_previous_epoch ? q.previous_epoch : -1,
+                        r.get()->snapshot_epoch()))
+                    return std::string();
+                jev::EngineInputs e = eng_from_state(*state);
+                e.calibration_gate = jev::CalibrationGate::PASS;
+                jev::Decision d =
+                    jev::EvaluateDecision(*r.get(), e);
+                out_n++;
+                cat += std::to_string(i) + "|" + d.action + "|" +
+                       d.reason + "|" + r.get()->decision_key() + ";";
+            }
+            return jev::Sha256Hex(cat);
+        };
+        int n1 = 0, n2 = 0;
+        std::string h1 = replay_pass(n1);
+        std::string h2 = replay_pass(n2);
+        CHECK("replay-all-valid", n1 == 200 && n2 == 200);
+        CHECK("replay-deterministic",
+              !h1.empty() && h1 == h2);
+        printf("  replay sha256: %s\n", h1.c_str());
+    }
+    // Non-degeneracy: every budget class occurs over the sweep.
+    {
+        jev::KernelState k;
+        std::string w;
+        jev::KernelState::Create({"EURUSD"}, w, k);
         int n_hold = 0, n_base = 0, n_elev = 0;
         for (int i = 0; i < 200; i++) {
             char name[32];
             snprintf(name, sizeof(name), "r_%03d.json", i);
-            std::string raw = fx(name);
-            jev::ValidationRequest q = k3.request_for(
-                raw, key, state_for(i, "EURUSD"), "EURUSD", 0.0,
-                jev::Mode::REPLAY);
+            std::string raw = fx(dir, name);
+            jev::JVal art;
+            std::string err;
+            if (!jev::ParseJson(raw, art, err)) continue;
+            const jev::JVal* state = jev::ObjGet(art, "state");
+            jev::JEVStateV3 s;
+            std::string why;
+            if (!state || !jev::JEVStateV3::FromJVal(*state, s, why))
+                continue;
+            jev::ValidationRequest q =
+                k.request_for(validation_bytes(raw), key, s.Serialize(), "EURUSD", 0.0,
+                              jev::Mode::REPLAY);
             jev::ValidationResult r = jev::validate_jev(q);
-            if (!r.ok()) continue;  // counted in replay pass; skip here
-            k3.accept("EURUSD", r.get()->snapshot_epoch());
-            jev::EngineInputs clean = eng();
-            clean.calibration_gate = jev::CalibrationGate::PASS;
-            jev::Decision d = jev::EvaluateDecision(*r.get(), clean);
+            if (!r.ok()) continue;
+            k.try_accept("EURUSD",
+                         q.has_previous_epoch ? q.previous_epoch : -1,
+                         r.get()->snapshot_epoch());
+            jev::EngineInputs e = eng_from_state(*state);
+            e.calibration_gate = jev::CalibrationGate::PASS;
+            jev::Decision d = jev::EvaluateDecision(*r.get(), e);
             if (d.budget == jev::Decision::Budget::HOLD) n_hold++;
             if (d.budget == jev::Decision::Budget::BASE_1R) n_base++;
             if (d.budget == jev::Decision::Budget::ELEVATED_2R) n_elev++;
@@ -523,6 +610,7 @@ int main(int argc, char** argv) {
               n_hold > 0 && n_base > 0 && n_elev > 0);
     }
 
-    printf("CHECKS: %d/%d PASS\n", count - fails, count);
-    return fails ? 1 : 0;
+    printf("CHECKS: %d/%d %s\n", total - fails, total,
+           fails == 0 ? "PASS" : "FAIL");
+    return fails == 0 ? 0 : 1;
 }

@@ -23,9 +23,42 @@ enum class CalibrationGate { PASS, INSUFFICIENT, BREACH };
 
 // Deterministic engine inputs (C++-computed, never model outputs — except
 // enter/latent_risk as bounded table inputs per doc 03 §3.3).
+// Veto reasons are a FROZEN enum (#9), never free text: paper-trade
+// analysis needs countable HOLD causes (R5 loss cap, R6 vol, session,
+// short/corp-action blocks, pending risk), not arbitrary strings.
+enum class VetoReason {
+    NONE,
+    LOSS_CAP_R5,
+    VOL_TRIP_R6,
+    SESSION_CLOSED,
+    SHORT_BLOCK,
+    CORP_ACTION_BLOCK,
+    PENDING_RISK,
+    OTHER_BREACH
+};
+inline const char* VetoCode(VetoReason v) {
+    switch (v) {
+        case VetoReason::LOSS_CAP_R5:
+            return "r5-loss-cap";
+        case VetoReason::VOL_TRIP_R6:
+            return "r6-vol-trip";
+        case VetoReason::SESSION_CLOSED:
+            return "session-closed";
+        case VetoReason::SHORT_BLOCK:
+            return "short-block";
+        case VetoReason::CORP_ACTION_BLOCK:
+            return "corp-action-block";
+        case VetoReason::PENDING_RISK:
+            return "pending-risk";
+        case VetoReason::OTHER_BREACH:
+            return "other-breach";
+        default:
+            return "engine";
+    }
+}
 struct EngineInputs {
     bool deterministic_veto = false;  // row 0: R-breach/session/corp/pending
-    std::string veto_reason = "engine";
+    VetoReason veto_reason = VetoReason::NONE;
     bool disagreement = false;        // R14 opposite TRIGGER effects
     bool event_blackout = false;      // C++ impact+phase blackout
     CalibrationGate calibration_gate = CalibrationGate::INSUFFICIENT;
@@ -60,7 +93,16 @@ inline Decision EvaluateDecision(const ValidatedJEVAnswerSetV3& a,
         return d;
     };
     // Row 0: deterministic veto is authoritative, never a model opinion.
-    if (in.deterministic_veto) return hold("engine-veto");
+    // Reason carries the frozen veto code for countable paper analysis.
+    if (in.deterministic_veto) {
+        Decision d;
+        d.action = "HOLD";
+        d.reason = (in.veto_reason == VetoReason::NONE)
+                       ? "engine-veto"
+                       : std::string("engine-veto:") +
+                             VetoCode(in.veto_reason);
+        return d;
+    }
     // Additive hidden-risk veto (strictly greater: 0.5 passes).
     if (L > 0.5) return hold("latent-risk");
     if (in.disagreement) return hold("disagreement");
