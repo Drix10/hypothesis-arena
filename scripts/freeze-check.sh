@@ -236,6 +236,8 @@ grep -q 'friend class KernelState;' "$ROOT/kernel/jev_validate.hpp" \
   && ok "ingest present" || bad "ingest missing"
 [ -f "$ROOT/kernel/ingest/test_features.cpp" ] \
   && ok "ingest suite present" || bad "ingest suite missing"
+[ -f "$ROOT/kernel/ingest/test_noalloc.cpp" ] \
+  && ok "ingest noalloc proof present" || bad "ingest noalloc proof missing"
 
 # ---- committed P3.2 vectors are self-consistent (no Python needed) ----
 for _v in v1 v2; do

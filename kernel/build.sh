@@ -90,10 +90,18 @@ g++ $FLAGS -o test_features ingest/test_features.cpp ingest/features.cpp
 ./test_features
 # Slice C zero-malloc contract: validation + retention allocate nothing
 # (comments stripped: the discipline note names the forbidden tokens).
-if sed 's|//.*||' ingest/features.cpp | grep -nE "std::string|std::vector|malloc|calloc|realloc|strdup|operator new"; then
+# U8()/JVal::find are forbidden in the ingest path: both build key
+# temporaries that may heap-allocate through helpers defined elsewhere,
+# invisible to a vocabulary grep. Lookup runs via FindAscii.
+if sed 's|//.*||' ingest/features.cpp | grep -nE "std::string|std::vector|malloc|calloc|realloc|strdup|operator new|U8\(|\.find\("; then
     echo "GATE FAIL: heap use in ingest execution path"
     exit 1
 fi
+# Slice C runtime proof (not only grep): wrapped-malloc counter around
+# the validation path must stay zero. Static libstdc++ so operator new
+# resolves to the wrapped malloc.
+g++ $FLAGS -static-libstdc++ -static-libgcc -Wl,--wrap,malloc -Wl,--wrap,calloc -Wl,--wrap,realloc -o test_noalloc ingest/test_noalloc.cpp ingest/features.cpp
+./test_noalloc
 # Acceptance: no downstream function may accept raw JEV JSON.
 # The header exposes exactly one entry point: validate_jev().
 if grep -nE "\b(evaluate|decide|decide_from_json|from_json)\s*\(" jev_validate.hpp \

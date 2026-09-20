@@ -55,6 +55,15 @@ bool InAsciiList(const char* const* list, size_t n,
         if (AsciiEq(u, list[i])) return true;
     return false;
 }
+// Allocation-free member lookup (the zero-malloc contract forbids the
+// U8() key temporaries: each U8() builds a std::string + u32string
+// that may heap-allocate, invisible to any file-local grep gate).
+const JVal* FindAscii(const JVal& obj, const char* key) {
+    if (obj.t != JVal::T::OBJ) return nullptr;
+    for (auto& kv : obj.o)
+        if (AsciiEq(kv.first, key)) return &kv.second;
+    return nullptr;
+}
 #define NARR(a) (sizeof(a) / sizeof((a)[0]))
 
 // Strict int64 over a JSON numeric token (pointer+length into the
@@ -243,12 +252,12 @@ IngestOutcome IngestRecord(IngestState& st, const JVal& rec, const char* canon,
         }
         if (nm > 0) return reject_a(RejectCode::MISSING_FIELD, miss[0]);
     }
-    const JVal* schema = rec.find(U8("schema_version"));
-    const JVal* kind = rec.find(U8("kind"));
-    const JVal* effect = rec.find(U8("effect"));
-    const JVal* evidence = rec.find(U8("evidence"));
-    const JVal* conf = rec.find(U8("confidence_bucket"));
-    const JVal* source = rec.find(U8("source_id"));
+    const JVal* schema = FindAscii(rec, "schema_version");
+    const JVal* kind = FindAscii(rec, "kind");
+    const JVal* effect = FindAscii(rec, "effect");
+    const JVal* evidence = FindAscii(rec, "evidence");
+    const JVal* conf = FindAscii(rec, "confidence_bucket");
+    const JVal* source = FindAscii(rec, "source_id");
     // 4. version (before primitive check: a non-string version fails HERE,
     // P1.5-identical).
     if (!schema || schema->t != JVal::T::STR || !AsciiEq(schema->s, "f2"))
@@ -274,16 +283,17 @@ IngestOutcome IngestRecord(IngestState& st, const JVal& rec, const char* canon,
     if (is_edgar ? !InAsciiList(kEdgarKinds, NARR(kEdgarKinds), kind->s)
                  : !InAsciiList(kMacroKinds, NARR(kMacroKinds), kind->s))
         return reject(RejectCode::NO_EMITTER, nullptr);
-    // 9. value shape: exact keys {type, v}, closed type, exact v type.
-    const JVal* value = rec.find(U8("value"));
+    // 9. value shape, P1.5 precedence exactly: object -> type is a
+    // string -> type is a known VTYPES member (schema-value) -> exact
+    // {type, v} key set -> exact v type -> count >= 0. Multi-defect
+    // records therefore report the same first failure as P1.5 (e.g.
+    // {type:"bogus", v:"x", extra:1} is schema-value, not value-shape).
+    const JVal* value = FindAscii(rec, "value");
     if (!value || value->t != JVal::T::OBJ)
         return reject(RejectCode::SCHEMA_VALUE, nullptr);
     {
-        const JVal* vt = value->find(U8("type"));
-        const JVal* vv = value->find(U8("v"));
-        if (value->o.size() != 2 || !vt || !vv)
-            return reject(RejectCode::VALUE_SHAPE, nullptr);
-        if (vt->t != JVal::T::STR)
+        const JVal* vt = FindAscii(*value, "type");
+        if (!vt || vt->t != JVal::T::STR)
             return reject(RejectCode::VALUE_SHAPE, nullptr);
         bool is_enum = AsciiEq(vt->s, "enum");
         bool is_bucket = AsciiEq(vt->s, "bucket");
@@ -291,6 +301,9 @@ IngestOutcome IngestRecord(IngestState& st, const JVal& rec, const char* canon,
         bool is_count = AsciiEq(vt->s, "count");
         if (!is_enum && !is_bucket && !is_bool && !is_count)
             return reject(RejectCode::SCHEMA_VALUE, nullptr);
+        const JVal* vv = FindAscii(*value, "v");
+        if (value->o.size() != 2 || !vv)
+            return reject(RejectCode::VALUE_SHAPE, nullptr);
         bool shape_ok = false;
         if (is_enum || is_bucket)
             shape_ok = (vv->t == JVal::T::STR);
@@ -305,7 +318,7 @@ IngestOutcome IngestRecord(IngestState& st, const JVal& rec, const char* canon,
     // 10. symbols: non-empty array (empty bypasses identity — reject),
     // <= 16, every element a non-empty string.
     {
-        const JVal* syms = rec.find(U8("symbols"));
+        const JVal* syms = FindAscii(rec, "symbols");
         if (!syms || syms->t != JVal::T::ARR || syms->a.empty())
             return reject(RejectCode::SYMBOLS_TYPE, nullptr);
         if (syms->a.size() > (size_t)kMaxSymbols)
@@ -317,7 +330,7 @@ IngestOutcome IngestRecord(IngestState& st, const JVal& rec, const char* canon,
     // 11/12. observed (exact int, >= 0) and ttl (exact int, 1..7d).
     int64_t observed = 0;
     {
-        const JVal* ob = rec.find(U8("observed_at_ns"));
+        const JVal* ob = FindAscii(rec, "observed_at_ns");
         if (!ob || !AsInt64(*ob, observed))
             return reject(RejectCode::OBSERVED_TYPE, nullptr);
         if (observed < 0)  // P1.5 range is 0..INT64_MAX, mirrored exactly
@@ -325,7 +338,7 @@ IngestOutcome IngestRecord(IngestState& st, const JVal& rec, const char* canon,
     }
     int64_t ttl = 0;
     {
-        const JVal* tt = rec.find(U8("ttl_s"));
+        const JVal* tt = FindAscii(rec, "ttl_s");
         if (!tt || !AsInt64(*tt, ttl))
             return reject(RejectCode::TTL_TYPE, nullptr);
         if (ttl < 1 || ttl > kTtlMaxS)
@@ -333,10 +346,10 @@ IngestOutcome IngestRecord(IngestState& st, const JVal& rec, const char* canon,
     }
     // 13. lineage shape + combination (DB resolution is Slice G).
     {
-        const JVal* ch = rec.find(U8("canonical_hash"));
+        const JVal* ch = FindAscii(rec, "canonical_hash");
         if (!ch || ch->t != JVal::T::STR || !IsHex64U32(ch->s))
             return reject(RejectCode::HASH_FORMAT, nullptr);
-        const JVal* chs = rec.find(U8("canonical_hashes"));
+        const JVal* chs = FindAscii(rec, "canonical_hashes");
         if (chs) {
             if (chs->t != JVal::T::ARR || chs->a.empty() ||
                 chs->a.size() > (size_t)kMaxHashes)
@@ -405,7 +418,7 @@ IngestOutcome IngestRecord(IngestState& st, const JVal& rec, const char* canon,
     // 16. ingested (optional): exact int, ranged, never future, never
     // before observed (time-travel lineage is rejected, not reasoned).
     {
-        const JVal* ig = rec.find(U8("ingested_at_ns"));
+        const JVal* ig = FindAscii(rec, "ingested_at_ns");
         if (ig) {
             int64_t iv = 0;
             if (!AsInt64(*ig, iv))
@@ -420,25 +433,25 @@ IngestOutcome IngestRecord(IngestState& st, const JVal& rec, const char* canon,
     }
     // 17. provenance_url (optional): string type only.
     {
-        const JVal* pu = rec.find(U8("provenance_url"));
+        const JVal* pu = FindAscii(rec, "provenance_url");
         if (pu && pu->t != JVal::T::STR)
             return reject(RejectCode::PROVENANCE_TYPE, nullptr);
     }
     // 18. entity_ref shape (optional): exactly {"cik": str}. Resolution
     // against the pinned map is Slice G (needs the map file).
     {
-        const JVal* er = rec.find(U8("entity_ref"));
+        const JVal* er = FindAscii(rec, "entity_ref");
         if (er) {
             if (er->t != JVal::T::OBJ || er->o.size() != 1)
                 return reject(RejectCode::ENTITY_REF_SHAPE, nullptr);
-            const JVal* cik = er->find(U8("cik"));
+            const JVal* cik = FindAscii(*er, "cik");
             if (!cik || cik->t != JVal::T::STR)
                 return reject(RejectCode::ENTITY_REF_SHAPE, nullptr);
         }
     }
     // 19. feature_id shape (optional): non-empty string, <= 128 chars.
     {
-        const JVal* fi = rec.find(U8("feature_id"));
+        const JVal* fi = FindAscii(rec, "feature_id");
         if (fi) {
             if (fi->t != JVal::T::STR || fi->s.empty() || fi->s.size() > 128)
                 return reject(RejectCode::FEATURE_ID, nullptr);
@@ -453,8 +466,10 @@ IngestOutcome IngestRecord(IngestState& st, const JVal& rec, const char* canon,
     // newer than the oldest retained => valid-but-dropped (over-count).
     if (st.n >= kRetainMax) {
         if (observed <= st.slots[st.n - 1].observed_ns) {
+            // Valid but too old: counts as DROPPED only. (rejected and
+            // dropped are disjoint sets; counting both would make one
+            // drop two bad events in the rate math.)
             SetReason(o, false, false, RejectCode::OVER_COUNT, nullptr);
-            st.rejected++;
             st.dropped++;
             st.per_reason[(int)RejectCode::OVER_COUNT - 1]++;
             return o;
@@ -477,29 +492,51 @@ IngestOutcome IngestRecord(IngestState& st, const JVal& rec, const char* canon,
     return o;
 }
 
+namespace {
+// Saturating counter add: operationally unreachable, but keeps the
+// hourly window meaningful (monotone, ordered) past any wrap.
+void SatAdd(uint64_t& acc, uint64_t x) {
+    if (acc > UINT64_MAX - x)
+        acc = UINT64_MAX;
+    else
+        acc += x;
+}
+}  // namespace
+
 void RateAdd(RateWindow& w, const IngestState& st, int64_t now_ns) {
-    // Caller contract: once per bundle. Elapsed hour resets first so the
-    // rate is always trailing-1h (mutation, no allocation).
-    if (!w.window_set ||
-        (now_ns >= w.window_start_ns &&
-         now_ns - w.window_start_ns >= kHourNs)) {
+    // Caller contract: once per bundle, now_ns a non-negative monotonic
+    // clock. Elapsed hour resets first so the rate is trailing-1h.
+    // Clock rollback (now < start) keeps the current window rather than
+    // resetting: resetting would erase accumulated bad counts. The
+    // difference is __int128, so no signed overflow on any input.
+    __int128 elapsed = (__int128)now_ns - (__int128)w.window_start_ns;
+    if (!w.window_set || elapsed < 0) {
+        if (!w.window_set) {
+            w.window_start_ns = now_ns;
+            w.window_set = true;
+            w.accepted = w.rejected = w.dropped = 0;
+            for (int i = 0; i < kRejectCount; i++) w.per_reason[i] = 0;
+        }
+    } else if (elapsed >= kHourNs) {
         w.window_start_ns = now_ns;
-        w.window_set = true;
         w.accepted = w.rejected = w.dropped = 0;
         for (int i = 0; i < kRejectCount; i++) w.per_reason[i] = 0;
     }
-    w.accepted += st.accepted;
-    w.rejected += st.rejected;
-    w.dropped += st.dropped;
-    for (int i = 0; i < kRejectCount; i++) w.per_reason[i] += st.per_reason[i];
+    SatAdd(w.accepted, st.accepted);
+    SatAdd(w.rejected, st.rejected);
+    SatAdd(w.dropped, st.dropped);
+    for (int i = 0; i < kRejectCount; i++)
+        SatAdd(w.per_reason[i], st.per_reason[i]);
 }
 
 bool ShouldAlert(const RateWindow& w) {
-    uint64_t total = w.accepted + w.rejected + w.dropped;
+    // Strictly above 5%: 20*bad > total. Every addend is widened to
+    // __int128 BEFORE any addition, so no uint64 sum can overflow first.
+    __int128 total =
+        (__int128)w.accepted + (__int128)w.rejected + (__int128)w.dropped;
     if (total == 0) return false;
-    uint64_t bad = w.rejected + w.dropped;
-    // Strictly above 5%: 20*bad > total, overflow-free.
-    return (__int128)20 * bad > (__int128)total;
+    __int128 bad = (__int128)w.rejected + (__int128)w.dropped;
+    return (__int128)20 * bad > total;
 }
 
 int PayloadCount(const IngestState& st) {

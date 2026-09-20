@@ -16,9 +16,13 @@
 // are SKIPPED here and owned by Slice G — this gate is necessary but not
 // sufficient; a record accepted here can still be rejected there.
 //
-// ZERO-MALLOC CONTRACT: IngestRecord allocates nothing (fixed arena slots,
-// stack buffers, incremental Sha256). IngestState owns no std:: types.
+// ZERO-MALLOC CONTRACT: IngestRecord allocates nothing (fixed arena
+// slots, stack buffers, incremental Sha256, ASCII-direct u32 compares —
+// notably NO U8() key temporaries, which would heap-allocate through
+// std::string/u32string construction). IngestState owns no std:: types.
 // ParseJson/CanonJson allocate in the CALLER, off the validation path.
+// Proven at runtime by kernel/ingest/test_noalloc.cpp (wrapped-malloc
+// counter around the validation path), not only by the grep gate.
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -162,9 +166,12 @@ struct IngestState {
     int n = 0;  // retained count; slots[0..n) newest-first by observed_ns
     // Per-bundle counters (one IngestState per bundle ingest; the hourly
     // rejection rate lives in RateWindow below, fed once per bundle).
+    // rejected and dropped are DISJOINT: rejected = validation +
+    // over-size failures; dropped = valid but too old for a full arena
+    // (over-count). One drop is exactly one bad event in the rate math.
     uint64_t accepted = 0;
-    uint64_t rejected = 0;  // validation + over-size failures
-    uint64_t dropped = 0;   // valid but too old for a full arena
+    uint64_t rejected = 0;
+    uint64_t dropped = 0;
     uint64_t per_reason[kRejectCount] = {};
 };
 
@@ -187,7 +194,10 @@ IngestOutcome IngestRecord(IngestState& st, const JVal& rec,
                            const char* canon, size_t canon_len,
                            int64_t snapshot_ns);
 // Rejection rate over the trailing hour window: (rejected + dropped) /
-// total, evaluated overflow-free as 20*bad > total (strictly above 5%).
+// total, strictly above 5% (20*bad > total, __int128 throughout).
+// RateAdd contract: call ONCE per bundle with a non-negative monotonic
+// now_ns. Hour roll resets the window; clock rollback keeps the current
+// window (never erases accumulated bad counts); counters saturate.
 // Alert emission (alerts.jsonl) is Phase 2.5 ops; Slice C computes.
 void RateAdd(RateWindow& w, const IngestState& st, int64_t now_ns);
 bool ShouldAlert(const RateWindow& w);

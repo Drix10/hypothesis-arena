@@ -202,6 +202,17 @@ int main() {
                          "\"type\":\"bool\",\"v\":\"true\""),
                  SNAP);
         CHECK("value-str-for-bool", Reason(o) == "value-shape");
+        // Multi-defect precedence (P1.5 order: unknown type beats key
+        // count): unknown type + extra key is schema-value, not
+        // value-shape; unknown type + missing v is schema-value too.
+        o = Feed(st, Sub(base, "\"type\":\"enum\",\"v\":\"8-K:item-2.02\"",
+                         "\"type\":\"bogus\",\"v\":\"x\",\"extra\":1"),
+                 SNAP);
+        CHECK("value-multidefect-extra", Reason(o) == "schema-value");
+        o = Feed(st, Sub(base, "\"type\":\"enum\",\"v\":\"8-K:item-2.02\"",
+                         "\"type\":\"bogus\""),
+                 SNAP);
+        CHECK("value-multidefect-missing", Reason(o) == "schema-value");
         std::string cnt = Sub(base, "\"type\":\"enum\",\"v\":\"8-K:item-2.02\"",
                               "\"type\":\"count\",\"v\":3");
         o = Feed(st, cnt, SNAP);
@@ -410,6 +421,37 @@ int main() {
         CHECK("rate-exact5", !ShouldAlert(w2));
         RateWindow w3;
         CHECK("rate-empty", !ShouldAlert(w3));
+        // One over-count drop is exactly ONE bad event (rejected and
+        // dropped are disjoint). Full arena (64a, 0r) + 1 drop + 2
+        // validation rejects: 3/67 = 4.48% -> no alert. (The old
+        // double-count made this 4/68 = 5.9% -> alert.)
+        RateWindow w4;
+        IngestState full;
+        for (int i = 63; i >= 0; i--)
+            Feed(full, Base(OBS + i, 3600), SNAP);
+        CHECK("rate-drop-setup", full.n == 64 && full.dropped == 0 &&
+                                       full.rejected == 0);
+        IngestOutcome od =
+            Feed(full, Base(OBS - 1, 3600), SNAP);  // older than oldest
+        CHECK("rate-drop-one", !Accepted(od) && Reason(od) == "over-count" &&
+                                     full.dropped == 1 && full.rejected == 0 &&
+                                     full.per_reason[(int)RejectCode::OVER_COUNT -
+                                                     1] == 1);
+        RateAdd(w4, full, SNAP);
+        IngestState b4;
+        for (int i = 0; i < 2; i++)
+            Feed(b4, Sub(Base(OBS, 3600), "\"kind\":\"filing_event\"",
+                         "\"kind\":\"bogus\""),
+                 SNAP);
+        RateAdd(w4, b4, SNAP);
+        CHECK("rate-drop-counted-once", !ShouldAlert(w4));
+        // ...and one more reject crosses: 4/68 = 5.9% alerts.
+        IngestState b4b;
+        Feed(b4b, Sub(Base(OBS, 3600), "\"kind\":\"filing_event\"",
+                      "\"kind\":\"bogus\""),
+             SNAP);
+        RateAdd(w4, b4b, SNAP);
+        CHECK("rate-drop-plus-one", ShouldAlert(w4));
         // hour roll resets the window.
         RateAdd(w2, b2, SNAP + 3600LL * 1000000000LL);
         CHECK("rate-roll", ShouldAlert(w2) && w2.accepted == 0 &&
