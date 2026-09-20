@@ -244,7 +244,9 @@ only, never into JEV state — doc 03 §3.4).
   "effect": "bullish|bearish|risk_up|risk_down|neutral|unknown",
   "evidence": "source|derived|inference",
   "confidence_bucket": "low|medium|high",
-  "source_id": "edgar_submissions", "provenance_url": "https://..."
+  "source_id": "edgar_submissions", "provenance_url": "https://...",
+  "canonical_hash": "sha256 of the canonical SQLite content row",
+  "canonical_hashes": ["..."]
 }
 ```
 
@@ -266,17 +268,30 @@ Hard rules on this record:
   three semantic checks prove the record means what it claims (all P1.5
   ctx-reader enforced, rejection reasons logged):
   1. *Entity binding* — every `symbols[]` entry must resolve through the
-     versioned CIK/ticker map (EDGAR) or release-symbol table (macro). Unmapped
-     or contradictory binding → reject (TRIGGER) or cap at CONTEXT (derived).
-  2. *Frozen-feed detection* — identical authoritative payload across N
-     consecutive polls (N per source TTL) marks the source `stale`, never fresh.
-  3. *Session-aware freshness* — equity features timestamped outside
-     09:30–16:00 America/New_York without an overnight-event kind are rejected.
+     versioned map `collector/entity_map.json` (`map_version`, sha256-pinned
+     in the bundle watermarks; EDGAR CIK↔ticker, macro release↔symbols).
+     The reader replays the exact pinned version — never a newer map.
+     Unmapped or contradictory binding → reject (TRIGGER) or cap at
+     CONTEXT (derived).
+  2. *Frozen-feed detection* — identical authoritative payload across
+     `FROZEN_N = 3` consecutive polls (`plausibility_v1`; per-source time
+     cover: EDGAR 45 min, Fed/ECB 3 h, Treasury/BLS/FRED 18 h from TTLs)
+     marks the source `stale`, never fresh.
+  3. *Session-aware freshness* — timestamps in America/New_York (IANA).
+     Equity features timed 16:00–09:30 ET are rejected UNLESS kind is in
+     the overnight allowlist (`calendar_ahead` with phase pre/blackout,
+     scheduled `macro_release`, forex any open `session`). Scheduled
+     pre-market releases pass; unscheduled overnight equity events reject.
   A perfectly deterministic system deciding from wrong-but-valid data is the
   failure these rules exist to prevent.
 - **Lineage.** Every feature carries `canonical_hash` chaining to the exact
-  canonical row(s) (SQLite `content_hash`) it derives from. Research-plane
-  features without resolvable lineage are rejected like schema failures.
+  canonical row(s) (SQLite `content_hash`) it derives from. Single-source:
+  `canonical_hash` IS that row's hash and `canonical_hashes` holds just it.
+  Multi-source derived: `canonical_hashes` is the sorted list of all input
+  hashes and `canonical_hash = hex(sha256("‖".join(sorted_hashes)))`.
+  The combination rule is part of f2, not implementation choice.
+  Research-plane features without resolvable lineage are rejected like
+  schema failures.
 - Max 64 features per snapshot, newest first. Overflow dropped, counted, logged.
 - `ctx/` rejects any record failing schema, bounds, or R12 timestamp checks, and
   increments `features_rejected`. Rejection rate > 5%/hour alerts.

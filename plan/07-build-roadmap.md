@@ -18,9 +18,12 @@ must exist on paper before a line of code.
 
 **Decision layer (doc 03)**
 - [x] 20 hand-worked cases in §3.7 (all HOLD rows + boundaries).
-- [ ] Get `OPENROUTER_API_KEY`, confirm the Decisions endpoint and pin the exact
-      model revision string (BLOCKED 2026-09-18: no key; doc 03 pins
-      `typesafe/jev-1.13`, revision string pending key).
+- [ ] Get `OPENROUTER_API_KEY`, then verify BEFORE any Phase-2 dependency
+      freezes: Decisions endpoint reachable + access confirmed + exact model
+      revision string pinned + provider/model identity recorded. The key is
+      necessary but not sufficient — "API works" never equals "dependency
+      frozen" (BLOCKED 2026-09-18: no key; doc 03 pins `typesafe/jev-1.13`,
+      revision string pending verification).
 - [x] `question_set_version = v3` pinned (freeze v2: enter / edge_family /
       conviction / latent_risk); slow-key fields (incl. `disagreement`,
       feature-count bucket) frozen (doc 03 §3.5).

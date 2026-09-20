@@ -1,0 +1,1 @@
+{"map_version": "entity-v1", "note": "P1.5 seed; replayed exactly as pinned, never silently upgraded", "cik_to_ticker": {"0000320193": "AAPL", "0000789019": "MSFT", "0001318605": "TSLA"}, "macro_release_to_symbols": {"NFP": ["EURUSD", "USDJPY", "SPY"], "CPI": ["EURUSD", "USDJPY", "SPY"], "FOMC": ["EURUSD", "USDJPY", "SPY", "GLD"]}}

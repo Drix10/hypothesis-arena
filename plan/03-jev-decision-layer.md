@@ -65,7 +65,8 @@ edge_family == execution      → HOLD (liquidity-only evidence never directs ri
 conviction == flat            → HOLD
 conviction == lean            → base risk budget (1×R)
 conviction == strong          → base risk budget (1×R)
-conviction == max + max-gate  → elevated budget (2×R, §3.3)
+conviction == max + max-gate  → ELIGIBLE for elevated budget (engine decides,
+  §3.3 — conviction nominates, never authorizes)
 conviction == max, gate fails → downgrade to strong
 ```
 
@@ -81,8 +82,15 @@ with different stop distances are different trades, and the engine treats
 them that way:
 
 ```
-1. risk budget: R = 25bp equity (base); 2×R only via max-gate below.
-   (Tune-with-data default. R is a code constant like R1–R17.)
+1. risk budget: R = 25bp equity (base). Elevated 2×R is granted SOLELY by
+   the deterministic risk engine on independently validated conditions —
+   conviction never authorizes size, including here. Engine conditions (all
+   observed/logged, none a model output except E/L as bounded inputs):
+   enter ≥ 0.8 AND latent_risk ≤ 0.3 AND calibration ≠ worse AND
+   edge_family ≠ execution AND conviction == max (necessary nominating input,
+   not authority) AND no R6 vol trip AND exposure headroom under R2 AND no
+   pending-risk breach. Any condition unmet → base budget (max downgrades
+   to strong).
 2. stop distance from exit_profile_v1 (doc 05): notional = budget / stop_dist
 3. liquidity cap (spread/impact estimate; Phase-3 adapter refines)
 4. portfolio caps: R2 notional, marginal-risk gate (Phase 3), pending-risk
@@ -93,8 +101,10 @@ them that way:
 Size = min(steps 2–6). Conviction never appears in this hierarchy except
 through the max-gate, which is necessary but not sufficient:
 
-- max-gate: `enter ≥ 0.8` AND `latent_risk ≤ 0.3` AND `calibration ≠ worse`
-  AND `edge_family ≠ execution` AND `conviction == max` → budget 2×R.
+- max-gate (nomination only): `enter ≥ 0.8` AND `latent_risk ≤ 0.3` AND
+  `calibration ≠ worse` AND `edge_family ≠ execution` AND `conviction == max`
+  → the engine evaluates its independent conditions (step 1) for a 2×R grant.
+  Conviction max is necessary but confers zero authority.
 - Anything else at `max` downgrades to strong (base budget).
 - `edge_family` probabilities are family-fit evidence; they carry zero sizing
   weight. No analyst-distribution test survives from v2 — it confused
@@ -240,8 +250,9 @@ Notation: E = enter, F = edge_family, C = conviction, L = latent_risk.
 | 28 | .89 | momentum | strong | BINARY pre-event blackout | HOLD blackout |
 
 v3 rule proven by 24/25: conviction max is necessary but never sufficient —
-the gate (E≥.8, L≤.3, calibration≠worse, F≠execution) plus the §3.3 hierarchy
-owns size. Family-fit probabilities carry zero sizing weight, ever.
+it nominates, the engine's independently validated conditions authorize, and
+the §3.3 hierarchy owns size. Family-fit probabilities carry zero sizing
+weight, ever.
 
 ## Locked decisions
 
