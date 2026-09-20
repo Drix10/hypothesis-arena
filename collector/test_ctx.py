@@ -29,8 +29,11 @@ DB = os.path.join(TMP, "c.db")
 H1, H2 = "a" * 64, "b" * 64
 con = sqlite3.connect(DB)
 con.execute("CREATE TABLE records (source, source_id, content_hash)")
-con.execute("INSERT INTO records VALUES (?,?,?)", ("edgar_8k", "x", H1))
-con.execute("INSERT INTO records VALUES (?,?,?)", ("edgar_8k", "y", H2))
+# Hashes exist under EVERY registered source: lineage binds hash AND source.
+for _src in ("edgar_8k", "fed_monetary", "ecb_mid", "treasury_auctions",
+             "bls_empsit", "fred_macro"):
+    con.execute("INSERT INTO records VALUES (?,?,?)", (_src, "x", H1))
+    con.execute("INSERT INTO records VALUES (?,?,?)", (_src, "y", H2))
 con.commit()
 con.close()
 MAP = os.path.join(HERE, "entity_map.json")
@@ -52,7 +55,8 @@ def feat(**kw):
 def run(features, extra=None, name="b"):
     import hashlib as _hl
     sha = _hl.sha256(open(MAP, "rb").read()).hexdigest()
-    b = {"bundle_id": name, "commit": True,
+    b = {"bundle_id": name, "commit": True, "schema_version": "f2",
+         "research_epoch": 0,
          "watermarks": {"entity_map_version": "entity-v1",
                         "entity_map_sha256": sha},
          "features": features}
@@ -78,7 +82,8 @@ r = run([feat(), multi])
 check("valid-accepted", r["stats"]["accepted"] == 2 and r["stats"]["rejected"] == 0)
 
 # 2. incomplete bundle rejected wholesale
-b = {"bundle_id": "inc", "commit": False, "features": [feat()]}
+b = {"bundle_id": "inc", "commit": False, "schema_version": "f2",
+     "research_epoch": 0, "features": [feat()]}
 p = os.path.join(TMP, "inc.json")
 json.dump(b, open(p, "w"))
 r = read_bundle(p, DB, MAP, NOW)
@@ -145,7 +150,8 @@ wm2 = {"watermarks": {"entity_map_version": "entity-v1",
 r = run([feat()], extra=wm2, name="bmap2")
 check("map-hash-mismatch", r["accepted"] == []
       and "map-hash-mismatch" in r["stats"]["reasons"])
-b = {"bundle_id": "nowm", "commit": True, "features": [feat()]}
+b = {"bundle_id": "nowm", "commit": True, "schema_version": "f2",
+     "research_epoch": 0, "features": [feat()]}
 p = os.path.join(TMP, "nowm.json")
 json.dump(b, open(p, "w"))
 r = read_bundle(p, DB, MAP, NOW)
@@ -308,9 +314,72 @@ for blob, name in [([], "bundle-list"), ("garbage", "bundle-str"),
         json.dump(blob, open(p, "w"))
         r = read_bundle(p, DB, MAP, NOW)
         ok = r["accepted"] == [] and \
-            "bundle-not-object" in r["stats"]["reasons"]
+            "bundle-shape" in r["stats"]["reasons"]
     except AttributeError:
         ok = False
     check(name, ok)
+
+# 27. lineage binds hash AND source: H3 lives only under edgar_8k.
+H3 = "c" * 64
+con = sqlite3.connect(DB)
+con.execute("INSERT INTO records VALUES (?,?,?)", ("edgar_8k", "z", H3))
+con.commit()
+con.close()
+r = run([feat(source_id="fed_monetary", symbols=["EURUSD"],
+              kind="macro_release", canonical_hash=H3)], name="bx10")
+check("lineage-wrong-source", r["stats"]["reasons"].get("lineage-mismatch") == 1
+      and r["stats"]["accepted"] == 0)
+r = run([feat(canonical_hash=H3)], name="bx10b")
+check("lineage-right-source", r["stats"]["accepted"] == 1)
+
+# 28. bundle envelope: schema/research_epoch/commit-exact/batch bounds.
+
+
+def raw_bundle(**kw):
+    import hashlib as _hl
+    sha = _hl.sha256(open(MAP, "rb").read()).hexdigest()
+    b = {"bundle_id": "env", "commit": True, "schema_version": "f2",
+         "research_epoch": 3,
+         "watermarks": {"entity_map_version": "entity-v1",
+                          "entity_map_sha256": sha},
+         "features": [feat()]}
+    b.update(kw)
+    p = os.path.join(TMP, "env-%d.json" % raw_bundle.n)
+    raw_bundle.n += 1
+    json.dump(b, open(p, "w"))
+    return read_bundle(p, DB, MAP, NOW)
+
+
+raw_bundle.n = 0
+r = raw_bundle()
+check("envelope-ok", r["stats"]["accepted"] == 1)
+r = raw_bundle(schema_version="f1")
+check("envelope-schema", "bundle-schema" in r["stats"]["reasons"])
+r = raw_bundle(research_epoch=-1)
+check("envelope-epoch-neg", "research-epoch" in r["stats"]["reasons"])
+r = raw_bundle(research_epoch="3")
+check("envelope-epoch-type", "research-epoch" in r["stats"]["reasons"])
+r = raw_bundle(commit="yes")
+check("envelope-commit-truthy", "bundle-incomplete" in r["stats"]["reasons"])
+r = raw_bundle(bundle_id="")
+check("envelope-id", "bundle-id" in r["stats"]["reasons"])
+r = raw_bundle(features=[])
+check("envelope-empty", "bundle-features" in r["stats"]["reasons"])
+r = raw_bundle(features=[feat()] * 65)
+check("envelope-65", "bundle-features" in r["stats"]["reasons"])
+# oversize + unknown source + bad ttl + bad feature_id
+big = raw_bundle()
+bigp = os.path.join(TMP, "env-big.json")
+json.dump([0] * 600000, open(bigp, "w"))
+r = read_bundle(bigp, DB, MAP, NOW)
+check("envelope-too-large", "bundle-too-large" in r["stats"]["reasons"])
+r = run([feat(source_id="edgar_submissions")], name="bx11")
+check("source-unknown", "source-unknown" in r["stats"]["reasons"])
+r = run([feat(ttl_s=10 ** 18)], name="bx4")
+check("ttl-bounded", "ttl-type" in r["stats"]["reasons"])
+r = run([feat(feature_id="")], name="bxid")
+check("feature-id-shape", "feature-id-shape" in r["stats"]["reasons"])
+r = run([feat(observed_at_ns=2 ** 70)], name="bx5")
+check("observed-range", "observed-range" in r["stats"]["reasons"])
 
 print("ALL CTX CHECKS PASS")

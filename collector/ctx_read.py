@@ -35,6 +35,16 @@ HEX64 = re.compile("^[0-9a-f]{64}$")
 SOURCE_COVER_MIN = {"edgar_8k": 45, "fed_monetary": 180, "ecb_mid": 180,
                       "treasury_auctions": 1080, "bls_empsit": 1080,
                       "fred_macro": 1080}
+SOURCE_IDS = frozenset(SOURCE_COVER_MIN)  # frozen source namespace (X11)
+BUNDLE_SCHEMA = "f2"
+TTL_MAX_S = 7 * 86400  # emitters never grant freshness beyond this (X4)
+MAX_FEATURES = 64  # plan cap, now enforced (X3)
+MAX_HASHES = 16  # rows contributing to one derived feature (X9)
+MAX_BUNDLE_BYTES = 1024 * 1024  # raw cap before parse (X1)
+MAX_DEPTH = 16
+MAX_NODES = 20000
+MAX_STR = 4096
+INT64_MIN, INT64_MAX = -(2 ** 63), 2 ** 63 - 1
 NY = ZoneInfo("America/New_York")
 EQUITY_SESSION = (9 * 60 + 30, 16 * 60)
 PROSE_KEYS = {"thesis_text", "critique_text", "narrative", "summary",
@@ -50,7 +60,43 @@ def combine_hashes(hashes):
     return hashlib.sha256("‖".join(sorted(hashes)).encode()).hexdigest()
 
 
+def measure(obj, depth=0):
+    """Structural pre-pass: (nodes, maxstr) or None when over bounds.
+    Runs BEFORE any semantic walk (incl. prose scan) so hostile shapes
+    fail on size, never on recursion or work."""
+    if depth > MAX_DEPTH:
+        return None
+    if isinstance(obj, dict):
+        total, ms = 1, 0
+        for k, v in obj.items():
+            if not isinstance(k, str) or len(k) > MAX_STR:
+                return None
+            r = measure(v, depth + 1)
+            if r is None:
+                return None
+            total += r[0]
+            ms = max(ms, len(k), r[1])
+            if total > MAX_NODES or ms > MAX_STR:
+                return None
+        return total, ms
+    if isinstance(obj, (list, tuple)):
+        total, ms = 1, 0
+        for v in obj:
+            r = measure(v, depth + 1)
+            if r is None:
+                return None
+            total += r[0]
+            ms = max(ms, r[1])
+            if total > MAX_NODES or ms > MAX_STR:
+                return None
+        return total, ms
+    if isinstance(obj, str):
+        return (1, len(obj)) if len(obj) <= MAX_STR else None
+    return 1, 0
+
+
 def has_prose(obj):
+    # Only called after measure() bounds the shape (see read_bundle).
     if isinstance(obj, dict):
         return (any(k in PROSE_KEYS for k in obj)
                 or any(has_prose(v) for v in obj.values()))
@@ -71,6 +117,8 @@ def check_feature(f, con, emap, history, now_ts):
         return False, "schema-missing:" + sorted(missing)[0]
     if f["schema_version"] != SCHEMA:
         return False, "schema-version"
+    if not isinstance(f["source_id"], str) or f["source_id"] not in SOURCE_IDS:
+        return False, "source-unknown"
     for _k in ("schema_version", "kind", "effect", "evidence",
                "confidence_bucket", "source_id"):
         if not isinstance(f[_k], str):
@@ -101,7 +149,9 @@ def check_feature(f, con, emap, history, now_ts):
         return False, "symbols-type"
     if type(f["observed_at_ns"]) is not int:
         return False, "observed-type"
-    if type(f["ttl_s"]) is not int or f["ttl_s"] <= 0:
+    if not (INT64_MIN <= f["observed_at_ns"] <= INT64_MAX):
+        return False, "observed-range"
+    if type(f["ttl_s"]) is not int or not (1 <= f["ttl_s"] <= TTL_MAX_S):
         return False, "ttl-type"
     if not isinstance(f["canonical_hash"], str):
         return False, "hash-format"
@@ -109,7 +159,7 @@ def check_feature(f, con, emap, history, now_ts):
         return False, "hash-format"
     chs = f.get("canonical_hashes")
     if chs is not None:
-        if not isinstance(chs, list) or not chs:
+        if not isinstance(chs, list) or not chs or len(chs) > MAX_HASHES:
             return False, "hash-format"
         if len(set(chs)) != len(chs):
             return False, "hash-format"
@@ -120,10 +170,17 @@ def check_feature(f, con, emap, history, now_ts):
     if f["canonical_hash"] != expect:
         return False, "lineage-mismatch"
     for h in hs:
+        # Lineage binds hash AND source: a row with this hash under the
+        # feature's claimed source must exist (X10). Same bytes under a
+        # different source do not satisfy this feature's lineage.
         row = con.execute(
-            "SELECT 1 FROM records WHERE content_hash=?", (h,)).fetchone()
+            "SELECT 1 FROM records WHERE content_hash=? AND source=?",
+            (h, f["source_id"])).fetchone()
         if not row:
-            return False, "lineage-unresolved"
+            # Distinguish "hash unknown anywhere" from "wrong source".
+            anyrow = con.execute(
+                "SELECT 1 FROM records WHERE content_hash=?", (h,)).fetchone()
+            return False, "lineage-unresolved" if not anyrow else "lineage-mismatch"
     obs = f["observed_at_ns"] / 1e9
     if obs > now_ts:
         return False, "future-timestamp"
@@ -132,6 +189,8 @@ def check_feature(f, con, emap, history, now_ts):
     if "ingested_at_ns" in f:
         if type(f["ingested_at_ns"]) is not int:
             return False, "ingested-type"
+        if not (INT64_MIN <= f["ingested_at_ns"] <= INT64_MAX):
+            return False, "ingested-range"
         if f["ingested_at_ns"] / 1e9 > now_ts:
             return False, "ingested-future"
     if "provenance_url" in f and not isinstance(f["provenance_url"], str):
@@ -154,9 +213,14 @@ def check_feature(f, con, emap, history, now_ts):
             return False, "entity-ref-unknown"
         if want not in f["symbols"]:
             return False, "entity-contradiction"
+    if "feature_id" in f and (not isinstance(f["feature_id"], str) or
+                               not f["feature_id"] or
+                               len(f["feature_id"]) > 128):
+        return False, "feature-id-shape"
     hist = (history or {}).get(f["source_id"], [])
     if hist and any(not isinstance(e, dict) or set(e) != {"h", "ts"}
                     or not isinstance(e["h"], str)
+                    or not HEX64.match(e["h"])
                     or type(e["ts"]) is not int for e in hist):
         return False, "history-undated"
     if len(hist) >= FROZEN_N:
@@ -166,8 +230,9 @@ def check_feature(f, con, emap, history, now_ts):
         cover = SOURCE_COVER_MIN.get(f["source_id"], 60) * 60
         if same and span >= cover * 0.5:
             return False, "frozen-feed"
-    equity_like = f["symbols"] and all(
-        "/" not in s and s.isalpha() and len(s) <= 5 for s in f["symbols"])
+    # Asset class from the pinned entity map, never symbol spelling (X12):
+    # equity = every symbol is a mapped equity ticker; macro/other otherwise.
+    equity_like = f["symbols"] and all(s in tickers for s in f["symbols"])
     if equity_like:
         lt = datetime.fromtimestamp(obs, NY)
         mins = lt.hour * 60 + lt.minute
@@ -188,17 +253,56 @@ def trigger_eligible(feature_result):
 def read_bundle(path, db_path, map_path, now_ts=None):
     if now_ts is None:
         now_ts = datetime.now(timezone.utc).timestamp()
-    b = json.load(open(path, encoding="utf-8"))
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        size = None
+    if size is None or size > MAX_BUNDLE_BYTES:
+        return {"bundle_id": None, "accepted": [],
+                "stats": {"accepted": 0, "rejected": 1,
+                            "reasons": {"bundle-too-large": 1}}}
+    with open(path, encoding="utf-8") as fh:
+        raw = fh.read(MAX_BUNDLE_BYTES + 1)
+    if len(raw) > MAX_BUNDLE_BYTES:
+        return {"bundle_id": None, "accepted": [],
+                "stats": {"accepted": 0, "rejected": 1,
+                            "reasons": {"bundle-too-large": 1}}}
+    try:
+        b = json.loads(raw)
+    except ValueError:
+        return {"bundle_id": None, "accepted": [],
+                "stats": {"accepted": 0, "rejected": 1,
+                            "reasons": {"bundle-unparseable": 1}}}
     stats = {"accepted": 0, "rejected": 0, "reasons": {}}
-    if not isinstance(b, dict):
-        stats["reasons"]["bundle-not-object"] = 1
+    if not isinstance(b, dict) or measure(b) is None:
+        stats["reasons"]["bundle-shape"] = 1
         return {"bundle_id": None, "accepted": [], "stats": stats}
-    complete = b.get("commit") and b.get("bundle_id") and isinstance(
-        b.get("features"), list)
-    if not complete:
-        stats["rejected"] += len(b.get("features", [])) or 1
-        stats["reasons"]["bundle-incomplete"] = stats["rejected"]
+    # Exact bundle envelope (X7/X8): schema, id, epoch, commit, features.
+    if b.get("schema_version") != BUNDLE_SCHEMA:
+        stats["reasons"]["bundle-schema"] = 1
         return {"bundle_id": b.get("bundle_id"), "accepted": [],
+                "stats": stats}
+    if not isinstance(b.get("bundle_id"), str) or not b["bundle_id"] or \
+            len(b["bundle_id"]) > 256:
+        stats["reasons"]["bundle-id"] = 1
+        return {"bundle_id": None, "accepted": [], "stats": stats}
+    if type(b.get("research_epoch")) is not int or b["research_epoch"] < 0:
+        stats["reasons"]["research-epoch"] = 1
+        return {"bundle_id": b["bundle_id"], "accepted": [],
+                "stats": stats}
+    if b.get("commit") is not True:
+        stats["reasons"]["bundle-incomplete"] = 1
+        return {"bundle_id": b["bundle_id"], "accepted": [],
+                "stats": stats}
+    feats = b.get("features")
+    if not isinstance(feats, list) or not (1 <= len(feats) <= MAX_FEATURES):
+        stats["reasons"]["bundle-features"] = 1
+        return {"bundle_id": b["bundle_id"], "accepted": [],
+                "stats": stats}
+    hist = b.get("history")
+    if hist is not None and not isinstance(hist, dict):
+        stats["reasons"]["history-shape"] = 1
+        return {"bundle_id": b["bundle_id"], "accepted": [],
                 "stats": stats}
     wm = b.get("watermarks") or {}
     if not isinstance(wm, dict) or "entity_map_version" not in wm             or "entity_map_sha256" not in wm:
