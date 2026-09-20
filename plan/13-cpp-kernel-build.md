@@ -174,7 +174,14 @@ Exit: §4.5, §6.5 drill boxes checked.
 
 ## Exit criteria (Phase 3 -> Phase 4)
 
-- [ ] P3.1 adversarial suite green (21 checks, per-check failing vectors).
+- [x] P3.1 DONE (`kernel/jev_validate.hpp` + `kernel/test_p31.cpp`, 39 checks
+      green): boundary validator first; typed `ValidatedJEVAnswerSetV3`
+      constructible only via `validate_jev()`; per-check failing vectors from
+      the frozen sidecar (fixed key); crypto primitives independently proven
+      (SHA-256/512 vectors, first-principles K table, field ops vs Python,
+      oracle Ed25519 vectors); LIVE vs REPLAY expiry; artifact key ignored
+      for trust; build.sh grep-gate enforces no raw-JSON downstream.
+      Sidecar untouched. P3.2 NOT started (separate boundary).
 - [ ] P3.2 cross-language vector green (byte-equal canonical, hash, verify).
 - [ ] P3.3 table tests + replay determinism green.
 - [ ] §13.4 resolved to (a) with contract or (b) quarantined.
