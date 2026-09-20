@@ -135,9 +135,12 @@ hidden discretionary detector.
    effective sample size, and the unweighted resolved-count floor —
    reported, never silent.
 6. Unavailable regime. If the bucket cannot be computed (missing bars,
-   feed gap), the day is tagged UNKNOWN: weights stay 1, the gap is
-   logged, and UNKNOWN days never count toward the two-day change
-   persistence. Absent is not neutral, but it is also not a change.
+   feed gap), the day is tagged UNKNOWN: decay_weight = 1 while the row
+   retains its normal inclusion weight (1 normally, 4 for an included
+   CAL2 HOLD) — UNKNOWN never erases inverse-probability weighting. The
+   gap is logged, and UNKNOWN days never count toward the two-day change
+   persistence and never create a transition. Absent is not neutral, but
+   it is also not a change.
 7. New version / fresh window. A finite-H adoption, an H change, or a
    regime-signal definition change each bump the calibration config
    version and open a fresh paper window. The calibration harness
