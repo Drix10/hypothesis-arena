@@ -2,9 +2,12 @@
 """P1.3 canonical layer: signals.jsonl (event log) -> SQLite (truth) -> classified.jsonl.
 
 Authority: the SQLite DB is the canonical truth. classified.jsonl is a
-DERIVED, rebuildable projection (rerun run() over the same signals file
-reproduces it PK-idempotently); a crash between DB commit and file publish
-loses nothing authoritative.
+DERIVED, rebuildable projection: project_day() materializes it as a pure
+function of (DB rows first-seen that day, processing clock) — rerunning
+run() over the same signals file AND the same DB reproduces it
+byte-for-byte, and repeated cycles accumulate rather than shrink to the
+delta. A crash between DB commit and file publish loses nothing
+authoritative.
 
 Deterministic only. No LLM anywhere: TRIGGER eligibility comes from
 source + record type + rule table, never from interpretation. Records that
@@ -362,6 +365,87 @@ class ClassifyAbort(Exception):
         self.stats = stats
 
 
+def project_day(con, day, now):
+    """Rebuild the day's classified projection from CANONICAL DB STATE
+    (not from this run's intake verdicts). Returns (emitted-rows, skipped).
+    For every content row first seen on `day`, ordered by
+    (first_seen_at, rowid): revalidate schema, recompute eligibility with
+    the STORED standing verdict and the run's processing clock, emit iff
+    eligible. Consequences (all load-bearing):
+    - Rerun with the same as_of over the same DB reproduces the file
+      byte-for-byte (duplicates re-derive their stored outcome; nothing
+      depends on whether THIS run saw the content as new).
+    - Repeated cycles ACCUMULATE (A+B, then A+B+C): each cycle rewrites
+      the day file with every eligible row, never just the delta.
+    - Time-dependent standing (fresh/TTL aging) is re-evaluated per run:
+      same now -> same file; later now may demote (never silently drop).
+    - revision_of is re-derived as the predecessor in (first_seen,rowid)
+      order: identical to ingest-time prior[-1] on first write, stable
+      across reruns (rowid breaks every tie)."""
+    emitted, skipped = [], 0
+    try:
+        rows = con.execute(
+            "SELECT raw_json, content_hash, first_seen_at, published_at, "
+            "verdict, source, source_id, rowid FROM records "
+            "WHERE date(first_seen_at) = ? "
+            "ORDER BY first_seen_at, rowid", (day,)).fetchall()
+    except sqlite3.Error as e:
+        raise ClassifyAbort(f"db-infrastructure:{type(e).__name__}",
+                            {"per_source": {}})
+    for raw_json, ch, first_seen, published_at, standing, source, \
+            source_id, rowid in rows:
+        try:
+            rec = json.loads(raw_json)
+        except ValueError:
+            skipped += 1
+            continue
+        try:
+            bad = validate_record(rec)
+        except Exception:
+            bad = "validator-crash"
+        if bad:
+            skipped += 1  # rules moved under a stored row: current rules
+            continue  # govern the projection, honestly and loudly
+        retrieved_at = now
+        estimated = published_at is None
+        fresh = is_fresh(first_seen, source)
+        elig, effect, conf, reason, effective_at = classify(
+            source, rec, standing, published_at, estimated, fresh,
+            retrieved_at)
+        if elig not in ("TRIGGER_CANDIDATE", "CONTEXT"):
+            continue
+        try:
+            prev = con.execute(
+                "SELECT content_hash FROM records "
+                "WHERE source=? AND source_id=? AND "
+                "(first_seen_at < ? OR "
+                "(first_seen_at = ? AND rowid < ?)) "
+                "ORDER BY first_seen_at DESC, rowid DESC LIMIT 1",
+                (source, source_id, first_seen, first_seen,
+                 rowid)).fetchone()
+        except sqlite3.Error as e:
+            raise ClassifyAbort(f"db-infrastructure:{type(e).__name__}",
+                                {"per_source": {}})
+        revision_of = prev[0] if prev else None
+        emitted.append({
+            "id": rec["id"], "source": source, "source_id": source_id,
+            "eligibility": elig, "effect": effect, "confidence": conf,
+            "reason": reason,
+            "timestamps": {"published_at": published_at,
+                           "retrieved_at": retrieved_at,
+                           "source_observed_at": rec.get("observed_at"),
+                           "effective_at": effective_at,
+                           "first_seen_at": first_seen,
+                           "published_estimated": estimated},
+            "provenance": {"raw_hash": ch,
+                           "parser_version": PARSER_VERSION,
+                           "rule_version": RULES_VERSION,
+                           "created_at": retrieved_at,
+                           "revision_of": revision_of},
+        })
+    return emitted, skipped
+
+
 def run(signals_path, as_of=None):
     REF["t"] = as_of or now_iso()
     os.makedirs(CLASSIFIED, exist_ok=True)
@@ -375,7 +459,6 @@ def run(signals_path, as_of=None):
         day = now[:10]
         out_path = os.path.join(CLASSIFIED, f"{day}.jsonl")
         stats = {"per_source": {}}
-        emitted = []  # published only after a successful DB commit (C6)
         with open(signals_path, encoding="utf-8") as fh:
             for line in fh:
                 line = line.strip()
@@ -443,21 +526,11 @@ def run(signals_path, as_of=None):
                 s[verdict] = s.get(verdict, 0) + 1
                 s[elig] = s.get(elig, 0) + 1
                 s[f"reason:{reason}"] = s.get(f"reason:{reason}", 0) + 1
-                if elig in ("TRIGGER_CANDIDATE", "CONTEXT"):
-                    emitted.append({
-                        "id": rec["id"], "source": rec["source"], "source_id": rec["source_id"],
-                        "eligibility": elig, "effect": effect, "confidence": conf,
-                        "reason": reason,
-                        "timestamps": {"published_at": published_at,
-                                       "retrieved_at": retrieved_at,
-                                       "source_observed_at": rec.get("observed_at"),
-                                       "effective_at": effective_at,
-                                       "first_seen_at": first_seen,
-                                       "published_estimated": estimated},
-                        "provenance": {"raw_hash": ch, "parser_version": PARSER_VERSION,
-                                       "rule_version": RULES_VERSION, "created_at": retrieved_at,
-                                       "revision_of": revision_of},
-                    })
+                # NOTE: intake stats only. Emission comes from project_day()
+                # below (canonical DB state), never from this run's
+                # verdicts — otherwise reruns would shrink the file to
+                # just the delta (duplicates are REJECTED here, but their
+                # stored outcome still belongs in the projection).
         # Malformed signals rows are EVIDENCE failure, not skippable dirt:
         # append_records() is append-only, so a collector crash can leave a
         # partial final line. Classifying "everything parseable" and
@@ -469,6 +542,13 @@ def run(signals_path, as_of=None):
             raise ClassifyAbort(
                 f"signals-integrity:{stats['malformed_lines']}-malformed-lines",
                 stats)
+        # Projection from canonical state (see project_day): the file is a
+        # deterministic materialization of the DB, published only after a
+        # successful commit below (C6).
+        emitted, projected_skipped = project_day(con, day, now)
+        stats["projected"] = len(emitted)
+        if projected_skipped:
+            stats["projected_skipped"] = projected_skipped
         # Crash-consistent publication: commit the canonical truth FIRST, then
         # write the output to temp + fsync + atomic rename. A crash before the
         # commit leaves neither DB rows nor output; a crash during the file

@@ -361,6 +361,10 @@ grep -q 'ClassifyAbort' "$ROOT/collector/classify.py" \
   && ok "classify abort" || bad "classify abort moved"
 grep -q 'signals-integrity' "$ROOT/collector/classify.py" \
   && ok "signals abort" || bad "signals abort moved"
+grep -q 'def project_day' "$ROOT/collector/classify.py" \
+  && ok "projection rebuild" || bad "projection moved"
+grep -q 'date(first_seen_at)' "$ROOT/collector/classify.py" \
+  && ok "projection query" || bad "projection query moved"
 grep -q 'SOAK_ALREADY_RUNNING' "$ROOT/collector/soak.py" \
   && ok "soak singleton" || bad "soak singleton moved"
 grep -q 'MISSED_RANGE' "$ROOT/collector/soak.py" \

@@ -374,3 +374,48 @@ assert _aborted2, "malformed signals must abort"
 assert not os.path.exists(os.path.join(tmp, "2026-09-18.jsonl")), \
     "malformed run must not publish"
 print("ok signals-integrity-aborts")
+
+# 27. PROJECTION INVARIANT (the rebuildability contract): same signals +
+# same DB + same clock -> byte-identical file, full content, not a delta.
+import classify as _cm2
+DAY20 = "2026-09-20T10:00:00+00:00"
+_psig = os.path.join(tmp, "proj.jsonl")
+with open(_psig, "w") as _fh:
+    _fh.write(_json.dumps(rec(source_id="projA",
+                              text="Item 2.02 alpha")) + "\n")
+    _fh.write(_json.dumps(rec(source_id="projB",
+                              text="Item 8.01 bravo")) + "\n")
+    _fh.write(_json.dumps(rec(source_id="projA",
+                              text="Item 2.02 alpha revised")) + "\n")
+_p1, _s1 = _cm2.run(_psig, as_of=DAY20)
+with open(_p1, encoding="utf-8") as _fh:
+    _file1 = _fh.read()
+_rows1 = [_json.loads(_l) for _l in _file1.splitlines()]
+assert len(_rows1) == 3, [(_r["source_id"], _r["eligibility"]) for _r in _rows1]
+# second run over the SAME file and SAME db: intake is all-duplicate...
+_p2, _s2 = _cm2.run(_psig, as_of=DAY20)
+with open(_p2, encoding="utf-8") as _fh:
+    _file2 = _fh.read()
+assert _file1 == _file2, "rerun must reproduce the projection byte-for-byte"
+assert _s2["per_source"]["edgar_8k"].get("duplicate", 0) == 3, \
+    "rerun intake really was all duplicates (or the test proves nothing)"
+# ...yet the projection still carries every row, with stable lineage.
+_rows2 = [_json.loads(_l) for _l in _file2.splitlines()]
+_rev = [_r for _r in _rows2 if _r["reason"].startswith("8K-items")]
+assert _rows2 == _rows1, "row order and content stable across reruns"
+print("ok projection-rerun-identical")
+
+# 28. cycles ACCUMULATE: A+B, then A+B+C — never shrink to the delta.
+with open(_psig, "a") as _fh:
+    _fh.write(_json.dumps(rec(source_id="projC",
+                              text="Item 5.02 charlie")) + "\n")
+_p3, _s3 = _cm2.run(_psig, as_of="2026-09-20T11:00:00+00:00")
+with open(_p3, encoding="utf-8") as _fh:
+    _file3 = _fh.read()
+_rows3 = [_json.loads(_l) for _l in _file3.splitlines()]
+assert len(_rows3) == 4, len(_rows3)
+_ids3 = [(_r["source_id"], _r["provenance"]["raw_hash"]) for _r in _rows3]
+_ids1 = [(_r["source_id"], _r["provenance"]["raw_hash"]) for _r in _rows1]
+assert _ids3[:3] == _ids1, "earlier rows survive later cycles unchanged"
+assert _ids3[3][0] == "projC", _ids3
+print("ok projection-accumulates")
