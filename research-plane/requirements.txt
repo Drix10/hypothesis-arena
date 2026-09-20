@@ -1,6 +1,7 @@
 # Pinned Phase-2.5 research-plane dependencies (doc 08 locked versions).
 # Install: python3 -m venv .venv && .venv/Scripts/python -m pip install -r requirements.txt
 langgraph==1.1.6
+langgraph-checkpoint-sqlite>=3.0
 smolagents==1.26.0
 pydantic>=2.0
 requests>=2.0
