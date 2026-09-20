@@ -13,15 +13,16 @@ A hash is not a signature — anyone holding the file can recompute it. v2
 separates the human act from the runtime state:
 
 - `PROMOTION_MANIFEST` (human-owned, human-written, process stopped):
+  immutable once signed. The runtime NEVER modifies promotion material.
+- `STAGE_STATE` (process-owned, append-only): runtime `DEMOTION_EVENT`
+  records. Demotion appends, journals, alerts; it never
   from_stage, to_stage, intended_capital_usd, allocated_capital_usd,
   policy_version, plan_hash, approved_at, evidence_hash, signer_id, plus an
   Ed25519 `signature` over all of it. The process verifies (valid signature,
   known signer key, correct plan version, correct prior stage, sane capital)
   and then — and only then — advances.
-- Runtime stage state (process-owned): current effective stage + chained
-  `DEMOTION_EVENT` records. Demotion appends, journals, alerts; it never
-  edits a manifest.
-- `effective_stage = last verified promotion − automatic demotions.` No shared
+- `effective_stage` = last verified promotion − automatic `STAGE_STATE`
+  demotion events`. No shared
   ownership, no direct human edits to runtime files, no process writes to
   manifests.
 - Legacy `STAGE` single-file format (§10.1 as frozen in Phase 0 v1) remains the
@@ -33,6 +34,12 @@ operation targets), `allocated_capital_usd` (actually deposited at the stage),
 `current_equity_usd` (live, from the adapter). "≤2% of intended capital" is
 computed from the manifest's intended number — mechanically enforceable, no
 interpretation.
+
+Risk-capital basis (G2, locked): every percentage cap (R1/R2 exposure,
+drawdown, VaR) is computed against `risk_capital = min(intended_capital_usd,
+allocated_capital_usd, current_equity_usd)` at snapshot time. A live account
+holding less than intended capital gets proportionally less risk — the
+conservative minimum, frozen, no discretion.
 
 LIVE JURISDICTION GATE (before any G1 promotion, locked): operator
 jurisdiction, broker authorization in that jurisdiction, instrument legality
@@ -62,7 +69,10 @@ attest_hash:  <sha256 of "stage|approved_by|approved_at|capital_usd|prev_attest"
 - Alerts (every "alert" in this doc and in §§10.2–10.4) mean: append to
   `alerts.jsonl` + non-zero exit status where the process stops. No messaging
   integrations (Telegram/Discord/email) in v1 — those are chat-gateway paths
-  and doc 08 bans them from the trading host.
+  and doc 08 bans them from the trading host. Consequence (S1): unattended
+  LIVE operation is BLOCKED until an approved external alert adapter exists;
+  until then, stdout/log alerts are monitoring aids only, never the
+  unattended path. Logging to a file is not an unattended alert.
 - The research plane cannot read or write `STAGE` (doc 08 §8.1, R11).
 - **R17 (new):** no code path exists that raises a stage. Promotion is a human
   editing a file while the system is down. This is deliberate friction, exactly
@@ -70,8 +80,11 @@ attest_hash:  <sha256 of "stage|approved_by|approved_at|capital_usd|prev_attest"
 
 ## 10.2 Stage table (locked)
 
-`R-multiplier` scales every numeric limit in doc 05 §5.1 (positions, exposure,
-trades/day, sizes). It never scales the *rules* — R1–R9 always apply.
+`R-multiplier` scales ONLY stage exposure/position/sizing/trade-count limits
+(positions, exposure %, trades/day, sizes). It never scales safety thresholds:
+correlation > .9, drawdown > 10%, vol > 3x, the 2-hour flip lock, R15 call
+limits, freshness windows, and security bounds are FIXED at every stage unless
+explicitly versioned. It never scales the *rules* — R1–R9 always apply.
 
 | | G0_PAPER | G1_TINY | G2_SCALED | G3_FULL |
 |---|---|---|---|---|
@@ -107,7 +120,9 @@ cap; kill-switch, reconcile, and isolation drills all passed.
 
 **G1 → G2** — 30 consecutive live days at G1; zero R-rule violations; realized
 slippage within 1.5× the paper fill model; live-vs-paper divergence < 30% (S3);
-AI-spend ratio test passing for 30 days (§10.4); calibration still ≥ baseline.
+AI-spend ratio computed daily at G1 in SHADOW (readiness display only — G1 has
+no ratio cap to enforce); promotion requires 30 days of computed-passing
+readings (§10.4); calibration still ≥ baseline.
 
 **G2 → G3** — 60 consecutive live days at G2; the above sustained; max drawdown
 < 5% over the window; ≥ 100 closed trades so the statistics mean something.

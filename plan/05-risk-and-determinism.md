@@ -13,6 +13,13 @@ reach any of it.
   pending is not at zero exposure). Account inputs are first-class: equity,
   cash, margin used/available, unrealized/realized PnL, open-order notional —
   from the broker adapter (Phase 3), paper-equivalents before that.
+  Snapshot-time formulas (K6, frozen before P3.5 coding):
+  `pending_notional` = sum of open-order notional (entry + unacked); 
+  `reserved_risk` = pending_notional × per-symbol risk fraction;
+  `margin_requirement` = broker-reported margin used + pending margin at the
+  adapter's stated rate; `available buying power` = equity − margin used −
+  pending margin, all in account currency (FX converted at snapshot mid).
+  Pending exposure counts toward every cap below.
 - R2. Single position ≤ 25% notional/equity. Total exposure ≤ 75% notional/equity.
   (Notional = size × price; equity = account equity at snapshot time. Both frozen
   in the snapshot, never re-read at send. Pending exposure counts toward both.)
@@ -24,17 +31,26 @@ a broker-acknowledged fill (not an intent, not an order — unacked orders do no
   = two filled direction-changing orders; direction is position sign, entries
   into flat do not count.
 - R5. Drawdown > 10% from peak → HALT all entries (exits only) until review.
-  Peak = max(daily-close high-water, intraday high-water): equity is sampled
-every cycle and the running maximum persists — an intraday spike-to-trough
+  Peak = max(daily_close_hwm, intraday_hwm), both persisted: daily_close_hwm
+  = running maximum of closed-UTC-day equity; intraday_hwm = running maximum
+  of snapshot equity observed since the stage/reset epoch. Drawdown is
+  evaluated on snapshot equity each cycle — an intraday spike-to-trough
   counts exactly like a close-to-close one.
 - R6. Realized volatility > 3× 20-day baseline → halve sizes until review.
   Like-with-like only: both sides are stdev of 1 h log returns (baseline =
   trailing 480 points, current = trailing 24). No cross-horizon comparison.
 - R7. Correlation gate at entry + drift rule after. Entry that would create a
   same-direction pair with Pearson > 0.9 (1 h closes, trailing 30) is HOLD —
-  prevention, not cleanup. If drift creates the breach later, remove the
-  position whose removal cuts portfolio VaR most per unit of unrealized PnL
-  sacrificed (deterministic, computed, logged). Never blindly "newest".
+  prevention, not cleanup. Insufficient samples, zero variance, or missing
+  bars → correlation UNAVAILABLE → entry HOLD (K4: never assume zero
+  correlation). If drift creates the breach later, remove the position
+  maximizing (VaR_reduction / max(sacrificed_unrealized_PnL, epsilon)) with
+epsilon = $1: zero-denominator positions rank by VaR_reduction alone;
+  negative-PnL positions are eligible (sacrifice = max(PnL, epsilon) keeps
+  the ordering total); exact ties break by older position first, then
+  lexicographic symbol. If no removal reduces VaR, HOLD new entries and
+  escalate instead of churning. Deterministic, computed, logged. Never
+  blindly "newest".
   (Phase 3 extends this to factor/beta exposure; the gate stays.)
 - R8. `max` budget requires the doc 03 §3.3 max-gate or downgrade. No exceptions.
 - R9. Sessions, broker rules, and corporate plumbing are hard vetoes, via a
@@ -58,10 +74,16 @@ every cycle and the running maximum persists — an intraday spike-to-trough
 
 ## 5.1a Measurement definitions (without these the rules are slogans)
 
-- Peak (R5): running maximum of daily-close equity, persisted to disk. Drawdown =
-  peak − current equity, evaluated on snapshot equity each cycle.
+- Peak (R5): max(daily_close_hwm, intraday_hwm), both persisted.
+  daily_close_hwm = running maximum of closed-UTC-day equity;
+  intraday_hwm = running maximum of snapshot equity since stage/reset epoch.
+  Drawdown = peak − current equity, evaluated on snapshot equity each cycle.
 - Volatility baseline (R6): stdev of 1 h log returns over trailing 480 points
   (~20 days); current = trailing 24 points. Persisted; recomputed at 00:00 UTC.
+  Asset-class coherent (K3): fixed bar COUNT with no synthetic bars — FX 24/5
+  and US equities 6.5 h/day both count actual 1 h bars; missing hours (halts,
+  holidays, feed gaps) are skipped, never zero-filled; spans therefore differ
+  by calendar and that is recorded, not normalized away.
 - Correlation (R7): Pearson on 1 h closes, trailing 30 points, per open-pair.
   Computed in `ctx/`, breach flag lands in `state.risk_flags`.
 - VaR (veto question + `risk_flags.var_breach`): parametric 95% on trailing 24 h
@@ -177,8 +199,11 @@ intent carries a stop or it is rejected by `veto.cpp`.
 - S7. Feature rejection rate > 5% over an hour → alert; > 25% → treat the emitting
   source as failed and disable it (doc 09 §9.3).
 - S8. Provider/LLM outage (JEV or research models): research degrades to
-  harvest-only, thesis and critique go empty, `disagreement` defaults to `true`
-  (the safe value), entries requiring research context HOLD.
+  harvest-only, thesis and critique go empty, entries requiring research
+  context HOLD. Outage is reported as `research_available=false` /
+  `jev_available=false` + `provider_health` — NEVER as `disagreement=true`:
+  an outage is uncertainty, not evidence conflict, and must not invoke R14
+  semantics (S2).
 - S9. Broker outage: entries stop immediately; exits attempt REST; unresolvable
   reconcile drift → HARD kill (doc 10 §10.3) rather than trading blind.
 - S10. Spend-counter loss (restart, corrupt file) → assume the highest tier
@@ -190,8 +215,12 @@ intent carries a stop or it is rejected by `veto.cpp`.
 Degraded strategy modes (locked — HOLD is safe but total, so the system names
 its partial states): FULL (everything live), DEGRADED_RESEARCH (plane down —
 baseline strategy from doc 12 may continue only if it needs no research input
-and no source-dependent rule is armed), BASELINE_ONLY (JEV down — doc-12
-baseline with frozen parameters, entries capped at lean budgets), ENTRY_HALT
+and no source-dependent rule is armed), BASELINE_ONLY is a SHADOW mode —
+the doc-12 baseline keeps computing offline for calibration comparison only
+and never places live entries. JEV down means ENTRY_HALT / EXIT_ONLY for
+live capital: an unavailable decision gate narrows autonomy, never bypasses
+it. Any future autonomous JEV-bypass design needs a deliberate architecture
+change and fresh authorization.
 (entries off, management on), EXIT_ONLY, HARD_STOP. Mode transitions are
 journaled; a mode never widens autonomy, only narrows it.
 

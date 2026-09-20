@@ -84,7 +84,11 @@ on a machine that can move money.
 `CodeAgent` runs with `executor_type="docker"` only: non-root user, read-only
 rootfs, dropped capabilities, explicit CPU/RAM limits, and network egress limited
 to the Phase-0 allow-listed endpoints (source APIs + the model provider, nothing
-else). Import allowlist (LOCKED 2026-09-18, exact — nothing else imports): stdlib
+else). The prompt is NEVER the network boundary: enforcement lives in the
+sandbox firewall/proxy (container netns + egress proxy with an exact
+destination allowlist), and §8.6 proves it with an unauthorized-destination
+probe (a worker attempting a non-allowlisted host must fail at the network
+layer, counted). Import allowlist (LOCKED 2026-09-18, exact — nothing else imports): stdlib
 `json, re, datetime, urllib, xml, html, math, statistics, collections,
 itertools, hashlib, base64` + `requests` + `bs4` (BeautifulSoup) + `lxml`
 (parser only) + `pydantic` + `pandas` (frames parsing, no eval) + `feedparser`
@@ -92,16 +96,19 @@ itertools, hashlib, base64` + `requests` + `bs4` (BeautifulSoup) + `lxml`
 `yaml.load` (safe_load only if yaml ever added — it is not on the list).
 
 OS isolation design (LOCKED 2026-09-18, enforced at build, proven by the §8.6
-isolation test): three users, no shared groups. `mirotrade` runs the C++ core
+isolation test): four identities, no shared groups. `mirotrade` runs the C++ core
 and owns journal/HALT/STAGE/broker keys (mode 600, group `mirotrade`).
 `miroresearch` runs the plane + sidecars and owns `features.jsonl` +
 `signals.jsonl` only; no read on `mirotrade` home, no sudo, no docker group
 (the container runtime is driven by the supervisor, not by the agent user).
 `mirojev` runs the JEV sidecar only: read-only snapshot in, Ed25519-signed
+artifact out, and owns the JEV credential + signing key (mode 600, group
+`mirojev`).
 answers out (doc 03 §3.5); no research tools, no network except the provider.
 `mirohuman` (you) writes `PROMOTION_MANIFEST` files; the process never runs as
-you. Credentials live in `mirotrade` home or the sidecar env owned by
-`miroresearch` — never in git, never world-readable, inventoried in the
+you. Credentials live in the owning identity's home (`mirotrade` for broker
+keys, `mirojev` for the JEV credential + signing key, `miroresearch` for
+source keys) — never in git, never world-readable, inventoried in the
 Phase-1 credential-placement note. (No X session exists anywhere in v1: X is
 out of the production path, doc 02.)
 `LocalPythonExecutor` is **forbidden** on any host or container that can reach
@@ -116,10 +123,10 @@ One LangGraph graph, run as a supervised loop. Six nodes, all off the hot path.
 | Node | Job | Output | Default on failure |
 |---|---|---|---|
 | `harvest` | Pull the doc-09 sources on their cadences (EDGAR, FRED/ALFRED, official macro feeds, calendars; NO X in v1). Pure I/O, no LLM. | raw records + `observed_at_ns` | Source marked `stale`; never blocks |
-| `extract` | smolagents `CodeAgent`: parse filings/calendars/OSINT into typed candidate features | candidate features | Drop + count |
+| `extract` | smolagents `CodeAgent`: parse filings/calendars/OSINT into ADVISORY typed candidate features (never evidence-bearing) | advisory candidates | Drop + count |
 | `fuse` | Deterministic Python (no LLM): join candidates to symbols, dedupe, bucket | joined features | Drop + count |
 | `hypothesize` | LLM: write ≤500-char thesis per watchlist symbol into the research digest (never into JEV state) | digest entry | Empty thesis — never a crash |
-| `critique` | LLM: adversarial pass. Names the strongest disconfirming evidence and a regime-change check | `critique_text`, `disagreement` flag | `disagreement=true` (the safe value) |
+| `critique` | LLM: adversarial pass. Names the strongest disconfirming evidence and a regime-change check | `critique_text`, `critique_disagreement` advisory flag | `critique_disagreement=true` (the safe value) |
 | `emit` | Schema-validate, bound, write `features.jsonl` atomically | `features.jsonl` | Nothing written; last file ages out via TTL |
 
 - The graph is **checkpointed after every node**. A crash resumes at the last
@@ -134,9 +141,12 @@ One LangGraph graph, run as a supervised loop. Six nodes, all off the hot path.
   nodes are enumerated in Phase 0; any new one needs its key design reviewed.
 - Checkpoint retention is 30 days, mandatory, then pruned. Replay older than
   retention is unsupported and must fail loudly, not silently.
-- `critique` disagreeing with `hypothesize` sets `state.disagreement=true`, which
-  is an input to JEV and a hard input to R14: **conflicting agent conclusions
-  never produce a larger position; they produce HOLD or nothing.**
+- `critique` disagreeing with `hypothesize` sets `state.critique_disagreement=true`
+  (advisory research metadata, visible to researchers only). It is NEVER
+  `state.disagreement`: only the deterministic R14 computation (opposite
+  TRIGGER effects, doc 03 §3.4) may set `disagreement`, and only that field
+  can invoke R14. Conflicting agent conclusions still never produce a larger
+  position; they produce HOLD or nothing via the deterministic path.
 - Agents never vote on entry. They produce evidence; JEV scores it; the table in
   doc 03 §3.2 sizes it; doc 05 vetoes it.
 
@@ -226,7 +236,11 @@ mode that kills unattended agent systems, and it is capped in three places.
 
 `features.jsonl` carries typed feature records in complete bundles. One
 `emit` writes one bundle: `research_epoch` + `bundle_id` + `watermarks` +
-feature list + `BUNDLE_COMMIT`. Watermarks are replay-critical metadata, not
+feature list + `BUNDLE_COMMIT`, staged as temp + fsync + atomic rename with
+a manifest row (bundle_id, research_epoch, feature count, map sha, commit).
+The reader accepts ONLY a generation whose manifest shows a complete
+committed publish: partial emit + crash + restart can never expose half a
+bundle (R6). Watermarks are replay-critical metadata, not
 decoration: `{"entity_map_version", "entity_map_sha256", source watermarks,
 last-observation timestamps}`. The reader hashes the actual map file and
 requires an exact sha256 match — version strings alone are not pinning. C++ consumes the last *complete* bundle
@@ -262,6 +276,13 @@ Hard rules on this record:
   `canonical_hashes`, `entity_ref`. The §8.5 example shows both levels
   together for readability; the reader validates each level separately and
   rejects cross-level smuggling.
+- **LLM outputs are always advisory candidates, never evidence.** `extract`
+  / `hypothesize` / `critique` may propose `source`-shaped records, but a
+  deterministic resolver recomputes `evidence`, `effect`, `observed_at_ns`,
+  entity binding, and `canonical_hash` from the canonical source record
+  before anything is emitted: facts actually present become deterministic
+  `source` features, everything else stays `inference`/CONTEXT. No LLM
+  output can directly declare `evidence=source` (R1).
 - **Evidence levels, not vibes.** `source` = deterministic parser over a
   primary source (only these are TRIGGER-eligible). `derived` = deterministic
   transform of source facts. `inference` = model-produced: CONTEXT-only until
@@ -335,6 +356,11 @@ Hard rules on this record:
 - [ ] Isolation proven: the research-plane user cannot write the journal, the
       `HALT` file, the stage file, or read broker credentials. Tested, not assumed.
 - [ ] R12 proven: a feature with a future `observed_at_ns` is dropped by `ctx/`.
+- [ ] Egress proven: a worker attempting a non-allowlisted destination fails
+      at the sandbox network layer (proxy/firewall deny, counted) — the
+      prompt is not the boundary.
+- [ ] Bundle atomicity proven: kill -9 mid-`emit` never exposes a partial
+      bundle; the reader accepts only manifest-committed generations.
 - [ ] Langfuse shows per-node token + dollar attribution for a full day.
 - [ ] `features.jsonl` schema frozen and consumed by a stub `ctx/` reader.
 - [ ] Cadence gating proven: a quiet symbol refreshes on the 30-min TTL, not
@@ -375,7 +401,8 @@ Hard rules on this record:
   tests) with measurements.
 - Sandbox build requirements (Phase 2.5 implements, listed so the image is not
   improvised): immutable digest + SBOM + vuln scan, seccomp + AppArmor,
-  no Docker socket, no host mounts (read-only binds only), PID/fd/process
+  no Docker socket, no writable host mounts (explicitly allowlisted read-only
+  bind mounts only), PID/fd/process
   limits, CPU/RAM/disk quotas, DNS/egress via a fetch proxy — generated code
 gets tool functions (SEC/FRED/RSS fetchers, parser, validator), not general
   HTTP.
