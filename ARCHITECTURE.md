@@ -28,7 +28,8 @@ Hot path never blocks on prose LLM. Agents never size or send orders.
 | Responsibility | Owner | Must not |
 |---|---|---|
 | Typed features, OSINT, thesis/critique | Research plane (doc 08) | Touch journal, HALT, STAGE, broker keys |
-| X-list / newswire collection | Signal sidecar (doc 02) | Score polarity or trade |
+| X-list / newswire material (HISTORICAL ONLY, never production) | Archive (doc 02 §2.6) | Enter v1 production |
+| Production signal collection (broker market data + SEC/EDGAR + FRED/macro) | Signal sidecar (docs 02/09) | Score polarity or trade |
 | Calibrated answers, exactly 4 v3 questions | JEV sidecar (doc 03) | Size, execute, or read family-fit as success odds |
 | Snapshot, decision table, R1-R17, kills | C++ `risk/` + `kill/` (docs 05, 10) | Call LLMs |
 | Orders, stops, journal-before-order | C++ `exec/` + `journal/` (doc 06) | Act without a journal row; hold a position lacking broker-acked SL/TP |
@@ -86,8 +87,9 @@ neutral. Spend tier, R13, disagreement, event window -> HOLD or demote.
 
 ## 7 | Where does new code belong?
 
-New free source -> research plane + doc 09 table first. New list -> doc 02
-§2.4 + TODO evidence. New risk rule -> doc 05, then `risk/veto.cpp`. New JEV
+New free source -> research plane + doc 09 table first. New production list
+-> doc 09 + TODO evidence (X lists are HISTORICAL per doc 02 §2.6 — never
+resurrect one as production). New risk rule -> doc 05, then `risk/veto.cpp`. New JEV
 question -> forbidden without version bump + 20 cases. New agent node/tool ->
 doc 08 first, no runtime self-modification. Broker adapter -> `feed/` +
 `exec/` only, names already in doc 01. Calibration/challenger -> offline

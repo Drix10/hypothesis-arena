@@ -202,6 +202,22 @@ _n="$(ls "$ROOT/kernel/p33"/r_*.json 2>/dev/null | wc -l | tr -d ' ')"
 [ "$_n" = "200" ] \
   && ok "p33 replay set: 200 artifacts" \
   || bad "p33 replay set count: $_n"
+# P3.3 correction locks: universe cap == manifest, symbol binding,
+# micros internals, full-state vocabularies present.
+grep -q 'EXEC_UNIVERSE_MAX = 5' "$ROOT/kernel/kernel_state.hpp" \
+  && ok "universe cap 5" || bad "universe cap moved"
+[ "$(grep -A1 '^universe:' "$ROOT/plan/system-manifest.yaml" | grep execution_max | grep -o '[0-9]*')" = "5" ] \
+  && ok "manifest execution_max 5" || bad "manifest execution_max moved"
+grep -q 'expected_symbol' "$ROOT/kernel/jev_validate.hpp" \
+  && ok "symbol binding" || bad "symbol binding moved"
+grep -q 'created_us()' "$ROOT/kernel/jev_validate.hpp" \
+  && ok "micros internals" || bad "micros internals moved"
+grep -q 'deterministic_veto' "$ROOT/kernel/jev_state.hpp" \
+  && ok "risk flags in state" || bad "risk flags moved"
+grep -q 'VetoReason' "$ROOT/kernel/decision_table.hpp" \
+  && ok "veto codes" || bad "veto codes moved"
+grep -q 'try_accept' "$ROOT/kernel/kernel_state.hpp" \
+  && ok "compare-and-advance gate" || bad "accept gate moved"
 
 # ---- committed P3.2 vectors are self-consistent (no Python needed) ----
 for _v in v1 v2; do

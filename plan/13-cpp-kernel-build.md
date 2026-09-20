@@ -288,36 +288,43 @@ Exit: §4.5, §6.5 drill boxes checked.
 - [x] P3.2 DONE (`kernel/vectors/` v1+v2 + `kernel/test_p32.cpp`, 37 checks green normal+hardened): committed canonical bytes, hash, signature; byte-equal C++ reproduction; mutation/key-mismatch failures; UTF-8/nesting/float boundaries; signature scope recorded (payload only); V1 accepted by frozen P3.1 validator. Sidecar untouched. P3.2 ACCEPTED/FROZEN (human sign-off; no further P3.2 changes; P3.3 NOT authorized).
 
 Protocol guard: the canonical form is exactly the frozen `json.dumps` recipe above, pinned by the committed vectors. Replacing it with RFC 8785/JCS or any other scheme is a PROTOCOL change requiring new vectors and a version bump — never a silent substitution.
-- [x] P3.1 AMENDMENT (`52ccedb`, pending human re-sign): P3.3 integration
-      exposed a soundness bug in the frozen verifier — `ScalarLessL`'s LE
-      L-table was wrong from byte 5 on (top bytes 0x10/0x0F instead of
-      0x00/0x10), false-rejecting ~6% of VALID sidecar signatures
-      (S[31]==0x0F, S[30]>=0x10) as S>=L. Never false-accepted
+- [x] P3.1 AMENDMENT RE-SIGNED (`52ccedb`, human review of the five-commit
+      P3.3 set): the LE L-table was wrong from byte 5 on (top bytes
+      0x10/0x0F instead of 0x00/0x10), false-rejecting ~6% of VALID
+      sidecar signatures (S[31]==0x0F, S[30]>=0x10). Never false-accepted
       (fail-closed direction). Found by 3 systematic P3.3 fixtures;
-      root-caused to the constant via cross-language bisection (canon,
-      hash, sha512, reduction, point arithmetic all proven equal; the
-      S<L comparison itself was wrong). Fix = the 32-byte constant only,
-      cross-checked against Python integers + Reduce512's LB limbs.
-      Full gates re-run green on the amended verifier (P3.1 102/102 +
-      P3.2 37/37 + 20k fuzz, normal + hardened). No fixture changed
-      (the fix only ADDS acceptances). P3.1 needs explicit human re-sign.
-- [x] P3.3 DONE (technical gate green, human sign-off pending in doc 07):
-      `kernel/jev_state.hpp` (typed JEVStateV3, closed schema, exact
-      serializer bit-equal to frozen sidecar canon on the committed state
-      vector incl. tricky strings/mixed scalars; strict FromJVal +
-      CheckStateShape make the "?" fallback unreachable),
-      `kernel/kernel_state.hpp` (immutable universe, per-symbol epochs,
-      sole ValidationRequest source), `kernel/decision_table.hpp` (doc 03
-      §3.2 verbatim row order + budget-dependent calibration_gate +
-      max-gate nomination/authorization split; budget tiers only, no
-      sizing), `kernel/test_p33.cpp` 68/68 + 200-AnswerSet replay hashed
-      twice identical + non-degenerate distribution + ScalarLessL boundary
-      regression, `kernel/p33/` committed fixtures (same test key as P3.1),
-      build.sh P3.3 gate + typed-only/confidence/python gates extended.
-      §3.7 cases 21–28 green verbatim; v2 cases 1–20 NOT re-encoded (their
-      v2-only semantics — karen/consensus/sizes — have no v3 table mapping
-      in the plan; code implements §3.2 + 21–28, invents nothing).
-      Sidecar untouched. P3.4 defaults to (b) quarantine (gated).
+      root-caused via cross-language bisection to the constant itself.
+      Fix = the 32-byte constant only, cross-checked vs Python integers +
+      Reduce512's LB limbs. Full gates re-run green (P3.1 102/102 + P3.2
+      37/37 + 20k fuzz, normal + hardened). No fixture changed (the fix
+      only ADDS acceptances). Lesson recorded: primitives need direct
+      boundary vectors, not indirect fixture coverage (ScalarLessL
+      boundaries now pinned in test_p33 + freeze-check L-table lock).
+- [x] P3.3 CORRECTION (`7d83974`, technical gate green, human sign-off
+      pending in doc 07): human review REJECTED the first P3.3 state as a
+      reduced subset (feature IDs only — research evidence would not reach
+      JEV). Corrected to the EXACT frozen §3.4 contract: `jev_state.hpp`
+      carries all 17 top-level keys + full feature records (frozen
+      kind/effect/evidence/conf/vtype/stage/session/regime/impact/phase/
+      baseline/gate/source-status vocabularies) + exact nested allowlists
+      (unknown/missing/non-object members -> state-shape) + single checked
+      int path (no stoll, no UB; INT64_MAX/MAX+1/64-digit pinned) +
+      serializer bit-equal to sidecar canon on full states (tricky
+      strings/mixed scalars proven vs Python ground truth). Validator
+      additive changes only: int64-micros freshness internals (wire
+      untouched), expected_symbol binding (default preserves P3.1).
+      `kernel_state.hpp`: non-copyable, mutex epochs, try_accept() sole
+      compare-and-advance gate, universe capped at 5/dedupe/UTF-8
+      (manifest execution_max). Decision table unchanged + frozen
+      VetoReason codes (engine-veto:<code>). test_p33 78/78 + 200-replay
+      SHA-256 proof (twice identical, non-degenerate) + per-artifact
+      closed loop (C++ Serialize hashes to sidecar state_hash /
+      decision_key, frozen "?" feature_revision reproduced exactly).
+      §3.7 21–28 green verbatim; v2 1–20 NOT re-encoded (no v3 mapping
+      in plan; invented nothing). Sidecar untouched. P3.4 defaults to
+      (b), gated. KNOWN QUIRK (frozen, not ours to fix): feature_revision
+      over full states is count-only ("?" per member) — content-aware
+      revision needs a plan amendment + version bump.
 - [ ] §13.4 resolved to (a) with contract or (b) quarantined.
 - [ ] P3.5 drill boxes (§4.5, §6.5) checked.
 - [ ] Freeze-check extended to cover the kernel pins (model/revision/provider/
