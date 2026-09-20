@@ -130,17 +130,23 @@ path for a trade.
 - [ ] `lessons.jsonl` seeded with ≥10 graded entries.
 - [ ] Exit: doc 08 §8.6 and doc 09 §9.4 boxes checked.
 
-## Phase 3 — C++ core (docs 04–06)
+## Phase 3 — C++ deterministic kernel (doc 13; order is load-bearing)
 
-- [ ] `core` + `risk/veto.cpp` first (pure logic, unit-tested vs docs 03/05/10 —
-      R1–R17 and the stage multiplier).
-- [ ] `ingest/features.cpp` + rejection tests (schema, R12 timestamps, TTL, counts).
-- [ ] `kill/switch.cpp` + SOFT/MEDIUM/HARD drills, exits proven alive in each.
-- [ ] `STAGE` chain verification, including the corrupted-file → G0_PAPER test.
-- [ ] `feed` + 24 h soak + kill/reconnect drill.
-- [ ] `ctx` + hash-stability test (10k identical → 1 hash).
-- [ ] `exec` + `journal` + kill-switch + reconcile drills.
-- [ ] Exit: §4.5, §6.5 drill boxes checked.
+Phase 2 accepted/frozen (`50ea369`). Do not modify the sidecar unless
+integration exposes an actual contract defect.
+
+- [ ] P3.1 boundary validator first: 21-check AnswerSet gate (schema, pins,
+      response_hash, Ed25519, key trust, state binding, LIVE expiry vs REPLAY
+      mode) + per-check adversarial vectors.
+- [ ] P3.2 canonical serialization contract + committed cross-language test
+      vector (canonical bytes → SHA-256 → Ed25519, verified independently).
+- [ ] P3.3 typed `JEVAnswerSetV3` + deterministic decision table (§3.5a/§3.7
+      tests, replay determinism by hash).
+- [ ] §13.4 confidence resolved: contracted (a) or quarantined (b, default).
+- [ ] P3.5 risk/sizing/execution in docs 04–06 order: veto, features, kills,
+      STAGE chain, feed soak, ctx hash-stability, exec/journal/reconcile.
+- [ ] Freeze-check extended to kernel pins; human sign-off recorded below.
+- [ ] Exit: doc 13 exit criteria all checked.
 
 ## Phase 4 — Paper loop at G0_PAPER (everything together)
 

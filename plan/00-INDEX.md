@@ -16,6 +16,7 @@ One folder. Everything lives here. No code until the plan is complete.
 10. `10-capital-gates-and-spend-control.md` — capital stages, kill-switch hierarchy, AI spend circuit breakers.
 11. `11-calibration-and-self-improvement.md` — calibration scoring, shadow challengers, the promotion gate.
 12. `12-statistical-baseline.md` — the frozen permanent champion the AI layer must beat.
+13. `13-cpp-kernel-build.md` — Phase 3 build sequence: validator first, then canonical bytes, table, risk.
 13. `system-manifest.yaml` — canonical build fingerprint code verifies against.
 
 ## Rules of this folder
