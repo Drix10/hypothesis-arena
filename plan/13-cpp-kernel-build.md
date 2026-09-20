@@ -234,7 +234,7 @@ Exit: §4.5, §6.5 drill boxes checked.
       noncanonical/x0-sign/malformed-key); 96 checks + 20k-iter deterministic
       fuzz clean in normal AND hardened (libstdc++-debug) builds; sanitizer
       runtimes unavailable on this MinGW toolchain (documented in build.sh).
-      Sidecar still byte-identical. P3.2 still NOT started.
+      Sidecar still byte-identical. P3.2 still NOT started. P3.1 ACCEPTED/FROZEN at dcd44d4 (human sign-off; no further P3.1 changes).
 - [ ] P3.2 cross-language vector green (byte-equal canonical, hash, verify).
 - [ ] P3.3 table tests + replay determinism green.
 - [ ] §13.4 resolved to (a) with contract or (b) quarantined.
