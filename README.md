@@ -67,6 +67,11 @@ Three principles that shape everything:
 | Research plane, paper loop (G0) | Designed, not built |
 
 Paper only until 30 clean days plus a human signature. No exceptions.
+Promotion of anything (model, stage) needs 200 decisions + 100 closed
+simulated trades, a beaten non-LLM baseline, and a human signature.
+
+Status words used in this repo: FROZEN-DESIGN (spec locked, not built) ·
+IMPLEMENTED (code exists) · VERIFIED (acceptance green).
 
 ## Quick start
 
