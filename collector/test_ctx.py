@@ -179,11 +179,58 @@ tight = {"history": {"edgar_8k": [dated(H1, t0), dated(H1, t0 + 60),
                                  dated(H1, t0 + 120)]}}
 r = run([feat()], extra=tight)
 check("frozen-needs-time-cover", r["stats"]["accepted"] == 1)
+# per-source-family covers: Fed 180m -> 90m span; Treasury 1080m -> 9h span
+fed_ok = {"history": {"fed_monetary": [dated(H1, NOW - 6000),
+                                           dated(H1, NOW - 3000),
+                                           dated(H1, NOW - 100)]}}
+ff = feat(source_id="fed_monetary", symbols=["EURUSD"], kind="macro_release")
+r = run([ff], extra=fed_ok, name="bfed")
+check("frozen-fed-cover", r["stats"]["reasons"].get("frozen-feed") == 1)
+fed_short = {"history": {"fed_monetary": [dated(H1, NOW - 3000),
+                                              dated(H1, NOW - 1500),
+                                              dated(H1, NOW - 100)]}}
+r = run([feat(source_id="fed_monetary", symbols=["EURUSD"],
+              kind="macro_release")], extra=fed_short, name="bfed2")
+check("frozen-fed-short", r["stats"]["accepted"] == 1)
+tre_ok = {"history": {"treasury_auctions": [dated(H1, NOW - 35000),
+                                                dated(H1, NOW - 17000),
+                                                dated(H1, NOW - 100)]}}
+ft = feat(source_id="treasury_auctions", symbols=["USD"], kind="macro_release")
+r = run([ft], extra=tre_ok, name="btre")
+check("frozen-treasury-cover", r["stats"]["reasons"].get("frozen-feed") == 1)
 
 # 15. inference never TRIGGER-eligible downstream
 inf = feat(evidence="inference")
 check("inference-never-trigger",
       trigger_eligible(inf) is False
       and trigger_eligible(feat()) is True)
+
+# 16. doc-example round trip: bundle-level vs feature-level ownership
+full = feat(ingested_at_ns=int(NOW * 1e9),
+            provenance_url="https://www.sec.gov/")
+r = run([full], name="broundtrip")
+check("doc-fields-accepted", r["stats"]["accepted"] == 1)
+
+# 17. malformed nested types fail closed
+r = run([feat(symbols="AAPL")], name="bm1")
+check("symbols-str", r["stats"]["reasons"].get("symbols-type") == 1)
+r = run([feat(symbols=[])], name="bm2")
+check("symbols-empty", r["stats"]["reasons"].get("symbols-type") == 1)
+r = run([feat(observed_at_ns=1.5)], name="bm3")
+check("observed-float", r["stats"]["reasons"].get("observed-type") == 1)
+r = run([feat(ttl_s="3600")], name="bm4")
+check("ttl-str", r["stats"]["reasons"].get("ttl-type") == 1)
+r = run([feat(ttl_s=0)], name="bm5")
+check("ttl-zero", r["stats"]["reasons"].get("ttl-type") == 1)
+r = run([feat(value={"type": "bool", "v": "yes"})], name="bm6")
+check("value-bool-shape", r["stats"]["reasons"].get("value-shape") == 1)
+r = run([feat(value={"type": "count", "v": -3})], name="bm7")
+check("value-count-neg", r["stats"]["reasons"].get("value-shape") == 1)
+r = run([feat(value={"type": "enum"})], name="bm8")
+check("value-no-v", r["stats"]["reasons"].get("value-shape") == 1)
+r = run([feat(entity_ref={"garbage": True})], name="bm9")
+check("entity-ref-shape", r["stats"]["reasons"].get("entity-ref-shape") == 1)
+r = run([feat(canonical_hash=H1, canonical_hashes=[H1, H1])], name="bm10")
+check("hashes-dup", r["stats"]["reasons"].get("hash-format") == 1)
 
 print("ALL CTX CHECKS PASS")

@@ -254,6 +254,14 @@ only, never into JEV state — doc 03 §3.4).
 ```
 
 Hard rules on this record:
+- **Bundle vs feature ownership (explicit).** Bundle-level: `schema_version`,
+  `research_epoch`, `bundle_id`, `commit`, `watermarks`, `history`, `features`.
+  Feature-level: `feature_id`, `kind`, `symbols`, `observed_at_ns`,
+  `ingested_at_ns`, `ttl_s`, `value`, `effect`, `evidence`,
+  `confidence_bucket`, `source_id`, `provenance_url`, `canonical_hash`,
+  `canonical_hashes`, `entity_ref`. The §8.5 example shows both levels
+  together for readability; the reader validates each level separately and
+  rejects cross-level smuggling.
 - **Evidence levels, not vibes.** `source` = deterministic parser over a
   primary source (only these are TRIGGER-eligible). `derived` = deterministic
   transform of source facts. `inference` = model-produced: CONTEXT-only until
@@ -283,9 +291,14 @@ Hard rules on this record:
      contradiction validation arrives with the research plane.
      Unmapped or contradictory binding → reject (TRIGGER) or cap at
      CONTEXT (derived).
-  2. *Frozen-feed detection* — identical authoritative payload across
-     `FROZEN_N = 3` consecutive polls (`plausibility_v1`; per-source time
-     cover: EDGAR 45 min, Fed/ECB 3 h, Treasury/BLS/FRED 18 h from TTLs)
+  2. *Frozen-feed detection* — nominal covers are explicit, never derived
+     from polling cadence (`plausibility_v1`):
+
+     ```
+     edgar_8k: 45 min | fed/ecb: 3 h | treasury/bls/fred: 18 h
+     ```
+
+     identical authoritative payload across `FROZEN_N = 3` consecutive polls
      marks the source `stale`, never fresh. The bundle carries dated poll
      history (`{"h", "ts"}` entries); the reader requires the N identical
      observations to span at least half the source's nominal cover.

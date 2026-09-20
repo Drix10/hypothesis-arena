@@ -29,11 +29,12 @@ OVERNIGHT_ALLOW = {"calendar_ahead", "macro_release"}
 REQUIRED_FIELDS = {"schema_version", "kind", "symbols", "value", "effect",
                    "evidence", "confidence_bucket", "source_id",
                    "canonical_hash", "observed_at_ns", "ttl_s"}
-OPTIONAL_FIELDS = {"feature_id", "canonical_hashes", "entity_ref"}
+OPTIONAL_FIELDS = {"feature_id", "canonical_hashes", "entity_ref",
+                   "ingested_at_ns", "provenance_url"}
 HEX64 = re.compile("^[0-9a-f]{64}$")
-SOURCE_POLL_MIN = {"edgar_8k": 15, "fed_monetary": 60, "ecb_mid": 60,
-                   "treasury_auctions": 360, "bls_empsit": 360,
-                   "fred_macro": 360}
+SOURCE_COVER_MIN = {"edgar_8k": 45, "fed_monetary": 180, "ecb_mid": 180,
+                      "treasury_auctions": 1080, "bls_empsit": 1080,
+                      "fred_macro": 1080}
 NY = ZoneInfo("America/New_York")
 EQUITY_SESSION = (9 * 60 + 30, 16 * 60)
 PROSE_KEYS = {"thesis_text", "critique_text", "narrative", "summary",
@@ -76,11 +77,31 @@ def check_feature(f, con, emap, history, now_ts):
         return False, "schema-enum"
     if not isinstance(f["value"], dict) or f["value"].get("type") not in VTYPES:
         return False, "schema-value"
-    if not HEX64.match(f["canonical_hash"] or ""):
+    v = f["value"]
+    vtype_shapes = {"enum": str, "bucket": str, "bool": bool, "count": int}
+    if "v" not in v or not isinstance(v["v"], vtype_shapes[v["type"]]):
+        return False, "value-shape"
+    if v["type"] == "count" and v["v"] < 0:
+        return False, "value-shape"
+    if not isinstance(f["symbols"], list) or not f["symbols"]:
+        return False, "symbols-type"
+    if any(not isinstance(s, str) for s in f["symbols"]):
+        return False, "symbols-type"
+    if not isinstance(f["observed_at_ns"], int):
+        return False, "observed-type"
+    if not isinstance(f["ttl_s"], int) or f["ttl_s"] <= 0:
+        return False, "ttl-type"
+    if not isinstance(f["canonical_hash"], str):
+        return False, "hash-format"
+    if not HEX64.match(f["canonical_hash"]):
         return False, "hash-format"
     chs = f.get("canonical_hashes")
     if chs is not None:
-        if not isinstance(chs, list) or not chs or                 any(not HEX64.match(h or "") for h in chs):
+        if not isinstance(chs, list) or not chs:
+            return False, "hash-format"
+        if len(set(chs)) != len(chs):
+            return False, "hash-format"
+        if any(not isinstance(h, str) or not HEX64.match(h) for h in chs):
             return False, "hash-format"
     hs = chs or [f["canonical_hash"]]
     expect = hs[0] if len(hs) == 1 else combine_hashes(hs)
@@ -103,6 +124,10 @@ def check_feature(f, con, emap, history, now_ts):
         if s not in tickers and s not in macro and s not in ("USD", "RATES"):
             return False, "entity-unmapped:" + s
     ref = f.get("entity_ref") or {}
+    if "entity_ref" in f and (not isinstance(ref, dict)
+            or any(k != "cik" for k in ref)
+            or ("cik" in ref and not isinstance(ref["cik"], str))):
+        return False, "entity-ref-shape"
     if "cik" in ref:
         want = emap.get("cik_to_ticker", {}).get(ref["cik"])
         if want is None:
@@ -116,7 +141,7 @@ def check_feature(f, con, emap, history, now_ts):
         tail = hist[-FROZEN_N:]
         same = len({e["h"] for e in tail}) == 1 and             tail[-1]["h"] == f["canonical_hash"]
         span = tail[-1]["ts"] - tail[0]["ts"]
-        cover = (FROZEN_N - 1) * SOURCE_POLL_MIN.get(f["source_id"], 60) * 60
+        cover = SOURCE_COVER_MIN.get(f["source_id"], 60) * 60
         if same and span >= cover * 0.5:
             return False, "frozen-feed"
     equity_like = f["symbols"] and all(
