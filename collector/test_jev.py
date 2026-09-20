@@ -85,8 +85,13 @@ check("questions-have-instructions",
 
 # 2. happy path: ANSWER + signed artifact, cache write
 row, art = jev.decide(state(), now=1000.0, key="k", post_fn=mkpost(good_resp()))
-check("answer-action", row["action"] == "ANSWER" and row["cost"] > 0
-      and row["cached"] is False)
+check("answer-action", row["action"] == "ANSWER"
+      and row["cost"]["usd"] > 0 and row["cached"] is False
+      and set(row["cost"]) == {"stage", "cycle_id", "symbol", "node", "model",
+                               "prompt_tokens", "completion_tokens", "usd",
+                               "category"}
+      and row["cost"]["category"] == "decision"
+      and row["cost"]["node"] == "jev")
 check("artifact-signed", jev.verify_answerset(art))
 check("artifact-pins", art["payload"]["revision"] == jev.REVISION
       and art["payload"]["provider"] == jev.PROVIDER
@@ -98,7 +103,7 @@ check("no-size-fields", not any(k in row for k in
 calls = []
 row2, art2 = jev.decide(state(), now=1010.0, key="k",
                         post_fn=mkpost(good_resp(), calls=calls))
-check("cache-hit", row2["action"] == "CACHED" and row2["cost"] == 0.0
+check("cache-hit", row2["action"] == "CACHED" and row2["cost"]["usd"] == 0.0
       and calls == [] and art2["response_hash"] == art["response_hash"])
 
 # 4. cache invalidations: changed decision state, protected state, age
@@ -126,22 +131,19 @@ bad_cases = [
     ("missing-fields", {"model": jev.REVISION}),
     ("wrong-types", {"model": jev.REVISION,
                      "answers": {"enter": {"type": "noul", "noul": "high"}}}),
-    ("extra-fields-ok-shape", None),  # filled below
+    ("answers-keys", None),  # filled below
     ("wrong-revision", dict(good_resp(), model="typesafe/jev-9.99")),
     ("noul-range", None),
 ]
-r = dict(good_resp())
+r = json.loads(json.dumps(good_resp()))
 r["answers"]["enter"]["noul"] = 1.5
 bad_cases[5] = ("noul-range", r)
-r = dict(good_resp())
+r = json.loads(json.dumps(good_resp()))
 r["answers"]["mystery"] = {"type": "noul", "noul": 0.5}
-bad_cases[3] = ("extra-fields-tolerated", r)
+bad_cases[3] = ("answers-keys", r)
 for name, resp in bad_cases:
-    a, why = jev.validate_response(resp, "h")
-    if name == "extra-fields-tolerated":
-        check(name, a is not None)
-    else:
-        check(name, a is None and isinstance(why, str))
+    a, why = jev.validate_response(resp)
+    check(name, a is None and isinstance(why, str))
 
 # 7. tampered artifact: altered answers / state hash fail verify
 row, art = jev.decide(state(symbol="Y"), now=3000.0, key="k",
@@ -188,12 +190,14 @@ check("replay-wrong-revision-hold",
 day = jev.datetime.now(jev.timezone.utc).strftime("%Y-%m-%d")
 jev.SPEND_DIR = os.path.join(TMP, "spend2")
 os.makedirs(jev.SPEND_DIR, exist_ok=True)
-json.dump({"total": 5000.0, "calls": 9},
+json.dump({"usd": 0.0, "calls": 5000, "prompt_tokens": 0,
+           "completion_tokens": 0},
           open(os.path.join(jev.SPEND_DIR, day + ".json"), "w"))
 calls9 = []
 row, _ = jev.decide(state(symbol="Z"), now=4000.0, key="k",
                     post_fn=mkpost(good_resp(), calls=calls9))
-check("ceiling-blocks", row["reason"] == "spend-ceiling" and calls9 == [])
+check("call-ceiling-blocks",
+      row["reason"] == "spend-call-ceiling" and calls9 == [])
 jev.SPEND_DIR = os.path.join(TMP, "spend")
 
 # 10. authority: max conviction + execution family pass through untouched;
@@ -207,6 +211,64 @@ check("adapter-passthrough-only",
       row["action"] == "ANSWER"
       and row["answers"]["conviction"]["score"] == "max"
       and "2xR" not in json.dumps(row) and "budget" not in json.dumps(row))
+
+# 11b. finite noul: bool/NaN/Inf rejected
+import math as _math
+for bad_v, name in [(True, "enter-true"), (False, "enter-false"),
+                    (float("nan"), "enter-nan"), (float("inf"), "enter-inf")]:
+    r = json.loads(json.dumps(good_resp()))
+    r["answers"]["enter"]["noul"] = bad_v
+    a, why = jev.validate_response(r)
+    check(name, a is None)
+for bad_v, name in [(True, "latent-true"), (float("nan"), "latent-nan")]:
+    r = json.loads(json.dumps(good_resp()))
+    r["answers"]["latent_risk"]["noul"] = bad_v
+    a, why = jev.validate_response(r)
+    check(name, a is None)
+
+# 11c. provider identity enforced
+r = json.loads(json.dumps(good_resp()))
+r["provider"] = "SomeoneElse"
+a, why = jev.validate_response(r)
+check("wrong-provider", a is None and why == "wrong-provider")
+
+# 11d. artifact schema: self-describing for C++
+row, art = jev.decide(state(symbol="Q"), now=4300.0, key="k",
+                      post_fn=mkpost(good_resp()))
+pl = art["payload"]
+check("artifact-schema",
+      set(pl) == {"schema_version", "question_set_version", "model",
+                  "revision", "provider", "symbol", "snapshot_epoch",
+                  "state_hash", "decision_key", "created_at", "expires_at",
+                  "answers"}
+      and pl["symbol"] == "Q" and pl["expires_at"] > 4300.0)
+
+# 11e. state binding explicit
+check("bind-check-true", jev.bind_check(art, state(symbol="Q")) is True)
+check("bind-check-changed-state",
+      jev.bind_check(art, state(symbol="Q", snapshot_epoch=99)) is False)
+check("bind-check-wrong-symbol",
+      jev.bind_check(art, state(symbol="OTHER")) is False)
+
+# 11f. failed attempts carry explicit unknown cost
+row, _ = jev.decide(state(symbol="QF"), now=4400.0, key="k",
+                    post_fn=mkpost(err="provider-http-500"))
+check("unknown-cost-tagged",
+      row["action"] == "HOLD" and row["cost"]["usd"] == "unknown"
+      and row["cost"]["category"] == "decision")
+
+# 11g. stage 30d USD cap governs (doc 10 units)
+jev.SPEND_DIR = os.path.join(TMP, "spend3")
+os.makedirs(jev.SPEND_DIR, exist_ok=True)
+json.dump({"usd": 150.0, "calls": 5, "prompt_tokens": 0,
+           "completion_tokens": 0},
+          open(os.path.join(jev.SPEND_DIR, day + ".json"), "w"))
+calls_g = []
+row, _ = jev.decide(state(symbol="QG"), now=4500.0, key="k",
+                    post_fn=mkpost(good_resp(), calls=calls_g))
+check("stage-cap-blocks",
+      row["reason"] == "spend-stage-cap" and calls_g == [])
+jev.SPEND_DIR = os.path.join(TMP, "spend")
 
 # 11. bad state input holds deterministically
 row, _ = jev.decide({"symbol": "X"}, now=4200.0, key="k",

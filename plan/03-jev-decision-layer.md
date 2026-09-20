@@ -180,19 +180,28 @@ fingerprint instead:
   question_set_version`. TTL 5 min. Busts on any new contradicting feature.
 - `decision_key` = `symbol ‖ snapshot_epoch ‖ price-return bucket ‖ spread
   bucket ‖ ATR bucket ‖ zscore bucket ‖ regime ‖ event phase ‖ exposure
-  bucket ‖ feature revision ‖ research_revision ‖ question_set_version`.
+  bucket ‖ feature revision ‖ research_revision ‖ question_set_version`,
+  where `feature revision = sha256(‖-joined sorted feature-ID set)` —
+  deterministic and distinct from the research-epoch `research_revision`.
 - A cached answer is usable only if the decision_key is still compatible AND
   answer age ≤ 60 s AND no protected state (stage, HALT, R-flags) changed.
   Otherwise the sidecar re-issues the call — JEV answers are cheap, stale
   answers are expensive.
-- Daily safety ceiling 5000 (alert at 50%). The 500/day shutdown is retired:
-  an arbitrary count must never halt a healthy trader; spend tiers (doc 10)
-  are the real governor.
+- Spend safety is two-layered (units resolved — the frozen doc named a number
+  without units, so this amendment fixes the interpretation; ratify by review):
+  (a) **rate ceiling: 5000 provider calls/day** (alert at 2500) — an emergency
+  brake on runaway call loops, not a money cap; (b) **money governance from
+  doc 10**: rolling-30d USD vs the stage absolute cap ($150 G0/G1, $400 G2,
+  $1000 G3) — breach halts JEV calls (`spend-stage-cap`) while exits/reconcile
+  stay live. USD at probe scale (~$1e-5/call) makes a $5000/day JEV money cap
+  meaningless, which is why the call-count reading is the coherent one.
 - JEV down / timeout (>10 s) / malformed response → exactly 1 retry after ~5 s,
   then HOLD + log `jev_error`. Every failure increments the S5 streak counter.
   Risk gates still run locally.
-- Every call is cost-tagged `{stage, cycle_id, symbol, node, model, tokens, usd,
-  category: decision}` (doc 10 §10.4). An untagged call is a build failure.
+- Every call is cost-tagged `{stage, cycle_id, symbol, node, model,
+  prompt_tokens, completion_tokens, usd, category: decision}` (doc 10 §10.4).
+  An untagged call is a build failure. Failed provider attempts are logged
+  with `usd: unknown` — an explicitly unattributed attempt, never silent zero.
 - Every answer is scored against realized outcomes, HOLDs included, per doc 11
   §11.1. Calibration worse than the base-rate baseline over 200 decisions halts
   entries (R13).
@@ -215,9 +224,13 @@ revision, provider, question_set_version, prompt hash, state hash, response
 hash. Replay never calls the remote model.
 
 Answer authentication: the sidecar runs as a dedicated `mirojev` user (doc 08
-§8.2) and Ed25519-signs every answer artifact (snapshot_hash, decision_key,
-symbol, timestamp, expiry, question_set_version, model/provider IDs,
-response_hash). C++ verifies before trusting; a bad signature is a HOLD +
+§8.2) and Ed25519-signs every answer artifact. The single authoritative
+AnswerSet schema (reconciling §3.5's field list with the implementation):
+`schema_version | question_set_version | model | revision | provider |
+symbol | snapshot_epoch | state_hash | decision_key | created_at |
+expires_at (= created + 60 s) | answers`. `state_hash` is the canonical-state
+name for §3.5's `snapshot_hash` — same value, one term. Expiry is signed into
+the artifact so C++ verifies freshness without consulting Python's cache. C++ verifies before trusting; a bad signature is a HOLD +
 alert, and a forged `answers.json` buys an attacker nothing past the
 still-authoritative C++ risk layer.
 
@@ -229,9 +242,9 @@ the frozen dependency say"; it never answers "how much should we trade".
 
 ```
 JEVAnswerSetV3: schema_version | question_set_version=v3 |
-  model | revision | provider | snapshot_epoch | state_hash |
-  response_hash | enter | edge_family | conviction | latent_risk |
-  signature
+  model | revision | provider | symbol | snapshot_epoch |
+  state_hash | decision_key | created_at | expires_at (=created+60s) |
+  answers | response_hash | signature
 ```
 
 C++ semantics for every malformed/stale answer (locked — each row is HOLD):
