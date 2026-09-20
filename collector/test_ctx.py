@@ -52,13 +52,21 @@ def feat(**kw):
     return f
 
 
+def wm_full(*sources):
+    """Frozen watermark envelope for tests: map pins + per-source
+    {last_observation_at, cursor} for the given sources."""
+    sha = hashlib.sha256(open(MAP, "rb").read()).hexdigest()
+    srcs = sources or ("edgar_8k", "fed_monetary", "ecb_mid",
+                       "treasury_auctions", "bls_empsit", "fred_macro")
+    return {"entity_map_version": "entity-v1",
+            "entity_map_sha256": sha,
+            "sources": {s: {"last_observation_at": int(NOW) - 300,
+                              "cursor": "test-cursor"} for s in srcs}}
+
+
 def run(features, extra=None, name="b"):
-    import hashlib as _hl
-    sha = _hl.sha256(open(MAP, "rb").read()).hexdigest()
     b = {"bundle_id": name, "commit": True, "schema_version": "f2",
-         "research_epoch": 0,
-         "watermarks": {"entity_map_version": "entity-v1",
-                        "entity_map_sha256": sha},
+         "research_epoch": 0, "watermarks": wm_full(),
          "features": features}
     b.update(extra or {})
     p = os.path.join(TMP, name + ".json")
@@ -338,12 +346,8 @@ check("lineage-right-source", r["stats"]["accepted"] == 1)
 
 
 def raw_bundle(**kw):
-    import hashlib as _hl
-    sha = _hl.sha256(open(MAP, "rb").read()).hexdigest()
     b = {"bundle_id": "env", "commit": True, "schema_version": "f2",
-         "research_epoch": 3,
-         "watermarks": {"entity_map_version": "entity-v1",
-                          "entity_map_sha256": sha},
+         "research_epoch": 3, "watermarks": wm_full(),
          "features": [feat()]}
     b.update(kw)
     p = os.path.join(TMP, "env-%d.json" % raw_bundle.n)
@@ -446,5 +450,72 @@ check("history-entry-shape", "history-shape" in r["stats"]["reasons"])
 r = run([feat()], extra={"history": {"edgar_8k": [dated(H1, -5)]}},
         name="bhist2")
 check("history-negative-ts", "history-shape" in r["stats"]["reasons"])
+
+# 34. history namespace: unknown source keys rejected at the boundary
+r = run([feat()], extra={"history": {"fake-source": [dated(H1, t0)]}},
+        name="bhist-ns")
+check("history-unknown-source",
+      "history-unknown-source" in r["stats"]["reasons"]
+      and r["stats"]["accepted"] == 0)
+
+# 35. history monotonicity: reordered + duplicate timestamps rejected
+r = run([feat()],
+        extra={"history": {"edgar_8k": [dated(H1, t0),
+                                          dated(H1, t0 + 100),
+                                          dated(H1, t0 + 50)]}},
+        name="bhist-reorder")
+check("history-nonmonotonic",
+      "history-nonmonotonic" in r["stats"]["reasons"]
+      and r["stats"]["accepted"] == 0)
+r = run([feat()],
+        extra={"history": {"edgar_8k": [dated(H1, t0),
+                                          dated(H1, t0)]}},
+        name="bhist-dupe-ts")
+check("history-duplicate-ts",
+      "history-nonmonotonic" in r["stats"]["reasons"]
+      and r["stats"]["accepted"] == 0)
+
+# 36. watermark envelope: shape, namespace, skew, coverage
+_bad_wm = dict(wm_full())
+_bad_wm["extra"] = 1
+r = run([feat()], extra={"watermarks": _bad_wm}, name="bwm-extra")
+check("watermark-extra-key", "watermark-shape" in r["stats"]["reasons"])
+_bad_wm2 = wm_full()
+_bad_wm2["sources"]["edgar_8k"] = {"last_observation_at": int(NOW) - 10}
+r = run([feat()], extra={"watermarks": _bad_wm2}, name="bwm-keys")
+check("watermark-source-keys",
+      "watermark-shape" in r["stats"]["reasons"])
+_bad_wm3 = wm_full()
+_bad_wm3["sources"]["edgar_8k"] = {
+    "last_observation_at": int(NOW) + 3600, "cursor": "c"}
+r = run([feat()], extra={"watermarks": _bad_wm3}, name="bwm-future")
+check("watermark-future", "watermark-shape" in r["stats"]["reasons"])
+_bad_wm4 = wm_full("fed_monetary")  # edgar_8k participates, unwatermarked
+r = run([feat()], extra={"watermarks": _bad_wm4}, name="bwm-cover")
+check("watermark-coverage",
+      "watermark-coverage:edgar_8k" in r["stats"]["reasons"]
+      and r["stats"]["accepted"] == 0)
+_bad_wm5 = wm_full()
+_bad_wm5["sources"]["nope"] = {"last_observation_at": 1,
+                                   "cursor": "c"}
+r = run([feat()], extra={"watermarks": _bad_wm5}, name="bwm-ns")
+check("watermark-unknown-source",
+      "watermark-unknown-source" in r["stats"]["reasons"])
+# history-only participant must also be watermarked
+_hist_wm = wm_full("edgar_8k")
+r = run([feat()],
+        extra={"watermarks": _hist_wm,
+               "history": {"fed_monetary": [dated(H1, t0)]}},
+        name="bwm-histcover")
+check("watermark-history-coverage",
+      "watermark-coverage:fed_monetary" in r["stats"]["reasons"])
+
+# 37. symbols cardinality bound
+r = run([feat(symbols=["AAPL"] * 17)], name="bsym17")
+check("symbols-cardinality",
+      r["stats"]["reasons"].get("symbols-cardinality") == 1
+      and r["stats"]["accepted"] == 0)
+r = run([feat(symbols=["AAPL"] * 16)], name="bsym16")
+check("symbols-16-ok", r["stats"]["accepted"] == 1)
 
 print("ALL CTX CHECKS PASS")

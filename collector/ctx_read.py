@@ -58,10 +58,26 @@ SOURCE_KINDS = {
 BUNDLE_REQUIRED = {"schema_version", "research_epoch", "bundle_id",
                    "commit", "watermarks", "features"}
 BUNDLE_OPTIONAL = {"history"}
+# Frozen watermark envelope: the bundle proves which map it was built
+# against (version + sha, verified below) AND, for every source
+# participating in the bundle (features + history), a last-observation
+# instant and an opaque source cursor. Sources NOT participating need no
+# entry (extra entries for unused sources are tolerated as inert claims).
+# last_observation_at is unix seconds, never in the future beyond skew;
+# cursor is a short opaque string (feed ETag, accession, vintage id).
+WATERMARK_REQUIRED = {"entity_map_version", "entity_map_sha256",
+                      "sources"}
+WATERMARK_SOURCE_REQUIRED = {"last_observation_at", "cursor"}
+WATERMARK_SKEW_S = 60
+CURSOR_MAX_LEN = 256
 BUNDLE_SCHEMA = "f2"
 TTL_MAX_S = 7 * 86400  # emitters never grant freshness beyond this (X4)
 MAX_FEATURES = 64  # plan cap, now enforced (X3)
 MAX_HASHES = 16  # rows contributing to one derived feature (X9)
+MAX_SYMBOLS = 16  # mapped tickers per feature: entity resolution,
+# session classification, disagreement, and snapshot build stay bounded.
+# More than 16 tickers on one feature is a basket/index construction that
+# belongs in the Phase 2.5 resolver, not in a single feature row.
 MAX_BUNDLE_BYTES = 1024 * 1024  # raw cap before parse (X1)
 MAX_DEPTH = 16
 MAX_NODES = 20000
@@ -190,6 +206,8 @@ def check_feature(f, con, emap, history, now_ts):
         return False, "value-shape"
     if not isinstance(f["symbols"], list) or not f["symbols"]:
         return False, "symbols-type"
+    if len(f["symbols"]) > MAX_SYMBOLS:
+        return False, "symbols-cardinality"
     if any(not isinstance(s, str) or not s for s in f["symbols"]):
         return False, "symbols-type"
     if type(f["observed_at_ns"]) is not int:
@@ -362,10 +380,18 @@ def read_bundle(path, db_path, map_path, now_ts=None):
             return {"bundle_id": b["bundle_id"], "accepted": [],
                     "stats": stats}
         for _src, _entries in hist.items():
+            # History namespace: only frozen sources have frozen-feed
+            # semantics. "fake-source" histories are structurally neat
+            # but semantically void — reject at the boundary.
+            if _src not in SOURCE_IDS:
+                stats["reasons"]["history-unknown-source"] = 1
+                return {"bundle_id": b["bundle_id"], "accepted": [],
+                        "stats": stats}
             if not isinstance(_entries, list):
                 stats["reasons"]["history-shape"] = 1
                 return {"bundle_id": b["bundle_id"], "accepted": [],
                         "stats": stats}
+            _prev = None
             for _e in _entries:
                 if not isinstance(_e, dict) or set(_e) != {"h", "ts"} \
                         or not isinstance(_e["h"], str) \
@@ -374,6 +400,15 @@ def read_bundle(path, db_path, map_path, now_ts=None):
                     stats["reasons"]["history-shape"] = 1
                     return {"bundle_id": b["bundle_id"], "accepted": [],
                             "stats": stats}
+                # Strictly increasing per source: the frozen-feed span
+                # tail[-1].ts - tail[0].ts is meaningless on reordered or
+                # duplicated timestamps. Equal timestamps are rejected
+                # (duplicates), not deduplicated (rewriting evidence).
+                if _prev is not None and _e["ts"] <= _prev:
+                    stats["reasons"]["history-nonmonotonic"] = 1
+                    return {"bundle_id": b["bundle_id"], "accepted": [],
+                            "stats": stats}
+                _prev = _e["ts"]
     # feature_id uniqueness: duplicates would corrupt feature_revision
     # (derived from IDs) without representing distinct evidence.
     _ids = [f["feature_id"] for f in feats
@@ -382,12 +417,17 @@ def read_bundle(path, db_path, map_path, now_ts=None):
         stats["reasons"]["bundle-duplicate-feature-id"] = 1
         return {"bundle_id": b["bundle_id"], "accepted": [],
                 "stats": stats}
-    wm = b.get("watermarks") or {}
+    wm = b.get("watermarks")
     if not isinstance(wm, dict) or "entity_map_version" not in wm             or "entity_map_sha256" not in wm:
         stats["reasons"]["watermarks-missing"] = 1
         return {"bundle_id": b.get("bundle_id"), "accepted": [], "stats": stats}
     with open(map_path, "rb") as _mf:
         raw_map = _mf.read()
+    if not isinstance(wm["entity_map_sha256"], str) or not HEX64.match(
+            wm["entity_map_sha256"]):
+        stats["reasons"]["watermark-shape"] = 1
+        return {"bundle_id": b["bundle_id"], "accepted": [],
+                "stats": stats}
     if hashlib.sha256(raw_map).hexdigest() != wm["entity_map_sha256"]:
         stats["reasons"]["map-hash-mismatch"] = 1
         return {"bundle_id": b["bundle_id"], "accepted": [], "stats": stats}
@@ -403,6 +443,46 @@ def read_bundle(path, db_path, map_path, now_ts=None):
                 "stats": stats}
     if emap.get("map_version") != wm["entity_map_version"]:
         stats["reasons"]["map-version-mismatch"] = 1
+        return {"bundle_id": b["bundle_id"], "accepted": [], "stats": stats}
+    # Frozen watermark envelope (strict): exact top-level keys; per-source
+    # {last_observation_at, cursor} with namespace, types, and skew;
+    # coverage of every participating source (features + history).
+    if set(wm) != WATERMARK_REQUIRED:
+        stats["reasons"]["watermark-shape"] = 1
+        return {"bundle_id": b["bundle_id"], "accepted": [], "stats": stats}
+    _srcs_wm = wm["sources"]
+    if not isinstance(_srcs_wm, dict):
+        stats["reasons"]["watermark-shape"] = 1
+        return {"bundle_id": b["bundle_id"], "accepted": [], "stats": stats}
+    for _sid, _w in _srcs_wm.items():
+        if _sid not in SOURCE_IDS:
+            stats["reasons"]["watermark-unknown-source"] = 1
+            return {"bundle_id": b["bundle_id"], "accepted": [], "stats": stats}
+        if not isinstance(_w, dict) or set(_w) != WATERMARK_SOURCE_REQUIRED:
+            stats["reasons"]["watermark-shape"] = 1
+            return {"bundle_id": b["bundle_id"], "accepted": [], "stats": stats}
+        _loa, _cur = _w["last_observation_at"], _w["cursor"]
+        if type(_loa) is not int or _loa < 0 \
+                or _loa > now_ts + WATERMARK_SKEW_S:
+            stats["reasons"]["watermark-shape"] = 1
+            return {"bundle_id": b["bundle_id"], "accepted": [], "stats": stats}
+        if not isinstance(_cur, str) or not _cur \
+                or len(_cur) > CURSOR_MAX_LEN:
+            stats["reasons"]["watermark-shape"] = 1
+            return {"bundle_id": b["bundle_id"], "accepted": [], "stats": stats}
+    _participating = {f.get("source_id") for f in feats
+                      if isinstance(f, dict)
+                      and isinstance(f.get("source_id"), str)
+                      and f.get("source_id") in SOURCE_IDS}
+    # Only namespaced participants need watermarks. Unknown sources are
+    # rejected per-feature (source-unknown) or at the history gate
+    # (history-unknown-source); demanding watermarks for them would mask
+    # the precise reason with a wholesale coverage rejection.
+    if isinstance(b.get("history"), dict):
+        _participating |= set(b["history"])
+    _missing = sorted(s for s in _participating if s not in _srcs_wm)
+    if _missing:
+        stats["reasons"]["watermark-coverage:" + str(_missing[0])] = 1
         return {"bundle_id": b["bundle_id"], "accepted": [], "stats": stats}
     con = sqlite3.connect("file:" + db_path + "?mode=ro", uri=True)
     out = []
