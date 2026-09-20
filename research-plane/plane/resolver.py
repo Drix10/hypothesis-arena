@@ -8,10 +8,10 @@ Inputs:
   candidate: advisory dict (kind, value, symbols?, effect?, evidence?,
              feature_id?, entity_ref?, provenance_url?)
   canonical: the deterministic source record the candidate claims to
-             derive from: {source_id, content_hash, published_ns (or None),
-             ingested_ns, symbols, effect (parser-assigned or None),
-             parser_confidence ("high"/"medium"/"low"),
-             corroborated (bool)}
+             derive from: {source_id, kind (parser-assigned), content_hash,
+             published_ns (or None), ingested_ns, symbols, effect
+             (parser-assigned or None), parser_confidence
+             ("high"/"medium"/"low"), corroborated (bool)}
   entity_map: {"cik_to_ticker": {...}, "macro_release_to_symbols": {...}}
   map_version, map_sha: pinned map identity for the bundle watermarks.
 
@@ -101,12 +101,16 @@ def resolve(candidate, canonical, entity_map, llm_touched=True):
         return False, "value-shape"
     if value["type"] == "count" and value["v"] < 0:
         return False, "value-shape"
-    # Mechanical identity with the canonical record?
+    # Mechanical identity with the canonical record, INCLUDING the
+    # parser-assigned kind: a candidate must not relabel canonical
+    # semantics (e.g. macro_release -> calendar_ahead) while keeping the
+    # checked fields identical and still earn evidence=source.
+    canon_kind = canonical.get("kind")
     canon_value = canonical.get("value")
     canon_symbols = canonical.get("symbols", [])
     canon_effect = canonical.get("effect")
     pub_ns = canonical.get("published_ns")
-    identical = (canon_value == value and
+    identical = (canon_kind == kind and canon_value == value and
                  list(canon_symbols) == list(bound) and
                  pub_ns is not None and
                  candidate.get("effect") == canon_effect)

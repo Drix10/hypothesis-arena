@@ -57,7 +57,8 @@ def watermarks(map_sha, sources=("edgar_8k",)):
 
 
 def canonical(source_id="edgar_8k", **kw):
-    rec = {"source_id": source_id, "content_hash": HEXA,
+    rec = {"source_id": source_id, "kind": "filing_event",
+           "content_hash": HEXA,
            "published_ns": OBS_NS, "ingested_ns": OBS_NS,
            "symbols": ["AAPL"],
            "value": {"type": "enum", "v": "8-K:item-2.02"},
@@ -167,6 +168,58 @@ class EmitTest(unittest.TestCase):
         os.makedirs(outdir)
         with open(os.path.join(outdir, "features-9-x.json.tmp-1"), "wb") as fh:
             fh.write(b'{"half": true')
+        self.assertIsNone(emit_mod.latest_complete(outdir))
+
+    def test_kind_relabel_never_source(self):
+        # fed source emits two kinds: relabeling macro_release as
+        # calendar_ahead with identical fields must not earn source.
+        can = canonical(source_id="fed_monetary", kind="macro_release",
+                        symbols=["EURUSD"],
+                        value={"type": "enum", "v": "hike-25"},
+                        effect="risk_up", content_hash="b" * 64)
+        cand = {"kind": "calendar_ahead", "symbols": ["EURUSD"],
+                "value": {"type": "enum", "v": "hike-25"},
+                "effect": "risk_up", "feature_id": "k1"}
+        fmap = {"cik_to_ticker": {},
+                "macro_release_to_symbols": {"FOMC": ["EURUSD"]}}
+        ok, out = resolver.resolve(cand, can, fmap)
+        self.assertTrue(ok)
+        self.assertEqual(out[0]["evidence"], "inference")
+
+    def test_changed_watermarks_new_identity(self):
+        # Same epoch + same features, new cursor: different bundle_id,
+        # both manifest rows, latest resolves to the NEWER bytes.
+        ok, (feat, _) = resolver.resolve(candidate(), canonical(), MAP)
+        self.assertTrue(ok)
+        outdir = os.path.join(self.d, "outW")
+        b1, p1 = emit_mod.emit_bundle(outdir, 5, [feat],
+                                      watermarks(self.msha))
+        wm2 = watermarks(self.msha)
+        wm2["sources"]["edgar_8k"] = {"last_observation_at": OBS_S + 10,
+                                        "cursor": "test-cursor-2"}
+        b2, p2 = emit_mod.emit_bundle(outdir, 5, [feat], wm2)
+        self.assertNotEqual(b1, b2)
+        self.assertNotEqual(p1, p2)
+        self.assertEqual(emit_mod.latest_complete(outdir), p2)
+        res = emit_mod.read_latest(outdir, self.dbp, self.mapp, NOW_S)
+        self.assertEqual(res["stats"]["reasons"], {"ok": 1})
+
+    def test_symlink_entry_rejected(self):
+        # In-tree symlink to an outside file: never followed.
+        outdir = os.path.join(self.d, "outS")
+        os.makedirs(outdir)
+        outside = os.path.join(self.d, "secret.json")
+        with open(outside, "w") as fh:
+            fh.write('{"x": 1}')
+        link = os.path.join(outdir, "features-1-evil.json")
+        try:
+            os.symlink(outside, link)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlinks unavailable")
+        with open(os.path.join(outdir, "manifest.jsonl"), "w") as fh:
+            fh.write('{"bundle_id": "evil", "commit": true, '
+                     '"path": "features-1-evil.json", '
+                     '"sha256": "' + "0" * 64 + '"}\n')
         self.assertIsNone(emit_mod.latest_complete(outdir))
 
     def test_r12_future_dropped_by_ctx(self):
