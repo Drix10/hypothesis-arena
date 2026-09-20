@@ -14,7 +14,10 @@ misbehaves. What it cannot do is give itself more money or more rope (doc 10).
 
 Three inputs, one output:
 - **Input A (slow, rich):** the agentic research plane — free OSINT, SEC filings,
-  macro releases, and X-List sentiment, fused into typed features (docs 08, 09).
+  and macro releases, fused into typed features (docs 08, 09). X-List sentiment
+  is HISTORICAL / NON-PRODUCTION only (freeze v2 X:(a)): no automated X and no
+  hand-pasted X context in v1; the v1 collector runs broker market data +
+  SEC/EDGAR + FRED/ALFRED + Treasury/BLS/BEA + Fed/ECB + earnings/calendars.
 - **Input B (fast, thin):** broker quotes / trades / account state (forex majors +
   US-listed stocks).
 - **Input C (governing):** the stage file, risk constants, and spend counters —
@@ -35,7 +38,7 @@ inference cost, doc 11 requires removing it, not tuning it.
 | Thesis text | Write the "why" in prose | Research plane `hypothesize` node (capped, advisory only) |
 | Routing, ranking, gating | Calibrated yes/no, pick-winner, conviction | JEV via OpenRouter Decisions API |
 | Snapshot, risk, execution | Fast, deterministic, auditable | C++ from scratch |
-| Knowledge feed | Curated signals from X Lists | Sidecar (API/RSS, never Selenium in C++) |
+| Knowledge feed | Curated non-X signals (X material historical only) | Sidecar (API/RSS, never Selenium in C++) |
 | Research, OSINT fusion, hypotheses, self-critique | Produce typed features only (bundle transactions); prose → research_digest.jsonl, outside the trading boundary | Research plane: LangGraph + smolagents, sandboxed, off hot path (doc 08) |
 | Capital stage, kill switches, spend | Permit or forbid; never expand | `STAGE` file + C++ constants + human signature (doc 10) |
 | Calibration + promotion | Score answers, judge challengers | Offline harness + human sign-off (doc 11) |
@@ -78,7 +81,7 @@ boundary is enforced by OS permissions, not convention (doc 08 §8.1, R11).
 - Risk: zero trades violating `05-risk-and-determinism.md`. One violation = halt.
 - Latency: context snapshot → order intent < 1 ms local, including the cached-JEV
   read. Excludes all network calls (JEV fetch, order send, reconcile).
-- Calibration: JEV `enter` and `veto` beat a base-rate baseline on Brier score over
+- Calibration: JEV `enter` and `latent_risk` beat a base-rate baseline on Brier score over
   ≥ 200 decisions (doc 11 §11.1).
 - Autonomy: 30 consecutive days with no human intervention required, and every
   intervention that *was* required logged with its cause.

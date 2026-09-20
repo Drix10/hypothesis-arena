@@ -122,7 +122,7 @@ a human. A lesson can only ever become a
 
 | Source | Access | Commercial/auto use | Redistribution | Storage/derived |
 |---|---|---|---|---|
-| SEC EDGAR | free, no key, 10 req/s fair-access | public filings, automated collection allowed within fair access | no bulk resale; derived features ours | 90-day prune (§9.2) |
+| SEC EDGAR | free, no key, provider-published 10 req/s fair-access max | public filings, automated collection allowed within fair access | no bulk resale; derived features ours | 90-day prune (§9.2) |
 | FRED/ALFRED | free, key required | allowed with attribution | no redistribution of bulk downloads | vintages kept for replay |
 | Treasury/BLS/BEA/Fed/ECB | free, no key | US/EU public data, automated use allowed | link, don't mirror | same prune |
 | Broker paper data (OANDA/Alpaca) | account required | per broker account terms; re-verify at G1 | never | journal keeps fills, not full depth |
@@ -142,7 +142,13 @@ a human. A lesson can only ever become a
   authenticated CDP only where a login is unavoidable. No Selenium anywhere
   (doc 02, locked). Every browser-based source needs a named fallback, because
   browser scrapers break silently.
-- **Polite by construction:** declared User-Agent with contact, per-source rate
+- **Provider limits are ceilings, not measurements.** "10 req/s" is SEC's
+  published fair-access maximum; our operating rate, p50/p99 latency, and
+  availability are MEASURED from this deployment and recorded in §9.4 —
+  never assume the provider's number is our performance. Licensing
+  ("free to access" ≠ "commercial automated use permitted") is rechecked
+  per source before G1/G2, not once at freeze.
+- **Polite by construction (measured, not assumed):** declared User-Agent with contact, per-source rate
   limiter, jittered backoff (3 retries, ~15 s base, ±20% jitter — same semantics
   as doc 02 §2.5), and an on-disk cache keyed by source ETag/Last-Modified. A 429
   halves that source's poll rate for an hour.

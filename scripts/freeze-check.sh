@@ -142,6 +142,57 @@ grep -q "Boundary law" "$ROOT/plan/09-osint-and-free-data.md" \
 grep -q "NON-PRODUCTION / HISTORICAL" "$ROOT/plan/02-twitter-alpha-system.md" \
   && ok "02 archive/production split" || bad "02 split banner missing"
 
+# ---- code pins must equal the manifest (the fingerprint is enforced) ----
+pyval() { grep -E "^$1 *= *\"" "$ROOT/collector/jev.py" | head -n1 | sed 's/.*"\([^"]*\)".*/\1/'; }
+[ "$(pyval MODEL)" = "$(mval jev_model)" ] \
+  && ok "jev.py MODEL == manifest" \
+  || bad "jev.py MODEL '$(pyval MODEL)' vs manifest '$(mval jev_model)'"
+[ "$(pyval REVISION)" = "typesafe/jev-1.13-20260917" ] \
+  && ok "jev.py REVISION pinned" || bad "jev.py REVISION wrong"
+[ "$(pyval PROVIDER)" = "$(mval jev_provider_name)" ] \
+  && ok "jev.py PROVIDER == manifest" \
+  || bad "jev.py PROVIDER vs manifest"
+[ "$(pyval QVERSION)" = "$(mval question_set_version)" ] \
+  && ok "jev.py QVERSION == manifest" \
+  || bad "jev.py QVERSION vs manifest"
+[ "$(grep -E '^DAILY_CALL_CEILING *=' "$ROOT/collector/jev.py" | grep -o '[0-9]*')" = "5000" ] \
+  && ok "call ceiling 5000" || bad "call ceiling moved"
+[ "$(grep -E '^DAILY_CALL_ALERT *=' "$ROOT/collector/jev.py" | grep -o '[0-9]*')" = "2500" ] \
+  && ok "call alert 2500" || bad "call alert moved"
+for _cap in '"G0_PAPER": 150.0' '"G1_TINY": 150.0' '"G2_SCALED": 400.0' '"G3_FULL": 1000.0'; do
+  grep -q "$_cap" "$ROOT/collector/jev.py" \
+    && ok "jev.py stage cap $_cap" || bad "jev.py stage cap $_cap moved"
+done
+for _q in '("enter", "noul"' '("edge_family", "choice"' '("conviction", "score"' '("latent_risk", "noul"'; do
+  grep -q "$_q" "$ROOT/collector/jev.py" \
+    && ok "jev.py question $_q" || bad "jev.py question order/type moved: $_q"
+done
+for _pin in 'typesafe/jev-1.13' 'typesafe/jev-1.13-20260917' '"TypeSafe"' 'answerset_v1'; do
+  grep -q "$_pin" "$ROOT/kernel/jev_validate.hpp" \
+    && ok "kernel pin $_pin" || bad "kernel pin moved: $_pin"
+done
+
+# ---- committed P3.2 vectors are self-consistent (no Python needed) ----
+for _v in v1 v2; do
+  _hex="$ROOT/kernel/vectors/${_v}_canonical.hex"
+  _hash="$ROOT/kernel/vectors/${_v}_response_hash.txt"
+  _sig="$ROOT/kernel/vectors/${_v}_signature.txt"
+  if [ -f "$_hex" ] && [ -f "$_hash" ] && [ -f "$_sig" ]; then
+    _recomputed="$(xxd -r -p "$_hex" | sha256sum | cut -d' ' -f1)"
+    [ "$_recomputed" = "$(cat "$_hash")" ] \
+      && ok "vectors ${_v}: sha256(canonical) == response_hash" \
+      || bad "vectors ${_v}: hash mismatch"
+    [ "$(wc -c < "$_sig" | tr -d ' ')" = "128" ] \
+      && ok "vectors ${_v}: 128-hex signature present" \
+      || bad "vectors ${_v}: signature shape"
+  else
+    bad "vectors ${_v}: files missing"
+  fi
+done
+[ "$(cat "$ROOT/kernel/vectors/pubkey.txt" 2>/dev/null)" = "$(cat "$ROOT/kernel/fixtures/trusted_key.txt" 2>/dev/null)" ] \
+  && ok "vectors pubkey == P3.1 trusted key" \
+  || bad "vectors pubkey drifted from trusted key"
+
 echo "---"
 [ "$FAIL" = 0 ] && echo "FREEZE-CHECK: PASS" || echo "FREEZE-CHECK: FAIL"
 exit "$FAIL"

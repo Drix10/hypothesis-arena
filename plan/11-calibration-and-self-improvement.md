@@ -12,7 +12,7 @@ happened. Scored per question, per regime, per symbol class, on a rolling window
 
 | Question | Resolves against | Horizon |
 |---|---|---|
-| `enter.noul` | Did the trade, taken at the snapshot price with exit_profile_v1, reach +1R before −1R? | min(stop/TP/time_exit hit, 24 h) |
+| `enter.noul` | P( if the opportunity is taken at the frozen snapshot price using `exit_profile_v1`, the trade reaches +1R before −1R within the horizon ) — the question text and this label statement are identical by freeze (CAL1); any question rewording versions the question and restarts its calibration clock. | min(stop/TP/time_exit hit, 24 h) |
 | `latent_risk.noul` | Did a material adverse event occur that NO deterministic flag caught (gap through stop, unflagged halt, overnight shock without event blackout)? Counterfactual trade at snapshot size. | 24 h |
 | `edge_family.choice` | Which family's evidence matched the realized path (rule-based classifier, no LLM)? Family-fit only — never scored as success probability. | trade lifetime |
 | `conviction.score` | Realized R-multiple bucket | trade lifetime |
@@ -22,29 +22,41 @@ stop and TP touched in one candle → stop-first (loss); gap over stop → loss
 at first tradable print beyond the gap; neither hit by horizon → censored
 (excluded from Brier, counted separately); halt/close before resolution →
 excluded; stocks resolve within the session, forex within 24 h. Censored is a
-third class, never silently a win or a loss.
+third class, never silently a win or a loss. Censoring is tracked, not just
+excluded (CAL3): resolution rate, censor rate, and censoring by regime are
+reported every cycle; promotion is BLOCKED while resolution coverage < 80%
+or any regime's censor rate exceeds 2× the global rate.
 
 Every resolved outcome carries `outcome_source` (locked vocabulary):
 `EXOGENOUS` (price path shows no traceable contribution from our fills),
 `SELF_INFLUENCED` (our order/fill precedes and plausibly shapes the resolving
 path — always assumed when our fill volume is non-trivial vs venue depth or
-when resolution occurs within N seconds of our fill; N versioned per venue),
+when resolution occurs within the venue's frozen SELF_WINDOW_S of our fill),
 `UNKNOWN` (cannot determine — scored with confidence intervals widened, never
-as exogenous by default). Self-influenced outcomes are never neutral market
+as exogenous by default). Frozen SELF_WINDOW_S (CAL6): OANDA practice 5 s,
+Alpaca paper 5 s, with a venue-depth participation threshold of 1% (our fill
+≥ 1% of top-of-book depth at the resolving print). Self-influenced outcomes are never neutral market
 truth: they are scored separately and cannot promote a challenger alone.
 
 - **HOLDs are scored too, sampled.** A system that only scores trades it took
   cannot discover that it is systematically too cautious — or that its `enter`
-  scores are noise. Every HOLD is eligible, but only a **25% stratified sample**
-  (stratified by regime, so the set is not dominated by whichever regime happens
-  to produce the most HOLDs) is actually resolved and scored — full enumeration
+  scores are noise. Every HOLD is eligible, but only a deterministically
+  sampled 25% (CAL2) is actually resolved and scored — full enumeration
   would let the quietest regime swamp the calibration set with cheap, easy-to-score
   cases and bias the whole metric toward "calibrated when nothing is happening."
-  The sampling rate is logged per row so the harness can reweight if the realized
+  Inclusion rule (frozen): `sha256(context_hash ‖ regime) mod 4 == 0`;
+  every HOLD row logs `sampling_probability=0.25`, its stratum, and
+  included/excluded; aggregate calibration over sampled HOLDs uses
+  inverse-probability weighting (weight 4.0). The sampling rate is logged per row so the harness can reweight if the realized
   mix drifts. Counterfactual resolution uses the frozen snapshot price and the
   same stop/TP rules, marked `counterfactual=true`, and is never mixed into PnL.
 - Metrics: **Brier score**, **log-loss**, and a 10-bin **reliability curve** per
-  question, over trailing 200 and 1000 decisions.
+  question, over trailing 200 and 1000 decisions. Per-answer metric mapping
+  (CAL4/CAL5, locked): `enter`/`latent_risk` (probabilities) → Brier +
+  log-loss + reliability; `edge_family` (categorical) → multiclass log-loss
+  + one-vs-rest Brier, accuracy descriptive-only; `conviction` (ordinal
+  flat/lean/strong/max) → realized-R-bucket rank correlation (Somers' D)
+  plus per-level hit-rate tables — never treated as a probability forecast.
 - **Baseline: the point-in-time base-rate predictor** — at each prediction
   timestamp, the observed base rate of the outcome using only information
   available *before* t. Never a rolling window that includes future outcomes
@@ -120,6 +132,13 @@ A challenger may be proposed for promotion only when **all** of the following ho
 5. **Beats the champion on the primary metric and does not lose on the guardrails**:
    primary = risk-adjusted return net of all costs; guardrails = max drawdown,
    trade count (over-trading check), calibration (Brier), and R-rule proximity.
+   Primary metric frozen (CAL7): net Sharpe (all-in costs incl. AI share) with
+   a 95% stationary-bootstrap CI, minimum 100 closed trades, Lo–MacKinlay
+   heteroskedasticity-consistent variance; ties break toward the champion;
+   any window cherry-picking (start/end chosen after seeing results) voids
+   the run. Search correction (CAL8): Holm step-down over the family's tested
+   variants at α=0.05 on the primary metric — the declared variant count from
+   step 4 sets the multiplicity, no post-hoc discounting.
 6. **A non-LLM baseline is beaten.** The challenger must beat the frozen
    statistical baseline (doc 12: exact universe, features, entries, exits,
    costs — indicators + regime + risk table, no JEV, no research plane) on the

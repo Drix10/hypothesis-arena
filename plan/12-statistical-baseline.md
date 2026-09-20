@@ -8,8 +8,12 @@ scored against this exact specification on the same window.
 ## 12.1 Universe
 
 - Forex majors: EURUSD, USDJPY, GBPUSD, USDCHF, AUDUSD, USDCAD (6).
-- US stocks: deterministic scan (doc 04 universe service) filtered to S&P-500
-  constituents with median daily dollar volume > $50M and spread ≤ 5bp at entry.
+- US stocks: deterministic scan (doc 04 universe service) filtered to
+  POINT-IN-TIME S&P-500 constituents (BASE1): membership, delistings, IPO
+  age, liquidity, and corporate actions are all evaluated as-of the entry
+  timestamp from versioned constituent records — today's membership applied
+  to history is survivorship bias and voids the run. Filter: median daily
+  dollar volume > $50M and spread ≤ 5bp at entry, point-in-time.
 - No crypto, no OTC, no IPOs younger than 1 year, no symbols with pending
   corporate actions.
 
@@ -18,12 +22,18 @@ scored against this exact specification on the same window.
 RSI(14), z-score(20, 2σ), ATR(14), 20/50 trend filter, session flag, realized
 1h-vol bucket. Regime = trend/range/volatile from ADX(14) + vol bucket with
 frozen cutoffs (ADX>25 trend, else range unless vol bucket high → volatile).
-Nothing else. No research plane, no JEV, no text.
+Vol bucket construction (BASE3, frozen): 1 h log-return stdev, trailing 24
+bars, NYSE-session bars for equities (09:30–16:00 America/New_York), 24/5
+bars for FX; cutoffs low < 0.5× / high > 2× the trailing-480-bar median;
+warmup 480 bars before the first bucketed decision; missing bars skipped,
+never filled. Nothing else. No research plane, no JEV, no text.
 
 ## 12.3 Entries
 
 - Mean reversion (range regime only): |z| > 2 → toward mean.
-- Momentum (trend regime only): 20>50 and RSI(14) confirms direction → with trend.
+- Momentum (trend regime only): 20>50 and RSI(14) confirms direction → with
+  trend. Confirmation frozen (BASE2): long requires RSI(14) > 50, short
+  requires RSI(14) < 50.
 - Macro regime (volatile): no entries. One rule for both asset classes.
 - Max 3 positions, R1–R9 all apply (the baseline obeys the same risk table).
 
@@ -35,7 +45,8 @@ Nothing else. No research plane, no JEV, no text.
 
 ## 12.5 Costs and labels
 
-- Paper fill model (doc 06 Locked): mid + 1 spread adverse, min 1bp, full size,
+- Paper fill model (doc 06 Locked): BUY at mid + one full spread adverse,
+  SELL at mid − one full spread adverse (BASE4), min 1bp, full size,
   simulated. Cost stress at 1×/1.5×/2×/3× spread + fee — the baseline must be
   reported at all four; a challenger beats the baseline only if it beats it at
   2× too (robustness, not optimism).

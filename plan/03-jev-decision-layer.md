@@ -57,7 +57,8 @@ deterministic veto (C++ risk/: any R-breach, session closed,
 latent_risk.noul > 0.5       → HOLD (additive hidden-risk veto)
 disagreement == true          → HOLD (R14: opposite TRIGGER effects, §3.4)
 event blackout active         → HOLD (C++-computed from impact+phase, §3.4)
-calibration.vs_baseline == worse → HOLD (in-band belt to R13 suspenders)
+calibration_gate == breach      → HOLD (deterministic R13 breach;
+  comparison alone never holds — see calibration semantics below)
 enter.noul < 0.5              → HOLD (no edge)
 enter 0.5–0.8 + (edge_family == execution
   OR conviction < strong)     → HOLD (mid-band needs strong directional)
@@ -86,7 +87,7 @@ them that way:
    the deterministic risk engine on independently validated conditions —
    conviction never authorizes size, including here. Engine conditions (all
    observed/logged, none a model output except E/L as bounded inputs):
-   enter ≥ 0.8 AND latent_risk ≤ 0.3 AND calibration ≠ worse AND
+   enter ≥ 0.8 AND latent_risk ≤ 0.3 AND calibration_gate ≠ breach AND
    edge_family ≠ execution AND conviction == max (necessary nominating input,
    not authority) AND no R6 vol trip AND exposure headroom under R2 AND no
    pending-risk breach. Any condition unmet → base budget (max downgrades
@@ -102,7 +103,7 @@ Size = min(steps 2–6). Conviction never appears in this hierarchy except
 through the max-gate, which is necessary but not sufficient:
 
 - max-gate (nomination only): `enter ≥ 0.8` AND `latent_risk ≤ 0.3` AND
-  `calibration ≠ worse` AND `edge_family ≠ execution` AND `conviction == max`
+  `calibration_gate ≠ breach` AND `edge_family ≠ execution` AND `conviction == max`
   → the engine evaluates its independent conditions (step 1) for a 2×R grant.
   Conviction max is necessary but confers zero authority.
 - Anything else at `max` downgrades to strong (base budget).
@@ -142,7 +143,9 @@ critique-node reading only. Schema validation proves shape, not truth (doc 08
   "disagreement": false,
   "event_window": {"blackout": false, "impact": "none|low|medium|high|binary",
                      "phase": "none|pre|blackout|post"},
-  "calibration": {"enter_brier_200": 0.0, "vs_baseline": "better|equal|worse"},
+  "calibration": {"enter_brier_200": 0.0,
+    "vs_baseline": "better|equal|worse|insufficient",
+    "gate": "pass|insufficient|breach"},
   "stage": "G0_PAPER|G1_TINY|G2_SCALED|G3_FULL",
   "research_revision": "epoch/bundle id",
   "risk_flags": {"deterministic_veto": false, "var_breach": false, "corr_breach": false}
@@ -207,8 +210,12 @@ fingerprint instead:
   An untagged call is a build failure. Failed provider attempts are logged
   with `usd: unknown` — an explicitly unattributed attempt, never silent zero.
 - Every answer is scored against realized outcomes, HOLDs included, per doc 11
-  §11.1. Calibration worse than the base-rate baseline over 200 decisions halts
-  entries (R13).
+  §11.1. Calibration semantics (P3.3-E, locked): `vs_baseline`
+  (better|equal|worse|insufficient) is a descriptive comparison;
+  `gate` (pass|insufficient|breach) is the deterministic control, where
+  breach = worse by more than the 0.02 R13 margin over ≥20 realized outcomes.
+  ONLY `gate == breach` HOLDs entries (and demotes per R13). A bare "worse"
+  comparison never holds by itself.
 - Redaction: logged state rows carry structured evidence only (no raw texts,
   no prose) and never API keys or tokens. Verified by grep before any log
   leaves the machine.
@@ -294,7 +301,7 @@ Notation: E = enter, F = edge_family, C = conviction, L = latent_risk.
 | 23 | .85 | execution | strong | — | HOLD execution family never directs risk |
 | 24 | .93 | macro | max | L=.1, calib better, gate | Elevated budget 2×R |
 | 25 | .93 | macro | max | L=.4 | Downgrade strong (gate needs L≤.3) |
-| 26 | .91 | momentum | max | calib worse | HOLD calibration (row above max) |
+| 26 | .91 | momentum | max | calib breach | HOLD calibration (row above max) |
 | 27 | .86 | mean_reversion | strong | opposite TRIGGER effects | HOLD disagreement |
 | 28 | .89 | momentum | strong | BINARY pre-event blackout | HOLD blackout |
 

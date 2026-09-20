@@ -183,6 +183,22 @@ verification bit-for-bit; a deliberately altered byte fails.
 
 ## 13.3 P3.3 — Canonical C++ representation + deterministic decision table
 
+P3.3 prerequisites (frozen before code starts):
+- Typed `JEVStateV3` + exact serializer matching the frozen sidecar recipe:
+  `state_hash` = SHA-256 over JEV-state canonical bytes ONLY. The broader
+  kernel `Snapshot` keeps its own fixed-point `context_hash` (doc 04).
+  Never redefine `state_hash` as the Snapshot hash — two contracts, two
+  names, no conflation.
+- `KernelState`: immutable execution universe + per-symbol last-accepted
+  epoch, kernel-owned. The validator receives a read-only kernel context,
+  not caller-supplied `allowed_symbols`/`previous_epoch`.
+- Malformed `feature_id` (missing/non-string) → `state-shape` HOLD; no `"?"`
+  fabrication in `ComputeDecisionKey`.
+- Timestamps as `int64_t` epoch-microseconds internally (wire format stays
+  frozen P3.2); freshness arithmetic becomes integer operations.
+- `calibration_gate` (pass|insufficient|breach) per doc 03; only breach holds.
+
+Scope (narrow):
 - Typed `JEVAnswerSetV3` struct: no optional-in-practice fields, no raw JSON
   carried forward. Construction is only possible through the §13.1 validator
   (private constructor / factory returning `HOLD` reason on failure).

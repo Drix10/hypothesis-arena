@@ -12,7 +12,7 @@
   [![JEV](https://img.shields.io/badge/JEV-v3_calibrated-7B2CBF)](./plan/03-jev-decision-layer.md)
   [![Stage](https://img.shields.io/badge/Capital-G0_PAPER_only-00D4AA)](./plan/10-capital-gates-and-spend-control.md)
 
-  **Status: Phase 0 closed (freeze v2, signed). P1.3 frozen (19 checks green). P1.4 soak running.**
+  **Status: Phase 0 closed (freeze v2, signed). P1.3/P1.4/P1.5 + Phase 2 done. P3.1 ACCEPTED/FROZEN (102/102 + 20k fuzz). P3.2 ACCEPTED/FROZEN (37/37 interop). P3.3 NOT AUTHORIZED.**
 
 </div>
 
