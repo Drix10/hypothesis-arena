@@ -96,6 +96,15 @@ def mutated(name, fn, resign=True):
     w(name, art)
 
 
+def mutated_payload_noresign(name, fn):
+    # mutate the payload inside a signed artifact WITHOUT re-signing:
+    # the payload is tampered, the signature is stale (crypto must fail
+    # downstream of whatever schema check the mutation targets).
+    art = json.loads(json.dumps(valid))
+    fn(art["payload"])
+    w(name, art)
+
+
 M = lambda f: (lambda p: f(p))  # noqa
 
 # top-level shape (no resign: structural failure precedes crypto)
@@ -124,8 +133,8 @@ mutated("bad_epoch_neg.json",
         lambda p: p.update({"snapshot_epoch": -1}))
 mutated("bad_statehash_shape.json",
         lambda p: p.update({"state_hash": "xyz"}))
-mutated("bad_created.json",
-        lambda p: p.update({"created_at": "yesterday"}))
+mutated_payload_noresign("bad_created.json",
+                         lambda p: p.update({"created_at": "yesterday"}))
 mutated("bad_expires_window.json",
         lambda p: p.update({"expires_at": p["expires_at"] + 120.0}))
 # answers (resigned)
@@ -152,8 +161,41 @@ art = json.loads(json.dumps(valid))
 s = art["signature"]
 art["signature"] = ("0" if s[0] != "0" else "1") + s[1:]
 w("bad_sig.json", art)
+# binding: decision_key replaced, artifact re-signed -> recompute must catch
+mutated("bad_dkey.json",
+        lambda p: p.update({"decision_key": "0" * 64}))
+# answers: latent out of range (re-signed)
+mutated("bad_latent_range.json",
+        lambda p: p["answers"]["latent_risk"].update({"noul": 1.5}))
+# answers: probabilities with a foreign key (re-signed)
+mutated("bad_prob_key.json",
+        lambda p: p["answers"]["edge_family"].update(
+            {"probabilities": {"vibes": 0.5}}))
+# confidence quarantine: huge finite confidence must still validate ...
+mutated("conf_huge.json",
+        lambda p: p["answers"]["edge_family"].update({"confidence": 1e9}))
+# ... but a non-numeric confidence is a structural failure
+mutated("conf_bool.json",
+        lambda p: p["answers"]["edge_family"].update({"confidence": True}))
+# timestamps: impossible calendar date / leap second (payload tampered,
+# signature stale: created-at check precedes crypto)
+mutated_payload_noresign("bad_date_feb31.json",
+                         lambda p: p.update(
+                             {"created_at": "2026-02-31T00:00:00+00:00"}))
+mutated_payload_noresign("bad_leap60.json",
+                         lambda p: p.update(
+                             {"created_at": "2026-01-01T00:00:60+00:00"}))
 # pubkey mutation must NOT affect trust
 art = json.loads(json.dumps(valid))
 art["pubkey"] = "00" * 32
 w("pubkey_mutated.json", art)
+
+# Float edge sweep (REPORT-ONLY evidence for P3.2; not a contract).
+# C++ CanonDouble must reproduce these Python json.dumps outputs byte-for-byte.
+edges = [1e16, 1e-5, 0.1 + 0.2, 1e21, 123456789.0, 2.5e-7, 100000.0, 0.0,
+         -0.0, 3.141592653589793, 1.7976931348623157e308, 5e-324,
+         2.2250738585072014e-308, 100.0, 0.5]
+with io.open(os.path.join(FIX, "float_edges.txt"), "w") as f:
+    for v in edges:
+        f.write(repr(v) + " -> " + json.dumps(v) + "\n")
 print("done")

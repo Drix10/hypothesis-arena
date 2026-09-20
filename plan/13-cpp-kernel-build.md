@@ -46,7 +46,11 @@ cryptographic validity =/= semantic validity =/= decision authorization
 Independent enforcement, in this order (fail-closed, first failure wins, HOLD
 with a named reason):
 
-1. JSON/object structure (parseable, top-level object).
+1. JSON/object structure (parseable, top-level object). Resource bounds are
+   part of this check and frozen: raw JSON <= 64 KiB (rejected before any
+   allocation), strings <= 1024 chars, objects/arrays <= 64 members/elements,
+   numeric tokens <= 64 bytes, nesting <= 64 deep. Duplicate object member
+   names rejected at parse (cryptographic boundary: no find()-first-wins).
 2. Exact top-level schema (no missing, no extra fields).
 3. `schema_version` pin.
 4. `question_set_version == v3`.
@@ -54,7 +58,10 @@ with a named reason):
 6. `revision` pin (`typesafe/jev-1.13-20260917`).
 7. `provider` pin (`TypeSafe`).
 8. `symbol` present and in the exec universe (<= 5, doc 04).
-9. `snapshot_epoch` integer, non-negative, monotonic per symbol.
+9. `snapshot_epoch` integer, non-negative, strictly monotonic per symbol:
+   `epoch > previous accepted epoch` for that symbol (first artifact: any
+   non-negative). Enforced in LIVE and REPLAY alike against the kernel-owned
+   predecessor (replay callers supply the recorded predecessor).
 10. `state_hash` well-formed (64 hex).
 11. `decision_key` well-formed (64 hex).
 12. `created_at` well-formed timestamp.
@@ -63,17 +70,28 @@ with a named reason):
 15. Exactly four answers (`enter`, `edge_family`, `conviction`, `latent_risk`).
 16. Answer types/enums/ranges: `noul` finite real in [0,1] (bool rejected —
     C++ `bool`/`int` must not implicitly satisfy a double field), family enum,
-    conviction enum. `confidence`, if present, validated against its own
-    contract (see 13.4); if absent, treated as unknown, never defaulted.
+    conviction enum, `probabilities` bounded to the four family keys (<= 4
+    entries, each in [0,1], never authorization). `confidence`, if present,
+    must be a JSON number (structural integrity only); P3.1 applies §13.4(b)
+    quarantine: it is never stored in and never readable from the
+    decision-facing object (no accessor exists). If absent, unknown, never
+    defaulted.
 17. `response_hash` recomputation over canonical bytes (see 13.2) — mismatch
     -> HOLD.
 18. Ed25519 signature verification (see 13.2) — failure -> HOLD.
 19. Signature-key trust: pubkey must equal the pinned sidecar key (no
     self-attested keys; the artifact's `pubkey` field, if carried, is
     informational only and never trusted).
-20. Live expiry: `now <= expires_at`, else HOLD (LIVE mode only).
+20. Live expiry: `now <= expires_at`, else HOLD (LIVE mode only). Frozen
+    clock-skew allowance: `created_at <= now + 300 s`, else HOLD
+    (`not-yet-valid`); boundary tested at created-299 (accept) / created-301
+    (HOLD). Timestamps strictly validated (real calendar incl. leap years,
+    seconds 00-59, years 1970-2100).
 21. State binding: `state_hash` and `decision_key` recomputed from the kernel's
     own canonical snapshot must equal the artifact's values, else HOLD.
+    `decision_key` is recomputed field-for-field from the parsed snapshot
+    (frozen sidecar recipe, cross-checked on 300 randomized states); no
+    trusted-string comparison exists on this path.
 
 Two validation modes, selected explicitly at the call site:
 
@@ -182,6 +200,21 @@ Exit: §4.5, §6.5 drill boxes checked.
       oracle Ed25519 vectors); LIVE vs REPLAY expiry; artifact key ignored
       for trust; build.sh grep-gate enforces no raw-JSON downstream.
       Sidecar untouched. P3.2 NOT started (separate boundary).
+- [x] P3.1 CORRECTION PASS (deep review, 17 findings -> all closed):
+      epoch strictly monotonic vs kernel-owned predecessor (LIVE+REPLAY);
+      decision_key recomputed field-for-field in-kernel (0 mismatches on
+      300 randomized sidecar states); exec-universe membership enforced;
+      confidence quarantined per §13.4(b) (no accessor exists, grep-gated);
+      RFC 8032 decode (canonical-y, x=0/sign reject, post-sqrtm1 re-check);
+      resource bounds (64 KiB raw, member/string/array/number caps);
+      duplicate keys rejected at parse; strict calendar timestamps, frozen
+      300 s skew rule; checked numeric parsing (no atoll); thread-safe
+      crypto init; Python-repr float formatting (all float_edges byte-equal,
+      incl. subnormals); Ed25519 adversarial unit vectors (zero/S=L/
+      noncanonical/x0-sign/malformed-key); 96 checks + 20k-iter deterministic
+      fuzz clean in normal AND hardened (libstdc++-debug) builds; sanitizer
+      runtimes unavailable on this MinGW toolchain (documented in build.sh).
+      Sidecar still byte-identical. P3.2 still NOT started.
 - [ ] P3.2 cross-language vector green (byte-equal canonical, hash, verify).
 - [ ] P3.3 table tests + replay determinism green.
 - [ ] §13.4 resolved to (a) with contract or (b) quarantined.

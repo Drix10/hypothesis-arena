@@ -147,6 +147,12 @@ struct JParse {
     const char* end;
     int depth = 0;
     std::string err;
+    // Resource bounds: artifacts are tiny; fail closed before big allocation.
+    static constexpr size_t MAX_STR = 1024;   // string characters
+    static constexpr size_t MAX_MEMB = 64;    // object members
+    static constexpr size_t MAX_ARR = 64;     // array elements
+    static constexpr size_t MAX_NUM = 64;     // numeric token bytes
+    static constexpr size_t MAX_RAW = 65536;  // raw JSON bytes (checked first)
     JParse(const std::string& s) : p(s.data()), end(s.data() + s.size()) {}
     void ws() {
         while (p < end && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
@@ -178,12 +184,14 @@ struct JParse {
             if (c == '\\') {
                 if (p >= end) { err = "bad-string"; return false; }
                 char e = *p++;
-                if (e == '"' || e == '\\' || e == '/') out += char32_t(e);
-                else if (e == 'b') out += char32_t(8);
-                else if (e == 'f') out += char32_t(12);
-                else if (e == 'n') out += char32_t(10);
-                else if (e == 'r') out += char32_t(13);
-                else if (e == 't') out += char32_t(9);
+                if (e == '"' || e == '\\' || e == '/') {
+                    if (out.size() >= MAX_STR) { err = "too-long-string"; return false; }
+                    out += char32_t(e);
+                }
+                else if (e == 'b' || e == 'f' || e == 'n' || e == 'r' || e == 't') {
+                    if (out.size() >= MAX_STR) { err = "too-long-string"; return false; }
+                    out += char32_t(e == 'b' ? 8 : e == 'f' ? 12 : e == 'n' ? 10 : e == 'r' ? 13 : 9);
+                }
                 else if (e == 'u') {
                     uint32_t cp;
                     if (!hex4(cp)) { err = "bad-escape"; return false; }
@@ -198,10 +206,14 @@ struct JParse {
                         }
                         cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
                     }
+                    if (out.size() >= MAX_STR) { err = "too-long-string"; return false; }
                     out += char32_t(cp);
                 } else { err = "bad-escape"; return false; }
             } else if ((uint8_t)c < 0x20) { err = "bad-string"; return false; }
-            else if ((uint8_t)c < 0x80) { out += char32_t(c); }
+            else if ((uint8_t)c < 0x80) {
+                if (out.size() >= MAX_STR) { err = "too-long-string"; return false; }
+                out += char32_t(c);
+            }
             else { err = "bad-utf8-raw"; return false; }
         }
     }
@@ -225,6 +237,7 @@ struct JParse {
             if (p >= end || *p < '0' || *p > '9') { err = "bad-number"; return false; }
             while (p < end && *p >= '0' && *p <= '9') p++;
         }
+        if (size_t(p - s) > MAX_NUM) { err = "too-long-number"; return false; }
         out.t = JVal::T::NUM; out.num = std::string(s, p); out.num_double = isd;
         if (isd) {
             char* e = nullptr;
@@ -247,8 +260,14 @@ struct JParse {
             if (p < end && *p == '}') { p++; }
             else while (true) {
                 ws();
+                if (out.o.size() >= MAX_MEMB) {
+                    err = "too-many-members"; ok = false; break;
+                }
                 std::u32string k;
                 if (!str(k)) { ok = false; break; }
+                for (auto& kv : out.o)
+                    if (kv.first == k) { err = "duplicate-keys"; ok = false; break; }
+                if (!ok) break;
                 ws();
                 if (p >= end || *p != ':') { err = "bad-object"; ok = false; break; }
                 p++;
@@ -266,6 +285,9 @@ struct JParse {
             ws();
             if (p < end && *p == ']') { p++; }
             else while (true) {
+                if (out.a.size() >= MAX_ARR) {
+                    err = "too-many-elements"; ok = false; break;
+                }
                 JVal v;
                 if (!val(v)) { ok = false; break; }
                 out.a.push_back(std::move(v));
@@ -294,15 +316,66 @@ inline bool ParseJson(const std::string& s, JVal& out, std::string& err) {
     if (j.p != j.end) { err = "trailing"; return false; }
     return true;
 }
-// ---- canonical JSON: sorted keys, compact separators, Python float style ----
-inline std::string CanonDouble(double d) {
+// ---- canonical JSON (P3.1-INTERNAL, NOT the frozen P3.2 contract) ----
+// Used for response_hash recompute + signature message. Byte-equality with
+// the sidecar is demonstrated per-fixture (valid passes, tampered fails),
+// NOT proven in general: float formatting edge cases are P3.2's job.
+// Do not cite this serializer as cross-language canonical until P3.2.
+// Python repr()-compatible double formatting (needed NOW: response_hash and
+// decision_key must reproduce sidecar bytes for ordinary magnitudes; the
+// full cross-language contract + committed vector is still P3.2's job).
+// Rule: shortest digits (to_chars), scientific iff decimal exponent < -4
+// or >= 16, else positional; integral values carry ".0".
+inline std::string PyFloatRepr(double d) {
     char b[32];
     auto r = std::to_chars(b, b + sizeof(b), d);
     std::string s(b, r.ptr);
-    if (s.find('.') == std::string::npos && s.find('e') == std::string::npos)
-        s += ".0";
-    return s;
+    size_t epos = s.find('e');
+    if (epos == std::string::npos) {
+        if (s.find('.') == std::string::npos) s += ".0";
+        return s;
+    }
+    bool neg = !s.empty() && s[0] == '-';
+    size_t ds = neg ? 1 : 0;
+    std::string digits;
+    for (size_t i = ds; i < epos; i++)
+        if (s[i] != '.') digits += s[i];
+    int E = 0;
+    {
+        // bounded compiler-generated text, never attacker input
+        bool eneg = s[epos + 1] == '-';
+        for (size_t i = epos + 2; i < s.size(); i++) E = E * 10 + (s[i] - '0');
+        if (eneg) E = -E;
+    }
+    std::string out = neg ? "-" : "";
+    if (E < -4 || E >= 16) {
+        out += digits[0];
+        if (digits.size() > 1) {
+            out += '.';
+            out += digits.substr(1);
+        }
+        out += 'e';
+        int ae = E < 0 ? -E : E;
+        out += E < 0 ? '-' : '+';
+        if (ae < 10) out += '0';
+        out += std::to_string(ae);
+        return out;
+    }
+    if (E >= 0) {
+        std::string ip = digits.substr(0, (size_t)E + 1);
+        std::string fp =
+            digits.size() > (size_t)E + 1 ? digits.substr((size_t)E + 1) : "";
+        while (ip.size() < (size_t)E + 1) ip += '0';
+        out += ip;
+        out += fp.empty() ? ".0" : "." + fp;
+        return out;
+    }
+    out += "0.";
+    for (int i = 0; i < -E - 1; i++) out += '0';
+    out += digits;
+    return out;
 }
+inline std::string CanonDouble(double d) { return PyFloatRepr(d); }
 inline std::string CanonInt(const std::string& tok) {
     size_t i = 0; bool neg = false;
     if (i < tok.size() && (tok[i] == '-' || tok[i] == '+')) {
@@ -571,10 +644,9 @@ inline void FtoLE(const F& f, uint8_t b[32]) {
     }
 }
 // d = -121665 * inv(121666)
-inline F EdD() {
-    static bool init = false;
-    static F d;
-    if (!init) {
+inline const F& EdD() {
+    // Function-local static: thread-safe initialization (C++11).
+    static const F d = [] {
         F n, e;
         n.l[0] = 121665;
         e.l[0] = 121666;
@@ -588,9 +660,8 @@ inline F EdD() {
             if (bit) inv = Fmul(inv, base);
         }
         (void)n;
-        d = Fsub(F::zero(), Fmul(n, inv));
-        init = true;
-    }
+        return Fsub(F::zero(), Fmul(n, inv));
+    }();
     return d;
 }
 inline Pt PtAdd(const Pt& p, const Pt& q, const F& d) {
@@ -620,10 +691,10 @@ inline void ScalarBitsLE(const uint8_t s[32], bool bits[256]) {
     for (int i = 0; i < 32; i++)
         for (int k = 0; k < 8; k++) bits[i * 8 + k] = (s[i] >> k) & 1;
 }
-inline Pt BasePoint() {
-    static bool init = false;
-    static Pt b;
-    if (!init) {
+inline const Pt& BasePoint() {
+    // Function-local static: thread-safe initialization (C++11).
+    static const Pt b = [] {
+        Pt b;
         // Bx, By true values (oracle-proven via Python sidecar vectors)
         const uint8_t xb[32] = {0x1a, 0xd5, 0x25, 0x8f, 0x60, 0x2d, 0x56, 0xc9,
                                 0xb2, 0xa7, 0x25, 0x95, 0x60, 0xc7, 0x2c, 0x69,
@@ -635,21 +706,39 @@ inline Pt BasePoint() {
                                 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66};
         b.X = FfromLE(xb); b.Y = FfromLE(yb);
         b.Z = F::one(); b.T = Fmul(b.X, b.Y);
-        init = true;
-    }
+        return b;
+    }();
     return b;
 }
-// decode compressed point; false on invalid (y>=p, x nonsquare, parity mismatch handled)
+// decode compressed point per RFC 8032 §5.1.3: canonical y, x^2 == target
+// re-checked after the sqrt(-1) adjustment, x==0 with sign bit rejected.
 inline bool PtDecode(const uint8_t enc[32], Pt& out) {
     uint8_t cp[32];
     memcpy(cp, enc, 32);
     int sign = (cp[31] >> 7) & 1;
     cp[31] &= 0x7F;
     F y = FfromLE(cp);
-    // reject y >= p: re-encode check
-    uint8_t back[32];
-    FtoLE(y, back);
-    if (memcmp(back, cp, 32) != 0) return false;
+    // reject y >= p (FfromLE loads raw limbs, so compare explicitly)
+    {
+        static const uint8_t P[32] = {
+            0xED, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F};
+        bool ge = true;
+        for (int i = 31; i >= 0; i--) {
+            if (cp[i] < P[i]) {
+                ge = false;
+                break;
+            }
+            if (cp[i] > P[i]) break;
+        }
+        if (ge) return false;
+    }
+    // reject x == 0 with sign bit set (y == 0 here iff x == 0)
+    bool yzero = true;
+    for (int i = 0; i < 32; i++)
+        if (cp[i] != 0) yzero = false;
+    if (yzero && sign) return false;
     F d = EdD();
     F y2 = Fmul(y, y);
     F u = Fsub(y2, F::one());
@@ -686,6 +775,11 @@ inline bool PtDecode(const uint8_t enc[32], Pt& out) {
             if (bit) s = Fmul(s, two);
         }
         e = Fmul(e, s);
+        // RFC 8032: if x^2 still != target after adjustment, decoding FAILS.
+        F x2b = Fmul(e, e);
+        F diffb = Fsub(x2b, x);
+        for (int i = 0; i < 8; i++)
+            if (diffb.l[i] != 0) return false;
     }
     if ((e.l[0] & 1u) != (uint32_t)sign) e = Fsub(F::zero(), e);
     out.X = e; out.Y = y; out.Z = F::one(); out.T = Fmul(e, y);
@@ -838,8 +932,19 @@ inline bool ParseIso8601(const std::u32string& in, double& out) {
         return false;
     }
     if (p != s.size()) return false;
-    if (M < 1 || M > 12 || D < 1 || D > 31 || h > 23 || mi > 59 || se > 60)
-        return false;
+    if (M < 1 || M > 12 || h > 23 || mi > 59 || se > 59) return false;
+    // strict calendar: real month lengths incl. leap years; no leap seconds.
+    {
+        int dim = 31;
+        if (M == 4 || M == 6 || M == 9 || M == 11) dim = 30;
+        else if (M == 2) {
+            bool leap = (Y % 4 == 0 && Y % 100 != 0) || (Y % 400 == 0);
+            dim = leap ? 29 : 28;
+        }
+        if (D < 1 || D > dim) return false;
+    }
+    // contractually constrained year range for a signed expiry boundary
+    if (Y < 1970 || Y > 2100) return false;
     out = (double)DaysFromCivil(Y, M, D) * 86400.0 + h * 3600 + mi * 60 + se +
           frac - off;
     return true;
@@ -861,9 +966,10 @@ class ValidatedJEVAnswerSetV3 {
     double latent_risk() const { return latent_; }
     EdgeFamily family() const { return family_; }
     Conviction conviction() const { return conviction_; }
-    bool has_confidence() const { return has_conf_; }
-    double confidence() const { return conf_; }
     const std::string& response_hash() const { return response_hash_; }
+    // NOTE: no confidence accessor. P3.4 default is (b) quarantine: confidence
+    // is structurally validated for artifact compatibility but never stored
+    // in, and never readable from, the decision-facing object.
 
    private:
     ValidatedJEVAnswerSetV3() = default;
@@ -872,8 +978,6 @@ class ValidatedJEVAnswerSetV3 {
     double created_ = 0, expires_ = 0, enter_ = 0, latent_ = 0;
     EdgeFamily family_ = EdgeFamily::MACRO;
     Conviction conviction_ = Conviction::FLAT;
-    bool has_conf_ = false;
-    double conf_ = 0;
     friend struct ValidationResult;
     friend ValidationResult validate_jev(const ValidationRequest&);
 };
@@ -882,17 +986,25 @@ struct ValidationRequest {
     std::string raw_json;
     std::array<uint8_t, 32> trusted_key;
     std::string state_canon_json;     // kernel-owned canonical snapshot bytes
-    std::string expected_decision_key;  // hex, from snapshot owner (P3.3: typed)
+    std::vector<std::string> allowed_symbols;  // kernel-owned exec universe
+    bool has_previous_epoch = false;  // kernel-owned last accepted epoch
+    int64_t previous_epoch = 0;       // (per symbol; unset = first artifact)
     double now_unix = 0;              // live clock; ignored in REPLAY
     Mode mode = Mode::LIVE;
 };
 struct ValidationResult {
-    bool ok = false;
-    std::string reason;  // "ok" or HOLD reason
-    ValidatedJEVAnswerSetV3 value;
+    // The validated object exists ONLY on success: get() is null on HOLD.
+    bool ok() const { return ok_; }
+    const std::string& reason() const { return reason_; }  // "ok" or HOLD
+    const ValidatedJEVAnswerSetV3* get() const {
+        return ok_ ? &value_ : nullptr;
+    }
 
    private:
     ValidationResult() = default;
+    bool ok_ = false;
+    std::string reason_;
+    ValidatedJEVAnswerSetV3 value_;
     friend ValidationResult validate_jev(const ValidationRequest&);
 };
 
@@ -917,17 +1029,103 @@ inline std::string U32ToUtf8(const std::u32string& s) {
     return out;
 }
 
+// Python str() mirror for decision-key parts (frozen sidecar semantics):
+// str->itself, int->decimal, float->shortest repr, bool->True/False,
+// null->None, missing->"?". Composites use canonical JSON (documented
+// deviation: the sidecar never emits composite parts, so any divergence
+// fails closed at the decision-binding comparison).
+inline std::string PyStr(const JVal& v) {
+    switch (v.t) {
+        case JVal::T::STR:
+            return U32ToUtf8(v.s);
+        case JVal::T::NUM:
+            if (v.num_double) return CanonDouble(v.dval);
+            if (v.num.size() > 1 && v.num[0] == '-') {
+                bool allz = true;
+                for (size_t i = 1; i < v.num.size(); i++)
+                    if (v.num[i] != '0') allz = false;
+                if (allz) return "0";  // JSON -0 == Python 0
+            }
+            return v.num;
+        case JVal::T::BOOL:
+            return v.b ? "True" : "False";
+        case JVal::T::NUL:
+            return "None";
+        default:
+            return CanonJson(v);
+    }
+}
+inline const JVal* ObjGet(const JVal& o, const char* k) {
+    if (o.t != JVal::T::OBJ) return nullptr;
+    return o.find(U8(k));
+}
+inline std::string ComputeDecisionKey(const JVal& state) {
+    // Mirrors frozen collector/jev.py decision_key() field-for-field.
+    static const JVal EMPTY_OBJ = [] {
+        JVal v;
+        v.t = JVal::T::OBJ;
+        return v;
+    }();
+    const JVal* ind = ObjGet(state, "indicators");
+    const JVal* pf = ObjGet(state, "portfolio");
+    const JVal* ew = ObjGet(state, "event_window");
+    if (!ind) ind = &EMPTY_OBJ;
+    if (!pf) pf = &EMPTY_OBJ;
+    if (!ew) ew = &EMPTY_OBJ;
+    auto part = [&](const JVal* o, const char* k) -> std::string {
+        const JVal* v = ObjGet(*o, k);
+        return v ? PyStr(*v) : "?";
+    };
+    // feature_revision = sha256_hex(",".join(sorted ids, non-dicts skipped))
+    std::string frev;
+    {
+        std::vector<std::string> ids;
+        const JVal* feats = ObjGet(state, "features");
+        if (feats && feats->t == JVal::T::ARR) {
+            for (auto& f : feats->a) {
+                if (f.t != JVal::T::OBJ) continue;  // sidecar skips non-dicts
+                const JVal* id = ObjGet(f, "feature_id");
+                if (!id || id->t != JVal::T::STR)
+                    ids.push_back("?");
+                else
+                    ids.push_back(U32ToUtf8(id->s));
+            }
+        }
+        std::sort(ids.begin(), ids.end());
+        std::string joined;
+        for (size_t i = 0; i < ids.size(); i++) {
+            if (i) joined += ",";
+            joined += ids[i];
+        }
+        frev = Sha256Hex(joined);
+    }
+    std::string parts =
+        part(&state, "symbol") + "|" + part(&state, "snapshot_epoch") + "|" +
+        part(ind, "price_return_bucket") + "|" + part(&state, "spread_bps") +
+        "|" + part(ind, "atr_bucket") + "|" + part(ind, "zscore") + "|" +
+        part(ind, "regime") + "|" + part(ew, "phase") + "|" +
+        part(pf, "exposure_pct") + "|" + frev + "|" +
+        part(&state, "research_revision") + "|v3";
+    return Sha256Hex(parts);
+}
+
 inline ValidationResult validate_jev(const ValidationRequest& q) {
+
     ValidationResult r;
     auto fail = [&](const char* why) -> ValidationResult {
-        r.ok = false;
-        r.reason = why;
+        r.ok_ = false;
+        r.reason_ = why;
         return r;
     };
+    // 1. size bound first: fail closed before any allocation
+    if (q.raw_json.size() > JParse::MAX_RAW) return fail("too-large");
     // 1. parse
     JVal root;
     std::string perr;
-    if (!ParseJson(q.raw_json, root, perr)) return fail("parse-error");
+    if (!ParseJson(q.raw_json, root, perr)) {
+        if (perr == "duplicate-keys") return fail("duplicate-keys");
+        return fail("parse-error");
+    }
     if (root.t != JVal::T::OBJ) return fail("parse-error");
     // 2. exact top-level schema (+ optional informational pubkey, never trusted)
     {
@@ -987,6 +1185,16 @@ inline ValidationResult validate_jev(const ValidationRequest& q) {
         if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' ||
               c == '/'))
             return fail("symbol");
+    // exec-universe membership: kernel-owned set, syntax alone never suffices
+    {
+        bool member = false;
+        for (auto& a : q.allowed_symbols)
+            if (a == symbol) {
+                member = true;
+                break;
+            }
+        if (!member) return fail("symbol-universe");
+    }
     const JVal* ep = payload->find(U8("snapshot_epoch"));
     if (!ep || ep->t != JVal::T::NUM || ep->num_double) return fail("snapshot-epoch");
     int64_t epoch = 0;
@@ -1007,6 +1215,10 @@ inline ValidationResult validate_jev(const ValidationRequest& q) {
         }
         if (neg) return fail("snapshot-epoch");
     }
+    // monotonic per symbol: strictly greater than the last accepted epoch.
+    // (Frozen rule, plan/13 check 9. Applies in LIVE and REPLAY alike.)
+    if (q.has_previous_epoch && !(epoch > q.previous_epoch))
+        return fail("epoch-not-monotonic");
     if (!getstr("state_hash", sth) || !IsHex64(sth)) return fail("state-hash-shape");
     if (!getstr("decision_key", dk) || !IsHex64(dk)) return fail("decision-key-shape");
     const JVal* ca = payload->find(U8("created_at"));
@@ -1015,7 +1227,18 @@ inline ValidationResult validate_jev(const ValidationRequest& q) {
         return fail("created-at");
     const JVal* ea = payload->find(U8("expires_at"));
     if (!ea || ea->t != JVal::T::NUM) return fail("expires-at");
-    double expires = ea->num_double ? ea->dval : (double)atoll(ea->num.c_str());
+    double expires = 0;
+    if (ea->num_double) {
+        expires = ea->dval;  // finite: enforced by the parser
+    } else {
+        // checked integer conversion: no atoll on attacker-controlled input
+        int64_t whole = 0;
+        const char* b = ea->num.c_str();
+        const char* e = b + ea->num.size();
+        auto res = std::from_chars(b, e, whole);
+        if (res.ptr != e || res.ec != std::errc()) return fail("expires-at");
+        expires = (double)whole;
+    }
     if (!(expires == expires) || expires > 1e18 || expires < -1e18)
         return fail("expires-at");
     if (!(expires >= created + 59.999 && expires <= created + 60.001))
@@ -1058,8 +1281,12 @@ inline ValidationResult validate_jev(const ValidationRequest& q) {
     if (!getnoul(e, enter)) return fail("enter-shape");
     if (!getnoul(l, latent)) return fail("latent-shape");
     EdgeFamily fam;
-    double famconf = 0;
-    bool famhasconf = false;
+    // confidence (P3.4/b quarantine): validated for structural integrity only
+    // (must be a JSON number if present), never stored, never exposed.
+    auto checkconf = [&](const JVal* cf) -> bool {
+        if (!cf) return true;
+        return cf->t == JVal::T::NUM && cf->num_double;
+    };
     {
         if (!f || f->t != JVal::T::OBJ) return fail("family-shape");
         // allowed keys: type, choice (+ optional probabilities, confidence)
@@ -1082,8 +1309,14 @@ inline ValidationResult validate_jev(const ValidationRequest& q) {
         else return fail("family-shape");
         const JVal* pr = f->find(U8("probabilities"));
         if (pr) {
-            if (pr->t != JVal::T::OBJ) return fail("family-shape");
+            // Bounded map: at most the four edge families, values in [0,1].
+            // Never used for authorization (P3.1); bounded to deny DoS surface.
+            if (pr->t != JVal::T::OBJ || pr->o.size() > 4) return fail("family-shape");
             for (auto& kv : pr->o) {
+                std::string k = U32ToUtf8(kv.first);
+                if (k != "mean_reversion" && k != "momentum" && k != "macro" &&
+                    k != "execution")
+                    return fail("family-shape");
                 if (kv.second.t != JVal::T::NUM || !kv.second.num_double)
                     return fail("family-shape");
                 double dval = kv.second.dval;
@@ -1092,13 +1325,7 @@ inline ValidationResult validate_jev(const ValidationRequest& q) {
             }
         }
         const JVal* cf = f->find(U8("confidence"));
-        if (cf) {
-            if (cf->t != JVal::T::NUM || !cf->num_double) return fail("family-shape");
-            double dval = cf->dval;
-            if (!(dval == dval)) return fail("family-shape");
-            famconf = dval;
-            famhasconf = true;
-        }
+        if (!checkconf(cf)) return fail("family-shape");
     }
     Conviction conv;
     {
@@ -1120,15 +1347,7 @@ inline ValidationResult validate_jev(const ValidationRequest& q) {
         else if (ss == "max") conv = Conviction::MAX;
         else return fail("conviction-shape");
         const JVal* cf = c->find(U8("confidence"));
-        if (cf) {
-            if (cf->t != JVal::T::NUM || !cf->num_double) return fail("conviction-shape");
-            double dval = cf->dval;
-            if (!(dval == dval)) return fail("conviction-shape");
-            if (!famhasconf) {
-                famconf = dval;
-                famhasconf = true;
-            }
-        }
+        if (!checkconf(cf)) return fail("conviction-shape");
     }
     // 17. response_hash recomputation over canonical payload bytes
     std::string canon = CanonJson(*payload);
@@ -1151,24 +1370,30 @@ inline ValidationResult validate_jev(const ValidationRequest& q) {
         if (!(q.now_unix <= expires)) return fail("expired");
         if (!(created <= q.now_unix + 300.0)) return fail("not-yet-valid");
     }
-    // 21. state binding against kernel-owned bytes
+    // 21. state binding: BOTH keys recomputed from kernel-owned bytes.
+    // state_hash = sha256(canonical snapshot); decision_key recomputed
+    // field-for-field from the parsed snapshot (frozen sidecar recipe).
+    // No trusted-string comparison anywhere on this path.
+    if (q.state_canon_json.size() > JParse::MAX_RAW) return fail("too-large");
+    JVal snap;
+    std::string serr;
+    if (!ParseJson(q.state_canon_json, snap, serr) || snap.t != JVal::T::OBJ)
+        return fail("state-shape");
     if (Sha256Hex(q.state_canon_json) != sth) return fail("state-binding");
-    if (q.expected_decision_key != dk) return fail("decision-binding");
-    r.ok = true;
-    r.reason = "ok";
-    r.value.symbol_ = symbol;
-    r.value.epoch_ = epoch;
-    r.value.state_hash_ = sth;
-    r.value.decision_key_ = dk;
-    r.value.created_ = created;
-    r.value.expires_ = expires;
-    r.value.enter_ = enter;
-    r.value.latent_ = latent;
-    r.value.family_ = fam;
-    r.value.conviction_ = conv;
-    r.value.has_conf_ = famhasconf;
-    r.value.conf_ = famconf;
-    r.value.response_hash_ = rhs;
+    if (ComputeDecisionKey(snap) != dk) return fail("decision-binding");
+    r.ok_ = true;
+    r.reason_ = "ok";
+    r.value_.symbol_ = symbol;
+    r.value_.epoch_ = epoch;
+    r.value_.state_hash_ = sth;
+    r.value_.decision_key_ = dk;
+    r.value_.created_ = created;
+    r.value_.expires_ = expires;
+    r.value_.enter_ = enter;
+    r.value_.latent_ = latent;
+    r.value_.family_ = fam;
+    r.value_.conviction_ = conv;
+    r.value_.response_hash_ = rhs;
     return r;
 }
 
