@@ -104,7 +104,7 @@ check("lineage-mismatch", r["stats"]["reasons"].get("lineage-mismatch") == 1)
 r = run([feat(symbols=["FAKECOIN"])])
 check("entity-unmapped", "entity-unmapped:FAKECOIN" in r["stats"]["reasons"])
 r = run([feat(symbols=["EURUSD"], kind="macro_release",
-              observed_at_ns=IN_SESSION)])
+              source_id="fed_monetary", observed_at_ns=IN_SESSION)])
 check("macro-symbols-pass", r["stats"]["accepted"] == 1)
 
 # 6. frozen feed (N=3 + time cover) vs below threshold
@@ -121,7 +121,8 @@ check("below-frozen-threshold", r["stats"]["accepted"] == 1)
 # 7. session freshness
 r = run([feat(observed_at_ns=OVERNIGHT, ttl_s=86400)])
 check("session-reject", r["stats"]["reasons"].get("session-reject") == 1)
-r = run([feat(observed_at_ns=OVERNIGHT, kind="calendar_ahead", ttl_s=86400)])
+r = run([feat(observed_at_ns=OVERNIGHT, kind="calendar_ahead",
+              source_id="fed_monetary", symbols=["EURUSD"], ttl_s=86400)])
 check("overnight-allowlist", r["stats"]["accepted"] == 1)
 
 # 8. R12 + TTL
@@ -178,9 +179,10 @@ check("entity-contradiction",
 r = run([feat(entity_ref={"cik": "9999999999"})])
 check("entity-ref-unknown", r["stats"]["reasons"].get("entity-ref-unknown") == 1)
 
-# 14. dated history contracts
+# 14. undated history rejected at the bundle boundary (strict entries)
 r = run([feat()], extra={"history": {"edgar_8k": [H1, H1, H1]}})
-check("history-undated", r["stats"]["reasons"].get("history-undated") == 1)
+check("history-undated", "history-shape" in r["stats"]["reasons"]
+      and r["stats"]["accepted"] == 0)
 tight = {"history": {"edgar_8k": [dated(H1, t0), dated(H1, t0 + 60),
                                  dated(H1, t0 + 120)]}}
 r = run([feat()], extra=tight)
@@ -381,5 +383,68 @@ r = run([feat(feature_id="")], name="bxid")
 check("feature-id-shape", "feature-id-shape" in r["stats"]["reasons"])
 r = run([feat(observed_at_ns=2 ** 70)], name="bx5")
 check("observed-range", "observed-range" in r["stats"]["reasons"])
+r = run([feat(observed_at_ns=-1)], name="bx6")
+check("observed-negative", "observed-range" in r["stats"]["reasons"])
+
+# 29. source/kind emission registry: structurally valid but semantically
+# impossible combinations are rejected (kind-no-emitter)
+r = run([feat(kind="macro_release")], name="bk1")
+check("edgar-macro-rejected",
+      r["stats"]["reasons"].get("kind-no-emitter") == 1)
+r = run([feat(kind="sentiment_tail")], name="bk2")
+check("sentiment-no-emitter",
+      r["stats"]["reasons"].get("kind-no-emitter") == 1)
+r = run([feat(kind="regime_hint", source_id="fed_monetary",
+              symbols=["EURUSD"])], name="bk3")
+check("regime-no-emitter",
+      r["stats"]["reasons"].get("kind-no-emitter") == 1)
+r = run([feat(source_id="fed_monetary", symbols=["EURUSD"],
+              kind="macro_release")], name="bk4")
+check("fed-macro-emitter", r["stats"]["accepted"] == 1)
+
+# 30. duplicate JSON members rejected (bundle + nested feature)
+dup_raw = ('{"bundle_id": "dup", "bundle_id": "dup2", '
+           '"commit": true, "schema_version": "f2", '
+           '"research_epoch": 0, "watermarks": {}, "features": []}')
+_pp = os.path.join(TMP, "dup.json")
+open(_pp, "w").write(dup_raw)
+r = read_bundle(_pp, DB, MAP, NOW)
+check("bundle-duplicate-keys",
+      "bundle-duplicate-keys" in r["stats"]["reasons"])
+_fraw = ('{"bundle_id": "dupf", "commit": true, '
+         '"schema_version": "f2", "research_epoch": 0, '
+         '"watermarks": {"entity_map_version": "entity-v1", '
+         '"entity_map_sha256": "%s"}, '
+         '"features": [{"source_id": "edgar_8k", '
+         '"source_id": "fed_monetary"}]}' % MAP_SHA)
+_pp2 = os.path.join(TMP, "dupf.json")
+open(_pp2, "w").write(_fraw)
+r = read_bundle(_pp2, DB, MAP, NOW)
+check("feature-duplicate-keys",
+      "bundle-duplicate-keys" in r["stats"]["reasons"])
+
+# 31. strict bundle envelope: unknown top-level keys rejected
+r = run([feat()], extra={"thesis_text": "smuggled"}, name="benv")
+check("bundle-unknown-field",
+      "bundle-unknown-field:thesis_text" in r["stats"]["reasons"]
+      and r["stats"]["accepted"] == 0)
+
+# 32. feature_id uniqueness within a bundle
+_f1, _f2 = feat(feature_id="same"), feat(feature_id="same")
+r = run([_f1, _f2], name="bdup")
+check("bundle-duplicate-feature-id",
+      "bundle-duplicate-feature-id" in r["stats"]["reasons"]
+      and r["stats"]["accepted"] == 0)
+
+# 33. non-dict features + strict history entries
+r = raw_bundle(features=[[1, 2]])
+check("feature-shape",
+      r["stats"]["reasons"].get("feature-shape") == 1)
+r = run([feat()], extra={"history": {"edgar_8k": [{"h": H1}]}},
+        name="bhist")
+check("history-entry-shape", "history-shape" in r["stats"]["reasons"])
+r = run([feat()], extra={"history": {"edgar_8k": [dated(H1, -5)]}},
+        name="bhist2")
+check("history-negative-ts", "history-shape" in r["stats"]["reasons"])
 
 print("ALL CTX CHECKS PASS")

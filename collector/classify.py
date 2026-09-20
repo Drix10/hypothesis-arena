@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """P1.3 canonical layer: signals.jsonl (event log) -> SQLite (truth) -> classified.jsonl.
 
+Authority: the SQLite DB is the canonical truth. classified.jsonl is a
+DERIVED, rebuildable projection (rerun run() over the same signals file
+reproduces it PK-idempotently); a crash between DB commit and file publish
+loses nothing authoritative.
+
 Deterministic only. No LLM anywhere: TRIGGER eligibility comes from
 source + record type + rule table, never from interpretation. Records that
 need economic interpretation stay CONTEXT with effect_pending until the
@@ -107,6 +112,13 @@ def content_hash(rec):
 
 
 REQUIRED_FIELDS = ("id", "source", "source_id")
+# Canonical record allowlist: every key a collector may author. Unknown keys
+# are schema rejections, never silently carried (provenance smuggling
+# surface). The hash payload (§content_hash) draws from this set.
+KNOWN_FIELDS = frozenset(("id", "source", "source_id", "title", "text",
+                          "url", "links", "observed_at", "published_at",
+                          "published_estimated", "updated_at", "word_count",
+                          "has_external_link"))
 # Exact types for source-authored fields (None = absent; anything else wrong
 # is a schema rejection, never coerced). Extra unknown keys are allowed
 # through (collectors may annotate) but never enter the hash payload.
@@ -123,6 +135,9 @@ def validate_record(rec):
         v = rec.get(f)
         if not isinstance(v, str) or not v:
             return f"missing-or-null-{f}"
+    for k in rec:
+        if k not in KNOWN_FIELDS:
+            return f"unknown-field-{k}"
     for f in OPTIONAL_STR:
         v = rec.get(f)
         if v is not None and not isinstance(v, str):
@@ -150,7 +165,8 @@ def init_db(con):
       retrieved_at TEXT, revision_id TEXT, verdict TEXT, raw_json TEXT,
       parser_version TEXT, PRIMARY KEY(source, source_id, content_hash))""")
     con.execute("""CREATE TABLE IF NOT EXISTS corrections(
-      source TEXT, amending_id TEXT, base_id TEXT, at TEXT)""")
+      source TEXT, amending_id TEXT, base_id TEXT, at TEXT,
+      UNIQUE(source, amending_id, base_id))""")
 
 
 def ingest_signal(con, rec, retrieved_at):

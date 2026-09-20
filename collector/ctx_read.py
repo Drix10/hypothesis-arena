@@ -5,6 +5,13 @@ written). Rejects incomplete bundles wholesale; per-feature rejects are
 counted with reasons. Prose is quarantined, never consumed.
 
 Usage: python3 collector/ctx_read.py <bundle.json> [--db PATH] [--map PATH]
+
+Atomicity note (DESIGN FROZEN, IMPLEMENTATION DEFERRED to Phase 2.5): the
+`commit is True` flag checked here is the bundle-INTERNAL completeness flag.
+The writer-side generation manifest (a separate manifest proving a complete
+committed publish, consumed by the reader) does not exist yet and is NOT
+enforced: do not describe this reader as manifest-backed until Phase 2.5
+implements the manifest mechanism.
 '''
 import hashlib
 import json
@@ -36,6 +43,21 @@ SOURCE_COVER_MIN = {"edgar_8k": 45, "fed_monetary": 180, "ecb_mid": 180,
                       "treasury_auctions": 1080, "bls_empsit": 1080,
                       "fred_macro": 1080}
 SOURCE_IDS = frozenset(SOURCE_COVER_MIN)  # frozen source namespace (X11)
+# Frozen source->kind emission registry: which kinds each source may emit.
+# Directional/osint/sentiment/regime kinds have NO frozen emitter: they need
+# the Phase 2.5 deterministic source->feature resolver, so they are rejected
+# here (kind-no-emitter), never admitted on structural validity alone.
+SOURCE_KINDS = {
+    "edgar_8k": {"filing_event"},
+    "fed_monetary": {"macro_release", "calendar_ahead"},
+    "treasury_auctions": {"macro_release", "calendar_ahead"},
+    "bls_empsit": {"macro_release", "calendar_ahead"},
+    "ecb_mid": {"macro_release", "calendar_ahead"},
+    "fred_macro": {"macro_release", "calendar_ahead"},
+}
+BUNDLE_REQUIRED = {"schema_version", "research_epoch", "bundle_id",
+                   "commit", "watermarks", "features"}
+BUNDLE_OPTIONAL = {"history"}
 BUNDLE_SCHEMA = "f2"
 TTL_MAX_S = 7 * 86400  # emitters never grant freshness beyond this (X4)
 MAX_FEATURES = 64  # plan cap, now enforced (X3)
@@ -54,6 +76,27 @@ HB_MAP = {"ok": "healthy", "EMPTY_SUCCESS": "healthy", "STALE": "stale",
           "SOURCE_DOWN": "failed", "AUTH_FAILURE": "failed",
           "RATE_LIMITED": "failed", "PARSE_FAILURE": "failed",
           "SKIPPED_CONFIG": "not_scheduled"}
+
+
+class _DupKey(ValueError):
+    pass
+
+
+def _no_dupes(pairs):
+    """object_pairs_hook rejecting duplicate JSON members. P3.1 rejects
+    duplicate members at the crypto boundary; the provenance boundary must
+    too — last-write-wins on source_id would silently rebind lineage."""
+    obj = {}
+    for k, v in pairs:
+        if k in obj:
+            raise _DupKey(k)
+        obj[k] = v
+    return obj
+
+
+def parse_strict(raw):
+    """json.loads with duplicate-key rejection. Raises _DupKey."""
+    return json.loads(raw, object_pairs_hook=_no_dupes)
 
 
 def combine_hashes(hashes):
@@ -127,6 +170,8 @@ def check_feature(f, con, emap, history, now_ts):
                 and f["evidence"] in EVIDENCE and f["confidence_bucket"] in CONF)
     if not enums_ok:
         return False, "schema-enum"
+    if f["kind"] not in SOURCE_KINDS.get(f["source_id"], ()):
+        return False, "kind-no-emitter"
     if not isinstance(f["value"], dict):
         return False, "schema-value"
     if not isinstance(f["value"].get("type"), str):
@@ -149,7 +194,7 @@ def check_feature(f, con, emap, history, now_ts):
         return False, "symbols-type"
     if type(f["observed_at_ns"]) is not int:
         return False, "observed-type"
-    if not (INT64_MIN <= f["observed_at_ns"] <= INT64_MAX):
+    if not (0 <= f["observed_at_ns"] <= INT64_MAX):
         return False, "observed-range"
     if type(f["ttl_s"]) is not int or not (1 <= f["ttl_s"] <= TTL_MAX_S):
         return False, "ttl-type"
@@ -189,7 +234,7 @@ def check_feature(f, con, emap, history, now_ts):
     if "ingested_at_ns" in f:
         if type(f["ingested_at_ns"]) is not int:
             return False, "ingested-type"
-        if not (INT64_MIN <= f["ingested_at_ns"] <= INT64_MAX):
+        if not (0 <= f["ingested_at_ns"] <= INT64_MAX):
             return False, "ingested-range"
         if f["ingested_at_ns"] / 1e9 > now_ts:
             return False, "ingested-future"
@@ -268,7 +313,11 @@ def read_bundle(path, db_path, map_path, now_ts=None):
                 "stats": {"accepted": 0, "rejected": 1,
                             "reasons": {"bundle-too-large": 1}}}
     try:
-        b = json.loads(raw)
+        b = parse_strict(raw)
+    except _DupKey:
+        return {"bundle_id": None, "accepted": [],
+                "stats": {"accepted": 0, "rejected": 1,
+                            "reasons": {"bundle-duplicate-keys": 1}}}
     except ValueError:
         return {"bundle_id": None, "accepted": [],
                 "stats": {"accepted": 0, "rejected": 1,
@@ -277,6 +326,13 @@ def read_bundle(path, db_path, map_path, now_ts=None):
     if not isinstance(b, dict) or measure(b) is None:
         stats["reasons"]["bundle-shape"] = 1
         return {"bundle_id": None, "accepted": [], "stats": stats}
+    # Strict bundle envelope: unknown top-level keys are smuggling surface.
+    unknown_keys = set(b) - BUNDLE_REQUIRED - BUNDLE_OPTIONAL
+    if unknown_keys:
+        stats["reasons"]["bundle-unknown-field:" + sorted(unknown_keys)[0]] = 1
+        _bid = b.get("bundle_id")
+        return {"bundle_id": _bid if isinstance(_bid, str) else None,
+                "accepted": [], "stats": stats}
     # Exact bundle envelope (X7/X8): schema, id, epoch, commit, features.
     if b.get("schema_version") != BUNDLE_SCHEMA:
         stats["reasons"]["bundle-schema"] = 1
@@ -300,19 +356,51 @@ def read_bundle(path, db_path, map_path, now_ts=None):
         return {"bundle_id": b["bundle_id"], "accepted": [],
                 "stats": stats}
     hist = b.get("history")
-    if hist is not None and not isinstance(hist, dict):
-        stats["reasons"]["history-shape"] = 1
+    if hist is not None:
+        if not isinstance(hist, dict):
+            stats["reasons"]["history-shape"] = 1
+            return {"bundle_id": b["bundle_id"], "accepted": [],
+                    "stats": stats}
+        for _src, _entries in hist.items():
+            if not isinstance(_entries, list):
+                stats["reasons"]["history-shape"] = 1
+                return {"bundle_id": b["bundle_id"], "accepted": [],
+                        "stats": stats}
+            for _e in _entries:
+                if not isinstance(_e, dict) or set(_e) != {"h", "ts"} \
+                        or not isinstance(_e["h"], str) \
+                        or not HEX64.match(_e["h"]) \
+                        or type(_e["ts"]) is not int or _e["ts"] < 0:
+                    stats["reasons"]["history-shape"] = 1
+                    return {"bundle_id": b["bundle_id"], "accepted": [],
+                            "stats": stats}
+    # feature_id uniqueness: duplicates would corrupt feature_revision
+    # (derived from IDs) without representing distinct evidence.
+    _ids = [f["feature_id"] for f in feats
+            if isinstance(f, dict) and isinstance(f.get("feature_id"), str)]
+    if len(set(_ids)) != len(_ids):
+        stats["reasons"]["bundle-duplicate-feature-id"] = 1
         return {"bundle_id": b["bundle_id"], "accepted": [],
                 "stats": stats}
     wm = b.get("watermarks") or {}
     if not isinstance(wm, dict) or "entity_map_version" not in wm             or "entity_map_sha256" not in wm:
         stats["reasons"]["watermarks-missing"] = 1
         return {"bundle_id": b.get("bundle_id"), "accepted": [], "stats": stats}
-    raw_map = open(map_path, "rb").read()
+    with open(map_path, "rb") as _mf:
+        raw_map = _mf.read()
     if hashlib.sha256(raw_map).hexdigest() != wm["entity_map_sha256"]:
         stats["reasons"]["map-hash-mismatch"] = 1
         return {"bundle_id": b["bundle_id"], "accepted": [], "stats": stats}
-    emap = json.loads(raw_map.decode("utf-8"))
+    try:
+        emap = parse_strict(raw_map.decode("utf-8"))
+    except _DupKey:
+        stats["reasons"]["map-duplicate-keys"] = 1
+        return {"bundle_id": b["bundle_id"], "accepted": [],
+                "stats": stats}
+    except ValueError:
+        stats["reasons"]["map-version-mismatch"] = 1
+        return {"bundle_id": b["bundle_id"], "accepted": [],
+                "stats": stats}
     if emap.get("map_version") != wm["entity_map_version"]:
         stats["reasons"]["map-version-mismatch"] = 1
         return {"bundle_id": b["bundle_id"], "accepted": [], "stats": stats}
@@ -320,6 +408,10 @@ def read_bundle(path, db_path, map_path, now_ts=None):
     out = []
     try:
         for f in b["features"]:
+            if not isinstance(f, dict):
+                stats["reasons"]["feature-shape"] = 1
+                stats["rejected"] += 1
+                continue
             ok, reason = check_feature(f, con, emap, b.get("history"), now_ts)
             stats["reasons"][reason] = stats["reasons"].get(reason, 0) + 1
             if ok:

@@ -271,3 +271,18 @@ C.REF["t"] = None
 print("ok pinned-reference-time")
 
 print("ALL CORRECTIVE CHECKS PASS")
+
+# 20. canonical record allowlist: unknown keys rejected, never carried
+assert validate_record(dict(rec(), evil_field="x")).startswith("unknown-field")
+assert validate_record(rec()) is None
+print("ok record-allowlist")
+
+# 21. corrections idempotent under UNIQUE(source, amending_id, base_id)
+con = fresh()
+con.execute("INSERT OR IGNORE INTO corrections VALUES(?,?,?,?)",
+            ("edgar_8k", "a/A", "a", "t"))
+con.execute("INSERT OR IGNORE INTO corrections VALUES(?,?,?,?)",
+            ("edgar_8k", "a/A", "a", "t"))
+n = con.execute("SELECT COUNT(*) FROM corrections").fetchone()[0]
+assert n == 1, n
+print("ok corrections-unique")
