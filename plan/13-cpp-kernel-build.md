@@ -235,6 +235,11 @@ Exit: §4.5, §6.5 drill boxes checked.
       fuzz clean in normal AND hardened (libstdc++-debug) builds; sanitizer
       runtimes unavailable on this MinGW toolchain (documented in build.sh).
       Sidecar still byte-identical. P3.2 still NOT started. P3.1 ACCEPTED/FROZEN at dcd44d4 (human sign-off; no further P3.1 changes).
+- [x] P3.1 FINAL (unambiguous gate record; history above retained):
+      ACCEPTED/FROZEN at `dcd44d4` — 102/102 checks, 20,000 fuzz iterations,
+      normal + hardened builds, Python suite + freeze green, sidecar
+      byte-identical. (Earlier "39 checks" / "96 checks" lines describe
+      superseded intermediate states, not the final gate.)
 - [ ] P3.2 cross-language vector green (byte-equal canonical, hash, verify).
 - [ ] P3.3 table tests + replay determinism green.
 - [ ] §13.4 resolved to (a) with contract or (b) quarantined.

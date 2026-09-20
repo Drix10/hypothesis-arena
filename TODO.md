@@ -16,8 +16,8 @@ Legend: `[B]` needs real-browser control (X login, JS pages, portals) · `[W]` n
 - [x] 1.7 SUPERSEDED 2026-09-18: self-hosted transport has no third-party mirror to fall short; TRIGGER = account roster, throttled only by X frontend rate limits (Phase-1 soak measures)
 
 ## 2. Decision-layer proof (doc 03)
-- [ ] 2.1 [HUMAN] Obtain `OPENROUTER_API_KEY` — nothing in 2.2 can run without it
-- [ ] 2.2 [BLOCKED] 2026-09-18: needs OPENROUTER_API_KEY in env (human skipped); then confirm Decisions endpoint + pin exact revision into doc 03
+- [x] 2.1 DONE 2026-09-18/20: OPENROUTER_API_KEY obtained in env (local, never committed); Phase-0 verification green at `1730acc`.
+- [x] 2.2 DONE: Decisions endpoint `POST /api/alpha/decisions` confirmed; revision `typesafe/jev-1.13-20260917`, provider `TypeSafe` pinned into doc 03. (Historical; Phase 2 subsequently accepted/frozen at `50ea369`.)
 - [x] 2.3 DONE, RE-RUN 2026-09-18 (freeze v2): 20 v2 cases green under v3 table + 8 new v3 semantic cases (21–28) in doc 03 §3.7
 
 ## 3. Venues (doc 01)
@@ -66,18 +66,18 @@ Legend: `[B]` needs real-browser control (X login, JS pages, portals) · `[W]` n
 - [x] P1.5 DEFENSIVE-SCHEMA DONE: bool-is-not-int, entity_ref exactly {cik:str}, primitive-first ordering (no TypeError possible), ingested/provenance types, value fail-closed, empty symbols. 55 ctx checks; evidence pristine. P1.5 semantics frozen here.
 - [x] P1.5 EXCEPTION-SAFETY DONE: entity_ref/vtype/bundle guards, dated-history shape, JEVAnswerSetV3 contract locked in doc 03 (C++ owns decisions, adapter owns slowness, replay never calls provider). 69 ctx checks; evidence pristine. P1.5 FROZEN. Phase 2 AUTHORIZED (all gates green incl. OpenRouter verification).
 - [x] PHASE 2 ACCEPTED/FROZEN at 50ea369 (attempt-counted ceiling, true rolling-30d, invalid-stage fail-closed; 49 checks). Spend interpretation ratified with corrections. Confidence-null omission ratified.
-- [ ] PHASE 3 PLANNED: plan/13-cpp-kernel-build.md (P3.1 boundary validator first, P3.2 canonical vector, P3.3 typed table, P3.4 confidence, P3.5 risk/sizing/exec). P3.1 authorized.
+- [x] PHASE 3 STARTED: plan/13-cpp-kernel-build.md. P3.2 canonical vector NOT started (awaiting explicit authorization); P3.3/P3.4/P3.5 pending.
 - [x] P3.1 DONE: kernel boundary validator, 39 checks, sidecar untouched.
 - [x] P3.1 CORRECTION DONE: 17 review findings closed (epoch monotonicity, decision-key recompute 0/300 mismatches, universe, confidence quarantine, RFC decode, bounds, dup-keys, timestamps, no-atoll, thread-safe init, repr floats, ed vectors, 96 checks + 20k fuzz normal/hardened). Sidecar byte-identical, P3.2 not started.
 - [x] P3.1 X0-FIX DONE: recovered-x==0/sign rejection (y=0/sign=1 valid, y=1/sign=1 invalid, identity round-trip), OpenSSL 3.2 cross-vectors, Ed25519 policy frozen in plan/13, secondaries recorded. 102 checks + 20k fuzz normal/hardened.
 - [x] P3.1 ACCEPTED/FROZEN at dcd44d4 (human review: x0 blocker correctly fixed, 102/102 + 20k fuzz normal/hardened, policy frozen, secondaries carried to P3.2/P3.3). NO further P3.1 changes.
 - [x] PHASE 2 DONE: collector/jev.py (v3 batch, pinned revision/provider, RFC8032-Ed25519 sign/verify proven vs independent oracle incl. real clamp-bit253 bug found+fixed, research/decision cache, retry-once-HOLD, spend ceiling, zero-network replay). 40+ JEV checks; authority boundary tested (no size/budget fields). Awaiting human diff review.
-- [ ] NEXT: Phase-0 OpenRouter verification BLOCKED (key in chat only; .env has no OPENROUTER_API_KEY, nothing exported). Then Phase 2 jev.py (still not authorized until verification passes).
+- [x] NEXT (historical): Phase-0 OpenRouter verification is DONE (`1730acc`); Phase 2 jev.py was authorized on that basis and is now ACCEPTED/FROZEN (`50ea369`). No open verification item remains.
 - [ ] POST-SOAK HARDENING (do NOT touch until P1.4 window closes + report signed) | POST-SOAK RESEARCH (same gate): Jane Street public-material gap analysis. Study real-world ML, market-data architecture, replayability, risk computation, battle-testing/chaos, model evaluation. Map concrete lessons onto our architecture; no blind copying, NO code changes. Deliverable: gap analysis (principles already satisfied / specified-but-unimplemented / genuinely missing), prioritized by statistical validity, data integrity, execution correctness, portfolio risk, operational reliability. Tier-1 reads: real-world ML pt1, tested-to-battle-tested, ML overview, market-data teach-in, Datafetcher.: persist explicit observation-window start/end (e.g. data/soak/window.json on first launch; restarts must read, never extend the 7-day deadline); document missed-cycle semantics for interruption during the 15-min wait; verify restart is cwd-independent; verify restart cannot corrupt/duplicate evidence (SQLite PK idempotency, append-only logs). No rules_v1 or active-soak changes. Secrets contract DONE: .env.example (docs in header) + root .env (untracked) + collector/config.py; history/tree audited clean; no OPENROUTER or other unused credentials introduced.
 - [x] P1.4 acceptance automation DONE 2026-09-18: `soak_check.py` (6/6 objective checks: edgar-403, heartbeat vocab, replay determinism, future leakage, SQLite integrity, boundary) + `pregrade.py` (day-1: 40/40 auto_genuine, 0 ambiguous → zero human reviews needed today). Human work reduced to `data/soak/human-queue.jsonl` only. Both wired into soak daily cycle. No rules_v1 change.
-- [ ] P1.4 7-day soak + noise grade (<10% off-topic)
-- [ ] P1.5 Stub `ctx/` reader consumes bundle schema (§2.7 exit)
-- [ ] Later: 10. Phase 2 JEV sidecar (v3 + Ed25519) → 11. Phase 2.5 research plane (bundle model, sandbox image) → 12. Phase 3 C++ core (adapters, protection, FSM) → 13. Phase 4 paper loop G0 → 14-16. G1/G2/G3 gates
+- [x] P1.4 CLOSED (shortened): ~33h / 133 cycles, 0x403, 7/7 acceptance, 0% pre-grade noise (see collector/SOAK_REPORT.md + SOAK_MANIFEST.json). The original 7-day target was closed on this evidence; NOT a 7-day run.
+- [x] P1.5 DONE (stub superseded): `collector/ctx_read.py` (f2, R12/TTL, prose quarantine, entity-v1, FROZEN_N=3, canonical_hash); 69 ctx checks; P1.5 FROZEN.
+- [ ] Later: 11. Phase 2.5 research plane (bundle model, sandbox image) → 12. Phase 3 C++ core cont. (P3.2 authorized next, then P3.3/P3.4/P3.5) → 13. Phase 4 paper loop G0 → 14-16. G1/G2/G3 gates. (10. Phase 2 JEV sidecar DONE, accepted/frozen `50ea369`.)
 
 ## A. Agent orientation files (Phase-0, new)
 - [x] A.1 DONE 2026-09-18: ARCHITECTURE.md (8 questions, MiroHedge-mapped) at root

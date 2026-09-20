@@ -100,16 +100,20 @@ heartbeat, and failure default.
       heartbeats per doc 09).
 - [ ] P1.3 TRIGGER/CONTEXT tagging at classify step (deterministic rules_v1, doc 09).
 - [x] P1.4 CLOSED 2026-09-20 at observed ~33h / 133 cycles (shortened from 7d on evidence; see collector/SOAK_REPORT.md + SOAK_MANIFEST.json). 0x403, 7/7 acceptance, 0% pre-grade noise.
-- [ ] P1.5 Stub `ctx/` reader consumes the bundle schema; validates the
-      boundary law (§2.7: prose rows quarantined, never consumed).
+- [x] P1.5 DONE (stub superseded by `collector/ctx_read.py`, 69 checks,
+      P1.5 FROZEN): bundle-schema reader validates the boundary law (§2.7:
+      prose rows quarantined, never consumed).
 - [ ] Exit: §2.7 boxes checked.
 
-## Phase 2 — JEV sidecar (doc 03)
+## Phase 2 — JEV sidecar (doc 03) — ACCEPTED/FROZEN `50ea369` (historical)
 
-- [ ] `jev.py`: stdin state → batched call → stdout answers + log row.
-- [ ] Cache + failure paths (timeout/500/malformed → HOLD).
-- [ ] 20 hand-worked cases green; replay of 200 recorded/synthetic states sane.
-- [ ] Exit: §3.6 boxes checked.
+- [x] `jev.py`: stdin state → batched call → stdout answers + log row.
+- [x] Cache + failure paths (timeout/500/malformed → HOLD).
+- [x] 49 checks incl. hand-worked cases, spend controls, retry/HOLD, replay,
+      signing; 300-state decision-key cross-check vs C++ later green.
+- [x] Exit: accepted/frozen at `50ea369`; confidence-null omission ratified.
+      Do not modify the sidecar unless integration exposes an actual
+      contract defect.
 
 ## Phase 2.5 — Research plane (docs 08, 09)
 
@@ -135,9 +139,12 @@ path for a trade.
 Phase 2 accepted/frozen (`50ea369`). Do not modify the sidecar unless
 integration exposes an actual contract defect.
 
-- [ ] P3.1 boundary validator first: 21-check AnswerSet gate (schema, pins,
-      response_hash, Ed25519, key trust, state binding, LIVE expiry vs REPLAY
-      mode) + per-check adversarial vectors.
+- [x] P3.1 boundary validator DONE and ACCEPTED/FROZEN at `dcd44d4`:
+      21-check AnswerSet gate (schema, pins, response_hash, Ed25519, key
+      trust, state binding, LIVE expiry vs REPLAY mode) + per-check
+      adversarial vectors. FINAL GATE: 102/102 checks, 20,000 fuzz
+      iterations, normal + hardened builds, sidecar byte-identical.
+      NO further P3.1 changes.
 - [ ] P3.2 canonical serialization contract + committed cross-language test
       vector (canonical bytes → SHA-256 → Ed25519, verified independently).
 - [ ] P3.3 typed `JEVAnswerSetV3` + deterministic decision table (§3.5a/§3.7
