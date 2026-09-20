@@ -9,6 +9,7 @@ Usage: python3 collector/ctx_read.py <bundle.json> [--db PATH] [--map PATH]
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import sys
 from datetime import datetime, timezone
@@ -25,6 +26,14 @@ EVIDENCE = {"source", "derived", "inference"}
 CONF = {"low", "medium", "high"}
 VTYPES = {"enum", "bucket", "bool", "count"}
 OVERNIGHT_ALLOW = {"calendar_ahead", "macro_release"}
+REQUIRED_FIELDS = {"schema_version", "kind", "symbols", "value", "effect",
+                   "evidence", "confidence_bucket", "source_id",
+                   "canonical_hash", "observed_at_ns", "ttl_s"}
+OPTIONAL_FIELDS = {"feature_id", "canonical_hashes", "entity_ref"}
+HEX64 = re.compile("^[0-9a-f]{64}$")
+SOURCE_POLL_MIN = {"edgar_8k": 15, "fed_monetary": 60, "ecb_mid": 60,
+                   "treasury_auctions": 360, "bls_empsit": 360,
+                   "fred_macro": 360}
 NY = ZoneInfo("America/New_York")
 EQUITY_SESSION = (9 * 60 + 30, 16 * 60)
 PROSE_KEYS = {"thesis_text", "critique_text", "narrative", "summary",
@@ -53,11 +62,12 @@ def check_feature(f, con, emap, history, now_ts):
     '''Returns (ok, reason). First failure wins, counted by caller.'''
     if has_prose(f):
         return False, "prose-quarantined"
-    for k in ("schema_version", "kind", "symbols", "value", "effect",
-              "evidence", "confidence_bucket", "source_id",
-              "canonical_hash", "observed_at_ns", "ttl_s"):
-        if k not in f:
-            return False, "schema-missing:" + k
+    unknown = set(f) - REQUIRED_FIELDS - OPTIONAL_FIELDS
+    if unknown:
+        return False, "unknown-field:" + sorted(unknown)[0]
+    missing = REQUIRED_FIELDS - set(f)
+    if missing:
+        return False, "schema-missing:" + sorted(missing)[0]
     if f["schema_version"] != SCHEMA:
         return False, "schema-version"
     enums_ok = (f["kind"] in KINDS and f["effect"] in EFFECTS
@@ -66,7 +76,13 @@ def check_feature(f, con, emap, history, now_ts):
         return False, "schema-enum"
     if not isinstance(f["value"], dict) or f["value"].get("type") not in VTYPES:
         return False, "schema-value"
-    hs = f.get("canonical_hashes") or [f["canonical_hash"]]
+    if not HEX64.match(f["canonical_hash"] or ""):
+        return False, "hash-format"
+    chs = f.get("canonical_hashes")
+    if chs is not None:
+        if not isinstance(chs, list) or not chs or                 any(not HEX64.match(h or "") for h in chs):
+            return False, "hash-format"
+    hs = chs or [f["canonical_hash"]]
     expect = hs[0] if len(hs) == 1 else combine_hashes(hs)
     if f["canonical_hash"] != expect:
         return False, "lineage-mismatch"
@@ -86,11 +102,23 @@ def check_feature(f, con, emap, history, now_ts):
     for s in f["symbols"]:
         if s not in tickers and s not in macro and s not in ("USD", "RATES"):
             return False, "entity-unmapped:" + s
+    ref = f.get("entity_ref") or {}
+    if "cik" in ref:
+        want = emap.get("cik_to_ticker", {}).get(ref["cik"])
+        if want is None:
+            return False, "entity-ref-unknown"
+        if want not in f["symbols"]:
+            return False, "entity-contradiction"
     hist = (history or {}).get(f["source_id"], [])
-    frozen = (len(hist) >= FROZEN_N and len(set(hist[-FROZEN_N:])) == 1
-              and hist[-1] == f["canonical_hash"])
-    if frozen:
-        return False, "frozen-feed"
+    if hist and any(not isinstance(e, dict) for e in hist):
+        return False, "history-undated"
+    if len(hist) >= FROZEN_N:
+        tail = hist[-FROZEN_N:]
+        same = len({e["h"] for e in tail}) == 1 and             tail[-1]["h"] == f["canonical_hash"]
+        span = tail[-1]["ts"] - tail[0]["ts"]
+        cover = (FROZEN_N - 1) * SOURCE_POLL_MIN.get(f["source_id"], 60) * 60
+        if same and span >= cover * 0.5:
+            return False, "frozen-feed"
     equity_like = f["symbols"] and all(
         "/" not in s and s.isalpha() and len(s) <= 5 for s in f["symbols"])
     if equity_like:
@@ -102,6 +130,12 @@ def check_feature(f, con, emap, history, now_ts):
     if f["evidence"] == "inference":
         return True, "inference-capped"
     return True, "ok"
+
+
+def trigger_eligible(feature_result):
+    """Downstream invariant: ctx-accepted inference is CONTEXT-only, never
+    TRIGGER-eligible. Only evidence==source features may trigger."""
+    return feature_result.get("evidence") == "source"
 
 
 def read_bundle(path, db_path, map_path, now_ts=None):
@@ -116,8 +150,16 @@ def read_bundle(path, db_path, map_path, now_ts=None):
         stats["reasons"]["bundle-incomplete"] = stats["rejected"]
         return {"bundle_id": b.get("bundle_id"), "accepted": [],
                 "stats": stats}
-    emap = json.load(open(map_path, encoding="utf-8"))
-    if emap.get("map_version") != (b.get("entity_map_version") or "entity-v1"):
+    wm = b.get("watermarks") or {}
+    if not isinstance(wm, dict) or "entity_map_version" not in wm             or "entity_map_sha256" not in wm:
+        stats["reasons"]["watermarks-missing"] = 1
+        return {"bundle_id": b.get("bundle_id"), "accepted": [], "stats": stats}
+    raw_map = open(map_path, "rb").read()
+    if hashlib.sha256(raw_map).hexdigest() != wm["entity_map_sha256"]:
+        stats["reasons"]["map-hash-mismatch"] = 1
+        return {"bundle_id": b["bundle_id"], "accepted": [], "stats": stats}
+    emap = json.loads(raw_map.decode("utf-8"))
+    if emap.get("map_version") != wm["entity_map_version"]:
         stats["reasons"]["map-version-mismatch"] = 1
         return {"bundle_id": b["bundle_id"], "accepted": [], "stats": stats}
     con = sqlite3.connect("file:" + db_path + "?mode=ro", uri=True)

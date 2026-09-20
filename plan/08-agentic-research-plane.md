@@ -225,8 +225,11 @@ mode that kills unattended agent systems, and it is capped in three places.
 ## 8.5 Feature contract v2 (locked — the only thing that crosses the boundary)
 
 `features.jsonl` carries typed feature records in complete bundles. One
-`emit` writes one bundle: `research_epoch` + `bundle_id` + source watermarks
-+ feature list + `BUNDLE_COMMIT`. C++ consumes the last *complete* bundle
+`emit` writes one bundle: `research_epoch` + `bundle_id` + `watermarks` +
+feature list + `BUNDLE_COMMIT`. Watermarks are replay-critical metadata, not
+decoration: `{"entity_map_version", "entity_map_sha256", source watermarks,
+last-observation timestamps}`. The reader hashes the actual map file and
+requires an exact sha256 match — version strings alone are not pinning. C++ consumes the last *complete* bundle
 only — a runaway-aborted cycle that never reaches `emit` publishes nothing,
 so partial epochs can never mix (R15). Thesis/critique prose is NOT a feature:
 it goes to `research_digest.jsonl` (human + critique-node reading, advisory
@@ -263,7 +266,10 @@ Hard rules on this record:
 - **`confidence_bucket` is computed** (source reliability × timestamp quality ×
   parser confidence × corroboration), never self-reported by the model.
 - **No free-form floats.** Values are enums, booleans, counts, or buckets.
-- **No prose** in this file, at all. Prose lives in the digest.
+- **No prose** in this file, at all. The reader enforces an explicit f2
+  field allowlist (required + `feature_id`/`canonical_hashes`/`entity_ref`)
+  and rejects unknown fields — a prose-key denylist alone cannot guarantee
+  "no prose", so unknown keys fail closed. Prose lives in the digest.
 - **Plausibility, not just shape.** Schema validation proves structure; these
   three semantic checks prove the record means what it claims (all P1.5
   ctx-reader enforced, rejection reasons logged):
@@ -271,12 +277,19 @@ Hard rules on this record:
      versioned map `collector/entity_map.json` (`map_version`, sha256-pinned
      in the bundle watermarks; EDGAR CIK↔ticker, macro release↔symbols).
      The reader replays the exact pinned version — never a newer map.
+     Features may carry `entity_ref` (e.g. `{"cik": ...}`); when present,
+     map contradiction (CIK resolves to a different ticker than claimed)
+     rejects. Without a ref, P1.5 enforces resolvability; full upstream
+     contradiction validation arrives with the research plane.
      Unmapped or contradictory binding → reject (TRIGGER) or cap at
      CONTEXT (derived).
   2. *Frozen-feed detection* — identical authoritative payload across
      `FROZEN_N = 3` consecutive polls (`plausibility_v1`; per-source time
      cover: EDGAR 45 min, Fed/ECB 3 h, Treasury/BLS/FRED 18 h from TTLs)
-     marks the source `stale`, never fresh.
+     marks the source `stale`, never fresh. The bundle carries dated poll
+     history (`{"h", "ts"}` entries); the reader requires the N identical
+     observations to span at least half the source's nominal cover.
+     Undated history is rejected (`history-undated`).
   3. *Session-aware freshness* — timestamps in America/New_York (IANA).
      Equity features timed 16:00–09:30 ET are rejected UNLESS kind is in
      the overnight allowlist (`calendar_ahead` with phase pre/blackout,
@@ -294,7 +307,9 @@ Hard rules on this record:
   schema failures.
 - Max 64 features per snapshot, newest first. Overflow dropped, counted, logged.
 - `ctx/` rejects any record failing schema, bounds, or R12 timestamp checks, and
-  increments `features_rejected`. Rejection rate > 5%/hour alerts.
+  increments `features_rejected`. The rejection rate is computed per bundle;
+  operational >5%/hour alerting is deferred to Phase 2.5 (the stub reader does
+  not run continuously).
 - Source health is `source_status` per source (healthy/stale/failed/
   not_scheduled/unavailable/na — doc 03 §3.4), not a single absent-list.
   `not_scheduled` (nothing expected) is never a negative signal.

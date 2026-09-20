@@ -11,7 +11,7 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from ctx_read import read_bundle, combine_hashes, HB_MAP  # noqa: E402
+from ctx_read import read_bundle, combine_hashes, HB_MAP, trigger_eligible  # noqa: E402
 
 
 def datetime_ts(s):
@@ -50,12 +50,20 @@ def feat(**kw):
 
 
 def run(features, extra=None, name="b"):
-    b = {"bundle_id": name, "commit": True, "entity_map_version": "entity-v1",
+    import hashlib as _hl
+    sha = _hl.sha256(open(MAP, "rb").read()).hexdigest()
+    b = {"bundle_id": name, "commit": True,
+         "watermarks": {"entity_map_version": "entity-v1",
+                        "entity_map_sha256": sha},
          "features": features}
     b.update(extra or {})
     p = os.path.join(TMP, name + ".json")
     json.dump(b, open(p, "w"))
     return read_bundle(p, DB, MAP, NOW)
+
+
+def dated(h, ts):
+    return {"h": h, "ts": ts}
 
 
 def check(name, cond):
@@ -94,11 +102,15 @@ r = run([feat(symbols=["EURUSD"], kind="macro_release",
               observed_at_ns=IN_SESSION)])
 check("macro-symbols-pass", r["stats"]["accepted"] == 1)
 
-# 6. frozen feed (N=3) vs below threshold
-hist3 = {"history": {"edgar_8k": [H1, H1, H1]}}
+# 6. frozen feed (N=3 + time cover) vs below threshold
+t0 = NOW - 3000
+hist3 = {"history": {"edgar_8k": [dated(H1, t0), dated(H1, t0 + 1500),
+                                     dated(H1, t0 + 2900)]}}
 r = run([feat()], extra=hist3)
-check("frozen-feed", r["stats"]["reasons"].get("frozen-feed") == 1)
-r = run([feat()], extra={"history": {"edgar_8k": [H2, H1, H1]}})
+check("frozen-feed-v1", r["stats"]["reasons"].get("frozen-feed") == 1)
+r = run([feat()], extra={"history": {"edgar_8k": [dated(H2, t0),
+                                                  dated(H1, t0 + 1500),
+                                                  dated(H1, t0 + 2900)]}})
 check("below-frozen-threshold", r["stats"]["accepted"] == 1)
 
 # 7. session freshness
@@ -120,14 +132,58 @@ expect = {"ok": "healthy", "EMPTY_SUCCESS": "healthy", "STALE": "stale",
           "SKIPPED_CONFIG": "not_scheduled"}
 check("heartbeat-map", HB_MAP == expect)
 
-# 10. map version mismatch
-r = run([feat()], extra={"entity_map_version": "entity-v99"})
+# 10. map version mismatch + hash mismatch + missing watermarks
+import hashlib as _hlm
+MAP_SHA = _hlm.sha256(open(MAP, "rb").read()).hexdigest()
+wm = {"watermarks": {"entity_map_version": "entity-v99",
+                     "entity_map_sha256": MAP_SHA}}
+r = run([feat()], extra=wm, name="bmap1")
 check("map-version-mismatch", r["accepted"] == []
       and "map-version-mismatch" in r["stats"]["reasons"])
+wm2 = {"watermarks": {"entity_map_version": "entity-v1",
+                      "entity_map_sha256": "0" * 64}}
+r = run([feat()], extra=wm2, name="bmap2")
+check("map-hash-mismatch", r["accepted"] == []
+      and "map-hash-mismatch" in r["stats"]["reasons"])
+b = {"bundle_id": "nowm", "commit": True, "features": [feat()]}
+p = os.path.join(TMP, "nowm.json")
+json.dump(b, open(p, "w"))
+r = read_bundle(p, DB, MAP, NOW)
+check("watermarks-missing", r["accepted"] == []
+      and "watermarks-missing" in r["stats"]["reasons"])
 
 # 11. inference capped, not dropped
 r = run([feat(evidence="inference")])
 check("inference-capped", r["stats"]["accepted"] == 1
       and r["stats"]["reasons"].get("inference-capped") == 1)
+
+# 12. hash format + unknown fields
+r = run([feat(canonical_hash="not-a-hash")])
+check("hash-format", r["stats"]["reasons"].get("hash-format") == 1)
+r = run([feat(description="smuggled prose under unknown key")])
+check("unknown-field", "unknown-field:description" in r["stats"]["reasons"])
+
+# 13. entity contradiction (Option A groundwork)
+r = run([feat(entity_ref={"cik": "0000320193"})])
+check("entity-ref-consistent", r["stats"]["accepted"] == 1)
+r = run([feat(symbols=["MSFT"], entity_ref={"cik": "0000320193"})])
+check("entity-contradiction",
+      r["stats"]["reasons"].get("entity-contradiction") == 1)
+r = run([feat(entity_ref={"cik": "9999999999"})])
+check("entity-ref-unknown", r["stats"]["reasons"].get("entity-ref-unknown") == 1)
+
+# 14. dated history contracts
+r = run([feat()], extra={"history": {"edgar_8k": [H1, H1, H1]}})
+check("history-undated", r["stats"]["reasons"].get("history-undated") == 1)
+tight = {"history": {"edgar_8k": [dated(H1, t0), dated(H1, t0 + 60),
+                                 dated(H1, t0 + 120)]}}
+r = run([feat()], extra=tight)
+check("frozen-needs-time-cover", r["stats"]["accepted"] == 1)
+
+# 15. inference never TRIGGER-eligible downstream
+inf = feat(evidence="inference")
+check("inference-never-trigger",
+      trigger_eligible(inf) is False
+      and trigger_eligible(feat()) is True)
 
 print("ALL CTX CHECKS PASS")
