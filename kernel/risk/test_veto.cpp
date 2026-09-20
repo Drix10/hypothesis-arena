@@ -939,6 +939,56 @@ int main(int argc, char** argv) {
             CHECK("c-medium-hold",
                   !v3.proceed &&
                       std::string(v3.reason) == "event-medium");
+            // Case 29 (doc 03 §3.7): joint JEV error, end to end.
+            // t_max_elevated is the adversarial optimistic answer proxy
+            // (E .93 / macro / max / L .1, calib pass — NOT a claim that
+            // the recorded answer was empirically wrong). The independent
+            // RiskSnapshot supplies a real R2 pending-risk breach: intent
+            // 10% + pending 66% on another symbol = 76% > 75% cap, with
+            // no R1 count/direction trip, no symbol collision, no
+            // leverage trip. The four optimistic answers must not
+            // authorize around the independently detected breach.
+            std::string raw29 = read_all((dir + "/t_max_elevated.json").c_str());
+            JVal art29;
+            std::string err29;
+            CHECK("c29-parses", ParseJson(raw29, art29, err29));
+            const JVal* state29 = nullptr;
+            if (art29.t == JVal::T::OBJ) state29 = ObjGet(art29, "state");
+            JEVStateV3 st29;
+            std::string why29;
+            bool ok29 = state29 && state29->t == JVal::T::OBJ &&
+                        JEVStateV3::FromJVal(*state29, st29, why29);
+            CHECK("c29-state", ok29);
+            if (ok29) {
+                KernelState kern29;
+                std::string kwhy29;
+                CHECK("c29-kernel", KernelState::Create(
+                                          {"EURUSD"}, kwhy29, kern29));
+                ValidationRequest q29 = kern29.request_for(
+                    validation_bytes(raw29), key, st29.Serialize(),
+                    "EURUSD", 0.0, Mode::REPLAY);
+                ValidationResult r29 = validate_jev(q29);
+                CHECK("c29-valid", r29.ok());
+                if (r29.ok()) {
+                    RiskSnapshot s29 = Clean();
+                    s29.calib = CalibState::PASS;
+                    AddPending(s29, "GBPUSD", Side::SHORT, 6600000LL);
+                    VetoVerdict v29 = EvaluateVeto(s29);
+                    CHECK("c29-veto-hold",
+                          !v29.proceed &&
+                              std::string(v29.reason) == "pending-risk");
+                    EngineInputs in29 = BuildEngineInputs(s29, v29);
+                    CHECK("c29-inputs",
+                          in29.deterministic_veto &&
+                              in29.veto_reason ==
+                                  VetoReason::PENDING_RISK);
+                    Decision d29 = EvaluateDecision(*r29.get(), in29);
+                    CHECK("c29-table-hold",
+                          d29.budget == Decision::Budget::HOLD &&
+                              d29.action == "HOLD" &&
+                              d29.reason == "engine-veto:pending-risk");
+                }
+            }
         }
     } else {
         printf("FAIL need-argv\n");

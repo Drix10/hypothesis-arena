@@ -517,11 +517,15 @@ int main(int argc, char** argv) {
                  jev::VetoReason::NONE);
         targeted("t_max_downgrade_insuf.json", "BASE", "downgrade-strong",
                  jev::VetoReason::NONE);
-        // Case 29 (doc 03 §3.7): joint JEV error. t_max_elevated is the
-        // maximally optimistic artifact (E .93 / macro / max / L .1,
-        // calib pass, no veto → ELEVATED above). Replayed here against a
-        // forbidding snapshot (R2 pending-risk): correlated model
-        // optimism must still HOLD on row 0 with the coded reason.
+        // Case 29 (doc 03 §3.7), table-isolation component: t_max_elevated
+        // is the adversarial optimistic answer proxy (E .93 / macro / max
+        // / L .1, calib pass — NOT a claim the recorded answer was wrong).
+        // With a forbidding deterministic state the table must HOLD on
+        // row 0 with the coded reason. The full end-to-end proof (real R2
+        // pending-risk detected by EvaluateVeto, mapped by
+        // BuildEngineInputs, then blocking these answers) lives in the
+        // Slice-B composed suite (c29-*); this row proves the table half:
+        // a vetoed state authorizes nothing regardless of answers.
         // Fresh kernel (t_max_elevated already admitted above); no
         // admission — the decision layer needs the validated object.
         {
@@ -532,24 +536,29 @@ int main(int argc, char** argv) {
             std::string raw = fx(dir, "t_max_elevated.json");
             jev::JVal art;
             std::string err;
-            jev::ParseJson(raw, art, err);
-            const jev::JVal* state = jev::ObjGet(art, "state");
+            CHECK("c29-parses", jev::ParseJson(raw, art, err));
+            const jev::JVal* state = nullptr;
+            if (art.t == jev::JVal::T::OBJ) state = jev::ObjGet(art, "state");
             jev::JEVStateV3 s;
             std::string why;
-            jev::JEVStateV3::FromJVal(*state, s, why);
-            jev::ValidationRequest q = k3.request_for(
-                validation_bytes(raw), key, s.Serialize(), "EURUSD", 0.0,
-                jev::Mode::REPLAY);
-            jev::ValidationResult r = jev::validate_jev(q);
-            CHECK("c29-valid", r.ok());
-            if (r.ok()) {
-                jev::EngineInputs e = eng_from_state(*state);
-                e.deterministic_veto = true;
-                e.veto_reason = jev::VetoReason::PENDING_RISK;
-                jev::Decision d = jev::EvaluateDecision(*r.get(), e);
-                CHECK("case29-joint-error-hold",
-                      d.action == "HOLD" &&
-                          d.reason == "engine-veto:pending-risk");
+            bool ok29 = state && state->t == jev::JVal::T::OBJ &&
+                        jev::JEVStateV3::FromJVal(*state, s, why);
+            CHECK("c29-state", ok29);
+            if (ok29) {
+                jev::ValidationRequest q = k3.request_for(
+                    validation_bytes(raw), key, s.Serialize(), "EURUSD",
+                    0.0, jev::Mode::REPLAY);
+                jev::ValidationResult r = jev::validate_jev(q);
+                CHECK("c29-valid", r.ok());
+                if (r.ok()) {
+                    jev::EngineInputs e = eng_from_state(*state);
+                    e.deterministic_veto = true;
+                    e.veto_reason = jev::VetoReason::PENDING_RISK;
+                    jev::Decision d = jev::EvaluateDecision(*r.get(), e);
+                    CHECK("case29-joint-error-hold",
+                          d.action == "HOLD" &&
+                              d.reason == "engine-veto:pending-risk");
+                }
             }
         }
     }
