@@ -150,6 +150,38 @@ behavior.
   "`STAGE`" means this chain; the legacy single `STAGE` file is the G0
   bootstrap only). Demotion is automatic and cannot be vetoed. *Owner:* `STAGE` chain + human. *Default:* G0_PAPER.
 
+## 5.1c Incremental risk DAG (frozen shape)
+
+Per the gap analysis, portfolio risk is a dependency DAG, not a flat
+checklist. Layers (each layer reads only the layers below it):
+
+- L0 frozen inputs: the `RiskSnapshot` as frozen at snapshot time
+  (positions, pending orders, equity/margin/PnL, ctx-derived flags:
+  R6 vol state, R7 corr flags, VaR/stress values, session/short/corp
+  flags, calibration-gate inputs, event phase, kill level, stage).
+- L1 derived-once: K6 formulas (pending_notional, reserved_risk,
+  margin_requirement, buying_power), exposure sums with pending,
+  R5 drawdown vs persisted HWMs, R6 current-vs-baseline, R7 pair scan +
+  drift directive, churn counters (R3), flip-lock state (R4), VaR/stress
+  breach flags. Each L1 quantity is computed ONCE per evaluation and
+  shared by reference — never recomputed inconsistently by two rules.
+- L2 rule nodes: R1–R17 + session/short/corp/event checks. Each node
+  reads L0 fields and L1 quantities only; no node reads another rule
+  node's verdict (no rule-to-rule edges — verdicts combine only at L3).
+- L3 verdict: one `VetoVerdict` (frozen precedence order, all co-causes
+  preserved in reasons_all) + `BuildEngineInputs` fill onto the frozen
+  P3.3 table inputs.
+
+DAG invariants (load-bearing for every future slice): deterministic
+(same snapshot → same verdict, no RNG, no clock reads); allocation-free
+on the execution path (fixed storage verdict, stack derivations);
+integer-exact money math. Slice B status (frozen, do not reopen): the
+current `EvaluateVeto` computes small helpers per rule and is
+functionally correct as proven by its 153+ suite — the DAG section is
+the contract that any future refactor or H1 integration must satisfy,
+proven by bit-identical verdicts on that suite before landing. No Slice
+B behavior change is authorized by this section.
+
 ## 5.2 Leverage / stop table (locked)
 
 v1 caps: forex ≤ 5×, US stocks ≤ 2× (1× on cash account — Reg T, no exceptions).

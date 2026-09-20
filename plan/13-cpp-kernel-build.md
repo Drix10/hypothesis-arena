@@ -310,6 +310,32 @@ Soak/operational evidence tracked per gate class, never retro-blocking.
   Alpaca paper.
 - No confidence-driven decisions without closing §13.4(a).
 
+## 13.7 Battle-testing ladder (gap-analysis mapping, frozen ownership)
+
+The research lesson set vs existing gates — reconciled, not duplicated.
+Every reliability property has exactly one owner and one measurable test.
+
+| Research lesson | Existing gate | Missing gate | Owning slice |
+|---|---|---|---|
+| parser fuzzing | P3.1 20k fuzz (normal+hardened) | — (covered) | P3.1 (closed) |
+| rejection-shape matrix | Slice C 78-check suite (§4.5 rows) | — (covered) | Slice C (closed) |
+| veto unit battery | Slice B 153+ suite + case-29 row | — (covered) | Slice B (closed) |
+| decision determinism | P3.3 200-replay SHA-256 proof | — (covered) | P3.3 (closed) |
+| simulated network delay/drop | — | feed-gap + JEV-timeout injection vs §6.2a rows | Slice F (feed) + H1 (outage rows) |
+| randomized event ordering | — | order-permuted journal/reconcile test (same fills, any arrival order → same adopted state) | H1 (S2 FSM) |
+| version skew | P3.2 interop vectors (v1+v2) | schema-version rejection drill (f3-shaped artifact → loud reject, no silent pass) | Slice G (ctx version gate) |
+| chaos restart (kernel) | — | kill -9 mid-cycle drill: journal chain verifies, epoch monotonicity holds, no duplicate order IDs | H1 (drill gate) |
+| chaos restart (research) | — | kill -9 at random node: resume, no duplicate features, no partial bundle | Phase 2.5 §8.6 |
+| kill-switch levels | — | §4.5 + §6.5 kill drills (exits alive at all three) | Slice D (drill gate) |
+| outage defaults | — | every §6.2a row drilled with exits proven alive | H1 (drill gate) |
+| feed soak | — | 24 h soak, flat RSS, kill/reconnect | Slice F (soak gate) |
+| 30-day operation | — | H2 operational evidence (Phase 4, never retro-blocks) | H2 |
+
+No overlapping tests proving the same thing twice: a lesson with an
+existing gate is cited, not rebuilt. New gates attach to the listed slice
+and must be green before that slice closes (soak/operational per the §13.5
+sequencing rule).
+
 ## Exit criteria (Phase 3 -> Phase 4)
 
 - [x] P3.1 DONE (`kernel/jev_validate.hpp` + `kernel/test_p31.cpp`, 39 checks

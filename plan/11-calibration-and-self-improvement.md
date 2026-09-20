@@ -89,6 +89,48 @@ truth: they are scored separately and cannot promote a challenger alone.
   broken in `volatile` is the ordinary case, not the exception — that is regime
   blindness, and it is only visible if the metrics are sliced by regime.
 
+## 11.1a Regime change and evidence decay (deterministic, frozen)
+
+Slicing calibration by regime (§11.1) is measurement. This section is
+treatment: what happens when the regime itself changes, and how old
+evidence loses weight. No online learning, no agent-set thresholds, no
+hidden discretionary detector.
+
+1. Regime signal. The frozen regime bucket trend|range|volatile from
+   ADX(14) + 1h-vol bucket (doc 12; also JEV state indicators, doc 03
+   §3.4). No other signal may define regime without a doc edit + version
+   bump + fresh paper window.
+2. Regime change. The daily bucket differs from the previous UTC-day
+   bucket for two consecutive UTC days. The two-day persistence exists
+   because a single-day flip is noise, not a change (same precedent as
+   FROZEN_N=3 in doc 08 §8.5 and the two-expected-bar gates in doc 05).
+   Evaluated once per UTC day at 00:05 UTC from frozen daily closes —
+   never intra-day, never revised intra-day.
+3. Reduced weight. Calibration samples (§11.1 trailing-200/1000 windows,
+   R13 window, reliability curves) resolved under a regime bucket no
+   longer current receive exponential weight w = 2^(-age_days / H).
+   Current-regime samples keep weight 1.
+4. Half-life rule. H (days) is a versioned calibration constant with
+   frozen default H = infinity (all weights 1: no decay). A finite H is
+   a config change requiring measured G0-paper justification, human
+   sign-off, and a fresh paper window — the same bar as any limit change
+   (doc 05). No finite H is invented here from literature alone.
+5. Scope. The rule affects calibration MEASUREMENT only (Brier/log-loss/
+   reliability weights, R13 window weights). It never affects decision
+   authorization (the table + vetoes read current state only), research
+   weighting, or promotion arithmetic beyond the measured metrics. Every
+   calibration render states H and the effective sample size — reported,
+   never silent.
+6. Unavailable regime. If the bucket cannot be computed (missing bars,
+   feed gap), the day is tagged UNKNOWN: weights stay 1, the gap is
+   logged, and UNKNOWN days never count toward the two-day change
+   persistence. Absent is not neutral, but it is also not a change.
+7. New version / fresh window. A finite-H adoption, an H change, or a
+   regime-signal definition change each bump the calibration config
+   version and open a fresh paper window. Regime CHANGES themselves never
+   version anything — they are data, and the decay rule handles them by
+   construction.
+
 ## 11.2 Shadow and challenger evaluation
 
 Everything not live runs in shadow, permanently:

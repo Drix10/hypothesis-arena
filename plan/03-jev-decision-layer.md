@@ -350,6 +350,18 @@ Notation: E = enter, F = edge_family, C = conviction, L = latent_risk.
 | 26 | .91 | momentum | max | calib breach | HOLD calibration (row above max) |
 | 27 | .86 | mean_reversion | strong | opposite TRIGGER effects | HOLD disagreement |
 | 28 | .89 | momentum | strong | BINARY pre-event blackout | HOLD blackout |
+| 29 | .93 | macro | max | L=.1, calib pass, R2 pending-risk breach in snapshot | HOLD joint-error (row 0; reason = engine-veto:pending-risk) |
+
+Case 29 is the joint-JEV-error stress (gap-analysis B1, frozen): all four
+answers are jointly wrong in the optimistic direction (high enter, favored
+family, max conviction, low latent risk, clean calibration) while the
+independent snapshot/risk state forbids the trade. The deterministic engine
+stays authoritative: a correlated JEV failure creates no authorization path
+the snapshot state would not permit, and the failure is observable as HOLD
+with the coded deterministic reason — never as a model-driven override.
+No new question, no version change, no field reinterpretation; the stress
+is a row over existing artifacts plus forced deterministic state, proven
+in the P3.3 table suite.
 
 v3 rule proven by 24/25: conviction max is necessary but never sufficient —
 it nominates, the engine's independently validated conditions authorize, and
