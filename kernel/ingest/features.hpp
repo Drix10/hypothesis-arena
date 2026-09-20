@@ -193,7 +193,8 @@ struct RateWindow {
 IngestOutcome IngestRecord(IngestState& st, const JVal& rec,
                            const char* canon, size_t canon_len,
                            int64_t snapshot_ns);
-// Rejection rate over the trailing hour window: (rejected + dropped) /
+// Rejection rate over the current one-hour window (tumbling: anchored
+// at the first RateAdd, reset on hour roll — not a rolling deque):
 // total, strictly above 5% (20*bad > total, __int128 throughout).
 // RateAdd contract: call ONCE per bundle with a non-negative monotonic
 // now_ns. Hour roll resets the window; clock rollback keeps the current

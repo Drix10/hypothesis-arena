@@ -1,0 +1,2 @@
+# Diff hygiene: shell scripts must stay LF (shebang-safe, minimal diffs).
+*.sh text eol=lf

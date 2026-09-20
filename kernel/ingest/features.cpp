@@ -505,7 +505,8 @@ void SatAdd(uint64_t& acc, uint64_t x) {
 
 void RateAdd(RateWindow& w, const IngestState& st, int64_t now_ns) {
     // Caller contract: once per bundle, now_ns a non-negative monotonic
-    // clock. Elapsed hour resets first so the rate is trailing-1h.
+    // clock. Elapsed hour resets first, so the rate covers the current
+    // one-hour window (tumbling, anchored at first RateAdd).
     // Clock rollback (now < start) keeps the current window rather than
     // resetting: resetting would erase accumulated bad counts. The
     // difference is __int128, so no signed overflow on any input.
