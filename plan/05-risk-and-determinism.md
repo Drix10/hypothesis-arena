@@ -86,7 +86,7 @@ epsilon = $1: zero-denominator positions rank by VaR_reduction alone;
   by calendar and that is recorded, not normalized away.
 - Correlation (R7): Pearson on 1 h closes, trailing 30 points, per open-pair.
   Computed in `ctx/`, breach flag lands in `state.risk_flags`.
-- VaR (veto question + `risk_flags.var_breach`): parametric 95% on trailing 24 h
+- VaR (`latent_risk` question + `risk_flags.var_breach`): parametric 95% on trailing 24 h
   1 h returns, position-weighted; breach = portfolio VaR > 5% equity. VaR is
   necessary but not sufficient: the engine also carries historical expected
   shortfall plus precomputed stress scenarios (gap, correlation shock,
@@ -118,7 +118,7 @@ behavior.
   margin, **and** the window holds ≥20 realized outcomes of the resolving class,
   entries halt and the stage demotes (doc 11 §11.1). Below that sample size the
   check reports insufficient-sample rather than pass/fail — a bare "any amount
-  worse" test on a rare-event question like `veto` would trip on noise, not on
+  worse" test on a rare-event question like `latent_risk` would trip on noise, not on
   an actual failure. *Owner:* calibration harness + hot path. *Default:* entries
   off, exits live.
 - **R14. Conflicting conclusions never size up.** `disagreement == true` → HOLD.
@@ -135,8 +135,10 @@ behavior.
   can invoke or override any level. Exits, stops, TP, and reconcile survive all
   three. *Owner:* `kill/`. *Default:* the higher level wins.
 - **R17. No automatic capital escalation.** No code path raises a stage. Promotion
-  is a human editing `STAGE` with the process stopped. Demotion is automatic and
-  cannot be vetoed. *Owner:* `STAGE` chain + human. *Default:* G0_PAPER.
+  is a human editing the stage chain with the process stopped (terminology:
+  `PROMOTION_MANIFEST` + `STAGE_STATE`, doc 10 §10.1 — other docs' bare
+  "`STAGE`" means this chain; the legacy single `STAGE` file is the G0
+  bootstrap only). Demotion is automatic and cannot be vetoed. *Owner:* `STAGE` chain + human. *Default:* G0_PAPER.
 
 ## 5.2 Leverage / stop table (locked)
 
@@ -147,7 +149,7 @@ Stops are `exit_profile_v1` (doc 03 §3.3): 1.5 × ATR(14), floored at 0.1% of
 price, TP 2R, mandatory time_exit — one frozen profile for both asset classes
 (a fixed-% stop built for crypto would never trigger on EURUSD and would bleed
 on TSLA). Profile variants are shadow-tested, never live-tuned. Every order
-intent carries a stop or it is rejected by `veto.cpp`.
+intent carries a stop or it is rejected by the deterministic risk veto (`risk/veto.cpp`).
 
 ## 5.3 Determinism contract
 
@@ -227,7 +229,7 @@ journaled; a mode never widens autonomy, only narrows it.
 ## 5.5 Audit
 
 - Every decision row: ts_ns, context_hash, features hash, JEV answers+probs,
-  disagreement flag, calibration snapshot, stage, spend tier, veto verdict,
+  disagreement flag, calibration snapshot, stage, spend tier, deterministic veto verdict,
   order intent or HOLD reason, chained hash. Append-only, daily backup.
 - Hash chains detect accidents, not attackers: every 1000 decisions the journal
   head is Ed25519-signed and the checkpoint stored off-host where the trading

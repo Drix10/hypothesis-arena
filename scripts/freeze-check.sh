@@ -193,6 +193,52 @@ done
   && ok "vectors pubkey == P3.1 trusted key" \
   || bad "vectors pubkey drifted from trusted key"
 
+# ---- hardening-2 contracts (fail-closed plumbing, frozen) ----
+# collect.py: status/records never mix; no identity truncation/coercion;
+# corrupt schedule/cache refuse to poll.
+grep -q 'return "not-modified", \[\]' "$ROOT/collector/collect.py" \
+  && ok "collect tuple returns" || bad "collect tuple returns moved"
+! grep -q 'uid\[:256\]' "$ROOT/collector/collect.py" \
+  && ok "no identity truncation" || bad "identity truncation back"
+grep -q 'str(row.get' "$ROOT/collector/collect.py" \
+  && bad "str() coercion back in collect" || ok "no str() coercion"
+grep -q 'SOURCE_SCHEDULING_UNKNOWN' "$ROOT/collector/collect.py" \
+  && ok "schedule fail-closed" || bad "schedule fail-closed moved"
+grep -q 'CACHE_CORRUPT' "$ROOT/collector/collect.py" \
+  && ok "cache fail-closed" || bad "cache fail-closed moved"
+# jev.py: OS lock, fail-closed charge, strict confidence/state.
+grep -q '_FileLock' "$ROOT/collector/jev.py" \
+  && ok "jev OS lock" || bad "jev OS lock moved"
+! grep -q '_SpendLock' "$ROOT/collector/jev.py" \
+  && ok "mkdir-lock gone" || bad "mkdir-lock back"
+grep -q 'if spent is None:' "$ROOT/collector/jev.py" \
+  && ok "charge-fail HOLD" || bad "charge-fail HOLD moved"
+grep -q '"confidence" in f' "$ROOT/collector/jev.py" \
+  && ok "confidence presence" || bad "confidence presence moved"
+grep -q '_finite_json' "$ROOT/collector/jev.py" \
+  && ok "recursive state scan" || bad "recursive state scan moved"
+grep -q 'allow_nan=False' "$ROOT/collector/jev.py" \
+  && ok "canon fail-closed" || bad "canon fail-closed moved"
+# ctx_read.py: dup keys, envelope, kind registry, unique ids.
+grep -q 'object_pairs_hook' "$ROOT/collector/ctx_read.py" \
+  && ok "dup-key rejection" || bad "dup-key rejection moved"
+grep -q 'BUNDLE_REQUIRED' "$ROOT/collector/ctx_read.py" \
+  && ok "bundle allowlist" || bad "bundle allowlist moved"
+grep -q 'SOURCE_KINDS' "$ROOT/collector/ctx_read.py" \
+  && ok "kind registry" || bad "kind registry moved"
+grep -q 'bundle-duplicate-feature-id' "$ROOT/collector/ctx_read.py" \
+  && ok "unique feature ids" || bad "unique feature ids moved"
+# classify.py: corrections uniqueness, record allowlist.
+grep -q 'UNIQUE(source, amending_id, base_id)' "$ROOT/collector/classify.py" \
+  && ok "corrections unique" || bad "corrections unique moved"
+grep -q 'KNOWN_FIELDS' "$ROOT/collector/classify.py" \
+  && ok "record allowlist" || bad "record allowlist moved"
+# plan/03: exact decision-key recipe, no hard-coded clock exit.
+grep -q 'comma-joined sorted' "$ROOT/plan/03-jev-decision-layer.md" \
+  && ok "03 decision-key recipe" || bad "03 decision-key recipe moved"
+! grep -q '15:55 ET' "$ROOT/plan/03-jev-decision-layer.md" \
+  && ok "03 no hard-coded exit" || bad "03 hard-coded exit back"
+
 echo "---"
 [ "$FAIL" = 0 ] && echo "FREEZE-CHECK: PASS" || echo "FREEZE-CHECK: FAIL"
 exit "$FAIL"

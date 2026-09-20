@@ -55,7 +55,7 @@ Three inputs, one output, inside a box:
 
 | Branch | What lives here | Status |
 |---|---|---|
-| **`main`** (you are here) | MiroHedge AI fund: this README, the locked spec in `plan/`, the collector build | P1.4 soak |
+| **`main`** (you are here) | MiroHedge AI fund: this README, the locked spec in `plan/`, the collector build | P3.1/P3.2 frozen, P3.3 NOT authorized |
 | **`arena`** | Hypothesis Arena: autonomous crypto trading bot for WEEX (4 AI analysts plus AI judge, WEEX Hackathon 2026 submission) | Archived lineage, runs as-is |
 
 Other branches (`stock`, `weex`) are legacy lineage. New fund work happens on `main`.
@@ -117,7 +117,7 @@ Trust flows one way: research to ctx to risk to exec. Nothing upstream can relax
 Row 0 is the deterministic engine (any R-breach holds, no model involved). Above the edge bands:
 
 - `latent_risk > 0.5` goes HOLD, additively. `disagreement == true` goes HOLD (R14, opposite TRIGGER effects, never averaged)
-- Event blackout (BINARY/HIGH tiers) goes HOLD. Calibration worse than baseline goes HOLD (R13 in-band)
+- Event blackout (BINARY/HIGH tiers) goes HOLD. Calibration `gate == breach` goes HOLD (R13 in-band; the `vs_baseline` comparison is descriptive, only the deterministic gate controls)
 - `execution` family or `flat` goes HOLD. `max` needs the §3.3 gate (enter high, latent low, calibration ok, directional family) or it downgrades. Family probabilities never size.
 
 State now carries typed `features` (max 16 in payload; enums, bools, counts, buckets; no model floats; effect + evidence level each), `source_status` (failed is not the same as not-scheduled), `disagreement`, event tiers, `calibration`, and `stage`. No raw texts, no prose in JEV state.
@@ -162,7 +162,7 @@ Every non-price source starts CONTEXT or NULL. Promotion to TRIGGER needs measur
 | Spend breaker (R10) | Hourly 30-day projection vs stage cap: 60% trim, 80% cheap + SOFT, 100% MEDIUM + demote. Research throttles, JEV never does |
 | Isolation (R11) | Research writes `features.jsonl` only. No broker keys, no journal/`HALT`/`STAGE` writes. Proven by test |
 | No lookahead (R12) | Future or TTL-expired features dropped structurally in `ingest/` |
-| Calibration floor (R13) | Brier worse than base rate by over 0.02 across 200 decisions (at least 20 outcomes) halts entries + demotes |
+| Calibration floor (R13) | Brier worse than base rate by over 0.02 across 200 decisions (at least 20 outcomes) sets `gate == breach`: halts entries + demotes |
 | Conflict (R14) | `disagreement == true` goes HOLD. No averaging, no tie-break toward action |
 | Runaway caps (R15) | Per-cycle LLM/tool/token/time/depth ceilings. 3 aborts pause the plane |
 | Kill hierarchy (R16) | SOFT / MEDIUM / HARD. None agent-reachable, exits survive all three |

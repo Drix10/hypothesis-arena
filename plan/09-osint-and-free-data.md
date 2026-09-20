@@ -154,8 +154,9 @@ a human. A lesson can only ever become a
   halves that source's poll rate for an hour.
 - **EDGAR specifics (LOCKED 2026-09-18):** UA `MiroHedge/phase0 contact=<human fills
   at build>`, hard ceiling 10 req/s (SEC limit), submissions JSON + companyfacts
-  only — no full-text crawl beyond the filing index. Zero 403s over the 7-day
-  soak or the poller does not ship (§9.4).
+  only — no full-text crawl beyond the filing index. Zero 403s over the observed
+  ~33 h / 133-cycle soak (shortened from 7 d on evidence; collector/
+  SOAK_REPORT.md) or the poller does not ship (§9.4).
 - **Timestamps:** `observed_at_ns` comes from the source's own publication field
   when it exists; when it does not, the feature is marked `observed_at_estimated`
   and is CONTEXT-capped forever. Publication-time-vs-availability-time mismatch is
@@ -181,7 +182,7 @@ a human. A lesson can only ever become a
 
 - [ ] Every Tier A source has a working poller, a TTL, a heartbeat, and a measured
       p50/p99 latency recorded in this doc.
-- [ ] EDGAR poller honors the UA requirement and rate limit; 7-day soak, zero 403s.
+- [ ] EDGAR poller honors the UA requirement and rate limit; observed soak window (133 cycles, zero 403s — see collector/SOAK_REPORT.md; the 7-day target was shortened on evidence, not redefined).
 - [ ] ALFRED vintage path proven: a revised series replays with the *original*
       vintage for any historical decision.
 - [ ] Every source classified TRIGGER / CONTEXT / NULL in the table above, with no

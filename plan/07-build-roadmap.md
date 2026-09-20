@@ -113,9 +113,10 @@ heartbeat, and failure default.
 - [x] Cache + failure paths (timeout/500/malformed → HOLD).
 - [x] 49 checks incl. hand-worked cases, spend controls, retry/HOLD, replay,
       signing; 300-state decision-key cross-check vs C++ later green.
-- [x] Exit: accepted/frozen at `50ea369`; confidence-null omission ratified.
-      Do not modify the sidecar unless integration exposes an actual
-      contract defect.
+- [x] Exit: accepted/frozen at `50ea369`; explicit confidence-null REJECTED
+      (matches C++ checkconf; absence means unknown). Do not modify the
+      sidecar beyond the authorized hardening scope unless integration
+      exposes an actual contract defect.
 
 ## Phase 2.5 — Research plane (docs 08, 09)
 
@@ -139,9 +140,11 @@ path for a trade.
 ## Phase 3 — C++ deterministic kernel (doc 13; order is load-bearing)
 
 Phase 2 accepted/frozen (`50ea369`) plus authorized pre-P3.3 hardening
-(spend fail-closed + atomic reserve, pinned verification, strict cache —
-this pass; P3.1/P3.2 protocol untouched). Do not modify the sidecar beyond
-that scope unless integration exposes an actual contract defect.
+(second pass, current: status/records separation, OS-native spend lock,
+fail-closed charge, strict confidence/state admission, strict ctx envelope
++ kind registry, canonical allowlists; P3.1/P3.2 protocol untouched).
+Do not modify the sidecar beyond that scope unless integration exposes
+an actual contract defect.
 
 - [x] P3.1 boundary validator DONE and ACCEPTED/FROZEN at `dcd44d4`:
       21-check AnswerSet gate (schema, pins, response_hash, Ed25519, key

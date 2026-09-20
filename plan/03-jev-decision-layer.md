@@ -112,8 +112,10 @@ through the max-gate, which is necessary but not sufficient:
   "which view fits" with "the trade wins."
 
 Exit profile v1 (frozen live profile; variants shadow-tested, never live-tuned):
-stop 1.5×ATR(14) floored 0.1%, TP 2R, plus mandatory `time_exit` — stocks flat
-by 15:55 ET (America/New_York), forex max 24 h. Profile changes are versioned
+stop 1.5×ATR(14) floored 0.1%, TP 2R, plus mandatory `time_exit` — calendar-aware
+(E4): time_exit = actual exchange close − frozen exit buffer (30 min default),
+from the validated IANA/exchange calendar, never a hard-coded clock time
+(which is wrong on early closes). Forex max 24 h. Profile changes are versioned
 (`exit_profile_v2`…) and need the doc-11 promotion path.
 
 ## 3.4 State contract v3 (what the sidecar sends)
@@ -181,11 +183,16 @@ fingerprint instead:
 
 - `research_key` = `symbol ‖ regime ‖ research_revision ‖ feature-ID set ‖
   question_set_version`. TTL 5 min. Busts on any new contradicting feature.
-- `decision_key` = `symbol ‖ snapshot_epoch ‖ price-return bucket ‖ spread
-  bucket ‖ ATR bucket ‖ zscore bucket ‖ regime ‖ event phase ‖ exposure
-  bucket ‖ feature revision ‖ research_revision ‖ question_set_version`,
-  where `feature revision = sha256(‖-joined sorted feature-ID set)` —
-  deterministic and distinct from the research-epoch `research_revision`.
+- `decision_key` = sha256_hex of `|`-joined (exactly, frozen sidecar recipe):
+  `symbol | snapshot_epoch | price_return_bucket | spread_bps | atr_bucket |
+  zscore | regime | event phase | exposure_pct | feature_revision |
+  research_revision | question_set_version`, where `spread_bps`, `zscore`,
+  and `exposure_pct` enter RAW (not bucketed — the "bucket" wording in
+drafts was wrong), `feature_revision = sha256_hex(comma-joined sorted
+  feature-ID set)`, and the join delimiter is the single ASCII pipe `|`
+  (feature_revision's inner delimiter is the comma). Deterministic and
+distinct from the research-epoch `research_revision`. Do not reword this
+  recipe: the C++ kernel recomputes it field-for-field (P3.1 check 21).
 - A cached answer is usable only if the decision_key is still compatible AND
   answer age ≤ 60 s AND no protected state (stage, HALT, R-flags) changed.
   Otherwise the sidecar re-issues the call — JEV answers are cheap, stale

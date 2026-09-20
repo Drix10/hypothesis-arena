@@ -113,8 +113,10 @@ Everything not live runs in shadow, permanently:
 
 A challenger may be proposed for promotion only when **all** of the following hold:
 
-1. **≥ 200 decisions and ≥ 60 closed simulated trades** in shadow. Short windows
-   guarantee out-of-sample decay.
+1. **≥ 200 decisions and ≥ 100 closed simulated trades** in shadow. Short windows
+   guarantee out-of-sample decay. (Single authoritative minimum: the earlier
+   "60 closed trades" draft is superseded — the CAL7 primary-metric validity
+   floor of 100 governs.)
 2. **Forward-only evaluation with walk-forward discipline.** The challenger was
    defined before the data it is evaluated on existed. Time-series splits are
    walk-forward with purged/embargoed boundaries where labels overlap, and the
@@ -133,12 +135,23 @@ A challenger may be proposed for promotion only when **all** of the following ho
    primary = risk-adjusted return net of all costs; guardrails = max drawdown,
    trade count (over-trading check), calibration (Brier), and R-rule proximity.
    Primary metric frozen (CAL7): net Sharpe (all-in costs incl. AI share) with
-   a 95% stationary-bootstrap CI, minimum 100 closed trades, Lo–MacKinlay
-   heteroskedasticity-consistent variance; ties break toward the champion;
-   any window cherry-picking (start/end chosen after seeing results) voids
-   the run. Search correction (CAL8): Holm step-down over the family's tested
-   variants at α=0.05 on the primary metric — the declared variant count from
-   step 4 sets the multiplicity, no post-hoc discounting.
+   a 95% stationary-bootstrap CI, minimum 100 closed trades; Sharpe-ratio
+   inference uses HAC (heteroskedasticity-and-autocorrelation-consistent)
+   standard errors with the kernel/bandwidth choice documented per run —
+   reported as its own procedure, not attributed to Lo–MacKinlay (whose
+   variance-ratio work is a different methodology). Ties break toward the
+   champion; any window cherry-picking (start/end chosen after seeing
+   results) voids the run. Search correction (CAL8): Holm step-down at
+   α=0.05 over the family's tested variants on the primary metric — the
+   declared variant count from step 4 sets the multiplicity, no post-hoc
+   discounting. Full Holm construction is frozen as a promotion-gate
+   requirement (H0/H1/statistic/direction/resampling/family/threshold):
+   H0 = challenger net Sharpe ≤ champion net Sharpe (one-sided, challenger
+   must be strictly better); test statistic = paired bootstrap difference
+   of net Sharpes on the same window; p-values from the stationary
+   bootstrap (same resampling as the CAL7 CI); family = all variants
+   declared under step 4 for this challenger lineage (cross-family search
+   is accounted by union over families); Holm-adjusted p < 0.05 required.
 6. **A non-LLM baseline is beaten.** The challenger must beat the frozen
    statistical baseline (doc 12: exact universe, features, entries, exits,
    costs — indicators + regime + risk table, no JEV, no research plane) on the

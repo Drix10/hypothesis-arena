@@ -238,9 +238,14 @@ mode that kills unattended agent systems, and it is capped in three places.
 `emit` writes one bundle: `research_epoch` + `bundle_id` + `watermarks` +
 feature list + `BUNDLE_COMMIT`, staged as temp + fsync + atomic rename with
 a manifest row (bundle_id, research_epoch, feature count, map sha, commit).
-The reader accepts ONLY a generation whose manifest shows a complete
-committed publish: partial emit + crash + restart can never expose half a
-bundle (R6). Watermarks are replay-critical metadata, not
+MANIFEST STATUS (explicit): the manifest mechanism is DESIGN FROZEN but
+IMPLEMENTATION DEFERRED to Phase 2.5 — the research-plane writer does not
+exist yet, so no writer produces the separate generation manifest and the
+P1.5 reader (`collector/ctx_read.py`) does NOT consume one. What the reader
+enforces TODAY is the bundle-internal `commit is True` flag plus the strict
+envelope/lineage/kind checks. Do not describe the reader as manifest-backed
+until Phase 2.5 implements the writer side. The frozen guarantee stands:
+partial emit + crash + restart can never expose half a bundle (R6). Watermarks are replay-critical metadata, not
 decoration: `{"entity_map_version", "entity_map_sha256", source watermarks,
 last-observation timestamps}`. The reader hashes the actual map file and
 requires an exact sha256 match — version strings alone are not pinning. C++ consumes the last *complete* bundle
@@ -261,7 +266,7 @@ only, never into JEV state — doc 03 §3.4).
   "effect": "bullish|bearish|risk_up|risk_down|neutral|unknown",
   "evidence": "source|derived|inference",
   "confidence_bucket": "low|medium|high",
-  "source_id": "edgar_submissions", "provenance_url": "https://...",
+  "source_id": "edgar_8k", "provenance_url": "https://...",
   "canonical_hash": "sha256 of the canonical SQLite content row",
   "canonical_hashes": ["..."]
 }
