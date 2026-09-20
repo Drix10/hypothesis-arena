@@ -39,6 +39,12 @@ def write_polls(rows):
               encoding="utf-8") as fh:
         json.dump({"start": DAY + "T00:00:00+00:00",
                    "end": "2026-09-19T00:00:00+00:00"}, fh)
+    # A same-day audit artifact: absence is tested explicitly by deleting
+    # it (audit-missing), never by the shared fixture lacking one.
+    with open(os.path.join(SOAK, f"audit-{DAY}.json"), "w",
+              encoding="utf-8") as fh:
+        json.dump({"per_source": {}, "as_of": DAY + "T00:00:00+00:00",
+                   "input_records": 0}, fh)
 
 
 def hb(status, at=AT):
@@ -142,5 +148,93 @@ with open(os.path.join(SOAK, "polls.jsonl"), "a",
     fh.write('"bare string row"\n')
 run()
 check("poll-integrity-fails", results()["poll-log-integrity"] == "FAIL")
+
+# 8. malformed classified rows fail classified-integrity (never skipped)
+write_polls([good_row])
+clf_dir = os.path.join(DATA, "classified")
+os.makedirs(clf_dir, exist_ok=True)
+with open(os.path.join(clf_dir, DAY + ".jsonl"), "w",
+          encoding="utf-8") as fh:
+    fh.write("{bad classified\n")
+    fh.write('"bare string"\n')
+    fh.write(json.dumps({"id": "x", "timestamps": {}}) + "\n")
+run()
+check("classified-integrity-fails",
+      results()["classified-integrity"] == "FAIL")
+os.remove(os.path.join(clf_dir, DAY + ".jsonl"))
+write_polls([good_row])
+run()
+check("classified-integrity-passes",
+      results()["classified-integrity"] == "PASS")
+
+# 9. SQLite acceptance runs PRAGMA integrity_check on a real database
+import sqlite3 as _sq
+_db = os.path.join(DATA, "canonical.db")
+_con = _sq.connect(_db)
+_con.execute("CREATE TABLE records(source TEXT, source_id TEXT, "
+             "content_hash TEXT, first_seen_at TEXT, last_seen_at TEXT, "
+             "published_at TEXT, retrieved_at TEXT, revision_id TEXT, "
+             "verdict TEXT, raw_json TEXT, parser_version TEXT, "
+             "PRIMARY KEY(source, source_id, content_hash))")
+_con.execute("CREATE TABLE corrections(source TEXT, amending_id TEXT, "
+             "base_id TEXT, at TEXT, "
+             "UNIQUE(source, amending_id, base_id))")
+_con.execute("INSERT INTO records VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+             ("edgar_8k", "a", "h", "t", "t", None, "t", None,
+              "new", "{}", "p1"))
+_con.commit()
+_con.close()
+write_polls([good_row])
+run()
+check("sqlite-pragma-passes", results()["sqlite-integrity"] == "PASS")
+_con = _sq.connect(_db)
+_con.execute("INSERT INTO records VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+             (None, "b", "h2", "t", "t", None, "t", None,
+              "new", "{}", "p1"))
+_con.commit()
+_con.close()
+run()
+check("sqlite-null-key-fails", results()["sqlite-integrity"] == "FAIL")
+os.remove(_db)
+
+# 10. audit absence is absence: no fallback to another day's audit
+write_polls([good_row])
+run()
+check("audit-present-passes", results()["audit-present"] == "PASS")
+os.remove(os.path.join(SOAK, f"audit-{DAY}.json"))
+with open(os.path.join(SOAK, "audit-2000-01-01.json"), "w",
+          encoding="utf-8") as fh:
+    json.dump({"per_source": {}}, fh)
+run()
+check("audit-missing-fails", results()["audit-present"] == "FAIL")
+for _f in os.listdir(SOAK):
+    if _f.startswith("audit-"):
+        os.remove(os.path.join(SOAK, _f))
+
+# 11. soak runner: timeout/spawn failures are persisted evidence codes
+import soak as _soak
+_r = _soak.run_step([sys.executable, "-c",
+                     "import time; time.sleep(30)"], timeout=2)
+check("run-step-timeout", _r.returncode == 124)
+_r = _soak.run_step([os.path.join(TMP, "no-such-binary-xyz")], timeout=10)
+check("run-step-spawn", _r.returncode == 127)
+# restart derivation: dead interval becomes an explicit MISSED_RANGE row
+_soak.POLLS = os.path.join(SOAK, "polls.jsonl")
+_old = {"at": "2026-09-18T10:00:00+00:00",
+        "sources": {n: hb("ok", "2026-09-18T10:00:00+00:00")
+                      for n in NAMES}}
+write_polls([_old])
+_n = _soak.record_missed_range("2026-09-18T16:45:00+00:00")
+check("missed-range-count", _n == 27)  # 6h45m // 15m
+_last = [json.loads(_l) for _l in
+         open(os.path.join(SOAK, "polls.jsonl"),
+              encoding="utf-8")][-1]
+check("missed-range-row",
+      _last["status"] == "MISSED_RANGE" and _last["count"] == 27
+      and _last["from"] == "2026-09-18T10:00:00+00:00")
+# continuous restart records nothing
+write_polls([good_row])  # last at 18:00, now 18:05 -> gap < 1.5 cycles
+_n = _soak.record_missed_range("2026-09-18T18:05:00+00:00")
+check("missed-range-quiet", _n == 0)
 
 print("ALL SOAK-CHECK TESTS PASS")

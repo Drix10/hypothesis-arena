@@ -161,6 +161,35 @@ def validate_record(rec):
     return None
 
 
+def _instant_or_none(s):
+    """Parse an ISO instant for temporal-ordering checks. None when
+    absent or unparseable (unparseable publication is already capped to
+    CONTEXT by parse_ts; this gate only orders what is orderable)."""
+    if not isinstance(s, str):
+        return None
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    return dt if dt.tzinfo is not None else None
+
+
+def temporal_violation(rec, retrieved_at):
+    """Require published_at <= observed_at <= retrieved_at wherever all
+    are available. A source observation stamped in the future (or a
+    publication newer than its own observation) is a timestamp-consistency
+    failure: the row is rejected before SQLite, never classified on a
+    clock that has not happened yet. Returns a reason or None."""
+    pub = _instant_or_none(rec.get("published_at"))
+    obs = _instant_or_none(rec.get("observed_at"))
+    ret = _instant_or_none(retrieved_at)
+    if obs is not None and ret is not None and obs > ret:
+        return "observed-in-future"
+    if pub is not None and obs is not None and pub > obs:
+        return "published-after-observed"
+    return None
+
+
 def init_db(con):
     con.execute("""CREATE TABLE IF NOT EXISTS records(
       source TEXT, source_id TEXT, content_hash TEXT,
@@ -176,9 +205,13 @@ def ingest_signal(con, rec, retrieved_at):
     """Revision-aware dedupe. Caller MUST run validate_record() first.
     Returns (verdict, content_hash, first_seen_at, revision_of)."""
     ch = content_hash(rec)
+    # Deterministic revision lineage: ties on first_seen_at are broken by
+    # rowid (insertion order), never by SQLite's unspecified order. An
+    # entire run shares one retrieved_at, so same-batch revisions of one
+    # source_id ALWAYS tie — without the tie-break prior[-1] is undefined.
     cur = con.execute(
         "SELECT content_hash, verdict FROM records WHERE source=? AND source_id=? "
-        "ORDER BY first_seen_at",
+        "ORDER BY first_seen_at, rowid",
         (rec["source"], rec["source_id"]))
     prior = cur.fetchall()
     pub, estimated = parse_ts(rec.get("published_at"))
@@ -324,83 +357,95 @@ def run(signals_path, as_of=None):
     os.makedirs(CLASSIFIED, exist_ok=True)
     con = sqlite3.connect(DB, timeout=30)
     init_db(con)
-    # Deterministic replay: when as_of is supplied, OUR processing clock and
-    # the output day both come from as_of — never wall-clock. Reruns of the
-    # same input reproduce the same rows and the same file.
-    now = REF["t"]
-    day = now[:10]
-    out_path = os.path.join(CLASSIFIED, f"{day}.jsonl")
-    stats = {"per_source": {}}
-    emitted = []  # published only after a successful DB commit (C6)
-    with open(signals_path, encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except ValueError:
-                stats["malformed_lines"] = stats.get("malformed_lines", 0) + 1
-                continue
-            try:
-                schema_problem = validate_record(rec)
-            except Exception:
-                schema_problem = "validator-crash"
-            if schema_problem:
-                stats["schema_invalid"] = stats.get("schema_invalid", 0) + 1
-                s = stats["per_source"].setdefault(
-                    rec.get("source", "unknown") if isinstance(rec, dict) else "unknown", {})
-                s["REJECTED"] = s.get("REJECTED", 0) + 1
-                s[f"reason:schema-{schema_problem}"] = \
-                    s.get(f"reason:schema-{schema_problem}", 0) + 1
-                continue  # structurally invalid: never SQLite, never emitted
-            try:
+    try:
+        # Deterministic replay: when as_of is supplied, OUR processing clock and
+        # the output day both come from as_of — never wall-clock. Reruns of the
+        # same input reproduce the same rows and the same file.
+        now = REF["t"]
+        day = now[:10]
+        out_path = os.path.join(CLASSIFIED, f"{day}.jsonl")
+        stats = {"per_source": {}}
+        emitted = []  # published only after a successful DB commit (C6)
+        with open(signals_path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    stats["malformed_lines"] = stats.get("malformed_lines", 0) + 1
+                    continue
+                try:
+                    schema_problem = validate_record(rec)
+                except Exception:
+                    schema_problem = "validator-crash"
+                if schema_problem:
+                    stats["schema_invalid"] = stats.get("schema_invalid", 0) + 1
+                    s = stats["per_source"].setdefault(
+                        rec.get("source", "unknown") if isinstance(rec, dict) else "unknown", {})
+                    s["REJECTED"] = s.get("REJECTED", 0) + 1
+                    s[f"reason:schema-{schema_problem}"] = \
+                        s.get(f"reason:schema-{schema_problem}", 0) + 1
+                    continue  # structurally invalid: never SQLite, never emitted
                 retrieved_at = now  # OUR processing time, not the source's
-                verdict, ch, first_seen, revision_of = ingest_signal(con, rec, retrieved_at)
-            except Exception as e:
-                stats["ingest_crash"] = stats.get("ingest_crash", 0) + 1
-                stats["ingest_crash_last"] = f"{type(e).__name__}: {e}"[:200]
-                continue  # one bad row never kills the batch
-            pub_row = con.execute(
-                "SELECT published_at FROM records WHERE source=? AND source_id=? AND content_hash=?",
-                (rec["source"], rec["source_id"], ch)).fetchone()
-            published_at = pub_row[0] if pub_row else None
-            estimated = published_at is None
-            fresh = is_fresh(first_seen, rec["source"])
-            elig, effect, conf, reason, effective_at = classify(
-                rec["source"], rec, verdict, published_at, estimated, fresh, retrieved_at)
-            s = stats["per_source"].setdefault(rec["source"], {})
-            s[verdict] = s.get(verdict, 0) + 1
-            s[elig] = s.get(elig, 0) + 1
-            s[f"reason:{reason}"] = s.get(f"reason:{reason}", 0) + 1
-            if elig in ("TRIGGER_CANDIDATE", "CONTEXT"):
-                emitted.append({
-                    "id": rec["id"], "source": rec["source"], "source_id": rec["source_id"],
-                    "eligibility": elig, "effect": effect, "confidence": conf,
-                    "reason": reason,
-                    "timestamps": {"published_at": published_at,
-                                   "retrieved_at": retrieved_at,
-                                   "source_observed_at": rec.get("observed_at"),
-                                   "effective_at": effective_at,
-                                   "first_seen_at": first_seen,
-                                   "published_estimated": estimated},
-                    "provenance": {"raw_hash": ch, "parser_version": PARSER_VERSION,
-                                   "rule_version": RULES_VERSION, "created_at": retrieved_at,
-                                   "revision_of": revision_of},
-                })
-    # Crash-consistent publication: commit the canonical truth FIRST, then
-    # write the output to temp + fsync + atomic rename. A crash before the
-    # commit leaves neither DB rows nor output; a crash during the file
-    # write leaves the previous artifact intact; reruns are PK-idempotent.
-    con.commit()
-    tmp_path = out_path + f".tmp-{os.getpid()}"
-    with open(tmp_path, "w", encoding="utf-8") as out:
-        for row in emitted:
-            out.write(json.dumps(row, ensure_ascii=False) + "\n")
-        out.flush()
-        os.fsync(out.fileno())
-    os.replace(tmp_path, out_path)
-    con.close()
+                try:
+                    tv = temporal_violation(rec, retrieved_at)
+                except Exception:
+                    tv = "temporal-check-crash"
+                if tv:
+                    stats["temporal_invalid"] = stats.get("temporal_invalid", 0) + 1
+                    s = stats["per_source"].setdefault(rec.get("source", "unknown"), {})
+                    s["REJECTED"] = s.get("REJECTED", 0) + 1
+                    s[f"reason:temporal-{tv}"] = s.get(f"reason:temporal-{tv}", 0) + 1
+                    continue  # inconsistent clocks: never SQLite, never emitted
+                try:
+                    verdict, ch, first_seen, revision_of = ingest_signal(con, rec, retrieved_at)
+                except Exception as e:
+                    stats["ingest_crash"] = stats.get("ingest_crash", 0) + 1
+                    stats["ingest_crash_last"] = f"{type(e).__name__}: {e}"[:200]
+                    continue  # one bad row never kills the batch
+                pub_row = con.execute(
+                    "SELECT published_at FROM records WHERE source=? AND source_id=? AND content_hash=?",
+                    (rec["source"], rec["source_id"], ch)).fetchone()
+                published_at = pub_row[0] if pub_row else None
+                estimated = published_at is None
+                fresh = is_fresh(first_seen, rec["source"])
+                elig, effect, conf, reason, effective_at = classify(
+                    rec["source"], rec, verdict, published_at, estimated, fresh, retrieved_at)
+                s = stats["per_source"].setdefault(rec["source"], {})
+                s[verdict] = s.get(verdict, 0) + 1
+                s[elig] = s.get(elig, 0) + 1
+                s[f"reason:{reason}"] = s.get(f"reason:{reason}", 0) + 1
+                if elig in ("TRIGGER_CANDIDATE", "CONTEXT"):
+                    emitted.append({
+                        "id": rec["id"], "source": rec["source"], "source_id": rec["source_id"],
+                        "eligibility": elig, "effect": effect, "confidence": conf,
+                        "reason": reason,
+                        "timestamps": {"published_at": published_at,
+                                       "retrieved_at": retrieved_at,
+                                       "source_observed_at": rec.get("observed_at"),
+                                       "effective_at": effective_at,
+                                       "first_seen_at": first_seen,
+                                       "published_estimated": estimated},
+                        "provenance": {"raw_hash": ch, "parser_version": PARSER_VERSION,
+                                       "rule_version": RULES_VERSION, "created_at": retrieved_at,
+                                       "revision_of": revision_of},
+                    })
+        # Crash-consistent publication: commit the canonical truth FIRST, then
+        # write the output to temp + fsync + atomic rename. A crash before the
+        # commit leaves neither DB rows nor output; a crash during the file
+        # write leaves the previous artifact intact; reruns are PK-idempotent.
+        con.commit()
+        tmp_path = out_path + f".tmp-{os.getpid()}"
+        with open(tmp_path, "w", encoding="utf-8") as out:
+            for row in emitted:
+                out.write(json.dumps(row, ensure_ascii=False) + "\n")
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(tmp_path, out_path)
+    finally:
+        con.close()
     return out_path, stats
 
 

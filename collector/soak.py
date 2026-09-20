@@ -25,10 +25,15 @@ POLLS = os.path.join(SOAK, "polls.jsonl")
 CYCLE_S = 15 * 60
 WINDOW_PATH = os.path.join(SOAK, "window.json")
 
-# Missed-cycle semantics (explicit): a cycle interrupted during the 15-min
-# wait is a MISSED cycle. It is recorded (polls.jsonl row, no collection),
-# never backfilled: catch-up polls would double-collect and corrupt the
-# record-balance evidence. Gaps are data, not errors to hide.
+# Missed-cycle semantics (explicit and honest): a hard kill during the
+# 15-min sleep writes NOTHING — a dead process cannot append rows. The
+# absence is detectable, but it is absence, not a recorded MISSED row.
+# On (re)start, the supervisor derives the dead interval from the
+# persisted window + last poll row and appends ONE explicit MISSED_RANGE
+# row {from, through, count}. Late wakeups (sleep returned over a cycle
+# late but the process lived) derive the same way. Gaps are data, never
+# backfilled: catch-up polls would double-collect and corrupt the
+# record-balance evidence.
 
 
 def load_window(hours):
@@ -85,9 +90,55 @@ def valid_window(w):
         return False
 
 
-def record_missed(at):
-    append_poll_row({"at": at, "status": "MISSED",
-                     "note": "cycle interrupted during wait; not backfilled"})
+def _parse_at(s):
+    try:
+        dt = datetime.fromisoformat(s)
+    except (ValueError, TypeError):
+        return None
+    return dt if dt.tzinfo is not None else None
+
+
+def last_poll_at():
+    """Newest parseable `at` in polls.jsonl, or None (first launch).
+    Malformed lines are skipped here (the checker, not the runner,
+    judges log integrity)."""
+    latest = None
+    try:
+        with open(POLLS, encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                inst = _parse_at(row.get("at"))
+                if inst is not None and (latest is None or inst > latest):
+                    latest = inst
+    except OSError:
+        return None
+    return latest
+
+
+def record_missed_range(now_iso):
+    """Derive the dead interval since the last poll row and record ONE
+    explicit MISSED_RANGE row. Returns the missed count (0 = continuous).
+    Called at loop start (covers hard kills) and on late wakeups."""
+    last = last_poll_at()
+    if last is None:
+        return 0  # first launch: nothing missed
+    now = _parse_at(now_iso) or datetime.now(timezone.utc)
+    gap = (now - last).total_seconds()
+    if gap <= CYCLE_S * 1.5:
+        return 0
+    count = int(gap // CYCLE_S)
+    append_poll_row({"at": now_iso, "status": "MISSED_RANGE",
+                     "from": last.isoformat(), "through": now_iso,
+                     "count": count,
+                     "note": "restart-derived dead interval; the dead "
+                             "process wrote nothing, this row is the "
+                             "restart speaking for it; never backfilled"})
+    return count
 
 
 def ts_now():
@@ -220,14 +271,20 @@ def main():
             if a == "--window-hours" and i + 1 < len(sys.argv):
                 hours = float(sys.argv[i + 1])
         w = load_window(hours)
+        # A previous incarnation may have died mid-window: derive and
+        # record the dead interval BEFORE the first cycle, so the gap is
+        # explicit evidence rather than silent absence.
+        record_missed_range(ts_now())
         end = datetime.fromisoformat(w["end"]).timestamp()
         while time.time() < end:
             cycle()
             nxt = (int(time.time() / CYCLE_S) + 1) * CYCLE_S
             wait = nxt - time.time()
             if wait > CYCLE_S * 1.5:
-                # woke up over a cycle late (sleep interrupted / host stalled)
-                record_missed(ts_now())
+                # Woke over a cycle late but alive: derive the lost
+                # interval from the last poll row (honest count, not one
+                # generic row).
+                record_missed_range(ts_now())
             time.sleep(max(60, wait))
         print(f"window closed {w['end']}")
     else:

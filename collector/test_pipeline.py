@@ -15,7 +15,8 @@ os.environ["MIRO_CLASSIFIED_DIR"] = tmp
 sys.path.insert(0, HERE)
 
 import sqlite3  # noqa: E402
-from classify import init_db, ingest_signal, classify, DB  # noqa: E402
+from classify import init_db, ingest_signal, classify, DB, \
+    temporal_violation  # noqa: E402
 
 N = 0
 
@@ -299,3 +300,34 @@ assert validate_record(dict(rec(), word_count="lots")) == "bad-type-word_count"
 assert validate_record(dict(rec(), links="http://x")) == "bad-type-links"
 assert validate_record(dict(rec(), links=["http://x"])) is None
 print("ok exhaustive-types")
+
+# 23. revision tie-break: same first_seen_at -> rowid decides, always.
+# Insert B (hash-high) first, A (hash-low) second, identical timestamps;
+# a third revision must link to the later-INSERTED row (A), not the
+# lexicographically-smaller hash. Without ORDER BY ... rowid this is
+# SQLite's unspecified order.
+con = fresh()
+TS = "2026-09-18T18:00:00+00:00"
+rb = rec(source_id="tie1", text="Item 8.01 version BRAVO zzz")
+ra = rec(source_id="tie1", text="Item 8.01 version ALPHA aaa")
+vb, hb, _, _ = ingest_signal(con, rb, TS)
+va, ha, _, _ = ingest_signal(con, ra, TS)
+assert (vb, va) == ("new", "revision"), (vb, va)
+rc = rec(source_id="tie1", text="Item 8.01 version CHARLIE mmm")
+vc, _, _, rev_of = ingest_signal(con, rc, TS)
+assert vc == "revision" and rev_of == ha, (vc, rev_of)
+print("ok revision-tiebreak")
+
+# 24. temporal ordering: published <= observed <= retrieved enforced.
+RET = "2026-09-18T18:00:00+00:00"
+assert temporal_violation(rec(), RET) is None  # sane fixture passes
+assert temporal_violation(
+    dict(rec(), observed_at="2026-09-18T19:00:00+00:00"),
+    RET) == "observed-in-future"
+assert temporal_violation(
+    dict(rec(), published_at="2026-09-18T17:30:00+00:00",
+         observed_at="2026-09-18T17:00:00+00:00"),
+    RET) == "published-after-observed"
+# absent publication (estimated) only checks observed <= retrieved
+assert temporal_violation(dict(rec(), published_at=None), RET) is None
+print("ok temporal-ordering")
