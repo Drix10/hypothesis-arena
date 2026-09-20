@@ -805,11 +805,17 @@ inline void PtEncode(const Pt& p, uint8_t enc[32]) {
     enc[31] |= uint8_t((x.l[0] & 1) << 7);
 }
 // order L = 2^252 + 27742317777372353535851937790883648493
+// AMENDMENT (P3.3 integration found it): the LE table below was wrong from
+// byte 5 on (top bytes read 0x10/0x0F instead of 0x00/0x10), false-rejecting
+// ~6% of VALID signatures (S[31]==0x0F, S[30]>=0x10) as S>=L. Never
+// false-accepted (direction was fail-closed: the wrong table is STRICTER).
+// Corrected bytes cross-checked against Python integers AND Reduce512's LB
+// limbs; full P3.1/P3.2/fuzz gates re-run green. Pending human re-sign.
 inline bool ScalarLessL(const uint8_t s[32]) {
-    static const uint8_t L[32] = {0xED, 0xD3, 0xF5, 0x5C, 0x1A, 0x26, 0x12, 0x2E,
-                                  0x52, 0x8C, 0xB3, 0xE3, 0x51, 0x7A, 0x67, 0xE8,
-                                  0xF0, 0x9E, 0x9D, 0x72, 0xEC, 0xFD, 0xE9, 0xC8,
-                                  0xE0, 0x75, 0x3A, 0xE5, 0x33, 0x6F, 0x10, 0x0F};
+    static const uint8_t L[32] = {0xED, 0xD3, 0xF5, 0x5C, 0x1A, 0x63, 0x12, 0x58,
+                                  0xD6, 0x9C, 0xF7, 0xA2, 0xDE, 0xF9, 0xDE, 0x14,
+                                  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                                  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10};
     for (int i = 31; i >= 0; i--) {
         if (s[i] < L[i]) return true;
         if (s[i] > L[i]) return false;
