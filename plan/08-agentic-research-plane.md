@@ -262,6 +262,21 @@ Hard rules on this record:
   parser confidence × corroboration), never self-reported by the model.
 - **No free-form floats.** Values are enums, booleans, counts, or buckets.
 - **No prose** in this file, at all. Prose lives in the digest.
+- **Plausibility, not just shape.** Schema validation proves structure; these
+  three semantic checks prove the record means what it claims (all P1.5
+  ctx-reader enforced, rejection reasons logged):
+  1. *Entity binding* — every `symbols[]` entry must resolve through the
+     versioned CIK/ticker map (EDGAR) or release-symbol table (macro). Unmapped
+     or contradictory binding → reject (TRIGGER) or cap at CONTEXT (derived).
+  2. *Frozen-feed detection* — identical authoritative payload across N
+     consecutive polls (N per source TTL) marks the source `stale`, never fresh.
+  3. *Session-aware freshness* — equity features timestamped outside
+     09:30–16:00 America/New_York without an overnight-event kind are rejected.
+  A perfectly deterministic system deciding from wrong-but-valid data is the
+  failure these rules exist to prevent.
+- **Lineage.** Every feature carries `canonical_hash` chaining to the exact
+  canonical row(s) (SQLite `content_hash`) it derives from. Research-plane
+  features without resolvable lineage are rejected like schema failures.
 - Max 64 features per snapshot, newest first. Overflow dropped, counted, logged.
 - `ctx/` rejects any record failing schema, bounds, or R12 timestamp checks, and
   increments `features_rejected`. Rejection rate > 5%/hour alerts.

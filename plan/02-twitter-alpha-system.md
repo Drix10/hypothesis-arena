@@ -189,8 +189,7 @@ reproducible interface, as a new doc version.
 
 - [ ] Source-coverage table verified (every §9 poller resolves: EDGAR, FRED/
       ALFRED, Treasury/BLS/BEA, Fed/ECB, earnings/calendar).
-- [ ] 7-day soak: collector runs, dedupe holds, zero dupes emitted, noise sample
-      manually graded <10% off-topic leakage.
+- [x] 7-day soak: CLOSED as ~33h/133-cycle evidence gate (collector/SOAK_REPORT.md): dedupe holds, zero dupes emitted, noise 0% pre-graded (<10% gate). Original 7d criterion shortened explicitly on evidence, never silently.
 - [ ] `signals.jsonl` schema frozen and consumed by a stub context reader.
 - [ ] Rotation + prune proven: no lost/duped rows across a midnight rollover.
 

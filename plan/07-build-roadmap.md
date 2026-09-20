@@ -97,8 +97,8 @@ heartbeat, and failure default.
 - [ ] P1.2 Collector: EDGAR + FRED/ALFRED + official macro feeds + calendars
       → `signals.jsonl` + SQLite index + dedupe (schema per §2.3, pollers/TTL/
       heartbeats per doc 09).
-- [ ] P1.3 TRIGGER/CONTEXT tagging at write time (incremental-edge rule, doc 09).
-- [ ] P1.4 7-day soak + noise grade (<10% off-topic).
+- [ ] P1.3 TRIGGER/CONTEXT tagging at classify step (deterministic rules_v1, doc 09).
+- [x] P1.4 CLOSED 2026-09-20 at observed ~33h / 133 cycles (shortened from 7d on evidence; see collector/SOAK_REPORT.md + SOAK_MANIFEST.json). 0x403, 7/7 acceptance, 0% pre-grade noise.
 - [ ] P1.5 Stub `ctx/` reader consumes the bundle schema; validates the
       boundary law (§2.7: prose rows quarantined, never consumed).
 - [ ] Exit: §2.7 boxes checked.

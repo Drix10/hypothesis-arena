@@ -24,6 +24,15 @@ at first tradable print beyond the gap; neither hit by horizon → censored
 excluded; stocks resolve within the session, forex within 24 h. Censored is a
 third class, never silently a win or a loss.
 
+Every resolved outcome carries `outcome_source` (locked vocabulary):
+`EXOGENOUS` (price path shows no traceable contribution from our fills),
+`SELF_INFLUENCED` (our order/fill precedes and plausibly shapes the resolving
+path — always assumed when our fill volume is non-trivial vs venue depth or
+when resolution occurs within N seconds of our fill; N versioned per venue),
+`UNKNOWN` (cannot determine — scored with confidence intervals widened, never
+as exogenous by default). Self-influenced outcomes are never neutral market
+truth: they are scored separately and cannot promote a challenger alone.
+
 - **HOLDs are scored too, sampled.** A system that only scores trades it took
   cannot discover that it is systematically too cautious — or that its `enter`
   scores are noise. Every HOLD is eligible, but only a **25% stratified sample**
