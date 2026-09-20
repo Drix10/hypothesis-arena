@@ -261,7 +261,9 @@ Exit: §4.5, §6.5 drill boxes checked.
       normal + hardened builds, Python suite + freeze green, sidecar
       byte-identical. (Earlier "39 checks" / "96 checks" lines describe
       superseded intermediate states, not the final gate.)
-- [x] P3.2 DONE (`kernel/vectors/` v1+v2 + `kernel/test_p32.cpp`, 37 checks green normal+hardened): committed canonical bytes, hash, signature; byte-equal C++ reproduction; mutation/key-mismatch failures; UTF-8/nesting/float boundaries; signature scope recorded (payload only); V1 accepted by frozen P3.1 validator. Sidecar untouched.
+- [x] P3.2 DONE (`kernel/vectors/` v1+v2 + `kernel/test_p32.cpp`, 37 checks green normal+hardened): committed canonical bytes, hash, signature; byte-equal C++ reproduction; mutation/key-mismatch failures; UTF-8/nesting/float boundaries; signature scope recorded (payload only); V1 accepted by frozen P3.1 validator. Sidecar untouched. P3.2 ACCEPTED/FROZEN (human sign-off; no further P3.2 changes; P3.3 NOT authorized).
+
+Protocol guard: the canonical form is exactly the frozen `json.dumps` recipe above, pinned by the committed vectors. Replacing it with RFC 8785/JCS or any other scheme is a PROTOCOL change requiring new vectors and a version bump — never a silent substitution.
 - [ ] P3.3 table tests + replay determinism green.
 - [ ] §13.4 resolved to (a) with contract or (b) quarantined.
 - [ ] P3.5 drill boxes (§4.5, §6.5) checked.
