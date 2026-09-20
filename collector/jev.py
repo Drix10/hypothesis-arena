@@ -1288,60 +1288,64 @@ def decide(state, now=None, key=None, post_fn=None):
         return row, None
     post_fn = post_fn or post
     # MONEY GATE (serialized): the 30-day USD authorization, the attempt
-    # reservation, the provider call, and the charge all happen inside ONE
-    # OS-lock hold. Checking the cap outside the lock lets two processes
-    # both observe headroom and jointly overshoot; the call ceiling was
-    # already safe (reservation-counted), the money cap was not. Signing
-    # and caching happen AFTER release: crypto needs no money lock.
+    # reservation, the provider call, the charge, the SIGNING, and the cache
+    # write all happen inside ONE OS-lock hold. Checking the cap outside the
+    # lock lets two processes both observe headroom and jointly overshoot;
+    # and releasing before sign+cache lets a loser's in-lock recheck miss
+    # between the winner's release and its (slow, pure-Python) cache write,
+    # buying a duplicate call. Single-flight must be atomic end to end.
     # Lock ordering is spend -> call-log everywhere (log_row's lock is a
     # different file, always taken inside, never outside, the spend lock).
+    # The final ANSWER row + spend_30d reads happen after release: reporting
+    # needs no money lock.
     try:
         with _spend_lock(timeout=MONEY_GATE_TIMEOUT):
             gate = _money_gate(state, key, post_fn, now)
+            if gate[0] == "hold":
+                return gate[1], None
+            if gate[0] == "cached":
+                # Single-flight recheck hit inside the lock: another process
+                # answered this state while we waited. Serve their artifact.
+                return gate[1], gate[2]
+            answers, usage, spent = gate[1], gate[2], gate[3]
+            created = datetime.fromtimestamp(now, timezone.utc).isoformat()
+            payload = {"schema_version": "answerset_v1",
+                       "question_set_version": QVERSION, "model": MODEL,
+                       "revision": REVISION, "provider": PROVIDER,
+                       "symbol": state.get("symbol"),
+                       "snapshot_epoch": state.get("snapshot_epoch"),
+                       "state_hash": sha256_hex(canon(state)),
+                       "decision_key": decision_key(state),
+                       "created_at": created,
+                       "expires_at": (datetime.fromisoformat(created)
+                                      .timestamp() + ANSWER_MAX_AGE_S),
+                       "answers": answers}
+            try:
+                artifact = sign_answerset(payload)
+            except KeyMaterialError as e:
+                row = hold_row(state, f"signing-key-unavailable:{e}", now=now)
+                row["cost"] = cost_tag(state, usage)
+                log_row(row)
+                return row, None
+            try:
+                cache_put(state, artifact, now)
+            except OSError as e:
+                # Paid, settled, signed — but NOT durably cached. Fail
+                # loudly: HOLD, no artifact, stderr. The next cycle will
+                # miss cache and may buy another call (bounded by the spend
+                # governor); a dead disk needs a human, and pretending
+                # otherwise would be worse. Spend stays settled: the money
+                # was spent, whatever the disk did.
+                row = hold_row(state, f"evidence-persist-failed:{type(e).__name__}",
+                               now=now)
+                row["cost"] = cost_tag(state, usage)
+                log_row(row)
+                print(f"CACHE_PUT_FAILED: {e}", file=sys.stderr)
+                return row, None
     except TimeoutError:
         row = hold_row(state, "spend-lock-busy", now=now)
         row["cost"] = cost_tag(state, None)
         log_row(row)
-        return row, None
-    if gate[0] == "hold":
-        return gate[1], None
-    if gate[0] == "cached":
-        # Single-flight recheck hit inside the lock: another process
-        # answered this state while we waited. Serve their artifact.
-        return gate[1], gate[2]
-    answers, usage, spent = gate[1], gate[2], gate[3]
-    created = datetime.fromtimestamp(now, timezone.utc).isoformat()
-    payload = {"schema_version": "answerset_v1",
-               "question_set_version": QVERSION, "model": MODEL,
-               "revision": REVISION, "provider": PROVIDER,
-               "symbol": state.get("symbol"),
-               "snapshot_epoch": state.get("snapshot_epoch"),
-               "state_hash": sha256_hex(canon(state)),
-               "decision_key": decision_key(state),
-               "created_at": created,
-               "expires_at": (datetime.fromisoformat(created)
-                              .timestamp() + ANSWER_MAX_AGE_S),
-               "answers": answers}
-    try:
-        artifact = sign_answerset(payload)
-    except KeyMaterialError as e:
-        row = hold_row(state, f"signing-key-unavailable:{e}", now=now)
-        row["cost"] = cost_tag(state, usage)
-        log_row(row)
-        return row, None
-    try:
-        cache_put(state, artifact, now)
-    except OSError as e:
-        # Paid, settled, signed — but NOT durably cached. Fail loudly:
-        # HOLD, no artifact, stderr. The next cycle will miss cache and
-        # may buy another call (bounded by the spend governor); a dead
-        # disk needs a human, and pretending otherwise would be worse.
-        # Spend stays settled: the money was spent, whatever the disk did.
-        row = hold_row(state, f"evidence-persist-failed:{type(e).__name__}",
-                       now=now)
-        row["cost"] = cost_tag(state, usage)
-        log_row(row)
-        print(f"CACHE_PUT_FAILED: {e}", file=sys.stderr)
         return row, None
     row = {"action": "ANSWER", "answers": answers, "symbol": state.get("symbol"),
            "context_hash": state.get("context_hash"), "cached": False,
