@@ -32,11 +32,25 @@ QVERSION = "v3"
 TIMEOUT_S = 10
 RETRY_DELAY_S = 5.0
 ANSWER_MAX_AGE_S = 60
+CLOCK_SKEW_S = 60.0  # max tolerated future-dating of signed created_at
 DAILY_CALL_CEILING = 5000
 DAILY_CALL_ALERT = 2500
 STAGES = frozenset({"G0_PAPER", "G1_TINY", "G2_SCALED", "G3_FULL"})
 STAGE_30D_CAPS_USD = {"G0_PAPER": 150.0, "G1_TINY": 150.0,
                       "G2_SCALED": 400.0, "G3_FULL": 1000.0}
+# Frozen maximum authorized charge for ONE provider call. The money gate
+# reserves this amount BEFORE sending the request and reconciles the actual
+# cost after: a call is only authorized when total_30d + this reservation
+# fits inside the stage cap, so one call can never overshoot an absolute
+# cap merely because usage is learned afterward. Covers the worst-case
+# pinned-model 4-question call with headroom; raising it is a doc edit +
+# version bump (it weakens the pre-call bound), never a silent constant
+# tweak. Actual overruns (provider reprices above this) are charged in
+# full AND trip unknown_charges: the governor holds until a human audits.
+MAX_AUTHORIZED_CALL_USD = 2.00
+# Clock-skew allowance for artifact admission: a signed created_at up to
+# this far in the future is tolerated (signer/verifier clock offset),
+# anything beyond is future-dated evidence and rejected.
 CACHE_DIR = os.path.join(ROOT, "data", "jev_cache")
 SPEND_DIR = os.path.join(ROOT, "data", "jev_spend")
 CALL_LOG = os.path.join(ROOT, "data", "jev_calls.jsonl")
@@ -529,6 +543,12 @@ def validate_cached_artifact(state, c, now):
             return None
         if exp != created.timestamp() + ANSWER_MAX_AGE_S:
             return None  # expiry must equal created + 60 s, exactly
+        if exp <= now:
+            return None  # signed artifact itself expired, even though
+            # the cache wrapper `at` is still fresh: admission is about
+            # the ANSWER's lifetime, not the wrapper's.
+        if created.timestamp() > now + CLOCK_SKEW_S:
+            return None  # created in the future beyond skew: miss
         if p.get("schema_version") != "answerset_v1":
             return None
         if p.get("question_set_version") != QVERSION:
@@ -719,12 +739,22 @@ TMP_LEDGER_RE = re.compile(r"^\d{4}-\d{2}-\d{2}\.json\.tmp-\d+$")
 DAY_LEDGER_RE = re.compile(r"^\d{4}-\d{2}-\d{2}\.json$")
 
 
-def spend_today():
+def _day_of(now):
+    """UTC day string for an epoch instant. The spend ledger is keyed
+    by the DECISION clock, never wall clock: replay/test with an
+    injected now must read and write the same day-file the live caller
+    would have used at that instant."""
+    return datetime.fromtimestamp(now, timezone.utc).strftime("%Y-%m-%d")
+
+
+def spend_today(now=None):
     """Returns (ledger-or-None, path). None = UNKNOWN_SPEND (corrupt or
     schema-invalid): callers must fail closed, never treat as $0.
     An ABSENT day-file is a fresh day (blank ledger); a present-but-bad
-    file is corruption."""
-    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    file is corruption. `now` is the authoritative decision instant
+    (epoch); None means live wall clock."""
+    now = now if now is not None else time.time()
+    day = _day_of(now)
     p = _spend_path(day)
     try:
         with open(p, encoding="utf-8") as fh:
@@ -738,27 +768,43 @@ def spend_today():
     return s, p
 
 
-def _reserve_now():
-    """Reserve one attempt. Caller MUST hold _spend_lock (see decide's
-    money gate); the public spend_reserve() takes it for standalone use."""
-    s, p = spend_today()
+def _reserve_now(now, cap=None):
+    """Reserve one attempt AND the maximum authorized call charge.
+    Caller MUST hold _spend_lock (see decide's money gate); the public
+    spend_reserve() takes it for standalone use. The money reservation
+    makes the stage cap a pre-call bound: authorization requires
+    total_30d + MAX_AUTHORIZED_CALL_USD <= cap, so the ledger can never
+    cross the cap from a single call whose actual cost is learned later.
+    cap=None skips the money-cap check (legacy standalone tooling only;
+    the decision path always passes its stage cap). A crash between
+    reserve and settle overstates spend (fail-closed)."""
+    s, p = spend_today(now)
     if s is None:
         return "unknown", None
     if s["calls"] >= DAILY_CALL_CEILING:
         return "ceiling", s
+    if cap is not None:
+        total, unknown = spend_30d(now)
+        if unknown:
+            return "unknown", None
+        if total + MAX_AUTHORIZED_CALL_USD > cap:
+            return "stage-cap", s
     s["calls"] += 1
+    s["usd"] = round(s["usd"] + MAX_AUTHORIZED_CALL_USD, 8)
     _persist_ledger(s, p)
     return "ok", s
 
 
-def spend_reserve():
+def spend_reserve(now=None, cap=None):
     """Atomically reserve ONE provider attempt BEFORE the network call.
     Returns (status, ledger-or-None): ok | ceiling | unknown | lock-busy.
     The increment is persisted inside the lock, so concurrent sidecars
-    cannot both observe headroom (B4)."""
+    cannot both observe headroom (B4). `now` is the authoritative
+    decision instant; None means live wall clock."""
     try:
         with _spend_lock():
-            return _reserve_now()
+            return _reserve_now(now if now is not None else time.time(),
+                                cap)
     except TimeoutError:
         return "lock-busy", None
 
@@ -783,10 +829,10 @@ def validate_usage(usage):
     return float(cost), pt, ct, True
 
 
-def _charge_now(cost, prompt_t=0, completion_t=0, known=True):
+def _charge_now(cost, prompt_t=0, completion_t=0, known=True, now=None):
     """Charge money/tokens. Caller MUST hold _spend_lock; the public
     spend_charge() takes it for standalone use."""
-    s, p = spend_today()
+    s, p = spend_today(now if now is not None else time.time())
     if s is None:
         return None
     if known:
@@ -799,12 +845,59 @@ def _charge_now(cost, prompt_t=0, completion_t=0, known=True):
     return s
 
 
-def spend_charge(cost, prompt_t=0, completion_t=0, known=True):
+def _settle_now(cost, prompt_t, completion_t, known, now):
+    """Reconcile the pre-call reservation against the actual cost.
+    Caller MUST hold _spend_lock. Returns (ledger-or-None, flag) where
+    flag is "ok" | "pricing-violation" (actual exceeded the frozen
+    maximum: charged in full AND unknown_charges tripped, so the governor
+    holds until a human audits the repricing). Unknown cost refunds the
+    reservation and trips unknown_charges (money spent but unpriced)."""
+    s, p = spend_today(now)
+    if s is None:
+        return None, "unknown"
+    if not known:
+        s["usd"] = round(s["usd"] - MAX_AUTHORIZED_CALL_USD, 8)
+        if s["usd"] < 0:
+            return None, "unknown"
+        s["unknown_charges"] = s.get("unknown_charges", 0) + 1
+        _persist_ledger(s, p)
+        return s, "ok"
+    if cost > MAX_AUTHORIZED_CALL_USD:
+        s["usd"] = round(s["usd"] + (cost - MAX_AUTHORIZED_CALL_USD), 8)
+        s["prompt_tokens"] += prompt_t
+        s["completion_tokens"] += completion_t
+        s["unknown_charges"] = s.get("unknown_charges", 0) + 1
+        _persist_ledger(s, p)
+        return s, "pricing-violation"
+    s["usd"] = round(s["usd"] + (cost - MAX_AUTHORIZED_CALL_USD), 8)
+    if s["usd"] < 0:
+        return None, "unknown"
+    s["prompt_tokens"] += prompt_t
+    s["completion_tokens"] += completion_t
+    _persist_ledger(s, p)
+    return s, "ok"
+
+
+def _refund_now(now):
+    """Release the money reservation after a failed provider call:
+    nothing was spent, the attempt stays counted. Caller MUST hold lock."""
+    s, p = spend_today(now)
+    if s is None:
+        return None
+    s["usd"] = round(s["usd"] - MAX_AUTHORIZED_CALL_USD, 8)
+    if s["usd"] < 0:
+        return None
+    _persist_ledger(s, p)
+    return s
+
+
+def spend_charge(cost, prompt_t=0, completion_t=0, known=True, now=None):
     """Record a completed call's money/tokens. NEVER increments calls:
     attempts are counted once, at reservation (B2). Unknown cost sets the
     unknown_charges flag that trips the money governor (B8)."""
     with _spend_lock():
-        return _charge_now(cost, prompt_t, completion_t, known)
+        return _charge_now(cost, prompt_t, completion_t, known,
+                           now if now is not None else time.time())
 
 
 def spend_add(cost, prompt_t=0, completion_t=0):
@@ -819,11 +912,15 @@ def spend_attempt():
     return s if s is not None else blank_ledger()
 
 
-def spend_30d(today=None):
+def spend_30d(now=None):
     """Returns (total_usd, unknown). Out-of-window files are ignored
     without penalty; in-window corrupt/invalid files (or unknown charges
-    in any in-window ledger) set unknown=True -> governor holds (S10)."""
-    today = today or datetime.now(timezone.utc).date()
+    in any in-window ledger) set unknown=True -> governor holds (S10).
+    `now` is the authoritative decision instant (epoch); None means live
+    wall clock. Totals include outstanding pre-call reservations: money
+    reserved is money accounted, even before the provider bill arrives."""
+    now = now if now is not None else time.time()
+    today = datetime.fromtimestamp(now, timezone.utc).date()
     total, unknown = 0.0, False
     try:
         files = os.listdir(SPEND_DIR)
@@ -920,11 +1017,12 @@ def post(body, key):
         return None, "provider-error:%s" % type(e).__name__
 
 
-def hold_row(state, reason, cost=0.0, cached=False):
+def hold_row(state, reason, cost=0.0, cached=False, now=None):
+    at = datetime.fromtimestamp(now if now is not None else time.time(),
+                                timezone.utc).isoformat()
     return {"action": "HOLD", "reason": reason, "symbol": state.get("symbol"),
             "context_hash": state.get("context_hash"), "cost": cost,
-            "cached": cached,
-            "at": datetime.now(timezone.utc).isoformat()}
+            "cached": cached, "at": at}
 
 
 CALL_LOG_MAX_BYTES = 8 * 1024 * 1024
@@ -958,36 +1056,47 @@ def log_row(row):
 MONEY_GATE_TIMEOUT = 60.0  # worst-case wait for the serialized money gate
 
 
-def _money_gate(state, key, post_fn):
+def _money_gate(state, key, post_fn, now):
     """Runs with the spend lock HELD. Returns ("hold", row) or
-    ("answer", answers, usage, ledger). Never raises on provider failure."""
+    ("answer", answers, usage, ledger). Never raises on provider failure.
+    The stage USD cap is a PRE-CALL bound: _reserve_now() authorizes only
+    when total_30d + MAX_AUTHORIZED_CALL_USD fits inside the cap, and the
+    reservation is reconciled (settled/refunded) on every path below, so a
+    single call can never overshoot the cap from learning actual cost late."""
     cap = STAGE_30D_CAPS_USD[state["stage"]]  # stage already allowlisted
-    total_30d, unknown_30d = spend_30d()
+    total_30d, unknown_30d = spend_30d(now)
     if unknown_30d:
-        row = hold_row(state, "spend-unknown")
+        row = hold_row(state, "spend-unknown", now=now)
         row["cost"] = cost_tag(state, None)
         log_row(row)
         return "hold", row
-    if total_30d >= cap:
-        row = hold_row(state, "spend-stage-cap")
+    if total_30d + MAX_AUTHORIZED_CALL_USD > cap:
+        row = hold_row(state, "spend-stage-cap", now=now)
         row["cost"] = cost_tag(state, None)
         log_row(row)
         return "hold", row
     resp, err, attempts = None, "not-attempted", 0
     for attempt in range(2):
-        status, _ = _reserve_now()  # lock held: ceiling enforced pre-call
+        # Lock held: attempt + money reservation enforced pre-call, with
+        # the stage cap passed so authorization is absolute, not advisory.
+        status, _ = _reserve_now(now, cap)
         if status == "ceiling":
-            row = hold_row(state, "spend-call-ceiling")
+            row = hold_row(state, "spend-call-ceiling", now=now)
+            row["cost"] = cost_tag(state, None)
+            log_row(row)
+            return "hold", row
+        if status == "stage-cap":
+            row = hold_row(state, "spend-stage-cap", now=now)
             row["cost"] = cost_tag(state, None)
             log_row(row)
             return "hold", row
         if status == "unknown":
-            row = hold_row(state, "spend-unknown")
+            row = hold_row(state, "spend-unknown", now=now)
             row["cost"] = cost_tag(state, None)
             log_row(row)
             return "hold", row
         if status == "lock-busy":
-            row = hold_row(state, "spend-lock-busy")
+            row = hold_row(state, "spend-lock-busy", now=now)
             row["cost"] = cost_tag(state, None)
             log_row(row)
             return "hold", row
@@ -997,8 +1106,11 @@ def _money_gate(state, key, post_fn):
         attempts += 1
         if err is None or not transient_error(err):
             break  # success, or non-retryable: exactly one attempt
+        _refund_now(now)  # transient retry: release this attempt's money
+        # reservation before re-reserving; the attempt stays counted.
     if err is not None:
-        row = hold_row(state, "jev_error:" + err)
+        _refund_now(now)  # failed call spent nothing: release reservation.
+        row = hold_row(state, "jev_error:" + err, now=now)
         row["cost"] = cost_tag(state, None)  # unknown cost, explicitly shown
         row["attempts"] = attempts
         log_row(row)
@@ -1006,24 +1118,25 @@ def _money_gate(state, key, post_fn):
     answers, why = validate_response(resp)
     usage = resp.get("usage") if isinstance(resp, dict) else None
     cost, pt, ct, known = validate_usage(usage)
+    # Money spent is money recorded, even when answers are unusable.
+    # _settle_now reconciles the reservation against actual cost; a failed
+    # settle is spend-unknown (HOLD), never a silent loss of accounting.
+    spent, flag = _settle_now(cost, pt, ct, known, now)
+    if spent is None:
+        row = hold_row(state, "spend-unknown", now=now)
+        row["cost"] = cost_tag(state, usage)
+        log_row(row)
+        return "hold", row
     if answers is None:
-        # Money spent is money recorded, even when answers are unusable.
-        # A failed charge is spend-unknown (HOLD), never a silent loss of
-        # accounting: the governor must stay conservative after an attempt.
-        charged = _charge_now(cost, pt, ct, known=known)
-        if charged is None:
-            row = hold_row(state, "spend-unknown")
-        else:
-            row = hold_row(state, why)
+        row = hold_row(state, why, now=now)
         row["cost"] = cost_tag(state, resp.get("usage") if isinstance(resp, dict) else None)
         log_row(row)
         return "hold", row
-    spent = _charge_now(cost, pt, ct, known=known)
-    if spent is None:
-        # Money accounting failed AFTER a valid provider answer: the answer
-        # must NOT become a signed, cached, reusable decision artifact.
-        # Fail closed (HOLD spend-unknown) before signing or caching.
-        row = hold_row(state, "spend-unknown")
+    if flag == "pricing-violation":
+        # Valid answers, but the provider repriced above the frozen maximum:
+        # actual cost charged in full, governor tripped for human audit.
+        # The answer must NOT become a reusable artifact on this path.
+        row = hold_row(state, "pricing-violation", now=now)
         row["cost"] = cost_tag(state, usage)
         log_row(row)
         return "hold", row
@@ -1032,26 +1145,33 @@ def _money_gate(state, key, post_fn):
 
 def decide(state, now=None, key=None, post_fn=None):
     '''Single decision cycle. Returns (row, artifact-or-None).
-    Never raises on provider failure; never fabricates answers.'''
+    Never raises on provider failure; never fabricates answers.
+    `now` is the authoritative decision instant (epoch): spend ledgers,
+    cache freshness, HOLD/audit timestamps, and artifact created_at all
+    derive from it. None means live wall clock (production caller passes
+    time.time()); replay/tests MUST inject a fixed instant so no wall
+    clock consults the evidence path.'''
     now = now if now is not None else time.time()
     ok, why = validate_state(state)
     if not ok:
-        row = hold_row(state if isinstance(state, dict) else {}, why)
+        row = hold_row(state if isinstance(state, dict) else {}, why,
+                       now=now)
         log_row(row)
         return row, None
     hit = cache_get(state, now)
     if hit is not None:
         # validate_cached_artifact already proved shape, pins, answers,
-        # configured-key signature, binding, and age: safe to serve.
+        # configured-key signature, binding, age, AND that the signed
+        # artifact itself has not expired: safe to serve.
         row = {"action": "CACHED", "answers": hit["payload"]["answers"],
                "symbol": state.get("symbol"), "cached": True,
-               "at": datetime.now(timezone.utc).isoformat()}
+               "at": datetime.fromtimestamp(now, timezone.utc).isoformat()}
         row["cost"] = cost_tag(state, {"cost": 0.0})
         log_row(row)
         return row, hit
     key = key if key is not None else api_key()
     if not key:
-        row = hold_row(state, "jev_error:no-key")
+        row = hold_row(state, "jev_error:no-key", now=now)
         log_row(row)
         return row, None
     post_fn = post_fn or post
@@ -1065,16 +1185,16 @@ def decide(state, now=None, key=None, post_fn=None):
     # different file, always taken inside, never outside, the spend lock).
     try:
         with _spend_lock(timeout=MONEY_GATE_TIMEOUT):
-            gate = _money_gate(state, key, post_fn)
+            gate = _money_gate(state, key, post_fn, now)
     except TimeoutError:
-        row = hold_row(state, "spend-lock-busy")
+        row = hold_row(state, "spend-lock-busy", now=now)
         row["cost"] = cost_tag(state, None)
         log_row(row)
         return row, None
     if gate[0] == "hold":
         return gate[1], None
     answers, usage, spent = gate[1], gate[2], gate[3]
-    created = datetime.now(timezone.utc).isoformat()
+    created = datetime.fromtimestamp(now, timezone.utc).isoformat()
     payload = {"schema_version": "answerset_v1",
                "question_set_version": QVERSION, "model": MODEL,
                "revision": REVISION, "provider": PROVIDER,
@@ -1089,7 +1209,7 @@ def decide(state, now=None, key=None, post_fn=None):
     try:
         artifact = sign_answerset(payload)
     except KeyMaterialError as e:
-        row = hold_row(state, f"signing-key-unavailable:{e}")
+        row = hold_row(state, f"signing-key-unavailable:{e}", now=now)
         row["cost"] = cost_tag(state, usage)
         log_row(row)
         return row, None
@@ -1098,8 +1218,8 @@ def decide(state, now=None, key=None, post_fn=None):
            "context_hash": state.get("context_hash"), "cached": False,
            "calls_day_total": spent["calls"],
            "calls_alert": spent["calls"] >= DAILY_CALL_ALERT,
-           "spend_30d_usd": spend_30d()[0],
-           "spend_unknown": spend_30d()[1],
+           "spend_30d_usd": spend_30d(now)[0],
+           "spend_unknown": spend_30d(now)[1],
            "at": created}
     row["cost"] = cost_tag(state, usage)
     # Authority boundary: answers only. No size, no budget, no order fields.

@@ -205,7 +205,8 @@ check("replay-wrong-revision-hold",
       jev.replay(pc)["reason"] == "wrong-revision")
 
 # 9. cost ceiling: pre-exhausted day blocks without calling
-day = jev.datetime.now(jev.timezone.utc).strftime("%Y-%m-%d")
+# Seed the DECISION-clock day (ledgers key on decide's now, not wall).
+day = jev._day_of(4000.0)
 jev.SPEND_DIR = os.path.join(TMP, "spend2")
 os.makedirs(jev.SPEND_DIR, exist_ok=True)
 json.dump({"usd": 0.0, "calls": 5000, "prompt_tokens": 0,
@@ -280,7 +281,8 @@ jev.SPEND_DIR = os.path.join(TMP, "spend3")
 os.makedirs(jev.SPEND_DIR, exist_ok=True)
 json.dump({"usd": 150.0, "calls": 5, "prompt_tokens": 0,
            "completion_tokens": 0},
-          open(os.path.join(jev.SPEND_DIR, day + ".json"), "w"))
+          open(os.path.join(jev.SPEND_DIR, jev._day_of(4500.0)
+                             + ".json"), "w"))
 calls_g = []
 row, _ = jev.decide(state(symbol="QG"), now=4500.0, key="k",
                     post_fn=mkpost(good_resp(), calls=calls_g))
@@ -296,11 +298,7 @@ row, _ = jev.decide(state(symbol="F"), now=4600.0, key="k",
                     post_fn=mkpost(err="provider-error:Timeout", calls=calls_f))
 check("attempts-counted",
       row["action"] == "HOLD" and len(calls_f) == 2
-      and json.load(open(os.path.join(
-          jev.SPEND_DIR,
-          __import__("datetime").datetime.now(
-              __import__("datetime").timezone.utc).strftime("%Y-%m-%d")
-          + ".json")))["calls"] == 2)
+      and jev.spend_today(4600.0)[0]["calls"] == 2)
 jev.SPEND_DIR = os.path.join(TMP, "spend")
 # non-transient errors never retry: one attempt, one call
 jev.SPEND_DIR = os.path.join(TMP, "spend4b")
@@ -347,15 +345,15 @@ os.makedirs(jev.SPEND_DIR, exist_ok=True)
 row, _ = jev.decide(state(symbol="X1"), now=5000.0, key="k",
                      post_fn=mkpost(good_resp()))
 check("one-success-one-call",
-      row["action"] == "ANSWER" and jev.spend_today()[0]["calls"] == 1)
+      row["action"] == "ANSWER" and jev.spend_today(5000.0)[0]["calls"] == 1)
 row, _ = jev.decide(state(symbol="X2"), now=5001.0, key="k",
                      post_fn=mkpost(err="provider-http-400"))
 check("one-failure-one-call",
-      row["action"] == "HOLD" and jev.spend_today()[0]["calls"] == 2)
+      row["action"] == "HOLD" and jev.spend_today(5001.0)[0]["calls"] == 2)
 row, _ = jev.decide(state(symbol="X3"), now=5002.0, key="k",
                      post_fn=mkpost(good_resp()))
 check("success-after-failure",
-      row["action"] == "ANSWER" and jev.spend_today()[0]["calls"] == 3)
+      row["action"] == "ANSWER" and jev.spend_today(5002.0)[0]["calls"] == 3)
 jev.SPEND_DIR = os.path.join(TMP, "spend")
 
 # 13. B3 corrupt ledger fails closed (never $0), no provider call
@@ -367,9 +365,7 @@ for name, blob in [("corrupt-json", "{nope"),
                      '"prompt_tokens": 0, "completion_tokens": 0}'),
                     ("string-calls", '{"usd": 0, "calls": "3", '
                      '"prompt_tokens": 0, "completion_tokens": 0}')]:
-    p = os.path.join(jev.SPEND_DIR,
-                     jev.datetime.now(jev.timezone.utc).strftime("%Y-%m-%d")
-                     + ".json")
+    p = os.path.join(jev.SPEND_DIR, jev._day_of(5100.0) + ".json")
     open(p, "w").write(blob)
     calls_b = []
     row, _ = jev.decide(state(symbol="XB"), now=5100.0, key="k",
@@ -467,13 +463,16 @@ jev.SPEND_DIR = os.path.join(TMP, "spendCharge")
 os.makedirs(jev.SPEND_DIR, exist_ok=True)
 _real_charge = jev.spend_charge
 _real_charge_now = jev._charge_now
+_real_settle = jev._settle_now
 jev.spend_charge = lambda *a, **k: None
 jev._charge_now = lambda *a, **k: None
+jev._settle_now = lambda *a, **k: (None, "unknown")
 calls_z = []
 row, art = jev.decide(state(symbol="XZ"), now=5700.0, key="k",
                       post_fn=mkpost(good_resp(), calls=calls_z))
 jev.spend_charge = _real_charge
 jev._charge_now = _real_charge_now
+jev._settle_now = _real_settle
 check("charge-fail-hold",
       row["action"] == "HOLD" and row["reason"] == "spend-unknown"
       and art is None)
@@ -564,12 +563,12 @@ jev.CALL_LOG_MAX_BYTES = 8 * 1024 * 1024
 # (accounting failure after an attempt, not the response's own HOLD)
 jev.SPEND_DIR = os.path.join(TMP, "spendMC")
 os.makedirs(jev.SPEND_DIR, exist_ok=True)
-jev._charge_now = lambda *a, **k: None
+jev._settle_now = lambda *a, **k: (None, "unknown")
 _bad = json.loads(json.dumps(good_resp()))
 _bad["answers"]["enter"]["noul"] = "high"
 row, art = jev.decide(state(symbol="XMC"), now=5900.0, key="k",
                       post_fn=mkpost(_bad))
-jev._charge_now = _real_charge_now
+jev._settle_now = _real_settle
 check("malformed-charge-fail",
       row["action"] == "HOLD" and row["reason"] == "spend-unknown"
       and art is None)
@@ -629,14 +628,19 @@ os.remove(os.path.join(jev.SPEND_DIR, _legit))
 jev.SPEND_DIR = os.path.join(TMP, "spend")
 
 # 29. two-process money gate: concurrent racers cannot jointly cross the
-# stage cap (pre-fix, both could observe $149.99 headroom and land $150.01).
+# stage cap. Seed $148.00: the first $0.01 call reserves $2.00 (peak
+# exactly $150.00, never above), settles to $148.01; the second then
+# needs $150.01 of headroom it no longer has -> HOLD spend-stage-cap.
+# (Pre-fix, both observed headroom and jointly overshot; the reservation
+# makes the cap pre-call. Peak ledger is bounded by construction:
+# reserve authorizes only total+R<=cap, settle only decreases it.)
 import subprocess as _sp2
 _cap_dir = os.path.join(TMP, "spendCap")
 os.makedirs(_cap_dir, exist_ok=True)
 _day = jev.datetime.now(jev.timezone.utc).strftime("%Y-%m-%d")
 with open(os.path.join(_cap_dir, _day + ".json"), "w",
           encoding="utf-8") as _fh:
-    json.dump({"usd": 149.99, "calls": 0, "prompt_tokens": 0,
+    json.dump({"usd": 148.00, "calls": 0, "prompt_tokens": 0,
                "completion_tokens": 0, "unknown_charges": 0}, _fh)
 _child_lines = [
     "import sys, json, time",
@@ -678,5 +682,91 @@ check("cap-race-serialized",
       and _cap_total <= 150.0 and _cap_unk is False
       and sum(1 for o in _outs
               if o.get("reason") == "spend-stage-cap") == 1)
+
+# 30. expired signed artifact is never served, even with a fresh wrapper.
+jev.SPEND_DIR = os.path.join(TMP, "spendExp")
+os.makedirs(jev.SPEND_DIR, exist_ok=True)
+row, art = jev.decide(state(symbol="XE"), now=7000.0, key="k",
+                      post_fn=mkpost(good_resp()))
+check("expiry-setup", row["action"] == "ANSWER")
+import glob as _glob3
+_cp3 = _glob3.glob(os.path.join(jev.CACHE_DIR, "*.json"))
+assert _cp3, "cache file expected"
+for _p in _cp3:
+    with open(_p, encoding="utf-8") as _fh:
+        _c = json.load(_fh)
+    # Age the SIGNED artifact 120 s (expired) but keep the wrapper fresh.
+    _created = 7000.0 - 120.0
+    _iso = jev.datetime.fromtimestamp(_created, jev.timezone.utc).isoformat()
+    _c["artifact"]["payload"]["created_at"] = _iso
+    _c["artifact"]["payload"]["expires_at"] = _created + 60.0
+    _c["artifact"]["response_hash"] = jev.sha256_hex(
+        jev.canon(_c["artifact"]["payload"]))
+    _msg = jev.canon(_c["artifact"]["payload"]).encode()
+    _c["artifact"]["signature"] = jev.ed_sign(JEV_SEED, _msg).hex()
+    _c["at"] = 6999.0  # wrapper fresh (1 s old at now=7000)
+    with open(_p, "w", encoding="utf-8") as _fh:
+        json.dump(_c, _fh)
+_calls_e = []
+row_e, _ = jev.decide(state(symbol="XE"), now=7000.0, key="k",
+                      post_fn=mkpost(good_resp(), calls=_calls_e))
+check("expired-artifact-miss",
+      row_e["action"] == "ANSWER" and len(_calls_e) == 1)
+# Future-dated creation beyond skew is also a miss.
+for _p in _glob3.glob(os.path.join(jev.CACHE_DIR, "*.json")):
+    with open(_p, encoding="utf-8") as _fh:
+        _c = json.load(_fh)
+    if _c["artifact"]["payload"].get("symbol") != "XE":
+        continue
+    _created = 7000.0 + 3600.0
+    _iso = jev.datetime.fromtimestamp(_created, jev.timezone.utc).isoformat()
+    _c["artifact"]["payload"]["created_at"] = _iso
+    _c["artifact"]["payload"]["expires_at"] = _created + 60.0
+    _c["artifact"]["response_hash"] = jev.sha256_hex(
+        jev.canon(_c["artifact"]["payload"]))
+    _msg = jev.canon(_c["artifact"]["payload"]).encode()
+    _c["artifact"]["signature"] = jev.ed_sign(JEV_SEED, _msg).hex()
+    _c["at"] = 7000.0
+    with open(_p, "w", encoding="utf-8") as _fh:
+        json.dump(_c, _fh)
+_calls_f = []
+row_f, _ = jev.decide(state(symbol="XE"), now=7000.0, key="k",
+                      post_fn=mkpost(good_resp(), calls=_calls_f))
+check("future-created-miss",
+      row_f["action"] == "ANSWER" and len(_calls_f) == 1)
+jev.SPEND_DIR = os.path.join(TMP, "spend")
+
+# 31. single-call overshoot is impossible: $149.99 + $2.00 reservation
+# does not fit a $150 cap, so the call is refused BEFORE sending.
+jev.SPEND_DIR = os.path.join(TMP, "spendOver")
+os.makedirs(jev.SPEND_DIR, exist_ok=True)
+with open(os.path.join(jev.SPEND_DIR, jev._day_of(7100.0) + ".json"),
+          "w", encoding="utf-8") as _fh:
+    json.dump({"usd": 149.99, "calls": 0, "prompt_tokens": 0,
+               "completion_tokens": 0}, _fh)
+_calls_o = []
+row_o, _ = jev.decide(state(symbol="XO"), now=7100.0, key="k",
+                      post_fn=mkpost(good_resp(cost=0.01), calls=_calls_o))
+check("overshoot-refused",
+      row_o["reason"] == "spend-stage-cap" and _calls_o == []
+      and jev.spend_30d(7100.0) == (149.99, False))
+jev.SPEND_DIR = os.path.join(TMP, "spend")
+
+# 32. decision-clock determinism: same now -> identical HOLD rows, and
+# the ledger day-file is the decision day, never wall-clock day.
+jev.SPEND_DIR = os.path.join(TMP, "spendClk")
+os.makedirs(jev.SPEND_DIR, exist_ok=True)
+_clk_calls = []
+h1, _ = jev.decide(state(symbol="XC"), now=7200.0, key="",
+                   post_fn=mkpost(good_resp(), calls=_clk_calls))
+h2, _ = jev.decide(state(symbol="XC"), now=7200.0, key="",
+                   post_fn=mkpost(good_resp(), calls=_clk_calls))
+check("hold-clock-deterministic",
+      h1["action"] == "HOLD" and h1["at"] == h2["at"]
+      and h1["at"] == jev.datetime.fromtimestamp(
+          7200.0, jev.timezone.utc).isoformat()
+      and _clk_calls == []
+      and jev._day_of(7200.0) == "1970-01-01")
+jev.SPEND_DIR = os.path.join(TMP, "spend")
 
 print("ALL JEV CHECKS PASS")
