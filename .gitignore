@@ -45,3 +45,9 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+
+# C++ build artifacts
+*.exe
+*.o
+*.a
+kernel/test_p31
