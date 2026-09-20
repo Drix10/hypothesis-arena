@@ -350,18 +350,25 @@ Notation: E = enter, F = edge_family, C = conviction, L = latent_risk.
 | 26 | .91 | momentum | max | calib breach | HOLD calibration (row above max) |
 | 27 | .86 | mean_reversion | strong | opposite TRIGGER effects | HOLD disagreement |
 | 28 | .89 | momentum | strong | BINARY pre-event blackout | HOLD blackout |
-| 29 | .93 | macro | max | L=.1, calib pass, R2 pending-risk breach in snapshot | HOLD joint-error (row 0; reason = engine-veto:pending-risk) |
+| 29 | .93 | macro | max | L=.1, calib pass, independent snapshot carries R2 pending-risk | HOLD joint-error (row 0; reason = engine-veto:pending-risk) |
 
-Case 29 is the joint-JEV-error stress (gap-analysis B1, frozen): all four
-answers are jointly wrong in the optimistic direction (high enter, favored
-family, max conviction, low latent risk, clean calibration) while the
-independent snapshot/risk state forbids the trade. The deterministic engine
-stays authoritative: a correlated JEV failure creates no authorization path
-the snapshot state would not permit, and the failure is observable as HOLD
-with the coded deterministic reason — never as a model-driven override.
-No new question, no version change, no field reinterpretation; the stress
-is a row over existing artifacts plus forced deterministic state, proven
-in the P3.3 table suite.
+Case 29 is the joint-JEV-error stress (gap-analysis B1, frozen): the
+artifact is an adversarial optimistic answer proxy — all four answers
+jointly wrong in the optimistic direction (high enter, favored family,
+max conviction, low latent risk, clean calibration) — while an
+independent snapshot/risk state forbids the trade (R2 pending-risk:
+intent + pending exposure over the 75% cap). The proof is about
+authorization independence, NOT about the recorded answer being
+empirically wrong: no claim is made that the historical fixture was
+actually miscalibrated (its own pending_exposure_pct is 0.0). The
+deterministic engine stays authoritative: a correlated JEV failure
+creates no authorization path the snapshot state would not permit, and
+the failure is observable as HOLD with the coded deterministic reason.
+No new question, no version change, no field reinterpretation. Proven in
+two halves: the Slice-B composed suite detects a real pending-risk
+breach via EvaluateVeto, maps it via BuildEngineInputs, and blocks the
+optimistic artifact; the P3.3 table suite proves a vetoed state
+authorizes nothing regardless of answers.
 
 v3 rule proven by 24/25: conviction max is necessary but never sufficient —
 it nominates, the engine's independently validated conditions authorize, and

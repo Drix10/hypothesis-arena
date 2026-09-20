@@ -96,16 +96,22 @@ treatment: what happens when the regime itself changes, and how old
 evidence loses weight. No online learning, no agent-set thresholds, no
 hidden discretionary detector.
 
-1. Regime signal. The frozen regime bucket trend|range|volatile from
-   ADX(14) + 1h-vol bucket (doc 12; also JEV state indicators, doc 03
-   §3.4). No other signal may define regime without a doc edit + version
-   bump + fresh paper window.
-2. Regime change. The daily bucket differs from the previous UTC-day
-   bucket for two consecutive UTC days. The two-day persistence exists
-   because a single-day flip is noise, not a change (same precedent as
-   FROZEN_N=3 in doc 08 §8.5 and the two-expected-bar gates in doc 05).
-   Evaluated once per UTC day at 00:05 UTC from frozen daily closes —
-   never intra-day, never revised intra-day.
+1. Regime signal. The frozen per-snapshot regime bucket trend|range|
+   volatile from ADX(14) + 1h-vol bucket (doc 12; also JEV state
+   indicators, doc 03 §3.4), tracked per symbol. No other signal may
+   define regime without a doc edit + version bump + fresh paper window.
+2. Daily representative and change. For each symbol and each UTC
+   calendar day, the daily representative is the regime of the last
+   valid completed 1h observation for that symbol during that day. No
+   valid observation → UNKNOWN for that day. A new regime is confirmed
+   only when day d-1 has a known bucket, day d has the same new bucket,
+   and both differ from the preceding known day d-2. UNKNOWN days break
+   adjacency and are never skipped over to manufacture a two-day
+   transition. The two-day persistence exists because a single-day flip
+   is noise, not a change (same precedent as FROZEN_N=3 in doc 08 §8.5
+   and the two-expected-bar gates in doc 05). Evaluated once per UTC day
+   at 00:05 UTC from frozen daily closes using only completed
+   information — never intra-day, never revised intra-day.
 3. Reduced weight. Calibration samples (§11.1 trailing-200/1000 windows,
    R13 window, reliability curves) resolved under a regime bucket no
    longer current receive exponential weight w = 2^(-age_days / H).
@@ -115,21 +121,31 @@ hidden discretionary detector.
    a config change requiring measured G0-paper justification, human
    sign-off, and a fresh paper window — the same bar as any limit change
    (doc 05). No finite H is invented here from literature alone.
-5. Scope. The rule affects calibration MEASUREMENT only (Brier/log-loss/
-   reliability weights, R13 window weights). It never affects decision
-   authorization (the table + vetoes read current state only), research
-   weighting, or promotion arithmetic beyond the measured metrics. Every
-   calibration render states H and the effective sample size — reported,
-   never silent.
+5. Scope and weight composition. The rule affects calibration
+   MEASUREMENT only (Brier/log-loss/reliability weights, R13 window
+   weights). It never affects decision authorization (the table + vetoes
+   read current state only), research weighting, or promotion arithmetic
+   beyond the measured metrics. For every calibration row:
+   total_weight = inclusion_weight × decay_weight, where normal
+   inclusion = 1, sampled CAL2 HOLD = 4 (the frozen inverse-probability
+   weight), and decay_weight = 2^(-age_days / H) (1 when H is
+   infinite). Model and baseline metrics use the SAME row weights —
+   weighting that applied to one side only would bias the comparison.
+   Every calibration render states H, the decay rule, the weighted
+   effective sample size, and the unweighted resolved-count floor —
+   reported, never silent.
 6. Unavailable regime. If the bucket cannot be computed (missing bars,
    feed gap), the day is tagged UNKNOWN: weights stay 1, the gap is
    logged, and UNKNOWN days never count toward the two-day change
    persistence. Absent is not neutral, but it is also not a change.
 7. New version / fresh window. A finite-H adoption, an H change, or a
    regime-signal definition change each bump the calibration config
-   version and open a fresh paper window. Regime CHANGES themselves never
-   version anything — they are data, and the decay rule handles them by
-   construction.
+   version and open a fresh paper window. The calibration harness
+   carries an explicit version/artifact identity containing at least the
+   regime definition version, H, and the weighting rule version; a change
+   to any of these is observable and triggers the fresh-window rule.
+   Regime CHANGES themselves never version anything — they are data, and
+   the decay rule handles them by construction.
 
 ## 11.2 Shadow and challenger evaluation
 

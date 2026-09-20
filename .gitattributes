@@ -1,2 +1,5 @@
 # Diff hygiene: shell scripts must stay LF (shebang-safe, minimal diffs).
 *.sh text eol=lf
+# The tree stores CRLF: treat trailing CR as line-ending so
+# `git diff --check` reports real whitespace errors, not every line.
+* whitespace=cr-at-eol

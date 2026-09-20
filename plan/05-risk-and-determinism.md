@@ -159,13 +159,18 @@ checklist. Layers (each layer reads only the layers below it):
   (positions, pending orders, equity/margin/PnL, ctx-derived flags:
   R6 vol state, R7 corr flags, VaR/stress values, session/short/corp
   flags, calibration-gate inputs, event phase, kill level, stage).
-- L1 derived-once: K6 formulas (pending_notional, reserved_risk,
-  margin_requirement, buying_power), exposure sums with pending,
-  R5 drawdown vs persisted HWMs, R6 current-vs-baseline, R7 pair scan +
-  drift directive, churn counters (R3), flip-lock state (R4), VaR/stress
-  breach flags. Each L1 quantity is computed ONCE per evaluation and
-  shared by reference — never recomputed inconsistently by two rules.
-- L2 rule nodes: R1–R17 + session/short/corp/event checks. Each node
+- L1 derived-once MEASUREMENTS (no predicates, no breach flags — every
+  threshold test lives in L2): K6 formulas (pending_notional,
+  reserved_risk, margin_requirement, buying_power), exposure sums with
+  pending (total, same-side), drawdown measurement vs persisted HWMs,
+  volatility ratio (current vs baseline), correlation coefficients,
+  VaR and stress-scenario values, churn counters (R3), flip timing state
+  (R4), deterministic drift candidate (R7 directive inputs). Each L1
+  quantity is computed ONCE per evaluation and shared by reference —
+  never recomputed inconsistently by two rules.
+- L2 rule nodes (predicates): R1–R17 + session/short/corp/event checks +
+  every threshold test (R5 trip, R6 trip/halve, R7 breach, VaR breach,
+  stress breach, calibration-gate breach, exposure-cap breach). Each node
   reads L0 fields and L1 quantities only; no node reads another rule
   node's verdict (no rule-to-rule edges — verdicts combine only at L3).
 - L3 verdict: one `VetoVerdict` (frozen precedence order, all co-causes

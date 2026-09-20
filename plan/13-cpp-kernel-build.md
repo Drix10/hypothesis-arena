@@ -321,9 +321,10 @@ Every reliability property has exactly one owner and one measurable test.
 | rejection-shape matrix | Slice C 78-check suite (§4.5 rows) | — (covered) | Slice C (closed) |
 | veto unit battery | Slice B 153+ suite + case-29 row | — (covered) | Slice B (closed) |
 | decision determinism | P3.3 200-replay SHA-256 proof | — (covered) | P3.3 (closed) |
-| simulated network delay/drop | — | feed-gap + JEV-timeout injection vs §6.2a rows | Slice F (feed) + H1 (outage rows) |
-| randomized event ordering | — | order-permuted journal/reconcile test (same fills, any arrival order → same adopted state) | H1 (S2 FSM) |
-| version skew | P3.2 interop vectors (v1+v2) | schema-version rejection drill (f3-shaped artifact → loud reject, no silent pass) | Slice G (ctx version gate) |
+| simulated market-feed delay/drop | — | feed-gap + transport-drop injection vs §6.2a broker rows | Slice F |
+| JEV/provider timeout/drop | — | provider-timeout injection vs §6.2a JEV rows | H1 |
+| randomized event ordering | — | order-permuted reconcile test: arrival order randomized while broker event identity/sequence metadata is preserved; reconciliation must converge to the same broker-consistent final state across permutations and duplicate deliveries. Where a venue supplies no usable sequence metadata, the H1 design freezes an explicit deterministic tie-break (e.g. broker-timestamp then event-id order) rather than assuming order irrelevance | H1 |
+| feature-bundle version skew | P3.2 interop vectors (v1+v2, f2 only) | f3-shaped research bundle → loud reject at the feature/context boundary, no silent pass | Phase 2.5 |
 | chaos restart (kernel) | — | kill -9 mid-cycle drill: journal chain verifies, epoch monotonicity holds, no duplicate order IDs | H1 (drill gate) |
 | chaos restart (research) | — | kill -9 at random node: resume, no duplicate features, no partial bundle | Phase 2.5 §8.6 |
 | kill-switch levels | — | §4.5 + §6.5 kill drills (exits alive at all three) | Slice D (drill gate) |
