@@ -123,13 +123,32 @@ row5, _ = jev.decide(state(), now=5000.0, key="k",
                      post_fn=mkpost(good_resp(), calls=calls))
 check("stale-answer-reissues", row5["action"] == "ANSWER" and len(calls) == 3)
 
-# 5. failures -> HOLD, retry once, never fabricate
+# 5. failures -> HOLD, never fabricate. Ambiguous transport (timeout with
+# no response: the provider may have billed us) never retries and never
+# refunds: the reservation stands, the governor trips, a human reconciles.
 calls5 = []
+jev.SPEND_DIR = os.path.join(TMP, "spendAmb")
+os.makedirs(jev.SPEND_DIR, exist_ok=True)
 row, art = jev.decide(state(symbol="X"), now=2000.0, key="k",
                       post_fn=mkpost(err="provider-error:Timeout", calls=calls5))
-check("timeout-retry-once-hold",
+check("timeout-ambiguous-hold",
+      row["action"] == "HOLD" and row["reason"] == "ambiguous-transport"
+      and len(calls5) == 1 and art is None)
+_s, _p = jev.spend_today(2000.0)
+check("ambiguous-no-refund",
+      _s["usd"] == jev.MAX_AUTHORIZED_CALL_USD
+      and _s.get("unknown_charges") == 1 and _s["calls"] == 1)
+row_b, _ = jev.decide(state(symbol="X2"), now=2001.0, key="k",
+                      post_fn=mkpost(good_resp()))
+check("ambiguous-trips-governor", row_b["reason"] == "spend-unknown")
+jev.SPEND_DIR = os.path.join(TMP, "spend")
+# Answered failures (HTTP 5xx DID arrive) still retry once, then HOLD.
+calls5b = []
+row, art = jev.decide(state(symbol="X5"), now=2002.0, key="k",
+                      post_fn=mkpost(err="provider-http-500", calls=calls5b))
+check("http500-retry-once-hold",
       row["action"] == "HOLD" and row["reason"].startswith("jev_error")
-      and len(calls5) == 2 and art is None)
+      and len(calls5b) == 2 and art is None)
 
 # 6. adversarial responses
 bad_cases = [
@@ -290,15 +309,29 @@ check("stage-cap-blocks",
       row["reason"] == "spend-stage-cap" and calls_g == [])
 jev.SPEND_DIR = os.path.join(TMP, "spend")
 
-# 10b. every provider attempt counts EXACTLY once, even failures
+# 10b. every provider attempt counts EXACTLY once; ambiguous transport
+# never retries (one attempt, one reservation, governor tripped).
 jev.SPEND_DIR = os.path.join(TMP, "spend4")
 os.makedirs(jev.SPEND_DIR, exist_ok=True)
 calls_f = []
 row, _ = jev.decide(state(symbol="F"), now=4600.0, key="k",
                     post_fn=mkpost(err="provider-error:Timeout", calls=calls_f))
 check("attempts-counted",
-      row["action"] == "HOLD" and len(calls_f) == 2
-      and jev.spend_today(4600.0)[0]["calls"] == 2)
+      row["reason"] == "ambiguous-transport" and len(calls_f) == 1
+      and jev.spend_today(4600.0)[0]["calls"] == 1)
+# answered-transient retries cost one reservation per attempt, refunded
+# per attempt: two attempts, two calls counted, money net zero.
+# (Fresh ledger: the ambiguous failure above tripped this dir's governor.)
+jev.SPEND_DIR = os.path.join(TMP, "spend4r")
+os.makedirs(jev.SPEND_DIR, exist_ok=True)
+calls_r = []
+row, _ = jev.decide(state(symbol="F5"), now=4600.5, key="k",
+                    post_fn=mkpost(err="provider-http-503", calls=calls_r))
+_s4, _ = jev.spend_today(4600.5)
+check("retry-counted-refunded",
+      row["reason"].startswith("jev_error") and len(calls_r) == 2
+      and _s4["calls"] == 2 and _s4["usd"] == 0.0)
+jev.SPEND_DIR = os.path.join(TMP, "spend")
 jev.SPEND_DIR = os.path.join(TMP, "spend")
 # non-transient errors never retry: one attempt, one call
 jev.SPEND_DIR = os.path.join(TMP, "spend4b")
@@ -383,7 +416,9 @@ mut["pubkey"] = FOREIGN_PUB.hex()
 check("pubkey-mutation-irrelevant", jev.verify_answerset(mut) is True)
 check("verify-needs-configured-key", jev.verify_answerset(art) is True)
 
-# 15. B8 malformed usage poisons the governor, never silently $0
+# 15. B8 malformed usage poisons the governor AND blocks the answer:
+# an unknowable bill is unbounded by the reservation, so no ANSWER may
+# enter the decision path (unknown-cost HOLD), and the governor holds after.
 for bad_usage, name in [({"cost": -10.0}, "neg-cost"),
                          ({"cost": float("nan")}, "nan-cost"),
                          ({"cost": 1e18}, "huge-cost"),
@@ -393,17 +428,19 @@ for bad_usage, name in [({"cost": -10.0}, "neg-cost"),
     os.makedirs(jev.SPEND_DIR, exist_ok=True)
     r = good_resp()
     r["usage"] = bad_usage
-    row, _ = jev.decide(state(symbol="XU" + name), now=5300.0, key="k",
+    row, art_u = jev.decide(state(symbol="XU" + name), now=5300.0, key="k",
                          post_fn=mkpost(r))
     check("usage-" + name,
-          row["action"] == "ANSWER" and row["cost"]["usd"] == "unknown")
+          row["action"] == "HOLD" and row["reason"] == "unknown-cost"
+          and row["cost"]["usd"] == "unknown" and art_u is None)
 jev.SPEND_DIR = os.path.join(TMP, "spendU-gov")
 os.makedirs(jev.SPEND_DIR, exist_ok=True)
 r = good_resp()
 r["usage"] = {"cost": -1.0}
 row, _ = jev.decide(state(symbol="XUg"), now=5300.0, key="k",
                      post_fn=mkpost(r))
-check("usage-poisoned", row["action"] == "ANSWER")
+check("usage-poisoned", row["action"] == "HOLD"
+      and row["reason"] == "unknown-cost")
 row, _ = jev.decide(state(symbol="XU2"), now=5301.0, key="k",
                      post_fn=mkpost(good_resp()))
 check("governor-unknown-holds", row["reason"] == "spend-unknown")
@@ -768,5 +805,82 @@ check("hold-clock-deterministic",
       and _clk_calls == []
       and jev._day_of(7200.0) == "1970-01-01")
 jev.SPEND_DIR = os.path.join(TMP, "spend")
+
+# 33. single-flight: two processes racing the same decision_key buy ONE
+# provider call. Both miss the empty cache; the loser rechecks inside the
+# lock and serves the winner's artifact instead of calling again.
+import subprocess as _sp3
+_sf_dir = os.path.join(TMP, "spendSF")
+os.makedirs(_sf_dir, exist_ok=True)
+_sf_cache = os.path.join(TMP, "cacheSF")
+_sf_count = os.path.join(TMP, "callsSF.txt")
+open(_sf_count, "w").write("")
+_sf_lines = [
+    "import sys, json, time",
+    "sys.path.insert(0, %r)" % HERE,
+    "import jev",
+    "jev.SPEND_DIR = %r" % _sf_dir,
+    "jev.CACHE_DIR = %r" % _sf_cache,
+    "jev.CALL_LOG = %r" % os.path.join(TMP, "callsSF.jsonl"),
+    "jev.KEY_PATH = %r" % jev.KEY_PATH,
+    "jev.RETRY_DELAY_S = 0",
+    "resp = {'model': jev.REVISION, 'provider': jev.PROVIDER, ",
+    "'answers': {'enter': {'type': 'noul', 'noul': 0.9}, ",
+    "'edge_family': {'type': 'choice', 'choice': 'momentum', ",
+    "'probabilities': {'momentum': 0.8}}, ",
+    "'conviction': {'type': 'score', 'score': 'strong'}, ",
+    "'latent_risk': {'type': 'noul', 'noul': 0.1}}, ",
+    "'usage': {'cost': 0.01}}",
+    "def post_fn(body, key):",
+    "    time.sleep(1.0)",
+    "    open(%r, 'a').write('call\\n')" % _sf_count,
+    "    return (resp, None)",
+    "st = {'context_hash': 'sf', 'symbol': 'SF', ",
+    "'stage': 'G0_PAPER', 'question_set_version': 'v3', ",
+    "'snapshot_epoch': 1}",
+    "row, _ = jev.decide(st, now=time.time(), key='k', post_fn=post_fn)",
+    "print(json.dumps({'action': row['action']}))",
+]
+_sf_child = "\n".join(_sf_lines)
+_sf_procs = [_sp3.Popen([sys.executable, "-c", _sf_child],
+                        stdout=_sp3.PIPE, text=True) for _ in range(2)]
+_sf_outs = sorted(json.loads(p.communicate()[0])["action"]
+                  for p in _sf_procs)
+_sf_calls = open(_sf_count).read().count("call")
+check("single-flight",
+      _sf_outs == ["ANSWER", "CACHED"] and _sf_calls == 1)
+
+# 34. replay enforces the full artifact contract (never KeyError).
+_p, _a = jev.decide(state(symbol="XR"), now=7300.0, key="k",
+                    post_fn=mkpost(good_resp()))
+_rp = os.path.join(TMP, "replay_ok.json")
+json.dump(_a, open(_rp, "w"))
+check("replay-ok", jev.replay(_rp)["action"] == "ANSWER")
+_mut = json.loads(json.dumps(_a))
+del _mut["payload"]["state_hash"]  # signed-but-malformed artifact
+_mp = os.path.join(TMP, "replay_nosh.json")
+json.dump(_mut, open(_mp, "w"))
+_out = jev.replay(_mp)
+check("replay-malformed-hold",
+      _out["action"] == "HOLD" and _out["reason"] == "replay-shape")
+_mut2 = json.loads(json.dumps(_a))
+_mut2["payload"]["expires_at"] = 1.0  # incoherent lifetime
+_mp2 = os.path.join(TMP, "replay_incoh.json")
+json.dump(_mut2, open(_mp2, "w"))
+check("replay-incoherent-hold",
+      jev.replay(_mp2)["action"] == "HOLD")
+
+# 35. paid-but-uncached degrades loudly, never crashes or double-spends
+# silently: cache_put failure -> HOLD evidence-persist-failed.
+_real_cache_put = jev.cache_put
+jev.cache_put = lambda *a, **k: (_ for _ in ()).throw(OSError("disk full"))
+row, art = jev.decide(state(symbol="XP"), now=7400.0, key="k",
+                      post_fn=mkpost(good_resp()))
+jev.cache_put = _real_cache_put
+check("persist-failure-hold",
+      row["action"] == "HOLD"
+      and row["reason"].startswith("evidence-persist-failed")
+      and art is None)
+check("log-contained", jev.log_row({"x": 1}) is True)
 
 print("ALL JEV CHECKS PASS")

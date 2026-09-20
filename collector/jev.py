@@ -494,11 +494,77 @@ def protected_state(state):
             "event_blackout": state.get("event_window", {}).get("blackout")}
 
 
+def _validate_answerset_artifact(art, live_now=None):
+    """Shared AnswerSet contract for LIVE cache admission and REPLAY.
+    Returns (payload-or-None, reason). Shape, pins, answers, timestamp
+    coherence, and configured-key signature are enforced in BOTH modes;
+    live_now (epoch) additionally requires the artifact unexpired and
+    freshly created. REPLAY (live_now=None) is forensics: it reads the
+    past, so liveness is not required — everything else is. Reason strings
+    reuse replay's vocabulary so both paths report the same contract."""
+    try:
+        if not isinstance(art, dict):
+            return None, "replay-shape"
+        if set(art) != {"payload", "response_hash", "signature",
+                         "pubkey"}:
+            return None, "replay-shape"
+        p = art.get("payload")
+        if not isinstance(p, dict):
+            return None, "replay-shape"
+        if set(p) != {"schema_version", "question_set_version", "model",
+                       "revision", "provider", "symbol",
+                       "snapshot_epoch", "state_hash", "decision_key",
+                       "created_at", "expires_at", "answers"}:
+            return None, "replay-shape"
+        # Signature BEFORE pins: never interpret an unauthenticated
+        # payload (a foreign key with a rewritten revision field must
+        # fail HERE as signature-failure, not as a pin mismatch).
+        if not verify_answerset(art):
+            return None, "signature-failure"
+        if p.get("schema_version") != "answerset_v1":
+            return None, "wrong-schema"
+        if p.get("question_set_version") != QVERSION:
+            return None, "wrong-qversion"
+        if p.get("model") != MODEL:
+            return None, "wrong-model"
+        if p.get("revision") != REVISION:
+            return None, "wrong-revision"
+        if p.get("provider") != PROVIDER:
+            return None, "wrong-provider"
+        try:
+            created = datetime.fromisoformat(p["created_at"])
+        except (ValueError, TypeError):
+            return None, "replay-shape"
+        if created.tzinfo is None:
+            return None, "replay-shape"
+        exp = p["expires_at"]
+        if type(exp) not in (int, float) or not math.isfinite(exp):
+            return None, "replay-shape"
+        if exp != created.timestamp() + ANSWER_MAX_AGE_S:
+            return None, "replay-shape"  # incoherent lifetime
+        if live_now is not None:
+            if exp <= live_now:
+                return None, "artifact-expired"
+            if created.timestamp() > live_now + CLOCK_SKEW_S:
+                return None, "artifact-future"
+        clean, why = validate_response({"model": REVISION,
+                                        "provider": PROVIDER,
+                                        "answers": p.get("answers")})
+        if clean is None:
+            return None, why
+        return p, "ok"
+    except Exception:
+        return None, "replay-shape"  # malformed never crashes the cycle
+
+
 def validate_cached_artifact(state, c, now):
     """Strict cache admission (B6). Returns the artifact or None (miss).
     Every cached artifact re-proves the full contract: exact envelope
     shapes, pins, answers, finite timestamps with coherent
-    created/expires/at semantics, configured-key signature, binding, age."""
+    created/expires/at semantics, configured-key signature, binding, age.
+    Artifact-shape/pins/signature enforcement is shared with replay()
+    via _validate_answerset_artifact (LIVE mode); wrapper age/binding
+    stay cache-specific."""
     if not isinstance(c, dict):
         return None
     if set(c) != {"research_key", "decision_key", "protected",
@@ -519,54 +585,12 @@ def validate_cached_artifact(state, c, now):
         if at > now or now - at > ANSWER_MAX_AGE_S:
             return None  # future-dated or stale: miss, never a hit
         art = c.get("artifact")
-        if not isinstance(art, dict):
-            return None
-        if set(art) != {"payload", "response_hash", "signature",
-                         "pubkey"}:
-            return None
-        p = art.get("payload")
-        if not isinstance(p, dict):
-            return None
-        if set(p) != {"schema_version", "question_set_version", "model",
-                       "revision", "provider", "symbol",
-                       "snapshot_epoch", "state_hash", "decision_key",
-                       "created_at", "expires_at", "answers"}:
-            return None
-        try:
-            created = datetime.fromisoformat(p["created_at"])
-        except (ValueError, TypeError):
-            return None
-        if created.tzinfo is None:
-            return None
-        exp = p["expires_at"]
-        if type(exp) not in (int, float) or not math.isfinite(exp):
-            return None
-        if exp != created.timestamp() + ANSWER_MAX_AGE_S:
-            return None  # expiry must equal created + 60 s, exactly
-        if exp <= now:
-            return None  # signed artifact itself expired, even though
-            # the cache wrapper `at` is still fresh: admission is about
-            # the ANSWER's lifetime, not the wrapper's.
-        if created.timestamp() > now + CLOCK_SKEW_S:
-            return None  # created in the future beyond skew: miss
-        if p.get("schema_version") != "answerset_v1":
-            return None
-        if p.get("question_set_version") != QVERSION:
-            return None
-        if p.get("model") != MODEL or p.get("revision") != REVISION:
-            return None
-        if p.get("provider") != PROVIDER:
+        p, _ = _validate_answerset_artifact(art, live_now=now)
+        if p is None:
             return None
         if p.get("symbol") != state.get("symbol"):
             return None
         if p.get("snapshot_epoch") != state.get("snapshot_epoch"):
-            return None
-        clean, why = validate_response({"model": REVISION,
-                                        "provider": PROVIDER,
-                                        "answers": p.get("answers")})
-        if clean is None:
-            return None
-        if not verify_answerset(art):
             return None
         if not bind_check(art, state):
             return None
@@ -878,7 +902,43 @@ def _settle_now(cost, prompt_t, completion_t, known, now):
     return s, "ok"
 
 
+def ambiguous_error(err):
+    """No-response transport failures: timeout, reset, refused, DNS,
+    dropped connection. The provider MAY have executed and billed the
+    request before the client gave up — the POST is ambiguous. HTTP error
+    responses (even 408/429/5xx) DID arrive, so that round trip completed
+    and retry policy owns them; these never retry and never refund."""
+    if err is None or err.startswith("provider-http-"):
+        return False
+    if err.startswith("provider-error:"):
+        kind = err.split(":", 1)[1]
+        no_response = ("Timeout", "TimeoutError", "ConnectionError",
+                       "ConnectionResetError", "ConnectionRefusedError",
+                       "ConnectionAbortedError", "RemoteDisconnected",
+                       "IncompleteRead", "URLError", "SSLError", "SSL",
+                       "gaierror", "socket", "timeout", "Reset",
+                       "Refused", "Aborted")
+        return kind.split(":")[0] in no_response or \
+            "Timeout" in kind or "Connection" in kind
+    return False
+
+
+def _flag_unknown_now(now):
+    """Trip the money governor after an ambiguous POST: the reservation
+    STAYS in the ledger (conservative spend) and unknown_charges forces
+    every future authorization to HOLD until a human reconciles against
+    provider billing and repairs the ledger. Caller MUST hold the lock."""
+    s, p = spend_today(now)
+    if s is None:
+        return None
+    s["unknown_charges"] = s.get("unknown_charges", 0) + 1
+    _persist_ledger(s, p)
+    return s
+
+
 def _refund_now(now):
+    # (refunds happen ONLY for failures the provider demonstrably
+    # answered or that never left the client — see ambiguous_error)
     """Release the money reservation after a failed provider call:
     nothing was spent, the attempt stays counted. Caller MUST hold lock."""
     s, p = spend_today(now)
@@ -1029,40 +1089,63 @@ CALL_LOG_MAX_BYTES = 8 * 1024 * 1024
 
 
 def log_row(row):
-    os.makedirs(os.path.dirname(CALL_LOG), exist_ok=True)
-    with _FileLock(CALL_LOG + ".lock"):
-        with open(CALL_LOG, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row) + "\n")
-            fh.flush()
-            os.fsync(fh.fileno())
-        try:
-            if os.path.getsize(CALL_LOG) > CALL_LOG_MAX_BYTES:
-                with open(CALL_LOG, "rb") as fh:
-                    fh.seek(-CALL_LOG_MAX_BYTES // 2, os.SEEK_END)
-                    tail = fh.read().split(b"\n", 1)[-1]
-                # Crash-consistent rotation: temp + fsync + atomic rename.
-                # An in-place "wb" rewrite could crash mid-write and leave
-                # a partial call log; the log is spend/replay evidence.
-                tmp = CALL_LOG + f".tmp-{os.getpid()}"
-                with open(tmp, "wb") as fh:
-                    fh.write(tail)
-                    fh.flush()
-                    os.fsync(fh.fileno())
-                os.replace(tmp, CALL_LOG)
-        except OSError:
-            pass
+    """Append-only call log. Returns True on success. I/O failure is
+    CONTAINED (stderr + False), never a cycle crash: the decision stands
+    and the missing evidence is loud. Rotation failures were already
+    best-effort; now the primary write is too."""
+    try:
+        os.makedirs(os.path.dirname(CALL_LOG), exist_ok=True)
+        with _FileLock(CALL_LOG + ".lock"):
+            with open(CALL_LOG, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(row) + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            try:
+                if os.path.getsize(CALL_LOG) > CALL_LOG_MAX_BYTES:
+                    with open(CALL_LOG, "rb") as fh:
+                        fh.seek(-CALL_LOG_MAX_BYTES // 2, os.SEEK_END)
+                        tail = fh.read().split(b"\n", 1)[-1]
+                    # Crash-consistent rotation: temp + fsync + atomic rename.
+                    # An in-place "wb" rewrite could crash mid-write and leave
+                    # a partial call log; the log is spend/replay evidence.
+                    tmp = CALL_LOG + f".tmp-{os.getpid()}"
+                    with open(tmp, "wb") as fh:
+                        fh.write(tail)
+                        fh.flush()
+                        os.fsync(fh.fileno())
+                    os.replace(tmp, CALL_LOG)
+            except OSError:
+                pass
+    except OSError as e:
+        print(f"CALL_LOG_WRITE_FAILED: {e}", file=sys.stderr)
+        return False
+    return True
 
 
 MONEY_GATE_TIMEOUT = 60.0  # worst-case wait for the serialized money gate
 
 
 def _money_gate(state, key, post_fn, now):
-    """Runs with the spend lock HELD. Returns ("hold", row) or
-    ("answer", answers, usage, ledger). Never raises on provider failure.
-    The stage USD cap is a PRE-CALL bound: _reserve_now() authorizes only
-    when total_30d + MAX_AUTHORIZED_CALL_USD fits inside the cap, and the
-    reservation is reconciled (settled/refunded) on every path below, so a
-    single call can never overshoot the cap from learning actual cost late."""
+    """Runs with the spend lock HELD. Returns ("hold", row),
+    ("cached", row, artifact), or ("answer", answers, usage, ledger).
+    Never raises on provider failure.
+    The lock covers cache-recheck -> cap -> reserve -> call -> settle, so
+    one decision_key buys at most one provider call (single-flight) and
+    the stage USD cap is a PRE-CALL bound. Ambiguous POSTs (timeout/reset
+    with no response) never retry and never refund: the provider may have
+    billed us, so the reservation stands and the governor trips."""
+    # Single-flight recheck INSIDE the lock: another process may have
+    # answered this exact state between our lock-free cache_get and our
+    # acquisition. Same decision_key must never buy two provider calls or
+    # leave two different remote answers fighting over one cache file.
+    hit = cache_get(state, now)
+    if hit is not None:
+        row = {"action": "CACHED", "answers": hit["payload"]["answers"],
+               "symbol": state.get("symbol"), "cached": True,
+               "at": datetime.fromtimestamp(now, timezone.utc).isoformat()}
+        row["cost"] = cost_tag(state, {"cost": 0.0})
+        log_row(row)
+        return "cached", row, hit
     cap = STAGE_30D_CAPS_USD[state["stage"]]  # stage already allowlisted
     total_30d, unknown_30d = spend_30d(now)
     if unknown_30d:
@@ -1106,8 +1189,23 @@ def _money_gate(state, key, post_fn, now):
         attempts += 1
         if err is None or not transient_error(err):
             break  # success, or non-retryable: exactly one attempt
-        _refund_now(now)  # transient retry: release this attempt's money
+        if ambiguous_error(err):
+            # The provider may have executed and billed this POST before
+            # the transport died. Retrying could double-spend; refunding
+            # would understate the bill. NEITHER: reservation stands,
+            # governor trips, human reconciles. No second attempt.
+            _flag_unknown_now(now)
+            row = hold_row(state, "ambiguous-transport", now=now)
+            row["cost"] = cost_tag(state, None)
+            row["attempts"] = attempts
+            log_row(row)
+            return "hold", row
+        if attempt == 0:
+            _refund_now(now)  # retrying: release this attempt's money
         # reservation before re-reserving; the attempt stays counted.
+        # (On the final attempt there is no re-reserve: the error path
+        # below releases it exactly once. Refunding here unconditionally
+        # would double-refund the last attempt.)
     if err is not None:
         _refund_now(now)  # failed call spent nothing: release reservation.
         row = hold_row(state, "jev_error:" + err, now=now)
@@ -1124,6 +1222,14 @@ def _money_gate(state, key, post_fn, now):
     spent, flag = _settle_now(cost, pt, ct, known, now)
     if spent is None:
         row = hold_row(state, "spend-unknown", now=now)
+        row["cost"] = cost_tag(state, usage)
+        log_row(row)
+        return "hold", row
+    if not known:
+        # Valid answers, unknowable bill: an unknown charge is unbounded by
+        # the reservation, so the absolute cap cannot bless it. The answers
+        # die here (HOLD); the governor is already poisoned for next time.
+        row = hold_row(state, "unknown-cost", now=now)
         row["cost"] = cost_tag(state, usage)
         log_row(row)
         return "hold", row
@@ -1193,6 +1299,10 @@ def decide(state, now=None, key=None, post_fn=None):
         return row, None
     if gate[0] == "hold":
         return gate[1], None
+    if gate[0] == "cached":
+        # Single-flight recheck hit inside the lock: another process
+        # answered this state while we waited. Serve their artifact.
+        return gate[1], gate[2]
     answers, usage, spent = gate[1], gate[2], gate[3]
     created = datetime.fromtimestamp(now, timezone.utc).isoformat()
     payload = {"schema_version": "answerset_v1",
@@ -1213,7 +1323,20 @@ def decide(state, now=None, key=None, post_fn=None):
         row["cost"] = cost_tag(state, usage)
         log_row(row)
         return row, None
-    cache_put(state, artifact, now)
+    try:
+        cache_put(state, artifact, now)
+    except OSError as e:
+        # Paid, settled, signed — but NOT durably cached. Fail loudly:
+        # HOLD, no artifact, stderr. The next cycle will miss cache and
+        # may buy another call (bounded by the spend governor); a dead
+        # disk needs a human, and pretending otherwise would be worse.
+        # Spend stays settled: the money was spent, whatever the disk did.
+        row = hold_row(state, f"evidence-persist-failed:{type(e).__name__}",
+                       now=now)
+        row["cost"] = cost_tag(state, usage)
+        log_row(row)
+        print(f"CACHE_PUT_FAILED: {e}", file=sys.stderr)
+        return row, None
     row = {"action": "ANSWER", "answers": answers, "symbol": state.get("symbol"),
            "context_hash": state.get("context_hash"), "cached": False,
            "calls_day_total": spent["calls"],
@@ -1240,30 +1363,22 @@ def bind_check(artifact, state):
 
 
 def replay(artifact_path):
-    '''Zero-network replay: full-contract verification + downstream input.'''
+    '''Zero-network replay: full-contract verification + downstream input.
+    Enforces the SAME artifact contract as LIVE cache admission via
+    _validate_answerset_artifact (REPLAY mode: shape/pins/answers/
+    signature/coherence, no liveness or state binding — forensics reads
+    the past). Every malformation is a structured HOLD, never KeyError.'''
     try:
         with open(artifact_path, encoding="utf-8") as fh:
             artifact = json.load(fh)
     except (OSError, ValueError):
         return {"action": "HOLD", "reason": "replay-unreadable"}
-    if not isinstance(artifact, dict):
-        return {"action": "HOLD", "reason": "replay-shape"}
-    p = artifact.get("payload")
-    if not isinstance(p, dict):
-        return {"action": "HOLD", "reason": "replay-shape"}
-    if not verify_answerset(artifact):
-        return {"action": "HOLD", "reason": "signature-failure"}
-    if p.get("schema_version") != "answerset_v1":
-        return {"action": "HOLD", "reason": "wrong-schema"}
-    if p.get("revision") != REVISION or p.get("provider") != PROVIDER:
-        return {"action": "HOLD", "reason": "wrong-revision"}
-    if p.get("question_set_version") != QVERSION:
-        return {"action": "HOLD", "reason": "wrong-qversion"}
-    if p.get("model") != MODEL:
-        return {"action": "HOLD", "reason": "wrong-model"}
+    p, why = _validate_answerset_artifact(artifact)
+    if p is None:
+        return {"action": "HOLD", "reason": why}
     clean, why = validate_response({"model": REVISION, "provider": PROVIDER,
                                     "answers": p.get("answers")})
-    if clean is None:
+    if clean is None:  # unreachable (validator proved answers), kept explicit
         return {"action": "HOLD", "reason": why}
     return {"action": "ANSWER", "answers": clean,
             "state_hash": p["state_hash"], "replayed": True}
