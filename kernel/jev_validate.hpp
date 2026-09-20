@@ -734,11 +734,9 @@ inline bool PtDecode(const uint8_t enc[32], Pt& out) {
         }
         if (ge) return false;
     }
-    // reject x == 0 with sign bit set (y == 0 here iff x == 0)
-    bool yzero = true;
-    for (int i = 0; i < 32; i++)
-        if (cp[i] != 0) yzero = false;
-    if (yzero && sign) return false;
+    // NOTE: no y==0/sign rejection here. x == 0 occurs for y == +/-1, not
+    // y == 0 (x^2 = (y^2-1)/(d*y^2+1)); the x==0/sign check below examines
+    // the RECOVERED x per RFC 8032 s5.1.3.
     F d = EdD();
     F y2 = Fmul(y, y);
     F u = Fsub(y2, F::one());
@@ -780,6 +778,14 @@ inline bool PtDecode(const uint8_t enc[32], Pt& out) {
         F diffb = Fsub(x2b, x);
         for (int i = 0; i < 8; i++)
             if (diffb.l[i] != 0) return false;
+    }
+    // RFC 8032 s5.1.3: if the recovered x == 0 and the sign bit is 1, FAIL.
+    // (x == 0 for y == +/-1; y == 0/sign == 1 is a VALID point.)
+    {
+        bool xzero = true;
+        for (int i = 0; i < 8; i++)
+            if (e.l[i] != 0) xzero = false;
+        if (xzero && sign) return false;
     }
     if ((e.l[0] & 1u) != (uint32_t)sign) e = Fsub(F::zero(), e);
     out.X = e; out.Y = y; out.Z = F::one(); out.T = Fmul(e, y);

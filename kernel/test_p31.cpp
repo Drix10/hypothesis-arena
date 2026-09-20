@@ -310,18 +310,63 @@ int main(int argc, char** argv) {
                   !jev::EdVerify(badkey.data(), (const uint8_t*)canon.data(),
                                  canon.size(), sigraw));
         }
-        // point decode unit vectors
+        // point decode unit vectors (RFC 8032 s5.1.3: x==0 iff y==+/-1)
         {
             jev::Pt pt;
             uint8_t z[32] = {};
             CHECK("decode-zero-ok", jev::PtDecode(z, pt));  // identity, sign 0
-            uint8_t x0s[32] = {};
-            x0s[31] = 0x80;
-            CHECK("decode-x0-sign-fails", !jev::PtDecode(x0s, pt));
+            // y=0/sign=1 is a VALID point (x = +/-sqrt(-1)); must decode
+            uint8_t y0s[32] = {};
+            y0s[31] = 0x80;
+            CHECK("decode-y0-sign-ok", jev::PtDecode(y0s, pt));
+            // y=1/sign=0 is the identity; must decode and re-encode cleanly
+            uint8_t y1[32] = {};
+            y1[0] = 0x01;
+            CHECK("decode-y1-ok", jev::PtDecode(y1, pt));
+            uint8_t re[32];
+            jev::PtEncode(pt, re);
+            CHECK("identity-re-encodes", memcmp(re, y1, 32) == 0);
+            // THE x=0/sign=1 vector: y=1, recovered x==0, sign==1 -> FAIL
+            uint8_t y1s[32] = {};
+            y1s[0] = 0x01;
+            y1s[31] = 0x80;
+            CHECK("decode-x0-sign-fails", !jev::PtDecode(y1s, pt));
             uint8_t nc[32];
             memset(nc, 0xFF, 32);
             CHECK("decode-noncanon-fails", !jev::PtDecode(nc, pt));
             CHECK("decode-pubkey-ok", jev::PtDecode(key.data(), pt));
+        }
+        // independent oracle: OpenSSL 3.2 Ed25519 signatures verify here
+        {
+            std::array<uint8_t, 32> okey{};
+            if (hxkey("18fd09829dd87bd6a5d27046f624bf08ae01ca5950f449851fecc362f67aa713",
+                      okey)) {
+                auto over = [&](const char* rhex, const char* shex,
+                                const std::string& msg) {
+                    std::array<uint8_t, 32> R, S;
+                    uint8_t sig[64];
+                    if (!hxkey(rhex, R) || !hxkey(shex, S)) return false;
+                    memcpy(sig, R.data(), 32);
+                    memcpy(sig + 32, S.data(), 32);
+                    return jev::EdVerify(okey.data(), (const uint8_t*)msg.data(),
+                                         msg.size(), sig);
+                };
+                CHECK("openssl-sig1-accepts",
+                      over("53452561a71f76b419e15bf82476c135f2d8f910f0054152361e172dcb1ba8df",
+                           "7230f7931c6152530ad301c8f318136f6b566032e3473c038ee7bedbd7953f0d",
+                           "hello"));
+                CHECK("openssl-sig2-accepts",
+                      over("a7995a477aeb0a90d3918056f5e73a7390e7ac3b124f630366e2ee30b0c30711",
+                           "2864f120467b0b589ea986de6fa93e44ae92837b1367b2f4c4ffbd0bf647f30d",
+                           "hypothesis-arena cross-check vector"));
+                // same signature, wrong message -> reject
+                CHECK("openssl-wrongmsg-rejects",
+                      !over("53452561a71f76b419e15bf82476c135f2d8f910f0054152361e172dcb1ba8df",
+                            "7230f7931c6152530ad301c8f318136f6b566032e3473c038ee7bedbd7953f0d",
+                            "hellx"));
+            } else {
+                CHECK("openssl-key-load", false);
+            }
         }
     }
     // float formatting: C++ must reproduce Python json.dumps for edge values

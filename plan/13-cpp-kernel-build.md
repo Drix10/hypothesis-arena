@@ -107,6 +107,26 @@ key, bool noul, NaN-equivalent, out-of-range, tampered response_hash,
 tampered signature, untrusted key, expired-live, mismatched state_hash,
 mismatched decision_key), plus the §13.2 cross-language vector.
 
+Frozen P3.1 Ed25519 policy: strict RFC 8032 decoding (canonical y,
+recovered-x == 0 with sign bit rejected, post-adjustment square re-check),
+`S < L`, cofactorless `[S]B == R + [h]A` verification. No ZIP-215 semantics.
+Cross-checked against OpenSSL 3.2 signatures (accept) plus tamper/wrong-msg
+rejection; decode distinction vectors (y=0/sign=1 valid, y=1/sign=1 invalid).
+
+Explicitly NOT claimed by P3.1 (carried, not expanded):
+- `allowed_symbols` / `previous_epoch` are kernel-supplied inputs; the
+  persistent per-symbol epoch state machine and immutable universe live in
+  the kernel (P3.3/P3.5), not in this caller-constructible request.
+- `ComputeDecisionKey` maps unrepresentable feature_id types to `"?"`
+  (Python would raise: such states are unsignable, comparison fails closed).
+  P3.3 hardens this to an explicit `state-shape` failure.
+- Check order keeps crypto before freshness/binding (fine for the cold
+  sidecar path); the hot path never revalidates JEV JSON.
+- ASan/UBSan: MinGW ships no runtimes (hardened build substituted and
+  green); Linux ASan/UBSan required before production freeze.
+- Fuzz is mutation-robustness around committed artifacts (single-artifact
+  seed + token soup + nesting + boundary sizes), not grammar coverage.
+
 ## 13.2 P3.2 — Canonical serialization + cross-language test vector
 
 `state_hash`, `decision_key`, `response_hash`, and the Ed25519 signature are
