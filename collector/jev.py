@@ -66,10 +66,14 @@ CONVICTIONS = {"flat", "lean", "strong", "max"}
 
 
 def api_key():
-    for line in open(os.path.join(ROOT, ".env"), encoding="utf-8"):
-        line = line.strip()
-        if line.startswith("OPENROUTER_API_KEY="):
-            return line.split("=", 1)[1].strip().strip("'\"")
+    try:
+        with open(os.path.join(ROOT, ".env"), encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line.startswith("OPENROUTER_API_KEY="):
+                    return line.split("=", 1)[1].strip().strip("'\"")
+    except OSError:
+        pass
     return os.environ.get("OPENROUTER_API_KEY", "")
 
 
@@ -204,17 +208,47 @@ def ed_verify(pub, msg, sig):
 
 
 def keypair():
+    """Explicit bootstrap ONLY: creates a fresh signing identity iff none
+    exists. Refuses to overwrite. Runtime paths never call this."""
     os.makedirs(os.path.dirname(KEY_PATH), exist_ok=True)
+    if os.path.exists(KEY_PATH):
+        raise FileExistsError("key already exists; refusing to overwrite " +
+                              KEY_PATH)
+    seed = os.urandom(32)
+    pub = ed_pubkey(seed)
+    fd = os.open(KEY_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump({"seed": seed.hex(), "pub": pub.hex()}, fh)
+    return seed, pub
+
+
+class KeyMaterialError(Exception):
+    pass
+
+
+def load_keypair():
+    """Runtime key load. Missing/malformed/mismatched material raises —
+    never silently regenerates (a corrupt key file must HOLD + alert, not
+    rotate identity and orphan every existing artifact)."""
     try:
-        kp = json.load(open(KEY_PATH, encoding="utf-8"))
-        return bytes.fromhex(kp["seed"]), bytes.fromhex(kp["pub"])
-    except (OSError, ValueError, KeyError):
-        seed = os.urandom(32)
-        pub = ed_pubkey(seed)
-        fd = os.open(KEY_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump({"seed": seed.hex(), "pub": pub.hex()}, fh)
-        return seed, pub
+        with open(KEY_PATH, encoding="utf-8") as fh:
+            kp = json.load(fh)
+        seed = bytes.fromhex(kp["seed"])
+        pub = bytes.fromhex(kp["pub"])
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        raise KeyMaterialError(f"unreadable key file: {type(e).__name__}")
+    if len(seed) != 32 or len(pub) != 32:
+        raise KeyMaterialError("key length")
+    if ed_pubkey(seed) != pub:
+        raise KeyMaterialError("seed/pub mismatch")
+    return seed, pub
+
+
+def load_pubkey():
+    """Configured trust anchor for verification (B5). Raises when the
+    anchor itself is unusable — verification then fails closed."""
+    _, pub = load_keypair()
+    return pub
 
 
 # ---- request / response ----
@@ -232,10 +266,40 @@ def validate_state(state):
     for k in ("context_hash", "symbol", "stage"):
         if k not in state:
             return False, "state-missing:" + k
+    if not isinstance(state.get("context_hash"), str) or \
+            not state["context_hash"]:
+        return False, "state-context_hash"
+    if not isinstance(state.get("symbol"), str) or not state["symbol"]:
+        return False, "state-symbol"
     if state.get("stage") not in STAGES:
         return False, "invalid-stage"
     if state.get("question_set_version", QVERSION) != QVERSION:
         return False, "state-qversion"
+    ep = state.get("snapshot_epoch", "?")
+    if ep != "?" and (isinstance(ep, bool) or not isinstance(ep, int)
+                        or ep < 0):
+        return False, "state-epoch"
+    for k in ("indicators", "portfolio", "event_window"):
+        if k in state and not isinstance(state[k], dict):
+            return False, "state-" + k
+    if "features" in state and not isinstance(state["features"], list):
+        return False, "state-features"
+    if "features" in state:
+        for f in state["features"]:
+            if isinstance(f, dict) and "feature_id" in f and \
+                    not isinstance(f["feature_id"], str):
+                # decision_key() would raise sorting mixed types: refuse
+                # admission instead of crashing mid-cycle (B11).
+                return False, "state-feature-id"
+    if "research_revision" in state and \
+            not isinstance(state["research_revision"], str):
+        return False, "state-research_revision"
+    if "spread_bps" in state and \
+            (isinstance(state["spread_bps"], bool) or
+             not isinstance(state["spread_bps"], (int, float))):
+        return False, "state-spread"
+    if "cycle_id" in state and not isinstance(state["cycle_id"], str):
+        return False, "state-cycle_id"
     return True, "ok"
 
 
@@ -265,14 +329,41 @@ def validate_response(resp):
         l = ans["latent_risk"]
         f = ans["edge_family"]
         c = ans["conviction"]
-        if e["type"] != "noul" or not finite_prob(e["noul"]):
+        if not isinstance(e, dict) or set(e) != {"type", "noul"} or \
+                e["type"] != "noul" or not finite_prob(e["noul"]):
             return None, "enter-shape"
-        if l["type"] != "noul" or not finite_prob(l["noul"]):
+        if not isinstance(l, dict) or set(l) != {"type", "noul"} or \
+                l["type"] != "noul" or not finite_prob(l["noul"]):
             return None, "latent-shape"
-        if f["type"] != "choice" or f["choice"] not in FAMILIES:
+        # Exact C++ boundary mirror (B7): allowed keys, bounded family map,
+        # finite numerics only. The sidecar must never accept an artifact
+        # the kernel would reject.
+        if not isinstance(f, dict):
             return None, "family-shape"
-        if c["type"] != "score" or c["score"] not in CONVICTIONS:
+        if set(f) - {"type", "choice", "probabilities", "confidence"}:
+            return None, "family-shape"
+        if f.get("type") != "choice" or f.get("choice") not in FAMILIES:
+            return None, "family-shape"
+        pr = f.get("probabilities", {})
+        if not isinstance(pr, dict) or len(pr) > 4:
+            return None, "family-shape"
+        for k, v in pr.items():
+            if k not in FAMILIES or not finite_prob(v):
+                return None, "family-shape"
+        if f.get("confidence") is not None:
+            cf = f["confidence"]
+            if type(cf) not in (int, float) or not math.isfinite(cf):
+                return None, "family-shape"
+        if not isinstance(c, dict):
             return None, "conviction-shape"
+        if set(c) - {"type", "score", "confidence"}:
+            return None, "conviction-shape"
+        if c.get("type") != "score" or c.get("score") not in CONVICTIONS:
+            return None, "conviction-shape"
+        if c.get("confidence") is not None:
+            cf = c["confidence"]
+            if type(cf) not in (int, float) or not math.isfinite(cf):
+                return None, "conviction-shape"
     except (KeyError, TypeError):
         return None, "answers-incomplete"
     clean = {"enter": {"type": "noul", "noul": e["noul"]},
@@ -288,18 +379,23 @@ def validate_response(resp):
 
 
 def sign_answerset(payload):
-    seed, pub = keypair()
+    seed, pub = load_keypair()  # raises KeyMaterialError: caller HOLDs
     msg = canon(payload).encode()
     return {"payload": payload, "response_hash": sha256_hex(canon(payload)),
             "signature": ed_sign(seed, msg).hex(), "pubkey": pub.hex()}
 
 
 def verify_answerset(artifact):
+    """Crypto verification against the CONFIGURED trust anchor (B5).
+    artifact["pubkey"] is informational metadata only: a foreign keypair
+    with a matching self-attested pubkey field never verifies."""
     try:
         msg = canon(artifact["payload"]).encode()
         sig = bytes.fromhex(artifact["signature"])
-        pub = bytes.fromhex(artifact["pubkey"])
-    except (KeyError, ValueError):
+        pub = load_pubkey()
+    except (KeyError, ValueError, KeyMaterialError):
+        return False
+    if len(sig) != 64:
         return False
     if sha256_hex(canon(artifact["payload"])) != artifact.get("response_hash"):
         return False
@@ -344,22 +440,68 @@ def protected_state(state):
             "event_blackout": state.get("event_window", {}).get("blackout")}
 
 
+def validate_cached_artifact(state, c, now):
+    """Strict cache admission (B6). Returns the artifact or None (miss).
+    Every cached artifact re-proves the full contract: shape, keys, pins,
+    answers, hashes, configured-key signature, state binding, age."""
+    if not isinstance(c, dict):
+        return None
+    try:
+        if c.get("research_key") != research_key(state):
+            return None
+        if c.get("decision_key") != decision_key(state):
+            return None
+        if c.get("protected") != protected_state(state):
+            return None
+        at = c.get("at")
+        if isinstance(at, bool) or not isinstance(at, (int, float)):
+            return None
+        if at > now or now - at > ANSWER_MAX_AGE_S:
+            return None  # future-dated or stale: miss, never a hit
+        art = c.get("artifact")
+        if not isinstance(art, dict):
+            return None
+        p = art.get("payload")
+        if not isinstance(p, dict):
+            return None
+        if p.get("schema_version") != "answerset_v1":
+            return None
+        if p.get("question_set_version") != QVERSION:
+            return None
+        if p.get("model") != MODEL or p.get("revision") != REVISION:
+            return None
+        if p.get("provider") != PROVIDER:
+            return None
+        if p.get("symbol") != state.get("symbol"):
+            return None
+        if p.get("snapshot_epoch") != state.get("snapshot_epoch"):
+            return None
+        clean, why = validate_response({"model": REVISION,
+                                        "provider": PROVIDER,
+                                        "answers": p.get("answers")})
+        if clean is None:
+            return None
+        if not verify_answerset(art):
+            return None
+        if not bind_check(art, state):
+            return None
+        return art
+    except Exception:
+        return None  # malformed cache never crashes the cycle
+
+
 def cache_get(state, now):
     try:
-        c = json.load(open(os.path.join(
-            CACHE_DIR, sha256_hex(research_key(state)) + ".json"),
-            encoding="utf-8"))
+        with open(os.path.join(
+                CACHE_DIR, sha256_hex(research_key(state)) + ".json"),
+                encoding="utf-8") as fh:
+            c = json.load(fh)
     except (OSError, ValueError):
         return None
-    if c.get("research_key") != research_key(state):
+    try:
+        return validate_cached_artifact(state, c, now)
+    except Exception:
         return None
-    if c.get("decision_key") != decision_key(state):
-        return None
-    if c.get("protected") != protected_state(state):
-        return None
-    if now - c.get("at", 0) > ANSWER_MAX_AGE_S:
-        return None
-    return c.get("artifact")
 
 
 def cache_put(state, artifact, now):
@@ -369,50 +511,231 @@ def cache_put(state, artifact, now):
          "protected": protected_state(state),
          "artifact": artifact, "at": now}
     p = os.path.join(CACHE_DIR, sha256_hex(research_key(state)) + ".json")
-    tmp = p + ".tmp"
-    json.dump(c, open(tmp, "w"))
+    tmp = p + f".tmp-{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(c, fh)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, p)
+    prune_cache(now)
+
+
+def prune_cache(now, max_age_s=3600):
+    """Bounded cache GC: drop unparseable or ancient files. Best-effort."""
+    try:
+        files = os.listdir(CACHE_DIR)
+    except OSError:
+        return
+    for fn in files:
+        if not fn.endswith(".json") or fn.endswith(".tmp"):
+            continue
+        p = os.path.join(CACHE_DIR, fn)
+        try:
+            at = json.load(open(p, encoding="utf-8")).get("at", 0)
+            stale = not isinstance(at, (int, float)) or now - at > max_age_s
+        except (OSError, ValueError):
+            stale = True
+        if stale:
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+
+# ---- spend (fail-closed ledger, atomic reservation) ----
+# Ledger integrity failure is UNKNOWN_SPEND: conservative/high, never $0.
+# Recovery is human repair only (delete the corrupt day-file after
+# reconciling against provider billing, or move it aside).
+MAX_COST_USD = 100.0
+MAX_TOKENS = 10 ** 7
+
+
+def _lock_path():
+    return os.path.join(SPEND_DIR, ".lock")
+
+
+def valid_ledger(s):
+    if not isinstance(s, dict):
+        return False
+    if type(s.get("usd")) not in (int, float):
+        return False
+    if not math.isfinite(s["usd"]) or s["usd"] < 0:
+        return False
+    for k in ("calls", "prompt_tokens", "completion_tokens"):
+        if type(s.get(k)) is not int or s[k] < 0:
+            return False
+    if "unknown_charges" in s and (type(s["unknown_charges"]) is not int
+                                     or s["unknown_charges"] < 0):
+        return False
+    return True
+
+
+def blank_ledger():
+    return {"usd": 0.0, "calls": 0, "prompt_tokens": 0,
+            "completion_tokens": 0, "unknown_charges": 0}
+
+
+def _spend_path(day):
+    return os.path.join(SPEND_DIR, day + ".json")
+
+
+def _persist_ledger(s, p):
+    tmp = p + f".tmp-{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(s, fh)
+        fh.flush()
+        os.fsync(fh.fileno())
     os.replace(tmp, p)
 
 
-# ---- spend ----
+class _SpendLock:
+    """Single-writer mutual exclusion via atomic mkdir (stdlib only).
+    Stale locks (>120s) are stolen; reservations are idempotent-safe
+    because a crash leaves the incremented count persisted (B4: a crash
+    after reservation conservatively consumes the attempt)."""
+    def __enter__(self):
+        os.makedirs(SPEND_DIR, exist_ok=True)
+        lock = _lock_path()
+        deadline = time.time() + 30
+        while True:
+            try:
+                os.mkdir(lock)
+                with open(os.path.join(lock, "pid"), "w") as fh:
+                    fh.write(f"{os.getpid()} {time.time()}")
+                return self
+            except FileExistsError:
+                try:
+                    with open(os.path.join(lock, "pid")) as fh:
+                        _, ts = fh.read().split()
+                    stale = time.time() - float(ts) > 120
+                except (OSError, ValueError):
+                    stale = True
+                if stale:
+                    try:
+                        os.remove(os.path.join(lock, "pid"))
+                    except OSError:
+                        pass
+                    try:
+                        os.rmdir(lock)
+                    except OSError:
+                        pass
+                if time.time() > deadline:
+                    raise TimeoutError("spend lock busy")
+                time.sleep(0.05)
+
+    def __exit__(self, *a):
+        lock = _lock_path()
+        try:
+            os.remove(os.path.join(lock, "pid"))
+        except OSError:
+            pass
+        try:
+            os.rmdir(lock)
+        except OSError:
+            pass
+        return False
+
+
 def spend_today():
+    """Returns (ledger-or-None, path). None = UNKNOWN_SPEND (corrupt or
+    schema-invalid): callers must fail closed, never treat as $0.
+    An ABSENT day-file is a fresh day (blank ledger); a present-but-bad
+    file is corruption."""
     day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    p = os.path.join(SPEND_DIR, day + ".json")
+    p = _spend_path(day)
     try:
-        return json.load(open(p, encoding="utf-8")), p
+        with open(p, encoding="utf-8") as fh:
+            s = json.load(fh)
+    except FileNotFoundError:
+        return blank_ledger(), p
     except (OSError, ValueError):
-        return {"usd": 0.0, "calls": 0, "prompt_tokens": 0,
-                "completion_tokens": 0}, p
+        return None, p
+    if not valid_ledger(s):
+        return None, p
+    return s, p
+
+
+def spend_reserve():
+    """Atomically reserve ONE provider attempt BEFORE the network call.
+    Returns (status, ledger-or-None): ok | ceiling | unknown | lock-busy.
+    The increment is persisted inside the lock, so concurrent sidecars
+    cannot both observe headroom (B4)."""
+    try:
+        with _SpendLock():
+            s, p = spend_today()
+            if s is None:
+                return "unknown", None
+            if s["calls"] >= DAILY_CALL_CEILING:
+                return "ceiling", s
+            s["calls"] += 1
+            _persist_ledger(s, p)
+            return "ok", s
+    except TimeoutError:
+        return "lock-busy", None
+
+
+def validate_usage(usage):
+    """Provider usage -> (cost, prompt_t, completion_t, known).
+    Malformed/negative/non-finite money or token counts are never coerced:
+    unknown cost poisons the money governor (S10), never silently $0."""
+    u = usage if isinstance(usage, dict) else {}
+    cost = u.get("cost", "unknown")
+    pt = u.get("prompt_tokens", 0)
+    ct = u.get("completion_tokens", 0)
+    if cost is None or isinstance(cost, str):
+        return 0.0, 0, 0, False
+    if type(cost) not in (int, float) or not math.isfinite(cost):
+        return 0.0, 0, 0, False
+    if not (0.0 <= cost <= MAX_COST_USD):
+        return 0.0, 0, 0, False
+    for t in (pt, ct):
+        if type(t) is not int or not (0 <= t <= MAX_TOKENS):
+            return 0.0, 0, 0, False
+    return float(cost), pt, ct, True
+
+
+def spend_charge(cost, prompt_t=0, completion_t=0, known=True):
+    """Record a completed call's money/tokens. NEVER increments calls:
+    attempts are counted once, at reservation (B2). Unknown cost sets the
+    unknown_charges flag that trips the money governor (B8)."""
+    with _SpendLock():
+        s, p = spend_today()
+        if s is None:
+            return None
+        if known:
+            s["usd"] = round(s["usd"] + cost, 8)
+            s["prompt_tokens"] += prompt_t
+            s["completion_tokens"] += completion_t
+        else:
+            s["unknown_charges"] = s.get("unknown_charges", 0) + 1
+        _persist_ledger(s, p)
+        return s
 
 
 def spend_add(cost, prompt_t=0, completion_t=0):
-    os.makedirs(SPEND_DIR, exist_ok=True)
-    s, p = spend_today()
-    s["usd"] = round(s["usd"] + cost, 8)
-    s["calls"] += 1
-    s["prompt_tokens"] += prompt_t
-    s["completion_tokens"] += completion_t
-    json.dump(s, open(p, "w"))
-    return s
+    """Legacy entry point kept for tooling: charges money/tokens only
+    (calls are reservation-counted). Prefer spend_charge()."""
+    return spend_charge(cost, prompt_t, completion_t, known=True)
 
 
 def spend_attempt():
-    """Count one provider attempt. Called for every post_fn() invocation,
-    success or failure: the call ceiling counts attempts, not answers."""
-    os.makedirs(SPEND_DIR, exist_ok=True)
-    s, p = spend_today()
-    s["calls"] += 1
-    json.dump(s, open(p, "w"))
-    return s
+    """Legacy entry point kept for tooling: reserves one attempt."""
+    status, s = spend_reserve()
+    return s if s is not None else blank_ledger()
 
 
 def spend_30d(today=None):
+    """Returns (total_usd, unknown). Out-of-window files are ignored
+    without penalty; in-window corrupt/invalid files (or unknown charges
+    in any in-window ledger) set unknown=True -> governor holds (S10)."""
     today = today or datetime.now(timezone.utc).date()
-    total = 0.0
+    total, unknown = 0.0, False
     try:
         files = os.listdir(SPEND_DIR)
+    except FileNotFoundError:
+        return 0.0, False  # nothing ever spent: known-zero
     except OSError:
-        return 0.0
+        return 0.0, True  # unreadable ledger dir: unknown
     for fn in files:
         if not fn.endswith(".json"):
             continue
@@ -420,25 +743,57 @@ def spend_30d(today=None):
             day = datetime.strptime(fn[:-5], "%Y-%m-%d").date()
         except ValueError:
             continue
-        if 0 <= (today - day).days <= 29:
-            try:
-                total += json.load(open(os.path.join(SPEND_DIR, fn),
-                                        encoding="utf-8")).get("usd", 0.0)
-            except (OSError, ValueError):
-                pass
-    return round(total, 8)
+        if not (0 <= (today - day).days <= 29):
+            continue
+        try:
+            with open(os.path.join(SPEND_DIR, fn), encoding="utf-8") as fh:
+                s = json.load(fh)
+        except (OSError, ValueError):
+            unknown = True
+            continue
+        if not valid_ledger(s):
+            unknown = True
+            continue
+        if s.get("unknown_charges", 0):
+            unknown = True
+        total += s["usd"]
+    return round(total, 8), unknown
 
 
 def cost_tag(state, usage, category="decision"):
+    _c, pt, ct, known = validate_usage(usage)
     return {"stage": state.get("stage"), "cycle_id": state.get("cycle_id"),
             "symbol": state.get("symbol"), "node": "jev", "model": REVISION,
-            "prompt_tokens": (usage or {}).get("prompt_tokens", 0),
-            "completion_tokens": (usage or {}).get("completion_tokens", 0),
-            "usd": (usage or {}).get("cost", "unknown"),
+            "prompt_tokens": pt if known else 0,
+            "completion_tokens": ct if known else 0,
+            "usd": _c if known else "unknown",
             "category": category}
 
 
 # ---- provider call ----
+MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+TRANSIENT_HTTP = {408, 429, 500, 502, 503, 504}
+
+
+def transient_error(err):
+    """Retry exactly once ONLY for transient failures (B9). Auth, bad
+    request, schema rejections, and unknown models never retry."""
+    if err is None:
+        return False
+    if err.startswith("provider-http-"):
+        try:
+            return int(err.split("-")[-1]) in TRANSIENT_HTTP
+        except ValueError:
+            return False
+    if err.startswith("provider-error:"):
+        kind = err.split(":", 1)[1]
+        return kind in ("Timeout", "TimeoutError", "ConnectionError",
+                        "ConnectionResetError", "RemoteDisconnected",
+                        "URLError", "socket", "timeout") or \
+            "Timeout" in kind or "Connection" in kind
+    return False
+
+
 def post(body, key):
     data = json.dumps(body).encode()
     req = urllib.request.Request(
@@ -446,7 +801,11 @@ def post(body, key):
         headers={"Authorization": "Bearer " + key,
                  "Content-Type": "application/json"})
     try:
-        return json.load(urllib.request.urlopen(req, timeout=TIMEOUT_S)), None
+        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:
+            raw = r.read(MAX_RESPONSE_BYTES + 1)
+            if len(raw) > MAX_RESPONSE_BYTES:
+                return None, "provider-error:oversize-response"
+            return json.loads(raw), None
     except urllib.error.HTTPError as e:
         return None, "provider-http-%d" % e.code
     except Exception as e:
@@ -460,10 +819,24 @@ def hold_row(state, reason, cost=0.0, cached=False):
             "at": datetime.now(timezone.utc).isoformat()}
 
 
+CALL_LOG_MAX_BYTES = 8 * 1024 * 1024
+
+
 def log_row(row):
     os.makedirs(os.path.dirname(CALL_LOG), exist_ok=True)
     with open(CALL_LOG, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(row) + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    try:
+        if os.path.getsize(CALL_LOG) > CALL_LOG_MAX_BYTES:
+            with open(CALL_LOG, "rb") as fh:
+                fh.seek(-CALL_LOG_MAX_BYTES // 2, os.SEEK_END)
+                tail = fh.read().split(b"\n", 1)[-1]
+            with open(CALL_LOG, "wb") as fh:
+                fh.write(tail)
+    except OSError:
+        pass
 
 
 def decide(state, now=None, key=None, post_fn=None):
@@ -477,10 +850,8 @@ def decide(state, now=None, key=None, post_fn=None):
         return row, None
     hit = cache_get(state, now)
     if hit is not None:
-        if not verify_answerset(hit):
-            row = hold_row(state, "signature-failure")
-            log_row(row)
-            return row, None
+        # validate_cached_artifact already proved shape, pins, answers,
+        # configured-key signature, binding, and age: safe to serve.
         row = {"action": "CACHED", "answers": hit["payload"]["answers"],
                "symbol": state.get("symbol"), "cached": True,
                "at": datetime.now(timezone.utc).isoformat()}
@@ -493,7 +864,13 @@ def decide(state, now=None, key=None, post_fn=None):
         log_row(row)
         return row, None
     cap = STAGE_30D_CAPS_USD[state["stage"]]  # stage already allowlisted
-    if spend_30d() >= cap:
+    total_30d, unknown_30d = spend_30d()
+    if unknown_30d:
+        row = hold_row(state, "spend-unknown")
+        row["cost"] = cost_tag(state, None)
+        log_row(row)
+        return row, None
+    if total_30d >= cap:
         row = hold_row(state, "spend-stage-cap")
         row["cost"] = cost_tag(state, None)
         log_row(row)
@@ -501,9 +878,19 @@ def decide(state, now=None, key=None, post_fn=None):
     post_fn = post_fn or post
     resp, err, attempts = None, "not-attempted", 0
     for attempt in range(2):
-        spent, _ = spend_today()
-        if spent["calls"] >= DAILY_CALL_CEILING:
+        status, _ = spend_reserve()  # atomic: ceiling enforced pre-call
+        if status == "ceiling":
             row = hold_row(state, "spend-call-ceiling")
+            row["cost"] = cost_tag(state, None)
+            log_row(row)
+            return row, None
+        if status == "unknown":
+            row = hold_row(state, "spend-unknown")
+            row["cost"] = cost_tag(state, None)
+            log_row(row)
+            return row, None
+        if status == "lock-busy":
+            row = hold_row(state, "spend-lock-busy")
             row["cost"] = cost_tag(state, None)
             log_row(row)
             return row, None
@@ -511,9 +898,11 @@ def decide(state, now=None, key=None, post_fn=None):
             time.sleep(RETRY_DELAY_S)
         resp, err = post_fn(build_request(state), key)
         attempts += 1
-        spend_attempt()
-        if err is None:
-            break
+        if err is None or not transient_error(err):
+            break  # success, or non-retryable: exactly one attempt
+    if err is not None:
+        row = hold_row(state, "jev_error:" + err)
+        row["cost"] = cost_tag(state, None)  # unknown cost, explicitly shown
     if err is not None:
         row = hold_row(state, "jev_error:" + err)
         row["cost"] = cost_tag(state, None)  # unknown cost, explicitly shown
@@ -521,15 +910,16 @@ def decide(state, now=None, key=None, post_fn=None):
         log_row(row)
         return row, None
     answers, why = validate_response(resp)
+    usage = resp.get("usage") if isinstance(resp, dict) else None
+    cost, pt, ct, known = validate_usage(usage)
     if answers is None:
+        # Money spent is money recorded, even when answers are unusable.
+        spend_charge(cost, pt, ct, known=known)
         row = hold_row(state, why)
-        row["cost"] = cost_tag(state, resp.get("usage"))
+        row["cost"] = cost_tag(state, resp.get("usage") if isinstance(resp, dict) else None)
         log_row(row)
         return row, None
-    usage = resp.get("usage") or {}
-    cost = float(usage.get("cost") or 0.0)
-    spent = spend_add(cost, usage.get("prompt_tokens", 0),
-                      usage.get("completion_tokens", 0))
+    spent = spend_charge(cost, pt, ct, known=known)
     created = datetime.now(timezone.utc).isoformat()
     payload = {"schema_version": "answerset_v1",
                "question_set_version": QVERSION, "model": MODEL,
@@ -542,13 +932,20 @@ def decide(state, now=None, key=None, post_fn=None):
                "expires_at": (datetime.fromisoformat(created)
                               .timestamp() + ANSWER_MAX_AGE_S),
                "answers": answers}
-    artifact = sign_answerset(payload)
+    try:
+        artifact = sign_answerset(payload)
+    except KeyMaterialError as e:
+        row = hold_row(state, f"signing-key-unavailable:{e}")
+        row["cost"] = cost_tag(state, usage)
+        log_row(row)
+        return row, None
     cache_put(state, artifact, now)
     row = {"action": "ANSWER", "answers": answers, "symbol": state.get("symbol"),
            "context_hash": state.get("context_hash"), "cached": False,
-           "calls_day_total": spent["calls"],
-           "calls_alert": spent["calls"] >= DAILY_CALL_ALERT,
-           "spend_30d_usd": spend_30d(),
+           "calls_day_total": spent["calls"] if spent else -1,
+           "calls_alert": (spent["calls"] >= DAILY_CALL_ALERT) if spent else False,
+           "spend_30d_usd": spend_30d()[0],
+           "spend_unknown": spend_30d()[1],
            "at": created}
     row["cost"] = cost_tag(state, usage)
     # Authority boundary: answers only. No size, no budget, no order fields.
@@ -569,22 +966,50 @@ def bind_check(artifact, state):
 
 
 def replay(artifact_path):
-    '''Zero-network replay: verify + emit downstream input.'''
-    artifact = json.load(open(artifact_path, encoding="utf-8"))
+    '''Zero-network replay: full-contract verification + downstream input.'''
+    try:
+        with open(artifact_path, encoding="utf-8") as fh:
+            artifact = json.load(fh)
+    except (OSError, ValueError):
+        return {"action": "HOLD", "reason": "replay-unreadable"}
+    if not isinstance(artifact, dict):
+        return {"action": "HOLD", "reason": "replay-shape"}
+    p = artifact.get("payload")
+    if not isinstance(p, dict):
+        return {"action": "HOLD", "reason": "replay-shape"}
     if not verify_answerset(artifact):
         return {"action": "HOLD", "reason": "signature-failure"}
-    p = artifact["payload"]
+    if p.get("schema_version") != "answerset_v1":
+        return {"action": "HOLD", "reason": "wrong-schema"}
     if p.get("revision") != REVISION or p.get("provider") != PROVIDER:
         return {"action": "HOLD", "reason": "wrong-revision"}
     if p.get("question_set_version") != QVERSION:
         return {"action": "HOLD", "reason": "wrong-qversion"}
-    return {"action": "ANSWER", "answers": p["answers"],
+    if p.get("model") != MODEL:
+        return {"action": "HOLD", "reason": "wrong-model"}
+    clean, why = validate_response({"model": REVISION, "provider": PROVIDER,
+                                    "answers": p.get("answers")})
+    if clean is None:
+        return {"action": "HOLD", "reason": why}
+    return {"action": "ANSWER", "answers": clean,
             "state_hash": p["state_hash"], "replayed": True}
 
 
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--replay":
         print(json.dumps(replay(sys.argv[2]), indent=1))
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "--keygen":
+        # Explicit bootstrap: creates identity once, never overwrites.
+        try:
+            _, pub = keypair()
+        except FileExistsError as e:
+            print(f"refusing: {e}", file=sys.stderr)
+            return 1
+        print(json.dumps({
+            "pubkey": pub.hex(),
+            "fingerprint": sha256_hex(pub.hex()),
+            "path": KEY_PATH}))
         return
     state = json.load(sys.stdin)
     row, _ = decide(state)

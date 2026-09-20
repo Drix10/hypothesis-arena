@@ -21,6 +21,11 @@ jev.KEY_PATH = os.path.join(TMP, "keys", "k.json")
 jev.RETRY_DELAY_S = 0
 N = [0]
 
+# Explicit key bootstrap (runtime never self-generates; tests do it once).
+JEV_SEED, JEV_PUB = jev.keypair()
+FOREIGN_SEED = bytes.fromhex("2a" * 32)
+FOREIGN_PUB = jev.ed_pubkey(FOREIGN_SEED)
+
 
 def state(**kw):
     s = {"context_hash": "h", "symbol": "EURUSD", "stage": "G0_PAPER",
@@ -173,7 +178,7 @@ try:
     check("replay-zero-network", out["action"] == "ANSWER")
 finally:
     jev.post = jev_post_orig
-seed_x, pub_x = jev.keypair()
+seed_x, pub_x = FOREIGN_SEED, FOREIGN_PUB
 foreign = dict(art["payload"])
 foreign["revision"] = "typesafe/jev-9.99"
 msg_x = jev.canon(foreign).encode()
@@ -183,8 +188,20 @@ bad_art["signature"] = jev.ed_sign(seed_x, msg_x).hex()
 bad_art["pubkey"] = pub_x.hex()
 pb = os.path.join(TMP, "bad.json")
 json.dump(bad_art, open(pb, "w"))
+check("replay-foreign-key-hold",
+      jev.replay(pb)["reason"] == "signature-failure")
+# wrong revision signed by the CONFIGURED key still fails at pins
+cfg_bad = json.loads(json.dumps(art["payload"]))
+cfg_bad["revision"] = "typesafe/jev-9.99"
+msg_c = jev.canon(cfg_bad).encode()
+rb = {"payload": cfg_bad,
+      "response_hash": jev.sha256_hex(jev.canon(cfg_bad)),
+      "signature": jev.ed_sign(JEV_SEED, msg_c).hex(),
+      "pubkey": JEV_PUB.hex()}
+pc = os.path.join(TMP, "bad2.json")
+json.dump(rb, open(pc, "w"))
 check("replay-wrong-revision-hold",
-      jev.replay(pb)["reason"] == "wrong-revision")
+      jev.replay(pc)["reason"] == "wrong-revision")
 
 # 9. cost ceiling: pre-exhausted day blocks without calling
 day = jev.datetime.now(jev.timezone.utc).strftime("%Y-%m-%d")
@@ -270,12 +287,12 @@ check("stage-cap-blocks",
       row["reason"] == "spend-stage-cap" and calls_g == [])
 jev.SPEND_DIR = os.path.join(TMP, "spend")
 
-# 10b. every provider attempt counts, even failures
+# 10b. every provider attempt counts EXACTLY once, even failures
 jev.SPEND_DIR = os.path.join(TMP, "spend4")
 os.makedirs(jev.SPEND_DIR, exist_ok=True)
 calls_f = []
 row, _ = jev.decide(state(symbol="F"), now=4600.0, key="k",
-                    post_fn=mkpost(err="provider-timeout", calls=calls_f))
+                    post_fn=mkpost(err="provider-error:Timeout", calls=calls_f))
 check("attempts-counted",
       row["action"] == "HOLD" and len(calls_f) == 2
       and json.load(open(os.path.join(
@@ -283,6 +300,16 @@ check("attempts-counted",
           __import__("datetime").datetime.now(
               __import__("datetime").timezone.utc).strftime("%Y-%m-%d")
           + ".json")))["calls"] == 2)
+jev.SPEND_DIR = os.path.join(TMP, "spend")
+# non-transient errors never retry: one attempt, one call
+jev.SPEND_DIR = os.path.join(TMP, "spend4b")
+os.makedirs(jev.SPEND_DIR, exist_ok=True)
+calls_nr = []
+row, _ = jev.decide(state(symbol="F2"), now=4601.0, key="k",
+                    post_fn=mkpost(err="provider-http-401", calls=calls_nr))
+check("no-retry-401",
+      row["action"] == "HOLD" and len(calls_nr) == 1
+      and row["reason"] == "jev_error:provider-http-401")
 jev.SPEND_DIR = os.path.join(TMP, "spend")
 
 # 10c. rolling 30d ignores stale files
@@ -293,7 +320,7 @@ old_day = (__import__("datetime").datetime.now(
     - __import__("datetime").timedelta(days=40)).strftime("%Y-%m-%d")
 json.dump({"usd": 999.0, "calls": 1},
           open(os.path.join(jev.SPEND_DIR, old_day + ".json"), "w"))
-check("rolling-window-true", jev.spend_30d() == 0.0)
+check("rolling-window-true", jev.spend_30d()[0] == 0.0)
 jev.SPEND_DIR = os.path.join(TMP, "spend")
 
 # 10d. unknown stage fails closed before any provider call
@@ -312,5 +339,126 @@ check("bad-state-hold", row["action"] == "HOLD")
 row, _ = jev.decide("garbage", now=4200.0, key="k",
                     post_fn=mkpost(good_resp()))
 check("nonobject-state-hold", row["action"] == "HOLD")
+
+# 12. B2 exact attempt accounting: success/failure/retries count once each
+jev.SPEND_DIR = os.path.join(TMP, "spendX")
+os.makedirs(jev.SPEND_DIR, exist_ok=True)
+row, _ = jev.decide(state(symbol="X1"), now=5000.0, key="k",
+                     post_fn=mkpost(good_resp()))
+check("one-success-one-call",
+      row["action"] == "ANSWER" and jev.spend_today()[0]["calls"] == 1)
+row, _ = jev.decide(state(symbol="X2"), now=5001.0, key="k",
+                     post_fn=mkpost(err="provider-http-400"))
+check("one-failure-one-call",
+      row["action"] == "HOLD" and jev.spend_today()[0]["calls"] == 2)
+row, _ = jev.decide(state(symbol="X3"), now=5002.0, key="k",
+                     post_fn=mkpost(good_resp()))
+check("success-after-failure",
+      row["action"] == "ANSWER" and jev.spend_today()[0]["calls"] == 3)
+jev.SPEND_DIR = os.path.join(TMP, "spend")
+
+# 13. B3 corrupt ledger fails closed (never $0), no provider call
+jev.SPEND_DIR = os.path.join(TMP, "spendBad")
+os.makedirs(jev.SPEND_DIR, exist_ok=True)
+for name, blob in [("corrupt-json", "{nope"),
+                    ("array-shape", "[]"),
+                    ("negative-usd", '{"usd": -5, "calls": 0, '
+                     '"prompt_tokens": 0, "completion_tokens": 0}'),
+                    ("string-calls", '{"usd": 0, "calls": "3", '
+                     '"prompt_tokens": 0, "completion_tokens": 0}')]:
+    p = os.path.join(jev.SPEND_DIR,
+                     jev.datetime.now(jev.timezone.utc).strftime("%Y-%m-%d")
+                     + ".json")
+    open(p, "w").write(blob)
+    calls_b = []
+    row, _ = jev.decide(state(symbol="XB"), now=5100.0, key="k",
+                         post_fn=mkpost(good_resp(), calls=calls_b))
+    check("spend-" + name,
+          row["reason"] == "spend-unknown" and calls_b == [])
+    os.remove(p)
+jev.SPEND_DIR = os.path.join(TMP, "spend")
+
+# 14. B5 artifact pubkey is informational: mutation changes nothing
+row, art = jev.decide(state(symbol="XK"), now=5200.0, key="k",
+                       post_fn=mkpost(good_resp()))
+mut = json.loads(json.dumps(art))
+mut["pubkey"] = FOREIGN_PUB.hex()
+check("pubkey-mutation-irrelevant", jev.verify_answerset(mut) is True)
+check("verify-needs-configured-key", jev.verify_answerset(art) is True)
+
+# 15. B8 malformed usage poisons the governor, never silently $0
+for bad_usage, name in [({"cost": -10.0}, "neg-cost"),
+                         ({"cost": float("nan")}, "nan-cost"),
+                         ({"cost": 1e18}, "huge-cost"),
+                         ({"cost": 0.01, "prompt_tokens": -1}, "neg-tokens"),
+                         ({"cost": 0.01, "prompt_tokens": True}, "bool-tokens")]:
+    jev.SPEND_DIR = os.path.join(TMP, "spendU-" + name)
+    os.makedirs(jev.SPEND_DIR, exist_ok=True)
+    r = good_resp()
+    r["usage"] = bad_usage
+    row, _ = jev.decide(state(symbol="XU" + name), now=5300.0, key="k",
+                         post_fn=mkpost(r))
+    check("usage-" + name,
+          row["action"] == "ANSWER" and row["cost"]["usd"] == "unknown")
+jev.SPEND_DIR = os.path.join(TMP, "spendU-gov")
+os.makedirs(jev.SPEND_DIR, exist_ok=True)
+r = good_resp()
+r["usage"] = {"cost": -1.0}
+row, _ = jev.decide(state(symbol="XUg"), now=5300.0, key="k",
+                     post_fn=mkpost(r))
+check("usage-poisoned", row["action"] == "ANSWER")
+row, _ = jev.decide(state(symbol="XU2"), now=5301.0, key="k",
+                     post_fn=mkpost(good_resp()))
+check("governor-unknown-holds", row["reason"] == "spend-unknown")
+jev.SPEND_DIR = os.path.join(TMP, "spend")
+
+# 16. B10 missing key material HOLDs, never rotates
+old_key = jev.KEY_PATH
+jev.KEY_PATH = os.path.join(TMP, "nokeys", "k.json")
+row, _ = jev.decide(state(symbol="XN"), now=5400.0, key="k",
+                     post_fn=mkpost(good_resp()))
+check("missing-key-holds",
+      row["reason"].startswith("signing-key-unavailable"))
+check("no-silent-keygen", not os.path.exists(jev.KEY_PATH))
+jev.KEY_PATH = old_key
+
+# 17. B11 strict state admission
+for extra, name in [({"indicators": [1]}, "indicators-list"),
+                    ({"snapshot_epoch": True}, "epoch-bool"),
+                    ({"snapshot_epoch": -1}, "epoch-neg"),
+                    ({"spread_bps": "wide"}, "spread-str"),
+                    ({"features": [{"feature_id": 7}]}, "feature-id-int"),
+                    ({"context_hash": ""}, "empty-hash")]:
+    row, _ = jev.decide(state(symbol="XS", **extra), now=5500.0, key="k",
+                         post_fn=mkpost(good_resp()))
+    check("admit-" + name, row["action"] == "HOLD")
+
+# 18. B7 strict nested response mirroring C++
+r = good_resp()
+r["answers"]["edge_family"]["probabilities"] = {"vibes": 0.5}
+check("prob-key-rejected", jev.validate_response(r)[0] is None)
+r = good_resp()
+r["answers"]["edge_family"]["confidence"] = True
+check("conf-bool-rejected", jev.validate_response(r)[0] is None)
+r = good_resp()
+r["answers"]["enter"]["extra"] = 1
+check("enter-extra-rejected", jev.validate_response(r)[0] is None)
+r = good_resp()
+r["answers"]["edge_family"]["probabilities"] = {"momentum": 2.0}
+check("prob-range-rejected", jev.validate_response(r)[0] is None)
+
+# 19. B6 future-dated cache is a miss, not a hit
+row, art = jev.decide(state(symbol="XC"), now=5600.0, key="k",
+                       post_fn=mkpost(good_resp()))
+import glob as _glob
+for _cp in _glob.glob(os.path.join(jev.CACHE_DIR, "*.json")):
+    _c = json.load(open(_cp))
+    _c["at"] = 9999999999.0
+    json.dump(_c, open(_cp, "w"))
+calls_c = []
+row, _ = jev.decide(state(symbol="XC"), now=5601.0, key="k",
+                     post_fn=mkpost(good_resp(), calls=calls_c))
+check("future-cache-miss",
+      row["action"] == "ANSWER" and len(calls_c) == 1)
 
 print("ALL JEV CHECKS PASS")
