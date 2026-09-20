@@ -84,6 +84,16 @@ if grep -nE "std::string|std::vector|malloc|calloc|realloc|strdup|operator new" 
     echo "GATE FAIL: heap use in veto execution path"
     exit 1
 fi
+# Slice C gate [correctness]: ingest suite (sec.4.5 rejection tests + f2
+# boundaries + retention + rate window).
+g++ $FLAGS -o test_features ingest/test_features.cpp ingest/features.cpp
+./test_features
+# Slice C zero-malloc contract: validation + retention allocate nothing
+# (comments stripped: the discipline note names the forbidden tokens).
+if sed 's|//.*||' ingest/features.cpp | grep -nE "std::string|std::vector|malloc|calloc|realloc|strdup|operator new"; then
+    echo "GATE FAIL: heap use in ingest execution path"
+    exit 1
+fi
 # Acceptance: no downstream function may accept raw JEV JSON.
 # The header exposes exactly one entry point: validate_jev().
 if grep -nE "\b(evaluate|decide|decide_from_json|from_json)\s*\(" jev_validate.hpp \

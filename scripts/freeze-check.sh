@@ -231,6 +231,11 @@ grep -q 'friend class KernelState;' "$ROOT/kernel/jev_validate.hpp" \
   && ok "veto present" || bad "veto missing"
 [ -f "$ROOT/kernel/risk/test_veto.cpp" ] \
   && ok "veto suite present" || bad "veto suite missing"
+# Slice C pins: ingest sources present (behavior gated by kernel/build.sh).
+[ -f "$ROOT/kernel/ingest/features.cpp" ] \
+  && ok "ingest present" || bad "ingest missing"
+[ -f "$ROOT/kernel/ingest/test_features.cpp" ] \
+  && ok "ingest suite present" || bad "ingest suite missing"
 
 # ---- committed P3.2 vectors are self-consistent (no Python needed) ----
 for _v in v1 v2; do
