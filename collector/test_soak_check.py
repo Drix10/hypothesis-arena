@@ -87,7 +87,22 @@ write_polls([stale])
 run()
 check("stale-heartbeat-fails", results()["heartbeat-freshness"] == "FAIL")
 
-# 4. nonzero collect/classify exits FAIL acceptance
+# 3b. SAME-DAY but 12h-old heartbeat FAILs (date-fresh is not cycle-fresh)
+noon = {"at": AT, "exits": {"collect": 0},
+        "sources": {n: hb("ok") for n in NAMES}}
+noon["sources"][NAMES[2]] = hb("ok", DAY + "T06:00:00+00:00")
+write_polls([noon])
+run()
+check("sameday-stale-fails", results()["heartbeat-freshness"] == "FAIL")
+# 10-min-old heartbeat for a 15-min-cadence source passes
+fresh = {"at": AT, "exits": {"collect": 0},
+         "sources": {n: hb("ok") for n in NAMES}}
+fresh["sources"][NAMES[0]] = hb("ok", DAY + "T17:50:00+00:00")
+write_polls([fresh])
+run()
+check("cycle-fresh-passes", results()["heartbeat-freshness"] == "PASS")
+
+# 4. nonzero collect/classify/audit exits FAIL acceptance
 fail = {"at": AT, "exits": {"collect": 1, "classify": 0},
         "sources": {n: hb("ok") for n in NAMES}}
 write_polls([fail])
@@ -97,6 +112,10 @@ fail["exits"] = {"collect": 0, "classify": 2}
 write_polls([fail])
 run()
 check("classify-exit-fails", results()["subprocess-health"] == "FAIL")
+fail["exits"] = {"collect": 0, "classify": 0, "audit": 3}
+write_polls([fail])
+run()
+check("audit-exit-fails", results()["subprocess-health"] == "FAIL")
 
 # 5. corrupt sources.json -> sources-schema FAIL (never AttributeError)
 soak_check.HERE = TMP
@@ -114,5 +133,14 @@ short = {"at": AT, "exits": {"collect": 0},
 write_polls([short])
 run()
 check("coverage-missing", results()["heartbeat-coverage"] == "FAIL")
+
+# 7. malformed poll lines fail poll-log-integrity (never silently skipped)
+write_polls([good_row])
+with open(os.path.join(SOAK, "polls.jsonl"), "a",
+          encoding="utf-8") as fh:
+    fh.write("{not json\n")
+    fh.write('"bare string row"\n')
+run()
+check("poll-integrity-fails", results()["poll-log-integrity"] == "FAIL")
 
 print("ALL SOAK-CHECK TESTS PASS")

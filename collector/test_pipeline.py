@@ -286,3 +286,16 @@ con.execute("INSERT OR IGNORE INTO corrections VALUES(?,?,?,?)",
 n = con.execute("SELECT COUNT(*) FROM corrections").fetchone()[0]
 assert n == 1, n
 print("ok corrections-unique")
+
+# 22. exhaustive field typing: every allowlisted field is type-gated
+assert validate_record(dict(rec(), updated_at=123)) == "bad-type-updated_at"
+assert validate_record(dict(rec(), updated_at="2026-09-18T18:00:00+00:00")) is None
+assert validate_record(dict(rec(), published_estimated="yes")) == \
+    "bad-type-published_estimated"
+assert validate_record(dict(rec(), published_estimated=True)) is None
+assert validate_record(dict(rec(), has_external_link=1)) == \
+    "bad-type-has_external_link"
+assert validate_record(dict(rec(), word_count="lots")) == "bad-type-word_count"
+assert validate_record(dict(rec(), links="http://x")) == "bad-type-links"
+assert validate_record(dict(rec(), links=["http://x"])) is None
+print("ok exhaustive-types")

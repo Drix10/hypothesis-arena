@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -118,21 +119,47 @@ def snapshot_heartbeats(at, exits=None):
     return row
 
 
+def run_step(args, timeout):
+    """Subprocess with failure-as-evidence. A hung/crashing child must
+    NEVER kill the soak runner before the snapshot: TimeoutExpired and
+    spawn errors become synthetic nonzero codes (124 timeout, 127 spawn)
+    recorded in the poll row like any other exit."""
+    try:
+        return subprocess.run(args, capture_output=True, text=True,
+                              timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        out = e.stdout or ""
+        if isinstance(out, bytes):
+            out = out.decode(errors="replace")
+        return SimpleNamespace(returncode=124, stdout=out,
+                               stderr=f"TimeoutExpired after {timeout}s")
+    except OSError as e:
+        return SimpleNamespace(returncode=127, stdout="",
+                               stderr=f"spawn-failed: {e}")
+
+
+def valid_audit_doc(obj):
+    """Gate for publishing the daily audit artifact: must be the audit
+    schema (dict, per_source dict, as_of str). A failed audit that happens
+    to emit parseable JSON must never become the artifact."""
+    return (isinstance(obj, dict)
+            and isinstance(obj.get("per_source"), dict)
+            and isinstance(obj.get("as_of"), str))
+
+
 def cycle():
     at = ts_now()
     day = at[:10]
     exits = {}
-    r1 = subprocess.run([sys.executable, os.path.join(HERE, "collect.py")],
-                        capture_output=True, text=True, timeout=600)
+    r1 = run_step([sys.executable, os.path.join(HERE, "collect.py")], 600)
     exits["collect"] = r1.returncode
     print(r1.stdout[-500:] if r1.stdout else "", end="")
     if r1.returncode != 0:
         print(f"COLLECT EXIT {r1.returncode}: {r1.stderr[-500:]}")
     sig = os.path.join(ROOT, "data", "signals", f"{day}.jsonl")
     if os.path.exists(sig):
-        r2 = subprocess.run(
-            [sys.executable, os.path.join(HERE, "classify.py"), sig],
-            capture_output=True, text=True, timeout=300)
+        r2 = run_step(
+            [sys.executable, os.path.join(HERE, "classify.py"), sig], 300)
         exits["classify"] = r2.returncode
         if r2.returncode != 0:
             print(f"CLASSIFY EXIT {r2.returncode}: {r2.stderr[-500:]}")
@@ -140,22 +167,28 @@ def cycle():
     # daily audit artifact (overwritten once per day, kept per day)
     audit_path = os.path.join(SOAK, f"audit-{day}.json")
     if not os.path.exists(audit_path) and os.path.exists(sig):
-        r3 = subprocess.run(
-            [sys.executable, os.path.join(HERE, "audit.py"), sig],
-            capture_output=True, text=True, timeout=300)
+        r3 = run_step(
+            [sys.executable, os.path.join(HERE, "audit.py"), sig], 300)
         exits["audit"] = r3.returncode
-        try:
-            atomic_write_json(audit_path, json.loads(r3.stdout))
-            print(f"audit -> {audit_path}")
-        except ValueError:
-            print(f"audit failed: {r3.stderr[-300:]}")
+        if r3.returncode == 0:
+            try:
+                doc = json.loads(r3.stdout)
+                if not valid_audit_doc(doc):
+                    raise ValueError("audit-schema")
+            except ValueError as e:
+                print(f"audit output rejected: {e}")
+                exits["audit"] = 126  # ran, but output unusable: evidence
+            else:
+                atomic_write_json(audit_path, doc)
+                print(f"audit -> {audit_path}")
+        else:
+            print(f"AUDIT EXIT {r3.returncode}: {r3.stderr[-300:]}")
     # daily objective evidence: pre-grade triage + acceptance checks (read-only)
     clf = os.path.join(ROOT, "data", "classified", f"{day}.jsonl")
     if os.path.exists(clf):
         for tool, args in (("pregrade.py", [clf]), ("soak_check.py", [day])):
-            r4 = subprocess.run(
-                [sys.executable, os.path.join(HERE, tool)] + args,
-                capture_output=True, text=True, timeout=600)
+            r4 = run_step(
+                [sys.executable, os.path.join(HERE, tool)] + args, 600)
             exits[tool.replace(".py", "")] = r4.returncode
             tail = (r4.stdout.strip().splitlines() or [""])[-3:]
             print(f"[{tool} exit={r4.returncode}]")

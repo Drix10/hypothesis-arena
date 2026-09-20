@@ -122,7 +122,9 @@ KNOWN_FIELDS = frozenset(("id", "source", "source_id", "title", "text",
 # Exact types for source-authored fields (None = absent; anything else wrong
 # is a schema rejection, never coerced). Extra unknown keys are allowed
 # through (collectors may annotate) but never enter the hash payload.
-OPTIONAL_STR = ("title", "text", "url", "published_at", "observed_at")
+OPTIONAL_STR = ("title", "text", "url", "published_at", "observed_at",
+                "updated_at")
+OPTIONAL_BOOL = ("published_estimated", "has_external_link")
 
 
 def validate_record(rec):
@@ -142,6 +144,10 @@ def validate_record(rec):
         v = rec.get(f)
         if v is not None and not isinstance(v, str):
             return f"bad-type-{f}"
+    for f in OPTIONAL_BOOL:
+        v = rec.get(f)
+        if v is not None and not isinstance(v, bool):
+            return f"bad-type-{f}"
     links = rec.get("links")
     if links is not None:
         if not isinstance(links, list) or \
@@ -150,9 +156,6 @@ def validate_record(rec):
     wc = rec.get("word_count")
     if wc is not None and (isinstance(wc, bool) or not isinstance(wc, int)):
         return "bad-type-word_count"
-    hel = rec.get("has_external_link")
-    if hel is not None and not isinstance(hel, bool):
-        return "bad-type-has_external_link"
     if not (rec.get("title") or rec.get("text") or rec.get("url")):
         return "no-content-at-all"
     return None
@@ -402,6 +405,20 @@ def run(signals_path, as_of=None):
 
 
 if __name__ == "__main__":
-    path, stats = run(sys.argv[1])
+    argv = sys.argv[1:]
+    as_of = None
+    if "--as-of" in argv:
+        i = argv.index("--as-of")
+        try:
+            as_of = argv[i + 1]
+        except IndexError:
+            print("--as-of requires an ISO instant", file=sys.stderr)
+            sys.exit(2)
+        argv = [a for j, a in enumerate(argv) if j not in (i, i + 1)]
+    if len(argv) != 1:
+        print(f"usage: classify.py <signals.jsonl> [--as-of ISO]",
+              file=sys.stderr)
+        sys.exit(2)
+    path, stats = run(argv[0], as_of=as_of)
     print(f"classified -> {path}")
     print(json.dumps(stats, indent=1))

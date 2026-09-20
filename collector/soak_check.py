@@ -24,6 +24,11 @@ SOAK = os.path.join(ROOT, "data", "soak")
 DATA = os.path.join(ROOT, "data")
 ALLOWED_HB = {"ok", "EMPTY_SUCCESS", "SKIPPED_CONFIG", "SOURCE_DOWN",
               "AUTH_FAILURE", "RATE_LIMITED", "PARSE_FAILURE", "STALE"}
+# Freshness is proven per CYCLE, not per calendar day: a heartbeat may be
+# at most max(2x that source's poll_min, 15 min) older than the snapshot
+# row that cites it, and never more than 60 s newer (clock skew allowance).
+FRESH_FUTURE_SKEW = 60
+FRESH_MIN_BOUND = 900
 
 
 def verdict(name, ok, detail=""):
@@ -60,6 +65,21 @@ def main():
         datetime.now(timezone.utc).strftime("%Y-%m-%d")
     out = {"day": day, "rules_version": "rules_v1", "checks": []}
     C = out["checks"]
+    # Configured universe FIRST: freshness bounds and coverage both key on it.
+    try:
+        with open(os.path.join(HERE, "sources.json"),
+                   encoding="utf-8") as fh:
+            _ss = validate_sources_config(json.load(fh))
+            configured = {s["name"] for s in _ss}
+            POLL_MIN = {s["name"]: s.get("poll_min", 15) for s in _ss}
+    except (OSError, ValueError, ConfigError) as e:
+        configured = set()
+        POLL_MIN = {}
+        C.append(verdict("sources-schema", False,
+                         f"{type(e).__name__}: {e}"))
+    else:
+        C.append(verdict("sources-schema", True,
+                         f"{len(configured)} sources"))
 
     # 1. EDGAR: polls + zero 403
     edgar_polls, edgar_403, edgar_other = 0, [], []
@@ -68,6 +88,8 @@ def main():
             try:
                 row = json.loads(line)
             except ValueError:
+                continue
+            if not isinstance(row, dict):
                 continue
             if row_day(row) != day:
                 continue
@@ -87,23 +109,31 @@ def main():
 
     # 2. heartbeat vocabulary (day-filtered) + coverage: every configured
     # source must have at least one heartbeat stamped for `day`. Freshness
-    # is judged on the heartbeat file's OWN `heartbeat_at`, never the
-    # snapshot row's `at` (a stale file copied into today's row is not
-    # today's coverage). UNREADABLE always FAILs: broken observability is
-    # evidence of failure, never an exemption.
+    # is judged per CYCLE: heartbeat_at must fall inside the bounded
+    # freshness window of the snapshot row citing it (same-day-date alone
+    # is not freshness — a 00:01 heartbeat copied into 18:00 rows FAILs).
+    # UNREADABLE always FAILs: broken observability is evidence of failure.
     unknown, statuses = [], {}
     seen_sources = set()
     stale_hb = []
+    malformed_rows = 0
     for f in glob.glob(os.path.join(SOAK, "polls.jsonl")):
         for line in open(f, encoding="utf-8"):
             try:
                 row = json.loads(line)
             except ValueError:
+                malformed_rows += 1
+                continue
+            if not isinstance(row, dict):
+                malformed_rows += 1
                 continue
             if row_day(row) != day:
                 continue
+            snap = parse_instant(row.get("at"))
             for src, h in (row.get("sources") or {}).items():
                 if not isinstance(h, dict):
+                    stale_hb.append({"at": row.get("at"), "src": src,
+                                     "why": "heartbeat-not-a-dict"})
                     continue
                 s = h.get("status")
                 statuses[f"{src}:{s}"] = statuses.get(f"{src}:{s}", 0) + 1
@@ -117,28 +147,29 @@ def main():
                     continue
                 seen_sources.add(src)
                 hb_at = parse_instant(h.get("heartbeat_at"))
-                if hb_at is None or hb_at.strftime("%Y-%m-%d") != day:
+                bound = max(2 * POLL_MIN.get(src, 15) * 60,
+                            FRESH_MIN_BOUND)
+                if snap is None or hb_at is None:
                     stale_hb.append({"at": row.get("at"), "src": src,
-                                     "why": "heartbeat-not-fresh",
+                                     "why": "heartbeat-undated",
                                      "heartbeat_at": h.get("heartbeat_at")})
+                else:
+                    age = (snap - hb_at).total_seconds()
+                    if not (-FRESH_FUTURE_SKEW <= age <= bound):
+                        stale_hb.append({
+                            "at": row.get("at"), "src": src,
+                            "why": "heartbeat-not-fresh",
+                            "heartbeat_at": h.get("heartbeat_at"),
+                            "age_s": round(age, 1),
+                            "bound_s": bound})
     C.append(verdict("heartbeat-vocabulary", not unknown,
                      f"{len(statuses)} combos seen, unknown={len(unknown)}"))
     out["heartbeat_combos"] = statuses
     C.append(verdict("heartbeat-freshness", not stale_hb,
                      f"stale_or_unreadable={len(stale_hb)}"))
     out["stale_heartbeat_samples"] = stale_hb[:5]
-    try:
-        with open(os.path.join(HERE, "sources.json"),
-                   encoding="utf-8") as fh:
-            configured = {s["name"] for s in
-                           validate_sources_config(json.load(fh))}
-    except (OSError, ValueError, ConfigError) as e:
-        configured = set()
-        C.append(verdict("sources-schema", False,
-                         f"{type(e).__name__}: {e}"))
-    else:
-        C.append(verdict("sources-schema", True,
-                         f"{len(configured)} sources"))
+    C.append(verdict("poll-log-integrity", malformed_rows == 0,
+                     f"malformed_poll_rows={malformed_rows}"))
     missing_hb = sorted(configured - seen_sources)
     C.append(verdict("heartbeat-coverage", not missing_hb,
                      f"missing={missing_hb or 'none'}"))
@@ -152,9 +183,11 @@ def main():
                 row = json.loads(line)
             except ValueError:
                 continue
+            if not isinstance(row, dict):
+                continue
             if row_day(row) != day:
                 continue
-            for step in ("collect", "classify"):
+            for step in ("collect", "classify", "audit"):
                 code = (row.get("exits") or {}).get(step)
                 if code is not None and code != 0:
                     bad_exits.append({"at": row.get("at"), "step": step,
@@ -162,10 +195,14 @@ def main():
     C.append(verdict("subprocess-health", not bad_exits,
                      f"failures={bad_exits[:5] or 'none'}"))
 
-    # 3a. replay determinism: same input + same as_of -> identical verdicts
+    # 3a. replay determinism: same input + same FIXED as_of -> byte-identical
+    # classified output. as_of is pinned (not wall-clock): without the pin
+    # the two runs use different processing clocks and the comparison proves
+    # nothing. Full file bytes are compared, not just per_source counters.
     sig = os.path.join(DATA, "signals", f"{day}.jsonl")
     det_ok, det_detail = True, "no signals file"
     if os.path.exists(sig):
+        as_of = f"{day}T23:59:00+00:00"
         try:
             seqs = []
             for i in range(2):
@@ -174,16 +211,16 @@ def main():
                                MIRO_CANONICAL_DB=os.path.join(tmp, "c.db"),
                                MIRO_CLASSIFIED_DIR=os.path.join(tmp, "cl"))
                     r = subprocess.run(
-                        [sys.executable, os.path.join(HERE, "classify.py"), sig],
+                        [sys.executable, os.path.join(HERE, "classify.py"),
+                         sig, "--as-of", as_of],
                         capture_output=True, text=True, env=env, timeout=300)
                     if r.returncode != 0:
                         raise RuntimeError(f"classify exit {r.returncode}")
-                    lines = r.stdout.strip().splitlines()
-                    stats = json.loads("\n".join(lines[1:]))  # skip 'classified ->' line
-                    per = stats.get("per_source", {})
-                    seqs.append(json.dumps(per, sort_keys=True))
+                    with open(os.path.join(tmp, "cl", f"{day}.jsonl"),
+                              encoding="utf-8") as fh:
+                        seqs.append(fh.read())
             det_ok = seqs[0] == seqs[1]
-            det_detail = "identical" if det_ok else f"{seqs[0][:200]} != {seqs[1][:200]}"
+            det_detail = "byte-identical" if det_ok else "outputs differ"
         except Exception as e:
             det_ok, det_detail = False, f"{type(e).__name__}: {e}"
     C.append(verdict("replay-determinism", det_ok, det_detail))
