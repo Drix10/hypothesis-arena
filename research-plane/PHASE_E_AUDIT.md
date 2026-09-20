@@ -1,0 +1,46 @@
+# Phase E — dependency audit vs P3.5 D–H1 (pre-D gate, no code)
+
+Question: did the pre-D research contracts (Phase B) or the Phase 2.5
+plane (Phase D) change any interface a future slice depends on?
+
+## D (kill/switch.cpp) needs: STAGE semantics, kill semantics, exit
+## liveness, journal/exec contracts.
+- Doc 10 untouched. Journal/exec untouched. Case 29 is table-test-only.
+  §11.1a affects calibration measurement, never authorization.
+  The plane writes features.jsonl only (frozen f2). VERDICT: no impact.
+
+## E (STAGE chain) needs: D-compatible cycle boundaries, STAGE verify.
+- Doc 10 §10.1 untouched. The plane never touches STAGE (R17; proven by
+  write-confinement: every writer byte lands inside outdir).
+  VERDICT: no impact.
+
+## F (feed/broker.cpp) needs: broker/feed contracts, R6/R7 freshness,
+## outage semantics.
+- §13.7 assigns F the feed-gap injection gate (new test, no contract
+  change). R6/R7 frozen text untouched. Tier-A evidence measured
+  behavior, changed nothing. VERDICT: no impact.
+
+## G (ctx/context.cpp) needs: bundle producer, ingest C, frozen context
+## contract, research_revision, calibration state.
+- The writer FILLS the previously missing producer slot against the
+  unchanged frozen reader — gap closed, contract unchanged (round-trip
+  proven through read_bundle). Ingest C untouched. research_revision
+  untouched. Calibration state gains H (default infinity = zero
+  behavior change) + a harness-time config identity (regime-def
+  version, H, weighting-rule version). VERDICT: compatible; harness
+  must carry the three identity fields when implemented.
+
+## H1 (exec/router + log/journal) needs: snapshot, risk output, kill
+## state, STAGE state, broker/feed state, journal contract.
+- None of these interfaces were touched by Phase B or D.
+  VERDICT: no impact.
+
+## Frozen-behavior check
+- `git diff` since pre-D shows zero changes under kernel/, collector/,
+  plan/ from Phase D work (new research-plane/ tree only).
+- No contract received a silent patch; none needed versioning.
+
+## Open deployment boxes (not interface changes)
+- OS users + setpriv isolation run, Docker egress-proxy probe, image
+  digest pin + SBOM/scan, self-hosted Langfuse server tailing spans,
+  FRED/ALFRED keys, Tier B/C harvest wiring, 7-day unattended run.
