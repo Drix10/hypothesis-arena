@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -460,5 +461,100 @@ row, _ = jev.decide(state(symbol="XC"), now=5601.0, key="k",
                      post_fn=mkpost(good_resp(), calls=calls_c))
 check("future-cache-miss",
       row["action"] == "ANSWER" and len(calls_c) == 1)
+
+# 20. spend_charge() failure FAILS CLOSED: no sign, no cache, no ANSWER
+jev.SPEND_DIR = os.path.join(TMP, "spendCharge")
+os.makedirs(jev.SPEND_DIR, exist_ok=True)
+_real_charge = jev.spend_charge
+jev.spend_charge = lambda *a, **k: None
+calls_z = []
+row, art = jev.decide(state(symbol="XZ"), now=5700.0, key="k",
+                      post_fn=mkpost(good_resp(), calls=calls_z))
+jev.spend_charge = _real_charge
+check("charge-fail-hold",
+      row["action"] == "HOLD" and row["reason"] == "spend-unknown"
+      and art is None)
+check("charge-fail-no-cache",
+      jev.cache_get(state(symbol="XZ"), 5701.0) is None)
+jev.SPEND_DIR = os.path.join(TMP, "spend")
+
+# 21. malformed spend filenames poison the 30d governor (never vanish)
+jev.SPEND_DIR = os.path.join(TMP, "spendF")
+os.makedirs(jev.SPEND_DIR, exist_ok=True)
+open(os.path.join(jev.SPEND_DIR, "garbage.json"), "w").write("{}")
+check("spend-malformed-name", jev.spend_30d() == (0.0, True))
+os.remove(os.path.join(jev.SPEND_DIR, "garbage.json"))
+open(os.path.join(jev.SPEND_DIR, "notes.txt"), "w").write("x")
+check("spend-stray-file", jev.spend_30d()[1] is True)
+os.remove(os.path.join(jev.SPEND_DIR, "notes.txt"))
+check("spend-clean-zero", jev.spend_30d() == (0.0, False))
+jev.SPEND_DIR = os.path.join(TMP, "spend")
+
+# 22. confidence: absent = unknown (accepted); explicit null REJECTED
+# (C++ checkconf requires a number); finite number accepted
+r = good_resp()
+r["answers"]["edge_family"]["confidence"] = None
+check("conf-null-family", jev.validate_response(r)[0] is None)
+r = good_resp()
+r["answers"]["conviction"]["confidence"] = None
+check("conf-null-conviction", jev.validate_response(r)[0] is None)
+r = good_resp()
+r["answers"]["edge_family"]["confidence"] = 0.7
+r["answers"]["conviction"]["confidence"] = 0.2
+a, why = jev.validate_response(r)
+check("conf-numeric",
+      a is not None and a["edge_family"]["confidence"] == 0.7
+      and a["conviction"]["confidence"] == 0.2)
+
+# 23. recursive state admission: nested NaN/Infinity/non-JSON rejected
+import math as _m2
+for extra, name in [({"indicators": {"deep": {"v": _m2.nan}}}, "nested-nan"),
+                    ({"indicators": {"deep": [_m2.inf]}}, "nested-inf"),
+                    ({"event_window": {"x": {"y": 1}}}, "nested-ok-shape")]:
+    row, _ = jev.decide(state(symbol="XN2", **extra), now=5800.0, key="k",
+                        post_fn=mkpost(good_resp()))
+    if name == "nested-ok-shape":
+        check(name, row["action"] == "ANSWER")
+    else:
+        check(name, row["action"] == "HOLD"
+              and row["reason"] == "state-nonfinite")
+
+# 24. OS-native lock: acquire/release/reacquire; a live holder in ANOTHER
+# process blocks acquisition (locks are process-owned: same-process
+# threads would not prove exclusion, so the holder is a subprocess).
+lockp = os.path.join(TMP, "test.lock")
+with jev._FileLock(lockp):
+    check("lock-held", os.path.exists(lockp))
+with jev._FileLock(lockp, timeout=1.0):
+    check("lock-reacquire", True)
+import subprocess as _sp
+_holder_code = (
+    "import sys, time; sys.path.insert(0, %r); "
+    "from jev import _FileLock; "
+    "f = _FileLock(%r); f.__enter__(); time.sleep(8)" % (HERE, lockp))
+proc = _sp.Popen([sys.executable, "-c", _holder_code])
+try:
+    time.sleep(1.5)  # let the holder acquire
+    try:
+        with jev._FileLock(lockp, timeout=1.0):
+            blocked = False
+    except TimeoutError:
+        blocked = True
+    check("lock-contention", blocked)
+finally:
+    proc.terminate()
+    proc.wait()
+
+# 25. log rotation is atomic: tail stays valid JSONL
+jev.CALL_LOG_MAX_BYTES = 200
+for i in range(50):
+    jev.log_row({"i": i, "pad": "x" * 100})
+with open(jev.CALL_LOG, "rb") as _lf:
+    _lines = _lf.read().split(b"\n")
+nonempty = [ln for ln in _lines if ln.strip()]
+check("log-rotation-valid",
+      len(nonempty) > 0
+      and all(json.loads(ln)["i"] >= 0 for ln in nonempty))
+jev.CALL_LOG_MAX_BYTES = 8 * 1024 * 1024
 
 print("ALL JEV CHECKS PASS")

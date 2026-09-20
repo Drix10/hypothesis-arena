@@ -78,7 +78,10 @@ def api_key():
 
 
 def canon(obj):
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"))
+    # allow_nan=False: non-finite floats raise instead of emitting
+    # non-standard NaN/Infinity tokens the C++ boundary rejects.
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"),
+                      allow_nan=False)
 
 
 def sha256_hex(s):
@@ -260,6 +263,38 @@ def build_questions():
     return qs
 
 
+STATE_MAX_DEPTH = 32
+STATE_MAX_MEMBERS = 1024
+STATE_MAX_STR = 65536
+
+
+def _finite_json(obj, depth=0):
+    """Recursive admission scan: JSON scalars only, floats finite, bounded
+    shape. The sidecar must never hash-and-send a state carrying nested
+    NaN/Infinity (canon() would emit non-standard tokens C++ rejects) or
+    non-JSON Python objects."""
+    if depth > STATE_MAX_DEPTH:
+        return False
+    if obj is None or isinstance(obj, bool):
+        return True
+    if isinstance(obj, int):
+        return True
+    if isinstance(obj, float):
+        return math.isfinite(obj)
+    if isinstance(obj, str):
+        return len(obj) <= STATE_MAX_STR
+    if isinstance(obj, dict):
+        if len(obj) > STATE_MAX_MEMBERS:
+            return False
+        return all(isinstance(k, str) and _finite_json(v, depth + 1)
+                   for k, v in obj.items())
+    if isinstance(obj, (list, tuple)):
+        if len(obj) > STATE_MAX_MEMBERS:
+            return False
+        return all(_finite_json(v, depth + 1) for v in obj)
+    return False
+
+
 def validate_state(state):
     if not isinstance(state, dict):
         return False, "state-not-object"
@@ -300,6 +335,8 @@ def validate_state(state):
         return False, "state-spread"
     if "cycle_id" in state and not isinstance(state["cycle_id"], str):
         return False, "state-cycle_id"
+    if not _finite_json(state):
+        return False, "state-nonfinite"
     return True, "ok"
 
 
@@ -350,7 +387,9 @@ def validate_response(resp):
         for k, v in pr.items():
             if k not in FAMILIES or not finite_prob(v):
                 return None, "family-shape"
-        if f.get("confidence") is not None:
+        if "confidence" in f:
+            # Presence matters: explicit null is REJECTED, matching the C++
+            # boundary (checkconf requires a number). Absence means unknown.
             cf = f["confidence"]
             if type(cf) not in (int, float) or not math.isfinite(cf):
                 return None, "family-shape"
@@ -360,7 +399,7 @@ def validate_response(resp):
             return None, "conviction-shape"
         if c.get("type") != "score" or c.get("score") not in CONVICTIONS:
             return None, "conviction-shape"
-        if c.get("confidence") is not None:
+        if "confidence" in c:
             cf = c["confidence"]
             if type(cf) not in (int, float) or not math.isfinite(cf):
                 return None, "conviction-shape"
@@ -371,9 +410,9 @@ def validate_response(resp):
                              "probabilities": f.get("probabilities", {})},
              "conviction": {"type": "score", "score": c["score"]},
              "latent_risk": {"type": "noul", "noul": l["noul"]}}
-    if f.get("confidence") is not None:
+    if "confidence" in f:
         clean["edge_family"]["confidence"] = f["confidence"]
-    if c.get("confidence") is not None:
+    if "confidence" in c:
         clean["conviction"]["confidence"] = c["confidence"]
     return clean, "ok"
 
@@ -531,7 +570,8 @@ def prune_cache(now, max_age_s=3600):
             continue
         p = os.path.join(CACHE_DIR, fn)
         try:
-            at = json.load(open(p, encoding="utf-8")).get("at", 0)
+            with open(p, encoding="utf-8") as fh:
+                at = json.load(fh).get("at", 0)
             stale = not isinstance(at, (int, float)) or now - at > max_age_s
         except (OSError, ValueError):
             stale = True
@@ -548,10 +588,6 @@ def prune_cache(now, max_age_s=3600):
 # reconciling against provider billing, or move it aside).
 MAX_COST_USD = 100.0
 MAX_TOKENS = 10 ** 7
-
-
-def _lock_path():
-    return os.path.join(SPEND_DIR, ".lock")
 
 
 def valid_ledger(s):
@@ -588,52 +624,67 @@ def _persist_ledger(s, p):
     os.replace(tmp, p)
 
 
-class _SpendLock:
-    """Single-writer mutual exclusion via atomic mkdir (stdlib only).
-    Stale locks (>120s) are stolen; reservations are idempotent-safe
-    because a crash leaves the incremented count persisted (B4: a crash
-    after reservation conservatively consumes the attempt)."""
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
+
+
+class _FileLock:
+    """OS-native mutual exclusion on a lock FILE (stdlib only: fcntl on
+    POSIX, msvcrt on Windows). The OS releases the lock on close even if
+    the process dies, so there are NO stale locks and NO reclamation race:
+    nothing to observe, remove, or steal. Blocking acquire with a deadline;
+    TimeoutError on expiry."""
+    def __init__(self, path, timeout=30.0):
+        self.path = path
+        self.timeout = timeout
+        self.fh = None
+
     def __enter__(self):
-        os.makedirs(SPEND_DIR, exist_ok=True)
-        lock = _lock_path()
-        deadline = time.time() + 30
+        parent = os.path.dirname(self.path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        self.fh = open(self.path, "a+b")
+        self.fh.seek(0)
+        deadline = time.time() + self.timeout
         while True:
             try:
-                os.mkdir(lock)
-                with open(os.path.join(lock, "pid"), "w") as fh:
-                    fh.write(f"{os.getpid()} {time.time()}")
+                if os.name == "nt":
+                    msvcrt.locking(self.fh.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    fcntl.flock(self.fh.fileno(),
+                                fcntl.LOCK_EX | fcntl.LOCK_NB)
                 return self
-            except FileExistsError:
-                try:
-                    with open(os.path.join(lock, "pid")) as fh:
-                        _, ts = fh.read().split()
-                    stale = time.time() - float(ts) > 120
-                except (OSError, ValueError):
-                    stale = True
-                if stale:
-                    try:
-                        os.remove(os.path.join(lock, "pid"))
-                    except OSError:
-                        pass
-                    try:
-                        os.rmdir(lock)
-                    except OSError:
-                        pass
+            except (OSError, IOError):
                 if time.time() > deadline:
-                    raise TimeoutError("spend lock busy")
+                    try:
+                        self.fh.close()
+                    except (OSError, ValueError):
+                        pass
+                    self.fh = None
+                    raise TimeoutError("lock busy: " + self.path)
                 time.sleep(0.05)
 
     def __exit__(self, *a):
-        lock = _lock_path()
         try:
-            os.remove(os.path.join(lock, "pid"))
-        except OSError:
+            if os.name == "nt":
+                self.fh.seek(0)
+                msvcrt.locking(self.fh.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(self.fh.fileno(), fcntl.LOCK_UN)
+        except (OSError, ValueError):
             pass
         try:
-            os.rmdir(lock)
-        except OSError:
+            self.fh.close()
+        except (OSError, ValueError):
             pass
+        self.fh = None
         return False
+
+
+def _spend_lock(timeout=30.0):
+    return _FileLock(os.path.join(SPEND_DIR, ".lockfile"), timeout)
 
 
 def spend_today():
@@ -661,7 +712,7 @@ def spend_reserve():
     The increment is persisted inside the lock, so concurrent sidecars
     cannot both observe headroom (B4)."""
     try:
-        with _SpendLock():
+        with _spend_lock():
             s, p = spend_today()
             if s is None:
                 return "unknown", None
@@ -698,7 +749,7 @@ def spend_charge(cost, prompt_t=0, completion_t=0, known=True):
     """Record a completed call's money/tokens. NEVER increments calls:
     attempts are counted once, at reservation (B2). Unknown cost sets the
     unknown_charges flag that trips the money governor (B8)."""
-    with _SpendLock():
+    with _spend_lock():
         s, p = spend_today()
         if s is None:
             return None
@@ -737,11 +788,24 @@ def spend_30d(today=None):
     except OSError:
         return 0.0, True  # unreadable ledger dir: unknown
     for fn in files:
-        if not fn.endswith(".json"):
+        if fn == ".lockfile" or ".tmp-" in fn:
+            continue  # explicitly permitted lock/temp paths only
+        full = os.path.join(SPEND_DIR, fn)
+        if os.path.isdir(full):
+            if fn == ".lock":
+                continue  # legacy mkdir-lock artifact, harmless
+            unknown = True
             continue
         try:
-            day = datetime.strptime(fn[:-5], "%Y-%m-%d").date()
+            day = datetime.strptime(fn[:-5] if fn.endswith(".json") else fn,
+                                    "%Y-%m-%d").date()
+            if not fn.endswith(".json"):
+                raise ValueError("not-a-day-file")
         except ValueError:
+            # A malformed ledger filename inside the spend directory must
+            # NOT disappear from accounting: S10 unknown spend is
+            # high/conservative, never silently $0.
+            unknown = True
             continue
         if not (0 <= (today - day).days <= 29):
             continue
@@ -824,19 +888,27 @@ CALL_LOG_MAX_BYTES = 8 * 1024 * 1024
 
 def log_row(row):
     os.makedirs(os.path.dirname(CALL_LOG), exist_ok=True)
-    with open(CALL_LOG, "a", encoding="utf-8") as fh:
-        fh.write(json.dumps(row) + "\n")
-        fh.flush()
-        os.fsync(fh.fileno())
-    try:
-        if os.path.getsize(CALL_LOG) > CALL_LOG_MAX_BYTES:
-            with open(CALL_LOG, "rb") as fh:
-                fh.seek(-CALL_LOG_MAX_BYTES // 2, os.SEEK_END)
-                tail = fh.read().split(b"\n", 1)[-1]
-            with open(CALL_LOG, "wb") as fh:
-                fh.write(tail)
-    except OSError:
-        pass
+    with _FileLock(CALL_LOG + ".lock"):
+        with open(CALL_LOG, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            if os.path.getsize(CALL_LOG) > CALL_LOG_MAX_BYTES:
+                with open(CALL_LOG, "rb") as fh:
+                    fh.seek(-CALL_LOG_MAX_BYTES // 2, os.SEEK_END)
+                    tail = fh.read().split(b"\n", 1)[-1]
+                # Crash-consistent rotation: temp + fsync + atomic rename.
+                # An in-place "wb" rewrite could crash mid-write and leave
+                # a partial call log; the log is spend/replay evidence.
+                tmp = CALL_LOG + f".tmp-{os.getpid()}"
+                with open(tmp, "wb") as fh:
+                    fh.write(tail)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                os.replace(tmp, CALL_LOG)
+        except OSError:
+            pass
 
 
 def decide(state, now=None, key=None, post_fn=None):
@@ -903,9 +975,6 @@ def decide(state, now=None, key=None, post_fn=None):
     if err is not None:
         row = hold_row(state, "jev_error:" + err)
         row["cost"] = cost_tag(state, None)  # unknown cost, explicitly shown
-    if err is not None:
-        row = hold_row(state, "jev_error:" + err)
-        row["cost"] = cost_tag(state, None)  # unknown cost, explicitly shown
         row["attempts"] = attempts
         log_row(row)
         return row, None
@@ -920,6 +989,14 @@ def decide(state, now=None, key=None, post_fn=None):
         log_row(row)
         return row, None
     spent = spend_charge(cost, pt, ct, known=known)
+    if spent is None:
+        # Money accounting failed AFTER a valid provider answer: the answer
+        # must NOT become a signed, cached, reusable decision artifact.
+        # Fail closed (HOLD spend-unknown) before signing or caching.
+        row = hold_row(state, "spend-unknown")
+        row["cost"] = cost_tag(state, usage)
+        log_row(row)
+        return row, None
     created = datetime.now(timezone.utc).isoformat()
     payload = {"schema_version": "answerset_v1",
                "question_set_version": QVERSION, "model": MODEL,
@@ -942,8 +1019,8 @@ def decide(state, now=None, key=None, post_fn=None):
     cache_put(state, artifact, now)
     row = {"action": "ANSWER", "answers": answers, "symbol": state.get("symbol"),
            "context_hash": state.get("context_hash"), "cached": False,
-           "calls_day_total": spent["calls"] if spent else -1,
-           "calls_alert": (spent["calls"] >= DAILY_CALL_ALERT) if spent else False,
+           "calls_day_total": spent["calls"],
+           "calls_alert": spent["calls"] >= DAILY_CALL_ALERT,
            "spend_30d_usd": spend_30d()[0],
            "spend_unknown": spend_30d()[1],
            "at": created}
