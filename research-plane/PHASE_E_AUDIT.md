@@ -44,3 +44,20 @@ plane (Phase D) change any interface a future slice depends on?
 - OS users + setpriv isolation run, Docker egress-proxy probe, image
   digest pin + SBOM/scan, self-hosted Langfuse server tailing spans,
   FRED/ALFRED keys, Tier B/C harvest wiring, 7-day unattended run.
+
+## Addendum — human re-audit of Phase D (17 findings, corrected)
+- The original Phase E claim of "no design blockers" was overstated.
+  The audit found the implementation weaker than the reported invariants
+  in: bundle identity (watermarks/history now hashed), fsync
+  fail-closedness, manifest/reader integration (read_latest added),
+  symlink containment, worker completeness (real CodeAgent path wired;
+  live Docker execution stays a deployment box), ConfigBlocked mapping,
+  R15 at all LLM nodes, abort->no-emit enforcement, cadence durability,
+  health-window semantics + recovery, attribution idempotency,
+  resolver canonical kind, checkpoint caps, scanner scope wording,
+  dependency pins, FRED verify-before-READY, calendar scope wording.
+- All corrected in `6965b89` + `49ecb65` with regression coverage for
+  each (changed-watermark re-emit, symlink entry, read_latest path,
+  kind relabel, abort-no-publish, hypothesize cap trip, cadence
+  restart, health recovery, span dedupe, caps, dynamic imports).
+- Interface conclusion unchanged: no D–H1 contract changed.
