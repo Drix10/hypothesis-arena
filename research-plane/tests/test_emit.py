@@ -62,7 +62,8 @@ def canonical(source_id="edgar_8k", **kw):
            "published_ns": OBS_NS, "ingested_ns": OBS_NS,
            "symbols": ["AAPL"],
            "value": {"type": "enum", "v": "8-K:item-2.02"},
-           "effect": "bullish", "corroborated": True}
+           "effect": "bullish", "corroborated": True,
+           "parser_confidence": "high"}
     rec.update(kw)
     return rec
 
@@ -74,6 +75,11 @@ def candidate(**kw):
          "provenance_url": "https://example.invalid/x"}
     c.update(kw)
     return c
+
+
+def _emit_same(args):
+    outdir, epoch, feats, wm, hist = args
+    return emit_mod.emit_bundle(outdir, epoch, feats, wm, hist)
 
 
 class EmitTest(unittest.TestCase):
@@ -200,7 +206,8 @@ class EmitTest(unittest.TestCase):
         b2, p2 = emit_mod.emit_bundle(outdir, 5, [feat], wm2)
         self.assertNotEqual(b1, b2)
         self.assertNotEqual(p1, p2)
-        self.assertEqual(emit_mod.latest_complete(outdir), p2)
+        self.assertEqual(os.path.realpath(emit_mod.latest_complete(outdir)),
+                         os.path.realpath(p2))
         res = emit_mod.read_latest(outdir, self.dbp, self.mapp, NOW_S)
         self.assertEqual(res["stats"]["reasons"], {"ok": 1})
 
@@ -222,8 +229,64 @@ class EmitTest(unittest.TestCase):
                      '"sha256": "' + "0" * 64 + '"}\n')
         self.assertIsNone(emit_mod.latest_complete(outdir))
 
+    def test_concurrent_same_bundle_emit_once(self):
+        # Four processes, one bundle: exactly one manifest row, one id.
+        import multiprocessing
+        ok, (feat, _) = resolver.resolve(candidate(), canonical(), MAP)
+        self.assertTrue(ok)
+        outdir = os.path.join(self.d, "outC")
+        wm = watermarks(self.msha)
+        args = (outdir, 11, [feat], wm, None)
+        ctx = multiprocessing.get_context("spawn")
+        with ctx.Pool(4) as pool:
+            got = pool.map(_emit_same, [args] * 4)
+        self.assertEqual(len(set(g[0] for g in got)), 1)
+        rows = open(os.path.join(outdir, "manifest.jsonl")).read(
+        ).strip().splitlines()
+        self.assertEqual(len(rows), 1)
+
+    def test_corrupt_newest_falls_back(self):
+        # good A, good B, then B's file is damaged: latest resolves B->A
+        # instead of blacking out research.
+        ok, (feat, _) = resolver.resolve(candidate(), canonical(), MAP)
+        outdir = os.path.join(self.d, "outF")
+        _, pa = emit_mod.emit_bundle(outdir, 1, [feat],
+                                      watermarks(self.msha))
+        _, pb = emit_mod.emit_bundle(outdir, 2, [feat],
+                                      watermarks(self.msha))
+        with open(pb, "wb") as fh:
+            fh.write(b"damaged")
+        self.assertEqual(os.path.realpath(emit_mod.latest_complete(outdir)),
+                         os.path.realpath(pa))
+        res = emit_mod.read_latest(outdir, self.dbp, self.mapp, NOW_S)
+        self.assertIsNotNone(res)
+        self.assertEqual(res["stats"]["reasons"], {"ok": 1})
+
+    def test_read_consumes_verified_snapshot(self):
+        # The frozen reader consumes staged verified bytes: even if
+        # every publication file is replaced between verification and
+        # consumption, the result stands.
+        ok, (feat, _) = resolver.resolve(candidate(), canonical(), MAP)
+        outdir = os.path.join(self.d, "outT")
+        emit_mod.emit_bundle(outdir, 3, [feat], watermarks(self.msha))
+        real_read = ctx_read.read_bundle
+
+        def _swap_then_read(path, db, mp, now):
+            for name in os.listdir(outdir):
+                if name.endswith(".json"):
+                    with open(os.path.join(outdir, name), "wb") as fh:
+                        fh.write(b"swapped")
+            return real_read(path, db, mp, now)
+
+        ctx_read.read_bundle = _swap_then_read
+        try:
+            res = emit_mod.read_latest(outdir, self.dbp, self.mapp,
+                                       NOW_S)
+        finally:
+            ctx_read.read_bundle = real_read
+        self.assertEqual(res["stats"]["reasons"], {"ok": 1})
+
     def test_r12_future_dropped_by_ctx(self):
-        # D7 integration proof: a future-dated feature travels the real
         # writer -> real frozen reader path and is dropped there.
         fut = (NOW_S + 3600) * 10 ** 9
         feat = schema.build_feature(

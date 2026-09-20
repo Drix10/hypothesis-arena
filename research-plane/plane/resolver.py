@@ -5,8 +5,11 @@ recomputes every load-bearing field from the canonical source record
 before emission. No LLM, no network, no clock reads (timestamps in).
 
 Inputs:
-  candidate: advisory dict (kind, value, symbols?, effect?, evidence?,
-             feature_id?, entity_ref?, provenance_url?)
+  candidate: advisory dict (kind, value, symbols?, effect?,
+             evidence?, entity_ref?, provenance_url?). feature_id, when
+             present on a candidate, is IGNORED: feature identity is
+             assigned downstream from trusted canonical lineage, never
+             from model output (duplicate/invented IDs cannot survive).
   canonical: the deterministic source record the candidate claims to
              derive from: {source_id, kind (parser-assigned), content_hash,
              published_ns (or None), ingested_ns, symbols, effect
@@ -40,7 +43,15 @@ Rules (frozen):
 - confidence_bucket is computed, never self-reported:
   base = source tier (high->high, medium->medium); drop one level if the
   published timestamp was missing; drop one level if uncorroborated and
-  the candidate was LLM-touched (llm_touched=True). Floor is "low".
+  the candidate was LLM-touched (llm_touched=True); drop per
+  parser_confidence (high: 0, medium: 1, low: 2 — a low-confidence
+  parser result can never ride a high tier to high confidence).
+  Floor is "low".
+- the canonical record itself is validated FIRST: missing keys, wrong
+  types, non-hex content_hash, unknown parser_confidence, or an
+  entity_ref CIK unknown to the pinned map are deterministic REJECTS
+  (canonical-shape / entity-unmapped), never exceptions and never
+  knowingly-invalid emitted features.
 """
 from . import schema
 
@@ -50,7 +61,33 @@ def _drop(level):
 
 
 def resolve(candidate, canonical, entity_map, llm_touched=True):
+    # Canonical record validation FIRST: malformed trusted input is a
+    # counted reject, never a KeyError/TypeError and never a feature.
+    if not isinstance(canonical, dict):
+        return False, "canonical-shape"
     src = canonical.get("source_id")
+    canon_kind = canonical.get("kind")
+    canon_value = canonical.get("value")
+    canon_symbols = canonical.get("symbols")
+    canon_effect = canonical.get("effect")
+    pub_ns = canonical.get("published_ns")
+    ingested_ns = canonical.get("ingested_ns")
+    content_hash = canonical.get("content_hash")
+    parser_conf = canonical.get("parser_confidence")
+    corroborated = canonical.get("corroborated")
+    import re as _re
+    if (not isinstance(src, str) or not isinstance(canon_kind, str) or
+            not isinstance(canon_value, dict) or
+            not isinstance(canon_symbols, list) or
+            not all(isinstance(s, str) and s
+                    for s in canon_symbols) or
+            not isinstance(content_hash, str) or
+            not _re.fullmatch(r"[0-9a-f]{64}", content_hash) or
+            (pub_ns is not None and type(pub_ns) is not int) or
+            type(ingested_ns) is not int or
+            parser_conf not in ("high", "medium", "low") or
+            not isinstance(corroborated, bool)):
+        return False, "canonical-shape"
     kind = candidate.get("kind")
     if kind not in schema.KINDS:
         return False, "schema-enum"
@@ -83,7 +120,11 @@ def resolve(candidate, canonical, entity_map, llm_touched=True):
                 not isinstance(ref.get("cik"), str)):
             return False, "entity-ref-shape"
         actual = tickers.get(ref["cik"])
-        if actual is not None and actual not in bound:
+        # Unknown CIK rejects HERE (resolver), not downstream: an
+        # unmapped reference must never become an emitted feature.
+        if actual is None:
+            return False, "entity-unmapped:%s" % ref["cik"]
+        if actual not in bound:
             return False, "contradiction"
     # Value: exact type discipline mirrored from the f2 reader.
     value = candidate.get("value")
@@ -105,18 +146,13 @@ def resolve(candidate, canonical, entity_map, llm_touched=True):
     # parser-assigned kind: a candidate must not relabel canonical
     # semantics (e.g. macro_release -> calendar_ahead) while keeping the
     # checked fields identical and still earn evidence=source.
-    canon_kind = canonical.get("kind")
-    canon_value = canonical.get("value")
-    canon_symbols = canonical.get("symbols", [])
-    canon_effect = canonical.get("effect")
-    pub_ns = canonical.get("published_ns")
     identical = (canon_kind == kind and canon_value == value and
                  list(canon_symbols) == list(bound) and
                  pub_ns is not None and
                  candidate.get("effect") == canon_effect)
     context_cap = False
     if pub_ns is None:
-        observed_ns = canonical["ingested_ns"]
+        observed_ns = ingested_ns
         context_cap = True  # R12: no source-published ts, CONTEXT forever
     else:
         observed_ns = pub_ns
@@ -127,19 +163,22 @@ def resolve(candidate, canonical, entity_map, llm_touched=True):
         evidence = "inference"
         effect = (canon_effect if canon_effect in schema.EFFECTS
                   else "unknown")
-    # Confidence: computed from tier x timestamp quality x corroboration.
+    # Confidence: computed from tier x timestamp quality x corroboration
+    # x PARSER confidence. A low-confidence parse never reaches high,
+    # even on a high-tier source with corroboration.
     conf = {"high": "high", "medium": "medium"}.get(
         schema.SOURCE_TIER.get(src, "medium"), "medium")
     if pub_ns is None:
         conf = _drop(conf)
-    if llm_touched and not canonical.get("corroborated", False):
+    if llm_touched and not corroborated:
+        conf = _drop(conf)
+    for _ in range({"high": 0, "medium": 1, "low": 2}[parser_conf]):
         conf = _drop(conf)
     ttl = schema.SOURCE_TTL_S.get(src, 3600)
     feat = schema.build_feature(
         kind, bound, dict(value), effect, evidence, conf, src,
-        canonical["content_hash"], observed_ns, canonical["ingested_ns"],
-        ttl, feature_id=candidate.get("feature_id"),
-        hashes=[canonical["content_hash"]],
+        content_hash, observed_ns, ingested_ns,
+        ttl, feature_id=None, hashes=[content_hash],
         entity_ref=dict(ref) if ref else None,
         provenance_url=candidate.get("provenance_url"))
     return True, (feat, context_cap)

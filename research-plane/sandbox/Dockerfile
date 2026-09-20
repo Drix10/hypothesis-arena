@@ -15,9 +15,12 @@
 #  4. Prove: unauthorized-destination probe fails at the proxy
 #     (counted), and the research identity cannot read/write the
 #     mirotrade/mirojev homes (setup-identities.sh + isolation test).
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm@sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637cecc392d97f980d4fec56b
+# Pinned base digest (resolves python:3.11-slim-bookworm, 2026-09-20).
+# Re-pin + record SBOM/scan on every rebuild; a floating base is a
+# build failure (D3).
 RUN useradd -u 65532 -m worker && \
-    pip install --no-cache-dir requests beautifulsoup4 lxml pydantic pandas feedparser && \
+    pip install --no-cache-dir requests==2.34.2 beautifulsoup4==4.15.0 lxml==6.1.3 pydantic==2.13.5 pandas==3.0.6 feedparser==6.0.14 && \
     rm -rf /root/.cache
 USER 65532
 WORKDIR /work
