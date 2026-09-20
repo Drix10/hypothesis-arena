@@ -6,6 +6,7 @@ retries, per-source heartbeats. Dedupe/SQLite/tagging is P1.3; soak is P1.4.
 Failure defaults per doc 09: errors land in heartbeats, never in signals.
 """
 import hashlib
+import http.client
 import json
 import os
 import random
@@ -43,6 +44,16 @@ class ConfigError(Exception):
     pass
 
 
+# Exact source-config contract: every key a source entry may carry.
+# class_hint/note are INERT human annotations (never read by code);
+# everything else — including typos like poll_mni — is rejected, never
+# silently ignored. Functional keys are all consumed somewhere below.
+ALLOWED_SOURCE_KEYS = frozenset({
+    "name", "kind", "url", "poll_min", "limit", "needs_key",
+    "id_field", "title_field", "date_field", "link_template",
+    "drill", "text_fields", "class_hint", "note"})
+
+
 def validate_sources_config(raw):
     """Strict parser for sources.json (top-level LIST, not {"sources":...}).
     Raises ConfigError on any shape violation. Shared by collect.py main()
@@ -54,6 +65,9 @@ def validate_sources_config(raw):
     for i, s in enumerate(raw):
         if not isinstance(s, dict):
             raise ConfigError(f"sources-entry-{i}-not-object")
+        for k in s:
+            if k not in ALLOWED_SOURCE_KEYS:
+                raise ConfigError(f"sources-entry-{i}-unknown-key-{k}")
         for k in ("name", "kind", "url"):
             if not isinstance(s.get(k), str) or not s[k]:
                 raise ConfigError(f"sources-entry-{i}-bad-{k}")
@@ -186,9 +200,16 @@ def parse_instant(s):
 
 def fetch(url, cache_key, extra_headers=None):
     """GET with ETag/Last-Modified cache + 3 jittered retries. Returns
-    (status, body, headers); status in ok | not-modified | auth-failure |
-    rate-limited | source-down. HTTP classes mapped once here so every
-    source kind reports the same vocabulary."""
+    (status, body, headers, validators); status in ok | not-modified |
+    auth-failure | rate-limited | source-down. HTTP classes mapped once
+    here so every source kind reports the same vocabulary.
+    Validators (ETag/Last-Modified seen on THIS response) are RETURNED,
+    never persisted: the caller commits them via commit_validators() only
+    after the body parses successfully. A malformed 200 must not bank a
+    validator that turns the next poll into a 304 masking the same parse
+    failure. Only network/transient failures retry: programming errors
+    (TypeError, AttributeError, ...) propagate loudly, never as
+    source-down."""
     os.makedirs(STATE, exist_ok=True)
     cpath = CACHE_PATH
     try:
@@ -214,35 +235,54 @@ def fetch(url, cache_key, extra_headers=None):
             with urllib.request.urlopen(req(url, extra_headers), timeout=30) as r:
                 body = r.read(MAX_BODY + 1)
                 if len(body) > MAX_BODY:
-                    return "source-down", b"response over 8MiB cap", {}
+                    return "source-down", b"response over 8MiB cap", {}, {}
                 hdrs = dict(r.headers.items())
-                cache[cache_key] = {"etag": hdrs.get("ETag"),
-                                    "modified": hdrs.get("Last-Modified")}
-                tmp = cpath + f".tmp-{os.getpid()}"
-                with open(tmp, "w", encoding="utf-8") as fh:
-                    json.dump(cache, fh)
-                    fh.flush()
-                    os.fsync(fh.fileno())
-                os.replace(tmp, cpath)
-                return "ok", body, hdrs
+                validators = {"etag": hdrs.get("ETag"),
+                              "modified": hdrs.get("Last-Modified")}
+                return "ok", body, hdrs, validators
         except urllib.error.HTTPError as e:
             last_err = f"HTTP {e.code}"
             if e.code == 304:
-                return "not-modified", b"", {}
+                return "not-modified", b"", {}, {}
             # Non-transient: return IMMEDIATELY, never burn retries/delay
             # on auth failures or dead endpoints.
             if e.code in (401, 403):
-                return "auth-failure", last_err.encode(), {}
+                return "auth-failure", last_err.encode(), {}, {}
             if e.code in (400, 404, 405, 410):
-                return "source-down", last_err.encode(), {}
+                return "source-down", last_err.encode(), {}, {}
             if e.code == 429:
                 delay *= 2
-        except Exception as e:  # network, DNS, timeout: retry, then heartbeat
+        except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
+            # Network/DNS/timeout/reset only. Anything else (TypeError,
+            # AttributeError, KeyError, ...) is OUR bug: loud, not retried.
             last_err = f"{type(e).__name__}: {e}"
         time.sleep(delay * random.uniform(0.8, 1.2))
     if last_err.startswith("HTTP 429"):
-        return "rate-limited", last_err.encode(), {}
-    return "source-down", last_err.encode(), {}
+        return "rate-limited", last_err.encode(), {}, {}
+    return "source-down", last_err.encode(), {}, {}
+
+
+def commit_validators(cache_key, validators):
+    """Persist ETag/Last-Modified AFTER the caller accepted the body.
+    Raises ConfigError on mid-run cache corruption (same fail-closed
+    policy fetch() used to enforce inline)."""
+    os.makedirs(STATE, exist_ok=True)
+    cpath = CACHE_PATH
+    try:
+        with open(cpath, encoding="utf-8") as fh:
+            cache = validate_cache(json.load(fh))
+    except FileNotFoundError:
+        cache = {}
+    except (OSError, ValueError, ConfigError) as e:
+        raise ConfigError(f"cache-corrupt-mid-run: {e}")
+    cache[cache_key] = {"etag": validators.get("etag"),
+                        "modified": validators.get("modified")}
+    tmp = cpath + f".tmp-{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(cache, fh)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, cpath)
 
 
 def text(el):
@@ -403,8 +443,9 @@ def run_json_source(src):
     """Returns (status, records-list). The tuple is structural: main() can
     NEVER mistake a status string for records (a bare string return used to
     be iterated char-by-char into the event stream). Only a list reaches
-    append_records()."""
-    status, body, _ = fetch(src["url"], src["name"])
+    append_records(). Validators commit only after the payload proves
+    parseable (deferred persistence: a bad 200 never banks an ETag)."""
+    status, body, _, validators = fetch(src["url"], src["name"])
     if status == "not-modified":
         heartbeat(src["name"], "ok", "not-modified")
         return "not-modified", []
@@ -426,6 +467,7 @@ def run_json_source(src):
         heartbeat(src["name"], "PARSE_FAILURE",
                   "drilled payload not a list")
         return "parse-failure", []
+    commit_validators(src["name"], validators)
     out, skipped = [], 0
     for row in items[: src.get("limit", 50)]:
         if not isinstance(row, dict):
@@ -458,6 +500,80 @@ def run_json_source(src):
 
 
 def main():
+    """Single-writer entry point. A collector.lock (OS-native, held for
+    the whole run) refuses concurrent collect.py instances: two writers
+    would last-write-wins schedule.json/cache.json and double-append
+    signals. Second instance exits 3 (COLLECT_ALREADY_RUNNING)."""
+    os.makedirs(STATE, exist_ok=True)
+    lock = _SingletonLock(os.path.join(STATE, "collector.lock"))
+    if not lock.acquire():
+        print("COLLECT_ALREADY_RUNNING: another collect.py holds "
+              "collector.lock -- refusing concurrent run",
+              file=sys.stderr)
+        return 3
+    try:
+        return _run()
+    finally:
+        lock.release()
+
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
+
+
+class _SingletonLock:
+    """Non-blocking OS-native file lock (fcntl/msvcrt, stdlib only).
+    The OS releases on process death: no stale lockfiles, no reclamation
+    race. Held from main() start to finish; acquire() is try-once."""
+    def __init__(self, path):
+        self.path = path
+        self.fh = None
+
+    def acquire(self):
+        parent = os.path.dirname(self.path)
+        if parent:
+            try:
+                os.makedirs(parent, exist_ok=True)
+            except OSError:
+                return False
+        try:
+            self.fh = open(self.path, "a+b")
+            self.fh.seek(0)
+            if os.name == "nt":
+                msvcrt.locking(self.fh.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                fcntl.flock(self.fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except (OSError, IOError):
+            try:
+                if self.fh is not None:
+                    self.fh.close()
+            except (OSError, ValueError):
+                pass
+            self.fh = None
+            return False
+
+    def release(self):
+        if self.fh is None:
+            return
+        try:
+            if os.name == "nt":
+                self.fh.seek(0)
+                msvcrt.locking(self.fh.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(self.fh.fileno(), fcntl.LOCK_UN)
+        except (OSError, ValueError):
+            pass
+        try:
+            self.fh.close()
+        except (OSError, ValueError):
+            pass
+        self.fh = None
+
+
+def _run():
     cfg = load_config()
     if cfg["status"] == "MISSING_REQUIRED_CONFIG":
         print(f"MISSING_REQUIRED_CONFIG: {','.join(cfg['missing_required'])} "
@@ -521,7 +637,7 @@ def _poll_source(src, sched, now, recs):
                     f"cadence-skip next_due={entry['next_due']}")
         return 0
     if src["kind"] in ("rss", "atom"):
-        status, body, _ = fetch(src["url"], name)
+        status, body, _, validators = fetch(src["url"], name)
         if status == "not-modified":
             heartbeat(name, "ok", "not-modified")
         elif status != "ok":
@@ -531,12 +647,13 @@ def _poll_source(src, sched, now, recs):
                                  status, "SOURCE_DOWN"), msg)
             if status == "rate-limited":
                 entry["backoff_until"] = \
-                    (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+                    (now + timedelta(hours=1)).isoformat()
         else:
             try:
                 items = [r for r in (to_record(name, it) for it in
                                     parse_feed(body)[: src.get("limit", 50)])
                          if r is not None]
+                commit_validators(name, validators)
             except ET.ParseError as e:
                 heartbeat(name, "PARSE_FAILURE", f"bad xml: {e}")
                 items = None
@@ -550,16 +667,25 @@ def _poll_source(src, sched, now, recs):
         status, recs = run_json_source(src)
         if status == "rate-limited":
             entry["backoff_until"] = \
-                (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+                (now + timedelta(hours=1)).isoformat()
             recs = []
-        assert isinstance(recs, list), "contract: records only"
+        if not isinstance(recs, list):
+            # Production contract (asserts vanish under -O): a non-list
+            # here is OUR bug, fail loudly via the mid-run abort path.
+            raise ConfigError(f"records-contract:{name}")
     else:
         heartbeat(name, "PARSE_FAILURE", f"unknown kind {src['kind']}")
         return 0
-    entry["next_due"] = (datetime.now(timezone.utc) +
+    # Operational scheduling from the run's reference instant: next_due
+    # and backoff windows derive from the same `now` main() captured, not
+    # from per-source wall-clock reads mid-run (deterministic tests,
+    # stable cadence within one run). Observation timestamps
+    # (heartbeat `at`, observed_at) remain wall-clock: they record when
+    # the world was seen, not when the schedule was computed.
+    entry["next_due"] = (now +
                            timedelta(minutes=src.get("poll_min", 15))).isoformat()
     bu = parse_instant(entry.get("backoff_until"))
-    if bu and bu <= datetime.now(timezone.utc):
+    if bu and bu <= now:
         entry.pop("backoff_until", None)
     sched[name] = entry
     save_schedule(sched)

@@ -36,7 +36,8 @@ REAL_FETCH = collect.fetch
 
 
 def run_with(body=None, status="ok"):
-    collect.fetch = lambda url, key, extra=None: (status, body or b"", {})
+    collect.fetch = lambda url, key, extra=None: (status, body or b"", {},
+                                                  {})
     return collect.run_json_source(dict(SRC))
 
 
@@ -126,14 +127,14 @@ for code, want, attempts in [(401, "auth-failure", 1),
                              (404, "source-down", 1)]:
     calls.clear()
     with mock.patch.object(_ureq, "urlopen", boom_once_then_ok(code)):
-        st, body, _ = collect.fetch("http://x/", "k")
+        st, body, _, _ = collect.fetch("http://x/", "k")
     check(f"fetch-{code}-immediate", st == want and len(calls) == attempts)
 
 # 429 retries then succeeds
 calls.clear()
 with mock.patch.object(_ureq, "urlopen", boom_once_then_ok(429)):
     with mock.patch.object(collect.time, "sleep", lambda *a: None):
-        st, body, _ = collect.fetch("http://x/", "k")
+        st, body, _, _ = collect.fetch("http://x/", "k")
 check("fetch-429-retries", st == "ok" and len(calls) == 2)
 
 # 12. schedule: missing = first run; corrupt = fail closed
@@ -223,13 +224,19 @@ def run_main(status2):
     def fake_fetch(url, key, extra=None):
         calls["fetch"] += 1
         if "s1" in url:
-            return "ok", RSS_ONE, {}
-        return status2, b"x", {}
+            return "ok", RSS_ONE, {}, {}
+        return status2, b"x", {}, {}
     appended = []
     saved = (collect.fetch, collect.load_sources, collect.load_schedule,
              collect.heartbeat, collect.append_records,
              collect.save_schedule, collect.load_config,
-             collect.check_cache_usable)
+             collect.check_cache_usable, collect.STATE,
+             collect.CACHE_PATH, collect.SCHEDULE_PATH)
+    collect.STATE = os.path.join(TMP, "stateMain")
+    # Fresh state files: earlier tests leave corrupt-path fixtures behind
+    # (schedule-corrupt/cache-corrupt); main() must see a clean slate here.
+    collect.CACHE_PATH = os.path.join(TMP, "cache-main.json")
+    collect.SCHEDULE_PATH = os.path.join(TMP, "schedule-main.json")
     collect.fetch = fake_fetch
     collect.load_sources = lambda: srcs
     collect.load_schedule = lambda: ({}, True)
@@ -246,7 +253,8 @@ def run_main(status2):
         (collect.fetch, collect.load_sources, collect.load_schedule,
          collect.heartbeat, collect.append_records,
          collect.save_schedule, collect.load_config,
-         collect.check_cache_usable) = saved
+         collect.check_cache_usable, collect.STATE,
+         collect.CACHE_PATH, collect.SCHEDULE_PATH) = saved
     return appended
 
 
@@ -256,5 +264,92 @@ for status2 in ["not-modified", "auth-failure", "rate-limited",
     check("main-isolation-" + status2,
           len(got) == 1 and got[0]["source"] == "s1"
           and got[0]["source_id"] == "g1")
+
+# 17. source-config allowlist: unknown keys rejected, inert notes kept
+try:
+    collect.validate_sources_config([{"name": "a", "kind": "rss",
+                                      "url": "u", "poll_mni": 15}])
+    raised = False
+except collect.ConfigError:
+    raised = True
+check("sources-unknown-key", raised)
+check("sources-inert-notes",
+      len(collect.validate_sources_config(
+          [{"name": "a", "kind": "rss", "url": "u",
+            "note": "human comment", "class_hint": "x"}])) == 1)
+
+# 18. singleton: concurrent collect.py refuses (in-process + cross-process)
+import subprocess as _sp
+_saved_state = collect.STATE
+collect.STATE = os.path.join(TMP, "stateLock")
+_holder = collect._SingletonLock(os.path.join(collect.STATE,
+                                               "collector.lock"))
+assert _holder.acquire()
+check("singleton-second-refuses", collect.main() == 3)
+_p = _sp.run(
+    [sys.executable, "-c",
+     "import sys; sys.path.insert(0, %r); import collect; "
+     "collect.STATE = %r; "
+     "sys.exit(0 if collect._SingletonLock("
+     "collect.STATE + '/collector.lock').acquire() else 1)"
+     % (HERE, collect.STATE)], capture_output=True)
+check("singleton-cross-process", _p.returncode == 1)
+_holder.release()
+_p2 = _sp.run(
+    [sys.executable, "-c",
+     "import sys; sys.path.insert(0, %r); import collect; "
+     "collect.STATE = %r; "
+     "sys.exit(0 if collect._SingletonLock("
+     "collect.STATE + '/collector.lock').acquire() else 1)"
+     % (HERE, collect.STATE)], capture_output=True)
+check("singleton-reacquire", _p2.returncode == 0)
+collect.STATE = _saved_state
+
+# 19. deferred validators: malformed 200 banks nothing, good parse commits
+collect.fetch = REAL_FETCH
+collect.CACHE_PATH = os.path.join(TMP, "cache-defer.json")
+if os.path.exists(collect.CACHE_PATH):
+    os.remove(collect.CACHE_PATH)
+_bad_validators = {"etag": '"BAD"', "modified": "Thu, 18 Sep 2026"}
+collect.fetch = lambda url, key, extra=None: ("ok", b"{nope", {},
+                                              _bad_validators)
+st, recs = collect.run_json_source(dict(SRC))
+_cache_after_bad = {}
+if os.path.exists(collect.CACHE_PATH):
+    _cache_after_bad = json.load(open(collect.CACHE_PATH, encoding="utf-8"))
+check("validators-not-banked-on-parse-failure",
+      st == "parse-failure" and _cache_after_bad.get("t_json") is None)
+_good_validators = {"etag": '"GOOD"', "modified": None}
+collect.fetch = lambda url, key, extra=None: (
+    "ok", payload([{"uid": "u9", "title": "T", "a": "x"}]), {},
+    _good_validators)
+st, recs = collect.run_json_source(dict(SRC))
+_cache_after_good = json.load(open(collect.CACHE_PATH, encoding="utf-8"))
+check("validators-committed-on-parse-success",
+      st == "ok" and _cache_after_good.get("t_json") == _good_validators)
+collect.fetch = REAL_FETCH
+
+# 20. narrow exceptions: programming errors propagate, never source-down
+collect.CACHE_PATH = os.path.join(TMP, "cache-exc.json")
+with mock.patch.object(_ureq, "urlopen", side_effect=TypeError("boom")):
+    try:
+        collect.fetch("http://x/", "k")
+        raised = False
+    except TypeError:
+        raised = True
+check("programming-error-loud", raised)
+
+# 21. records contract is explicit (no assert): non-list fails loudly
+_saved_rjs = collect.run_json_source
+collect.run_json_source = lambda src: ("ok", "notalist")
+try:
+    collect._poll_source(dict(SRC), {}, collect.datetime.now(
+        collect.timezone.utc), [])
+    raised = False
+except collect.ConfigError:
+    raised = True
+finally:
+    collect.run_json_source = _saved_rjs
+check("records-contract-explicit", raised)
 
 print("ALL COLLECT CHECKS PASS")
