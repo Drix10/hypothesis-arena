@@ -18,12 +18,10 @@ must exist on paper before a line of code.
 
 **Decision layer (doc 03)**
 - [x] 20 hand-worked cases in §3.7 (all HOLD rows + boundaries).
-- [ ] Get `OPENROUTER_API_KEY`, then verify BEFORE any Phase-2 dependency
-      freezes: Decisions endpoint reachable + access confirmed + exact model
-      revision string pinned + provider/model identity recorded. The key is
-      necessary but not sufficient — "API works" never equals "dependency
-      frozen" (BLOCKED 2026-09-18: no key; doc 03 pins `typesafe/jev-1.13`,
-      revision string pending verification).
+- [x] `OPENROUTER_API_KEY` in local `.env` (2026-09-20); Decisions endpoint
+      verified reachable + auth ok + exact revision `typesafe/jev-1.13-20260917`
+      + provider `TypeSafe` pinned (doc 03 intro, manifest, freeze-check).
+      Key material never enters the repo.
 - [x] `question_set_version = v3` pinned (freeze v2: enter / edge_family /
       conviction / latent_risk); slow-key fields (incl. `disagreement`,
       feature-count bucket) frozen (doc 03 §3.5).

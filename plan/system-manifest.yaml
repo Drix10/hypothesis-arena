@@ -10,7 +10,9 @@ risk_version: R1-R17+v2-amendments  # R4-symmetric, R5-HWM, R6-like-for-like, R7
 exit_profile: exit_profile_v1
 research_graph_version: g1  # six nodes, deterministic-first
 jev_model: typesafe/jev-1.13
-jev_provider: TBD_AT_KEY  # BUILD-TIME-REQUIRED: allowed placeholder until Phase 2 key
+jev_revision: typesafe/jev-1.13-20260917  # verified live 2026-09-20: exact revision pinned
+jev_provider_name: TypeSafe  # verified live 2026-09-20: provider identity
+jev_provider: TBD_AT_KEY  # BUILD-TIME-REQUIRED: key material never enters the repo
 research_models: TBD_AT_BUILD  # BUILD-TIME-REQUIRED: per-node pins required by doc 08 (D3)
 venues:
   forex_paper: OANDA-v20-practice

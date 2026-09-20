@@ -113,6 +113,12 @@ grep -q 'plan_hash: "TO_BE_COMPUTED_AT_FREEZE"' "$M" \
 grep -q 'jev_provider: TBD_AT_KEY' "$M" \
   && ok "jev_provider build-time placeholder" \
   || bad "jev_provider placeholder altered"
+grep -q 'jev_revision: typesafe/jev-1.13-20260917' "$M" \
+  && ok "jev_revision pinned (verified live 2026-09-20)" \
+  || bad "jev_revision not pinned"
+grep -q 'jev_provider_name: TypeSafe' "$M" \
+  && ok "jev_provider_name pinned (verified live 2026-09-20)" \
+  || bad "jev_provider_name not pinned"
 grep -q 'research_models: TBD_AT_BUILD' "$M" \
   && ok "research_models build-time placeholder" \
   || bad "research_models placeholder altered"
