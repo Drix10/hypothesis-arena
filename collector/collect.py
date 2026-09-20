@@ -440,33 +440,37 @@ def _summary_text(row, keys):
 
 
 def run_json_source(src):
-    """Returns (status, records-list). The tuple is structural: main() can
-    NEVER mistake a status string for records (a bare string return used to
-    be iterated char-by-char into the event stream). Only a list reaches
-    append_records(). Validators commit only after the payload proves
-    parseable (deferred persistence: a bad 200 never banks an ETag)."""
+    """Returns (status, records-list, validators-or-None, skipped-count).
+    The tuple is structural: main() can NEVER mistake a status string for records (a
+    bare string return used to be iterated char-by-char into the event
+    stream). Only a list reaches append_records(). Validators are RETURNED,
+    never committed here: the caller persists them only AFTER the records
+    are durably appended (durable-first ordering — a bad 200 never banks
+    an ETag, and neither does a good 200 whose sink write fails). Success
+    heartbeats are the caller's job too (observability follows durability).
+    Failure heartbeats (nothing to append) fire immediately."""
     status, body, _, validators = fetch(src["url"], src["name"])
     if status == "not-modified":
         heartbeat(src["name"], "ok", "not-modified")
-        return "not-modified", []
+        return "not-modified", [], None, 0
     if status != "ok":
         heartbeat(src["name"], {"auth-failure": "AUTH_FAILURE",
                                   "rate-limited": "RATE_LIMITED"}.get(
                                       status, "SOURCE_DOWN"),
                                   body.decode(errors="replace")[:200])
-        return status, []  # caller persists backoff on rate-limited
+        return status, [], None, 0  # caller persists backoff on rate-limited
     try:
         payload = json.loads(body)
     except ValueError as e:
         heartbeat(src["name"], "PARSE_FAILURE", f"bad json: {e}")
-        return "parse-failure", []
+        return "parse-failure", [], None, 0
     items = payload
     for key in src.get("drill", []):
         items = items.get(key, []) if isinstance(items, dict) else []
     if not isinstance(items, list):
         heartbeat(src["name"], "PARSE_FAILURE",
                   "drilled payload not a list")
-        return "parse-failure", []
+        return "parse-failure", [], None, 0
     commit_validators(src["name"], validators)
     out, skipped = [], 0
     for row in items[: src.get("limit", 50)]:
@@ -494,9 +498,7 @@ def run_json_source(src):
             skipped += 1
             continue
         out.append(rec)
-    heartbeat(src["name"], "ok" if out else "EMPTY_SUCCESS",
-                f"skipped_no_identity={skipped}" if skipped else "", count=len(out))
-    return "ok", out
+    return "ok", out, validators, skipped
 
 
 def main():
@@ -616,9 +618,19 @@ def _run():
 def _poll_source(src, sched, now, recs):
     """One source poll. Returns record count. `recs` is caller-owned fresh
     state (never reused across sources). May raise ConfigError on mid-run
-    state corruption; early exits return 0."""
+    state corruption; early exits return 0.
+    DURABLE-FIRST commit ordering: the signals file is the commit point.
+    Validators (ETag) and schedule (next_due) are DERIVED HINTS persisted
+    only after the records they describe are fsync'd. If the sink fails,
+    nothing downstream is banked: the next poll re-fetches with OLD
+    validators (no 304 masking the loss) and PK-dedupe in classify absorbs
+    redelivery. There is no filesystem transaction across three files, so
+    the recovery rule is explicit: evidence first, hints after, loud abort
+    (exit 2, audited repair) on any metadata failure past the commit."""
     name = src["name"]
     recs = []  # local per-source state; caller passes nothing reusable.
+    validators = None  # banked only after the commit point below
+    success_detail = ""  # success heartbeat detail (skipped counts)
     if src.get("needs_key") and not os.environ.get(src["needs_key"]):
         heartbeat(name, "SKIPPED_CONFIG", f"needs {src['needs_key']} (build-time)")
         return 0
@@ -637,7 +649,7 @@ def _poll_source(src, sched, now, recs):
                     f"cadence-skip next_due={entry['next_due']}")
         return 0
     if src["kind"] in ("rss", "atom"):
-        status, body, _, validators = fetch(src["url"], name)
+        status, body, _, v = fetch(src["url"], name)
         if status == "not-modified":
             heartbeat(name, "ok", "not-modified")
         elif status != "ok":
@@ -646,36 +658,51 @@ def _poll_source(src, sched, now, recs):
                              "rate-limited": "RATE_LIMITED"}.get(
                                  status, "SOURCE_DOWN"), msg)
             if status == "rate-limited":
-                entry["backoff_until"] = \
-                    (now + timedelta(hours=1)).isoformat()
+                entry["backoff_until"] =                     (now + timedelta(hours=1)).isoformat()
         else:
             try:
                 items = [r for r in (to_record(name, it) for it in
                                     parse_feed(body)[: src.get("limit", 50)])
                          if r is not None]
-                commit_validators(name, validators)
             except ET.ParseError as e:
                 heartbeat(name, "PARSE_FAILURE", f"bad xml: {e}")
                 items = None
-            if items is not None:
-                heartbeat(name, "ok" if items else "EMPTY_SUCCESS",
-                            count=len(items))
-                recs = items
-            else:
+            if items is None:
                 recs = []
+            else:
+                recs = items
+                validators = v  # commit AFTER the sink below
     elif src["kind"] == "json":
-        status, recs = run_json_source(src)
+        status, recs, v, skipped = run_json_source(src)
         if status == "rate-limited":
-            entry["backoff_until"] = \
-                (now + timedelta(hours=1)).isoformat()
+            entry["backoff_until"] =                 (now + timedelta(hours=1)).isoformat()
             recs = []
         if not isinstance(recs, list):
             # Production contract (asserts vanish under -O): a non-list
             # here is OUR bug, fail loudly via the mid-run abort path.
             raise ConfigError(f"records-contract:{name}")
+        if status == "ok":
+            validators = v  # commit AFTER the sink below
+            if skipped:
+                success_detail = f"skipped_no_identity={skipped}"
     else:
         heartbeat(name, "PARSE_FAILURE", f"unknown kind {src['kind']}")
         return 0
+    # COMMIT POINT: durable signals first. A failed sink raises (exit 2)
+    # with validators/schedule untouched — the loss is re-fetchable.
+    if recs:
+        try:
+            path = append_records(recs)
+        except OSError as e:
+            raise ConfigError(
+                f"signals-append-failed:{name}:{type(e).__name__}")
+        print(f"{name}: {len(recs)} records -> {path}")
+        heartbeat(name, "ok", success_detail, count=len(recs))
+    elif validators is not None:
+        # Parsed cleanly but empty: still a successful observation.
+        heartbeat(name, "EMPTY_SUCCESS", success_detail, count=0)
+    if validators is not None:
+        commit_validators(name, validators)
     # Operational scheduling from the run's reference instant: next_due
     # and backoff windows derive from the same `now` main() captured, not
     # from per-source wall-clock reads mid-run (deterministic tests,
@@ -683,17 +710,19 @@ def _poll_source(src, sched, now, recs):
     # (heartbeat `at`, observed_at) remain wall-clock: they record when
     # the world was seen, not when the schedule was computed.
     entry["next_due"] = (now +
-                           timedelta(minutes=src.get("poll_min", 15))).isoformat()
+                         timedelta(minutes=src.get("poll_min", 15))).isoformat()
     bu = parse_instant(entry.get("backoff_until"))
     if bu and bu <= now:
         entry.pop("backoff_until", None)
-    sched[name] = entry
-    save_schedule(sched)
-    if recs:
-        path = append_records(recs)
-        print(f"{name}: {len(recs)} records -> {path}")
+    try:
+        sched[name] = entry
+        save_schedule(sched)
+    except OSError as e:
+        raise ConfigError(
+            f"schedule-persist-failed:{name}:{type(e).__name__}")
     time.sleep(2)  # polite gap between sources
     return len(recs)
+
 
 
 if __name__ == "__main__":
