@@ -102,18 +102,27 @@ bool ValidStage(Stage s) {
 bool ValidSide(Side side) {
     return side == Side::LONG || side == Side::SHORT;
 }
+// EXIT/ENTRY intent structure: what H1 needs to CONSTRUCT an order
+// (identity + direction + market + non-negative size). Checked for BOTH
+// kinds before anything else. Risk-state fields (equity, stage,
+// counters, HWM, calibration, flip history, kill) are NOT intent
+// structure — they never block a valid EXIT (entries may halt, exits
+// remain alive, doc 10 §10.3).
+bool ValidIntentStructure(const Intent& in) {
+    if (in.kind != IntentKind::ENTRY && in.kind != IntentKind::EXIT)
+        return false;
+    if (in.symbol.empty()) return false;
+    if (!ValidSide(in.side)) return false;
+    if (in.asset != AssetClass::FOREX && in.asset != AssetClass::STOCK)
+        return false;
+    if (in.account != AccountType::MARGIN &&
+        in.account != AccountType::CASH)
+        return false;
+    if (in.notional_cents < 0) return false;
+    return true;
+}
 bool ValidEnums(const RiskSnapshot& s) {
     if (!ValidStage(s.stage)) return false;
-    if (s.intent.kind != IntentKind::ENTRY &&
-        s.intent.kind != IntentKind::EXIT)
-        return false;
-    if (!ValidSide(s.intent.side)) return false;
-    if (s.intent.asset != AssetClass::FOREX &&
-        s.intent.asset != AssetClass::STOCK)
-        return false;
-    if (s.intent.account != AccountType::MARGIN &&
-        s.intent.account != AccountType::CASH)
-        return false;
     if (s.impact != Impact::NONE && s.impact != Impact::LOW &&
         s.impact != Impact::MEDIUM && s.impact != Impact::HIGH &&
         s.impact != Impact::BINARY)
@@ -245,14 +254,35 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
     v.stage_num = sc.mult_num;
     v.stage_den = sc.mult_den;
     v.size_scale = s.r6_trip ? 0.5 : 1.0;
-    // Structural validation FIRST: an exit bypasses risk LIMITS, never
-    // structural integrity (doc 10 §10.3 stops new risk; it does not make
-    // malformed order metadata executable — H1 needs valid symbol/side/
-    // asset to construct the exit). Invalid => bad-inputs, even for EXIT.
-    // Valid EXITs skip the R-battery below; ENTRY evaluates R1–R17.
+    // LAYER 1 — intent structure (BOTH kinds): H1 needs identity +
+    // direction + market + non-negative size to construct ANY order.
+    // Corrupt intent metadata is never executable, exit or entry.
+    if (!ValidIntentStructure(s.intent)) {
+        v.reasons_all[0] = "bad-inputs";
+        v.n_reasons = 1;
+        v.proceed = false;
+        v.reason = "bad-inputs";
+        return v;
+    }
+    // Valid EXIT bypasses risk LIMITS (doc 10 §10.3: entries may halt,
+    // exits remain alive). Corrupt risk STATE — equity, stage, counters,
+    // HWM, calibration, flip history, kill — never blocks a
+    // structurally valid exit; reconcile owns bookkeeping truth.
+    if (s.intent.kind == IntentKind::EXIT) {
+        v.proceed = true;
+        v.reason = "exit-bypass";
+        return v;
+    }
+    // LAYER 2 — ENTRY risk-state validation: the full snapshot must be
+    // evaluable before any R-rule runs. Includes the margin account
+    // (negative used-margin makes BuyingPower exceed equity — nonsense
+    // K6 state), non-empty bookkeeping symbols (empty identity would
+    // silently bypass symbol logic), and drift-candidate integrity when
+    // a breach is claimed (every candidate must name a real open
+    // position — a removal directive for thin air is corrupt input).
     bool bad = !ValidEnums(s) || s.now_us < 0 ||
-               s.equity_cents <= 0 || s.daily_close_hwm_cents < 0 ||
-               s.intraday_hwm_cents < 0 || s.intent.notional_cents < 0 ||
+               s.equity_cents <= 0 || s.margin_used_cents < 0 ||
+               s.daily_close_hwm_cents < 0 || s.intraday_hwm_cents < 0 ||
                s.risk_fraction_bp < 0 || s.day_count < 0 ||
                s.hour_count < 0 || s.realized_outcomes < 0;
     int64_t peak =
@@ -260,21 +290,23 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
             ? s.daily_close_hwm_cents
             : s.intraday_hwm_cents;
     if (peak <= 0) bad = true;
-    // Corrupt sides in bookkeeping must not read as neutral (an invalid
-    // side would otherwise be silently ignored by the == comparisons).
+    // Corrupt SIDES/SYMBOLS in bookkeeping must not read as neutral (an
+    // invalid side would otherwise be silently ignored by the ==
+    // comparisons; an empty symbol would silently bypass symbol logic).
     // Corrupt FLIP RECORDS join bad-inputs too when armed (empty symbol,
     // negative stamps, inverted pair, future fill): a malformed history
     // is malformed input, not an expired lock.
     if (!bad) {
         for (auto& p : s.open)
-            if (p.notional_cents < 0 || !ValidSide(p.side)) {
+            if (p.notional_cents < 0 || !ValidSide(p.side) ||
+                p.symbol.empty()) {
                 bad = true;
                 break;
             }
         if (!bad)
             for (auto& p : s.pending)
                 if (p.notional_cents < 0 || p.margin_cents < 0 ||
-                    !ValidSide(p.side)) {
+                    !ValidSide(p.side) || p.symbol.empty()) {
                     bad = true;
                     break;
                 }
@@ -283,6 +315,28 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
              s.flip_t2_us < 0 || s.flip_t2_us < s.flip_t1_us ||
              s.now_us < s.flip_t2_us))
             bad = true;
+        // Claimed drift breach with phantom candidates is corrupt input:
+        // a removal directive must name a real open position, or H1
+        // would "resolve" the breach against thin air and let the entry
+        // proceed. (H1 ordering contract on drift_idx is pinned in
+        // veto.hpp: journal, remove, reconcile, re-check, then enter.)
+        if (!bad && s.r7_drift_breach)
+            for (auto& c : s.drift) {
+                if (c.symbol.empty()) {
+                    bad = true;
+                    break;
+                }
+                bool held = false;
+                for (auto& p : s.open)
+                    if (p.symbol == c.symbol) {
+                        held = true;
+                        break;
+                    }
+                if (!held) {
+                    bad = true;
+                    break;
+                }
+            }
     }
     // Collect EVERY armed condition in frozen precedence order; the first
     // one wins the logged reason, none are dropped from reasons_all.

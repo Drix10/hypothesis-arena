@@ -454,6 +454,8 @@ int main(int argc, char** argv) {
         DriftCandidate g{"GGG", -5000LL, 100000LL, 1000LL};
         s4.drift.push_back(f);
         s4.drift.push_back(g);
+        AddOpen(s4, "FFF", Side::SHORT, 100000LL);
+        AddOpen(s4, "GGG", Side::SHORT, 100000LL);
         s4.r7_drift_breach = true;
         CHECK("drift-none", DriftSelection(s4) == -1);
         VetoVerdict v = EvaluateVeto(s4);
@@ -463,6 +465,7 @@ int main(int argc, char** argv) {
         // found removal => directive attached, evaluation continues
         RiskSnapshot s5 = Clean();
         s5.drift.push_back(e);
+        AddOpen(s5, "EEE", Side::LONG, 500000LL);
         s5.r7_drift_breach = true;
         v = EvaluateVeto(s5);
         CHECK("drift-directive",
@@ -661,23 +664,49 @@ int main(int argc, char** argv) {
         v = EvaluateVeto(s);
         CHECK("exit-bad-asset",
               !v.proceed && std::string(v.reason) == "bad-inputs");
+        // Risk STATE never blocks a structurally valid exit: kill,
+        // equity, clock, and flip history are entry-risk concerns.
+        // (These three encoded the old wrong policy; they now prove
+        // the corrected liveness boundary.)
         s = Clean();
         s.intent.kind = IntentKind::EXIT;
         s.kill = (KillLevel)99;
         v = EvaluateVeto(s);
-        CHECK("exit-bad-kill",
-              !v.proceed && std::string(v.reason) == "bad-inputs");
+        CHECK("exit-ignores-kill",
+              v.proceed && std::string(v.reason) == "exit-bypass");
         s = Clean();
         s.intent.kind = IntentKind::EXIT;
         s.equity_cents = 0;
         v = EvaluateVeto(s);
-        CHECK("exit-bad-equity",
-              !v.proceed && std::string(v.reason) == "bad-inputs");
+        CHECK("exit-ignores-equity",
+              v.proceed && std::string(v.reason) == "exit-bypass");
         s = Clean();
         s.intent.kind = IntentKind::EXIT;
         s.now_us = -1;
         v = EvaluateVeto(s);
-        CHECK("exit-bad-clock",
+        CHECK("exit-ignores-clock",
+              v.proceed && std::string(v.reason) == "exit-bypass");
+        // ...even a corrupt flip record cannot strand an exit.
+        s = Clean();
+        s.intent.kind = IntentKind::EXIT;
+        s.flip_armed = true;
+        s.flip_symbol = "";
+        v = EvaluateVeto(s);
+        CHECK("exit-ignores-flip",
+              v.proceed && std::string(v.reason) == "exit-bypass");
+        // But exit INTENT structure still fails closed: identity and
+        // non-negative size are what H1 builds the order from.
+        s = Clean();
+        s.intent.kind = IntentKind::EXIT;
+        s.intent.symbol = "";
+        v = EvaluateVeto(s);
+        CHECK("exit-empty-symbol",
+              !v.proceed && std::string(v.reason) == "bad-inputs");
+        s = Clean();
+        s.intent.kind = IntentKind::EXIT;
+        s.intent.notional_cents = -1;
+        v = EvaluateVeto(s);
+        CHECK("exit-neg-notional",
               !v.proceed && std::string(v.reason) == "bad-inputs");
         // Negative clock fails closed on ENTRY too.
         s = Clean();
@@ -743,6 +772,51 @@ int main(int argc, char** argv) {
         s.stage = (Stage)99;  // unknown underlying, not UNKNOWN
         VetoVerdict v = EvaluateVeto(s);
         CHECK("bad-stage-enum",
+              !v.proceed && std::string(v.reason) == "bad-inputs");
+    }
+    // ---- ENTRY bookkeeping identity + margin account (correction) ----
+    {
+        // Empty identity silently bypasses symbol logic: reject.
+        RiskSnapshot s = Clean();
+        s.intent.symbol = "";
+        VetoVerdict v = EvaluateVeto(s);
+        CHECK("entry-empty-symbol",
+              !v.proceed && std::string(v.reason) == "bad-inputs");
+        s = Clean();
+        AddOpen(s, "", Side::LONG, 100000LL);
+        v = EvaluateVeto(s);
+        CHECK("open-empty-symbol",
+              !v.proceed && std::string(v.reason) == "bad-inputs");
+        s = Clean();
+        AddPending(s, "", Side::LONG, 100000LL);
+        v = EvaluateVeto(s);
+        CHECK("pending-empty-symbol",
+              !v.proceed && std::string(v.reason) == "bad-inputs");
+        // Negative used-margin makes BuyingPower exceed equity: nonsense.
+        s = Clean();
+        s.margin_used_cents = -1;
+        v = EvaluateVeto(s);
+        CHECK("margin-used-neg",
+              !v.proceed && std::string(v.reason) == "bad-inputs");
+    }
+    // ---- drift-candidate integrity (correction: no phantom removal) ----
+    {
+        // A claimed breach whose candidates name no open position is
+        // corrupt input — H1 must never "resolve" against thin air.
+        RiskSnapshot s = Clean();
+        DriftCandidate p{"ZZZ", 500000LL, 100000LL, 1000LL};
+        s.drift.push_back(p);
+        s.r7_drift_breach = true;
+        VetoVerdict v = EvaluateVeto(s);
+        CHECK("drift-phantom",
+              !v.proceed && std::string(v.reason) == "bad-inputs");
+        s = Clean();
+        DriftCandidate q{"", 500000LL, 100000LL, 1000LL};
+        s.drift.push_back(q);
+        AddOpen(s, "QQQ", Side::LONG, 100000LL);
+        s.r7_drift_breach = true;
+        v = EvaluateVeto(s);
+        CHECK("drift-empty-candidate",
               !v.proceed && std::string(v.reason) == "bad-inputs");
     }
     // ---- R3 overflow-free counters (correction) ----

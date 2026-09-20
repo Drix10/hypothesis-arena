@@ -176,8 +176,15 @@ struct VetoVerdict {
     int stage_num = 1;        // R-multiplier for H1 (veto never sizes)
     int stage_den = 1;
     int drift_idx = -1;  // R7 drift directive: index into snapshot drift
-                         // (-1 = none). H1 resolves the symbol; the index
-                         // is valid for the snapshot this verdict ran on.
+                         // (-1 = none). H1 CONTRACT (frozen): on breach
+                         // with idx >= 0, H1 must journal the directive,
+                         // execute + reconcile the removal, re-check the
+                         // snapshot/caps, and only then permit the new
+                         // entry. The PROCEED verdict authorizes the entry
+                         // CONDITIONAL on that ordering — never alongside
+                         // an unresolved breach. Slice B additionally
+                         // rejects phantom candidates (bad-inputs) so the
+                         // directive always names a real open position.
     bool escalate = false;  // drift breach with no VaR-reducing removal
 };
 static_assert(std::is_trivially_copyable<VetoVerdict>::value,
