@@ -18,6 +18,8 @@ else
 fi
 g++ $FLAGS -o test_p31 test_p31.cpp
 ./test_p31 fixtures
+g++ $FLAGS -o test_p32 test_p32.cpp
+./test_p32 vectors
 g++ $FLAGS -o fuzz_p31 fuzz_p31.cpp
 ./fuzz_p31 20000
 # Acceptance: no downstream function may accept raw JEV JSON.
@@ -30,6 +32,11 @@ fi
 # No confidence accessor may exist on the decision object (P3.4/b quarantine).
 if grep -nE "confidence\s*\(\s*\)" jev_validate.hpp; then
     echo "GATE FAIL: confidence accessor present"
+    exit 1
+fi
+# P3.2 interop: test_p32.cpp must never invoke Python (committed files only).
+if grep -nE "popen|system\(|python" test_p32.cpp; then
+    echo "GATE FAIL: test_p32 depends on Python"
     exit 1
 fi
 echo "P3.1 GATE ($MODE): PASS"

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -244,7 +245,8 @@ struct JParse {
             out.dval = strtod(out.num.c_str(), &e);
             if (e == nullptr || *e != 0) { err = "bad-number"; return false; }
             if (!(out.dval == out.dval)) { err = "bad-number"; return false; }
-            if (out.dval > 1e308 || out.dval < -1e308) { err = "bad-number"; return false; }
+            // finite only: reject overflow-to-inf, allow up to DBL_MAX
+            if (std::isinf(out.dval)) { err = "bad-number"; return false; }
         }
         return true;
     }

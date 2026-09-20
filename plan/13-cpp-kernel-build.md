@@ -134,14 +134,23 @@ cross-language interoperability boundaries. "Python JSON serialization" must
 not remain an implicit cryptographic dependency. This section defines the
 canonical byte representation explicitly:
 
-- Canonical JSON: UTF-8, `sort_keys=True`, `separators=(",", ":")`
-  (equivalently: keys lexicographically sorted by UTF-16 code unit, no
-  whitespace, `:` and `,` separators, shortest float repr, no NaN/Infinity).
-- `response_hash = sha256_hex(canonical_bytes(payload_without_signature))`.
-- `signature = Ed25519(signing_key, canonical_bytes(full_payload))`
-  where `full_payload` includes `response_hash` (sign-then... precisely:
-  sign the canonical bytes of the payload object that carries all fields
-  except `signature` itself; `response_hash` is a field of that payload).
+- Canonical JSON (FROZEN, mirrors frozen `collector/jev.py::canon` exactly):
+  UTF-8, `json.dumps(obj, sort_keys=True, separators=(",", ":"))` — keys
+  sorted by Unicode code point, no whitespace, `:` and `,` separators,
+  `ensure_ascii=True` (non-ASCII and C0 controls as lowercase `\uXXXX`,
+  astral as surrogate pairs; DEL escaped), shortest float repr (fixed iff
+  decimal exponent in [-4, 16), else scientific; integral floats carry
+  `.0`; `-0.0` preserved), ints plain decimal. NaN/Infinity have NO
+  canonical form (contract-excluded; sidecar never emits them —
+  `finite_prob` gates every value — and the C++ parser rejects them).
+- `response_hash = sha256_hex(canonical_bytes(payload))` where `payload` is
+  the 12-field object WITHOUT `response_hash`/`signature` (they are
+  top-level siblings, not payload members).
+- `signature = Ed25519(signing_key, canonical_bytes(payload))` over the
+  SAME payload bytes (this corrects the earlier prose that suggested
+  `response_hash` was signature-covered: it is not — it is a
+  recomputation-checked claim, proven by the v1-hashclaim-fails vector).
+  Verification order: recompute hash, compare, then verify signature.
 
 Dedicated test vector (generated once from the frozen sidecar, committed):
 
@@ -155,7 +164,19 @@ known AnswerSet payload
 C++ verifies the vector independently: recompute canonical bytes (byte-equal
 to committed), recompute hash (equal), verify signature (valid). Any
 canonicalization drift between languages fails this vector loudly instead of
-silently invalidating every artifact at runtime.
+silently invalidating every artifact at runtime. The C++ side reads ONLY
+committed files (build.sh gates any Python invocation in the interop test).
+
+P3.2 CLOSED: `kernel/vectors/` (v1 genuine artifact + v2 stress) + 
+`kernel/test_p32.cpp` 37 checks green (normal + hardened): byte-equal canon
+for both vectors, hash equality, signature verification, one-byte mutation
+(hash + sig fail), response-hash-claim mutation (hash fails, payload-sig
+scope documented), signature mutation, key mismatch, UTF-8/astral escapes,
+nested ordering, int/float boundaries (`-0.0`, DBL_MAX, subnormals),
+no-NaN/Infinity, exact timestamp rendering, V1 accepted by the frozen P3.1
+validator. One P3.2-driven parser correction: finite-double cap raised from
+`1e308` to infinity-rejection (DBL_MAX is legitimate sidecar output; P3.1
+suite re-verified 102/102, frozen contract unchanged). Sidecar untouched.
 
 Done when: C++ reproduces the committed canonical bytes, hash, and signature
 verification bit-for-bit; a deliberately altered byte fails.
@@ -240,7 +261,7 @@ Exit: §4.5, §6.5 drill boxes checked.
       normal + hardened builds, Python suite + freeze green, sidecar
       byte-identical. (Earlier "39 checks" / "96 checks" lines describe
       superseded intermediate states, not the final gate.)
-- [ ] P3.2 cross-language vector green (byte-equal canonical, hash, verify).
+- [x] P3.2 DONE (`kernel/vectors/` v1+v2 + `kernel/test_p32.cpp`, 37 checks green normal+hardened): committed canonical bytes, hash, signature; byte-equal C++ reproduction; mutation/key-mismatch failures; UTF-8/nesting/float boundaries; signature scope recorded (payload only); V1 accepted by frozen P3.1 validator. Sidecar untouched.
 - [ ] P3.3 table tests + replay determinism green.
 - [ ] §13.4 resolved to (a) with contract or (b) quarantined.
 - [ ] P3.5 drill boxes (§4.5, §6.5) checked.
