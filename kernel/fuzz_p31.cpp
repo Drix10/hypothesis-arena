@@ -7,6 +7,7 @@
 #include <cstring>
 #include <string>
 #include "jev_validate.hpp"
+#include "kernel_state.hpp"
 
 static uint64_t rng_state = 0;
 // The artifact-carried pubkey is informational-only and never trusted:
@@ -121,14 +122,14 @@ int main(int argc, char** argv) {
             size_t n = 65536 - 8 + rnd() % 32;
             input = "{\"k\":\"" + std::string(n > 8 ? n - 8 : 0, 'a');
         }
-        jev::ValidationRequest q;
-        q.raw_json = input;
-        q.trusted_key = key;
-        q.state_canon_json = state_canon;
-        q.allowed_symbols = {"EURUSD"};
-        q.now_unix = created + 10.0;
-        q.mode = (rnd() % 2) ? jev::Mode::LIVE : jev::Mode::REPLAY;
-        if ((rnd() % 16) == 0) q.state_canon_json = input;  // hostile state too
+        jev::KernelState kern;
+        std::string kwhy;
+        jev::KernelState::Create({"EURUSD"}, kwhy, kern);
+        jev::Mode m = (rnd() % 2) ? jev::Mode::LIVE : jev::Mode::REPLAY;
+        std::string canon_use =
+            ((rnd() % 16) == 0) ? input : state_canon;  // hostile state too
+        jev::ValidationRequest q = kern.request_for(
+            input, key, canon_use, "EURUSD", created + 10.0, m);
         jev::ValidationResult r = jev::validate_jev(q);
         if (r.ok()) {
             // ok=true is legitimate only for the unmutated artifact, or for

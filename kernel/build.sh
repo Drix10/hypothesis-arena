@@ -22,6 +22,40 @@ g++ $FLAGS -o test_p32 test_p32.cpp
 ./test_p32 vectors
 g++ $FLAGS -o test_p33 test_p33.cpp
 ./test_p33 p33 fixtures
+# Slice A authority proof: the boundary is compiler-enforced, not merely
+# grep-policed. Each neg_* probe must FAIL compilation for its documented
+# reason; the positive control must compile, run, and exit 0 (it proves
+# the toolchain is healthy, so the failures are real rejections).
+for neg in auth/neg_*.cpp; do
+    # set -e is on: a failing probe compile would kill the script
+    # silently via the bare assignment, so capture status explicitly.
+    set +e
+    err="$(g++ $FLAGS -o /tmp/auth_neg "$neg" 2>&1)"
+    st=$?
+    set -e
+    if [ $st -eq 0 ]; then
+        echo "GATE FAIL: $neg compiled (authority boundary breached)"
+        exit 1
+    fi
+    echo "$err" | grep -qiE "private|deleted|read-only|lvalue|discards qualifiers" || {
+        echo "GATE FAIL: $neg failed for the wrong reason"
+        echo "$err" | head -5
+        exit 1
+    }
+done
+g++ $FLAGS -o /tmp/auth_pos auth/pos_authorized.cpp
+/tmp/auth_pos || { echo "GATE FAIL: authorized path broken"; exit 1; }
+# Friend list pinned tight INSIDE ValidationRequest: exactly the
+# construction authority plus the read-only validator. Any third friend
+# in that region is a second authority (friends elsewhere in the file ,
+# ValidationResult's own , are out of scope for this gate).
+_region="$(sed -n '/^class ValidationRequest {/,/^};/p' jev_validate.hpp)"
+[ "$(echo "$_region" | grep -c 'friend class KernelState;')" = "1" ] || {
+    echo "GATE FAIL: KernelState friendship moved"; exit 1; }
+[ "$(echo "$_region" | grep -c 'friend ValidationResult validate_jev(const ValidationRequest&);')" = "1" ] || {
+    echo "GATE FAIL: validator friendship moved"; exit 1; }
+[ "$(echo "$_region" | grep -c 'friend ')" = "2" ] || {
+    echo "GATE FAIL: unexpected friend (authority leak)"; exit 1; }
 g++ $FLAGS -o fuzz_p31 fuzz_p31.cpp
 ./fuzz_p31 20000
 # Acceptance: no downstream function may accept raw JEV JSON.

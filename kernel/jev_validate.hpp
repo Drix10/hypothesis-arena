@@ -981,8 +981,9 @@ inline bool UnixMicros(double seconds, int64_t& out) {
 }
 
 // ---- ValidatedJEVAnswerSetV3: constructible ONLY via validate() ----
-struct ValidationRequest;
 struct ValidationResult;
+class ValidationRequest;
+class KernelState;  // sole construction authority (kernel_state.hpp)
 ValidationResult validate_jev(const ValidationRequest&);
 class ValidatedJEVAnswerSetV3 {
    public:
@@ -1018,18 +1019,67 @@ class ValidatedJEVAnswerSetV3 {
     friend ValidationResult validate_jev(const ValidationRequest&);
 };
 
-struct ValidationRequest {
-    std::string raw_json;
-    std::array<uint8_t, 32> trusted_key;
-    std::string state_canon_json;     // kernel-owned canonical snapshot bytes
-    std::vector<std::string> allowed_symbols;  // kernel-owned exec universe
-    bool has_previous_epoch = false;  // kernel-owned last accepted epoch
-    int64_t previous_epoch = 0;       // (per symbol; unset = first artifact)
-    double now_unix = 0;              // live clock; ignored in REPLAY
-    Mode mode = Mode::LIVE;
-    std::string expected_symbol;      // kernel-bound symbol (#6): when
-    // non-empty, the artifact MUST name it (checked BEFORE epoch
-    // monotonicity). Empty = legacy behavior (P3.1 vectors unaffected).
+// ---- ValidationRequest: privately constructible, immutable (Slice A)
+//
+// The authority boundary is compiler-enforced, not conventional:
+//   - the ONLY construction path is KernelState::request_for() (friend);
+//   - all state is const: copying an authorized request is allowed, but
+//     "copy then mutate" is unrepresentable (no setters, no mutable
+//     accessors, const members — mutation would be UB, not API);
+//   - validate_jev() is the only other friend, read-only by signature.
+// There is deliberately no default constructor, no aggregate form, no
+// delegating constructor, no helper factory: grep-gates plus the
+// auth/compile-fail harness prove every one of those paths is absent.
+class ValidationRequest {
+   public:
+    ValidationRequest(const ValidationRequest&) = default;
+    ValidationRequest(ValidationRequest&&) = default;
+    ValidationRequest& operator=(const ValidationRequest&) = delete;
+    ValidationRequest& operator=(ValidationRequest&&) = delete;
+    // Read-only views into immutable storage. Const refs / values only:
+    // no mutable accessor exists anywhere on this type.
+    const std::string& raw_json() const { return raw_json_; }
+    const std::array<uint8_t, 32>& trusted_key() const {
+        return trusted_key_;
+    }
+    const std::string& state_canon_json() const {
+        return state_canon_json_;
+    }
+    const std::vector<std::string>& allowed_symbols() const {
+        return allowed_symbols_;
+    }
+    bool has_previous_epoch() const { return has_previous_epoch_; }
+    int64_t previous_epoch() const { return previous_epoch_; }
+    double now_unix() const { return now_unix_; }  // live clock
+    Mode mode() const { return mode_; }
+    const std::string& expected_symbol() const { return expected_symbol_; }
+
+   private:
+    friend class KernelState;  // sole construction authority
+    friend ValidationResult validate_jev(const ValidationRequest&);
+    ValidationRequest() = delete;
+    ValidationRequest(std::string raw, std::array<uint8_t, 32> key,
+                      std::string canon, std::vector<std::string> syms,
+                      bool has_prev, int64_t prev, double now, Mode m,
+                      std::string expected)
+        : raw_json_(std::move(raw)),
+          trusted_key_(key),
+          state_canon_json_(std::move(canon)),
+          allowed_symbols_(std::move(syms)),
+          has_previous_epoch_(has_prev),
+          previous_epoch_(prev),
+          now_unix_(now),
+          mode_(m),
+          expected_symbol_(std::move(expected)) {}
+    const std::string raw_json_;
+    const std::array<uint8_t, 32> trusted_key_;
+    const std::string state_canon_json_;
+    const std::vector<std::string> allowed_symbols_;  // kernel universe
+    const bool has_previous_epoch_;  // kernel last-accepted epoch
+    const int64_t previous_epoch_;   // (per symbol; false = first)
+    const double now_unix_;          // live clock; ignored in REPLAY
+    const Mode mode_;
+    const std::string expected_symbol_;  // kernel-bound symbol (#6)
 };
 struct ValidationResult {
     // The validated object exists ONLY on success: get() is null on HOLD.
@@ -1157,11 +1207,11 @@ inline ValidationResult validate_jev(const ValidationRequest& q) {
         return r;
     };
     // 1. size bound first: fail closed before any allocation
-    if (q.raw_json.size() > JParse::MAX_RAW) return fail("too-large");
+    if (q.raw_json().size() > JParse::MAX_RAW) return fail("too-large");
     // 1. parse
     JVal root;
     std::string perr;
-    if (!ParseJson(q.raw_json, root, perr)) {
+    if (!ParseJson(q.raw_json(), root, perr)) {
         if (perr == "duplicate-keys") return fail("duplicate-keys");
         return fail("parse-error");
     }
@@ -1227,12 +1277,12 @@ inline ValidationResult validate_jev(const ValidationRequest& q) {
     // expected-symbol binding (#6): the kernel names the symbol whose
     // epoch state admitted this request; the artifact must name the same
     // one BEFORE monotonicity can be trusted. Empty = legacy (P3.1).
-    if (!q.expected_symbol.empty() && symbol != q.expected_symbol)
+    if (!q.expected_symbol().empty() && symbol != q.expected_symbol())
         return fail("symbol-mismatch");
     // exec-universe membership: kernel-owned set, syntax alone never suffices
     {
         bool member = false;
-        for (auto& a : q.allowed_symbols)
+        for (auto& a : q.allowed_symbols())
             if (a == symbol) {
                 member = true;
                 break;
@@ -1261,7 +1311,7 @@ inline ValidationResult validate_jev(const ValidationRequest& q) {
     }
     // monotonic per symbol: strictly greater than the last accepted epoch.
     // (Frozen rule, plan/13 check 9. Applies in LIVE and REPLAY alike.)
-    if (q.has_previous_epoch && !(epoch > q.previous_epoch))
+    if (q.has_previous_epoch() && !(epoch > q.previous_epoch()))
         return fail("epoch-not-monotonic");
     if (!getstr("state_hash", sth) || !IsHex64(sth)) return fail("state-hash-shape");
     if (!getstr("decision_key", dk) || !IsHex64(dk)) return fail("decision-key-shape");
@@ -1412,16 +1462,16 @@ inline ValidationResult validate_jev(const ValidationRequest& q) {
             sscanf(sighex.c_str() + 2 * i, "%02x", &v);
             sigraw[i] = (uint8_t)v;
         }
-        if (!EdVerify(q.trusted_key.data(),
+        if (!EdVerify(q.trusted_key().data(),
                       reinterpret_cast<const uint8_t*>(canon.data()), canon.size(),
                       sigraw))
             return fail("signature-invalid");
     }
     // 20. freshness (LIVE only), in integer micros (blocker #4). now is
     // kernel clock input: unrepresentable values HOLD, never wrap.
-    if (q.mode == Mode::LIVE) {
+    if (q.mode() == Mode::LIVE) {
         int64_t now_us = 0;
-        if (!UnixMicros(q.now_unix, now_us))
+        if (!UnixMicros(q.now_unix(), now_us))
             return fail("clock-unrepresentable");
         if (!(now_us <= expires_us)) return fail("expired");
         if (!(created_us <= now_us + 300000000LL)) return fail("not-yet-valid");
@@ -1430,12 +1480,12 @@ inline ValidationResult validate_jev(const ValidationRequest& q) {
     // state_hash = sha256(canonical snapshot); decision_key recomputed
     // field-for-field from the parsed snapshot (frozen sidecar recipe).
     // No trusted-string comparison anywhere on this path.
-    if (q.state_canon_json.size() > JParse::MAX_RAW) return fail("too-large");
+    if (q.state_canon_json().size() > JParse::MAX_RAW) return fail("too-large");
     JVal snap;
     std::string serr;
-    if (!ParseJson(q.state_canon_json, snap, serr) || snap.t != JVal::T::OBJ)
+    if (!ParseJson(q.state_canon_json(), snap, serr) || snap.t != JVal::T::OBJ)
         return fail("state-shape");
-    if (Sha256Hex(q.state_canon_json) != sth) return fail("state-binding");
+    if (Sha256Hex(q.state_canon_json()) != sth) return fail("state-binding");
     if (ComputeDecisionKey(snap) != dk) return fail("decision-binding");
     r.ok_ = true;
     r.reason_ = "ok";

@@ -423,7 +423,7 @@ int main(int argc, char** argv) {
             }
             bool admitted = k.try_accept(
                 "EURUSD",
-                q.has_previous_epoch ? q.previous_epoch : -1,
+                q.has_previous_epoch() ? q.previous_epoch() : -1,
                 r.get()->snapshot_epoch());
             if (!admitted) {
                 CHECK(name, false);
@@ -550,7 +550,7 @@ int main(int argc, char** argv) {
                 }
                 if (!k.try_accept(
                         "EURUSD",
-                        q.has_previous_epoch ? q.previous_epoch : -1,
+                        q.has_previous_epoch() ? q.previous_epoch() : -1,
                         r.get()->snapshot_epoch()))
                     return std::string();
                 jev::EngineInputs e = eng_from_state(*state);
@@ -595,7 +595,7 @@ int main(int argc, char** argv) {
             jev::ValidationResult r = jev::validate_jev(q);
             if (!r.ok()) continue;
             k.try_accept("EURUSD",
-                         q.has_previous_epoch ? q.previous_epoch : -1,
+                         q.has_previous_epoch() ? q.previous_epoch() : -1,
                          r.get()->snapshot_epoch());
             jev::EngineInputs e = eng_from_state(*state);
             e.calibration_gate = jev::CalibrationGate::PASS;

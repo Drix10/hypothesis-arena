@@ -95,25 +95,22 @@ class KernelState {
     // NEVER universe, symbol binding, or epoch values. Non-executable
     // symbols still produce a request — the frozen validator reports the
     // HOLD itself. The request binds expected_symbol (#6) so the artifact
-    // cannot borrow another symbol's epoch state.
+    // cannot borrow another symbol's epoch state. This is the ONLY
+    // construction path for ValidationRequest (private ctor + friendship).
     ValidationRequest request_for(
         const std::string& raw_json, const std::array<uint8_t, 32>& key,
         const std::string& state_canon_json, const std::string& symbol,
         double now_unix, Mode mode) const {
-        ValidationRequest q;
-        q.raw_json = raw_json;
-        q.trusted_key = key;
-        q.state_canon_json = state_canon_json;
-        q.now_unix = now_unix;
-        q.mode = mode;
-        q.expected_symbol = symbol;
-        q.allowed_symbols.reserve(universe_.size());
-        for (auto& kv : universe_) q.allowed_symbols.push_back(kv.first);
+        std::vector<std::string> syms;
+        syms.reserve(universe_.size());
+        for (auto& kv : universe_) syms.push_back(kv.first);
         std::lock_guard<std::mutex> lock(mu_);
         auto it = epochs_.find(symbol);
-        q.has_previous_epoch = (it != epochs_.end());
-        q.previous_epoch = it == epochs_.end() ? 0 : it->second;
-        return q;
+        bool has_prev = (it != epochs_.end());
+        int64_t prev = it == epochs_.end() ? 0 : it->second;
+        return ValidationRequest(raw_json, key, state_canon_json,
+                                 std::move(syms), has_prev, prev, now_unix,
+                                 mode, symbol);
     }
     // SOLE admission gate (#5): compare-and-advance under the epoch lock.
     // expected_prev is the previous epoch the request was admitted with

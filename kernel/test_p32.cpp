@@ -6,6 +6,7 @@
 #include <cstring>
 #include <string>
 #include "jev_validate.hpp"
+#include "kernel_state.hpp"
 
 static int fails = 0;
 static int count = 0;
@@ -187,15 +188,18 @@ int main(int argc, char** argv) {
                             sig));
     }
     // V1 is a genuine artifact: the frozen P3.1 validator accepts it
-    // (uses P3.1 as a tool; modifies nothing).
+    // (uses P3.1 as a tool; modifies nothing). Request via the sole
+    // authority (Slice A); vector and expectation unchanged.
     {
-        jev::ValidationRequest q;
-        q.raw_json = fx("v1_artifact.json");
-        q.trusted_key = pub;
-        q.state_canon_json = fx("v1_state_canon.json");
-        q.allowed_symbols = {"EURUSD"};
-        q.now_unix = 1789948810.0;  // created + 10 s
-        q.mode = jev::Mode::LIVE;
+        jev::KernelState kern;
+        std::string kwhy;
+        if (!jev::KernelState::Create({"EURUSD"}, kwhy, kern)) {
+            printf("FAIL kernel-setup\n");
+            return 1;
+        }
+        jev::ValidationRequest q = kern.request_for(
+            fx("v1_artifact.json"), pub, fx("v1_state_canon.json"),
+            "EURUSD", 1789948810.0, jev::Mode::LIVE);  // created + 10 s
         jev::ValidationResult r = jev::validate_jev(q);
         CHECK("v1-genuine-artifact", r.ok());
         const auto* o = r.get();

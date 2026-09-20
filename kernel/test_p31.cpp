@@ -6,6 +6,7 @@
 #include <cstring>
 #include <string>
 #include "jev_validate.hpp"
+#include "kernel_state.hpp"
 
 static int fails = 0;
 static int count = 0;
@@ -45,15 +46,26 @@ int main(int argc, char** argv) {
     std::string state_canon = fx("state_canon.json");
     double created = atof(fx("created_unix.txt").c_str());
 
+    // All requests route through KernelState (Slice A): it is the sole
+    // construction authority for ValidationRequest. Kernels below encode
+    // exactly the universes/epochs the old hand-filled fields carried;
+    // every vector, reason string, and check count is unchanged.
+    jev::KernelState kern, kernG, kernX;
+    std::string kwhy;
+    if (!jev::KernelState::Create({"EURUSD"}, kwhy, kern) ||
+        !jev::KernelState::Create({"GBPUSD"}, kwhy, kernG) ||
+        !jev::KernelState::Create({"XXX"}, kwhy, kernX)) {
+        printf("FAIL kernel-setup\n");
+        return 1;
+    }
+    auto reqx = [&](const std::string& raw, jev::Mode m, double now,
+                    const std::array<uint8_t, 32>& k,
+                    const std::string& canon, const std::string& sym,
+                    jev::KernelState& ks) {
+        return ks.request_for(raw, k, canon, sym, now, m);
+    };
     auto req = [&](const std::string& raw, jev::Mode m, double now) {
-        jev::ValidationRequest q;
-        q.raw_json = raw;
-        q.trusted_key = key;
-        q.state_canon_json = state_canon;
-        q.allowed_symbols = {"EURUSD"};
-        q.now_unix = now;
-        q.mode = m;
-        return q;
+        return reqx(raw, m, now, key, state_canon, "EURUSD", kern);
     };
     double fresh = created + 10.0;
 
@@ -189,54 +201,73 @@ int main(int argc, char** argv) {
     }
     // wrong trusted key rejected; artifact key never trusted
     {
-        jev::ValidationRequest q = req(fx("valid.json"), jev::Mode::LIVE, fresh);
-        q.trusted_key.fill(0xAB);
-        jev::ValidationResult r = jev::validate_jev(q);
+        std::array<uint8_t, 32> badkey = key;
+        badkey.fill(0xAB);
+        jev::ValidationResult r = jev::validate_jev(
+            reqx(fx("valid.json"), jev::Mode::LIVE, fresh, badkey,
+                 state_canon, "EURUSD", kern));
         CHECK("reject-wrong-key", !r.ok() && r.reason() == "signature-invalid");
         r = jev::validate_jev(req(fx("pubkey_mutated.json"), jev::Mode::LIVE, fresh));
         CHECK("artifact-key-ignored", r.ok());
     }
     // symbol universe: syntax-valid but non-member rejected
     {
-        jev::ValidationRequest q = req(fx("valid.json"), jev::Mode::LIVE, fresh);
-        q.allowed_symbols = {"GBPUSD"};
-        jev::ValidationResult r = jev::validate_jev(q);
+        jev::ValidationResult r = jev::validate_jev(
+            reqx(fx("valid.json"), jev::Mode::LIVE, fresh, key,
+                 state_canon, "EURUSD", kernG));
         CHECK("reject-nonuniverse", !r.ok() && r.reason() == "symbol-universe");
-        q.allowed_symbols.clear();
-        r = jev::validate_jev(q);
+        r = jev::validate_jev(reqx(fx("valid.json"), jev::Mode::LIVE,
+                                   fresh, key, state_canon, "EURUSD",
+                                   kernX));
         CHECK("reject-empty-universe", !r.ok() && r.reason() == "symbol-universe");
     }
-    // epoch monotonicity: strictly greater than kernel-owned previous
+    // epoch monotonicity: strictly greater than kernel-owned previous.
+    // try_accept() drives a DEDICATED kernel's epoch state (admission
+    // here is test setup, not trading: validation never advances state).
+    // The shared kern stays epoch-free so later checks see first-artifact
+    // semantics exactly as before.
     {
-        jev::ValidationRequest q = req(fx("valid.json"), jev::Mode::LIVE, fresh);
-        q.has_previous_epoch = true;
-        q.previous_epoch = 6;
-        CHECK("epoch-after-6-ok", jev::validate_jev(q).ok());
-        q.previous_epoch = 7;
-        jev::ValidationResult r = jev::validate_jev(q);
+        jev::KernelState kernE;
+        std::string kewhy;
+        jev::KernelState::Create({"EURUSD"}, kewhy, kernE);
+        kernE.try_accept("EURUSD", -1, 6);
+        CHECK("epoch-after-6-ok",
+              jev::validate_jev(
+                  reqx(fx("valid.json"), jev::Mode::LIVE, fresh, key,
+                       state_canon, "EURUSD", kernE))
+                  .ok());
+        kernE.try_accept("EURUSD", 6, 7);
+        jev::ValidationResult r = jev::validate_jev(
+            reqx(fx("valid.json"), jev::Mode::LIVE, fresh, key,
+                 state_canon, "EURUSD", kernE));
         CHECK("reject-epoch-replay", !r.ok() && r.reason() == "epoch-not-monotonic");
-        q.previous_epoch = 8;
-        r = jev::validate_jev(q);
+        kernE.try_accept("EURUSD", 7, 8);
+        r = jev::validate_jev(
+            reqx(fx("valid.json"), jev::Mode::LIVE, fresh, key,
+                 state_canon, "EURUSD", kernE));
         CHECK("reject-epoch-regress", !r.ok() && r.reason() == "epoch-not-monotonic");
         // REPLAY enforces the same rule against the recorded predecessor
-        q.mode = jev::Mode::REPLAY;
-        q.previous_epoch = 6;
-        CHECK("replay-epoch-ok", jev::validate_jev(q).ok());
+        jev::KernelState kernE2;
+        jev::KernelState::Create({"EURUSD"}, kewhy, kernE2);
+        kernE2.try_accept("EURUSD", -1, 6);
+        r = jev::validate_jev(
+            reqx(fx("valid.json"), jev::Mode::REPLAY, fresh, key,
+                 state_canon, "EURUSD", kernE2));
+        CHECK("replay-epoch-ok", r.ok());
     }
     // state / decision-key mutation rejected (key recomputed, never compared)
     {
-        jev::ValidationRequest q = req(fx("valid.json"), jev::Mode::LIVE, fresh);
-        q.state_canon_json = "{\"tampered\":true}";
-        jev::ValidationResult r = jev::validate_jev(q);
+        jev::ValidationResult r = jev::validate_jev(
+            reqx(fx("valid.json"), jev::Mode::LIVE, fresh, key,
+                 "{\"tampered\":true}", "EURUSD", kern));
         CHECK("reject-state-mutation", !r.ok() && r.reason() == "state-binding");
         // feature change keeps hash path intact but breaks recomputed key... or hash:
         // either reason proves kernel-side derivation, never a trusted string
-        jev::ValidationRequest q2 = req(fx("valid.json"), jev::Mode::LIVE, fresh);
         std::string st = state_canon;
         size_t at = st.find("\"range\"");
         if (at != std::string::npos) st.replace(at + 1, 5, "trend");
-        q2.state_canon_json = st;
-        r = jev::validate_jev(q2);
+        r = jev::validate_jev(reqx(fx("valid.json"), jev::Mode::LIVE,
+                                   fresh, key, st, "EURUSD", kern));
         CHECK("reject-feature-mutation", !r.ok());
     }
     // expiry: LIVE holds, REPLAY waives; skew allowance exactly 300 s
