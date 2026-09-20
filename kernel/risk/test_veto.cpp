@@ -415,12 +415,15 @@ int main(int argc, char** argv) {
         s.flip_symbol = "GBPUSD";
         v = EvaluateVeto(s);
         CHECK("r4-symbol", v.proceed);
-        // corrupt history (t2 < t1): assume locked, fail-closed
+        // corrupt history (t2 < t1) is malformed input, not an
+        // expired lock: bad-inputs (structural validation, correction).
         s.flip_symbol = "EURUSD";
         s.flip_t1_us = NOW;
         s.flip_t2_us = NOW - 1000LL;
         v = EvaluateVeto(s);
-        CHECK("r4-corrupt", !v.proceed);
+        CHECK("r4-corrupt",
+              !v.proceed && std::string(v.reason) == "bad-inputs" &&
+                  v.n_reasons == 1);
     }
     // ---- R7 drift selection ----
     {
@@ -642,6 +645,106 @@ int main(int argc, char** argv) {
         CHECK("exit-still-bypass",
               v.proceed && std::string(v.reason) == "exit-bypass");
     }
+    // ---- structural validation before EXIT bypass (correction) ----
+    {
+        // A valid EXIT on a corrupt snapshot is not executable: H1 needs
+        // intact symbol/side/asset to construct the order. All HOLD.
+        RiskSnapshot s = Clean();
+        s.intent.kind = IntentKind::EXIT;
+        s.intent.side = (Side)99;
+        VetoVerdict v = EvaluateVeto(s);
+        CHECK("exit-bad-side",
+              !v.proceed && std::string(v.reason) == "bad-inputs");
+        s = Clean();
+        s.intent.kind = IntentKind::EXIT;
+        s.intent.asset = (AssetClass)99;
+        v = EvaluateVeto(s);
+        CHECK("exit-bad-asset",
+              !v.proceed && std::string(v.reason) == "bad-inputs");
+        s = Clean();
+        s.intent.kind = IntentKind::EXIT;
+        s.kill = (KillLevel)99;
+        v = EvaluateVeto(s);
+        CHECK("exit-bad-kill",
+              !v.proceed && std::string(v.reason) == "bad-inputs");
+        s = Clean();
+        s.intent.kind = IntentKind::EXIT;
+        s.equity_cents = 0;
+        v = EvaluateVeto(s);
+        CHECK("exit-bad-equity",
+              !v.proceed && std::string(v.reason) == "bad-inputs");
+        s = Clean();
+        s.intent.kind = IntentKind::EXIT;
+        s.now_us = -1;
+        v = EvaluateVeto(s);
+        CHECK("exit-bad-clock",
+              !v.proceed && std::string(v.reason) == "bad-inputs");
+        // Negative clock fails closed on ENTRY too.
+        s = Clean();
+        s.now_us = -1;
+        v = EvaluateVeto(s);
+        CHECK("bad-clock", !v.proceed && std::string(v.reason) == "bad-inputs");
+    }
+    // ---- realized_outcomes sign (correction: the fail-open edge) ----
+    {
+        // Reviewer's exact edge: positive delta with -1 outcomes must NOT
+        // leave the gate at PASS for the max-gate to use.
+        RiskSnapshot s = Clean();
+        s.calib = CalibState::PASS;
+        s.brier_delta = 0.03;
+        s.realized_outcomes = -1;
+        VetoVerdict v = EvaluateVeto(s);
+        CHECK("r13-neg-outcomes",
+              !v.proceed && std::string(v.reason) == "bad-inputs");
+        // INT64_MAX outcomes: trip when delta says so, no overflow.
+        s = Clean();
+        s.brier_delta = 0.03;
+        s.realized_outcomes = std::numeric_limits<int64_t>::max();
+        v = EvaluateVeto(s);
+        CHECK("r13-max-trip",
+              !v.proceed && std::string(v.reason) == "r13-calibration");
+        s.brier_delta = 0.0;
+        v = EvaluateVeto(s);
+        CHECK("r13-max-free", v.proceed);
+    }
+    // ---- flip record validation (correction) ----
+    {
+        RiskSnapshot s = Clean();
+        s.flip_armed = true;
+        s.flip_symbol = "";  // missing symbol: not an expired lock
+        s.flip_t1_us = NOW - 30 * 60 * 1000000LL;
+        s.flip_t2_us = NOW - 10 * 1000000LL;
+        VetoVerdict v = EvaluateVeto(s);
+        CHECK("flip-empty-sym",
+              !v.proceed && std::string(v.reason) == "bad-inputs");
+        s.flip_symbol = "EURUSD";
+        s.flip_t1_us = -5;
+        v = EvaluateVeto(s);
+        CHECK("flip-neg-t1",
+              !v.proceed && std::string(v.reason) == "bad-inputs");
+        s.flip_t1_us = NOW - 30 * 60 * 1000000LL;
+        s.flip_t2_us = -5;
+        v = EvaluateVeto(s);
+        CHECK("flip-neg-t2",
+              !v.proceed && std::string(v.reason) == "bad-inputs");
+        s.flip_t2_us = NOW + 3600LL * 1000000LL;  // future fill
+        v = EvaluateVeto(s);
+        CHECK("flip-future",
+              !v.proceed && std::string(v.reason) == "bad-inputs");
+        // Lock expires EXACTLY at +2h: now - t2 == 2h is free.
+        s.flip_t1_us = NOW - 150 * 60 * 1000000LL;
+        s.flip_t2_us = NOW - 120 * 60 * 1000000LL;
+        v = EvaluateVeto(s);
+        CHECK("flip-exact-2h", v.proceed);
+    }
+    // ---- Stage enum validation (correction) ----
+    {
+        RiskSnapshot s = Clean();
+        s.stage = (Stage)99;  // unknown underlying, not UNKNOWN
+        VetoVerdict v = EvaluateVeto(s);
+        CHECK("bad-stage-enum",
+              !v.proceed && std::string(v.reason) == "bad-inputs");
+    }
     // ---- R3 overflow-free counters (correction) ----
     {
         RiskSnapshot s = Clean();
@@ -750,6 +853,18 @@ int main(int argc, char** argv) {
             CHECK("c-table-veto",
                   d2.budget == Decision::Budget::HOLD &&
                       d2.reason == "engine-veto:other-breach");
+            // MEDIUM impact + active phase HOLDs at the veto even for
+            // this strong-conviction artifact: the documented fail-closed
+            // over-approximation of "entries need strong" (the frozen
+            // table cannot express it; refining needs a table amendment).
+            RiskSnapshot s3 = Clean();
+            s3.calib = CalibState::PASS;
+            s3.impact = Impact::MEDIUM;
+            s3.phase = Phase::PRE;
+            VetoVerdict v3 = EvaluateVeto(s3);
+            CHECK("c-medium-hold",
+                  !v3.proceed &&
+                      std::string(v3.reason) == "event-medium");
         }
     } else {
         printf("FAIL need-argv\n");

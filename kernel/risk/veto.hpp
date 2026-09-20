@@ -162,8 +162,8 @@ struct RiskSnapshot {
 // order — first-wins never silently drops a co-cause from the journal.
 //
 // ZERO-MALLOC CONTRACT (core tick-path requirement): the verdict is
-// trivially copyable fixed storage — 32 reason slots (23 arm sites, so
-// the cap is unreachable) and a drift CANDIDATE INDEX, never allocated
+// trivially copyable fixed storage — 32 reason slots (22 battery arm
+// sites plus the bad-inputs early return; the cap is unreachable), and a drift CANDIDATE INDEX, never allocated
 // strings or vectors. EvaluateVeto allocates nothing; proven by the
 // static_assert below plus the build.sh allocation grep gate.
 struct VetoVerdict {

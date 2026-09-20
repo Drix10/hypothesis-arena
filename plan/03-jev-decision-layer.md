@@ -175,6 +175,10 @@ State rules (locked v3):
 - `event_window`: C++ maps (impact, phase) → `blackout` per the tier table
   (BINARY: pre+blackout; HIGH: blackout ± post; MEDIUM: entries need strong;
   LOW: no constraint). The table decides; JEV only sees the result.
+  Frozen kernel reading (P3.5 Slice B): MEDIUM with an active phase HOLDs
+  unconditionally at the veto — the frozen decision table cannot express
+  "strong required", so the veto over-approximates fail-closed. Refining
+  this needs a table-contract amendment, never a silent behavior change.
 - No numeric sentiment score, no raw texts, no prose. If scored sentiment is
   ever wanted, it arrives as a new versioned question, not a smuggled float.
 

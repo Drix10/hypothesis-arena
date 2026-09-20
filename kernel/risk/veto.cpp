@@ -95,10 +95,15 @@ int MaxLeverage(Stage stage, AssetClass asset, AccountType account) {
 // Enum boundary validation: every enum field in the snapshot must hold a
 // defined value. A corrupted/underlying-out-of-range field is malformed
 // input (bad-inputs), never silently neutral — and never an exit bypass.
+bool ValidStage(Stage s) {
+    return s == Stage::G0_PAPER || s == Stage::G1_TINY ||
+           s == Stage::G2_SCALED || s == Stage::G3_FULL;
+}
 bool ValidSide(Side side) {
     return side == Side::LONG || side == Side::SHORT;
 }
 bool ValidEnums(const RiskSnapshot& s) {
+    if (!ValidStage(s.stage)) return false;
     if (s.intent.kind != IntentKind::ENTRY &&
         s.intent.kind != IntentKind::EXIT)
         return false;
@@ -240,30 +245,16 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
     v.stage_num = sc.mult_num;
     v.stage_den = sc.mult_den;
     v.size_scale = s.r6_trip ? 0.5 : 1.0;
-    // Exits bypass everything (doc 10 §10.3): the veto gates new risk
-    // only. EXACT match: any other (including corrupted) kind falls
-    // through to enum validation below, which fails it closed.
-    if (s.intent.kind == IntentKind::EXIT) {
-        v.proceed = true;
-        v.reason = "exit-bypass";
-        return v;
-    }
-    // Collect EVERY armed condition in frozen precedence order; the first
-    // one wins the logged reason, none are dropped from reasons_all.
-    // Fixed array (fixed-storage contract): 23 arm sites < 32 slots, the
-    // guard below is unreachable-by-construction defense in depth.
-    const char* armed[VetoVerdict::kMaxArmed];
-    int n_armed = 0;
-    auto arm = [&](const char* code) {
-        if (n_armed < VetoVerdict::kMaxArmed) armed[n_armed++] = code;
-    };
-    // bad-inputs: unevaluable snapshot cannot authorize risk. Invalid
-    // enums join this code (never neutral, never a bypass).
-    bool bad = !ValidEnums(s) || s.intent.kind != IntentKind::ENTRY ||
-               (s.stage == Stage::UNKNOWN || s.equity_cents <= 0 ||
-                s.daily_close_hwm_cents < 0 || s.intraday_hwm_cents < 0 ||
-                s.intent.notional_cents < 0 || s.risk_fraction_bp < 0 ||
-                s.day_count < 0 || s.hour_count < 0);
+    // Structural validation FIRST: an exit bypasses risk LIMITS, never
+    // structural integrity (doc 10 §10.3 stops new risk; it does not make
+    // malformed order metadata executable — H1 needs valid symbol/side/
+    // asset to construct the exit). Invalid => bad-inputs, even for EXIT.
+    // Valid EXITs skip the R-battery below; ENTRY evaluates R1–R17.
+    bool bad = !ValidEnums(s) || s.now_us < 0 ||
+               s.equity_cents <= 0 || s.daily_close_hwm_cents < 0 ||
+               s.intraday_hwm_cents < 0 || s.intent.notional_cents < 0 ||
+               s.risk_fraction_bp < 0 || s.day_count < 0 ||
+               s.hour_count < 0 || s.realized_outcomes < 0;
     int64_t peak =
         s.daily_close_hwm_cents > s.intraday_hwm_cents
             ? s.daily_close_hwm_cents
@@ -271,20 +262,54 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
     if (peak <= 0) bad = true;
     // Corrupt sides in bookkeeping must not read as neutral (an invalid
     // side would otherwise be silently ignored by the == comparisons).
+    // Corrupt FLIP RECORDS join bad-inputs too when armed (empty symbol,
+    // negative stamps, inverted pair, future fill): a malformed history
+    // is malformed input, not an expired lock.
     if (!bad) {
         for (auto& p : s.open)
             if (p.notional_cents < 0 || !ValidSide(p.side)) {
                 bad = true;
                 break;
             }
-        for (auto& p : s.pending)
-            if (p.notional_cents < 0 || p.margin_cents < 0 ||
-                !ValidSide(p.side)) {
-                bad = true;
-                break;
-            }
+        if (!bad)
+            for (auto& p : s.pending)
+                if (p.notional_cents < 0 || p.margin_cents < 0 ||
+                    !ValidSide(p.side)) {
+                    bad = true;
+                    break;
+                }
+        if (!bad && s.flip_armed &&
+            (s.flip_symbol.empty() || s.flip_t1_us < 0 ||
+             s.flip_t2_us < 0 || s.flip_t2_us < s.flip_t1_us ||
+             s.now_us < s.flip_t2_us))
+            bad = true;
     }
-    if (bad) arm("bad-inputs");
+    // Collect EVERY armed condition in frozen precedence order; the first
+    // one wins the logged reason, none are dropped from reasons_all.
+    // Fixed array (fixed-storage contract): 22 arm sites < 32 slots, the
+    // guard below is unreachable-by-construction defense in depth.
+    const char* armed[VetoVerdict::kMaxArmed];
+    int n_armed = 0;
+    auto arm = [&](const char* code) {
+        if (n_armed < VetoVerdict::kMaxArmed) armed[n_armed++] = code;
+    };
+    if (bad) {
+        // Corrupt snapshots hold on bad-inputs alone: co-causes computed
+        // from garbage are noise, and an EXIT built on garbage is not
+        // executable. Valid EXITs bypass below; ENTRY evaluates the battery.
+        v.reasons_all[0] = "bad-inputs";
+        v.n_reasons = 1;
+        v.proceed = false;
+        v.reason = "bad-inputs";
+        return v;
+    }
+    // Valid EXIT bypasses risk limits (doc 10 §10.3); structural
+    // integrity was proven above.
+    if (s.intent.kind == IntentKind::EXIT) {
+        v.proceed = true;
+        v.reason = "exit-bypass";
+        return v;
+    }
     if (R5Trips(s.equity_cents, peak)) arm("r5-loss-cap");
     if (!s.intent.has_stop) arm("no-stop");
     {
@@ -338,8 +363,10 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
     }
     if (s.flip_armed) {
         bool locked = true;
+        // Corrupt records cannot reach here (rejected as bad-inputs
+        // above); the locked=true default stays as defense in depth.
         if (s.flip_t2_us < s.flip_t1_us || s.now_us < s.flip_t2_us)
-            locked = true;  // corrupt history => assume locked (fail-closed)
+            locked = true;
         else if (s.flip_symbol != s.intent.symbol)
             locked = false;  // per-symbol lock
         else
