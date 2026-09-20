@@ -190,10 +190,14 @@ fingerprint instead:
 - Spend safety is two-layered (units resolved — the frozen doc named a number
   without units, so this amendment fixes the interpretation; ratify by review):
   (a) **rate ceiling: 5000 provider calls/day** (alert at 2500) — an emergency
-  brake on runaway call loops, not a money cap; (b) **money governance from
-  doc 10**: rolling-30d USD vs the stage absolute cap ($150 G0/G1, $400 G2,
-  $1000 G3) — breach halts JEV calls (`spend-stage-cap`) while exits/reconcile
-  stay live. USD at probe scale (~$1e-5/call) makes a $5000/day JEV money cap
+  brake on runaway call loops, not a money cap. Every `post()` invocation
+  counts, including timeouts/500s/malformed (retry storms are exactly what the
+  brake is for); (b) **money governance from doc 10**: true date-based
+  rolling-30d USD (files outside `[today-29d, today]` ignored) vs the stage
+  absolute cap ($150 G0/G1, $400 G2, $1000 G3) — breach halts JEV calls
+  (`spend-stage-cap`) while exits/reconcile stay live. Unknown stage values
+  HOLD as `invalid-stage` before any provider call — no default cap.
+  USD at probe scale (~$1e-5/call) makes a $5000/day JEV money cap
   meaningless, which is why the call-count reading is the coherent one.
 - JEV down / timeout (>10 s) / malformed response → exactly 1 retry after ~5 s,
   then HOLD + log `jev_error`. Every failure increments the S5 streak counter.

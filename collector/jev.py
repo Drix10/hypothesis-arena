@@ -33,6 +33,7 @@ RETRY_DELAY_S = 5.0
 ANSWER_MAX_AGE_S = 60
 DAILY_CALL_CEILING = 5000
 DAILY_CALL_ALERT = 2500
+STAGES = frozenset({"G0_PAPER", "G1_TINY", "G2_SCALED", "G3_FULL"})
 STAGE_30D_CAPS_USD = {"G0_PAPER": 150.0, "G1_TINY": 150.0,
                       "G2_SCALED": 400.0, "G3_FULL": 1000.0}
 CACHE_DIR = os.path.join(ROOT, "data", "jev_cache")
@@ -231,6 +232,8 @@ def validate_state(state):
     for k in ("context_hash", "symbol", "stage"):
         if k not in state:
             return False, "state-missing:" + k
+    if state.get("stage") not in STAGES:
+        return False, "invalid-stage"
     if state.get("question_set_version", QVERSION) != QVERSION:
         return False, "state-qversion"
     return True, "ok"
@@ -393,18 +396,36 @@ def spend_add(cost, prompt_t=0, completion_t=0):
     return s
 
 
-def spend_30d():
+def spend_attempt():
+    """Count one provider attempt. Called for every post_fn() invocation,
+    success or failure: the call ceiling counts attempts, not answers."""
+    os.makedirs(SPEND_DIR, exist_ok=True)
+    s, p = spend_today()
+    s["calls"] += 1
+    json.dump(s, open(p, "w"))
+    return s
+
+
+def spend_30d(today=None):
+    today = today or datetime.now(timezone.utc).date()
     total = 0.0
     try:
-        files = sorted(os.listdir(SPEND_DIR))[-30:]
+        files = os.listdir(SPEND_DIR)
     except OSError:
         return 0.0
     for fn in files:
+        if not fn.endswith(".json"):
+            continue
         try:
-            total += json.load(open(os.path.join(SPEND_DIR, fn),
-                                    encoding="utf-8")).get("usd", 0.0)
-        except (OSError, ValueError):
-            pass
+            day = datetime.strptime(fn[:-5], "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if 0 <= (today - day).days <= 29:
+            try:
+                total += json.load(open(os.path.join(SPEND_DIR, fn),
+                                        encoding="utf-8")).get("usd", 0.0)
+            except (OSError, ValueError):
+                pass
     return round(total, 8)
 
 
@@ -471,7 +492,7 @@ def decide(state, now=None, key=None, post_fn=None):
         row = hold_row(state, "jev_error:no-key")
         log_row(row)
         return row, None
-    cap = STAGE_30D_CAPS_USD.get(state.get("stage"), 150.0)
+    cap = STAGE_30D_CAPS_USD[state["stage"]]  # stage already allowlisted
     if spend_30d() >= cap:
         row = hold_row(state, "spend-stage-cap")
         row["cost"] = cost_tag(state, None)
@@ -488,8 +509,9 @@ def decide(state, now=None, key=None, post_fn=None):
             return row, None
         if attempt:
             time.sleep(RETRY_DELAY_S)
-        attempts += 1
         resp, err = post_fn(build_request(state), key)
+        attempts += 1
+        spend_attempt()
         if err is None:
             break
     if err is not None:

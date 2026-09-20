@@ -270,6 +270,41 @@ check("stage-cap-blocks",
       row["reason"] == "spend-stage-cap" and calls_g == [])
 jev.SPEND_DIR = os.path.join(TMP, "spend")
 
+# 10b. every provider attempt counts, even failures
+jev.SPEND_DIR = os.path.join(TMP, "spend4")
+os.makedirs(jev.SPEND_DIR, exist_ok=True)
+calls_f = []
+row, _ = jev.decide(state(symbol="F"), now=4600.0, key="k",
+                    post_fn=mkpost(err="provider-timeout", calls=calls_f))
+check("attempts-counted",
+      row["action"] == "HOLD" and len(calls_f) == 2
+      and json.load(open(os.path.join(
+          jev.SPEND_DIR,
+          __import__("datetime").datetime.now(
+              __import__("datetime").timezone.utc).strftime("%Y-%m-%d")
+          + ".json")))["calls"] == 2)
+jev.SPEND_DIR = os.path.join(TMP, "spend")
+
+# 10c. rolling 30d ignores stale files
+jev.SPEND_DIR = os.path.join(TMP, "spend5")
+os.makedirs(jev.SPEND_DIR, exist_ok=True)
+old_day = (__import__("datetime").datetime.now(
+    __import__("datetime").timezone.utc)
+    - __import__("datetime").timedelta(days=40)).strftime("%Y-%m-%d")
+json.dump({"usd": 999.0, "calls": 1},
+          open(os.path.join(jev.SPEND_DIR, old_day + ".json"), "w"))
+check("rolling-window-true", jev.spend_30d() == 0.0)
+jev.SPEND_DIR = os.path.join(TMP, "spend")
+
+# 10d. unknown stage fails closed before any provider call
+calls_s = []
+bad_st = state(symbol="S")
+bad_st["stage"] = "G9_MOON"
+row, _ = jev.decide(bad_st, now=4700.0, key="k",
+                    post_fn=mkpost(good_resp(), calls=calls_s))
+check("invalid-stage",
+      row["reason"] == "invalid-stage" and calls_s == [])
+
 # 11. bad state input holds deterministically
 row, _ = jev.decide({"symbol": "X"}, now=4200.0, key="k",
                     post_fn=mkpost(good_resp()))
