@@ -36,6 +36,8 @@ def load_window(hours):
     os.makedirs(SOAK, exist_ok=True)
     if os.path.exists(WINDOW_PATH):
         w = json.load(open(WINDOW_PATH, encoding="utf-8"))
+        if not valid_window(w):
+            raise SystemExit(f"refusing to run: corrupt {WINDOW_PATH}")
         print(f"resuming window {w['start']} -> {w['end']} (restart-safe)")
         return w
     now = time.time()
@@ -44,17 +46,46 @@ def load_window(hours):
                                          timezone.utc).isoformat(),
          "hours": hours}
     tmp = WINDOW_PATH + ".tmp"
-    json.dump(w, open(tmp, "w"), indent=1)
-    os.replace(tmp, WINDOW_PATH)
+    atomic_write_json(WINDOW_PATH, w)
     print(f"new window {w['start']} -> {w['end']}")
     return w
 
 
-def record_missed(at):
+def append_poll_row(row):
+    """Append-only polls log with flush+fsync: a crash loses at most the
+    in-flight row, never truncates committed history."""
     os.makedirs(SOAK, exist_ok=True)
     with open(POLLS, "a", encoding="utf-8") as fh:
-        fh.write(json.dumps({"at": at, "status": "MISSED",
-                             "note": "cycle interrupted during wait; not backfilled"}) + "\n")
+        fh.write(json.dumps(row) + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+
+
+def atomic_write_json(dest, obj):
+    tmp = dest + f".tmp-{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(obj, fh, indent=1)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, dest)
+
+
+def valid_window(w):
+    """Window config bounds: ISO instants, start < end, 1h..720h."""
+    try:
+        s = datetime.fromisoformat(w["start"])
+        e = datetime.fromisoformat(w["end"])
+        if s.tzinfo is None or e.tzinfo is None:
+            return False
+        hours = (e - s).total_seconds() / 3600
+        return 1 <= hours <= 720
+    except (KeyError, ValueError, TypeError):
+        return False
+
+
+def record_missed(at):
+    append_poll_row({"at": at, "status": "MISSED",
+                     "note": "cycle interrupted during wait; not backfilled"})
 
 
 def ts_now():
@@ -72,8 +103,7 @@ def snapshot_heartbeats(at):
         except (OSError, ValueError):
             row["sources"][os.path.basename(f)] = {"status": "UNREADABLE"}
     os.makedirs(SOAK, exist_ok=True)
-    with open(POLLS, "a", encoding="utf-8") as fh:
-        fh.write(json.dumps(row) + "\n")
+    append_poll_row(row)
     return row
 
 
@@ -103,7 +133,7 @@ def cycle():
             [sys.executable, os.path.join(HERE, "audit.py"), sig],
             capture_output=True, text=True, timeout=300)
         try:
-            json.dump(json.loads(r3.stdout), open(audit_path, "w"), indent=1)
+            atomic_write_json(audit_path, json.loads(r3.stdout))
             print(f"audit -> {audit_path}")
         except ValueError:
             print(f"audit failed: {r3.stderr[-300:]}")

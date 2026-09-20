@@ -28,6 +28,31 @@ def verdict(name, ok, detail=""):
     return {"check": name, "result": "PASS" if ok else "FAIL", "detail": detail}
 
 
+def parse_instant(s):
+    """ISO timestamp -> aware datetime, or None (never string-compare)."""
+    try:
+        dt = datetime.fromisoformat(s)
+    except (ValueError, TypeError):
+        return None
+    if dt.tzinfo is None:
+        return None
+    return dt.astimezone(timezone.utc)
+
+
+def row_day(row):
+    inst = parse_instant(row.get("at"))
+    return inst.strftime("%Y-%m-%d") if inst else None
+
+
+def atomic_write_json(dest, obj):
+    tmp = dest + f".tmp-{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(obj, fh, indent=1)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, dest)
+
+
 def main():
     day = sys.argv[1] if len(sys.argv) > 1 else \
         datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -41,6 +66,8 @@ def main():
             try:
                 row = json.loads(line)
             except ValueError:
+                continue
+            if row_day(row) != day:
                 continue
             e = (row.get("sources") or {}).get("edgar_8k")
             if not e:
@@ -56,15 +83,20 @@ def main():
                      f"other={len(edgar_other)}"))
     out["edgar_403_samples"] = edgar_403[:5]
 
-    # 2. heartbeat vocabulary
+    # 2. heartbeat vocabulary (day-filtered) + coverage: every configured
+    # source must have at least one heartbeat stamped for `day`.
     unknown, statuses = [], {}
+    seen_sources = set()
     for f in glob.glob(os.path.join(SOAK, "polls.jsonl")):
         for line in open(f, encoding="utf-8"):
             try:
                 row = json.loads(line)
             except ValueError:
                 continue
+            if row_day(row) != day:
+                continue
             for src, h in (row.get("sources") or {}).items():
+                seen_sources.add(src)
                 s = h.get("status")
                 statuses[f"{src}:{s}"] = statuses.get(f"{src}:{s}", 0) + 1
                 if s not in ALLOWED_HB and s != "UNREADABLE":
@@ -72,6 +104,16 @@ def main():
     C.append(verdict("heartbeat-vocabulary", not unknown,
                      f"{len(statuses)} combos seen, unknown={len(unknown)}"))
     out["heartbeat_combos"] = statuses
+    try:
+        configured = {s.get("name") for s in
+                      json.load(open(os.path.join(HERE, "sources.json"),
+                                     encoding="utf-8")).get("sources", [])}
+        configured.discard(None)
+    except (OSError, ValueError):
+        configured = set()
+    missing_hb = sorted(configured - seen_sources)
+    C.append(verdict("heartbeat-coverage", not missing_hb,
+                     f"missing={missing_hb or 'none'}"))
 
     # 3a. replay determinism: same input + same as_of -> identical verdicts
     sig = os.path.join(DATA, "signals", f"{day}.jsonl")
@@ -96,17 +138,22 @@ def main():
             det_ok, det_detail = False, f"{type(e).__name__}: {e}"
     C.append(verdict("replay-determinism", det_ok, det_detail))
 
-    # 3b. future-timestamp leakage in emitted classified feed
+    # 3b. future-timestamp leakage in the DAY's classified feed, compared as
+    # instants (never strings); unparseable timestamps are flagged too.
+    day_classified = os.path.join(DATA, "classified", f"{day}.jsonl")
+    day_lines = open(day_classified, encoding="utf-8") if os.path.exists(
+        day_classified) else []
     leaks = []
-    for f in glob.glob(os.path.join(DATA, "classified", "*.jsonl")):
-        for line in open(f, encoding="utf-8"):
+    for line in day_lines:
             try:
                 r = json.loads(line)
             except ValueError:
                 continue
             t = r.get("timestamps") or {}
+            pub, ret = parse_instant(t.get("published_at")), \
+                parse_instant(t.get("retrieved_at"))
             if t.get("published_at") and t.get("retrieved_at") and \
-                    t["published_at"] > t["retrieved_at"]:
+                    (pub is None or ret is None or pub > ret):
                 leaks.append(r.get("id"))
     C.append(verdict("no-future-leakage", not leaks, f"leaks={len(leaks)}"))
 
@@ -131,6 +178,19 @@ def main():
         except Exception as e:
             integ_ok, integ_detail = False, f"{type(e).__name__}: {e}"
     C.append(verdict("sqlite-integrity", integ_ok, integ_detail))
+
+    # 5. soak window configuration: bounded, ISO, start < end.
+    wpath = os.path.join(SOAK, "window.json")
+    wok, wdetail = False, "no window.json"
+    try:
+        w = json.load(open(wpath, encoding="utf-8"))
+        s, e = parse_instant(w.get("start")), parse_instant(w.get("end"))
+        hours = (e - s).total_seconds() / 3600 if s and e else -1
+        wok = bool(s and e and 0 < hours <= 24 * 30)
+        wdetail = f"{w.get('start')} -> {w.get('end')} ({hours:.1f}h)"
+    except (OSError, ValueError, TypeError) as ex:
+        wdetail = f"{type(ex).__name__}"
+    C.append(verdict("window-config", wok, wdetail))
 
     # 4. boundary: no features.jsonl, no C++ artifacts anywhere under data/
     viol = []
@@ -161,6 +221,9 @@ def main():
                      f"template={tmpl_ok} tracked_envs={secret_leak or 'none'} "
                      f"contact_in_env={contact_ok}"))
     audits = sorted(glob.glob(os.path.join(SOAK, "audit-*.json")))
+    day_audits = [a for a in audits if day in os.path.basename(a)]
+    if day_audits:
+        audits = day_audits
     if audits:
         a = json.load(open(audits[-1]))
         out["latest_audit"] = {
@@ -179,7 +242,7 @@ def main():
     out["summary"] = f"{len(C) - len(fails)}/{len(C)} objective checks PASS"
     os.makedirs(SOAK, exist_ok=True)
     dest = os.path.join(SOAK, f"acceptance-{day}.json")
-    json.dump(out, open(dest, "w"), indent=1)
+    atomic_write_json(dest, out)
     print(out["summary"])
     for c in C:
         print(f"  [{'x' if c['result'] == 'PASS' else '!'}] {c['check']}: {c['detail']}")

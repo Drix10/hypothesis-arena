@@ -12,17 +12,22 @@ import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-tmp = tempfile.mkdtemp(prefix="miro-audit-")
-os.environ["MIRO_CANONICAL_DB"] = os.path.join(tmp, "audit.db")
-os.environ["MIRO_CLASSIFIED_DIR"] = tmp
-sys.path.insert(0, HERE)
-
-from classify import run  # noqa: E402
 
 
 def main():
     from datetime import datetime, timezone
     as_of = datetime.now(timezone.utc).isoformat()
+    # Scratch DB auto-cleaned even on failure (no mkdtemp litter).
+    with tempfile.TemporaryDirectory(prefix="miro-audit-") as tmp:
+        os.environ["MIRO_CANONICAL_DB"] = os.path.join(tmp, "audit.db")
+        os.environ["MIRO_CLASSIFIED_DIR"] = tmp
+        return _audit(as_of)
+
+
+def _audit(as_of):
+    sys.path.insert(0, HERE)
+    from classify import run
+
     out_path, stats = run(sys.argv[1], as_of=as_of)
     agg = {"input_records": 0, "unique_event_keys": 0, "unique_content_versions": 0,
            "duplicates": 0, "revisions": 0, "corrections": 0,
@@ -67,9 +72,8 @@ def main():
         con.close()
     except Exception:
         agg["unique_event_keys"] = None
-    agg["corrections"] = sum(
-        s.get("reason:amendment-never-triggers", 0)
-        for s in agg["per_source"].values())
+    agg["corrections"] = sum(s.get("correction", 0)
+                           for s in agg["per_source"].values())
     agg["malformed"] += stats.get("malformed_lines", 0) + stats.get("schema_invalid", 0)
     agg["input_records"] += stats.get("malformed_lines", 0) + stats.get("schema_invalid", 0)
     agg["total"] = agg["input_records"]

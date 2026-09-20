@@ -51,7 +51,14 @@ def detect_amendment(source, rec):
     if source != "edgar_8k":
         return False
     title = rec.get("title", "") or ""
-    return "/A" in title.split("(")[0] or (rec.get("source_id", "") or "").endswith("/A")
+    if AMEND_TITLE_RE.match(title):
+        return True
+    return (rec.get("source_id", "") or "").endswith("/A")
+# Strict EDGAR amendment marker: anchored title prefix `8-K/A` (optional
+# leading space, then whitespace/paren/colon/end) or a trailing `/A` on the
+# source_id. Substring matching ("/A" anywhere) false-positives on titles
+# like "SEC FORM 4/A..." handled by other sources or narrative text.
+AMEND_TITLE_RE = re.compile(r"\s*8-K/A(?=[\s(:]|$)")
 FED_TRIGGER_RE = re.compile(
     r"FOMC statement|monetary policy|discount rate|Federal Open Market|target range",
     re.IGNORECASE)
@@ -65,30 +72,45 @@ ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]")
 
 
 def parse_ts(s):
-    """Best-effort publication parse. Returns (iso, estimated)."""
+    """Publication parse. Returns (iso, estimated).
+    Authoritative timestamps REQUIRE explicit timezone (Z or +/-HH:MM).
+    Naive timestamps are never authoritative: (None, True) — the record is
+    permanently CONTEXT-capped, never TRIGGER on a guessed clock."""
     if not s:
         return None, True
     try:
         if isinstance(s, str) and ISO_RE.match(s.strip()):
-            return datetime.fromisoformat(s).astimezone(timezone.utc).isoformat(), False
-        return parsedate_to_datetime(s).astimezone(timezone.utc).isoformat(), False
+            dt = datetime.fromisoformat(s)
+            if dt.tzinfo is None:
+                return None, True
+            return dt.astimezone(timezone.utc).isoformat(), False
+        dt = parsedate_to_datetime(s)
+        if dt.tzinfo is None:
+            return None, True
+        return dt.astimezone(timezone.utc).isoformat(), False
     except (ValueError, TypeError):
         return None, True
 
 
 def content_hash(rec):
-    """Hash over the canonical authoritative payload.
+    """Hash over the canonical authoritative payload (FULL 64-hex SHA-256).
     Excluded (volatile transport, changes every poll): observed_at.
     Everything else a source can authoritatively correct — title, text, url,
-    links, published_at — is hashed, so metadata-only changes become revisions."""
+    links, published_at — is hashed, so metadata-only changes become revisions.
+    No default=str: exact types are enforced by validate_record() first; a
+    non-serializable payload raises instead of silently stringifying."""
     h = hashlib.sha256()
     payload = {k: rec.get(k) for k in
                ("source", "source_id", "title", "text", "url", "links", "published_at")}
-    h.update(json.dumps(payload, sort_keys=True, default=str).encode())
-    return h.hexdigest()[:24]
+    h.update(json.dumps(payload, sort_keys=True).encode())
+    return h.hexdigest()
 
 
 REQUIRED_FIELDS = ("id", "source", "source_id")
+# Exact types for source-authored fields (None = absent; anything else wrong
+# is a schema rejection, never coerced). Extra unknown keys are allowed
+# through (collectors may annotate) but never enter the hash payload.
+OPTIONAL_STR = ("title", "text", "url", "published_at", "observed_at")
 
 
 def validate_record(rec):
@@ -101,6 +123,21 @@ def validate_record(rec):
         v = rec.get(f)
         if not isinstance(v, str) or not v:
             return f"missing-or-null-{f}"
+    for f in OPTIONAL_STR:
+        v = rec.get(f)
+        if v is not None and not isinstance(v, str):
+            return f"bad-type-{f}"
+    links = rec.get("links")
+    if links is not None:
+        if not isinstance(links, list) or \
+                any(not isinstance(x, str) for x in links):
+            return "bad-type-links"
+    wc = rec.get("word_count")
+    if wc is not None and (isinstance(wc, bool) or not isinstance(wc, int)):
+        return "bad-type-word_count"
+    hel = rec.get("has_external_link")
+    if hel is not None and not isinstance(hel, bool):
+        return "bad-type-has_external_link"
     if not (rec.get("title") or rec.get("text") or rec.get("url")):
         return "no-content-at-all"
     return None
@@ -162,7 +199,9 @@ def ingest_signal(con, rec, retrieved_at):
             (rec["source"], rec["source_id"], ch)).fetchone()
         return "duplicate", ch, (row[0] if row else retrieved_at), None
     if verdict == "correction":
-        base = rec["source_id"].replace("/A", "")
+        base = rec["source_id"]
+        if base.endswith("/A"):
+            base = base[: -len("/A")]
         con.execute("INSERT OR IGNORE INTO corrections VALUES(?,?,?,?)",
                     (rec["source"], rec["source_id"], base, retrieved_at))
     row = con.execute(
@@ -266,11 +305,16 @@ def run(signals_path, as_of=None):
     os.makedirs(CLASSIFIED, exist_ok=True)
     con = sqlite3.connect(DB, timeout=30)
     init_db(con)
-    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    # Deterministic replay: when as_of is supplied, OUR processing clock and
+    # the output day both come from as_of — never wall-clock. Reruns of the
+    # same input reproduce the same rows and the same file.
+    now = REF["t"]
+    day = now[:10]
     out_path = os.path.join(CLASSIFIED, f"{day}.jsonl")
     stats = {"per_source": {}}
-    with open(out_path, "a", encoding="utf-8") as out:
-        for line in open(signals_path, encoding="utf-8"):
+    emitted = []  # published only after a successful DB commit (C6)
+    with open(signals_path, encoding="utf-8") as fh:
+        for line in fh:
             line = line.strip()
             if not line:
                 continue
@@ -292,7 +336,7 @@ def run(signals_path, as_of=None):
                     s.get(f"reason:schema-{schema_problem}", 0) + 1
                 continue  # structurally invalid: never SQLite, never emitted
             try:
-                retrieved_at = now_iso()  # OUR processing time, not the source's
+                retrieved_at = now  # OUR processing time, not the source's
                 verdict, ch, first_seen, revision_of = ingest_signal(con, rec, retrieved_at)
             except Exception as e:
                 stats["ingest_crash"] = stats.get("ingest_crash", 0) + 1
@@ -311,7 +355,7 @@ def run(signals_path, as_of=None):
             s[elig] = s.get(elig, 0) + 1
             s[f"reason:{reason}"] = s.get(f"reason:{reason}", 0) + 1
             if elig in ("TRIGGER_CANDIDATE", "CONTEXT"):
-                out.write(json.dumps({
+                emitted.append({
                     "id": rec["id"], "source": rec["source"], "source_id": rec["source_id"],
                     "eligibility": elig, "effect": effect, "confidence": conf,
                     "reason": reason,
@@ -324,8 +368,19 @@ def run(signals_path, as_of=None):
                     "provenance": {"raw_hash": ch, "parser_version": PARSER_VERSION,
                                    "rule_version": RULES_VERSION, "created_at": retrieved_at,
                                    "revision_of": revision_of},
-                }, ensure_ascii=False) + "\n")
+                })
+    # Crash-consistent publication: commit the canonical truth FIRST, then
+    # write the output to temp + fsync + atomic rename. A crash before the
+    # commit leaves neither DB rows nor output; a crash during the file
+    # write leaves the previous artifact intact; reruns are PK-idempotent.
     con.commit()
+    tmp_path = out_path + f".tmp-{os.getpid()}"
+    with open(tmp_path, "w", encoding="utf-8") as out:
+        for row in emitted:
+            out.write(json.dumps(row, ensure_ascii=False) + "\n")
+        out.flush()
+        os.fsync(out.fileno())
+    os.replace(tmp_path, out_path)
     con.close()
     return out_path, stats
 
