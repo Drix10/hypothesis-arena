@@ -1,0 +1,125 @@
+{
+ "window": {
+  "start": "2026-09-18T18:54:26+00:00",
+  "end": "2026-09-20T03:30:00+00:00",
+  "cycles": 133,
+  "criterion": "30h-evidence-gate (originally 7d, shortened explicitly)"
+ },
+ "files": [
+  {
+   "path": "data/classified/2026-09-18.jsonl",
+   "bytes": 134650,
+   "sha256": "d3f57892b3623a445b145b8e2f1660ea7bd0a7586b1e7b4164aaf401c12a0cfe"
+  },
+  {
+   "path": "data/classified/2026-09-19.jsonl",
+   "bytes": 1472,
+   "sha256": "d4a452e7b8b7af00afa10501707792e8ba37f2ef5f1f1c408eab31ad62ba0f41"
+  },
+  {
+   "path": "data/classified/2026-09-20.jsonl",
+   "bytes": 0,
+   "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+   "path": "data/signals/2026-09-18.jsonl",
+   "bytes": 1192101,
+   "sha256": "7aceefc5c3074ef4cf002c5aa71034b8a74a1b13c0421233405f17aae04edd63"
+  },
+  {
+   "path": "data/signals/2026-09-19.jsonl",
+   "bytes": 4114992,
+   "sha256": "de8289b86df653a61c714f877c4cc7a06f86c92fa8d17980f596efa984e7a04d"
+  },
+  {
+   "path": "data/signals/2026-09-20.jsonl",
+   "bytes": 641310,
+   "sha256": "cb7b9dd0cb886cb603bce678266b4f41fb85c69401aa3ec987537b06c77659e9"
+  },
+  {
+   "path": "data/soak/acceptance-2026-09-18.json",
+   "bytes": 2146,
+   "sha256": "541aa0185f828644ab33cecceb356da12d22bbc0564ff18b509f3087abc9050b"
+  },
+  {
+   "path": "data/soak/acceptance-2026-09-19.json",
+   "bytes": 1722,
+   "sha256": "09ae3f22ab26da9b05e9edfa9306daa9dfb22c867c78cf62f6faad1effafea4e"
+  },
+  {
+   "path": "data/soak/acceptance-2026-09-20.json",
+   "bytes": 1722,
+   "sha256": "d12c5d689f7fbec4bb9d1d763675d715a1dadc2f9d4bf345edfc65a02a0bfeb1"
+  },
+  {
+   "path": "data/soak/audit-2026-09-18.json",
+   "bytes": 2094,
+   "sha256": "c32c080a9b5bb73d9f090d43161ab45425d3c575f576e7f69725d202a749c950"
+  },
+  {
+   "path": "data/soak/audit-2026-09-19.json",
+   "bytes": 1453,
+   "sha256": "b75e66755aa0171d49f3314bce36e17551880af7d4bb5352590afd81c4ce5025"
+  },
+  {
+   "path": "data/soak/audit-2026-09-20.json",
+   "bytes": 1453,
+   "sha256": "f2e35d2095e944adf6bd729e4cd637106f1ddb87edc4c34befc711eeb9d8d453"
+  },
+  {
+   "path": "data/soak/human-queue.jsonl",
+   "bytes": 0,
+   "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+   "path": "data/soak/polls.jsonl",
+   "bytes": 65148,
+   "sha256": "3b3ec7366b7edbee398b91320dc9ab9ff7bbf760836dedddd8f3dd59d1bbae85"
+  },
+  {
+   "path": "data/soak/pregrade-2026-09-18.jsonl",
+   "bytes": 29786,
+   "sha256": "18a5914633fd9c720c898d875c9887d1501b710c17957c559cb823ee7bdc98a7"
+  },
+  {
+   "path": "data/soak/pregrade-2026-09-19.jsonl",
+   "bytes": 0,
+   "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+   "path": "data/soak/pregrade-2026-09-20.jsonl",
+   "bytes": 0,
+   "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+   "path": "data/state/bls_empsit.heartbeat.json",
+   "bytes": 120,
+   "sha256": "645243456c893ef6feec4bfa1e6d37a53eef38a90470ec867b1ff2793a52ebe8"
+  },
+  {
+   "path": "data/state/ecb_mid.heartbeat.json",
+   "bytes": 117,
+   "sha256": "abd7be5c12d6acf9147b4a5b0985d0396801d4431ee5283f7acbdca1f142b5a9"
+  },
+  {
+   "path": "data/state/edgar_8k.heartbeat.json",
+   "bytes": 107,
+   "sha256": "12b98deeb6c5e9e17f2ffd4a2bf5d346b2a9a22b49314e47c0306cc2fa2e7ed7"
+  },
+  {
+   "path": "data/state/fed_monetary.heartbeat.json",
+   "bytes": 122,
+   "sha256": "ed77e40f58bb19eb5a17374c15ddc7e9030da8435571612d01479f3a5f123760"
+  },
+  {
+   "path": "data/state/fred_macro.heartbeat.json",
+   "bytes": 151,
+   "sha256": "8b0c1cd32f7a35d7909ffd273c0ec17c8161221aa9b83dea15a3eca644745237"
+  },
+  {
+   "path": "data/state/treasury_auctions.heartbeat.json",
+   "bytes": 116,
+   "sha256": "163ad4f1a9e1dceca4df2c8d41485c8139761cfc64b786b766ee6ade4bd95c49"
+  }
+ ]
+}

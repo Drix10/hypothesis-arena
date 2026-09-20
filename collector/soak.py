@@ -22,6 +22,39 @@ ROOT = os.path.dirname(HERE)
 SOAK = os.path.join(ROOT, "data", "soak")
 POLLS = os.path.join(SOAK, "polls.jsonl")
 CYCLE_S = 15 * 60
+WINDOW_PATH = os.path.join(SOAK, "window.json")
+
+# Missed-cycle semantics (explicit): a cycle interrupted during the 15-min
+# wait is a MISSED cycle. It is recorded (polls.jsonl row, no collection),
+# never backfilled: catch-up polls would double-collect and corrupt the
+# record-balance evidence. Gaps are data, not errors to hide.
+
+
+def load_window(hours):
+    """Persisted observation window. First launch writes it atomically;
+    restarts read it and can never extend the formal deadline."""
+    os.makedirs(SOAK, exist_ok=True)
+    if os.path.exists(WINDOW_PATH):
+        w = json.load(open(WINDOW_PATH, encoding="utf-8"))
+        print(f"resuming window {w['start']} -> {w['end']} (restart-safe)")
+        return w
+    now = time.time()
+    w = {"start": datetime.fromtimestamp(now, timezone.utc).isoformat(),
+         "end": datetime.fromtimestamp(now + hours * 3600,
+                                         timezone.utc).isoformat(),
+         "hours": hours}
+    tmp = WINDOW_PATH + ".tmp"
+    json.dump(w, open(tmp, "w"), indent=1)
+    os.replace(tmp, WINDOW_PATH)
+    print(f"new window {w['start']} -> {w['end']}")
+    return w
+
+
+def record_missed(at):
+    os.makedirs(SOAK, exist_ok=True)
+    with open(POLLS, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"at": at, "status": "MISSED",
+                             "note": "cycle interrupted during wait; not backfilled"}) + "\n")
 
 
 def ts_now():
@@ -96,13 +129,23 @@ def main():
         cfg = load_config()
         if cfg["status"] == "MISSING_REQUIRED_CONFIG":
             print(f"MISSING_REQUIRED_CONFIG: {','.join(cfg['missing_required'])} "
-                  f"-- refusing 7-day loop", file=sys.stderr)
+                  f"-- refusing loop", file=sys.stderr)
             return 2
-        end = time.time() + 7 * 24 * 3600
+        hours = 168.0
+        for i, a in enumerate(sys.argv):
+            if a == "--window-hours" and i + 1 < len(sys.argv):
+                hours = float(sys.argv[i + 1])
+        w = load_window(hours)
+        end = datetime.fromisoformat(w["end"]).timestamp()
         while time.time() < end:
             cycle()
             nxt = (int(time.time() / CYCLE_S) + 1) * CYCLE_S
-            time.sleep(max(60, nxt - time.time()))
+            wait = nxt - time.time()
+            if wait > CYCLE_S * 1.5:
+                # woke up over a cycle late (sleep interrupted / host stalled)
+                record_missed(ts_now())
+            time.sleep(max(60, wait))
+        print(f"window closed {w['end']}")
     else:
         print(__doc__)
 
