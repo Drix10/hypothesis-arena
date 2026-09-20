@@ -61,3 +61,25 @@ plane (Phase D) change any interface a future slice depends on?
   kind relabel, abort-no-publish, hypothesize cap trip, cadence
   restart, health recovery, span dedupe, caps, dynamic imports).
 - Interface conclusion unchanged: no D–H1 contract changed.
+
+## Addendum 2 — independent 32-finding end-to-end audit (closed)
+- A second audit (run against `6965b89`+`49ecb65`) found the first
+  pass had strengthened wrappers/tests without closing every
+  end-to-end invariant. All 32 closed in `a921934` with one
+  regression proof each (see TODO record): manifest/span/cadence
+  concurrency, newest-valid fallback, snapshot consumption, real
+  invocation-boundary metering (model+executor+tools), token
+  reservation/reconciliation, timeout accounting + kill primitive,
+  durable budgets, abort short-circuit, success-only cadence,
+  ledger-schema attribution, retention + deserialization hardening,
+  pre-materialization caps, producer-side 64-cap, lineage IDs,
+  parser-confidence, map binding, canonical validation, correct
+  smolagents controls, pre-execution scan, locked sandbox spec,
+  pinned image, digest writer, trigger input, history propagation,
+  supervisor health contract.
+- Deliberately left as DEPLOYMENT boxes (no daemon/keys on this
+  host): live Docker execution, egress-proxy deny probe, image
+  SBOM/scan, model pricing table (usd recorded as 0.0/unpriced until
+  wired), supervisor process kill at WALL_S (in-process watchdog is
+  the secondary guard). The code fails closed (ConfigBlocked) on all
+  of them; nothing claims to be operationally complete without them.
