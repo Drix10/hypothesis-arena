@@ -288,7 +288,36 @@ Exit: §4.5, §6.5 drill boxes checked.
 - [x] P3.2 DONE (`kernel/vectors/` v1+v2 + `kernel/test_p32.cpp`, 37 checks green normal+hardened): committed canonical bytes, hash, signature; byte-equal C++ reproduction; mutation/key-mismatch failures; UTF-8/nesting/float boundaries; signature scope recorded (payload only); V1 accepted by frozen P3.1 validator. Sidecar untouched. P3.2 ACCEPTED/FROZEN (human sign-off; no further P3.2 changes; P3.3 NOT authorized).
 
 Protocol guard: the canonical form is exactly the frozen `json.dumps` recipe above, pinned by the committed vectors. Replacing it with RFC 8785/JCS or any other scheme is a PROTOCOL change requiring new vectors and a version bump — never a silent substitution.
-- [ ] P3.3 table tests + replay determinism green.
+- [x] P3.1 AMENDMENT (`52ccedb`, pending human re-sign): P3.3 integration
+      exposed a soundness bug in the frozen verifier — `ScalarLessL`'s LE
+      L-table was wrong from byte 5 on (top bytes 0x10/0x0F instead of
+      0x00/0x10), false-rejecting ~6% of VALID sidecar signatures
+      (S[31]==0x0F, S[30]>=0x10) as S>=L. Never false-accepted
+      (fail-closed direction). Found by 3 systematic P3.3 fixtures;
+      root-caused to the constant via cross-language bisection (canon,
+      hash, sha512, reduction, point arithmetic all proven equal; the
+      S<L comparison itself was wrong). Fix = the 32-byte constant only,
+      cross-checked against Python integers + Reduce512's LB limbs.
+      Full gates re-run green on the amended verifier (P3.1 102/102 +
+      P3.2 37/37 + 20k fuzz, normal + hardened). No fixture changed
+      (the fix only ADDS acceptances). P3.1 needs explicit human re-sign.
+- [x] P3.3 DONE (technical gate green, human sign-off pending in doc 07):
+      `kernel/jev_state.hpp` (typed JEVStateV3, closed schema, exact
+      serializer bit-equal to frozen sidecar canon on the committed state
+      vector incl. tricky strings/mixed scalars; strict FromJVal +
+      CheckStateShape make the "?" fallback unreachable),
+      `kernel/kernel_state.hpp` (immutable universe, per-symbol epochs,
+      sole ValidationRequest source), `kernel/decision_table.hpp` (doc 03
+      §3.2 verbatim row order + budget-dependent calibration_gate +
+      max-gate nomination/authorization split; budget tiers only, no
+      sizing), `kernel/test_p33.cpp` 68/68 + 200-AnswerSet replay hashed
+      twice identical + non-degenerate distribution + ScalarLessL boundary
+      regression, `kernel/p33/` committed fixtures (same test key as P3.1),
+      build.sh P3.3 gate + typed-only/confidence/python gates extended.
+      §3.7 cases 21–28 green verbatim; v2 cases 1–20 NOT re-encoded (their
+      v2-only semantics — karen/consensus/sizes — have no v3 table mapping
+      in the plan; code implements §3.2 + 21–28, invents nothing).
+      Sidecar untouched. P3.4 defaults to (b) quarantine (gated).
 - [ ] §13.4 resolved to (a) with contract or (b) quarantined.
 - [ ] P3.5 drill boxes (§4.5, §6.5) checked.
 - [ ] Freeze-check extended to cover the kernel pins (model/revision/provider/

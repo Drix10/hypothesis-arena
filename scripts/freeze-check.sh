@@ -171,6 +171,37 @@ for _pin in 'typesafe/jev-1.13' 'typesafe/jev-1.13-20260917' '"TypeSafe"' 'answe
   grep -q "$_pin" "$ROOT/kernel/jev_validate.hpp" \
     && ok "kernel pin $_pin" || bad "kernel pin moved: $_pin"
 done
+grep -q 'question_set_version' "$ROOT/kernel/jev_validate.hpp" \
+  && ok "kernel pin qversion" || bad "kernel pin qversion moved"
+# P3.1 amendment lock: corrected L-table tail (0x00/0x10, not 0x10/0x0F).
+grep -q '0x00, 0x00, 0x00, 0x10};' "$ROOT/kernel/jev_validate.hpp" \
+  && ok "L-table amended" || bad "L-table regressed"
+# P3.3 components present with their contracts.
+for _f in jev_state.hpp kernel_state.hpp decision_table.hpp test_p33.cpp gen_p33.py; do
+  [ -f "$ROOT/kernel/$_f" ] \
+    && ok "p33 file $_f" || bad "p33 file missing: $_f"
+done
+grep -q 'EvaluateDecision(const ValidatedJEVAnswerSetV3' "$ROOT/kernel/decision_table.hpp" \
+  && ok "table typed-only" || bad "table signature moved"
+grep -q 'class KernelState' "$ROOT/kernel/kernel_state.hpp" \
+  && ok "kernel state" || bad "kernel state moved"
+grep -q 'class JEVStateV3' "$ROOT/kernel/jev_state.hpp" \
+  && ok "jev state" || bad "jev state moved"
+# P3.3 committed vectors self-consistent (state canon -> hash, no Python).
+_hex="$ROOT/kernel/p33/state_vector_canon.hex"
+_hash="$ROOT/kernel/p33/state_vector_hash.txt"
+if [ -f "$_hex" ] && [ -f "$_hash" ]; then
+  _recomputed="$(xxd -r -p "$_hex" | sha256sum | cut -d' ' -f1)"
+  [ "$_recomputed" = "$(cat "$_hash")" ] \
+    && ok "p33 state: sha256(canon) == hash" \
+    || bad "p33 state: hash mismatch"
+else
+  bad "p33 state vector files missing"
+fi
+_n="$(ls "$ROOT/kernel/p33"/r_*.json 2>/dev/null | wc -l | tr -d ' ')"
+[ "$_n" = "200" ] \
+  && ok "p33 replay set: 200 artifacts" \
+  || bad "p33 replay set count: $_n"
 
 # ---- committed P3.2 vectors are self-consistent (no Python needed) ----
 for _v in v1 v2; do
