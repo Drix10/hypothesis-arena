@@ -169,6 +169,21 @@ class EmitTest(unittest.TestCase):
             fh.write(b'{"half": true')
         self.assertIsNone(emit_mod.latest_complete(outdir))
 
+    def test_r12_future_dropped_by_ctx(self):
+        # D7 integration proof: a future-dated feature travels the real
+        # writer -> real frozen reader path and is dropped there.
+        fut = (NOW_S + 3600) * 10 ** 9
+        feat = schema.build_feature(
+            "filing_event", ["AAPL"],
+            {"type": "enum", "v": "8-K:item-2.02"}, "bullish",
+            "source", "high", "edgar_8k", HEXA, fut, fut, 3600,
+            feature_id="fut1", hashes=[HEXA])
+        _, path = self.emit_ok([feat])
+        res = ctx_read.read_bundle(path, self.dbp, self.mapp, NOW_S)
+        self.assertEqual(res["stats"]["accepted"], 0)
+        self.assertEqual(res["stats"]["reasons"],
+                         {"future-timestamp": 1})
+
 
 if __name__ == "__main__":
     unittest.main()
