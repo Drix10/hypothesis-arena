@@ -183,6 +183,13 @@ an actual contract defect.
       mechanically enforceable — ValidationRequest must be constructible
       ONLY via KernelState::request_for() (compiler-enforced), not merely
       by convention; close during P3.5 integration, not as P3.3 rework.
+      Chosen design (human ruling): private immutable construction +
+      KernelState friendship — constructor inaccessible to ordinary
+      callers, fields private, no public mutation after construction,
+      KernelState as construction authority, validator given read access;
+      copying an authorized request allowed, manufacturing one from
+      arbitrary universe/epoch values impossible. Do NOT move validation
+      into KernelState; no opaque handle.
 - [x] Freeze-check extended to code pins (jev.py MODEL/REVISION/PROVIDER/
       QVERSION/ceilings/caps/questions), kernel pins, and P3.2 vector
       self-consistency; human sign-off recorded below.
