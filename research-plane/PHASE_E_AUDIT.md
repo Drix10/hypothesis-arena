@@ -252,7 +252,8 @@ plane (Phase D) change any interface a future slice depends on?
   pre-provider test asserts the retained reservation.
 - Batteries on the fix tree: plane 105 + hardening 69 + emit +
   isolation + sources + stdlib green locally; kernel `build.sh`
-  exit 0; freeze-check PASS; kernel/collector zero-diff. Hosted
-  rerun pending on push; the frozen-collector stdlib failure stays
-  untouched. Slice D NOT AUTHORIZED. Phase D NOT closed — this
+  exit 0; freeze-check PASS; kernel/collector zero-diff. Hosted CI
+  on `349e89a` (run 35631946891): plane SUCCESS, kernel SUCCESS,
+  stdlib FAILURE at the same frozen-collector step (pre-existing,
+  untouched). Slice D NOT AUTHORIZED. Phase D NOT closed — this
   record awaits the human re-audit of `6fe44d5`.
