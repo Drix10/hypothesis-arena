@@ -242,8 +242,19 @@ class _ChildExec:
                 "generated code failed import scan: %s" % bad)
         self.calls += 1
         out = self._delegate(code)
-        text = out if isinstance(out, str) else repr(out)
-        return _truncate_bytes(text, TOOL_OUT_MAX_BYTES)
+        # Pass executor protocol objects through (truncating only
+        # their text payloads): stringifying a CodeOutput would
+        # destroy is_final_answer and break the agent loop.
+        if isinstance(out, str):
+            return _truncate_bytes(out, TOOL_OUT_MAX_BYTES)
+        try:
+            from smolagents.local_python_executor import CodeOutput
+        except ImportError:
+            return out
+        if isinstance(out, CodeOutput) and isinstance(out.output, str):
+            out.output = _truncate_bytes(out.output,
+                                         TOOL_OUT_MAX_BYTES)
+        return out
 
     def __getattr__(self, name):
         return getattr(self.__dict__["_delegate"], name)
@@ -316,18 +327,28 @@ def _record_brief(rec):
 
 
 def _to_candidates(result, rec_defaults):
-    """Shape agent text into advisory candidate dicts. Malformed
-    output yields [] (the graph counts the empty extract); shaping is
-    never evidence (the resolver decides)."""
+    """Shape agent output into advisory candidate dicts. Accepts
+    native lists/dicts directly; a JSON TEXT result is parsed, and
+    anything else yields [] (the graph counts the empty extract).
+    Shaping is never evidence (the resolver decides)."""
     import json
-    try:
-        data = json.loads(str(result))
-    except (ValueError, TypeError):
+    if isinstance(result, dict):
+        data = [result]
+    elif isinstance(result, list):
+        data = result
+    elif isinstance(result, str):
+        try:
+            data = json.loads(result)
+        except (ValueError, TypeError):
+            return []
+        if isinstance(data, dict):
+            data = [data]
+        if not isinstance(data, list):
+            return []
+    else:
         return []
-    if isinstance(data, dict):
-        data = [data]
     out = []
-    for c in data if isinstance(data, list) else []:
+    for c in data:
         if not isinstance(c, dict):
             continue
         out.append({
