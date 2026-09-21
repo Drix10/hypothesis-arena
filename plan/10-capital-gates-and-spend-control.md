@@ -274,3 +274,51 @@ exists and verifies, nothing starts — there is no default STAGE.
   cost late; an unknowable bill (unknown-cost) or an ambiguous transport
   outcome (may-have-been-billed) is UNKNOWN_SPEND → HOLD with no answer
   admitted — an unbounded charge is never blessed by a bounded reservation.
+
+### 10.4.1 Reservation mechanism (frozen — change = doc edit + fresh paper window)
+
+The pre-call order is fixed: R15 token reservation, then worst-case
+dollar HOLD against the stage cap, then and only then provider
+execution. Either refusal is clean (nothing ran). Anything ambiguous
+after execution started settles the FULL reservation as UNKNOWN_SPEND
+and blocks future spend until a supervisor reconciles.
+
+- Pricing table semantics: each entry is the MAXIMUM per-1k price
+  across input/output legs. The hold prices every possibly-consumed
+  token at that leg, so it is a true worst case. Unpriced models
+  never run (construction blocks); usd=0.0 always means a zero-price
+  model, never unknown.
+- Token bound: the measured utf-8 bytes of the exact outbound prompt
+  (a true upper bound for byte-level-BPE providers — every token
+  spans >= 1 byte; post-call reconciliation tripwires the assumption
+  and aborts on violation) plus COMPLETION_MAX = 1500 tokens per
+  provider step, clamped downward into every generate call. Agentic
+  runs add the closed-form multi-step growth bound with
+  AGENT_MAX_STEPS = 5, TOOL_OUT_MAX_BYTES = 1500 (tool outputs are
+  byte-truncated, so tool context is truly bounded) and
+  TOOLS_PER_STEP_MAX = 4 tool slots reserved up front.
+- Holds: `reserved` (pre-spawn; auto-released after 600 s as a crashed
+  pre-spawn never billed) → `invoked` (post-spawn; never auto-released
+  — only clean settlement or supervisor reconcile clears it).
+  Committed spend = trailing-30d ledger + outstanding holds.
+- UNKNOWN_SPEND: timeout, child crash, provider error after possible
+  invocation, or unaccountable usage settles the full token
+  reservation, spans the full dollar reservation as unknown (never
+  $0), keeps the hold against the cap, poisons the R15 row, and
+  denies all future spend until `reconcile_unknown` attests actuals.
+- Projection/tier plumbing: `tier_state.json` (hourly evaluation
+  cache + 6-hour anti-flap counter), `tier_journal.jsonl` (every
+  transition with its projection), `ratio_journal.jsonl` (daily ratio
+  evaluations). The T2 SOFT-kill and T3 MEDIUM-kill signals are
+  durable sentinel files plus supervisor-hook events; the trading-side
+  kill state machine that consumes them is Slice-D+ work — the plane
+  signals, it never acts on capital. Until the trailing-90d profit
+  feed is wired, every ratio evaluation reports suspended (the same
+  visibility flag as an unprofitable window) and the absolute cap
+  alone governs.
+- Watchlist-2 ranking input is supervisor-supplied per-symbol
+  calibration; absent that feed the cut is deterministic
+  alphabetical-first-2 (fewer symbols either way is the control).
+  NULL-class suspension binds the frozen Tier-C source set
+  (x_lists_tail, launch_library, submarine_cables, aisstream,
+  opensky_adsb) plus records explicitly carrying class NULL.

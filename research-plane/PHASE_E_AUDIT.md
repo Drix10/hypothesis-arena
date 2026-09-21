@@ -106,7 +106,44 @@ plane (Phase D) change any interface a future slice depends on?
 - plan/08 §8.4 corrected: partial in-memory/checkpoint state may
   exist, but NO partial bundle is published (was: ambiguous
   "partial features kept").
+## Addendum 4 — independent 23-finding correction pass (closed agent-side, NOT signed off)
+- A fourth audit (against `aaa8ecd`) found the money/boundary claims
+  incomplete: no per-call dollar reservation, tier behavior/projection
+  not matching the frozen doc-10 text, ambiguous spend recorded as $0,
+  factory bypass structurally possible, token ceiling post-call only,
+  ledger deletion/integrity gaps, accounting failures downgradable,
+  thread-watchdog production boundary, plus 9 P1 publisher/validation
+  gaps and 4 P2 storage/concurrency/evidence gaps. Closed across
+  `790374d` (gate + ledgers), `851725a` (tiers + publisher), `c3ea793`
+  (battery), `ab92bf0` (CI) — see TODO record for the per-finding
+  disposition. Kernel/collector zero-diff throughout.
+- Architecture after the pass: the graph holds NO model object (the
+  module-level provider_factory runs only inside the spawned worker
+  child); every call reserves TRUE token bounds (prompt utf-8 bytes
+  under the documented byte-BPE assumption + 1500/step clamp + the
+  agentic closed-form bound) and worst-case dollars (worst-leg
+  pricing, single governor-owned table) BEFORE spawn; ambiguous
+  outcomes settle FULL reservations as UNKNOWN_SPEND and deny future
+  spend until supervisor `reconcile_unknown`; timeouts hard-kill and
+  reap the child (no live workers, no late accounting — the child
+  never held ledger authority); any post-call accounting failure
+  aborts hard. Tiers implement the frozen §10.4 table exactly
+  (T1 double-interval + critique-trigger-only + NULL-suspend; T2
+  cheapest + 200-cap + watchlist-2 + SOFT-kill signal; T3 deny +
+  MEDIUM-kill signal) on the 7-day projection with hourly journaled
+  evaluation and 6-hour anti-flap. New frozen mechanism constants
+  live in plan/10 §10.4.1.
+- Trust boundaries stated plainly: provider factories and price
+  tables are supervisor-owned config (a lying factory is a
+  compromised deployment, same class as a lying price); markers
+  distinguish fresh deploys from deleted authorities (supervisor
+  fresh-start = delete DB + marker together); total directory wipe
+  equals a new deployment (accepted, documented).
 - Remaining DEPLOYMENT boxes (fail-closed without them): Docker
   daemon + egress-proxy probe, image SBOM/scan, model key, supervisor
-  WALL_S kill, Langfuse tail. No GitHub CI exists (no workflows) —
-  all counts above are local.
+  WALL_S kill, Langfuse tail, trailing-90d profit feed (ratio
+  suspended without it), per-symbol calibration feed (watchlist-2
+  falls back deterministic without it). CI workflow added
+  (stdlib + plane + kernel); first hosted run pending on push.
+  Slice D NOT AUTHORIZED. Phase D is NOT marked closed — this
+  record awaits the human re-audit.
