@@ -568,8 +568,14 @@ def build_graph(deps):
                         if not _keep_candidate(cand, "llm", cands):
                             dropped += 1
             except r15.AbortCycle:
+                # An ambiguous/errored attempt aborts the cycle AND
+                # leaves visible evidence: an aborted cycle with an
+                # empty blocked list is a silent hole (a hosted run
+                # once demonstrated exactly that).
                 aborted = True
                 aborts += 1
+                if len(blocked) < BLOCKED_MAX:
+                    blocked.append("extract-aborted")
             except _workers.ConfigBlocked as e:
                 if len(blocked) < BLOCKED_MAX:
                     blocked.append(_bound_str("extract:%s" % e,

@@ -1722,15 +1722,21 @@ class GraphTest(unittest.TestCase):
     def test_extract_cleanup_failure_reaps_and_blocks(self):
         # Child-side cleanup failure rides the envelope; the parent
         # performs the authoritative reclaim, and its failure is
-        # blocked evidence (docker rm -f on the unique name fails
-        # with or without a daemon present).
+        # blocked evidence. The reclaim itself is hermetically
+        # failed (no dependence on whether a docker daemon exists):
+        # a hosted run once showed a real-daemon environment can
+        # otherwise resolve the reclaim cleanly and hide the path.
+        import unittest.mock as _mock
         d = tempfile.mkdtemp()
         _fixtures(d)
         app, deps, calls, log, gov = self._app(
             d, script="t", extract_stub=False)
         deps["executor_factory"] = FailCleanupExecutor
         app = _graph().build_graph(deps)
-        out = _graph().run_cycle(app, ["AAPL"], 1, "tec")
+        with _mock.patch.object(workers, "_reap_container",
+                                side_effect=RuntimeError(
+                                    "docker rm failed")):
+            out = _graph().run_cycle(app, ["AAPL"], 1, "tec")
         blocked = " ".join(out.get("blocked") or [])
         self.assertIn("reap-failed", blocked)
 

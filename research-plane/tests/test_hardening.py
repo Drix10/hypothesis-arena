@@ -1447,15 +1447,6 @@ def _hang_forever():
     _t.sleep(3600)
 
 
-def _partial_stall(conn):
-    # 64 raw bytes (not a frame) then silence: the parent sees
-    # readable bytes but the frame never completes.
-    import os as _os
-    import time as _t
-    _os.write(conn.fileno(), b"\x99" * 64)
-    _t.sleep(60)
-
-
 class ReauditFixTest(unittest.TestCase):
     """Human re-audit of the shipped 62e1019 tree (5 code findings +
     pipe IPC). Each test pins the exact gap, through the real
@@ -1872,32 +1863,58 @@ class ReauditFixTest(unittest.TestCase):
         graph_mod._reject_stale_thread(app, "never-seen")
 
     def test_partial_frame_cannot_hang_recv(self):
-        # Pathological sender: partial frame then stall. The bounded
-        # frame read must give up at the deadline (kill path), never
-        # hang in recv(), and the reader thread must exit once the
-        # child is killed (no thread debt).
+        # A sender readable-but-never-completing its frame must not
+        # hang recv() past the deadline. Hermetic (no subprocess,
+        # no platform pipe-fd tricks — an earlier subprocess version
+        # passed vacuously on Windows where os.write to a pipe
+        # HANDLE fails): a fake conn whose recv blocks until
+        # released, simulating the kill closing the write end. This
+        # proves the deadline bound AND the post-kill thread exit
+        # (no thread debt).
+        import threading as _th
         from plane import timeout as timeout_mod
-        ctx = multiprocessing.get_context("spawn")
-        parent, child = ctx.Pipe(duplex=False)
-        proc = ctx.Process(target=_partial_stall, args=(child,))
-        proc.start()
-        child.close()
-        try:
-            t0 = time.monotonic()
-            outcome = timeout_mod._recv_envelope(parent, 3)
-            self.assertEqual(outcome[0], "none")
-            self.assertLess(time.monotonic() - t0, 15.0)
-        finally:
-            proc.terminate()
-            proc.join(10)
-            if proc.is_alive():
-                proc.kill()
-                proc.join(10)
-            parent.close()
-        self.assertFalse(proc.is_alive())
-        if len(outcome) == 2:
-            outcome[1].join(5)
-            self.assertFalse(outcome[1].is_alive())
+        release = _th.Event()
+
+        class _StalledConn:
+            def poll(self, timeout):
+                return True
+            def recv(self):
+                release.wait(30)
+                raise EOFError("closed")
+
+        t0 = time.monotonic()
+        outcome = timeout_mod._recv_envelope(_StalledConn(), 2)
+        dt = time.monotonic() - t0
+        self.assertEqual(outcome[0], "none")
+        self.assertEqual(len(outcome), 2)  # reader outstanding
+        self.assertGreaterEqual(dt, 2.0)
+        self.assertLess(dt, 5.0)
+        release.set()  # the kill closed the write end
+        outcome[1].join(5)
+        self.assertFalse(outcome[1].is_alive())
+
+    def test_reap_container_contract(self):
+        # Authoritative reclaim: exact argv, nonzero exit and
+        # missing-binary both raise (the caller folds them into
+        # blocked evidence), empty name is a no-op.
+        import subprocess as _sp
+        import unittest.mock as _mock
+        with _mock.patch.object(_sp, "run") as run:
+            run.return_value = _mock.Mock(returncode=0)
+            self.assertIsNone(workers._reap_container("miro-c-1"))
+            args, kw = run.call_args
+            self.assertEqual(args[0],
+                             ["docker", "rm", "-f", "miro-c-1"])
+            self.assertEqual(kw.get("timeout"), 30)
+            run.return_value = _mock.Mock(returncode=1, stderr=b"x")
+            with self.assertRaises(RuntimeError):
+                workers._reap_container("miro-c-1")
+            run.side_effect = FileNotFoundError()
+            with self.assertRaises(RuntimeError):
+                workers._reap_container("miro-c-1")
+        with _mock.patch.object(_sp, "run") as run:
+            self.assertIsNone(workers._reap_container(""))
+            run.assert_not_called()
 
     def test_reconcile_over_reservation_is_rejected(self):
         # An attested bill above the worst-case reservation is a
