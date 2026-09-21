@@ -74,7 +74,10 @@ def canon(obj):
 
 
 def make_bundle_id(epoch, content_sha):
-    return "rp-%d-%s" % (epoch, content_sha[:16])
+    # Full digest identity (>= 128-bit rule: the whole 256-bit sha).
+    # Truncated 64-bit IDs collide under birthday search and are
+    # unfit for security-sensitive dedupe/identity.
+    return "rp-%d-%s" % (epoch, content_sha)
 
 
 def build_feature(kind, symbols, value, effect, evidence, conf, source_id,
@@ -105,3 +108,53 @@ def build_bundle(epoch, bundle_id, features, watermarks, history=None):
     if history is not None:
         b["history"] = dict(history)
     return b
+
+
+# Strict JSON-safe validation (producer/state inputs): only plain
+# containers and finite scalars pass. Anything else (arbitrary
+# objects, non-finite floats, over-long strings, over-deep nesting)
+# is REJECTED — never admitted via a lossy str() coercion that
+# would pass the size test while leaving unserializable or
+# unexpectedly expensive objects in checkpoint state.
+JSON_SAFE_MAX_NODES = 100000
+JSON_SAFE_MAX_STR = 65536
+JSON_SAFE_MAX_DEPTH = 32
+
+
+def json_safe(obj, max_nodes=JSON_SAFE_MAX_NODES,
+              max_str=JSON_SAFE_MAX_STR):
+    """(ok, reason): True only for plain JSON-shaped data."""
+    import math
+    count = [0]
+
+    def _walk(o, depth):
+        count[0] += 1
+        if count[0] > max_nodes:
+            return "too-many-nodes"
+        if depth > JSON_SAFE_MAX_DEPTH:
+            return "too-deep"
+        if o is None or o is True or o is False:
+            return None
+        if type(o) is int:
+            return None
+        if type(o) is float:
+            return None if math.isfinite(o) else "non-finite-float"
+        if isinstance(o, str):
+            return None if len(o) <= max_str else "string-too-long"
+        if isinstance(o, list):
+            for v in o:
+                bad = _walk(v, depth + 1)
+                if bad:
+                    return bad
+            return None
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if not isinstance(k, str) or len(k) > max_str:
+                    return "bad-key"
+                bad = _walk(v, depth + 1)
+                if bad:
+                    return bad
+            return None
+        return "non-json-type:%s" % type(o).__name__
+    bad = _walk(obj, 0)
+    return (bad is None, bad or "ok")

@@ -1,23 +1,41 @@
 """Cross-process file primitives (stdlib only).
 
-Single home for the three patterns every writer needs:
-- FileLock: blocking OS-native exclusive lock (fcntl/msvcrt).
+Single home for the patterns every writer needs:
+- FileLock: blocking OS-native exclusive lock (fcntl/msvcrt) layered
+  over a per-PURPOSE in-process RLock. Purposes are a FROZEN allowlist:
+  subsystem writers must never serialize through one global lock (that
+  trades a leak for global contention), and a per-path table would grow
+  without bound in a long-lived process. Unknown purpose = ValueError
+  at acquisition time (fail fast, nothing to grow).
 - atomic_write_bytes: unique temp + file fsync + atomic replace +
-  POSIX directory fsync (fail-closed: any error raises, the final
-  name never appears half-written).
+  POSIX directory fsync (fail-closed).
 - load_json_bounded: size-capped JSON load (fail-closed on oversize).
+- Authority markers: init_marker_path/read_marker/write_marker. A
+  durable SQLite authority (budget, attribution) is created together
+  with a sidecar marker holding the same random init token that is
+  also stored inside the DB. Marker-without-DB means the authority
+  was deleted -> open aborts, NEVER recreates fresh counters.
+  Supervisor fresh-start procedure: delete BOTH files (documented in
+  PHASE_E_AUDIT.md). Total wipe of the directory is indistinguishable
+  from a new deployment (accepted, documented).
 """
 import json
 import os
+import secrets
 import tempfile
 import threading
 
-# One process-wide guard, not one entry per path: the in-process layer
-# only serializes same-process threads (the OS lock serializes
-# processes). A per-path table would retain an entry for every path
-# ever seen — an unbounded leak in a long-lived process. A single
-# RLock holds no per-path state at all, so there is nothing to grow.
-_PROC = threading.RLock()
+# Frozen purpose allowlist. One RLock each; no per-path state.
+_PURPOSES = ("spans", "manifest", "cadence", "digest", "tier",
+             "budget", "attribution", "signal", "general")
+_LOCKS = {p: threading.RLock() for p in _PURPOSES}
+
+
+def _guard(purpose):
+    try:
+        return _LOCKS[purpose]
+    except KeyError:
+        raise ValueError("unknown lock purpose: %r" % (purpose,))
 
 
 class FileLock:
@@ -27,25 +45,27 @@ class FileLock:
     generous timeout) because writer serialization must WAIT, not fail:
     check-then-act races (manifest append, span dedupe, cadence save)
     close only when the check and the act hold the same lock. A
-    same-process threading lock is layered inside because two threads
+    per-purpose threading lock is layered inside because two threads
     may share an OS lock description on some platforms.
     """
 
-    def __init__(self, path, timeout=120.0):
+    def __init__(self, path, purpose="general", timeout=120.0):
         self.path = path
+        self.purpose = purpose
         self.timeout = timeout
         self.fh = None
 
     def __enter__(self):
         import time
+        guard = _guard(self.purpose)
         d = os.path.dirname(os.path.abspath(self.path))
         os.makedirs(d, exist_ok=True)
-        if not _PROC.acquire(timeout=self.timeout):
+        if not guard.acquire(timeout=self.timeout):
             raise TimeoutError("lock busy: %s" % self.path)
         try:
             self.fh = open(self.path, "a+b")
         except OSError:
-            self._proc.release()
+            guard.release()
             raise
         try:
             if os.name == "nt":
@@ -82,7 +102,7 @@ class FileLock:
             except OSError:
                 pass
             self.fh = None
-            _PROC.release()
+            guard.release()
             raise
 
     def __exit__(self, *exc):
@@ -101,7 +121,7 @@ class FileLock:
                     self.fh.close()
         finally:
             self.fh = None
-            _PROC.release()
+            _guard(self.purpose).release()
         return False
 
 
@@ -148,3 +168,39 @@ def load_json_bounded(path, max_bytes=65536):
                          % (size, max_bytes))
     with open(path, encoding="utf-8") as fh:
         return json.load(fh)
+
+
+def init_marker_path(db_path):
+    return db_path + ".init"
+
+
+def write_marker(db_path, token):
+    """Durably record the authority-init token beside the DB."""
+    import time
+    raw = json.dumps({"init_token": token,
+                      "created_ts": int(time.time())},
+                     sort_keys=True).encode("utf-8")
+    atomic_write_bytes(os.path.dirname(os.path.abspath(db_path)),
+                       os.path.basename(init_marker_path(db_path)), raw)
+
+
+def read_marker(db_path):
+    """The init token, or None when no marker file exists. A corrupt
+    marker reads as None (the DB-side token check then decides: a DB
+    whose token cannot be confirmed against a marker is healed only
+    when the DB itself verifies, never trusted blindly)."""
+    try:
+        data = load_json_bounded(init_marker_path(db_path),
+                                 max_bytes=1024)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    token = data.get("init_token")
+    if not isinstance(token, str) or not token:
+        return None
+    return token
+
+
+def fresh_token():
+    return secrets.token_hex(16)

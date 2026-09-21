@@ -7,46 +7,64 @@ spending record: SQLite with one counters row per (cycle_id, symbol)
 plus one row per reservation LEASE. A restarted process reconstructs
 exact counters instead of minting fresh ones.
 
-Fail-closed corruption rule (frozen): a MISSING ledger file for a new
-cycle starts at zero. An EXISTING but corrupt/oversized/unreadable
-ledger NEVER becomes a fresh budget — every operation raises
-AbortCycle (the cycle stops and publishes nothing) instead of
-resetting the safety counters. snapshot() and settle() obey the same
-rule: a missing reservation at settle time is an accounting error,
-not a silent discard.
+Fail-closed rules (frozen):
+- An EXISTING but corrupt/oversized/unreadable ledger NEVER becomes a
+  fresh budget — every operation raises AbortCycle.
+- Deletion of the authority fails closed: the DB is created together
+  with a sidecar init marker holding the same random token that is
+  stored inside the DB. Marker-without-DB aborts ("authority-deleted"),
+  never recreates. Supervisor fresh-start = delete BOTH (documented).
+- PRAGMA integrity_check is READ (== "ok" single row), the table
+  schemas are verified column-exact, and PRAGMA user_version is pinned.
+  A non-ok integrity result aborts — executing the pragma without
+  reading it is not a check.
+- Storage is bounded INCLUDING wal/shm sidecars: main+wal+shm over
+  LEDGER_MAX_BYTES aborts; post-prune reclaim runs
+  wal_checkpoint(TRUNCATE) and VACUUMs when over bound, and a still-
+  over-bound store aborts on the next open.
 
-Leases (idempotent settlement): every reserve mints
-lease_id = "cycle:symbol:kind:seq" and persists it unsettled.
-settle() on an unknown lease raises; settle() twice on the same lease
-raises. The SQLite redesign (not JSON) also removes the 1MiB rewrite-
-the-world cap: rows are per-cycle and pruned by retention (cycles
-older than LEDGER_RETAIN_DAYS vanish on the next reservation —
-bounded storage for unattended runs).
-
-Flow per actual model/tool attempt (enforced by workers.py wrappers,
-never by graph-level counting):
-  lease = budget.reserve_llm()   # BEFORE execution, raises at cap
-  msg = call_with_timeout(...)   # bounded wall clock
-  budget.settle_llm(lease, actual_tokens)  # reconcile; double-settle
-                                           # raises; unknown lease raises
-  # on error/timeout: no settle — the reservation stands (an ambiguous
-  # attempt counts as spent) AND the lease stays open as evidence.
-
-Token reservation: TOKENS_PER_CALL = TOKENS // LLM_CALLS (6250),
-derived from the frozen caps. The wrapper additionally clamps
-provider max_tokens downward and aborts the cycle when actual usage
-breaches the reservation (see workers.py) — the reservation is the
-pre-call gate, the post-call audit closes the loop.
+Reservation model (the pre-call gate): reserve_call(token_need,
+tool_need) validates BOTH needs as exact ints in range (non-int,
+negative, or absurd values are "tokens-unaccountable" aborts, never
+clamped into validity) and persists llm+1/depth+1/tokens+=need/
+tools+=tool_need BEFORE the provider may be touched. settle_call()
+reconciles to measured actuals; unknown lease / double-settle /
+missing counters abort. An unsettled reservation stands charged
+(an ambiguous attempt counts as spent) AND the lease stays open as
+evidence. Tool-only counting (deterministic in-parent parser work,
+no provider) keeps the small reserve_tool path.
 """
 import os
 import sqlite3
 import time
 
+from . import locks
 from . import r15
 
-TOKENS_PER_CALL = r15.TOKENS // r15.LLM_CALLS  # 6250, derived
-LEDGER_RETAIN_DAYS = 7
 LEDGER_MAX_BYTES = 64 << 20
+LEDGER_RETAIN_DAYS = 7
+SCHEMA_VERSION = 1
+TOKENS_ABSOLUTE_MAX = r15.TOKENS  # a single need can never exceed cap
+TOOLS_ABSOLUTE_MAX = r15.TOOL_CALLS
+
+_COUNTERS_DDL = (
+    "CREATE TABLE IF NOT EXISTS counters (cycle TEXT, symbol TEXT, "
+    "llm INT, tools INT, tokens INT, depth INT, start_wall REAL, "
+    "dead INT DEFAULT 0, PRIMARY KEY (cycle, symbol))")
+_LEASES_DDL = (
+    "CREATE TABLE IF NOT EXISTS leases (lease_id TEXT PRIMARY KEY, "
+    "cycle TEXT, symbol TEXT, kind TEXT, reserved INT, actual INT, "
+    "settled INT DEFAULT 0)")
+_META_DDL = ("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, "
+             "v TEXT NOT NULL)")
+
+_EXPECTED_COLUMNS = {
+    "counters": ["cycle", "symbol", "llm", "tools", "tokens", "depth",
+                 "start_wall", "dead"],
+    "leases": ["lease_id", "cycle", "symbol", "kind", "reserved",
+               "actual", "settled"],
+    "meta": ["k", "v"],
+}
 
 
 class LedgerCorrupt(AssertionError):
@@ -58,23 +76,35 @@ def _abort(symbol, reason):
     raise r15.AbortCycle(symbol, {"ledger": reason})
 
 
+def _storage_size(path):
+    total = 0
+    for suffix in ("", "-wal", "-shm"):
+        try:
+            total += os.path.getsize(path + suffix)
+        except OSError:
+            pass
+    return total
+
+
 class BudgetLedger:
     """Atomic SQLite ledger. Cross-process safe via SQLite locking +
-    BEGIN IMMEDIATE; the FileLock serializes schema setup."""
+    BEGIN IMMEDIATE."""
 
     def __init__(self, path):
         self.path = path
 
     def _connect(self, fresh_ok, abort_symbol):
         exists = os.path.exists(self.path)
-        if not exists and not fresh_ok:
-            _abort(abort_symbol, "ledger-missing")
-        if exists:
-            try:
-                if os.path.getsize(self.path) > LEDGER_MAX_BYTES:
-                    raise LedgerCorrupt("oversize")
-            except OSError as e:
-                raise LedgerCorrupt(str(e))
+        marker = locks.read_marker(self.path)
+        if not exists:
+            if marker is not None:
+                # The authority was deleted mid-deployment. Recreate-
+                # as-fresh would zero live counters: abort instead.
+                raise LedgerCorrupt("authority-deleted")
+            if not fresh_ok:
+                _abort(abort_symbol, "ledger-missing")
+        if exists and _storage_size(self.path) > LEDGER_MAX_BYTES:
+            raise LedgerCorrupt("oversize")
         d = os.path.dirname(os.path.abspath(self.path))
         os.makedirs(d, exist_ok=True)
         try:
@@ -86,16 +116,42 @@ class BudgetLedger:
         try:
             con.execute("PRAGMA journal_mode=WAL")
             con.execute("PRAGMA synchronous=FULL")
-            con.execute(
-                "CREATE TABLE IF NOT EXISTS counters (cycle TEXT, "
-                "symbol TEXT, llm INT, tools INT, tokens INT, depth INT,"
-                " start_wall REAL, dead INT DEFAULT 0, "
-                "PRIMARY KEY (cycle, symbol))")
-            con.execute(
-                "CREATE TABLE IF NOT EXISTS leases (lease_id TEXT "
-                "PRIMARY KEY, cycle TEXT, symbol TEXT, kind TEXT, "
-                "reserved INT, actual INT, settled INT DEFAULT 0)")
-            con.execute("PRAGMA integrity_check")
+            con.execute(_COUNTERS_DDL)
+            con.execute(_LEASES_DDL)
+            con.execute(_META_DDL)
+            for table, cols in _EXPECTED_COLUMNS.items():
+                got = [r[1] for r in con.execute(
+                    "PRAGMA table_info(%s)" % table)]
+                if got != cols:
+                    raise LedgerCorrupt("schema-mismatch:%s" % table)
+            row = con.execute("PRAGMA integrity_check").fetchone()
+            if row is None or row[0] != "ok":
+                raise LedgerCorrupt("integrity:%r" % (row,))
+            ver = con.execute("PRAGMA user_version").fetchone()[0]
+            cur = con.execute(
+                "SELECT v FROM meta WHERE k='init_token'").fetchone()
+            if not exists and marker is None:
+                # Genuine first init: mint the token inside the DB,
+                # then publish the sidecar marker. A crash between
+                # the two heals on next open (DB verifies, marker
+                # re-created from the DB token).
+                token = locks.fresh_token()
+                con.execute("PRAGMA user_version=%d" % SCHEMA_VERSION)
+                con.execute("INSERT INTO meta VALUES ('init_token',?)",
+                            (token,))
+                locks.write_marker(self.path, token)
+            else:
+                if ver != SCHEMA_VERSION:
+                    raise LedgerCorrupt("version:%r" % (ver,))
+                if cur is None:
+                    raise LedgerCorrupt("token-missing")
+                if marker is None:
+                    locks.write_marker(self.path, cur[0])
+                elif marker != cur[0]:
+                    raise LedgerCorrupt("token-mismatch")
+        except LedgerCorrupt:
+            con.close()
+            raise
         except sqlite3.Error as e:
             con.close()
             raise LedgerCorrupt(str(e))
@@ -108,6 +164,25 @@ class BudgetLedger:
             "DELETE FROM leases WHERE lease_id IN (SELECT l.lease_id "
             "FROM leases l LEFT JOIN counters c ON l.cycle = c.cycle "
             "AND l.symbol = c.symbol WHERE c.cycle IS NULL)")
+
+    def _reclaim(self):
+        """Bounded-storage policy: checkpoint the WAL away and vacuum
+        when over bound. Runs outside any transaction; failure to
+        reclaim leaves the next open to abort (fail closed)."""
+        try:
+            con = sqlite3.connect(self.path, timeout=60.0,
+                                  check_same_thread=False,
+                                  isolation_level=None)
+        except sqlite3.Error:
+            return
+        try:
+            con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            if _storage_size(self.path) > LEDGER_MAX_BYTES:
+                con.execute("VACUUM")
+        except sqlite3.Error:
+            pass
+        finally:
+            con.close()
 
     def _row(self, con, cycle_id, symbol, now_wall, create):
         cur = con.execute(
@@ -171,38 +246,58 @@ class BudgetLedger:
         except r15.AbortCycle:
             _abort(symbol, "ledger-unreadable")
 
-    def reserve_llm(self, cycle_id, symbol, reserve_tokens=None,
-                    now_wall=None):
-        reserve_tokens = TOKENS_PER_CALL if reserve_tokens is None \
-            else reserve_tokens
+    @staticmethod
+    def _valid_need(value, maximum, name, symbol):
+        # Exact ints in range. bool is not an int here; floats,
+        # strings, negatives, and over-cap values are accounting
+        # defects, never clamped into validity.
+        if type(value) is not int or not 0 <= value <= maximum:
+            _abort(symbol, "%s-unaccountable" % name)
+
+    def reserve_call(self, cycle_id, symbol, token_need, tool_need,
+                     now_wall=None):
+        """One atomic pre-call reservation: llm+1, depth+1,
+        tokens+=token_need, tools+=tool_need. Returns the lease; the
+        provider may be touched ONLY after this returns."""
+        self._valid_need(token_need, TOKENS_ABSOLUTE_MAX, "tokens",
+                         symbol)
+        self._valid_need(tool_need, TOOLS_ABSOLUTE_MAX, "tools",
+                         symbol)
         now_wall = time.time() if now_wall is None else now_wall
 
         def _res(con):
             self._prune(con, now_wall)
             e = self._row(con, cycle_id, symbol, now_wall, True)
             self._check_row(e, symbol, now_wall)
-            if e[2] + reserve_tokens > r15.TOKENS:
+            if e[2] + token_need > r15.TOKENS:
                 _abort(symbol, "tokens-exhausted")
+            if e[1] + tool_need > r15.TOOL_CALLS:
+                _abort(symbol, "tools-exhausted")
             e[0] += 1
             e[3] += 1
-            e[2] += reserve_tokens
+            e[2] += token_need
+            e[1] += tool_need
+            if e[0] > r15.LLM_CALLS or e[3] > r15.DEPTH:
+                _abort(symbol, "cap-exhausted")
             con.execute(
                 "UPDATE counters SET llm=?, tools=?, tokens=?, depth=?"
                 " WHERE cycle=? AND symbol=?",
                 (e[0], e[1], e[2], e[3], cycle_id, symbol))
-            lease_id = "%s:%s:llm:%d" % (cycle_id, symbol, e[0])
+            lease_id = "%s:%s:call:%d" % (cycle_id, symbol, e[0])
             con.execute(
                 "INSERT INTO leases VALUES (?,?,?,?,?,NULL,0)",
-                (lease_id, cycle_id, symbol, "llm", reserve_tokens))
+                (lease_id, cycle_id, symbol, "call", token_need))
             return {"lease_id": lease_id, "seq": e[0],
-                    "reserved": reserve_tokens,
+                    "reserved": token_need,
+                    "tools_reserved": tool_need,
                     "remaining_tokens": r15.TOKENS - e[2]}
-        return self._op(True, _res, symbol)
+        out = self._op(True, _res, symbol)
+        if _storage_size(self.path) > LEDGER_MAX_BYTES:
+            self._reclaim()
+        return out
 
-    def settle_llm(self, cycle_id, symbol, lease, actual_tokens):
-        if (type(actual_tokens) is not int or actual_tokens < 0 or
-                actual_tokens > 10 ** 12):
-            _abort(symbol, "tokens-unaccountable")
+    def settle_call(self, cycle_id, symbol, lease, actual_tokens):
+        self._valid_need(actual_tokens, 10 ** 12, "tokens", symbol)
 
         def _set(con):
             cur = con.execute(
@@ -227,6 +322,9 @@ class BudgetLedger:
         return self._op(False, _set, symbol)
 
     def reserve_tool(self, cycle_id, symbol, now_wall=None):
+        """In-parent deterministic tool counting (parser work, no
+        provider). Provider tool consumption reserves through
+        reserve_call's tool_need instead."""
         now_wall = time.time() if now_wall is None else now_wall
 
         def _res(con):
@@ -253,7 +351,6 @@ class BudgetLedger:
 
     def invalidate(self, cycle_id, symbol):
         """Poison a (cycle, symbol) after a timeout/ambiguous failure:
-        leaked threads that settle late cannot corrupt accounting, and
         no further reservation succeeds. Missing row: nothing to do."""
 
         def _inv(con):
@@ -264,21 +361,21 @@ class BudgetLedger:
 
 class DurableBudget:
     """Supervisor-owned per-(cycle, symbol) budget handle. Duck-typed
-    to the CycleBudget surface the graph needs (check/reserve/settle/
-    snapshot) plus counter properties for the cadence recorder."""
+    to the surface the graph needs (check/reserve/settle/snapshot)
+    plus counter properties for the cadence recorder."""
 
     def __init__(self, ledger, cycle_id, symbol):
         self.ledger = ledger
         self.cycle_id = cycle_id
         self.symbol = symbol
 
-    def reserve_llm(self, reserve_tokens=None):
-        return self.ledger.reserve_llm(self.cycle_id, self.symbol,
-                                       reserve_tokens)
+    def reserve_call(self, token_need, tool_need=0):
+        return self.ledger.reserve_call(self.cycle_id, self.symbol,
+                                        token_need, tool_need)
 
-    def settle_llm(self, lease, actual_tokens):
-        return self.ledger.settle_llm(self.cycle_id, self.symbol, lease,
-                                      actual_tokens)
+    def settle_call(self, lease, actual_tokens):
+        return self.ledger.settle_call(self.cycle_id, self.symbol,
+                                       lease, actual_tokens)
 
     def reserve_tool(self):
         return self.ledger.reserve_tool(self.cycle_id, self.symbol)
@@ -288,10 +385,6 @@ class DurableBudget:
 
     def invalidate(self):
         self.ledger.invalidate(self.cycle_id, self.symbol)
-
-    def charge_llm(self, tokens=0):
-        lease = self.reserve_llm(reserve_tokens=tokens)
-        self.settle_llm(lease, tokens)
 
     def charge_tool(self):
         self.reserve_tool()
