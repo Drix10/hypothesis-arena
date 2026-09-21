@@ -5,6 +5,7 @@ run_gated boundary), never through doubles of the code under test.
 Multiprocess tests use the spawn context with module-level children;
 a go-file gate forces genuine concurrency on the reservation race.
 """
+import hashlib
 import multiprocessing
 import os
 import sqlite3
@@ -778,6 +779,438 @@ class GraphGovernanceTest(unittest.TestCase):
                 n = 0  # no span ever written: nothing attempted
             con.close()
         self.assertEqual(n, 0)
+
+
+    def test_strict_timeout_blocks_attempt(self):
+        d = tempfile.mkdtemp()
+        T._fixtures(d)
+        gt = T.GraphTest()
+        deps, _c, _l, _led, _g = gt._deps(d, script="t")
+        deps["model_timeout_s"] = "soon"
+        app = T._graph().build_graph(deps)
+        out = T._graph().run_cycle(app, ["AAPL"], 1, "badto")
+        blocked = " ".join(out.get("blocked") or [])
+        self.assertIn("bad-model-timeout", blocked)
+        dbp = attribution._db_for(os.path.join(d, "spans.jsonl"))
+        n = 0
+        if os.path.exists(dbp):
+            con = sqlite3.connect(dbp)
+            try:
+                n = con.execute(
+                    "SELECT COUNT(*) FROM spans WHERE node IN "
+                    "('hypothesize','critique')").fetchone()[0]
+            except sqlite3.OperationalError:
+                n = 0  # no span ever written: nothing attempted
+            con.close()
+        self.assertEqual(n, 0)
+
+
+class TierStateTest(unittest.TestCase):
+    def _gov(self, d, **kw):
+        log = os.path.join(d, "spans.jsonl")
+        return T.spend_mod.SpendGovernor(
+            log, dict(T.PRICING), "G0",
+            state_dir=os.path.join(d, "spend")), log
+
+    def test_deleted_state_fails_closed(self):
+        d = tempfile.mkdtemp()
+        gov, _log = self._gov(d)
+        now = int(time.time())
+        self.assertEqual(gov.evaluate(now)[0], 0)
+        # Journal-free fresh state may re-init; WITH history present
+        # (force a journal row via a transition) deletion aborts.
+        gov._journal(T.spend_mod.TIER_JOURNAL_NAME,
+                     {"ts": now, "from": 0, "to": 0,
+                      "projection_30d": 0.0, "cap": 150.0,
+                      "stage": "G0"})
+        os.remove(os.path.join(d, "spend",
+                               T.spend_mod.TIER_STATE_NAME))
+        with self.assertRaises(T.spend_mod.StateUnavailable):
+            gov.evaluate(now + 3600)
+        self.assertEqual(gov.decision(now + 3600)[0], "deny")
+
+    def test_corrupt_and_future_state_fail_closed(self):
+        d = tempfile.mkdtemp()
+        gov, _log = self._gov(d)
+        now = int(time.time())
+        gov.evaluate(now)
+        sp = os.path.join(d, "spend", T.spend_mod.TIER_STATE_NAME)
+        with open(sp, "wb") as fh:
+            fh.write(b"{corrupt")
+        with self.assertRaises(T.spend_mod.StateUnavailable):
+            gov.evaluate(now + 3600)
+        with open(sp, "w", encoding="utf-8") as fh:
+            import json as _json
+            fh.write(_json.dumps(
+                {"tier": 0, "projection": 0.0,
+                 "evaluated_at": now + 360000, "below_count": 0,
+                 "binding": gov._binding()}))
+        with self.assertRaises(T.spend_mod.StateUnavailable):
+            gov.evaluate(now + 3600)
+
+    def test_config_change_forces_fresh_evaluation(self):
+        d = tempfile.mkdtemp()
+        gov, log = self._gov(d)
+        now = int(time.time())
+        gov.evaluate(now)
+        # Same dir, changed pricing: the cached tier is NOT reused —
+        # a fresh evaluation runs immediately (hourly cache bypassed).
+        gov2 = T.spend_mod.SpendGovernor(
+            log, {"fake": 99.0}, "G0",
+            state_dir=os.path.join(d, "spend"))
+        t, _p = gov2.evaluate(now + 10)
+        self.assertEqual(t, 0)
+        st = gov2._load_state(now + 10)
+        self.assertEqual(st["binding"]["pricing_fp"],
+                         gov2._binding()["pricing_fp"])
+
+    def test_crash_between_journal_and_state_recovers(self):
+        # Injected failure at the exact crash point: journal carries
+        # the transition, state never lands — the next load adopts
+        # the journaled snapshot deterministically.
+        d = tempfile.mkdtemp()
+        gov, _log = self._gov(d)
+        now = int(time.time())
+        gov.evaluate(now)
+        st = gov._initial_state()
+        st.update(tier=2, projection=130.0, evaluated_at=now + 3600,
+                  below_count=0)
+        real_save = gov._save_state
+        try:
+            gov._save_state = lambda s: (_ for _ in ()).throw(
+                OSError("crash"))
+            with self.assertRaises(OSError):
+                gov._save_state_and_journal(
+                    st, T.spend_mod.TIER_JOURNAL_NAME,
+                    {"ts": now + 3600, "from": 0, "to": 2,
+                     "projection_30d": 130.0, "cap": 150.0,
+                     "stage": "G0"})
+        finally:
+            gov._save_state = real_save
+        recovered = gov._load_state(now + 7200)
+        self.assertEqual(recovered["tier"], 2)
+        self.assertEqual(recovered["evaluated_at"], now + 3600)
+
+
+class RatioDaysTest(unittest.TestCase):
+    def _gov(self, d, profits):
+        log = os.path.join(d, "spans.jsonl")
+        calls = {"n": 0}
+
+        def _profit(since):
+            i = min(calls["n"], len(profits) - 1)
+            calls["n"] += 1
+            return profits[i]
+
+        gov = T.spend_mod.SpendGovernor(
+            log, dict(T.PRICING), "G2",
+            state_dir=os.path.join(d, "spend"), profit_since=_profit)
+        return gov, log
+
+    def _seed(self, log, usd, ts):
+        attribution.append_span(log, 1, "seed", "seed",
+                                cycle_id="c", symbol="AAPL",
+                                prompt_tokens=10, completion_tokens=5,
+                                usd=usd, span_id="seed-%d" % ts, ts=ts)
+
+    def test_five_same_day_failures_no_tier3(self):
+        d = tempfile.mkdtemp()
+        gov, log = self._gov(d, [1.0])
+        now = int(time.time())
+        self._seed(log, 300.0, now - 10 * 86400)
+        for i in range(5):
+            self.assertEqual(gov.evaluate(now + i * 60)[0], 0)
+        rows = []
+        jp = os.path.join(d, "spend", T.spend_mod.RATIO_JOURNAL_NAME)
+        import json as _json
+        with open(jp, encoding="utf-8") as fh:
+            for line in fh:
+                if line.strip():
+                    rows.append(_json.loads(line))
+        # One counted evaluation per UTC day, however many hourly
+        # evaluations ran.
+        self.assertEqual(len(rows), 1)
+
+    def test_three_distinct_days_force_tier3(self):
+        d = tempfile.mkdtemp()
+        gov, log = self._gov(d, [1.0])
+        now = int(time.time())
+        self._seed(log, 300.0, now - 10 * 86400)
+        day = now - (now % 86400)
+        self.assertEqual(gov.evaluate(day + 100)[0], 0)
+        self.assertEqual(gov.evaluate(day + 86500)[0], 0)
+        self.assertEqual(gov.evaluate(day + 2 * 86400 + 100)[0], 3)
+
+    def test_ok_day_resets_streak(self):
+        d = tempfile.mkdtemp()
+        # fail, fail, OK (huge profit), fail, fail, fail -> T3 only
+        # on the third consecutive failure AFTER the reset.
+        gov, log = self._gov(d, [1.0, 1.0, 10 ** 9, 1.0, 1.0, 1.0])
+        now = int(time.time())
+        self._seed(log, 300.0, now - 10 * 86400)
+        day = now - (now % 86400)
+        self.assertEqual(gov.evaluate(day + 100)[0], 0)
+        self.assertEqual(gov.evaluate(day + 86500)[0], 0)
+        self.assertEqual(gov.evaluate(day + 2 * 86400 + 100)[0], 0)
+        self.assertEqual(gov.evaluate(day + 3 * 86400 + 100)[0], 0)
+        self.assertEqual(gov.evaluate(day + 4 * 86400 + 100)[0], 0)
+        self.assertEqual(gov.evaluate(day + 5 * 86400 + 100)[0], 3)
+
+    def test_suspended_day_breaks_streak(self):
+        d = tempfile.mkdtemp()
+        # fail, fail, suspended (no profit), fail -> no Tier 3.
+        gov, log = self._gov(d, [1.0, 1.0, 0.0, 1.0])
+        now = int(time.time())
+        self._seed(log, 300.0, now - 10 * 86400)
+        day = now - (now % 86400)
+        self.assertEqual(gov.evaluate(day + 100)[0], 0)
+        self.assertEqual(gov.evaluate(day + 86500)[0], 0)
+        self.assertEqual(gov.evaluate(day + 2 * 86400 + 100)[0], 0)
+        self.assertEqual(gov.evaluate(day + 3 * 86400 + 100)[0], 0)
+
+
+class PublisherHardeningTest(unittest.TestCase):
+    def _pub_deps(self, d, mapp, **kw):
+        deps = {"outdir": os.path.join(d, "out"),
+                "map_path": mapp,
+                "canonical_for": lambda c: T._canon(),
+                "source_watermarks": lambda st: {
+                    "edgar_8k": {"last_observation_at": T.OBS_S,
+                                   "cursor": "g"}}}
+        deps.update(kw)
+        return deps
+
+    def _cand(self, **kw):
+        c = {"kind": "filing_event", "symbols": ["AAPL"],
+             "value": {"type": "enum", "v": "8-K:item-2.02"},
+             "effect": "bullish", "origin": "parser",
+             "provenance_url": "https://example.invalid/x"}
+        c.update(kw)
+        return c
+
+    def test_malformed_direct_calls_closed(self):
+        from plane import publish as pub
+        d = tempfile.mkdtemp()
+        mapp, _dbp, _msha = T._fixtures(d)
+        state = {"epoch": 1, "fused": [self._cand()]}
+        ok = pub.resolve_emit(self._pub_deps(d, mapp), state)
+        self.assertIsNotNone(ok.get("emitted"))
+        for deps, st in (
+                (None, state), ({}, state),
+                (self._pub_deps(d, mapp), None),
+                (self._pub_deps(d, mapp), {"epoch": "x"}),
+                (self._pub_deps(d, mapp), {"epoch": 1}),
+                (self._pub_deps(d, mapp),
+                 {"epoch": 1, "fused": "nope"}),
+                (self._pub_deps(d, mapp),
+                 {"epoch": 1, "fused": [self._cand()],
+                  "history": "str"}),
+                (self._pub_deps(d, mapp),
+                 {"epoch": 1, "fused": [self._cand()],
+                  "history": {"s%d" % i: [] for i in range(17)}}),
+                (dict(self._pub_deps(d, mapp), outdir=""), state),
+                (dict(self._pub_deps(d, mapp),
+                      canonical_for=None), state)):
+            with self.subTest(deps=bool(deps), st=bool(st)):
+                out = pub.resolve_emit(deps, st)
+                self.assertIsNone(out.get("emitted"))
+                self.assertIn("resolve_error", out)
+        # Per-candidate drops (oversize candidate) are counted, not
+        # call-malformed: legitimate-empty with evidence.
+        out = pub.resolve_emit(
+            self._pub_deps(d, mapp),
+            {"epoch": 1, "fused": [{"kind": "x" * 70000}]})
+        self.assertIsNone(out.get("emitted"))
+        self.assertTrue(out.get("empty"))
+        self.assertGreater(out.get("dropped_resolve", 0), 0)
+        # A raising canonical lookup drops the candidate (counted),
+        # never crashes the emit: legitimate-empty, not malformed.
+        def _boom(cand):
+            raise RuntimeError("lookup down")
+        out = pub.resolve_emit(
+            self._pub_deps(d, mapp, canonical_for=_boom), state)
+        self.assertIsNone(out.get("emitted"))
+        self.assertTrue(out.get("empty"))
+        self.assertGreater(out.get("dropped_resolve", 0), 0)
+        # Oversize watermark/history mappings fail closed.
+        wm = {"k%d" % i: {"last_observation_at": T.OBS_S,
+                            "cursor": "c"} for i in range(65)}
+        out = pub.resolve_emit(
+            self._pub_deps(
+                d, mapp,
+                source_watermarks=lambda st: wm), state)
+        self.assertIsNone(out.get("emitted"))
+
+    def test_map_rejections(self):
+        import json as _json
+        from plane import publish as pub
+        d = tempfile.mkdtemp()
+        mapp, _dbp, _msha = T._fixtures(d)
+        state = {"epoch": 1, "fused": [self._cand()]}
+        base = _json.loads(open(mapp, encoding="utf-8").read())
+        cases = []
+        bad = dict(base, cik_to_ticker={"ABC": "AAPL"})
+        cases.append(bad)
+        bad = dict(base, cik_to_ticker={"0000320193": "aapl"})
+        cases.append(bad)
+        bad = dict(base, evil=1)
+        cases.append(bad)
+        bad = dict(base, macro_release_to_symbols={"FOMC": "EURUSD"})
+        cases.append(bad)
+        bad = dict(base, note="n" * 1025)
+        cases.append(bad)
+        for i, m in enumerate(cases):
+            with self.subTest(case=i):
+                p = os.path.join(d, "m%d.json" % i)
+                with open(p, "w", encoding="utf-8") as fh:
+                    fh.write(_json.dumps(m))
+                out = pub.resolve_emit(self._pub_deps(d, p), state)
+                self.assertIsNone(out.get("emitted"))
+                self.assertIn("map_error", out)
+
+
+class ManifestBoundTest(unittest.TestCase):
+    def test_strict_rows_and_huge_manifest(self):
+        import json as _json
+        from plane import emit as emit_mod
+        d = tempfile.mkdtemp()
+        mapp, dbp, msha = T._fixtures(d)
+        outdir = os.path.join(d, "out")
+        ok, (_feat, _c) = __import__('plane.resolver', fromlist=['x']).resolve(
+            {"kind": "filing_event", "symbols": ["AAPL"],
+             "value": {"type": "enum", "v": "8-K:item-2.02"},
+             "effect": "bullish",
+             "provenance_url": "https://example.invalid/x"},
+            T._canon(), T.MAP, origin="parser")
+        self.assertTrue(ok)
+        bid, good = emit_mod.emit_bundle(
+            outdir, 7, [_feat],
+            {"entity_map_version": T.MAP["map_version"],
+             "entity_map_sha256": msha,
+             "sources": {"edgar_8k": {"last_observation_at": T.OBS_S,
+                                          "cursor": "g"}}})
+        # Semantically-wrong rows (right hash shape, wrong envelope
+        # linkage) are ignored, not blessed.
+        with open(os.path.join(outdir, "manifest.jsonl"), "a",
+                  encoding="utf-8") as fh:
+            for bad in ({"bundle_id": "rp-99-row", "commit": True,
+                         "research_epoch": 99, "feature_count": 1,
+                         "entity_map_sha256": msha,
+                         "path": "features-99-rp-99-row.json",
+                         "sha256": "0" * 64},
+                        {"bundle_id": bid, "commit": True,
+                         "research_epoch": 7, "feature_count": -1,
+                         "entity_map_sha256": msha,
+                         "path": os.path.basename(good),
+                         "sha256": "0" * 64}):
+                fh.write(_json.dumps(bad, sort_keys=True) + "\n")
+        self.assertEqual(emit_mod.latest_complete(outdir), good)
+        # A multi-MB hostile manifest stays bounded: garbage oldest,
+        # valid generation newest (inside the tail) still resolves in
+        # bounded time, and the next emit rotates the file back under
+        # the bound while keeping the newest rows resolvable.
+        with open(os.path.join(outdir, "manifest.jsonl"), "a",
+                  encoding="utf-8") as fh:
+            fh.write(("x" * 200 + "\n") * 20000)
+        bid2, good2 = emit_mod.emit_bundle(
+            outdir, 8, [_feat],
+            {"entity_map_version": T.MAP["map_version"],
+             "entity_map_sha256": msha,
+             "sources": {"edgar_8k": {"last_observation_at": T.OBS_S,
+                                          "cursor": "g2"}}})
+        t0 = time.monotonic()
+        self.assertEqual(emit_mod.latest_complete(outdir), good2)
+        self.assertLess(time.monotonic() - t0, 10.0)
+        size = os.path.getsize(os.path.join(outdir, "manifest.jsonl"))
+        self.assertLessEqual(size, emit_mod.MANIFEST_MAX_BYTES)
+        self.assertEqual(emit_mod.latest_complete(outdir), good2)
+
+    def test_reader_falls_back_past_throwing_generation(self):
+        import json as _json
+        from plane import emit as emit_mod
+        from collector import ctx_read
+        d = tempfile.mkdtemp()
+        mapp, dbp, msha = T._fixtures(d)
+        outdir = os.path.join(d, "out")
+        ok, (_feat, _c) = __import__('plane.resolver', fromlist=['x']).resolve(
+            {"kind": "filing_event", "symbols": ["AAPL"],
+             "value": {"type": "enum", "v": "8-K:item-2.02"},
+             "effect": "bullish",
+             "provenance_url": "https://example.invalid/x"},
+            T._canon(), T.MAP, origin="parser")
+        bid1, _p1 = emit_mod.emit_bundle(
+            outdir, 1, [_feat],
+            {"entity_map_version": T.MAP["map_version"],
+             "entity_map_sha256": msha,
+             "sources": {"edgar_8k": {"last_observation_at": T.OBS_S,
+                                          "cursor": "g"}}})
+        # Newer generation: hash-valid + envelope-valid, but the
+        # frozen reader THROWS on it (simulated downstream defect).
+        env = {"schema_version": "f2", "research_epoch": 2,
+               "bundle_id": "rp-2-" + "b" * 64, "commit": True,
+               "watermarks": {}, "features": []}
+        raw = _json.dumps(env, sort_keys=True,
+                          separators=(",", ":")).encode()
+        name = "features-2-rp-2-" + "b" * 64 + ".json"
+        with open(os.path.join(outdir, name), "wb") as fh:
+            fh.write(raw)
+        with open(os.path.join(outdir, "manifest.jsonl"), "a",
+                  encoding="utf-8") as fh:
+            fh.write(_json.dumps(
+                {"bundle_id": "rp-2-" + "b" * 64, "commit": True,
+                 "research_epoch": 2, "feature_count": 0,
+                 "entity_map_sha256": msha, "path": name,
+                 "sha256": hashlib.sha256(
+                     raw).hexdigest()}, sort_keys=True) + "\n")
+        real = ctx_read.read_bundle
+        calls = {"n": 0}
+
+        def _flaky(snap, db, mp, now):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("reader defect")
+            return real(snap, db, mp, now)
+
+        ctx_read.read_bundle = _flaky
+        try:
+            res = emit_mod.read_latest(outdir, dbp, mapp, T.NOW_S)
+        finally:
+            ctx_read.read_bundle = real
+        self.assertIsNotNone(res)
+        self.assertEqual(res["bundle_id"], bid1)
+
+
+class DigestConflictTest(unittest.TestCase):
+    def test_conflict_not_duplicate(self):
+        from plane import digest as digest_mod
+        d = tempfile.mkdtemp()
+        ok, why = digest_mod.append_digest(d, 1, "AAPL", "hypothesize",
+                                           "thesis-one")
+        self.assertEqual((ok, why), (True, "ok"))
+        ok, why = digest_mod.append_digest(d, 1, "AAPL", "hypothesize",
+                                           "thesis-one")
+        self.assertEqual((ok, why), (True, "duplicate"))
+        ok, why = digest_mod.append_digest(d, 1, "AAPL", "hypothesize",
+                                           "thesis-TWO")
+        self.assertEqual((ok, why), (False, "digest-conflict"))
+        rows = open(os.path.join(d, digest_mod.DIGEST_NAME),
+                    encoding="utf-8").read().strip().split("\n")
+        self.assertEqual(len(rows), 1)  # first write wins
+
+    def test_many_epochs_bound_memory(self):
+        from plane import digest as digest_mod
+        d = tempfile.mkdtemp()
+        for e in range(4200):
+            ok, _why = digest_mod.append_digest(d, e, "AAPL",
+                                                "hypothesize", "t%d" % e)
+            self.assertTrue(ok)
+        path = os.path.join(d, digest_mod.DIGEST_NAME)
+        self.assertLessEqual(len(digest_mod._SEEN[path][1]),
+                             digest_mod._SEEN_KEYS_MAX)
+        # Evicted keys re-derive from the file (still correct).
+        ok, why = digest_mod.append_digest(d, 0, "AAPL", "hypothesize",
+                                           "t0")
+        self.assertEqual((ok, why), (True, "duplicate"))
 
 
 if __name__ == "__main__":

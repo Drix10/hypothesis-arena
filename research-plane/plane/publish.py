@@ -43,6 +43,15 @@ from . import schema
 EMIT_MAX_FEATURES = 64  # frozen reader cap, enforced at the producer
 EMIT_MAX_SYMBOLS = 16  # frozen ctx MAX_SYMBOLS, enforced at producer
 CURSOR_MAX_LEN = 256
+# Independent producer-side input bounds (resolve_emit validates its
+# OWN inputs: graph upstream validation is defense-in-depth, never
+# the only check on a direct call).
+WM_SOURCES_MAX = 64
+WM_KEY_MAX = 256
+HISTORY_SOURCES_MAX = 16
+HISTORY_SOURCE_KEY_MAX = 128
+HISTORY_ENTRIES_MAX = 256
+CANDIDATE_BYTES_MAX = 16384
 # Strict map bounds: the pinned map is small and exact; anything
 # larger or misshapen is hostile input, not a map.
 MAP_MAX_CIK = 20000
@@ -122,9 +131,12 @@ def _validate_watermarks(sources, feature_srcs, history_srcs):
     with no valid watermark entry, whose features are dropped."""
     if not isinstance(sources, dict):
         return False, {}, "watermark-shape"
+    if len(sources) > WM_SOURCES_MAX:
+        return False, {}, "watermark-too-many"
     clean = {}
     for sid, w in sources.items():
-        if not isinstance(sid, str) or not sid:
+        if (not isinstance(sid, str) or not sid or
+                len(sid) > WM_KEY_MAX):
             return False, {}, "watermark-shape"
         if (not isinstance(w, dict) or set(w) !=
                 {"last_observation_at", "cursor"} or
@@ -141,16 +153,23 @@ def _validate_watermarks(sources, feature_srcs, history_srcs):
 
 def _validate_history(history):
     """Producer-side history shape check. Returns (clean_or_None,
-    dropped_count). Malformed tails are dropped+counted here so the
-    reader never sees them."""
+    dropped, ok): malformed TOP-level history (not a dict, too many
+    sources) fails closed (ok=False — the emit publishes nothing);
+    malformed tails inside a well-formed mapping are dropped+counted
+    so the reader never sees them."""
     if history is None:
-        return None, 0
+        return None, 0, True
     if not isinstance(history, dict):
-        return None, 1
+        return None, 0, False
+    if len(history) > HISTORY_SOURCES_MAX:
+        return None, 0, False
     clean = {}
     dropped = 0
     for src, entries in history.items():
-        if not isinstance(src, str) or not isinstance(entries, list):
+        if (not isinstance(src, str) or not src or
+                len(src) > HISTORY_SOURCE_KEY_MAX or
+                not isinstance(entries, list) or
+                len(entries) > HISTORY_ENTRIES_MAX):
             dropped += 1
             continue
         good = []
@@ -166,7 +185,7 @@ def _validate_history(history):
             else:
                 dropped += 1
         clean[src] = good
-    return clean, dropped
+    return clean, dropped, True
 
 
 def _feature_lineage_id(feat):
@@ -180,21 +199,67 @@ def _feature_lineage_id(feat):
         schema.canon(lineage)).hexdigest()
 
 
+def _closed(reason, **extra):
+    """Fail-closed resolve outcome: nothing publishes."""
+    out = {"emitted": None, "empty": True, "aborted": False,
+           "resolve_error": reason, "dropped_resolve": 0,
+           "dropped_over_cap": 0}
+    out.update(extra)
+    return out
+
+
 def resolve_emit(deps, state):
-    outdir = deps["outdir"]
+    if not isinstance(deps, dict) or not isinstance(state, dict):
+        return _closed("resolve-shape")
+    outdir = deps.get("outdir")
+    if not isinstance(outdir, str) or not outdir:
+        return _closed("resolve-outdir")
+    if not isinstance(deps.get("map_path"), str):
+        return _closed("resolve-map-path")
+    for key in ("canonical_for", "source_watermarks"):
+        if not callable(deps.get(key)):
+            return _closed("resolve-%s" % key.replace("_", "-"))
+    epoch = state.get("epoch")
+    if type(epoch) is not int or isinstance(epoch, bool) or \
+            not 0 <= epoch <= 2 ** 31 - 1:
+        return _closed("resolve-epoch")
+    if "fused" not in state:
+        return _closed("fused-shape")
+    fused = state.get("fused")
+    if not isinstance(fused, list):
+        return _closed("fused-shape")
+    history, history_dropped, history_ok = _validate_history(
+        state.get("history"))
+    if not history_ok:
+        return _closed("history-shape")
     mapinfo, map_err = _load_map(deps["map_path"])
     if mapinfo is None:
-        return {"emitted": None, "empty": True, "aborted": False,
-                "map_error": map_err, "dropped_resolve": 0}
+        return _closed("map", map_error=map_err)
     map_sha, entity_map = mapinfo
-    history, history_dropped = _validate_history(state.get("history"))
     resolved = []
     dropped = history_dropped
-    for cand in state.get("fused", []):
+    for cand in fused:
         if not isinstance(cand, dict):
             dropped += 1
             continue
-        canon = deps["canonical_for"](cand)
+        # Direct-call candidate bound (no unbounded candidate may
+        # reach the resolver/bundle on this path).
+        ok_c, _why = schema.json_safe(cand)
+        if not ok_c:
+            dropped += 1
+            continue
+        try:
+            oversize = len(schema.canon(cand)) > CANDIDATE_BYTES_MAX
+        except (TypeError, ValueError):
+            oversize = True
+        if oversize:
+            dropped += 1
+            continue
+        try:
+            canon = deps["canonical_for"](cand)
+        except Exception:
+            dropped += 1
+            continue
         if canon is None:
             dropped += 1
             continue
@@ -241,12 +306,16 @@ def resolve_emit(deps, state):
                 "dropped_resolve": dropped + dupes, "dropped_over_cap": 0}
     feature_srcs = {f["source_id"] for f in clean}
     history_srcs = set(history) if history else set()
+    try:
+        wm_sources = deps["source_watermarks"](state)
+    except Exception:
+        return _closed("watermark-callback", watermark_error=True,
+                        dropped_resolve=dropped)
     ok_wm, clean_wm, uncovered = _validate_watermarks(
-        deps["source_watermarks"](state), feature_srcs, history_srcs)
+        wm_sources, feature_srcs, history_srcs)
     if not ok_wm:
-        return {"emitted": None, "empty": True, "aborted": False,
-                "watermark_error": uncovered, "dropped_resolve": dropped,
-                "dropped_over_cap": 0}
+        return _closed("watermark", watermark_error=uncovered,
+                        dropped_resolve=dropped)
     if uncovered:
         # Drop features/history of uncovered sources, count them, emit
         # the covered rest (graceful + safe; coverage failure never
@@ -264,7 +333,7 @@ def resolve_emit(deps, state):
     wm = {"entity_map_version": entity_map["map_version"],
           "entity_map_sha256": map_sha,
           "sources": clean_wm}
-    bid, path = emit_mod.emit_bundle(outdir, state["epoch"], clean, wm,
+    bid, path = emit_mod.emit_bundle(outdir, epoch, clean, wm,
                                      history if history else None)
     return {"emitted": bid, "bundle_path": path, "empty": False,
             "aborted": False, "dropped_resolve": dropped + dupes,
