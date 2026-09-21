@@ -322,7 +322,16 @@ and blocks future spend until a supervisor reconciles.
   deadline, so a mid-frame stall hits the kill path) and the tier
   evaluation holds one lock across load-compute-persist (no stale
   evaluator can overwrite a restrictive tier; the per-day ratio
-  record is inside the same section).
+  record is inside the same section). Tier-2+ research requires the
+  durable signal path: the health hook is telemetry only and can
+  never substitute for the signal_dir sentinel. Unreadable authority
+  markers, tier state, or ratio history fail closed (only provably
+  missing state is fresh; the ratio journal carries a deletion
+  tripwire in tier state, and lost history denies instead of
+  resetting the 3-day streak). Generated text is byte-capped in the
+  child before the IPC envelope; extract cleanup outcome rides the
+envelope and the parent reclaims authoritatively. The kill ladder
+  begins at the deadline (bounded settle grace for exact labels).
 - Projection/tier plumbing: `tier_state.json` (hourly evaluation
   cache + 6-hour anti-flap counter), `tier_journal.jsonl` (every
   transition with its projection), `ratio_journal.jsonl` (daily ratio

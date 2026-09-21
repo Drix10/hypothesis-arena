@@ -284,3 +284,41 @@ plane (Phase D) change any interface a future slice depends on?
   kernel SUCCESS, stdlib FAILURE at the same frozen-collector step
   (pre-existing, untouched). Slice D NOT AUTHORIZED. Phase D NOT closed — this
   record awaits the human re-audit of `c423e20`.
+
+## Addendum 10 — re-audit round 4 fix pass (0dccc0b, agent-side, NOT signed off)
+- The human re-audit of `c423e20` verified the round-3 fixes but
+  withheld sign-off on ten points, all closed in `0dccc0b` with one
+  regression each (see TODO record): Tier-2 research requires the
+  durable signal_dir sentinel (hook-only no longer signallable);
+  migration CREATE + backfill in a single transaction plus an
+  idempotent present-but-empty-over-live heal (pruning makes that
+  state illegitimate: 7d counters vs 30d registry); unreadable
+  markers read as invalid (only FileNotFoundError is absent) and an
+  unreadable tier state raises instead of initializing Tier 0;
+  the ratio journal is read strictly (deleted/empty-with-tripwire,
+  unreadable, malformed, and truncated-tail all deny; one trailing
+  partial line tolerated as crash-mid-append and healed by the next
+  append under the same lock) with the last journaled day tripwired
+  in tier state across binding resets — and the record corrected:
+  suspended days never journal; run_cycle refuses thread_ids whose
+  checkpoint exceeds the 7d R15 window (same cycle_id never mints a
+  second budget); generate text is byte-capped in the child before
+  the envelope (parent check aligned to bytes); extract cleanup
+  outcome rides the envelope with authoritative parent reclaim
+  (reclaim failure is blocked evidence); emit records
+  r15-budget-unreadable instead of swallowing the fail-closed read;
+  the kill ladder begins at the deadline (0.25s settle grace for
+  exact missing-vs-timeout labels; the 10s gentle join now applies
+  only to the post-result reap — a 2s deadline resolves in ~2.3s,
+  previously ~12.3s; the daemon-reader escape is documented as
+  accepted residual).
+- Forensic note (accepted without change): synthetic recovery spans
+  keep epoch=0 / cycle=recovered / symbol=? because unknown_holds
+  carries no cycle/symbol link; the dollars stay conservative and
+  spend authority is unaffected.
+- Batteries on the fix tree: plane 108 + hardening 82 + emit 19 +
+  isolation + sources + stdlib green locally; kernel `build.sh`
+  exit 0; freeze-check PASS; kernel/collector zero-diff. Hosted
+  rerun pending on push; the frozen-collector stdlib failure stays
+  untouched. Slice D NOT AUTHORIZED. Phase D NOT closed — this
+  record awaits the human re-audit of `0dccc0b`.

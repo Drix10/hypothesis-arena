@@ -240,7 +240,14 @@ cycles (registry memory past 30 days) may start over. The same rule covers
 every reader: snapshot/check/settle/invalidate abort on a deleted recent
 row instead of minting zeros. Old ledgers backfill the registry from
 surviving counters rows inside the migration itself, so upgraded
-deployments are protected immediately.
+deployments are protected immediately. The migration is crash-safe
+(CREATE + backfill in one transaction; a present-but-empty registry over
+live counters — impossible via pruning — is healed idempotently).
+Thread identity cannot resurrect a budget: run_cycle refuses a thread_id
+whose checkpoint is older than the 7-day R15 window (same cycle_id never
+mints a second budget). A fail-closed reader error during cadence
+accounting is blocked evidence (r15-budget-unreadable), never a silent
+under-count.
 
 ## 8.5 Feature contract v2 (locked — the only thing that crosses the boundary)
 
