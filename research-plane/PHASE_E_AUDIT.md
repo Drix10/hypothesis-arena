@@ -199,3 +199,30 @@ plane (Phase D) change any interface a future slice depends on?
   integration). It is reported, not fixed: the human re-audit
   should pull the stdlib job log before signing anything that
   depends on the collector suites.
+
+## Addendum 7 — human re-audit fix pass (5f54ee5, agent-side, NOT signed off)
+- The human re-audit of the shipped `62e1019` tree confirmed: hosted
+  plane + kernel SUCCESS, hosted stdlib FAILURE (frozen collector,
+  pre-existing); the first-create race genuinely fixed. It withheld
+  sign-off on five points, all closed in `5f54ee5` with one regression
+  each (see TODO record): strict `record_unknown` (hold-usd equality,
+  reserved/invoked state, unknown_holds identical-idempotent vs
+  conflict-loud, rowcount-verified transitions) on one shared span-
+  identity helper with the normal path (ts is metadata, excluded);
+  tier journal + state under ONE lock acquisition (locked variants,
+  same-file nesting would self-deadlock); pre-provider unwind
+  failures abort with a both-sides snapshot (reservation preserved)
+  plus a verified `mark_invoked` transition; `run_in_process` handoff
+  moved from Queue (30 s post-death get) to a one-shot Pipe (10 s
+  anomaly-only bound, Windows BrokenPipe fails loud).
+- The new strictness exposed a REAL shipped bug the 32/32 claim
+  missed: `record_unknown` stored symbol in the stage column and
+  `'r'` in symbol (swapped INSERT). Fixed, with the column order now
+  pinned by comment + test.
+- Batteries on the fix tree: plane 105 + hardening 64 + emit 19 +
+  isolation + sources + stdlib green locally; kernel `build.sh`
+  exit 0; freeze-check PASS; kernel/collector zero-diff. Hosted
+  plane/kernel rerun pending on push; the frozen-collector stdlib
+  failure is NOT touched (per the re-audit: document, do not fix
+  for the badge). Slice D NOT AUTHORIZED. Phase D NOT closed —
+  this record awaits the human re-audit of `5f54ee5`.

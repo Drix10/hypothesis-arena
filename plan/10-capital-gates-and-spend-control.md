@@ -301,6 +301,12 @@ and blocks future spend until a supervisor reconciles.
   pre-spawn never billed) → `invoked` (post-spawn; never auto-released
   — only clean settlement or supervisor reconcile clears it).
   Committed spend = trailing-30d ledger + outstanding holds.
+  Pre-provider unwind rule: unwinding a reservation before the
+  provider was provably touched settles the lease at zero and
+  releases the hold; if the unwind itself fails, the cycle aborts
+  with a diagnostic snapshot naming both the original and the
+  cleanup failure and the conservative reservation is preserved
+  (never silently the original error alone).
 - UNKNOWN_SPEND: timeout, child crash, provider error after possible
   invocation, or unaccountable usage settles the full token
   reservation, spans the full dollar reservation as unknown (never
