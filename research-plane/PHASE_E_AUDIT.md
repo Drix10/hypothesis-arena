@@ -257,3 +257,29 @@ plane (Phase D) change any interface a future slice depends on?
   stdlib FAILURE at the same frozen-collector step (pre-existing,
   untouched). Slice D NOT AUTHORIZED. Phase D NOT closed — this
   record awaits the human re-audit of `6fe44d5`.
+
+## Addendum 9 — re-audit round 3 fix pass (c423e20, agent-side, NOT signed off)
+- The human re-audit of `6fe44d5` confirmed the round-2 fixes (plus
+  hosted plane/kernel green, stdlib frozen-collector red) but
+  withheld sign-off on four points, all closed in `c423e20` with one
+  regression each (see TODO record): R15 deletion detection now
+  covers every reader — snapshot/check/settle/invalidate abort on a
+  missing row for a recently seen cycle instead of minting zeros
+  (the cycle estimate cannot read zeros over live state);
+  old-ledger migration backfills the cycles registry from surviving
+  counters rows inside the migration itself (upgraded deployments
+  are protected immediately; additive table, fail-closed); tier
+  evaluation holds ONE lock across load-compute-persist (locked
+  persist/ratio variants, tier-first order so no lock cycle; a
+  two-governor stale-writer regression plus a single-acquisition
+  proof); the Pipe frame read is bounded by the call deadline (a
+  mid-frame stall hits the kill path, the reader is joined
+  post-kill, and the dead-child/exit race is settled with a short
+  join so missing-vs-timeout labels stay exact) with partial-frame
+  and 1 MB-streaming regressions.
+- Batteries on the fix tree: plane 105 + hardening 73 + emit 19 +
+  isolation + sources + stdlib green locally; kernel `build.sh`
+  exit 0; freeze-check PASS; kernel/collector zero-diff. Hosted
+  rerun pending on push; the frozen-collector stdlib failure stays
+  untouched. Slice D NOT AUTHORIZED. Phase D NOT closed — this
+  record awaits the human re-audit of `c423e20`.

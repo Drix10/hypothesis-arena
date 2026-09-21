@@ -236,7 +236,11 @@ Budget-ledger durability (frozen): the per-(cycle,symbol) counters live in
 SQLite with a cycle registry alongside. A missing counters row for a cycle
 seen within the 7-day retention window is a deleted authority → the next
 reservation aborts, never fresh counters over live state. Only prune-aged
-cycles (registry memory past 30 days) may start over.
+cycles (registry memory past 30 days) may start over. The same rule covers
+every reader: snapshot/check/settle/invalidate abort on a deleted recent
+row instead of minting zeros. Old ledgers backfill the registry from
+surviving counters rows inside the migration itself, so upgraded
+deployments are protected immediately.
 
 ## 8.5 Feature contract v2 (locked — the only thing that crosses the boundary)
 

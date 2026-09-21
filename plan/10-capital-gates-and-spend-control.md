@@ -317,7 +317,12 @@ and blocks future spend until a supervisor reconciles.
   span first so the ledger carries the reconciled dollars (all
   transitions rowcount-verified); a success-path settlement that
   does not land aborts with the hold retained, never a success
-  return.
+  return. The invocation boundary reads its result pipe while the
+  child runs (large results stream; the frame read shares the call
+  deadline, so a mid-frame stall hits the kill path) and the tier
+  evaluation holds one lock across load-compute-persist (no stale
+  evaluator can overwrite a restrictive tier; the per-day ratio
+  record is inside the same section).
 - Projection/tier plumbing: `tier_state.json` (hourly evaluation
   cache + 6-hour anti-flap counter), `tier_journal.jsonl` (every
   transition with its projection), `ratio_journal.jsonl` (daily ratio
