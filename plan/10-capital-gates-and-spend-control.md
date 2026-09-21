@@ -312,6 +312,12 @@ and blocks future spend until a supervisor reconciles.
   reservation, spans the full dollar reservation as unknown (never
   $0), keeps the hold against the cap, poisons the R15 row, and
   denies all future spend until `reconcile_unknown` attests actuals.
+  Reconcile rules: an attested actual above the reservation is
+  rejected before any mutation; hold-only recovery mints the unknown
+  span first so the ledger carries the reconciled dollars (all
+  transitions rowcount-verified); a success-path settlement that
+  does not land aborts with the hold retained, never a success
+  return.
 - Projection/tier plumbing: `tier_state.json` (hourly evaluation
   cache + 6-hour anti-flap counter), `tier_journal.jsonl` (every
   transition with its projection), `ratio_journal.jsonl` (daily ratio

@@ -232,6 +232,12 @@ A cycle that aborts is not retried within the same interval. There is no
 exponential-retry path that can spend money without bound — that is the failure
 mode that kills unattended agent systems, and it is capped in three places.
 
+Budget-ledger durability (frozen): the per-(cycle,symbol) counters live in
+SQLite with a cycle registry alongside. A missing counters row for a cycle
+seen within the 7-day retention window is a deleted authority → the next
+reservation aborts, never fresh counters over live state. Only prune-aged
+cycles (registry memory past 30 days) may start over.
+
 ## 8.5 Feature contract v2 (locked — the only thing that crosses the boundary)
 
 `features.jsonl` carries typed feature records in complete bundles. One

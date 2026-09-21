@@ -226,3 +226,33 @@ plane (Phase D) change any interface a future slice depends on?
   stdlib FAILURE at the same frozen-collector step (pre-existing,
   untouched per the re-audit: document, do not fix for the badge). Slice D NOT AUTHORIZED. Phase D NOT closed —
   this record awaits the human re-audit of `5f54ee5`.
+
+## Addendum 8 — re-audit round 2 fix pass (6fe44d5, agent-side, NOT signed off)
+- The human re-audit of `5f54ee5`/`a7bbbde` confirmed the five prior
+  fixes but withheld sign-off on eight points, all closed in
+  `6fe44d5` with one regression each (see TODO record): the Pipe now
+  polls/reads WHILE the child runs (a ~1 MB result streams through
+  the finite buffer instead of deadlocking the child's send; an
+  intact envelope proves completion so post-send teardown crashes do
+  not convert accounted work to unknown spend; a missing envelope
+  stays loud; an unkillable child never returns success); hold-only
+  reconcile mints the synthetic unknown span FIRST (the ledger
+  carries the reconciled dollars; the existing span-recovery test
+  now asserts the final span evidence) and every transition is
+  rowcount-verified; attested actual above the reservation
+  hard-rejects before mutation (rollback keeps the hold blocking;
+  the timeout test now attests $0 for not-billed, matching the
+  contract); success-path settlement failure aborts with the hold
+  retained; the R15 ledger keeps a cycle registry (a missing
+  counters row for a recently seen cycle aborts as deleted
+  authority; only prune-aged cycles recreate; additive table, old
+  ledgers upgrade with empty memory); the ratio per-day record holds
+  one lock across check+append; the duplicate timeout test is
+  removed; the map pre-parse bound is truly 1 MiB+1; the
+  pre-provider test asserts the retained reservation.
+- Batteries on the fix tree: plane 105 + hardening 69 + emit +
+  isolation + sources + stdlib green locally; kernel `build.sh`
+  exit 0; freeze-check PASS; kernel/collector zero-diff. Hosted
+  rerun pending on push; the frozen-collector stdlib failure stays
+  untouched. Slice D NOT AUTHORIZED. Phase D NOT closed — this
+  record awaits the human re-audit of `6fe44d5`.
