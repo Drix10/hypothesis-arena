@@ -646,6 +646,14 @@ def _llm_child_main(payload):
             return {"status": "provider-error",
                     "reason": _bounded_repr(e)}
         text = getattr(msg, "content", None)
+        if isinstance(text, str) and \
+                len(text.encode("utf-8")) > RESULT_TEXT_MAX_BYTES:
+            # Oversize provider text never crosses the IPC boundary:
+            # drop it HERE (the parent accounts the spend and records
+            # result-too-large, same as its own post-IPC check).
+            # Measuring costs one transient encode in the disposable
+            # child; the pipe never sees the bytes.
+            text = None
         return {"status": "ok",
                 "text": text if isinstance(text, str) else None,
                 "usage": tape.totals(), "tool_calls": 0}
@@ -686,6 +694,7 @@ def _llm_child_main(payload):
             return {"status": "config-error",
                     "reason": _truncate_bytes("executor:%r" % (e,),
                                               256)}
+        cleanup_note = None
         try:
             agent = CodeAgent(
                 tools=wrapped_tools,
@@ -706,18 +715,24 @@ def _llm_child_main(payload):
             return {"status": "provider-error",
                     "reason": _bounded_repr(e)}
         finally:
+            # Child-side cleanup outcome rides the envelope: the
+            # parent performs authoritative post-child reclaim when
+            # this failed (a successful result must not silently
+            # leak its container).
             for meth in ("cleanup", "delete"):
                 try:
                     getattr(executor, meth, lambda: None)()
-                except Exception:
-                    pass
+                except Exception as e:
+                    if cleanup_note is None:
+                        cleanup_note = _bounded_repr(e)
         tool_calls = sum(t.calls for t in wrapped_tools)
         tool_calls += getattr(agent.python_executor, "calls", 0)
         cands = _to_candidates(result, rec_defaults)
         records = [r for t in wrapped_tools for r in t.records]
         return {"status": "ok", "candidates": cands,
                 "usage": tape.totals(), "tool_calls": tool_calls,
-                "tool_records": records[:CHILD_TOOL_RECORDS_MAX]}
+                "tool_records": records[:CHILD_TOOL_RECORDS_MAX],
+                "cleanup": cleanup_note}
     return {"status": "config-error", "reason": "bad-kind"}
 
 
@@ -1023,17 +1038,33 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
             # Result failure WITH good accounting: blocked evidence,
             # not an abort (the spend is settled and spanned above).
             return {"blocked": "non-string-output"}
-        if len(text) > RESULT_TEXT_MAX_BYTES:
-            # Oversize provider text never crosses into state: the
-            # spend is accounted; the RESULT is dropped + counted.
+        if len(text.encode("utf-8")) > RESULT_TEXT_MAX_BYTES:
+            # Second net behind the child-side drop (same byte
+            # semantics): the spend is accounted; the RESULT is
+            # dropped + counted, never crossed into state.
             return {"blocked": "result-too-large"}
         return {"text": text, "usage": usage}
     cands = child.get("candidates")
     if not isinstance(cands, list):
         return {"blocked": "non-list-candidates"}
-    return {"candidates": cands, "usage": usage,
-            "tool_calls": tool_calls,
-            "tool_records": child.get("tool_records", [])}
+    cleanup_evidence = None
+    if child.get("cleanup"):
+        # Child-side cleanup failed: authoritative post-child
+        # reclaim HERE (the child is dead; docker rm -f cannot race
+        # it). Reclaim failure is blocked evidence — the extraction
+        # succeeded and is accounted, but the leak is counted, never
+        # silent.
+        try:
+            _reap_container(container_name)
+            cleanup_evidence = "container-reaped-by-parent"
+        except Exception as e:
+            return {"blocked": "reap-failed:%s" % _bounded_repr(e)}
+    out = {"candidates": cands, "usage": usage,
+           "tool_calls": tool_calls,
+           "tool_records": child.get("tool_records", [])}
+    if cleanup_evidence is not None:
+        out["cleanup"] = cleanup_evidence
+    return out
 
 
 def _span(log_path, epoch, node, model_id, cycle_id, symbol, pt, ct,

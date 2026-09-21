@@ -182,6 +182,15 @@ def fake_executor_factory():
     return FakeExecutor()
 
 
+class FailCleanupExecutor(FakeExecutor):
+    """Module-level (spawn-picklable) executor double whose cleanup
+    fails: drives the child-envelope cleanup note + parent-side
+    authoritative reclaim path."""
+
+    def cleanup(self):
+        raise RuntimeError("cleanup boom")
+
+
 def fake_tool_factory():
     return []
 
@@ -1669,6 +1678,61 @@ class GraphTest(unittest.TestCase):
         self.assertTrue(out.get("cycle_aborted"))
         blocked = " ".join(out.get("blocked") or [])
         self.assertIn("unsignallable", blocked)
+
+    def test_tier2_hook_only_still_unsignallable(self):
+        # The health hook is supplemental telemetry by contract: a
+        # hook alone (no durable signal_dir) must NOT gate Tier-2
+        # research — otherwise the plane works before any SOFT_KILL
+        # the supervisor can act on.
+        d = tempfile.mkdtemp()
+        _fixtures(d)
+        hooks = []
+        app, deps, calls, log, gov = self._app(
+            d, spend_usd=30.0, hooks=hooks)
+        deps.pop("signal_dir")
+        out = _graph().run_cycle(app, ["AAPL"], 1, "t2h")
+        self.assertTrue(out.get("cycle_aborted"))
+        blocked = " ".join(out.get("blocked") or [])
+        self.assertIn("unsignallable", blocked)
+        rows = [r for r in self._spans(log)
+                if r[0] == "hypothesize"]
+        self.assertEqual(rows, [])
+
+    def test_emit_records_r15_blind(self):
+        # A fail-closed R15 reader error (deleted live counter)
+        # surfaces as blocked evidence in emit — never a silent
+        # under-count of the cadence estimate.
+        d = tempfile.mkdtemp()
+        _fixtures(d)
+        app, deps, calls, log, gov = self._app(d, script="t")
+        led = deps["budget_factory"]("x", "AAPL").ledger
+
+        class _BlindBudget(budgets.DurableBudget):
+            @property
+            def llm(self):
+                raise r15.AbortCycle("c", {})
+        deps["budget_factory"] = (
+            lambda cyc, sym: _BlindBudget(led, cyc, sym))
+        app = _graph().build_graph(deps)
+        out = _graph().run_cycle(app, ["AAPL"], 1, "tem")
+        blocked = " ".join(out.get("blocked") or [])
+        self.assertIn("r15-budget-unreadable", blocked)
+
+    @unittest.skipUnless(_HAS_SMOL, "smolagents missing")
+    def test_extract_cleanup_failure_reaps_and_blocks(self):
+        # Child-side cleanup failure rides the envelope; the parent
+        # performs the authoritative reclaim, and its failure is
+        # blocked evidence (docker rm -f on the unique name fails
+        # with or without a daemon present).
+        d = tempfile.mkdtemp()
+        _fixtures(d)
+        app, deps, calls, log, gov = self._app(
+            d, script="t", extract_stub=False)
+        deps["executor_factory"] = FailCleanupExecutor
+        app = _graph().build_graph(deps)
+        out = _graph().run_cycle(app, ["AAPL"], 1, "tec")
+        blocked = " ".join(out.get("blocked") or [])
+        self.assertIn("reap-failed", blocked)
 
     def test_two_threads_two_identities(self):
         d = tempfile.mkdtemp()

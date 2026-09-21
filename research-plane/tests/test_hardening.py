@@ -529,6 +529,54 @@ class ChildValidationTest(unittest.TestCase):
         self.assertEqual(out["status"], "ok")
         self.assertEqual(out["text"], "thesis")
 
+    def test_generate_text_capped_before_ipc(self):
+        # A 2 MiB provider string never reaches the envelope: the
+        # child drops it (byte-measured) so the pipe never carries
+        # it. Spend accounting is the parent's job; the text is None
+        # exactly as the parent's own oversize path expects.
+        def _huge(cfg):
+            class _P:
+                def generate(self, messages, max_tokens=None, **kw):
+                    return T.FakeMsg("x" * (2 << 20))
+            return _P()
+        p = self._payload(provider_factory=_huge)
+        out = workers._llm_child_main(p)
+        self.assertEqual(out["status"], "ok")
+        self.assertIsNone(out["text"])
+        # Boundary: exactly 1 MiB passes; one byte over does not.
+        for n, want in (((1 << 20), False), ((1 << 20) + 1, True)):
+            def _mk(cfg, _n=n):
+                class _P:
+                    def generate(self, messages, max_tokens=None,
+                                 **kw):
+                        return T.FakeMsg("y" * _n)
+                return _P()
+            got = workers._llm_child_main(
+                self._payload(provider_factory=_mk))
+            self.assertEqual(got["text"] is None, want)
+
+    @unittest.skipUnless(T._HAS_SMOL, "smolagents missing")
+    def test_extract_cleanup_failure_rides_envelope(self):
+        # Child-side Docker cleanup failure is data in the envelope
+        # ("cleanup"), never a swallowed exception: the parent
+        # decides the authoritative reclaim.
+        class _FailCleanup(T.FakeExecutor):
+            def cleanup(self):
+                raise RuntimeError("cleanup boom")
+        p = {"kind": "extract",
+             "provider_factory": T.FakeProvider,
+             "provider_cfg": dict(T._cfg()),
+             "max_tokens": 100, "token_budget": 100000,
+             "sandbox_cfg": dict(T.SANDBOX),
+             "container_name": "miro-c-s-9",
+             "brief": "b", "rec_defaults": {}, "steps": 5,
+             "tool_factory": lambda: [],
+             "executor_factory": _FailCleanup}
+        out = workers._llm_child_main(p)
+        self.assertEqual(out["status"], "ok")
+        self.assertTrue(out["cleanup"])
+        self.assertIn("cleanup boom", out["cleanup"])
+
 
 class BoundedOutputTest(unittest.TestCase):
     def test_huge_repr_never_called(self):
@@ -1394,6 +1442,11 @@ def _big_result(n):
     return "x" * n
 
 
+def _hang_forever():
+    import time as _t
+    _t.sleep(3600)
+
+
 def _partial_stall(conn):
     # 64 raw bytes (not a frame) then silence: the parent sees
     # readable bytes but the frame never completes.
@@ -1634,6 +1687,189 @@ class ReauditFixTest(unittest.TestCase):
                     rows.append(_json.loads(line))
         self.assertTrue(rows)
         self.assertTrue(all(r["to"] == 2 for r in rows))
+
+    def test_timeout_kill_starts_at_deadline(self):
+        # Hard-deadline semantics: the kill ladder begins within a
+        # fraction of a second of the deadline — never seconds
+        # later — and the attempt is still ambiguous (CallTimeout).
+        from plane import timeout as timeout_mod
+        t0 = time.monotonic()
+        with self.assertRaises(timeout_mod.CallTimeout):
+            timeout_mod.run_in_process(_hang_forever, 2)
+        dt = time.monotonic() - t0
+        self.assertGreaterEqual(dt, 2.0)
+        self.assertLess(dt, 6.0)
+        self.assertEqual(multiprocessing.active_children(), [])
+
+    def test_marker_unreadable_is_invalid_not_absent(self):
+        # An unreadable marker (here: a directory in the way —
+        # deterministic, no permission juggling) is "invalid", never
+        # "absent": a missing DB with an unreadable marker must not
+        # mint a fresh authority.
+        d = tempfile.mkdtemp()
+        dbp = os.path.join(d, "ledger.sqlite3")
+        os.mkdir(dbp + ".init")
+        self.assertEqual(locks.marker_state(dbp)[0], "invalid")
+        led = budgets.BudgetLedger(dbp)
+        with self.assertRaises(r15.AbortCycle) as cm:
+            led.reserve_call("c", "AAPL", 10, 0)
+        self.assertIn("marker-invalid", str(cm.exception.snapshot))
+        # Control: a provably missing marker is still absent.
+        os.rmdir(dbp + ".init")
+        self.assertEqual(locks.marker_state(dbp)[0], "absent")
+
+    def test_tier_state_unreadable_denies_not_tier0(self):
+        # A present-but-unreadable tier state (directory in the way)
+        # denies — it must not initialize a fresh Tier 0 that would
+        # loosen T1/T2/T3 gating.
+        from plane import spend as spend_mod
+        d = tempfile.mkdtemp()
+        sdir = os.path.join(d, "spend")
+        os.makedirs(sdir)
+        os.mkdir(os.path.join(sdir, spend_mod.TIER_STATE_NAME))
+        gov = spend_mod.SpendGovernor(
+            os.path.join(d, "spans.jsonl"), dict(T.PRICING), "G0",
+            state_dir=sdir)
+        with self.assertRaises(spend_mod.StateUnavailable):
+            gov.evaluate()
+        verdict, _reason = gov.decision()
+        self.assertEqual(verdict, "deny")
+
+    def _ratio_gov(self, d, stage):
+        from plane import spend as spend_mod
+        log = os.path.join(d, "spans.jsonl")
+        now = int(time.time())
+        attribution.append_span(log, 1, "seed", "m", cycle_id="c",
+                                symbol="AAPL", prompt_tokens=10,
+                                completion_tokens=5, usd=30.0,
+                                span_id="ratio-seed", ts=now)
+        return spend_mod.SpendGovernor(
+            log, dict(T.PRICING), stage,
+            state_dir=os.path.join(d, "spend"),
+            profit_since=lambda since: 100.0)
+
+    def test_ratio_journal_deletion_fails_closed(self):
+        # $30 spend vs $100 profit trips a failed ratio day, which is
+        # journaled and tripwired in state. Deleting the journal then
+        # denies (streak cannot reset to zero); corrupting it denies
+        # too.
+        from plane import spend as spend_mod
+        d = tempfile.mkdtemp()
+        gov = self._ratio_gov(d, "G2")
+        t0 = int(time.time())
+        gov.evaluate(t0)
+        jpath = os.path.join(d, "spend",
+                             spend_mod.RATIO_JOURNAL_NAME)
+        self.assertTrue(os.path.exists(jpath))
+        os.remove(jpath)
+        # Explicit later nows: the hourly state cache must not mask
+        # the journal read (the point of the test is the read).
+        with self.assertRaises(spend_mod.StateUnavailable):
+            gov.evaluate(t0 + 3700)
+        verdict, _reason = gov.decision(t0 + 3700)
+        self.assertEqual(verdict, "deny")
+        # Corrupt (newline-terminated garbage) likewise denies.
+        with open(jpath, "w", encoding="utf-8") as fh:
+            fh.write('{"day": 1, BROKEN\n')
+        with self.assertRaises(spend_mod.StateUnavailable):
+            gov.evaluate(t0 + 7400)
+
+    def test_ratio_first_run_without_journal_is_fresh(self):
+        # Upgrade path: tier history (G0, suspended, never journaled)
+        # plus no ratio journal is a fresh streak, not a deletion —
+        # the first counted day journals cleanly.
+        from plane import spend as spend_mod
+        d = tempfile.mkdtemp()
+        g0 = self._ratio_gov(d, "G0")
+        g0.evaluate()
+        jpath = os.path.join(d, "spend",
+                             spend_mod.RATIO_JOURNAL_NAME)
+        self.assertFalse(os.path.exists(jpath))
+        g2 = self._ratio_gov(d, "G2")
+        g2.evaluate()  # must not raise
+        self.assertTrue(os.path.exists(jpath))
+
+    def test_migration_crash_residue_heals(self):
+        # Crash residue the old migration could leave (registry
+        # present but empty over live counters) is backfilled
+        # idempotently on open — live rows are never treated as new.
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "ledger.sqlite3")
+        led = budgets.BudgetLedger(path)
+        led.reserve_call("c", "AAPL", 10, 0)
+        con = sqlite3.connect(path)
+        con.execute("DELETE FROM cycles")  # crash residue
+        con.commit()
+        con.close()
+        led2 = budgets.BudgetLedger(path)
+        led2.reserve_call("c", "AAPL", 10, 0)  # heals + resumes
+        con = sqlite3.connect(path)
+        reg = con.execute("SELECT COUNT(*) FROM cycles").fetchone()
+        con.execute("DELETE FROM counters")
+        con.commit()
+        con.close()
+        self.assertEqual(reg[0], 1)
+        with self.assertRaises(r15.AbortCycle) as cm:
+            led2.reserve_call("c", "AAPL", 10, 0)
+        self.assertIn("counters-deleted",
+                      str(cm.exception.snapshot))
+
+    def test_stale_thread_refused(self):
+        # A thread_id whose checkpoint outlives the R15 window is
+        # refused (same cycle_id must never mint a second budget);
+        # new threads, recent threads, and unreadable saver state
+        # proceed.
+        from plane import graph as graph_mod
+        import datetime as _dt
+        old = (_dt.datetime.now(_dt.timezone.utc) -
+               _dt.timedelta(days=8)).isoformat()
+        new = (_dt.datetime.now(_dt.timezone.utc) -
+               _dt.timedelta(hours=1)).isoformat()
+
+        class _Snap:
+            def __init__(self, created):
+                self.created_at = created
+
+        class _App:
+            def __init__(self, created, boom=False):
+                self._created = created
+                self._boom = boom
+
+            def get_state(self, _cfg):
+                if self._boom:
+                    raise RuntimeError("no checkpointer")
+                return _Snap(self._created)
+
+        with self.assertRaises(ValueError):
+            graph_mod._reject_stale_thread(_App(old), "t")
+        graph_mod._reject_stale_thread(_App(new), "t")
+        graph_mod._reject_stale_thread(_App(None), "t")
+        graph_mod._reject_stale_thread(_App(old, boom=True), "t")
+        with self.assertRaises(ValueError):
+            graph_mod._reject_stale_thread(_App("not-a-ts"), "t")
+        # Integration: reusing a live thread is not a stale thread.
+        d = tempfile.mkdtemp()
+        con = sqlite3.connect(os.path.join(d, "ckpt.sqlite3"),
+                              check_same_thread=False)
+        from plane import retention as retention_mod
+        from langgraph.graph import StateGraph, END
+        from typing import TypedDict
+
+        class _S(TypedDict):
+            x: int
+
+        g = StateGraph(_S)
+        g.add_node("n", lambda s: {"x": 1})
+        g.set_entry_point("n")
+        g.add_edge("n", END)
+        app = g.compile(
+            checkpointer=retention_mod.make_saver(con))
+        # Integration: the guard reads a real checkpointer — a just
+        # written checkpoint is recent, so reuse proceeds.
+        app.invoke({"x": 0},
+                   {"configurable": {"thread_id": "live"}})
+        graph_mod._reject_stale_thread(app, "live")
+        graph_mod._reject_stale_thread(app, "never-seen")
 
     def test_partial_frame_cannot_hang_recv(self):
         # Pathological sender: partial frame then stall. The bounded

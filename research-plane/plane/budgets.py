@@ -147,13 +147,17 @@ class BudgetLedger:
                 "AND name='cycles'").fetchone() is not None
             con.execute(_CYCLES_DDL)
             if not had_cycles:
-                # Migrate an old ledger: register every surviving
-                # counters row, in one transaction, so deletion
-                # detection works immediately after upgrade (an empty
-                # registry would treat a deleted live row as new).
+                # Migrate an old ledger: CREATE + backfill in ONE
+                # transaction (DDL is transactional in SQLite), so a
+                # crash can only leave the table ABSENT (migration
+                # retries cleanly) — never present-but-empty over
+                # live counters. Every surviving counters row is
+                # registered, so deletion detection works
+                # immediately after upgrade.
                 try:
                     con.execute("BEGIN IMMEDIATE")
                     try:
+                        con.execute(_CYCLES_DDL)
                         con.execute(
                             "INSERT INTO cycles SELECT cycle, symbol, "
                             "start_wall FROM counters")
@@ -166,6 +170,33 @@ class BudgetLedger:
                         raise
                 except sqlite3.Error as e:
                     raise LedgerCorrupt("cycles-backfill:%s" % e)
+            else:
+                # Crash-residue guard: a present-but-empty registry
+                # over live counters is never legitimate (pruning
+                # only forgets cycles whose counters aged out first),
+                # so backfill it idempotently instead of treating
+                # the live rows as new cycles.
+                reg = con.execute(
+                    "SELECT COUNT(*) FROM cycles").fetchone()[0]
+                live = con.execute(
+                    "SELECT COUNT(*) FROM counters").fetchone()[0]
+                if reg == 0 and live > 0:
+                    try:
+                        con.execute("BEGIN IMMEDIATE")
+                        try:
+                            con.execute(
+                                "INSERT OR IGNORE INTO cycles SELECT "
+                                "cycle, symbol, start_wall FROM "
+                                "counters")
+                            con.execute("COMMIT")
+                        except BaseException:
+                            try:
+                                con.execute("ROLLBACK")
+                            except sqlite3.Error:
+                                pass
+                            raise
+                    except sqlite3.Error as e:
+                        raise LedgerCorrupt("cycles-heal:%s" % e)
             for table, cols in _EXPECTED_COLUMNS.items():
                 if table == "cycles" and not had_cycles:
                     # Additive upgrade: a pre-registry ledger gains an

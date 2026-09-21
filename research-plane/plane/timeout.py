@@ -15,6 +15,13 @@ import multiprocessing
 # kill ladder. The RESULT wait itself is the caller's timeout_s
 # (poll below) — this bound covers only post-delivery reaping.
 REAP_GRACE_S = 10.0
+# Dying-window grace between the result deadline and the kill
+# ladder: an already-exited child must read as a missing result
+# (not a timeout), but the kill must still begin promptly — the
+# hard deadline overshoots by at most this plus reap time, never
+# by seconds. join() returns the instant the child exits, so the
+# fast path costs nothing.
+SETTLE_GRACE_S = 0.25
 
 
 class CallTimeout(Exception):
@@ -88,11 +95,16 @@ def _recv_envelope(conn, deadline_s):
     return ("result", env[0], env[1])
 
 
-def _kill_and_reap(proc):
+def _kill_and_reap(proc, grace=REAP_GRACE_S):
     """SIGTERM, escalate to SIGKILL, verify. Returns True when no
-    live worker remains."""
+    live worker remains. grace is the gentle window granted BEFORE
+    the first signal: the result path (child provably done, tearing
+    down) waits for a clean exit; the timeout path passes 0 — the
+    settle grace already gave a dying child its chance, so the
+    kill begins at the deadline instead of seconds later."""
     try:
-        proc.join(REAP_GRACE_S)
+        if grace > 0:
+            proc.join(grace)
         if proc.is_alive():
             proc.terminate()
             proc.join(10)
@@ -109,7 +121,9 @@ def _kill_and_reap(proc):
 
 def run_in_process(func, timeout_s, *args, **kwargs):
     """Run a PICKLABLE func in a child process with a hard kill at
-    timeout_s. Raises CallTimeout (child terminated) or re-raises the
+    timeout_s (the kill ladder begins within SETTLE_GRACE_S of the
+    deadline — just enough to tell an exited child from a live one
+    for exact missing-vs-timeout labels). Raises CallTimeout (child terminated) or re-raises the
     child's exception repr as RuntimeError.
 
     Result handoff over a one-shot Pipe, read WHILE the child runs
@@ -156,20 +170,28 @@ def run_in_process(func, timeout_s, *args, **kwargs):
                                 len(outcome) == 2) else None
         if outcome[0] != "result":
             # No (complete) result. Settle the race between a dead
-            # child (EOF already readable) and a dying one: a short
-            # join first, so an exited child is labeled missing
-            # (not timed out) and a live one is killed below.
-            proc.join(5)
+            # child (EOF already readable) and a dying one with a
+            # bounded grace — then the kill begins immediately, so
+            # the hard deadline overshoots by SETTLE_GRACE_S at
+            # most. A live child afterwards is killed below; an
+            # exited one is labeled missing (not timed out).
+            proc.join(SETTLE_GRACE_S)
             if proc.is_alive():
                 # Deadline with no result, or a frame stalled
                 # mid-send: the child may be blocked or slow —
-                # either way it must die, and the attempt is
+                # either way it must die NOW (grace=0: no second
+                # wait before the first signal), and the attempt is
                 # ambiguous.
-                dead = _kill_and_reap(proc)
+                dead = _kill_and_reap(proc, grace=0)
                 if reader is not None:
                     # The write end is now closed: the stalled reader
                     # unblocks on EOF — join it so no thread debt
-                    # accumulates across cycles.
+                    # accumulates across cycles. Residual risk
+                    # (accepted, documented): on a platform where
+                    # recv() does not unblock after the child dies,
+                    # this daemon thread outlives the call — it never
+                    # blocks the result, and the reaped child
+                    # guarantees no live worker.
                     reader.join(5)
                 if not dead:
                     raise CallTimeout("child unkillable after %.1fs "
@@ -179,7 +201,7 @@ def run_in_process(func, timeout_s, *args, **kwargs):
             # The child is already dead and sent nothing: loud
             # missing result (callers treat it as ambiguous, same
             # conservatism as a timeout, without mislabeling it).
-            _kill_and_reap(proc)
+            _kill_and_reap(proc, grace=0)
             raise RuntimeError("child exited without a result")
         status, payload = outcome[1], outcome[2]
         # Envelope in hand: the call provably completed. Reap

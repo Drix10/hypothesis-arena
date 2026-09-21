@@ -244,7 +244,7 @@ class SpendGovernor:
 
     def _initial_state(self):
         st = {"tier": 0, "projection": 0.0, "evaluated_at": 0,
-              "below_count": 0}
+              "below_count": 0, "ratio_day": 0}
         st["binding"] = self._binding()
         return st
 
@@ -265,8 +265,12 @@ class SpendGovernor:
                     type(eva) is not int or eva < 0 or
                     type(below) is not int or below < 0):
                 return None
+            ratio_day = data.get("ratio_day", 0)
+            if type(ratio_day) is not int or ratio_day < 0:
+                return None
             st = {"tier": tier, "projection": float(proj),
                   "evaluated_at": eva, "below_count": below,
+                  "ratio_day": ratio_day,
                   "binding": data.get("binding")}
         except (TypeError, ValueError):
             return None
@@ -287,10 +291,15 @@ class SpendGovernor:
         try:
             data = locks.load_json_bounded(path,
                                            max_bytes=STATE_MAX_BYTES)
-        except OSError:
+        except FileNotFoundError:
             if os.path.exists(journal):
                 raise StateUnavailable("tier-state-deleted")
             return self._initial_state()
+        except OSError:
+            # Present-but-unreadable (permissions, I/O failure) is
+            # NOT a fresh install: Tier state gates T1/T2/T3, so an
+            # uncertain state denies instead of becoming Tier 0.
+            raise StateUnavailable("tier-state-unreadable")
         except ValueError:
             raise StateUnavailable("tier-state-corrupt")
         st = self._valid_state(data, self._binding())
@@ -298,7 +307,12 @@ class SpendGovernor:
             raise StateUnavailable("tier-state-corrupt")
         if st["binding"] != self._binding():
             # Config changed under the cache: fresh evaluation now.
-            return self._initial_state()
+            # The ratio deletion tripwire survives the reset (ratio
+            # history is config-independent; only the tier reading
+            # goes stale).
+            init = self._initial_state()
+            init["ratio_day"] = st["ratio_day"]
+            return init
         if now is not None and st["evaluated_at"] > now + \
                 EVAL_FUTURE_SKEW_S:
             raise StateUnavailable("tier-state-future")
@@ -466,7 +480,7 @@ class SpendGovernor:
         except attribution.LedgerUnavailable:
             return st["tier"], st["projection"]
         # Ratio-forced Tier 3 (G2/G3 with a wired profit feed).
-        if self._ratio_forces_stop(now, locked=locked):
+        if self._ratio_forces_stop(now, st, locked=locked):
             new_tier = 3
         else:
             new_tier = self._tier_for(proj, cap)
@@ -527,22 +541,123 @@ class SpendGovernor:
             return "ok", "within-ratio"
         return "failed", "ratio-exceeded"
 
-    def _ratio_day_state(self, day):
+    def _ratio_rows_strict(self, journaled_day):
+        """Newest-first ratio-journal rows with fail-closed anomaly
+        handling. journaled_day is the last day the tier state proves
+        was journaled (the deletion tripwire): a missing/empty journal
+        with journaled_day > 0 means evidence was deleted; an
+        unreadable journal, a malformed row, or a newest row older
+        than the tripwire (lost tail rows) means corruption. Any of
+        those raises StateUnavailable — lost ratio history denies,
+        never resets the 3-day streak. A missing journal with
+        journaled_day == 0 is a fresh path (first counted evaluation
+        ever, or a reset before any ratio row existed). One trailing
+        line without its terminating newline is tolerated (crash
+        mid-append; the next append heals it by truncating the
+        partial tail first); every other malformed line is
+        corruption."""
+        if not self.state_dir:
+            return []
+        path = os.path.join(self.state_dir, RATIO_JOURNAL_NAME)
+        try:
+            size = os.path.getsize(path)
+        except FileNotFoundError:
+            if journaled_day > 0:
+                raise StateUnavailable("ratio-journal-deleted")
+            return []
+        except OSError:
+            raise StateUnavailable("ratio-journal-unreadable")
+        if size == 0:
+            if journaled_day > 0:
+                raise StateUnavailable("ratio-journal-deleted")
+            return []
+        try:
+            with open(path, "rb") as fh:
+                if size > JOURNAL_TAIL_BYTES:
+                    fh.seek(size - JOURNAL_TAIL_BYTES)
+                    fh.readline()  # drop the partial first line
+                chunk = fh.read(JOURNAL_TAIL_BYTES + 4096)
+        except OSError:
+            raise StateUnavailable("ratio-journal-unreadable")
+        text = chunk.decode("utf-8", "replace")
+        ends_clean = text.endswith("\n")
+        parts = text.split("\n")
+        rows = []
+        last = len(parts) - 1
+        for i, line in enumerate(parts):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                if i == last and not ends_clean:
+                    # Crash mid-append: the next journaled day
+                    # truncates this partial tail before appending.
+                    continue
+                raise StateUnavailable("ratio-journal-corrupt")
+            if isinstance(row, dict):
+                rows.append(row)
+        rows.reverse()  # newest first (single-writer append order)
+        if journaled_day > 0 and rows:
+            newest = rows[0].get("day")
+            if type(newest) is not int or newest < journaled_day:
+                # Tail rows were lost (truncation/restore): the
+                # surviving history cannot prove the streak.
+                raise StateUnavailable("ratio-journal-truncated")
+        return rows
+
+    def _heal_ratio_tail_locked(self):
+        """Drop a crash-partial trailing line (bytes after the last
+        newline) so buried partials can never accumulate: every
+        append heals the tail first, under the tier lock. A complete
+        row always ends with a newline, so only provably incomplete
+        bytes are removed. No newline in the trailing window means
+        the tail is not a row stream at all — fail closed."""
+        path = os.path.join(self.state_dir, RATIO_JOURNAL_NAME)
+        try:
+            with open(path, "rb") as fh:
+                fh.seek(0, 2)
+                size = fh.tell()
+                fh.seek(max(0, size - 4096))
+                tail = fh.read()
+        except FileNotFoundError:
+            return
+        except OSError:
+            raise StateUnavailable("ratio-journal-unreadable")
+        if tail and not tail.endswith(b"\n"):
+            idx = tail.rfind(b"\n")
+            if idx < 0:
+                raise StateUnavailable("ratio-journal-corrupt")
+            cut = size - (len(tail) - (idx + 1))
+            try:
+                with open(path, "r+b") as fh:
+                    fh.truncate(cut)
+            except OSError:
+                raise StateUnavailable("ratio-journal-unreadable")
+
+    def _ratio_day_state(self, day, journaled_day=0):
         """Recorded ratio state for one UTC day (newest row wins),
         or None when the day was never evaluated (suspended days
-        journal too — audit completeness — but never count as
-        failed)."""
-        for row in self._journal_tail(RATIO_JOURNAL_NAME):
+        never journal — they return before the day-record block —
+        but never count as failed). journaled_day is the tier
+        state's deletion tripwire (see _ratio_rows_strict)."""
+        for row in self._ratio_rows_strict(journaled_day):
             if (type(row.get("day")) is int and row["day"] == day
                     and row.get("state") in ("ok", "failed",
                                                "suspended")):
                 return row["state"]
         return None
 
-    def _ratio_forces_stop(self, now, locked=False):
-        """locked=True: the caller holds the tier lock (see evaluate)
-        — the per-day check+append uses the locked journal path so
-        two evaluators cannot double-count one UTC day."""
+    def _ratio_forces_stop(self, now, st=None, locked=False):
+        """st is the caller's loaded tier state (see evaluate): its
+        ratio_day is the journal-deletion tripwire, and it is
+        advanced here whenever a row is journaled so the advance
+        persists with the evaluation. locked=True: the caller holds
+        the tier lock (see evaluate) — the tail heal, the per-day
+        check+append, and the strict streak read are one critical
+        section, so two evaluators cannot double-count one UTC
+        day."""
         state, _detail = self.ratio_status(now)
         day = now - (now % 86400)
         if state == "suspended":
@@ -553,32 +668,35 @@ class SpendGovernor:
             # (the absolute cap still governs; production governors
             # always carry state_dir — enforced at graph build).
             return False
-        if self._ratio_day_state(day) is None:
+        journaled_day = st["ratio_day"] if st is not None else 0
+        if self._ratio_day_state(day, journaled_day) is None:
             # At most ONE counted evaluation per UTC day: repeated
-            # hourly failures on the same day are one failed day. The
-            # check and the append hold ONE tier-lock acquisition
-            # (no check-then-write window for a second evaluator).
-            if locked:
-                # Outer tier lock already held (see evaluate): the
-                # tail read and the append are one critical section.
-                if self._ratio_day_state(day) is None:
+            # hourly failures on the same day are one failed day.
+            def _record():
+                if self._ratio_day_state(day,
+                                          journaled_day) is None:
+                    self._heal_ratio_tail_locked()
                     self._journal_locked(RATIO_JOURNAL_NAME,
                                          {"day": day, "state": state,
                                           "stage": self.stage})
+                    if st is not None:
+                        st["ratio_day"] = day
+            if locked:
+                # Outer tier lock already held (see evaluate).
+                _record()
             else:
                 lock = self._tier_lock_path()
                 with locks.FileLock(lock, purpose="tier"):
-                    if self._ratio_day_state(day) is None:
-                        self._journal_locked(RATIO_JOURNAL_NAME,
-                                             {"day": day, "state": state,
-                                              "stage": self.stage})
+                    _record()
         # Distinct consecutive FAILED days ending today; an ok day or
         # a missing/suspended day breaks the streak. Only the first
-        # RATIO_FAIL_DAYS days matter (bounded journal scans).
+        # RATIO_FAIL_DAYS days matter (bounded journal scans). The
+        # tripwire follows a just-journaled advance above.
+        trip = st["ratio_day"] if st is not None else journaled_day
         streak = 0
         d = day
         while streak < RATIO_FAIL_DAYS:
-            if self._ratio_day_state(d) != "failed":
+            if self._ratio_day_state(d, trip) != "failed":
                 break
             streak += 1
             d -= 86400

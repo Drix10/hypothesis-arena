@@ -668,8 +668,13 @@ def build_graph(deps):
             return "deny", 3, "governor-error"
 
     def _signallable(state):
-        return bool(deps.get("signal_dir") or
-                    deps.get("health_hook") is not None)
+        # Tier-2+ research requires the DURABLE sentinel path: the
+        # health hook is supplemental telemetry by contract (a hook
+        # failure never breaks the cycle in _ensure_signal), so a
+        # hook alone must not gate Tier-2 work — without signal_dir
+        # the plane could research before any durable SOFT_KILL the
+        # supervisor can act on.
+        return bool(deps.get("signal_dir"))
 
     def hypothesize(state):
         out = {}
@@ -858,6 +863,11 @@ def build_graph(deps):
     def emit(state):
         # Steady-state estimate input: per-cycle model-call totals from
         # the durable budgets (attribution rows remain the audit source).
+        # A deleted live counter now raises AbortCycle here (fail
+        # closed at the reader): that is blocked evidence, never a
+        # silent under-count — the monetary cap stays authoritative
+        # in attribution, but the estimate must say it is blind.
+        r15_blind = False
         try:
             syms = set(state.get("watchlist", [])) | {None}
             cyc = state.get("cycle_id", "local")
@@ -865,8 +875,10 @@ def build_graph(deps):
             for s in syms:
                 try:
                     total += (deps["budget_factory"](cyc, s).llm or 0)
-                except (r15.AbortCycle, _workers.ConfigBlocked,
-                        AttributeError, TypeError):
+                except r15.AbortCycle:
+                    r15_blind = True
+                except (_workers.ConfigBlocked, AttributeError,
+                        TypeError):
                     pass
             deps["cadence_state"].record_cycle(total)
         except (AttributeError, TypeError):
@@ -879,6 +891,8 @@ def build_graph(deps):
         blocked_emit = [_bound_str(b, BLOCKED_CHARS)
                         for b in (state.get("blocked") or [])
                         [:BLOCKED_MAX]]
+        if r15_blind and len(blocked_emit) < BLOCKED_MAX:
+            blocked_emit.append("r15-budget-unreadable")
         if tier >= 2:
             try:
                 _row, hook_note = _ensure_signal("SOFT_KILL", tier,
@@ -973,6 +987,7 @@ def run_cycle(app, watchlist, epoch, thread_id, trigger_symbols=()):
     if type(epoch) is not int or isinstance(epoch, bool) or \
             not 0 <= epoch <= EPOCH_MAX:
         raise ValueError("bad epoch: %r" % (epoch,))
+    _reject_stale_thread(app, thread_id)
     if not _RUN_GUARD.acquire(blocking=False):
         raise RuntimeError("concurrent run_cycle refused: one active "
                            "graph run per process")
@@ -991,6 +1006,39 @@ def run_cycle(app, watchlist, epoch, thread_id, trigger_symbols=()):
                           {"configurable": {"thread_id": thread_id}})
     finally:
         _RUN_GUARD.release()
+
+
+def _reject_stale_thread(app, thread_id):
+    """Refuse a thread_id whose checkpoint outlives R15 budget
+    authority. Counters are retained 7 days while checkpoints live
+    30: resuming (or reusing) a cycle older than the budget window
+    would mint that cycle a fresh budget from zero — same cycle_id,
+    new money. A thread with no checkpoint is new (proceed); a
+    checkpoint with an unreadable timestamp fails closed (age cannot
+    be proven); only a provably recent checkpoint proceeds. A
+    checkpointer that cannot answer at all is not a stale thread —
+    proceed and let invoke surface the real error."""
+    from . import budgets as _budgets
+    try:
+        snap = app.get_state({"configurable":
+                              {"thread_id": thread_id}})
+    except Exception:
+        return
+    created = getattr(snap, "created_at", None)
+    if not created:
+        return
+    try:
+        import datetime as _dt
+        age = time.time() - _dt.datetime.fromisoformat(
+            created).timestamp()
+    except (ValueError, TypeError, OverflowError):
+        raise ValueError("stale thread_id (unreadable checkpoint "
+                         "age): %r" % (thread_id,))
+    if age > _budgets.LEDGER_RETAIN_DAYS * 86400:
+        raise ValueError("stale thread_id (checkpoint %.1f days "
+                         "old, R15 window %d): %r"
+                         % (age / 86400,
+                            _budgets.LEDGER_RETAIN_DAYS, thread_id))
 
 
 def _capped_count(items, limit):

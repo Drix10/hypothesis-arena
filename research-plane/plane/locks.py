@@ -199,8 +199,12 @@ def marker_state(db_path):
 
     - ("absent", None): no marker file at all.
     - ("invalid", None): a marker file exists but is corrupt,
-      oversized, malformed, or carries no usable token. INVALID is
-      NEVER folded into absent: DB-absent + marker-invalid aborts
+      oversized, malformed, carries no usable token, OR cannot be
+      read at all (permissions, I/O failure). Only a PROVABLY
+      missing file (FileNotFoundError) is absent: an unreadable
+      marker with a missing DB must not look like a fresh
+      deployment (that is the spend-reset the marker exists to
+      prevent). DB-absent + marker-invalid aborts
       (a deleted authority with a damaged marker must not look like
       a fresh deployment), and DB-present + marker-invalid aborts
       (an unverifiable authority is not healed blindly).
@@ -209,8 +213,12 @@ def marker_state(db_path):
     try:
         data = load_json_bounded(init_marker_path(db_path),
                                  max_bytes=1024)
-    except OSError:
+    except FileNotFoundError:
         return "absent", None
+    except OSError:
+        # Unreadable (permissions, I/O error, directory in the
+        # way): NOT absent — fail closed as invalid.
+        return "invalid", None
     except ValueError:
         return "invalid", None
     if not isinstance(data, dict):
