@@ -26,12 +26,18 @@ Rules (frozen):
 - kind/source must be in the frozen registry; unknown kind or a kind the
   source cannot emit -> reject (never admitted on structure alone).
 - symbols must resolve through the pinned map (EDGAR CIK or macro
-  release table). Unresolvable -> reject. entity_ref cik contradicting
+  release table) and number at most 16 (frozen ctx MAX_SYMBOLS — the
+  producer enforces the downstream limit, never ships past it).
+  Unresolvable -> reject. entity_ref cik contradicting
   the claimed symbol -> reject ("contradiction").
-- evidence = "source" ONLY if kind, value, symbols, and observed_at_ns
-  are mechanically identical to the canonical record AND the effect
-  equals the parser-assigned canonical effect. Anything else the model
-  touched -> "inference" (CONTEXT-only downstream).
+- evidence = "source" ONLY for a pipeline-owned deterministic-parser
+  origin (origin="parser", stamped by the graph — never by candidate
+  output) with kind, value, symbols, and observed_at_ns mechanically
+  identical to the canonical record AND the effect equal to the
+  parser-assigned canonical effect. LLM-origin output (origin="llm")
+  is ALWAYS "inference", even when its content happens to match:
+  advisory content can never promote itself to evidence. The legacy
+  candidate llm_touched field is IGNORED entirely.
 - effect is never invented: carried from the canonical record when
   present, else "unknown". The resolver owns no directional mapping;
   per-source directional tables are parser config added only with
@@ -60,7 +66,12 @@ def _drop(level):
     return {"high": "medium", "medium": "low", "low": "low"}[level]
 
 
-def resolve(candidate, canonical, entity_map, llm_touched=True):
+def resolve(candidate, canonical, entity_map, origin="llm",
+            llm_touched=True):
+    # origin is pipeline-stamped (graph overwrites worker output to
+    # "llm"); llm_touched is accepted for backward compatibility but
+    # IGNORED — a candidate-controlled trust bit can never earn source
+    # evidence. Only origin="parser" may.
     # Canonical record validation FIRST: malformed trusted input is a
     # counted reject, never a KeyError/TypeError and never a feature.
     if not isinstance(canonical, dict):
@@ -96,7 +107,7 @@ def resolve(candidate, canonical, entity_map, llm_touched=True):
     # Symbols: candidate claim first, canonical record as ground truth.
     claimed = candidate.get("symbols") or []
     if (not isinstance(claimed, list) or not claimed or
-            len(claimed) > 64 or
+            len(claimed) > 16 or
             any(not isinstance(s, str) or not s for s in claimed)):
         return False, "symbols-type"
     tickers = entity_map.get("cik_to_ticker", {})
@@ -146,7 +157,8 @@ def resolve(candidate, canonical, entity_map, llm_touched=True):
     # parser-assigned kind: a candidate must not relabel canonical
     # semantics (e.g. macro_release -> calendar_ahead) while keeping the
     # checked fields identical and still earn evidence=source.
-    identical = (canon_kind == kind and canon_value == value and
+    identical = (origin == "parser" and canon_kind == kind and
+                 canon_value == value and
                  list(canon_symbols) == list(bound) and
                  pub_ns is not None and
                  candidate.get("effect") == canon_effect)
@@ -165,12 +177,15 @@ def resolve(candidate, canonical, entity_map, llm_touched=True):
                   else "unknown")
     # Confidence: computed from tier x timestamp quality x corroboration
     # x PARSER confidence. A low-confidence parse never reaches high,
-    # even on a high-tier source with corroboration.
+    # even on a high-tier source with corroboration. LLM-origin output
+    # additionally drops one level (advisory content, never parser
+    # output) unless corroborated by an independent deterministic
+    # record.
     conf = {"high": "high", "medium": "medium"}.get(
         schema.SOURCE_TIER.get(src, "medium"), "medium")
     if pub_ns is None:
         conf = _drop(conf)
-    if llm_touched and not corroborated:
+    if origin != "parser" and not corroborated:
         conf = _drop(conf)
     for _ in range({"high": 0, "medium": 1, "low": 2}[parser_conf]):
         conf = _drop(conf)

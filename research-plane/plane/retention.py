@@ -25,13 +25,50 @@ CHECKPOINT_ALLOWLIST = (
 )
 
 
-def harden_saver(saver):
-    """Apply the strict deserialization allowlist. Returns the saver
-    to compile the graph with (a clone when the backend derives one)."""
+def make_saver(conn):
+    """Build a SqliteSaver whose deserialization is STRICT: explicit
+    msgpack module allowlist (containers + scalars only), no pickle
+    fallback. FAILS CLOSED: if the strict configuration cannot be
+    established AND verified on the effective serializer, raise
+    instead of compiling a graph over a permissive checkpointer (a
+    security control that fails open is not a control).
+
+    NOTE: this intentionally bypasses with_allowlist(), which is a
+    no-op derivation when the requested types are already inside the
+    default SAFE set — it cannot prove strictness. Construction with
+    explicit allowed_msgpack_modules can."""
     try:
-        return saver.with_allowlist(CHECKPOINT_ALLOWLIST)
-    except (AttributeError, TypeError, ValueError):
-        return saver
+        from langgraph.checkpoint.sqlite import SqliteSaver
+        from langgraph.checkpoint.serde.jsonplus import \
+            JsonPlusSerializer
+    except ImportError as e:
+        raise RuntimeError("checkpoint backend unavailable: %s" % e)
+    allowed = [tuple(t) for t in CHECKPOINT_ALLOWLIST]
+    try:
+        serde = JsonPlusSerializer(pickle_fallback=False,
+                                   allowed_msgpack_modules=allowed,
+                                   allowed_json_modules=allowed)
+    except (TypeError, ValueError) as e:
+        raise RuntimeError("checkpoint hardening unavailable: %s" % e)
+    if getattr(serde, "pickle_fallback", True) is not False:
+        raise RuntimeError("checkpoint pickle fallback not disabled")
+    eff = getattr(serde, "_allowed_msgpack_modules", True)
+    if eff is True or eff is None:
+        raise RuntimeError("checkpoint allowlist not applied")
+    try:
+        saver = SqliteSaver(conn, serde=serde)
+    except TypeError as e:
+        raise RuntimeError("checkpoint saver rejects serde: %s" % e)
+    if getattr(saver, "serde", None) is not serde:
+        raise RuntimeError("checkpoint saver dropped hardened serde")
+    return saver
+
+
+def harden_saver(saver):
+    """Legacy entry: the saver object alone cannot prove strictness
+    (see make_saver). Refuse rather than bless an unverifiable saver."""
+    raise RuntimeError("use retention.make_saver(conn): hardening must "
+                       "be constructed, not derived")
 
 
 def _thread_latest(saver):

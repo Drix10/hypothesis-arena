@@ -115,39 +115,52 @@ def _allowed_top(top):
 
 
 def _record_attempt(log_path, cycle_id, symbol, node, kind, seq, pt=0,
-                    ct=0, category="research", epoch=0, model_id="?"):
+                    ct=0, category="research", outcome="success",
+                    epoch=0, model_id="?", usd=0.0):
     """Exactly one durable span per actual attempt (model generations
     AND executor/tool executions — every budget-consuming try is
     accounted)."""
     attribution.append_span(
         log_path, epoch, node, model_id, cycle_id=cycle_id, stage="r",
-        symbol=symbol, prompt_tokens=pt, completion_tokens=ct, usd=0.0,
-        category=category,
+        symbol=symbol, prompt_tokens=pt, completion_tokens=ct, usd=usd,
+        category=category, outcome=outcome,
         span_id="%s:%s:%s:%s:%d" % (cycle_id, symbol, node, kind,
                                       seq))
 
 
 def _usage_of(msg):
-    """(prompt_tokens, completion_tokens) from a smolagents ChatMessage;
-    (0, 0) when the provider did not report usage (reservation stands)."""
+    """(prompt_tokens, completion_tokens) from a smolagents ChatMessage.
+    Non-integer or negative usage is unaccountable (fail closed — the
+    caller aborts the cycle rather than settling fiction)."""
     usage = getattr(msg, "token_usage", None)
     if usage is None:
         return 0, 0
     try:
-        return int(getattr(usage, "input_tokens", 0) or 0), int(
-            getattr(usage, "output_tokens", 0) or 0)
+        pt = getattr(usage, "input_tokens", 0) or 0
+        ct = getattr(usage, "output_tokens", 0) or 0
     except (TypeError, ValueError):
-        return 0, 0
+        raise ValueError("unaccountable usage")
+    if type(pt) is not int or type(ct) is not int or pt < 0 or ct < 0:
+        raise ValueError("unaccountable usage")
+    return pt, ct
 
 
 class GatedModel:
     """Wraps a smolagents model so EVERY real generation reserves R15
     budget first, executes under the watchdog, reconciles tokens, and
     records exactly one attribution span. Works with any object
-    exposing generate(); production passes OpenAIServerModel."""
+    exposing generate(); production passes OpenAIServerModel.
+
+    Hard token ceiling: provider max_tokens is clamped DOWNWARD to
+    min(caller request, reservation, remaining) — a caller can never
+    widen it (setdefault would). Actual prompt+completion usage is
+    settled after; usage breaching the reservation, exceeding the cap,
+    or unaccountable (negative/non-integer) aborts the cycle instead
+    of settling silently. Timeouts/errors invalidate the budget row so
+    leaked-thread late completions cannot corrupt later accounting."""
 
     def __init__(self, model, budget, node, model_id, cycle_id, symbol,
-                 timeout_s, log_path):
+                 timeout_s, log_path, price_usd_per_1k=0.0):
         self._model = model
         self._budget = budget
         self._node = node
@@ -156,32 +169,60 @@ class GatedModel:
         self._symbol = symbol
         self._timeout_s = timeout_s
         self._log_path = log_path
+        self._price = price_usd_per_1k
 
-    def _span(self, seq, pt, ct, category):
+    def _usd(self, pt, ct):
+        return (pt + ct) / 1000.0 * self._price
+
+    def _span(self, seq, pt, ct, outcome):
         _record_attempt(self._log_path, self._cycle_id, self._symbol,
-                        self._node, "llm", seq, pt, ct, category,
-                        model_id=self._model_id)
+                        self._node, "llm", seq, pt, ct, "research",
+                        outcome, model_id=self._model_id,
+                        usd=self._usd(pt, ct))
 
     def generate(self, messages, **kwargs):
         lease = self._budget.reserve_llm()  # BEFORE execution, or abort
-        kwargs.setdefault("max_tokens",
-                          min(lease["reserved"],
-                              lease["remaining_tokens"]))
+        requested = kwargs.get("max_tokens", budgets.TOKENS_PER_CALL)
+        try:
+            requested = int(requested)
+        except (TypeError, ValueError):
+            requested = budgets.TOKENS_PER_CALL
+        # Clamp DOWNWARD only: the caller never widens the bound.
+        kwargs["max_tokens"] = max(
+            1, min(requested, lease["reserved"],
+                    lease["remaining_tokens"]))
         try:
             msg = timeout_mod.run_with_timeout(
                 self._model.generate, self._timeout_s, messages,
                 **kwargs)
         except timeout_mod.CallTimeout:
             self._span(lease["seq"], 0, 0, "timeout")
+            try:
+                self._budget.invalidate()
+            except r15.AbortCycle:
+                pass
             raise r15.AbortCycle(self._symbol,
                                  {"timeout": True,
                                   "seq": lease["seq"]})
         except Exception:
             self._span(lease["seq"], 0, 0, "error")
             raise
-        pt, ct = _usage_of(msg)
-        self._budget.settle_llm(lease, pt + ct)
-        self._span(lease["seq"], pt, ct, "research")
+        try:
+            pt, ct = _usage_of(msg)
+        except ValueError:
+            self._span(lease["seq"], 0, 0, "error")
+            raise r15.AbortCycle(self._symbol,
+                                 {"unaccountable-usage": True})
+        actual = pt + ct
+        self._budget.settle_llm(lease, actual)
+        self._span(lease["seq"], pt, ct, "success")
+        # Post-call audit: a breached reservation or cap aborts the
+        # cycle HERE (the spend already happened — it is recorded, and
+        # no further call follows).
+        if actual > lease["reserved"] or \
+                self._budget.tokens > r15.TOKENS:
+            raise r15.AbortCycle(self._symbol,
+                                 {"token-breach": actual})
         return msg
 
     def __getattr__(self, name):
@@ -218,14 +259,18 @@ class PrescanningExecutor:
             if self._log_path is not None:
                 _record_attempt(self._log_path, self._cycle_id,
                                 self._symbol, self._node, "exec",
-                                lease["seq"], category="timeout",
+                                lease["seq"], outcome="timeout",
                                 epoch=self._epoch)
+            try:
+                self._budget.invalidate()
+            except (r15.AbortCycle, AttributeError):
+                pass
             raise r15.AbortCycle(self._symbol, {"timeout": True})
         except Exception:
             if self._log_path is not None:
                 _record_attempt(self._log_path, self._cycle_id,
                                 self._symbol, self._node, "exec",
-                                lease["seq"], category="error",
+                                lease["seq"], outcome="error",
                                 epoch=self._epoch)
             raise
         if self._log_path is not None:
@@ -250,7 +295,7 @@ def gate_tool(tool, budget, timeout_s, log_path=None, cycle_id="local",
         except BaseException:
             if log_path is not None:
                 _record_attempt(log_path, cycle_id, symbol, node,
-                                "tool", lease["seq"], category="error",
+                                "tool", lease["seq"], outcome="error",
                                 epoch=epoch)
             raise
         if log_path is not None:
@@ -289,10 +334,43 @@ def _sandbox_kwargs(sandbox_cfg):
     }
 
 
+def make_model(model_cfg, sandbox_cfg):
+    """Build the provider model with host egress FORCED through the
+    deployment allowlist proxy. The model call runs in the host
+    research process (it cannot run inside the code-execution
+    container), so the locked egress boundary for the provider path
+    is the proxy: no egress_proxy in sandbox_cfg -> ConfigBlocked,
+    never a direct-Internet client. client_kwargs carries an httpx
+    client pinned to the proxy; env-derived proxying is not relied
+    upon (explicit, auditable)."""
+    proxy = (sandbox_cfg or {}).get("egress_proxy")
+    if not proxy:
+        raise ConfigBlocked("provider egress proxy not configured")
+    try:
+        from smolagents import OpenAIServerModel
+    except ImportError as e:
+        raise ConfigBlocked("smolagents unavailable: %s" % e)
+    try:
+        import httpx
+    except ImportError as e:
+        raise ConfigBlocked("httpx unavailable: %s" % e)
+    # NOTE: httpx.Client(proxy=...) is IGNORED by some httpx versions
+    # (silently direct!). The proxy is pinned on an explicit
+    # HTTPTransport, which is the version-stable enforcement point.
+    transport = httpx.HTTPTransport(proxy=proxy)
+    return OpenAIServerModel(
+        model_id=model_cfg["model_id"],
+        api_base=model_cfg.get("api_base"),
+        api_key=model_cfg.get("api_key"),
+        client_kwargs={"http_client": httpx.Client(
+            transport=transport)})
+
+
 def make_extract_worker(model_cfg=None, sandbox_cfg=None, tools=(),
                         budget=None, node="extract", cycle_id="local",
                         symbol="?", timeout_s=120.0, log_path=None,
-                        agent_factory=None, model_factory=None):
+                        agent_factory=None, model_factory=None,
+                        executor_factory=None, pricing=None):
     """Build the sandboxed extract worker.
 
     With model_cfg + complete sandbox_cfg the returned worker builds a
@@ -300,8 +378,15 @@ def make_extract_worker(model_cfg=None, sandbox_cfg=None, tools=(),
     authorized-import set, wraps model/executor/tools in the R15
     invocation boundary above, and returns advisory candidates (the
     resolver, not the model, decides evidence). Anything missing ->
-    ConfigBlocked on first use. agent_factory/model_factory are
-    seams for the multi-step regression test (production passes None).
+    ConfigBlocked on first use. agent_factory/model_factory/
+    executor_factory are seams for the regression tests (production
+    passes None). pricing is REQUIRED (missing pricing blocks: an
+    unpriced model never runs, so usd=0.0 always means a zero-price
+    model, never unknown).
+
+    Executor lifecycle: one container executor per run() invocation,
+    ALWAYS cleaned up in finally (success, error, timeout, abort) —
+    repeated cycles cannot accumulate containers.
     """
     if not model_cfg or not model_cfg.get("model_id"):
         def blocked(rec, budget):
@@ -320,46 +405,68 @@ def make_extract_worker(model_cfg=None, sandbox_cfg=None, tools=(),
             raise ConfigBlocked("no R15 budget for live extraction")
         if log_path is None:
             raise ConfigBlocked("no attribution log for live extraction")
+        if not isinstance(pricing, dict) or \
+                model_cfg["model_id"] not in pricing:
+            raise ConfigBlocked("no price for model %r" %
+                                model_cfg.get("model_id"))
+        price = pricing[model_cfg["model_id"]]
         if model_factory is None:
-            try:
-                from smolagents import CodeAgent, DockerExecutor, \
-                    OpenAIServerModel
-            except ImportError as e:
-                raise ConfigBlocked("smolagents unavailable: %s" % e)
-            model = OpenAIServerModel(
-                model_id=model_cfg["model_id"],
-                api_base=model_cfg.get("api_base"),
-                api_key=model_cfg.get("api_key"))
+            model = make_model(model_cfg, sandbox_cfg)
         else:
             model = model_factory(model_cfg)
         gated = GatedModel(model, call_budget, node,
                            model_cfg["model_id"], cycle_id, symbol,
-                           timeout_s, log_path)
+                           timeout_s, log_path, price)
         if agent_factory is not None:
             agent = agent_factory(gated, rec)
             return _to_candidates(agent.run("extract"), rec)
-        executor = DockerExecutor(
-            additional_imports=[],  # image preinstalls everything;
-            # installing here would mutate the frozen image.
-            logger=None,
-            image_name=sandbox_cfg["image_digest"],
-            build_new_image=False,  # missing image = error, never build
-            container_run_kwargs=container_kwargs)
-        agent = CodeAgent(
-            tools=[gate_tool(t, call_budget, timeout_s, log_path,
-                             cycle_id, symbol, node)
-                   for t in tools],
-            model=gated, additional_authorized_imports=sorted(ALLOWLIST),
-            executor=executor, max_steps=10)
-        # Pre-execution gate installed at the exact call boundary (the
-        # in-container authorized-import list is the second layer; the
-        # proxy firewall is the real boundary).
-        agent.python_executor = PrescanningExecutor(
-            agent.python_executor, call_budget, timeout_s, log_path,
-            cycle_id, symbol, node)
-        return _to_candidates(agent.run(
-            "Extract advisory feature candidates as JSON from: %s" %
-            _record_brief(rec)), rec)
+        if executor_factory is not None:
+            ef = executor_factory
+        else:
+            try:
+                from smolagents import CodeAgent, DockerExecutor
+            except ImportError as e:
+                raise ConfigBlocked("smolagents unavailable: %s" % e)
+
+            def _default_executor():
+                return DockerExecutor(
+                    additional_imports=[],  # image preinstalls
+                    # everything; installing here would mutate it.
+                    logger=None,
+                    image_name=sandbox_cfg["image_digest"],
+                    build_new_image=False,  # missing image = error
+                    container_run_kwargs=container_kwargs)
+            ef = _default_executor
+        executor = ef()
+        try:
+            from smolagents import CodeAgent
+        except ImportError as e:
+            raise ConfigBlocked("smolagents unavailable: %s" % e)
+        try:
+            agent = CodeAgent(
+                tools=[gate_tool(t, call_budget, timeout_s, log_path,
+                                 cycle_id, symbol, node)
+                       for t in tools],
+                model=gated,
+                additional_authorized_imports=sorted(ALLOWLIST),
+                executor=executor, max_steps=10)
+            # Pre-execution gate installed at the exact call boundary
+            # (the in-container authorized-import list is the second
+            # layer; the proxy firewall is the real boundary).
+            agent.python_executor = PrescanningExecutor(
+                agent.python_executor, call_budget, timeout_s, log_path,
+                cycle_id, symbol, node)
+            return _to_candidates(agent.run(
+                "Extract advisory feature candidates as JSON from: %s" %
+                _record_brief(rec)), rec)
+        finally:
+            # Container lifecycle closed on EVERY path: success, error,
+            # timeout, abort. No accumulating executors across records.
+            for meth in ("cleanup", "delete"):
+                try:
+                    getattr(executor, meth, lambda: None)()
+                except Exception:
+                    pass
     return run
 
 

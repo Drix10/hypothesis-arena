@@ -12,22 +12,22 @@
   "polls": {
     "edgar_8k": {
       "all_200": true,
-      "p50_ms": 94.0,
-      "p99_ms": 437.0,
+      "p50_ms": 329.0,
+      "p99_ms": 421.0,
       "samples": [
         {
           "bytes": 29455,
-          "latency_ms": 437.0,
+          "latency_ms": 421.0,
           "status": 200
         },
         {
           "bytes": 29455,
-          "latency_ms": 94.0,
+          "latency_ms": 329.0,
           "status": 200
         },
         {
           "bytes": 29455,
-          "latency_ms": 62.0,
+          "latency_ms": 78.0,
           "status": 200
         }
       ],
@@ -35,12 +35,12 @@
     },
     "fed_monetary": {
       "all_200": true,
-      "p50_ms": 79.0,
-      "p99_ms": 328.0,
+      "p50_ms": 93.0,
+      "p99_ms": 343.0,
       "samples": [
         {
           "bytes": 9645,
-          "latency_ms": 328.0,
+          "latency_ms": 343.0,
           "status": 200
         },
         {
@@ -50,13 +50,13 @@
         },
         {
           "bytes": 9645,
-          "latency_ms": 78.0,
+          "latency_ms": 93.0,
           "status": 200
         }
       ],
       "zero_403": true
     }
   },
-  "ts": 1789932481,
+  "ts": 1789959523,
   "ua": "MiroHedge/phase0 contact=research-plane-tier-a"
 }

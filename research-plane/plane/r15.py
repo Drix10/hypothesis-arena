@@ -27,6 +27,7 @@ class CycleBudget:
     def __init__(self, symbol, now=None, cycle_id="local"):
         self.symbol = symbol
         self.cycle_id = cycle_id
+        self._dead = False
         self.llm = 0
         self.tools = 0
         self.tokens = 0
@@ -48,16 +49,25 @@ class CycleBudget:
         self.depth += 1
         self._enforce()
 
+    def invalidate(self):
+        """Poison after a timeout/ambiguous failure: no further
+        reservation succeeds (mirrors the durable ledger)."""
+        self._dead = True
+
     def check(self):
         """Pre-call guard WITHOUT incrementing: raises AbortCycle when
         the cycle is already exhausted. Node boundaries call this;
         actual attempts go through charge_*/reserve_* (workers.py)."""
+        if self._dead:
+            raise AbortCycle(self.symbol, {"dead": True})
         if (self.llm >= LLM_CALLS or self.tools >= TOOL_CALLS or
                 self.tokens >= TOKENS or self.depth >= DEPTH or
                 self._elapsed() > WALL_S):
             raise AbortCycle(self.symbol, self.snapshot())
 
     def _enforce(self):
+        if self._dead:
+            raise AbortCycle(self.symbol, {"dead": True})
         if (self.llm > LLM_CALLS or self.tools > TOOL_CALLS or
                 self.tokens > TOKENS or self.depth > DEPTH or
                 self._elapsed() > WALL_S):

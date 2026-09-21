@@ -89,7 +89,10 @@ def _manifest_has_locked(manifest, bundle_id):
 
 def _manifest_rows(outdir):
     """All manifest rows in append order with sequence numbers.
-    Malformed rows are skipped (counted by callers that care)."""
+    Malformed rows are skipped (never crash the reader); row FIELDS
+    are type-validated before any sort/path processing so hostile
+    manifest data fails closed per-row instead of provoking
+    exceptions."""
     manifest = os.path.join(outdir, MANIFEST_NAME)
     rows = []
     try:
@@ -99,7 +102,12 @@ def _manifest_rows(outdir):
                     row = json.loads(line)
                 except ValueError:
                     continue
-                if isinstance(row, dict) and row.get("commit") is True:
+                if (isinstance(row, dict) and row.get("commit") is True
+                        and isinstance(row.get("bundle_id"), str)
+                        and row.get("bundle_id")
+                        and isinstance(row.get("path"), str)
+                        and isinstance(row.get("sha256"), str)
+                        and type(row.get("research_epoch")) is int):
                     rows.append((seq, row))
     except OSError:
         pass
@@ -146,6 +154,9 @@ def latest_complete(outdir):
     root = os.path.realpath(outdir)
     rows = _manifest_rows(outdir)
     # Newest-first: highest epoch, then latest manifest sequence.
+    # Duplicate bundle_ids are NOT pre-filtered: a corrupt first row
+    # must not poison a valid duplicate (seen marks only VERIFIED
+    # generations).
     rows.sort(key=lambda sr: (sr[1].get("research_epoch", -1), sr[0]),
               reverse=True)
     seen = set()
@@ -153,9 +164,9 @@ def latest_complete(outdir):
         bid = row.get("bundle_id")
         if bid in seen:
             continue
-        seen.add(bid)
         data = _verify_row(root, row.get("path"), row.get("sha256"))
         if data is not None:
+            seen.add(bid)
             return os.path.join(root, os.path.basename(row["path"]))
     return None
 
@@ -194,10 +205,10 @@ def read_latest(outdir, db_path, map_path, now_ts):
         bid = row.get("bundle_id")
         if bid in seen:
             continue
-        seen.add(bid)
         data = _verify_row(root, row.get("path"), row.get("sha256"))
         if data is None:
             continue
+        seen.add(bid)
         snap = _stage_snapshot(data)
         try:
             return ctx_read.read_bundle(snap, db_path, map_path, now_ts)

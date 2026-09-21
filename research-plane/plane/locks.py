@@ -12,13 +12,12 @@ import os
 import tempfile
 import threading
 
-_PROCESS_LOCKS = {}
-_PROCESS_GUARD = threading.Lock()
-
-
-def _proc_lock(name):
-    with _PROCESS_GUARD:
-        return _PROCESS_LOCKS.setdefault(name, threading.Lock())
+# One process-wide guard, not one entry per path: the in-process layer
+# only serializes same-process threads (the OS lock serializes
+# processes). A per-path table would retain an entry for every path
+# ever seen — an unbounded leak in a long-lived process. A single
+# RLock holds no per-path state at all, so there is nothing to grow.
+_PROC = threading.RLock()
 
 
 class FileLock:
@@ -41,8 +40,7 @@ class FileLock:
         import time
         d = os.path.dirname(os.path.abspath(self.path))
         os.makedirs(d, exist_ok=True)
-        self._proc = _proc_lock(os.path.abspath(self.path))
-        if not self._proc.acquire(timeout=self.timeout):
+        if not _PROC.acquire(timeout=self.timeout):
             raise TimeoutError("lock busy: %s" % self.path)
         try:
             self.fh = open(self.path, "a+b")
@@ -84,7 +82,7 @@ class FileLock:
             except OSError:
                 pass
             self.fh = None
-            self._proc.release()
+            _PROC.release()
             raise
 
     def __exit__(self, *exc):
@@ -103,7 +101,7 @@ class FileLock:
                     self.fh.close()
         finally:
             self.fh = None
-            self._proc.release()
+            _PROC.release()
         return False
 
 

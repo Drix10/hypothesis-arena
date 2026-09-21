@@ -95,7 +95,8 @@ class EmitTest(unittest.TestCase):
         return bid, path
 
     def test_roundtrip_source(self):
-        ok, out = resolver.resolve(candidate(), canonical(), MAP)
+        ok, out = resolver.resolve(candidate(), canonical(), MAP,
+                         origin="parser")
         self.assertTrue(ok)
         feat, capped = out
         self.assertFalse(capped)
@@ -146,7 +147,8 @@ class EmitTest(unittest.TestCase):
         self.assertEqual(feat["evidence"], "inference")  # not identical
 
     def test_resolver_confidence_computed(self):
-        ok, (feat, _) = resolver.resolve(candidate(), canonical(), MAP)
+        ok, (feat, _) = resolver.resolve(candidate(), canonical(), MAP,
+                                         origin="parser")
         self.assertEqual(feat["confidence_bucket"], "high")
         ok, (feat2, _) = resolver.resolve(
             candidate(), canonical(corroborated=False), MAP)
@@ -157,7 +159,8 @@ class EmitTest(unittest.TestCase):
             os.path.join(self.d, "empty")))
 
     def test_idempotent_reemit(self):
-        ok, (feat, _) = resolver.resolve(candidate(), canonical(), MAP)
+        ok, (feat, _) = resolver.resolve(candidate(), canonical(), MAP,
+                                         origin="parser")
         outdir = os.path.join(self.d, "out2")
         b1, p1 = emit_mod.emit_bundle(outdir, 7, [feat],
                                       watermarks(self.msha))
@@ -195,7 +198,8 @@ class EmitTest(unittest.TestCase):
     def test_changed_watermarks_new_identity(self):
         # Same epoch + same features, new cursor: different bundle_id,
         # both manifest rows, latest resolves to the NEWER bytes.
-        ok, (feat, _) = resolver.resolve(candidate(), canonical(), MAP)
+        ok, (feat, _) = resolver.resolve(candidate(), canonical(), MAP,
+                                         origin="parser")
         self.assertTrue(ok)
         outdir = os.path.join(self.d, "outW")
         b1, p1 = emit_mod.emit_bundle(outdir, 5, [feat],
@@ -232,7 +236,8 @@ class EmitTest(unittest.TestCase):
     def test_concurrent_same_bundle_emit_once(self):
         # Four processes, one bundle: exactly one manifest row, one id.
         import multiprocessing
-        ok, (feat, _) = resolver.resolve(candidate(), canonical(), MAP)
+        ok, (feat, _) = resolver.resolve(candidate(), canonical(), MAP,
+                                         origin="parser")
         self.assertTrue(ok)
         outdir = os.path.join(self.d, "outC")
         wm = watermarks(self.msha)
@@ -248,7 +253,8 @@ class EmitTest(unittest.TestCase):
     def test_corrupt_newest_falls_back(self):
         # good A, good B, then B's file is damaged: latest resolves B->A
         # instead of blacking out research.
-        ok, (feat, _) = resolver.resolve(candidate(), canonical(), MAP)
+        ok, (feat, _) = resolver.resolve(candidate(), canonical(), MAP,
+                                         origin="parser")
         outdir = os.path.join(self.d, "outF")
         _, pa = emit_mod.emit_bundle(outdir, 1, [feat],
                                       watermarks(self.msha))
@@ -266,7 +272,8 @@ class EmitTest(unittest.TestCase):
         # The frozen reader consumes staged verified bytes: even if
         # every publication file is replaced between verification and
         # consumption, the result stands.
-        ok, (feat, _) = resolver.resolve(candidate(), canonical(), MAP)
+        ok, (feat, _) = resolver.resolve(candidate(), canonical(), MAP,
+                                         origin="parser")
         outdir = os.path.join(self.d, "outT")
         emit_mod.emit_bundle(outdir, 3, [feat], watermarks(self.msha))
         real_read = ctx_read.read_bundle
