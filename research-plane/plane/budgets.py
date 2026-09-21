@@ -95,12 +95,15 @@ class BudgetLedger:
 
     def _connect(self, fresh_ok, abort_symbol):
         exists = os.path.exists(self.path)
-        marker = locks.read_marker(self.path)
+        mstate, marker = locks.marker_state(self.path)
         if not exists:
-            if marker is not None:
+            if mstate == "valid":
                 # The authority was deleted mid-deployment. Recreate-
                 # as-fresh would zero live counters: abort instead.
                 raise LedgerCorrupt("authority-deleted")
+            if mstate == "invalid":
+                # Damaged marker, no DB: cannot prove first install.
+                raise LedgerCorrupt("marker-invalid")
             if not fresh_ok:
                 _abort(abort_symbol, "ledger-missing")
         if exists and _storage_size(self.path) > LEDGER_MAX_BYTES:
@@ -130,7 +133,7 @@ class BudgetLedger:
             ver = con.execute("PRAGMA user_version").fetchone()[0]
             cur = con.execute(
                 "SELECT v FROM meta WHERE k='init_token'").fetchone()
-            if not exists and marker is None:
+            if not exists and mstate == "absent":
                 # Genuine first init: mint the token inside the DB,
                 # then publish the sidecar marker. A crash between
                 # the two heals on next open (DB verifies, marker
@@ -145,7 +148,9 @@ class BudgetLedger:
                     raise LedgerCorrupt("version:%r" % (ver,))
                 if cur is None:
                     raise LedgerCorrupt("token-missing")
-                if marker is None:
+                if mstate == "invalid":
+                    raise LedgerCorrupt("marker-invalid")
+                if mstate == "absent":
                     locks.write_marker(self.path, cur[0])
                 elif marker != cur[0]:
                     raise LedgerCorrupt("token-mismatch")
@@ -297,27 +302,39 @@ class BudgetLedger:
 
     def settle_call(self, cycle_id, symbol, lease, actual_tokens):
         self._valid_need(actual_tokens, 10 ** 12, "tokens", symbol)
+        if actual_tokens > r15.TOKENS:
+            # Actual usage outside the legal cycle bound is an
+            # accounting defect, never a number to store.
+            _abort(symbol, "actual-exceeds-cycle-bound")
 
         def _set(con):
             cur = con.execute(
-                "SELECT reserved, actual, settled FROM leases "
-                "WHERE lease_id = ?", (lease["lease_id"],))
+                "SELECT cycle, symbol, kind, reserved, actual, settled "
+                "FROM leases WHERE lease_id = ?",
+                (lease["lease_id"],))
             r = cur.fetchone()
             if r is None:
                 _abort(symbol, "unknown-lease")
-            if r[2]:
+            if r[5]:
                 _abort(symbol, "double-settle")
-            reserved = r[0]
+            if r[0] != cycle_id or r[1] != symbol or r[2] != "call":
+                # Cross-cycle / cross-symbol / cross-kind settlement
+                # would corrupt another row's counters: refuse loudly.
+                _abort(symbol, "cross-lease-settle")
+            reserved = r[3]
             con.execute(
                 "UPDATE leases SET actual=?, settled=1 WHERE lease_id=?",
                 (actual_tokens, lease["lease_id"]))
             e = self._row(con, cycle_id, symbol, time.time(), False)
             if e is None:
                 _abort(symbol, "counters-missing-at-settle")
-            e[2] = max(0, e[2] - reserved + actual_tokens)
+            new_tokens = e[2] - reserved + actual_tokens
+            if new_tokens < 0:
+                # Counter corruption: clamping to zero would hide it.
+                _abort(symbol, "token-underflow")
             con.execute("UPDATE counters SET tokens=? WHERE cycle=? "
-                        "AND symbol=?", (e[2], cycle_id, symbol))
-            return e[2]
+                        "AND symbol=?", (new_tokens, cycle_id, symbol))
+            return new_tokens
         return self._op(False, _set, symbol)
 
     def reserve_tool(self, cycle_id, symbol, now_wall=None):
@@ -350,11 +367,15 @@ class BudgetLedger:
 
     def invalidate(self, cycle_id, symbol):
         """Poison a (cycle, symbol) after a timeout/ambiguous failure:
-        no further reservation succeeds. Missing row: nothing to do."""
+        no further reservation succeeds. A missing row is a loud
+        defect (invalidating a cycle that never reserved hides
+        ordering bugs), not a silent no-op."""
 
         def _inv(con):
-            con.execute("UPDATE counters SET dead=1 WHERE cycle=? AND"
-                        " symbol=?", (cycle_id, symbol))
+            cur = con.execute("UPDATE counters SET dead=1 WHERE cycle=?"
+                              " AND symbol=?", (cycle_id, symbol))
+            if not cur.rowcount:
+                _abort(symbol, "counters-missing-at-invalidate")
         self._op(True, _inv, symbol)
 
 

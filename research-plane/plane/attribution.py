@@ -26,6 +26,21 @@ reconciles it (reconcile_unknown). usd is caller-supplied from the
 deployment pricing table; 0.0 on a success row means a zero-price
 model, never "unpriced" — unpriced models never run.
 
+Spend authorization is ONE atomic transaction (reserve_spend_hold):
+reap-expired + unknown/invoked block check + committed measurement +
+cap compare + hold insert happen under the same lock inside a single
+BEGIN IMMEDIATE. There is no second non-atomic cap check anywhere.
+Any positive-dollar spend_holds row in state='invoked' counts as
+unresolved unknown spend (crash backstop: an invoked hold without
+its unknown rows still blocks). Ambiguous attempts are recorded by
+record_unknown() in ONE transaction (span + unknown row + invoked
+mark); reconcile_unknown() recovers from a crash at any point of
+that path.
+
+Duplicate span identity is STRICT: same span_id + identical payload
+is an idempotent no-op; same span_id + different payload is a hard
+conflict (never silently INSERT OR IGNORE'd away).
+
 Authoritative-row hardening: every numeric/string field is validated
 in Python AND constrained in DDL (CHECK(usd=usd) rejects NaN,
 usd >= 0 rejects negatives, token bounds, string length bounds,
@@ -36,6 +51,7 @@ spend — except a GENUINELY NEW path (no DB and no init marker),
 which mints fresh. Marker-without-DB aborts (authority-deleted).
 Storage (main+wal+shm) is bounded with checkpoint/vacuum reclaim.
 """
+import hashlib
 import json
 import math
 import os
@@ -47,7 +63,7 @@ from . import locks
 CATEGORIES = ("decision", "research", "experiment", "observability")
 OUTCOMES = ("success", "error", "timeout", "blocked")
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 LEDGER_MAX_BYTES = 64 << 20
 SPAN_RETAIN_DAYS = 120  # > 90d ratio window + margin, then pruned
 
@@ -90,7 +106,7 @@ _RECON_DDL = (
 _SPEND_HOLDS_DDL = (
     "CREATE TABLE IF NOT EXISTS spend_holds ("
     "lease_id TEXT PRIMARY KEY, usd REAL NOT NULL, state TEXT NOT NULL, "
-    "ts INTEGER NOT NULL, "
+    "ts INTEGER NOT NULL, span_id TEXT, "
     "CHECK (usd = usd AND usd >= 0), "
     "CHECK (state IN ('reserved','invoked')))")
 _META_DDL = ("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, "
@@ -105,12 +121,19 @@ _EXPECTED_COLUMNS = {
                       "reconciled"],
     "reconciliations": ["lease_id", "old_usd", "new_usd", "ts",
                         "note"],
-    "spend_holds": ["lease_id", "usd", "state", "ts"],
+    "spend_holds": ["lease_id", "usd", "state", "ts", "span_id"],
     "meta": ["k", "v"],
 }
 
 
 class LedgerUnavailable(Exception):
+    pass
+
+
+class SpendBlocked(Exception):
+    """Authoritative spend refusal from inside the ledger
+    transaction (cap crossed, unknowns pending, unmeasurable). The
+    governor converts this to SpendRefused; it is never a crash."""
     pass
 
 
@@ -126,12 +149,16 @@ def _storage_size(path):
 
 def _connect(db_path, create=False):
     exists = os.path.exists(db_path)
-    marker = locks.read_marker(db_path)
+    mstate, marker = locks.marker_state(db_path)
     if not exists:
-        if marker is not None:
+        if mstate == "valid":
             # The spend authority was deleted. A missing ledger must
             # block, never report $0 — recreating fresh would too.
             raise LedgerUnavailable("attribution authority deleted")
+        if mstate == "invalid":
+            # A damaged marker with no DB is indistinguishable from a
+            # deleted authority: fail closed, never mint fresh.
+            raise LedgerUnavailable("attribution marker invalid")
         if not create:
             raise LedgerUnavailable("attribution ledger missing: %s"
                                     % db_path)
@@ -163,7 +190,7 @@ def _connect(db_path, create=False):
         ver = con.execute("PRAGMA user_version").fetchone()[0]
         cur = con.execute(
             "SELECT v FROM meta WHERE k='init_token'").fetchone()
-        if not exists and marker is None:
+        if not exists and mstate == "absent":
             token = locks.fresh_token()
             con.execute("PRAGMA user_version=%d" % SCHEMA_VERSION)
             con.execute("INSERT INTO meta VALUES ('init_token',?)",
@@ -174,7 +201,13 @@ def _connect(db_path, create=False):
                 raise LedgerUnavailable("version:%r" % (ver,))
             if cur is None:
                 raise LedgerUnavailable("token-missing")
-            if marker is None:
+            if mstate == "invalid":
+                # The DB verifies but its authority token cannot be
+                # confirmed: not healed blindly, abort.
+                raise LedgerUnavailable("marker-invalid")
+            if mstate == "absent":
+                # Heal ONLY here: the DB verified (schema +
+                # integrity above) and carries a valid token.
                 locks.write_marker(db_path, cur[0])
             elif marker != cur[0]:
                 raise LedgerUnavailable("token-mismatch")
@@ -203,7 +236,9 @@ def _check_int(name, value, lo, hi):
 
 
 def _check_usd(value):
-    if (not isinstance(value, (int, float)) or
+    # Type-exact (bool is NOT a number here) and finite: neither a
+    # True==1 discount nor an infinite reservation may move money.
+    if (type(value) not in (int, float) or
             not math.isfinite(value) or not 0 <= value <= USD_MAX):
         raise ValueError("bad usd: %r" % (value,))
 
@@ -213,10 +248,14 @@ def append_span(log_path, epoch, node, model_id, calls=1, tokens=0,
                 symbol="?", prompt_tokens=0, completion_tokens=0,
                 usd=None, category="research", outcome="success",
                 ts=None, is_unknown=False):
-    """Append one span. With span_id: INSERT OR IGNORE under the
-    inter-process lock, and the JSONL mirror is appended ONLY when the
-    insert actually lands (cursor rowcount) — concurrent duplicates
-    collapse to one ledger row AND one mirror row.
+    """Append one span. Duplicate span identity is STRICT: the same
+    span_id with an IDENTICAL payload is an idempotent no-op (ledger
+    and mirror both converge); the same span_id with a DIFFERENT
+    payload is a hard ValueError conflict — conflicting spend data is
+    never silently INSERT OR IGNORE'd away. The JSONL mirror is
+    appended ONLY when the insert actually lands, so retries never
+    duplicate the mirror; sync_mirror() regenerates it from the
+    ledger.
 
     Authoritative validation: negative/NaN/infinite usd, negative or
     non-integer token counts, over-long identities, and off-enum
@@ -270,16 +309,39 @@ def append_span(log_path, epoch, node, model_id, calls=1, tokens=0,
         # blocks instead of resetting spend to zero.
         con = _connect(db_path, create=True)
         try:
-            cur = con.execute(
-                "INSERT OR IGNORE INTO spans (span_id, ts, "
-                "research_epoch, cycle_id, stage, symbol, node, model,"
-                " prompt_tokens, completion_tokens, usd, category, "
-                "outcome, is_unknown) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (span_id, ts, epoch, cycle_id, stage, symbol, node,
-                 model_id, prompt_tokens, completion_tokens, usd,
-                 category, outcome, 1 if is_unknown else 0))
-            inserted = cur.rowcount
+            payload = (ts, epoch, cycle_id, stage, symbol, node,
+                       model_id, prompt_tokens, completion_tokens,
+                       usd, category, outcome, 1 if is_unknown else 0)
+            got = con.execute(
+                "SELECT ts, research_epoch, cycle_id, stage, symbol, "
+                "node, model, prompt_tokens, completion_tokens, usd, "
+                "category, outcome, is_unknown FROM spans WHERE "
+                "span_id=?", (span_id,)).fetchone()
+            if got is not None:
+                if tuple(got) != payload:
+                    raise ValueError("span-conflict: %s" % span_id)
+                inserted = False
+            else:
+                try:
+                    con.execute(
+                        "INSERT INTO spans (span_id, ts, "
+                        "research_epoch, cycle_id, stage, symbol, node, "
+                        "model, prompt_tokens, completion_tokens, usd, "
+                        "category, outcome, is_unknown) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (span_id,) + payload)
+                except sqlite3.IntegrityError:
+                    # Lost a same-id race: re-read and decide (never
+                    # blind-ignore — the winner may disagree).
+                    got = con.execute(
+                        "SELECT ts, research_epoch, cycle_id, stage, "
+                        "symbol, node, model, prompt_tokens, "
+                        "completion_tokens, usd, category, outcome, "
+                        "is_unknown FROM spans WHERE span_id=?",
+                        (span_id,)).fetchone()
+                    if got is None or tuple(got) != payload:
+                        raise ValueError("span-conflict: %s" % span_id)
+                inserted = True
         finally:
             con.close()
         if inserted:
@@ -293,25 +355,70 @@ def append_span(log_path, epoch, node, model_id, calls=1, tokens=0,
     return row
 
 
-def mark_unknown(log_path, lease_id, span_id, usd, ts=None):
-    """Record an ambiguous (possibly-billed) attempt against its span.
-    The span already carries the full reservation as usd; this row is
-    what BLOCKS future spend until reconcile_unknown()."""
+def record_unknown(log_path, lease_id, span_id, usd, outcome, epoch,
+                   node, model_id, cycle_id, symbol, ts=None):
+    """ONE atomic ambiguity record: the unknown span (full reserved
+    usd, is_unknown=1) + the unknown_holds row + the spend hold moved
+    to invoked with its span_id — all in a single transaction. A crash
+    can therefore leave either NOTHING (hold still reserved: reaped
+    only if pre-spawn) or EVERYTHING (recoverable via the normal
+    reconcile path); never a partial ambiguity. The spend hold must
+    already exist (reserved pre-spawn); a missing hold is a loud
+    ordering defect, not a silent mint. Raises SpendBlocked on any
+    accounting defect (the caller keeps the hold and aborts)."""
     _check_str("lease_id", lease_id, SPAN_ID_MAX)
     _check_str("span_id", span_id, SPAN_ID_MAX)
     _check_usd(usd)
     if not usd > 0:
         raise ValueError("unknown spend without reserved usd")
+    if outcome not in OUTCOMES:
+        raise ValueError("bad outcome: %r" % outcome)
+    _check_int("research_epoch", epoch, 0, EPOCH_MAX)
+    _check_str("node", node, IDENT_MAX)
+    _check_str("model", model_id, MODEL_MAX)
+    _check_str("cycle_id", cycle_id, IDENT_MAX)
+    _check_str("symbol", symbol, IDENT_MAX)
     ts = int(time.time()) if ts is None else ts
+    _check_int("ts", ts, 0, 2 ** 63 - 1)
     db_path = _db_for(log_path)
     with locks.FileLock(db_path + ".lock", purpose="spans"):
-        con = _connect(db_path)
+        try:
+            con = _connect(db_path)
+        except LedgerUnavailable as e:
+            raise SpendBlocked("spend-unmeasurable:%s" % e)
         try:
             con.execute("BEGIN IMMEDIATE")
             try:
+                have = con.execute(
+                    "SELECT usd, state FROM spend_holds WHERE "
+                    "lease_id=?", (lease_id,)).fetchone()
+                if have is None:
+                    raise SpendBlocked("unknown-lease-no-hold:%s" %
+                                       lease_id)
+                got = con.execute(
+                    "SELECT usd, is_unknown FROM spans WHERE "
+                    "span_id=?", (span_id,)).fetchone()
+                if got is not None:
+                    if got[0] != usd or not got[1]:
+                        raise SpendBlocked("span-conflict:%s" %
+                                           span_id)
+                else:
+                    con.execute(
+                        "INSERT INTO spans (span_id, ts, "
+                        "research_epoch, cycle_id, stage, symbol, "
+                        "node, model, prompt_tokens, "
+                        "completion_tokens, usd, category, outcome, "
+                        "is_unknown) VALUES "
+                        "(?,?,?,?,?,'r',?,?,?,?,?,'research',?,1)",
+                        (span_id, ts, epoch, cycle_id, symbol, node,
+                         model_id, 0, 0, usd, outcome))
                 con.execute(
                     "INSERT OR IGNORE INTO unknown_holds VALUES "
                     "(?,?,?,?,0)", (lease_id, span_id, usd, ts))
+                con.execute(
+                    "UPDATE spend_holds SET state='invoked', "
+                    "span_id=? WHERE lease_id=?",
+                    (span_id, lease_id))
                 con.execute("COMMIT")
             except BaseException:
                 try:
@@ -324,17 +431,85 @@ def mark_unknown(log_path, lease_id, span_id, usd, ts=None):
 
 
 def has_unreconciled(log_path):
-    """True when an ambiguous charge is still outstanding. A missing
-    ledger raises (unmeasurable blocks); only a genuine fresh path
-    reports False."""
+    """True when an ambiguous charge is still outstanding: an
+    unreconciled unknown row, OR any positive-dollar spend hold in
+    state='invoked' (crash backstop — an invoked hold whose unknown
+    rows were never written still blocks). Zero-dollar invoked holds
+    never block (nothing uncertain). A missing ledger raises
+    (unmeasurable blocks); only a genuine fresh path reports False."""
     db_path = _db_for(log_path)
     con = _connect(db_path)
     try:
-        row = con.execute("SELECT COUNT(*) FROM unknown_holds WHERE "
-                          "reconciled=0").fetchone()
+        unk = con.execute("SELECT COUNT(*) FROM unknown_holds WHERE "
+                          "reconciled=0").fetchone()[0]
+        inv = con.execute("SELECT COALESCE(SUM(usd),0) FROM "
+                          "spend_holds WHERE state='invoked' AND "
+                          "usd > 0").fetchone()[0]
     finally:
         con.close()
-    return bool(row[0])
+    return bool(unk or inv > 0)
+
+
+def reserve_spend_hold(log_path, lease_id, usd, cap_usd, now=None):
+    """THE pre-call USD authorization: ONE transaction under the
+    spend lock — reap expired reserved holds, refuse when unknowns are
+    pending, measure (30d committed + all outstanding holds), compare
+    against the cap, insert the hold, commit. Only after this returns
+    may the provider be spawned. Raises SpendBlocked (refusal, never a
+    crash) or LedgerUnavailable (unmeasurable). There is no second
+    non-atomic cap check: callers must not re-implement read/compare/
+    insert outside this function."""
+    _check_str("lease_id", lease_id, SPAN_ID_MAX)
+    _check_usd(usd)
+    if (type(cap_usd) not in (int, float) or
+            not math.isfinite(cap_usd) or cap_usd < 0):
+        raise SpendBlocked("bad cap: %r" % (cap_usd,))
+    now = int(time.time()) if now is None else now
+    db_path = _db_for(log_path)
+    with locks.FileLock(db_path + ".lock", purpose="spans"):
+        try:
+            con = _connect(db_path, create=True)
+        except LedgerUnavailable as e:
+            raise SpendBlocked("spend-unmeasurable:%s" % e)
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            try:
+                con.execute("DELETE FROM spend_holds WHERE "
+                            "state='reserved' AND ts < ?",
+                            (now - HOLD_TTL_S,))
+                unk = con.execute(
+                    "SELECT COUNT(*) FROM unknown_holds WHERE "
+                    "reconciled=0").fetchone()[0]
+                inv = con.execute(
+                    "SELECT COALESCE(SUM(usd),0) FROM spend_holds "
+                    "WHERE state='invoked' AND usd > 0").fetchone()[0]
+                if unk or inv > 0:
+                    raise SpendBlocked("unknown-spend-pending")
+                spent = con.execute(
+                    "SELECT COALESCE(SUM(usd),0) FROM spans WHERE "
+                    "ts >= ?", (now - 30 * 86400,)).fetchone()[0]
+                holds = con.execute(
+                    "SELECT COALESCE(SUM(usd),0) FROM "
+                    "spend_holds").fetchone()[0]
+                if spent + holds + usd > cap_usd:
+                    raise SpendBlocked(
+                        "stage-cap: %.2f+%.2f>%.2f" %
+                        (spent + holds, usd, cap_usd))
+                try:
+                    con.execute("INSERT INTO spend_holds VALUES "
+                                "(?,?,?,?,NULL)",
+                                (lease_id, usd, "reserved", now))
+                except sqlite3.IntegrityError:
+                    raise SpendBlocked("duplicate-hold:%s" % lease_id)
+                con.execute("COMMIT")
+            except BaseException:
+                try:
+                    con.execute("ROLLBACK")
+                except sqlite3.Error:
+                    pass
+                raise
+        finally:
+            con.close()
 
 
 def reconcile_unknown(log_path, lease_id, actual_usd, note=""):
@@ -342,7 +517,14 @@ def reconcile_unknown(log_path, lease_id, actual_usd, note=""):
     conservative reservation with the attested actual (which may KEEP
     the full reservation — never below it without attestation), clear
     the block, and journal the adjustment. actual_usd must be finite
-    and non-negative; note is recorded verbatim (bounded)."""
+    and non-negative; note is recorded verbatim (bounded).
+
+    Crash recovery: reconciles from EVERY point of the ambiguity
+    path — complete unknown rows (normal), an invoked hold with no
+    unknown rows (fabricate + settle the missing rows from the hold,
+    journaled as recovered), or an orphan unknown span (clear the
+    flag, journaled). A lease with no trace at all is a loud error
+    (supervisor typo safety), never a silent no-op."""
     _check_str("lease_id", lease_id, SPAN_ID_MAX)
     _check_usd(actual_usd)
     if not isinstance(note, str) or len(note) > 256:
@@ -358,20 +540,57 @@ def reconcile_unknown(log_path, lease_id, actual_usd, note=""):
                 hold = con.execute(
                     "SELECT span_id, usd, reconciled FROM unknown_holds"
                     " WHERE lease_id=?", (lease_id,)).fetchone()
-                if hold is None:
-                    raise LedgerUnavailable("unknown lease: %s"
-                                            % lease_id)
-                if hold[2]:
+                if hold is not None and hold[2]:
                     raise LedgerUnavailable("already reconciled: %s"
                                             % lease_id)
-                span_id, old_usd = hold[0], hold[1]
-                con.execute("UPDATE spans SET usd=?, is_unknown=0 "
-                            "WHERE span_id=?", (actual_usd, span_id))
+                if hold is not None:
+                    span_id, old_usd = hold[0], hold[1]
+                    tag = note
+                else:
+                    # Crash between the invoked mark and the atomic
+                    # unknown record (or a partially written legacy
+                    # path): recover FROM THE HOLD, which conservatively
+                    # counted the dollars the whole time.
+                    inv = con.execute(
+                        "SELECT usd, span_id FROM spend_holds WHERE "
+                        "lease_id=? AND state='invoked'",
+                        (lease_id,)).fetchone()
+                    if inv is None:
+                        # Maybe an orphan unknown span with no rows at
+                        # all: find it by the lease-derived span shape?
+                        # Spans carry no lease link, so this state is
+                        # only reachable when nothing was ever
+                        # recorded — a loud error, never a silent ok.
+                        raise LedgerUnavailable("unknown lease: %s"
+                                                % lease_id)
+                    old_usd = inv[0]
+                    span_id = inv[1]
+                    if span_id is not None:
+                        con.execute(
+                            "INSERT OR IGNORE INTO unknown_holds "
+                            "VALUES (?,?,?,?,0)",
+                            (lease_id, span_id, old_usd, now))
+                    else:
+                        span_id = ("recovered-%s" %
+                                   hashlib.sha256(
+                                       lease_id.encode("utf-8"),
+                                       usedforsecurity=False
+                                   ).hexdigest()[:48])
+                        con.execute(
+                            "INSERT OR IGNORE INTO unknown_holds "
+                            "VALUES (?,?,?,?,0)",
+                            (lease_id, span_id, old_usd, now))
+                    tag = (note + ":recovered" if note
+                           else "recovered")
+                if span_id is not None:
+                    con.execute("UPDATE spans SET usd=?, is_unknown=0 "
+                                "WHERE span_id=? AND is_unknown=1",
+                                (actual_usd, span_id))
                 con.execute("UPDATE unknown_holds SET reconciled=1 "
                             "WHERE lease_id=?", (lease_id,))
                 con.execute(
                     "INSERT INTO reconciliations VALUES (?,?,?,?,?)",
-                    (lease_id, old_usd, actual_usd, now, note))
+                    (lease_id, old_usd, actual_usd, now, tag))
                 con.execute("DELETE FROM spend_holds WHERE lease_id=?",
                             (lease_id,))
                 con.execute("COMMIT")
@@ -403,7 +622,8 @@ def hold_spend(log_path, lease_id, usd, now=None):
         try:
             con.execute("BEGIN IMMEDIATE")
             try:
-                con.execute("INSERT INTO spend_holds VALUES (?,?,?,?)",
+                con.execute("INSERT INTO spend_holds VALUES "
+                            "(?,?,?,?,NULL)",
                             (lease_id, usd, "reserved", now))
                 con.execute("COMMIT")
             except BaseException:
@@ -452,8 +672,8 @@ def reap_holds(log_path, now=None):
     crashed post-spawn attempt may have been billed."""
     now = int(time.time()) if now is None else now
     db_path = _db_for(log_path)
-    if not os.path.exists(db_path) and \
-            locks.read_marker(db_path) is None:
+    mstate, _tok = locks.marker_state(db_path)
+    if not os.path.exists(db_path) and mstate == "absent":
         return  # genuinely new path: nothing to reap
     with locks.FileLock(db_path + ".lock", purpose="spans"):
         con = _connect(db_path)

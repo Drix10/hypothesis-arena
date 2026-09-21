@@ -10,11 +10,15 @@ Single home for the patterns every writer needs:
 - atomic_write_bytes: unique temp + file fsync + atomic replace +
   POSIX directory fsync (fail-closed).
 - load_json_bounded: size-capped JSON load (fail-closed on oversize).
-- Authority markers: init_marker_path/read_marker/write_marker. A
+- Authority markers: init_marker_path/marker_state/write_marker. A
   durable SQLite authority (budget, attribution) is created together
   with a sidecar marker holding the same random init token that is
-  also stored inside the DB. Marker-without-DB means the authority
-  was deleted -> open aborts, NEVER recreates fresh counters.
+  also stored inside the DB. Marker states are TRI-STATE — absent /
+  invalid (a missing file is absent; corrupt, oversized, or malformed
+  content is INVALID, never silently absent): DB-absent + marker-
+  absent is the only genuine first init; every other combination
+  involving an invalid marker aborts. Marker healing is allowed only
+  when the DB itself verifies AND carries a valid token.
   Supervisor fresh-start procedure: delete BOTH files (documented in
   PHASE_E_AUDIT.md). Total wipe of the directory is indistinguishable
   from a new deployment (accepted, documented).
@@ -184,22 +188,31 @@ def write_marker(db_path, token):
                        os.path.basename(init_marker_path(db_path)), raw)
 
 
-def read_marker(db_path):
-    """The init token, or None when no marker file exists. A corrupt
-    marker reads as None (the DB-side token check then decides: a DB
-    whose token cannot be confirmed against a marker is healed only
-    when the DB itself verifies, never trusted blindly)."""
+def marker_state(db_path):
+    """Tri-state authority marker: (state, token_or_None).
+
+    - ("absent", None): no marker file at all.
+    - ("invalid", None): a marker file exists but is corrupt,
+      oversized, malformed, or carries no usable token. INVALID is
+      NEVER folded into absent: DB-absent + marker-invalid aborts
+      (a deleted authority with a damaged marker must not look like
+      a fresh deployment), and DB-present + marker-invalid aborts
+      (an unverifiable authority is not healed blindly).
+    - ("valid", token): well-formed marker with a non-empty token.
+    """
     try:
         data = load_json_bounded(init_marker_path(db_path),
                                  max_bytes=1024)
-    except (OSError, ValueError):
-        return None
+    except OSError:
+        return "absent", None
+    except ValueError:
+        return "invalid", None
     if not isinstance(data, dict):
-        return None
+        return "invalid", None
     token = data.get("init_token")
     if not isinstance(token, str) or not token:
-        return None
-    return token
+        return "invalid", None
+    return "valid", token
 
 
 def fresh_token():

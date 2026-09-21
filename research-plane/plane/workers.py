@@ -522,6 +522,18 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
         raise r15.AbortCycle("gate", {"bad-kind": kind})
     if not callable(provider_factory):
         raise ConfigBlocked("provider_factory not callable")
+    # Model/pricing identity (P0): the priced model_id and the model
+    # the provider config names must be the SAME string. A config
+    # naming a different model than the reservation prices is a
+    # clean refusal BEFORE any reservation — never a billed surprise.
+    if not isinstance(provider_cfg, dict):
+        raise ConfigBlocked("provider-cfg-shape")
+    ok, why = schema_mod.json_safe(provider_cfg)
+    if not ok:
+        raise ConfigBlocked("provider-cfg:%s" % why)
+    if provider_cfg.get("model_id") != model_id:
+        raise ConfigBlocked("model-identity-mismatch:%r" %
+                            (provider_cfg.get("model_id"),))
     # Single pricing authority: the governor's deployment table. A
     # second table here could diverge from the cap enforcement below
     # (proven by test: $149 spent + $93 worst-case must refuse).
@@ -691,23 +703,26 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
         tool_calls = tools_needed + 1  # force the breach path below
     if actual > need or tool_calls > tools_needed:
         # Post-call tripwire: the bound was violated. Record truth,
-        # then abort — reconciliation is audit, never the cap.
+        # then abort — reconciliation is audit, never the cap. Every
+        # accounting step reports into the abort snapshot: NOTHING
+        # here may disappear into a bare pass.
+        breach = {"bound-breach": actual}
         try:
             budget.settle_call(lease, actual)
-        except r15.AbortCycle:
-            pass
+        except r15.AbortCycle as e:
+            breach["settle-failed"] = str(e.snapshot)
         try:
             usd = (actual / 1000.0) * price
             _span(log_path, epoch, node, model_id, cycle_id, symbol,
                   usage[0], usage[1], usd, "error", lease)
             governor.settle_usd(lease_id)
-        except Exception:
-            pass
+        except Exception as e:
+            breach["span-or-settle-failed"] = repr(e)
         try:
             budget.invalidate()
-        except r15.AbortCycle:
-            pass
-        raise r15.AbortCycle(symbol, {"bound-breach": actual})
+        except r15.AbortCycle as e:
+            breach["invalidate-failed"] = str(e.snapshot)
+        raise r15.AbortCycle(symbol, breach)
     # Accounted success: settle actuals, exactly one span, hold out.
     # ANY failure from here is AbortCycle (P0-9): the call was real.
     try:
@@ -757,17 +772,20 @@ def _span(log_path, epoch, node, model_id, cycle_id, symbol, pt, ct,
 def _unknown(budget, governor, log_path, epoch, node, model_id,
              cycle_id, symbol, lease, lease_id, worst, need, outcome,
              container_name):
-    """Ambiguous attempt: settle the FULL token reservation, span the
-    FULL dollar reservation as UNKNOWN_SPEND (never $0), keep the
-    spend hold (it counts against the cap), register the unknown block,
-    poison the R15 row, reap the container. Best-effort ordering: the
-    HOLD is never released on this path; every failure below still
-    aborts (the money is already conservatively counted).
+    """Ambiguous attempt. The spend hold (marked invoked pre-spawn)
+    is NEVER released on this path, so the dollars stay conservatively
+    counted and future spend stays blocked even if every write below
+    fails. Recording is ONE atomic ledger operation
+    (record_unknown: span + unknown row + invoked mark); ANY failure
+    there raises AbortCycle with an unresolved-spend snapshot — never
+    a downgraded blocked result, never a silent pass.
 
-    Zero-price note: when worst == 0.0 (a genuinely free model) the
-    unknown rows cannot be written (an unknown $0 row is meaningless
-    and rejected); the R15 poison + AbortCycle still fire, and no
-    block is needed because no dollars are uncertain.
+    Zero-price note: when worst == 0.0 (a genuinely free model) there
+    are no uncertain dollars: the R15 reservation still settles at the
+    full bound and the row is still poisoned, but no unknown rows are
+    written (an unknown $0 row is meaningless and rejected) and the
+    hold is released — no unreconcilable block, the next fresh cycle
+    proceeds.
 
     Returns the container-reap note (None when reaped cleanly): reap
     failure folds into the abort snapshot, never replaces it."""
@@ -776,19 +794,30 @@ def _unknown(budget, governor, log_path, epoch, node, model_id,
     except r15.AbortCycle:
         pass
     span_id = "%s:%s:%s:run:%d" % (cycle_id, symbol, node, lease["seq"])
-    try:
-        attribution.append_span(
-            log_path, epoch, node, model_id, cycle_id=cycle_id,
-            stage="r", symbol=symbol, prompt_tokens=0,
-            completion_tokens=0, usd=worst, category="research",
-            outcome="timeout" if outcome == "timeout" else "error",
-            is_unknown=True, span_id=span_id)
-    except (ValueError, attribution.LedgerUnavailable):
-        pass
-    try:
-        attribution.mark_unknown(log_path, lease_id, span_id, worst)
-    except (ValueError, attribution.LedgerUnavailable):
-        pass
+    if worst > 0:
+        try:
+            attribution.record_unknown(
+                log_path, lease_id, span_id, worst,
+                "timeout" if outcome == "timeout" else "error",
+                epoch, node, model_id, cycle_id, symbol)
+        except Exception as e:
+            # The hold is still invoked (never released here) so the
+            # money is counted and has_unreconciled() blocks on the
+            # invoked-hold backstop even without the unknown rows.
+            try:
+                budget.invalidate()
+            except r15.AbortCycle:
+                pass
+            raise r15.AbortCycle(
+                symbol, {"unresolved-spend": repr(e),
+                         "unknown-spend": worst})
+    else:
+        # Zero-price ambiguity: no dollars uncertain, nothing to
+        # block on — release the hold, keep the R15 poison.
+        try:
+            governor.settle_usd(lease_id)
+        except Exception:
+            pass
     try:
         budget.invalidate()
     except r15.AbortCycle:
@@ -820,16 +849,3 @@ def _reap_container(container_name):
                                    200))
     except FileNotFoundError:
         raise RuntimeError("docker unavailable for container reap")
-
-
-def stub_advisory(rec, budget):
-    """Deterministic test double: wraps a raw record as an advisory
-    candidate WITHOUT evidence claims (resolver decides evidence).
-    In-parent counting only (no provider): reserve_tool, never a call
-    lease."""
-    budget.charge_tool()
-    return [{"kind": rec.get("kind", "filing_event"),
-             "symbols": list(rec.get("symbols", [])),
-             "value": dict(rec.get("value", {"type": "enum", "v": "x"})),
-             "effect": "unknown",
-             "provenance_url": rec.get("provenance_url")}]

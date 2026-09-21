@@ -541,9 +541,16 @@ class LocksTest(unittest.TestCase):
     def test_marker_roundtrip(self):
         d = tempfile.mkdtemp()
         dbp = os.path.join(d, "x.sqlite3")
-        self.assertIsNone(locks.read_marker(dbp))
+        self.assertEqual(locks.marker_state(dbp), ("absent", None))
         locks.write_marker(dbp, "tok123")
-        self.assertEqual(locks.read_marker(dbp), "tok123")
+        self.assertEqual(locks.marker_state(dbp),
+                         ("valid", "tok123"))
+        with open(dbp + ".init", "wb") as fh:
+            fh.write(b"{corrupt")
+        self.assertEqual(locks.marker_state(dbp)[0], "invalid")
+        with open(dbp + ".init", "wb") as fh:
+            fh.write(b"x" * 2048)
+        self.assertEqual(locks.marker_state(dbp)[0], "invalid")
 
 
 class JsonSafeTest(unittest.TestCase):
@@ -725,10 +732,12 @@ class AttributionTest(unittest.TestCase):
     def test_unknown_lifecycle(self):
         d = tempfile.mkdtemp()
         log = self._log(d)
-        attribution.append_span(log, 1, "hypothesize", "m", usd=2.0,
-                                outcome="timeout", is_unknown=True,
-                                span_id="u1")
-        attribution.mark_unknown(log, "lease-1", "u1", 2.0)
+        # Atomic ambiguity record: hold first (as the gate does),
+        # then the single span+unknown+invoked transaction.
+        attribution.hold_spend(log, "lease-1", 2.0)
+        attribution.record_unknown(log, "lease-1", "u1", 2.0,
+                                   "timeout", 1, "hypothesize", "m",
+                                   "c", "AAPL")
         self.assertTrue(attribution.has_unreconciled(log))
         self.assertEqual(attribution.spend_since(log, 0), 2.0)
         attribution.reconcile_unknown(log, "lease-1", 0.05, "billed")
@@ -888,10 +897,10 @@ class SpendTest(unittest.TestCase):
         d = tempfile.mkdtemp()
         gov, log = self._gov(d)
         self.assertEqual(gov.decision()[0], "allow")
-        attribution.append_span(log, 1, "hypothesize", "fake", usd=2.0,
-                                outcome="timeout", is_unknown=True,
-                                span_id="u1")
-        attribution.mark_unknown(log, "lease-1", "u1", 2.0)
+        attribution.hold_spend(log, "lease-1", 2.0)
+        attribution.record_unknown(log, "lease-1", "u1", 2.0,
+                                   "timeout", 1, "hypothesize",
+                                   "fake", "c", "AAPL")
         self.assertEqual(gov.decision(), ("deny", "unknown-spend-pending"))
         with self.assertRaises(spend_mod.SpendRefused):
             gov.reserve_usd(0.01, "late")
