@@ -261,6 +261,37 @@ def _check_usd(value):
         raise ValueError("bad usd: %r" % (value,))
 
 
+def _span_identity(epoch, cycle_id, stage, symbol, node, model,
+                   prompt_tokens, completion_tokens, usd, category,
+                   outcome, is_unknown):
+    """Canonical span-identity tuple (spans-table column order minus
+    span_id/ts). ts is INTENTIONALLY excluded: it is wall-clock
+    metadata, not identity — an identical retry one second later is
+    the same attempt, not a conflict. Both append_span() and
+    record_unknown() compare through here, so normal and unknown
+    spans share one identity rule (re-audit: equivalent semantics
+    on both paths)."""
+    return (epoch, cycle_id, stage, symbol, node, model,
+            prompt_tokens, completion_tokens, usd, category,
+            outcome, 1 if is_unknown else 0)
+
+
+_IDENTITY_COLS = ("research_epoch, cycle_id, stage, symbol, node, "
+                  "model, prompt_tokens, completion_tokens, usd, "
+                  "category, outcome, is_unknown")
+
+
+def _span_verdict(con, span_id, identity):
+    """One span_id under one payload comparison: absent / identical /
+    conflict. Centralized so the unknown path cannot drift weaker
+    than the normal path."""
+    got = con.execute("SELECT " + _IDENTITY_COLS + " FROM spans "
+                      "WHERE span_id=?", (span_id,)).fetchone()
+    if got is None:
+        return "absent"
+    return "identical" if tuple(got) == identity else "conflict"
+
+
 def append_span(log_path, epoch, node, model_id, calls=1, tokens=0,
                 dollars=0.0, span_id=None, cycle_id="local", stage="r",
                 symbol="?", prompt_tokens=0, completion_tokens=0,
@@ -327,17 +358,14 @@ def append_span(log_path, epoch, node, model_id, calls=1, tokens=0,
         # blocks instead of resetting spend to zero.
         con = _connect(db_path, create=True)
         try:
-            payload = (ts, epoch, cycle_id, stage, symbol, node,
-                       model_id, prompt_tokens, completion_tokens,
-                       usd, category, outcome, 1 if is_unknown else 0)
-            got = con.execute(
-                "SELECT ts, research_epoch, cycle_id, stage, symbol, "
-                "node, model, prompt_tokens, completion_tokens, usd, "
-                "category, outcome, is_unknown FROM spans WHERE "
-                "span_id=?", (span_id,)).fetchone()
-            if got is not None:
-                if tuple(got) != payload:
-                    raise ValueError("span-conflict: %s" % span_id)
+            identity = _span_identity(
+                epoch, cycle_id, stage, symbol, node, model_id,
+                prompt_tokens, completion_tokens, usd, category,
+                outcome, is_unknown)
+            verdict = _span_verdict(con, span_id, identity)
+            if verdict == "conflict":
+                raise ValueError("span-conflict: %s" % span_id)
+            if verdict == "identical":
                 inserted = False
             else:
                 try:
@@ -347,19 +375,15 @@ def append_span(log_path, epoch, node, model_id, calls=1, tokens=0,
                         "model, prompt_tokens, completion_tokens, usd, "
                         "category, outcome, is_unknown) "
                         "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                        (span_id,) + payload)
+                        (span_id, ts) + identity)
+                    inserted = True
                 except sqlite3.IntegrityError:
                     # Lost a same-id race: re-read and decide (never
                     # blind-ignore — the winner may disagree).
-                    got = con.execute(
-                        "SELECT ts, research_epoch, cycle_id, stage, "
-                        "symbol, node, model, prompt_tokens, "
-                        "completion_tokens, usd, category, outcome, "
-                        "is_unknown FROM spans WHERE span_id=?",
-                        (span_id,)).fetchone()
-                    if got is None or tuple(got) != payload:
+                    verdict = _span_verdict(con, span_id, identity)
+                    if verdict == "conflict":
                         raise ValueError("span-conflict: %s" % span_id)
-                inserted = True
+                    inserted = verdict == "absent"
         finally:
             con.close()
         if inserted:
@@ -414,30 +438,60 @@ def record_unknown(log_path, lease_id, span_id, usd, outcome, epoch,
                 if have is None:
                     raise SpendBlocked("unknown-lease-no-hold:%s" %
                                        lease_id)
-                got = con.execute(
-                    "SELECT usd, is_unknown FROM spans WHERE "
-                    "span_id=?", (span_id,)).fetchone()
-                if got is not None:
-                    if got[0] != usd or not got[1]:
-                        raise SpendBlocked("span-conflict:%s" %
-                                           span_id)
-                else:
-                    con.execute(
+                if have[0] != usd:
+                    # The hold is the reservation: converting a
+                    # different amount would mint or erase dollars.
+                    raise SpendBlocked("unknown-hold-usd-mismatch:%s"
+                                       % lease_id)
+                if have[1] not in ("reserved", "invoked"):
+                    raise SpendBlocked("unknown-hold-state:%s" %
+                                       lease_id)
+                identity = _span_identity(
+                    epoch, cycle_id, "r", symbol, node, model_id,
+                    0, 0, usd, "research", outcome, True)
+                verdict = _span_verdict(con, span_id, identity)
+                if verdict == "conflict":
+                    raise SpendBlocked("span-conflict:%s" % span_id)
+                if verdict == "absent":
+                    # Column order is load-bearing: stage='r' belongs
+                    # to the STAGE column, the symbol to SYMBOL (a
+                    # prior revision had them swapped — caught by the
+                    # strict identity check above).
+                    cur = con.execute(
                         "INSERT INTO spans (span_id, ts, "
                         "research_epoch, cycle_id, stage, symbol, "
                         "node, model, prompt_tokens, "
                         "completion_tokens, usd, category, outcome, "
                         "is_unknown) VALUES "
-                        "(?,?,?,?,?,'r',?,?,?,?,?,'research',?,1)",
+                        "(?,?,?,?, 'r', ?,?,?,?,?,?,'research',?,1)",
                         (span_id, ts, epoch, cycle_id, symbol, node,
                          model_id, 0, 0, usd, outcome))
-                con.execute(
-                    "INSERT OR IGNORE INTO unknown_holds VALUES "
-                    "(?,?,?,?,0)", (lease_id, span_id, usd, ts))
-                con.execute(
+                    if cur.rowcount != 1:
+                        raise SpendBlocked("span-insert:%s" % span_id)
+                uh = con.execute(
+                    "SELECT span_id, usd FROM unknown_holds WHERE "
+                    "lease_id=?", (lease_id,)).fetchone()
+                if uh is not None:
+                    # Same strictness as spans: an identical retry is
+                    # idempotent; a conflicting payload is a hard
+                    # failure, never a silent OR IGNORE.
+                    if uh != (span_id, usd):
+                        raise SpendBlocked(
+                            "unknown-hold-conflict:%s" % lease_id)
+                else:
+                    cur = con.execute(
+                        "INSERT INTO unknown_holds VALUES (?,?,?,?,0)",
+                        (lease_id, span_id, usd, ts))
+                    if cur.rowcount != 1:
+                        raise SpendBlocked(
+                            "unknown-hold-insert:%s" % lease_id)
+                cur = con.execute(
                     "UPDATE spend_holds SET state='invoked', "
                     "span_id=? WHERE lease_id=?",
                     (span_id, lease_id))
+                if cur.rowcount != 1:
+                    raise SpendBlocked(
+                        "unknown-hold-transition:%s" % lease_id)
                 con.execute("COMMIT")
             except BaseException:
                 try:
@@ -664,8 +718,15 @@ def mark_invoked(log_path, lease_id):
     with locks.FileLock(db_path + ".lock", purpose="spans"):
         con = _connect(db_path)
         try:
-            con.execute("UPDATE spend_holds SET state='invoked' WHERE "
-                        "lease_id=? AND state='reserved'", (lease_id,))
+            cur = con.execute("UPDATE spend_holds SET state='invoked'"
+                              " WHERE lease_id=? AND state='reserved'",
+                              (lease_id,))
+            if cur.rowcount != 1:
+                # No reserved hold: a missing or already-invoked hold
+                # is an ordering defect, never a silent no-op (an
+                # unmarked post-spawn hold could auto-release).
+                raise LedgerUnavailable("mark-invoked-no-hold:%s" %
+                                        lease_id)
         finally:
             con.close()
 

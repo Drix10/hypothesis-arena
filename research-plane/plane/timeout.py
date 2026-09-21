@@ -11,14 +11,21 @@ thread is not a boundary.)
 """
 import multiprocessing
 
+# After the child is verified dead, its one envelope is already in
+# the OS pipe buffer — the parent's poll() returns immediately. The
+# bound below covers only a genuine anomaly (dead child, no
+# envelope), never normal delivery: there is no feeder-thread
+# handoff to wait out.
+RECEIVE_TIMEOUT_S = 10.0
+
 
 class CallTimeout(Exception):
     pass
 
 
-def _child_main(queue, func, args, kwargs):
+def _child_main(conn, func, args, kwargs):
     try:
-        queue.put(("ok", func(*args, **kwargs)))
+        conn.send(("ok", func(*args, **kwargs)))
     except BaseException as e:  # noqa: BLE001 - shipped back, re-raised
         # Bound the shipped error text (a hostile exception message
         # must not bloat IPC).
@@ -30,7 +37,15 @@ def _child_main(queue, func, args, kwargs):
             err = fmt.repr(e)
         except Exception:
             err = "%s: <unrepresentable>" % type(e).__name__
-        queue.put(("error", err))
+        try:
+            conn.send(("error", err))
+        except BaseException:
+            pass
+    finally:
+        try:
+            conn.close()
+        except OSError:
+            pass
 
 
 def run_in_process(func, timeout_s, *args, **kwargs):
@@ -38,25 +53,33 @@ def run_in_process(func, timeout_s, *args, **kwargs):
     timeout_s. Raises CallTimeout (child terminated) or re-raises the
     child's exception repr as RuntimeError.
 
-    Deterministic result handoff (no Queue.empty() polling): the child
-    puts EXACTLY ONE envelope; the parent reads it with get_nowait()
-    ONLY after the child is verified dead — a dead child cannot put,
-    so the queue state is final: one envelope (success or child
-    error) or a loud missing-result error. On timeout the child is
-    terminated (SIGTERM), joined, escalated to SIGKILL when still
-    alive, and verified gone; the queue is drained-or-closed so no
-    fd/handle leaks accumulate across cycles.
+    Deterministic result handoff over a one-shot Pipe (no Queue, no
+    empty() polling, no feeder thread): the child sends EXACTLY ONE
+    envelope down the pipe and closes it; the parent reads ONLY after
+    the child is verified dead — a dead child cannot send, so the
+    pipe state is final: one envelope (success or child error) or a
+    loud missing-result error. On timeout the child is terminated
+    (SIGTERM), joined, escalated to SIGKILL when still alive, and
+    verified gone; both pipe ends are closed so no fd/handle leaks
+    accumulate across cycles.
 
     Reaping contract: on EVERY return path no live worker child of
     this call remains (terminate + join, then verify; a still-alive
-    child after SIGTERM escalates to SIGKILL and raises). The queue
-    is closed so no fd/handle leaks accumulate across cycles."""
-    import queue as _queue_mod
+    child after SIGTERM escalates to SIGKILL and raises)."""
     ctx = multiprocessing.get_context("spawn")
-    queue = ctx.Queue()
+    parent_conn, child_conn = ctx.Pipe(duplex=False)
     proc = ctx.Process(target=_child_main,
-                       args=(queue, func, args, kwargs))
-    proc.start()
+                       args=(child_conn, func, args, kwargs))
+    try:
+        proc.start()
+    except BaseException:
+        parent_conn.close()
+        child_conn.close()
+        raise
+    try:
+        child_conn.close()
+    except OSError:
+        pass
     try:
         proc.join(timeout_s)
         if proc.is_alive():
@@ -76,19 +99,25 @@ def run_in_process(func, timeout_s, *args, **kwargs):
             # attempt is AMBIGUOUS — it may have been billed.
             raise CallTimeout("child killed (signal %d), attempt "
                               "ambiguous" % proc.exitcode)
-        # The child is dead: its exactly-one envelope is either in
-        # the pipe (the feeder delivers it imminently) or never
-        # coming. A bounded get() distinguishes the two WITHOUT
-        # polling empty() and WITHOUT blocking forever: success and
-        # child-error envelopes both arrive; anything else is loud.
+        # The child is dead and the pipe is one-shot: poll() returns
+        # at once when the envelope is there; a closed-without-send
+        # pipe (Windows raises BrokenPipeError on poll, POSIX reads
+        # EOF) or an expiry means the dead child sent nothing — loud,
+        # never a silent default.
         try:
-            status, payload = queue.get(timeout=30)
-        except _queue_mod.Empty:
+            got = parent_conn.poll(RECEIVE_TIMEOUT_S)
+        except (EOFError, BrokenPipeError, OSError):
+            got = False
+        if got:
+            try:
+                status, payload = parent_conn.recv()
+            except (EOFError, BrokenPipeError, OSError):
+                raise RuntimeError("child exited without a result")
+        else:
             raise RuntimeError("child exited without a result")
     finally:
         try:
-            queue.close()
-            queue.join_thread()
+            parent_conn.close()
         except (OSError, ValueError):
             pass
         if proc.is_alive():

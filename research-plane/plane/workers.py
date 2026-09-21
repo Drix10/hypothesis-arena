@@ -730,6 +730,28 @@ def _clamp_completion(asked):
     return max(1, min(asked, COMPLETION_MAX))
 
 
+def _release_pre_provider(budget, governor, lease, lease_id,
+                          release_hold=True):
+    """Unwind a pre-provider reservation (the provider was provably
+    untouched): settle the R15 lease at zero, release the dollar
+    hold. Returns None when both unwind cleanly, else a diagnostic
+    dict — the caller aborts with it (the conservative reservation
+    stays in place) instead of silently keeping only the original
+    error. Re-audit rule: pre-provider cleanup failure → cycle abort
+    + preserved reservation + diagnostic snapshot."""
+    cleanup = {}
+    try:
+        budget.settle_call(lease, 0)
+    except r15.AbortCycle as e:
+        cleanup["lease-cleanup-failed"] = str(e.snapshot)
+    if release_hold:
+        try:
+            governor.settle_usd(lease_id)
+        except Exception as e:
+            cleanup["hold-cleanup-failed"] = _bounded_repr(e)
+    return cleanup or None
+
+
 def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
               provider_factory, sandbox_cfg, budget, governor,
               model_id, log_path, timeout_s, max_tokens_asked=None,
@@ -833,37 +855,35 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
     try:
         worst = governor.worst_usd(model_id, need)
         governor.reserve_usd(worst, lease_id)
-    except Exception:
-        try:
-            budget.settle_call(lease, 0)
-        except r15.AbortCycle:
-            pass
+    except Exception as orig:
+        cleanup = _release_pre_provider(
+            budget, governor, lease, lease_id, release_hold=False)
+        if cleanup is not None:
+            cleanup["original"] = _bounded_repr(orig)
+            raise r15.AbortCycle(
+                symbol, {"pre-provider-cleanup-failure": cleanup})
         raise
     try:
         governor.mark_invoked(lease_id)
-    except Exception:
-        try:
-            budget.settle_call(lease, 0)
-        except r15.AbortCycle:
-            pass
-        try:
-            governor.settle_usd(lease_id)
-        except Exception:
-            pass
+    except Exception as orig:
+        cleanup = _release_pre_provider(budget, governor, lease,
+                                        lease_id)
+        if cleanup is not None:
+            cleanup["original"] = _bounded_repr(orig)
+            raise r15.AbortCycle(
+                symbol, {"pre-provider-cleanup-failure": cleanup})
         raise
 
     if container_name is None:
         container_name = "miro-%s-%s-%d" % (cycle_id, symbol,
                                             lease["seq"])
     if not _valid_container_name(container_name):
-        try:
-            budget.settle_call(lease, 0)
-        except r15.AbortCycle:
-            pass
-        try:
-            governor.settle_usd(lease_id)
-        except Exception:
-            pass
+        cleanup = _release_pre_provider(budget, governor, lease,
+                                        lease_id)
+        if cleanup is not None:
+            cleanup["original"] = "bad-container-name"
+            raise r15.AbortCycle(
+                symbol, {"pre-provider-cleanup-failure": cleanup})
         raise ConfigBlocked("bad-container-name")
     payload = {"kind": kind, "provider_factory": provider_factory,
                "provider_cfg": dict(provider_cfg),
@@ -884,14 +904,12 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
     try:
         pickle.dumps(payload)
     except Exception as e:
-        try:
-            budget.settle_call(lease, 0)
-        except r15.AbortCycle:
-            pass
-        try:
-            governor.settle_usd(lease_id)
-        except Exception:
-            pass
+        cleanup = _release_pre_provider(budget, governor, lease,
+                                        lease_id)
+        if cleanup is not None:
+            cleanup["original"] = "task-unpicklable:%r" % (e,)
+            raise r15.AbortCycle(
+                symbol, {"pre-provider-cleanup-failure": cleanup})
         raise ConfigBlocked("task-unpicklable:%r" % (e,))
 
     try:
@@ -921,14 +939,13 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
         # Build-time failure through OUR build path: provider untouched.
         # Settle the reservation at zero, release the hold, no span
         # (nothing was attempted), graph records blocked evidence.
-        try:
-            budget.settle_call(lease, 0)
-        except r15.AbortCycle:
-            pass
-        try:
-            governor.settle_usd(lease_id)
-        except Exception:
-            pass
+        cleanup = _release_pre_provider(budget, governor, lease,
+                                        lease_id)
+        if cleanup is not None:
+            cleanup["original"] = str(child.get("reason",
+                                                 "config-error"))
+            raise r15.AbortCycle(
+                symbol, {"pre-provider-cleanup-failure": cleanup})
         raise ConfigBlocked(str(child.get("reason", "config-error")))
     if status == "provider-error":
         note = _unknown(budget, governor, log_path, epoch, node,

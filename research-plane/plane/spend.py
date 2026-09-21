@@ -357,39 +357,64 @@ class SpendGovernor:
                 best = cand
         return best
 
-    def _save_state(self, st):
+    def _save_state_locked(self, st):
+        """State-file write ASSUMING the tier lock is held."""
         path = self._state_path()
         if path is None:
             return
         d = os.path.dirname(os.path.abspath(path))
         os.makedirs(d, exist_ok=True)
+        locks.atomic_write_bytes(
+            d, os.path.basename(path),
+            json.dumps(st, sort_keys=True).encode("utf-8"))
+
+    def _save_state(self, st):
         lock = self._tier_lock_path()
+        if lock is None:
+            self._save_state_locked(st)
+            return
         with locks.FileLock(lock, purpose="tier"):
-            locks.atomic_write_bytes(
-                d, os.path.basename(path),
-                json.dumps(st, sort_keys=True).encode("utf-8"))
+            self._save_state_locked(st)
+
+    def _journal_locked(self, name, row):
+        """Journal append ASSUMING the tier lock is held."""
+        if not self.state_dir:
+            return
+        path = os.path.join(self.state_dir, name)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, sort_keys=True) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
 
     def _journal(self, name, row):
         if not self.state_dir:
             return
-        path = os.path.join(self.state_dir, name)
         lock = self._tier_lock_path()
+        if lock is None:
+            self._journal_locked(name, row)
+            return
         with locks.FileLock(lock, purpose="tier"):
-            with open(path, "a", encoding="utf-8") as fh:
-                fh.write(json.dumps(row, sort_keys=True) + "\n")
-                fh.flush()
-                os.fsync(fh.fileno())
+            self._journal_locked(name, row)
 
     def _save_state_and_journal(self, st, journal_name, journal_row):
         """Crash-consistent transition persist: journal (carrying the
         full post-transition state snapshot for tail recovery) THEN
-        state, under the SINGLE tier lock. A crash between the two is
-        recovered by _recover_from_journal on the next load."""
+        state, under ONE acquisition of the tier lock. A crash
+        between the two is recovered by _recover_from_journal on the
+        next load; no second evaluator can enter between them."""
         if journal_row is not None:
             journal_row = dict(journal_row)
             journal_row["state"] = dict(st)
-            self._journal(journal_name, journal_row)
-        self._save_state(st)
+        lock = self._tier_lock_path()
+        if lock is None:
+            if journal_row is not None:
+                self._journal_locked(journal_name, journal_row)
+            self._save_state_locked(st)
+            return
+        with locks.FileLock(lock, purpose="tier"):
+            if journal_row is not None:
+                self._journal_locked(journal_name, journal_row)
+            self._save_state_locked(st)
 
     @staticmethod
     def _tier_for(projection, cap):

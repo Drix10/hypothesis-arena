@@ -875,9 +875,9 @@ class TierStateTest(unittest.TestCase):
         st = gov._initial_state()
         st.update(tier=2, projection=130.0, evaluated_at=now + 3600,
                   below_count=0)
-        real_save = gov._save_state
+        real_save = gov._save_state_locked
         try:
-            gov._save_state = lambda s: (_ for _ in ()).throw(
+            gov._save_state_locked = lambda s: (_ for _ in ()).throw(
                 OSError("crash"))
             with self.assertRaises(OSError):
                 gov._save_state_and_journal(
@@ -886,7 +886,7 @@ class TierStateTest(unittest.TestCase):
                      "projection_30d": 130.0, "cap": 150.0,
                      "stage": "G0"})
         finally:
-            gov._save_state = real_save
+            gov._save_state_locked = real_save
         recovered = gov._load_state(now + 7200)
         self.assertEqual(recovered["tier"], 2)
         self.assertEqual(recovered["evaluated_at"], now + 3600)
@@ -1396,6 +1396,183 @@ class MirrorAndEmitBoundTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             emit_mod.emit_bundle(os.path.join(d, "o"), 1,
                                  [{"n": i} for i in range(65)], wm)
+
+
+def _silent_exit():
+    import os as _os
+    _os._exit(0)
+
+
+class ReauditFixTest(unittest.TestCase):
+    """Human re-audit of the shipped 62e1019 tree (5 code findings +
+    pipe IPC). Each test pins the exact gap, through the real
+    authorities."""
+
+    def _log(self, d):
+        return os.path.join(d, "spans.jsonl")
+
+    def _held(self, d, lease="L1", usd=2.0):
+        log = self._log(d)
+        T._gate(d)
+        attribution.hold_spend(log, lease, usd)
+        return log
+
+    def _rec(self, log, lease="L1", span="S1", usd=2.0, **kw):
+        args = dict(lease_id=lease, span_id=span, usd=usd,
+                    outcome="timeout", epoch=1, node="hypothesize",
+                    model_id="m", cycle_id="c", symbol="AAPL")
+        args.update(kw)
+        attribution.record_unknown(log, **args)
+
+    def test_record_unknown_rejects_usd_mismatch(self):
+        d = tempfile.mkdtemp()
+        log = self._held(d, usd=2.0)
+        with self.assertRaises(attribution.SpendBlocked) as cm:
+            self._rec(log, usd=1.0)
+        self.assertIn("usd-mismatch", str(cm.exception))
+
+    def _seeded_log(self, d):
+        """Ledger exists (fail-closed missing-ledger distinguished
+        from a present ledger with no such hold)."""
+        log = self._log(d)
+        T._gate(d)
+        attribution.hold_spend(log, "seed", 1.0)
+        attribution.settle_hold(log, "seed")
+        return log
+
+    def test_record_unknown_rejects_missing_hold(self):
+        d = tempfile.mkdtemp()
+        log = self._seeded_log(d)
+        with self.assertRaises(attribution.SpendBlocked) as cm:
+            self._rec(log)
+        self.assertIn("no-hold", str(cm.exception))
+
+    def test_record_unknown_conflicting_unknown_row_is_loud(self):
+        d = tempfile.mkdtemp()
+        log = self._held(d, usd=2.0)
+        dbp = attribution._db_for(log)
+        con = sqlite3.connect(dbp)
+        con.execute("INSERT INTO unknown_holds VALUES "
+                    "('L1','OTHER',2.0,1,0)")
+        con.commit()
+        con.close()
+        with self.assertRaises(attribution.SpendBlocked) as cm:
+            self._rec(log)
+        self.assertIn("unknown-hold-conflict", str(cm.exception))
+        # Atomic rollback: the span was NOT half-written.
+        con = sqlite3.connect(dbp)
+        n = con.execute(
+            "SELECT COUNT(*) FROM spans WHERE span_id='S1'"
+            ).fetchone()[0]
+        con.close()
+        self.assertEqual(n, 0)
+
+    def test_record_unknown_identical_retry_is_idempotent(self):
+        d = tempfile.mkdtemp()
+        log = self._held(d, usd=2.0)
+        self._rec(log)
+        self._rec(log)  # identical retry: no raise
+        con = sqlite3.connect(attribution._db_for(log))
+        nspan = con.execute(
+            "SELECT COUNT(*) FROM spans WHERE span_id='S1'"
+            ).fetchone()[0]
+        nunk = con.execute(
+            "SELECT COUNT(*) FROM unknown_holds WHERE lease_id='L1'"
+            ).fetchone()[0]
+        hold = con.execute(
+            "SELECT state, span_id FROM spend_holds WHERE "
+            "lease_id='L1'").fetchone()
+        con.close()
+        self.assertEqual((nspan, nunk), (1, 1))
+        self.assertEqual(tuple(hold), ("invoked", "S1"))
+
+    def test_record_unknown_span_identity_is_full(self):
+        # Same span_id, different node: the strict span contract
+        # fires even though usd + is_unknown match.
+        d = tempfile.mkdtemp()
+        log = self._held(d, usd=2.0)
+        self._rec(log)
+        with self.assertRaises(attribution.SpendBlocked) as cm:
+            self._rec(log, node="critique")
+        self.assertIn("span-conflict", str(cm.exception))
+
+    def test_mark_invoked_rejects_missing_hold(self):
+        d = tempfile.mkdtemp()
+        log = self._seeded_log(d)
+        with self.assertRaises(attribution.LedgerUnavailable) as cm:
+            attribution.mark_invoked(log, "ghost")
+        self.assertIn("no-hold", str(cm.exception))
+
+    def test_tier_journal_state_single_lock(self):
+        d = tempfile.mkdtemp()
+        _led, _log, gov, _budget, _p = T._gate(d)
+        lock_path = gov._tier_lock_path()
+        st = dict(gov._initial_state())
+        st.update(tier=1, projection=10.0,
+                  evaluated_at=int(time.time()), below_count=0)
+        acq = []
+        real = locks.FileLock
+
+        class CountingLock(real):
+            def __enter__(self):
+                acq.append(self.path)
+                return super().__enter__()
+
+        import unittest.mock as _mock
+        with _mock.patch.object(locks, "FileLock", CountingLock):
+            gov._save_state_and_journal(st, "tier_journal.jsonl",
+                                        {"t": 1,
+                                         "ts": st["evaluated_at"]})
+        self.assertEqual(acq.count(lock_path), 1)
+        # Both artifacts landed, journal first (snapshot carried).
+        self.assertTrue(os.path.exists(
+            os.path.join(d, "spend", "tier_journal.jsonl")))
+        loaded = gov._load_state(int(time.time()) + 3600)
+        self.assertEqual(loaded["tier"], 1)
+        # Crash recovery still works: a STALE state file with a
+        # newer journal tail replays the journal snapshot (a MISSING
+        # state with journal history stays fail-closed deleted).
+        stale = dict(gov._initial_state())
+        stale.update(evaluated_at=st["evaluated_at"] - 100)
+        gov._save_state_locked(stale)
+        recovered = gov._load_state(int(time.time()) + 3600)
+        self.assertEqual(recovered["tier"], 1)
+
+    def test_pre_provider_cleanup_failure_aborts(self):
+        import unittest.mock as _mock
+        d = tempfile.mkdtemp()
+        _led, log, gov, budget, _p = T._gate(d)
+        cfg = T._cfg()
+        with _mock.patch.object(
+                spend_mod.SpendGovernor, "reserve_usd",
+                side_effect=spend_mod.SpendRefused("cap")):
+            with _mock.patch.object(
+                    budget, "settle_call",
+                    side_effect=r15.AbortCycle(
+                        "AAPL", {"boom": True})):
+                with self.assertRaises(r15.AbortCycle) as cm:
+                    workers.run_gated(
+                        "generate", "hypothesize", "AAPL", "t1", 1,
+                        {"messages": [{"role": "user",
+                                       "content": "hi"}]},
+                        cfg, T.fake_provider_factory, None, budget,
+                        gov, "fake", log, 30.0)
+        snap = cm.exception.snapshot
+        self.assertIn("pre-provider-cleanup-failure", snap)
+        self.assertIn("lease-cleanup-failed",
+                      snap["pre-provider-cleanup-failure"])
+
+    def test_pipe_missing_result_is_loud_and_fast(self):
+        import unittest.mock as _mock
+        from plane import timeout as timeout_mod
+        t0 = time.monotonic()
+        with _mock.patch.object(timeout_mod, "RECEIVE_TIMEOUT_S",
+                                1.0):
+            with self.assertRaises(RuntimeError) as cm:
+                timeout_mod.run_in_process(_silent_exit, 20)
+        self.assertIn("without a result", str(cm.exception))
+        self.assertLess(time.monotonic() - t0, 20.0)
+        self.assertEqual(multiprocessing.active_children(), [])
 
 
 if __name__ == "__main__":
