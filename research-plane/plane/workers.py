@@ -608,20 +608,23 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
         child = timeout_mod.run_in_process(_llm_child_main, timeout_s,
                                            payload)
     except timeout_mod.CallTimeout:
-        _unknown(budget, governor, log_path, epoch, node, model_id,
-                 cycle_id, symbol, lease, lease_id, worst, need,
-                 "timeout", container_name)
+        note = _unknown(budget, governor, log_path, epoch, node,
+                        model_id, cycle_id, symbol, lease, lease_id,
+                        worst, need, "timeout", container_name)
         raise r15.AbortCycle(symbol, {"timeout": True,
-                                      "unknown-spend": worst})
+                                      "unknown-spend": worst,
+                                      "reap": note})
     except Exception as e:
         # run_in_process transport failure (not a child envelope):
         # the child may or may not have run — ambiguous by
         # construction, same path as a timeout.
-        _unknown(budget, governor, log_path, epoch, node, model_id,
-                 cycle_id, symbol, lease, lease_id, worst, need,
-                 "transport:%r" % (e,), container_name)
+        note = _unknown(budget, governor, log_path, epoch, node,
+                        model_id, cycle_id, symbol, lease, lease_id,
+                        worst, need, "transport:%r" % (e,),
+                        container_name)
         raise r15.AbortCycle(symbol, {"transport-ambiguous": True,
-                                      "unknown-spend": worst})
+                                      "unknown-spend": worst,
+                                      "reap": note})
 
     status = child.get("status") if isinstance(child, dict) else None
     if status == "config-error":
@@ -638,17 +641,19 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
             pass
         raise ConfigBlocked(str(child.get("reason", "config-error")))
     if status == "provider-error":
-        _unknown(budget, governor, log_path, epoch, node, model_id,
-                 cycle_id, symbol, lease, lease_id, worst, need,
-                 "provider-error", container_name)
+        note = _unknown(budget, governor, log_path, epoch, node,
+                        model_id, cycle_id, symbol, lease, lease_id,
+                        worst, need, "provider-error", container_name)
         raise r15.AbortCycle(symbol, {"provider-error": True,
-                                      "unknown-spend": worst})
+                                      "unknown-spend": worst,
+                                      "reap": note})
     if status != "ok" or not isinstance(child, dict):
-        _unknown(budget, governor, log_path, epoch, node, model_id,
-                 cycle_id, symbol, lease, lease_id, worst, need,
-                 "bad-envelope", container_name)
+        note = _unknown(budget, governor, log_path, epoch, node,
+                        model_id, cycle_id, symbol, lease, lease_id,
+                        worst, need, "bad-envelope", container_name)
         raise r15.AbortCycle(symbol, {"bad-envelope": True,
-                                      "unknown-spend": worst})
+                                      "unknown-spend": worst,
+                                      "reap": note})
 
     usage = child.get("usage")
     if (not isinstance(usage, list) or len(usage) != 2 or
@@ -656,11 +661,13 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
             usage[0] < 0 or usage[1] < 0):
         # The call happened but its cost is unknowable: keep the FULL
         # reservation as UNKNOWN_SPEND (never settle fiction).
-        _unknown(budget, governor, log_path, epoch, node, model_id,
-                 cycle_id, symbol, lease, lease_id, worst, need,
-                 "unaccountable-usage", container_name)
+        note = _unknown(budget, governor, log_path, epoch, node,
+                        model_id, cycle_id, symbol, lease, lease_id,
+                        worst, need, "unaccountable-usage",
+                        container_name)
         raise r15.AbortCycle(symbol, {"unaccountable-usage": True,
-                                      "unknown-spend": worst})
+                                      "unknown-spend": worst,
+                                      "reap": note})
     actual = usage[0] + usage[1]
     tool_calls = child.get("tool_calls", 0)
     if type(tool_calls) is not int or tool_calls < 0:
@@ -742,7 +749,10 @@ def _unknown(budget, governor, log_path, epoch, node, model_id,
     Zero-price note: when worst == 0.0 (a genuinely free model) the
     unknown rows cannot be written (an unknown $0 row is meaningless
     and rejected); the R15 poison + AbortCycle still fire, and no
-    block is needed because no dollars are uncertain."""
+    block is needed because no dollars are uncertain.
+
+    Returns the container-reap note (None when reaped cleanly): reap
+    failure folds into the abort snapshot, never replaces it."""
     try:
         budget.settle_call(lease, need)
     except r15.AbortCycle:
@@ -765,7 +775,11 @@ def _unknown(budget, governor, log_path, epoch, node, model_id,
         budget.invalidate()
     except r15.AbortCycle:
         pass
-    _reap_container(container_name)
+    try:
+        _reap_container(container_name)
+        return None
+    except Exception as e:
+        return "reap-failed:%s" % e
 
 
 def _reap_container(container_name):

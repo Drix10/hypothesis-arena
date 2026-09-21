@@ -385,8 +385,12 @@ class SpendGovernor:
         if (not isinstance(amount_usd, (int, float)) or
                 amount_usd != amount_usd or amount_usd < 0):
             raise SpendRefused("unaccountable usd amount")
+        import os as _os
+        db_path = attribution._db_for(self.log_path)
+        fresh = (not _os.path.exists(db_path) and
+                 locks.read_marker(db_path) is None)
         try:
-            if attribution.has_unreconciled(self.log_path):
+            if not fresh and attribution.has_unreconciled(self.log_path):
                 raise SpendRefused("unknown-spend-pending")
             committed = self.committed_spend()
         except attribution.LedgerUnavailable:

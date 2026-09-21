@@ -452,6 +452,9 @@ def reap_holds(log_path, now=None):
     crashed post-spawn attempt may have been billed."""
     now = int(time.time()) if now is None else now
     db_path = _db_for(log_path)
+    if not os.path.exists(db_path) and \
+            locks.read_marker(db_path) is None:
+        return  # genuinely new path: nothing to reap
     with locks.FileLock(db_path + ".lock", purpose="spans"):
         con = _connect(db_path)
         try:
