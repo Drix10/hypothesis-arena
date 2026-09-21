@@ -396,25 +396,29 @@ class SpendGovernor:
         with locks.FileLock(lock, purpose="tier"):
             self._journal_locked(name, row)
 
+    def _save_state_and_journal_locked(self, st, journal_name,
+                                       journal_row):
+        """Transition persist ASSUMING the tier lock is held."""
+        if journal_row is not None:
+            journal_row = dict(journal_row)
+            journal_row["state"] = dict(st)
+            self._journal_locked(journal_name, journal_row)
+        self._save_state_locked(st)
+
     def _save_state_and_journal(self, st, journal_name, journal_row):
         """Crash-consistent transition persist: journal (carrying the
         full post-transition state snapshot for tail recovery) THEN
         state, under ONE acquisition of the tier lock. A crash
         between the two is recovered by _recover_from_journal on the
         next load; no second evaluator can enter between them."""
-        if journal_row is not None:
-            journal_row = dict(journal_row)
-            journal_row["state"] = dict(st)
         lock = self._tier_lock_path()
         if lock is None:
-            if journal_row is not None:
-                self._journal_locked(journal_name, journal_row)
-            self._save_state_locked(st)
+            self._save_state_and_journal_locked(st, journal_name,
+                                                journal_row)
             return
         with locks.FileLock(lock, purpose="tier"):
-            if journal_row is not None:
-                self._journal_locked(journal_name, journal_row)
-            self._save_state_locked(st)
+            self._save_state_and_journal_locked(st, journal_name,
+                                                journal_row)
 
     @staticmethod
     def _tier_for(projection, cap):
@@ -432,8 +436,22 @@ class SpendGovernor:
         6-hour anti-flap fallback. Returns (tier, projection).
         Tier-state failure raises StateUnavailable (fail closed — the
         caller denies); ledger-unavailable keeps the last tier
-        (decision() separately denies on unmeasurable spend)."""
+        (decision() separately denies on unmeasurable spend).
+        Whole-transition locking: load → compute → persist holds ONE
+        tier-lock acquisition, so a second evaluator cannot read stale
+        state and overwrite a newer (more restrictive) tier. Nested
+        subsystems (spend ledger, journals) are always acquired
+        tier-first, never the reverse, so no lock cycle exists."""
         now = int(time.time()) if now is None else now
+        lock = self._tier_lock_path()
+        if lock is None:
+            return self._evaluate_once(now, locked=False)
+        with locks.FileLock(lock, purpose="tier"):
+            return self._evaluate_once(now, locked=True)
+
+    def _evaluate_once(self, now, locked):
+        """One evaluation ASSUMING the caller holds the tier lock
+        when locked=True (see evaluate)."""
         st = self._load_state(now)
         if now - st["evaluated_at"] < TIER_EVAL_S and self._tier_cache \
                 and self._tier_cache[2] == st["evaluated_at"]:
@@ -448,7 +466,7 @@ class SpendGovernor:
         except attribution.LedgerUnavailable:
             return st["tier"], st["projection"]
         # Ratio-forced Tier 3 (G2/G3 with a wired profit feed).
-        if self._ratio_forces_stop(now):
+        if self._ratio_forces_stop(now, locked=locked):
             new_tier = 3
         else:
             new_tier = self._tier_for(proj, cap)
@@ -463,11 +481,17 @@ class SpendGovernor:
             st["below_count"] = 0
         st.update(projection=proj, evaluated_at=now)
         if st["tier"] != old_tier:
-            self._save_state_and_journal(
-                st, TIER_JOURNAL_NAME,
-                {"ts": now, "from": old_tier, "to": st["tier"],
-                 "projection_30d": proj, "cap": cap,
-                 "stage": self.stage})
+            row = {"ts": now, "from": old_tier, "to": st["tier"],
+                   "projection_30d": proj, "cap": cap,
+                   "stage": self.stage}
+            if locked:
+                self._save_state_and_journal_locked(
+                    st, TIER_JOURNAL_NAME, row)
+            else:
+                self._save_state_and_journal(
+                    st, TIER_JOURNAL_NAME, row)
+        elif locked:
+            self._save_state_locked(st)
         else:
             self._save_state(st)
         self._tier_cache = (st["tier"], proj, now)
@@ -515,7 +539,10 @@ class SpendGovernor:
                 return row["state"]
         return None
 
-    def _ratio_forces_stop(self, now):
+    def _ratio_forces_stop(self, now, locked=False):
+        """locked=True: the caller holds the tier lock (see evaluate)
+        — the per-day check+append uses the locked journal path so
+        two evaluators cannot double-count one UTC day."""
         state, _detail = self.ratio_status(now)
         day = now - (now % 86400)
         if state == "suspended":
@@ -531,12 +558,20 @@ class SpendGovernor:
             # hourly failures on the same day are one failed day. The
             # check and the append hold ONE tier-lock acquisition
             # (no check-then-write window for a second evaluator).
-            lock = self._tier_lock_path()
-            with locks.FileLock(lock, purpose="tier"):
+            if locked:
+                # Outer tier lock already held (see evaluate): the
+                # tail read and the append are one critical section.
                 if self._ratio_day_state(day) is None:
                     self._journal_locked(RATIO_JOURNAL_NAME,
                                          {"day": day, "state": state,
                                           "stage": self.stage})
+            else:
+                lock = self._tier_lock_path()
+                with locks.FileLock(lock, purpose="tier"):
+                    if self._ratio_day_state(day) is None:
+                        self._journal_locked(RATIO_JOURNAL_NAME,
+                                             {"day": day, "state": state,
+                                              "stage": self.stage})
         # Distinct consecutive FAILED days ending today; an ok day or
         # a missing/suspended day breaks the streak. Only the first
         # RATIO_FAIL_DAYS days matter (bounded journal scans).

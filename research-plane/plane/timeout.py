@@ -46,6 +46,48 @@ def _child_main(conn, func, args, kwargs):
             pass
 
 
+def _recv_envelope(conn, deadline_s):
+    """Wait up to deadline_s for exactly one envelope, then read the
+    whole frame under the same bound. Returns ("result", status,
+    payload) or ("none",) or ("none", thread): a child that stalls
+    mid-frame (partial bytes readable, frame never completed) must
+    not hang recv() past the hard deadline — the caller kills and
+    treats it as ambiguous. A dead child with nothing sent reads as
+    immediate EOF (loud missing result, no wait to the deadline)."""
+    import threading
+    import time as _t
+    end = _t.monotonic() + deadline_s
+    try:
+        if not conn.poll(max(0.0, end - _t.monotonic())):
+            return ("none",)
+    except (EOFError, BrokenPipeError, OSError):
+        return ("none",)
+    box = {}
+
+    def _read():
+        try:
+            box["got"] = ("result", conn.recv())
+        except BaseException as e:  # noqa: BLE001 - classified below
+            box["got"] = ("error", e)
+    th = threading.Thread(target=_read, daemon=True)
+    th.start()
+    th.join(max(0.0, end - _t.monotonic()))
+    if th.is_alive():
+        # Frame stalled mid-send: no result. The caller kills the
+        # child (closing the write end unblocks the reader, which
+        # then exits on EOF — joined again after the kill).
+        return ("none", th)
+    got = box.get("got")
+    if got is None or got[0] != "result":
+        return ("none",)
+    env = got[1]
+    if (not isinstance(env, tuple)) or len(env) != 2:
+        # A complete frame that is not our envelope: no usable
+        # result (the caller treats it as missing, loud).
+        return ("none",)
+    return ("result", env[0], env[1])
+
+
 def _kill_and_reap(proc):
     """SIGTERM, escalate to SIGKILL, verify. Returns True when no
     live worker remains."""
@@ -72,10 +114,12 @@ def run_in_process(func, timeout_s, *args, **kwargs):
 
     Result handoff over a one-shot Pipe, read WHILE the child runs
     (no Queue, no empty() polling, no feeder thread): the parent
-    polls the pipe for up to timeout_s, so a large valid result
+    waits up to timeout_s for the envelope, so a large valid result
     streams through the finite OS pipe buffer concurrently instead
     of blocking the child's send() against a parent that only reads
-    after death. Deadline with no result → kill + CallTimeout
+    after death. The frame read itself is bounded by the same
+    deadline: a child stalled mid-frame cannot hang recv() past it.
+    Deadline with no (complete) result → kill + CallTimeout
     (ambiguous: the attempt may have been billed). A dead child with
     no envelope (all write ends closed, nothing sent) reads as
     immediate EOF — loud missing-result RuntimeError, never a wait
@@ -107,27 +151,43 @@ def run_in_process(func, timeout_s, *args, **kwargs):
     except OSError:
         pass
     try:
-        if parent_conn.poll(timeout_s):
-            try:
-                status, payload = parent_conn.recv()
-            except (EOFError, BrokenPipeError, OSError):
-                # All write ends closed with nothing sent: the dead
-                # child produced no result.
-                raise RuntimeError("child exited without a result")
-            # Envelope in hand: the call provably completed. Reap
-            # the tearing-down child; a leaked worker is fatal even
-            # with a result (never return success over one).
-            if not _kill_and_reap(proc):
-                raise CallTimeout("child unkillable after result "
-                                  "(leaked worker)")
-        else:
-            # Deadline, no result: the child may be blocked or slow —
-            # either way it must die, and the attempt is ambiguous.
-            if not _kill_and_reap(proc):
-                raise CallTimeout("child unkillable after %.1fs "
-                                  "(leaked worker)" % timeout_s)
-            raise CallTimeout("child timed out after %.1fs (no "
-                              "result)" % timeout_s)
+        outcome = _recv_envelope(parent_conn, timeout_s)
+        reader = outcome[1] if (outcome[0] == "none" and
+                                len(outcome) == 2) else None
+        if outcome[0] != "result":
+            # No (complete) result. Settle the race between a dead
+            # child (EOF already readable) and a dying one: a short
+            # join first, so an exited child is labeled missing
+            # (not timed out) and a live one is killed below.
+            proc.join(5)
+            if proc.is_alive():
+                # Deadline with no result, or a frame stalled
+                # mid-send: the child may be blocked or slow —
+                # either way it must die, and the attempt is
+                # ambiguous.
+                dead = _kill_and_reap(proc)
+                if reader is not None:
+                    # The write end is now closed: the stalled reader
+                    # unblocks on EOF — join it so no thread debt
+                    # accumulates across cycles.
+                    reader.join(5)
+                if not dead:
+                    raise CallTimeout("child unkillable after %.1fs "
+                                      "(leaked worker)" % timeout_s)
+                raise CallTimeout("child timed out after %.1fs (no "
+                                  "result)" % timeout_s)
+            # The child is already dead and sent nothing: loud
+            # missing result (callers treat it as ambiguous, same
+            # conservatism as a timeout, without mislabeling it).
+            _kill_and_reap(proc)
+            raise RuntimeError("child exited without a result")
+        status, payload = outcome[1], outcome[2]
+        # Envelope in hand: the call provably completed. Reap
+        # the tearing-down child; a leaked worker is fatal even
+        # with a result (never return success over one).
+        if not _kill_and_reap(proc):
+            raise CallTimeout("child unkillable after result "
+                              "(leaked worker)")
     finally:
         try:
             parent_conn.close()

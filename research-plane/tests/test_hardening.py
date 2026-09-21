@@ -1394,6 +1394,15 @@ def _big_result(n):
     return "x" * n
 
 
+def _partial_stall(conn):
+    # 64 raw bytes (not a frame) then silence: the parent sees
+    # readable bytes but the frame never completes.
+    import os as _os
+    import time as _t
+    _os.write(conn.fileno(), b"\x99" * 64)
+    _t.sleep(60)
+
+
 class ReauditFixTest(unittest.TestCase):
     """Human re-audit of the shipped 62e1019 tree (5 code findings +
     pipe IPC). Each test pins the exact gap, through the real
@@ -1579,6 +1588,81 @@ class ReauditFixTest(unittest.TestCase):
         self.assertLess(dt, 45.0)
         self.assertEqual(multiprocessing.active_children(), [])
 
+    def test_stale_snapshot_cannot_overwrite_restrictive_tier(self):
+        # B reads tier-0 state; A persists tier 2; B's only persist
+        # path (evaluate) re-reads under the whole-transition lock,
+        # so the restrictive tier stands and no downgrade is written.
+        # The transition also holds exactly one tier-lock
+        # acquisition (single critical section, no nesting).
+        import unittest.mock as _mock
+        d = tempfile.mkdtemp()
+        log = os.path.join(d, "spans.jsonl")
+        now = int(time.time())
+        attribution.append_span(log, 1, "hypothesize", "m",
+                                cycle_id="c", symbol="AAPL",
+                                prompt_tokens=10, completion_tokens=5,
+                                usd=30.0, span_id="prime", ts=now)
+        mk = lambda: spend_mod.SpendGovernor(
+            log, dict(T.PRICING), "G0",
+            state_dir=os.path.join(d, "spend"))
+        govA, govB = mk(), mk()
+        stale = govB._load_state(now)
+        self.assertEqual(stale["tier"], 0)
+        tA, _p = govA.evaluate(now)
+        self.assertEqual(tA, 2)
+        acq = []
+        real = locks.FileLock
+        lock_path = govB._tier_lock_path()
+
+        class CountingLock(real):
+            def __enter__(self):
+                acq.append(self.path)
+                return super().__enter__()
+
+        with _mock.patch.object(locks, "FileLock", CountingLock):
+            tB, _p = govB.evaluate(now + 1)
+        self.assertEqual(tB, 2)
+        self.assertEqual(acq.count(lock_path), 1)
+        loaded = govA._load_state(now + 3600)
+        self.assertEqual(loaded["tier"], 2)
+        rows = []
+        with open(os.path.join(d, "spend", "tier_journal.jsonl"),
+                  encoding="utf-8") as fh:
+            for line in fh:
+                if line.strip():
+                    import json as _json
+                    rows.append(_json.loads(line))
+        self.assertTrue(rows)
+        self.assertTrue(all(r["to"] == 2 for r in rows))
+
+    def test_partial_frame_cannot_hang_recv(self):
+        # Pathological sender: partial frame then stall. The bounded
+        # frame read must give up at the deadline (kill path), never
+        # hang in recv(), and the reader thread must exit once the
+        # child is killed (no thread debt).
+        from plane import timeout as timeout_mod
+        ctx = multiprocessing.get_context("spawn")
+        parent, child = ctx.Pipe(duplex=False)
+        proc = ctx.Process(target=_partial_stall, args=(child,))
+        proc.start()
+        child.close()
+        try:
+            t0 = time.monotonic()
+            outcome = timeout_mod._recv_envelope(parent, 3)
+            self.assertEqual(outcome[0], "none")
+            self.assertLess(time.monotonic() - t0, 15.0)
+        finally:
+            proc.terminate()
+            proc.join(10)
+            if proc.is_alive():
+                proc.kill()
+                proc.join(10)
+            parent.close()
+        self.assertFalse(proc.is_alive())
+        if len(outcome) == 2:
+            outcome[1].join(5)
+            self.assertFalse(outcome[1].is_alive())
+
     def test_reconcile_over_reservation_is_rejected(self):
         # An attested bill above the worst-case reservation is a
         # defect: reject BEFORE mutating (rollback keeps the hold
@@ -1614,6 +1698,57 @@ class ReauditFixTest(unittest.TestCase):
         with self.assertRaises(r15.AbortCycle) as cm:
             led.reserve_call("c", "AAPL", 10, 0)
         self.assertIn("counters-deleted", str(cm.exception.snapshot))
+
+    def test_r15_snapshot_and_check_fail_closed_on_deletion(self):
+        # Deletion detection covers every reader, not just new
+        # reservations: a missing row for a seen cycle aborts in
+        # snapshot() (which feeds the cycle estimate) and check(),
+        # instead of minting zeros. Genuinely new cycles still read
+        # zero.
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "ledger.sqlite3")
+        led = budgets.BudgetLedger(path)
+        snap = led.snapshot("fresh", "AAPL")
+        self.assertEqual(
+            (snap["llm"], snap["tokens"]), (0, 0))
+        led.reserve_call("c", "AAPL", 10, 0)
+        con = sqlite3.connect(path)
+        con.execute("DELETE FROM counters")
+        con.commit()
+        con.close()
+        with self.assertRaises(r15.AbortCycle) as cm:
+            led.snapshot("c", "AAPL")
+        self.assertIn("counters-deleted",
+                      str(cm.exception.snapshot))
+        with self.assertRaises(r15.AbortCycle):
+            led.check("c", "AAPL")
+
+    def test_r15_migration_backfills_registry(self):
+        # An old-schema ledger (no cycles table) gains deletion
+        # detection immediately on upgrade: existing counters rows
+        # are registered from start_wall in the migration itself.
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "ledger.sqlite3")
+        led = budgets.BudgetLedger(path)
+        led.reserve_call("c", "AAPL", 10, 0)
+        con = sqlite3.connect(path)
+        con.execute("DROP TABLE cycles")
+        con.commit()
+        con.close()
+        led2 = budgets.BudgetLedger(path)
+        led2.reserve_call("c", "AAPL", 10, 0)  # upgrade + resume
+        con = sqlite3.connect(path)
+        reg = con.execute(
+            "SELECT COUNT(*) FROM cycles WHERE cycle='c' AND "
+            "symbol='AAPL'").fetchone()[0]
+        con.execute("DELETE FROM counters")
+        con.commit()
+        con.close()
+        self.assertEqual(reg, 1)
+        with self.assertRaises(r15.AbortCycle) as cm:
+            led2.reserve_call("c", "AAPL", 10, 0)
+        self.assertIn("counters-deleted",
+                      str(cm.exception.snapshot))
 
     def test_r15_prune_aged_row_recreates(self):
         # Prune is the only legitimate deleter: an aged-out cycle

@@ -146,6 +146,26 @@ class BudgetLedger:
                 "SELECT name FROM sqlite_master WHERE type='table' "
                 "AND name='cycles'").fetchone() is not None
             con.execute(_CYCLES_DDL)
+            if not had_cycles:
+                # Migrate an old ledger: register every surviving
+                # counters row, in one transaction, so deletion
+                # detection works immediately after upgrade (an empty
+                # registry would treat a deleted live row as new).
+                try:
+                    con.execute("BEGIN IMMEDIATE")
+                    try:
+                        con.execute(
+                            "INSERT INTO cycles SELECT cycle, symbol, "
+                            "start_wall FROM counters")
+                        con.execute("COMMIT")
+                    except BaseException:
+                        try:
+                            con.execute("ROLLBACK")
+                        except sqlite3.Error:
+                            pass
+                        raise
+                except sqlite3.Error as e:
+                    raise LedgerCorrupt("cycles-backfill:%s" % e)
             for table, cols in _EXPECTED_COLUMNS.items():
                 if table == "cycles" and not had_cycles:
                     # Additive upgrade: a pre-registry ledger gains an
@@ -243,6 +263,23 @@ class BudgetLedger:
                     (cycle_id, symbol, now_wall))
         return [0, 0, 0, 0, now_wall, 0]
 
+    def _live_row_or_abort(self, con, cycle_id, symbol, now_wall):
+        """Read-only twin of _reserve_row: an existing row resumes;
+        a missing row for a cycle seen within LEDGER_RETAIN_DAYS is
+        a deleted authority → abort (a reader that mints zeros over
+        a live cycle corrupts every downstream estimate). Missing
+        with old or no registry memory → None (genuinely new)."""
+        e = self._row(con, cycle_id, symbol, now_wall, False)
+        if e is not None:
+            return e
+        seen = con.execute(
+            "SELECT first_wall FROM cycles WHERE cycle=? AND "
+            "symbol=?", (cycle_id, symbol)).fetchone()
+        if (seen is not None and seen[0] >=
+                now_wall - LEDGER_RETAIN_DAYS * 86400):
+            _abort(symbol, "counters-deleted")
+        return None
+
     def _row(self, con, cycle_id, symbol, now_wall, create):
         # NOTE: create=True is legacy; reserve paths use _reserve_row
         # (deletion-detecting). No other caller passes True.
@@ -295,7 +332,8 @@ class BudgetLedger:
 
     def snapshot(self, cycle_id, symbol):
         def _get(con):
-            e = self._row(con, cycle_id, symbol, time.time(), False)
+            e = self._live_row_or_abort(con, cycle_id, symbol,
+                                        time.time())
             if e is None:
                 return {"llm": 0, "tools": 0, "tokens": 0, "depth": 0,
                         "start_wall": time.time(), "dead": False}
@@ -381,7 +419,8 @@ class BudgetLedger:
             con.execute(
                 "UPDATE leases SET actual=?, settled=1 WHERE lease_id=?",
                 (actual_tokens, lease["lease_id"]))
-            e = self._row(con, cycle_id, symbol, time.time(), False)
+            e = self._live_row_or_abort(con, cycle_id, symbol,
+                                        time.time())
             if e is None:
                 _abort(symbol, "counters-missing-at-settle")
             new_tokens = e[2] - reserved + actual_tokens
@@ -415,7 +454,7 @@ class BudgetLedger:
         now_wall = time.time() if now_wall is None else now_wall
 
         def _chk(con):
-            e = self._row(con, cycle_id, symbol, now_wall, False)
+            e = self._live_row_or_abort(con, cycle_id, symbol, now_wall)
             if e is None:
                 return
             self._check_row(e, symbol, now_wall)
@@ -428,6 +467,9 @@ class BudgetLedger:
         ordering bugs), not a silent no-op."""
 
         def _inv(con):
+            if self._live_row_or_abort(con, cycle_id, symbol,
+                                       time.time()) is None:
+                _abort(symbol, "counters-missing-at-invalidate")
             cur = con.execute("UPDATE counters SET dead=1 WHERE cycle=?"
                               " AND symbol=?", (cycle_id, symbol))
             if not cur.rowcount:
