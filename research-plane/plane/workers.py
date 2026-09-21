@@ -696,7 +696,8 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
     try:
         budget.settle_call(lease, actual)
         _span(log_path, epoch, node, model_id, cycle_id, symbol,
-              usage[0], usage[1], price, "success", lease)
+              usage[0], usage[1], (actual / 1000.0) * price,
+              "success", lease)
         governor.settle_usd(lease_id)
     except r15.AbortCycle:
         raise
