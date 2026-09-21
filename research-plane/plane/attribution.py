@@ -359,7 +359,8 @@ def append_span(log_path, epoch, node, model_id, calls=1, tokens=0,
                     fh.flush()
                     os.fsync(fh.fileno())
             except OSError:
-                pass  # ledger is authoritative; mirror repaired below
+                pass  # ledger is authoritative; the mirror self-heals
+                # hourly via prune_spans -> sync_mirror
     return row
 
 

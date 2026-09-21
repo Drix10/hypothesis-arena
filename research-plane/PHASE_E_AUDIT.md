@@ -147,3 +147,34 @@ plane (Phase D) change any interface a future slice depends on?
   (stdlib + plane + kernel); first hosted run pending on push.
   Slice D NOT AUTHORIZED. Phase D is NOT marked closed — this
   record awaits the human re-audit.
+
+## Addendum 5 — 32-finding final hardening pass (closed agent-side, NOT signed off)
+- A final audit (against `151000a`) found authorization/accounting/
+  lifecycle defects beneath the prior claims: TOCTOU dollar race,
+  model/pricing identity split, undercounted tool-growth bound with
+  no per-call pre-provider fit proof, unsafe marker folding,
+  crash-partial unknown states, unreconcilable zero-price blocks,
+  swallowed post-call accounting, Queue.empty() IPC, pre-provider
+  construction ordering, unbounded repr/IPC/result/generator/
+  manifest/digest growth, fail-open tier defaults, row-counted
+  ratio, implicit governors, driftable pricing, weak span identity,
+  cross-lease settlement, publisher/reader trust, signal/hook
+  semantics, journal/state splits, lifecycle proof, control-plane
+  and numeric validation, dead helpers, stale docs, and local-only
+  CI. Closed across `45996e9` (atomic spend + identity + markers +
+  recovery), `1c4d0d2` (token budget + child-first validation +
+  bounded outputs + deterministic IPC), `a2780ae` (producer ceilings
+  + mandatory governor + sole pricing + signal durability),
+  `cc1beac` (publisher/manifest/reader/digest + tier/ratio
+  battery), `1af480a` (numerics/dead-code/lifecycle/CI) — every fix
+  proven through the actual graph → worker → budget →
+  attribution/spend → publish path with a live regression, never by
+  isolated-helper test alone. Kernel/collector zero-diff throughout.
+- Batteries: plane 105 + hardening 55 + emit 19 + isolation +
+  sources green (venv), stdlib subset green on system python;
+  kernel re-green normal+hardened (83/83, 161/161, 78/78, NOALLOC),
+  freeze-check PASS, CTX/JEV pass, evidence pristine, diff-check
+  clean. CI workflow now pins permissions + timeouts and runs the
+  hardening suite; the first hosted run is pending (this push).
+  Slice D NOT AUTHORIZED. Phase D is NOT marked closed — this
+  record awaits the human re-audit against the shipped tree.

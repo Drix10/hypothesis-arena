@@ -322,3 +322,51 @@ and blocks future spend until a supervisor reconciles.
   NULL-class suspension binds the frozen Tier-C source set
   (x_lists_tail, launch_library, submarine_cables, aisstream,
   opensky_adsb) plus records explicitly carrying class NULL.
+
+### 10.4.2 Authorization hardening (frozen — change = doc edit + fresh paper window)
+
+Final-audit corrections to the §10.4.1 mechanism (all proven through
+the graph → worker → budget → attribution/spend → publish path):
+
+- The dollar authorization is ONE SQLite transaction
+  (`reserve_spend_hold`: reap-expired + unknown/invoked block check +
+  30d-measure + cap-compare + hold-insert under one lock). No second
+  non-atomic cap check exists anywhere; concurrent processes
+  serialize on the transaction (proven: four $0.60 racers vs a $1.00
+  cap admit exactly one).
+- Model identity: the priced `model_id` and
+  `provider_cfg["model_id"]` must be the same string before any
+  reservation (a mismatch is a clean pre-reserve refusal).
+- Token bound correction: tool growth per prior step is
+  TOOLS_PER_STEP_MAX × TOOL_OUT_MAX_BYTES (every slot counts). The
+  reserved budget travels into the worker child, whose UsageTape
+  refuses before EVERY provider call that cannot fit the remaining
+  budget (actual prompt bytes projected per call, including agent
+  message objects); the post-call tripwire stays as audit backstop.
+- Ledger markers are tri-state (absent/invalid/valid): only
+  DB-absent + marker-absent mints fresh; a damaged marker with no DB,
+  or any invalid marker with a DB, aborts. Any positive-dollar
+  `invoked` hold counts as unresolved unknown spend (crash backstop),
+  and `reconcile_unknown` recovers from every point of the ambiguity
+  path (complete rows, hold-only, span-only, or loud error on
+  nothing). Zero-price ambiguity settles R15 + poisons the row with
+  NO dollar block (nothing uncertain) so the next fresh cycle
+  proceeds.
+- Tier state is fail-closed (missing-with-history, corrupt,
+  future-dated, or non-finite states raise; callers deny) and bound
+  to stage + pricing fingerprint (a config change forces immediate
+  fresh evaluation, never reuse). State + journals persist under ONE
+  tier lock with journal-carried snapshots (crash between the two
+  recovers from the journal tail). Ratio counts DISTINCT consecutive
+  failed UTC days (one counted evaluation per day; ok/suspended days
+  break the streak).
+- The graph builds only with an explicit stateful governor, which is
+  the sole pricing authority (cheapest-model switch and every
+  reservation price come from its table). Kill signals are sentinel-
+  required (write failure fails the cycle closed with no publication);
+  the supervisor hook is supplemental telemetry (failures visible in
+  blocked evidence). Manifest rows are strictly validated with
+  bounded-tail reads + rotation; the reader falls through
+  reader-throwing generations; digest keys detect text conflicts with
+  bounded per-path memory. All money/control numerics are type-exact
+  and finite (bool is never a number here).
