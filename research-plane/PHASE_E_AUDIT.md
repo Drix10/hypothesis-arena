@@ -352,3 +352,12 @@ plane (Phase D) change any interface a future slice depends on?
   (untouched). Hosted rerun pending on push. Slice D NOT
   AUTHORIZED. Phase D NOT closed — awaiting the human re-audit of
   `0dccc0b`/`3e3a18b` and the hosted rerun.
+
+## Addendum 12 — hosted rerun green on the follow-up tree (4370574)
+- Run 35646920298: plane SUCCESS, kernel SUCCESS, stdlib FAILURE
+  at the same frozen-collector step (pre-existing, untouched per
+  the freeze/zero-diff constraint). The hermetic reclaim test
+  passes on hosted, confirming the child-envelope → parent-reclaim
+  → blocked-evidence chain on Linux; the real docker command stays
+  covered by the argv unit test. Awaiting the human re-audit of
+  `0dccc0b`/`3e3a18b`. Slice D NOT AUTHORIZED. Phase D NOT closed.
