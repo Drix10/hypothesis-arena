@@ -221,8 +221,8 @@ plane (Phase D) change any interface a future slice depends on?
   pinned by comment + test.
 - Batteries on the fix tree: plane 105 + hardening 64 + emit 19 +
   isolation + sources + stdlib green locally; kernel `build.sh`
-  exit 0; freeze-check PASS; kernel/collector zero-diff. Hosted
-  plane/kernel rerun pending on push; the frozen-collector stdlib
-  failure is NOT touched (per the re-audit: document, do not fix
-  for the badge). Slice D NOT AUTHORIZED. Phase D NOT closed —
+  exit 0; freeze-check PASS; kernel/collector zero-diff. Hosted CI
+  on `c5634f8` (run 35626652683): plane SUCCESS, kernel SUCCESS,
+  stdlib FAILURE at the same frozen-collector step (pre-existing,
+  untouched per the re-audit: document, do not fix for the badge). Slice D NOT AUTHORIZED. Phase D NOT closed —
   this record awaits the human re-audit of `5f54ee5`.
