@@ -322,3 +322,33 @@ plane (Phase D) change any interface a future slice depends on?
   rerun pending on push; the frozen-collector stdlib failure stays
   untouched. Slice D NOT AUTHORIZED. Phase D NOT closed — this
   record awaits the human re-audit of `0dccc0b`.
+
+## Addendum 11 — hosted plane failure on the round-4 tree, diagnosed (3e3a18b)
+- Hosted run 35643930706 (head `30be8a8`, round-4 code): kernel
+  SUCCESS, stdlib the same pre-existing frozen-collector failure,
+  plane FAILURE — one test,
+  test_extract_cleanup_failure_reaps_and_blocks, with EMPTY blocked
+  evidence (`'reap-failed' not found in ''`; log read via a signed-in
+  browser session, API log download stays repo-admin-blocked).
+- Diagnosis: the test depended on real docker state (assumed
+  `docker rm -f` on a unique name always fails), so a real-daemon
+  environment could resolve the reclaim cleanly and hide the path;
+  worse, the empty blocked exposed a genuine visibility hole — the
+  graph extract node turned AbortCycle into `aborted=True` with zero
+  blocked entries (an aborted cycle with nothing to show). A third
+  defect surfaced while reproducing: the round-3 partial-frame
+  regression passed vacuously on Windows (os.write to a pipe HANDLE
+  crashes the child instantly, so the deadline bound was never
+  exercised).
+- Closed in `3e3a18b`: extract-aborted blocked evidence on
+  AbortCycle; hermetic reclaim failure via mock in the integration
+  test; a _reap_container contract test (exact argv, nonzero-exit /
+  missing-binary raise, empty-name no-op); the partial-frame test
+  rewritten hermetically around a fake stalled conn (deadline bound
+  + post-kill thread exit, no subprocess, no platform fd tricks).
+- Batteries on the follow-up tree: plane 108 + hardening 83 + emit
+  19 + isolation + sources + stdlib green locally in CI-identical
+  script invocation; freeze-check PASS; kernel/collector zero-diff
+  (untouched). Hosted rerun pending on push. Slice D NOT
+  AUTHORIZED. Phase D NOT closed — awaiting the human re-audit of
+  `0dccc0b`/`3e3a18b` and the hosted rerun.
