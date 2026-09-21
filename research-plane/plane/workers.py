@@ -42,11 +42,21 @@ Token bounds (frozen mechanism constants):
   byte); documented assumption, tripwire-verified post-call.
 - COMPLETION_MAX = 1500 tokens per provider step (clamped downward
   into every generate call; callers can only shrink).
-- Agentic need = steps*P + (comp+tool)*steps*(steps-1)/2 + steps*comp
-  with AGENT_MAX_STEPS=5, TOOL_OUT_MAX_BYTES=1500 (tool outputs are
-  byte-truncated in the child, so tool context is truly bounded).
-- Post-call reconciliation is a tripwire (breach aborts), never the
+- Agentic need = steps*P + (comp+TOOLS_PER_STEP_MAX*tool)*steps*
+  (steps-1)/2 + steps*comp with AGENT_MAX_STEPS=5,
+  TOOL_OUT_MAX_BYTES=1500 (tool outputs are byte-truncated in the
+  child, so tool context is truly bounded) and TOOLS_PER_STEP_MAX=4
+  tool slots per step (every slot counts — four large tool outputs
+  on one step grow context by four outputs).
+- The reserved budget travels into the child UsageTape, which
+  refuses BEFORE every provider call whose actual prompt bytes +
+  requested completion cannot fit the remaining budget. The
+  post-call reconciliation is a tripwire (breach aborts), never the
   primary cap.
+- The child validates the complete task/configuration BEFORE
+  constructing the provider (kind, messages, brief, defaults,
+  limits, sandbox, container name, steps, budget shape); only then
+  does the factory run.
 
 Provider factories are deployment configuration (like pricing): the
 gate guarantees every execution is reserved + accounted; a factory
@@ -141,6 +151,56 @@ def _truncate_bytes(text, limit):
     return raw.decode("utf-8", "replace")
 
 
+# Bounds for bounded tool-output shaping (never materialize more).
+_TOOL_STR_SLICE = TOOL_OUT_MAX_BYTES * 4  # chars (pre-truncate slice)
+_TOOL_INT_BITS_MAX = 65536
+_TOOL_JSON_NODES_MAX = 4096
+_TOOL_JSON_STR_MAX = 8192
+
+
+def _bounded_tool_text(out):
+    """Shape a tool return into bounded text WITHOUT ever building
+    an unbounded representation: no repr() of arbitrary objects, no
+    full encode of huge strings, no unbounded JSON dumps."""
+    if isinstance(out, str):
+        # Slice first (bounded copy), then byte-truncate: the full
+        # string is never encoded.
+        if len(out) > _TOOL_STR_SLICE:
+            out = out[:_TOOL_STR_SLICE]
+        return _truncate_bytes(out, TOOL_OUT_MAX_BYTES)
+    if isinstance(out, bytes):
+        # Bounded decode: only the prefix that can survive truncation
+        # (+4 bytes so a split multibyte char degrades gracefully).
+        return _truncate_bytes(
+            out[:TOOL_OUT_MAX_BYTES + 4].decode("utf-8", "replace"),
+            TOOL_OUT_MAX_BYTES)
+    if out is None or isinstance(out, (bool, float)):
+        return _truncate_bytes(repr(out), TOOL_OUT_MAX_BYTES)
+    if isinstance(out, int):
+        # A huge int's repr is ~1 char per 3.3 bits: gate by bit
+        # length instead of materializing it.
+        try:
+            bits = out.bit_length()
+        except (AttributeError, OverflowError):
+            bits = _TOOL_INT_BITS_MAX + 1
+        if bits > _TOOL_INT_BITS_MAX:
+            return "<int:%d-bits>" % bits
+        return _truncate_bytes(repr(out), TOOL_OUT_MAX_BYTES)
+    if isinstance(out, (dict, list)):
+        import json
+        ok, _why = schema_mod.json_safe(
+            out, max_nodes=_TOOL_JSON_NODES_MAX,
+            max_str=_TOOL_JSON_STR_MAX)
+        if not ok:
+            return "<unserializable-tool-output:%s>" % type(out).__name__
+        try:
+            raw = json.dumps(out, sort_keys=True, default=str)
+        except (TypeError, ValueError):
+            return "<unserializable-tool-output:%s>" % type(out).__name__
+        return _truncate_bytes(raw, TOOL_OUT_MAX_BYTES)
+    return "<tool-output:%s>" % type(out).__name__
+
+
 def _usage_of(msg):
     """(prompt_tokens, completion_tokens) from a provider message, or
     None when unaccountable (missing, non-integer, negative). The
@@ -160,25 +220,47 @@ def _usage_of(msg):
 
 class UsageTape:
     """Child-side usage accumulator: wraps a raw provider, clamps
-    per-call max_tokens DOWNWARD to the completion bound, and sums
+    per-call max_tokens DOWNWARD to the completion bound, enforces
+    the parent's reserved token budget BEFORE every provider call
+    (prompt bytes + requested completion must fit the remaining
+    budget — refusal happens pre-provider, never post-call), and sums
     usage across multi-step agent runs. No authority, pure counting —
     unaccountable usage poisons the tape (totals() -> None) and the
     parent settles the full reservation."""
 
-    def __init__(self, provider, completion_max):
+    def __init__(self, provider, completion_max, token_budget=None):
         self._provider = provider
         self._completion_max = completion_max
+        # Reserved budget from the parent (the pre-call R15/token
+        # reservation). None = legacy unit-test path with no budget.
+        self._remaining = token_budget
         self._pt = 0
         self._ct = 0
         self._ok = True
         self.calls = 0
+
+    def _prompt_bytes(self, messages):
+        try:
+            raw = schema_mod.canon(messages)
+        except (TypeError, ValueError):
+            raise ConfigBlocked("tape-messages-unserializable")
+        return len(raw)
 
     def generate(self, messages, **kwargs):
         try:
             asked = int(kwargs.get("max_tokens", self._completion_max))
         except (TypeError, ValueError):
             asked = self._completion_max
-        kwargs["max_tokens"] = max(1, min(asked, self._completion_max))
+        comp = max(1, min(asked, self._completion_max))
+        if self._remaining is not None:
+            prompt_bytes = self._prompt_bytes(messages)
+            if prompt_bytes + comp > self._remaining:
+                # The actual outbound prompt does not fit the reserved
+                # budget: refuse BEFORE the provider is touched.
+                raise ConfigBlocked(
+                    "prompt-exceeds-reservation:%d+%d>%d" %
+                    (prompt_bytes, comp, self._remaining))
+        kwargs["max_tokens"] = comp
         msg = self._provider.generate(messages, **kwargs)
         self.calls += 1
         usage = _usage_of(msg)
@@ -187,6 +269,8 @@ class UsageTape:
         else:
             self._pt += usage[0]
             self._ct += usage[1]
+            if self._remaining is not None:
+                self._remaining -= (usage[0] + usage[1])
         return msg
 
     def totals(self):
@@ -201,7 +285,12 @@ class UsageTape:
 class _ChildTool:
     """Child-side tool wrapper: counts calls, byte-truncates outputs
     (bounded context growth — the parent's token bound relies on it),
-    records per-tool evidence for the parent to span."""
+    records per-tool evidence for the parent to span.
+
+    Bounded-output discipline: NEVER build an unbounded repr() just
+    to truncate it. Strings slice-then-truncate, bytes decode bounded,
+    small primitives repr directly, huge ints/arbitrary objects become
+    bounded placeholders without invoking their __repr__."""
 
     def __init__(self, tool):
         self._tool = tool
@@ -221,9 +310,8 @@ class _ChildTool:
                                  "reason": _truncate_bytes(repr(e),
                                                            256)})
             raise
-        text = out if isinstance(out, str) else repr(out)
         self.records.append({"ok": True})
-        return _truncate_bytes(text, TOOL_OUT_MAX_BYTES)
+        return _bounded_tool_text(out)
 
 
 class _ChildExec:
@@ -326,17 +414,34 @@ def _record_brief(rec):
                 if k in rec})[:2000]
 
 
+# Child-result bounds (enforced in the child BEFORE IPC so a huge
+# provider result never crosses the process boundary unbounded).
+RESULT_TEXT_MAX_BYTES = 1 << 20
+CHILD_CANDIDATES_MAX = 256
+CHILD_CANDIDATE_BYTES_MAX = 16384
+CHILD_TOOL_RECORDS_MAX = 64
+
+
 def _to_candidates(result, rec_defaults):
     """Shape agent output into advisory candidate dicts. Accepts
-    native lists/dicts directly; a JSON TEXT result is parsed, and
+    native lists/dicts directly; a JSON TEXT result is parsed (text
+    over RESULT_TEXT_MAX_BYTES is rejected BEFORE json.loads), and
     anything else yields [] (the graph counts the empty extract).
-    Shaping is never evidence (the resolver decides)."""
+    At most CHILD_CANDIDATES_MAX dicts are shaped, each validated
+    JSON-safe and canonically small (oversize/hostile items skipped) —
+    shaping is never evidence (the resolver decides)."""
     import json
     if isinstance(result, dict):
         data = [result]
     elif isinstance(result, list):
         data = result
     elif isinstance(result, str):
+        # Byte cap BEFORE json.loads: the char-count fast path avoids
+        # encoding huge text at all (utf-8 bytes >= char count).
+        if len(result) > RESULT_TEXT_MAX_BYTES or \
+                len(result.encode("utf-8", "replace")) > \
+                RESULT_TEXT_MAX_BYTES:
+            return []
         try:
             data = json.loads(result)
         except (ValueError, TypeError):
@@ -348,8 +453,16 @@ def _to_candidates(result, rec_defaults):
     else:
         return []
     out = []
-    for c in data:
+    for c in data[:CHILD_CANDIDATES_MAX]:
         if not isinstance(c, dict):
+            continue
+        ok, _why = schema_mod.json_safe(c)
+        if not ok:
+            continue
+        try:
+            if len(schema_mod.canon(c)) > CHILD_CANDIDATE_BYTES_MAX:
+                continue
+        except (TypeError, ValueError):
             continue
         out.append({
             "kind": c.get("kind", rec_defaults.get("kind",
@@ -368,14 +481,28 @@ def _token_need(kind, prompt_bytes, completion_max, steps):
     if kind == "generate":
         return prompt_bytes + completion_max
     # Closed-form multi-step bound: each step's context holds the
-    # initial prompt plus all prior completions and tool outputs
-    # (both bounded: completion_max per step, TOOL_OUT_MAX_BYTES per
-    # tool output, one tool output per step worst case... bounded by
-    # TOOLS_PER_STEP_MAX counted separately for the tool cap).
+    # initial prompt plus all prior completions and tool outputs.
+    # Tool growth per prior step is TOOLS_PER_STEP_MAX tool slots
+    # each holding up to TOOL_OUT_MAX_BYTES (byte-truncated outputs),
+    # NOT one output per step — four large tool outputs on one step
+    # grow context by four outputs, and the bound counts all four.
+    per_step_growth = (completion_max +
+                       TOOLS_PER_STEP_MAX * TOOL_OUT_MAX_BYTES)
     return (steps * prompt_bytes +
-            (completion_max + TOOL_OUT_MAX_BYTES) *
-            steps * (steps - 1) // 2 +
+            per_step_growth * steps * (steps - 1) // 2 +
             steps * completion_max)
+
+
+CONTAINER_NAME_RE = None  # compiled lazily below (stdlib re)
+
+
+def _valid_container_name(name):
+    import re
+    global CONTAINER_NAME_RE
+    if CONTAINER_NAME_RE is None:
+        CONTAINER_NAME_RE = re.compile(r"[A-Za-z0-9_.\-]{1,128}")
+    return isinstance(name, str) and bool(
+        CONTAINER_NAME_RE.fullmatch(name))
 
 
 def _llm_child_main(payload):
@@ -386,14 +513,81 @@ def _llm_child_main(payload):
       config-error: build-time failure, provider untouched by OUR
         build path (the factory itself is trusted config)
       provider-error: anything after the provider may have been
-        touched (ambiguous by construction)."""
-    try:
-        kind = payload["kind"]
-        factory = payload["provider_factory"]
-        provider_cfg = payload["provider_cfg"]
-        max_tokens = payload["max_tokens"]
-    except (KeyError, TypeError):
+        touched (ambiguous by construction).
+
+    Ordering (P0): the COMPLETE task/configuration validates FIRST;
+    the provider factory runs ONLY after every check passes. An
+    invalid sandbox/task/config returns config-error with the factory
+    provably untouched."""
+    if not isinstance(payload, dict):
         return {"status": "config-error", "reason": "bad-payload"}
+    kind = payload.get("kind")
+    if kind not in ("generate", "extract"):
+        return {"status": "config-error", "reason": "bad-kind"}
+    factory = payload.get("provider_factory")
+    if not callable(factory):
+        return {"status": "config-error",
+                "reason": "factory-not-callable"}
+    provider_cfg = payload.get("provider_cfg")
+    if not isinstance(provider_cfg, dict):
+        return {"status": "config-error",
+                "reason": "provider-cfg-shape"}
+    max_tokens = payload.get("max_tokens")
+    if type(max_tokens) is not int or \
+            not 1 <= max_tokens <= COMPLETION_MAX:
+        return {"status": "config-error", "reason": "bad-max-tokens"}
+    token_budget = payload.get("token_budget")
+    if type(token_budget) is not int or token_budget < 0:
+        return {"status": "config-error",
+                "reason": "bad-token-budget"}
+    messages = brief = rec_defaults = None
+    steps = 1
+    sandbox_cfg = {}
+    container_name = ""
+    if kind == "generate":
+        messages = payload.get("messages")
+        ok, why = schema_mod.json_safe(messages)
+        if not ok:
+            return {"status": "config-error",
+                    "reason": "messages:%s" % why}
+        try:
+            if len(schema_mod.canon(messages)) > PROMPT_BYTES_MAX:
+                return {"status": "config-error",
+                        "reason": "prompt-too-large"}
+        except (TypeError, ValueError):
+            return {"status": "config-error",
+                    "reason": "messages-unserializable"}
+    else:
+        try:
+            sandbox_cfg = payload["sandbox_cfg"]
+            _sandbox_kwargs(sandbox_cfg)
+        except (KeyError, TypeError, ConfigBlocked) as e:
+            return {"status": "config-error",
+                    "reason": _truncate_bytes("sandbox:%r" % (e,),
+                                              256)}
+        container_name = payload.get("container_name")
+        if not _valid_container_name(container_name):
+            return {"status": "config-error",
+                    "reason": "bad-container-name"}
+        for key in ("tool_factory", "executor_factory"):
+            fac = payload.get(key)
+            if fac is not None and not callable(fac):
+                return {"status": "config-error",
+                        "reason": "bad-%s" % key}
+        brief = payload.get("brief")
+        rec_defaults = payload.get("rec_defaults")
+        steps = payload.get("steps")
+        if (not isinstance(brief, str) or not brief or
+                len(brief) > BRIEF_CHARS_MAX):
+            return {"status": "config-error", "reason": "bad-brief"}
+        ok, why = schema_mod.json_safe(rec_defaults)
+        if not ok:
+            return {"status": "config-error",
+                    "reason": "rec-defaults:%s" % why}
+        if type(steps) is not int or \
+                not 1 <= steps <= AGENT_MAX_STEPS:
+            return {"status": "config-error", "reason": "bad-steps"}
+    # Validation complete: ONLY now may the provider be constructed.
     try:
         provider = factory(provider_cfg)
     except Exception as e:
@@ -401,7 +595,7 @@ def _llm_child_main(payload):
                 "reason": _truncate_bytes("factory:%r" % (e,), 256)}
     if not hasattr(provider, "generate"):
         return {"status": "config-error", "reason": "factory-no-model"}
-    tape = UsageTape(provider, max_tokens)
+    tape = UsageTape(provider, max_tokens, token_budget)
     if kind == "generate":
         messages = payload.get("messages")
         try:
@@ -419,18 +613,20 @@ def _llm_child_main(payload):
         except ImportError as e:
             return {"status": "config-error",
                     "reason": "smolagents:%r" % (e,)}
+        # Task/config already validated above (pre-provider); only
+        # construction that cannot touch the provider remains here.
+        container_kwargs = _sandbox_kwargs(sandbox_cfg)
+        container_kwargs["name"] = container_name
         try:
-            sandbox_cfg = payload["sandbox_cfg"]
-            container_kwargs = _sandbox_kwargs(sandbox_cfg)
-            container_kwargs["name"] = payload["container_name"]
             tool_factory = payload.get("tool_factory")
             raw_tools = tool_factory() if tool_factory else []
-            brief = payload["brief"]
-            rec_defaults = payload["rec_defaults"]
-            steps = payload["steps"]
         except Exception as e:
             return {"status": "config-error",
-                    "reason": _truncate_bytes("task:%r" % (e,), 256)}
+                    "reason": _truncate_bytes("tools:%r" % (e,), 256)}
+        if not isinstance(raw_tools, (list, tuple)) or \
+                len(raw_tools) > 64:
+            return {"status": "config-error",
+                    "reason": "bad-tools"}
         wrapped_tools = [_ChildTool(t) for t in raw_tools]
         try:
             executor_factory = payload.get("executor_factory")
@@ -470,10 +666,10 @@ def _llm_child_main(payload):
         tool_calls = sum(t.calls for t in wrapped_tools)
         tool_calls += getattr(agent.python_executor, "calls", 0)
         cands = _to_candidates(result, rec_defaults)
+        records = [r for t in wrapped_tools for r in t.records]
         return {"status": "ok", "candidates": cands,
                 "usage": tape.totals(), "tool_calls": tool_calls,
-                "tool_records": [
-                    r for t in wrapped_tools for r in t.records][:64]}
+                "tool_records": records[:CHILD_TOOL_RECORDS_MAX]}
     return {"status": "config-error", "reason": "bad-kind"}
 
 
@@ -522,6 +718,12 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
         raise r15.AbortCycle("gate", {"bad-kind": kind})
     if not callable(provider_factory):
         raise ConfigBlocked("provider_factory not callable")
+    # Timeout is control-plane input: invalid values block the attempt
+    # (never run, never silently become a default).
+    if (type(timeout_s) not in (int, float) or
+            not timeout_s == timeout_s or
+            not 0 < timeout_s <= 3600):
+        raise ConfigBlocked("bad-timeout:%r" % (timeout_s,))
     # Model/pricing identity (P0): the priced model_id and the model
     # the provider config names must be the SAME string. A config
     # naming a different model than the reservation prices is a
@@ -605,9 +807,20 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
     if container_name is None:
         container_name = "miro-%s-%s-%d" % (cycle_id, symbol,
                                             lease["seq"])
+    if not _valid_container_name(container_name):
+        try:
+            budget.settle_call(lease, 0)
+        except r15.AbortCycle:
+            pass
+        try:
+            governor.settle_usd(lease_id)
+        except Exception:
+            pass
+        raise ConfigBlocked("bad-container-name")
     payload = {"kind": kind, "provider_factory": provider_factory,
                "provider_cfg": dict(provider_cfg),
-               "max_tokens": comp, "container_name": container_name}
+               "max_tokens": comp, "container_name": container_name,
+               "token_budget": need}
     if kind == "generate":
         payload["messages"] = messages
     else:
@@ -745,6 +958,10 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
             # Result failure WITH good accounting: blocked evidence,
             # not an abort (the spend is settled and spanned above).
             return {"blocked": "non-string-output"}
+        if len(text) > RESULT_TEXT_MAX_BYTES:
+            # Oversize provider text never crosses into state: the
+            # spend is accounted; the RESULT is dropped + counted.
+            return {"blocked": "result-too-large"}
         return {"text": text, "usage": usage}
     cands = child.get("candidates")
     if not isinstance(cands, list):

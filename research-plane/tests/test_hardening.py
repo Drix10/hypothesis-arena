@@ -397,5 +397,210 @@ class MarkerTriStateTest(unittest.TestCase):
         self.assertIn("marker-invalid", str(cm.exception.snapshot))
 
 
+class TokenBudgetTest(unittest.TestCase):
+    def test_tape_prefit_refuses_pre_provider(self):
+        touched = []
+
+        class TouchProvider:
+            def generate(self, messages, max_tokens=None, **kw):
+                touched.append(True)
+                return T.FakeMsg("x", pt=1, ct=1)
+
+        tape = workers.UsageTape(TouchProvider(),
+                                 workers.COMPLETION_MAX,
+                                 token_budget=100)
+        with self.assertRaises(workers.ConfigBlocked):
+            tape.generate([{"role": "user",
+                            "content": "x" * 1000}],
+                          max_tokens=1500)
+        self.assertEqual(touched, [])  # provider never touched
+        msg = tape.generate([{"role": "user", "content": "hi"}],
+                            max_tokens=10)
+        self.assertEqual(touched, [True])
+        self.assertEqual(tape.totals(), [1, 1])
+
+    def test_four_tool_outputs_fit_within_corrected_bound(self):
+        # Four max-size tool outputs appended over agent steps: the
+        # corrected closed form covers them; the old one-slot form
+        # would not.
+        p, c, s = 2000, 1500, 5
+        need = workers._token_need("extract", p, c, s)
+        new_growth = (c + 4 * 1500) * s * (s - 1) // 2
+        old_growth = (c + 1500) * s * (s - 1) // 2
+        self.assertGreater(new_growth, old_growth)  # 75000 > 30000
+        self.assertGreaterEqual(
+            new_growth, 4 * 1500 * s * (s - 1) // 2)  # 4 outs/step
+        four = [{"tool": "t%d" % i, "output": "y" * 1500}
+                for i in range(4)]
+        hist_bytes = len(T.schema.canon(four))
+        self.assertLess(p + hist_bytes, need)
+        # The tape enforces the same bound call by call.
+        touched = []
+
+        class TouchProvider:
+            def generate(self, messages, max_tokens=None, **kw):
+                touched.append(True)
+                return T.FakeMsg("x", pt=10, ct=10)
+
+        tape = workers.UsageTape(TouchProvider(), c,
+                                 token_budget=need)
+        big_step = [{"role": "user", "content": "x" * p}] + four
+        for _ in range(s):
+            tape.generate(big_step, max_tokens=c)
+        self.assertEqual(len(touched), s)
+        # Remaining-based refusal across steps: a tight budget fits
+        # the step once, then refuses when actuals consumed the
+        # headroom (prompt bytes + completion vs what is left).
+        step_bytes = len(T.schema.canon(big_step))
+        tight = step_bytes + c  # exactly one step fits
+        tape2 = workers.UsageTape(TouchProvider(), c,
+                                  token_budget=tight)
+        tape2.generate(big_step, max_tokens=c)
+        self.assertEqual(len(touched), s + 1)
+        with self.assertRaises(workers.ConfigBlocked):
+            tape2.generate(big_step, max_tokens=c)
+        self.assertEqual(len(touched), s + 1)  # still pre-provider
+
+
+class ChildValidationTest(unittest.TestCase):
+    def _touch_factory(self, path):
+        def _factory(cfg):
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("touched")
+            return T.FakeProvider(cfg)
+        return _factory
+
+    def _payload(self, **kw):
+        p = {"kind": "generate",
+             "provider_factory": self._touch_factory(
+                 os.path.join(tempfile.mkdtemp(), "t")),
+             "provider_cfg": {"model_id": "m"},
+             "max_tokens": 100, "token_budget": 100000,
+             "messages": [{"role": "user", "content": "hi"}]}
+        p.update(kw)
+        return p
+
+    def test_invalid_task_never_builds_provider(self):
+        d = tempfile.mkdtemp()
+        # Invalid sandbox on an extract task: factory untouched.
+        touch = os.path.join(d, "touched")
+        out = workers._llm_child_main({
+            "kind": "extract",
+            "provider_factory": self._touch_factory(touch),
+            "provider_cfg": {"model_id": "m"},
+            "max_tokens": 100, "token_budget": 100000,
+            "sandbox_cfg": {},  # missing proxy network etc.
+            "container_name": "miro-c-s-1",
+            "brief": "b", "rec_defaults": {}, "steps": 5})
+        self.assertEqual(out["status"], "config-error")
+        self.assertFalse(os.path.exists(touch))
+        # Bad brief / steps / budget / container likewise.
+        base = self._payload()
+        base.update({"kind": "extract",
+                     "sandbox_cfg": dict(T.SANDBOX),
+                     "container_name": "miro-c-s-1",
+                     "brief": "b", "rec_defaults": {},
+                     "steps": 5})
+        for bad in ({"brief": ""}, {"steps": 99},
+                    {"token_budget": -1},
+                    {"container_name": "a;b"},
+                    {"max_tokens": 10 ** 9}):
+            p = dict(base, **bad)
+            p["provider_factory"] = self._touch_factory(
+                os.path.join(d, "t%d" % len(str(bad))))
+            out = workers._llm_child_main(p)
+            self.assertEqual(out["status"], "config-error")
+        self.assertEqual(os.listdir(d), [])
+
+    def test_valid_generate_still_runs(self):
+        out = workers._llm_child_main(self._payload())
+        self.assertEqual(out["status"], "ok")
+        self.assertEqual(out["text"], "thesis")
+
+
+class BoundedOutputTest(unittest.TestCase):
+    def test_huge_repr_never_called(self):
+        called = []
+
+        class BadRepr:
+            def __repr__(self):
+                called.append(True)
+                return "x" * (100 << 20)
+
+        t = workers._ChildTool(lambda: BadRepr())
+        out = t()
+        self.assertEqual(called, [])
+        self.assertLess(len(out.encode("utf-8")), 256)
+        self.assertIn("BadRepr", out)
+
+    def test_huge_str_sliced_not_encoded(self):
+        t = workers._ChildTool(lambda: "y" * (100 << 20))
+        out = t()
+        self.assertLessEqual(len(out.encode("utf-8")),
+                             workers.TOOL_OUT_MAX_BYTES)
+
+    def test_huge_int_becomes_placeholder(self):
+        t = workers._ChildTool(lambda: (1 << 1000000))
+        out = t()
+        self.assertLess(len(out.encode("utf-8")), 256)
+        self.assertIn("int:", out)
+
+    def test_huge_result_capped_before_ipc(self):
+        many = [{"kind": "filing_event", "symbols": ["AAPL"],
+                 "value": {"type": "enum", "v": "e"}}
+                for _ in range(1000)]
+        cands = workers._to_candidates(many, {})
+        self.assertEqual(len(cands), workers.CHILD_CANDIDATES_MAX)
+        self.assertEqual(workers._to_candidates("x" * (2 << 20), {}),
+                         [])
+        big = {"kind": "filing_event", "symbols": ["AAPL"],
+               "value": {"type": "enum", "v": "e"},
+               "pad": "z" * (1 << 20)}
+        self.assertEqual(workers._to_candidates([big], {}), [])
+
+
+class ProcessBoundaryTest(unittest.TestCase):
+    def test_repeated_success_and_timeout_leave_no_debt(self):
+        for _ in range(5):
+            self.assertEqual(
+                T.timeout_mod.run_in_process(T._sleepy, 30, 0), "woke")
+        for _ in range(3):
+            with self.assertRaises(T.timeout_mod.CallTimeout):
+                T.timeout_mod.run_in_process(T._sleepy, 1, 60)
+        self.assertEqual(multiprocessing.active_children(), [])
+        # Child errors propagate as RuntimeError, not silence.
+        with self.assertRaises(RuntimeError):
+            T.timeout_mod.run_in_process(T._emit_same,
+                                         30, ("x",))
+        self.assertEqual(multiprocessing.active_children(), [])
+
+    def test_bad_timeout_blocks_pre_spawn(self):
+        d = tempfile.mkdtemp()
+        led, log, gov, budget, _p = T._gate(d)
+        touch = os.path.join(d, "touched")
+        cfg = T._cfg(fake_behavior="touch-file", touch_path=touch)
+        for bad in (None, "30", -1, 0, float("nan"), float("inf"),
+                    10 ** 9, True):
+            with self.assertRaises(workers.ConfigBlocked):
+                workers.run_gated(
+                    "generate", "hypothesize", "AAPL", "t1", 1,
+                    {"messages": [{"role": "user", "content": "hi"}]},
+                    cfg, T.fake_provider_factory, None, budget, gov,
+                    "fake", log, bad)
+        self.assertFalse(os.path.exists(touch))
+        # Nothing ever reserved: the ledger was never even created.
+        self.assertFalse(os.path.exists(attribution._db_for(log)))
+
+    def test_bad_container_name_blocks_pre_spawn(self):
+        d = tempfile.mkdtemp()
+        led, log, gov, budget, _p = T._gate(d)
+        with self.assertRaises(workers.ConfigBlocked):
+            workers.run_gated(
+                "generate", "hypothesize", "AAPL", "t1", 1,
+                {"messages": [{"role": "user", "content": "hi"}]},
+                T._cfg(), T.fake_provider_factory, None, budget, gov,
+                "fake", log, 30.0, container_name="a;b|c")
+
+
 if __name__ == "__main__":
     unittest.main()

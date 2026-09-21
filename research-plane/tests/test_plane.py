@@ -1186,8 +1186,11 @@ class GateTest(unittest.TestCase):
     def test_token_need_formula(self):
         n1 = workers._token_need("generate", 2000, 1500, 1)
         self.assertEqual(n1, 3500)
+        # Corrected bound: EVERY tool slot per prior step counts
+        # (TOOLS_PER_STEP_MAX x TOOL_OUT_MAX_BYTES), not one output.
+        growth = 1500 + workers.TOOLS_PER_STEP_MAX * 1500
         n5 = workers._token_need("extract", 2000, 1500, 5)
-        self.assertEqual(n5, 5 * 2000 + 3000 * 5 * 4 // 2 + 5 * 1500)
+        self.assertEqual(n5, 5 * 2000 + growth * 5 * 4 // 2 + 5 * 1500)
         self.assertLess(n5, r15.TOKENS)
 
 
