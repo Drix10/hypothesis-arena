@@ -83,3 +83,30 @@ plane (Phase D) change any interface a future slice depends on?
   wired), supervisor process kill at WALL_S (in-process watchdog is
   the secondary guard). The code fails closed (ConfigBlocked) on all
   of them; nothing claims to be operationally complete without them.
+
+## Addendum 3 — independent 26-finding end-to-end audit (closed)
+- A third audit (against `a921934`) found the forced-boundary gaps:
+  hypothesize/critique are now pure build/parse callables with the
+  graph performing every provider call through required gated models;
+  cycle identity is run-scoped (thread_id); the budget ledger is
+  SQLite with leases and fail-closed corruption; the token ceiling is
+  hard (downward max_tokens clamp + post-call breach abort);
+  timeouts invalidate budget rows and executors clean up in finally;
+  provider egress is pinned to the deployment proxy via explicit
+  httpx transport (Client(proxy=...) was found silently ignored and
+  is not used); the doc-10 spend governor (stage caps + tiers +
+  pricing-required) gates every LLM node; attribution uses the doc-10
+  category taxonomy with a separate outcome field and insert-gated
+  mirrors; the thesis/digest/freshness ordering is digest-first;
+  producer-side 16-symbol, watermark, and history validation;
+  verify-before-seen manifests; constructed-and-verified strict
+  checkpoint serde; single-run guard; iteration ceilings; raw-record
+  validation; graph-stamped origin; leak-free locks. Closed in
+  `aaa8ecd` with one regression proof each (see TODO record).
+- plan/08 §8.4 corrected: partial in-memory/checkpoint state may
+  exist, but NO partial bundle is published (was: ambiguous
+  "partial features kept").
+- Remaining DEPLOYMENT boxes (fail-closed without them): Docker
+  daemon + egress-proxy probe, image SBOM/scan, model key, supervisor
+  WALL_S kill, Langfuse tail. No GitHub CI exists (no workflows) —
+  all counts above are local.

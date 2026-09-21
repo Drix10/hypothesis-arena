@@ -221,7 +221,7 @@ supervisor independently:
 
 | Limit | Value | On breach |
 |---|---|---|
-| LLM calls per cycle | 40 | Cycle aborted, partial features kept, `research_abort` logged |
+| LLM calls per cycle | 40 | Cycle aborted, `research_abort` logged. Partial in-memory/checkpoint state may exist for debugging, but NO partial feature bundle is ever published — the last complete bundle stands (see §8.5). |
 | Tool calls per cycle | 120 | Same |
 | Wall clock per cycle | 8 min | Same |
 | Tokens per cycle | 250k | Same |
