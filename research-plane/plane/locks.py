@@ -30,8 +30,14 @@ import tempfile
 import threading
 
 # Frozen purpose allowlist. One RLock each; no per-path state.
+# "create" serializes ledger first-creation across processes (a
+# dedicated lock file per DB: creation check-then-mint must be
+# atomic, and it must never nest inside the spans/budget locks on
+# the SAME file — lock ORDER is always data-lock -> create-lock,
+# never the reverse, so no hold-and-wait cycle exists).
 _PURPOSES = ("spans", "manifest", "cadence", "digest", "tier",
-             "budget", "attribution", "signal", "general")
+             "budget", "attribution", "signal", "create",
+             "general")
 _LOCKS = {p: threading.RLock() for p in _PURPOSES}
 
 

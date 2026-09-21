@@ -94,6 +94,14 @@ class BudgetLedger:
         self.path = path
 
     def _connect(self, fresh_ok, abort_symbol):
+        # See attribution._connect: first-creation check-then-mint
+        # serializes on a dedicated lock file (data-lock ->
+        # create-lock order, never the reverse).
+        with locks.FileLock(self.path + ".create.lock",
+                            purpose="create"):
+            return self._connect_locked(fresh_ok, abort_symbol)
+
+    def _connect_locked(self, fresh_ok, abort_symbol):
         exists = os.path.exists(self.path)
         mstate, marker = locks.marker_state(self.path)
         if not exists:

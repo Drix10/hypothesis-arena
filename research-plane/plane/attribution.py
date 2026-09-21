@@ -156,6 +156,16 @@ def _storage_size(path):
 
 
 def _connect(db_path, create=False):
+    # First-creation is check-then-mint: serialize it across
+    # processes on a dedicated lock file. Lock order is always
+    # data-lock -> create-lock (this function never acquires a data
+    # lock), so concurrent creators converge instead of double-
+    # minting, and no lock cycle exists.
+    with locks.FileLock(db_path + ".create.lock", purpose="create"):
+        return _connect_locked(db_path, create)
+
+
+def _connect_locked(db_path, create=False):
     exists = os.path.exists(db_path)
     mstate, marker = locks.marker_state(db_path)
     if not exists:
