@@ -528,10 +528,15 @@ class SpendGovernor:
             return False
         if self._ratio_day_state(day) is None:
             # At most ONE counted evaluation per UTC day: repeated
-            # hourly failures on the same day are one failed day.
-            self._journal(RATIO_JOURNAL_NAME,
-                          {"day": day, "state": state,
-                           "stage": self.stage})
+            # hourly failures on the same day are one failed day. The
+            # check and the append hold ONE tier-lock acquisition
+            # (no check-then-write window for a second evaluator).
+            lock = self._tier_lock_path()
+            with locks.FileLock(lock, purpose="tier"):
+                if self._ratio_day_state(day) is None:
+                    self._journal_locked(RATIO_JOURNAL_NAME,
+                                         {"day": day, "state": state,
+                                          "stage": self.stage})
         # Distinct consecutive FAILED days ending today; an ok day or
         # a missing/suspended day breaks the streak. Only the first
         # RATIO_FAIL_DAYS days matter (bounded journal scans).
@@ -606,8 +611,9 @@ class SpendGovernor:
 
     def settle_usd(self, lease_id):
         """Release a cleanly accounted hold (the span carries actuals).
-        Never raises for a missing hold."""
-        try:
-            attribution.settle_hold(self.log_path, lease_id)
-        except attribution.LedgerUnavailable:
-            pass
+        Ledger failure PROPAGATES: a success-path settlement that did
+        not land is an incomplete accounting protocol, so the caller
+        aborts with the hold retained (still blocking) instead of
+        returning success. Missing hold row: nothing to do (already
+        settled or a pre-hold failure — both safe)."""
+        attribution.settle_hold(self.log_path, lease_id)

@@ -43,6 +43,7 @@ from . import r15
 
 LEDGER_MAX_BYTES = 64 << 20
 LEDGER_RETAIN_DAYS = 7
+CYCLES_RETAIN_DAYS = 30
 SCHEMA_VERSION = 1
 TOKENS_ABSOLUTE_MAX = r15.TOKENS  # a single need can never exceed cap
 TOOLS_ABSOLUTE_MAX = r15.TOOL_CALLS
@@ -57,6 +58,16 @@ _LEASES_DDL = (
     "settled INT DEFAULT 0)")
 _META_DDL = ("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, "
              "v TEXT NOT NULL)")
+# Registry of every (cycle, symbol) that ever reserved: the ONLY
+# legitimate deleter of a counters row is _prune (older than
+# LEDGER_RETAIN_DAYS). A missing counters row for a RECENTLY seen
+# cycle is an illegitimate deletion → fail closed, never mint fresh
+# counters over a live cycle. Registry memory past CYCLES_RETAIN_DAYS
+# is pruned: no live cycle can be that old (WALL_S bounds a cycle to
+# minutes), so re-creation there is genuinely new, not resurrected.
+_CYCLES_DDL = (
+    "CREATE TABLE IF NOT EXISTS cycles (cycle TEXT, symbol TEXT, "
+    "first_wall REAL NOT NULL, PRIMARY KEY (cycle, symbol))")
 
 _EXPECTED_COLUMNS = {
     "counters": ["cycle", "symbol", "llm", "tools", "tokens", "depth",
@@ -64,6 +75,7 @@ _EXPECTED_COLUMNS = {
     "leases": ["lease_id", "cycle", "symbol", "kind", "reserved",
                "actual", "settled"],
     "meta": ["k", "v"],
+    "cycles": ["cycle", "symbol", "first_wall"],
 }
 
 
@@ -130,7 +142,16 @@ class BudgetLedger:
             con.execute(_COUNTERS_DDL)
             con.execute(_LEASES_DDL)
             con.execute(_META_DDL)
+            had_cycles = con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name='cycles'").fetchone() is not None
+            con.execute(_CYCLES_DDL)
             for table, cols in _EXPECTED_COLUMNS.items():
+                if table == "cycles" and not had_cycles:
+                    # Additive upgrade: a pre-registry ledger gains an
+                    # empty registry (existing counters rows still
+                    # authorize their own cycles below).
+                    continue
                 got = [r[1] for r in con.execute(
                     "PRAGMA table_info(%s)" % table)]
                 if got != cols:
@@ -177,6 +198,8 @@ class BudgetLedger:
             "DELETE FROM leases WHERE lease_id IN (SELECT l.lease_id "
             "FROM leases l LEFT JOIN counters c ON l.cycle = c.cycle "
             "AND l.symbol = c.symbol WHERE c.cycle IS NULL)")
+        con.execute("DELETE FROM cycles WHERE first_wall < ?",
+                    (now_wall - CYCLES_RETAIN_DAYS * 86400,))
 
     def _reclaim(self):
         """Bounded-storage policy: checkpoint the WAL away and vacuum
@@ -197,7 +220,32 @@ class BudgetLedger:
         finally:
             con.close()
 
+    def _reserve_row(self, con, cycle_id, symbol, now_wall):
+        """Counters row for a new reservation: existing rows resume;
+        a missing row for a cycle seen within LEDGER_RETAIN_DAYS is
+        an illegitimate deletion (only _prune may delete, and only
+        older rows) → abort, never fresh counters over live state.
+        A missing row with old or no registry memory is genuinely
+        new (or prune-aged) → create + (re)register."""
+        e = self._row(con, cycle_id, symbol, now_wall, False)
+        if e is not None:
+            return e
+        seen = con.execute(
+            "SELECT first_wall FROM cycles WHERE cycle=? AND "
+            "symbol=?", (cycle_id, symbol)).fetchone()
+        if (seen is not None and seen[0] >=
+                now_wall - LEDGER_RETAIN_DAYS * 86400):
+            _abort(symbol, "counters-deleted")
+        con.execute(
+            "INSERT INTO counters VALUES (?,?,?,?,?,?,?,0)",
+            (cycle_id, symbol, 0, 0, 0, 0, now_wall))
+        con.execute("INSERT OR REPLACE INTO cycles VALUES (?,?,?)",
+                    (cycle_id, symbol, now_wall))
+        return [0, 0, 0, 0, now_wall, 0]
+
     def _row(self, con, cycle_id, symbol, now_wall, create):
+        # NOTE: create=True is legacy; reserve paths use _reserve_row
+        # (deletion-detecting). No other caller passes True.
         cur = con.execute(
             "SELECT llm, tools, tokens, depth, start_wall, dead "
             "FROM counters WHERE cycle = ? AND symbol = ?",
@@ -279,7 +327,7 @@ class BudgetLedger:
 
         def _res(con):
             self._prune(con, now_wall)
-            e = self._row(con, cycle_id, symbol, now_wall, True)
+            e = self._reserve_row(con, cycle_id, symbol, now_wall)
             self._check_row(e, symbol, now_wall)
             if e[2] + token_need > r15.TOKENS:
                 _abort(symbol, "tokens-exhausted")
@@ -353,7 +401,7 @@ class BudgetLedger:
 
         def _res(con):
             self._prune(con, now_wall)
-            e = self._row(con, cycle_id, symbol, now_wall, True)
+            e = self._reserve_row(con, cycle_id, symbol, now_wall)
             self._check_row(e, symbol, now_wall)
             e[1] += 1
             e[3] += 1

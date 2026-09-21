@@ -587,17 +587,20 @@ def reserve_spend_hold(log_path, lease_id, usd, cap_usd, now=None):
 
 def reconcile_unknown(log_path, lease_id, actual_usd, note=""):
     """Supervisor reconciliation of an ambiguous charge: replace the
-    conservative reservation with the attested actual (which may KEEP
-    the full reservation — never below it without attestation), clear
-    the block, and journal the adjustment. actual_usd must be finite
-    and non-negative; note is recorded verbatim (bounded).
+    conservative reservation with the attested actual, clear the
+    block, and journal the adjustment. actual_usd must be finite and
+    non-negative AND may never exceed the reservation (an attested
+    bill above the worst case is a defect, never a number to store);
+    note is recorded verbatim (bounded).
 
     Crash recovery: reconciles from EVERY point of the ambiguity
     path — complete unknown rows (normal), an invoked hold with no
-    unknown rows (fabricate + settle the missing rows from the hold,
-    journaled as recovered), or an orphan unknown span (clear the
-    flag, journaled). A lease with no trace at all is a loud error
-    (supervisor typo safety), never a silent no-op."""
+    unknown rows (a synthetic unknown span is CREATED from the hold
+    first, so the authoritative spend ledger carries the reconciled
+    dollars; then the unknown row, the span settlement, and the hold
+    deletion — all rowcount-verified), or a loud error when nothing
+    was ever recorded (supervisor typo safety), never a silent
+    no-op."""
     _check_str("lease_id", lease_id, SPAN_ID_MAX)
     _check_usd(actual_usd)
     if not isinstance(note, str) or len(note) > 256:
@@ -629,36 +632,96 @@ def reconcile_unknown(log_path, lease_id, actual_usd, note=""):
                         "lease_id=? AND state='invoked'",
                         (lease_id,)).fetchone()
                     if inv is None:
-                        # Maybe an orphan unknown span with no rows at
-                        # all: find it by the lease-derived span shape?
-                        # Spans carry no lease link, so this state is
-                        # only reachable when nothing was ever
-                        # recorded — a loud error, never a silent ok.
+                        # An orphan unknown span with no rows at all
+                        # cannot be attributed to a lease (spans carry
+                        # no lease link): a loud error, never a silent
+                        # ok. (Orphan spans do not block: only
+                        # unknown rows and invoked holds do.)
                         raise LedgerUnavailable("unknown lease: %s"
                                                 % lease_id)
                     old_usd = inv[0]
+                    if actual_usd > old_usd:
+                        # The reservation is the worst case by
+                        # construction: an attested bill above it is
+                        # a defect. Reject BEFORE mutating (rollback
+                        # keeps the hold blocking).
+                        raise LedgerUnavailable(
+                            "reconcile-over-reservation:%s" % lease_id)
                     span_id = inv[1]
-                    if span_id is not None:
-                        con.execute(
-                            "INSERT OR IGNORE INTO unknown_holds "
-                            "VALUES (?,?,?,?,0)",
-                            (lease_id, span_id, old_usd, now))
-                    else:
+                    if span_id is None:
+                        # Hold-only recovery: no span was ever written
+                        # for this attempt. Mint a clearly-marked
+                        # synthetic unknown span from the reservation
+                        # FIRST, so the authoritative ledger carries
+                        # the reconciled dollars below.
                         span_id = ("recovered-%s" %
                                    hashlib.sha256(
                                        lease_id.encode("utf-8"),
                                        usedforsecurity=False
                                    ).hexdigest()[:48])
+                        cur = con.execute(
+                            "INSERT INTO spans (span_id, ts, "
+                            "research_epoch, cycle_id, stage, "
+                            "symbol, node, model, prompt_tokens, "
+                            "completion_tokens, usd, category, "
+                            "outcome, is_unknown) VALUES "
+                            "(?,?,0,'recovered','r','?',"
+                            "'reconcile','unknown',0,0,?,"
+                            "'research','error',1)",
+                            (span_id, now, old_usd))
+                        if cur.rowcount != 1:
+                            raise LedgerUnavailable(
+                                "reconcile-span-mint:%s" % lease_id)
+                    else:
+                        got = con.execute(
+                            "SELECT is_unknown FROM spans WHERE "
+                            "span_id=?", (span_id,)).fetchone()
+                        if got is None:
+                            cur = con.execute(
+                                "INSERT INTO spans (span_id, ts, "
+                                "research_epoch, cycle_id, stage, "
+                                "symbol, node, model, "
+                                "prompt_tokens, completion_tokens, "
+                                "usd, category, outcome, is_unknown)"
+                                " VALUES (?,?,0,'recovered','r','?',"
+                                "'reconcile','unknown',0,0,?,"
+                                "'research','error',1)",
+                                (span_id, now, old_usd))
+                            if cur.rowcount != 1:
+                                raise LedgerUnavailable(
+                                    "reconcile-span-mint:%s" % lease_id)
+                        elif got[0] != 1:
+                            # A settled span re-entering reconcile is
+                            # an ordering defect, never a second
+                            # settlement.
+                            raise LedgerUnavailable(
+                                "reconcile-span-not-unknown:%s"
+                                % lease_id)
+                    try:
                         con.execute(
-                            "INSERT OR IGNORE INTO unknown_holds "
-                            "VALUES (?,?,?,?,0)",
+                            "INSERT INTO unknown_holds VALUES "
+                            "(?,?,?,?,0)",
                             (lease_id, span_id, old_usd, now))
+                    except sqlite3.IntegrityError:
+                        raise LedgerUnavailable(
+                            "reconcile-unknown-row-race:%s" % lease_id)
                     tag = (note + ":recovered" if note
                            else "recovered")
+                if hold is not None:
+                    if actual_usd > old_usd:
+                        raise LedgerUnavailable(
+                            "reconcile-over-reservation:%s" % lease_id)
                 if span_id is not None:
-                    con.execute("UPDATE spans SET usd=?, is_unknown=0 "
-                                "WHERE span_id=? AND is_unknown=1",
-                                (actual_usd, span_id))
+                    cur = con.execute(
+                        "UPDATE spans SET usd=?, is_unknown=0 "
+                        "WHERE span_id=? AND is_unknown=1",
+                        (actual_usd, span_id))
+                    if cur.rowcount != 1:
+                        # Complete path with no unknown span, or a
+                        # span that is not unknown: the evidence does
+                        # not match the claim — abort loud, hold kept.
+                        raise LedgerUnavailable(
+                            "reconcile-span-missing:%s" % lease_id)
                 con.execute("UPDATE unknown_holds SET reconciled=1 "
                             "WHERE lease_id=?", (lease_id,))
                 con.execute(

@@ -240,10 +240,21 @@ class UnknownRecoveryTest(unittest.TestCase):
         rec = con.execute(
             "SELECT old_usd, new_usd, note FROM reconciliations WHERE "
             "lease_id='orphan-lease'").fetchone()
+        # The authoritative spend ledger carries the reconciled $1 on
+        # a minted recovered-* span (never vanished); the orphan
+        # span stays unknown evidence (counted, never lost).
+        got = con.execute(
+            "SELECT usd, is_unknown FROM spans WHERE "
+            "span_id LIKE 'recovered-%'").fetchone()
+        orphan = con.execute(
+            "SELECT usd, is_unknown FROM spans WHERE "
+            "span_id='orphan-1'").fetchone()
         con.close()
         self.assertEqual(unk[0], 1)
         self.assertEqual((rec[0], rec[1]), (3.0, 1.0))
         self.assertIn("recovered", rec[2])
+        self.assertEqual(tuple(got), (1.0, 0))
+        self.assertEqual(tuple(orphan), (3.0, 1))
 
     def test_complete_record_reconciles_normally(self):
         d = tempfile.mkdtemp()
@@ -756,30 +767,6 @@ class GraphGovernanceTest(unittest.TestCase):
         self.assertIsNone(out.get("emitted"))
         blocked = " ".join(out.get("blocked") or [])
         self.assertIn("signal-persist-failed", blocked)
-
-    def test_strict_timeout_blocks_attempt(self):
-        d = tempfile.mkdtemp()
-        T._fixtures(d)
-        gt = T.GraphTest()
-        deps, _c, _l, _led, _g = gt._deps(d, script="t")
-        deps["model_timeout_s"] = "soon"
-        app = T._graph().build_graph(deps)
-        out = T._graph().run_cycle(app, ["AAPL"], 1, "badto")
-        blocked = " ".join(out.get("blocked") or [])
-        self.assertIn("bad-model-timeout", blocked)
-        dbp = attribution._db_for(os.path.join(d, "spans.jsonl"))
-        n = 0
-        if os.path.exists(dbp):
-            con = sqlite3.connect(dbp)
-            try:
-                n = con.execute(
-                    "SELECT COUNT(*) FROM spans WHERE node IN "
-                    "('hypothesize','critique')").fetchone()[0]
-            except sqlite3.OperationalError:
-                n = 0  # no span ever written: nothing attempted
-            con.close()
-        self.assertEqual(n, 0)
-
 
     def test_strict_timeout_blocks_attempt(self):
         d = tempfile.mkdtemp()
@@ -1403,6 +1390,10 @@ def _silent_exit():
     _os._exit(0)
 
 
+def _big_result(n):
+    return "x" * n
+
+
 class ReauditFixTest(unittest.TestCase):
     """Human re-audit of the shipped 62e1019 tree (5 code findings +
     pipe IPC). Each test pins the exact gap, through the real
@@ -1561,18 +1552,107 @@ class ReauditFixTest(unittest.TestCase):
         self.assertIn("pre-provider-cleanup-failure", snap)
         self.assertIn("lease-cleanup-failed",
                       snap["pre-provider-cleanup-failure"])
+        # The conservative reservation is preserved (lease still
+        # charged, never silently unwound by the failed cleanup).
+        self.assertEqual(budget.llm, 1)
 
     def test_pipe_missing_result_is_loud_and_fast(self):
-        import unittest.mock as _mock
+        # A child that dies with no envelope reads as immediate EOF
+        # (all write ends closed): loud, never a wait to the deadline.
         from plane import timeout as timeout_mod
         t0 = time.monotonic()
-        with _mock.patch.object(timeout_mod, "RECEIVE_TIMEOUT_S",
-                                1.0):
-            with self.assertRaises(RuntimeError) as cm:
-                timeout_mod.run_in_process(_silent_exit, 20)
+        with self.assertRaises(RuntimeError) as cm:
+            timeout_mod.run_in_process(_silent_exit, 20)
         self.assertIn("without a result", str(cm.exception))
         self.assertLess(time.monotonic() - t0, 20.0)
         self.assertEqual(multiprocessing.active_children(), [])
+
+    def test_pipe_large_result_streams_while_child_runs(self):
+        # ~1 MB result >> 64 KiB OS pipe buffer: the parent drains
+        # concurrently, so the child's send() never blocks against a
+        # parent that only reads after death (the old deadlock).
+        from plane import timeout as timeout_mod
+        t0 = time.monotonic()
+        out = timeout_mod.run_in_process(_big_result, 60, 1 << 20)
+        dt = time.monotonic() - t0
+        self.assertEqual(len(out), 1 << 20)
+        self.assertLess(dt, 45.0)
+        self.assertEqual(multiprocessing.active_children(), [])
+
+    def test_reconcile_over_reservation_is_rejected(self):
+        # An attested bill above the worst-case reservation is a
+        # defect: reject BEFORE mutating (rollback keeps the hold
+        # blocking, nothing settled).
+        d = tempfile.mkdtemp()
+        log = self._held(d, lease="L9", usd=2.0)
+        self._rec(log, lease="L9", span="S9", usd=2.0)
+        with self.assertRaises(attribution.LedgerUnavailable) as cm:
+            attribution.reconcile_unknown(log, "L9", 2.5, "over")
+        self.assertIn("over-reservation", str(cm.exception))
+        self.assertTrue(attribution.has_unreconciled(log))
+        con = sqlite3.connect(attribution._db_for(log))
+        hold = con.execute(
+            "SELECT state, usd FROM spend_holds WHERE "
+            "lease_id='L9'").fetchone()
+        span = con.execute(
+            "SELECT usd, is_unknown FROM spans WHERE "
+            "span_id='S9'").fetchone()
+        con.close()
+        self.assertEqual(tuple(hold), ("invoked", 2.0))
+        self.assertEqual(tuple(span), (2.0, 1))
+
+    def test_r15_deleted_live_row_aborts(self):
+        # A live cycle whose counters row vanishes is a deletion,
+        # never a first use: the next reservation aborts.
+        d = tempfile.mkdtemp()
+        led = budgets.BudgetLedger(os.path.join(d, "ledger.sqlite3"))
+        led.reserve_call("c", "AAPL", 10, 0)
+        con = sqlite3.connect(os.path.join(d, "ledger.sqlite3"))
+        con.execute("DELETE FROM counters")
+        con.commit()
+        con.close()
+        with self.assertRaises(r15.AbortCycle) as cm:
+            led.reserve_call("c", "AAPL", 10, 0)
+        self.assertIn("counters-deleted", str(cm.exception.snapshot))
+
+    def test_r15_prune_aged_row_recreates(self):
+        # Prune is the only legitimate deleter: an aged-out cycle
+        # may start over (registry memory older than retain too).
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "ledger.sqlite3")
+        led = budgets.BudgetLedger(path)
+        led.reserve_call("c", "AAPL", 10, 0)
+        con = sqlite3.connect(path)
+        old = time.time() - 8 * 86400
+        con.execute("UPDATE counters SET start_wall=?", (old,))
+        con.execute("UPDATE cycles SET first_wall=?", (old,))
+        con.commit()
+        con.close()
+        out = led.reserve_call("c", "AAPL", 10, 0)
+        self.assertEqual(out["seq"], 1)
+
+    def test_settle_failure_aborts_with_hold_retained(self):
+        # Success-path settlement that does not land is an
+        # incomplete protocol: no success return, hold retained and
+        # still blocking.
+        import unittest.mock as _mock
+        d = tempfile.mkdtemp()
+        _led, log, gov, budget, _p = T._gate(d)
+        cfg = T._cfg()
+        with _mock.patch.object(
+                attribution, "settle_hold",
+                side_effect=attribution.LedgerUnavailable(
+                    "disk-gone")):
+            with self.assertRaises(r15.AbortCycle) as cm:
+                workers.run_gated(
+                    "generate", "hypothesize", "AAPL", "t1", 1,
+                    {"messages": [{"role": "user",
+                                   "content": "hi"}]},
+                    cfg, T.fake_provider_factory, None, budget,
+                    gov, "fake", log, 30.0)
+        self.assertIn("accounting-failure", cm.exception.snapshot)
+        self.assertTrue(attribution.has_unreconciled(log))
+        self.assertGreater(attribution.outstanding_holds(log), 0)
 
 
 if __name__ == "__main__":

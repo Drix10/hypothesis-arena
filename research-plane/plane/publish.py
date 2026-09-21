@@ -70,7 +70,7 @@ def _load_map(map_path):
     closed before it can bind anything."""
     try:
         with open(map_path, "rb") as fh:
-            raw = fh.read(1 << 20 + 1)
+            raw = fh.read((1 << 20) + 1)
     except OSError as e:
         return None, "map-unreadable:%s" % e
     if len(raw) > 1 << 20:

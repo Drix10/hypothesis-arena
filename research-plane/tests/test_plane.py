@@ -997,11 +997,14 @@ class GateTest(unittest.TestCase):
         self.assertEqual(gov.decision(), ("deny", "unknown-spend-pending"))
         self.assertEqual(multiprocessing.active_children(), [])
         # Supervisor reconciliation unblocks with attested actuals.
+        # "Not billed" attests $0.00 — and any attestation must fit
+        # inside the worst-case reservation (over-reservation is a
+        # hard reject, never a number to store).
         cur = sqlite3.connect(attribution._db_for(log))
         lease_id = cur.execute(
             "SELECT lease_id FROM unknown_holds").fetchone()[0]
         cur.close()
-        attribution.reconcile_unknown(log, lease_id, 0.02, "not billed")
+        attribution.reconcile_unknown(log, lease_id, 0.0, "not billed")
         self.assertEqual(gov.decision()[0], "allow")
         # Spend unblocked; the poisoned CYCLE stays dead (R15), so
         # the next call proceeds on a fresh cycle.
