@@ -178,3 +178,24 @@ plane (Phase D) change any interface a future slice depends on?
   hardening suite; the first hosted run is pending (this push).
   Slice D NOT AUTHORIZED. Phase D is NOT marked closed — this
   record awaits the human re-audit against the shipped tree.
+
+## Addendum 6 — hosted CI outcome + creation-race fix (d79253b)
+- Hosted CI on `d79253b` (ubuntu-latest, CPython 3.11): **plane
+  SUCCESS** (105 + 55 + 19, fully independent of local output),
+  **kernel SUCCESS**, stdlib FAILURE at the collector step. The
+  plane green verifies this entire pass on a hosted runner.
+- The hosted plane failure on `ff1b3bc` was diagnosed via a WSL
+  Ubuntu reproduction as a concurrent first-create race (two
+  processes minting the ledger's init token; loser aborted) plus a
+  Linux-flaky assertion — fixed by serializing first-creation on a
+  dedicated create lock (data-lock -> create-lock order, no cycle),
+  proven 8/8 on WSL Linux plus the hosted green. The local
+  NameError seen mid-fix never reached any push.
+- The stdlib/collector failure is PRE-EXISTING (identical at
+  `151000a`, before this pass) and UNREPRODUCIBLE locally
+  (Windows 3.11/3.13, WSL Ubuntu 3.12, standalone 3.11.13 all
+  green): it lives in frozen collector code outside the authorized
+  touch zone, and hosted logs need repo-admin access (403 for the
+  integration). It is reported, not fixed: the human re-audit
+  should pull the stdlib job log before signing anything that
+  depends on the collector suites.
