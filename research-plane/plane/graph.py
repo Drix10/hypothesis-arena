@@ -373,7 +373,7 @@ def build_graph(deps):
                  "provenance_url": rec.get("provenance_url")}},
             cfg, deps["provider_factory"], sandbox_cfg, ctx["budget"],
             _governor_for(pricing, log_path),
-            pricing, model_id, log_path,
+            model_id, log_path,
             _extract_timeout(), tool_factory=deps.get("tool_factory"),
             executor_factory=deps.get("executor_factory"))
         if isinstance(out, dict) and "blocked" in out:
@@ -538,7 +538,7 @@ def build_graph(deps):
                 "generate", node, sym or "?", cyc, epoch,
                 {"messages": messages}, cfg, deps["provider_factory"],
                 None, budget, _governor_for(pricing, log_path),
-                pricing, model_id, log_path,
+                model_id, log_path,
                 _model_timeout())
         except _workers.ConfigBlocked as e:
             return None, _blocked(state, "%s:%s" % (node, e)), False, False

@@ -370,7 +370,7 @@ def reconcile_unknown(log_path, lease_id, actual_usd, note=""):
                 con.execute("UPDATE unknown_holds SET reconciled=1 "
                             "WHERE lease_id=?", (lease_id,))
                 con.execute(
-                    "INSERT INTO reconciliations VALUES (?,?,?,?)",
+                    "INSERT INTO reconciliations VALUES (?,?,?,?,?)",
                     (lease_id, old_usd, actual_usd, now, note))
                 con.execute("DELETE FROM spend_holds WHERE lease_id=?",
                             (lease_id,))

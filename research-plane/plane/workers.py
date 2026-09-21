@@ -466,7 +466,7 @@ def _clamp_completion(asked):
 
 
 def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
-              provider_factory, sandbox_cfg, budget, governor, pricing,
+              provider_factory, sandbox_cfg, budget, governor,
               model_id, log_path, timeout_s, max_tokens_asked=None,
               tool_factory=None, executor_factory=None, steps=None,
               container_name=None):
@@ -501,14 +501,10 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
         raise r15.AbortCycle("gate", {"bad-kind": kind})
     if not callable(provider_factory):
         raise ConfigBlocked("provider_factory not callable")
-    try:
-        price = pricing[model_id]
-    except (KeyError, TypeError):
-        raise ConfigBlocked("no price for model %r" % (model_id,))
-    if (not isinstance(model_id, str) or
-            not isinstance(price, (int, float)) or price != price or
-            not 0 <= price < 10 ** 6):
-        raise ConfigBlocked("bad pricing entry")
+    # Single pricing authority: the governor's deployment table. A
+    # second table here could diverge from the cap enforcement below
+    # (proven by test: $149 spent + $93 worst-case must refuse).
+    price = governor.price_for(model_id)
 
     steps = AGENT_MAX_STEPS if steps is None else steps
     if type(steps) is not int or not 1 <= steps <= AGENT_MAX_STEPS:
