@@ -241,10 +241,9 @@ class BudgetLedger:
             return {"llm": e[0], "tools": e[1], "tokens": e[2],
                     "depth": e[3], "start_wall": e[4],
                     "dead": bool(e[5])}
-        try:
-            return self._op(True, _get, symbol)
-        except r15.AbortCycle:
-            _abort(symbol, "ledger-unreadable")
+        # No reason-masking: _op already raises specific ledger-* aborts
+        # (corrupt/deleted/integrity), which must reach the caller.
+        return self._op(True, _get, symbol)
 
     @staticmethod
     def _valid_need(value, maximum, name, symbol):

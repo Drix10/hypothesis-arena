@@ -19,7 +19,7 @@ sys.path.insert(0, ROOT)  # research-plane/: plane/
 
 from collector import ctx_read
 from plane import emit as emit_mod
-from plane import resolver, schema
+from plane import publish, resolver, schema
 
 # Fixed Monday 2026-01-05 15:00 UTC = 10:00 America/New_York (in session).
 OBS_S = 1767625200
@@ -306,6 +306,91 @@ class EmitTest(unittest.TestCase):
         self.assertEqual(res["stats"]["accepted"], 0)
         self.assertEqual(res["stats"]["reasons"],
                          {"future-timestamp": 1})
+
+    def test_full_length_ids(self):
+        ok, out = resolver.resolve(candidate(), canonical(), MAP,
+                                   origin="parser")
+        self.assertTrue(ok)
+        feat, _capped = out
+        res = publish.resolve_emit({
+            "outdir": os.path.join(self.d, "out2"),
+            "map_path": self.mapp,
+            "canonical_for": lambda c: canonical(),
+            "source_watermarks": lambda st: {
+                "edgar_8k": {"last_observation_at": OBS_S,
+                               "cursor": "g"}}},
+            {"epoch": 412, "fused": [feat]})
+        self.assertIsNotNone(res.get("emitted"))
+        tail = res["emitted"].rsplit("-", 1)[-1]
+        self.assertEqual(len(tail), 64)  # full sha, never 16
+        env = json.loads(open(res["bundle_path"],
+                              encoding="utf-8").read())
+        fid = env["features"][0]["feature_id"]
+        self.assertTrue(fid.startswith("f-"))
+        self.assertEqual(len(fid), 66)
+
+    def test_strict_map_rejects(self):
+        def _write(obj):
+            p = os.path.join(self.d, "m%d.json" %
+                             _write.n)
+            _write.n += 1
+            with open(p, "wb") as fh:
+                fh.write(json.dumps(obj).encode())
+            return p
+        _write.n = 0
+        bad_cik = dict(MAP)
+        bad_cik["cik_to_ticker"] = {"ABC": "AAPL"}
+        self.assertEqual(publish._load_map(_write(bad_cik))[1],
+                         "map-cik-key")
+        bad_ticker = dict(MAP)
+        bad_ticker["cik_to_ticker"] = {"0000320193": "aapl"}
+        self.assertEqual(publish._load_map(_write(bad_ticker))[1],
+                         "map-cik-value")
+        bad_keys = dict(MAP)
+        bad_keys["evil"] = 1
+        self.assertEqual(publish._load_map(_write(bad_keys))[1],
+                         "map-keys")
+        bad_macro = dict(MAP)
+        bad_macro["macro_release_to_symbols"] = {"FOMC": "EURUSD"}
+        self.assertEqual(publish._load_map(_write(bad_macro))[1],
+                         "map-macro-value")
+        bad_note = dict(MAP)
+        bad_note["note"] = "n" * 1025
+        self.assertEqual(publish._load_map(_write(bad_note))[1],
+                         "map-note")
+        info, err = publish._load_map(self.mapp)
+        self.assertIsNone(err)
+        self.assertEqual(info[0], self.msha)
+
+    def test_semantic_invalid_bundle_skipped(self):
+        ok, out = resolver.resolve(candidate(), canonical(), MAP,
+                                   origin="parser")
+        feat, _capped = out
+        bid, good = self.emit_ok([feat])
+        outdir = os.path.join(self.d, "out")
+        # Evil generation: correct SHA in the manifest row, but the
+        # envelope inside names a DIFFERENT bundle_id (and epoch).
+        env = json.loads(open(good, encoding="utf-8").read())
+        env["bundle_id"] = "rp-99-evil"
+        evil_raw = json.dumps(env, sort_keys=True,
+                              separators=(",", ":")).encode()
+        with open(os.path.join(outdir, "features-99-evil.json"),
+                  "wb") as fh:
+            fh.write(evil_raw)
+        with open(os.path.join(outdir, "manifest.jsonl"), "a",
+                  encoding="utf-8") as fh:
+            fh.write(json.dumps(
+                {"bundle_id": "rp-99-row", "research_epoch": 99,
+                 "feature_count": 1,
+                 "entity_map_sha256": self.msha, "commit": True,
+                 "path": "features-99-evil.json",
+                 "sha256": hashlib.sha256(evil_raw).hexdigest()},
+                sort_keys=True) + "\n")
+        # Newest row is hash-valid but semantically void: the reader
+        # falls back to the good generation instead of blessing it.
+        self.assertEqual(emit_mod.latest_complete(outdir), good)
+        res = emit_mod.read_latest(outdir, self.dbp, self.mapp, NOW_S)
+        self.assertEqual(res["stats"]["reasons"], {"ok": 1})
 
 
 if __name__ == "__main__":
