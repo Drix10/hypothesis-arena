@@ -969,6 +969,153 @@ class RatioDaysTest(unittest.TestCase):
         self.assertEqual(gov.evaluate(day + 3 * 86400 + 100)[0], 0)
 
 
+class BudgetOracleTest(unittest.TestCase):
+    """CycleBudget (in-memory reference) vs DurableBudget (production
+    authority): the same scripted sequences must agree on counters
+    and on abort-vs-proceed. A divergence is a semantic defect in
+    one of the two — the oracle pins them together."""
+
+    def test_sequences_agree(self):
+        d = tempfile.mkdtemp()
+        led = budgets.BudgetLedger(os.path.join(d, "ledger.sqlite3"))
+        ref = T.r15.CycleBudget("AAPL", cycle_id="c")
+        dur = budgets.DurableBudget(led, "c", "AAPL")
+        # Script: reserve 100 tokens + 2 tools, settle 50, reserve
+        # again, over-reserve aborts both, invalidate poisons both.
+        lease = dur.reserve_call(100, 2)
+        ref.charge_llm(100)
+        ref.charge_tool()
+        ref.charge_tool()
+        s_ref, s_dur = ref.snapshot(), dur.snapshot()
+        self.assertEqual((s_ref["llm"], s_ref["tools"],
+                          s_ref["tokens"]),
+                         (s_dur["llm"], s_dur["tools"],
+                          s_dur["tokens"]))
+        dur.settle_call(lease, 50)
+        ref.tokens = 50  # reference settles by assignment in tests
+        self.assertEqual(dur.snapshot()["tokens"],
+                         ref.snapshot()["tokens"])
+        for reserve in (lambda: dur.reserve_call(T.r15.TOKENS, 0),
+                        lambda: ref.charge_llm(T.r15.TOKENS)):
+            with self.assertRaises(T.r15.AbortCycle):
+                reserve()
+        dur.invalidate()
+        ref.invalidate()
+        with self.assertRaises(T.r15.AbortCycle):
+            dur.reserve_call(1, 0)
+        with self.assertRaises(T.r15.AbortCycle):
+            ref.check()
+
+
+class LifecycleStressTest(unittest.TestCase):
+    def test_repeated_timeouts_reap_every_time(self):
+        # Eight consecutive hung calls: no live child after ANY of
+        # them (not just at the end), proven inside the loop.
+        for _ in range(8):
+            with self.assertRaises(T.timeout_mod.CallTimeout):
+                T.timeout_mod.run_in_process(T._sleepy, 1, 60)
+            self.assertEqual(multiprocessing.active_children(), [])
+
+    def test_container_reap_runs_after_worker_death(self):
+        # The parent reaps the executor container only after
+        # run_in_process guarantees the worker dead: the stub observes
+        # zero live children at reap time. On accounted success the
+        # parent reaps nothing (child-side finally owns cleanup).
+        import unittest.mock as _mock
+        d = tempfile.mkdtemp()
+        led, log, gov, budget, _p = T._gate(d)
+        observed = []
+
+        def _stub(cmd, **kw):
+            observed.append(list(multiprocessing.active_children()))
+
+            class _R:
+                returncode = 0
+                stderr = b""
+            return _R()
+
+        cfg = T._cfg(fake_behavior="hang")
+        with _mock.patch.object(workers.subprocess, "run", _stub):
+            with self.assertRaises(T.r15.AbortCycle):
+                workers.run_gated(
+                    "generate", "hypothesize", "AAPL", "t1", 1,
+                    {"messages": [{"role": "user", "content": "hi"}]},
+                    cfg, T.fake_provider_factory, None, budget, gov,
+                    "fake", log, 2.0)
+        self.assertEqual(len(observed), 1)
+        self.assertEqual(observed[0], [])
+        observed.clear()
+        # Success leg on a FRESH ledger (the hang leg above left a
+        # real unreconciled unknown — correctly blocking).
+        d2 = tempfile.mkdtemp()
+        led2, log2, gov2, budget2, _p2 = T._gate(d2, cycle="t2")
+        with _mock.patch.object(workers.subprocess, "run", _stub):
+            workers.run_gated(
+                "generate", "hypothesize", "AAPL", "t2", 1,
+                {"messages": [{"role": "user", "content": "hi"}]},
+                T._cfg(), T.fake_provider_factory, None, budget2,
+                gov2, "fake", log2, 30.0)
+        self.assertEqual(observed, [])
+
+
+class NumericsTest(unittest.TestCase):
+    def test_bool_and_infinite_pricing_blocked(self):
+        d = tempfile.mkdtemp()
+        log = os.path.join(d, "spans.jsonl")
+        for bad_price in (True, False, float("inf"), float("-inf"),
+                          float("nan"), -1.0, 10 ** 9):
+            with self.subTest(price=bad_price):
+                with self.assertRaises(workers.ConfigBlocked):
+                    T.spend_mod.SpendGovernor(log, {"m": bad_price},
+                                              "G0")
+
+    def test_bool_and_infinite_amounts_refused(self):
+        d = tempfile.mkdtemp()
+        led, log, gov, _b, _p = T._gate(d)
+        for bad in (True, False, float("inf"), float("nan"), -0.5):
+            with self.subTest(amount=bad):
+                with self.assertRaises(T.spend_mod.SpendRefused):
+                    gov.reserve_usd(bad, "lease-bad")
+                with self.assertRaises(ValueError):
+                    attribution.append_span(
+                        log, 1, "n", "m", usd=bad, span_id="s-bad")
+
+    def test_bool_calibration_ignored(self):
+        # A True calibration score is not 1.0: ignored (fallback),
+        # never ranked — proven through a real Tier-2 watchlist cut.
+        d = tempfile.mkdtemp()
+        T._fixtures(d)
+        gt = T.GraphTest()
+        deps, _c, _l, _led, _g = gt._deps(
+            d, script="t", spend_usd=30.0,
+            calibration_ranking={"MSFT": True, "AAPL": 0.5,
+                                 "GOOG": 0.7,
+                                 "TSLA": float("inf")})
+        app = T._graph().build_graph(deps)
+        out = T._graph().run_cycle(app, ["MSFT", "AAPL", "GOOG"],
+                                    1, "cal")
+        # Only finite numbers rank: GOOG (0.7) then AAPL (0.5).
+        self.assertEqual(out.get("watchlist"), ["GOOG", "AAPL"])
+
+    def test_infinite_projection_fails_closed(self):
+        import json as _json
+        d = tempfile.mkdtemp()
+        log = os.path.join(d, "spans.jsonl")
+        gov = T.spend_mod.SpendGovernor(
+            log, dict(T.PRICING), "G0",
+            state_dir=os.path.join(d, "spend"))
+        now = int(time.time())
+        gov.evaluate(now)
+        sp = os.path.join(d, "spend", T.spend_mod.TIER_STATE_NAME)
+        st = gov._load_state(now)
+        st["projection"] = float("inf")
+        with open(sp, "w", encoding="utf-8") as fh:
+            fh.write(_json.dumps(st))
+        with self.assertRaises(T.spend_mod.StateUnavailable):
+            gov.evaluate(now + 3600)
+        self.assertEqual(gov.decision(now + 3600)[0], "deny")
+
+
 class PublisherHardeningTest(unittest.TestCase):
     def _pub_deps(self, d, mapp, **kw):
         deps = {"outdir": os.path.join(d, "out"),
@@ -1211,6 +1358,44 @@ class DigestConflictTest(unittest.TestCase):
         ok, why = digest_mod.append_digest(d, 0, "AAPL", "hypothesize",
                                            "t0")
         self.assertEqual((ok, why), (True, "duplicate"))
+
+
+class MirrorAndEmitBoundTest(unittest.TestCase):
+    def test_mirror_self_heals_on_prune(self):
+        # A mirror row lost to an append failure is regenerated from
+        # the ledger by the hourly prune path (production wiring).
+        d = tempfile.mkdtemp()
+        log = os.path.join(d, "spans.jsonl")
+        attribution.append_span(log, 1, "n", "m", usd=1.0,
+                                span_id="s1")
+        with open(log, "w", encoding="utf-8") as fh:
+            fh.write("{corrupt\n")
+        attribution.prune_spans(log)
+        rows = [l for l in open(log, encoding="utf-8")
+                if l.strip()]
+        self.assertEqual(len(rows), 1)
+        self.assertIn('"span_id": "s1"', rows[0])
+
+    def test_emit_bundle_rejects_hostile_input(self):
+        from plane import emit as emit_mod
+        d = tempfile.mkdtemp()
+        wm = {"entity_map_version": "v", "entity_map_sha256": "a",
+              "sources": {}}
+
+        def _inf():
+            i = 0
+            while True:
+                i += 1
+                yield {"n": i}
+
+        t0 = time.monotonic()
+        with self.assertRaises(ValueError):
+            emit_mod.emit_bundle(os.path.join(d, "o"), 1, _inf(),
+                                 wm)
+        self.assertLess(time.monotonic() - t0, 10.0)
+        with self.assertRaises(ValueError):
+            emit_mod.emit_bundle(os.path.join(d, "o"), 1,
+                                 [{"n": i} for i in range(65)], wm)
 
 
 if __name__ == "__main__":

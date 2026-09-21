@@ -45,9 +45,20 @@ _SHA_RE = re.compile(r"[0-9a-f]{64}")
 
 
 def emit_bundle(outdir, epoch, features, watermarks, history=None):
-    """Write one complete committed bundle. Returns (bundle_id, path)."""
+    """Write one complete committed bundle. Returns (bundle_id, path).
+    Generator/oversize-hostile input fails closed: at most
+    schema.MAX_FEATURES+1 items are drawn (an infinite iterable cannot
+    hang the writer), and more than schema.MAX_FEATURES raises
+    instead of silently truncating identity."""
+    import itertools
     os.makedirs(outdir, exist_ok=True)
-    feats = list(features)
+    if isinstance(features, (list, tuple)):
+        feats = list(features)
+    else:
+        feats = list(itertools.islice(iter(features),
+                                      schema.MAX_FEATURES + 1))
+    if len(feats) > schema.MAX_FEATURES:
+        raise ValueError("emit_bundle over cap: %d" % len(feats))
     # Bundle identity covers EVERYTHING published: epoch, features,
     # watermarks, and history. Same features with different watermarks
     # (new cursor, new observation) are a DIFFERENT bundle — otherwise a

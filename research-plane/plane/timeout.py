@@ -1,55 +1,36 @@
-"""Bounded execution primitives (stdlib only).
+"""Bounded execution primitive (stdlib only).
 
-Two distinct guarantees, honestly separated:
-- run_with_timeout (threads): bounds SECONDARY time only (tool
-  steps inside the worker child). A hung tool raises promptly, but
-  the abandoned thread cannot be killed — the child process death
-  is the real kill.
-- run_in_process (multiprocessing): the PRODUCTION invocation
-  boundary. Every provider call runs in a spawn-context child that
-  is terminated (SIGTERM, escalated to SIGKILL) on expiry and
-  reaped on every path — no live worker survives a timeout, and no
-  timed-out thread can write late accounting (the child held no
-  ledger authority at all).
+run_in_process (multiprocessing) is the PRODUCTION invocation
+boundary. Every provider call runs in a spawn-context child that
+is terminated (SIGTERM, escalated to SIGKILL) on expiry and
+reaped on every path — no live worker survives a timeout, and no
+timed-out thread can write late accounting (the child held no
+ledger authority at all). (A thread-based secondary bound was
+removed: no production path used it, and an unkillable abandoned
+thread is not a boundary.)
 """
 import multiprocessing
-import threading
 
 
 class CallTimeout(Exception):
     pass
 
 
-def run_with_timeout(func, timeout_s, *args, **kwargs):
-    """Run func in a daemon thread; raise CallTimeout after timeout_s.
-    The attempt is the caller's to charge BEFORE calling this (a timed-
-    out attempt counts as spent — fail-closed, like ambiguous
-    transport)."""
-    box = {}
-    done = threading.Event()
-
-    def _target():
-        try:
-            box["result"] = func(*args, **kwargs)
-        except BaseException as e:  # noqa: BLE001 - re-raised below
-            box["error"] = e
-        finally:
-            done.set()
-
-    t = threading.Thread(target=_target, daemon=True)
-    t.start()
-    if not done.wait(timeout_s):
-        raise CallTimeout("call exceeded %.1fs" % timeout_s)
-    if "error" in box:
-        raise box["error"]
-    return box.get("result")
-
-
 def _child_main(queue, func, args, kwargs):
     try:
         queue.put(("ok", func(*args, **kwargs)))
     except BaseException as e:  # noqa: BLE001 - shipped back, re-raised
-        queue.put(("error", repr(e)))
+        # Bound the shipped error text (a hostile exception message
+        # must not bloat IPC).
+        import reprlib
+        fmt = reprlib.Repr()
+        fmt.maxstring = 2000
+        fmt.maxother = 2000
+        try:
+            err = fmt.repr(e)
+        except Exception:
+            err = "%s: <unrepresentable>" % type(e).__name__
+        queue.put(("error", err))
 
 
 def run_in_process(func, timeout_s, *args, **kwargs):

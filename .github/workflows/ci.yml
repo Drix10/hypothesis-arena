@@ -1,7 +1,9 @@
 # Repository-level execution evidence (Phase-D audit finding: claimed
-# green counts were local-only). Three jobs on every push/PR:
+# green counts were local-only). Four jobs on every push/PR:
 #  1. stdlib — collector + plane isolation tests, no third-party deps.
-#  2. plane — full research-plane battery in the pinned venv.
+#  2. plane — full research-plane battery in the pinned venv, including
+#     the final-hardening P0 suite (concurrency, crash recovery,
+#     process boundary, publisher/manifest/reader/digest).
 #  3. kernel — deterministic C++ gates (normal mode; MinGW-only
 #     hardened flags stay local to the Windows build host).
 name: ci
@@ -11,9 +13,13 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   stdlib:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -29,6 +35,7 @@ jobs:
 
   plane:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -39,10 +46,12 @@ jobs:
       - name: plane battery (no external network; .invalid hosts only)
         run: |
           python3 research-plane/tests/test_plane.py
+          python3 research-plane/tests/test_hardening.py
           python3 research-plane/tests/test_emit.py
 
   kernel:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: install toolchain

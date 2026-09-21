@@ -10,6 +10,12 @@ Frozen caps (per research cycle, per symbol):
 Consecutive aborts: 3 same-symbol -> that symbol pauses; majority of the
 watchlist aborting in-window -> plane degrades. An aborted cycle is never
 retried in-interval and publishes nothing (last complete bundle stands).
+
+CycleBudget below is the IN-MEMORY reference implementation of these
+semantics. Production attempts go through the crash-durable
+budgets.DurableBudget; CycleBudget is explicitly retained as the
+semantic oracle (a live equivalence regression proves both agree),
+not as a second authority.
 """
 import time
 

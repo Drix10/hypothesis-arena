@@ -305,7 +305,10 @@ def build_graph(deps):
         if isinstance(ranking, dict):
             for s in wl:
                 v = ranking.get(s)
-                if isinstance(v, (int, float)) and v == v:
+                # Type-exact + finite: a True score is not 1.0 and an
+                # infinite score must not poison the ranking.
+                if type(v) in (int, float) and v == v and \
+                        abs(v) != float("inf"):
                     scored.append((v, s))
         if len(scored) >= WATCHLIST_TIER2:
             scored.sort(key=lambda vs: (-vs[0], vs[1]))

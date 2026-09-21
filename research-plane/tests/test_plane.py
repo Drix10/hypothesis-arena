@@ -460,12 +460,6 @@ class LedgerTest(unittest.TestCase):
 
 
 class TimeoutTest(unittest.TestCase):
-    def test_thread_timeout_accounts_promptly(self):
-        t0 = time.monotonic()
-        with self.assertRaises(timeout_mod.CallTimeout):
-            timeout_mod.run_with_timeout(_sleepy, 0.5, 30)
-        self.assertLess(time.monotonic() - t0, 10.0)
-
     def test_process_timeout_kills(self):
         t0 = time.monotonic()
         with self.assertRaises(timeout_mod.CallTimeout):

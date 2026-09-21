@@ -151,6 +151,22 @@ def _truncate_bytes(text, limit):
     return raw.decode("utf-8", "replace")
 
 
+def _bounded_repr(exc, limit=256):
+    """Exception text WITHOUT ever materializing a hostile message:
+    reprlib bounds containers/strings/levels before the final
+    truncate (a 100MB exception message from a tool/provider must
+    not allocate 100MB just to be recorded)."""
+    import reprlib
+    fmt = reprlib.Repr()
+    fmt.maxstring = limit
+    fmt.maxother = limit
+    try:
+        text = fmt.repr(exc)
+    except Exception:
+        text = "%s: <unrepresentable>" % type(exc).__name__
+    return _truncate_bytes(text, limit)
+
+
 # Bounds for bounded tool-output shaping (never materialize more).
 _TOOL_STR_SLICE = TOOL_OUT_MAX_BYTES * 4  # chars (pre-truncate slice)
 _TOOL_INT_BITS_MAX = 65536
@@ -334,8 +350,7 @@ class _ChildTool:
             out = self._tool(*args, **kwargs)
         except Exception as e:
             self.records.append({"ok": False,
-                                 "reason": _truncate_bytes(repr(e),
-                                                           256)})
+                                 "reason": _bounded_repr(e)})
             raise
         self.records.append({"ok": True})
         return _bounded_tool_text(out)
@@ -429,10 +444,6 @@ def make_raw_provider(provider_cfg):
         api_key=provider_cfg.get("api_key"),
         client_kwargs={"http_client": httpx.Client(
             transport=transport)})
-
-
-# Keep the historical name: make_model IS the raw-provider factory.
-make_model = make_raw_provider
 
 
 def _record_brief(rec):
@@ -633,7 +644,7 @@ def _llm_child_main(payload):
                     "reason": _truncate_bytes(str(e), 256)}
         except Exception as e:
             return {"status": "provider-error",
-                    "reason": _truncate_bytes(repr(e), 256)}
+                    "reason": _bounded_repr(e)}
         text = getattr(msg, "content", None)
         return {"status": "ok",
                 "text": text if isinstance(text, str) else None,
@@ -693,7 +704,7 @@ def _llm_child_main(payload):
                     "reason": _truncate_bytes(str(e), 256)}
         except Exception as e:
             return {"status": "provider-error",
-                    "reason": _truncate_bytes(repr(e), 256)}
+                    "reason": _bounded_repr(e)}
         finally:
             for meth in ("cleanup", "delete"):
                 try:
@@ -967,7 +978,7 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
                   usage[0], usage[1], usd, "error", lease)
             governor.settle_usd(lease_id)
         except Exception as e:
-            breach["span-or-settle-failed"] = repr(e)
+            breach["span-or-settle-failed"] = _bounded_repr(e)
         try:
             budget.invalidate()
         except r15.AbortCycle as e:
@@ -988,7 +999,7 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
             budget.invalidate()
         except r15.AbortCycle:
             pass
-        raise r15.AbortCycle(symbol, {"accounting-failure": repr(e)})
+        raise r15.AbortCycle(symbol, {"accounting-failure": _bounded_repr(e)})
     if kind == "generate":
         text = child.get("text")
         if text is None or not isinstance(text, str):
@@ -1063,11 +1074,13 @@ def _unknown(budget, governor, log_path, epoch, node, model_id,
             except r15.AbortCycle:
                 pass
             raise r15.AbortCycle(
-                symbol, {"unresolved-spend": repr(e),
+                symbol, {"unresolved-spend": _bounded_repr(e),
                          "unknown-spend": worst})
     else:
         # Zero-price ambiguity: no dollars uncertain, nothing to
-        # block on — release the hold, keep the R15 poison.
+        # block on — release the hold, keep the R15 poison. The hold
+        # release is best-effort: a $0 hold that survives can neither
+        # block (has_unreconciled ignores $0) nor move money.
         try:
             governor.settle_usd(lease_id)
         except Exception:

@@ -6,9 +6,11 @@ delete_thread(). Retention runs under the supervisor (or the emit
 node's post-cycle hook); what it deleted is returned for the audit
 trail.
 
-Deserialization hardening: build_graph() wraps the saver with
-with_allowlist(CHECKPOINT_ALLOWLIST) so checkpoint blobs deserialize
-under a strict msgpack allowlist instead of the default surface.
+Deserialization hardening: build_graph() builds the saver through
+retention.make_saver(), which constructs the checkpointer over an
+explicit strict msgpack/json module allowlist
+(CHECKPOINT_ALLOWLIST) with no pickle fallback — verified on the
+effective serializer at construction, failing closed otherwise.
 """
 import time
 

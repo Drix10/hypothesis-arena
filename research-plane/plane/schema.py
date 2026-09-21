@@ -5,7 +5,6 @@ frozen reader (collector/ctx_read.py); this module never re-validates —
 the acceptance tests round-trip every emitted bundle through
 read_bundle(). Builders produce canonical-JSON-ready dicts only.
 """
-import hashlib
 import json
 
 SCHEMA_VERSION = "f2"
@@ -58,13 +57,6 @@ SOURCE_TTL_S = {
     "bls_empsit": 18 * 3600,
     "fred_macro": 18 * 3600,
 }
-
-SEP = "‖"  # U+2016 lineage separator (f2 combination rule)
-
-
-def combine_hashes(hashes):
-    """f2 multi-source combination: hex(sha256(SEP.join(sorted)))."""
-    return hashlib.sha256(SEP.join(sorted(hashes)).encode("utf-8")).hexdigest()
 
 
 def canon(obj):

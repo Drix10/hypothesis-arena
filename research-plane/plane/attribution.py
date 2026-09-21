@@ -50,6 +50,14 @@ ignored). Missing/corrupt ledger is LedgerUnavailable, NEVER zero
 spend — except a GENUINELY NEW path (no DB and no init marker),
 which mints fresh. Marker-without-DB aborts (authority-deleted).
 Storage (main+wal+shm) is bounded with checkpoint/vacuum reclaim.
+
+Retained low-level primitives (audited, live-tested, no undead
+code): hold_spend/mark_invoked/settle_hold/reap_holds are the
+crash-state constructors the recovery tests build ambiguous states
+from (production authorization goes ONLY through the atomic
+reserve_spend_hold above); day_summary/sync_mirror/committed_spend
+are the read-only supervisor/audit surfaces. Each is covered by a
+live regression, not kept for convenience.
 """
 import hashlib
 import json
@@ -698,7 +706,10 @@ def outstanding_holds(log_path):
 
 def prune_spans(log_path, now=None):
     """Bounded storage: drop spans (and settled holds) older than
-    SPAN_RETAIN_DAYS, then checkpoint/vacuum when over bound."""
+    SPAN_RETAIN_DAYS, then checkpoint/vacuum when over bound. Also
+    self-heals the best-effort JSONL mirror from the ledger
+    (best-effort: mirror failure never fails the prune — the ledger
+    is authoritative). Runs hourly through the tier evaluator."""
     now = int(time.time()) if now is None else now
     cutoff = now - SPAN_RETAIN_DAYS * 86400
     db_path = _db_for(log_path)
@@ -711,6 +722,10 @@ def prune_spans(log_path, now=None):
             con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         finally:
             con.close()
+    try:
+        sync_mirror(log_path)
+    except (OSError, LedgerUnavailable, ValueError):
+        pass
     if _storage_size(db_path) > LEDGER_MAX_BYTES:
         try:
             con = sqlite3.connect(db_path, timeout=60.0,
@@ -726,7 +741,11 @@ def prune_spans(log_path, now=None):
 
 def sync_mirror(log_path):
     """Regenerate the JSONL mirror from the authoritative ledger,
-    atomically (temp + replace — readers never see a half file)."""
+    atomically (temp + replace — readers never see a half file).
+    Bounded by construction: the ledger itself is capped at
+    LEDGER_MAX_BYTES with 120-day retention, so the materialized
+    rows are deployment-bounded, not unbounded. Runs hourly via
+    prune_spans (mirror self-heal); best-effort throughout."""
     db_path = _db_for(log_path)
     with locks.FileLock(db_path + ".lock", purpose="spans"):
         try:
