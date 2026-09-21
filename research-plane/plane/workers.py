@@ -243,8 +243,35 @@ class UsageTape:
         try:
             raw = schema_mod.canon(messages)
         except (TypeError, ValueError):
+            raw = None
+        if raw is not None:
+            return len(raw)
+        # Provider message OBJECTS (e.g. smolagents ChatMessage
+        # dataclasses in the agent loop): project the known text
+        # fields instead of serializing arbitrary objects.
+        try:
+            proj = []
+            for m in messages:
+                role = getattr(m, "role", None)
+                # smolagents passes a MessageRole enum: project its
+                # value (any deterministic text works for sizing).
+                role = getattr(role, "value", role)
+                content = getattr(m, "content", None)
+                if not isinstance(role, str):
+                    raise ValueError("unprojectable-role")
+                if isinstance(content, str):
+                    proj.append({"role": role, "content": content})
+                elif isinstance(content, list):
+                    # canon() returns BYTES: decode (ASCII-safe via
+                    # ensure_ascii) before embedding in the projection.
+                    proj.append({"role": role,
+                                 "content": schema_mod.canon(
+                                     content).decode("ascii")})
+                else:
+                    raise ValueError("unprojectable-content")
+            return len(schema_mod.canon(proj))
+        except (TypeError, ValueError):
             raise ConfigBlocked("tape-messages-unserializable")
-        return len(raw)
 
     def generate(self, messages, **kwargs):
         try:
@@ -597,9 +624,13 @@ def _llm_child_main(payload):
         return {"status": "config-error", "reason": "factory-no-model"}
     tape = UsageTape(provider, max_tokens, token_budget)
     if kind == "generate":
-        messages = payload.get("messages")
         try:
             msg = tape.generate(messages, max_tokens=max_tokens)
+        except ConfigBlocked as e:
+            # Pre-provider refusal (budget fit): the provider was not
+            # touched — clean config-error, never ambiguous.
+            return {"status": "config-error",
+                    "reason": _truncate_bytes(str(e), 256)}
         except Exception as e:
             return {"status": "provider-error",
                     "reason": _truncate_bytes(repr(e), 256)}
@@ -654,6 +685,12 @@ def _llm_child_main(payload):
             result = agent.run(
                 "Extract advisory feature candidates as JSON from: %s"
                 % brief)
+        except ConfigBlocked as e:
+            # Pre-provider refusal inside the agent loop (tape budget
+            # fit or code import scan): clean, provider untouched by
+            # the refused call.
+            return {"status": "config-error",
+                    "reason": _truncate_bytes(str(e), 256)}
         except Exception as e:
             return {"status": "provider-error",
                     "reason": _truncate_bytes(repr(e), 256)}

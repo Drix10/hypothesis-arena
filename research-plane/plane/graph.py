@@ -34,10 +34,21 @@ harvest -> extract -> fuse -> hypothesize -> critique -> emit
   best-calibrated symbols, and emits the SOFT-kill signal; T3 denies
   all research LLM and emits the MEDIUM-kill signal. (JEV is never
   throttled: it lives in collector/jev.py, outside this graph.)
-- Kill signals are durable sentinel files (signal_dir) plus the
-  health_hook event. The supervisor/trading side consumes them; the
-  C++ kill state machine itself is Slice-D+ work (NOT authorized —
-  the plane signals, it never acts on capital).
+  deps["spend_governor"] is REQUIRED with persistent state_dir and
+  is the SOLE pricing authority (deps["pricing"], if present, is
+  ignored — the governor's table prices every reservation and every
+  span, so pricing cannot drift from cap enforcement).
+- Kill signals are durable sentinel files (signal_dir, REQUIRED for
+  Tier-2+ operation) plus a supplemental health_hook event. A hook
+  failure lands in blocked evidence (visible, never cycle-breaking);
+  a sentinel write failure fails the cycle closed with NO publication.
+  The supervisor/trading side consumes them; the C++ kill state
+  machine itself is Slice-D+ work (NOT authorized — the plane
+  signals, it never acts on capital).
+- Every producer (harvest records, parser/worker candidates) drains
+  under an independent ceiling: infinite generators terminate with
+  producer_overrun + lower-bound dropped counts. Harvest envelopes
+  are shape-validated (malformed = blocked evidence, no publication).
 - AbortCycle sets cycle_aborted AND short-circuits: no further
   expensive work runs once the cycle cannot publish.
 - Cadence freshness advances ONLY after a successful thesis AND its
@@ -146,23 +157,37 @@ class PlaneState(TypedDict, total=False):
     producer_overrun: bool
 
 
-def _take_capped(producer, limit):
-    """Consume an (untrusted, possibly infinite) iterable, keeping the
-    FIRST `limit` items. At most limit+PRODUCER_CEILING items are drawn;
-    beyond that the drain stops with overrun=True and dropped reported
-    as a LOWER BOUND (never an infinite count loop)."""
+def _drain(producer, keep_max):
+    """Draw items from an untrusted (possibly infinite, possibly
+    raising, possibly non-iterable) producer. Keeps the FIRST
+    keep_max items; draws at most keep_max+PRODUCER_CEILING total
+    (then stops with overrun=True and a lower-bound dropped count).
+    AbortCycle/ConfigBlocked propagate (flow control, not data);
+    other producer exceptions end that producer as blocked evidence.
+    Returns (kept, dropped, overrun, error_or_None)."""
     kept = []
     drawn = 0
-    overrun = False
-    for item in producer:
-        drawn += 1
-        if len(kept) < limit:
-            kept.append(item)
-        if drawn >= limit + PRODUCER_CEILING:
-            overrun = True
+    try:
+        it = iter(producer)
+    except TypeError:
+        return kept, 0, False, "producer-not-iterable"
+    while True:
+        try:
+            item = next(it)
+        except StopIteration:
             break
-    dropped = max(0, drawn - len(kept))
-    return kept, dropped, overrun
+        except (r15.AbortCycle, _workers.ConfigBlocked):
+            raise
+        except Exception as e:
+            return kept, drawn - len(kept), False, \
+                "producer-error:%r" % (e,)
+        drawn += 1
+        if len(kept) < keep_max:
+            kept.append(item)
+        if drawn >= keep_max + PRODUCER_CEILING:
+            break
+    overrun = drawn >= keep_max + PRODUCER_CEILING
+    return kept, drawn - len(kept), overrun, None
 
 
 def _islice_capped(mapping, limit):
@@ -194,6 +219,26 @@ def _sized_ok(obj, byte_cap):
     return True, "ok"
 
 
+def _require_governor(gov):
+    """The graph spends only through an explicit governor with
+    persistent tier state and the full gate interface. A missing
+    governor, a stateless one, or a partial double is ConfigBlocked
+    at construction — never discovered mid-cycle."""
+    if gov is None:
+        raise _workers.ConfigBlocked("graph requires spend_governor")
+    if getattr(gov, "state_dir", None) is None:
+        raise _workers.ConfigBlocked(
+            "spend_governor without state_dir: tier state would "
+            "not be durable")
+    for meth in ("tier", "decision", "price_for", "cheapest_model",
+                 "worst_usd", "reserve_usd", "mark_invoked",
+                 "settle_usd", "evaluate", "thesis_cap"):
+        if not callable(getattr(gov, meth, None)):
+            raise _workers.ConfigBlocked(
+                "spend_governor missing interface: %s" % meth)
+    return gov
+
+
 def build_graph(deps):
     """deps: {harvest, extract_workers?, parser_extract?,
     hypothesize_build, hypothesize_parse, critique_build,
@@ -211,8 +256,14 @@ def build_graph(deps):
     selects the default research model; provider_cfgs maps model_id ->
     cfg for the Tier-2 cheapest switch (cheapest model without a cfg
     blocks instead of silently running expensive).
-    pricing {model_id: worst-leg usd/1k} is REQUIRED at attempt time
-    (unpriced models never run). log_path carries the attribution
+    spend_governor is REQUIRED (explicit, with persistent state_dir):
+    the production graph never builds an implicit governor, because an
+    implicit SpendGovernor(..., state_dir=None) would destroy durable
+    tier state and hourly-cache semantics. It is also the SOLE pricing
+    authority: deps["pricing"] is ignored — every price lookup,
+    cheapest-model decision, and worst-case computation goes through
+    the governor's deployment table, which cannot drift from the cap
+    enforcement below (same object). log_path carries the attribution
     spans (attempt-time required). budget_factory(cycle_id, symbol)
     -> handle with reserve_call/settle_call/check/snapshot.
     """
@@ -220,11 +271,13 @@ def build_graph(deps):
         raise RuntimeError("langgraph not installed (see requirements.txt)")
     for req in ("provider_factory", "budget_factory", "fuse",
                 "hypothesize_build", "hypothesize_parse",
-                "critique_build", "critique_parse"):
+                "critique_build", "critique_parse",
+                "spend_governor"):
         if req not in deps:
             raise _workers.ConfigBlocked("graph missing dep: %s" % req)
     if not callable(deps["provider_factory"]):
         raise _workers.ConfigBlocked("provider_factory not callable")
+    _require_governor(deps["spend_governor"])
 
     def _blocked(state, msg):
         blocked = [_bound_str(b, BLOCKED_CHARS)
@@ -234,11 +287,8 @@ def build_graph(deps):
         return blocked
 
     def _tier(state):
-        gov = deps.get("spend_governor")
-        if gov is None:
-            return 0
         try:
-            return gov.tier()
+            return deps["spend_governor"].tier()
         except Exception:
             return 3  # uncertain plane: most restrictive
 
@@ -262,11 +312,41 @@ def build_graph(deps):
             return [s for _, s in scored[:WATCHLIST_TIER2]], "calibrated"
         return sorted(wl)[:WATCHLIST_TIER2], "uncalibrated-fallback"
 
+    def _invalid_harvest(state, msg):
+        # Malformed harvest envelope: stale/blocked, no publication.
+        # Nothing downstream runs on unvalidated shape.
+        return {"raw": [], "stamps": {}, "dropped_raw": 0,
+                "malformed_raw": 0, "producer_overrun": False,
+                "blocked": _blocked(state, "harvest:%s" % msg)}
+
     def harvest(state):
         out = deps["harvest"](state["watchlist"], state["epoch"])
+        # Envelope contract: (recs, stamps) or (recs, stamps,
+        # history). Anything else is blocked evidence, never an
+        # IndexError/TypeError/iter(None).
+        if not isinstance(out, (tuple, list)) or \
+                not 2 <= len(out) <= 3:
+            return _invalid_harvest(state, "envelope-shape")
         recs, stamps = out[0], out[1]
         hist = out[2] if len(out) > 2 else None
-        raw, dropped, overrun = _take_capped(iter(recs), RAW_MAX)
+        if isinstance(recs, (str, bytes, dict)) or \
+                not hasattr(recs, "__iter__"):
+            return _invalid_harvest(state, "records-not-iterable")
+        envelope_defects = 0
+        if not isinstance(stamps, dict):
+            stamps = {}
+            envelope_defects += 1
+        if hist is not None and not isinstance(hist, dict):
+            hist = None
+            envelope_defects += 1
+        try:
+            raw, dropped, overrun, herr = _drain(iter(recs), RAW_MAX)
+        except (r15.AbortCycle, _workers.ConfigBlocked):
+            raise
+        except Exception as e:
+            return _invalid_harvest(state, "records-error:%r" % (e,))
+        if herr is not None:
+            return _invalid_harvest(state, herr)
         # Raw validation BEFORE orchestration: strict JSON-safe shape
         # then size (never default=str admission).
         valid = []
@@ -286,7 +366,7 @@ def build_graph(deps):
                 malformed += 1
                 continue
             valid.append(rec)
-        dropped += len(raw) - len(valid)
+        dropped += len(raw) - len(valid) + envelope_defects
         # Stamps: len() gate BEFORE any materialization, then islice.
         stamps = stamps if isinstance(stamps, dict) else {}
         if len(stamps) > STAMPS_MAX:
@@ -357,9 +437,6 @@ def build_graph(deps):
         log_path = deps.get("log_path")
         if not log_path:
             raise _workers.ConfigBlocked("no attribution log")
-        pricing = deps.get("pricing")
-        if not isinstance(pricing, dict):
-            raise _workers.ConfigBlocked("no pricing for extraction")
         tier = _tier(ctx)
         model_id, cfg = _select_model(tier)
         out = _workers.run_gated(
@@ -372,7 +449,7 @@ def build_graph(deps):
                              if isinstance(s, str)],
                  "provenance_url": rec.get("provenance_url")}},
             cfg, deps["provider_factory"], sandbox_cfg, ctx["budget"],
-            _governor_for(pricing, log_path),
+            deps["spend_governor"],
             model_id, log_path,
             _extract_timeout(), tool_factory=deps.get("tool_factory"),
             executor_factory=deps.get("executor_factory"))
@@ -382,16 +459,53 @@ def build_graph(deps):
         return out.get("candidates", []) if isinstance(out, dict) \
             else []
 
-    def _governor_for(pricing, log_path):
-        """The dollar gate is unconditional: without an explicit
-        spend_governor dep the graph builds one from pricing + log
-        path (same caps, same tiers). There is no governorless spend."""
-        gov = deps.get("spend_governor")
-        if gov is not None:
-            return gov
-        return spend_mod.SpendGovernor(
-            log_path, pricing,
-            state_dir=deps.get("spend_state_dir"))
+    def _model_timeout():
+        # Strict: an invalid timeout blocks the attempt (ConfigBlocked
+        # -> blocked evidence), never silently becomes a default.
+        t = deps.get("model_timeout_s", MODEL_TIMEOUT_DEFAULT)
+        if (type(t) not in (int, float) or t != t or
+                not 1.0 <= t <= 3600.0):
+            raise _workers.ConfigBlocked("bad-model-timeout:%r" % (t,))
+        return float(t)
+
+    def _extract_timeout():
+        t = deps.get("extract_timeout_s", EXTRACT_TIMEOUT_DEFAULT)
+        if (type(t) not in (int, float) or t != t or
+                not 1.0 <= t <= 3600.0):
+            raise _workers.ConfigBlocked("bad-extract-timeout:%r" % (t,))
+        return float(t)
+
+    def _select_model(tier):
+        """(model_id, cfg): default research model, or the cheapest
+        configured model under Tier 2+. BOTH the identity and the
+        price come from the governor (sole pricing authority): a
+        cheapest model without a config blocks (never silently runs
+        expensive), and no independent table can drift."""
+        cfgs = deps.get("provider_cfgs") or {}
+        default = deps.get("provider_cfg")
+        gov = deps["spend_governor"]
+        if tier >= 2:
+            cheapest = gov.cheapest_model()
+            if isinstance(cfgs, dict) and cheapest in cfgs:
+                return cheapest, cfgs[cheapest]
+            raise _workers.ConfigBlocked(
+                "tier-2 cheapest model %r not configured" % (cheapest,))
+        if not isinstance(default, dict) or \
+                not default.get("model_id"):
+            raise _workers.ConfigBlocked("no default provider_cfg")
+        return default["model_id"], default
+
+    def _keep_candidate(cand, origin, cands):
+        """Stamp + bound one produced candidate. True when kept."""
+        if not isinstance(cand, dict):
+            return False
+        cand = dict(cand)
+        cand["origin"] = origin  # graph-stamped, never trusted
+        ok, _why = _sized_ok(cand, CANDIDATE_BYTES_MAX)
+        if not ok or len(cands) >= CAND_MAX:
+            return False
+        cands.append(cand)
+        return True
 
     def extract(state):
         cyc = state.get("cycle_id", "local")
@@ -400,6 +514,7 @@ def build_graph(deps):
         cands = []
         dropped = 0
         null_dropped = 0
+        overrun = bool(state.get("producer_overrun"))
         blocked = [_bound_str(b, BLOCKED_CHARS)
                    for b in (state.get("blocked") or [])[:BLOCKED_MAX]]
         aborted = bool(state.get("cycle_aborted"))
@@ -418,25 +533,37 @@ def build_graph(deps):
             try:
                 budget = deps["budget_factory"](cyc, sym)
                 budget.check()
-                produced = []
+                # EACH producer drains under its own ceiling: an
+                # infinite parser generator and an infinite worker
+                # generator both terminate, each counted separately.
                 if parser is not None:
-                    for cand in parser(rec, budget):
-                        produced.append((cand, "parser"))
-                for cand in worker(
-                        rec, {"budget": budget, "cycle_id": cyc,
-                              "symbol": sym, "epoch": epoch}):
-                    produced.append((cand, "llm"))
-                for cand, origin in produced:
-                    if not isinstance(cand, dict):
-                        dropped += 1
-                        continue
-                    cand = dict(cand)
-                    cand["origin"] = origin
-                    ok, _why = _sized_ok(cand, CANDIDATE_BYTES_MAX)
-                    if not ok or len(cands) >= CAND_MAX:
-                        dropped += 1
+                    produced, pdrop, pov, perr = _drain(
+                        parser(rec, budget), CAND_MAX - len(cands))
+                    dropped += pdrop
+                    overrun = overrun or pov
+                    if perr is not None:
+                        if len(blocked) < BLOCKED_MAX:
+                            blocked.append(_bound_str(
+                                "parser:%s" % perr, BLOCKED_CHARS))
                     else:
-                        cands.append(cand)
+                        for cand in produced:
+                            if not _keep_candidate(cand, "parser",
+                                                   cands):
+                                dropped += 1
+                produced, wdrop, wov, werr = _drain(
+                    worker(rec, {"budget": budget, "cycle_id": cyc,
+                                 "symbol": sym, "epoch": epoch}),
+                    CAND_MAX - len(cands))
+                dropped += wdrop
+                overrun = overrun or wov
+                if werr is not None:
+                    if len(blocked) < BLOCKED_MAX:
+                        blocked.append(_bound_str(
+                            "extract:%s" % werr, BLOCKED_CHARS))
+                else:
+                    for cand in produced:
+                        if not _keep_candidate(cand, "llm", cands):
+                            dropped += 1
             except r15.AbortCycle:
                 aborted = True
                 aborts += 1
@@ -446,7 +573,8 @@ def build_graph(deps):
                                               BLOCKED_CHARS))
         out = {"candidates": cands, "dropped_candidates": dropped,
                "dropped_null_class": null_dropped,
-               "cycle_aborted": aborted, "extract_aborts": aborts}
+               "cycle_aborted": aborted, "extract_aborts": aborts,
+               "producer_overrun": overrun}
         if blocked:
             out["blocked"] = blocked
         return out
@@ -477,37 +605,6 @@ def build_graph(deps):
         return {"fused": fused, "dropped_fused": dropped,
                 "producer_overrun": overrun}
 
-    def _model_timeout():
-        t = deps.get("model_timeout_s", MODEL_TIMEOUT_DEFAULT)
-        if not isinstance(t, (int, float)) or t != t:
-            return MODEL_TIMEOUT_DEFAULT
-        return min(3600.0, max(1.0, float(t)))
-
-    def _extract_timeout():
-        t = deps.get("extract_timeout_s", EXTRACT_TIMEOUT_DEFAULT)
-        if not isinstance(t, (int, float)) or t != t:
-            return EXTRACT_TIMEOUT_DEFAULT
-        return min(3600.0, max(1.0, float(t)))
-
-    def _select_model(tier):
-        """(model_id, cfg): default research model, or the cheapest
-        configured model under Tier 2+. A cheapest model without a
-        config blocks (never silently runs expensive)."""
-        cfgs = deps.get("provider_cfgs") or {}
-        default = deps.get("provider_cfg")
-        pricing = deps.get("pricing") or {}
-        if tier >= 2 and isinstance(pricing, dict) and pricing:
-            cheapest = sorted(pricing.items(),
-                              key=lambda kv: (kv[1], kv[0]))[0][0]
-            if isinstance(cfgs, dict) and cheapest in cfgs:
-                return cheapest, cfgs[cheapest]
-            raise _workers.ConfigBlocked(
-                "tier-2 cheapest model %r not configured" % (cheapest,))
-        if not isinstance(default, dict) or \
-                not default.get("model_id"):
-            raise _workers.ConfigBlocked("no default provider_cfg")
-        return default["model_id"], default
-
     def _llm_attempt(state, blocked, node, sym, build, parse):
         """One FORCED-boundary model attempt via run_gated. Returns
         (value_or_None, blocked, aborted, model_ran). The provider is
@@ -525,10 +622,6 @@ def build_graph(deps):
         if not log_path:
             return None, _blocked(state, "%s:no-attribution-log" % node), \
                 False, False
-        pricing = deps.get("pricing")
-        if not isinstance(pricing, dict):
-            return None, _blocked(state, "%s:no-pricing" % node), \
-                False, False
         try:
             budget = deps["budget_factory"](cyc, sym)
             budget.check()
@@ -537,7 +630,7 @@ def build_graph(deps):
             out = _workers.run_gated(
                 "generate", node, sym or "?", cyc, epoch,
                 {"messages": messages}, cfg, deps["provider_factory"],
-                None, budget, _governor_for(pricing, log_path),
+                None, budget, deps["spend_governor"],
                 model_id, log_path,
                 _model_timeout())
         except _workers.ConfigBlocked as e:
@@ -564,9 +657,7 @@ def build_graph(deps):
         return value, blocked, False, True
 
     def _spend_verdict(state):
-        gov = deps.get("spend_governor")
-        if gov is None:
-            return "allow", 0, "no-governor"
+        gov = deps["spend_governor"]
         try:
             verdict, reason = gov.decision()
             return verdict, gov.tier(), reason
@@ -730,25 +821,36 @@ def build_graph(deps):
         return upd
 
     def _ensure_signal(kind, tier, state):
-        """Durable kill-signal sentinel + hook flag. The plane signals;
-        the supervisor (and the Slice-D+ trading side) acts."""
+        """Durable kill-signal sentinel (REQUIRED) + hook event
+        (supplemental telemetry). The plane signals; the supervisor
+        (and the Slice-D+ trading side) acts. A sentinel write
+        failure raises: the caller fails the cycle closed rather than
+        running Tier-2+ research unsignalled."""
         proj = 0.0
-        gov = deps.get("spend_governor")
-        if gov is not None:
-            try:
-                _t, proj = gov.evaluate()
-            except Exception:
-                proj = 0.0
+        try:
+            _t, proj = deps["spend_governor"].evaluate()
+        except Exception:
+            proj = 0.0
         row = {"signal": kind, "tier": tier, "projection_30d": proj,
                "ts": int(time.time()),
                "cycle_id": state.get("cycle_id", "local")}
         sigdir = deps.get("signal_dir")
-        if sigdir:
-            os.makedirs(sigdir, exist_ok=True)
-            locks.atomic_write_bytes(
-                sigdir, kind,
-                json.dumps(row, sort_keys=True).encode("utf-8"))
-        return row
+        if not sigdir:
+            # No durable path at all: the signal cannot be proven.
+            raise _workers.ConfigBlocked("signal-dir-missing:%s" % kind)
+        os.makedirs(sigdir, exist_ok=True)
+        locks.atomic_write_bytes(
+            sigdir, kind,
+            json.dumps(row, sort_keys=True).encode("utf-8"))
+        hook = deps.get("health_hook")
+        if hook is not None:
+            try:
+                hook(dict(row))
+            except Exception as e:
+                # Telemetry failure is VISIBLE (returned) but never
+                # breaks the cycle: the sentinel is authoritative.
+                return row, "health-hook-failed:%s" % e
+        return row, None
 
     def emit(state):
         # Steady-state estimate input: per-cycle model-call totals from
@@ -767,22 +869,42 @@ def build_graph(deps):
         except (AttributeError, TypeError):
             pass
         soft = medium = False
-        gov = deps.get("spend_governor")
-        tier = 0
-        if gov is not None:
-            try:
-                tier = gov.tier()
-            except Exception:
-                tier = 3
-        signals = {}
+        try:
+            tier = deps["spend_governor"].tier()
+        except Exception:
+            tier = 3
+        blocked_emit = [_bound_str(b, BLOCKED_CHARS)
+                        for b in (state.get("blocked") or [])
+                        [:BLOCKED_MAX]]
         if tier >= 2:
-            signals["soft_kill"] = _ensure_signal("SOFT_KILL", tier,
+            try:
+                _row, hook_note = _ensure_signal("SOFT_KILL", tier,
                                                   state)
-            soft = True
+                if hook_note and len(blocked_emit) < BLOCKED_MAX:
+                    blocked_emit.append(_bound_str(hook_note,
+                                                   BLOCKED_CHARS))
+                soft = True
+            except (OSError, _workers.ConfigBlocked) as e:
+                # Unsignallable Tier-2+: fail closed, publish nothing.
+                upd = {"soft_kill": False, "medium_kill": False,
+                       "emitted": None, "aborted": True,
+                       "blocked": _blocked(
+                           state, "signal-persist-failed:%s" % e)}
+                return upd
         if tier >= 3:
-            signals["medium_kill"] = _ensure_signal("MEDIUM_KILL", tier,
-                                                    state)
-            medium = True
+            try:
+                _row, hook_note = _ensure_signal("MEDIUM_KILL", tier,
+                                                  state)
+                if hook_note and len(blocked_emit) < BLOCKED_MAX:
+                    blocked_emit.append(_bound_str(hook_note,
+                                                   BLOCKED_CHARS))
+                medium = True
+            except (OSError, _workers.ConfigBlocked) as e:
+                upd = {"soft_kill": soft, "medium_kill": False,
+                       "emitted": None, "aborted": True,
+                       "blocked": _blocked(
+                           state, "signal-persist-failed:%s" % e)}
+                return upd
         hook = deps.get("health_hook")
         if hook is not None:
             try:
@@ -793,16 +915,30 @@ def build_graph(deps):
                       "tier": tier, "soft_kill": soft,
                       "medium_kill": medium,
                       "blocked": list(state.get("blocked") or [])})
-            except Exception:
-                pass  # supervision telemetry never breaks the cycle
+            except Exception as e:
+                # Supervision telemetry failure is visible in blocked
+                # evidence, never a cycle-breaker.
+                if len(blocked_emit) < BLOCKED_MAX:
+                    blocked_emit.append(_bound_str(
+                        "health-hook-failed:%s" % e, BLOCKED_CHARS))
         upd = {"soft_kill": soft, "medium_kill": medium}
         # Frozen contract: an aborted cycle publishes NOTHING. The last
         # complete bundle stands; the supervisor records research_abort.
         if state.get("cycle_aborted"):
             upd.update({"emitted": None, "aborted": True})
+            if blocked_emit:
+                upd["blocked"] = blocked_emit
             return upd
         upd.update(deps["resolve_emit"](state))
         upd.setdefault("aborted", False)
+        if blocked_emit:
+            seen = set(upd.get("blocked") or [])
+            merged = list(upd.get("blocked") or [])
+            for b in blocked_emit:
+                if b not in seen and len(merged) < BLOCKED_MAX:
+                    merged.append(b)
+                    seen.add(b)
+            upd["blocked"] = merged
         return upd
 
     g = StateGraph(PlaneState)

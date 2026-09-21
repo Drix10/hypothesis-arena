@@ -602,5 +602,183 @@ class ProcessBoundaryTest(unittest.TestCase):
                 "fake", log, 30.0, container_name="a;b|c")
 
 
+class GraphGovernanceTest(unittest.TestCase):
+    def _app(self, d, **kw):
+        return T.GraphTest()._app(d, **kw)
+
+    def test_no_governor_build_blocked(self):
+        d = tempfile.mkdtemp()
+        gt = T.GraphTest()
+        deps, _c, _l, _led, _g = gt._deps(d)
+        del deps["spend_governor"]
+        with self.assertRaises(workers.ConfigBlocked):
+            T._graph().build_graph(deps)
+        # Stateless governor: durable tier state would be destroyed.
+        deps2, _c2, _l2, _led2, _g2 = gt._deps(d)
+        log2 = os.path.join(d, "spans2.jsonl")
+        deps2["spend_governor"] = T.spend_mod.SpendGovernor(
+            log2, dict(T.PRICING), "G0", state_dir=None)
+        with self.assertRaises(workers.ConfigBlocked):
+            T._graph().build_graph(deps2)
+        # Partial interface double is rejected at construction.
+        class Partial:
+            state_dir = os.path.join(d, "spend")
+
+            def tier(self):
+                return 0
+        deps3, _c3, _l3, _led3, _g3 = gt._deps(d)
+        deps3["spend_governor"] = Partial()
+        with self.assertRaises(workers.ConfigBlocked):
+            T._graph().build_graph(deps3)
+
+    def test_pricing_cannot_diverge(self):
+        # deps["pricing"] wildly disagrees with the governor table:
+        # Tier-2 model selection AND reservation pricing both follow
+        # the governor (sole authority) through the real graph path.
+        d = tempfile.mkdtemp()
+        T._fixtures(d)
+        gt = T.GraphTest()
+        deps, _c, log, _led, gov = gt._deps(d, script="t",
+                                            spend_usd=30.0)
+        deps["pricing"] = {"fake": 0.0001, "cheap": 999.0}
+        app = T._graph().build_graph(deps)
+        out = T._graph().run_cycle(app, ["AAPL"], 1, "diverge")
+        self.assertFalse(out.get("aborted"))
+        con = sqlite3.connect(attribution._db_for(log))
+        rows = con.execute(
+            "SELECT node, model, prompt_tokens, completion_tokens, "
+            "usd FROM spans").fetchall()
+        con.close()
+        hyp = [r for r in rows if r[0] == "hypothesize"]
+        self.assertTrue(hyp)
+        # Governor cheapest (cheap @ 0.001), NOT deps cheapest.
+        self.assertTrue(all(r[1] == "cheap" for r in hyp))
+        for _n, _m, pt, ct, usd in hyp:
+            self.assertAlmostEqual(usd, (pt + ct) / 1000.0 * 0.001)
+
+    def test_malformed_harvest_envelopes(self):
+        blocked_cases = [None, 42, "recs", ([],), ([], {}, {}, {}),
+                         (None, {}), ("str-recs", {}), (b"bytes", {}),
+                         ({"dict": 1}, {})]
+        for i, bad in enumerate(blocked_cases):
+            with self.subTest(case=i):
+                d = tempfile.mkdtemp()
+                T._fixtures(d)
+                gt = T.GraphTest()
+                deps, _c, _l, _led, _g = gt._deps(d)
+
+                def _h(watchlist, epoch, _bad=bad):
+                    return _bad
+
+                deps["harvest"] = _h
+                app = T._graph().build_graph(deps)
+                out = T._graph().run_cycle(app, ["AAPL"], 1,
+                                            "mal%d" % i)
+                self.assertIsNone(out.get("emitted"))
+                blocked = " ".join(out.get("blocked") or [])
+                self.assertIn("harvest:", blocked)
+        # Tolerated-but-counted envelope defects: no publication,
+        # defects visible in dropped counts.
+        for i, bad in enumerate([([], "stamps"), ([], {}, "hist"),
+                                 ([], None)]):
+            with self.subTest(counted=i):
+                d = tempfile.mkdtemp()
+                T._fixtures(d)
+                gt = T.GraphTest()
+                deps, _c, _l, _led, _g = gt._deps(d)
+
+                def _h2(watchlist, epoch, _bad=bad):
+                    return _bad
+
+                deps["harvest"] = _h2
+                app = T._graph().build_graph(deps)
+                out = T._graph().run_cycle(app, ["AAPL"], 1,
+                                            "malc%d" % i)
+                self.assertIsNone(out.get("emitted"))
+                self.assertGreater(out.get("dropped_raw", 0), 0)
+
+    def test_infinite_parser_and_worker_terminate(self):
+        d = tempfile.mkdtemp()
+        T._fixtures(d)
+        gt = T.GraphTest()
+        deps, _c, _l, _led, _g = gt._deps(d, extract_stub=False)
+
+        def _inf(_rec, _ctx):
+            i = 0
+            while True:
+                i += 1
+                yield {"kind": "filing_event", "symbols": ["AAPL"],
+                       "value": {"type": "enum", "v": "e"}}
+
+        deps["parser_extract"] = _inf
+        deps["extract_workers"] = _inf
+        app = T._graph().build_graph(deps)
+        t0 = time.monotonic()
+        out = T._graph().run_cycle(app, ["AAPL"], 1, "inf2")
+        self.assertLess(time.monotonic() - t0, 120.0)
+        self.assertTrue(out.get("producer_overrun"))
+        self.assertLessEqual(len(out.get("candidates", [])),
+                             T._graph().CAND_MAX)
+        self.assertGreater(out.get("dropped_candidates", 0), 0)
+
+    def test_hook_failure_visible_not_breaking(self):
+        d = tempfile.mkdtemp()
+        T._fixtures(d)
+
+        def _boom(row):
+            raise RuntimeError("hook down")
+
+        app, deps, _c, log, gov = self._app(
+            d, script="thesis-AAPL", hooks=[])
+        deps["health_hook"] = _boom
+        app = T._graph().build_graph(deps)
+        out = T._graph().run_cycle(app, ["AAPL"], 1, "hookfail")
+        self.assertIsNotNone(out.get("emitted"))
+        blocked = " ".join(out.get("blocked") or [])
+        self.assertIn("health-hook-failed", blocked)
+
+    def test_sentinel_failure_fails_closed(self):
+        # signal_dir that cannot hold a sentinel (an existing FILE):
+        # Tier-2 research cannot signal, so it must not publish.
+        d = tempfile.mkdtemp()
+        T._fixtures(d)
+        blocker = os.path.join(d, "not-a-dir")
+        with open(blocker, "w", encoding="utf-8") as fh:
+            fh.write("x")
+        gt = T.GraphTest()
+        deps, _c, _l, _led, _g = gt._deps(d, script="t",
+                                          spend_usd=130.0)
+        deps["signal_dir"] = blocker
+        app = T._graph().build_graph(deps)
+        out = T._graph().run_cycle(app, ["AAPL"], 1, "sigfail")
+        self.assertTrue(out.get("aborted"))
+        self.assertIsNone(out.get("emitted"))
+        blocked = " ".join(out.get("blocked") or [])
+        self.assertIn("signal-persist-failed", blocked)
+
+    def test_strict_timeout_blocks_attempt(self):
+        d = tempfile.mkdtemp()
+        T._fixtures(d)
+        gt = T.GraphTest()
+        deps, _c, _l, _led, _g = gt._deps(d, script="t")
+        deps["model_timeout_s"] = "soon"
+        app = T._graph().build_graph(deps)
+        out = T._graph().run_cycle(app, ["AAPL"], 1, "badto")
+        blocked = " ".join(out.get("blocked") or [])
+        self.assertIn("bad-model-timeout", blocked)
+        dbp = attribution._db_for(os.path.join(d, "spans.jsonl"))
+        n = 0
+        if os.path.exists(dbp):
+            con = sqlite3.connect(dbp)
+            try:
+                n = con.execute(
+                    "SELECT COUNT(*) FROM spans WHERE node IN "
+                    "('hypothesize','critique')").fetchone()[0]
+            except sqlite3.OperationalError:
+                n = 0  # no span ever written: nothing attempted
+            con.close()
+        self.assertEqual(n, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
