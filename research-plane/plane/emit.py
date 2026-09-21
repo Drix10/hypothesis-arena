@@ -63,7 +63,7 @@ def emit_bundle(outdir, epoch, features, watermarks, history=None):
            "sha256": hashlib.sha256(raw).hexdigest()}
     # Check + append under ONE inter-process lock: exactly-once even
     # for concurrent same-bundle emits across processes.
-    with locks.FileLock(manifest + ".lock"):
+    with locks.FileLock(manifest + ".lock", purpose="manifest"):
         if not _manifest_has_locked(manifest, bundle_id):
             with open(manifest, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(row, sort_keys=True) + "\n")
@@ -143,8 +143,10 @@ def latest_complete(outdir):
 
     Scans newest-first by (research_epoch, manifest sequence) and
     returns the first generation whose file exists with matching
-    sha256. A corrupt/missing newest generation falls back to the
-    prior good one; None only when NO verifiable bundle exists.
+    sha256 AND a corresponding envelope (bundle_id/epoch/schema/
+    commit). A corrupt/missing/semantically-void newest generation
+    falls back to the prior good one; None only when NO verifiable
+    bundle exists.
 
     NOTE: the returned pathname is for inspection/legacy callers. For
     consumption use read_latest(), which stages verified bytes into a
@@ -165,10 +167,33 @@ def latest_complete(outdir):
         if bid in seen:
             continue
         data = _verify_row(root, row.get("path"), row.get("sha256"))
-        if data is not None:
+        if data is not None and _verify_semantics(data, row):
             seen.add(bid)
             return os.path.join(root, os.path.basename(row["path"]))
     return None
+
+
+BUNDLE_SEMANTIC_MAX_BYTES = 4 << 20
+
+
+def _verify_semantics(data, row):
+    """Bundle semantics, not just file SHA: the envelope must parse
+    (bounded) and its bundle_id / research_epoch / schema_version /
+    commit must correspond to the manifest row. A row pointing at
+    well-hashed garbage is NOT a complete generation."""
+    if len(data) > BUNDLE_SEMANTIC_MAX_BYTES:
+        return False
+    try:
+        env = json.loads(data.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return False
+    if not isinstance(env, dict):
+        return False
+    return (env.get("bundle_id") == row.get("bundle_id") and
+            type(env.get("research_epoch")) is int and
+            env.get("research_epoch") == row.get("research_epoch")
+            and env.get("schema_version") == "f2" and
+            env.get("commit") is True)
 
 
 def _stage_snapshot(data):
@@ -206,7 +231,7 @@ def read_latest(outdir, db_path, map_path, now_ts):
         if bid in seen:
             continue
         data = _verify_row(root, row.get("path"), row.get("sha256"))
-        if data is None:
+        if data is None or not _verify_semantics(data, row):
             continue
         seen.add(bid)
         snap = _stage_snapshot(data)

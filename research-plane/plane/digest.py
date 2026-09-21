@@ -29,7 +29,24 @@ def _digest_path(outdir):
     return os.path.join(outdir, DIGEST_NAME)
 
 
-def _has_locked(path, epoch, symbol, node):
+# Per-process seen-key cache: (size, mtime_ns, set). The lock
+# serializes writers, so the cache is always validated against the
+# live file before use — a changed file rescans, an unchanged one
+# answers O(1). Without this every append re-scans the whole JSONL
+# (O(n^2) over a 24/7 runtime).
+_SEEN = {}
+
+
+def _seen_keys(path):
+    try:
+        st = os.stat(path)
+    except OSError:
+        return set()
+    key = (st.st_size, st.st_mtime_ns)
+    hit = _SEEN.get(path)
+    if hit is not None and hit[0] == key:
+        return hit[1]
+    seen = set()
     try:
         with open(path, encoding="utf-8") as fh:
             for line in fh:
@@ -37,13 +54,32 @@ def _has_locked(path, epoch, symbol, node):
                     r = json.loads(line)
                 except ValueError:
                     continue
-                if (isinstance(r, dict) and r.get("research_epoch")
-                        == epoch and r.get("symbol") == symbol
-                        and r.get("node") == node):
-                    return True
+                if isinstance(r, dict):
+                    seen.add((r.get("research_epoch"),
+                              r.get("symbol"), r.get("node")))
     except OSError:
-        pass
-    return False
+        return set()
+    _SEEN[path] = (key, seen)
+    # Bounded registry: one entry per digest path in the process.
+    # A process that cycles thousands of outdirs would grow this;
+    # digest dirs are deployment-fixed (one per plane), documented.
+    if len(_SEEN) > 64:
+        _SEEN.pop(next(iter(_SEEN)))
+    return seen
+
+
+def _remember(path, epoch, symbol, node):
+    # Called right after our own append (still under the lock): the
+    # file stat is new, so refresh the key AND the set together.
+    try:
+        st = os.stat(path)
+    except OSError:
+        _SEEN.pop(path, None)
+        return
+    hit = _SEEN.get(path)
+    seen = set(hit[1]) if hit is not None else _seen_keys(path)
+    seen.add((epoch, symbol, node))
+    _SEEN[path] = ((st.st_size, st.st_mtime_ns), seen)
 
 
 def append_digest(outdir, epoch, symbol, node, text, extra=None):
@@ -64,12 +100,13 @@ def append_digest(outdir, epoch, symbol, node, text, extra=None):
            "extra": dict(extra) if extra else {}}
     os.makedirs(outdir, exist_ok=True)
     path = _digest_path(outdir)
-    with locks.FileLock(path + ".lock"):
-        if _has_locked(path, epoch, symbol, node):
+    with locks.FileLock(path + ".lock", purpose="digest"):
+        if (epoch, symbol, node) in _seen_keys(path):
             return True, "duplicate"
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(row, sort_keys=True) + "\n")
             fh.flush()
             os.fsync(fh.fileno())
         locks.fsync_dir(outdir)
+        _remember(path, epoch, symbol, node)
     return True, "ok"

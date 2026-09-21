@@ -72,7 +72,7 @@ class CadenceState:
         d = os.path.dirname(os.path.abspath(self.persist_path))
         os.makedirs(d, exist_ok=True)
         import json
-        with locks.FileLock(self.persist_path + ".lock"):
+        with locks.FileLock(self.persist_path + ".lock", purpose="cadence"):
             # Merge under the SAME lock (read-modify-write): concurrent
             # writers converge instead of clobbering each other.
             try:

@@ -34,6 +34,7 @@ tails from harvest) passes straight to the bundle.
 """
 import hashlib
 import json
+import re
 
 from . import emit as emit_mod
 from . import resolver
@@ -42,6 +43,16 @@ from . import schema
 EMIT_MAX_FEATURES = 64  # frozen reader cap, enforced at the producer
 EMIT_MAX_SYMBOLS = 16  # frozen ctx MAX_SYMBOLS, enforced at producer
 CURSOR_MAX_LEN = 256
+# Strict map bounds: the pinned map is small and exact; anything
+# larger or misshapen is hostile input, not a map.
+MAP_MAX_CIK = 20000
+MAP_MAX_MACRO_KEYS = 20000
+MAP_MAX_MACRO_SYMS = 512
+MAP_VERSION_MAX = 64
+TICKER_RE = re.compile(r"[A-Z][A-Z0-9.\-]{0,15}")
+CIK_RE = re.compile(r"[0-9]{1,10}")
+MAP_ALLOWED_KEYS = {"map_version", "cik_to_ticker",
+                    "macro_release_to_symbols", "note"}
 
 
 def _load_map(map_path):
@@ -64,6 +75,34 @@ def _load_map(map_path):
     if not isinstance(parsed, dict) or not isinstance(
             parsed.get("map_version"), str):
         return None, "map-shape"
+    if set(parsed) - MAP_ALLOWED_KEYS:
+        return None, "map-keys"
+    if not 0 < len(parsed["map_version"]) <= MAP_VERSION_MAX:
+        return None, "map-version"
+    note = parsed.get("note")
+    if note is not None and (not isinstance(note, str) or
+                              len(note) > 1024):
+        return None, "map-note"
+    cik = parsed.get("cik_to_ticker")
+    if not isinstance(cik, dict) or len(cik) > MAP_MAX_CIK:
+        return None, "map-cik-shape"
+    for k, v in cik.items():
+        if not isinstance(k, str) or not CIK_RE.fullmatch(k):
+            return None, "map-cik-key"
+        if not isinstance(v, str) or not TICKER_RE.fullmatch(v):
+            return None, "map-cik-value"
+    macro = parsed.get("macro_release_to_symbols")
+    if not isinstance(macro, dict) or \
+            len(macro) > MAP_MAX_MACRO_KEYS:
+        return None, "map-macro-shape"
+    for k, v in macro.items():
+        if not isinstance(k, str) or not 0 < len(k) <= 128:
+            return None, "map-macro-key"
+        if (not isinstance(v, list) or
+                len(v) > MAP_MAX_MACRO_SYMS or
+                any(not isinstance(s, str) or
+                    not TICKER_RE.fullmatch(s) for s in v)):
+            return None, "map-macro-value"
     return (sha, parsed), None
 
 
@@ -135,8 +174,10 @@ def _feature_lineage_id(feat):
                "value": feat["value"], "effect": feat["effect"],
                "canonical_hash": feat["canonical_hash"],
                "observed_at_ns": feat["observed_at_ns"]}
+    # Full digest identity (see schema.make_bundle_id): 64-bit
+    # truncation is unfit for security-sensitive dedupe.
     return "f-" + hashlib.sha256(
-        schema.canon(lineage)).hexdigest()[:16]
+        schema.canon(lineage)).hexdigest()
 
 
 def resolve_emit(deps, state):
