@@ -129,9 +129,12 @@ Exact Tier-A source-by-source matrix (plan §9.1 table is the requirement):
   constructs fully offline (no silent validation call — fail-closed
   defers to call time with a real provider error).
 - Secrets: `git grep` for key patterns over tracked files = zero matches
-  (exit 1). Placement: `research-plane/sandbox/provider.env.example`
-  (placeholders only) + `provider.env` git-ignored; real file lives in
-  the miroresearch home mode 600, sourced by the supervisor only.
+  (exit 1). Placement (single canonical source): repo-root `.env`
+  (git-ignored) + tracked `.env.example` template; the only loader is
+  `collector/config.py::_load_dotenv()` (root `.env`, exported vars win,
+  allowlisted KEYS only). Sandbox Python consumes it via
+  `collector.config.load()` — no second env file, no second mechanism.
+  There is no `sandbox/provider.env` (retired; see Addendum 29).
 - BLOCKED (genuinely unavailable, not unattempted): no live model key
   exists → no live provider call, no live per-node spend, no full-day
   Langfuse attribution. Requires human-placed key + funded provider

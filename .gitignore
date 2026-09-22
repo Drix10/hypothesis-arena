@@ -51,6 +51,3 @@ Thumbs.db
 *.o
 *.a
 kernel/test_p31
-
-# Phase-D deployment credential file (real keys; example template is tracked)
-research-plane/sandbox/provider.env
