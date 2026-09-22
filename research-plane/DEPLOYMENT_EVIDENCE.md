@@ -13,6 +13,37 @@ Deployment host for Linux boxes: WSL2 Ubuntu 24.04.1 LTS, kernel
 replicates the same mechanism). Docker daemon 29.7.2 (Docker Desktop) started
 2026-09-22 for the daemon-dependent boxes.
 
+## Box 8 — §8.6 remaining evidence — PARTIAL 2026-09-22
+
+- Kill -9 + resume + no-dupes PROVEN at runtime
+  (`research-plane/sandbox/kill9-resume.sh` + worker/verify/reconcile,
+  real 6-node graph, fake models, SQLite checkpoints, 40 epochs):
+  SIGKILL mid-run → same-thread resume records the killed attempt's
+  ambiguity as unknown-spend and aborts (fail-closed, asserted) →
+  supervisor `reconcile_unknown` at attested $0 → fresh cycle for the
+  killed epoch (aborted checkpoints terminal by design — fail-closed
+  never auto-cleared) → ALL ASSERTS PASS: 40/40 epochs exactly once,
+  span_ids unique, 40 committed bundles, reader resolves latest.
+  Found while proving (design confirmed, not defects): same-thread
+  epochs exhaust LLM_CALLS by design (per-epoch threads, as
+  production); os.path.join backslashes split-brain Windows-Python
+  vs bash temp paths (C:-style workdir in the driver).
+- Cadence gating OBSERVED in the same 40-epoch run: LLM attempts on
+  7/40 epochs (2 calls each, periodic TTL-like refresh), 33 epochs
+  cadence-skipped yet all 40 emitted — the §8.3a (b)-path shape.
+  Wall-clock 2×-of-estimate match needs production cadence (below).
+- Battery-cited (hosted green, not re-proven here): R15 runaway
+  (`test_looping_tool_caught`), R12 future-drop
+  (`test_r12_future_dropped_by_ctx`), bundle atomicity
+  (`test_partial_never_visible`), TTL/TRIGGER/throttle logic
+  (`test_trigger_immediate_and_ttl`, `test_throttle_doubles`),
+  crash-resume ledger level (`test_crash_resume_reconstructs`).
+- BLOCKED (time, not unattempted): 7-day unattended run + full-day
+  Langfuse + wall-clock cadence-rate match — need elapsed time and
+  the Box-4 key; mechanism proofs above are the executable part.
+- C++ `ctx/` consumption of features.jsonl: Phase-3/frozen territory
+  (kernel zero-diff holds); Python reader path proven resolving.
+
 ## Box 7 — source/feed config + probes (§9.4) — PARTIAL 2026-09-22
 
 - Live Tier-A probe (`sources/tier_a.py`, artifact
