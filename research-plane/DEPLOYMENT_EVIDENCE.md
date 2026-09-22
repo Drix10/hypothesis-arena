@@ -13,6 +13,20 @@ Deployment host for Linux boxes: WSL2 Ubuntu 24.04.1 LTS, kernel
 replicates the same mechanism). Docker daemon 29.7.2 (Docker Desktop) started
 2026-09-22 for the daemon-dependent boxes.
 
+## Box 5 — supervisor WALL_S kill/reap — PROVEN 2026-09-22
+
+- Mechanism: `plane/timeout.py::run_in_process` (the primitive the
+  production supervisor drives with `timeout_s=WALL_S=480s`;
+  `r15.WALL_S` is the same constant the cycle bound and prune
+  already enforce). Deadline-parameterized, so proven at short
+  deadlines — identical ladder at any value.
+- Script `research-plane/sandbox/kill-probe.py` on Linux (POSIX-only;
+  Windows signals vacuous): 4/4 PASS, exit 0. SIGTERM-trapping runaway
+  → SIGKILL escalation, CallTimeout in 13.6s on a 3s deadline
+  (bounded); cooperative sleeper → TERM death, CallTimeout in 3.3s;
+  fast child returns its result unharmed; zero live worker children
+  remain on every path (reaped).
+
 ## Box 4 — model credential + pricing config — PARTIAL 2026-09-22
 
 - Fail-closed PROVEN at runtime (`research-plane/sandbox/config-probe.py`,
