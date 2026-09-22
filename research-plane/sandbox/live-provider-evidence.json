@@ -1,0 +1,12 @@
+{
+ "ts": 1790108170,
+ "model": "meta/muse-spark-1.3-contributor",
+ "via": "squid-127.0.0.1:3128",
+ "latency_ms": 2797.0,
+ "prompt_tokens": 15,
+ "completion_tokens": 16,
+ "dollars": 5e-06,
+ "reserved_usd": 3.8400000000000005e-05,
+ "lease": "live-1790108154",
+ "reply_head": "None"
+}

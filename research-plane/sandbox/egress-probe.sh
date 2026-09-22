@@ -14,6 +14,10 @@
 # (egress-proxy/squid.conf) attached to both the internal net and bridge.
 # The worker runs with the doc-08 container spec flags.
 # Idempotent; exits 0 only if all three properties hold.
+# Under Git-Bash/MSYS, exempt all args from automatic path conversion:
+# without this, the -v Windows host path is mangled and the proxy
+# boots with the default deny-all config (observed 2026-09-23).
+export MSYS2_ARG_CONV_EXCL="*"
 set -u
 PASS=0
 FAIL=0
@@ -27,14 +31,24 @@ no() { echo "FAIL: $1"; FAIL=$((FAIL + 1)); }
 docker network inspect "$NET" > /dev/null 2>&1 || docker network create --internal "$NET" > /dev/null
 # Idempotent proxy ensure (reproducible bring-up; config is the committed
 # squid.conf beside this script). Windows daemon path via pwd -W.
-if ! docker inspect "$PROXY" > /dev/null 2>&1; then
+# Loopback publish lets the supervisor drive the shipped provider code
+# through the SAME squid + allowlist from the host (workers on the
+# internal net are unaffected: still no route except via the proxy).
+ensure_proxy() {
   HERE_WIN=$(cd "$(dirname "$0")" && pwd -W)
   docker run -d --name "$PROXY" --network "$NET" \
+    -p 127.0.0.1:3128:3128 \
     -v "$HERE_WIN/egress-proxy/squid.conf":/etc/squid/squid.conf:ro \
     sameersbn/squid > /dev/null
   sleep 8
+}
+if ! docker inspect "$PROXY" > /dev/null 2>&1; then
+  ensure_proxy
+elif [ -z "$(docker port "$PROXY" 2>/dev/null)" ]; then
+  docker rm -f "$PROXY" > /dev/null
+  ensure_proxy
 fi
-docker network inspect "$NET" 2>/dev/null | grep -q "$PROXY" || \
+docker network inspect bridge 2>/dev/null | grep -q "$PROXY" || \
   docker network connect bridge "$PROXY" > /dev/null
 
 OUT=$(docker run --rm --network "$NET" --user 65532:65532 --read-only \

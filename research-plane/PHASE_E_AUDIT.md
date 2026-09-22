@@ -731,3 +731,24 @@ plane (Phase D) change any interface a future slice depends on?
   claim. kernel/collector byte-identical vs `e8b419e`. Freeze PASS;
   config + sources suites green. No contracts, code, or runtime
   behavior touched.
+
+## Addendum 32 — Box 4 live provider proof (agent-executed, NOT signed off)
+- Trigger met (key in root `.env` + authorized model ID): exact model
+  slug verified on OpenRouter first (`meta/muse-spark-1.3-contributor`;
+  operator wrote "spart", canonical is "spark"; $0.10/M + $0.20/M).
+- Enabling fixes (all re-proven): squid allowlist gains exact
+  `openrouter.ai`; proxy recreated with loopback publish (host-side
+  shipped provider code through the SAME squid+allowlist; internal-net
+  workers unaffected) — this exposed and fixed two latent defects in
+  the accepted ensure block (MSYS path-mangling footgun, now
+  self-exempting; bridge-attachment check that never attached — allows
+  failed 503/HIER_NONE while denies passed). Egress 5/5 re-green.
+- `collector/config.py` gains additive OPTIONAL `RESEARCH_MODEL_ID`
+  (no-live-consumer yet + stale "keys do not exist" docstring
+  corrected): the single-source-of-truth order required a canonical
+  home for the model slug; config suite still green; freeze PASS.
+  Flagged explicitly as the one frozen-collector touch this pass.
+- Live run: reserve → invoke → 15+16 tokens ($0.000005 of $0.000038
+  reserved) → span row in ledger → hold settled/released. Artifact
+  `sandbox/live-provider-evidence.json`. Box 4 CLOSED on a real call.
+  Box 6 stays IN PROGRESS (needs elapsed traffic, not one call).
