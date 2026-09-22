@@ -579,3 +579,20 @@ plane (Phase D) change any interface a future slice depends on?
 - Phase D is eligible to close pending remaining sign-off
   criteria/deployment boxes — NOT declared closed by this
   record. Slice D NOT AUTHORIZED.
+
+## Addendum 24 — status confirmation recorded (human verification of 06da85c, NOT agent-signed)
+- Verified against `06da85c`: record internally consistent.
+  Round 9 CLOSED, narrowed threat model ACCEPTED, independent CI
+  evidence CLOSED. Phase D NOT YET CLOSED — remaining
+  deployment/operational exit boxes explicitly open (Linux
+  isolation deployment, egress enforcement probe, image
+  digest/SBOM/scan, model credentials/config, supervisor WALL_S
+  kill path, Langfuse attribution, required source/config feeds,
+  unattended operational evidence where applicable; plan/08 §8.6
+  + plan/09 §9.4). Security-model question finished;
+  deployment-readiness question not. PRE-D sequencing holds:
+  Slice D NOT AUTHORIZED until the Phase-D gate is accepted. No
+  code change warranted; `06da85c` remains the current clean
+  documentation checkpoint. Carried state: Round 9 closed →
+  Phase D open pending deployment evidence → Slice D
+  unauthorized.
