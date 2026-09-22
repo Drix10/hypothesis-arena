@@ -400,3 +400,9 @@ plane (Phase D) change any interface a future slice depends on?
   rerun pending on push; the frozen-collector stdlib failure stays
   untouched. Slice D NOT AUTHORIZED. Phase D NOT closed — this
   record awaits the human re-audit of `fb236d5`.
+
+## Addendum 14 — hosted rerun green on the round-5 tree (0229bd7)
+- Run 35682744131: plane SUCCESS, kernel SUCCESS, stdlib FAILURE
+  at the same frozen-collector step (pre-existing, untouched per
+  the freeze/zero-diff constraint). Awaiting the human re-audit
+  of `fb236d5`. Slice D NOT AUTHORIZED. Phase D NOT closed.
