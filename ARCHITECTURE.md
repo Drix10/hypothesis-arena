@@ -12,7 +12,12 @@ Verify this document: `git ls-files | wc -l` (= 389) and the per-family
 counts in §3. Family file lists follow exact name patterns; every
 non-family file is named explicitly.
 
-## 1. Root files (11)
+## 1. Root files (7 tracked + 1 ignored companion)
+
+Tracked (the "389" count includes these 7): `.env.example`,
+`.gitattributes`, `.gitignore`, `AGENTS.md`, `ARCHITECTURE.md`,
+`README.md`, `TODO.md`. Ignored companion, NOT counted: `.env`
+(real values; full flow under "Configuration / environment flow").
 
 - `AGENTS.md` — ACTIVE session rules: read ARCHITECTURE + plan/00-INDEX
   first; plan is source of truth; TODO updated per task; no secrets;
@@ -236,7 +241,9 @@ poller — that is `collector/collect.py`).
 - `test_sources.py` — calendar gate (3) + earnings veto (6);
   CI `evidence` job.
 
-### sandbox/ (15 + subdirs: deployment evidence machinery)
+### sandbox/ (13 files + 2 subdirs: deployment evidence machinery)
+
+Direct children (13 tracked files):
 
 - `setup-identities.sh` — 4 OS identities + `/srv/mirohedge` tree +
   deny/allow probes (8/8) + repo isolation check (4/4).

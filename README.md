@@ -51,7 +51,7 @@ broker quotes  --->  frozen snapshot (SHA-256 hashed)
 
 Three principles that shape everything:
 
-1. **Prose never touches money.** Research writes structured facts (`features.jsonl`). Thesis text and opinions stay in a separate digest for humans. The design isolates the trading core from prose by OS users rather than convention; the isolation gate itself is a Phase 2.5 exit criterion, still to be implemented and passed.
+1. **Prose never touches money.** Research writes structured facts (`features.jsonl`). Thesis text and opinions stay in a separate digest for humans. The design isolates the trading core from prose by OS users rather than convention; the isolation gate's implementation/test proof has passed and its deployment evidence is accepted + hardened (see DEPLOYMENT_EVIDENCE.md Box 1). Remaining Phase-D work is credentials, operational Tier-A wiring, and the 7-day elapsed proof — not the isolation mechanism.
 2. **HOLD is the default.** Dead model, stale data, breached rule, conflicting signals, event blackout, thin calibration evidence: all of these produce HOLD, never a shrug-and-trade.
 3. **Everything replays.** Same logged snapshot + same logged answer = same decision, bit for bit, even if the AI provider disappears tomorrow. Answers are Ed25519-signed for authenticity, and state binding, epoch monotonicity, freshness, plus deterministic validation are what make a forged or replayed log useless.
 
