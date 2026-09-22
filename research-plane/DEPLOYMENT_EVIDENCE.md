@@ -29,6 +29,11 @@ plane SUCCESS (249-test battery), kernel SUCCESS, evidence SUCCESS
   killed epoch (aborted checkpoints terminal by design — fail-closed
   never auto-cleared) → ALL ASSERTS PASS: 40/40 epochs exactly once,
   span_ids unique, 40 committed bundles, reader resolves latest.
+  A later run additionally proved the no-ambiguity branch (kill
+  outside an attempt → same-thread resume completes directly).
+  Deep-review fixes 2026-09-22 (full re-run green): C:-style workdir
+  (kills Windows-Python/bash temp split-brain), workdir cleanup +
+  stray-process assert, honest read_latest clock, dead-code removal.
   Found while proving (design confirmed, not defects): same-thread
   epochs exhaust LLM_CALLS by design (per-epoch threads, as
   production); os.path.join backslashes split-brain Windows-Python
@@ -49,20 +54,32 @@ plane SUCCESS (249-test battery), kernel SUCCESS, evidence SUCCESS
 - C++ `ctx/` consumption of features.jsonl: Phase-3/frozen territory
   (kernel zero-diff holds); Python reader path proven resolving.
 
-## Box 7 — source/feed config + probes (§9.4) — PARTIAL 2026-09-22
+## Box 7 — source/feed config + probes (§9.1 Tier-A / §9.4) — PARTIAL 2026-09-22
 
-- Live Tier-A probe (`sources/tier_a.py`, artifact
-  `research-plane/sandbox/tier-a-deploy-evidence.json`): EDGAR 8K
-  3/3×200 zero-403 (p50 94ms, p99 360ms), Fed monetary 3/3×200
-  zero-403 (p50/p99 ~406ms). Calendar LOADED (seed nyse-2026,
-  paper-only until G1).
-- FRED macro + ALFRED vintage replay: BLOCKED (no FRED_API_KEY;
-  the probe records BLOCKED, never silently downgrades — key
-  presence alone would not promote without a live 200).
+Exact Tier-A source-by-source matrix (plan §9.1 table is the requirement):
+
+| Source | Requirement | Status |
+|---|---|---|
+| Broker feed (forex + US equities) | poller/TTL/heartbeat/p50-p99 | OPEN — no account/credentials; never attempted live |
+| SEC EDGAR | same | PROVEN live (3/3×200 zero-403, p50 ~94ms p99 ~360ms, UA) |
+| FRED / ALFRED (+ vintage replay) | same + original-vintage replay | BLOCKED — no FRED_API_KEY (probe records BLOCKED, never downgrades) |
+| Treasury FiscalData / BLS / BEA | same | SPLIT: Treasury auctions 3/3×200 (p50 ~1.6s) + BLS empsit RSS 3/3×200 (p50 ~125ms) measured ad-hoc 2026-09-22; BEA BLOCKED (API UserID key required) |
+| Exchange/session calendars | fail-closed veto input | PROVEN (seed loads paper-only; CalendarMissing → zero entries, test-pinned + hosted evidence job) |
+| Earnings calendar (free/EDGAR-derived) | veto-side schedule | OPEN — no probe or registry entry exists (design gap, not a credential gap) |
+| Fed/ECB monetary RSS (Tier-B official) | bonus coverage | PROVEN live (Fed p50 ~400ms, ECB p50 ~766ms, all-200) |
+
+- Artifact `research-plane/sandbox/tier-a-deploy-evidence.json` holds the
+  EDGAR+Fed+calendar run; Treasury/BLS/ECB measured ad-hoc (same urllib
+  semantics as `sources/tier_a.py`; that probe itself unchanged by design
+  — no scope creep for this pass).
 - `lessons.jsonl`: 12/12 entries carry pattern + failure_mode +
   accept/hype grade (≥10 required) ✓.
-- Calendar fail-closed: `test_sources.py` pins CalendarMissing →
-  zero entries (now also running in the hosted evidence job) ✓.
+- Feed classification (audit correction): profit feed and calibration
+  feed are FUTURE-STAGE prerequisites (G-stage spend-ratio / doc-11
+  operation), NOT Phase-D exit blockers — tracked separately, not
+  counted here. Likewise the registry push: the frozen requirement is
+  pin + digest + SBOM + scan (all recorded); registry publication is
+  OPTIONAL unless a deployment target requires it.
 - Classification table: Phase-0 doc item (frozen). Tier B/C as
   CONTEXT/NULL unused-by-nothing: code posture, unchanged.
 
@@ -85,6 +102,9 @@ plane SUCCESS (249-test battery), kernel SUCCESS, evidence SUCCESS
 - BLOCKED (genuinely unavailable): full-day live per-node Langfuse
   attribution needs the Box-4 model key (no live LLM traffic exists
   to attribute). Server is ready to receive it.
+- Committed compose secrets are ephemeral evidence-only dev values
+  (random key, placeholder passwords, file says production replaces);
+  no production credential is in git (tracked-tree secret grep clean).
 
 ## Box 5 — supervisor WALL_S kill/reap — PROVEN 2026-09-22
 
@@ -154,6 +174,9 @@ plane SUCCESS (249-test battery), kernel SUCCESS, evidence SUCCESS
   it does not apply to CONNECT so HTTPS tunneling bypasses the filter
   (observed: example.com:443 returned 200 through it). Squid
   `http_access` enforces on CONNECT and is the recorded mechanism.
+- Deep-review fixes 2026-09-22 (all re-proven 5/5): idempotent proxy
+  bring-up inside the probe (no manual steps left out of repo) +
+  PROXY_HOST injection (override-consistent worker target).
 
 ## Box 1 — OS-user isolation (§8.6 "Isolation proven") — PROVEN 2026-09-22
 
@@ -172,3 +195,9 @@ plane SUCCESS (249-test battery), kernel SUCCESS, evidence SUCCESS
   writes own `features/`.
 - Note: `mirohuman` is the deploying human's account; service identities
   never run as the human, and the process never runs as root after setup.
+- Open design question (flagged, not unilaterally changed): the frozen
+  deployment script creates `mirohuman` as a nologin identity while plan
+  §8.2 describes mirohuman as the human operator — auditor to rule whether
+  the script or the doc yields.
+- Deep-review fixes 2026-09-22 (all re-proven): fixture-guard (re-runs never
+  clobber a deployed broker.key).
