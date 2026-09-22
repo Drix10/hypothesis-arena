@@ -47,7 +47,7 @@ from . import r15
 LEDGER_MAX_BYTES = 64 << 20
 LEDGER_RETAIN_DAYS = 7
 CYCLES_RETAIN_DAYS = 30
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 TOKENS_ABSOLUTE_MAX = r15.TOKENS  # a single need can never exceed cap
 TOOLS_ABSOLUTE_MAX = r15.TOOL_CALLS
 
@@ -203,6 +203,23 @@ def _bverify_history_locked(db_path, con, roots):
     _bmirror_roots_locked(db_path, con, live)
 
 
+def _bmarker_digest_era(db_path):
+    """Marker shape as digest-era proof: True when any content
+    slot is present (round-7+ marker), False for pre-digest or
+    pre-roots markers, None when unparseable (the caller denies —
+    an unreadable witness proves nothing)."""
+    try:
+        roots = locks.marker_roots(db_path)
+    except ValueError:
+        return None
+    if not roots:
+        return False
+    for slot in ("counters", "cycles", "leases"):
+        if isinstance(roots.get(slot), dict):
+            return True
+    return False
+
+
 def _bmirror_roots_locked(db_path, con, live=None):
     try:
         if live is None:
@@ -285,10 +302,12 @@ class BudgetLedger:
         past the cycles window). Additive merge converges across
         processes; every reserve re-adds its key from DB truth, so
         a lost update self-heals on next touch (graceful to the
-        in-DB registry rule, never to silent creation). Records the
-        adoption flag in the marker (one-time-migration witness:
-        a later missing sidecar with the flag set denies as
-        seen-deleted). Raises LedgerCorrupt on write failure."""
+        in-DB registry rule, never to silent creation). The marker
+        adoption flag publishes FIRST and the sidecar file second:
+        a crash between them leaves witness-without-sidecar, which
+        safely re-adopts (the reverse order would leave
+        sidecar-without-witness, reusable as an adoption bypass).
+        Raises LedgerCorrupt on write failure."""
         cutoff = now_wall - CYCLES_RETAIN_DAYS * 86400
         try:
             cur = self._read_seen() or {}
@@ -303,11 +322,11 @@ class BudgetLedger:
         if len(raw) > (1 << 20):
             raise LedgerCorrupt("seen-overflow")
         try:
+            locks.merge_marker_roots(self.path, {"_seen": {"v": 1}})
             import os as _os
             locks.atomic_write_bytes(
                 _os.path.dirname(_os.path.abspath(self.path)),
                 _os.path.basename(self._seen_path()), raw)
-            locks.merge_marker_roots(self.path, {"_seen": {"v": 1}})
         except (OSError, ValueError) as e:
             raise LedgerCorrupt("seen-write:%s" % (e,))
 
@@ -398,7 +417,6 @@ class BudgetLedger:
                 # First init and pristine files create below.
                 raise LedgerCorrupt("table-missing:%s" % missing[0])
             inited = False
-            digest_backfilled = False
             if locks.may_create_tables(have, exists, mstate) or \
                     (exists and mstate == "absent"
                      and self._pristine(con, have)):
@@ -456,14 +474,26 @@ class BudgetLedger:
                     pass
                 else:
                     # Old ledger (or fresh file): explicit versioned
-                    # migration — CREATE + backfill + version bump in
-                    # ONE transaction, so a crash can only leave the
-                    # table ABSENT (migration retries cleanly), never
-                    # present-but-empty over live counters. No CREATE
-                    # runs outside this transaction. The content
-                    # digest rides the same transaction (old ledgers
-                    # have no digest table: CREATE + full recompute
-                    # from backfilled truth).
+                    # migration — CREATE + backfill + digest +
+                    # version bump in ONE transaction, so a crash can
+                    # only leave the table ABSENT (migration retries
+                    # cleanly), never present-but-empty over live
+                    # counters. No CREATE runs outside this
+                    # transaction. The content digest rides the same
+                    # transaction (old ledgers have no digest table:
+                    # CREATE + full recompute from backfilled truth).
+                    # "Old" is proven by a pre-digest marker shape:
+                    # a digest-era marker with a missing cycles table
+                    # is deletion (a version reset alone cannot reach
+                    # migration).
+                    try:
+                        _eroots = locks.marker_roots(self.path)
+                    except ValueError:
+                        raise LedgerCorrupt("table-missing:cycles")
+                    if any(isinstance(_eroots.get(_s), dict)
+                           for _s in ("counters", "cycles",
+                                      "leases")):
+                        raise LedgerCorrupt("table-missing:cycles")
                     try:
                         con.execute("BEGIN IMMEDIATE")
                         try:
@@ -495,13 +525,24 @@ class BudgetLedger:
                     except sqlite3.Error as e:
                         raise LedgerCorrupt("cycles-backfill:%s" % e)
                 cycles_present = True
-                digest_backfilled = True
             elif not inited:
-                if ver0 == 1:
-                    # Round-3/4-era ledger: schema-identical to v2,
-                    # adopt the version explicitly.
-                    con.execute("PRAGMA user_version=%d" %
-                                SCHEMA_VERSION)
+                if "content_digest" in have and \
+                        ver0 < SCHEMA_VERSION:
+                    # Digest present, version lags: adopt v3 WITHOUT
+                    # recomputing (recompute would bless out-of-band
+                    # edits the intact digest still detects). A
+                    # pre-digest marker shape means a crash between
+                    # the backfill commit and the mirror — resume the
+                    # mirror too (it adopts FROM in-DB truth, which
+                    # verify still guards below). An unreadable marker
+                    # leaves everything untouched for the strict
+                    # checks below.
+                    _era = _bmarker_digest_era(self.path)
+                    if _era is False:
+                        _bmirror_roots_locked(self.path, con)
+                    if _era is not None:
+                        con.execute("PRAGMA user_version=%d" %
+                                    SCHEMA_VERSION)
                 # NOTE: no present-but-empty backfill here. An empty
                 # cycles table over live counters is cycles-only
                 # deletion (pruning forgets a cycle only after its
@@ -510,13 +551,27 @@ class BudgetLedger:
                 # resurrect registry cover for deleted authority.
                 # The reuse readers (_reserve_row/_live_row_or_abort)
                 # and the sidecar verify below deny it instead.
+            have = {r[0] for r in con.execute(
+                "SELECT name FROM sqlite_master WHERE "
+                "type='table'")}
             if "content_digest" not in have:
-                # Pre-digest ledger: one versioned backfill (CREATE
-                # + full recompute from truth in a single
-                # transaction, idempotent and retry-clean). A
-                # present table is never backfilled here (a
-                # present-but-emptied digest over live rows is
-                # tamper and denies at verify).
+                # The digest table is mandatory at v3: a missing
+                # table on a digest-era ledger is deletion, never a
+                # creation case — rebuilding it would silently
+                # re-baseline authority over possibly modified rows.
+                # Only a provably pre-digest ledger migrates: BOTH
+                # a pre-digest marker shape AND a pre-digest version
+                # (one-time TOFU, documented; the version stamp
+                # rides the same transaction). A version reset alone
+                # cannot reach migration (the marker shape still
+                # denies); only a full marker forgery plus version
+                # reset could, which is the documented
+                # coherent-forgery residual, not a silent path.
+                ver_now = con.execute("PRAGMA user_version"
+                                      ).fetchone()[0]
+                if _bmarker_digest_era(self.path) is not False \
+                        or ver_now >= SCHEMA_VERSION:
+                    raise LedgerCorrupt("digest-deleted")
                 try:
                     con.execute("BEGIN IMMEDIATE")
                     try:
@@ -531,6 +586,8 @@ class BudgetLedger:
                                 "INSERT OR IGNORE INTO content_digest "
                                 "VALUES (?,?,?,?,?)",
                                 (_slot, _d, _n, 0, 0))
+                        con.execute("PRAGMA user_version=%d" %
+                                    SCHEMA_VERSION)
                         con.execute("COMMIT")
                     except BaseException:
                         try:
@@ -540,7 +597,6 @@ class BudgetLedger:
                         raise
                 except sqlite3.Error as e:
                     raise LedgerCorrupt("digest-backfill:%s" % (e,))
-                digest_backfilled = True
             for table, cols in _EXPECTED_COLUMNS.items():
                 got = [r[1] for r in con.execute(
                     "PRAGMA table_info(%s)" % table)]
@@ -608,19 +664,16 @@ class BudgetLedger:
                 except ValueError:
                     raise LedgerCorrupt("marker-roots-corrupt")
                 if adopted_before:
-                    if digest_backfilled:
-                        # The digest itself was reconstructed this
-                        # open (its table was gone): with the
-                        # registry sidecar also gone, nothing proves
-                        # the reconstructed truth is complete — a
-                        # wiped registry could be hiding behind the
-                        # backfill. Deny, never fresh-create.
-                        raise LedgerCorrupt("seen-deleted")
                     # Only the sidecar file is lost: the content
                     # digest verified intact above, so no rows were
                     # deleted and re-adoption from the live registry
                     # is safe (self-healing availability; the flag
-                    # is re-recorded by the write).
+                    # is re-recorded by the write). A missing digest
+                    # table can no longer reach a backfill on a
+                    # flagged ledger (digest-deleted denies first),
+                    # so no reconstructed truth can hide a wiped
+                    # registry here.
+                    pass
                 # Genuinely pre-sidecar ledger: one-time adoption
                 # from the cycles registry (verified above); the
                 # write records the adoption flag in the marker, so

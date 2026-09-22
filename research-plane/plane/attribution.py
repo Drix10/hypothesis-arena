@@ -71,7 +71,7 @@ from . import locks
 CATEGORIES = ("decision", "research", "experiment", "observability")
 OUTCOMES = ("success", "error", "timeout", "blocked")
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 LEDGER_MAX_BYTES = 64 << 20
 SPAN_RETAIN_DAYS = 120  # > 90d ratio window + margin, then pruned
 
@@ -411,6 +411,24 @@ def _connect(db_path, create=False):
         return _connect_locked(db_path, create)
 
 
+def _marker_digest_era(db_path):
+    """Marker shape as digest-era proof: True when any history
+    slot carries a digest (round-7+ marker), False for pre-digest
+    or pre-roots markers, None when the marker is unparseable
+    (the caller denies — an unreadable witness proves nothing)."""
+    try:
+        roots = locks.marker_roots(db_path)
+    except ValueError:
+        return None
+    if not roots:
+        return False
+    for slot in ("spans", "recon", "unknown", "holds"):
+        s = roots.get(slot)
+        if isinstance(s, dict) and "digest" in s:
+            return True
+    return False
+
+
 def _connect_locked(db_path, create=False):
     exists = os.path.exists(db_path)
     mstate, marker = locks.marker_state(db_path)
@@ -506,13 +524,28 @@ def _connect_locked(db_path, create=False):
             # Established authority: every table is present (the
             # gate above denied otherwise) and NO DDL runs here —
             # a CREATE could mask a deletion the gate missed.
-            # Exception: the content-digest table on pre-digest
-            # ledgers — one versioned backfill (CREATE + full
-            # recompute from truth in a single transaction,
-            # idempotent and retry-clean), never on a present table
-            # (a present-but-emptied digest over live rows is
-            # tamper and denies at verify).
+            # Exception: the content-digest table on a PROVABLY
+            # pre-digest ledger — one versioned migration (CREATE +
+            # full recompute from truth + version stamp in a single
+            # transaction, idempotent and retry-clean), never on a
+            # present table (a present-but-emptied digest over live
+            # rows is tamper and denies at verify). "Provably"
+            # means BOTH a pre-digest version AND a pre-digest
+            # marker shape: a digest-era marker (or a digest-bearing
+            # version, or an unreadable marker) with a missing
+            # digest table is deletion, and the digest is NEVER
+            # rebuilt over it — rebuilding would silently re-baseline
+            # authority over possibly modified rows. A version reset
+            # alone cannot reach migration (the marker shape still
+            # denies); only a full marker forgery plus version reset
+            # could, which is the documented coherent-forgery
+            # residual, not a silent path.
+            ver0 = con.execute("PRAGMA user_version"
+                               ).fetchone()[0]
             if "content_digest" not in have:
+                era = _marker_digest_era(db_path)
+                if era is not False or ver0 >= SCHEMA_VERSION:
+                    raise LedgerUnavailable("digest-deleted")
                 try:
                     con.execute("BEGIN IMMEDIATE")
                     try:
@@ -535,6 +568,8 @@ def _connect_locked(db_path, create=False):
                                 "INSERT OR IGNORE INTO content_digest "
                                 "VALUES (?,?,?,?,?)",
                                 (_slot, _d, _n, _a, _b))
+                        con.execute("PRAGMA user_version=%d" %
+                                    SCHEMA_VERSION)
                         con.execute("COMMIT")
                     except BaseException:
                         try:
@@ -549,6 +584,26 @@ def _connect_locked(db_path, create=False):
                     _mirror_roots_locked(db_path, con)
                 except LedgerUnavailable:
                     raise
+            elif ver0 < SCHEMA_VERSION:
+                # Digest present, version lags: adopt v3 WITHOUT
+                # recomputing (recompute would bless out-of-band
+                # edits the intact digest still detects). A
+                # pre-digest marker shape means a crash between the
+                # backfill commit and the mirror — resume the mirror
+                # too (it adopts FROM in-DB truth, which verify
+                # still guards below). An unreadable marker leaves
+                # everything untouched for the strict checks below.
+                era = _marker_digest_era(db_path)
+                if era is None:
+                    pass
+                else:
+                    if era is False:
+                        try:
+                            _mirror_roots_locked(db_path, con)
+                        except LedgerUnavailable:
+                            raise
+                    con.execute("PRAGMA user_version=%d" %
+                                SCHEMA_VERSION)
             for table, cols in _EXPECTED_COLUMNS.items():
                 got = [r[1] for r in con.execute(
                     "PRAGMA table_info(%s)" % table)]

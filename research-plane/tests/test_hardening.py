@@ -1985,6 +1985,8 @@ class ReauditFixTest(unittest.TestCase):
         self.assertIn("table-missing:cycles",
                       str(cm.exception.snapshot))
         # Old (v1, pre-registry) ledger: backfill + version adopt.
+        # Genuine pre-digest shape (flagless marker + old version).
+        self._strip_marker_slots(path)
         con = _sq.connect(path)
         con.execute("PRAGMA user_version=1")
         con.commit()
@@ -2623,10 +2625,10 @@ class ReauditFixTest(unittest.TestCase):
 
     def test_registry_sidecar_deletion_denies(self):
         # Finding 2: counters + cycles + .seen deletion denies
-        # (digest fires); dropping the digest table too forces the
-        # backfill path, where the adoption flag denies
-        # (seen-deleted); losing ONLY the sidecar file re-adopts
-        # and stays available.
+        # (digest fires); dropping the digest table too denies at
+        # the versioned gate (digest-deleted — a missing digest on
+        # a digest-era marker is never rebuilt); losing ONLY the
+        # sidecar file re-adopts and stays available.
         d = tempfile.mkdtemp()
         path = os.path.join(d, "ledger.sqlite3")
         led = budgets.BudgetLedger(path)
@@ -2652,7 +2654,7 @@ class ReauditFixTest(unittest.TestCase):
         os.remove(path + ".seen")
         with self.assertRaises(r15.AbortCycle) as cm:
             led.reserve_call("c", "AAPL", 10, 0)
-        self.assertIn("seen-deleted",
+        self.assertIn("digest-deleted",
                       str(cm.exception.snapshot))
         d = tempfile.mkdtemp()
         path = os.path.join(d, "ledger.sqlite3")
@@ -2660,6 +2662,167 @@ class ReauditFixTest(unittest.TestCase):
         led.reserve_call("c", "AAPL", 10, 0)
         os.remove(path + ".seen")
         led.reserve_call("c", "AAPL", 10, 0)  # re-adopts
+
+    def test_digest_deletion_denies_budgets(self):
+        # P1 #1: DROP digest + modify rows + keep cycles + .seen
+        # must deny at the versioned gate — the digest is mandatory
+        # at v3 and is never rebuilt over a digest-era marker. The
+        # version-reset variant and the same-schema DROP+CREATE
+        # variant deny too.
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "ledger.sqlite3")
+        budgets.BudgetLedger(path).reserve_call("c", "AAPL", 10,
+                                                 0)
+
+        def _attack():
+            con = sqlite3.connect(path)
+            con.execute("DROP TABLE content_digest")
+            con.execute("UPDATE counters SET llm=0, tools=0, "
+                        "tokens=0, depth=0")
+            con.commit()
+            con.close()
+            with self.assertRaises(r15.AbortCycle) as cm:
+                budgets.BudgetLedger(path).reserve_call(
+                    "c", "AAPL", 10, 0)
+            self.assertIn("digest-deleted",
+                          str(cm.exception.snapshot))
+
+        _attack()  # auditor sequence: cycles + .seen kept
+        # Version-reset variants (0/1/2): the digest-era marker
+        # shape still denies.
+        for ver in (0, 1, 2):
+            dd = tempfile.mkdtemp()
+            pp = os.path.join(dd, "ledger.sqlite3")
+            budgets.BudgetLedger(pp).reserve_call("c", "AAPL",
+                                                   10, 0)
+            con = sqlite3.connect(pp)
+            con.execute("DROP TABLE content_digest")
+            con.execute("UPDATE counters SET llm=0")
+            con.execute("PRAGMA user_version=%d" % ver)
+            con.commit()
+            con.close()
+            with self.assertRaises(r15.AbortCycle) as cm:
+                budgets.BudgetLedger(pp).reserve_call(
+                    "c", "AAPL", 10, 0)
+            self.assertIn("digest-deleted",
+                          str(cm.exception.snapshot))
+        # Same-schema DROP+CREATE + mutation: the table is present
+        # but emptied — verify denies (the authority rows are gone).
+        dd = tempfile.mkdtemp()
+        pp = os.path.join(dd, "ledger.sqlite3")
+        budgets.BudgetLedger(pp).reserve_call("c", "AAPL", 10,
+                                               0)
+        con = sqlite3.connect(pp)
+        con.execute("DROP TABLE content_digest")
+        con.execute(budgets._BDIGEST_DDL)
+        con.execute("UPDATE counters SET llm=0")
+        con.commit()
+        con.close()
+        with self.assertRaises(r15.AbortCycle) as cm:
+            budgets.BudgetLedger(pp).reserve_call("c", "AAPL",
+                                                   10, 0)
+        self.assertIn("digest-missing:counters",
+                      str(cm.exception.snapshot))
+
+    def test_digest_deletion_denies_attribution(self):
+        # P1 #1 attribution twin: DROP digest + UPDATE spans denies
+        # (digest-deleted); same-schema DROP+CREATE + mutation
+        # denies on content.
+        now = int(time.time())
+        d = tempfile.mkdtemp()
+        log = os.path.join(d, "spans.jsonl")
+        attribution.append_span(
+            log, 1, "seed", "m", cycle_id="c", symbol="AAPL",
+            prompt_tokens=10, completion_tokens=5, usd=149.0,
+            span_id="hist", ts=now)
+        dbp = attribution._db_for(log)
+        con = sqlite3.connect(dbp)
+        con.execute("DROP TABLE content_digest")
+        con.execute("UPDATE spans SET usd=0")
+        con.commit()
+        con.close()
+        with self.assertRaises(
+                attribution.LedgerUnavailable) as cm:
+            attribution.append_span(
+                log, 1, "s2", "m", cycle_id="c", symbol="AAPL",
+                prompt_tokens=1, completion_tokens=1, usd=1.0,
+                span_id="s2", ts=now)
+        self.assertIn("digest-deleted", str(cm.exception))
+        # Same-schema DROP+CREATE + mutation: table present but
+        # emptied — verify denies (the authority rows are gone).
+        d = tempfile.mkdtemp()
+        log = os.path.join(d, "spans.jsonl")
+        attribution.append_span(
+            log, 1, "seed", "m", cycle_id="c", symbol="AAPL",
+            prompt_tokens=10, completion_tokens=5, usd=149.0,
+            span_id="hist", ts=now)
+        dbp = attribution._db_for(log)
+        con = sqlite3.connect(dbp)
+        con.execute("DROP TABLE content_digest")
+        con.execute(attribution._DIGEST_DDL)
+        con.execute("UPDATE spans SET usd=0")
+        con.commit()
+        con.close()
+        with self.assertRaises(
+                attribution.LedgerUnavailable) as cm:
+            attribution.append_span(
+                log, 1, "s2", "m", cycle_id="c", symbol="AAPL",
+                prompt_tokens=1, completion_tokens=1, usd=1.0,
+                span_id="s2", ts=now)
+        self.assertIn("digest-missing:spans", str(cm.exception))
+
+    def test_seen_witness_first_crash_safe(self):
+        # P1 #2: the marker witness publishes BEFORE the sidecar
+        # file, so every crash direction is conservative. A crash
+        # between them (witness present, file absent) safely
+        # re-adopts; the call order itself is asserted (witness
+        # first), proving the dangerous sidecar-without-witness
+        # state is unreachable by construction.
+        import unittest.mock as _mock
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "ledger.sqlite3")
+        led = budgets.BudgetLedger(path)
+        calls = []
+        _real_merge = locks.merge_marker_roots
+        _real_write = locks.atomic_write_bytes
+
+        def _merge_spy(db_path, update, exact=()):
+            calls.append("witness")
+            return _real_merge(db_path, update, exact=exact)
+
+        def _file_spy(*a, **k):
+            # FileLock traffic shares this helper: only the sidecar
+            # write counts (identified by its basename).
+            calls.append(("sidecar", a[1] if len(a) > 1 else ""))
+            return _real_write(*a, **k)
+
+        with _mock.patch.object(locks, "merge_marker_roots",
+                                _merge_spy), \
+                _mock.patch.object(locks, "atomic_write_bytes",
+                                   _file_spy):
+            led.reserve_call("c2", "AAPL", 10, 0)
+        first_sidecar = next(i for i, c in enumerate(calls)
+                             if c[0] == "sidecar" and
+                             c[1].endswith(".seen"))
+        self.assertLess(calls.index("witness"), first_sidecar)
+        # Crash between: witness merged, file write failed — at
+        # first install (init), the only moment the sidecar does
+        # not already exist. The next open safely adopts and
+        # republishes the sidecar.
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "ledger.sqlite3")
+        led = budgets.BudgetLedger(path)
+
+        def _crash(*a, **k):
+            raise OSError("simulated crash")
+
+        with _mock.patch.object(locks, "atomic_write_bytes",
+                                _crash):
+            with self.assertRaises(r15.AbortCycle):
+                led.reserve_call("c", "AAPL", 10, 0)
+        self.assertFalse(os.path.exists(path + ".seen"))
+        led.reserve_call("c", "AAPL", 10, 0)
+        self.assertIsNotNone(led._read_seen())
 
     def test_marker_unreadable_is_invalid_not_absent(self):
         # An unreadable marker (here: a directory in the way —
@@ -2778,6 +2941,17 @@ class ReauditFixTest(unittest.TestCase):
         g2 = self._ratio_gov(d, "G2")
         g2.evaluate()  # must not raise
         self.assertTrue(os.path.exists(jpath))
+
+    def _strip_marker_slots(self, path):
+        # Genuine pre-digest marker shape: token preserved, roots
+        # blanked (what a real pre-Round-7 ledger carries).
+        import json as _json
+        mp = path + ".init"
+        with open(mp, encoding="utf-8") as fh:
+            body = _json.load(fh)
+        body["roots"] = {}
+        with open(mp, "w", encoding="utf-8") as fh:
+            fh.write(_json.dumps(body, sort_keys=True))
 
     def test_migration_crash_residue_denies(self):
         # A present-but-empty registry over live counters is
@@ -3023,6 +3197,11 @@ class ReauditFixTest(unittest.TestCase):
         con.execute("DROP TABLE cycles")
         # Simulate a genuine pre-registry (v1) ledger: versioned
         # migration (not deletion) is the legitimate path here.
+        # Genuine pre-digest shape (flagless marker + old version).
+        con.commit()
+        con.close()
+        self._strip_marker_slots(path)
+        con = sqlite3.connect(path)
         con.execute("PRAGMA user_version=1")
         con.commit()
         con.close()
