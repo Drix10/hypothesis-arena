@@ -1,0 +1,23 @@
+{
+ "ts": 1790102727,
+ "ua": "MiroHedge/phase0 contact=research-plane-earnings",
+ "window_days": 3,
+ "symbols": [
+  {
+   "symbol": "AAPL",
+   "status": 200,
+   "latency_ms": 1047.0,
+   "events_seen": 89,
+   "latest": "2026-07-31"
+  },
+  {
+   "symbol": "MSFT",
+   "status": 200,
+   "latency_ms": 485.0,
+   "events_seen": 48,
+   "latest": "2026-07-29"
+  }
+ ],
+ "p50_ms": 1047.0,
+ "p99_ms": 1047.0
+}

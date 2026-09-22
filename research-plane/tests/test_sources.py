@@ -7,6 +7,52 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from sources import calendars
+from sources import earnings
+
+
+def _fake_fetcher_factory(forms, dates, items):
+    def fake(url):
+        if "company_tickers" in url:
+            return {"0": {"ticker": "AAA", "cik_str": "1"}}
+        return {"filings": {"recent": {
+            "form": forms, "filingDate": dates, "items": items}}}
+    return fake
+
+
+class EarningsVetoTest(unittest.TestCase):
+    def test_unknown_symbol_is_event_present(self):
+        fake = _fake_fetcher_factory([], [], [])
+        self.assertTrue(earnings.has_event("NOPE", "2026-09-22",
+                                           fetcher=fake))
+
+    def test_fetch_failure_is_event_present(self):
+        def boom(url):
+            raise OSError("net down")
+        self.assertTrue(earnings.has_event("AAA", "2026-09-22",
+                                           fetcher=boom))
+
+    def test_empty_filings_is_event_present(self):
+        fake = _fake_fetcher_factory([], [], [])
+        self.assertTrue(earnings.has_event("AAA", "2026-09-22",
+                                           fetcher=fake))
+
+    def test_8k_item202_in_window_suppresses(self):
+        fake = _fake_fetcher_factory(["8-K"], ["2026-09-21"],
+                                      ["2.02"])
+        self.assertTrue(earnings.has_event("AAA", "2026-09-22",
+                                           fetcher=fake))
+
+    def test_old_filing_is_event_free(self):
+        fake = _fake_fetcher_factory(["10-Q"], ["2026-01-05"], [""])
+        self.assertFalse(earnings.has_event("AAA", "2026-09-22",
+                                            fetcher=fake))
+
+    def test_non_earnings_8k_is_event_free(self):
+        fake = _fake_fetcher_factory(["8-K"], ["2026-09-21"],
+                                      ["5.02"])
+        self.assertTrue(earnings.has_event("AAA", "2026-09-22",
+                                           fetcher=fake))  # no usable
+        # earnings data -> unknown -> suppress (fail closed)
 
 
 class CalendarTest(unittest.TestCase):
