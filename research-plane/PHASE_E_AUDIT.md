@@ -696,3 +696,13 @@ plane (Phase D) change any interface a future slice depends on?
   map, per-component what/why/files/reads/writes/callers/failures,
   end-to-end + veto flows, authority boundaries, env/config flow,
   frozen-vs-active-vs-FUTURE, and the test-co-location rule.
+
+## Addendum 30 — hygiene pass hosted confirmation
+- Run 35773878605 on `78d5ad2`: plane SUCCESS, evidence SUCCESS,
+  kernel SUCCESS (build.sh green from `kernel/tests/`), stdlib
+  FAILURE at the same `collector suites` step. Log access 403
+  (repo-admin only), so the CI loop was replicated exactly on Linux
+  (system python3, new `collector/tests/` paths): 6/6 OK. The hosted
+  stdlib failure is therefore the same pre-existing frozen-collector
+  failure, not a path error from the CI edit. Frozen implementation
+  untouched (moves were test files + path-following edits only).
