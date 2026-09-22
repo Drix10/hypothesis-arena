@@ -706,3 +706,28 @@ plane (Phase D) change any interface a future slice depends on?
   stdlib failure is therefore the same pre-existing frozen-collector
   failure, not a path error from the CI edit. Frozen implementation
   untouched (moves were test files + path-following edits only).
+
+## Addendum 31 — documentation consistency pass (auditor-directed, docs only)
+- ARCHITECTURE.md made exhaustive (389 tracked files): per-file
+  roles for plane/sources/collector/sandbox/kernel-auth-ingest-risk,
+  per-test contracts, fixture/vector/row families with exact counts
+  (36 / 11 / 200+22+4), evidence-artifact provenance, full plan map,
+  env/config/storage/provider flows, money-ownership, FROZEN / ACTIVE
+  / FUTURE / HISTORICAL per area. Two honesty corrections vs the
+  prior version: collector is the production ingestion path while
+  sources/ holds readiness probes + the earnings veto gate (no
+  broader claim than the code supports); `config.load()` is
+  implemented+tested but has no live sandbox consumer yet — the
+  first live-provider probe will be the first.
+- README fixed: research-plane IMPLEMENTED (was "Designed, not
+  built"), P3.5 veto/ingest landed, repo map rewritten (old/ never
+  existed; research-plane/research/.env now listed).
+- TODO.md: 3.3 marked HISTORICAL design-lock, 5.2 marked SUPERSEDED
+  as a gate item (current Phase-D credentials ONLY: OpenRouter,
+  FRED/ALFRED, BEA, OANDA practice, Alpaca paper). No records
+  destroyed; no new mandatory credentials invented.
+- Sweeps clean: no stale research-plane claims, no old test paths
+  outside history/plan, no live provider.env refs, no "100 paths"
+  claim. kernel/collector byte-identical vs `e8b419e`. Freeze PASS;
+  config + sources suites green. No contracts, code, or runtime
+  behavior touched.

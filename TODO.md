@@ -23,7 +23,7 @@ Legend: `[B]` needs real-browser control (X login, JS pages, portals) · `[W]` n
 ## 3. Venues (doc 01)
 - [x] 3.1 DONE 2026-09-18: OANDA v20 practice primary, FXCM demo fallback (REST + streaming, free demo, same shape as live)
 - [x] 3.2 DONE 2026-09-18: Alpaca paper primary (free, live-price sim, REST + WS, resettable, no deposit)
-- [x] 3.3 DONE 2026-09-18: exchange/broker calendars (fail-closed) + FRED/ALFRED + Fed/ECB pages + EDGAR-derived earnings; all free
+- [x] 3.3 DONE 2026-09-18: exchange/broker calendars (fail-closed) + FRED/ALFRED + Fed/ECB pages + EDGAR-derived earnings; all free [HISTORICAL design-lock; operational proof = current Phase-D gate, see the Phase-D entry below]
 - [x] 3.4 DONE 2026-09-18: venue names LOCKED in doc 01 ([HUMAN] ACCEPTED)
 
 ## 4. Research-plane freeze (doc 08)
@@ -34,7 +34,7 @@ Legend: `[B]` needs real-browser control (X login, JS pages, portals) · `[W]` n
 
 ## 5. Sources classification (doc 09)
 - [x] 5.1 DONE 2026-09-18: Tier tables + finance-first X universe (doc 02 §2.4) leave no blanks; every source has class + failure default
-- [ ] 5.2 [HUMAN] Obtain free keys: FRED (signup, 1 key), NASA FIRMS (email token); AISStream/TomTom only if used — say which you want
+- [ ] 5.2 [HUMAN] Obtain free keys: FRED (signup, 1 key), NASA FIRMS (email token); AISStream/TomTom only if used — say which you want [SUPERSEDED as a gate item: current Phase-D credentials are OpenRouter + FRED/ALFRED + BEA + OANDA practice + Alpaca paper only — see the Phase-D entry below. NASA FIRMS/AISStream/TomTom are Tier-B/C/D, never Phase-D blockers. Kept for history.]
 - [x] 5.3 DONE 2026-09-18: EDGAR UA + 10 req/s ceiling locked in 09 §9.2
 - [x] 5.4 DONE 2026-09-18: §9.3 heartbeat (>3x cadence = stale) + per-tier failure defaults in §9.1 table; calendar fail-closed
 - [x] 5.5 DONE 2026-09-18: ALFRED vintages for replay (locked in 01); Tier D bar + lessons.jsonl already in 09 §9.1/§9.4
