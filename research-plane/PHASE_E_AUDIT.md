@@ -659,3 +659,15 @@ plane (Phase D) change any interface a future slice depends on?
   the new tests), frozen stdlib FAILURE. `mirohuman` nologin
   accepted as NOT A BLOCKER per ruling (evidence note updated,
   script unchanged).
+
+## Addendum 28 — earnings accounting correction (audit-directed, docs only)
+- Earnings implementation ACCEPTED; record corrected: gate
+  implementation + live probe = PROVEN, Tier-A operational wiring
+  (poller + TTL + heartbeat per §9.4) = OPEN, therefore the
+  earnings Tier-A source is NOT YET FULLY PROVEN. No code touched.
+- Canonical remaining Phase-D items (six): broker access +
+  operational proof; live model credential/traffic; FRED/ALFRED
+  credential + vintage replay; BEA credential/config + proof;
+  earnings TTL/heartbeat wiring; 7-day run + cadence-rate evidence.
+  Profit/calibration feeds stay future-stage; registry optional;
+  Slice D NOT AUTHORIZED; no further hardening rounds.

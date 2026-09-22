@@ -65,7 +65,7 @@ Exact Tier-A source-by-source matrix (plan §9.1 table is the requirement):
 | FRED / ALFRED (+ vintage replay) | same + original-vintage replay | BLOCKED — no FRED_API_KEY (probe records BLOCKED, never downgrades) |
 | Treasury FiscalData / BLS / BEA | same | SPLIT: Treasury auctions 3/3×200 (p50 ~1.6s) + BLS empsit RSS 3/3×200 (p50 ~125ms) measured ad-hoc 2026-09-22; BEA BLOCKED (API UserID key required) |
 | Exchange/session calendars | fail-closed veto input | PROVEN (seed loads paper-only; CalendarMissing → zero entries, test-pinned + hosted evidence job) |
-| Earnings calendar (free/EDGAR-derived) | veto-side schedule | PROVEN 2026-09-22 (`sources/earnings.py` + 6 fail-closed tests): EDGAR-derived 8-K Item 2.02 + 10-Q/10-K event windows, ±3d veto; live AAPL/MSFT 200s zero-403 (p50 ~1.0s), July-2026 earnings detected, gate verified True-on-event / False-on-quiet / True-on-unknown. TTL/heartbeat production wiring OPEN (module is gate+probe; §9.4 poller integration = deployment wiring, not a contract gap) |
+| Earnings calendar (free/EDGAR-derived) | veto-side schedule | SPLIT 2026-09-22: gate implementation + live probe PROVEN (`sources/earnings.py` + 6 fail-closed tests; AAPL/MSFT 200s zero-403, p50 ~1.0s; July-2026 earnings detected; True-on-event / False-on-quiet / True-on-unknown). Tier-A operational wiring (working poller + TTL + heartbeat per §9.4) OPEN — source NOT YET FULLY PROVEN (audit correction) |
 | Fed/ECB monetary RSS (Tier-B official) | bonus coverage | PROVEN live (Fed p50 ~400ms, ECB p50 ~766ms, all-200) |
 
 - Artifact `research-plane/sandbox/tier-a-deploy-evidence.json` holds the
