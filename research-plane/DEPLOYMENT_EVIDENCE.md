@@ -13,6 +13,11 @@ Deployment host for Linux boxes: WSL2 Ubuntu 24.04.1 LTS, kernel
 replicates the same mechanism). Docker daemon 29.7.2 (Docker Desktop) started
 2026-09-22 for the daemon-dependent boxes.
 
+Hosted CI on the deployment tree (run 35761650805, head `c3b375f`):
+plane SUCCESS (249-test battery), kernel SUCCESS, evidence SUCCESS
+(isolation+sources), stdlib FAILURE at the frozen collector step
+(pre-existing, untouched).
+
 ## Box 8 — §8.6 remaining evidence — PARTIAL 2026-09-22
 
 - Kill -9 + resume + no-dupes PROVEN at runtime

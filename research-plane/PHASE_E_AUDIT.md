@@ -596,3 +596,25 @@ plane (Phase D) change any interface a future slice depends on?
   documentation checkpoint. Carried state: Round 9 closed →
   Phase D open pending deployment evidence → Slice D
   unauthorized.
+
+## Addendum 25 — Phase-D deployment/evidence pass (agent-executed, NOT signed off)
+- From canonical `36c2862` (Round 9 closed, Phase D OPEN, Slice D
+  NOT AUTHORIZED): seven deployment commits, one per theme, all
+  runtime proof, no static-only closures. Box 1 OS isolation, Box 2
+  egress enforcement (squid; tinyproxy rejected on evidence),
+  Box 3 image SBOM+scan, Box 4 config fail-closed + placement,
+  Box 5 WALL_S kill/reap on Linux, Box 6 Langfuse server healthy +
+  ledger attribution, Box 7 Tier-A live probes + lessons +
+  calendar gate, Box 8 kill-9 resume end-to-end with the full
+  ambiguity→block→reconcile→fresh-cycle contract (plus two
+  design confirmations: per-epoch budget threads, terminal
+  aborted checkpoints — both fail-closed, unchanged). Full detail
+  in `research-plane/DEPLOYMENT_EVIDENCE.md`.
+- BLOCKED (external/human, not unattempted): live model key,
+  FRED_API_KEY, broker credentials/feed, profit feed, calibration
+  feed, 7-day elapsed time, registry credential. No live capital
+  touched; kernel/collector zero-diff; freeze PASS; local battery
+  249 green; hosted 35761650805 plane/kernel/evidence SUCCESS,
+  frozen stdlib FAILURE. Slice D NOT AUTHORIZED. Phase D closable
+  only after the BLOCKED externals land — this record does not
+  close it.
