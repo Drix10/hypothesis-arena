@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 '''P1.5 acceptance: every ctx/boundary/plausibility contract has a test.
-Run: python3 collector/test_ctx.py (stdlib only, temp DB, no P1.4 writes)
+Run: python3 collector/tests/test_ctx.py (stdlib only, temp DB, no P1.4 writes)
 '''
 import hashlib
 import json
@@ -9,7 +9,7 @@ import sqlite3
 import sys
 import tempfile
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 from ctx_read import read_bundle, combine_hashes, HB_MAP, trigger_eligible  # noqa: E402
 

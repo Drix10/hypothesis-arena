@@ -4,14 +4,14 @@ guarded swap of the repo-root .env (backed up + restored in finally).
 
 Proves: root .env auto-loads, exports win, missing means MISSING_REQUIRED,
 the EDGAR User-Agent carries the contact, and the contact value never
-appears in outputs/artifacts. Run: python3 collector/test_config.py
+appears in outputs/artifacts. Run: python3 collector/tests/test_config.py
 """
 import io
 import json
 import os
 import sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 

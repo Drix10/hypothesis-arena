@@ -5,8 +5,8 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
-#include "jev_validate.hpp"
-#include "kernel_state.hpp"
+#include "../jev_validate.hpp"
+#include "../kernel_state.hpp"
 
 static int fails = 0;
 static int count = 0;

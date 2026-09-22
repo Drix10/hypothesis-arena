@@ -2,7 +2,7 @@
 '''Collector failure-path acceptance: status/records can never mix, failure
 modes append nothing, non-transient errors never retry, corrupt state fails
 closed, identities are never coerced or truncated. Stdlib only.
-Run: python3 collector/test_collect.py (no network; urlopen mocked)
+Run: python3 collector/tests/test_collect.py (no network; urlopen mocked)
 '''
 import io
 import json
@@ -12,7 +12,7 @@ import tempfile
 import urllib.error
 from unittest import mock
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 import collect  # noqa: E402
 

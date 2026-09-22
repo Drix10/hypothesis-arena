@@ -16,12 +16,12 @@ if [ "$MODE" = "hardened" ]; then
 else
     FLAGS="-std=c++17 -Wall -Wextra -O2"
 fi
-g++ $FLAGS -o test_p31 test_p31.cpp
-./test_p31 fixtures
-g++ $FLAGS -o test_p32 test_p32.cpp
-./test_p32 vectors
-g++ $FLAGS -o test_p33 test_p33.cpp
-./test_p33 p33 fixtures
+g++ $FLAGS -o tests/test_p31 tests/test_p31.cpp
+./tests/test_p31 fixtures
+g++ $FLAGS -o tests/test_p32 tests/test_p32.cpp
+./tests/test_p32 vectors
+g++ $FLAGS -o tests/test_p33 tests/test_p33.cpp
+./tests/test_p33 p33 fixtures
 # Slice A authority proof: the boundary is compiler-enforced, not merely
 # grep-policed. Each neg_* probe must FAIL compilation for its documented
 # reason; the positive control must compile, run, and exit 0 (it proves
@@ -59,8 +59,8 @@ _region="$(sed -n '/^class ValidationRequest {/,/^};/p' jev_validate.hpp | sed '
     echo "GATE FAIL: validator friendship moved"; exit 1; }
 [ "$(echo "$_region" | grep -o 'friend ' | wc -l | tr -d ' ')" = "2" ] || {
     echo "GATE FAIL: unexpected friend (authority leak)"; exit 1; }
-g++ $FLAGS -o fuzz_p31 fuzz_p31.cpp
-./fuzz_p31 20000
+g++ $FLAGS -o tests/fuzz_p31 tests/fuzz_p31.cpp
+./tests/fuzz_p31 20000
 # Slice B gate [correctness]: veto unit suite (doc 05 rule boundaries +
 # composed veto+table rows on committed P3.3 artifacts).
 g++ $FLAGS -o test_veto risk/test_veto.cpp risk/veto.cpp
@@ -126,12 +126,12 @@ if grep -nE "\.confidence|->confidence" jev_state.hpp kernel_state.hpp decision_
     exit 1
 fi
 # P3.2 interop: test_p32.cpp must never invoke Python (committed files only).
-if grep -nE "popen|system\(|python" test_p32.cpp; then
+if grep -nE "popen|system\(|python" tests/test_p32.cpp; then
     echo "GATE FAIL: test_p32 depends on Python"
     exit 1
 fi
 # P3.3 replay/table suite: committed files only, same rule.
-if grep -nE "popen|system\(|python" test_p33.cpp; then
+if grep -nE "popen|system\(|python" tests/test_p33.cpp; then
     echo "GATE FAIL: test_p33 depends on Python"
     exit 1
 fi

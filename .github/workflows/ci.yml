@@ -33,7 +33,7 @@ jobs:
       - name: collector suites (mocked IO, no network)
         run: |
           for t in test_ctx test_jev test_pipeline test_config test_collect test_soak_check; do
-            python3 collector/$t.py
+            python3 collector/tests/$t.py
           done
 
   evidence:

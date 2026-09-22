@@ -6,8 +6,8 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
-#include "jev_validate.hpp"
-#include "kernel_state.hpp"
+#include "../jev_validate.hpp"
+#include "../kernel_state.hpp"
 
 static uint64_t rng_state = 0;
 // The artifact-carried pubkey is informational-only and never trusted:

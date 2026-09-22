@@ -176,11 +176,13 @@ grep -q 'question_set_version' "$ROOT/kernel/jev_validate.hpp" \
 # P3.1 amendment lock: corrected L-table tail (0x00/0x10, not 0x10/0x0F).
 grep -q '0x00, 0x00, 0x00, 0x10};' "$ROOT/kernel/jev_validate.hpp" \
   && ok "L-table amended" || bad "L-table regressed"
-# P3.3 components present with their contracts.
-for _f in jev_state.hpp kernel_state.hpp decision_table.hpp test_p33.cpp gen_p33.py; do
+# P3.3 components present with their contracts (test suite lives in tests/).
+for _f in jev_state.hpp kernel_state.hpp decision_table.hpp gen_p33.py; do
   [ -f "$ROOT/kernel/$_f" ] \
     && ok "p33 file $_f" || bad "p33 file missing: $_f"
 done
+[ -f "$ROOT/kernel/tests/test_p33.cpp" ] \
+  && ok "p33 file tests/test_p33.cpp" || bad "p33 suite missing"
 grep -q 'EvaluateDecision(const ValidatedJEVAnswerSetV3' "$ROOT/kernel/decision_table.hpp" \
   && ok "table typed-only" || bad "table signature moved"
 grep -q 'class KernelState' "$ROOT/kernel/kernel_state.hpp" \

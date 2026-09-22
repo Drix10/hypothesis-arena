@@ -7,8 +7,8 @@
 #include <limits>
 #include <string>
 #include <vector>
-#include "decision_table.hpp"
-#include "kernel_state.hpp"
+#include "../decision_table.hpp"
+#include "../kernel_state.hpp"
 
 namespace {
 int fails = 0, total = 0;

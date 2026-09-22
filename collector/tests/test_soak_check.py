@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 '''soak_check regression: real schema parsing, UNREADABLE fails, heartbeat
 freshness uses heartbeat_at, subprocess exits propagate. Stdlib only.
-Run: python3 collector/test_soak_check.py (no network, temp dirs)
+Run: python3 collector/tests/test_soak_check.py (no network, temp dirs)
 '''
 import json
 import os
 import sys
 import tempfile
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 import soak_check  # noqa: E402
 

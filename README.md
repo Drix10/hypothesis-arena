@@ -80,7 +80,7 @@ git clone https://github.com/Drix10/hypothesis-arena.git
 cd hypothesis-arena
 
 bash scripts/freeze-check.sh          # must print FREEZE-CHECK: PASS
-python3 collector/test_pipeline.py    # 28 checks, all must pass
+python3 collector/tests/test_pipeline.py    # 28 checks, all must pass
 python3 collector/collect.py          # poll sources -> data/signals/<day>.jsonl
 
 cd kernel && bash build.sh            # C++ gates: 102 + 37 + 78 checks, 20k fuzz
