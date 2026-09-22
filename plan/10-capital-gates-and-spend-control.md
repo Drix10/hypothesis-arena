@@ -220,6 +220,14 @@ extrapolated), so the brake is applied before the wall, not at it.
   check.
 - Tier changes are journaled with the projection that caused them. A tier can
   fall back only after 6 consecutive hours below the lower threshold (anti-flap).
+  The tier journal is a semantic chain, not just syntax: non-legacy rows
+  must carry consecutive revs, from/to matching the governor's emission
+  rule (first from Tier 0), snapshot tier equal to its row, and max rev
+  exactly equal to the state rev — a forged newer row denies, and rows
+  newer than state are never adopted (state-first persist means the
+  state always leads). The ratio journal must be a strictly increasing
+  day sequence (no duplicates, no reordering, no future days): an
+  edited day order denies rather than weakening the 3-day rule.
 - A provider price change that lifts projected spend past a tier acts exactly like
   usage growth. No exception path exists.
 

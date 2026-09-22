@@ -241,11 +241,33 @@ every reader: snapshot/check/settle/invalidate abort on a deleted recent
 row instead of minting zeros. Old ledgers backfill the registry from
 surviving counters rows inside the migration itself, so upgraded
 deployments are protected immediately. The migration is crash-safe
-(CREATE + backfill in one transaction; a present-but-empty registry over
-live counters — impossible via pruning — is healed idempotently).
+(CREATE + backfill in one transaction; a present-but-empty registry
+over live counters is registry-only deletion, never healed — it
+aborts, because healing would resurrect cover for deleted
+authority).
+Historical row integrity (beyond table presence): the attribution
+marker carries cumulative roots (per-table max timestamps with
+pre-declared prune high-waters, the append-only unknown count, and
+hold created/closed counters) re-baselined from committed truth
+under the same lock after every mutation — wholesale row deletion
+or same-schema DROP+CREATE denies as history-deleted, while a
+legitimate full prune verifies through its declared cutoff. The R15
+side keeps an out-of-band cycle registry (sidecar file, 30-day
+window): a young cycle whose registry entry is gone denies whether
+the counters row is missing (counters-deleted), the registry row is
+missing (registry-deleted — pruning cannot produce a live row
+without its entry), or both are gone. Counters rows starting more
+than 300 s in the future deny on every reader (future-start-wall).
+First init is one transaction (schema + version + token) with the
+marker published after; a crash-interrupted init re-inits instead
+of wedging. A missing marker over live rows denies
+(marker-deleted); pre-roots markers adopt truth once (documented
+trust-on-first-use).
 Thread identity cannot resurrect a budget: run_cycle refuses a thread_id
 whose checkpoint is older than the 7-day R15 window (same cycle_id never
-mints a second budget). A fail-closed reader error during cadence
+mints a second budget). A checkpoint whose age cannot be established —
+lookup failure, unreadable timestamp, or a checkpoint id with no
+timestamp — is refused, not treated as absent. A fail-closed reader error during cadence
 accounting is blocked evidence (r15-budget-unreadable), never a silent
 under-count. Established database files never regrow tables: a missing
 table on a verified schema (spans, holds, counters, leases, meta —

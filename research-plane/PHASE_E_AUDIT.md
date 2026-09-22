@@ -406,3 +406,28 @@ plane (Phase D) change any interface a future slice depends on?
   at the same frozen-collector step (pre-existing, untouched per
   the freeze/zero-diff constraint). Awaiting the human re-audit
   of `fb236d5`. Slice D NOT AUTHORIZED. Phase D NOT closed.
+
+## Addendum 15 — re-audit round 6 fix pass (48d5bd2, agent-side, NOT signed off)
+- The human re-audit of `fb236d5` verified the eight round-5
+  closures but withheld sign-off on seven further points, all
+  closed in `48d5bd2` with regressions (see TODO record):
+  historical row integrity (attribution marker roots re-baselined
+  post-commit under lock; R15 out-of-band registry sidecar;
+  row-deletion and same-schema replacement deny on both ledgers;
+  residue backfill removed as deletion cover; marker-absent over
+  live rows denies; TOFU adoption documented); future start_wall
+  denied on read and write; tier journal chain semantics with
+  newer-than-state forgery denial and no non-legacy adoption;
+  strictly increasing ratio days; single-transaction first init
+  with pristine re-init; checkpoint-id presence for
+  timestamp-less snapshots.
+- Interop found while verifying (fixed in-pass): the round-3
+  residue heal masked registry-only deletion (removed, test
+  retired to the deny semantic); a file rewrite CRLF'd the test
+  file (restored to LF, commit amended).
+- Batteries on the fix tree: plane 108 + hardening 105 + emit 19
+  + isolation + sources + stdlib green locally; kernel `build.sh`
+  exit 0; freeze-check PASS; kernel/collector zero-diff. Hosted
+  rerun pending on push; the frozen-collector stdlib failure stays
+  untouched. Slice D NOT AUTHORIZED. Phase D NOT closed — this
+  record awaits the human re-audit of `48d5bd2`.
