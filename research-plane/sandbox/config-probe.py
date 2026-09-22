@@ -39,10 +39,6 @@ def check(desc, fn, want_exc):
         FAIL += 1
 
 
-class ConfigBlocked(AssertionError):
-    pass
-
-
 # Resolve the real ConfigBlocked regardless of import path.
 try:
     RealBlocked = spend_mod.ConfigBlocked

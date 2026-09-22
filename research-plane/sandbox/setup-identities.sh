@@ -22,9 +22,16 @@ echo "identities ready under $TREE"
 # deny-probe denies and every allow-probe succeeds.
 [ "$(id -u)" -eq 0 ] || { echo "FATAL: run as root"; exit 2; }
 umask 077
-echo "BROKER_KEY_PLACEHOLDER_DEPLOYMENT_FIXTURE" > "$TREE/creds/broker/broker.key"
-chmod 600 "$TREE/creds/broker/broker.key"
-chown mirotrade:mirotrade "$TREE/creds/broker/broker.key"
+# Fixture only when no real key is deployed: NEVER clobber a production
+# credential by re-running this script on a live host.
+if [ ! -e "$TREE/creds/broker/broker.key" ]; then
+  echo "BROKER_KEY_PLACEHOLDER_DEPLOYMENT_FIXTURE" > "$TREE/creds/broker/broker.key"
+  chmod 600 "$TREE/creds/broker/broker.key"
+  chown mirotrade:mirotrade "$TREE/creds/broker/broker.key"
+  echo "fixture broker.key installed (placeholder)"
+else
+  echo "broker.key already deployed: fixture NOT overwritten"
+fi
 PASS=0
 FAIL=0
 probe() { # $1=desc $2=want-exit $3...=command

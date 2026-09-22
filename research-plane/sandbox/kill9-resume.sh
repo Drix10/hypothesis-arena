@@ -57,3 +57,20 @@ else
   [ $RC -eq 0 ] || { echo "FAIL: fresh cycle did not complete after reconcile"; tail -n 5 "$D/run3.log"; exit 1; }
 fi
 "$VENV" "$HERE/kill9_verify.py" "$D" $N
+RC=$?
+# Hygiene: no stray worker processes may survive the demo (orphaned
+# extract children self-exit via their own timeouts; verify it with ps
+# rather than pgrep for Git-Bash portability).
+if ps aux 2>/dev/null | grep "[k]ill9_worker" > /dev/null; then
+  echo "FAIL: stray kill9_worker processes remain"
+  ps aux | grep "[k]ill9_worker" | head -3
+  RC=1
+else
+  echo "PASS: no stray worker processes"
+fi
+if [ $RC -eq 0 ]; then
+  rm -rf "$D"  # workdir is evidence-summarized; drop on success
+else
+  echo "workdir kept for forensics: $D"
+fi
+exit $RC

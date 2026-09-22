@@ -62,9 +62,10 @@ else:
     fails.append("committed bundles %d != %d epochs" % (committed,
                                                            n))
 try:
+    import time as _time
     res = emit_mod.read_latest(
         os.path.join(d, "out"), os.path.join(d, "canonical.db"),
-        os.path.join(d, "entity_map.json"), 2 ** 62)
+        os.path.join(d, "entity_map.json"), int(_time.time()))
     if res is not None:
         ok("reader resolves latest verified bundle")
     else:

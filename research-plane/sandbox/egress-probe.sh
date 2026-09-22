@@ -25,15 +25,25 @@ ok() { echo "PASS: $1"; PASS=$((PASS + 1)); }
 no() { echo "FAIL: $1"; FAIL=$((FAIL + 1)); }
 
 docker network inspect "$NET" > /dev/null 2>&1 || docker network create --internal "$NET" > /dev/null
-docker inspect "$PROXY" > /dev/null 2>&1 || {
-  echo "FATAL: proxy container $PROXY missing (start it with egress-proxy/squid.conf)"
-  exit 2
-}
+# Idempotent proxy ensure (reproducible bring-up; config is the committed
+# squid.conf beside this script). Windows daemon path via pwd -W.
+if ! docker inspect "$PROXY" > /dev/null 2>&1; then
+  HERE_WIN=$(cd "$(dirname "$0")" && pwd -W)
+  docker run -d --name "$PROXY" --network "$NET" \
+    -v "$HERE_WIN/egress-proxy/squid.conf":/etc/squid/squid.conf:ro \
+    sameersbn/squid > /dev/null
+  sleep 8
+fi
+docker network inspect "$NET" 2>/dev/null | grep -q "$PROXY" || \
+  docker network connect bridge "$PROXY" > /dev/null
 
 OUT=$(docker run --rm --network "$NET" --user 65532:65532 --read-only \
-  --cap-drop=ALL --pids-limit 64 --memory=2g --cpus=1.0 "$IMG" python -c "
+  --cap-drop=ALL --pids-limit 64 --memory=2g --cpus=1.0 \
+  -e PROXY_HOST="$PROXY" "$IMG" python -c "
+import os
 import requests
-px = {'http': 'http://egress-proxy:3128', 'https': 'http://egress-proxy:3128'}
+ph = os.environ.get('PROXY_HOST', 'egress-proxy')
+px = {'http': 'http://%s:3128' % ph, 'https': 'http://%s:3128' % ph}
 def probe(name, url, proxies, ua=True):
     try:
         h = {'User-Agent': 'MiroHedge/0 evidence@example.invalid'} if ua else {}

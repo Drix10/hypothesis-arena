@@ -5,9 +5,10 @@ Proves the shipped kill ladder (plane/timeout.py::run_in_process, the
 primitive the production supervisor drives with timeout_s=WALL_S=480s)
 with SHORT deadlines (the ladder is deadline-parameterized; the
 mechanism is identical at any value):
-  1. SIGTERM-trapping runaway -> escalated to SIGKILL (exitcode -9),
-     CallTimeout raised, wall time bounded near deadline + ladder.
-  2. Cooperative sleeper -> SIGTERM death (exitcode -15), CallTimeout.
+  1. SIGTERM-ignoring runaway -> CallTimeout in bounded time (a child
+     that ignores TERM can only die by KILL: bounded return PROVES
+     the SIGKILL escalation fired, no exit-code access needed).
+  2. Cooperative sleeper -> prompt CallTimeout (TERM path).
   3. Fast child -> result returned, no kill.
   4. Every path leaves no live child (reaped: is_alive False).
 Exits 0 only if all hold. LINUX ONLY (POSIX signals are vacuous on
