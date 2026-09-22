@@ -131,7 +131,102 @@ _EXPECTED_COLUMNS = {
                         "note"],
     "spend_holds": ["lease_id", "usd", "state", "ts", "span_id"],
     "meta": ["k", "v"],
+    "content_digest": ["table", "digest", "n", "a", "b"],
 }
+
+# Tables whose presence the missing-table gate enforces. The digest
+# table is excluded: its absence on an established ledger is a
+# versioned backfill case (recompute from truth once), not a
+# deletion — while a present-but-emptied digest table over live
+# rows is tamper and denies.
+_GATED_TABLES = ("spans", "unknown_holds", "reconciliations",
+                 "spend_holds", "meta")
+
+_DIGEST_DDL = (
+    "CREATE TABLE IF NOT EXISTS content_digest ("
+    "\"table\" TEXT PRIMARY KEY, digest TEXT NOT NULL, "
+    "n INTEGER NOT NULL, a INTEGER NOT NULL, b INTEGER NOT NULL)")
+
+# Canonical column order per digest slot (schema order — the SELECT
+# order must match exactly or the fingerprint silently changes).
+# aux (a, b) meaning per slot: spans a = exact usd cents; holds
+# a = created, b = closed (exact, same-transaction — no lag); other
+# slots keep a = b = 0.
+_DIGEST_COLS = {
+    "spans": _EXPECTED_COLUMNS["spans"],
+    "recon": _EXPECTED_COLUMNS["reconciliations"],
+    "unknown": _EXPECTED_COLUMNS["unknown_holds"],
+    "holds": _EXPECTED_COLUMNS["spend_holds"],
+}
+
+_ZERO_DIGEST = "0" * 64
+
+
+def _hrow(values):
+    """Canonical row hash: JSON of the value list (floats via
+    repr-shortest — deterministic per value; None/ints/strs exact).
+    Column order is the schema order (see _DIGEST_COLS)."""
+    return hashlib.sha256(
+        json.dumps(list(values), separators=(",", ":")).encode(
+            "utf-8")).hexdigest()
+
+
+def _dxor(a, b):
+    return "%064x" % (int(a, 16) ^ int(b, 16))
+
+
+def _cents(usd):
+    """Exact usd-cents fingerprint (truncation, matching the SQL
+    CAST used at recompute — same IEEE754 value, same double
+    multiply, same truncation, so incremental and recomputed sums
+    agree exactly regardless of row order)."""
+    return int(usd * 100)
+
+
+def _recompute_table(con, slot, sql_table):
+    """Full re-fingerprint of one table from live rows: (digest,
+    count, cents-or-0). Order-independent (XOR) so VACUUMs,
+    rowid reuse, and plan changes never false-deny."""
+    cols = _DIGEST_COLS[slot]
+    cur = con.execute("SELECT %s FROM %s" % (",".join(cols),
+                                               sql_table))
+    acc = 0
+    n = 0
+    cents = 0
+    usd_idx = cols.index("usd") if "usd" in cols else None
+    for row in cur:
+        acc ^= int(_hrow(row), 16)
+        n += 1
+        if usd_idx is not None and row[usd_idx] is not None:
+            cents += _cents(row[usd_idx])
+    return "%064x" % acc, n, cents
+
+
+def _dig_apply(con, slot, sql_table, outs=(), ins=(), dn=0, da=0,
+               db=0):
+    """Incremental digest maintenance INSIDE the mutation's own
+    SQLite transaction (same BEGIN/COMMIT): outs/ins are canonical
+    value-lists of removed/added rows, dn/da/db counter deltas.
+    Same-transaction atomicity is what closes the commit/bump crash
+    seam — a crash leaves rows AND digest both old or both new,
+    never split. Out-of-band SQL (attacker, corruption, torn
+    pages) does not maintain this table, so any such edit shows
+    as digest-mismatch at verify. A missing digest row denies
+    (deleted digest evidence), never recreates."""
+    row = con.execute(
+        "SELECT digest, n, a, b FROM content_digest WHERE \"table\"=?",
+        (slot,)).fetchone()
+    if row is None:
+        raise LedgerUnavailable("digest-missing:%s" % slot)
+    acc = int(row[0], 16)
+    for vals in outs:
+        acc ^= int(_hrow(vals), 16)
+    for vals in ins:
+        acc ^= int(_hrow(vals), 16)
+    con.execute(
+        "UPDATE content_digest SET digest=?, n=n+?, a=a+?, b=b+? "
+        "WHERE \"table\"=?",
+        ("%064x" % acc, dn, da, db, slot))
 
 
 class LedgerUnavailable(Exception):
@@ -155,110 +250,122 @@ def _storage_size(path):
     return total
 
 
-_ZERO_ROOTS = {"spans": {"max_ts": 0, "pruned": 0},
-               "recon": {"max_ts": 0, "pruned": 0},
-               "unknown": {"count": 0},
-               "holds": {"created": 0, "closed": 0}}
+_ZERO_DIGEST = "0" * 64
+_ZERO_ROOTS = {"spans": {"digest": _ZERO_DIGEST, "count": 0,
+                           "cents": 0},
+               "recon": {"digest": _ZERO_DIGEST, "count": 0},
+               "unknown": {"digest": _ZERO_DIGEST, "count": 0},
+               "holds": {"digest": _ZERO_DIGEST, "count": 0,
+                           "created": 0, "closed": 0}}
 
 
-def _root_num(roots, table, key):
-    """One numeric root stat, fail-closed on edited roots."""
+def _req_int(slot, key, tag):
+    """One required root integer: exact int (bool excluded),
+    non-negative. Missing slots, floats (including NaN/inf),
+    and negatives deny — a malformed root weakens nothing, it
+    fails closed."""
     try:
-        val = roots.get(table, {}).get(key, 0)
+        val = slot.get(key)
     except AttributeError:
-        raise LedgerUnavailable("marker-roots-corrupt:%s.%s"
-                                % (table, key))
-    if type(val) not in (int, float) or isinstance(val, bool):
-        raise LedgerUnavailable("marker-roots-corrupt:%s.%s"
-                                % (table, key))
+        raise LedgerUnavailable("marker-roots-corrupt:%s" % tag)
+    if type(val) is not int or isinstance(val, bool) or val < 0:
+        raise LedgerUnavailable("marker-roots-corrupt:%s" % tag)
     return val
 
 
-def _verify_roots_locked(con, roots):
-    """Historical-integrity verify: the live tables must still
-    contain everything the marker baseline proves they once held.
-    Wholesale row deletion (or a same-schema DROP+CREATE, which is
-    the same thing with extra steps) leaves the schema, marker,
-    token, version, and integrity check all green — this is the
-    check that catches it. Legitimate pruning never trips it: prune
-    only removes rows below an advancing cutoff, so it can neither
-    lower a table's max timestamp while rows survive nor empty a
-    table without the cutoff first passing the old maximum (the
-    pre-declared pruned high-water proves that)."""
-    for table, sql in (("spans", "SELECT MAX(ts) FROM spans"),
-                        ("recon", "SELECT MAX(ts) FROM "
-                         "reconciliations")):
-        cur_max = con.execute(sql).fetchone()[0]
-        base = _root_num(roots, table, "max_ts")
-        if cur_max is None:
-            if _root_num(roots, table, "pruned") < base:
-                raise LedgerUnavailable("history-deleted:%s"
-                                        % table)
-        elif cur_max < base:
-            raise LedgerUnavailable("history-deleted:%s" % table)
-    count = con.execute(
-        "SELECT COUNT(*) FROM unknown_holds").fetchone()[0]
-    if count < _root_num(roots, "unknown", "count"):
-        # unknown_holds is append-only (reconcile flags, never
-        # deletes): a lower count is deleted history.
-        raise LedgerUnavailable("history-deleted:unknown")
+def _req_digest(slot, tag):
+    """One required 64-hex content digest. Anything else denies."""
+    try:
+        val = slot.get("digest")
+    except AttributeError:
+        raise LedgerUnavailable("marker-roots-corrupt:%s" % tag)
+    if type(val) is not str or len(val) != 64:
+        raise LedgerUnavailable("marker-roots-corrupt:%s" % tag)
+    try:
+        int(val, 16)
+    except ValueError:
+        raise LedgerUnavailable("marker-roots-corrupt:%s" % tag)
+    return val
+
+
+def _verify_history_locked(db_path, con, roots):
+    """Row-content integrity verify (every open of an established
+    ledger). For each money table: re-fingerprint live rows and
+    compare against the same-transaction in-DB digest (exact — a
+    crash can never split rows from their digest, so any mismatch
+    is an out-of-band edit: UPDATE usd/content, DELETE, torn page
+    — and denies as digest-mismatch). Holds additionally prove
+    active + closed == created exactly (in-DB counters, no lag).
+    The marker mirror is then strict-validated (malformed slots
+    deny) and re-baselined from in-DB truth when stale (adopt —
+    the marker is refreshed FROM truth, never trusted OVER it, so
+    marker tamper is erased rather than honored, and crash lag
+    self-heals instead of false-denying)."""
+    expect = (("spans", "spans", True),
+              ("recon", "reconciliations", False),
+              ("unknown", "unknown_holds", False),
+              ("holds", "spend_holds", False))
+    try:
+        live = {t: con.execute(
+            "SELECT digest, n, a, b FROM content_digest WHERE "
+            "\"table\"=?", (t,)).fetchone() for t, _, _ in expect}
+    except (sqlite3.Error, ValueError) as e:
+        raise LedgerUnavailable("digest-read:%s" % (e,))
+    for slot, sql_table, has_cents in expect:
+        if live[slot] is None:
+            raise LedgerUnavailable("digest-missing:%s" % slot)
+        digest, n, cents = _recompute_table(con, slot, sql_table)
+        if digest != live[slot][0] or n != live[slot][1]:
+            raise LedgerUnavailable("digest-mismatch:%s" % slot)
+        if has_cents and cents != live[slot][2]:
+            raise LedgerUnavailable("digest-mismatch:%s-cents"
+                                    % slot)
     active = con.execute(
         "SELECT COUNT(*) FROM spend_holds").fetchone()[0]
-    if active + _root_num(roots, "holds", "closed") < \
-            _root_num(roots, "holds", "created"):
-        # Holds are transient by design (created → settled →
-        # deleted), so the invariant is created <= closed +
-        # active: every deletion is paired with a recorded close.
-        raise LedgerUnavailable("history-deleted:holds")
+    if active + live["holds"][3] != live["holds"][2]:
+        raise LedgerUnavailable("holds-count")
+    for slot, _, _ in expect:
+        mslot = roots.get(slot)
+        if not isinstance(mslot, dict):
+            raise LedgerUnavailable("marker-roots-corrupt:%s"
+                                    % slot)
+        _req_digest(mslot, slot)
+        _req_int(mslot, "count", slot)
+        if slot == "spans":
+            _req_int(mslot, "cents", slot)
+        if slot == "holds":
+            _req_int(mslot, "created", slot)
+            _req_int(mslot, "closed", slot)
+    _mirror_roots_locked(db_path, con, live)
 
 
-def _bump_roots_locked(db_path, con, created=0, closed=0):
-    """Re-baseline the marker roots from live DB truth after a
-    committed mutation (same file lock held). Recompute-from-truth
-    plus max-accumulate makes a crash between commit and bump lag
-    the baseline, never corrupt it: truth >= lag always verifies,
-    then re-baselines. Raises LedgerUnavailable on bump failure
-    (fail-closed; the committed mutation stays valid and the next
-    open retries the bump)."""
+def _mirror_roots_locked(db_path, con, live=None):
+    """Re-baseline the marker mirror from in-DB truth (post-commit,
+    same file lock held): digest/count/cents/created/closed copied
+    from the digest table. Truth flows DB → marker only.
+    Raises LedgerUnavailable on failure (the committed mutation
+    stays valid; the next open retries the mirror — and verify
+    adopts it then, so a crash here lags but never wedges)."""
     try:
+        if live is None:
+            live = {t: con.execute(
+                "SELECT digest, n, a, b FROM content_digest WHERE "
+                "\"table\"=?", (t,)).fetchone()
+                for t in ("spans", "recon", "unknown", "holds")}
         stats = {}
-        cur_max = con.execute(
-            "SELECT MAX(ts) FROM spans").fetchone()[0]
-        if cur_max is not None:
-            stats["spans"] = {"max_ts": cur_max}
-        cur_max = con.execute(
-            "SELECT MAX(ts) FROM reconciliations").fetchone()[0]
-        if cur_max is not None:
-            stats["recon"] = {"max_ts": cur_max}
-        stats["unknown"] = {"count": con.execute(
-            "SELECT COUNT(*) FROM unknown_holds").fetchone()[0]}
-        if created or closed:
-            have = locks.marker_roots(db_path).get("holds", {})
-            hc = have.get("created", 0)
-            hx = have.get("closed", 0)
-            if type(hc) not in (int, float) or \
-                    type(hx) not in (int, float):
-                raise ValueError("holds roots not numeric")
-            stats["holds"] = {"created": hc + created,
-                                "closed": hx + closed}
-        locks.merge_marker_roots(db_path, stats)
-    except (OSError, ValueError) as e:
-        raise LedgerUnavailable("roots-bump:%s" % (e,))
-
-
-def _declare_prune_locked(db_path, cutoff):
-    """Pre-declare a prune cutoff in the marker BEFORE the DELETEs
-    run: a crash between declare and delete leaves the high-water
-    ahead of truth (harmless — the rows still verify), while the
-    reverse order could wedge a legitimately pruned-empty table as
-    deleted history. Raises LedgerUnavailable on failure (the prune
-    must not run undeclared)."""
-    try:
+        for slot in ("spans", "recon", "unknown", "holds"):
+            row = live[slot]
+            if row is None:
+                raise ValueError("digest row missing: %s" % slot)
+            stats[slot] = {"digest": row[0], "count": row[1]}
+        stats["spans"]["cents"] = live["spans"][2]
+        stats["holds"]["created"] = live["holds"][2]
+        stats["holds"]["closed"] = live["holds"][3]
         locks.merge_marker_roots(
-            db_path, {"spans": {"pruned": cutoff},
-                       "recon": {"pruned": cutoff}})
+            db_path, stats,
+            exact=("count", "cents", "created", "closed"))
     except (OSError, ValueError) as e:
-        raise LedgerUnavailable("roots-declare:%s" % (e,))
+        raise LedgerUnavailable("roots-mirror:%s" % (e,))
 
 
 def _pristine_locked(con, have):
@@ -278,6 +385,16 @@ def _pristine_locked(con, have):
             if table in have and con.execute(
                     "SELECT COUNT(*) FROM %s" % table
                     ).fetchone()[0] > 0:
+                return False
+        if "content_digest" in have:
+            try:
+                bad = con.execute(
+                    "SELECT COUNT(*) FROM content_digest WHERE "
+                    "n != 0 OR a != 0 OR b != 0 OR digest != '%s'"
+                    % _ZERO_DIGEST).fetchone()[0]
+            except (sqlite3.Error, ValueError):
+                return False
+            if bad:
                 return False
     except (sqlite3.Error, ValueError):
         return False
@@ -328,7 +445,7 @@ def _connect_locked(db_path, create=False):
             # Unreadable catalog (torn page, bad text): the schema
             # is unverifiable, so the authority is too — deny.
             raise LedgerUnavailable("catalog-unreadable:%r" % (e,))
-        missing = [t for t in _EXPECTED_COLUMNS if t not in have]
+        missing = [t for t in _GATED_TABLES if t not in have]
         if missing and not (
                 locks.may_create_tables(have, exists, mstate)
                 or (exists and mstate == "absent"
@@ -360,6 +477,13 @@ def _connect_locked(db_path, create=False):
                     con.execute(_RECON_DDL)
                     con.execute(_SPEND_HOLDS_DDL)
                     con.execute(_META_DDL)
+                    con.execute(_DIGEST_DDL)
+                    for _slot in ("spans", "recon", "unknown",
+                                  "holds"):
+                        con.execute(
+                            "INSERT INTO content_digest VALUES "
+                            "(?,?,?,?,?)",
+                            (_slot, _ZERO_DIGEST, 0, 0, 0))
                     con.execute("PRAGMA user_version=%d" %
                                 SCHEMA_VERSION)
                     con.execute("INSERT INTO meta VALUES "
@@ -382,6 +506,49 @@ def _connect_locked(db_path, create=False):
             # Established authority: every table is present (the
             # gate above denied otherwise) and NO DDL runs here —
             # a CREATE could mask a deletion the gate missed.
+            # Exception: the content-digest table on pre-digest
+            # ledgers — one versioned backfill (CREATE + full
+            # recompute from truth in a single transaction,
+            # idempotent and retry-clean), never on a present table
+            # (a present-but-emptied digest over live rows is
+            # tamper and denies at verify).
+            if "content_digest" not in have:
+                try:
+                    con.execute("BEGIN IMMEDIATE")
+                    try:
+                        con.execute(_DIGEST_DDL)
+                        for _slot, _sql in (
+                                ("spans", "spans"),
+                                ("recon", "reconciliations"),
+                                ("unknown", "unknown_holds"),
+                                ("holds", "spend_holds")):
+                            _d, _n, _c = _recompute_table(
+                                con, _slot, _sql)
+                            _a, _b = (0, 0)
+                            if _slot == "spans":
+                                _a = _c
+                            elif _slot == "holds":
+                                _a = con.execute(
+                                    "SELECT COUNT(*) FROM "
+                                    "spend_holds").fetchone()[0]
+                            con.execute(
+                                "INSERT OR IGNORE INTO content_digest "
+                                "VALUES (?,?,?,?,?)",
+                                (_slot, _d, _n, _a, _b))
+                        con.execute("COMMIT")
+                    except BaseException:
+                        try:
+                            con.execute("ROLLBACK")
+                        except sqlite3.Error:
+                            pass
+                        raise
+                except sqlite3.Error as e:
+                    raise LedgerUnavailable("digest-backfill:%s"
+                                            % (e,))
+                try:
+                    _mirror_roots_locked(db_path, con)
+                except LedgerUnavailable:
+                    raise
             for table, cols in _EXPECTED_COLUMNS.items():
                 got = [r[1] for r in con.execute(
                     "PRAGMA table_info(%s)" % table)]
@@ -425,14 +592,14 @@ def _connect_locked(db_path, create=False):
             except ValueError:
                 raise LedgerUnavailable("marker-roots-corrupt")
             if roots:
-                _verify_roots_locked(con, roots)
+                _verify_history_locked(db_path, con, roots)
             else:
                 # Pre-roots marker: trust-on-first-use adoption —
                 # the live DB verifies (schema + integrity +
                 # token above), so baseline its truth once; every
                 # later open verifies strictly. Deletions that
                 # predate this upgrade are unprovable (documented).
-                _bump_roots_locked(db_path, con)
+                _mirror_roots_locked(db_path, con)
     except LedgerUnavailable:
         con.close()
         raise
@@ -574,25 +741,45 @@ def append_span(log_path, epoch, node, model_id, calls=1, tokens=0,
             if verdict == "identical":
                 inserted = False
             else:
+                # Row + digest commit atomically (see _dig_apply):
+                # a crash can never leave the row without its
+                # fingerprint.
+                con.execute("BEGIN IMMEDIATE")
                 try:
-                    con.execute(
-                        "INSERT INTO spans (span_id, ts, "
-                        "research_epoch, cycle_id, stage, symbol, node, "
-                        "model, prompt_tokens, completion_tokens, usd, "
-                        "category, outcome, is_unknown) "
-                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                        (span_id, ts) + identity)
-                    inserted = True
-                except sqlite3.IntegrityError:
-                    # Lost a same-id race: re-read and decide (never
-                    # blind-ignore — the winner may disagree).
-                    verdict = _span_verdict(con, span_id, identity)
-                    if verdict == "conflict":
-                        raise ValueError("span-conflict: %s" % span_id)
-                    inserted = verdict == "absent"
-            # Re-baseline the history roots from committed truth
-            # (same lock): a later row deletion must fail closed.
-            _bump_roots_locked(db_path, con)
+                    try:
+                        con.execute(
+                            "INSERT INTO spans (span_id, ts, "
+                            "research_epoch, cycle_id, stage, symbol, "
+                            "node, model, prompt_tokens, "
+                            "completion_tokens, usd, category, "
+                            "outcome, is_unknown) "
+                            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            (span_id, ts) + identity)
+                        inserted = True
+                    except sqlite3.IntegrityError:
+                        # Lost a same-id race: re-read and decide
+                        # (never blind-ignore — the winner may
+                        # disagree).
+                        verdict = _span_verdict(con, span_id,
+                                              identity)
+                        if verdict == "conflict":
+                            raise ValueError("span-conflict: %s"
+                                             % span_id)
+                        inserted = verdict == "absent"
+                    if inserted:
+                        _dig_apply(
+                            con, "spans", "spans",
+                            ins=[[span_id, ts] + list(identity)],
+                            dn=1, da=_cents(usd))
+                    con.execute("COMMIT")
+                except BaseException:
+                    try:
+                        con.execute("ROLLBACK")
+                    except sqlite3.Error:
+                        pass
+                    raise
+            # Marker mirror from in-DB truth (same lock).
+            _mirror_roots_locked(db_path, con)
         finally:
             con.close()
         if inserted:
@@ -677,6 +864,12 @@ def record_unknown(log_path, lease_id, span_id, usd, outcome, epoch,
                          model_id, 0, 0, usd, outcome))
                     if cur.rowcount != 1:
                         raise SpendBlocked("span-insert:%s" % span_id)
+                    _dig_apply(
+                        con, "spans", "spans",
+                        ins=[[span_id, ts, epoch, cycle_id, "r",
+                              symbol, node, model_id, 0, 0, usd,
+                              "research", outcome, 1]],
+                        dn=1, da=_cents(usd))
                 uh = con.execute(
                     "SELECT span_id, usd FROM unknown_holds WHERE "
                     "lease_id=?", (lease_id,)).fetchone()
@@ -694,6 +887,13 @@ def record_unknown(log_path, lease_id, span_id, usd, outcome, epoch,
                     if cur.rowcount != 1:
                         raise SpendBlocked(
                             "unknown-hold-insert:%s" % lease_id)
+                    _dig_apply(con, "unknown", "unknown_holds",
+                               ins=[[lease_id, span_id, usd, ts, 0]],
+                               dn=1)
+                old_hold = con.execute(
+                    "SELECT lease_id, usd, state, ts, span_id FROM "
+                    "spend_holds WHERE lease_id=?",
+                    (lease_id,)).fetchone()
                 cur = con.execute(
                     "UPDATE spend_holds SET state='invoked', "
                     "span_id=? WHERE lease_id=?",
@@ -701,8 +901,12 @@ def record_unknown(log_path, lease_id, span_id, usd, outcome, epoch,
                 if cur.rowcount != 1:
                     raise SpendBlocked(
                         "unknown-hold-transition:%s" % lease_id)
+                _dig_apply(con, "holds", "spend_holds",
+                           outs=[list(old_hold)],
+                           ins=[[lease_id, usd, "invoked",
+                                 old_hold[3], span_id]])
                 con.execute("COMMIT")
-                _bump_roots_locked(db_path, con)
+                _mirror_roots_locked(db_path, con)
             except BaseException:
                 try:
                     con.execute("ROLLBACK")
@@ -757,10 +961,18 @@ def reserve_spend_hold(log_path, lease_id, usd, cap_usd, now=None):
         try:
             con.execute("BEGIN IMMEDIATE")
             try:
+                reaped_rows = con.execute(
+                    "SELECT lease_id, usd, state, ts, span_id FROM "
+                    "spend_holds WHERE state='reserved' AND ts < ?",
+                    (now - HOLD_TTL_S,)).fetchall()
                 reaped = con.execute(
                     "DELETE FROM spend_holds WHERE "
                     "state='reserved' AND ts < ?",
                     (now - HOLD_TTL_S,)).rowcount or 0
+                if reaped_rows:
+                    _dig_apply(con, "holds", "spend_holds",
+                               outs=[list(r) for r in reaped_rows],
+                               dn=-len(reaped_rows), db=reaped)
                 unk = con.execute(
                     "SELECT COUNT(*) FROM unknown_holds WHERE "
                     "reconciled=0").fetchone()[0]
@@ -785,9 +997,12 @@ def reserve_spend_hold(log_path, lease_id, usd, cap_usd, now=None):
                                 (lease_id, usd, "reserved", now))
                 except sqlite3.IntegrityError:
                     raise SpendBlocked("duplicate-hold:%s" % lease_id)
+                _dig_apply(con, "holds", "spend_holds",
+                           ins=[[lease_id, usd, "reserved", now,
+                                 None]],
+                           dn=1, da=1)
                 con.execute("COMMIT")
-                _bump_roots_locked(db_path, con, created=1,
-                                   closed=reaped)
+                _mirror_roots_locked(db_path, con)
             except BaseException:
                 try:
                     con.execute("ROLLBACK")
@@ -885,6 +1100,13 @@ def reconcile_unknown(log_path, lease_id, actual_usd, note=""):
                         if cur.rowcount != 1:
                             raise LedgerUnavailable(
                                 "reconcile-span-mint:%s" % lease_id)
+                        _dig_apply(
+                            con, "spans", "spans",
+                            ins=[[span_id, now, 0, "recovered", "r",
+                                  "?", "reconcile", "unknown", 0,
+                                  0, old_usd, "research", "error",
+                                  1]],
+                            dn=1, da=_cents(old_usd))
                     else:
                         got = con.execute(
                             "SELECT is_unknown FROM spans WHERE "
@@ -903,6 +1125,13 @@ def reconcile_unknown(log_path, lease_id, actual_usd, note=""):
                             if cur.rowcount != 1:
                                 raise LedgerUnavailable(
                                     "reconcile-span-mint:%s" % lease_id)
+                            _dig_apply(
+                                con, "spans", "spans",
+                                ins=[[span_id, now, 0, "recovered",
+                                      "r", "?", "reconcile",
+                                      "unknown", 0, 0, old_usd,
+                                      "research", "error", 1]],
+                                dn=1, da=_cents(old_usd))
                         elif got[0] != 1:
                             # A settled span re-entering reconcile is
                             # an ordering defect, never a second
@@ -918,13 +1147,24 @@ def reconcile_unknown(log_path, lease_id, actual_usd, note=""):
                     except sqlite3.IntegrityError:
                         raise LedgerUnavailable(
                             "reconcile-unknown-row-race:%s" % lease_id)
+                    _dig_apply(con, "unknown", "unknown_holds",
+                               ins=[[lease_id, span_id, old_usd, now,
+                                     0]],
+                               dn=1)
                     tag = (note + ":recovered" if note
                            else "recovered")
                 if hold is not None:
                     if actual_usd > old_usd:
                         raise LedgerUnavailable(
                             "reconcile-over-reservation:%s" % lease_id)
+                old_span = None
                 if span_id is not None:
+                    old_span = con.execute(
+                        "SELECT span_id, ts, research_epoch, cycle_id, "
+                        "stage, symbol, node, model, prompt_tokens, "
+                        "completion_tokens, usd, category, outcome, "
+                        "is_unknown FROM spans WHERE span_id=? AND "
+                        "is_unknown=1", (span_id,)).fetchone()
                     cur = con.execute(
                         "UPDATE spans SET usd=?, is_unknown=0 "
                         "WHERE span_id=? AND is_unknown=1",
@@ -935,18 +1175,44 @@ def reconcile_unknown(log_path, lease_id, actual_usd, note=""):
                         # not match the claim — abort loud, hold kept.
                         raise LedgerUnavailable(
                             "reconcile-span-missing:%s" % lease_id)
+                    new_span = list(old_span)
+                    new_span[10] = actual_usd
+                    new_span[13] = 0
+                    _dig_apply(con, "spans", "spans",
+                               outs=[list(old_span)], ins=[new_span],
+                               da=_cents(actual_usd) - _cents(
+                                   old_span[10]))
+                old_uh = con.execute(
+                    "SELECT lease_id, span_id, usd, ts, reconciled "
+                    "FROM unknown_holds WHERE lease_id=?",
+                    (lease_id,)).fetchone()
                 con.execute("UPDATE unknown_holds SET reconciled=1 "
                             "WHERE lease_id=?", (lease_id,))
+                _dig_apply(con, "unknown", "unknown_holds",
+                           outs=[list(old_uh)],
+                           ins=[[lease_id, old_uh[1], old_uh[2],
+                                 old_uh[3], 1]])
                 con.execute(
                     "INSERT INTO reconciliations VALUES (?,?,?,?,?)",
                     (lease_id, old_usd, actual_usd, now, tag))
+                _dig_apply(con, "recon", "reconciliations",
+                           ins=[[lease_id, old_usd, actual_usd, now,
+                                 tag]],
+                           dn=1)
+                old_hold = con.execute(
+                    "SELECT lease_id, usd, state, ts, span_id FROM "
+                    "spend_holds WHERE lease_id=?",
+                    (lease_id,)).fetchone()
                 cur = con.execute(
                     "DELETE FROM spend_holds WHERE lease_id=?",
                     (lease_id,))
                 closed_holds = cur.rowcount or 0
+                if old_hold is not None:
+                    _dig_apply(con, "holds", "spend_holds",
+                               outs=[list(old_hold)], dn=-1,
+                               db=closed_holds)
                 con.execute("COMMIT")
-                _bump_roots_locked(db_path, con,
-                                   closed=closed_holds)
+                _mirror_roots_locked(db_path, con)
             except BaseException:
                 try:
                     con.execute("ROLLBACK")
@@ -978,8 +1244,12 @@ def hold_spend(log_path, lease_id, usd, now=None):
                 con.execute("INSERT INTO spend_holds VALUES "
                             "(?,?,?,?,NULL)",
                             (lease_id, usd, "reserved", now))
+                _dig_apply(con, "holds", "spend_holds",
+                           ins=[[lease_id, usd, "reserved", now,
+                                 None]],
+                           dn=1, da=1)
                 con.execute("COMMIT")
-                _bump_roots_locked(db_path, con, created=1)
+                _mirror_roots_locked(db_path, con)
             except BaseException:
                 try:
                     con.execute("ROLLBACK")
@@ -999,15 +1269,37 @@ def mark_invoked(log_path, lease_id):
     with locks.FileLock(db_path + ".lock", purpose="spans"):
         con = _connect(db_path)
         try:
-            cur = con.execute("UPDATE spend_holds SET state='invoked'"
-                              " WHERE lease_id=? AND state='reserved'",
-                              (lease_id,))
-            if cur.rowcount != 1:
-                # No reserved hold: a missing or already-invoked hold
-                # is an ordering defect, never a silent no-op (an
-                # unmarked post-spawn hold could auto-release).
-                raise LedgerUnavailable("mark-invoked-no-hold:%s" %
-                                        lease_id)
+            # Row + digest commit atomically (see _dig_apply).
+            con.execute("BEGIN IMMEDIATE")
+            try:
+                old_hold = con.execute(
+                    "SELECT lease_id, usd, state, ts, span_id FROM "
+                    "spend_holds WHERE lease_id=? AND "
+                    "state='reserved'",
+                    (lease_id,)).fetchone()
+                cur = con.execute(
+                    "UPDATE spend_holds SET state='invoked'"
+                    " WHERE lease_id=? AND state='reserved'",
+                    (lease_id,))
+                if cur.rowcount != 1:
+                    # No reserved hold: a missing or already-invoked
+                    # hold is an ordering defect, never a silent
+                    # no-op (an unmarked post-spawn hold could
+                    # auto-release).
+                    raise LedgerUnavailable("mark-invoked-no-hold:%s"
+                                            % lease_id)
+                _dig_apply(con, "holds", "spend_holds",
+                           outs=[list(old_hold)],
+                           ins=[[lease_id, old_hold[1], "invoked",
+                                 old_hold[3], old_hold[4]]])
+                con.execute("COMMIT")
+            except BaseException:
+                try:
+                    con.execute("ROLLBACK")
+                except sqlite3.Error:
+                    pass
+                raise
+            _mirror_roots_locked(db_path, con)
         finally:
             con.close()
 
@@ -1021,10 +1313,28 @@ def settle_hold(log_path, lease_id):
     with locks.FileLock(db_path + ".lock", purpose="spans"):
         con = _connect(db_path)
         try:
-            closed = con.execute(
-                "DELETE FROM spend_holds WHERE lease_id=?",
-                (lease_id,)).rowcount or 0
-            _bump_roots_locked(db_path, con, closed=closed)
+            # Row + digest commit atomically (see _dig_apply).
+            con.execute("BEGIN IMMEDIATE")
+            try:
+                old_hold = con.execute(
+                    "SELECT lease_id, usd, state, ts, span_id FROM "
+                    "spend_holds WHERE lease_id=?",
+                    (lease_id,)).fetchone()
+                closed = con.execute(
+                    "DELETE FROM spend_holds WHERE lease_id=?",
+                    (lease_id,)).rowcount or 0
+                if old_hold is not None:
+                    _dig_apply(con, "holds", "spend_holds",
+                               outs=[list(old_hold)], dn=-1,
+                               db=closed)
+                con.execute("COMMIT")
+            except BaseException:
+                try:
+                    con.execute("ROLLBACK")
+                except sqlite3.Error:
+                    pass
+                raise
+            _mirror_roots_locked(db_path, con)
         finally:
             con.close()
 
@@ -1041,10 +1351,28 @@ def reap_holds(log_path, now=None):
     with locks.FileLock(db_path + ".lock", purpose="spans"):
         con = _connect(db_path)
         try:
-            closed = con.execute(
-                "DELETE FROM spend_holds WHERE state='reserved'"
-                " AND ts < ?", (now - HOLD_TTL_S,)).rowcount or 0
-            _bump_roots_locked(db_path, con, closed=closed)
+            # Rows + digest commit atomically (see _dig_apply).
+            con.execute("BEGIN IMMEDIATE")
+            try:
+                reaped_rows = con.execute(
+                    "SELECT lease_id, usd, state, ts, span_id FROM "
+                    "spend_holds WHERE state='reserved' AND ts < ?",
+                    (now - HOLD_TTL_S,)).fetchall()
+                closed = con.execute(
+                    "DELETE FROM spend_holds WHERE state='reserved'"
+                    " AND ts < ?", (now - HOLD_TTL_S,)).rowcount or 0
+                if reaped_rows:
+                    _dig_apply(con, "holds", "spend_holds",
+                               outs=[list(r) for r in reaped_rows],
+                               dn=-len(reaped_rows), db=closed)
+                con.execute("COMMIT")
+            except BaseException:
+                try:
+                    con.execute("ROLLBACK")
+                except sqlite3.Error:
+                    pass
+                raise
+            _mirror_roots_locked(db_path, con)
         finally:
             con.close()
 
@@ -1073,16 +1401,42 @@ def prune_spans(log_path, now=None):
     with locks.FileLock(db_path + ".lock", purpose="spans"):
         con = _connect(db_path)
         try:
-            # Pre-declare the cutoff BEFORE deleting: a crash
-            # between declare and delete verifies cleanly (rows
-            # still present), while the reverse could wedge a
-            # legitimately pruned-empty table as deleted history.
-            _declare_prune_locked(db_path, cutoff)
-            con.execute("DELETE FROM spans WHERE ts < ?", (cutoff,))
-            con.execute("DELETE FROM reconciliations WHERE ts < ?",
-                        (cutoff,))
+            # Rows + digest commit atomically (see _dig_apply).
+            con.execute("BEGIN IMMEDIATE")
+            try:
+                gone_spans = con.execute(
+                    "SELECT span_id, ts, research_epoch, cycle_id, "
+                    "stage, symbol, node, model, prompt_tokens, "
+                    "completion_tokens, usd, category, outcome, "
+                    "is_unknown FROM spans WHERE ts < ?",
+                    (cutoff,)).fetchall()
+                gone_recon = con.execute(
+                    "SELECT lease_id, old_usd, new_usd, ts, note FROM "
+                    "reconciliations WHERE ts < ?",
+                    (cutoff,)).fetchall()
+                con.execute("DELETE FROM spans WHERE ts < ?",
+                            (cutoff,))
+                con.execute("DELETE FROM reconciliations WHERE ts < ?",
+                            (cutoff,))
+                if gone_spans:
+                    _dig_apply(con, "spans", "spans",
+                               outs=[list(r) for r in gone_spans],
+                               dn=-len(gone_spans),
+                               da=-sum(_cents(r[10]) for r in
+                                       gone_spans))
+                if gone_recon:
+                    _dig_apply(con, "recon", "reconciliations",
+                               outs=[list(r) for r in gone_recon],
+                               dn=-len(gone_recon))
+                con.execute("COMMIT")
+            except BaseException:
+                try:
+                    con.execute("ROLLBACK")
+                except sqlite3.Error:
+                    pass
+                raise
             con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            _bump_roots_locked(db_path, con)
+            _mirror_roots_locked(db_path, con)
         finally:
             con.close()
     try:

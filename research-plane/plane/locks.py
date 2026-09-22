@@ -242,14 +242,17 @@ def marker_roots(db_path):
     return roots
 
 
-def merge_marker_roots(db_path, update):
+def merge_marker_roots(db_path, update, exact=()):
     """Max-accumulate numeric root stats into the marker (atomic
     rewrite; token and sibling fields preserved). Every stat is
     monotonic by construction (maxima, counts, high-waters), so
     concurrent mergers converge instead of losing updates, and a
     crash between the DB commit and this bump only lags the
-    baseline (the next verify passes on truth >= lag, then
-    re-baselines — never a false deny). Requires a token-bearing
+    baseline (the next verify adopts it from in-DB truth — never a
+    false deny). Keys listed in exact are overwritten instead of
+    max-accumulated (mirror copies of in-DB truth: count, cents,
+    created, closed — a tampered-high marker value must be
+    replaced by truth, not kept by max). Requires a token-bearing
     marker (bumping a tokenless file would mint a trust root over
     an unproven authority): ValueError otherwise."""
     body = marker_body(db_path)
@@ -265,11 +268,19 @@ def merge_marker_roots(db_path, update):
             slot = {}
             roots[table] = slot
         for key, val in stats.items():
+            if type(val) is str:
+                # Content digests: set-semantics (no ordering).
+                # Concurrent mirrors compute from the same DB
+                # truth, so last-wins converges in practice; any
+                # divergence is re-mirrored on the next mutation.
+                slot[key] = val
+                continue
             if type(val) not in (int, float):
                 raise ValueError("root stat not numeric: %r" %
                                  ((table, key),))
             old = slot.get(key)
-            if type(old) not in (int, float) or val > old:
+            if key in exact or type(old) not in (int, float) \
+                    or val > old:
                 slot[key] = val
     body["roots"] = roots
     raw = json.dumps(body, sort_keys=True).encode("utf-8")

@@ -38,7 +38,8 @@ import math
 import os
 import sqlite3
 import time
-import time
+import hashlib as _hashlib
+import json as _json
 
 from . import locks
 from . import r15
@@ -83,7 +84,142 @@ _EXPECTED_COLUMNS = {
                "actual", "settled"],
     "meta": ["k", "v"],
     "cycles": ["cycle", "symbol", "first_wall"],
+    "content_digest": ["table", "digest", "n", "a", "b"],
 }
+
+_BDIGEST_DDL = (
+    "CREATE TABLE IF NOT EXISTS content_digest ("
+    "\"table\" TEXT PRIMARY KEY, digest TEXT NOT NULL, "
+    "n INTEGER NOT NULL, a INTEGER NOT NULL, b INTEGER NOT NULL)")
+
+# Canonical column order per digest slot (schema order).
+_BDIGEST_COLS = {
+    "counters": _EXPECTED_COLUMNS["counters"],
+    "cycles": _EXPECTED_COLUMNS["cycles"],
+    "leases": _EXPECTED_COLUMNS["leases"],
+}
+
+_BZERO_DIGEST = "0" * 64
+
+
+def _bhrow(values):
+    return _hashlib.sha256(
+        _json.dumps(list(values), separators=(",", ":")).encode(
+            "utf-8")).hexdigest()
+
+
+def _bdxor(a, b):
+    return "%064x" % (int(a, 16) ^ int(b, 16))
+
+
+def _brecompute_table(con, slot, sql_table):
+    cols = _BDIGEST_COLS[slot]
+    cur = con.execute("SELECT %s FROM %s" % (",".join(cols),
+                                               sql_table))
+    acc = 0
+    n = 0
+    for row in cur:
+        acc ^= int(_bhrow(row), 16)
+        n += 1
+    return "%064x" % acc, n
+
+
+def _bdig_apply(con, slot, outs=(), ins=(), dn=0):
+    """Same-transaction digest maintenance (see the attribution
+    twin _dig_apply for the protocol): outs/ins are canonical
+    value-lists, dn the row-count delta. Missing digest row
+    denies, never recreates."""
+    row = con.execute(
+        "SELECT digest, n FROM content_digest WHERE \"table\"=?",
+        (slot,)).fetchone()
+    if row is None:
+        raise LedgerCorrupt("digest-missing:%s" % slot)
+    acc = int(row[0], 16)
+    for vals in outs:
+        acc ^= int(_bhrow(vals), 16)
+    for vals in ins:
+        acc ^= int(_bhrow(vals), 16)
+    con.execute(
+        "UPDATE content_digest SET digest=?, n=n+? WHERE "
+        "\"table\"=?", ("%064x" % acc, dn, slot))
+
+
+def _breq_int(slot, key, tag):
+    try:
+        val = slot.get(key)
+    except AttributeError:
+        raise LedgerCorrupt("marker-roots-corrupt:%s" % tag)
+    if type(val) is not int or isinstance(val, bool) or val < 0:
+        raise LedgerCorrupt("marker-roots-corrupt:%s" % tag)
+    return val
+
+
+def _breq_digest(slot, tag):
+    try:
+        val = slot.get("digest")
+    except AttributeError:
+        raise LedgerCorrupt("marker-roots-corrupt:%s" % tag)
+    if type(val) is not str or len(val) != 64:
+        raise LedgerCorrupt("marker-roots-corrupt:%s" % tag)
+    try:
+        int(val, 16)
+    except ValueError:
+        raise LedgerCorrupt("marker-roots-corrupt:%s" % tag)
+    return val
+
+
+def _bverify_history_locked(db_path, con, roots):
+    """Budgets twin of the attribution content verify: re-fingerprint
+    counters/cycles/leases and compare against the same-transaction
+    in-DB digest (an UPDATE counters SET llm=0 reset denies here as
+    digest-mismatch, although every numeric check passes). Marker
+    slots are strict-validated then re-baselined from in-DB truth
+    (adopt — same direction rule as attribution)."""
+    expect = (("counters", "counters"), ("cycles", "cycles"),
+              ("leases", "leases"))
+    try:
+        live = {t: con.execute(
+            "SELECT digest, n FROM content_digest WHERE "
+            "\"table\"=?", (t,)).fetchone() for t, _ in expect}
+    except (sqlite3.Error, ValueError) as e:
+        raise LedgerCorrupt("digest-read:%s" % (e,))
+    for slot, sql_table in expect:
+        if live[slot] is None:
+            raise LedgerCorrupt("digest-missing:%s" % slot)
+        digest, n = _brecompute_table(con, slot, sql_table)
+        if digest != live[slot][0] or n != live[slot][1]:
+            raise LedgerCorrupt("digest-mismatch:%s" % slot)
+    for slot, _ in expect:
+        mslot = roots.get(slot)
+        if not isinstance(mslot, dict):
+            raise LedgerCorrupt("marker-roots-corrupt:%s" % slot)
+        _breq_digest(mslot, slot)
+        _breq_int(mslot, "count", slot)
+    seen_flag = roots.get("_seen")
+    if seen_flag is not None:
+        if not isinstance(seen_flag, dict) or \
+                seen_flag.get("v") != 1:
+            raise LedgerCorrupt("marker-roots-corrupt:_seen")
+    _bmirror_roots_locked(db_path, con, live)
+
+
+def _bmirror_roots_locked(db_path, con, live=None):
+    try:
+        if live is None:
+            live = {t: con.execute(
+                "SELECT digest, n FROM content_digest WHERE "
+                "\"table\"=?", (t,)).fetchone()
+                for t in ("counters", "cycles", "leases")}
+        stats = {}
+        for slot in ("counters", "cycles", "leases"):
+            row = live[slot]
+            if row is None:
+                raise ValueError("digest row missing: %s" % slot)
+            stats[slot] = {"digest": row[0], "count": row[1]}
+        locks.merge_marker_roots(
+            db_path, stats, exact=("count",))
+    except (OSError, ValueError) as e:
+        raise LedgerCorrupt("roots-mirror:%s" % (e,))
 
 
 class LedgerCorrupt(AssertionError):
@@ -149,8 +285,10 @@ class BudgetLedger:
         past the cycles window). Additive merge converges across
         processes; every reserve re-adds its key from DB truth, so
         a lost update self-heals on next touch (graceful to the
-        in-DB registry rule, never to silent creation). Raises
-        LedgerCorrupt on write failure."""
+        in-DB registry rule, never to silent creation). Records the
+        adoption flag in the marker (one-time-migration witness:
+        a later missing sidecar with the flag set denies as
+        seen-deleted). Raises LedgerCorrupt on write failure."""
         cutoff = now_wall - CYCLES_RETAIN_DAYS * 86400
         try:
             cur = self._read_seen() or {}
@@ -169,7 +307,8 @@ class BudgetLedger:
             locks.atomic_write_bytes(
                 _os.path.dirname(_os.path.abspath(self.path)),
                 _os.path.basename(self._seen_path()), raw)
-        except OSError as e:
+            locks.merge_marker_roots(self.path, {"_seen": {"v": 1}})
+        except (OSError, ValueError) as e:
             raise LedgerCorrupt("seen-write:%s" % (e,))
 
     @staticmethod
@@ -179,7 +318,9 @@ class BudgetLedger:
     def _pristine(self, con, have):
         """No init token and every present ledger table empty:
         init never completed, so a single-transaction re-init
-        cannot destroy established state."""
+        cannot destroy established state. A present digest table
+        with nonzero rows blocks pristine (inconsistent with empty
+        money tables — that denies at verify instead)."""
         try:
             if "meta" in have:
                 cur = con.execute(
@@ -192,6 +333,11 @@ class BudgetLedger:
                         "SELECT COUNT(*) FROM %s" % table
                         ).fetchone()[0] > 0:
                     return False
+            if "content_digest" in have and con.execute(
+                    "SELECT COUNT(*) FROM content_digest WHERE "
+                    "n != 0 OR a != 0 OR b != 0 OR digest != '%s'"
+                    % _BZERO_DIGEST).fetchone()[0] > 0:
+                return False
         except (sqlite3.Error, ValueError):
             return False
         return True
@@ -252,6 +398,7 @@ class BudgetLedger:
                 # First init and pristine files create below.
                 raise LedgerCorrupt("table-missing:%s" % missing[0])
             inited = False
+            digest_backfilled = False
             if locks.may_create_tables(have, exists, mstate) or \
                     (exists and mstate == "absent"
                      and self._pristine(con, have)):
@@ -269,6 +416,13 @@ class BudgetLedger:
                         con.execute(_LEASES_DDL)
                         con.execute(_META_DDL)
                         con.execute(_CYCLES_DDL)
+                        con.execute(_BDIGEST_DDL)
+                        for _slot in ("counters", "cycles",
+                                      "leases"):
+                            con.execute(
+                                "INSERT INTO content_digest VALUES "
+                                "(?,?,?,?,?)",
+                                (_slot, _BZERO_DIGEST, 0, 0, 0))
                         con.execute("PRAGMA user_version=%d" %
                                     SCHEMA_VERSION)
                         con.execute("INSERT INTO meta VALUES "
@@ -306,7 +460,10 @@ class BudgetLedger:
                     # ONE transaction, so a crash can only leave the
                     # table ABSENT (migration retries cleanly), never
                     # present-but-empty over live counters. No CREATE
-                    # runs outside this transaction.
+                    # runs outside this transaction. The content
+                    # digest rides the same transaction (old ledgers
+                    # have no digest table: CREATE + full recompute
+                    # from backfilled truth).
                     try:
                         con.execute("BEGIN IMMEDIATE")
                         try:
@@ -314,6 +471,18 @@ class BudgetLedger:
                             con.execute(
                                 "INSERT INTO cycles SELECT cycle, "
                                 "symbol, start_wall FROM counters")
+                            con.execute(_BDIGEST_DDL)
+                            for _slot, _sql in (
+                                    ("counters", "counters"),
+                                    ("cycles", "cycles"),
+                                    ("leases", "leases")):
+                                _d, _n = _brecompute_table(con, _slot,
+                                                           _sql)
+                                con.execute(
+                                    "INSERT OR IGNORE INTO "
+                                    "content_digest VALUES "
+                                    "(?,?,?,?,?)",
+                                    (_slot, _d, _n, 0, 0))
                             con.execute("PRAGMA user_version=%d" %
                                         SCHEMA_VERSION)
                             con.execute("COMMIT")
@@ -326,6 +495,7 @@ class BudgetLedger:
                     except sqlite3.Error as e:
                         raise LedgerCorrupt("cycles-backfill:%s" % e)
                 cycles_present = True
+                digest_backfilled = True
             elif not inited:
                 if ver0 == 1:
                     # Round-3/4-era ledger: schema-identical to v2,
@@ -340,6 +510,37 @@ class BudgetLedger:
                 # resurrect registry cover for deleted authority.
                 # The reuse readers (_reserve_row/_live_row_or_abort)
                 # and the sidecar verify below deny it instead.
+            if "content_digest" not in have:
+                # Pre-digest ledger: one versioned backfill (CREATE
+                # + full recompute from truth in a single
+                # transaction, idempotent and retry-clean). A
+                # present table is never backfilled here (a
+                # present-but-emptied digest over live rows is
+                # tamper and denies at verify).
+                try:
+                    con.execute("BEGIN IMMEDIATE")
+                    try:
+                        con.execute(_BDIGEST_DDL)
+                        for _slot, _sql in (
+                                ("counters", "counters"),
+                                ("cycles", "cycles"),
+                                ("leases", "leases")):
+                            _d, _n = _brecompute_table(con, _slot,
+                                                       _sql)
+                            con.execute(
+                                "INSERT OR IGNORE INTO content_digest "
+                                "VALUES (?,?,?,?,?)",
+                                (_slot, _d, _n, 0, 0))
+                        con.execute("COMMIT")
+                    except BaseException:
+                        try:
+                            con.execute("ROLLBACK")
+                        except sqlite3.Error:
+                            pass
+                        raise
+                except sqlite3.Error as e:
+                    raise LedgerCorrupt("digest-backfill:%s" % (e,))
+                digest_backfilled = True
             for table, cols in _EXPECTED_COLUMNS.items():
                 got = [r[1] for r in con.execute(
                     "PRAGMA table_info(%s)" % table)]
@@ -382,14 +583,48 @@ class BudgetLedger:
                 elif marker != cur[0]:
                     raise LedgerCorrupt("token-mismatch")
             try:
+                roots = locks.marker_roots(self.path)
+            except ValueError:
+                raise LedgerCorrupt("marker-roots-corrupt")
+            if any(k in roots
+                   for k in ("counters", "cycles", "leases")):
+                _bverify_history_locked(self.path, con, roots)
+            else:
+                # No content slots yet (fresh init or pre-roots
+                # marker): trust-on-first-use adoption of in-DB
+                # truth (documented); every later open verifies
+                # strictly. The _seen flag, if present, is
+                # preserved by the merge.
+                _bmirror_roots_locked(self.path, con)
+            try:
                 seen = self._read_seen()
             except LedgerCorrupt:
                 raise
             now_now = int(time.time())
             if seen is None:
-                # Pre-sidecar ledger: trust-on-first-use adoption
-                # from the cycles registry (verified above); every
-                # later open verifies strictly.
+                try:
+                    adopted_before = bool(
+                        locks.marker_roots(self.path).get("_seen"))
+                except ValueError:
+                    raise LedgerCorrupt("marker-roots-corrupt")
+                if adopted_before:
+                    if digest_backfilled:
+                        # The digest itself was reconstructed this
+                        # open (its table was gone): with the
+                        # registry sidecar also gone, nothing proves
+                        # the reconstructed truth is complete — a
+                        # wiped registry could be hiding behind the
+                        # backfill. Deny, never fresh-create.
+                        raise LedgerCorrupt("seen-deleted")
+                    # Only the sidecar file is lost: the content
+                    # digest verified intact above, so no rows were
+                    # deleted and re-adoption from the live registry
+                    # is safe (self-healing availability; the flag
+                    # is re-recorded by the write).
+                # Genuinely pre-sidecar ledger: one-time adoption
+                # from the cycles registry (verified above); the
+                # write records the adoption flag in the marker, so
+                # this path never runs twice for one ledger.
                 adopt = {}
                 if cycles_present:
                     for cyc, sym, fw in con.execute(
@@ -427,13 +662,38 @@ class BudgetLedger:
 
     def _prune(self, con, now_wall):
         cutoff = now_wall - LEDGER_RETAIN_DAYS * 86400
+        gone_counters = con.execute(
+            "SELECT cycle, symbol, llm, tools, tokens, depth, "
+            "start_wall, dead FROM counters WHERE start_wall < ?",
+            (cutoff,)).fetchall()
         con.execute("DELETE FROM counters WHERE start_wall < ?", (cutoff,))
+        if gone_counters:
+            _bdig_apply(con, "counters",
+                        outs=[list(r) for r in gone_counters],
+                        dn=-len(gone_counters))
+        gone_leases = con.execute(
+            "SELECT l.lease_id, l.cycle, l.symbol, l.kind, l.reserved, "
+            "l.actual, l.settled FROM leases l LEFT JOIN counters c "
+            "ON l.cycle = c.cycle AND l.symbol = c.symbol "
+            "WHERE c.cycle IS NULL").fetchall()
         con.execute(
             "DELETE FROM leases WHERE lease_id IN (SELECT l.lease_id "
             "FROM leases l LEFT JOIN counters c ON l.cycle = c.cycle "
             "AND l.symbol = c.symbol WHERE c.cycle IS NULL)")
+        if gone_leases:
+            _bdig_apply(con, "leases",
+                        outs=[list(r) for r in gone_leases],
+                        dn=-len(gone_leases))
+        gone_cycles = con.execute(
+            "SELECT cycle, symbol, first_wall FROM cycles WHERE "
+            "first_wall < ?",
+            (now_wall - CYCLES_RETAIN_DAYS * 86400,)).fetchall()
         con.execute("DELETE FROM cycles WHERE first_wall < ?",
                     (now_wall - CYCLES_RETAIN_DAYS * 86400,))
+        if gone_cycles:
+            _bdig_apply(con, "cycles",
+                        outs=[list(r) for r in gone_cycles],
+                        dn=-len(gone_cycles))
 
     def _reclaim(self):
         """Bounded-storage policy: checkpoint the WAL away and vacuum
@@ -501,11 +761,23 @@ class BudgetLedger:
             # future-dated authority — refuse at write, not just
             # at read.
             _abort(symbol, "future-start-wall")
+        old_reg = con.execute(
+            "SELECT cycle, symbol, first_wall FROM cycles WHERE "
+            "cycle=? AND symbol=?", (cycle_id, symbol)).fetchone()
         con.execute(
             "INSERT INTO counters VALUES (?,?,?,?,?,?,?,0)",
             (cycle_id, symbol, 0, 0, 0, 0, now_wall))
+        _bdig_apply(con, "counters",
+                    ins=[[cycle_id, symbol, 0, 0, 0, 0, now_wall, 0]],
+                    dn=1)
         con.execute("INSERT OR REPLACE INTO cycles VALUES (?,?,?)",
                     (cycle_id, symbol, now_wall))
+        if old_reg is None:
+            _bdig_apply(con, "cycles",
+                        ins=[[cycle_id, symbol, now_wall]], dn=1)
+        else:
+            _bdig_apply(con, "cycles", outs=[list(old_reg)],
+                        ins=[[cycle_id, symbol, now_wall]])
         return [0, 0, 0, 0, now_wall, 0], now_wall
 
     def _live_row_or_abort(self, con, cycle_id, symbol, now_wall):
@@ -645,6 +917,7 @@ class BudgetLedger:
                 _abort(symbol, "tokens-exhausted")
             if e[1] + tool_need > r15.TOOL_CALLS:
                 _abort(symbol, "tools-exhausted")
+            e_old = list(e)
             e[0] += 1
             e[3] += 1
             e[2] += token_need
@@ -655,10 +928,18 @@ class BudgetLedger:
                 "UPDATE counters SET llm=?, tools=?, tokens=?, depth=?"
                 " WHERE cycle=? AND symbol=?",
                 (e[0], e[1], e[2], e[3], cycle_id, symbol))
+            _bdig_apply(con, "counters",
+                        outs=[[cycle_id, symbol] + e_old],
+                        ins=[[cycle_id, symbol] + e])
             lease_id = "%s:%s:call:%d" % (cycle_id, symbol, e[0])
             con.execute(
                 "INSERT INTO leases VALUES (?,?,?,?,?,NULL,0)",
                 (lease_id, cycle_id, symbol, "call", token_need))
+            _bdig_apply(con, "leases",
+                        ins=[[lease_id, cycle_id, symbol, "call",
+                              token_need, None, 0]],
+                        dn=1)
+            _bmirror_roots_locked(self.path, con)
             return ({"lease_id": lease_id, "seq": e[0],
                     "reserved": token_need,
                     "tools_reserved": tool_need,
@@ -700,6 +981,10 @@ class BudgetLedger:
             con.execute(
                 "UPDATE leases SET actual=?, settled=1 WHERE lease_id=?",
                 (actual_tokens, lease["lease_id"]))
+            _bdig_apply(con, "leases",
+                        outs=[[lease["lease_id"]] + list(r)],
+                        ins=[[lease["lease_id"], r[0], r[1], r[2],
+                              r[3], actual_tokens, 1]])
             e = self._live_row_or_abort(con, cycle_id, symbol,
                                         time.time())
             if e is None:
@@ -710,6 +995,12 @@ class BudgetLedger:
                 _abort(symbol, "token-underflow")
             con.execute("UPDATE counters SET tokens=? WHERE cycle=? "
                         "AND symbol=?", (new_tokens, cycle_id, symbol))
+            new_e = list(e)
+            new_e[2] = new_tokens
+            _bdig_apply(con, "counters",
+                        outs=[[cycle_id, symbol] + e],
+                        ins=[[cycle_id, symbol] + new_e])
+            _bmirror_roots_locked(self.path, con)
             return new_tokens
         return self._op(False, _set, symbol)
 
@@ -724,11 +1015,16 @@ class BudgetLedger:
             e, first_wall = self._reserve_row(con, cycle_id, symbol,
                                               now_wall)
             self._check_row(e, symbol, now_wall)
+            e_old = list(e)
             e[1] += 1
             e[3] += 1
             con.execute(
                 "UPDATE counters SET tools=?, depth=? WHERE cycle=? "
                 "AND symbol=?", (e[1], e[3], cycle_id, symbol))
+            _bdig_apply(con, "counters",
+                        outs=[[cycle_id, symbol] + e_old],
+                        ins=[[cycle_id, symbol] + e])
+            _bmirror_roots_locked(self.path, con)
             return {"seq": e[1]}, first_wall
         out, first_wall = self._op(True, _res, symbol)
         self._note_seen(cycle_id, symbol, first_wall, now_wall)
@@ -754,10 +1050,19 @@ class BudgetLedger:
             if self._live_row_or_abort(con, cycle_id, symbol,
                                        time.time()) is None:
                 _abort(symbol, "counters-missing-at-invalidate")
+            old = con.execute(
+                "SELECT cycle, symbol, llm, tools, tokens, depth, "
+                "start_wall, dead FROM counters WHERE cycle=? AND "
+                "symbol=?", (cycle_id, symbol)).fetchone()
             cur = con.execute("UPDATE counters SET dead=1 WHERE cycle=?"
                               " AND symbol=?", (cycle_id, symbol))
             if not cur.rowcount:
                 _abort(symbol, "counters-missing-at-invalidate")
+            new = list(old)
+            new[7] = 1
+            _bdig_apply(con, "counters", outs=[list(old)],
+                        ins=[new])
+            _bmirror_roots_locked(self.path, con)
         self._op(True, _inv, symbol)
 
 

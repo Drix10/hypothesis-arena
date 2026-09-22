@@ -1047,6 +1047,47 @@ class TierStateTest(unittest.TestCase):
         with self.assertRaises(spend_mod.StateUnavailable):
             gov._load_state(now + 7200)
 
+    def test_tier_legacy_forgery_denies(self):
+        # Finding 3: a rev-less row with current binding, a valid
+        # weaker-tier state, and a newer timestamp cannot bypass
+        # the revision chain through legacy recovery — once
+        # revisioned history exists, rev-less rows are corruption.
+        import json as _json
+        from plane import spend as spend_mod
+        d = tempfile.mkdtemp()
+        gov, now = self._tier2_gov(d)
+        jpath = os.path.join(d, "spend", "tier_journal.jsonl")
+        forged_state = gov._initial_state()  # tier 0, current bind
+        forged_state.update(tier=0, projection=10.0,
+                            evaluated_at=now + 3600)
+        forged = {"ts": now + 7200, "state": forged_state}
+        with open(jpath, "a", encoding="utf-8") as fh:
+            fh.write(_json.dumps(forged, sort_keys=True) + "\n")
+        with self.assertRaises(spend_mod.StateUnavailable) as cm:
+            gov._load_state(now + 7200)
+        self.assertIn("legacy-forged", str(cm.exception))
+        self.assertEqual(gov.decision(now + 7200)[0], "deny")
+
+    def test_tier_future_timestamp_denies(self):
+        # Finding 4: a chained-valid row carrying a future timestamp
+        # (or a snapshot from the future) denies — same defect
+        # class as future start_wall.
+        import json as _json
+        from plane import spend as spend_mod
+        d = tempfile.mkdtemp()
+        gov, now = self._tier2_gov(d)
+        jpath = os.path.join(d, "spend", "tier_journal.jsonl")
+        with open(jpath, encoding="utf-8") as fh:
+            rows = [l for l in fh.read().split("\n") if l.strip()]
+        row = _json.loads(rows[-1])
+        row["ts"] = now + 86400
+        row["state"]["evaluated_at"] = now + 86400
+        with open(jpath, "w", encoding="utf-8") as fh:
+            fh.write(_json.dumps(row, sort_keys=True) + "\n")
+        with self.assertRaises(spend_mod.StateUnavailable) as cm:
+            gov._load_state(now + 7200)
+        self.assertIn("future", str(cm.exception))
+
     def test_journal_write_failure_keeps_new_state(self):
         # State-first persist: if the journal write fails, the new
         # (restrictive) state already stands — no recovery needed,
@@ -1670,6 +1711,17 @@ class ReauditFixTest(unittest.TestCase):
         con = sqlite3.connect(dbp)
         con.execute("INSERT INTO unknown_holds VALUES "
                     "('L1','OTHER',2.0,1,0)")
+        # Digest-coherent plant (white-box): the test targets
+        # record_unknown's conflict logic, not the digest — an
+        # incoherent plant would (correctly) deny at connect.
+        planted = ['L1', 'OTHER', 2.0, 1, 0]
+        row = con.execute(
+            "SELECT digest, n FROM content_digest WHERE "
+            "\"table\"='unknown'").fetchone()
+        new = "%064x" % (int(row[0], 16) ^ int(
+            attribution._hrow(planted), 16))
+        con.execute("UPDATE content_digest SET digest=?, n=n+1 "
+                    "WHERE \"table\"='unknown'", (new,))
         con.commit()
         con.close()
         with self.assertRaises(attribution.SpendBlocked) as cm:
@@ -2008,22 +2060,23 @@ class ReauditFixTest(unittest.TestCase):
         con.close()
 
     def test_budget_numeric_corruption_aborts(self):
-        # Finding 5: negative counters, a bad dead flag, a negative
-        # wall, and corrupt lease terms abort on read — never
-        # normalized, never clamped into authority.
+        # Finding 5: out-of-band edits trip the content digest
+        # first (digest-mismatch); the numeric read-validation
+        # behind it still aborts (never normalizes) for
+        # digest-coherent paths.
         import sqlite3 as _sq
         cases = [
             ("UPDATE counters SET llm=-100", "reserve",
-             "counters-corrupt"),
+             "digest-mismatch:counters"),
             ("UPDATE counters SET depth=-1000", "check",
-             "counters-corrupt"),
+             "digest-mismatch:counters"),
             ("UPDATE counters SET dead=2", "snapshot",
-             "counters-corrupt"),
+             "digest-mismatch:counters"),
             # NB: a negative wall would be legitimately pruned as
             # ancient before validation; +inf is invalid but
             # unpruneable, so it reaches the reader check.
             ("UPDATE counters SET start_wall=1e999", "reserve",
-             "counters-corrupt"),
+             "digest-mismatch:counters"),
         ]
         for sql, op, why in cases:
             d = tempfile.mkdtemp()
@@ -2062,7 +2115,7 @@ class ReauditFixTest(unittest.TestCase):
             con.close()
             with self.assertRaises(r15.AbortCycle) as cm:
                 led.settle_call("c", "AAPL", lease, 100)
-            self.assertIn("lease-corrupt",
+            self.assertIn("digest-mismatch:leases",
                           str(cm.exception.snapshot))
 
     def test_ratio_journal_order_denies(self):
@@ -2101,6 +2154,42 @@ class ReauditFixTest(unittest.TestCase):
         # Control: an ordered history still reads.
         _rows([D, D + 86400, D + 2 * 86400])
         self.assertEqual(len(gov._ratio_rows_strict(0, now)), 3)
+
+    def test_checkpoint_future_and_naive_reject(self):
+        # Finding 5: a future checkpoint extends the budget window
+        # like a future start_wall; a naive timestamp has no
+        # provable age (host-local interpretation). Both reject.
+        from plane import graph as graph_mod
+        import datetime as _dt
+        future = (_dt.datetime.now(_dt.timezone.utc) +
+                  _dt.timedelta(days=1)).isoformat()
+        naive = (_dt.datetime.now(_dt.timezone.utc) -
+                 _dt.timedelta(hours=1)).replace(
+                     tzinfo=None).isoformat()
+
+        class _Snap:
+            def __init__(self, created):
+                self.created_at = created
+                self.config = {"configurable":
+                               {"thread_id": "t",
+                                "checkpoint_id": "ckpt-9"}}
+
+        class _App:
+            checkpointer = object()
+
+            def __init__(self, snap):
+                self._snap = snap
+
+            def get_state(self, _cfg):
+                return self._snap
+
+        with self.assertRaises(ValueError) as cm:
+            graph_mod._reject_stale_thread(_App(_Snap(future)),
+                                           "t")
+        self.assertIn("future", str(cm.exception))
+        with self.assertRaises(ValueError) as cm:
+            graph_mod._reject_stale_thread(_App(_Snap(naive)), "t")
+        self.assertIn("timezone-less", str(cm.exception))
 
     def test_cleanup_before_shape_rejection(self):
         # Finding 8: a failed cleanup plus malformed candidates
@@ -2179,7 +2268,7 @@ class ReauditFixTest(unittest.TestCase):
                     symbol="AAPL", prompt_tokens=1,
                     completion_tokens=1, usd=1.0, span_id="s2",
                     ts=now)
-            self.assertIn("history-deleted", str(cm.exception))
+            self.assertIn("digest-mismatch", str(cm.exception))
 
         d = tempfile.mkdtemp()
         log = _spent(d)
@@ -2326,7 +2415,7 @@ class ReauditFixTest(unittest.TestCase):
         con.close()
         with self.assertRaises(r15.AbortCycle) as cm:
             led.reserve_call("c", "AAPL", 10, 0)
-        self.assertIn("registry-deleted",
+        self.assertIn("digest-mismatch:counters",
                       str(cm.exception.snapshot))
         d = tempfile.mkdtemp()
         led, path = _led(d)
@@ -2336,7 +2425,7 @@ class ReauditFixTest(unittest.TestCase):
         con.close()
         with self.assertRaises(r15.AbortCycle) as cm:
             led.reserve_call("c", "AAPL", 10, 0)
-        self.assertIn("counters-deleted",
+        self.assertIn("digest-mismatch:counters",
                       str(cm.exception.snapshot))
         d = tempfile.mkdtemp()
         led, path = _led(d)
@@ -2350,7 +2439,7 @@ class ReauditFixTest(unittest.TestCase):
                                              0)):
             with self.assertRaises(r15.AbortCycle) as cm:
                 op()
-            self.assertIn("registry-deleted",
+            self.assertIn("digest-mismatch:cycles",
                           str(cm.exception.snapshot))
 
     def test_future_start_wall_denies(self):
@@ -2375,11 +2464,18 @@ class ReauditFixTest(unittest.TestCase):
                                              0)):
             with self.assertRaises(r15.AbortCycle) as cm:
                 op()
-            self.assertIn("future-start-wall",
+            # Out-of-band wall edit trips the digest before the
+            # wall check reads the row.
+            self.assertIn("digest-mismatch:counters",
                           str(cm.exception.snapshot))
+        # Write-path probe on a FRESH ledger (the ledger above is
+        # still corrupted by the UPDATE sub-case, which correctly
+        # denies first).
+        ledw = budgets.BudgetLedger(
+            os.path.join(tempfile.mkdtemp(), "ledger.sqlite3"))
         with self.assertRaises(r15.AbortCycle) as cm:
-            led.reserve_call("c2", "AAPL", 10, 0,
-                             now_wall=now + 86400)
+            ledw.reserve_call("c2", "AAPL", 10, 0,
+                              now_wall=now + 86400)
         self.assertIn("future-start-wall",
                       str(cm.exception.snapshot))
         # Control: present and past starts still verify (fresh
@@ -2388,6 +2484,182 @@ class ReauditFixTest(unittest.TestCase):
             os.path.join(tempfile.mkdtemp(), "ledger.sqlite3"))
         led2.reserve_call("c", "AAPL", 10, 0,
                           now_wall=now - 100)
+
+    def test_update_spend_content_denies(self):
+        # Finding 1: UPDATEs that preserve MAX(ts), row counts,
+        # schema, token, version, and integrity must still deny —
+        # the fingerprint covers canonical row CONTENT.
+        now = int(time.time())
+
+        def _spent(d):
+            log = os.path.join(d, "spans.jsonl")
+            attribution.append_span(
+                log, 1, "seed", "m", cycle_id="c",
+                symbol="AAPL", prompt_tokens=10,
+                completion_tokens=5, usd=149.0, span_id="hist",
+                ts=now)
+            return log
+
+        def _probe(log, frag):
+            with self.assertRaises(
+                    attribution.LedgerUnavailable) as cm:
+                attribution.append_span(
+                    log, 1, "s2", "m", cycle_id="c",
+                    symbol="AAPL", prompt_tokens=1,
+                    completion_tokens=1, usd=1.0, span_id="s2",
+                    ts=now)
+            self.assertIn(frag, str(cm.exception))
+
+        d = tempfile.mkdtemp()
+        log = _spent(d)
+        dbp = attribution._db_for(log)
+        con = sqlite3.connect(dbp)
+        con.execute("UPDATE spans SET usd = 0 WHERE span_id='hist'")
+        con.commit()
+        con.close()
+        _probe(log, "digest-mismatch:spans")
+        d = tempfile.mkdtemp()
+        log = _spent(d)
+        dbp = attribution._db_for(log)
+        con = sqlite3.connect(dbp)
+        con.execute("UPDATE spans SET model = 'evil' WHERE "
+                    "span_id='hist'")
+        con.commit()
+        con.close()
+        _probe(log, "digest-mismatch:spans")
+
+    def test_crash_before_mirror_then_delete_denies(self):
+        # Finding 1 crash seam: a row committed but never mirrored
+        # (crashed before the marker bump), then deleted before
+        # restart, must deny — the same-transaction in-DB digest
+        # remembers the row the marker never saw.
+        import unittest.mock as _mock
+        now = int(time.time())
+        d = tempfile.mkdtemp()
+        log = os.path.join(d, "spans.jsonl")
+        attribution.append_span(
+            log, 1, "seed", "m", cycle_id="c", symbol="AAPL",
+            prompt_tokens=10, completion_tokens=5, usd=149.0,
+            span_id="hist", ts=now)
+        with _mock.patch.object(attribution, "_mirror_roots_locked"):
+            attribution.append_span(
+                log, 1, "s2", "m", cycle_id="c", symbol="AAPL",
+                prompt_tokens=1, completion_tokens=1, usd=1.0,
+                span_id="fresh", ts=now)
+        dbp = attribution._db_for(log)
+        con = sqlite3.connect(dbp)
+        con.execute("DELETE FROM spans WHERE span_id='fresh'")
+        con.commit()
+        con.close()
+        with self.assertRaises(
+                attribution.LedgerUnavailable) as cm:
+            attribution.append_span(
+                log, 1, "s3", "m", cycle_id="c", symbol="AAPL",
+                prompt_tokens=1, completion_tokens=1, usd=1.0,
+                span_id="s3", ts=now)
+        self.assertIn("digest-mismatch:spans", str(cm.exception))
+
+    def test_malformed_roots_deny(self):
+        # Finding 1 strictness: missing slots, NaN numerics, and
+        # non-dict slots deny — never default, never weaken.
+        import json as _json
+        now = int(time.time())
+        d = tempfile.mkdtemp()
+        log = os.path.join(d, "spans.jsonl")
+        attribution.append_span(
+            log, 1, "seed", "m", cycle_id="c", symbol="AAPL",
+            prompt_tokens=10, completion_tokens=5, usd=149.0,
+            span_id="hist", ts=now)
+        dbp = attribution._db_for(log)
+
+        def _mutate(fn):
+            with open(dbp + ".init", encoding="utf-8") as fh:
+                body = _json.load(fh)
+            fn(body["roots"])
+            with open(dbp + ".init", "w",
+                       encoding="utf-8") as fh:
+                fh.write(_json.dumps(body, allow_nan=True))
+
+        def _denies():
+            with self.assertRaises(
+                    attribution.LedgerUnavailable) as cm:
+                attribution.append_span(
+                    log, 1, "s2", "m", cycle_id="c",
+                    symbol="AAPL", prompt_tokens=1,
+                    completion_tokens=1, usd=1.0, span_id="s2",
+                    ts=now)
+            self.assertIn("marker-roots-corrupt", str(cm.exception))
+
+        _mutate(lambda r: r.pop("spans"))
+        _denies()
+        d = tempfile.mkdtemp()
+        log = os.path.join(d, "spans.jsonl")
+        attribution.append_span(
+            log, 1, "seed", "m", cycle_id="c", symbol="AAPL",
+            prompt_tokens=10, completion_tokens=5, usd=149.0,
+            span_id="hist", ts=now)
+        dbp = attribution._db_for(log)
+        _mutate(lambda r: r["spans"].__setitem__("count",
+                                                   float("nan")))
+        _denies()
+
+    def test_update_counters_content_denies(self):
+        # Budgets twin: zeroing usage counters passes every numeric
+        # check but must deny on content.
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "ledger.sqlite3")
+        led = budgets.BudgetLedger(path)
+        lease = led.reserve_call("c", "AAPL", 100, 0)
+        led.settle_call("c", "AAPL", lease, 40)
+        con = sqlite3.connect(path)
+        con.execute("UPDATE counters SET llm=0, tools=0, tokens=0, "
+                    "depth=0")
+        con.commit()
+        con.close()
+        with self.assertRaises(r15.AbortCycle) as cm:
+            led.check("c", "AAPL")
+        self.assertIn("digest-mismatch:counters",
+                      str(cm.exception.snapshot))
+
+    def test_registry_sidecar_deletion_denies(self):
+        # Finding 2: counters + cycles + .seen deletion denies
+        # (digest fires); dropping the digest table too forces the
+        # backfill path, where the adoption flag denies
+        # (seen-deleted); losing ONLY the sidecar file re-adopts
+        # and stays available.
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "ledger.sqlite3")
+        led = budgets.BudgetLedger(path)
+        led.reserve_call("c", "AAPL", 10, 0)
+        con = sqlite3.connect(path)
+        con.execute("DELETE FROM counters")
+        con.execute("DELETE FROM cycles")
+        con.commit()
+        con.close()
+        os.remove(path + ".seen")
+        with self.assertRaises(r15.AbortCycle):
+            led.reserve_call("c", "AAPL", 10, 0)
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "ledger.sqlite3")
+        led = budgets.BudgetLedger(path)
+        led.reserve_call("c", "AAPL", 10, 0)
+        con = sqlite3.connect(path)
+        con.execute("DELETE FROM counters")
+        con.execute("DELETE FROM cycles")
+        con.execute("DROP TABLE content_digest")
+        con.commit()
+        con.close()
+        os.remove(path + ".seen")
+        with self.assertRaises(r15.AbortCycle) as cm:
+            led.reserve_call("c", "AAPL", 10, 0)
+        self.assertIn("seen-deleted",
+                      str(cm.exception.snapshot))
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "ledger.sqlite3")
+        led = budgets.BudgetLedger(path)
+        led.reserve_call("c", "AAPL", 10, 0)
+        os.remove(path + ".seen")
+        led.reserve_call("c", "AAPL", 10, 0)  # re-adopts
 
     def test_marker_unreadable_is_invalid_not_absent(self):
         # An unreadable marker (here: a directory in the way —
@@ -2528,7 +2800,7 @@ class ReauditFixTest(unittest.TestCase):
                    lambda: led2.snapshot("c", "AAPL")):
             with self.assertRaises(r15.AbortCycle) as cm:
                 op()
-            self.assertIn("registry-deleted",
+            self.assertIn("digest-mismatch:cycles",
                           str(cm.exception.snapshot))
 
     def test_stale_thread_refused(self):
@@ -2713,7 +2985,7 @@ class ReauditFixTest(unittest.TestCase):
         con.close()
         with self.assertRaises(r15.AbortCycle) as cm:
             led.reserve_call("c", "AAPL", 10, 0)
-        self.assertIn("counters-deleted", str(cm.exception.snapshot))
+        self.assertIn("digest-mismatch:counters", str(cm.exception.snapshot))
 
     def test_r15_snapshot_and_check_fail_closed_on_deletion(self):
         # Deletion detection covers every reader, not just new
@@ -2734,7 +3006,7 @@ class ReauditFixTest(unittest.TestCase):
         con.close()
         with self.assertRaises(r15.AbortCycle) as cm:
             led.snapshot("c", "AAPL")
-        self.assertIn("counters-deleted",
+        self.assertIn("digest-mismatch:counters",
                       str(cm.exception.snapshot))
         with self.assertRaises(r15.AbortCycle):
             led.check("c", "AAPL")
@@ -2766,7 +3038,7 @@ class ReauditFixTest(unittest.TestCase):
         self.assertEqual(reg, 1)
         with self.assertRaises(r15.AbortCycle) as cm:
             led2.reserve_call("c", "AAPL", 10, 0)
-        self.assertIn("counters-deleted",
+        self.assertIn("digest-mismatch:counters",
                       str(cm.exception.snapshot))
 
     def test_r15_prune_aged_row_recreates(self):
@@ -2775,13 +3047,8 @@ class ReauditFixTest(unittest.TestCase):
         d = tempfile.mkdtemp()
         path = os.path.join(d, "ledger.sqlite3")
         led = budgets.BudgetLedger(path)
-        led.reserve_call("c", "AAPL", 10, 0)
-        con = sqlite3.connect(path)
         old = time.time() - 8 * 86400
-        con.execute("UPDATE counters SET start_wall=?", (old,))
-        con.execute("UPDATE cycles SET first_wall=?", (old,))
-        con.commit()
-        con.close()
+        led.reserve_call("c", "AAPL", 10, 0, now_wall=old)
         out = led.reserve_call("c", "AAPL", 10, 0)
         self.assertEqual(out["seq"], 1)
 

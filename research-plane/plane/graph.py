@@ -1067,11 +1067,23 @@ def _reject_stale_thread(app, thread_id):
         return
     try:
         import datetime as _dt
-        age = time.time() - _dt.datetime.fromisoformat(
-            created).timestamp()
-    except (ValueError, TypeError, OverflowError):
+        parsed = _dt.datetime.fromisoformat(created)
+    except (ValueError, TypeError, OverflowError) as e:
         raise ValueError("stale thread_id (unreadable checkpoint "
+                         "age): %r" % (thread_id,)) from e
+    if parsed.tzinfo is None:
+        # A naive timestamp is interpreted in the host's LOCAL
+        # timezone: its age is unprovable — reject, never guess
+        # the zone.
+        raise ValueError("stale thread_id (timezone-less checkpoint "
                          "age): %r" % (thread_id,))
+    age = time.time() - parsed.timestamp()
+    from . import r15 as _r15
+    if age < -_r15.CLOCK_SKEW_S:
+        # A checkpoint from the future extends the budget window
+        # the same way a future start_wall does: reject.
+        raise ValueError("stale thread_id (checkpoint in the "
+                         "future): %r" % (thread_id,))
     if age > _budgets.LEDGER_RETAIN_DAYS * 86400:
         raise ValueError("stale thread_id (checkpoint %.1f days "
                          "old, R15 window %d): %r"

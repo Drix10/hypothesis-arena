@@ -320,7 +320,7 @@ class SpendGovernor:
         if now is not None and st["evaluated_at"] > now + \
                 EVAL_FUTURE_SKEW_S:
             raise StateUnavailable("tier-state-future")
-        recovered = self._recover_from_journal(st)
+        recovered = self._recover_from_journal(st, now)
         return recovered if recovered is not None else st
 
     @staticmethod
@@ -338,17 +338,21 @@ class SpendGovernor:
                          and row["rev"] >= 0))
                 and isinstance(row.get("state"), dict))
 
-    def _check_tier_chain(self, new, st):
+    def _check_tier_chain(self, new, st, now=None):
         """Semantic chain over non-legacy journal rows (file
         order): revs consecutive, from/to a legal governor step,
         snapshot tier matching its row, and the journal exactly
         mirroring the state (max rev == state rev, last to ==
-        state tier). Structural strictness proves the rows parse;
-        this proves they could only have been written by the
-        governor's own transition rule — a syntactically valid but
-        forged T3→T0 row cannot continue the chain AND match the
-        state. Legacy (rev-less) rows predate the chain and are
-        excluded (they recover through the legacy path below).
+        state tier). Temporal semantics too when now is given: no
+        row timestamp and no embedded evaluated_at may lie beyond
+        the clock-skew allowance, and a snapshot may not postdate
+        its own row (writer stamps both from the same clock).
+        Structural strictness proves the rows parse; this proves
+        they could only have been written by the governor's own
+        transition rule — a syntactically valid but forged T3→T0
+        row cannot continue the chain AND match the state. Legacy
+        (rev-less) rows predate the chain and are excluded (they
+        recover through the legacy path below).
         Raises StateUnavailable on any violation."""
         binding = self._binding()
         cur_rows = [r for r in new
@@ -361,6 +365,15 @@ class SpendGovernor:
                 # leads the journal: a row newer than state is
                 # forgery, never crash residue.
                 raise StateUnavailable("tier-journal-forged")
+            if now is not None:
+                if r["ts"] > now + EVAL_FUTURE_SKEW_S:
+                    raise StateUnavailable("tier-journal-future")
+                sev = r["state"].get("evaluated_at")
+                if type(sev) is int and (sev > now +
+                                         EVAL_FUTURE_SKEW_S or
+                                         sev > r["ts"] +
+                                         EVAL_FUTURE_SKEW_S):
+                    raise StateUnavailable("tier-journal-future")
         expected = None
         prev_to = None
         first = True
@@ -399,17 +412,21 @@ class SpendGovernor:
             if cur_rows[-1]["to"] != st.get("tier"):
                 raise StateUnavailable("tier-journal-chain")
 
-    def _recover_from_journal(self, st):
+    def _recover_from_journal(self, st, now=None):
         """Crash recovery: a transition journaled but never saved to
         the state file (possible only for legacy journal-first
         persists — current code persists state first) is adopted
         from the journal tail. STRICT: a missing journal with
         transitions on record means deleted evidence; a journal
         whose max rev trails the state's means lost tail rows;
-        any structurally invalid row means corruption. All raise
-        StateUnavailable — a damaged journal must never resolve to
-        the older (weaker) tier on disk. Returns the recovered
-        state or None."""
+        any structurally invalid row means corruption. Legacy
+        (rev-less) rows recover ONLY in an explicitly legacy
+        deployment (state rev 0 with no revisioned rows anywhere):
+        once revisioned history exists, a rev-less row newer than
+        state is forgery and older rev-less rows are audit-only,
+        never adoption candidates. All raise StateUnavailable — a
+        damaged journal must never resolve to the older (weaker)
+        tier on disk. Returns the recovered state or None."""
         rows, had = self._journal_rows_raw(TIER_JOURNAL_NAME,
                                             "tier")
         rev = st.get("tier_rev", 0)
@@ -424,15 +441,29 @@ class SpendGovernor:
         for row in rows:
             if not self._valid_tier_row(row):
                 raise StateUnavailable("tier-journal-corrupt")
+        has_rev = rev > 0 or any("rev" in r for r in rows)
+        if has_rev:
+            for r in rows:
+                if "rev" not in r and \
+                        r["ts"] > st["evaluated_at"]:
+                    # The writer always stamps revs now: a rev-less
+                    # row newer than revisioned state is a forged
+                    # downgrade path, never legacy residue (legacy
+                    # rows predate the chain and can only be older
+                    # than state).
+                    raise StateUnavailable(
+                        "tier-journal-legacy-forged")
         new = [r for r in rows if "rev" in r]
         if new:
-            self._check_tier_chain(new, st)
+            self._check_tier_chain(new, st, now)
         if rev > 0:
             have = [r["rev"] for r in rows if "rev" in r]
             if not have or max(have) < rev:
                 raise StateUnavailable("tier-journal-truncated")
         best = None
         for row in reversed(rows):  # newest first
+            if has_rev and "rev" not in row:
+                continue
             snap = row.get("state")
             ts = row.get("ts")
             if (not isinstance(snap, dict) or type(ts) is not int or
@@ -441,6 +472,9 @@ class SpendGovernor:
             cand = self._valid_state(snap, self._binding())
             if cand is None or cand["binding"] != self._binding():
                 continue
+            if now is not None and cand["evaluated_at"] > now + \
+                    EVAL_FUTURE_SKEW_S:
+                raise StateUnavailable("tier-journal-future")
             if best is None or ts > best["evaluated_at"]:
                 best = cand
         return best
