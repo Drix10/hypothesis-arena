@@ -253,19 +253,26 @@ leaves rows and digest both old or both new, never split, which
 closes the commit/bump crash seam by construction). Out-of-band SQL
 skips digest maintenance and denies as digest-mismatch at the next
 open — this covers UPDATE-usd/content edits that preserve every
-aggregate, which pure max/count roots cannot see. The marker
-mirrors the digest (re-baselined from in-DB truth post-commit;
-verify adopts the mirror when rows and digest agree, so crash lag
-self-heals and marker tamper is erased rather than honored).
-Malformed marker slots (missing keys, NaN/inf, non-int numerics)
-deny. The R15 side keeps an out-of-band cycle registry (sidecar
-file, 30-day window) with a one-time-migration flag in the
-marker: a missing sidecar on a flagged ledger denies
-(seen-deleted) when the digest itself was reconstructed that open,
-and re-adopts otherwise. Coherent forgery of rows + digest +
-marker together is outside the threat model (keyless roots detect
-corruption and non-coherent tamper; filesystem trust roots bound
-the rest) and is documented as such.
+aggregate, which pure max/count roots cannot see. The digest table
+itself is mandatory at schema v3 on both ledgers: a missing digest
+is NEVER rebuilt, because rebuilding would silently re-baseline
+authority over possibly modified rows. The one-time v2→v3 migration
+(CREATE + recompute + version stamp in a single transaction) runs
+only for provably pre-digest ledgers — BOTH a pre-digest version
+AND a pre-digest marker shape — so a version reset alone cannot
+reach it; only a full marker forgery plus version reset could,
+which is the documented coherent-forgery residual (keyless roots
+detect corruption and non-coherent tamper; filesystem trust roots
+bound the rest). The marker mirrors the digest (re-baselined from
+in-DB truth post-commit; verify adopts the mirror when rows and
+digest agree, so crash lag self-heals and marker tamper is erased
+rather than honored). Malformed marker slots (missing keys,
+NaN/inf, non-int numerics) deny. The R15 side keeps an out-of-band
+cycle registry (sidecar file, 30-day window) whose marker adoption
+flag publishes BEFORE the sidecar file, so every crash direction is
+conservative (witness-without-sidecar safely re-adopts; the reverse
+order would leave a reusable sidecar-without-witness). Sole sidecar
+loss re-adopts from the verified registry.
 Thread identity cannot resurrect a budget: run_cycle refuses a thread_id
 whose checkpoint is older than the 7-day R15 window (same cycle_id never
 mints a second budget). A checkpoint whose age cannot be established —

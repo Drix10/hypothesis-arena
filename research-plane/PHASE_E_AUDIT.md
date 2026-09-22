@@ -475,3 +475,30 @@ plane (Phase D) change any interface a future slice depends on?
   at the same frozen-collector step (pre-existing, untouched per
   the freeze/zero-diff constraint). Awaiting the human re-audit
   of `ce70100`. Slice D NOT AUTHORIZED. Phase D NOT closed.
+
+## Addendum 19 — re-audit round 8 fix pass (bb4733a, agent-side, NOT signed off)
+- The human re-audit of `ce70100` verified the tier-chain,
+  future-timestamp, ratio-order, and init closures (left
+  untouched) but withheld sign-off on two P1s: digest-table
+  deletion followed by row edits silently re-baselined authority
+  on both ledgers (the missing-table backfill was a new
+  trust-on-first-use event), and the .seen witness published
+  after the sidecar (crash seam). Both closed in `bb4733a` with
+  regressions (see TODO record): schema v3 makes the digest
+  table mandatory and never rebuilt (digest-deleted); one-time
+  migration only for provably pre-digest ledgers (pre-digest
+  version AND pre-digest marker shape — a version reset alone
+  cannot reach it, and the cycles-drop + version-reset variant is
+  closed by the same gate); witness-first sidecar publication
+  with init-crash resume proven. Residual: full marker forgery +
+  version reset (documented coherent-forgery class, same as the
+  round-7 triple-forgery scope). seen-deleted removed as
+  unreachable. Auditor nit accepted as P2 non-blocking: a
+  revisioned rev=0 row can pass chain predicates only toward
+  more-restrictive states (unchanged).
+- Batteries on the fix tree: plane 108 + hardening 116 + emit 19
+  + isolation + sources + stdlib green locally; kernel `build.sh`
+  exit 0; freeze-check PASS; kernel/collector zero-diff. Hosted
+  rerun pending on push; the frozen-collector stdlib failure stays
+  untouched. Slice D NOT AUTHORIZED. Phase D NOT closed — this
+  record awaits the human re-audit of `bb4733a`.
