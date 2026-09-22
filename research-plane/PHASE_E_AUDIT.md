@@ -562,3 +562,20 @@ plane (Phase D) change any interface a future slice depends on?
   untouched). The CI-evidence gap is closed with proof. Awaiting
   human sign-off on the narrowed model. Slice D NOT AUTHORIZED.
   Phase D NOT closed.
+
+## Addendum 23 — Round-9 sign-off recorded (human decision, NOT agent-signed)
+- The human re-auditor ACCEPTED the Round-9 threat-model
+  narrowing: the coherent rows+digest forgery is REAL, a code fix
+  within the current trust model is IMPOSSIBLE without an
+  independent trust anchor, and no code change / no theater was
+  the correct response. Corrected boundary: rows↔content_digest
+  = mutual-consistency / corruption detection; marker = recovery
+  mirror + shape tripwire, not a trust anchor; host/filesystem
+  integrity = outside this trust model. A real HSM/TPM/remote
+  witness is a NEW security architecture (different trust model),
+  unfunded — not a follow-up patch. Independent CI evidence
+  CLOSED (hosted evidence job green). Round 9 is CLOSED and
+  signed off under the narrowed model.
+- Phase D is eligible to close pending remaining sign-off
+  criteria/deployment boxes — NOT declared closed by this
+  record. Slice D NOT AUTHORIZED.
