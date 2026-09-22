@@ -4,8 +4,11 @@ AI-assisted paper-trading fund (forex majors + US equities, no crypto).
 Status: `Round 9: CLOSED · Deployment: ACCEPTED + hardened ·
 Phase D: OPEN · Slice D: NOT AUTHORIZED · G0_PAPER only`.
 `plan/` is source of truth; this file describes the tree as it exists
-(389 tracked files). Labels: FROZEN (zero-diff without a human
-contract-defect ruling) · ACTIVE (current work surface) · FUTURE (not
+(389 tracked files). Labels: FROZEN (no changes without a human
+contract-defect ruling; `kernel/` impl and collector production
+code are byte-identical to the Round-9 baseline; the sole exception
+is the additive `RESEARCH_MODEL_ID` key in `collector/config.py`,
+disclosed in Addendum 32) · ACTIVE (current work surface) · FUTURE (not
 implemented) · HISTORICAL (audit trail, read-only).
 
 Verify this document: `git ls-files | wc -l` (= 389) and the per-family
@@ -144,7 +147,8 @@ confidence accessor — both build-gated) · `gen_fixtures.py`,
   `tests/test_p33.cpp` + `risk/test_veto.cpp`; produced by `gen_p33.py`.
   Presence pinned by freeze-check.
 
-## 4. collector/ (FROZEN implementation + config; tests co-located)
+## 4. collector/ (FROZEN production code + additive config extension;
+tests co-located)
 
 Production ingestion path: the poller that turns outside data into
 `data/signals/<day>.jsonl`. (Second live-access point:
@@ -305,7 +309,9 @@ mirror (missing ledger raises, never $0).
 
 ## 9. Status ledger (current)
 
-- FROZEN: `kernel/` impl, `collector/` impl+config, `plan/`, JEV
+- FROZEN: `kernel/` impl, collector production code (`config.py`
+  carries the additive `RESEARCH_MODEL_ID` loader key per Addendum 32
+  — the only exception), `plan/`, JEV
   contracts, `research/` memos, round addenda, evidence JSON artifacts.
 - ACTIVE: `research-plane/plane`, `sources`, `tests`, `sandbox`,
   `lessons.jsonl`, `requirements.txt`, `TODO.md`, `README.md`, this

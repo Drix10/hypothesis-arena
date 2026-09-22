@@ -139,15 +139,20 @@ Exact Tier-A source-by-source matrix (plan §9.1 table is the requirement):
   exists → no live provider call, no live per-node spend, no full-day
   Langfuse attribution. Requires human-placed key + funded provider
   account. Fail-closed behavior with the key absent is the proven part.
-- LIVE 2026-09-23 (`sandbox/live-provider-probe.py`, artifact
+- LIVE PROVIDER + ACCOUNTING DEPLOYMENT PROOF 2026-09-23
+  (`sandbox/live-provider-probe.py`, artifact
   `live-provider-evidence.json`): key authorized in root `.env` +
   `RESEARCH_MODEL_ID=meta/muse-spark-1.3-contributor` ($0.10/M in +
-  $0.20/M out → worst-leg $0.00020/1k table entry). Exact production
-  path — reserve ($0.000038 worst-case lease) → mark_invoked →
+  $0.20/M out → worst-leg $0.00020/1k table entry). Scope, stated
+  precisely: the probe directly exercises the shipped
+  `make_raw_provider` + `UsageTape` + `SpendGovernor` path through
+  the real Squid proxy — reserve ($0.000038 worst-case lease) → mark_invoked →
   UsageTape(make_raw_provider, transport-pinned via Squid
   127.0.0.1:3128) → 15 prompt + 16 completion tokens in 2.8s →
   append_span ($0.000005 actual) → settle_usd (hold released;
-  ledger shows the span row, holds table empty). Key validity
+  ledger shows the span row, holds table empty). It is NOT a full live
+  `graph.run_cycle()` execution — the production gate is covered by
+  tests; this is direct deployment evidence. Key validity
   pre-proven zero-spend via /auth/key (200, $5 limit). Box 4 CLOSED
   on the real successful call (not the bogus-key path). Full-day
   attribution (Box 6) remains elapsed-evidence work.

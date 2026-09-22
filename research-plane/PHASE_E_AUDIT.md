@@ -752,3 +752,18 @@ plane (Phase D) change any interface a future slice depends on?
   reserved) → span row in ledger → hold settled/released. Artifact
   `sandbox/live-provider-evidence.json`. Box 4 CLOSED on a real call.
   Box 6 stays IN PROGRESS (needs elapsed traffic, not one call).
+
+## Addendum 33 — Box-4 evidence-label + frozen-zone bookkeeping (audit-directed, docs only)
+- Box 4 ACCEPTED as LIVE PROVIDER + ACCOUNTING DEPLOYMENT PROOF
+  (real auth, real Squid path, real tokens/spend/span/settle, no
+  leakage; slug/pricing independently consistent). Corrected label:
+  the probe directly exercises shipped `make_raw_provider` +
+  `UsageTape` + `SpendGovernor` — it is NOT a full live
+  `graph.run_cycle()` execution. Result unchanged, wording precise.
+- Frozen-zone bookkeeping: `collector/config.py` (additive
+  `RESEARCH_MODEL_ID`, Addendum 32) means `collector/` is no longer
+  byte-identical to `e8b419e`. Scope held explicit: production
+  implementation frozen; only the canonical loader extended; no
+  behavior/polling change; config/sources suites + freeze green.
+  Current ARCHITECTURE/TODO wording updated; historical records
+  untouched. No hardening pass; no Slice D; G0_PAPER only.
