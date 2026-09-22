@@ -618,3 +618,26 @@ plane (Phase D) change any interface a future slice depends on?
   frozen stdlib FAILURE. Slice D NOT AUTHORIZED. Phase D closable
   only after the BLOCKED externals land — this record does not
   close it.
+
+## Addendum 26 — deployment audit response: accounting corrected + probes hardened (agent-executed, NOT signed off)
+- Auditor verdict on `7df0865` (9 commits `36c2862..cea59b8`, not 8):
+  deployment pass ACCEPTED as evidence collection; Boxes 1/2/3/5
+  accepted with no rework; accounting tightened exactly as
+  directed: Box 7 now carries the full Tier-A matrix (broker OPEN,
+  EDGAR/calendar/Fed-ECB/Treasury/BLS PROVEN live, FRED-ALFRED/BEA
+  BLOCKED on keys, earnings OPEN as a design gap); Box 8 kept
+  partial (mechanism ≠ 7-day/wall-clock); registry push OPTIONAL;
+  profit/calibration feeds FUTURE-STAGE (not Phase-D blockers).
+- Deep re-verification of every deployment artifact (edge cases,
+  flaws, leaks): fixed fixture-clobber hazard, non-reproducible
+  proxy bring-up, Windows/bash temp split-brain, workdir leaks
+  (cleanup + stray assert), far-future reader clock, dead code,
+  overstated kill-probe docstring; verified zero stray processes,
+  zero workdir leaks, only egress-proxy running by intent.
+  Full battery 249 green + freeze PASS + kernel exit 0 after
+  fixes; kernel/collector zero-diff vs `36c2862` confirmed by
+  direct diff. Hosted 35765446507: plane/kernel/evidence SUCCESS,
+  frozen stdlib FAILURE. Open design question flagged (not
+  changed): mirohuman nologin vs plan §8.2. Slice D NOT
+  AUTHORIZED. Phase D OPEN — blocked only by externals and
+  elapsed evidence, no further code-hardening round indicated.
