@@ -273,6 +273,33 @@ flag publishes BEFORE the sidecar file, so every crash direction is
 conservative (witness-without-sidecar safely re-adopts; the reverse
 order would leave a reusable sidecar-without-witness). Sole sidecar
 loss re-adopts from the verified registry.
+
+Trust model & boundary (Round-9, verified by throwaway PoC against
+`bb4733a`): the ledger proves MUTUAL CONSISTENCY (rows ↔ in-DB
+digest), deletion of any single object (table, digest, marker,
+sidecar, version), crash atomicity, and version/shape-gated
+migration — against crashes, partial writes, operator error, and
+non-coherent tamper. It does NOT prove history against a
+format-aware adversary with arbitrary SQLite write access who
+coherently rewrites rows AND digest together: that pair is
+self-consistent by construction (verified: a 15-line PoC using only
+the public hash algorithm re-baselined $149 to $0 with no marker
+touch and no version reset), and the marker mirror adopts FROM db
+truth — lag-tolerant by requirement, so it cannot cross-check. No
+deterministic check on (DB, marker) can distinguish legitimate crash
+lag (auto-recovery required: 116 hardening tests pin it) from
+coherent forgery; they are observationally identical. Closing that
+would need a non-readable secret or external anchor (HSM, TPM,
+remote transparency log, OS-mediated key) — none exists in Phase-D
+scope, and a same-disk key file or SQLite triggers would be theater
+against a disk-write actor (readable secrets don't bind; triggers
+don't authenticate the writer). That actor is host-compromise class
+(it can equally patch the plane source itself), so coherent
+multi-object forgery bottoms out at host/filesystem integrity — the
+same root frozen-code integrity rests on. Marker digest/count/cents
+fields are therefore a lag-tolerant recovery mirror and shape
+tripwire (telemetry + baseline), NOT an authority root; the
+authority is rows+digest mutual consistency under the gates above.
 Thread identity cannot resurrect a budget: run_cycle refuses a thread_id
 whose checkpoint is older than the 7-day R15 window (same cycle_id never
 mints a second budget). A checkpoint whose age cannot be established —

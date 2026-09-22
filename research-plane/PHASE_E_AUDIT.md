@@ -508,3 +508,49 @@ plane (Phase D) change any interface a future slice depends on?
   at the same frozen-collector step (pre-existing, untouched per
   the freeze/zero-diff constraint). Awaiting the human re-audit
   of `bb4733a`. Slice D NOT AUTHORIZED. Phase D NOT closed.
+
+## Addendum 21 — round-9 response: coherent-forgery P1 analyzed, model narrowed (docs-only, NOT signed off)
+- The human re-audit of `bb4733a` verified all Round-8 closures
+  (deletion gate, version resets, DROP+CREATE, witness ordering,
+  crash resume) and left them untouched, but raised a new P1: a
+  format-aware actor with SQLite write access can coherently
+  rewrite rows AND digest (public algorithm) with no marker touch
+  and no version reset, and the mirror then re-baselines the
+  marker over the forgery. CONFIRMED agent-side with a throwaway
+  PoC (15 lines, $149→$0 accepted; script deleted, not
+  committed — committing a forgery-accepting test is forbidden,
+  and a forgery-denying test is unimplementable, see below).
+- Impossibility argument (why no code fix): legitimate crash lag
+  (DB self-consistent, marker one commit behind — auto-recovery
+  pinned by the hardening battery) and coherent forgery (DB
+  self-consistent, marker pre-attack) are observationally
+  identical given only (DB, marker). Any deterministic verifier
+  that auto-recovers the first must accept the second. Closing
+  it needs a non-readable secret or external anchor (HSM, TPM,
+  remote log, OS key) — none in Phase-D scope — and same-disk
+  key files, SQLite triggers, or extra same-permission sidecars
+  are theater against a disk-write actor (readable secrets don't
+  bind; triggers don't authenticate). That actor is
+  host-compromise class (it can patch plane/*.py itself).
+- Resolution taken (the auditor's accepted alternative): the
+  threat model is explicitly narrowed and code/docs now agree
+  exactly. Proven: rows↔digest mutual consistency, single-object
+  deletion, crash atomicity, version/shape-gated migration vs
+  non-coherent faults. Out of scope: coherent multi-object
+  forgery, bottoming out at host/filesystem integrity (same root
+  as frozen-code integrity). Residual corrected: rows+digest
+  (NOT rows+digest+marker — Addendum 17's wording overclaimed;
+  marker forgery is not required). Marker fields answered:
+  lag-tolerant recovery mirror + shape tripwire (telemetry +
+  baseline), NOT an authority root. No ledger behavior changed
+  (no theater); the two residual comments corrected in source.
+- CI evidence gap (auditor note, not a P1) closed: new
+  independent `evidence` job runs isolation + sources even when
+  the frozen collector loop fails; sources added to CI for the
+  first time. Workflow only — kernel/collector untouched.
+- Batteries: plane 108 + hardening 116 + emit 19 + isolation +
+  sources + stdlib green locally; kernel `build.sh` exit 0;
+  freeze-check PASS; kernel/collector zero-diff. Hosted rerun
+  pending on push. Slice D NOT AUTHORIZED. Phase D NOT closed —
+  awaiting human sign-off on the narrowed model (or a decision
+  to fund a real anchor: HSM/TPM/remote witness).

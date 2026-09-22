@@ -537,9 +537,10 @@ def _connect_locked(db_path, create=False):
             # rebuilt over it — rebuilding would silently re-baseline
             # authority over possibly modified rows. A version reset
             # alone cannot reach migration (the marker shape still
-            # denies); only a full marker forgery plus version reset
-            # could, which is the documented coherent-forgery
-            # residual, not a silent path.
+            # denies); only a coherent rows+digest rewrite could (no
+            # marker touch needed — the mirror adopts FROM db truth),
+            # which is the documented host-scope residual, not a
+            # silent path.
             ver0 = con.execute("PRAGMA user_version"
                                ).fetchone()[0]
             if "content_digest" not in have:

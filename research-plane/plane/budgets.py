@@ -564,9 +564,10 @@ class BudgetLedger:
                 # (one-time TOFU, documented; the version stamp
                 # rides the same transaction). A version reset alone
                 # cannot reach migration (the marker shape still
-                # denies); only a full marker forgery plus version
-                # reset could, which is the documented
-                # coherent-forgery residual, not a silent path.
+                # denies); only a coherent rows+digest rewrite could
+                # (no marker touch needed — the mirror adopts FROM db
+                # truth), which is the documented host-scope residual,
+                # not a silent path.
                 ver_now = con.execute("PRAGMA user_version"
                                       ).fetchone()[0]
                 if _bmarker_digest_era(self.path) is not False \
