@@ -361,3 +361,42 @@ plane (Phase D) change any interface a future slice depends on?
   → blocked-evidence chain on Linux; the real docker command stays
   covered by the argv unit test. Awaiting the human re-audit of
   `0dccc0b`/`3e3a18b`. Slice D NOT AUTHORIZED. Phase D NOT closed.
+
+## Addendum 13 — re-audit round 5 fix pass (fb236d5, agent-side, NOT signed off)
+- The human re-audit of `0dccc0b`/`3e3a18b` verified the round-4
+  headline fixes but withheld sign-off on eight points plus a
+  documentation note, all closed in `fb236d5` with regressions
+  (see TODO record): established SQLite files never regrow tables
+  (table-missing deny under a surviving marker/token/siblings;
+  creation only on provable first init, pristine files, or the
+  explicit v1→v2 cycles migration — locks.may_create_tables;
+  unreadable catalogs deny); the cycles migration is now genuinely
+  single-transaction (the stray pre-transaction CREATE is gone)
+  with version-explicit detection (SCHEMA_VERSION 2: v1+table
+  adopts, v1-without-table migrates, v2-without-table denies);
+  stale-thread lookup failure rejects (only checkpointer-less apps
+  proceed; the old test had encoded the bypass and now asserts the
+  rejection); the extract reservation covers measured agent
+  framing (32 KiB overhead over 9.3 KiB measured, proven against
+  the exact generated messages; tape refusal stays the backstop);
+  budget numerics fail closed (DDL CHECKs plus read-validation on
+  every counters/lease row; corruption aborts, never normalizes);
+  ratio rows must match the exact schema and the tier journal is
+  strict with a tier_rev tripwire, under a state-first persist
+  order (crash leaves restrictive state with at most an audit
+  gap; legacy journal-first rows still recover); container reclaim
+  runs before candidate-shape rejection; timeout_s is documented
+  as prompt-termination plus bounded escalation; retention list
+  failure raises; the trusted-config boundary
+  (extract_workers/tool/executor factories) is recorded in plan
+  08 §8.4 as deployment discipline, not a runtime guarantee.
+- Interop found while verifying (fixed in-pass): the new DDL text
+  moved a corruption-probe file offset, so the integrity test's
+  probe loop now also catches undecodable mutations; one outdated
+  migration test retired to the version gate.
+- Batteries on the fix tree: plane 108 + hardening 96 + emit 19 +
+  isolation + sources + stdlib green locally; kernel `build.sh`
+  exit 0; freeze-check PASS; kernel/collector zero-diff. Hosted
+  rerun pending on push; the frozen-collector stdlib failure stays
+  untouched. Slice D NOT AUTHORIZED. Phase D NOT closed — this
+  record awaits the human re-audit of `fb236d5`.

@@ -247,7 +247,23 @@ Thread identity cannot resurrect a budget: run_cycle refuses a thread_id
 whose checkpoint is older than the 7-day R15 window (same cycle_id never
 mints a second budget). A fail-closed reader error during cadence
 accounting is blocked evidence (r15-budget-unreadable), never a silent
-under-count.
+under-count. Established database files never regrow tables: a missing
+table on a verified schema (spans, holds, counters, leases, meta —
+and cycles at schema version 2) denies instead of recreating empty,
+so deleted spend history can never reset to $0 under a surviving
+marker; creation runs only on provable first init, pristine files,
+or the explicit v1→v2 cycles migration (all inside one transaction).
+Every counters/lease row is semantically validated on read
+(non-negative counters, 0/1 dead/settled flags, finite walls) and by
+CHECK constraints on write — corruption aborts, never normalizes.
+
+Trusted-config boundary (explicit, not mechanically enforced): the
+graph takes `extract_workers`, `tool_factory`, and
+`executor_factory` as deployment-provided callables. The
+"only provider path is run_gated()" property holds by frozen
+deployment discipline (test doubles stay in tests); the code does
+not and cannot prove a substituted worker is provider-free. Do not
+present it as a runtime guarantee.
 
 ## 8.5 Feature contract v2 (locked — the only thing that crosses the boundary)
 
