@@ -13,6 +13,23 @@ Deployment host for Linux boxes: WSL2 Ubuntu 24.04.1 LTS, kernel
 replicates the same mechanism). Docker daemon 29.7.2 (Docker Desktop) started
 2026-09-22 for the daemon-dependent boxes.
 
+## Box 7 — source/feed config + probes (§9.4) — PARTIAL 2026-09-22
+
+- Live Tier-A probe (`sources/tier_a.py`, artifact
+  `research-plane/sandbox/tier-a-deploy-evidence.json`): EDGAR 8K
+  3/3×200 zero-403 (p50 94ms, p99 360ms), Fed monetary 3/3×200
+  zero-403 (p50/p99 ~406ms). Calendar LOADED (seed nyse-2026,
+  paper-only until G1).
+- FRED macro + ALFRED vintage replay: BLOCKED (no FRED_API_KEY;
+  the probe records BLOCKED, never silently downgrades — key
+  presence alone would not promote without a live 200).
+- `lessons.jsonl`: 12/12 entries carry pattern + failure_mode +
+  accept/hype grade (≥10 required) ✓.
+- Calendar fail-closed: `test_sources.py` pins CalendarMissing →
+  zero entries (now also running in the hosted evidence job) ✓.
+- Classification table: Phase-0 doc item (frozen). Tier B/C as
+  CONTEXT/NULL unused-by-nothing: code posture, unchanged.
+
 ## Box 6 — Langfuse server + attribution — PARTIAL 2026-09-22
 
 - Server SELF-HOSTED and healthy: `research-plane/sandbox/langfuse/`

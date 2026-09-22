@@ -1,0 +1,62 @@
+{
+  "gates": {
+    "alfred_vintage": "BLOCKED: needs FRED_API_KEY",
+    "calendar": {
+      "live_eligible": false,
+      "note": "seed: paper only until verified before G1",
+      "state": "LOADED",
+      "version": "nyse-2026-seed"
+    },
+    "fred_macro": "BLOCKED: FRED_API_KEY not in env"
+  },
+  "polls": {
+    "edgar_8k": {
+      "all_200": true,
+      "p50_ms": 94.0,
+      "p99_ms": 360.0,
+      "samples": [
+        {
+          "bytes": 28344,
+          "latency_ms": 360.0,
+          "status": 200
+        },
+        {
+          "bytes": 28344,
+          "latency_ms": 94.0,
+          "status": 200
+        },
+        {
+          "bytes": 28344,
+          "latency_ms": 93.0,
+          "status": 200
+        }
+      ],
+      "zero_403": true
+    },
+    "fed_monetary": {
+      "all_200": true,
+      "p50_ms": 406.0,
+      "p99_ms": 407.0,
+      "samples": [
+        {
+          "bytes": 9645,
+          "latency_ms": 407.0,
+          "status": 200
+        },
+        {
+          "bytes": 9645,
+          "latency_ms": 78.0,
+          "status": 200
+        },
+        {
+          "bytes": 9645,
+          "latency_ms": 406.0,
+          "status": 200
+        }
+      ],
+      "zero_403": true
+    }
+  },
+  "ts": 1790096167,
+  "ua": "MiroHedge/phase0 contact=research-plane-tier-a"
+}
