@@ -1,10 +1,15 @@
 # Repository-level execution evidence (Phase-D audit finding: claimed
-# green counts were local-only). Four jobs on every push/PR:
-#  1. stdlib — collector + plane isolation tests, no third-party deps.
-#  2. plane — full research-plane battery in the pinned venv, including
+# green counts were local-only). Five jobs on every push/PR:
+#  1. stdlib — collector suites only (mocked IO, no network),
+#     no third-party deps.
+#  2. evidence — plane isolation + sources suites, stdlib only, in
+#     their own job so collector failure cannot mask them (Round-9
+#     audit gap: isolation used to be skipped behind the frozen
+#     collector loop, and sources never ran in CI at all).
+#  3. plane — full research-plane battery in the pinned venv, including
 #     the final-hardening P0 suite (concurrency, crash recovery,
 #     process boundary, publisher/manifest/reader/digest).
-#  3. kernel — deterministic C++ gates (normal mode; MinGW-only
+#  4. kernel — deterministic C++ gates (normal mode; MinGW-only
 #     hardened flags stay local to the Windows build host).
 name: ci
 
@@ -30,8 +35,19 @@ jobs:
           for t in test_ctx test_jev test_pipeline test_config test_collect test_soak_check; do
             python3 collector/$t.py
           done
+
+  evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
       - name: plane isolation (stdlib only)
         run: python3 research-plane/tests/test_isolation.py
+      - name: plane sources (stdlib only)
+        run: python3 research-plane/tests/test_sources.py
 
   plane:
     runs-on: ubuntu-latest
