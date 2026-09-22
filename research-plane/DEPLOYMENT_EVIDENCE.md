@@ -13,6 +13,21 @@ Deployment host for Linux boxes: WSL2 Ubuntu 24.04.1 LTS, kernel
 replicates the same mechanism). Docker daemon 29.7.2 (Docker Desktop) started
 2026-09-22 for the daemon-dependent boxes.
 
+## Box 3 — image pin/digest/SBOM/scan — PROVEN 2026-09-22
+
+- Base pinned in `research-plane/sandbox/Dockerfile`:
+  `python:3.11-slim-bookworm@sha256:a36c24f9…` (pre-existing pin).
+- Built `mirohedge/worker:sandbox-20260922`, digest
+  `sha256:4da3c201…5834` (local build; no registry push — no
+  registry credential exists on this host; RepoDigest records on push).
+- SBOM: `research-plane/sandbox/image-sbom.cyclonedx.json`
+  (CycloneDX 1.5, 194 components, sha256 `27e24676…`).
+- Scan: `research-plane/sandbox/image-scan.txt` (`docker scout cves`):
+  3C 14H 13M 40L, all inherited from the pinned bookworm base
+  (worker layer adds only the ==-pinned pip set). Disposition: no
+  silent upgrade — re-pin + rebuild + re-scan per the Dockerfile D3
+  rule; recorded here as the baseline for the next rebuild.
+
 ## Box 2 — egress enforcement (§8.6 "Egress proven") — PROVEN 2026-09-22
 
 - Worker image built from `research-plane/sandbox/Dockerfile`:
