@@ -338,6 +338,67 @@ class SpendGovernor:
                          and row["rev"] >= 0))
                 and isinstance(row.get("state"), dict))
 
+    def _check_tier_chain(self, new, st):
+        """Semantic chain over non-legacy journal rows (file
+        order): revs consecutive, from/to a legal governor step,
+        snapshot tier matching its row, and the journal exactly
+        mirroring the state (max rev == state rev, last to ==
+        state tier). Structural strictness proves the rows parse;
+        this proves they could only have been written by the
+        governor's own transition rule — a syntactically valid but
+        forged T3→T0 row cannot continue the chain AND match the
+        state. Legacy (rev-less) rows predate the chain and are
+        excluded (they recover through the legacy path below).
+        Raises StateUnavailable on any violation."""
+        binding = self._binding()
+        cur_rows = [r for r in new
+                    if isinstance(r.get("state"), dict)
+                    and r["state"].get("binding") == binding]
+        rev = st.get("tier_rev", 0)
+        for r in new:
+            if r["rev"] > rev:
+                # State-first persist means the state file always
+                # leads the journal: a row newer than state is
+                # forgery, never crash residue.
+                raise StateUnavailable("tier-journal-forged")
+        expected = None
+        prev_to = None
+        first = True
+        for r in cur_rows:
+            if expected is None:
+                # Any start: the rev counter survives binding
+                # resets, so a post-reset era continues it.
+                expected = r["rev"]
+            if r["rev"] != expected:
+                raise StateUnavailable("tier-journal-chain")
+            expected += 1
+            frm, to = r.get("from"), r.get("to")
+            if (type(frm) is not int or type(to) is not int
+                    or frm not in (0, 1, 2, 3)
+                    or to not in (0, 1, 2, 3) or frm == to
+                    or r["state"].get("tier") != to):
+                raise StateUnavailable("tier-journal-chain")
+            if first:
+                # Every rev-0 tier is Tier 0: fresh init starts
+                # there and binding resets return there.
+                if frm != 0:
+                    raise StateUnavailable("tier-journal-chain")
+                first = False
+            elif frm != prev_to:
+                raise StateUnavailable("tier-journal-chain")
+            prev_to = to
+        if cur_rows:
+            if cur_rows[-1]["rev"] != rev:
+                # Tail rows lost (or a crash between state save
+                # and journal append): the surviving audit history
+                # cannot mirror the state — deny, never resolve to
+                # the older tier. Recovery is an explicit
+                # supervisor re-baseline (fresh Tier-0 state +
+                # journal), never silent acceptance.
+                raise StateUnavailable("tier-journal-truncated")
+            if cur_rows[-1]["to"] != st.get("tier"):
+                raise StateUnavailable("tier-journal-chain")
+
     def _recover_from_journal(self, st):
         """Crash recovery: a transition journaled but never saved to
         the state file (possible only for legacy journal-first
@@ -363,6 +424,9 @@ class SpendGovernor:
         for row in rows:
             if not self._valid_tier_row(row):
                 raise StateUnavailable("tier-journal-corrupt")
+        new = [r for r in rows if "rev" in r]
+        if new:
+            self._check_tier_chain(new, st)
         if rev > 0:
             have = [r["rev"] for r in rows if "rev" in r]
             if not have or max(have) < rev:
@@ -650,20 +714,26 @@ class SpendGovernor:
                 and row["state"] in ("ok", "failed", "suspended")
                 and row["stage"] in STAGE_CAPS_USD)
 
-    def _ratio_rows_strict(self, journaled_day):
+    def _ratio_rows_strict(self, journaled_day, now=None):
         """Newest-first ratio-journal rows with fail-closed anomaly
         handling. journaled_day is the last day the tier state proves
         was journaled (the deletion tripwire): a missing/empty journal
         with journaled_day > 0 means evidence was deleted; an
         unreadable journal, a structurally invalid row, or a newest
         row older than the tripwire (lost tail rows) means
-        corruption. Any of those raises StateUnavailable — lost
-        ratio history denies, never resets the 3-day streak. A
-        missing journal with journaled_day == 0 is a fresh path
-        (first counted evaluation ever, or a reset before any ratio
-        row existed). One trailing line without its terminating
-        newline is tolerated (crash mid-append; the next append
-        heals it by truncating the partial tail first)."""
+        corruption. The journal itself must be a strictly increasing
+        day sequence (no duplicates, no reordering, no future days
+        when now is given): the writer appends at most one row per
+        UTC day in time order, so anything else is edited history —
+        and a duplicate/out-of-order day could flip the newest row
+        for a day and break the three-distinct-failed-days rule
+        without any malformed JSON. Any of those raises
+        StateUnavailable — lost ratio history denies, never resets
+        the 3-day streak. A missing journal with journaled_day == 0
+        is a fresh path (first counted evaluation ever, or a reset
+        before any ratio row existed). One trailing line without its
+        terminating newline is tolerated (crash mid-append; the next
+        append heals it by truncating the partial tail first)."""
         rows, had = self._journal_rows_raw(RATIO_JOURNAL_NAME,
                                             "ratio")
         if not had:
@@ -677,6 +747,15 @@ class SpendGovernor:
         for row in rows:
             if not self._valid_ratio_row(row):
                 raise StateUnavailable("ratio-journal-corrupt")
+        today = None if now is None else now - (now % 86400)
+        prev = -1
+        for row in rows:  # file order is append order
+            day = row["day"]
+            if day <= prev:
+                raise StateUnavailable("ratio-journal-order")
+            if today is not None and day > today:
+                raise StateUnavailable("ratio-journal-order")
+            prev = day
         rows.reverse()  # newest first (single-writer append order)
         if journaled_day > 0:
             newest = rows[0]["day"]
@@ -686,13 +765,13 @@ class SpendGovernor:
                 raise StateUnavailable("ratio-journal-truncated")
         return rows
 
-    def _ratio_day_state(self, day, journaled_day=0):
+    def _ratio_day_state(self, day, journaled_day=0, now=None):
         """Recorded ratio state for one UTC day (newest row wins),
         or None when the day was never evaluated (suspended days
         never journal — they return before the day-record block —
         but never count as failed). journaled_day is the tier
         state's deletion tripwire (see _ratio_rows_strict)."""
-        for row in self._ratio_rows_strict(journaled_day):
+        for row in self._ratio_rows_strict(journaled_day, now):
             if (type(row.get("day")) is int and row["day"] == day
                     and row.get("state") in ("ok", "failed",
                                                "suspended")):
@@ -719,12 +798,12 @@ class SpendGovernor:
             # always carry state_dir — enforced at graph build).
             return False
         journaled_day = st["ratio_day"] if st is not None else 0
-        if self._ratio_day_state(day, journaled_day) is None:
+        if self._ratio_day_state(day, journaled_day, now) is None:
             # At most ONE counted evaluation per UTC day: repeated
             # hourly failures on the same day are one failed day.
             def _record():
-                if self._ratio_day_state(day,
-                                          journaled_day) is None:
+                if self._ratio_day_state(day, journaled_day,
+                                          now) is None:
                     self._heal_journal_tail_locked(RATIO_JOURNAL_NAME,
                                                    "ratio")
                     self._journal_locked(RATIO_JOURNAL_NAME,
@@ -747,7 +826,7 @@ class SpendGovernor:
         streak = 0
         d = day
         while streak < RATIO_FAIL_DAYS:
-            if self._ratio_day_state(d, trip) != "failed":
+            if self._ratio_day_state(d, trip, now) != "failed":
                 break
             streak += 1
             d -= 86400

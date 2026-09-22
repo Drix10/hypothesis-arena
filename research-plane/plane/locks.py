@@ -184,14 +184,101 @@ def init_marker_path(db_path):
     return db_path + ".init"
 
 
-def write_marker(db_path, token):
-    """Durably record the authority-init token beside the DB."""
+def write_marker(db_path, token, roots=None):
+    """Durably record the authority-init token beside the DB.
+    roots (optional) replaces the historical-integrity roots
+    carried by the marker; None preserves whatever roots the
+    current marker holds (token-heal rewrites must not drop the
+    deletion-detection baseline). The 1 KiB cap stands: roots are
+    fixed-schema aggregates, never row sets (row sets live in
+    dedicated sidecars, not the marker)."""
     import time
-    raw = json.dumps({"init_token": token,
-                      "created_ts": int(time.time())},
-                     sort_keys=True).encode("utf-8")
+    if roots is None:
+        try:
+            roots = marker_roots(db_path)
+        except (FileNotFoundError, ValueError):
+            # Absent or corrupt body: nothing preservable. (An
+            # explicit re-publish carries a new token; stale roots
+            # must not survive it. Heal paths only reach here with
+            # a valid or absent marker — corrupt markers deny
+            # before any heal.)
+            roots = {}
+    body = {"init_token": token,
+            "created_ts": int(time.time()),
+            "roots": roots}
+    raw = json.dumps(body, sort_keys=True).encode("utf-8")
+    if len(raw) > 1024:
+        raise ValueError("marker roots overflow: %d bytes"
+                         % len(raw))
     atomic_write_bytes(os.path.dirname(os.path.abspath(db_path)),
-                       os.path.basename(init_marker_path(db_path)), raw)
+                       os.path.basename(init_marker_path(db_path)),
+                       raw)
+
+
+def marker_body(db_path):
+    """Parsed marker dict, or {} when provably absent. Raises
+    ValueError on corrupt/oversized/unreadable content
+    (fail-closed: callers deny — an unreadable trust root is not
+    an absent one)."""
+    try:
+        data = load_json_bounded(init_marker_path(db_path),
+                                 max_bytes=1024)
+    except FileNotFoundError:
+        return {}
+    if not isinstance(data, dict):
+        raise ValueError("marker body not a dict")
+    return data
+
+
+def marker_roots(db_path):
+    """Historical-integrity roots carried by the marker ({} when
+    the marker predates roots — trust-on-first-use adoption by the
+    caller verifies the live DB first; {} also when absent). Roots
+    present but malformed raise ValueError: edited roots are never
+    adopted, never verified against."""
+    roots = marker_body(db_path).get("roots", {})
+    if not isinstance(roots, dict):
+        raise ValueError("marker roots not a dict")
+    return roots
+
+
+def merge_marker_roots(db_path, update):
+    """Max-accumulate numeric root stats into the marker (atomic
+    rewrite; token and sibling fields preserved). Every stat is
+    monotonic by construction (maxima, counts, high-waters), so
+    concurrent mergers converge instead of losing updates, and a
+    crash between the DB commit and this bump only lags the
+    baseline (the next verify passes on truth >= lag, then
+    re-baselines — never a false deny). Requires a token-bearing
+    marker (bumping a tokenless file would mint a trust root over
+    an unproven authority): ValueError otherwise."""
+    body = marker_body(db_path)
+    if not isinstance(body.get("init_token"), str) or \
+            not body["init_token"]:
+        raise ValueError("merge needs a token-bearing marker")
+    roots = body.get("roots", {})
+    if not isinstance(roots, dict):
+        raise ValueError("marker roots not a dict")
+    for table, stats in update.items():
+        slot = roots.get(table)
+        if not isinstance(slot, dict):
+            slot = {}
+            roots[table] = slot
+        for key, val in stats.items():
+            if type(val) not in (int, float):
+                raise ValueError("root stat not numeric: %r" %
+                                 ((table, key),))
+            old = slot.get(key)
+            if type(old) not in (int, float) or val > old:
+                slot[key] = val
+    body["roots"] = roots
+    raw = json.dumps(body, sort_keys=True).encode("utf-8")
+    if len(raw) > 1024:
+        raise ValueError("marker roots overflow: %d bytes"
+                         % len(raw))
+    atomic_write_bytes(os.path.dirname(os.path.abspath(db_path)),
+                       os.path.basename(init_marker_path(db_path)),
+                       raw)
 
 
 def may_create_tables(have, exists, mstate):

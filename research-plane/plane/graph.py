@@ -1022,10 +1022,13 @@ def _reject_stale_thread(app, thread_id):
     new money. Lookup outcomes:
       no checkpointer on the app → proceed (nothing can be stale;
         invoke surfaces real errors);
-      no checkpoint for the thread (empty snapshot) → proceed;
+      no checkpoint for the thread (empty snapshot, no
+        checkpoint id) → proceed;
       checkpoint recent and timestamp valid → proceed;
       checkpoint old → reject;
       checkpoint timestamp unreadable → reject (age unprovable);
+      checkpoint present (by id) but timestamp missing → reject
+        (a timestamp-less snapshot is not a nonexistent one);
       checkpoint lookup itself fails → reject (an unverifiable
         checkpoint set must not silently skip the guard — the old
         checkpoint plus a storage error is exactly the bypass).
@@ -1044,6 +1047,23 @@ def _reject_stale_thread(app, thread_id):
                          "failed): %r" % (thread_id,)) from e
     created = getattr(snap, "created_at", None)
     if not created:
+        # No timestamp: a REAL checkpoint without a readable age
+        # is not a missing checkpoint. Presence is tested by
+        # checkpoint identity (config.checkpoint_id), not by the
+        # timestamp field (LangGraph types created_at as str |
+        # None, while real snapshots carry a checkpoint id).
+        cid = None
+        try:
+            cfg = getattr(snap, "config", None)
+            if isinstance(cfg, dict):
+                cid = cfg.get("configurable", {}).get(
+                    "checkpoint_id")
+        except (AttributeError, TypeError):
+            cid = None
+        if cid:
+            raise ValueError("stale thread_id (checkpoint %r has "
+                             "no readable age): %r" % (cid,
+                                                         thread_id))
         return
     try:
         import datetime as _dt

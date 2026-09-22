@@ -22,6 +22,10 @@ import time
 LLM_CALLS = 40
 TOOL_CALLS = 120
 WALL_S = 8 * 60
+# Clock-skew allowance for start-wall comparisons. A counters row
+# starting more than this in the future is a defect or tampering,
+# never a longer budget: fail closed, never extend the wall.
+CLOCK_SKEW_S = 300
 TOKENS = 250000
 DEPTH = 25
 ABORTS_PAUSE_SYMBOL = 3

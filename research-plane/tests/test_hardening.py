@@ -1007,6 +1007,46 @@ class TierStateTest(unittest.TestCase):
         with self.assertRaises(spend_mod.StateUnavailable):
             gov._load_state(now + 7200)
 
+    def test_tier_chain_forgery_denies(self):
+        # Finding 3: a syntactically valid row attempting T2 -> T0
+        # through recovery (valid binding, newer timestamp, rev
+        # continuing the chain) must deny — the chain plus the
+        # state-mirror rule proves it was not governor-written.
+        import json as _json
+        from plane import spend as spend_mod
+        d = tempfile.mkdtemp()
+        gov, now = self._tier2_gov(d)
+        jpath = os.path.join(d, "spend", "tier_journal.jsonl")
+        forged_state = gov._initial_state()  # tier 0, current bind
+        forged_state.update(tier=0, projection=10.0,
+                            evaluated_at=now + 3600)
+        forged = {"ts": now + 7200, "from": 2, "to": 0,
+                  "projection_30d": 10.0, "cap": 150.0,
+                  "stage": "G0", "rev": 2,
+                  "state": forged_state}
+        with open(jpath, "a", encoding="utf-8") as fh:
+            fh.write(_json.dumps(forged, sort_keys=True) + "\n")
+        with self.assertRaises(spend_mod.StateUnavailable):
+            gov._load_state(now + 7200)
+        self.assertEqual(gov.decision(now + 7200)[0], "deny")
+
+    def test_tier_chain_break_denies(self):
+        # A chain-broken row (first transition not from Tier 0)
+        # denies even though every field is well-typed.
+        import json as _json
+        from plane import spend as spend_mod
+        d = tempfile.mkdtemp()
+        gov, now = self._tier2_gov(d)
+        jpath = os.path.join(d, "spend", "tier_journal.jsonl")
+        with open(jpath, encoding="utf-8") as fh:
+            rows = [l for l in fh.read().split("\n") if l.strip()]
+        row = _json.loads(rows[-1])
+        row["from"] = 1  # real first transition is from 0
+        with open(jpath, "w", encoding="utf-8") as fh:
+            fh.write(_json.dumps(row, sort_keys=True) + "\n")
+        with self.assertRaises(spend_mod.StateUnavailable):
+            gov._load_state(now + 7200)
+
     def test_journal_write_failure_keeps_new_state(self):
         # State-first persist: if the journal write fails, the new
         # (restrictive) state already stands — no recovery needed,
@@ -2025,6 +2065,43 @@ class ReauditFixTest(unittest.TestCase):
             self.assertIn("lease-corrupt",
                           str(cm.exception.snapshot))
 
+    def test_ratio_journal_order_denies(self):
+        # Finding 4: duplicate, out-of-order, or future days can
+        # flip the newest row for a day and break the
+        # three-distinct-failed-days rule without any malformed
+        # JSON. The journal must be a strictly increasing sequence.
+        import json as _json
+        from plane import spend as spend_mod
+        d = tempfile.mkdtemp()
+        gov = self._ratio_gov(d, "G2")
+        now = int(time.time())
+        today = now - (now % 86400)
+        jpath = os.path.join(d, "spend",
+                             spend_mod.RATIO_JOURNAL_NAME)
+
+        def _rows(days):
+            os.makedirs(os.path.dirname(jpath), exist_ok=True)
+            with open(jpath, "w", encoding="utf-8") as fh:
+                for dd in days:
+                    fh.write(_json.dumps(
+                        {"day": dd, "state": "failed",
+                         "stage": "G2"}) + "\n")
+
+        D = today - 3 * 86400
+        _rows([D, D + 86400, D + 86400])  # duplicate day
+        with self.assertRaises(spend_mod.StateUnavailable) as cm:
+            gov._ratio_rows_strict(0, now)
+        self.assertIn("ratio-journal-order", str(cm.exception))
+        _rows([D, D + 2 * 86400, D + 86400])  # out of order
+        with self.assertRaises(spend_mod.StateUnavailable):
+            gov._ratio_rows_strict(0, now)
+        _rows([D, today + 86400])  # future day
+        with self.assertRaises(spend_mod.StateUnavailable):
+            gov._ratio_rows_strict(0, now)
+        # Control: an ordered history still reads.
+        _rows([D, D + 86400, D + 2 * 86400])
+        self.assertEqual(len(gov._ratio_rows_strict(0, now)), 3)
+
     def test_cleanup_before_shape_rejection(self):
         # Finding 8: a failed cleanup plus malformed candidates
         # still surfaces the leak — the shape rejection cannot
@@ -2076,6 +2153,241 @@ class ReauditFixTest(unittest.TestCase):
         bad = _Tup("t2", None)
         latest = retention_mod._thread_latest(_Saver([good, bad]))
         self.assertEqual(sorted(latest), ["t1"])
+
+    def test_row_deletion_denies_attribution(self):
+        # Finding 1: wholesale row deletion — and same-schema
+        # DROP+CREATE, which the column check accepts — resets
+        # $149 to $0 under a green schema/marker/token/integrity.
+        # The marker-carried history roots must deny.
+        import json as _json
+        now = int(time.time())
+
+        def _spent(d):
+            log = os.path.join(d, "spans.jsonl")
+            attribution.append_span(
+                log, 1, "seed", "m", cycle_id="c",
+                symbol="AAPL", prompt_tokens=10,
+                completion_tokens=5, usd=149.0, span_id="hist",
+                ts=now)
+            return log
+
+        def _probe(log):
+            with self.assertRaises(
+                    attribution.LedgerUnavailable) as cm:
+                attribution.append_span(
+                    log, 1, "s2", "m", cycle_id="c",
+                    symbol="AAPL", prompt_tokens=1,
+                    completion_tokens=1, usd=1.0, span_id="s2",
+                    ts=now)
+            self.assertIn("history-deleted", str(cm.exception))
+
+        d = tempfile.mkdtemp()
+        log = _spent(d)
+        dbp = attribution._db_for(log)
+        con = sqlite3.connect(dbp)
+        con.execute("DELETE FROM spans")
+        con.commit()
+        con.close()
+        _probe(log)
+        # Same-schema DROP+CREATE: columns match, history gone.
+        d = tempfile.mkdtemp()
+        log = _spent(d)
+        dbp = attribution._db_for(log)
+        con = sqlite3.connect(dbp)
+        con.execute("DROP TABLE spans")
+        con.execute(attribution._SPANS_DDL)
+        con.commit()
+        con.close()
+        _probe(log)
+        # Unknown-hold wipe.
+        d = tempfile.mkdtemp()
+        log = _spent(d)
+        dbp = attribution._db_for(log)
+        attribution.hold_spend(log, "h1", 20.0, now=now)
+        attribution.record_unknown(
+            log, lease_id="h1", span_id="u1", usd=20.0,
+            outcome="timeout", epoch=1, node="hypothesize",
+            model_id="m", cycle_id="c", symbol="AAPL", ts=now)
+        con = sqlite3.connect(dbp)
+        con.execute("DELETE FROM unknown_holds")
+        con.commit()
+        con.close()
+        _probe(log)
+        # Spend-hold wipe (outstanding $20 vanishes).
+        d = tempfile.mkdtemp()
+        log = _spent(d)
+        dbp = attribution._db_for(log)
+        attribution.hold_spend(log, "h2", 20.0, now=now)
+        con = sqlite3.connect(dbp)
+        con.execute("DELETE FROM spend_holds")
+        con.commit()
+        con.close()
+        _probe(log)
+
+    def test_prune_to_empty_still_verifies(self):
+        # Legitimate full prune must NOT trip the roots: the
+        # pre-declared cutoff proves the emptiness.
+        now = int(time.time())
+        d = tempfile.mkdtemp()
+        log = os.path.join(d, "spans.jsonl")
+        old = now - (attribution.SPAN_RETAIN_DAYS + 1) * 86400
+        attribution.append_span(
+            log, 1, "seed", "m", cycle_id="c", symbol="AAPL",
+            prompt_tokens=10, completion_tokens=5, usd=149.0,
+            span_id="old", ts=old)
+        attribution.prune_spans(log, now)
+        dbp = attribution._db_for(log)
+        con = sqlite3.connect(dbp)
+        left = con.execute(
+            "SELECT COUNT(*) FROM spans").fetchone()[0]
+        con.close()
+        self.assertEqual(left, 0)
+        attribution.append_span(
+            log, 1, "s2", "m", cycle_id="c", symbol="AAPL",
+            prompt_tokens=1, completion_tokens=1, usd=1.0,
+            span_id="s2", ts=now)  # must not raise
+
+    def test_marker_deleted_over_live_denies(self):
+        # A missing trust root over live money denies on both
+        # ledgers (it cannot re-baseline history it never saw).
+        now = int(time.time())
+        d = tempfile.mkdtemp()
+        log = os.path.join(d, "spans.jsonl")
+        attribution.append_span(
+            log, 1, "seed", "m", cycle_id="c", symbol="AAPL",
+            prompt_tokens=10, completion_tokens=5, usd=149.0,
+            span_id="hist", ts=now)
+        os.remove(attribution._db_for(log) + ".init")
+        with self.assertRaises(
+                attribution.LedgerUnavailable) as cm:
+            attribution.append_span(
+                log, 1, "s2", "m", cycle_id="c", symbol="AAPL",
+                prompt_tokens=1, completion_tokens=1, usd=1.0,
+                span_id="s2", ts=now)
+        self.assertIn("marker-deleted", str(cm.exception))
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "ledger.sqlite3")
+        budgets.BudgetLedger(path).reserve_call("c", "AAPL",
+                                                 10, 0)
+        os.remove(path + ".init")
+        with self.assertRaises(r15.AbortCycle) as cm:
+            budgets.BudgetLedger(path).reserve_call("c", "AAPL",
+                                                     10, 0)
+        self.assertIn("marker-deleted",
+                      str(cm.exception.snapshot))
+
+    def test_crashed_init_reinits(self):
+        # Finding 5: a crash-interrupted first init (tables
+        # without a token, no marker) re-inits in one transaction
+        # instead of wedging on version/token.
+        import sqlite3 as _sq2
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "ledger.sqlite3")
+        con = _sq2.connect(path)
+        con.execute(budgets._COUNTERS_DDL)
+        con.execute(budgets._LEASES_DDL)
+        con.execute(budgets._META_DDL)
+        con.commit()
+        con.close()
+        budgets.BudgetLedger(path).reserve_call("c", "AAPL",
+                                                 10, 0)
+        self.assertTrue(os.path.exists(path + ".init"))
+        d = tempfile.mkdtemp()
+        log = os.path.join(d, "spans.jsonl")
+        dbp = attribution._db_for(log)
+        con = _sq2.connect(dbp)
+        con.execute(attribution._SPANS_DDL)
+        con.commit()
+        con.close()
+        con = attribution._connect(dbp, create=True)
+        con.close()
+        self.assertTrue(os.path.exists(dbp + ".init"))
+
+    def test_row_deletion_denies_budgets(self):
+        # Finding 1 (R15 side): joint counters+registry deletion
+        # recreates a zeroed row; cycles-only deletion drops the
+        # registry under a live row. Both deny; the pre-existing
+        # counters-only case still denies via the in-DB rule.
+        import sqlite3 as _sq
+        now = time.time()
+
+        def _led(d):
+            path = os.path.join(d, "ledger.sqlite3")
+            led = budgets.BudgetLedger(path)
+            led.reserve_call("c", "AAPL", 10, 0)
+            return led, path
+
+        d = tempfile.mkdtemp()
+        led, path = _led(d)
+        con = _sq.connect(path)
+        con.execute("DELETE FROM counters")
+        con.execute("DELETE FROM cycles")
+        con.commit()
+        con.close()
+        with self.assertRaises(r15.AbortCycle) as cm:
+            led.reserve_call("c", "AAPL", 10, 0)
+        self.assertIn("registry-deleted",
+                      str(cm.exception.snapshot))
+        d = tempfile.mkdtemp()
+        led, path = _led(d)
+        con = _sq.connect(path)
+        con.execute("DELETE FROM counters")
+        con.commit()
+        con.close()
+        with self.assertRaises(r15.AbortCycle) as cm:
+            led.reserve_call("c", "AAPL", 10, 0)
+        self.assertIn("counters-deleted",
+                      str(cm.exception.snapshot))
+        d = tempfile.mkdtemp()
+        led, path = _led(d)
+        con = _sq.connect(path)
+        con.execute("DELETE FROM cycles")
+        con.commit()
+        con.close()
+        for op in (lambda: led.check("c", "AAPL"),
+                   lambda: led.snapshot("c", "AAPL"),
+                   lambda: led.reserve_call("c", "AAPL", 10,
+                                             0)):
+            with self.assertRaises(r15.AbortCycle) as cm:
+                op()
+            self.assertIn("registry-deleted",
+                          str(cm.exception.snapshot))
+
+    def test_future_start_wall_denies(self):
+        # Finding 2: a start 24h in the future keeps
+        # now - start negative, so wall-exhausted can never fire.
+        # Deny on every reader, plus at write for the now_wall
+        # control parameter.
+        import sqlite3 as _sq
+        now = time.time()
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "ledger.sqlite3")
+        led = budgets.BudgetLedger(path)
+        led.reserve_call("c", "AAPL", 10, 0)
+        con = _sq.connect(path)
+        con.execute("UPDATE counters SET start_wall=?",
+                    (now + 86400,))
+        con.commit()
+        con.close()
+        for op in (lambda: led.check("c", "AAPL"),
+                   lambda: led.snapshot("c", "AAPL"),
+                   lambda: led.reserve_call("c", "AAPL", 10,
+                                             0)):
+            with self.assertRaises(r15.AbortCycle) as cm:
+                op()
+            self.assertIn("future-start-wall",
+                          str(cm.exception.snapshot))
+        with self.assertRaises(r15.AbortCycle) as cm:
+            led.reserve_call("c2", "AAPL", 10, 0,
+                             now_wall=now + 86400)
+        self.assertIn("future-start-wall",
+                      str(cm.exception.snapshot))
+        # Control: present and past starts still verify (fresh
+        # ledger, past control clock).
+        led2 = budgets.BudgetLedger(
+            os.path.join(tempfile.mkdtemp(), "ledger.sqlite3"))
+        led2.reserve_call("c", "AAPL", 10, 0,
+                          now_wall=now - 100)
 
     def test_marker_unreadable_is_invalid_not_absent(self):
         # An unreadable marker (here: a directory in the way —
@@ -2195,30 +2507,29 @@ class ReauditFixTest(unittest.TestCase):
         g2.evaluate()  # must not raise
         self.assertTrue(os.path.exists(jpath))
 
-    def test_migration_crash_residue_heals(self):
-        # Crash residue the old migration could leave (registry
-        # present but empty over live counters) is backfilled
-        # idempotently on open — live rows are never treated as new.
+    def test_migration_crash_residue_denies(self):
+        # A present-but-empty registry over live counters is
+        # cycles-only deletion (indistinguishable from the crash
+        # residue the pre-transactional migration could leave, and
+        # healing it would resurrect cover for deleted authority)
+        # → deny on every reader, never backfill.
         d = tempfile.mkdtemp()
         path = os.path.join(d, "ledger.sqlite3")
         led = budgets.BudgetLedger(path)
         led.reserve_call("c", "AAPL", 10, 0)
         con = sqlite3.connect(path)
-        con.execute("DELETE FROM cycles")  # crash residue
+        con.execute("DELETE FROM cycles")  # registry-only wipe
         con.commit()
         con.close()
         led2 = budgets.BudgetLedger(path)
-        led2.reserve_call("c", "AAPL", 10, 0)  # heals + resumes
-        con = sqlite3.connect(path)
-        reg = con.execute("SELECT COUNT(*) FROM cycles").fetchone()
-        con.execute("DELETE FROM counters")
-        con.commit()
-        con.close()
-        self.assertEqual(reg[0], 1)
-        with self.assertRaises(r15.AbortCycle) as cm:
-            led2.reserve_call("c", "AAPL", 10, 0)
-        self.assertIn("counters-deleted",
-                      str(cm.exception.snapshot))
+        for op in (lambda: led2.reserve_call("c", "AAPL", 10,
+                                              0),
+                   lambda: led2.check("c", "AAPL"),
+                   lambda: led2.snapshot("c", "AAPL")):
+            with self.assertRaises(r15.AbortCycle) as cm:
+                op()
+            self.assertIn("registry-deleted",
+                          str(cm.exception.snapshot))
 
     def test_stale_thread_refused(self):
         # A thread_id whose checkpoint outlives the R15 window is
@@ -2252,14 +2563,42 @@ class ReauditFixTest(unittest.TestCase):
             graph_mod._reject_stale_thread(_App(old), "t")
         graph_mod._reject_stale_thread(_App(new), "t")
         graph_mod._reject_stale_thread(_App(None), "t")
-        # Finding 3: a failed lookup with a checkpointer present
-        # rejects (an old checkpoint plus a storage error is the
-        # bypass); only a checkpointer-less app proceeds blind.
+        # Finding 3 (round 5): a failed lookup with a checkpointer
+        # present rejects (an old checkpoint plus a storage error
+        # is the bypass); only a checkpointer-less app proceeds
+        # blind.
         with self.assertRaises(ValueError):
             graph_mod._reject_stale_thread(_App(old, boom=True),
                                            "t")
         graph_mod._reject_stale_thread(
             _App(old, boom=True, checkpointer=False), "t")
+        # Finding 6 (round 6): a timestamp-less snapshot is not a
+        # nonexistent one — checkpoint identity decides. A real
+        # checkpoint id with no readable age rejects; neither id
+        # nor timestamp proceeds.
+        class _Snap2:
+            def __init__(self, created, cid):
+                self.created_at = created
+                self.config = {"configurable":
+                               {"thread_id": "t",
+                                "checkpoint_id": cid}}
+
+        class _App2:
+            checkpointer = object()
+
+            def __init__(self, snap):
+                self._snap = snap
+
+            def get_state(self, _cfg):
+                return self._snap
+
+        with self.assertRaises(ValueError):
+            graph_mod._reject_stale_thread(
+                _App2(_Snap2(None, "ckpt-1")), "t")
+        graph_mod._reject_stale_thread(_App2(_Snap2(None, None)),
+                                       "t")
+        graph_mod._reject_stale_thread(_App2(_Snap2(new, None)),
+                                       "t")
         with self.assertRaises(ValueError):
             graph_mod._reject_stale_thread(_App("not-a-ts"), "t")
         # Integration: reusing a live thread is not a stale thread.

@@ -38,6 +38,7 @@ import math
 import os
 import sqlite3
 import time
+import time
 
 from . import locks
 from . import r15
@@ -111,6 +112,90 @@ class BudgetLedger:
     def __init__(self, path):
         self.path = path
 
+    def _seen_path(self):
+        return self.path + ".seen"
+
+    def _read_seen(self):
+        """Out-of-band cycle registry root: {(cycle, symbol):
+        first_wall} for every reservation ever made (pruned past
+        the 30-day cycles window on write). Returns None when
+        absent (trust-on-first-use adoption by the caller). Raises
+        LedgerCorrupt on malformed/oversized/unreadable content —
+        an unverifiable root denies, never verifies vacuously.
+        Separate from the 1 KiB marker: a row set cannot live in
+        the marker, and it shares the marker's directory and
+        permissions (no new trust assumption)."""
+        try:
+            data = locks.load_json_bounded(self._seen_path(),
+                                           max_bytes=1 << 20)
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError) as e:
+            raise LedgerCorrupt("seen-unreadable:%s" % (e,))
+        if not isinstance(data, dict):
+            raise LedgerCorrupt("seen-malformed")
+        clean = {}
+        for key, val in data.items():
+            if type(key) is not str or "\x00" not in key:
+                raise LedgerCorrupt("seen-malformed")
+            if type(val) not in (int, float) or \
+                    isinstance(val, bool):
+                raise LedgerCorrupt("seen-malformed")
+            clean[key] = val
+        return clean
+
+    def _write_seen(self, seen, now_wall):
+        """Merge-add into the sidecar registry (pruning entries
+        past the cycles window). Additive merge converges across
+        processes; every reserve re-adds its key from DB truth, so
+        a lost update self-heals on next touch (graceful to the
+        in-DB registry rule, never to silent creation). Raises
+        LedgerCorrupt on write failure."""
+        cutoff = now_wall - CYCLES_RETAIN_DAYS * 86400
+        try:
+            cur = self._read_seen() or {}
+        except LedgerCorrupt:
+            raise
+        for key in [k for k, v in cur.items() if v < cutoff]:
+            del cur[key]
+        for key, val in seen.items():
+            cur[key] = val
+        import json as _json
+        raw = _json.dumps(cur, sort_keys=True).encode("utf-8")
+        if len(raw) > (1 << 20):
+            raise LedgerCorrupt("seen-overflow")
+        try:
+            import os as _os
+            locks.atomic_write_bytes(
+                _os.path.dirname(_os.path.abspath(self.path)),
+                _os.path.basename(self._seen_path()), raw)
+        except OSError as e:
+            raise LedgerCorrupt("seen-write:%s" % (e,))
+
+    @staticmethod
+    def _seen_key(cycle_id, symbol):
+        return "%s\x00%s" % (cycle_id, symbol)
+
+    def _pristine(self, con, have):
+        """No init token and every present ledger table empty:
+        init never completed, so a single-transaction re-init
+        cannot destroy established state."""
+        try:
+            if "meta" in have:
+                cur = con.execute(
+                    "SELECT v FROM meta WHERE k='init_token'"
+                ).fetchone()
+                if cur is not None:
+                    return False
+            for table in ("counters", "leases", "cycles"):
+                if table in have and con.execute(
+                        "SELECT COUNT(*) FROM %s" % table
+                        ).fetchone()[0] > 0:
+                    return False
+        except (sqlite3.Error, ValueError):
+            return False
+        return True
+
     def _connect(self, fresh_ok, abort_symbol):
         # See attribution._connect: first-creation check-then-mint
         # serializes on a dedicated lock file (data-lock ->
@@ -157,17 +242,56 @@ class BudgetLedger:
                 raise LedgerCorrupt("catalog-unreadable:%r" % (e,))
             missing = [t for t in ("counters", "leases", "meta")
                        if t not in have]
-            if missing and not locks.may_create_tables(
-                    have, exists, mstate):
+            if missing and not (
+                    locks.may_create_tables(have, exists, mstate)
+                    or (exists and mstate == "absent"
+                        and self._pristine(con, have))):
                 # Established file, table gone: deletion or
                 # corruption, never a creation case (a recreated
                 # empty counters table would reset live budgets).
                 # First init and pristine files create below.
                 raise LedgerCorrupt("table-missing:%s" % missing[0])
-            con.execute(_COUNTERS_DDL)
-            con.execute(_LEASES_DDL)
-            con.execute(_META_DDL)
-            if "cycles" not in have:
+            inited = False
+            if locks.may_create_tables(have, exists, mstate) or \
+                    (exists and mstate == "absent"
+                     and self._pristine(con, have)):
+                # First init (or a crash-interrupted one: no
+                # marker, no token, no rows) — schema + version +
+                # token in ONE transaction, marker + empty seen
+                # registry after. A crash can only leave an
+                # absent/pristine file that re-inits cleanly. No
+                # DDL runs outside this transaction.
+                token = locks.fresh_token()
+                try:
+                    con.execute("BEGIN IMMEDIATE")
+                    try:
+                        con.execute(_COUNTERS_DDL)
+                        con.execute(_LEASES_DDL)
+                        con.execute(_META_DDL)
+                        con.execute(_CYCLES_DDL)
+                        con.execute("PRAGMA user_version=%d" %
+                                    SCHEMA_VERSION)
+                        con.execute("INSERT INTO meta VALUES "
+                                    "('init_token',?)", (token,))
+                        con.execute("COMMIT")
+                    except BaseException:
+                        try:
+                            con.execute("ROLLBACK")
+                        except sqlite3.Error:
+                            pass
+                        raise
+                except sqlite3.Error as e:
+                    raise LedgerCorrupt("init:%s" % (e,))
+                try:
+                    locks.write_marker(self.path, token)
+                    self._write_seen({}, int(time.time()))
+                except (OSError, ValueError, LedgerCorrupt) as e:
+                    raise LedgerCorrupt("init-publish:%s" % (e,))
+                inited = True
+                cycles_present = True
+            else:
+                cycles_present = "cycles" in have
+            if not inited and "cycles" not in have:
                 if exists and ver0 == SCHEMA_VERSION:
                     # Versioned schema says the registry exists:
                     # its absence is deletion, not an upgrade.
@@ -201,38 +325,21 @@ class BudgetLedger:
                             raise
                     except sqlite3.Error as e:
                         raise LedgerCorrupt("cycles-backfill:%s" % e)
-            else:
+                cycles_present = True
+            elif not inited:
                 if ver0 == 1:
                     # Round-3/4-era ledger: schema-identical to v2,
                     # adopt the version explicitly.
                     con.execute("PRAGMA user_version=%d" %
                                 SCHEMA_VERSION)
-                # Crash-residue guard: a present-but-empty registry
-                # over live counters is never legitimate (pruning
-                # only forgets cycles whose counters aged out first),
-                # so backfill it idempotently instead of treating
-                # the live rows as new cycles.
-                reg = con.execute(
-                    "SELECT COUNT(*) FROM cycles").fetchone()[0]
-                live = con.execute(
-                    "SELECT COUNT(*) FROM counters").fetchone()[0]
-                if reg == 0 and live > 0:
-                    try:
-                        con.execute("BEGIN IMMEDIATE")
-                        try:
-                            con.execute(
-                                "INSERT OR IGNORE INTO cycles SELECT "
-                                "cycle, symbol, start_wall FROM "
-                                "counters")
-                            con.execute("COMMIT")
-                        except BaseException:
-                            try:
-                                con.execute("ROLLBACK")
-                            except sqlite3.Error:
-                                pass
-                            raise
-                    except sqlite3.Error as e:
-                        raise LedgerCorrupt("cycles-heal:%s" % e)
+                # NOTE: no present-but-empty backfill here. An empty
+                # cycles table over live counters is cycles-only
+                # deletion (pruning forgets a cycle only after its
+                # counters aged out, and the versioned migration
+                # above is single-transaction) — healing it would
+                # resurrect registry cover for deleted authority.
+                # The reuse readers (_reserve_row/_live_row_or_abort)
+                # and the sidecar verify below deny it instead.
             for table, cols in _EXPECTED_COLUMNS.items():
                 got = [r[1] for r in con.execute(
                     "PRAGMA table_info(%s)" % table)]
@@ -242,19 +349,14 @@ class BudgetLedger:
             if row is None or row[0] != "ok":
                 raise LedgerCorrupt("integrity:%r" % (row,))
             ver = con.execute("PRAGMA user_version").fetchone()[0]
-            cur = con.execute(
-                "SELECT v FROM meta WHERE k='init_token'").fetchone()
-            if not exists and mstate == "absent":
-                # Genuine first init: mint the token inside the DB,
-                # then publish the sidecar marker. A crash between
-                # the two heals on next open (DB verifies, marker
-                # re-created from the DB token).
-                token = locks.fresh_token()
-                con.execute("PRAGMA user_version=%d" % SCHEMA_VERSION)
-                con.execute("INSERT INTO meta VALUES ('init_token',?)",
-                            (token,))
-                locks.write_marker(self.path, token)
-            else:
+            cur = None
+            if "meta" in have or inited:
+                cur = con.execute(
+                    "SELECT v FROM meta WHERE k='init_token'"
+                ).fetchone()
+            if not inited:
+                # Established ledger (init published above and
+                # skips this: its ver/token/marker were just set).
                 if ver != SCHEMA_VERSION:
                     raise LedgerCorrupt("version:%r" % (ver,))
                 if cur is None:
@@ -262,9 +364,57 @@ class BudgetLedger:
                 if mstate == "invalid":
                     raise LedgerCorrupt("marker-invalid")
                 if mstate == "absent":
+                    # A missing trust root over live rows denies;
+                    # over an empty token-bearing DB (crashed init
+                    # between commit and marker) it heals.
+                    live = con.execute(
+                        "SELECT COUNT(*) FROM counters"
+                    ).fetchone()[0] + con.execute(
+                        "SELECT COUNT(*) FROM leases"
+                    ).fetchone()[0]
+                    if cycles_present:
+                        live += con.execute(
+                            "SELECT COUNT(*) FROM cycles"
+                        ).fetchone()[0]
+                    if live:
+                        raise LedgerCorrupt("marker-deleted")
                     locks.write_marker(self.path, cur[0])
                 elif marker != cur[0]:
                     raise LedgerCorrupt("token-mismatch")
+            try:
+                seen = self._read_seen()
+            except LedgerCorrupt:
+                raise
+            now_now = int(time.time())
+            if seen is None:
+                # Pre-sidecar ledger: trust-on-first-use adoption
+                # from the cycles registry (verified above); every
+                # later open verifies strictly.
+                adopt = {}
+                if cycles_present:
+                    for cyc, sym, fw in con.execute(
+                            "SELECT cycle, symbol, first_wall FROM "
+                            "cycles"):
+                        adopt[self._seen_key(cyc, sym)] = fw
+                try:
+                    self._write_seen(adopt, now_now)
+                except LedgerCorrupt:
+                    raise
+                seen = adopt
+            else:
+                young = now_now - CYCLES_RETAIN_DAYS * 86400
+                for key, fw in seen.items():
+                    if fw < young:
+                        continue
+                    cyc, sym = key.split("\x00")
+                    hit = con.execute(
+                        "SELECT 1 FROM cycles WHERE cycle=? AND "
+                        "symbol=?", (cyc, sym)).fetchone()
+                    if hit is None:
+                        # A young registry row cannot prune away:
+                        # joint deletion of counters + registry.
+                        raise LedgerCorrupt(
+                            "registry-deleted:%s" % cyc)
         except LedgerCorrupt:
             con.close()
             raise
@@ -304,37 +454,76 @@ class BudgetLedger:
         finally:
             con.close()
 
+    def _note_seen(self, cycle_id, symbol, first_wall, now_wall):
+        """Post-commit sidecar registry maintenance: re-add this
+        cycle's key from DB truth (creation and every reuse). Runs
+        AFTER the SQLite commit — a crash before it leaves the DB
+        row present, so the next reserve re-adds the key
+        (self-healing); a crash after it is a normal committed
+        reservation. Publish failure aborts (fail-closed; the
+        counters already moved, which is the safe direction —
+        over-counted, never under — and the next reserve
+        retries the note)."""
+        try:
+            self._write_seen(
+                {self._seen_key(cycle_id, symbol): first_wall},
+                now_wall)
+        except LedgerCorrupt as e:
+            _abort(symbol, "seen-publish:%s" % (e,))
+
     def _reserve_row(self, con, cycle_id, symbol, now_wall):
         """Counters row for a new reservation: existing rows resume;
         a missing row for a cycle seen within LEDGER_RETAIN_DAYS is
         an illegitimate deletion (only _prune may delete, and only
         older rows) → abort, never fresh counters over live state.
         A missing row with old or no registry memory is genuinely
-        new (or prune-aged) → create + (re)register."""
+        new (or prune-aged) → create + (re)register. A PRESENT row
+        whose registry entry is gone is registry-only deletion
+        (pruning forgets cycles only after their counters aged
+        out) → abort. Returns (row, registry_first_wall)."""
         e = self._row(con, cycle_id, symbol, now_wall, False)
         if e is not None:
-            return e
+            reg = con.execute(
+                "SELECT first_wall FROM cycles WHERE cycle=? AND "
+                "symbol=?", (cycle_id, symbol)).fetchone()
+            if reg is None:
+                _abort(symbol, "registry-deleted")
+            return e, reg[0]
         seen = con.execute(
             "SELECT first_wall FROM cycles WHERE cycle=? AND "
             "symbol=?", (cycle_id, symbol)).fetchone()
         if (seen is not None and seen[0] >=
                 now_wall - LEDGER_RETAIN_DAYS * 86400):
             _abort(symbol, "counters-deleted")
+        if now_wall > time.time() + r15.CLOCK_SKEW_S:
+            # The inserted start_wall derives from now_wall (a
+            # test/control parameter): a future value would mint a
+            # future-dated authority — refuse at write, not just
+            # at read.
+            _abort(symbol, "future-start-wall")
         con.execute(
             "INSERT INTO counters VALUES (?,?,?,?,?,?,?,0)",
             (cycle_id, symbol, 0, 0, 0, 0, now_wall))
         con.execute("INSERT OR REPLACE INTO cycles VALUES (?,?,?)",
                     (cycle_id, symbol, now_wall))
-        return [0, 0, 0, 0, now_wall, 0]
+        return [0, 0, 0, 0, now_wall, 0], now_wall
 
     def _live_row_or_abort(self, con, cycle_id, symbol, now_wall):
         """Read-only twin of _reserve_row: an existing row resumes;
         a missing row for a cycle seen within LEDGER_RETAIN_DAYS is
         a deleted authority → abort (a reader that mints zeros over
         a live cycle corrupts every downstream estimate). Missing
-        with old or no registry memory → None (genuinely new)."""
+        with old or no registry memory → None (genuinely new). A
+        present row with no registry entry is registry-only
+        deletion (pruning forgets a cycle only after its counters
+        aged out, so a live row always has its entry) → abort."""
         e = self._row(con, cycle_id, symbol, now_wall, False)
         if e is not None:
+            reg = con.execute(
+                "SELECT 1 FROM cycles WHERE cycle=? AND symbol=?",
+                (cycle_id, symbol)).fetchone()
+            if reg is None:
+                _abort(symbol, "registry-deleted")
             return e
         seen = con.execute(
             "SELECT first_wall FROM cycles WHERE cycle=? AND "
@@ -355,6 +544,8 @@ class BudgetLedger:
         if r is None:
             if not create:
                 return None
+            if now_wall > time.time() + r15.CLOCK_SKEW_S:
+                _abort(symbol, "future-start-wall")
             con.execute(
                 "INSERT INTO counters VALUES (?,?,?,?,?,?,?,0)",
                 (cycle_id, symbol, 0, 0, 0, 0, now_wall))
@@ -371,6 +562,12 @@ class BudgetLedger:
                 or not math.isfinite(e[4]) or e[4] < 0
                 or type(e[5]) is not int or e[5] not in (0, 1)):
             _abort(symbol, "counters-corrupt")
+        if e[4] > now_wall + r15.CLOCK_SKEW_S:
+            # A start in the future extends the wall-clock budget:
+            # now - start stays negative, so wall-exhausted can
+            # never fire. Fail closed (small skew allowance for
+            # honest clock drift), never extend the authority.
+            _abort(symbol, "future-start-wall")
         return e
 
     def _check_row(self, e, symbol, now_wall):
@@ -441,7 +638,8 @@ class BudgetLedger:
 
         def _res(con):
             self._prune(con, now_wall)
-            e = self._reserve_row(con, cycle_id, symbol, now_wall)
+            e, first_wall = self._reserve_row(con, cycle_id, symbol,
+                                              now_wall)
             self._check_row(e, symbol, now_wall)
             if e[2] + token_need > r15.TOKENS:
                 _abort(symbol, "tokens-exhausted")
@@ -461,13 +659,15 @@ class BudgetLedger:
             con.execute(
                 "INSERT INTO leases VALUES (?,?,?,?,?,NULL,0)",
                 (lease_id, cycle_id, symbol, "call", token_need))
-            return {"lease_id": lease_id, "seq": e[0],
+            return ({"lease_id": lease_id, "seq": e[0],
                     "reserved": token_need,
                     "tools_reserved": tool_need,
-                    "remaining_tokens": r15.TOKENS - e[2]}
-        out = self._op(True, _res, symbol)
+                    "remaining_tokens": r15.TOKENS - e[2]},
+                    first_wall)
+        out, first_wall = self._op(True, _res, symbol)
         if _storage_size(self.path) > LEDGER_MAX_BYTES:
             self._reclaim()
+        self._note_seen(cycle_id, symbol, first_wall, now_wall)
         return out
 
     def settle_call(self, cycle_id, symbol, lease, actual_tokens):
@@ -521,15 +721,18 @@ class BudgetLedger:
 
         def _res(con):
             self._prune(con, now_wall)
-            e = self._reserve_row(con, cycle_id, symbol, now_wall)
+            e, first_wall = self._reserve_row(con, cycle_id, symbol,
+                                              now_wall)
             self._check_row(e, symbol, now_wall)
             e[1] += 1
             e[3] += 1
             con.execute(
                 "UPDATE counters SET tools=?, depth=? WHERE cycle=? "
                 "AND symbol=?", (e[1], e[3], cycle_id, symbol))
-            return {"seq": e[1]}
-        return self._op(True, _res, symbol)
+            return {"seq": e[1]}, first_wall
+        out, first_wall = self._op(True, _res, symbol)
+        self._note_seen(cycle_id, symbol, first_wall, now_wall)
+        return out
 
     def check(self, cycle_id, symbol, now_wall=None):
         now_wall = time.time() if now_wall is None else now_wall

@@ -155,6 +155,135 @@ def _storage_size(path):
     return total
 
 
+_ZERO_ROOTS = {"spans": {"max_ts": 0, "pruned": 0},
+               "recon": {"max_ts": 0, "pruned": 0},
+               "unknown": {"count": 0},
+               "holds": {"created": 0, "closed": 0}}
+
+
+def _root_num(roots, table, key):
+    """One numeric root stat, fail-closed on edited roots."""
+    try:
+        val = roots.get(table, {}).get(key, 0)
+    except AttributeError:
+        raise LedgerUnavailable("marker-roots-corrupt:%s.%s"
+                                % (table, key))
+    if type(val) not in (int, float) or isinstance(val, bool):
+        raise LedgerUnavailable("marker-roots-corrupt:%s.%s"
+                                % (table, key))
+    return val
+
+
+def _verify_roots_locked(con, roots):
+    """Historical-integrity verify: the live tables must still
+    contain everything the marker baseline proves they once held.
+    Wholesale row deletion (or a same-schema DROP+CREATE, which is
+    the same thing with extra steps) leaves the schema, marker,
+    token, version, and integrity check all green — this is the
+    check that catches it. Legitimate pruning never trips it: prune
+    only removes rows below an advancing cutoff, so it can neither
+    lower a table's max timestamp while rows survive nor empty a
+    table without the cutoff first passing the old maximum (the
+    pre-declared pruned high-water proves that)."""
+    for table, sql in (("spans", "SELECT MAX(ts) FROM spans"),
+                        ("recon", "SELECT MAX(ts) FROM "
+                         "reconciliations")):
+        cur_max = con.execute(sql).fetchone()[0]
+        base = _root_num(roots, table, "max_ts")
+        if cur_max is None:
+            if _root_num(roots, table, "pruned") < base:
+                raise LedgerUnavailable("history-deleted:%s"
+                                        % table)
+        elif cur_max < base:
+            raise LedgerUnavailable("history-deleted:%s" % table)
+    count = con.execute(
+        "SELECT COUNT(*) FROM unknown_holds").fetchone()[0]
+    if count < _root_num(roots, "unknown", "count"):
+        # unknown_holds is append-only (reconcile flags, never
+        # deletes): a lower count is deleted history.
+        raise LedgerUnavailable("history-deleted:unknown")
+    active = con.execute(
+        "SELECT COUNT(*) FROM spend_holds").fetchone()[0]
+    if active + _root_num(roots, "holds", "closed") < \
+            _root_num(roots, "holds", "created"):
+        # Holds are transient by design (created → settled →
+        # deleted), so the invariant is created <= closed +
+        # active: every deletion is paired with a recorded close.
+        raise LedgerUnavailable("history-deleted:holds")
+
+
+def _bump_roots_locked(db_path, con, created=0, closed=0):
+    """Re-baseline the marker roots from live DB truth after a
+    committed mutation (same file lock held). Recompute-from-truth
+    plus max-accumulate makes a crash between commit and bump lag
+    the baseline, never corrupt it: truth >= lag always verifies,
+    then re-baselines. Raises LedgerUnavailable on bump failure
+    (fail-closed; the committed mutation stays valid and the next
+    open retries the bump)."""
+    try:
+        stats = {}
+        cur_max = con.execute(
+            "SELECT MAX(ts) FROM spans").fetchone()[0]
+        if cur_max is not None:
+            stats["spans"] = {"max_ts": cur_max}
+        cur_max = con.execute(
+            "SELECT MAX(ts) FROM reconciliations").fetchone()[0]
+        if cur_max is not None:
+            stats["recon"] = {"max_ts": cur_max}
+        stats["unknown"] = {"count": con.execute(
+            "SELECT COUNT(*) FROM unknown_holds").fetchone()[0]}
+        if created or closed:
+            have = locks.marker_roots(db_path).get("holds", {})
+            hc = have.get("created", 0)
+            hx = have.get("closed", 0)
+            if type(hc) not in (int, float) or \
+                    type(hx) not in (int, float):
+                raise ValueError("holds roots not numeric")
+            stats["holds"] = {"created": hc + created,
+                                "closed": hx + closed}
+        locks.merge_marker_roots(db_path, stats)
+    except (OSError, ValueError) as e:
+        raise LedgerUnavailable("roots-bump:%s" % (e,))
+
+
+def _declare_prune_locked(db_path, cutoff):
+    """Pre-declare a prune cutoff in the marker BEFORE the DELETEs
+    run: a crash between declare and delete leaves the high-water
+    ahead of truth (harmless — the rows still verify), while the
+    reverse order could wedge a legitimately pruned-empty table as
+    deleted history. Raises LedgerUnavailable on failure (the prune
+    must not run undeclared)."""
+    try:
+        locks.merge_marker_roots(
+            db_path, {"spans": {"pruned": cutoff},
+                       "recon": {"pruned": cutoff}})
+    except (OSError, ValueError) as e:
+        raise LedgerUnavailable("roots-declare:%s" % (e,))
+
+
+def _pristine_locked(con, have):
+    """No init token and every present money table empty: init
+    never completed, so a single-transaction re-init cannot destroy
+    established state. (Absent tables count as empty — a
+    crash-interrupted first init.)"""
+    try:
+        if "meta" in have:
+            cur = con.execute(
+                "SELECT v FROM meta WHERE k='init_token'"
+            ).fetchone()
+            if cur is not None:
+                return False
+        for table in ("spans", "unknown_holds", "reconciliations",
+                      "spend_holds"):
+            if table in have and con.execute(
+                    "SELECT COUNT(*) FROM %s" % table
+                    ).fetchone()[0] > 0:
+                return False
+    except (sqlite3.Error, ValueError):
+        return False
+    return True
+
+
 def _connect(db_path, create=False):
     # First-creation is check-then-mint: serialize it across
     # processes on a dedicated lock file. Lock order is always
@@ -200,8 +329,10 @@ def _connect_locked(db_path, create=False):
             # is unverifiable, so the authority is too — deny.
             raise LedgerUnavailable("catalog-unreadable:%r" % (e,))
         missing = [t for t in _EXPECTED_COLUMNS if t not in have]
-        if missing and not locks.may_create_tables(
-                have, exists, mstate):
+        if missing and not (
+                locks.may_create_tables(have, exists, mstate)
+                or (exists and mstate == "absent"
+                    and _pristine_locked(con, have))):
             # An established file never regrows tables: a deleted
             # spans/unknown/hold table with a surviving marker or
             # token would otherwise recreate EMPTY and reset spend
@@ -210,43 +341,98 @@ def _connect_locked(db_path, create=False):
             # first init or a pristine file (see locks
             # .may_create_tables).
             raise LedgerUnavailable("table-missing:%s" % missing[0])
-        con.execute(_SPANS_DDL)
-        con.execute(_UNKNOWN_DDL)
-        con.execute(_RECON_DDL)
-        con.execute(_SPEND_HOLDS_DDL)
-        con.execute(_META_DDL)
-        for table, cols in _EXPECTED_COLUMNS.items():
-            got = [r[1] for r in con.execute(
-                "PRAGMA table_info(%s)" % table)]
-            if got != cols:
-                raise LedgerUnavailable("schema-mismatch:%s" % table)
-        row = con.execute("PRAGMA integrity_check").fetchone()
-        if row is None or row[0] != "ok":
-            raise LedgerUnavailable("integrity:%r" % (row,))
-        ver = con.execute("PRAGMA user_version").fetchone()[0]
-        cur = con.execute(
-            "SELECT v FROM meta WHERE k='init_token'").fetchone()
-        if not exists and mstate == "absent":
+        if not exists or (mstate == "absent"
+                           and _pristine_locked(con, have)):
+            # Genuine first init (no file, no marker — create=False
+            # already raised above) or a crash-interrupted one (no
+            # marker, no token, no rows): the WHOLE init — schema
+            # + version + token — commits in ONE transaction, so a
+            # crash can only leave an absent/pristine file that
+            # re-inits cleanly, never a half-built authority. No
+            # DDL runs outside this transaction. The sidecar marker
+            # (with zeroed roots) publishes after.
             token = locks.fresh_token()
-            con.execute("PRAGMA user_version=%d" % SCHEMA_VERSION)
-            con.execute("INSERT INTO meta VALUES ('init_token',?)",
-                        (token,))
-            locks.write_marker(db_path, token)
+            try:
+                con.execute("BEGIN IMMEDIATE")
+                try:
+                    con.execute(_SPANS_DDL)
+                    con.execute(_UNKNOWN_DDL)
+                    con.execute(_RECON_DDL)
+                    con.execute(_SPEND_HOLDS_DDL)
+                    con.execute(_META_DDL)
+                    con.execute("PRAGMA user_version=%d" %
+                                SCHEMA_VERSION)
+                    con.execute("INSERT INTO meta VALUES "
+                                "('init_token',?)", (token,))
+                    con.execute("COMMIT")
+                except BaseException:
+                    try:
+                        con.execute("ROLLBACK")
+                    except sqlite3.Error:
+                        pass
+                    raise
+            except sqlite3.Error as e:
+                raise LedgerUnavailable("init:%s" % (e,))
+            try:
+                locks.write_marker(db_path, token,
+                                   roots=dict(_ZERO_ROOTS))
+            except (OSError, ValueError) as e:
+                raise LedgerUnavailable("marker-write:%s" % (e,))
         else:
+            # Established authority: every table is present (the
+            # gate above denied otherwise) and NO DDL runs here —
+            # a CREATE could mask a deletion the gate missed.
+            for table, cols in _EXPECTED_COLUMNS.items():
+                got = [r[1] for r in con.execute(
+                    "PRAGMA table_info(%s)" % table)]
+                if got != cols:
+                    raise LedgerUnavailable("schema-mismatch:%s"
+                                            % table)
+            row = con.execute("PRAGMA integrity_check").fetchone()
+            if row is None or row[0] != "ok":
+                raise LedgerUnavailable("integrity:%r" % (row,))
+            ver = con.execute("PRAGMA user_version").fetchone()[0]
+            cur = con.execute(
+                "SELECT v FROM meta WHERE k='init_token'"
+            ).fetchone()
             if ver != SCHEMA_VERSION:
                 raise LedgerUnavailable("version:%r" % (ver,))
             if cur is None:
                 raise LedgerUnavailable("token-missing")
             if mstate == "invalid":
-                # The DB verifies but its authority token cannot be
-                # confirmed: not healed blindly, abort.
                 raise LedgerUnavailable("marker-invalid")
             if mstate == "absent":
-                # Heal ONLY here: the DB verified (schema +
-                # integrity above) and carries a valid token.
-                locks.write_marker(db_path, cur[0])
+                # A missing trust root over live money denies: the
+                # marker cannot re-baseline spent history it never
+                # saw. The only heal is a token-bearing but EMPTY
+                # DB (crashed init between commit and marker).
+                live = False
+                for table in ("spans", "unknown_holds",
+                              "reconciliations", "spend_holds"):
+                    if con.execute(
+                            "SELECT COUNT(*) FROM %s" % table
+                            ).fetchone()[0] > 0:
+                        live = True
+                        break
+                if live:
+                    raise LedgerUnavailable("marker-deleted")
+                locks.write_marker(db_path, cur[0],
+                                   roots=dict(_ZERO_ROOTS))
             elif marker != cur[0]:
                 raise LedgerUnavailable("token-mismatch")
+            try:
+                roots = locks.marker_roots(db_path)
+            except ValueError:
+                raise LedgerUnavailable("marker-roots-corrupt")
+            if roots:
+                _verify_roots_locked(con, roots)
+            else:
+                # Pre-roots marker: trust-on-first-use adoption —
+                # the live DB verifies (schema + integrity +
+                # token above), so baseline its truth once; every
+                # later open verifies strictly. Deletions that
+                # predate this upgrade are unprovable (documented).
+                _bump_roots_locked(db_path, con)
     except LedgerUnavailable:
         con.close()
         raise
@@ -404,6 +590,9 @@ def append_span(log_path, epoch, node, model_id, calls=1, tokens=0,
                     if verdict == "conflict":
                         raise ValueError("span-conflict: %s" % span_id)
                     inserted = verdict == "absent"
+            # Re-baseline the history roots from committed truth
+            # (same lock): a later row deletion must fail closed.
+            _bump_roots_locked(db_path, con)
         finally:
             con.close()
         if inserted:
@@ -513,6 +702,7 @@ def record_unknown(log_path, lease_id, span_id, usd, outcome, epoch,
                     raise SpendBlocked(
                         "unknown-hold-transition:%s" % lease_id)
                 con.execute("COMMIT")
+                _bump_roots_locked(db_path, con)
             except BaseException:
                 try:
                     con.execute("ROLLBACK")
@@ -567,9 +757,10 @@ def reserve_spend_hold(log_path, lease_id, usd, cap_usd, now=None):
         try:
             con.execute("BEGIN IMMEDIATE")
             try:
-                con.execute("DELETE FROM spend_holds WHERE "
-                            "state='reserved' AND ts < ?",
-                            (now - HOLD_TTL_S,))
+                reaped = con.execute(
+                    "DELETE FROM spend_holds WHERE "
+                    "state='reserved' AND ts < ?",
+                    (now - HOLD_TTL_S,)).rowcount or 0
                 unk = con.execute(
                     "SELECT COUNT(*) FROM unknown_holds WHERE "
                     "reconciled=0").fetchone()[0]
@@ -595,6 +786,8 @@ def reserve_spend_hold(log_path, lease_id, usd, cap_usd, now=None):
                 except sqlite3.IntegrityError:
                     raise SpendBlocked("duplicate-hold:%s" % lease_id)
                 con.execute("COMMIT")
+                _bump_roots_locked(db_path, con, created=1,
+                                   closed=reaped)
             except BaseException:
                 try:
                     con.execute("ROLLBACK")
@@ -747,9 +940,13 @@ def reconcile_unknown(log_path, lease_id, actual_usd, note=""):
                 con.execute(
                     "INSERT INTO reconciliations VALUES (?,?,?,?,?)",
                     (lease_id, old_usd, actual_usd, now, tag))
-                con.execute("DELETE FROM spend_holds WHERE lease_id=?",
-                            (lease_id,))
+                cur = con.execute(
+                    "DELETE FROM spend_holds WHERE lease_id=?",
+                    (lease_id,))
+                closed_holds = cur.rowcount or 0
                 con.execute("COMMIT")
+                _bump_roots_locked(db_path, con,
+                                   closed=closed_holds)
             except BaseException:
                 try:
                     con.execute("ROLLBACK")
@@ -782,6 +979,7 @@ def hold_spend(log_path, lease_id, usd, now=None):
                             "(?,?,?,?,NULL)",
                             (lease_id, usd, "reserved", now))
                 con.execute("COMMIT")
+                _bump_roots_locked(db_path, con, created=1)
             except BaseException:
                 try:
                     con.execute("ROLLBACK")
@@ -823,8 +1021,10 @@ def settle_hold(log_path, lease_id):
     with locks.FileLock(db_path + ".lock", purpose="spans"):
         con = _connect(db_path)
         try:
-            con.execute("DELETE FROM spend_holds WHERE lease_id=?",
-                        (lease_id,))
+            closed = con.execute(
+                "DELETE FROM spend_holds WHERE lease_id=?",
+                (lease_id,)).rowcount or 0
+            _bump_roots_locked(db_path, con, closed=closed)
         finally:
             con.close()
 
@@ -841,8 +1041,10 @@ def reap_holds(log_path, now=None):
     with locks.FileLock(db_path + ".lock", purpose="spans"):
         con = _connect(db_path)
         try:
-            con.execute("DELETE FROM spend_holds WHERE state='reserved'"
-                        " AND ts < ?", (now - HOLD_TTL_S,))
+            closed = con.execute(
+                "DELETE FROM spend_holds WHERE state='reserved'"
+                " AND ts < ?", (now - HOLD_TTL_S,)).rowcount or 0
+            _bump_roots_locked(db_path, con, closed=closed)
         finally:
             con.close()
 
@@ -871,10 +1073,16 @@ def prune_spans(log_path, now=None):
     with locks.FileLock(db_path + ".lock", purpose="spans"):
         con = _connect(db_path)
         try:
+            # Pre-declare the cutoff BEFORE deleting: a crash
+            # between declare and delete verifies cleanly (rows
+            # still present), while the reverse could wedge a
+            # legitimately pruned-empty table as deleted history.
+            _declare_prune_locked(db_path, cutoff)
             con.execute("DELETE FROM spans WHERE ts < ?", (cutoff,))
             con.execute("DELETE FROM reconciliations WHERE ts < ?",
                         (cutoff,))
             con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            _bump_roots_locked(db_path, con)
         finally:
             con.close()
     try:
