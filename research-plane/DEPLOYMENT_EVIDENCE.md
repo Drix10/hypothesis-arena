@@ -13,6 +13,26 @@ Deployment host for Linux boxes: WSL2 Ubuntu 24.04.1 LTS, kernel
 replicates the same mechanism). Docker daemon 29.7.2 (Docker Desktop) started
 2026-09-22 for the daemon-dependent boxes.
 
+## Box 6 — Langfuse server + attribution — PARTIAL 2026-09-22
+
+- Server SELF-HOSTED and healthy: `research-plane/sandbox/langfuse/`
+  `docker-compose.yml` (postgres:16-alpine + redis:7-alpine +
+  clickhouse:24-alpine + langfuse:2, health-gated startup) boots to
+  `/api/public/health → 200` (bring-up needed two honest fixes:
+  health-gated depends_on after a postgres race, and the native
+  `clickhouse://:9000` migration URL; all-zero ENCRYPTION_KEY is
+  rejected — evidence-only random key in the file, production
+  replaces ALL placeholder secrets). Stack parked stopped after
+  proof; reproduce with `docker compose up -d` in that dir.
+- Attribution mechanics PROVEN without the server (venv python):
+  3 spans across hypothesize/critique aggregate per-node from the
+  authoritative ledger (critique 1 call/120 tok/$0.40, hypothesize
+  2 calls/300 tok/$1.00); `spans.jsonl` itself is the tail (3 lines,
+  one row per insert, fsync'd).
+- BLOCKED (genuinely unavailable): full-day live per-node Langfuse
+  attribution needs the Box-4 model key (no live LLM traffic exists
+  to attribute). Server is ready to receive it.
+
 ## Box 5 — supervisor WALL_S kill/reap — PROVEN 2026-09-22
 
 - Mechanism: `plane/timeout.py::run_in_process` (the primitive the

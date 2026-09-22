@@ -1,0 +1,71 @@
+# Langfuse self-hosted stack (doc 08 observability; Phase-D box 6).
+#
+# Evidence deployment on the build host. Production reuses this file with
+# human-placed secrets (POSTGRES_PASSWORD, NEXTAUTH_SECRET, SALT,
+# ENCRYPTION_KEY); the checked-in values below are LOCAL-EVIDENCE ONLY
+# placeholders and must never be treated as production credentials.
+# No model key is configured here: the server proves ingest/API health;
+# live per-node traffic needs the Box-4 key (BLOCKED, recorded).
+name: mirohedge-langfuse
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: "no"
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse-evidence-only
+      POSTGRES_DB: langfuse
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse -d langfuse"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  redis:
+    image: redis:7-alpine
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  clickhouse:
+    image: clickhouse/clickhouse-server:24-alpine
+    restart: "no"
+    volumes:
+      - chdata:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider",
+             "http://127.0.0.1:8123/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  langfuse:
+    image: langfuse/langfuse:2
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      DATABASE_URL: postgresql://langfuse:langfuse-evidence-only@postgres:5432/langfuse
+      DIRECT_URL: postgresql://langfuse:langfuse-evidence-only@postgres:5432/langfuse
+      REDIS_CONNECTION_STRING: redis://redis:6379
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ""
+      NEXTAUTH_SECRET: evidence-only-nextauth-secret-32chars-min!!
+      SALT: evidence-only-salt
+      ENCRYPTION_KEY: 79ad7f9be2799dc0f96a7b4ecfb78c30e822a0c3cf28dd78cddf37b25758ce1e
+      NEXTAUTH_URL: http://127.0.0.1:3000
+      TELEMETRY_ENABLED: "false"
+volumes:
+  pgdata:
+  chdata:
