@@ -225,9 +225,18 @@ extrapolated), so the brake is applied before the wall, not at it.
   rule (first from Tier 0), snapshot tier equal to its row, and max rev
   exactly equal to the state rev — a forged newer row denies, and rows
   newer than state are never adopted (state-first persist means the
-  state always leads). The ratio journal must be a strictly increasing
-  day sequence (no duplicates, no reordering, no future days): an
-  edited day order denies rather than weakening the 3-day rule.
+  state always leads). Legacy (rev-less) rows recover only in an
+  explicitly legacy deployment (state rev 0, no revisioned rows):
+  once revisioned history exists, a rev-less row newer than state is
+  forgery and older rev-less rows are audit-only. Row timestamps and
+  embedded evaluated_at values beyond the 300 s skew allowance deny.
+  The ratio journal must be a strictly increasing day sequence (no
+  duplicates, no reordering, no future days): an edited day order
+  denies rather than weakening the 3-day rule. Ordering is verified
+  over the bounded 64 KiB journal tail (≈3.5 years at one row/day);
+  streak soundness does not depend on ancient order (a gap outside
+  the tail reads as unevaluated and breaks the streak toward the
+  conservative side).
 - A provider price change that lifts projected spend past a tier acts exactly like
   usage growth. No exception path exists.
 

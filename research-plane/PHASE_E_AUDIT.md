@@ -437,3 +437,35 @@ plane (Phase D) change any interface a future slice depends on?
   at the same frozen-collector step (pre-existing, untouched per
   the freeze/zero-diff constraint). Awaiting the human re-audit
   of `48d5bd2`. Slice D NOT AUTHORIZED. Phase D NOT closed.
+
+## Addendum 17 — re-audit round 7 fix pass (ce70100, agent-side, NOT signed off)
+- The human re-audit of `48d5bd2` verified three round-6 closures
+  (future start_wall, init wedge, ratio ordering modulo a tail
+  caveat) but withheld sign-off on three P1s (aggregate-only
+  roots + crash seam + lax root numerics; .seen joint deletion;
+  tier legacy bypass) and three P2s (tier/checkpoint future
+  timestamps; ratio tail scope), plus a bookkeeping correction
+  (six findings, not seven). All closed in `ce70100` with
+  regressions (see TODO record): same-transaction in-DB content
+  digests on both ledgers (seam closed by SQLite atomicity;
+  marker mirrors adopt-on-consistent, strict slot validation);
+  sidecar one-time-migration flag (seen-deleted only when the
+  digest was reconstructed that open, sole sidecar loss
+  re-adopts); tier legacy boundary (rev-less recovers only at
+  rev 0 with no revisioned rows); future tier/checkpoint
+  timestamps and naive-checkpoint rejection; ratio tail scope
+  documented (64 KiB ≈ 3.5 yr at one row/day; streak soundness
+  independent of ancient order). Coherent rows+digest+marker
+  forgery is documented out-of-scope (keyless roots detect
+  corruption and non-coherent tamper).
+- Interop found while verifying (fixed in-pass): older
+  out-of-band-edit tests retired to the digest-mismatch code
+  (old deletion codes remain as backfill-evasion guards);
+  prune-aging via the now_wall parameter; the conflict test
+  plants digest-coherently.
+- Batteries on the fix tree: plane 108 + hardening 113 + emit 19
+  + isolation + sources + stdlib green locally; kernel `build.sh`
+  exit 0; freeze-check PASS; kernel/collector zero-diff. Hosted
+  rerun pending on push; the frozen-collector stdlib failure stays
+  untouched. Slice D NOT AUTHORIZED. Phase D NOT closed — this
+  record awaits the human re-audit of `ce70100`.

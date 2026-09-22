@@ -245,29 +245,34 @@ deployments are protected immediately. The migration is crash-safe
 over live counters is registry-only deletion, never healed — it
 aborts, because healing would resurrect cover for deleted
 authority).
-Historical row integrity (beyond table presence): the attribution
-marker carries cumulative roots (per-table max timestamps with
-pre-declared prune high-waters, the append-only unknown count, and
-hold created/closed counters) re-baselined from committed truth
-under the same lock after every mutation — wholesale row deletion
-or same-schema DROP+CREATE denies as history-deleted, while a
-legitimate full prune verifies through its declared cutoff. The R15
-side keeps an out-of-band cycle registry (sidecar file, 30-day
-window): a young cycle whose registry entry is gone denies whether
-the counters row is missing (counters-deleted), the registry row is
-missing (registry-deleted — pruning cannot produce a live row
-without its entry), or both are gone. Counters rows starting more
-than 300 s in the future deny on every reader (future-start-wall).
-First init is one transaction (schema + version + token) with the
-marker published after; a crash-interrupted init re-inits instead
-of wedging. A missing marker over live rows denies
-(marker-deleted); pre-roots markers adopt truth once (documented
-trust-on-first-use).
+Historical row integrity (beyond table presence): every money
+table carries a same-transaction content digest (XOR of canonical
+row hashes plus exact counts/cents, maintained explicitly in each
+mutation's own SQLite transaction — SQLite atomicity means a crash
+leaves rows and digest both old or both new, never split, which
+closes the commit/bump crash seam by construction). Out-of-band SQL
+skips digest maintenance and denies as digest-mismatch at the next
+open — this covers UPDATE-usd/content edits that preserve every
+aggregate, which pure max/count roots cannot see. The marker
+mirrors the digest (re-baselined from in-DB truth post-commit;
+verify adopts the mirror when rows and digest agree, so crash lag
+self-heals and marker tamper is erased rather than honored).
+Malformed marker slots (missing keys, NaN/inf, non-int numerics)
+deny. The R15 side keeps an out-of-band cycle registry (sidecar
+file, 30-day window) with a one-time-migration flag in the
+marker: a missing sidecar on a flagged ledger denies
+(seen-deleted) when the digest itself was reconstructed that open,
+and re-adopts otherwise. Coherent forgery of rows + digest +
+marker together is outside the threat model (keyless roots detect
+corruption and non-coherent tamper; filesystem trust roots bound
+the rest) and is documented as such.
 Thread identity cannot resurrect a budget: run_cycle refuses a thread_id
 whose checkpoint is older than the 7-day R15 window (same cycle_id never
 mints a second budget). A checkpoint whose age cannot be established —
 lookup failure, unreadable timestamp, or a checkpoint id with no
-timestamp — is refused, not treated as absent. A fail-closed reader error during cadence
+timestamp — is refused, not treated as absent. A checkpoint dated
+beyond the 300 s skew allowance, or with a timezone-less timestamp
+(host-local interpretation), is likewise refused. A fail-closed reader error during cadence
 accounting is blocked evidence (r15-budget-unreadable), never a silent
 under-count. Established database files never regrow tables: a missing
 table on a verified schema (spans, holds, counters, leases, meta —
