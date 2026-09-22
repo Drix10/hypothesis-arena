@@ -554,3 +554,11 @@ plane (Phase D) change any interface a future slice depends on?
   pending on push. Slice D NOT AUTHORIZED. Phase D NOT closed —
   awaiting human sign-off on the narrowed model (or a decision
   to fund a real anchor: HSM/TPM/remote witness).
+
+## Addendum 22 — hosted run with the independent evidence job (4dcf137)
+- Run 35747745650: plane SUCCESS, kernel SUCCESS, evidence
+  SUCCESS (isolation + sources green independently), stdlib
+  FAILURE at the same frozen-collector step (pre-existing,
+  untouched). The CI-evidence gap is closed with proof. Awaiting
+  human sign-off on the narrowed model. Slice D NOT AUTHORIZED.
+  Phase D NOT closed.
