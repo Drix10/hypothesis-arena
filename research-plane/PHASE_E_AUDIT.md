@@ -641,3 +641,21 @@ plane (Phase D) change any interface a future slice depends on?
   changed): mirohuman nologin vs plan §8.2. Slice D NOT
   AUTHORIZED. Phase D OPEN — blocked only by externals and
   elapsed evidence, no further code-hardening round indicated.
+
+## Addendum 27 — earnings-calendar gap closed (agent-executed, NOT signed off)
+- Auditor-scoped single item (`aa3c63d` verdict): `sources/earnings.py`
+  (new, stdlib-only, EDGAR-derived 8-K Item 2.02 + 10-Q/10-K windows,
+  ±3d veto, Unknown -> event-present -> no entry) + 6 fail-closed
+  unit tests in `tests/test_sources.py` (offline fetchers) + live
+  evidence `sandbox/earnings-deploy-evidence.json`.
+- Runtime proof 2026-09-22: AAPL/MSFT submissions 200s zero-403
+  (89/48 events, July-2026 earnings detected); gate verified
+  True-on-earnings-day / False-on-quiet-day / True-on-unknown.
+  Honest remainder: TTL/heartbeat production wiring OPEN
+  (deployment wiring, not a contract gap). No frozen dir touched,
+  no accepted mechanism modified, no live capital, fail-closed
+  intact. Local battery 255 green (249+6) + freeze PASS; hosted
+  35769648294 plane/kernel/evidence SUCCESS (evidence job covers
+  the new tests), frozen stdlib FAILURE. `mirohuman` nologin
+  accepted as NOT A BLOCKER per ruling (evidence note updated,
+  script unchanged).
