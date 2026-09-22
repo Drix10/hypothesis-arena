@@ -244,7 +244,7 @@ class SpendGovernor:
 
     def _initial_state(self):
         st = {"tier": 0, "projection": 0.0, "evaluated_at": 0,
-              "below_count": 0, "ratio_day": 0}
+              "below_count": 0, "ratio_day": 0, "tier_rev": 0}
         st["binding"] = self._binding()
         return st
 
@@ -268,9 +268,12 @@ class SpendGovernor:
             ratio_day = data.get("ratio_day", 0)
             if type(ratio_day) is not int or ratio_day < 0:
                 return None
+            tier_rev = data.get("tier_rev", 0)
+            if type(tier_rev) is not int or tier_rev < 0:
+                return None
             st = {"tier": tier, "projection": float(proj),
                   "evaluated_at": eva, "below_count": below,
-                  "ratio_day": ratio_day,
+                  "ratio_day": ratio_day, "tier_rev": tier_rev,
                   "binding": data.get("binding")}
         except (TypeError, ValueError):
             return None
@@ -312,6 +315,7 @@ class SpendGovernor:
             # goes stale).
             init = self._initial_state()
             init["ratio_day"] = st["ratio_day"]
+            init["tier_rev"] = st["tier_rev"]
             return init
         if now is not None and st["evaluated_at"] > now + \
                 EVAL_FUTURE_SKEW_S:
@@ -319,46 +323,52 @@ class SpendGovernor:
         recovered = self._recover_from_journal(st)
         return recovered if recovered is not None else st
 
-    def _journal_tail(self, name):
-        """Newest-first parsed rows from the bounded tail of a
-        journal (never the whole file)."""
-        if not self.state_dir:
-            return
-        path = os.path.join(self.state_dir, name)
-        try:
-            size = os.path.getsize(path)
-        except OSError:
-            return
-        try:
-            with open(path, "rb") as fh:
-                if size > JOURNAL_TAIL_BYTES:
-                    fh.seek(size - JOURNAL_TAIL_BYTES)
-                    fh.readline()  # drop the partial first line
-                chunk = fh.read(JOURNAL_TAIL_BYTES + 4096)
-        except OSError:
-            return
-        rows = []
-        for line in chunk.decode("utf-8", "replace").split("\n"):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                row = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(row, dict):
-                rows.append(row)
-        for row in reversed(rows):
-            yield row
+    @staticmethod
+    def _valid_tier_row(row):
+        """Exact tier-row shape for recovery: ts must be an exact
+        int, rev (absent on legacy rows) an exact non-negative int,
+        and state a dict (content-validated later against the
+        binding). Anything else is corruption, not a skippable
+        line — a damaged journal must not silently hide a
+        transition the state file predates."""
+        return (isinstance(row, dict)
+                and type(row.get("ts")) is int
+                and ("rev" not in row
+                     or (type(row["rev"]) is int
+                         and row["rev"] >= 0))
+                and isinstance(row.get("state"), dict))
 
     def _recover_from_journal(self, st):
         """Crash recovery: a transition journaled but never saved to
-        the state file (crash between the two writes) is adopted from
-        the journal tail — the journal row carries the full post-
-        transition state snapshot. Returns the recovered state or
-        None."""
+        the state file (possible only for legacy journal-first
+        persists — current code persists state first) is adopted
+        from the journal tail. STRICT: a missing journal with
+        transitions on record means deleted evidence; a journal
+        whose max rev trails the state's means lost tail rows;
+        any structurally invalid row means corruption. All raise
+        StateUnavailable — a damaged journal must never resolve to
+        the older (weaker) tier on disk. Returns the recovered
+        state or None."""
+        rows, had = self._journal_rows_raw(TIER_JOURNAL_NAME,
+                                            "tier")
+        rev = st.get("tier_rev", 0)
+        if not had:
+            if rev > 0:
+                raise StateUnavailable("tier-journal-deleted")
+            return None
+        if not rows:
+            if rev > 0:
+                raise StateUnavailable("tier-journal-deleted")
+            return None
+        for row in rows:
+            if not self._valid_tier_row(row):
+                raise StateUnavailable("tier-journal-corrupt")
+        if rev > 0:
+            have = [r["rev"] for r in rows if "rev" in r]
+            if not have or max(have) < rev:
+                raise StateUnavailable("tier-journal-truncated")
         best = None
-        for row in self._journal_tail(TIER_JOURNAL_NAME):
+        for row in reversed(rows):  # newest first
             snap = row.get("state")
             ts = row.get("ts")
             if (not isinstance(snap, dict) or type(ts) is not int or
@@ -412,19 +422,26 @@ class SpendGovernor:
 
     def _save_state_and_journal_locked(self, st, journal_name,
                                        journal_row):
-        """Transition persist ASSUMING the tier lock is held."""
+        """Transition persist ASSUMING the tier lock is held: STATE
+        FIRST, then the journal row. A crash can only leave new
+        state without its audit row (audit gap, tier-safe) or old
+        state with no new journal row (consistent old) — never a
+        journaled transition with stale state on disk (which would
+        need the journal to recover the restrictive tier)."""
+        self._save_state_locked(st)
         if journal_row is not None:
             journal_row = dict(journal_row)
             journal_row["state"] = dict(st)
+            self._heal_journal_tail_locked(journal_name, "tier")
             self._journal_locked(journal_name, journal_row)
-        self._save_state_locked(st)
 
     def _save_state_and_journal(self, st, journal_name, journal_row):
-        """Crash-consistent transition persist: journal (carrying the
-        full post-transition state snapshot for tail recovery) THEN
-        state, under ONE acquisition of the tier lock. A crash
-        between the two is recovered by _recover_from_journal on the
-        next load; no second evaluator can enter between them."""
+        """Crash-consistent transition persist: STATE then journal
+        (carrying the full post-transition state snapshot for audit
+        and legacy tail recovery), under ONE acquisition of the tier
+        lock. A crash between the two leaves the restrictive state
+        on disk with at most a missing audit row; no second
+        evaluator can enter between them."""
         lock = self._tier_lock_path()
         if lock is None:
             self._save_state_and_journal_locked(st, journal_name,
@@ -495,9 +512,10 @@ class SpendGovernor:
             st["below_count"] = 0
         st.update(projection=proj, evaluated_at=now)
         if st["tier"] != old_tier:
+            st["tier_rev"] = st.get("tier_rev", 0) + 1
             row = {"ts": now, "from": old_tier, "to": st["tier"],
                    "projection_30d": proj, "cap": cap,
-                   "stage": self.stage}
+                   "stage": self.stage, "rev": st["tier_rev"]}
             if locked:
                 self._save_state_and_journal_locked(
                     st, TIER_JOURNAL_NAME, row)
@@ -541,36 +559,28 @@ class SpendGovernor:
             return "ok", "within-ratio"
         return "failed", "ratio-exceeded"
 
-    def _ratio_rows_strict(self, journaled_day):
-        """Newest-first ratio-journal rows with fail-closed anomaly
-        handling. journaled_day is the last day the tier state proves
-        was journaled (the deletion tripwire): a missing/empty journal
-        with journaled_day > 0 means evidence was deleted; an
-        unreadable journal, a malformed row, or a newest row older
-        than the tripwire (lost tail rows) means corruption. Any of
-        those raises StateUnavailable — lost ratio history denies,
-        never resets the 3-day streak. A missing journal with
-        journaled_day == 0 is a fresh path (first counted evaluation
-        ever, or a reset before any ratio row existed). One trailing
-        line without its terminating newline is tolerated (crash
-        mid-append; the next append heals it by truncating the
-        partial tail first); every other malformed line is
-        corruption."""
+    def _journal_rows_raw(self, name, tag):
+        """Oldest-first parsed rows from a journal tail, STRICT.
+        Returns (rows, had_file). A missing file yields ([], False).
+        An unreadable file or any malformed line raises
+        StateUnavailable(<tag>-journal-unreadable/corrupt) — except
+        ONE trailing line without its terminating newline, which is
+        a crash mid-append (tolerated here; every append heals the
+        tail first under the same lock, so buried partials cannot
+        accumulate). Bounded tail scan, never the whole file. All
+        parsed values are returned (dict or not) so callers can
+        reject structurally invalid rows, not just bad syntax."""
         if not self.state_dir:
-            return []
-        path = os.path.join(self.state_dir, RATIO_JOURNAL_NAME)
+            return [], False
+        path = os.path.join(self.state_dir, name)
         try:
             size = os.path.getsize(path)
         except FileNotFoundError:
-            if journaled_day > 0:
-                raise StateUnavailable("ratio-journal-deleted")
-            return []
+            return [], False
         except OSError:
-            raise StateUnavailable("ratio-journal-unreadable")
+            raise StateUnavailable("%s-journal-unreadable" % tag)
         if size == 0:
-            if journaled_day > 0:
-                raise StateUnavailable("ratio-journal-deleted")
-            return []
+            return [], True
         try:
             with open(path, "rb") as fh:
                 if size > JOURNAL_TAIL_BYTES:
@@ -578,7 +588,7 @@ class SpendGovernor:
                     fh.readline()  # drop the partial first line
                 chunk = fh.read(JOURNAL_TAIL_BYTES + 4096)
         except OSError:
-            raise StateUnavailable("ratio-journal-unreadable")
+            raise StateUnavailable("%s-journal-unreadable" % tag)
         text = chunk.decode("utf-8", "replace")
         ends_clean = text.endswith("\n")
         parts = text.split("\n")
@@ -589,32 +599,21 @@ class SpendGovernor:
             if not line:
                 continue
             try:
-                row = json.loads(line)
+                rows.append(json.loads(line))
             except ValueError:
                 if i == last and not ends_clean:
-                    # Crash mid-append: the next journaled day
-                    # truncates this partial tail before appending.
                     continue
-                raise StateUnavailable("ratio-journal-corrupt")
-            if isinstance(row, dict):
-                rows.append(row)
-        rows.reverse()  # newest first (single-writer append order)
-        if journaled_day > 0 and rows:
-            newest = rows[0].get("day")
-            if type(newest) is not int or newest < journaled_day:
-                # Tail rows were lost (truncation/restore): the
-                # surviving history cannot prove the streak.
-                raise StateUnavailable("ratio-journal-truncated")
-        return rows
+                raise StateUnavailable("%s-journal-corrupt" % tag)
+        return rows, True
 
-    def _heal_ratio_tail_locked(self):
+    def _heal_journal_tail_locked(self, name, tag):
         """Drop a crash-partial trailing line (bytes after the last
         newline) so buried partials can never accumulate: every
         append heals the tail first, under the tier lock. A complete
         row always ends with a newline, so only provably incomplete
         bytes are removed. No newline in the trailing window means
         the tail is not a row stream at all — fail closed."""
-        path = os.path.join(self.state_dir, RATIO_JOURNAL_NAME)
+        path = os.path.join(self.state_dir, name)
         try:
             with open(path, "rb") as fh:
                 fh.seek(0, 2)
@@ -624,17 +623,68 @@ class SpendGovernor:
         except FileNotFoundError:
             return
         except OSError:
-            raise StateUnavailable("ratio-journal-unreadable")
+            raise StateUnavailable("%s-journal-unreadable" % tag)
         if tail and not tail.endswith(b"\n"):
             idx = tail.rfind(b"\n")
             if idx < 0:
-                raise StateUnavailable("ratio-journal-corrupt")
+                raise StateUnavailable("%s-journal-corrupt" % tag)
             cut = size - (len(tail) - (idx + 1))
             try:
                 with open(path, "r+b") as fh:
                     fh.truncate(cut)
             except OSError:
-                raise StateUnavailable("ratio-journal-unreadable")
+                raise StateUnavailable("%s-journal-unreadable" % tag)
+
+    @staticmethod
+    def _valid_ratio_row(row):
+        """Exact ratio-row schema: a syntactically valid but
+        structurally wrong line (a list, a string, a dict with
+        wrong keys/types) is corruption, not a skippable line —
+        ratio history controls the Tier-3 rule. Stage need only be
+        a KNOWN stage, not the current one: history survives
+        binding resets by design (the tripwire, not the streak,
+        is what a reset preserves)."""
+        return (isinstance(row, dict)
+                and set(row) == {"day", "state", "stage"}
+                and type(row["day"]) is int and row["day"] >= 0
+                and row["state"] in ("ok", "failed", "suspended")
+                and row["stage"] in STAGE_CAPS_USD)
+
+    def _ratio_rows_strict(self, journaled_day):
+        """Newest-first ratio-journal rows with fail-closed anomaly
+        handling. journaled_day is the last day the tier state proves
+        was journaled (the deletion tripwire): a missing/empty journal
+        with journaled_day > 0 means evidence was deleted; an
+        unreadable journal, a structurally invalid row, or a newest
+        row older than the tripwire (lost tail rows) means
+        corruption. Any of those raises StateUnavailable — lost
+        ratio history denies, never resets the 3-day streak. A
+        missing journal with journaled_day == 0 is a fresh path
+        (first counted evaluation ever, or a reset before any ratio
+        row existed). One trailing line without its terminating
+        newline is tolerated (crash mid-append; the next append
+        heals it by truncating the partial tail first)."""
+        rows, had = self._journal_rows_raw(RATIO_JOURNAL_NAME,
+                                            "ratio")
+        if not had:
+            if journaled_day > 0:
+                raise StateUnavailable("ratio-journal-deleted")
+            return []
+        if not rows:
+            if journaled_day > 0:
+                raise StateUnavailable("ratio-journal-deleted")
+            return []
+        for row in rows:
+            if not self._valid_ratio_row(row):
+                raise StateUnavailable("ratio-journal-corrupt")
+        rows.reverse()  # newest first (single-writer append order)
+        if journaled_day > 0:
+            newest = rows[0]["day"]
+            if newest < journaled_day:
+                # Tail rows were lost (truncation/restore): the
+                # surviving history cannot prove the streak.
+                raise StateUnavailable("ratio-journal-truncated")
+        return rows
 
     def _ratio_day_state(self, day, journaled_day=0):
         """Recorded ratio state for one UTC day (newest row wins),
@@ -675,7 +725,8 @@ class SpendGovernor:
             def _record():
                 if self._ratio_day_state(day,
                                           journaled_day) is None:
-                    self._heal_ratio_tail_locked()
+                    self._heal_journal_tail_locked(RATIO_JOURNAL_NAME,
+                                                   "ratio")
                     self._journal_locked(RATIO_JOURNAL_NAME,
                                          {"day": day, "state": state,
                                           "stage": self.stage})

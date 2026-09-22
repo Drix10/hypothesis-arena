@@ -1019,17 +1019,29 @@ def _reject_stale_thread(app, thread_id):
     authority. Counters are retained 7 days while checkpoints live
     30: resuming (or reusing) a cycle older than the budget window
     would mint that cycle a fresh budget from zero — same cycle_id,
-    new money. A thread with no checkpoint is new (proceed); a
-    checkpoint with an unreadable timestamp fails closed (age cannot
-    be proven); only a provably recent checkpoint proceeds. A
-    checkpointer that cannot answer at all is not a stale thread —
-    proceed and let invoke surface the real error."""
+    new money. Lookup outcomes:
+      no checkpointer on the app → proceed (nothing can be stale;
+        invoke surfaces real errors);
+      no checkpoint for the thread (empty snapshot) → proceed;
+      checkpoint recent and timestamp valid → proceed;
+      checkpoint old → reject;
+      checkpoint timestamp unreadable → reject (age unprovable);
+      checkpoint lookup itself fails → reject (an unverifiable
+        checkpoint set must not silently skip the guard — the old
+        checkpoint plus a storage error is exactly the bypass).
+    """
     from . import budgets as _budgets
+    if getattr(app, "checkpointer", None) is None:
+        # No checkpoint retention on this app: no stale-resume
+        # vector exists. (Exotic apps without the attribute read
+        # the same way.)
+        return
     try:
         snap = app.get_state({"configurable":
                               {"thread_id": thread_id}})
-    except Exception:
-        return
+    except Exception as e:
+        raise ValueError("stale thread_id (checkpoint lookup "
+                         "failed): %r" % (thread_id,)) from e
     created = getattr(snap, "created_at", None)
     if not created:
         return

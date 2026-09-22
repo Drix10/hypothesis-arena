@@ -120,10 +120,17 @@ def _kill_and_reap(proc, grace=REAP_GRACE_S):
 
 
 def run_in_process(func, timeout_s, *args, **kwargs):
-    """Run a PICKLABLE func in a child process with a hard kill at
-    timeout_s (the kill ladder begins within SETTLE_GRACE_S of the
-    deadline — just enough to tell an exited child from a live one
-    for exact missing-vs-timeout labels). Raises CallTimeout (child terminated) or re-raises the
+    """Run a PICKLABLE func in a child process with a prompt kill at
+    timeout_s. timeout_s is NOT a strict wall-clock completion
+    guarantee — it is the deadline at which termination begins
+    (within SETTLE_GRACE_S, just enough to tell an exited child
+    from a live one for exact missing-vs-timeout labels). After the
+    deadline: bounded escalation (SIGTERM, then SIGKILL, each with
+    a bounded join), ending in CallTimeout — or, for a truly
+    unkillable worker, a leaked-worker CallTimeout, never a silent
+    success. A normally terminable child therefore resolves just
+    past the deadline; an uncatchable one takes the escalation
+    ladder. Raises CallTimeout (child terminated) or re-raises the
     child's exception repr as RuntimeError.
 
     Result handoff over a one-shot Pipe, read WHILE the child runs

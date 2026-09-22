@@ -556,6 +556,47 @@ class ChildValidationTest(unittest.TestCase):
             self.assertEqual(got["text"] is None, want)
 
     @unittest.skipUnless(T._HAS_SMOL, "smolagents missing")
+    def test_extract_prompt_overhead_bound(self):
+        # Finding 4: the reservation must cover the ACTUAL first
+        # agent prompt (system + framing + tools), not just the
+        # brief. A recording provider captures the exact generated
+        # messages; every call's measured prompt must fit
+        # brief + EXTRACT_PROMPT_OVERHEAD_BYTES (here the overhead
+        # dwarfs the 4-byte brief, which is the finding's case).
+        seen = []
+
+        class _RecProv(T.FakeProvider):
+            def generate(self, messages, max_tokens=None, **kw):
+                seen.append(messages)
+                return super().generate(messages,
+                                        max_tokens=max_tokens, **kw)
+
+        def _factory(cfg):
+            return _RecProv(cfg)
+        p = {"kind": "extract", "provider_factory": _factory,
+             "provider_cfg": dict(T._cfg()), "max_tokens": 100,
+             "token_budget": 100000,
+             "sandbox_cfg": dict(T.SANDBOX),
+             "container_name": "miro-c-s-9", "brief": "TINY",
+             "rec_defaults": {}, "steps": 5,
+             "tool_factory": lambda: [],
+             "executor_factory": T.fake_executor_factory}
+        out = workers._llm_child_main(p)
+        self.assertEqual(out["status"], "ok")
+        self.assertTrue(seen)
+        tape = workers.UsageTape(T.FakeProvider({}), 100, 100000)
+        bound = len("TINY".encode("utf-8")) + \
+            workers.EXTRACT_PROMPT_OVERHEAD_BYTES
+        for messages in seen:
+            self.assertLessEqual(tape._prompt_bytes(messages), bound)
+        # The reservation formula actually spends the overhead:
+        comp, steps = 100, 5
+        self.assertGreater(
+            workers._token_need("extract", bound, comp, steps),
+            workers._token_need("extract", len("TINY"), comp,
+                                steps))
+
+    @unittest.skipUnless(T._HAS_SMOL, "smolagents missing")
     def test_extract_cleanup_failure_rides_envelope(self):
         # Child-side Docker cleanup failure is data in the envelope
         # ("cleanup"), never a swallowed exception: the parent
@@ -899,10 +940,78 @@ class TierStateTest(unittest.TestCase):
         self.assertEqual(st["binding"]["pricing_fp"],
                          gov2._binding()["pricing_fp"])
 
-    def test_crash_between_journal_and_state_recovers(self):
-        # Injected failure at the exact crash point: journal carries
-        # the transition, state never lands — the next load adopts
-        # the journaled snapshot deterministically.
+    def _tier2_gov(self, d):
+        # Governor that transitions 0 -> 2 on first evaluation
+        # ($30 spend vs $150 G0 cap), leaving a rev-1 journal row.
+        from plane import spend as spend_mod
+        log = os.path.join(d, "spans.jsonl")
+        now = int(time.time())
+        attribution.append_span(log, 1, "seed", "m", cycle_id="c",
+                                symbol="AAPL", prompt_tokens=10,
+                                completion_tokens=5, usd=30.0,
+                                span_id="t2seed", ts=now)
+        gov = spend_mod.SpendGovernor(
+            log, dict(T.PRICING), "G0",
+            state_dir=os.path.join(d, "spend"))
+        tA, _p = gov.evaluate(now)
+        self.assertEqual(tA, 2)
+        return gov, now
+
+    def test_tier_journal_malformed_denies(self):
+        # Finding 7: a damaged tier journal must deny, never resolve
+        # to the older weaker tier on disk.
+        from plane import spend as spend_mod
+        d = tempfile.mkdtemp()
+        gov, now = self._tier2_gov(d)
+        jpath = os.path.join(d, "spend", "tier_journal.jsonl")
+        self.assertTrue(os.path.exists(jpath))
+        with open(jpath, "a", encoding="utf-8") as fh:
+            fh.write('{"ts": broken}\n')
+        with self.assertRaises(spend_mod.StateUnavailable):
+            gov._load_state(now + 7200)
+        self.assertEqual(gov.decision(now + 7200)[0], "deny")
+
+    def test_tier_journal_deleted_with_rev_denies(self):
+        # Transitions on record (rev 1) plus a missing journal =
+        # deleted evidence -> deny. Missing journal with rev 0
+        # stays a fresh path.
+        from plane import spend as spend_mod
+        d = tempfile.mkdtemp()
+        gov, now = self._tier2_gov(d)
+        jpath = os.path.join(d, "spend", "tier_journal.jsonl")
+        os.remove(jpath)
+        with self.assertRaises(spend_mod.StateUnavailable):
+            gov._load_state(now + 7200)
+        d2 = tempfile.mkdtemp()
+        from plane import spend as _sp
+        gov2 = _sp.SpendGovernor(
+            os.path.join(d2, "spans.jsonl"), dict(T.PRICING), "G0",
+            state_dir=os.path.join(d2, "spend"))
+        gov2.evaluate(int(time.time()))  # no transition, rev 0
+        self.assertEqual(gov2._load_state()["tier_rev"], 0)
+
+    def test_tier_journal_truncated_denies(self):
+        # Journal rows older than the state's rev (lost tail rows)
+        # deny: the surviving history cannot prove the transition.
+        import json as _json
+        from plane import spend as spend_mod
+        d = tempfile.mkdtemp()
+        gov, now = self._tier2_gov(d)
+        jpath = os.path.join(d, "spend", "tier_journal.jsonl")
+        with open(jpath, encoding="utf-8") as fh:
+            rows = [l for l in fh.read().split("\n") if l.strip()]
+        row = _json.loads(rows[-1])
+        row["rev"] = 0  # tail evidence older than state rev 1
+        with open(jpath, "w", encoding="utf-8") as fh:
+            fh.write(_json.dumps(row, sort_keys=True) + "\n")
+        with self.assertRaises(spend_mod.StateUnavailable):
+            gov._load_state(now + 7200)
+
+    def test_journal_write_failure_keeps_new_state(self):
+        # State-first persist: if the journal write fails, the new
+        # (restrictive) state already stands — no recovery needed,
+        # no downgrade possible, journal simply absent.
+        import json as _json
         d = tempfile.mkdtemp()
         gov, _log = self._gov(d)
         now = int(time.time())
@@ -910,9 +1019,9 @@ class TierStateTest(unittest.TestCase):
         st = gov._initial_state()
         st.update(tier=2, projection=130.0, evaluated_at=now + 3600,
                   below_count=0)
-        real_save = gov._save_state_locked
+        real_journal = gov._journal_locked
         try:
-            gov._save_state_locked = lambda s: (_ for _ in ()).throw(
+            gov._journal_locked = lambda n, r: (_ for _ in ()).throw(
                 OSError("crash"))
             with self.assertRaises(OSError):
                 gov._save_state_and_journal(
@@ -921,7 +1030,30 @@ class TierStateTest(unittest.TestCase):
                      "projection_30d": 130.0, "cap": 150.0,
                      "stage": "G0"})
         finally:
-            gov._save_state_locked = real_save
+            gov._journal_locked = real_journal
+        loaded = gov._load_state(now + 7200)
+        self.assertEqual(loaded["tier"], 2)
+        self.assertEqual(loaded["evaluated_at"], now + 3600)
+        self.assertFalse(os.path.exists(
+            os.path.join(d, "spend", "tier_journal.jsonl")))
+
+    def test_legacy_journal_newer_than_state_recovers(self):
+        # Backward compat: a journal-first-era row (no rev) newer
+        # than the state file is still adopted.
+        import json as _json
+        d = tempfile.mkdtemp()
+        gov, _log = self._gov(d)
+        now = int(time.time())
+        gov.evaluate(now)  # Tier-0 state, no journal (no transition)
+        st = gov._initial_state()
+        st.update(tier=2, projection=130.0, evaluated_at=now + 3600,
+                  below_count=0)
+        row = {"ts": now + 3600, "from": 0, "to": 2,
+               "projection_30d": 130.0, "cap": 150.0,
+               "stage": "G0", "state": st}
+        with open(os.path.join(d, "spend", "tier_journal.jsonl"),
+                  "w", encoding="utf-8") as fh:
+            fh.write(_json.dumps(row, sort_keys=True) + "\n")
         recovered = gov._load_state(now + 7200)
         self.assertEqual(recovered["tier"], 2)
         self.assertEqual(recovered["evaluated_at"], now + 3600)
@@ -1679,7 +1811,111 @@ class ReauditFixTest(unittest.TestCase):
         self.assertTrue(rows)
         self.assertTrue(all(r["to"] == 2 for r in rows))
 
-    def test_timeout_kill_starts_at_deadline(self):
+    def test_deleted_spans_table_denies(self):
+        # Finding 1: an established ledger that loses its spans
+        # table must deny, never recreate empty ($149 of history
+        # must not become $0 with a still-valid marker).
+        d = tempfile.mkdtemp()
+        log = os.path.join(d, "spans.jsonl")
+        now = int(time.time())
+        attribution.append_span(log, 1, "seed", "m", cycle_id="c",
+                                symbol="AAPL", prompt_tokens=10,
+                                completion_tokens=5, usd=149.0,
+                                span_id="hist", ts=now)
+        dbp = attribution._db_for(log)
+        con = sqlite3.connect(dbp)
+        con.execute("DROP TABLE spans")
+        con.commit()
+        con.close()
+        with self.assertRaises(attribution.LedgerUnavailable) as cm:
+            attribution.append_span(log, 1, "s2", "m", cycle_id="c",
+                                    symbol="AAPL", prompt_tokens=1,
+                                    completion_tokens=1, usd=1.0,
+                                    span_id="s2", ts=now)
+        self.assertIn("table-missing:spans", str(cm.exception))
+
+    def test_deleted_hold_tables_deny(self):
+        # spend_holds / unknown_holds deletion denies on the next
+        # open (reap/has_unreconciled both open the DB).
+        d = tempfile.mkdtemp()
+        log = os.path.join(d, "spans.jsonl")
+        now = int(time.time())
+        attribution.append_span(log, 1, "seed", "m", cycle_id="c",
+                                symbol="AAPL", prompt_tokens=10,
+                                completion_tokens=5, usd=1.0,
+                                span_id="hist", ts=now)
+        dbp = attribution._db_for(log)
+        for table, probe in (
+                ("spend_holds", attribution.reap_holds),
+                ("unknown_holds", attribution.has_unreconciled)):
+            con = sqlite3.connect(dbp)
+            con.execute("DROP TABLE %s" % table)
+            con.commit()
+            con.close()
+            with self.assertRaises(
+                    attribution.LedgerUnavailable) as cm:
+                probe(log)
+            self.assertIn("table-missing:%s" % table,
+                          str(cm.exception))
+
+    def test_deleted_counters_table_denies(self):
+        # The budget twin: a deleted counters table on an
+        # established ledger aborts instead of minting fresh rows.
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "ledger.sqlite3")
+        led = budgets.BudgetLedger(path)
+        led.reserve_call("c", "AAPL", 10, 0)
+        con = sqlite3.connect(path)
+        con.execute("DROP TABLE counters")
+        con.commit()
+        con.close()
+        with self.assertRaises(r15.AbortCycle) as cm:
+            led.reserve_call("c", "AAPL", 10, 0)
+        self.assertIn("table-missing:counters",
+                      str(cm.exception.snapshot))
+
+    def test_cycles_schema_version_gating(self):
+        # Finding 2: cycles absence is a versioned migration ONLY
+        # for old ledgers. A current-version ledger missing cycles
+        # denies (deletion); a v1 ledger without it migrates and
+        # adopts version 2; a v1 ledger WITH it adopts silently.
+        import sqlite3 as _sq
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "ledger.sqlite3")
+        led = budgets.BudgetLedger(path)
+        led.reserve_call("c", "AAPL", 10, 0)
+        con = _sq.connect(path)
+        con.execute("DROP TABLE cycles")
+        con.commit()
+        con.close()
+        with self.assertRaises(r15.AbortCycle) as cm:
+            led.reserve_call("c", "AAPL", 10, 0)
+        self.assertIn("table-missing:cycles",
+                      str(cm.exception.snapshot))
+        # Old (v1, pre-registry) ledger: backfill + version adopt.
+        con = _sq.connect(path)
+        con.execute("PRAGMA user_version=1")
+        con.commit()
+        con.close()
+        led2 = budgets.BudgetLedger(path)
+        led2.reserve_call("c", "AAPL", 10, 0)
+        con = _sq.connect(path)
+        ver = con.execute("PRAGMA user_version").fetchone()[0]
+        reg = con.execute("SELECT COUNT(*) FROM cycles").fetchone()
+        con.close()
+        self.assertEqual(ver, budgets.SCHEMA_VERSION)
+        self.assertEqual(reg[0], 1)
+        # v1 ledger that already has the table: silent adopt.
+        con = _sq.connect(path)
+        con.execute("PRAGMA user_version=1")
+        con.commit()
+        con.close()
+        budgets.BudgetLedger(path).reserve_call("c", "AAPL", 10,
+                                                 0)
+        con = _sq.connect(path)
+        ver = con.execute("PRAGMA user_version").fetchone()[0]
+        con.close()
+        self.assertEqual(ver, budgets.SCHEMA_VERSION)
         # Hard-deadline semantics: the kill ladder begins within a
         # fraction of a second of the deadline — never seconds
         # later — and the attempt is still ambiguous (CallTimeout).
@@ -1691,6 +1927,155 @@ class ReauditFixTest(unittest.TestCase):
         self.assertGreaterEqual(dt, 2.0)
         self.assertLess(dt, 6.0)
         self.assertEqual(multiprocessing.active_children(), [])
+
+    def _strip_checks(self, path, table, ddl):
+        # Simulate a pre-CHECK legacy schema: same columns, no
+        # CHECK constraints, data preserved. Read-validation must
+        # still catch corruption the DDL never saw.
+        import sqlite3 as _sq
+        con = _sq.connect(path)
+        con.execute("ALTER TABLE %s RENAME TO %s_legacy" % (table,
+                                                             table))
+        con.execute(ddl)
+        con.execute("INSERT INTO %s SELECT * FROM %s_legacy" % (
+            table, table))
+        con.execute("DROP TABLE %s_legacy" % table)
+        con.commit()
+        con.close()
+
+    _COUNTERS_NOCHECK = (
+        "CREATE TABLE counters (cycle TEXT, symbol TEXT, llm INT, "
+        "tools INT, tokens INT, depth INT, start_wall REAL, "
+        "dead INT DEFAULT 0, PRIMARY KEY (cycle, symbol))")
+    _LEASES_NOCHECK = (
+        "CREATE TABLE leases (lease_id TEXT PRIMARY KEY, cycle TEXT, "
+        "symbol TEXT, kind TEXT, reserved INT, actual INT, "
+        "settled INT DEFAULT 0)")
+
+    def test_budget_ddl_checks_reject_corruption(self):
+        # New-schema layer: corrupt writes cannot land at all.
+        import sqlite3 as _sq
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "ledger.sqlite3")
+        led = budgets.BudgetLedger(path)
+        led.reserve_call("c", "AAPL", 100, 0)
+        con = _sq.connect(path)
+        for sql in ("UPDATE counters SET llm=-100",
+                    "UPDATE counters SET dead=2",
+                    "UPDATE leases SET reserved=-5"):
+            with self.assertRaises(_sq.IntegrityError):
+                con.execute(sql)
+        con.close()
+
+    def test_budget_numeric_corruption_aborts(self):
+        # Finding 5: negative counters, a bad dead flag, a negative
+        # wall, and corrupt lease terms abort on read — never
+        # normalized, never clamped into authority.
+        import sqlite3 as _sq
+        cases = [
+            ("UPDATE counters SET llm=-100", "reserve",
+             "counters-corrupt"),
+            ("UPDATE counters SET depth=-1000", "check",
+             "counters-corrupt"),
+            ("UPDATE counters SET dead=2", "snapshot",
+             "counters-corrupt"),
+            # NB: a negative wall would be legitimately pruned as
+            # ancient before validation; +inf is invalid but
+            # unpruneable, so it reaches the reader check.
+            ("UPDATE counters SET start_wall=1e999", "reserve",
+             "counters-corrupt"),
+        ]
+        for sql, op, why in cases:
+            d = tempfile.mkdtemp()
+            path = os.path.join(d, "ledger.sqlite3")
+            led = budgets.BudgetLedger(path)
+            led.reserve_call("c", "AAPL", 10, 0)
+            # Legacy schema (no CHECKs) so the corruption lands;
+            # read-validation must still abort.
+            self._strip_checks(path, "counters",
+                               self._COUNTERS_NOCHECK)
+            con = _sq.connect(path)
+            con.execute(sql)
+            con.commit()
+            con.close()
+            with self.assertRaises(r15.AbortCycle) as cm:
+                if op == "reserve":
+                    led.reserve_call("c", "AAPL", 10, 0)
+                elif op == "check":
+                    led.check("c", "AAPL")
+                else:
+                    led.snapshot("c", "AAPL")
+            self.assertIn(why, str(cm.exception.snapshot))
+        # Corrupt lease terms mis-settle: reserved/settled validated
+        # before any counter moves.
+        for sql in ("UPDATE leases SET reserved=-5",
+                    "UPDATE leases SET settled=2"):
+            d = tempfile.mkdtemp()
+            path = os.path.join(d, "ledger.sqlite3")
+            led = budgets.BudgetLedger(path)
+            lease = led.reserve_call("c", "AAPL", 100, 0)
+            self._strip_checks(path, "leases",
+                               self._LEASES_NOCHECK)
+            con = _sq.connect(path)
+            con.execute(sql)
+            con.commit()
+            con.close()
+            with self.assertRaises(r15.AbortCycle) as cm:
+                led.settle_call("c", "AAPL", lease, 100)
+            self.assertIn("lease-corrupt",
+                          str(cm.exception.snapshot))
+
+    def test_cleanup_before_shape_rejection(self):
+        # Finding 8: a failed cleanup plus malformed candidates
+        # still surfaces the leak — the shape rejection cannot
+        # skip the reclaim. Direct unit test on the extracted
+        # shaper (no spawn).
+        import unittest.mock as _mock
+        bad = {"status": "ok", "candidates": "not-a-list",
+               "usage": [1, 2], "tool_calls": 0,
+               "cleanup": "boom"}
+        with _mock.patch.object(workers, "_reap_container",
+                                side_effect=RuntimeError(
+                                    "rm failed")) as rm:
+            out = workers._shape_success_result(
+                "extract", bad, [1, 2], 0, "miro-c-1")
+        self.assertIn("reap-failed", out["blocked"])
+        rm.assert_called_once_with("miro-c-1")
+        with _mock.patch.object(workers, "_reap_container") as rm2:
+            out2 = workers._shape_success_result(
+                "extract", bad, [1, 2], 0, "miro-c-1")
+        self.assertEqual(
+            out2["blocked"],
+            "non-list-candidates+container-reaped-by-parent")
+        rm2.assert_called_once_with("miro-c-1")
+
+    def test_retention_list_failure_raises(self):
+        # Finding 10: a failed checkpoint LIST is not an empty set
+        # (which would silently grow retention); individually bad
+        # entries are still skipped.
+        from plane import retention as retention_mod
+
+        class _Tup:
+            def __init__(self, tid, ts):
+                self.config = {"configurable": {"thread_id": tid}}
+                self.checkpoint = {"ts": ts}
+
+        class _Saver:
+            def __init__(self, tuples=None, boom=False):
+                self._tuples = tuples or []
+                self._boom = boom
+
+            def list(self, _filter):
+                if self._boom:
+                    raise ValueError("db gone")
+                return self._tuples
+
+        with self.assertRaises(ValueError):
+            retention_mod._thread_latest(_Saver(boom=True))
+        good = _Tup("t1", "2026-01-01T00:00:00+00:00")
+        bad = _Tup("t2", None)
+        latest = retention_mod._thread_latest(_Saver([good, bad]))
+        self.assertEqual(sorted(latest), ["t1"])
 
     def test_marker_unreadable_is_invalid_not_absent(self):
         # An unreadable marker (here: a directory in the way —
@@ -1765,6 +2150,36 @@ class ReauditFixTest(unittest.TestCase):
         with self.assertRaises(spend_mod.StateUnavailable):
             gov.evaluate(t0 + 7400)
 
+    def test_ratio_structural_rows_rejected(self):
+        # Finding 6: syntactically valid but structurally wrong
+        # journal lines (a list, a string, a dict with wrong
+        # keys/types) are corruption — history controlling Tier 3
+        # must not silently lose records.
+        from plane import spend as spend_mod
+        d = tempfile.mkdtemp()
+        gov = self._ratio_gov(d, "G2")
+        t0 = int(time.time())
+        gov.evaluate(t0)
+        jpath = os.path.join(d, "spend",
+                             spend_mod.RATIO_JOURNAL_NAME)
+        self.assertTrue(os.path.exists(jpath))
+        for bad in ('[]\n', '"garbage"\n',
+                    '{"day": 1}\n',
+                    '{"day": "x", "state": "failed", '
+                    '"stage": "G2"}\n',
+                    '{"day": 1, "state": "meh", '
+                    '"stage": "G2"}\n'):
+            with open(jpath, "w", encoding="utf-8") as fh:
+                fh.write(bad)
+            with self.assertRaises(spend_mod.StateUnavailable):
+                gov.evaluate(t0 + 3700)
+        # Control: a structurally valid history still reads.
+        day = t0 - (t0 % 86400)
+        with open(jpath, "w", encoding="utf-8") as fh:
+            fh.write('{"day": %d, "state": "failed", '
+                     '"stage": "G2"}\n' % day)
+        gov.evaluate(t0 + 3700)  # must not raise
+
     def test_ratio_first_run_without_journal_is_fresh(self):
         # Upgrade path: tier history (G0, suspended, never journaled)
         # plus no ratio journal is a fresh streak, not a deletion —
@@ -1822,20 +2237,29 @@ class ReauditFixTest(unittest.TestCase):
                 self.created_at = created
 
         class _App:
-            def __init__(self, created, boom=False):
+            def __init__(self, created, boom=False,
+                         checkpointer=True):
                 self._created = created
                 self._boom = boom
+                self.checkpointer = object() if checkpointer else None
 
             def get_state(self, _cfg):
                 if self._boom:
-                    raise RuntimeError("no checkpointer")
+                    raise RuntimeError("storage failure")
                 return _Snap(self._created)
 
         with self.assertRaises(ValueError):
             graph_mod._reject_stale_thread(_App(old), "t")
         graph_mod._reject_stale_thread(_App(new), "t")
         graph_mod._reject_stale_thread(_App(None), "t")
-        graph_mod._reject_stale_thread(_App(old, boom=True), "t")
+        # Finding 3: a failed lookup with a checkpointer present
+        # rejects (an old checkpoint plus a storage error is the
+        # bypass); only a checkpointer-less app proceeds blind.
+        with self.assertRaises(ValueError):
+            graph_mod._reject_stale_thread(_App(old, boom=True),
+                                           "t")
+        graph_mod._reject_stale_thread(
+            _App(old, boom=True, checkpointer=False), "t")
         with self.assertRaises(ValueError):
             graph_mod._reject_stale_thread(_App("not-a-ts"), "t")
         # Integration: reusing a live thread is not a stale thread.
@@ -1986,6 +2410,9 @@ class ReauditFixTest(unittest.TestCase):
         led.reserve_call("c", "AAPL", 10, 0)
         con = sqlite3.connect(path)
         con.execute("DROP TABLE cycles")
+        # Simulate a genuine pre-registry (v1) ledger: versioned
+        # migration (not deletion) is the legitimate path here.
+        con.execute("PRAGMA user_version=1")
         con.commit()
         con.close()
         led2 = budgets.BudgetLedger(path)

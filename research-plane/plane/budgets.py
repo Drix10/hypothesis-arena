@@ -34,6 +34,7 @@ missing counters abort. An unsettled reservation stands charged
 evidence. Tool-only counting (deterministic in-parent parser work,
 no provider) keeps the small reserve_tool path.
 """
+import math
 import os
 import sqlite3
 import time
@@ -44,18 +45,23 @@ from . import r15
 LEDGER_MAX_BYTES = 64 << 20
 LEDGER_RETAIN_DAYS = 7
 CYCLES_RETAIN_DAYS = 30
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 TOKENS_ABSOLUTE_MAX = r15.TOKENS  # a single need can never exceed cap
 TOOLS_ABSOLUTE_MAX = r15.TOOL_CALLS
 
 _COUNTERS_DDL = (
     "CREATE TABLE IF NOT EXISTS counters (cycle TEXT, symbol TEXT, "
     "llm INT, tools INT, tokens INT, depth INT, start_wall REAL, "
-    "dead INT DEFAULT 0, PRIMARY KEY (cycle, symbol))")
+    "dead INT DEFAULT 0, PRIMARY KEY (cycle, symbol), "
+    "CHECK (llm >= 0 AND tools >= 0 AND tokens >= 0 AND "
+    "depth >= 0 AND dead IN (0, 1) AND "
+    "typeof(start_wall) IN ('real', 'integer') AND "
+    "start_wall = start_wall AND start_wall >= 0))")
 _LEASES_DDL = (
     "CREATE TABLE IF NOT EXISTS leases (lease_id TEXT PRIMARY KEY, "
     "cycle TEXT, symbol TEXT, kind TEXT, reserved INT, actual INT, "
-    "settled INT DEFAULT 0)")
+    "settled INT DEFAULT 0, "
+    "CHECK (reserved >= 0 AND actual >= 0 AND settled IN (0, 1)))")
 _META_DDL = ("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, "
              "v TEXT NOT NULL)")
 # Registry of every (cycle, symbol) that ever reserved: the ONLY
@@ -139,38 +145,68 @@ class BudgetLedger:
         try:
             con.execute("PRAGMA journal_mode=WAL")
             con.execute("PRAGMA synchronous=FULL")
+            ver0 = con.execute("PRAGMA user_version").fetchone()[0]
+            try:
+                have = {r[0] for r in con.execute(
+                    "SELECT name FROM sqlite_master WHERE "
+                    "type='table'")}
+            except (sqlite3.Error, ValueError) as e:
+                # Unreadable catalog (torn page, bad text): the
+                # schema is unverifiable, so the authority is
+                # too — deny.
+                raise LedgerCorrupt("catalog-unreadable:%r" % (e,))
+            missing = [t for t in ("counters", "leases", "meta")
+                       if t not in have]
+            if missing and not locks.may_create_tables(
+                    have, exists, mstate):
+                # Established file, table gone: deletion or
+                # corruption, never a creation case (a recreated
+                # empty counters table would reset live budgets).
+                # First init and pristine files create below.
+                raise LedgerCorrupt("table-missing:%s" % missing[0])
             con.execute(_COUNTERS_DDL)
             con.execute(_LEASES_DDL)
             con.execute(_META_DDL)
-            had_cycles = con.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' "
-                "AND name='cycles'").fetchone() is not None
-            con.execute(_CYCLES_DDL)
-            if not had_cycles:
-                # Migrate an old ledger: CREATE + backfill in ONE
-                # transaction (DDL is transactional in SQLite), so a
-                # crash can only leave the table ABSENT (migration
-                # retries cleanly) — never present-but-empty over
-                # live counters. Every surviving counters row is
-                # registered, so deletion detection works
-                # immediately after upgrade.
-                try:
-                    con.execute("BEGIN IMMEDIATE")
+            if "cycles" not in have:
+                if exists and ver0 == SCHEMA_VERSION:
+                    # Versioned schema says the registry exists:
+                    # its absence is deletion, not an upgrade.
+                    raise LedgerCorrupt("table-missing:cycles")
+                if exists and ver0 not in (0, 1):
+                    # Unknown version: the version gate below owns
+                    # this case (never migrate blindly into it).
+                    pass
+                else:
+                    # Old ledger (or fresh file): explicit versioned
+                    # migration — CREATE + backfill + version bump in
+                    # ONE transaction, so a crash can only leave the
+                    # table ABSENT (migration retries cleanly), never
+                    # present-but-empty over live counters. No CREATE
+                    # runs outside this transaction.
                     try:
-                        con.execute(_CYCLES_DDL)
-                        con.execute(
-                            "INSERT INTO cycles SELECT cycle, symbol, "
-                            "start_wall FROM counters")
-                        con.execute("COMMIT")
-                    except BaseException:
+                        con.execute("BEGIN IMMEDIATE")
                         try:
-                            con.execute("ROLLBACK")
-                        except sqlite3.Error:
-                            pass
-                        raise
-                except sqlite3.Error as e:
-                    raise LedgerCorrupt("cycles-backfill:%s" % e)
+                            con.execute(_CYCLES_DDL)
+                            con.execute(
+                                "INSERT INTO cycles SELECT cycle, "
+                                "symbol, start_wall FROM counters")
+                            con.execute("PRAGMA user_version=%d" %
+                                        SCHEMA_VERSION)
+                            con.execute("COMMIT")
+                        except BaseException:
+                            try:
+                                con.execute("ROLLBACK")
+                            except sqlite3.Error:
+                                pass
+                            raise
+                    except sqlite3.Error as e:
+                        raise LedgerCorrupt("cycles-backfill:%s" % e)
             else:
+                if ver0 == 1:
+                    # Round-3/4-era ledger: schema-identical to v2,
+                    # adopt the version explicitly.
+                    con.execute("PRAGMA user_version=%d" %
+                                SCHEMA_VERSION)
                 # Crash-residue guard: a present-but-empty registry
                 # over live counters is never legitimate (pruning
                 # only forgets cycles whose counters aged out first),
@@ -198,11 +234,6 @@ class BudgetLedger:
                     except sqlite3.Error as e:
                         raise LedgerCorrupt("cycles-heal:%s" % e)
             for table, cols in _EXPECTED_COLUMNS.items():
-                if table == "cycles" and not had_cycles:
-                    # Additive upgrade: a pre-registry ledger gains an
-                    # empty registry (existing counters rows still
-                    # authorize their own cycles below).
-                    continue
                 got = [r[1] for r in con.execute(
                     "PRAGMA table_info(%s)" % table)]
                 if got != cols:
@@ -237,7 +268,9 @@ class BudgetLedger:
         except LedgerCorrupt:
             con.close()
             raise
-        except sqlite3.Error as e:
+        except (sqlite3.Error, ValueError) as e:
+            # ValueError covers undecodable text from torn pages
+            # (integrity/table reads), which is corruption too.
             con.close()
             raise LedgerCorrupt(str(e))
         return con
@@ -326,7 +359,19 @@ class BudgetLedger:
                 "INSERT INTO counters VALUES (?,?,?,?,?,?,?,0)",
                 (cycle_id, symbol, 0, 0, 0, 0, now_wall))
             return [0, 0, 0, 0, now_wall, 0]
-        return list(r)
+        e = list(r)
+        # Semantic validation on EVERY read (old DBs predate the DDL
+        # CHECKs, and corruption/fraud can edit any file): negative
+        # counters would authorize beyond R15, a bad dead flag would
+        # misroute, a non-finite wall would break retention math. An
+        # invalid row aborts — never normalized, never clamped.
+        if (not all(type(v) is int and v >= 0 for v in e[:4])
+                or type(e[4]) not in (int, float)
+                or isinstance(e[4], bool)
+                or not math.isfinite(e[4]) or e[4] < 0
+                or type(e[5]) is not int or e[5] not in (0, 1)):
+            _abort(symbol, "counters-corrupt")
+        return e
 
     def _check_row(self, e, symbol, now_wall):
         if e[5]:
@@ -440,6 +485,11 @@ class BudgetLedger:
             r = cur.fetchone()
             if r is None:
                 _abort(symbol, "unknown-lease")
+            if (type(r[3]) is not int or r[3] < 0
+                    or type(r[5]) is not int or r[5] not in (0, 1)):
+                # Corrupt lease terms would mis-settle another row's
+                # counters: abort, never normalize.
+                _abort(symbol, "lease-corrupt")
             if r[5]:
                 _abort(symbol, "double-settle")
             if r[0] != cycle_id or r[1] != symbol or r[2] != "call":

@@ -389,7 +389,10 @@ class LedgerTest(unittest.TestCase):
                 except sqlite3.Error:
                     selectable = False
                 c2.close()
-            except sqlite3.Error:
+            except (sqlite3.Error, ValueError):
+                # Unopenable/undecodable mutations are a different
+                # corruption class: skip, keep probing for the
+                # opens-but-fails-integrity case.
                 continue
             finally:
                 try:

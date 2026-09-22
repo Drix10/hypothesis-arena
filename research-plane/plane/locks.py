@@ -194,6 +194,23 @@ def write_marker(db_path, token):
                        os.path.basename(init_marker_path(db_path)), raw)
 
 
+def may_create_tables(have, exists, mstate):
+    """True only when (re)creating missing SQLite tables cannot
+    reset an established money authority: a provable first init
+    (the file did not exist and no marker claims it), or a pristine
+    file (present but holding NONE of the required tables with no
+    marker — a crash-interrupted first init or total annihilation,
+    both correctly a fresh authority). Anything else — a marker or
+    token survivor, or surviving sibling tables — means the schema
+    is established and a missing table is deletion or corruption,
+    never a creation case."""
+    if not exists and mstate == "absent":
+        return True
+    if exists and mstate == "absent" and not have:
+        return True
+    return False
+
+
 def marker_state(db_path):
     """Tri-state authority marker: (state, token_or_None).
 

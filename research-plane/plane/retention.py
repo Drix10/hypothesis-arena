@@ -74,12 +74,17 @@ def harden_saver(saver):
 
 
 def _thread_latest(saver):
-    """thread_id -> newest checkpoint ts (seconds)."""
+    """thread_id -> newest checkpoint ts (seconds). A failed LIST
+    is not an empty checkpoint set: it raises, so retention can
+    never mistake "could not verify" for "nothing old exists"
+    (which would silently grow retained checkpoints). Individually
+    malformed entries are still skipped — one bad row must not veto
+    pruning every other thread."""
     latest = {}
     try:
         tuples = saver.list(None)
-    except (TypeError, ValueError):
-        return latest
+    except (TypeError, ValueError) as e:
+        raise ValueError("checkpoint-list-unverifiable:%r" % (e,))
     for t in tuples:
         try:
             tid = t.config["configurable"]["thread_id"]

@@ -458,6 +458,16 @@ RESULT_TEXT_MAX_BYTES = 1 << 20
 CHILD_CANDIDATES_MAX = 256
 CHILD_CANDIDATE_BYTES_MAX = 16384
 CHILD_TOOL_RECORDS_MAX = 64
+# Reservation bound for the agent's first outbound prompt BEYOND
+# the task brief: measured 9330 bytes of CodeAgent system/framing
+# for a 4-byte brief with zero tools (see the overhead regression).
+# 32 KiB covers that framing plus tool-description headroom for
+# small tool sets. The UsageTape measures the ACTUAL per-call
+# prompt against the reservation and refuses cleanly pre-provider
+# when a tool-heavy config exceeds it — the reservation is the
+# ceiling, the tape is the backstop, the post-call tripwire the
+# audit. Never shrink this below a fresh measurement.
+EXTRACT_PROMPT_OVERHEAD_BYTES = 32768
 
 
 def _to_candidates(result, rec_defaults):
@@ -855,6 +865,11 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
         if not ok:
             raise ConfigBlocked("extract-defaults:%s" % why)
         prompt_bytes = len(brief.encode("utf-8"))
+        # True outbound bound: the brief PLUS the agent framing the
+        # provider actually receives (system instructions, task
+        # framing, tool descriptions) — reserving brief-only would
+        # understate the first call and trip the tape refusal.
+        prompt_bytes += EXTRACT_PROMPT_OVERHEAD_BYTES
         need = _token_need("extract", prompt_bytes, comp, steps)
         tools_needed = steps * TOOLS_PER_STEP_MAX
         messages = None
@@ -1032,6 +1047,18 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
         except r15.AbortCycle:
             pass
         raise r15.AbortCycle(symbol, {"accounting-failure": _bounded_repr(e)})
+    return _shape_success_result(kind, child, usage, tool_calls,
+                                 container_name)
+
+
+def _shape_success_result(kind, child, usage, tool_calls,
+                          container_name):
+    """Shape an accounted ok-envelope into a run_gated result.
+    Pure shaping (plus the authoritative container reclaim): the
+    spend is already settled and spanned above, so every outcome
+    here is a result or blocked evidence, never an abort. Split
+    out so the cleanup-before-shape ordering is directly
+    unit-testable without spawning."""
     if kind == "generate":
         text = child.get("text")
         if text is None or not isinstance(text, str):
@@ -1044,21 +1071,25 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
             # dropped + counted, never crossed into state.
             return {"blocked": "result-too-large"}
         return {"text": text, "usage": usage}
-    cands = child.get("candidates")
-    if not isinstance(cands, list):
-        return {"blocked": "non-list-candidates"}
     cleanup_evidence = None
     if child.get("cleanup"):
         # Child-side cleanup failed: authoritative post-child
         # reclaim HERE (the child is dead; docker rm -f cannot race
-        # it). Reclaim failure is blocked evidence — the extraction
-        # succeeded and is accounted, but the leak is counted, never
+        # it). This runs BEFORE candidate-shape validation so a
+        # malformed result cannot skip the leak surfacing: the
+        # extraction is accounted, but a leak is counted, never
         # silent.
         try:
             _reap_container(container_name)
             cleanup_evidence = "container-reaped-by-parent"
         except Exception as e:
             return {"blocked": "reap-failed:%s" % _bounded_repr(e)}
+    cands = child.get("candidates")
+    if not isinstance(cands, list):
+        blocked = "non-list-candidates"
+        if cleanup_evidence is not None:
+            blocked += "+%s" % cleanup_evidence
+        return {"blocked": blocked}
     out = {"candidates": cands, "usage": usage,
            "tool_calls": tool_calls,
            "tool_records": child.get("tool_records", [])}

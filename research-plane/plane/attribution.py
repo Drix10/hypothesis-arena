@@ -192,6 +192,24 @@ def _connect_locked(db_path, create=False):
     try:
         con.execute("PRAGMA journal_mode=WAL")
         con.execute("PRAGMA synchronous=FULL")
+        try:
+            have = {r[0] for r in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+        except (sqlite3.Error, ValueError) as e:
+            # Unreadable catalog (torn page, bad text): the schema
+            # is unverifiable, so the authority is too — deny.
+            raise LedgerUnavailable("catalog-unreadable:%r" % (e,))
+        missing = [t for t in _EXPECTED_COLUMNS if t not in have]
+        if missing and not locks.may_create_tables(
+                have, exists, mstate):
+            # An established file never regrows tables: a deleted
+            # spans/unknown/hold table with a surviving marker or
+            # token would otherwise recreate EMPTY and reset spend
+            # history to $0 (the marker cannot catch it — the DB
+            # itself still verifies). Recreate-only on provable
+            # first init or a pristine file (see locks
+            # .may_create_tables).
+            raise LedgerUnavailable("table-missing:%s" % missing[0])
         con.execute(_SPANS_DDL)
         con.execute(_UNKNOWN_DDL)
         con.execute(_RECON_DDL)
@@ -232,7 +250,9 @@ def _connect_locked(db_path, create=False):
     except LedgerUnavailable:
         con.close()
         raise
-    except sqlite3.Error as e:
+    except (sqlite3.Error, ValueError) as e:
+        # ValueError covers undecodable text from torn pages
+        # (integrity/table reads), which is corruption too.
         con.close()
         raise LedgerUnavailable(str(e))
     return con
