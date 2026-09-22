@@ -671,3 +671,28 @@ plane (Phase D) change any interface a future slice depends on?
   earnings TTL/heartbeat wiring; 7-day run + cadence-rate evidence.
   Profit/calibration feeds stay future-stage; registry optional;
   Slice D NOT AUTHORIZED; no further hardening rounds.
+
+## Addendum 29 — repo hygiene pass (auditor-directed, no credential work)
+- Env consolidation (`01b6e47`): canonical root `.env` + `.env.example`
+  (now documents consumed OPENROUTER_API_KEY; broker/BEA keys stay out
+  until a code path consumes them, per the file's own rule); sole
+  loader `collector/config.py::_load_dotenv` (root file, allowlist,
+  exported env wins); tracked `sandbox/provider.env.example` deleted
+  + its gitignore rule removed; sandbox Python consumes root config
+  via `collector.config.load()` — no second file, no second mechanism,
+  nothing that can drift. Config suite passes; no secret in git.
+- Dead-material audit: `/research` RETAINED — both memos are
+  TODO-referenced HISTORICAL audit records, not scaffolding; deletion
+  would break the TODO reference and destroy history. Full-tree audit
+  found no other dead files (every dir referenced by code, CI, or docs).
+- Test layout (operator-directed; tests kept, never deleted):
+  `collector/tests/` (6 suites) + `kernel/tests/` (4 files) with
+  `build.sh`, CI stdlib step, README, and the freeze p33 presence-pin
+  following (gate intent preserved; risk/ingest subfolder precedent).
+  Collector moves are HERE→parent one-liners; kernel moves are `../`
+  includes. Freeze PASS + kernel build PASS from the new layout.
+- `ARCHITECTURE.md` rewritten from the actual tree (all 100 named
+  paths verified to exist; no stale v2/f1 literals): full directory
+  map, per-component what/why/files/reads/writes/callers/failures,
+  end-to-end + veto flows, authority boundaries, env/config flow,
+  frozen-vs-active-vs-FUTURE, and the test-co-location rule.
