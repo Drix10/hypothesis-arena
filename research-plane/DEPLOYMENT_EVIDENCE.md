@@ -13,6 +13,23 @@ Deployment host for Linux boxes: WSL2 Ubuntu 24.04.1 LTS, kernel
 replicates the same mechanism). Docker daemon 29.7.2 (Docker Desktop) started
 2026-09-22 for the daemon-dependent boxes.
 
+## Box 4 — model credential + pricing config — PARTIAL 2026-09-22
+
+- Fail-closed PROVEN at runtime (`research-plane/sandbox/config-probe.py`,
+  venv python, 5/5 PASS exit 0, shipped constructors, no mocks): empty/None
+  pricing → ConfigBlocked; provider without egress proxy → ConfigBlocked
+  (never direct); without model_id → ConfigBlocked; bogus-key provider
+  constructs fully offline (no silent validation call — fail-closed
+  defers to call time with a real provider error).
+- Secrets: `git grep` for key patterns over tracked files = zero matches
+  (exit 1). Placement: `research-plane/sandbox/provider.env.example`
+  (placeholders only) + `provider.env` git-ignored; real file lives in
+  the miroresearch home mode 600, sourced by the supervisor only.
+- BLOCKED (genuinely unavailable, not unattempted): no live model key
+  exists → no live provider call, no live per-node spend, no full-day
+  Langfuse attribution. Requires human-placed key + funded provider
+  account. Fail-closed behavior with the key absent is the proven part.
+
 ## Box 3 — image pin/digest/SBOM/scan — PROVEN 2026-09-22
 
 - Base pinned in `research-plane/sandbox/Dockerfile`:
