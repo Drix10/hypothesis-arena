@@ -1031,3 +1031,16 @@ plane (Phase D) change any interface a future slice depends on?
   dependency — verification is read-only and fails toward paper.
   H1 drill rows that require kill levels will be explicitly deferred
   with the dependency named, not silently skipped.
+
+## Addendum 50 — Slice E audit fix (timezone grammar + status)
+- MUST FIX 1: `ValidIso8601` numeric-offset tail rewritten — sign
+  REQUIRED, strict `±HH:MM` / `±HHMM` shapes, HH 00–14 (14:xx
+  rejected), MM 00–59. `+99:99`, bare `1234`, missing sign, bad
+  colons all rejected; boundary offsets (`+14:00`, `-05:00`,
+  `+0530`, `Z`, bare datetime) accepted. 13 new adversarial cases;
+  suite green normal+hardened.
+- MUST FIX 2: README/TODO now read P3.5 ACTIVE (A–C DONE, D NOT
+  AUTHORIZED, E IMPLEMENTED pending acceptance, F+ OPEN).
+- Escalation re-inspection: `effective` assigned only verified-file
+  echo or G0_PAPER; stage.{hpp,cpp} is pure logic (no I/O, no env,
+  no writes) — no indirect promotion path. Slice D absent/untouched.

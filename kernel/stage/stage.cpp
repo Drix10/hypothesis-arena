@@ -75,16 +75,30 @@ bool ValidIso8601(const std::string& s) {
     if (d < 1 || d > dim) return false;
     std::string rest = s.substr(19);
     if (rest.empty() || rest == "Z") return true;
-    // Numeric offset "+HH:MM" / "-HHMM" / "+HHMM".
-    size_t i = 0;
-    if (rest[0] == '+' || rest[0] == '-') ++i;
-    std::string digits;
-    for (; i < rest.size(); ++i) {
-        if (rest[i] == ':' && digits.size() == 2) continue;
-        if (rest[i] < '0' || rest[i] > '9') return false;
-        digits += rest[i];
+    // Numeric offset: sign REQUIRED, then HH[:]MM with range-checked
+    // fields. Bare digit tails (no sign) and out-of-range fields are
+    // rejected — the old digit-counting form accepted +99:99.
+    if (rest.size() < 3 || (rest[0] != '+' && rest[0] != '-'))
+        return false;
+    std::string body = rest.substr(1);
+    std::string hh, mm;
+    if (body.size() == 5 && body[2] == ':') {
+        hh = body.substr(0, 2);
+        mm = body.substr(3, 2);
+    } else if (body.size() == 4) {
+        hh = body.substr(0, 2);
+        mm = body.substr(2, 2);
+    } else {
+        return false;
     }
-    return digits.size() == 4;
+    for (char c : hh + mm)
+        if (c < '0' || c > '9') return false;
+    int oh = (hh[0] - '0') * 10 + (hh[1] - '0');
+    int om = (mm[0] - '0') * 10 + (mm[1] - '0');
+    // Real-world offsets top out at +14:00; anything above is malformed.
+    if (oh > 14 || om > 59) return false;
+    if (oh == 14 && om != 0) return false;
+    return true;
 }
 
 bool CleanValue(const std::string& s) {

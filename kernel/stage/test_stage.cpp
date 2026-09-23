@@ -132,10 +132,23 @@ int main() {
     // 12. malformed timestamps
     for (const char* bad :
          {"2026-13-01T00:00:00Z", "2026-02-30T00:00:00Z",
-          "2026-09-23 12:00:00", "not-a-date", "2023-02-29T00:00:00Z"}) {
+          "2026-09-23 12:00:00", "not-a-date", "2023-02-29T00:00:00Z",
+          "2026-09-23T12:00:00+99:99", "2026-09-23T12:00:001234",
+          "2026-09-23T12:00:00+1401", "2026-09-23T12:00:00-05:60",
+          "2026-09-23T12:00:00+5:00", "2026-09-23T12:00:00++05:00",
+          "2026-09-23T12:00:00+05-00", "2026-09-23T12:00:00Z+05:00"}) {
         auto r = VerifyStageContents(
             Make("G0_PAPER", "op", bad, "0"), "GENESIS");
         Check(!r.ok && r.reason == "bad-field", bad);
+    }
+    // 12b. valid boundary offsets accepted
+    for (const char* good :
+         {"2026-09-23T12:00:00+14:00", "2026-09-23T12:00:00-05:00",
+          "2026-09-23T12:00:00+0530", "2026-09-23T12:00:00Z",
+          "2026-09-23T12:00:00"}) {
+        auto r = VerifyStageContents(
+            Make("G0_PAPER", "op", good, "0"), "GENESIS");
+        Check(r.ok, good);
     }
     // 13. leap day accepted
     {
