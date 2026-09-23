@@ -65,6 +65,9 @@ struct SeqGap {
 // Poll-cadence gap detector for venues without sequence metadata
 // (Alpaca REST poll path): gap when micros jump more than max_gap
 // since the previous tick. First tick initializes, never gaps.
+// Backward/duplicate timestamps are ordering anomalies: they latch
+// the gap WITHOUT moving the reference backwards. Deltas are computed
+// overflow-safe (unsigned exact difference).
 struct PollGap {
     bool have_tick = false;
     int64_t last_micros = 0;

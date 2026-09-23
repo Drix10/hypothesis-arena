@@ -89,6 +89,39 @@ int main() {
         Check(!g.Note(0), "seq-zero-ignored");
     }
     // 6. poll gaps: init never gaps; jump > max gaps; steady fine
+    // 6b. poll boundary + backward + overflow determinism
+    {
+        const int64_t kMax = 30000000LL;
+        PollGap p;
+        Check(!p.Note(1000000LL, kMax), "poll-b-init");
+        Check(p.Note(1000000LL, kMax), "poll-equal-latch");
+        Check(!p.Note(1000001LL, kMax), "poll-plus-one");
+        Check(!p.Note(1000001LL + kMax, kMax), "poll-exact-max");
+        // ref is now 31000001: +kMax+1 more re-opens the gap.
+        Check(p.Note(31000001LL + kMax + 1, kMax), "poll-max-plus-one");
+        // backward latches and preserves the reference: last is now
+        // 61000002; a rewind to 900000 gaps, and the following
+        // forward sample off the PRESERVED reference does not.
+        Check(p.Note(900000LL, kMax), "poll-backward-latch");
+        Check(!p.Note(61000002LL + 1000LL, kMax), "poll-after-backward");
+        PollGap q;
+        Check(!q.Note(1LL, kMax), "poll-ov-init");
+        Check(q.Note(9223372036854775807LL, kMax), "poll-int64max-gap");
+        Check(q.Note(9223372036854775807LL, kMax), "poll-int64max-dup");
+    }
+    // 6c. seq overflow: UINT64_MAX latches, resyncs, zero still absent
+    {
+        SeqGap g;
+        Check(!g.Note(41), "seq-ov-init");
+        Check(!g.Note(42), "seq-ov-steady");
+        Check(g.Note(18446744073709551615ULL), "seq-max-latch");
+        Check(!g.Note(7), "seq-resync-init");
+        Check(!g.Note(8), "seq-resync-steady");
+        Check(!g.Note(0), "seq-zero-still-ignored");
+        SeqGap h;
+        Check(h.Note(18446744073709551615ULL), "seq-max-first-latch");
+        Check(!h.Note(3), "seq-max-first-resync");
+    }
     {
         PollGap p;
         Check(!p.Note(1000000LL, 30000000LL), "poll-init");

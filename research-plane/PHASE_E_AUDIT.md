@@ -1080,3 +1080,18 @@ plane (Phase D) change any interface a future slice depends on?
 - Authority: no prices consumed, no veto/risk/execution logic — the
   ring records, downstream decides. 24h soak gate OPEN (needs an
   awake host; tracked, never a bypass). Slice D untouched.
+
+## Addendum 54 — Slice F audit fix (gap detectors)
+- MUST FIX 1 (PollGap): backward/duplicate timestamps now latch the
+  gap WITHOUT moving the reference backwards; forward deltas use
+  unsigned-exact differences (no signed-subtraction UB at INT64_MAX).
+  Regressions: equal, +1 micro, exact-max, max+1, backward,
+  backward-then-normal (proves reference preservation), INT64_MAX
+  forward + duplicate.
+- MUST FIX 2 (SeqGap): explicit UINT64_MAX overflow policy — latch +
+  force re-init (never manufacture expected-0); zero/absent semantics
+  unchanged, covered on both paths.
+- Authority re-inspection: diff touches detectors + comments only; no
+  veto/risk/stage/execution logic. Suite green normal+hardened, full
+  kernel gate PASS, freeze PASS. Slice D untouched. F NOT claimed
+  accepted (awaits fresh audit); Slice G NOT started.

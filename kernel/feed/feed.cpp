@@ -72,6 +72,15 @@ void TickRing::ClearGap() { gap_ = false; }
 
 bool SeqGap::Note(uint64_t seq) {
     if (seq == 0) return false;  // absent metadata: poll path owns it
+    // UINT64_MAX overflow policy (fail-closed): seq+1 would wrap to 0,
+    // which means "absent" in this API. MAX is therefore an anomaly:
+    // latch the gap and force re-initialization on the next sample
+    // instead of manufacturing an ambiguous expected value.
+    if (seq == UINT64_MAX) {
+        have_seq = false;
+        next_expected = 0;
+        return true;
+    }
     if (!have_seq) {
         have_seq = true;
         next_expected = seq + 1;
@@ -96,7 +105,16 @@ bool PollGap::Note(int64_t micros, int64_t max_gap_micros) {
         last_micros = micros;
         return false;
     }
-    bool gap = (micros - last_micros) > max_gap_micros;
+    // Backward or duplicate timestamps are ordering anomalies: latch
+    // the gap and PRESERVE the latest valid reference (never move it
+    // backwards — that would reframe the next sample's delta).
+    if (micros <= last_micros) return true;
+    // Forward delta, overflow-safe: micros > last_micros > 0, so the
+    // unsigned difference is exact (no signed-subtraction UB even at
+    // INT64_MAX).
+    uint64_t fwd = static_cast<uint64_t>(micros) -
+                   static_cast<uint64_t>(last_micros);
+    bool gap = fwd > static_cast<uint64_t>(max_gap_micros);
     last_micros = micros;
     return gap;
 }
