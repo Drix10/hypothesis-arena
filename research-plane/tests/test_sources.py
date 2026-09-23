@@ -60,6 +60,78 @@ class EarningsVetoTest(unittest.TestCase):
         # earnings data -> unknown -> suppress (fail closed)
 
 
+class EarningsWiringTest(unittest.TestCase):
+    """Poller/TTL/heartbeat/gate: offline (fake fetcher + fake clock +
+    tmp heartbeat file). Live latencies stay in the sandbox probe."""
+    NOW = 1_000_000.0
+
+    def _hb_path(self):
+        import tempfile
+        return os.path.join(tempfile.mkdtemp(), "hb.json")
+
+    def test_poll_ok_marks_event_free(self):
+        fake = _fake_fetcher_factory(["10-Q"], ["2026-01-05"], [""])
+        hb = earnings.poll(("AAA",), fetcher=fake, now=self.NOW)
+        self.assertTrue(hb["ok"])
+        self.assertFalse(hb["symbols"][0]["suppress"])
+        self.assertEqual(hb["cadence_s"], 300)
+        self.assertEqual(hb["ttl_s"], 900)
+
+    def test_poll_failure_marks_unknown(self):
+        def boom(url):
+            raise OSError("net down")
+        hb = earnings.poll(("AAA",), fetcher=boom, now=self.NOW)
+        self.assertFalse(hb["ok"])
+        self.assertTrue(hb["symbols"][0]["suppress"])
+
+    def test_absent_heartbeat_suppresses(self):
+        g = earnings.gate(("AAA",),
+                          heartbeat_path="/nonexistent/hb.json",
+                          now=self.NOW)
+        self.assertEqual(g, {"suppress": True, "reason": "absent"})
+
+    def test_invalid_heartbeat_suppresses(self):
+        p = self._hb_path()
+        with open(p, "w") as fh:
+            fh.write("not-json{")
+        g = earnings.gate(("AAA",), heartbeat_path=p, now=self.NOW)
+        self.assertEqual(g, {"suppress": True, "reason": "invalid"})
+
+    def test_stale_heartbeat_suppresses_as_absent(self):
+        p = self._hb_path()
+        fake = _fake_fetcher_factory(["10-Q"], ["2026-01-05"], [""])
+        earnings.write_heartbeat(
+            p, earnings.poll(("AAA",), fetcher=fake, now=self.NOW))
+        g = earnings.gate(("AAA",), heartbeat_path=p,
+                          now=self.NOW + 901)
+        self.assertEqual(g, {"suppress": True, "reason": "stale"})
+
+    def test_fresh_event_free_passes(self):
+        p = self._hb_path()
+        fake = _fake_fetcher_factory(["10-Q"], ["2026-01-05"], [""])
+        earnings.write_heartbeat(
+            p, earnings.poll(("AAA",), fetcher=fake, now=self.NOW))
+        g = earnings.gate(("AAA",), heartbeat_path=p, now=self.NOW)
+        self.assertEqual(g, {"suppress": False,
+                             "reason": "event-free"})
+
+    def test_fresh_event_suppresses_with_event_reason(self):
+        p = self._hb_path()
+        fake = _fake_fetcher_factory(["8-K"], ["2026-09-21"], ["2.02"])
+        hb = earnings.poll(("AAA",), fetcher=fake, now=self.NOW)
+        # asof derives from now: 1970-01-12 is far from 2026-09-21,
+        # so craft the heartbeat at an asof inside the window instead.
+        import datetime
+        asof_now = datetime.datetime(2026, 9, 22,
+                                     tzinfo=datetime.timezone.utc
+                                     ).timestamp()
+        earnings.write_heartbeat(
+            p, earnings.poll(("AAA",), fetcher=fake, now=asof_now))
+        g = earnings.gate(("AAA",), heartbeat_path=p, now=asof_now)
+        self.assertEqual(g, {"suppress": True, "reason": "event"})
+        self.assertTrue(hb["ok"])  # poll itself succeeded
+
+
 class CalendarTest(unittest.TestCase):
     def test_missing_is_fail_closed(self):
         with self.assertRaises(calendars.CalendarMissing):

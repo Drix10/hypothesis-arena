@@ -957,3 +957,17 @@ plane (Phase D) change any interface a future slice depends on?
   chosen in this addendum.
 - BUILD track: earnings TTL/heartbeat wiring (§9.4) proceeds now —
   fully in-repo, no external dependency.
+
+## Addendum 45 — earnings TTL/heartbeat wiring CLOSED (Tier-A)
+- `research-plane/sources/earnings.py` extended (stdlib only, frozen
+  veto contract untouched): poller cycle (CADENCE_S=300, TTL_S=900 =
+  3x cadence per §9.3), atomic heartbeat file with version, states
+  {fresh, absent, invalid, stale} (FileNotFoundError=absent/fresh,
+  unreadable=invalid->stale), and `gate()` for JEV: suppress with
+  reason in {event, unknown, stale, invalid, absent}; only
+  fresh+ok+event-free passes. Stale/missing is ABSENT, never neutral.
+- 7 offline wiring tests (fake fetcher/clock/tmp file): 25/25 green.
+- Live 2-cycle evidence: ok 2/2, p50 ~425ms, gate event-free (AAPL
+  89 / MSFT 48 events seen, none within ±3d) — `sandbox/
+  earnings-heartbeat-evidence.json`. Earnings source now FULLY PROVEN
+  per §9.4 (implementation+probe were Addendum 27; wiring closes it).

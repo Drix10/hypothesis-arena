@@ -1,0 +1,27 @@
+{
+ "ts": 1790183420,
+ "cycles": 2,
+ "p50_ms": 425.5,
+ "cycle_ok": [
+  true,
+  true
+ ],
+ "symbols": [
+  {
+   "symbol": "AAPL",
+   "suppress": false,
+   "events_seen": 89,
+   "error": null
+  },
+  {
+   "symbol": "MSFT",
+   "suppress": false,
+   "events_seen": 48,
+   "error": null
+  }
+ ],
+ "gate": {
+  "suppress": false,
+  "reason": "event-free"
+ }
+}
