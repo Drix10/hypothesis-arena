@@ -109,7 +109,7 @@ def main():
 
     # 2+3. real data + deterministic replay: NIPA T10101 headline GDP
     q = {"UserID": uid, "method": "GETDATA", "ResultFormat": "JSON",
-         "dataset": "NIPA", "TableName": "T10101",
+         "datasetname": "NIPA", "TableName": "T10101",
          "Frequency": "A", "Year": "2023,2024"}
     reps, dt_lats = [], []
     for _ in range(2):

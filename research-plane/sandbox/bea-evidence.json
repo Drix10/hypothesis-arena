@@ -1,9 +1,9 @@
 {
- "ts": 1790178815,
+ "ts": 1790180632,
  "n": 3,
  "datasets": {
-  "p50_ms": 1017.9,
-  "p99_ms": 1069.6,
+  "p50_ms": 924.1,
+  "p99_ms": 1532.3,
   "names": [
    "NIPA",
    "NIUnderlyingDetail",
@@ -22,10 +22,19 @@
  },
  "data": {
   "table": "T10101",
-  "p50_ms": 998.7,
-  "rows": 0,
-  "sample": [],
-  "byte_identical": false
+  "p50_ms": 430.0,
+  "rows": 50,
+  "sample": [
+   [
+    "2023",
+    "2.9"
+   ],
+   [
+    "2024",
+    "2.8"
+   ]
+  ],
+  "byte_identical": true
  },
  "bad_userid": {
   "denied": true,

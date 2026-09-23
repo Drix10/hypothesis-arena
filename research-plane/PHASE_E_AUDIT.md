@@ -916,3 +916,13 @@ plane (Phase D) change any interface a future slice depends on?
   hammering: re-probe scheduled after elapsed time (next session),
   single call, then contact developers@bea.gov only if still red.
   State stays PARTIAL; nothing promoted, nothing faked.
+
+## Addendum 42 — BEA PROVEN (probe bug, not a key bug)
+- Root cause of error-20 found in BEA's own samples (us-bea/beaapi +
+  econ notebook): the data-method parameter is `datasetname`, not
+  `dataset` (bea.R patch note confirms the rename for NIPA-class
+  datasets; the API's error text misdirects). One-line probe fix;
+  key and activation were fine all along.
+- Full proof: dataset list (p50 ~0.9s) + NIPA T10101 50 rows
+  (GDP 2.9 @2023, 2.8 @2024, p50 ~0.4s) + byte-identical replay +
+  bad-UserID denied. Evidence saved, leak-checked (0 hits).
