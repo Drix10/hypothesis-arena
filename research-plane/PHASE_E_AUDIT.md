@@ -1004,3 +1004,17 @@ plane (Phase D) change any interface a future slice depends on?
   sources 39/39, plane OK, hardening OK, kernel P3.1 PASS, freeze
   PASS. Temp residue checked (TemporaryDirectory; no .hb- leftovers
   after concurrency test).
+
+## Addendum 48 — re-audit pass ACCEPTED (independent verification)
+- Independent auditor verified chain `29e6b4a -> dc228e6 -> a2f64df
+  -> d0343c5` + hosted run 35898494106 (all four jobs SUCCESS):
+  heartbeat reader/writer, SEC validation, BEA/Alpaca probe
+  predicates, and PROVEN/WIRED/EXECUTION-READY wording all accepted
+  as closed. `d0343c5` docs-only, so CI on `a2f64df` covers the code.
+- Explicitly NOT reopened: cadence/ttl type-exact ints, ask<bid
+  reject (SHOULD-FIX nits, no safety impact on fail-closed posture).
+- No-production-caller state for earnings poll/gate/heartbeat and
+  Alpaca-execution-OPEN confirmed as documented, not accidental.
+- Next substantive step per auditor: actual production
+  data/execution path (P3.5/H1 scope) under existing authority
+  boundary — NOT started; awaits human authorization.
