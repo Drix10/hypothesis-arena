@@ -1,5 +1,5 @@
 # Repository-level execution evidence (Phase-D audit finding: claimed
-# green counts were local-only). Five jobs on every push/PR:
+# green counts were local-only). Four jobs on every push/PR:
 #  1. stdlib — collector suites only (mocked IO, no network),
 #     no third-party deps.
 #  2. evidence — plane isolation + sources suites, stdlib only, in

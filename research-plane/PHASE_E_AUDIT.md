@@ -813,3 +813,23 @@ plane (Phase D) change any interface a future slice depends on?
   tests only). venv had vanished from the tree (untracked dir,
   external cause, tree itself clean) — rebuilt from pinned
   requirements, deps verified.
+
+## Addendum 36 — stdlib flake fixed (test-only; production untouched)
+- Hosted stdlib failure root-caused (run 35858925643, log-pulled by
+  the auditor): `test_jev.py` single-flight, timing race around
+  `sleep(1.0)` in the mock provider. Reproduced locally under CPU
+  load (1/40). Production `jev.decide` verified correct by reading
+  (whole money gate incl. provider call + cache write inside ONE
+  `_spend_lock` hold; 60s lock timeout) — defect is test-only.
+- Fix (`collector/tests/test_jev.py` only): deterministic
+  orchestration — child A blocks in post_fn on a parent-owned
+  RELEASE marker, READY proves A inside provider (lock held), child
+  B (SF_TAG-distinct started marker) spawns strictly after, parent
+  releases; bounded waits (60s markers, 120s join), exit-code +
+  valid-JSON asserts, kill/reap on every failure path, markers
+  cleaned. Invariant proved (exactly one call, one ANSWER + one
+  CACHED) independent of interleaving.
+- Proof: 100/100 consecutive on Linux under 4x CPU load + full
+  stdlib 6/6 on Linux + freeze PASS. No production change; no CI
+  weakening (no continue-on-error, no skips). Workflow "Five jobs"
+  comment corrected to four.

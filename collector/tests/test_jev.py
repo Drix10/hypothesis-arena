@@ -807,16 +807,29 @@ check("hold-clock-deterministic",
 jev.SPEND_DIR = os.path.join(TMP, "spend")
 
 # 33. single-flight: two processes racing the same decision_key buy ONE
-# provider call. Both miss the empty cache; the loser rechecks inside the
-# lock and serves the winner's artifact instead of calling again.
+# provider call. DETERMINISTIC orchestration (no timing assumptions):
+# child A blocks inside the mocked provider on a RELEASE marker only
+# the parent creates; child B is spawned strictly after A signals
+# READY (proven inside the provider, lock held); then the parent
+# releases A. Either interleaving satisfies the invariant: B misses
+# both cache checks only if A never wrote (impossible — A writes
+# inside its exclusive lock hold before release can complete the
+# test), so exactly one provider call + one ANSWER + one CACHED.
 import subprocess as _sp3
 _sf_dir = os.path.join(TMP, "spendSF")
 os.makedirs(_sf_dir, exist_ok=True)
 _sf_cache = os.path.join(TMP, "cacheSF")
+_sf_ready = os.path.join(TMP, "sf_ready")
+_sf_release = os.path.join(TMP, "sf_release")
 _sf_count = os.path.join(TMP, "callsSF.txt")
 open(_sf_count, "w").write("")
+for _f in (_sf_ready, _sf_release, _sf_count,
+         os.path.join(TMP, "sf_startedA"),
+         os.path.join(TMP, "sf_startedB")):
+    if os.path.exists(_f):
+        os.remove(_f)
 _sf_lines = [
-    "import sys, json, time",
+    "import sys, json, time, os",
     "sys.path.insert(0, %r)" % HERE,
     "import jev",
     "jev.SPEND_DIR = %r" % _sf_dir,
@@ -824,6 +837,7 @@ _sf_lines = [
     "jev.CALL_LOG = %r" % os.path.join(TMP, "callsSF.jsonl"),
     "jev.KEY_PATH = %r" % jev.KEY_PATH,
     "jev.RETRY_DELAY_S = 0",
+    "open(os.path.join(%r, 'sf_started' + os.environ.get('SF_TAG', '?')), 'w').write('b')" % TMP,
     "resp = {'model': jev.REVISION, 'provider': jev.PROVIDER, ",
     "'answers': {'enter': {'type': 'noul', 'noul': 0.9}, ",
     "'edge_family': {'type': 'choice', 'choice': 'momentum', ",
@@ -832,7 +846,12 @@ _sf_lines = [
     "'latent_risk': {'type': 'noul', 'noul': 0.1}}, ",
     "'usage': {'cost': 0.01}}",
     "def post_fn(body, key):",
-    "    time.sleep(1.0)",
+    "    open(%r, 'w').write('a')" % _sf_ready,
+    "    t0 = time.monotonic()",
+    "    while not os.path.exists(%r):" % _sf_release,
+    "        if time.monotonic() - t0 > 60:",
+    "            raise TimeoutError('sf-release-never-came')",
+    "        time.sleep(0.02)",
     "    open(%r, 'a').write('call\\n')" % _sf_count,
     "    return (resp, None)",
     "st = {'context_hash': 'sf', 'symbol': 'SF', ",
@@ -842,11 +861,50 @@ _sf_lines = [
     "print(json.dumps({'action': row['action']}))",
 ]
 _sf_child = "\n".join(_sf_lines)
-_sf_procs = [_sp3.Popen([sys.executable, "-c", _sf_child],
-                        stdout=_sp3.PIPE, text=True) for _ in range(2)]
-_sf_outs = sorted(json.loads(p.communicate()[0])["action"]
-                  for p in _sf_procs)
-_sf_calls = open(_sf_count).read().count("call")
+
+
+def _sf_wait(path, deadline_s, what):
+    t0 = time.monotonic()
+    while not os.path.exists(path):
+        if time.monotonic() - t0 > deadline_s:
+            raise TimeoutError("sf-%s-timeout" % what)
+        time.sleep(0.02)
+
+
+_sf_procs = []
+try:
+    _envA = dict(os.environ, SF_TAG="A")
+    _envB = dict(os.environ, SF_TAG="B")
+    _sf_procs.append(_sp3.Popen([sys.executable, "-c", _sf_child],
+                                stdout=_sp3.PIPE, text=True, env=_envA))
+    _sf_wait(_sf_ready, 60, "ready")  # A proven inside provider
+    _sf_procs.append(_sp3.Popen([sys.executable, "-c", _sf_child],
+                                stdout=_sp3.PIPE, text=True, env=_envB))
+    _sf_wait(os.path.join(TMP, "sf_startedB"), 60, "started")
+    open(_sf_release, "w").write("go")  # release A
+    _sf_results = []
+    for _p in _sf_procs:
+        try:
+            _out, _ = _p.communicate(timeout=120)
+        except _sp3.TimeoutExpired:
+            _p.kill()
+            _p.wait()
+            raise TimeoutError("sf-child-join-timeout")
+        if _p.returncode != 0:
+            raise RuntimeError("sf-child-exit-%d" % _p.returncode)
+        _sf_results.append(json.loads(_out)["action"])
+    _sf_outs = sorted(_sf_results)
+    _sf_calls = open(_sf_count).read().count("call")
+finally:
+    for _p in _sf_procs:
+        if _p.poll() is None:
+            _p.kill()
+            _p.wait()
+    for _f in (_sf_ready, _sf_release, _sf_count,
+               os.path.join(TMP, "sf_startedA"),
+               os.path.join(TMP, "sf_startedB")):
+        if os.path.exists(_f):
+            os.remove(_f)
 check("single-flight",
       _sf_outs == ["ANSWER", "CACHED"] and _sf_calls == 1)
 
