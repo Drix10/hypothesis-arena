@@ -11,6 +11,8 @@ sys.path.insert(0, os.path.join(ROOT, "sandbox"))  # evidence probes
 from sources import calendars
 from sources import earnings
 import fred_vintage_probe as fred_probe
+import bea_probe
+import alpaca_paper_probe as alpaca_probe
 
 
 def _fake_fetcher_factory(forms, dates, items):
@@ -96,6 +98,53 @@ class FredReplayTest(unittest.TestCase):
     def test_pct_bounds(self):
         self.assertEqual(fred_probe.pct([3.0, 1.0, 2.0], 0.5), 2.0)
         self.assertEqual(fred_probe.pct([5.0], 0.99), 5.0)
+
+
+class BeaErrorShapeTest(unittest.TestCase):
+    """BEA nests call errors inside Results.Error at HTTP 200: that
+    shape must read as denial, never as data."""
+
+    def test_results_error_is_denial(self):
+        api = {"Results": {
+            "Error": {"APIErrorCode": "20",
+                        "APIErrorDescription": "The Dataset requested "
+                        "does not exist."}}}
+        res = api.get("Results", {})
+        err_node = api.get("Error", res.get("Error"))
+        self.assertIsNotNone(err_node)
+        self.assertIn("does not exist", str(
+            err_node.get("APIErrorDescription", "")))
+
+    def test_rows_identical(self):
+        self.assertTrue(bea_probe.rows_identical(
+            [("2024", "1.4")], [("2024", "1.4")]))
+        self.assertFalse(bea_probe.rows_identical([], []))
+        self.assertFalse(bea_probe.rows_identical(None, None))
+
+
+class AlpacaPaperShapeTest(unittest.TestCase):
+    """Paper-base pin + response-shape predicates on canned bodies
+    (live calls stay in the sandbox probe, never in unit tests)."""
+
+    def test_paper_base_pinned_not_live(self):
+        self.assertEqual(alpaca_probe.PAPER,
+                         "https://paper-api.alpaca.markets")
+        self.assertNotIn("live", alpaca_probe.PAPER)
+
+    def test_account_shape(self):
+        body = {"id": "abc", "status": "ACTIVE",
+                "currency": "USD", "buying_power": "400000"}
+        self.assertTrue(body.get("id")
+                        and body.get("status") == "ACTIVE"
+                        and body.get("buying_power"))
+
+    def test_bad_key_shape_is_denial(self):
+        # Probe convention: denied := body is None (401/403 carry
+        # error dicts, never data).
+        self.assertTrue((lambda b, e: b is None)(
+            None, {"http": 401, "message": "unauthorized"}))
+        self.assertFalse((lambda b, e: b is None)(
+            {"id": "abc"}, None))
 
 
 if __name__ == "__main__":

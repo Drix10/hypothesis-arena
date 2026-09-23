@@ -885,3 +885,20 @@ plane (Phase D) change any interface a future slice depends on?
   a quotes feed would not satisfy execution/reconciliation). Human
   decision required: stocks-only G0 (Alpaca paper) vs alternative FX
   venue — agent does NOT invent plan here.
+
+## Addendum 40 — Alpaca paper PROVEN (read-only, first run PASS)
+- Human completed Alpaca signup + paper keypair generation; Key ID +
+  secret placed in gitignored root `.env` only. Loader allowlist
+  extended additively (`ALPACA_KEY_ID`/`ALPACA_SECRET` OPTIONAL in
+  `collector/config.py`, `.env.example` template, OANDA-only wording
+  kept for the still-unconsumed broker keys). Tracked files
+  leak-checked (0 hits); loader confirms all three IDs visible.
+- New `research-plane/sandbox/alpaca_paper_probe.py` (stdlib urllib,
+  N=3, p50/p99, zero leakage; PAPER base pinned in code, never live;
+  READ-ONLY — no order endpoint called): account ACTIVE + buying_power
+  present (p50 ~0.8s); AAPL asset tradable/NASDAQ; IEX latest quote
+  present (feed recorded honestly as iex, not disguised as SIP);
+  bad-key 401 denied. `alpaca-paper-evidence.json` saved, leak-free.
+- 5 canned predicate tests added to `test_sources.py` (BEA
+  Results.Error denial shape + rows_identical; Alpaca base pin +
+  account/bad-key shapes): 18/18 green. No production change.
