@@ -62,16 +62,22 @@ class EarningsVetoTest(unittest.TestCase):
 
 class EarningsWiringTest(unittest.TestCase):
     """Poller/TTL/heartbeat/gate: offline (fake fetcher + fake clock +
-    tmp heartbeat file). Live latencies stay in the sandbox probe."""
+    TemporaryDirectory). Live latencies stay in the sandbox probe."""
     NOW = 1_000_000.0
 
-    def _hb_path(self):
-        import tempfile
-        return os.path.join(tempfile.mkdtemp(), "hb.json")
+    def _write(self, d, hb):
+        import tempfile  # noqa: F401 (stdlib, explicit)
+        p = os.path.join(d, "hb.json")
+        earnings.write_heartbeat(p, hb)
+        return p
+
+    def _good_hb(self, now=None):
+        fake = _fake_fetcher_factory(["10-Q"], ["2026-01-05"], [""])
+        return earnings.poll(("AAA",), fetcher=fake,
+                             now=self.NOW if now is None else now)
 
     def test_poll_ok_marks_event_free(self):
-        fake = _fake_fetcher_factory(["10-Q"], ["2026-01-05"], [""])
-        hb = earnings.poll(("AAA",), fetcher=fake, now=self.NOW)
+        hb = self._good_hb()
         self.assertTrue(hb["ok"])
         self.assertFalse(hb["symbols"][0]["suppress"])
         self.assertEqual(hb["cadence_s"], 300)
@@ -91,45 +97,196 @@ class EarningsWiringTest(unittest.TestCase):
         self.assertEqual(g, {"suppress": True, "reason": "absent"})
 
     def test_invalid_heartbeat_suppresses(self):
-        p = self._hb_path()
-        with open(p, "w") as fh:
-            fh.write("not-json{")
-        g = earnings.gate(("AAA",), heartbeat_path=p, now=self.NOW)
-        self.assertEqual(g, {"suppress": True, "reason": "invalid"})
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "hb.json")
+            with open(p, "w") as fh:
+                fh.write("not-json{")
+            g = earnings.gate(("AAA",), heartbeat_path=p, now=self.NOW)
+            self.assertEqual(g, {"suppress": True,
+                                 "reason": "invalid"})
 
     def test_stale_heartbeat_suppresses_as_absent(self):
-        p = self._hb_path()
-        fake = _fake_fetcher_factory(["10-Q"], ["2026-01-05"], [""])
-        earnings.write_heartbeat(
-            p, earnings.poll(("AAA",), fetcher=fake, now=self.NOW))
-        g = earnings.gate(("AAA",), heartbeat_path=p,
-                          now=self.NOW + 901)
-        self.assertEqual(g, {"suppress": True, "reason": "stale"})
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            p = self._write(d, self._good_hb())
+            g = earnings.gate(("AAA",), heartbeat_path=p,
+                              now=self.NOW + 901)
+            self.assertEqual(g, {"suppress": True, "reason": "stale"})
 
     def test_fresh_event_free_passes(self):
-        p = self._hb_path()
-        fake = _fake_fetcher_factory(["10-Q"], ["2026-01-05"], [""])
-        earnings.write_heartbeat(
-            p, earnings.poll(("AAA",), fetcher=fake, now=self.NOW))
-        g = earnings.gate(("AAA",), heartbeat_path=p, now=self.NOW)
-        self.assertEqual(g, {"suppress": False,
-                             "reason": "event-free"})
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            p = self._write(d, self._good_hb())
+            g = earnings.gate(("AAA",), heartbeat_path=p, now=self.NOW)
+            self.assertEqual(g, {"suppress": False,
+                                 "reason": "event-free"})
 
     def test_fresh_event_suppresses_with_event_reason(self):
-        p = self._hb_path()
-        fake = _fake_fetcher_factory(["8-K"], ["2026-09-21"], ["2.02"])
-        hb = earnings.poll(("AAA",), fetcher=fake, now=self.NOW)
-        # asof derives from now: 1970-01-12 is far from 2026-09-21,
-        # so craft the heartbeat at an asof inside the window instead.
         import datetime
+        import tempfile
         asof_now = datetime.datetime(2026, 9, 22,
                                      tzinfo=datetime.timezone.utc
                                      ).timestamp()
-        earnings.write_heartbeat(
-            p, earnings.poll(("AAA",), fetcher=fake, now=asof_now))
-        g = earnings.gate(("AAA",), heartbeat_path=p, now=asof_now)
-        self.assertEqual(g, {"suppress": True, "reason": "event"})
-        self.assertTrue(hb["ok"])  # poll itself succeeded
+        fake = _fake_fetcher_factory(["8-K"], ["2026-09-21"], ["2.02"])
+        hb = earnings.poll(("AAA",), fetcher=fake, now=asof_now)
+        self.assertTrue(hb["ok"])
+        with tempfile.TemporaryDirectory() as d:
+            p = self._write(d, hb)
+            g = earnings.gate(("AAA",), heartbeat_path=p, now=asof_now)
+            self.assertEqual(g, {"suppress": True, "reason": "event"})
+
+    def test_adversarial_heartbeats_all_invalid(self):
+        import copy
+        base = self._good_hb()
+        mutants = {
+            "ts-string": lambda h: h.update(ts="1000000"),
+            "ts-bool": lambda h: h.update(ts=True),
+            "ts-nan": lambda h: h.update(ts=float("nan")),
+            "ts-inf": lambda h: h.update(ts=float("inf")),
+            "ts-future": lambda h: h.update(ts=self.NOW + 10**7),
+            "ok-string": lambda h: h.update(ok="false"),
+            "no-symbols": lambda h: h.pop("symbols"),
+            "empty-symbols": lambda h: h.update(symbols=[]),
+            "extra-field": lambda h: h.update(x=1),
+            "bad-row": lambda h: h["symbols"].append({"symbol": "X"}),
+            "dup-symbols": lambda h: h["symbols"].append(
+                dict(h["symbols"][0])),
+            "bad-cadence": lambda h: h.update(cadence_s=60),
+            "bad-ttl": lambda h: h.update(ttl_s=60),
+            "neg-latency": lambda h: h.update(latency_ms=-1.0),
+            "neg-events": lambda h: h["symbols"].__setitem__(
+                0, dict(h["symbols"][0], events_seen=-2)),
+        }
+        for name, fn in mutants.items():
+            hb = copy.deepcopy(base)
+            fn(hb)
+            import json as _j
+            import tempfile
+            with tempfile.TemporaryDirectory() as d:
+                p = os.path.join(d, "hb.json")
+                with open(p, "w") as fh:
+                    fh.write(_j.dumps(hb, allow_nan=True))
+                _, state = earnings.read_heartbeat(p, now=self.NOW)
+                g = earnings.gate(("AAA",), heartbeat_path=p,
+                                  now=self.NOW)
+            self.assertEqual(state, "invalid", name)
+            self.assertTrue(g["suppress"], name)
+
+    def test_missing_symbol_suppresses_unknown(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            p = self._write(d, self._good_hb())
+            g = earnings.gate(("AAA", "ZZZ"), heartbeat_path=p,
+                              now=self.NOW)
+            self.assertEqual(g, {"suppress": True,
+                                 "reason": "unknown"})
+
+    def test_huge_heartbeat_file_invalid(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "hb.json")
+            with open(p, "w") as fh:
+                fh.write("{" + "\"k\":" + "x" * 70000 + "}")
+            _, state = earnings.read_heartbeat(p, now=self.NOW)
+            self.assertEqual(state, "invalid")
+
+    def test_concurrent_writers_never_tear(self):
+        import tempfile
+        import threading
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "hb.json")
+            errs = []
+
+            def writer(k):
+                try:
+                    for _ in range(15):
+                        hb = self._good_hb(now=self.NOW + k)
+                        earnings.write_heartbeat(p, hb)
+                except Exception as e:  # noqa: BLE001
+                    errs.append(e)
+
+            def reader():
+                try:
+                    for _ in range(120):
+                        hb, state = earnings.read_heartbeat(p)
+                        if state == "invalid":
+                            # Only acceptable invalid: none — atomic
+                            # replace means never torn. Any invalid
+                            # here is a writer/reader race failure.
+                            errs.append(ValueError("torn-heartbeat"))
+                            return
+                except Exception as e:  # noqa: BLE001
+                    errs.append(e)
+
+            threads = [threading.Thread(target=writer, args=(k,))
+                       for k in range(4)]
+            threads.append(threading.Thread(target=reader))
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            self.assertEqual(errs, [])
+            leftovers = [f for f in os.listdir(d)
+                         if f.startswith(".hb-")]
+            self.assertEqual(leftovers, [])
+
+
+class EarningsSecSchemaTest(unittest.TestCase):
+    """Malformed SEC submissions payloads raise (fail closed), never
+    silently truncate into a possibly event-free subset."""
+    TICK = {"0": {"ticker": "AAA", "cik_str": "1"}}
+
+    def _fetch(self, recent):
+        def fake(url):
+            if "company_tickers" in url:
+                return dict(self.TICK)
+            return {"filings": {"recent": recent}}
+        return fake
+
+    def test_mismatched_lengths_raise(self):
+        fake = self._fetch({"form": ["8-K", "10-Q"],
+                            "filingDate": ["2026-09-21"], "items": ["",
+                                                                     ""]})
+        with self.assertRaises(ValueError):
+            earnings.recent_event_dates(1, fetcher=fake)
+
+    def test_non_list_fields_raise(self):
+        fake = self._fetch({"form": "8-K", "filingDate": [],
+                            "items": []})
+        with self.assertRaises(ValueError):
+            earnings.recent_event_dates(1, fetcher=fake)
+
+    def test_malformed_date_raises(self):
+        fake = self._fetch({"form": ["10-Q"],
+                            "filingDate": ["Sep 21 2026"], "items": [""]})
+        with self.assertRaises(ValueError):
+            earnings.recent_event_dates(1, fetcher=fake)
+
+    def test_missing_filing_date_raises(self):
+        fake = self._fetch({"form": ["10-Q"], "items": [""]})
+        with self.assertRaises(ValueError):
+            earnings.recent_event_dates(1, fetcher=fake)
+
+    def test_malformed_item_raises(self):
+        fake = self._fetch({"form": ["8-K"],
+                            "filingDate": ["2026-09-21"],
+                            "items": [{"x": 1}]})
+        with self.assertRaises(ValueError):
+            earnings.recent_event_dates(1, fetcher=fake)
+
+    def test_malformed_form_raises(self):
+        fake = self._fetch({"form": [8], "filingDate": ["2026-09-21"],
+                            "items": [""]})
+        with self.assertRaises(ValueError):
+            earnings.recent_event_dates(1, fetcher=fake)
+
+    def test_duplicate_records_still_decide(self):
+        fake = self._fetch({"form": ["8-K", "8-K"],
+                            "filingDate": ["2026-09-21", "2026-09-21"],
+                            "items": ["2.02", "2.02"]})
+        self.assertTrue(earnings.has_event("AAA", "2026-09-22",
+                                           fetcher=fake))
 
 
 class CalendarTest(unittest.TestCase):

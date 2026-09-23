@@ -16,8 +16,10 @@ posture is unit-testable offline; the __main__ probe exercises the
 live path and records p50/p99 per doc 09 sec. 9.4.
 """
 import json
+import math
 import os
 import sys
+import tempfile
 import time
 import urllib.request
 
@@ -36,6 +38,14 @@ WINDOW_DAYS = 3
 CADENCE_S = 300
 TTL_S = 3 * CADENCE_S
 HEARTBEAT_VERSION = 1
+# Reader/writer bounds (fail-closed hardening): a heartbeat that
+# violates any of these is invalid, never fresh.
+HEARTBEAT_MAX_BYTES = 65536  # read cap: no unbounded json.load()
+CLOCK_SKEW_ALLOW_S = 300  # future ts beyond this is corrupt, not fresh
+LATENCY_MAX_MS = 600000.0
+EVENTS_MAX = 100000
+SYMBOL_MAX_LEN = 16
+ERROR_MAX_LEN = 128
 
 
 def fetch_json(url, timeout=30):
@@ -58,19 +68,51 @@ def recent_event_dates(cik, fetcher=fetch_json):
     """Earnings event dates (filingDate strings) for a CIK.
 
     Raises on any failure; empty list means no usable filing data
-    (caller treats as unknown, NOT as event-free).
+    (caller treats as unknown, NOT as event-free). The SEC
+    submissions schema carries parallel arrays (form/filingDate/
+    items); lengths MUST agree and every element MUST have the
+    expected shape — a truncated/malformed payload raises instead of
+    silently zipping to a possibly event-free subset.
     """
     sub = fetcher(SUBMISSIONS_URL % cik)
-    recent = sub.get("filings", {}).get("recent", {})
+    if not isinstance(sub, dict):
+        raise ValueError("submissions-not-object")
+    filings = sub.get("filings", {})
+    recent = filings.get("recent", {}) if isinstance(filings, dict) \
+        else None
+    if not isinstance(recent, dict):
+        raise ValueError("recent-not-object")
     forms = recent.get("form", [])
     dates = recent.get("filingDate", [])
     items = recent.get("items", [])
+    for _name, _arr in (("form", forms), ("filingDate", dates),
+                        ("items", items)):
+        if not isinstance(_arr, list):
+            raise ValueError("recent-%s-not-list" % _name)
+    if not (len(forms) == len(dates) == len(items)):
+        raise ValueError("recent-parallel-arrays-disagree")
+    from datetime import date as _date
     found = []
-    for form, date, item in zip(forms, dates, items):
+    for form, date_s, item in zip(forms, dates, items):
+        if not isinstance(form, str):
+            raise ValueError("form-not-string")
+        if not isinstance(date_s, str):
+            raise ValueError("filingDate-not-string")
+        try:
+            _date.fromisoformat(date_s)
+        except Exception:
+            raise ValueError("filingDate-malformed")
+        if isinstance(item, str):
+            item_s = item
+        elif isinstance(item, (list, tuple)) and all(
+                isinstance(x, str) for x in item):
+            item_s = ",".join(item)
+        else:
+            raise ValueError("items-bad-shape")
         if form in ("10-Q", "10-K"):
-            found.append(date)
-        elif form == "8-K" and "2.02" in str(item):
-            found.append(date)
+            found.append(date_s)
+        elif form == "8-K" and "2.02" in item_s:
+            found.append(date_s)
     return found
 
 
@@ -135,31 +177,129 @@ def poll(symbols=("AAPL", "MSFT"), fetcher=fetch_json, now=None):
 
 
 def write_heartbeat(path, hb):
-    """Durable heartbeat for cross-process readers. Atomic replace so
-    readers never see a torn file."""
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(hb, fh)
-    os.replace(tmp, path)
+    """Durable heartbeat for cross-process readers. Unique temp file
+    per writer in the same directory (concurrent writers never share
+    a temp name), bounded content, flush+fsync before atomic replace,
+    directory fsync where the platform allows, temp cleanup on every
+    failure path. Readers see the previous or the new complete
+    heartbeat, never a partial one. Durability note: fsync orders the
+    write to the OS (crash-ordering); it is not a power-loss proof."""
+    data = json.dumps(hb)
+    if len(data.encode("utf-8")) > HEARTBEAT_MAX_BYTES:
+        raise ValueError("heartbeat-too-large")
+    parent = os.path.dirname(os.path.abspath(path)) or "."
+    fd, tmp = tempfile.mkstemp(prefix=".hb-", suffix=".tmp",
+                                dir=parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+        tmp = None
+        try:
+            dfd = os.open(parent, os.O_RDONLY)
+        except OSError:
+            dfd = None
+        if dfd is not None:
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
+    finally:
+        if tmp is not None and os.path.exists(tmp):
+            os.remove(tmp)
     return path
+
+
+_HB_KEYS = frozenset(("version", "ts", "cadence_s", "ttl_s", "ok",
+                       "latency_ms", "symbols"))
+_ROW_KEYS = frozenset(("symbol", "suppress", "events_seen", "error"))
+
+
+def _finite_num(x):
+    return isinstance(x, (int, float)) and not isinstance(x, bool) \
+        and math.isfinite(x)
+
+
+def _valid_row(r):
+    if not isinstance(r, dict) or set(r.keys()) != _ROW_KEYS:
+        return False
+    if not isinstance(r["symbol"], str) or not 1 <= len(r["symbol"]) \
+            <= SYMBOL_MAX_LEN:
+        return False
+    if not isinstance(r["suppress"], bool):
+        return False
+    ev = r["events_seen"]
+    if not isinstance(ev, int) or isinstance(ev, bool) or ev < 0 \
+            or ev > EVENTS_MAX:
+        return False
+    err = r["error"]
+    if err is not None and (not isinstance(err, str)
+                             or len(err) > ERROR_MAX_LEN):
+        return False
+    return True
+
+
+def _valid_heartbeat(hb):
+    """Strict schema gate. Never raises: any anomaly -> False."""
+    try:
+        if not isinstance(hb, dict) or set(hb.keys()) != _HB_KEYS:
+            return False
+        if hb["version"] != HEARTBEAT_VERSION \
+                or not isinstance(hb["version"], int) \
+                or isinstance(hb["version"], bool):
+            return False
+        if hb["cadence_s"] != CADENCE_S or hb["ttl_s"] != TTL_S:
+            return False
+        if not isinstance(hb["ok"], bool):
+            return False
+        lat = hb["latency_ms"]
+        if not _finite_num(lat) or lat < 0 or lat > LATENCY_MAX_MS:
+            return False
+        syms = hb["symbols"]
+        if not isinstance(syms, list) or not syms:
+            return False
+        seen = set()
+        for r in syms:
+            if not _valid_row(r):
+                return False
+            if r["symbol"] in seen:
+                return False
+            seen.add(r["symbol"])
+        return True
+    except Exception:
+        return False
 
 
 def read_heartbeat(path, now=None):
     """(heartbeat-or-None, state). state in {fresh, absent, invalid,
     stale}. absent = file never written (fresh boot, not a failure);
-    invalid = unreadable/wrong-version (fail closed -> stale handling
-    upstream); stale = age > TTL."""
+    invalid = oversize/unreadable/schema-bad/version-bad/future-ts;
+    stale = age > TTL. A version-correct but malformed file is ALWAYS
+    invalid, never fresh."""
     now = now if now is not None else time.time()
     try:
-        with open(path, encoding="utf-8") as fh:
-            hb = json.load(fh)
+        size = os.path.getsize(path)
     except FileNotFoundError:
         return None, "absent"
     except Exception:
         return None, "invalid"
-    if not isinstance(hb, dict) or hb.get("version") != HEARTBEAT_VERSION:
+    if size > HEARTBEAT_MAX_BYTES:
         return None, "invalid"
-    if now - hb.get("ts", 0) > TTL_S:
+    try:
+        with open(path, encoding="utf-8") as fh:
+            hb = json.load(fh)
+    except Exception:
+        return None, "invalid"
+    if not _valid_heartbeat(hb):
+        return None, "invalid"
+    ts = hb["ts"]
+    if not _finite_num(ts):
+        return None, "invalid"
+    if ts > now + CLOCK_SKEW_ALLOW_S:
+        return None, "invalid"  # future beyond skew: never fresh
+    if now - ts > TTL_S:
         return hb, "stale"
     return hb, "fresh"
 
@@ -169,22 +309,27 @@ def gate(symbols=("AAPL", "MSFT"), heartbeat_path=None,
     """Wired veto decision for JEV consumption. Returns
     {suppress: bool, reason: str} where reason in
     {event, unknown, stale, invalid, absent}. absent (never polled)
-    suppresses: no evidence of event-free is not event-free."""
-    now = now if now is not None else time.time()
-    hb, state = read_heartbeat(heartbeat_path, now) \
-        if heartbeat_path else (None, "absent")
-    if state != "fresh" or not (hb or {}).get("ok", False):
-        if state == "fresh":
-            return {"suppress": True, "reason": "unknown"}
-        return {"suppress": True, "reason": state}
-    by_sym = {r["symbol"]: r for r in hb.get("symbols", [])}
-    for sym in symbols:
-        r = by_sym.get(sym)
-        if r is None or r.get("error") or r.get("suppress"):
-            return {"suppress": True,
-                    "reason": "unknown" if r is None or r.get("error")
-                    else "event"}
-    return {"suppress": False, "reason": "event-free"}
+    suppresses: no evidence of event-free is not event-free.
+    Final defensive boundary: ANY unexpected shape/type error inside
+    resolves to suppression, never propagates as an exception."""
+    try:
+        now = now if now is not None else time.time()
+        hb, state = read_heartbeat(heartbeat_path, now) \
+            if heartbeat_path else (None, "absent")
+        if state != "fresh" or not (hb or {}).get("ok", False):
+            if state == "fresh":
+                return {"suppress": True, "reason": "unknown"}
+            return {"suppress": True, "reason": state}
+        by_sym = {r["symbol"]: r for r in hb.get("symbols", [])}
+        for sym in symbols:
+            r = by_sym.get(sym)
+            if r is None or r.get("error") or r.get("suppress"):
+                return {"suppress": True,
+                        "reason": "unknown" if r is None or r.get("error")
+                        else "event"}
+        return {"suppress": False, "reason": "event-free"}
+    except Exception:
+        return {"suppress": True, "reason": "unknown"}
 
 
 def measure(symbols=("AAPL", "MSFT"), timeout=30):
