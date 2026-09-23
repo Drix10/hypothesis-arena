@@ -1099,3 +1099,17 @@ plane (Phase D) change any interface a future slice depends on?
 ## Addendum 55 — hosted CI green on Slice F fix commit
 - Run 35908915502 on `9f966e0`: stdlib + evidence + plane + kernel
   SUCCESS.
+
+## Addendum 56 — Slice F implementation ACCEPTED; soak OPEN
+- Independent audit accepted `9f966e0` (+ docs-only `dd903827`;
+  hosted 35908915502 all-SUCCESS verified): backward/dup latch with
+  reference preservation, unsigned deltas, exact-threshold behavior,
+  MAX overflow policy, zero semantics, no authority creep, D
+  untouched.
+- Carried constraints (not blockers): ring is single-threaded
+  ("lock-free-shaped") — the production driver must not present it
+  as thread-safe without the atomic ownership model; F 24h soak +
+  reconnect evidence stays OPEN as an independent track (needs an
+  awake host; never silently complete).
+- State: P3.5 A/B/C/E DONE, D NOT AUTHORIZED, F IMPL-ACCEPTED +
+  SOAK-OPEN, G NEXT, H1 OPEN. Slice G starts now.
