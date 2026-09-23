@@ -32,9 +32,17 @@ jobs:
           python-version: "3.11"
       - name: collector suites (mocked IO, no network)
         run: |
-          for t in test_ctx test_jev test_pipeline test_config test_collect test_soak_check; do
+          for t in test_ctx test_jev test_pipeline test_config test_collect; do
             python3 collector/tests/$t.py
           done
+          # CI-only fixture (soak_check alone): it requires effective
+          # config to carry the EDGAR contact. Synthetic non-secret
+          # value via the documented exported-env-wins contract
+          # (config.py); test_config asserts a clean env, so the
+          # override is scoped to this one command. No secret, and the
+          # checkout has no tracked .env.
+          MIRO_CONTACT=ci-test@example.invalid \
+            python3 collector/tests/test_soak_check.py
 
   evidence:
     runs-on: ubuntu-latest
