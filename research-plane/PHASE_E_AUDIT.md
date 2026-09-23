@@ -902,3 +902,17 @@ plane (Phase D) change any interface a future slice depends on?
 - 5 canned predicate tests added to `test_sources.py` (BEA
   Results.Error denial shape + rows_identical; Alpaca base pin +
   account/bad-key shapes): 18/18 green. No production change.
+
+## Addendum 41 — BEA post-activation re-probe (still error-20)
+- Human confirmed email activation; probe re-run minutes later:
+  dataset list still fine (p50 ~1.0s), bad-UserID still denied, but
+  GetData/GetParameterList still BEA error 20 on EVERY dataset incl.
+  the documented Regional sample. Activation-click therefore did NOT
+  clear it within minutes.
+- Standing hypotheses, in order: (a) server-side provisioning batch
+  delay on fresh keys; (b) an undocumented per-key dataset grant.
+  Params-side causes exhausted (case variants, documented sample shape,
+  metadata vs data methods — all identical error). No further live
+  hammering: re-probe scheduled after elapsed time (next session),
+  single call, then contact developers@bea.gov only if still red.
+  State stays PARTIAL; nothing promoted, nothing faked.

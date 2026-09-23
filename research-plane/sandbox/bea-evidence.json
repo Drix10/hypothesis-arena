@@ -1,9 +1,9 @@
 {
- "ts": 1790176336,
+ "ts": 1790178815,
  "n": 3,
  "datasets": {
-  "p50_ms": 926.9,
-  "p99_ms": 959.5,
+  "p50_ms": 1017.9,
+  "p99_ms": 1069.6,
   "names": [
    "NIPA",
    "NIUnderlyingDetail",
@@ -22,13 +22,13 @@
  },
  "data": {
   "table": "T10101",
-  "p50_ms": 924.2,
+  "p50_ms": 998.7,
   "rows": 0,
   "sample": [],
   "byte_identical": false
  },
  "bad_userid": {
   "denied": true,
-  "message": "This UserId is not active. Please activate it and try again."
+  "message": "Invalid Request - Invalid API UserId."
  }
 }
