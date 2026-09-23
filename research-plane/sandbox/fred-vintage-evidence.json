@@ -1,0 +1,38 @@
+{
+ "ts": 1790165439,
+ "series": "GDP",
+ "n": 3,
+ "observations": {
+  "p50_ms": 500.0,
+  "p99_ms": 844.0,
+  "latest": {
+   "date": "2026-04-01",
+   "value": "32486.066"
+  }
+ },
+ "replay": {
+  "realtime": "2020-01-01",
+  "p50_ms": 516.0,
+  "observations": 3,
+  "values": [
+   [
+    "2019-01-01",
+    "21098.827"
+   ],
+   [
+    "2019-04-01",
+    "21340.267"
+   ],
+   [
+    "2019-07-01",
+    "21542.54"
+   ]
+  ],
+  "byte_identical": true
+ },
+ "bad_key": {
+  "status": 400,
+  "denied": true,
+  "message": "Bad Request.  The value for variable api_key is not registered.  Read https://fr"
+ }
+}

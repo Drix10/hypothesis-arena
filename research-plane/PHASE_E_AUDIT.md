@@ -794,3 +794,22 @@ plane (Phase D) change any interface a future slice depends on?
   proven); not a `graph.run_cycle()` proof. STAGE/HALT/promotion
   manifests stay locked concepts with absent runtime — credential
   work implements no Slice-D/kill-switch machinery.
+
+## Addendum 35 — FRED/ALFRED operational proof (agent-executed, NOT signed off)
+- Trigger met (FRED key in root `.env`, 32 chars). Pre-existing
+  `tier_a.py` gate now reports `fred_macro: READY (key verified
+  live)` — characterized honestly as auth/metadata readiness ONLY.
+- New `sandbox/fred_vintage_probe.py` (+ artifact
+  `fred-vintage-evidence.json`, +4 offline replay-predicate tests in
+  `tests/test_sources.py`, 13/13 green): GDP observations live
+  ($32,486.066 @ 2026-04-01, N=3, p50 ~500ms p99 ~844ms);
+  realtime-period replay as-known-2020-01-01 byte-identical twice
+  (pre-revision 2019 quarters); bad key 400-denied fail-closed;
+  artifact secret-free (no api_key, no 32-char runs).
+- Honest negative: dedicated `/alfred/*` endpoints 404 for this key
+  (recorded, not hidden); the realtime-parameter mechanism on the
+  FRED endpoint is the proven deterministic-replay path — same key,
+  one credential, both mechanisms. No frozen code touched (probe +
+  tests only). venv had vanished from the tree (untracked dir,
+  external cause, tree itself clean) — rebuilt from pinned
+  requirements, deps verified.
