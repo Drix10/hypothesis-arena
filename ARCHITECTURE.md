@@ -326,9 +326,12 @@ mirror (missing ledger raises, never $0).
 - ACTIVE: `research-plane/plane`, `sources`, `tests`, `sandbox`,
   `lessons.jsonl`, `requirements.txt`, `TODO.md`, `README.md`, this
   file, CI wiring, `.env.example` (additive consumed keys only).
-- FUTURE: Slice D; live capital past G0_PAPER; broker pollers (OANDA
-  practice + Alpaca paper); FRED/BEA live wiring; earnings TTL/
-  heartbeat; 7-day run; profit/calibration feeds (G-stage); registry
+- FUTURE: Slice D; live capital past G0_PAPER; production broker
+  pollers + H1 execution (order router/journal/ack/reconcile);
+  production FRED/BEA poller→feature wiring; production earnings
+  poller→graph consumer wiring (source-level TTL/heartbeat PROVEN);
+  7-day run; profit/calibration feeds (G-stage); registry
   publication (optional); P3.5 sizing/execution.
 - Current Phase-D credentials (ONLY): OpenRouter, FRED/ALFRED, BEA,
-  OANDA practice, Alpaca paper. No other mandatory keys exist.
+  Alpaca paper. OANDA practice BLOCKED (India ineligible, Addendum
+  39) — alt-FX venue research only, no signup. No other keys exist.

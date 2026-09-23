@@ -4,9 +4,12 @@
 Proves, with N=3 timed samples per call and zero secret leakage:
   1. authenticated dataset listing (GETDATASETLIST -> datasets present);
   2. real DATA retrieval (NIPA T10101 headline GDP -> rows present);
-  3. DETERMINISTIC replay: same GetData fetched twice -> rows
-     byte-identical;
-  4. bad-UserID FAIL-CLOSED (BEA error payload, never a data success).
+  3. DETERMINISTIC row replay: same GetData fetched twice -> parsed
+     row tuples equal AND row-shaped (semantic replay, not raw-byte
+     comparison; two malformed identical responses are not proof);
+  4. bad-UserID FAIL-CLOSED (BEA structured denial with invalid-
+     UserID semantics; transport failures are transport, never
+     denial).
 UserID comes from root .env via collector.config.load (never argv,
 never printed; URLs are redacted in all output). Exit 0 only if 1-4
 hold. Usage: python3 research-plane/sandbox/bea_probe.py [--out PATH]
@@ -31,7 +34,11 @@ UA = "MiroHedge/phase0 contact=research-plane-bea"
 
 
 def get(params, timeout=30):
-    """(ok-data-or-None, error-dict-or-None, latency_ms). Key in memory."""
+    """(res-or-None, err-or-None, latency_ms, kind). kind in
+    {data, denied, transport}. BEA auth errors arrive as HTTP 200 +
+    Results.Error, so ANY non-200/exception is transport (never
+    denial): a network failure can never masquerade as a 401 proof.
+    Key stays in memory."""
     qs = urllib.parse.urlencode(params)
     req = urllib.request.Request(BASE + "?" + qs,
                                  headers={"User-Agent": UA})
@@ -41,17 +48,12 @@ def get(params, timeout=30):
             body = r.read(1 << 20)
             ms = (time.monotonic() - t0) * 1000.0
             parsed = json.loads(body)
-    except urllib.error.HTTPError as e:
-        ms = (time.monotonic() - t0) * 1000.0
-        try:
-            parsed = json.loads(e.read(1 << 16))
-        except Exception:
-            parsed = {}
-        return None, {"http": e.code,
-                      "error": str(parsed)[:120]}, round(ms, 1)
     except Exception as e:
         ms = (time.monotonic() - t0) * 1000.0
-        return None, {"error": "%s" % type(e).__name__}, round(ms, 1)
+        code = getattr(e, "code", None)
+        return None, {"http": code,
+                      "error": "%s" % type(e).__name__}, \
+            round(ms, 1), "transport"
     api = parsed.get("BEAAPI", {})
     res = api.get("Results", {}) if isinstance(api, dict) else {}
     # BEA nests call errors inside Results.Error (HTTP stays 200).
@@ -60,10 +62,11 @@ def get(params, timeout=30):
     if err_node is not None:
         msg = err_node.get("APIErrorDescription", err_node) \
             if isinstance(err_node, dict) else err_node
-        return None, {"error": str(msg)[:120]}, round(ms, 1)
+        return None, {"error": str(msg)[:120]}, round(ms, 1), "denied"
     if not isinstance(res, dict):
-        return None, {"error": "malformed-results"}, round(ms, 1)
-    return res, None, round(ms, 1)
+        return None, {"error": "malformed-results"}, round(ms, 1), \
+            "transport"
+    return res, None, round(ms, 1), "data"
 
 
 def pct(lats, q):
@@ -71,11 +74,29 @@ def pct(lats, q):
     return s[min(len(s) - 1, int(q * len(s)))]
 
 
+def _valid_rows(rows):
+    """Replay rows must be shaped like real BEA data, not just
+    mutually equal: non-empty list of (TimePeriod, DataValue) with
+    bounded non-empty strings. Two malformed identical responses are
+    NOT a replay proof."""
+    if not isinstance(rows, list) or not rows:
+        return False
+    for r in rows:
+        if not isinstance(r, (list, tuple)) or len(r) != 2:
+            return False
+        tp, dv = r
+        if not isinstance(tp, str) or not 1 <= len(tp) <= 16:
+            return False
+        if not isinstance(dv, str) or not 1 <= len(dv) <= 64:
+            return False
+    return True
+
+
 def rows_identical(a, b):
-    """Two non-empty row lists, byte-identical. Empty/None is NOT
-    identical (fail closed: missing data never counts as replay)."""
-    return (a is not None and b is not None
-            and len(a) > 0 and a == b)
+    """Semantic deterministic-row replay (parsed tuples, NOT raw
+    response bytes): two non-empty VALID row lists, equal. Empty/
+    None/malformed on either side is NOT identical (fail closed)."""
+    return (_valid_rows(a) and _valid_rows(b) and a == b)
 
 
 def main():
@@ -91,8 +112,9 @@ def main():
     # 1. authenticated dataset list
     ds_lats, datasets = [], None
     for _ in range(N):
-        res, err, ms = get({"UserID": uid, "method": "GETDATASETLIST",
-                            "ResultFormat": "JSON"})
+        res, err, ms, kind = get({"UserID": uid,
+                                  "method": "GETDATASETLIST",
+                                  "ResultFormat": "JSON"})
         ds_lats.append(ms)
         if res and res.get("Dataset"):
             datasets = [d.get("DatasetName")
@@ -113,7 +135,7 @@ def main():
          "Frequency": "A", "Year": "2023,2024"}
     reps, dt_lats = [], []
     for _ in range(2):
-        res, err, ms = get(q)
+        res, err, ms, kind = get(q)
         dt_lats.append(ms)
         rows = None
         if res and res.get("Data"):
@@ -124,23 +146,29 @@ def main():
     ev["data"] = {"table": "T10101", "p50_ms": pct(dt_lats, 0.5),
                   "rows": len(reps[0]) if reps[0] else 0,
                   "sample": (reps[0] or [])[:2],
-                  "byte_identical": bool(same)}
-    print("NIPA T10101 rows=%d sample=%r p50=%.0fms byte-identical=%r"
+                  "rows_identical": bool(same),
+                  "replay_kind": "semantic-rows (parsed tuples, "
+                  "not raw bytes)"}
+    print("NIPA T10101 rows=%d sample=%r p50=%.0fms rows-identical=%r"
           % (ev["data"]["rows"], ev["data"]["sample"],
              ev["data"]["p50_ms"], same))
     if not same:
         print("FAIL: BEA data not deterministic across replays")
         ok = False
 
-    # 4. bad UserID fails closed (error payload, never data)
-    res4, err4, _ = get({"UserID": "0" * 8 + "-" + "0" * 4 + "-"
-                         + "0" * 4 + "-" + "0" * 4 + "-" + "0" * 12,
-                         "method": "GETDATASETLIST",
-                         "ResultFormat": "JSON"})
-    denied = (res4 is None)
-    ev["bad_userid"] = {"denied": bool(denied),
-                        "message": str((err4 or {}).get("error", ""))[:80]}
-    print("bad-userid probe: denied=%r" % denied)
+    # 4. bad UserID fails closed: requires a BEA structured denial
+    # (kind == denied with invalid-UserID semantics). Transport
+    # failures are transport, never denial.
+    res4, err4, _, kind4 = get({"UserID": "0" * 8 + "-" + "0" * 4 + "-"
+                                + "0" * 4 + "-" + "0" * 4 + "-"
+                                + "0" * 12,
+                                "method": "GETDATASETLIST",
+                                "ResultFormat": "JSON"})
+    msg4 = str((err4 or {}).get("error", ""))
+    denied = (kind4 == "denied" and "nvalid" in msg4)
+    ev["bad_userid"] = {"denied": bool(denied), "kind": kind4,
+                        "message": msg4[:80]}
+    print("bad-userid probe: denied=%r kind=%r" % (denied, kind4))
     if not denied:
         print("FAIL: bad UserID accepted")
         ok = False

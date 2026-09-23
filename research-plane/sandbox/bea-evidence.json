@@ -1,9 +1,9 @@
 {
- "ts": 1790180632,
+ "ts": 1790185390,
  "n": 3,
  "datasets": {
-  "p50_ms": 924.1,
-  "p99_ms": 1532.3,
+  "p50_ms": 1016.4,
+  "p99_ms": 1078.4,
   "names": [
    "NIPA",
    "NIUnderlyingDetail",
@@ -22,7 +22,7 @@
  },
  "data": {
   "table": "T10101",
-  "p50_ms": 430.0,
+  "p50_ms": 1145.6,
   "rows": 50,
   "sample": [
    [
@@ -34,10 +34,12 @@
     "2.8"
    ]
   ],
-  "byte_identical": true
+  "rows_identical": true,
+  "replay_kind": "semantic-rows (parsed tuples, not raw bytes)"
  },
  "bad_userid": {
   "denied": true,
+  "kind": "denied",
   "message": "Invalid Request - Invalid API UserId."
  }
 }

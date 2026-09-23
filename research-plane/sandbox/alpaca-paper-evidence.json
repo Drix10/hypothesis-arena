@@ -1,23 +1,20 @@
 {
- "ts": 1790178001,
+ "ts": 1790185397,
  "n": 3,
  "base": "https://paper-api.alpaca.markets",
  "orders_called": false,
  "account": {
-  "p50_ms": 801.8,
-  "p99_ms": 840.4,
+  "p50_ms": 835.2,
+  "p99_ms": 846.0,
   "fields": {
-   "id": "635d890e...",
-   "account_number": "PA32...",
    "status": "ACTIVE",
    "currency": "USD",
-   "buying_power": "400000",
-   "pattern_day_trader": null
+   "buying_power": "400000"
   }
  },
  "asset": {
-  "p50_ms": 794.6,
-  "p99_ms": 800.1,
+  "p50_ms": 804.3,
+  "p99_ms": 830.9,
   "fields": {
    "symbol": "AAPL",
    "status": "active",
@@ -26,18 +23,19 @@
   }
  },
  "quote": {
-  "p50_ms": 801.0,
-  "p99_ms": 849.6,
+  "p50_ms": 777.2,
+  "p99_ms": 800.2,
   "fields": {
-   "t": "2026-09-23T15:40:08.493790193Z",
-   "ap": 336.26,
-   "bp": 336.03,
+   "t": "2026-09-23T17:43:24.39448316Z",
+   "ap": 337.22,
+   "bp": 337.12,
    "feed": "iex"
   }
  },
  "bad_key": {
   "denied": true,
   "message": "unauthorized.",
-  "http": 401
+  "http": 401,
+  "transport": false
  }
 }

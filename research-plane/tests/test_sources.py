@@ -346,9 +346,15 @@ class BeaErrorShapeTest(unittest.TestCase):
 
     def test_rows_identical(self):
         self.assertTrue(bea_probe.rows_identical(
-            [("2024", "1.4")], [("2024", "1.4")]))
+            [("2024", "2.8")], [("2024", "2.8")]))
         self.assertFalse(bea_probe.rows_identical([], []))
         self.assertFalse(bea_probe.rows_identical(None, None))
+
+    def test_malformed_identical_rows_are_not_proof(self):
+        bad = [("", ""), (None, "2.8")]
+        self.assertFalse(bea_probe.rows_identical(bad, bad))
+        self.assertFalse(bea_probe.rows_identical(
+            [("2024", "2.8")], [("2024", "x" * 65)]))
 
 
 class AlpacaPaperShapeTest(unittest.TestCase):
@@ -361,11 +367,34 @@ class AlpacaPaperShapeTest(unittest.TestCase):
         self.assertNotIn("live", alpaca_probe.PAPER)
 
     def test_account_shape(self):
-        body = {"id": "abc", "status": "ACTIVE",
+        good = {"id": "abc", "status": "ACTIVE",
                 "currency": "USD", "buying_power": "400000"}
-        self.assertTrue(body.get("id")
-                        and body.get("status") == "ACTIVE"
-                        and body.get("buying_power"))
+        self.assertTrue(alpaca_probe._valid_account(good))
+        self.assertFalse(alpaca_probe._valid_account(
+            dict(good, buying_power="")))
+        self.assertFalse(alpaca_probe._valid_account(
+            dict(good, status="")))
+        self.assertFalse(alpaca_probe._valid_account(None))
+
+    def test_asset_shape(self):
+        good = {"symbol": "AAPL", "status": "active",
+                "tradable": True, "exchange": "NASDAQ"}
+        self.assertTrue(alpaca_probe._valid_asset(good))
+        self.assertFalse(alpaca_probe._valid_asset(
+            dict(good, tradable=False)))
+        self.assertFalse(alpaca_probe._valid_asset(
+            dict(good, symbol="MSFT")))
+
+    def test_quote_shape(self):
+        good = {"quote": {"t": "2026-09-23T15:40:08Z",
+                           "ap": 336.26, "bp": 336.03}}
+        self.assertTrue(alpaca_probe._valid_quote(good))
+        self.assertFalse(alpaca_probe._valid_quote(
+            {"quote": {"t": "not-a-time", "ap": 1, "bp": 1}}))
+        self.assertFalse(alpaca_probe._valid_quote(
+            {"quote": {"t": "2026-09-23T15:40:08Z",
+                        "ap": 0, "bp": 1}}))
+        self.assertFalse(alpaca_probe._valid_quote({}))
 
     def test_bad_key_shape_is_denial(self):
         # Probe convention: denied := body is None (401/403 carry

@@ -971,3 +971,29 @@ plane (Phase D) change any interface a future slice depends on?
   89 / MSFT 48 events seen, none within ±3d) — `sandbox/
   earnings-heartbeat-evidence.json`. Earnings source now FULLY PROVEN
   per §9.4 (implementation+probe were Addendum 27; wiring closes it).
+
+## Addendum 46 — re-audit hardening round (probes + wording)
+- Earnings (§1-3): strict heartbeat schema (exact keys, finite ts,
+  skew-bounded future reject, pinned cadence/TTL, bool ok, bounded
+  latency/events, exact row schema, dup/extra reject, 64KB read cap;
+  malformed -> invalid, never raise); gate() final defensive
+  suppress-unknown boundary; unique-tmp fsync writer + dir fsync
+  (best-effort) + failure cleanup; SEC parallel-array validation
+  (lengths/types/ISO dates/item shape). 17 adversarial/schema/
+  concurrency tests; 39/39 green; live SEC shape re-verified.
+- BEA (§6): get() now kind-tagged (data/denied/transport); bad-UserID
+  requires structured invalid-UserID denial (`Invalid Request -
+  Invalid API UserId.` observed); replay reframed as semantic rows
+  (`rows_identical`, validated shape); evidence re-run PASS.
+- Alpaca (§7): bad-key requires HTTP 401/403 (observed 401);
+  transport flagged separately; account/asset/quote validators;
+  evidence keeps readiness only (status/currency/buying-power — ids
+  removed); re-run PASS.
+- Runtime honesty (§4-5, §8, §11): full-tree search confirms NO
+  production caller of earnings poll/gate/heartbeat, NO BEA/Alpaca
+  production consumers (probe-only), H1 exec/router still future —
+  recorded as: Tier-A sources PROVEN; production poller/consumer
+  wiring OPEN (pending P3.5/H1); Alpaca API/account/data readiness
+  PROVEN, execution connector OPEN. README + ARCHITECTURE use
+  PROVEN/WIRED/EXECUTION-READY vocabulary; OANDA-out reflected.
+  7-day run NOT started (correctly — execution path open).

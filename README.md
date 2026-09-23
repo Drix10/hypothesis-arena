@@ -64,7 +64,7 @@ Three principles that shape everything:
 | JEV sidecar (`collector/jev.py`: 4 questions, spend-capped, signed answers) | Accepted/frozen |
 | C++ kernel (`kernel/`: validator, state, decision table) | P3.1 + P3.2 frozen, **P3.3 accepted** |
 | Risk/sizing/execution (P3.5) | Open: veto + ingest slices landed and build-gated, sizing/execution not started |
-| Research plane, paper loop (G0) | IMPLEMENTED: 6-node graph + spend/ledger control plane, 255-test battery green; deployment evidence ACCEPTED + hardened; 7-day unattended proof + Tier-A operational wiring still OPEN (see TODO.md Phase-D gate) |
+| Research plane, paper loop (G0) | PARTIAL: 6-node graph + spend/ledger control plane built, 255-test battery green; deployment evidence ACCEPTED + hardened. Status words — PROVEN (probe/evidence proves the tested capability) vs WIRED (a production caller consumes it) vs EXECUTION-READY (H1 order lifecycle exists + drilled): Tier-A sources PROVEN (EDGAR/FRED/BEA/Alpaca-read/earnings-gate); production poller/consumer wiring + H1 execution OPEN, so the loop is NOT execution-ready. OANDA practice BLOCKED (India ineligible) — alt-FX venue research, no signup. 7-day proof OPEN (see TODO.md Phase-D gate) |
 
 Paper only until 30 clean days plus a human signature. No exceptions.
 Promotion of anything (model, stage) needs 200 decisions + 100 closed
