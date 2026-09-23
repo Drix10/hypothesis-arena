@@ -1155,3 +1155,7 @@ plane (Phase D) change any interface a future slice depends on?
   freezes the representation (doc edit required).
 - Suite green normal+hardened, full kernel gate PASS, freeze PASS.
   Slice D untouched. No F/H1/poller/JEV changes.
+
+## Addendum 58 — hosted CI green on Slice G fix commit
+- Run 35915484245 on `db54d5a`: stdlib + evidence + plane + kernel
+  SUCCESS.
