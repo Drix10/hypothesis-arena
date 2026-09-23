@@ -944,3 +944,16 @@ plane (Phase D) change any interface a future slice depends on?
   work, NOT a G0 build item. No multi-user code is built now; the
   existing per-day accounting/attribution/ledger shape is preserved
   as-is so nothing forecloses it. No scope change from this note.
+
+## Addendum 44 — paper-ready goal; OANDA out, alt-FX research track
+- Human decision: future-fund work stays future; sole goal is 100%
+  paper-trade readiness. US startup later; operating from India now,
+  so OANDA is OUT (regulatory hard block, Addendum 39) — no
+  reconsideration, no circumvention.
+- FX leg proceeds as RESEARCH track only: vet alternative paper FX
+  venues for (i) India-resident demo eligibility, (ii) free
+  programmatic API on demo, (iii) $0 cost — recommendation first, no
+  signup without explicit human approval per venue. No venue is
+  chosen in this addendum.
+- BUILD track: earnings TTL/heartbeat wiring (§9.4) proceeds now —
+  fully in-repo, no external dependency.
