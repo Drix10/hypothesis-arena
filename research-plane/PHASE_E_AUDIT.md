@@ -1063,3 +1063,20 @@ plane (Phase D) change any interface a future slice depends on?
   Slice F proceeds under the same rule: feed machinery only, never a
   second authority for prices/stage/risk/execution; Alpaca paper-only;
   24h soak is evidence-gathering, never a gate bypass.
+
+## Addendum 53 — Slice F built (feed machinery, no authority)
+- `kernel/feed/feed.{hpp,cpp}` + `test_feed.cpp`, wired into
+  `kernel/build.sh` (suite + heap-once allocation gate): 65536-tick
+  ring (overwrite-oldest, monotonic writes, invalid-drop), venue-seq
+  + poll-cadence gap detectors, deterministic backoff (1s<<n cap
+  60s, saturating, no jitter), US-equities session marking (pure ET
+  math incl. DST hour rules, caller-supplied holiday/early-close
+  lists; unlisted days advisory-open with staleness as the real veto
+  authority). Integers only, no floats.
+- Two real defects caught by the suite before commit: 3MB stack
+  member (heap-once fix) and a transition-day early-out swallowing
+  the DST hour rule (both with regression tests). Suite green
+  normal+hardened; full kernel gate PASS.
+- Authority: no prices consumed, no veto/risk/execution logic — the
+  ring records, downstream decides. 24h soak gate OPEN (needs an
+  awake host; tracked, never a bypass). Slice D untouched.

@@ -106,6 +106,18 @@ g++ $FLAGS -static-libstdc++ -static-libgcc -Wl,--wrap,malloc -Wl,--wrap,calloc 
 # G0_PAPER (doc 10 sec. 10.1 legacy bootstrap).
 g++ $FLAGS -o test_stage stage/test_stage.cpp stage/stage.cpp
 ./test_stage
+# Slice F gate [correctness]: feed ring/gap/backoff/session (doc 04
+# sec. 4.2.2, Alpaca paper poll path; machinery only, never authority).
+g++ $FLAGS -o test_feed feed/test_feed.cpp feed/feed.cpp
+./test_feed
+# Slice F allocation contract: heap-once lives in the TickRing
+# constructor (a 64k member array would blow the thread stack); the
+# tick path itself allocates nothing.
+[ "$(sed 's|//.*||' feed/feed.cpp | grep -o 'new ' | wc -l | tr -d ' ')" = "1" ] || {
+    echo "GATE FAIL: heap use beyond ring construction"; exit 1; }
+if sed 's|//.*||' feed/feed.cpp | grep -nE "malloc|calloc|realloc|strdup|std::string|std::vector"; then
+    echo "GATE FAIL: heap use in feed tick path"; exit 1;
+fi
 # Slice E authority: effective stage is the verified file stage or
 # G0_PAPER — no promotion path may exist here. The G1+/G2/G3 literals
 # appear only as known-vocabulary checks/tests.
