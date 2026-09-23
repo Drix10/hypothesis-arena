@@ -1049,3 +1049,17 @@ plane (Phase D) change any interface a future slice depends on?
 - Run 35904580571 on `b0c26b9`: stdlib + evidence + plane + kernel
   SUCCESS. (Prior run 35902488121 covered `38f23b2` likewise green,
   but acceptance requires the fix commit — now satisfied.)
+
+## Addendum 52 — Slice E ACCEPTED; Slice F authorized
+- Independent audit accepted Slice E (`b0c26b9` + docs-only
+  `2c6191e`; hosted 35904580571 all-SUCCESS verified): timezone
+  grammar, adversarial cases, fail-closed verifier, no promotion
+  path, D untouched, status accurate.
+- Architectural note carried (not a blocker): VerifyStageContents
+  takes prev_attest from its caller — the eventual caller must source
+  the predecessor from the authoritative chain. Owned by integration
+  work (H1/cycle driver), not this slice.
+- State: P3.5 A/B/C/E DONE, D NOT AUTHORIZED, F NEXT, G/H1 OPEN.
+  Slice F proceeds under the same rule: feed machinery only, never a
+  second authority for prices/stage/risk/execution; Alpaca paper-only;
+  24h soak is evidence-gathering, never a gate bypass.
