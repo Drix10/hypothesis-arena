@@ -222,10 +222,20 @@ evidence and gating, not the poller.)
 ### sources/ (5)
 
 Readiness probes + gates (evidence + veto logic; NOT the production
-poller — that is `collector/collect.py`).
+poller — that is `collector/collect.py`). Egress, stated exactly:
+`sandbox/` worker containers egress ONLY via Squid (proven 5/5);
+host-side probes here (`tier_a.py`, `earnings.py`, live-provider
+probe driver) use DIRECT `urllib`/httpx from the build host and do
+NOT transit Squid — the live-provider call itself runs its shipped
+transport-pinned proxy path via loopback-published Squid. Two paths,
+documented separately, never conflated.
 
 - `tier_a.py` — Tier-A readiness probe (live EDGAR/Fed GETs p50/p99;
-  FRED→BLOCKED w/o key; calendar gate). Evidence JSON; exit 0 always.
+  FRED→BLOCKED w/o key; calendar gate). The FRED gate as shipped is
+auth/metadata readiness ONLY (`/fred/series?series_id=GDP` 200 =
+key verified live, NOT observation-data proof); real observation
+retrieval + ALFRED vintage replay are the upcoming gated task.
+Evidence JSON; exit 0 always.
 - `calendars.py` — fail-closed session presence-gate
   (`CalendarMissing` → zero records). Evaluation downstream in ctx.
 - `earnings.py` — EDGAR-derived earnings veto gate (8-K 2.02 + 10-Q/K

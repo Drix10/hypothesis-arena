@@ -767,3 +767,30 @@ plane (Phase D) change any interface a future slice depends on?
   behavior/polling change; config/sources suites + freeze green.
   Current ARCHITECTURE/TODO wording updated; historical records
   untouched. No hardening pass; no Slice D; G0_PAPER only.
+
+## Addendum 34 — egress/FRED/broker/pricing wording corrections (audit-directed, docs only)
+- HEAD note: auditor fetched `346cfae`; actual HEAD at audit time
+  was `e00d4be` (Box-4 live commit, already pushed + hosted). No
+  implementation change in `346cfae` itself — confirmed.
+- Egress, stated exactly (ARCHITECTURE §5): sandbox workers → Squid
+  only (proven); host-side probes (`tier_a.py`, `earnings.py`, live
+  drivers) → DIRECT, never Squid. The prior chat-checklist sentence
+  claiming all calls via Squid is retracted; no proxying added as
+  scope creep (plan does not require it).
+- FRED gate as shipped = auth/metadata readiness ONLY (GDP-series
+  200 = key verified, not observation proof). The gated task is:
+  real observation + ALFRED vintage replay (original realtime/
+  vintage params, deterministic) + latency with N + bad-key
+  fail-closed + redaction. FRED key format per provider docs:
+  32-char lowercase alphanumeric (not "hex"); same key serves
+  FRED + ALFRED endpoints.
+- Broker qualifier: OANDA demo / Alpaca paper creation authorizes
+  paper/demo probes ONLY — not the future G1 live
+  broker/jurisdiction gate (plan §10.1). Paper-only restriction
+  stays enforced in config + evidence. BEA UserID per provider
+  docs: 36-char, registration + activation.
+- Box-4 scope held: LIVE PROVIDER + ACCOUNTING DEPLOYMENT PROOF;
+  pricing entry probe-constructed (production pricing config NOT
+  proven); not a `graph.run_cycle()` proof. STAGE/HALT/promotion
+  manifests stay locked concepts with absent runtime — credential
+  work implements no Slice-D/kill-switch machinery.

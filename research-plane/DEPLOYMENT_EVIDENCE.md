@@ -150,7 +150,10 @@ Exact Tier-A source-by-source matrix (plan §9.1 table is the requirement):
   UsageTape(make_raw_provider, transport-pinned via Squid
   127.0.0.1:3128) → 15 prompt + 16 completion tokens in 2.8s →
   append_span ($0.000005 actual) → settle_usd (hold released;
-  ledger shows the span row, holds table empty). It is NOT a full live
+  ledger shows the span row, holds table empty). Pricing-table
+  qualifier: the $0.00020/1k entry was constructed by the probe
+  from the published contract for this call — production pricing
+  configuration is NOT proven by this evidence. It is NOT a full live
   `graph.run_cycle()` execution — the production gate is covered by
   tests; this is direct deployment evidence. Key validity
   pre-proven zero-spend via /auth/key (200, $5 limit). Box 4 CLOSED
