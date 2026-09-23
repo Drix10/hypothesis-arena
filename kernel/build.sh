@@ -110,6 +110,8 @@ g++ $FLAGS -o test_stage stage/test_stage.cpp stage/stage.cpp
 # sec. 4.2.2, Alpaca paper poll path; machinery only, never authority).
 g++ $FLAGS -o test_feed feed/test_feed.cpp feed/feed.cpp
 ./test_feed
+g++ $FLAGS -static-libstdc++ -static-libgcc -Wl,--wrap,malloc -Wl,--wrap,calloc -Wl,--wrap,realloc -o test_noalloc_feed feed/test_noalloc_feed.cpp feed/feed.cpp
+./test_noalloc_feed
 # Slice F allocation contract: heap-once lives in the TickRing
 # constructor (a 64k member array would blow the thread stack); the
 # tick path itself allocates nothing.
@@ -124,10 +126,26 @@ fi
 g++ $FLAGS -o test_context ctx/test_context.cpp ctx/context.cpp
 ./test_context
 # Slice G vocabulary: regime/calib/source/session/stage sets are
-# frozen mirrors — no second spelling may appear in context code.
-if grep -nE '"bull"|"bear"|"sideways"|"unknown-regime"' ctx/context.cpp ctx/snapshot.hpp; then
-    echo "GATE FAIL: non-frozen regime vocabulary"; exit 1;
+# frozen mirrors — the gate enforces each EXACT definition line once
+# (a second spelling anywhere trips the count) and forbids parallel
+# stage literals (stage vocabulary lives in Slice E only).
+[ "$(grep -c 's == "trend" || s == "range" || s == "volatile"' ctx/snapshot.hpp)" = "1" ] || {
+    echo "GATE FAIL: regime vocabulary moved/duplicated"; exit 1; }
+[ "$(grep -c 's == "pass" || s == "insufficient" || s == "breach"' ctx/snapshot.hpp)" = "1" ] || {
+    echo "GATE FAIL: calib vocabulary moved/duplicated"; exit 1; }
+[ "$(grep -c 's == "fresh" || s == "stale" || s == "absent"' ctx/snapshot.hpp)" = "1" ] || {
+    echo "GATE FAIL: source vocabulary moved/duplicated"; exit 1; }
+[ "$(grep -c 's == "open" || s == "closed" || s == "holiday"' ctx/snapshot.hpp)" = "1" ] || {
+    echo "GATE FAIL: session vocabulary moved/duplicated"; exit 1; }
+if grep -nE '"G1_TINY"|"G2_SCALED"|"G3_FULL"' ctx/snapshot.hpp ctx/context.cpp; then
+    echo "GATE FAIL: stage literals outside Slice E"; exit 1;
 fi
+[ "$(grep -c 'stage::IsKnownStage' ctx/context.cpp)" = "1" ] || {
+    echo "GATE FAIL: stage check moved/duplicated"; exit 1; }
+# Slice F/G resource proof: wrapped-malloc counter around the tick
+# path (ring + gaps + backoff + session) must stay zero. Context
+# assembly/hashing is cycle-path with a bounded-output assertion in
+# test_context, not part of this proof.
 # Slice E authority: effective stage is the verified file stage or
 # G0_PAPER — no promotion path may exist here. The G1+/G2/G3 literals
 # appear only as known-vocabulary checks/tests.

@@ -8,6 +8,14 @@
 // included: a partial snapshot hashes differently from a complete
 // one, so replay with a different completeness can never collide.
 // context_hash != state_hash (frozen distinction, doc 03 sec. 3.5a).
+//
+// RESOURCE BOUNDARY (doc 04 sec. 4.3): Snapshot assembly, canonical
+// serialization, and hashing are CYCLE path (once per decision cycle,
+// bounded output <= 4KiB asserted in test). They are NOT tick-hot and
+// never claimed zero-alloc. The zero-alloc path is the tick path:
+// feed TickRing::Push + gap Notes + session marking, proven by
+// feed/test_noalloc_feed (wrapped-malloc counter reads zero). H1 must
+// not place ContextHash on the per-tick path without its own proof.
 #pragma once
 #include <cstddef>
 #include <cstdint>

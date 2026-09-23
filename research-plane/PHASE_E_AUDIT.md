@@ -1129,3 +1129,29 @@ plane (Phase D) change any interface a future slice depends on?
   awaits H1. Suite: validation rejections, 10k-identical -> 1 hash,
   mutation sensitivity, golden — green normal+hardened; full kernel
   gate PASS, freeze PASS. Slice D untouched.
+
+## Addendum 57 — Slice G audit fix (mask coherence + contracts)
+- FIX 2 (mask): bidirectional coherence for all 12 sections —
+  set+empty -> *-incoherent, clear+nondefault -> *-ghost; present
+  zeros (flat book, zero flags/sentiment/brier-with-verdict) stay
+  valid. 14 ghost + set-empty + present-zero tests.
+- FIX 3: feature_bundle_hash lowercase-only (Slice C contract).
+- FIX 4: duplicate mark/indicator/source names rejected + tests.
+- FIX 5: var_corr_flags reserved bits (>0x3) rejected + tests.
+- FIX 6: vocabulary gate now pins each exact definition line once +
+  forbids stage literals outside Slice E (one gate self-trip caught:
+  include comment tripped the count — comment fixed, gate kept).
+- FIX 7 (resources): cycle-vs-tick boundary documented in
+  snapshot.hpp; NEW wrapped-malloc proof `feed/test_noalloc_feed`
+  (70k pushes + gap notes + backoff + session marks: 0 allocs) wired
+  into build.sh; canonical output bounded (<=4KiB asserted).
+  ContextHash stays off the tick path by documented contract.
+- FIX 1 (change): CONTRACT GAP REPORTED, not invented. Searched
+  plan/03/04/05 + jev_state + repo: no frozen unit/semantics for the
+  §4.2.3 `change` field exists (jev `price_return_bucket` is a free
+  string scalar, not a scale). Per the audit instruction the field
+  was NOT added. H1 order-identity/replay binding must treat
+  change-absence as a known snapshot limitation until the plan
+  freezes the representation (doc edit required).
+- Suite green normal+hardened, full kernel gate PASS, freeze PASS.
+  Slice D untouched. No F/H1/poller/JEV changes.

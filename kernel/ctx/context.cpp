@@ -4,7 +4,7 @@
 #include <cstdio>
 
 #include "../jev_validate.hpp"  // jev::Sha256Hex (P3.1 primitive)
-#include "../stage/stage.hpp"   // stage::IsKnownStage (Slice E vocab)
+#include "../stage/stage.hpp"   // Slice E stage vocabulary
 
 namespace ctx {
 namespace {
@@ -28,11 +28,11 @@ bool NameOk(const std::string& s) {
 }
 
 bool Hex64(const std::string& s) {
+    // Lowercase 64-hex ONLY: matches the frozen Slice C ingest
+    // contract (which rejects uppercase). One representation.
     if (s.size() != 64) return false;
     for (char c : s) {
-        if ((c < '0' || c > '9') && (c < 'a' || c > 'f') &&
-            (c < 'A' || c > 'F'))
-            return false;
+        if ((c < '0' || c > '9') && (c < 'a' || c > 'f')) return false;
     }
     return true;
 }
@@ -66,42 +66,99 @@ std::string ValidateSnapshot(const Snapshot& s) {
         if (m.mark_ud <= 0 || m.bid_ud <= 0 || m.ask_ud < m.bid_ud)
             return "mark-quote";
     }
-    if ((s.present_mask & kMarks) && s.marks.empty())
-        return "marks-incoherent";
+    // Duplicate symbols have no discriminator: ambiguous snapshot.
+    for (size_t i = 0; i < s.marks.size(); ++i)
+        for (size_t j = i + 1; j < s.marks.size(); ++j)
+            if (s.marks[i].symbol == s.marks[j].symbol)
+                return "mark-duplicate";
+    // Bidirectional mask coherence: set => populated+valid, clear =>
+    // canonical empty. Ghost data (populated but declared absent) is
+    // malformed — downstream must never read it.
+    bool has_marks = !s.marks.empty();
+    if ((s.present_mask & kMarks) && !has_marks) return "marks-incoherent";
+    if (!(s.present_mask & kMarks) && has_marks) return "marks-ghost";
     if (!s.session.empty() && !IsSession(s.session)) return "session";
-    if ((s.present_mask & kSession) && s.session.empty())
+    bool has_session = !s.session.empty();
+    if ((s.present_mask & kSession) && !has_session)
         return "session-incoherent";
+    if (!(s.present_mask & kSession) && has_session)
+        return "session-ghost";
     if (s.indicators.size() > 5) return "indicators-bound";
     for (const auto& in : s.indicators) {
         if (!SymOk(in.symbol)) return "ind-symbol";
         if (in.vwap_ud <= 0) return "ind-vwap";
     }
-    if ((s.present_mask & kIndicators) && s.indicators.empty())
+    for (size_t i = 0; i < s.indicators.size(); ++i)
+        for (size_t j = i + 1; j < s.indicators.size(); ++j)
+            if (s.indicators[i].symbol == s.indicators[j].symbol)
+                return "ind-duplicate";
+    bool has_ind = !s.indicators.empty();
+    if ((s.present_mask & kIndicators) && !has_ind)
         return "indicators-incoherent";
+    if (!(s.present_mask & kIndicators) && has_ind)
+        return "indicators-ghost";
     if (!s.regime.empty() && !IsRegime(s.regime)) return "regime";
-    if ((s.present_mask & kRegime) && s.regime.empty())
+    bool has_regime = !s.regime.empty();
+    if ((s.present_mask & kRegime) && !has_regime)
         return "regime-incoherent";
-    // sentiment/var_corr are plain integers: mask coherence only.
+    if (!(s.present_mask & kRegime) && has_regime)
+        return "regime-ghost";
+    // sentiment/var_corr are plain integers: ghost = nonzero while clear.
+    bool has_sent = (s.sentiment_d6[0] | s.sentiment_d6[1] |
+                     s.sentiment_d6[2] | s.sentiment_d6[3]) != 0;
+    if (!(s.present_mask & kSentiment) && has_sent)
+        return "sentiment-ghost";
+    if (s.var_corr_flags & ~0x3u) return "varcorr-reserved";
+    bool has_vc = s.var_corr_flags != 0;
+    if (!(s.present_mask & kVarCorr) && has_vc) return "varcorr-ghost";
+    // Portfolio: explicitly present zero is legitimate (flat book);
+    // ghost = nonzero while clear.
     if ((s.present_mask & kPortfolio) &&
         (s.equity_ud < 0 || s.exposure_ud < 0 || s.buying_power_ud < 0))
         return "portfolio-negative";
+    bool has_pf = (s.equity_ud != 0 || s.exposure_ud != 0 ||
+                   s.buying_power_ud != 0 || s.pending_count != 0);
+    if (!(s.present_mask & kPortfolio) && has_pf)
+        return "portfolio-ghost";
+    bool has_feat = (s.feature_bundle_id != 0 ||
+                     !s.feature_bundle_hash.empty());
     if ((s.present_mask & kFeatures) &&
         (s.feature_bundle_id == 0 || !Hex64(s.feature_bundle_hash)))
         return "features-incoherent";
+    if (!(s.present_mask & kFeatures) && has_feat)
+        return "features-ghost";
     if (s.sources.size() > 8) return "sources-bound";
     for (const auto& src : s.sources) {
         if (!NameOk(src.name) || !IsSourceState(src.state))
             return "source-row";
     }
-    if ((s.present_mask & kSources) && s.sources.empty())
+    for (size_t i = 0; i < s.sources.size(); ++i)
+        for (size_t j = i + 1; j < s.sources.size(); ++j)
+            if (s.sources[i].name == s.sources[j].name)
+                return "source-duplicate";
+    bool has_sources = !s.sources.empty();
+    if ((s.present_mask & kSources) && !has_sources)
         return "sources-incoherent";
+    if (!(s.present_mask & kSources) && has_sources)
+        return "sources-ghost";
     if (!s.stage.empty() && !stage::IsKnownStage(s.stage))
         return "stage";
-    if ((s.present_mask & kStage) && s.stage.empty())
+    bool has_stage = !s.stage.empty();
+    if ((s.present_mask & kStage) && !has_stage)
         return "stage-incoherent";
+    if (!(s.present_mask & kStage) && has_stage)
+        return "stage-ghost";
+    bool has_research = s.research_revision != 0;
+    if ((s.present_mask & kResearch) && !has_research)
+        return "research-incoherent";  // revision 0 IS absent
+    if (!(s.present_mask & kResearch) && has_research)
+        return "research-ghost";
     if (!s.calib.empty() && !IsCalib(s.calib)) return "calib";
+    bool has_calib = !s.calib.empty() || s.brier_d6 != 0;
     if ((s.present_mask & kCalib) && s.calib.empty())
-        return "calib-incoherent";
+        return "calib-incoherent";  // verdict is the section core;
+    if (!(s.present_mask & kCalib) && has_calib)
+        return "calib-ghost";
     if (s.present_mask & ~0xFFFu) return "mask-reserved";
     return "";
 }
