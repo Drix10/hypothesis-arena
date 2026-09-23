@@ -833,3 +833,16 @@ plane (Phase D) change any interface a future slice depends on?
   stdlib 6/6 on Linux + freeze PASS. No production change; no CI
   weakening (no continue-on-error, no skips). Workflow "Five jobs"
   comment corrected to four.
+
+## Addendum 37 — hosted CI fully green (no weakening anywhere)
+- Run 35865034676 on `c0b1ebc`: stdlib SUCCESS + evidence SUCCESS +
+  plane SUCCESS + kernel SUCCESS. First all-green hosted run.
+- Two-part fix, both verified: (1) deterministic single-flight
+  (`aa93274`, 100/100 Linux under load, production untouched);
+  (2) CI-only scoped fixture (`c0b1ebc`): the new failure was
+  `config-hygiene` (CI checkout has no `.env`/contact), fixed by
+  `MIRO_CONTACT=ci-test@example.invalid` scoped to the soak_check
+  command only — job-wide env would have broken `test_config`,
+  which asserts a clean environment (caught in local CI
+  replication, clean-checkout worktree, 6/6). No continue-on-error,
+  no skips, no secret, no production change.
