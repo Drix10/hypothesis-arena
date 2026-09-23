@@ -13,7 +13,7 @@ variables always win over `.env` values.
                            live paths BLOCKED (fail-closed), never a default.
 
 `.env` lives at the repo root, is gitignored, and is never committed.
-`.env.example` is the only committed template. Broker/BEA keys do not
+`.env.example` is the only committed template. Broker keys do not
 exist as consumed config yet and must not be added until a code path
 actually consumes them.
 """
@@ -26,6 +26,7 @@ OPTIONAL = {
     "FRED_API_KEY": "FRED collector; absent means SKIPPED_CONFIG, not failure",
     "OPENROUTER_API_KEY": "JEV sidecar; absent means jev_error:no-key HOLD, never a crash",
     "RESEARCH_MODEL_ID": "live research model slug; absent BLOCKS live paths, never a default",
+    "BEA_USER_ID": "BEA collector; absent means SKIPPED_CONFIG, not failure",
 }
 KEYS = tuple(list(REQUIRED) + list(OPTIONAL))
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

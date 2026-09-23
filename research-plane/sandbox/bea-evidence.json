@@ -1,0 +1,34 @@
+{
+ "ts": 1790176336,
+ "n": 3,
+ "datasets": {
+  "p50_ms": 926.9,
+  "p99_ms": 959.5,
+  "names": [
+   "NIPA",
+   "NIUnderlyingDetail",
+   "MNE",
+   "FixedAssets",
+   "ITA",
+   "IIP",
+   "InputOutput",
+   "IntlServTrade",
+   "IntlServSTA",
+   "GDPbyIndustry",
+   "Regional",
+   "UnderlyingGDPbyIndustry",
+   "APIDatasetMetaData"
+  ]
+ },
+ "data": {
+  "table": "T10101",
+  "p50_ms": 924.2,
+  "rows": 0,
+  "sample": [],
+  "byte_identical": false
+ },
+ "bad_userid": {
+  "denied": true,
+  "message": "This UserId is not active. Please activate it and try again."
+ }
+}

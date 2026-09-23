@@ -846,3 +846,42 @@ plane (Phase D) change any interface a future slice depends on?
   which asserts a clean environment (caught in local CI
   replication, clean-checkout worktree, 6/6). No continue-on-error,
   no skips, no secret, no production change.
+
+## Addendum 38 — BEA wired, auth proven, data pending activation
+- Human completed BEA signup (name+email filled by agent via browser
+  bridge; reCAPTCHA solved by human as required). UserID (36-char
+  GUID) placed in gitignored root `.env` only; loader allowlist
+  extended additively (`BEA_USER_ID` OPTIONAL in `collector/config.py`,
+  `.env.example` template, docstring updated) — same disclosed pattern
+  as `RESEARCH_MODEL_ID` (Addendum 32). No broker keys added.
+- New `research-plane/sandbox/bea_probe.py` (mirrors fred probe:
+  stdlib urllib, N=3, p50/p99, zero leakage, exit 0 iff all hold):
+  GETDATASETLIST auth PROVEN (NIPA/NIUnderlyingDetail/MNE/FixedAssets/
+  ITA/IIP, p50 ~0.9s); bad-UserID fail-closed PROVEN (Results.Error,
+  denied=True); evidence `bea-evidence.json` leak-checked (0 hits).
+- GetData BLOCKED with BEA error 20 ("dataset requested does not
+  exist") on EVERY dataset incl. the documented Regional sample, while
+  the list endpoint authenticates fine. Consistent with a key that is
+  registered but not yet ACTIVATED: BEA requires an email activation
+  step (`api/signup/activate.html`: "To activate your new key ...
+  validate reCAPTCHA and click Activate"). No params-side cause found.
+  State recorded honestly as PARTIAL; probe re-run pending the human
+  activation click. No data faked, no retry-loop theater.
+
+## Addendum 39 — OANDA practice BLOCKED (first-party evidence)
+- Browser-driven division check (main Chrome via bridge):
+  oanda.com geo-routes India -> bvi-en (OANDA Global Markets);
+  demo application `hub.oanda.com/apply/demo/` with country=India
+  answers verbatim: "Sorry, OANDA cannot accept new clients from your
+  country of residence. You will be unable to open an account."
+  Screenshot: `research-plane/sandbox/oanda-india-denial.png`.
+- OANDA docs confirm v20 practice accounts exist "for all divisions
+  except OANDA Global Markets". No PII submitted (blocked at the
+  country gate; phone/password never entered anywhere).
+- Consequence: NO OANDA practice token/account can exist for this
+  operator. The FX-broker leg of the paper loop cannot proceed as
+  planned; per fail-closed rules this is recorded BLOCKED, not worked
+  around (no substitute FX API — plan calls for a broker sandbox, and
+  a quotes feed would not satisfy execution/reconciliation). Human
+  decision required: stocks-only G0 (Alpaca paper) vs alternative FX
+  venue — agent does NOT invent plan here.
