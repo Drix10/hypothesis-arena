@@ -1113,3 +1113,19 @@ plane (Phase D) change any interface a future slice depends on?
   awake host; never silently complete).
 - State: P3.5 A/B/C/E DONE, D NOT AUTHORIZED, F IMPL-ACCEPTED +
   SOAK-OPEN, G NEXT, H1 OPEN. Slice G starts now.
+
+## Addendum 57 — Slice G built (frozen Snapshot + context_hash)
+- `kernel/ctx/snapshot.{hpp,cpp}` + `test_context.cpp`, wired into
+  `kernel/build.sh`: 12-section Snapshot (marks/session/indicators/
+  regime/sentiment/varcorr/portfolio/features/sources/stage/research/
+  calib) with frozen vocabularies (regime trend|range|volatile,
+  calib pass|insufficient|breach, Slice E stage set, feed session
+  names), bounds/charset checks, present_mask coherence (set-but-
+  empty is malformed; partial snapshots hash differently by
+  construction), canonical JSON recipe with hand-written golden
+  bytes, context_hash = sha256_hex(canonical).
+- Unset provider sections are explicit (mask clear), never defaulted
+  into authority; marks/session await F-driver fill, portfolio
+  awaits H1. Suite: validation rejections, 10k-identical -> 1 hash,
+  mutation sensitivity, golden — green normal+hardened; full kernel
+  gate PASS, freeze PASS. Slice D untouched.

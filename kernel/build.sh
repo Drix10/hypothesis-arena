@@ -118,6 +118,16 @@ g++ $FLAGS -o test_feed feed/test_feed.cpp feed/feed.cpp
 if sed 's|//.*||' feed/feed.cpp | grep -nE "malloc|calloc|realloc|strdup|std::string|std::vector"; then
     echo "GATE FAIL: heap use in feed tick path"; exit 1;
 fi
+# Slice G gate [correctness]: frozen Snapshot validation, canonical
+# determinism (10k -> 1 hash), mutation sensitivity, golden bytes
+# (doc 04 sec. 4.2.3; context_hash != state_hash, frozen).
+g++ $FLAGS -o test_context ctx/test_context.cpp ctx/context.cpp
+./test_context
+# Slice G vocabulary: regime/calib/source/session/stage sets are
+# frozen mirrors — no second spelling may appear in context code.
+if grep -nE '"bull"|"bear"|"sideways"|"unknown-regime"' ctx/context.cpp ctx/snapshot.hpp; then
+    echo "GATE FAIL: non-frozen regime vocabulary"; exit 1;
+fi
 # Slice E authority: effective stage is the verified file stage or
 # G0_PAPER — no promotion path may exist here. The G1+/G2/G3 literals
 # appear only as known-vocabulary checks/tests.
