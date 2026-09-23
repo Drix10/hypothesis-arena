@@ -997,3 +997,10 @@ plane (Phase D) change any interface a future slice depends on?
   PROVEN, execution connector OPEN. README + ARCHITECTURE use
   PROVEN/WIRED/EXECUTION-READY vocabulary; OANDA-out reflected.
   7-day run NOT started (correctly — execution path open).
+
+## Addendum 47 — hosted CI green on final hardening commit
+- Run 35898494106 on `a2f64df`: stdlib SUCCESS + evidence SUCCESS +
+  plane SUCCESS + kernel SUCCESS. Local: 6/6 collector suites,
+  sources 39/39, plane OK, hardening OK, kernel P3.1 PASS, freeze
+  PASS. Temp residue checked (TemporaryDirectory; no .hb- leftovers
+  after concurrency test).
