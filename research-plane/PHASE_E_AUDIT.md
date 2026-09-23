@@ -926,3 +926,21 @@ plane (Phase D) change any interface a future slice depends on?
 - Full proof: dataset list (p50 ~0.9s) + NIPA T10101 50 rows
   (GDP 2.9 @2023, 2.8 @2024, p50 ~0.4s) + byte-identical replay +
   bad-UserID denied. Evidence saved, leak-checked (0 hits).
+
+## Addendum 43 — operating constraints (human-directed, locked)
+- LEGALITY (G0 beta): every active integration is compliant —
+  EDGAR/FRED/BEA/BLS are public APIs used within terms (registered
+  keys, contact-bearing UA, rate limits); Alpaca paper is the
+  broker's own sandbox on paper-only creds; OpenRouter is metered
+  commercial API use; no live capital, no client money, no order
+  routing anywhere. FX exposure is research-only reference rates
+  (ECB/Fed); zero forex transactions exist, consistent with RBI
+  restrictions — and OANDA's own refusal confirms no offshore FX
+  account was or will be opened through this project.
+- FUTURE (multi-user fund): real money + outside users will require
+  investment-adviser/broker licensing and exchange data-redistribution
+  terms (Alpaca free feed is internal-use; SIP/full-exchange and
+  vendor redistribution are paid). That is FUTURE-STAGE licensing
+  work, NOT a G0 build item. No multi-user code is built now; the
+  existing per-day accounting/attribution/ledger shape is preserved
+  as-is so nothing forecloses it. No scope change from this note.
