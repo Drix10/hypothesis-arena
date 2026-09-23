@@ -102,6 +102,17 @@ fi
 # resolves to the wrapped malloc.
 g++ $FLAGS -static-libstdc++ -static-libgcc -Wl,--wrap,malloc -Wl,--wrap,calloc -Wl,--wrap,realloc -o test_noalloc ingest/test_noalloc.cpp ingest/features.cpp
 ./test_noalloc
+# Slice E gate [correctness]: STAGE chain verify, corruption fails to
+# G0_PAPER (doc 10 sec. 10.1 legacy bootstrap).
+g++ $FLAGS -o test_stage stage/test_stage.cpp stage/stage.cpp
+./test_stage
+# Slice E authority: effective stage is the verified file stage or
+# G0_PAPER — no promotion path may exist here. The G1+/G2/G3 literals
+# appear only as known-vocabulary checks/tests.
+if grep -nE "effective\s*=\s*\"G[123]" stage/stage.cpp; then
+    echo "GATE FAIL: stage escalation assignment present"
+    exit 1
+fi
 # Acceptance: no downstream function may accept raw JEV JSON.
 # The header exposes exactly one entry point: validate_jev().
 if grep -nE "\b(evaluate|decide|decide_from_json|from_json)\s*\(" jev_validate.hpp \

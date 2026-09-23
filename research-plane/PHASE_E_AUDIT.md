@@ -1018,3 +1018,16 @@ plane (Phase D) change any interface a future slice depends on?
 - Next substantive step per auditor: actual production
   data/execution path (P3.5/H1 scope) under existing authority
   boundary — NOT started; awaits human authorization.
+
+## Addendum 49 — Slice E built (STAGE chain verify)
+- `kernel/stage/stage.{hpp,cpp}` + `test_stage.cpp`, wired into
+  `kernel/build.sh`: strict 5-field legacy parse (exact keys, no
+  missing/extra/dup), known-stage vocabulary, checked capital (no
+  atoll), calendar-validated ISO-8601 (leap rules), pipe-safe values,
+  attest recompute vs predecessor (GENESIS bootstrap); anything
+  unverifiable -> effective G0_PAPER + frozen reason. 15-case suite
+  green normal+hardened; full kernel gate PASS.
+- Slice D untouched (NOT AUTHORIZED): Slice E has no kill-switch
+  dependency — verification is read-only and fails toward paper.
+  H1 drill rows that require kill levels will be explicitly deferred
+  with the dependency named, not silently skipped.
