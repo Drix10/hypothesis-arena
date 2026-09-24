@@ -1522,3 +1522,18 @@ plane (Phase D) change any interface a future slice depends on?
   TTL, pacing, retry, dedupe, truncation, timestamp, or schema change.
 - 23/23 Treasury green warnings-as-errors (both styles). Live soak +
   measured p50/p99 remain OPEN, unclaimed. No BLS/BEA work in scope.
+
+## Addendum 87 - BLS source slice (implementation)
+- NEW research-plane/sources/bls.py + tests/test_bls.py (15/15
+  warnings-as-errors, both styles): locked empsit.rss scope only;
+  keyless (MIRO_CONTACT UA preferred, fixed fallback); strict
+  RFC-822 pubDate parsed to publication-day midnight estimated;
+  future publication days dropped; guid PK dedupe (missing/empty
+  guid drops, never link-fallback); empty-data and no-usable-records
+  fail closed with explicit reasons; duplicate-only polls healthy via
+  usable count; 1/s monotonic pace + episode throttle; HTTPError
+  normalized + closed; 2MB cap; emit-before-seen dedupe with counted
+  truncation; completion-stamped strict heartbeat + tmp cleanup;
+  harvest envelope with values_pending. Symbols mirror pinned map
+  NFP. Wired into hosted CI stdlib job. Live BLS evidence OPEN.
+  No EDGAR/FRED/Treasury/resolver/JEV/kernel/plan changes.
