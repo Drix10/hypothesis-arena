@@ -1537,3 +1537,24 @@ plane (Phase D) change any interface a future slice depends on?
   harvest envelope with values_pending. Symbols mirror pinned map
   NFP. Wired into hosted CI stdlib job. Live BLS evidence OPEN.
   No EDGAR/FRED/Treasury/resolver/JEV/kernel/plan changes.
+
+## Addendum 88 - BLS adversarial audit hardening (agent self-audit)
+- Probed 15-point checklist empirically. Three real defects found:
+  (1) parsedate_to_datetime accepted non-RFC-822 shapes (missing
+  weekday, 1-digit day, 2-digit year) despite the strict claim ->
+  full-shape regex gate added, parsedate kept for semantic validity;
+  (2) empty title/link rows were EMITTED despite headline+link
+  contract -> both now required; (3) stdlib ET expands internal
+  entities (proven: 80-char expansion in probe) -> DOCTYPE bodies
+  rejected as malformed-xml.
+- Verified clean, no change needed: no production consumer imports
+  sources.bls (no f2 drift possible); kind macro_release within
+  frozen schema allowlist; truncation/seen ordering + duplicate-only
+  health + 429/pacing + HTTPError close + heartbeat/tmp already
+  correct with tests; estimated flag preserved for resolver path.
+- 5 new regressions (20/20 warnings-as-errors, both styles):
+  strict-shape triple + valid control, headline+link triple,
+  DOCTYPE rejection, SYMBOLS == pinned entity_map NFP (loaded, not
+  asserted), _read_capped exact-MAX vs MAX+1 boundary.
+- BLS code acceptance NOT claimed: pending hosted proof of this
+  commit + independent re-audit. Live evidence OPEN.

@@ -298,6 +298,70 @@ class TestBLS(unittest.TestCase):
             t1 = a.last_ok_ts
             self.assertFalse(info["stale"])
 
+    def test_strict_rfc822_shape(self):
+        lax = [("g1", "T", "21 Sep 2026 08:30:00 EDT"),
+               ("g2", "T", "Mon, 1 Sep 2026 08:30:00 EDT"),
+               ("g3", "T", "Mon, 21 Sep 26 08:30:00 EDT"),
+               ("g4", "T", "Mon, 21 Sep 2026")]
+        a = adapter(ok_routes(lax))
+        recs, info = a.poll(today=TODAY)
+        self.assertEqual(recs, [])
+        self.assertFalse(info["ok"])
+        self.assertEqual(info["dropped"], 4)
+        self.assertIn("no-usable-records", info["errors"])
+        b = adapter(ok_routes([("g5", "T", PUB)]))
+        recs2, info2 = b.poll(today=TODAY)
+        self.assertEqual(len(recs2), 1)
+        self.assertTrue(info2["ok"])
+
+    def test_headline_link_required(self):
+        body = (b'<?xml version="1.0"?><rss><channel>'
+                b'<item><guid>g1</guid><pubDate>' + PUB.encode() +
+                b'</pubDate></item>'
+                b'<item><guid>g2</guid><title></title>'
+                b'<link>https://www.bls.gov/x</link><pubDate>' +
+                PUB.encode() + b'</pubDate></item>'
+                b'<item><guid>g3</guid><title>Hiring</title>'
+                b'<link></link><pubDate>' + PUB.encode() +
+                b'</pubDate></item>'
+                b'<item><guid>g4</guid><title>Hiring</title>'
+                b'<link>https://www.bls.gov/x</link><pubDate>' +
+                PUB.encode() + b'</pubDate></item>'
+                b'</channel></rss>')
+        a = adapter({"empsit.rss": (200, body)})
+        recs, info = a.poll(today=TODAY)
+        self.assertEqual(len(recs), 1)
+        self.assertEqual(recs[0]["guid"], "g4")
+        self.assertEqual(info["dropped"], 3)
+        self.assertTrue(info["ok"])
+
+    def test_doctype_rejected(self):
+        evil = (b'<?xml version="1.0"?><!DOCTYPE rss ['
+                b'<!ENTITY x "1234567890">]><rss><channel>'
+                b'<item><guid>g1</guid><title>&x;</title>'
+                b'<link>https://www.bls.gov/x</link><pubDate>' +
+                PUB.encode() + b'</pubDate></item>'
+                b'</channel></rss>')
+        a = adapter({"empsit.rss": (200, evil)})
+        recs, info = a.poll(today=TODAY)
+        self.assertEqual(recs, [])
+        self.assertFalse(info["ok"])
+        self.assertIn("malformed-xml", " ".join(info["errors"]))
+
+    def test_symbols_match_pinned_map(self):
+        with open(os.path.join(ROOT, "..", "collector",
+                               "entity_map.json"),
+                  encoding="utf-8") as fh:
+            pinned = json.load(fh)["macro_release_to_symbols"]["NFP"]
+        self.assertEqual(bls.SYMBOLS, pinned)
+
+    def test_read_capped_boundary(self):
+        exact = bls._read_capped(io.BytesIO(b"y" * bls.MAX_BODY_BYTES))
+        self.assertEqual(len(exact), bls.MAX_BODY_BYTES)
+        over = bls._read_capped(
+            io.BytesIO(b"y" * (bls.MAX_BODY_BYTES + 1)))
+        self.assertEqual(len(over), bls.MAX_BODY_BYTES + 1)
+
 
 if __name__ == "__main__":
     unittest.main()

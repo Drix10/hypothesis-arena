@@ -8,9 +8,13 @@ it, so absence warns instead of blocking.
 
 Timestamps: RSS pubDate is parsed strictly but observed_at_ns is the
 publication DAY midnight, explicitly estimated (no authoritative
-pollers instants — same contract as Treasury). Future publication
-days are dropped. guid is the PK dedupe key, never synthesized
-(fallback to link is fabrication: a missing/empty guid drops the row).
+pollers instants — same contract as Treasury). The full
+'Day, DD Mon YYYY HH:MM:SS TZ' shape is regex-gated because
+parsedate_to_datetime is lenient. Future publication days are
+dropped. guid is the PK dedupe key, never synthesized (fallback to
+link is fabrication: a missing/empty guid drops the row). Title and
+link are both required (headline+link contract); bodies containing
+DOCTYPE are rejected as malformed (stdlib ET expands entities).
 
 Symbols ["EURUSD","USDJPY","SPY"] mirror pinned
 collector/entity_map.json macro_release_to_symbols[NFP] (Employment
@@ -33,6 +37,7 @@ import calendar
 import json
 import math
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -82,13 +87,21 @@ def _utc_today():
 def _pubdate_to_day_ns(s, today_s):
     """Strict RFC-822 parse; returns day-midnight ns or None.
 
-    Day-granularity by contract: the time-of-day is never treated as
-    an authoritative instant. Future publication days are rejected.
+    Shape gate first: parsedate_to_datetime is lenient (accepts
+    missing weekday, 1-digit days, 2-digit years), so the full
+    'Day, DD Mon YYYY HH:MM:SS TZ' shape is enforced by regex and
+    parsedate only checks semantic validity (ranges, leap days).
+    Day-granularity by contract: the time-of-day is never treated
+    as an authoritative instant. Future publication days rejected.
     """
-    if not isinstance(s, str) or not s.strip():
+    if not isinstance(s, str):
+        return None
+    s = s.strip()
+    if not re.match(r"^[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} "
+                     r"\d{2}:\d{2}:\d{2} \S+$", s):
         return None
     try:
-        dt = parsedate_to_datetime(s.strip())
+        dt = parsedate_to_datetime(s)
     except (TypeError, ValueError):
         return None
     if dt is None:
@@ -218,6 +231,12 @@ class Adapter:
                 return status, h, None, "HTTP %d" % status
             if len(body) > MAX_BODY_BYTES:
                 return status, h, None, "oversized: %d bytes" % len(body)
+            # stdlib ET expands internal entities (billion-laughs
+            # inside the 2MB cap could blow memory): a legitimate
+            # RSS feed never carries a DOCTYPE, so reject it as
+            # malformed rather than parsing.
+            if b"<!doctype" in body.lower():
+                return status, h, None, "malformed-xml"
             try:
                 return status, h, ET.fromstring(body.decode("utf-8")), ""
             except Exception:
@@ -254,10 +273,15 @@ class Adapter:
         recs = []
         for it in items:
             guid = (it.findtext("guid") or "").strip()
-            title = it.findtext("title") or ""
+            title = (it.findtext("title") or "").strip()
             link = (it.findtext("link") or "").strip()
             pub = it.findtext("pubDate") or ""
-            if not guid or not isinstance(title, str):
+            if not guid:
+                info["dropped"] += 1  # identity never fabricated
+                continue
+            if not title or not link:
+                # Locked contract is headline+link (sources.json
+                # note): a row missing either is not a usable row.
                 info["dropped"] += 1
                 continue
             obs_ns = _pubdate_to_day_ns(pub, today_s)
