@@ -1335,3 +1335,7 @@ plane (Phase D) change any interface a future slice depends on?
 - 42/42 EDGAR green warnings-as-errors (both styles); runnable
   plane 103 with only the pre-existing Windows file-lock failure;
   freeze PASS. Live SEC evidence still OPEN — not claimed.
+
+## Addendum 71 — hosted CI green on EDGAR round-4 correction
+- Run 35955270740 on `39c8771`: stdlib + evidence + plane + kernel
+  SUCCESS, EDGAR step success (42 tests hosted).
