@@ -1455,3 +1455,12 @@ plane (Phase D) change any interface a future slice depends on?
 - Runnable plane 132 with only the pre-existing Windows file-lock
   failure; freeze PASS. No EDGAR/resolver/JEV/kernel/plan changes.
   Hosted FRED suite still awaits the workflow-scope CI push.
+
+## Addendum 81 — FRED CLOSED (hosted suite proof)
+- `72ca59f` pushed (workflow-scope token); run 36013253054 on
+  that exact SHA: stdlib + evidence + plane + kernel SUCCESS.
+- Hosted evidence log proves the explicit step
+  `python3 research-plane/tests/test_fred.py` -> `Ran 24 tests
+  ... OK` (same log: isolation 3, sources 39, EDGAR 47, all OK).
+- FRED implementation audit CLOSED. Remaining OPEN gates (not
+  code defects): live soak, measured p50/p99, live ALFRED replay.
