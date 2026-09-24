@@ -1464,3 +1464,16 @@ plane (Phase D) change any interface a future slice depends on?
   ... OK` (same log: isolation 3, sources 39, EDGAR 47, all OK).
 - FRED implementation audit CLOSED. Remaining OPEN gates (not
   code defects): live soak, measured p50/p99, live ALFRED replay.
+
+## Addendum 82 — Treasury source slice (implementation)
+- NEW `research-plane/sources/treasury.py` + `tests/test_treasury.py`
+  (13/13 warnings-as-errors, both styles): locked auctions_query
+  scope only; keyless (MIRO_CONTACT UA preferred, fixed fallback);
+  conservative 1/s monotonic pace + episode throttle; HTTPError
+  normalized + closed; cusip+record_date PK dedupe with
+  emit-before-seen + counted truncation; auction_date midnight
+  flagged estimated; completion-stamped strict heartbeat with tmp
+  cleanup; harvest envelope. Wired into hosted CI stdlib job.
+- Runnable plane 145 with only the pre-existing Windows file-lock
+  failure; freeze PASS. Live Treasury evidence OPEN — not claimed.
+  No EDGAR/FRED/resolver/JEV/kernel/plan changes. BLS/BEA NEXT.
