@@ -56,6 +56,8 @@ jobs:
         run: python3 research-plane/tests/test_isolation.py
       - name: plane sources (stdlib only)
         run: python3 research-plane/tests/test_sources.py
+      - name: plane EDGAR adapter (stdlib only)
+        run: python3 research-plane/tests/test_edgar.py
 
   plane:
     runs-on: ubuntu-latest

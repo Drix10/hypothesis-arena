@@ -1249,3 +1249,34 @@ plane (Phase D) change any interface a future slice depends on?
 ## Addendum 65 — hosted CI green on EDGAR source slice
 - Run 35948979472 on `a2e6e57`: stdlib + evidence + plane + kernel
   SUCCESS (plane runs the venv-pinned suite incl. test_edgar).
+
+## Addendum 66 — EDGAR audit-round-2 correction (single commit)
+- BLOCKER 1 (urllib boundary): `_default_transport` now normalizes
+  `urllib.error.HTTPError` into (status, headers, capped body); only
+  genuine transport failures raise. Regression proves real 429/500
+  HTTPError shapes end-to-end (mocked urlopen).
+- BLOCKER 2 (CI): `test_edgar.py` wired into hosted CI stdlib job
+  (direct-script invocation, verified locally in both styles).
+- 429 episodes: one halving per episode on adapter state
+  (`_on_429` new-episode only); `_pace` deterministically restores
+  the ceiling rate after the hour. Cross-call + recovery tests.
+  Two suite-caught issues fixed: 304-handler wiped stored
+  validators (now ts-only refresh); recovery test re-armed with a
+  200 route (a fresh post-window 429 correctly opens a new episode).
+- Partial health: any requested-symbol error keeps ok=false +
+  TTL-driven stale; records preserved, nothing fabricated.
+- Caps: per-symbol 8-row omission REMOVED — full recent arrays
+  scanned through the 7-day cutoff; global 64 cap overflow now
+  counted as `truncated`, never silent.
+- Arrays: `_recent_arrays` validates equal-length str lists for
+  accession/form/date (+ present optional arrays) before indexing;
+  misaligned payloads rejected as malformed.
+- Conditional cache real: validators sent, 304 revalidates from
+  cache, validators persist only after data commit; meta writes are
+  atomic+fsync with unique tmp names (shared helper, also used by
+  heartbeat tmp naming).
+- SHOULD: `calendar.timegm` replaces the mktime round-trip; pacing
+  measured at request-start instants.
+- 31/31 EDGAR green; runnable plane 92 with only the pre-existing
+  Windows file-lock failure; freeze PASS. Live SEC evidence (soak,
+  zero-403, p50/p99) still OPEN — not claimed.

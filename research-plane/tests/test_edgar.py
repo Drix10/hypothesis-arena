@@ -51,7 +51,9 @@ class FakeClock:
 
 
 class FakeTransport:
-    """routes: url-prefix -> (status, body-bytes) | Exception instance."""
+    """routes: url-prefix -> (status, body) | Exception | handler.
+    A handler(headers) returns (status, resp_headers, body) and lets
+    tests assert conditional-request headers and 304 behavior."""
 
     def __init__(self, routes):
         self.routes = routes
@@ -63,6 +65,8 @@ class FakeTransport:
             if url.startswith(prefix):
                 if isinstance(resp, Exception):
                     raise resp
+                if callable(resp):
+                    return resp(dict(headers))
                 status, body = resp
                 return status, {}, body
         raise AssertionError("unexpected url: " + url)
@@ -304,6 +308,150 @@ class TestEdgar(unittest.TestCase):
             self.assertEqual(a.read_heartbeat(p)["state"], "stale")
             open(p, "w").write("{broken")
             self.assertEqual(a.read_heartbeat(p)["state"], "invalid")
+
+    # ---- audit-round-2 regressions ----
+
+    def test_real_httperror_boundary(self):
+        import io
+        import urllib.error
+        import urllib.request
+        from unittest import mock
+        err429 = urllib.error.HTTPError(
+            "https://x", 429, "Too Many Requests", {}, io.BytesIO(b"s"))
+        with mock.patch.object(urllib.request, "urlopen",
+                               side_effect=err429):
+            st, h, body = edgar._default_transport("https://x", {}, 30)
+        self.assertEqual(st, 429)
+        self.assertEqual(body, b"s")
+        err500 = urllib.error.HTTPError(
+            "https://x", 500, "Server Error", {}, io.BytesIO(b"e"))
+        with mock.patch.object(urllib.request, "urlopen",
+                               side_effect=err500):
+            st, h, body = edgar._default_transport("https://x", {}, 30)
+        self.assertEqual(st, 500)
+        # end to end: a real 429 shape drives the episode throttle
+        clock = FakeClock()
+        with mock.patch.object(urllib.request, "urlopen",
+                               side_effect=err429):
+            a = edgar.Adapter(CONTACT, clock=clock.now,
+                              sleeper=clock.sleep,
+                              jitter=lambda x, y: 0.0,
+                              backoff_base_s=0.0)
+            recs, info = a.poll(["AAPL"], today=TODAY)
+        self.assertEqual(recs, [])
+        self.assertEqual(a.interval, edgar.MIN_INTERVAL_S * 2)
+        self.assertTrue(any("429" in e for e in info["errors"]))
+
+    def test_429_episode_no_redouble_and_recovery(self):
+        clock = FakeClock()
+        routes = {edgar.TICKERS_URL: (429, b"slow")}
+        a = adapter_c(routes, clock)
+        a.poll(["AAPL"], today=TODAY)
+        self.assertEqual(a.interval, edgar.MIN_INTERVAL_S * 2)
+        first_throttle = a.throttle_until
+        clock.t += 10  # same episode: another 429 must NOT re-double
+        a.poll(["AAPL"], today=TODAY)
+        self.assertEqual(a.interval, edgar.MIN_INTERVAL_S * 2)
+        self.assertEqual(a.throttle_until, first_throttle)
+        clock.t = first_throttle + 1  # episode over: deterministic
+        a.transport.routes[edgar.TICKERS_URL] = (200, tickers_body())
+        a.poll(["AAPL"], today=TODAY)  # recovery on next pacing
+        self.assertEqual(a.interval, edgar.MIN_INTERVAL_S)
+        self.assertEqual(a.throttle_until, 0.0)
+
+    def test_partial_watchlist_not_healthy(self):
+        rows = [("0000320193-26-000080", "2026-09-22", "8-K",
+                 "d.htm", "")]
+        a = adapter(self.sub_routes(rows))
+        recs, info = a.poll(["AAPL", "ZZZZ"], today=TODAY)
+        self.assertEqual(len(recs), 1)  # success preserved
+        self.assertFalse(info["ok"])  # but poll is not healthy
+        self.assertTrue(info["stale"])  # failure never erases stale
+        self.assertTrue(any("unknown-symbol" in e
+                            for e in info["errors"]))
+
+    def test_mismatched_arrays_rejected(self):
+        bad = {"filings": {"recent": {
+            "accessionNumber": ["a1", "a2"],
+            "form": ["8-K"],
+            "filingDate": ["2026-09-22", "2026-09-21"]}}}
+        a = adapter(self.sub_routes([], extra={
+            "https://data.sec.gov/submissions/CIK0000320193.json":
+                (200, json.dumps(bad).encode())}))
+        recs, info = a.poll(["AAPL"], today=TODAY)
+        self.assertEqual(recs, [])
+        self.assertTrue(any("malformed" in e for e in info["errors"]))
+
+    def test_nonlist_recent_rejected(self):
+        bad = {"filings": {"recent": [1, 2]}}
+        a = adapter(self.sub_routes([], extra={
+            "https://data.sec.gov/submissions/CIK0000320193.json":
+                (200, json.dumps(bad).encode())}))
+        recs, info = a.poll(["AAPL"], today=TODAY)
+        self.assertEqual(recs, [])
+        self.assertTrue(any("malformed" in e for e in info["errors"]))
+
+    def test_many_in_window_filings_preserved(self):
+        rows = [("0000320193-26-%06d" % i, "2026-09-%02d" % (10 + i % 14),
+                 "4", "d.xml", "") for i in range(12)]
+        a = adapter(self.sub_routes(rows))
+        recs, info = a.poll(["AAPL"], today=TODAY)
+        self.assertEqual(len(recs), 12)  # no 8-row omission
+        self.assertEqual(info["truncated"], 0)
+        self.assertTrue(info["ok"])
+
+    def test_global_cap_overflow_counted(self):
+        rows = [("0000320193-26-%06d" % i, "2026-09-22",
+                 "8-K", "d.htm", "") for i in range(70)]
+        a = adapter(self.sub_routes(rows))
+        recs, info = a.poll(["AAPL"], today=TODAY)
+        self.assertEqual(len(recs), edgar.MAX_RECORDS)
+        self.assertEqual(info["truncated"], 70 - edgar.MAX_RECORDS)
+        self.assertTrue(info["ok"])  # cap is accounting, not failure
+
+    def test_conditional_cache_304(self):
+        seen = {}
+
+        def tickers(headers):
+            seen.update(headers)
+            if "If-None-Match" in headers:
+                self.assertEqual(headers["If-None-Match"], '"abc"')
+                return 304, {}, b""
+            return 200, {"etag": '"abc"'}, tickers_body()
+
+        with tempfile.TemporaryDirectory() as d:
+            clock = FakeClock()
+            a = adapter_c({edgar.TICKERS_URL: tickers}, clock,
+                          cache_dir=d)
+            recs, info = a.poll(["AAPL"], today=TODAY)
+            self.assertEqual(info["tickers"], "live")
+            self.assertNotIn("If-None-Match", seen)
+            clock.t += edgar.TICKERS_CACHE_DAYS * 86400 + 1
+            recs, info = a.poll(["AAPL"], today=TODAY)
+            self.assertEqual(info["tickers"], "cache-revalidated")
+            self.assertIn("If-None-Match", seen)
+            meta = json.load(open(os.path.join(
+                d, "edgar_tickers.meta.json"), encoding="utf-8"))
+            self.assertEqual(meta["etag"], '"abc"')
+
+    def test_request_start_pacing(self):
+        clock = FakeClock()
+        starts = []
+
+        def stamping(headers):
+            starts.append(clock.t)  # actual request-start instant
+            return 200, {}, json.dumps(submissions([])).encode()
+
+        with tempfile.TemporaryDirectory() as d:
+            routes = {edgar.TICKERS_URL: (200, tickers_body()),
+                      "https://data.sec.gov/submissions/"
+                      "CIK0000320193.json": stamping}
+            a = adapter_c(routes, clock, cache_dir=d)
+            a.poll(["AAPL"], today=TODAY)
+            a.poll(["AAPL"], today=TODAY)
+            self.assertEqual(len(starts), 2)
+            self.assertGreaterEqual(starts[1] - starts[0],
+                                    edgar.MIN_INTERVAL_S - 1e-6)
 
     def test_companyfacts_bounded(self):
         facts = {"cik": 320193, "facts": {}}
