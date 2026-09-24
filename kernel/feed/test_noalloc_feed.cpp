@@ -60,7 +60,7 @@ int main() {
             std::printf("FAIL backoff\n");
             return 1;
         }
-        // Wednesday 2026-09-23 14:30 UTC + i seconds: session marks.
+        // Tuesday 2025-09-23 14:30 UTC + i seconds: session marks.
         if (feed::MarkSession(1758637800000000LL + (long long)i * 1000000LL,
                               cal) != feed::Session::kOpen &&
             i < 3600) {

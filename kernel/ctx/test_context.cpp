@@ -52,6 +52,8 @@ static ctx::Snapshot Full() {
     return s;
 }
 
+static ctx::Snapshot Bare() { return ctx::Snapshot(); }
+
 int main() {
     using namespace ctx;
     // 1. full snapshot validates
@@ -200,26 +202,87 @@ int main() {
         Check(ValidateSnapshot(s) == "calib-ghost",
               "ghost-brier");
     }
-    // set-but-empty rejections (representative: mask claims, content bare)
+    // set-but-empty rejections for every section whose empty state is
+    // distinct from a valid zero (9 of 12; the 3 pure-integer sections
+    // below have no such distinction by design). Bare()+solo-bit
+    // proves the failure is the target section, not a ghost elsewhere.
     {
-        Snapshot s = Full();
-        s.present_mask = kResearch;  // revision 0 claimed present
-        s.marks.clear();
-        s.session.clear();
-        s.indicators.clear();
-        s.regime.clear();
-        s.sentiment_d6[0] = 0;
-        s.equity_ud = s.exposure_ud = s.buying_power_ud = 0;
-        s.sources.clear();
-        s.stage.clear();
-        s.calib.clear();
-        s.brier_d6 = 0;
-        s.feature_bundle_id = 0;
-        s.feature_bundle_hash.clear();
-        s.research_revision = 0;
-        // only kResearch set but revision 0 -> incoherent
+        Snapshot s = Bare();
+        s.present_mask = kMarks;
+        Check(ValidateSnapshot(s) == "marks-incoherent",
+              "set-empty-marks");
+    }
+    {
+        Snapshot s = Bare();
+        s.present_mask = kSession;
+        Check(ValidateSnapshot(s) == "session-incoherent",
+              "set-empty-session");
+    }
+    {
+        Snapshot s = Bare();
+        s.present_mask = kIndicators;
+        Check(ValidateSnapshot(s) == "indicators-incoherent",
+              "set-empty-indicators");
+    }
+    {
+        Snapshot s = Bare();
+        s.present_mask = kRegime;
+        Check(ValidateSnapshot(s) == "regime-incoherent",
+              "set-empty-regime");
+    }
+    {
+        Snapshot s = Bare();
+        s.present_mask = kFeatures;
+        Check(ValidateSnapshot(s) == "features-incoherent",
+              "set-empty-features");
+    }
+    {
+        Snapshot s = Bare();
+        s.present_mask = kSources;
+        Check(ValidateSnapshot(s) == "sources-incoherent",
+              "set-empty-sources");
+    }
+    {
+        Snapshot s = Bare();
+        s.present_mask = kStage;
+        Check(ValidateSnapshot(s) == "stage-incoherent",
+              "set-empty-stage");
+    }
+    {
+        Snapshot s = Bare();
+        s.present_mask = kResearch;
         Check(ValidateSnapshot(s) == "research-incoherent",
               "set-empty-research");
+    }
+    {
+        Snapshot s = Bare();
+        s.present_mask = kCalib;
+        Check(ValidateSnapshot(s) == "calib-incoherent",
+              "set-empty-calib");
+    }
+    // The 3 pure-integer sections: all-zero is BOTH the empty state
+    // and a legitimate present value, so set+zero is VALID (solo-bit
+    // masks prove no ghost trip either).
+    {
+        Snapshot s;
+        s.present_mask = kSentiment;
+        Check(ValidateSnapshot(s) == "", "set-zero-sentiment");
+        s.sentiment_d6[1] = 9;
+        Check(ValidateSnapshot(s) == "", "set-nonzero-sentiment");
+    }
+    {
+        Snapshot s;
+        s.present_mask = kVarCorr;
+        Check(ValidateSnapshot(s) == "", "set-zero-varcorr");
+        s.var_corr_flags = 0x3u;
+        Check(ValidateSnapshot(s) == "", "set-docbits-varcorr");
+    }
+    {
+        Snapshot s;
+        s.present_mask = kPortfolio;
+        Check(ValidateSnapshot(s) == "", "set-zero-portfolio");
+        s.equity_ud = 500;
+        Check(ValidateSnapshot(s) == "", "set-nonzero-portfolio");
     }
     // legitimate present zeros stay valid: flat book, zero flags,
     // zero sentiment, zero brier with verdict set.

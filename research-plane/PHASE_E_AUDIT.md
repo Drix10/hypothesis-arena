@@ -1159,3 +1159,17 @@ plane (Phase D) change any interface a future slice depends on?
 ## Addendum 58 — hosted CI green on Slice G fix commit
 - Run 35915484245 on `db54d5a`: stdlib + evidence + plane + kernel
   SUCCESS.
+
+## Addendum 59 — Slice G test closure (mechanical part)
+- Set-empty rejection now explicit for all 9 non-integer sections
+  (Bare()+solo-bit: marks/session/indicators/regime/features/
+  sources/stage/research/calib); the 3 pure-integer sections
+  (sentiment/varcorr/portfolio) assert set+zero VALID solo-bit, by
+  the accepted present-zero design — there is no distinct empty
+  state to reject for them.
+- Noalloc timestamp comment corrected (Tuesday 2025-09-23).
+- Suite green normal+hardened, full kernel gate PASS, freeze PASS.
+- Three contract questions are NOT code-fixable and await a human
+  protocol decision (see report): `change` representation, G
+  SourceStatus vocabulary vs frozen JEV states, sentiment_d6[4]
+  semantics. No invention applied.
