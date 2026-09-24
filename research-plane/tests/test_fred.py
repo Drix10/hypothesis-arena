@@ -114,6 +114,26 @@ class TestFred(unittest.TestCase):
         self.assertEqual(recs, [])
         self.assertTrue(any("denied" in e for e in info["errors"]))
 
+    def test_400_generic_not_key_denied(self):
+        a = adapter({"observations": (400, json.dumps(
+            {"error_code": 400,
+             "error_message": "Bad Request - missing series_id"}).encode())})
+        recs, info = a.poll({"GDP": ("GDP", ["SPY"])}, today=TODAY)
+        self.assertEqual(recs, [])
+        blob = " ".join(info["errors"])
+        self.assertIn("HTTP 400", blob)
+        self.assertNotIn("denied", blob)
+
+    def test_400_key_denied_on_key_evidence(self):
+        a = adapter({"observations": (400, json.dumps(
+            {"error_code": 400,
+             "error_message": "Invalid API key provided"}).encode())})
+        recs, info = a.poll({"GDP": ("GDP", ["SPY"])}, today=TODAY)
+        self.assertEqual(recs, [])
+        self.assertTrue(any("denied" in e for e in info["errors"]))
+        # classification only: message body never enters records
+        self.assertNotIn(KEY, json.dumps(info))
+
     def test_malformed_empty_oversized(self):
         for body, needle in ((b"{no", "malformed"),
                              (b"", "malformed"),

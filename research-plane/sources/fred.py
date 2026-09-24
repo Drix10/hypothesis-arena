@@ -228,7 +228,23 @@ class Adapter:
                     self.sleep(self.jitter(
                         0.8 * self.backoff_base, 1.2 * self.backoff_base))
                 continue
-            if status in (400, 401, 403):
+            if status == 400:
+                # FRED 400 is generic Bad Request: credential denial
+                # only on explicit key evidence in the error message —
+                # never inferred from status alone, never logged.
+                denied = False
+                try:
+                    msg = str(json.loads(body.decode("utf-8")).get(
+                        "error_message", ""))
+                    low = msg.lower()
+                    denied = "api key" in low or "apikey" in low.replace(
+                        " ", "")
+                except Exception:
+                    pass
+                if denied:
+                    return status, h, None, "HTTP 400: key denied"
+                return status, h, None, "HTTP 400"
+            if status in (401, 403):
                 return status, h, None, "HTTP %d: key denied" % status
             if status == 304:
                 return 304, h, b"", ""

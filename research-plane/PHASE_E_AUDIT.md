@@ -1430,3 +1430,16 @@ plane (Phase D) change any interface a future slice depends on?
   failure; freeze PASS. Live FRED evidence (soak, p50/p99, live
   ALFRED replay) OPEN — not claimed. No EDGAR/resolver/JEV/kernel/
   plan changes. Treasury/BLS/BEA untouched — next slices.
+
+## Addendum 79 — FRED 400 error-semantics correction
+- HTTP 400 is generic Bad Request: key-denied is now classified
+  ONLY on explicit api-key evidence in the error message (never
+  from status alone, never logged). 401/403 stay key-denied per
+  HTTP auth semantics. Regressions: ordinary 400 (missing
+  series_id) reports plain HTTP 400 with no denial; key-evidence
+  400 reports denied with no leakage. 429/500/retry/throttle
+  untouched. 22/22 FRED green warnings-as-errors (both styles).
+- Correction to Addendum 78: the "wired into hosted CI" claim was
+  premature — the CI-wiring commit is local-only until a
+  workflow-scope push lands it. No hosted FRED verification is
+  claimed until a run checks out the CI commit and logs 20+/20+.
