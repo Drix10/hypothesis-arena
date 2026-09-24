@@ -306,7 +306,8 @@ class TestEdgar(unittest.TestCase):
             a.write_heartbeat(p, hb)
             clock.t += edgar.TTL_S + 1
             self.assertEqual(a.read_heartbeat(p)["state"], "stale")
-            open(p, "w").write("{broken")
+            with open(p, "w") as fh:
+                fh.write("{broken")
             self.assertEqual(a.read_heartbeat(p)["state"], "invalid")
 
     # ---- audit-round-2 regressions ----
@@ -430,8 +431,11 @@ class TestEdgar(unittest.TestCase):
             recs, info = a.poll(["AAPL"], today=TODAY)
             self.assertEqual(info["tickers"], "cache-revalidated")
             self.assertIn("If-None-Match", seen)
-            meta = json.load(open(os.path.join(
-                d, "edgar_tickers.meta.json"), encoding="utf-8"))
+            meta = None
+            with open(os.path.join(
+                    d, "edgar_tickers.meta.json"),
+                    encoding="utf-8") as fh:
+                meta = json.load(fh)
             self.assertEqual(meta["etag"], '"abc"')
 
     def test_request_start_pacing(self):
@@ -452,6 +456,92 @@ class TestEdgar(unittest.TestCase):
             self.assertEqual(len(starts), 2)
             self.assertGreaterEqual(starts[1] - starts[0],
                                     edgar.MIN_INTERVAL_S - 1e-6)
+
+    def test_truncated_rows_eligible_next_poll(self):
+        rows = [("0000320193-26-%06d" % i, "2026-09-22",
+                 "8-K", "d.htm", "") for i in range(70)]
+        a = adapter(self.sub_routes(rows))
+        recs1, info1 = a.poll(["AAPL"], today=TODAY)
+        self.assertEqual(len(recs1), edgar.MAX_RECORDS)
+        self.assertEqual(info1["truncated"], 70 - edgar.MAX_RECORDS)
+        emitted = {r["accession"] for r in recs1}
+        recs2, info2 = a.poll(["AAPL"], today=TODAY)
+        self.assertEqual(len(recs2), 70 - edgar.MAX_RECORDS)
+        self.assertEqual(info2["truncated"], 0)
+        self.assertEqual(info2["duplicates"], edgar.MAX_RECORDS)
+        for r in recs2:
+            self.assertNotIn(r["accession"], emitted)
+
+    def test_slow_poll_measures_freshness_at_completion(self):
+        clock = FakeClock()
+
+        def slow(headers):
+            clock.sleep(edgar.TTL_S + 1)  # poll consumes > TTL
+            return 200, {}, tickers_body()
+
+        a = adapter_c({edgar.TICKERS_URL: slow}, clock)
+        recs, info = a.poll(["AAPL"], today=TODAY)
+        self.assertEqual(recs, [])  # no map data, but the point stands
+        self.assertTrue(info["stale"])
+        # clean poll whose body outlasts the TTL: stale, not fresh
+        rows = [("0000320193-26-000090", "2026-09-22", "8-K",
+                 "d.htm", "")]
+        clock2 = FakeClock()
+
+        def slow_sub(headers):
+            clock2.sleep(edgar.TTL_S + 1)
+            return 200, {}, json.dumps(submissions(rows)).encode()
+
+        a2 = adapter_c({edgar.TICKERS_URL: (200, tickers_body()),
+                        "https://data.sec.gov/submissions/"
+                        "CIK0000320193.json": slow_sub}, clock2)
+        recs2, info2 = a2.poll(["AAPL"], today=TODAY)
+        self.assertEqual(len(recs2), 1)
+        self.assertTrue(info2["ok"])
+        self.assertTrue(info2["stale"])  # completed past TTL
+        hb = a2.heartbeat(info2)
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "hb.json")
+            a2.write_heartbeat(p, hb)
+            self.assertEqual(a2.read_heartbeat(p)["state"], "stale")
+
+    def test_heartbeat_strict_schema(self):
+        a = adapter(self.sub_routes([]))
+        base = {"version": 1, "ts": 1780000000.0, "cadence_s": 300,
+                "ttl_s": 900, "ok": True, "stale": False,
+                "records": 1, "error": ""}
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "hb.json")
+
+            def state(hb):
+                with open(p, "w", encoding="utf-8") as fh:
+                    json.dump(hb, fh)
+                return a.read_heartbeat(p, now=1780000000.0)["state"]
+
+            self.assertEqual(state(dict(base)), "healthy")
+            bad = dict(base, ts=float("nan"))
+            self.assertEqual(state(bad), "invalid")
+            bad = dict(base, ts=float("inf"))
+            self.assertEqual(state(bad), "invalid")
+            bad = dict(base, ok=1)
+            self.assertEqual(state(bad), "invalid")
+            bad = dict(base, ok=True, stale=True)
+            self.assertEqual(state(bad), "stale")
+            bad = dict(base, records=-1)
+            self.assertEqual(state(bad), "invalid")
+            bad = dict(base, records="1")
+            self.assertEqual(state(bad), "invalid")
+            bad = dict(base, error="x" * 201)
+            self.assertEqual(state(bad), "invalid")
+            bad = dict(base, error=None)
+            self.assertEqual(state(bad), "invalid")
+            bad = dict(base)
+            bad["extra"] = 1
+            self.assertEqual(state(bad), "invalid")
+            bad = dict(base, version="1")
+            self.assertEqual(state(bad), "invalid")
+            bad = dict(base, stale="no")
+            self.assertEqual(state(bad), "invalid")
 
     def test_companyfacts_bounded(self):
         facts = {"cik": 320193, "facts": {}}

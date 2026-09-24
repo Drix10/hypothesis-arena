@@ -32,6 +32,7 @@ evidence (soak, zero-403 record, measured p50/p99) is still open.
 """
 import calendar
 import json
+import math
 import os
 import time
 import urllib.error
@@ -67,6 +68,10 @@ HEARTBEAT_VERSION = 1
 HEARTBEAT_MAX_BYTES = 65536
 
 DAY_NS = 86400 * 1000000000
+SKEW_ALLOW_S = 300
+
+_HB_KEYS = frozenset(("version", "ts", "cadence_s", "ttl_s",
+                       "ok", "stale", "records", "error"))
 
 _tmp_seq = [0]
 
@@ -160,7 +165,7 @@ class Adapter:
 
     def __init__(self, contact, transport=None, clock=None, sleeper=None,
                  jitter=None, backoff_base_s=BACKOFF_BASE_S,
-                 cache_dir=None, timeout_s=DEFAULT_TIMEOUT_S):
+                 cache_dir=None, timeout_s=DEFAULT_TIMEOUT_S, mono=None):
         if not contact or not contact.strip():
             raise ConfigError("edgar: MIRO_CONTACT missing — refusing "
                               "to poll without SEC fair-access contact")
@@ -168,6 +173,10 @@ class Adapter:
         self.ua = "%s contact=%s" % (UA_BASE, self.contact)
         self.transport = transport or _default_transport
         self.clock = clock or time.time
+        # Pacing/throttle run on a monotonic clock; wall clock stays
+        # for source timestamps. Injected fake clocks serve both.
+        self.mono = mono or (clock if clock is not None
+                             else time.monotonic)
         self.sleep = sleeper or time.sleep
         self.jitter = jitter or (lambda a, b: a + (b - a) * 0.5)
         self.backoff_base = backoff_base_s
@@ -185,7 +194,7 @@ class Adapter:
 
     # -- rate limit -------------------------------------------------
     def _pace(self):
-        now = self.clock()
+        now = self.mono()
         if self.throttle_until and now >= self.throttle_until:
             # episode over: deterministic recovery to the ceiling rate
             self.interval = MIN_INTERVAL_S
@@ -193,11 +202,11 @@ class Adapter:
         wait = self._next_ok - now
         if wait > 0:
             self.sleep(wait)
-            now = self.clock()
+            now = self.mono()
         self._next_ok = now + self.interval
 
     def _on_429(self):
-        now = self.clock()
+        now = self.mono()
         if now >= self.throttle_until:
             # new episode: exactly one halving for one hour
             self.interval = min(self.interval * 2, 60.0)
@@ -256,10 +265,12 @@ class Adapter:
             try:
                 if os.path.getsize(data_path) > (1 << 20):
                     raise ValueError("cache too large")
-                cached = json.load(open(data_path, encoding="utf-8"))
+                with open(data_path, encoding="utf-8") as fh:
+                    cached = json.load(fh)
                 meta = {}
                 if meta_path and os.path.exists(meta_path):
-                    meta = json.load(open(meta_path, encoding="utf-8"))
+                    with open(meta_path, encoding="utf-8") as fh:
+                        meta = json.load(fh)
                 age = self.clock() - float(meta.get("ts", 0))
                 if meta.get("etag"):
                     validators["If-None-Match"] = meta["etag"]
@@ -277,8 +288,10 @@ class Adapter:
                 # 304 carries no validators: keep the stored ones,
                 # refresh only the revalidation timestamp.
                 try:
-                    old = json.load(open(meta_path, encoding="utf-8")) \
-                        if meta_path and os.path.exists(meta_path) else {}
+                    old = {}
+                    if meta_path and os.path.exists(meta_path):
+                        with open(meta_path, encoding="utf-8") as fh:
+                            old = json.load(fh)
                 except Exception:
                     old = {}
                 old["ts"] = self.clock()
@@ -306,11 +319,11 @@ class Adapter:
         return self._ticker_index(raw), "live", ""
 
     def _atomic_write_json(self, path, obj):
-        """Atomic tmp+fsync+replace. Returns True on commit."""
+        """Atomic tmp+fsync+replace. Temp removed on every failure
+        path. Returns True on commit."""
+        tmp = "%s.tmp-%d-%d" % (path, os.getpid(), _next_tmp_seq())
         try:
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-            tmp = "%s.tmp-%d-%d" % (path, os.getpid(),
-                                      _next_tmp_seq())
             with open(tmp, "w", encoding="utf-8") as fh:
                 json.dump(obj, fh)
                 fh.flush()
@@ -318,6 +331,11 @@ class Adapter:
             os.replace(tmp, path)
             return True
         except Exception:
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except Exception:
+                pass
             return False
 
     def _write_meta(self, meta_path, headers):
@@ -451,14 +469,9 @@ class Adapter:
                     continue  # never estimate, never substitute now
                 if obs_ns < cutoff_ns:
                     continue  # outside the recent window, not an error
-                self._seen[acc] = 1
-                if len(self._seen) > 4096:
-                    # bounded cycle-local memory: drop oldest keys
-                    for k in list(self._seen)[:1024]:
-                        del self._seen[k]
                 if len(recs) >= MAX_RECORDS:
-                    info["truncated"] += 1  # valid row, explicit cap
-                    continue
+                    info["truncated"] += 1  # valid row, explicit cap;
+                    continue  # NOT marked seen: stays eligible next poll
                 acc_nodash = acc.replace("-", "")
                 recs.append({
                     "source_id": SOURCE_ID,
@@ -474,20 +487,31 @@ class Adapter:
                         "https://www.sec.gov/Archives/edgar/data/%d/%s/"
                         % (cik, acc_nodash),
                 })
+                # Seen ONLY on emit: truncated rows stay eligible.
+                self._seen[acc] = 1
+                if len(self._seen) > 4096:
+                    # bounded cycle-local memory: drop oldest keys
+                    for k in list(self._seen)[:1024]:
+                        del self._seen[k]
         info["records"] = len(recs)
+        # Freshness is measured at COMPLETION: a slow poll/retry
+        # episode must not publish fresh health from a stale start.
+        done = self.clock()
         # Health is source-level: ANY requested-symbol failure keeps the
         # poll unhealthy. Successful records are preserved; missing ones
         # are never fabricated. last_ok advances only on a fully clean
         # poll, so partial failure cannot erase staleness.
         if not info["errors"]:
             info["ok"] = True
-            info["stale"] = False
-            self.last_ok_ts = now
+            self.last_ok_ts = done
             self.last_error = ""
+            # A poll that itself outlasts the TTL cannot publish
+            # fresh health from a stale-duration operation.
+            info["stale"] = (done - now) > TTL_S
         else:
             self.failures += 1
             self.last_error = "; ".join(info["errors"][:3])
-        if now - self.last_ok_ts > TTL_S:
+        if done - self.last_ok_ts > TTL_S:
             info["stale"] = True
         return recs, info
 
@@ -522,27 +546,53 @@ class Adapter:
             os.fsync(fh.fileno())
         os.replace(tmp, path)
 
+    @staticmethod
+    def _valid_heartbeat(hb):
+        """Strict schema gate (mirrors earnings hardened pattern).
+        Never raises: any anomaly -> False."""
+        try:
+            if not isinstance(hb, dict) or set(hb.keys()) != _HB_KEYS:
+                return False
+            if hb["version"] != HEARTBEAT_VERSION \
+                    or type(hb["version"]) is not int:
+                return False
+            if hb["cadence_s"] != CADENCE_S or hb["ttl_s"] != TTL_S:
+                return False
+            if type(hb["ok"]) is not bool:
+                return False
+            if type(hb["stale"]) is not bool:
+                return False
+            if type(hb["records"]) is not int or hb["records"] < 0:
+                return False
+            if not isinstance(hb["error"], str) \
+                    or len(hb["error"]) > 200:
+                return False
+            ts = hb["ts"]
+            if type(ts) not in (int, float) or not math.isfinite(ts):
+                return False
+            return True
+        except Exception:
+            return False
+
     def read_heartbeat(self, path, now=None):
         now = now if now is not None else self.clock()
         try:
             if os.path.getsize(path) > HEARTBEAT_MAX_BYTES:
                 return {"state": "invalid"}
-            hb = json.load(open(path, encoding="utf-8"))
+            with open(path, encoding="utf-8") as fh:
+                hb = json.load(fh)
         except Exception:
             return {"state": "invalid"}
-        try:
-            if hb["version"] != HEARTBEAT_VERSION:
-                return {"state": "invalid"}
-            if hb["cadence_s"] != CADENCE_S or hb["ttl_s"] != TTL_S:
-                return {"state": "invalid"}
-            ts = float(hb["ts"])
-        except (KeyError, TypeError, ValueError):
+        if not self._valid_heartbeat(hb):
             return {"state": "invalid"}
-        if ts > now + 300:
+        ts = float(hb["ts"])
+        if ts > now + SKEW_ALLOW_S:
             return {"state": "invalid"}  # future skew cap
         if now - ts > TTL_S:
             return {"state": "stale"}
-        if not hb.get("ok", False):
+        if hb["stale"]:
+            return {"state": "stale"}  # declared stale is stale,
+        if not hb["ok"]:  # even beside ok=true: never healthy
             return {"state": "failed"}
         return {"state": "healthy"}
 

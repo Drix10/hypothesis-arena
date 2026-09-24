@@ -1286,3 +1286,24 @@ plane (Phase D) change any interface a future slice depends on?
   SUCCESS, with the new evidence-job step `plane EDGAR adapter
   (stdlib only)` -> success. The 31-test adapter suite is now
   hosted-verified, not just locally green.
+
+## Addendum 68 — EDGAR audit-round-3 correction (single commit)
+- BLOCKER (overflow dedupe): accession enters `_seen` ONLY on emit;
+  truncated rows stay eligible. Regression: 70-row poll emits 64 +
+  truncates 6, second poll emits those 6 (duplicates only the 64
+  already emitted). One suite-caught production fix: a clean poll
+  whose own duration outlasts the TTL now reports stale (freshness
+  from completion AND operation duration, TTL unchanged).
+- Heartbeat reader strictly fail-closed (earnings pattern): exact
+  8-key schema, int version, exact cadence/TTL, bool ok/stale, int
+  records >= 0, str error <= 200, finite ts; ok+stale never healthy.
+  12-case schema test incl. NaN/inf/wrong-type/extra-key/oversize.
+- Files: every json.load(open()) + test direct-open replaced with
+  `with` blocks; suite runs under PYTHONWARNINGS=error with zero
+  ResourceWarnings.
+- Atomic writes remove temp on all failure paths; pacing/throttle
+  state runs on monotonic clock (injected fake clocks serve both;
+  wall clock kept for source timestamps) — 10/s ceiling unchanged.
+- 34/34 EDGAR green (both invocation styles); runnable plane 95
+  with only the pre-existing Windows file-lock failure; freeze
+  PASS. Live SEC evidence still OPEN — not claimed.
