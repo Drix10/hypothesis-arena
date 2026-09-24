@@ -1199,3 +1199,20 @@ plane (Phase D) change any interface a future slice depends on?
 ## Addendum 62 — hosted CI green on Slice G v1 contract closure
 - Run 35945952755 on `aad16ca`: stdlib + evidence + plane + kernel
   SUCCESS.
+
+## Addendum 63 — Slice G v1 ACCEPTED, Plan 04 wording cleaned
+- Independent re-audit ACCEPTED `aad16ca` (hosted 35945952755
+  all-SUCCESS verified): change absent, H1 no-inference rule,
+  sentiment removed, 0x7FF mask, frozen JEV source vocabulary with
+  retired-literal gate, ghost/set-empty/zero semantics, golden
+  regenerated, no out-of-scope changes.
+- Plan 04 module description reworded to "full intended shape; v1
+  contract below scopes the frozen subset" so the v1 paragraph is
+  the single unambiguous statement (wording only, no semantics).
+- Carried H1 integration constraint (not a G reopen): marks/
+  indicators/sources vectors preserve supplied order with no
+  semantic ordering rule — H1 must construct them deterministically;
+  freeze a canonical ordering rule before any second producer
+  assembles these arrays.
+- Board: F IMPL-ACCEPTED + SOAK-OPEN, G v1 CLOSED, D NOT
+  AUTHORIZED, poller/graph/f2/ingest track NEXT, H1 AFTER.

@@ -56,7 +56,8 @@ STAGE (human-signed, doc 10) ─────────────┤
    relative to the snapshot, or past its declared TTL. Rejections are counted;
    a rejection rate >5%/h is an alert. No allocation on the tick path — fixed
    arena, overwrite-oldest.
-3. `ctx/context.cpp` — builds the frozen `Snapshot`: mark prices, spread, session,
+3. `ctx/context.cpp` — builds the frozen `Snapshot` (full intended
+   shape; v1 contract below scopes the frozen subset): mark prices, spread, session,
    change, indicator values (RSI/z-score/VWAP/ATR ported from
    `TechnicalIndicatorService`), regime (ported `RegimeDetector`), sentiment tail
    signal buckets, VaR/correlation flags per doc 05 §5.1a,
