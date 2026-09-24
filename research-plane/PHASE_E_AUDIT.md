@@ -1600,3 +1600,20 @@ plane (Phase D) change any interface a future slice depends on?
   edges, key isolation, query lock, build fail-closed — all correct.
   Live BEA evidence OPEN. No EDGAR/FRED/Treasury/BLS/resolver/JEV/
   kernel/D/H1 changes. BEA code acceptance NOT claimed (re-audit).
+
+## Addendum 92 - BEA credential/numeric correction (re-audit fixes)
+- Re-audit found two real defects in 5b4eaa3:
+  (1) APIErrorDescription copied verbatim into denied/last_error/
+  heartbeat, so a provider error echoing BEA_USER_ID would leak the
+  credential -> every exact credential occurrence now redacted to
+  [REDACTED] at the poll() boundary (key still only in query).
+  (2) DataValue float()-after-strip-commas silently repaired
+  malformed source data ('1,2,3'->123, '1_000'->1000) -> strict
+  grammar: signed decimals/scientific with valid thousands grouping
+  only; float() kept for finiteness; original string preserved.
+- 3 new regressions (22/22 warnings-as-errors, both styles):
+  denied-description redaction across errors/last_error/heartbeat,
+  key-in-exception-message non-leak (type-only errors proven), 30
+  good/bad numeric vectors + end-to-end malformed drop. No source,
+  schema, timestamp, or model change. BEA acceptance NOT claimed;
+  live evidence OPEN.

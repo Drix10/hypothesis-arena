@@ -151,6 +151,49 @@ class TestBEA(unittest.TestCase):
         self.assertNotIn(KEY, blob)
         self.assertIn("UserID=" + KEY, a.transport.calls[0][0])
 
+    def test_key_in_exception_message_never_leaks(self):
+        def fail_loud(headers):
+            raise TimeoutError("conn failed for UserID=%s" % KEY)
+
+        a = adapter({"apps.bea.gov": fail_loud})
+        recs, info = a.poll(today=TODAY)
+        blob = repr(info) + a.last_error + repr(a.heartbeat(info))
+        self.assertNotIn(KEY, blob)
+        self.assertIn("TimeoutError", " ".join(info["errors"]))
+
+    def test_denied_description_redacted(self):
+        desc = "Invalid UserID %s rejected" % KEY
+        a = adapter({"apps.bea.gov": (200, envelope(
+            error={"APIErrorDescription": desc}))})
+        recs, info = a.poll(today=TODAY)
+        self.assertEqual(recs, [])
+        self.assertFalse(info["ok"])
+        blob = (" ".join(info["errors"]) + a.last_error +
+                a.heartbeat(info)["error"])
+        self.assertNotIn(KEY, blob)
+        self.assertIn("[REDACTED]", blob)
+        self.assertTrue(
+            info["errors"][0].startswith("denied: Invalid UserID "))
+
+    def test_strict_numeric_grammar(self):
+        good = ["29,720.9", "-123.4", "+0.5", "1.2E+03",
+                "1E10", "1,234,567", "0", "-0.25"]
+        bad = ["1,2,3", "12,34.5", "1_000", "1__2", "(NA)",
+               "nan", "NaN", "inf", "-Infinity", "1E", "E10",
+               ".5", "5.", "1,2345", ",123", "12,", "--1",
+               "1.2.3", "", " ", "0x10", "1e9999"]
+        for v in good:
+            self.assertTrue(bea._value_ok(v), v)
+        for v in bad:
+            self.assertFalse(bea._value_ok(v), v)
+        a = adapter(ok_routes([row("2024", "S1", "1,2,3"),
+                               row("2024", "S2", "29,720.9")]))
+        recs, info = a.poll(today=TODAY)
+        self.assertEqual([r["series"] for r in recs], ["S2"])
+        self.assertEqual(recs[0]["data_value"], "29,720.9")
+        self.assertEqual(info["dropped"], 1)
+        self.assertTrue(info["ok"])
+
     def test_build_fail_closed(self):
         with self.assertRaises(bea.ConfigError):
             bea.build(env={})

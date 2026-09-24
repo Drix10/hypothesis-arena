@@ -121,10 +121,24 @@ def _series_of(row):
 
 
 def _value_ok(v):
-    if not isinstance(v, str) or not v.strip() or len(v) > 64:
+    """Strict BEA numeric grammar (fail-closed, no normalization).
+
+    Accepts signed decimals/scientific forms with commas ONLY in
+    valid thousands grouping. float() alone silently repairs
+    malformed source data ('1,2,3' -> 123, '1_000' -> 1000): that
+    is corruption, so the shape is regex-gated first and float()
+    only checks finiteness. The original string is preserved.
+    """
+    if not isinstance(v, str):
+        return False
+    s = v.strip()
+    if not s or len(s) > 64:
+        return False
+    if not re.match(r"^[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)"
+                     r"(?:\.\d+)?(?:[eE][+-]?\d+)?$", s):
         return False
     try:
-        f = float(v.strip().replace(",", ""))
+        f = float(s.replace(",", ""))
     except ValueError:
         return False
     return math.isfinite(f)
@@ -308,7 +322,13 @@ class Adapter:
             self._split_envelope(doc)
         if flaw:
             if flaw == "denied":
-                info["errors"].append("denied: %s" % (denied or "denied"))
+                # Provider error text is untrusted: it may echo the
+                # credential (e.g. 'Invalid UserID <key>'). Redact
+                # every exact occurrence before it can reach errors,
+                # last_error, or the heartbeat.
+                clean = (denied or "denied").replace(
+                    self.user_id, "[REDACTED]")
+                info["errors"].append("denied: %s" % clean)
             else:
                 info["errors"].append(flaw)
             self.failures += 1
