@@ -2,6 +2,10 @@
 
 Phases run in order. No phase starts until the previous one's exit criteria are
 met and checked off here. Paper capital only until phase 5 sign-off.
+Exception (human ruling): doc 13 §13.5 gate-classes sequencing rule governs P3.5
+sequencing — Phase 2.5 poller slices (EDGAR/FRED/Treasury/BLS/BEA), the F
+24h soak, and live-source operational evidence run IN PARALLEL with
+P3.5/D/H1 work and never retro-block it. TODO.md encodes the tracks.
 
 ## Phase 0 — Freeze the spec (this folder)
 
@@ -204,7 +208,9 @@ an actual contract defect.
 
 ## Phase 4 — Paper loop at G0_PAPER (everything together)
 
-- [ ] Full loop paper-trading on broker paper/sandbox accounts (forex + stocks),
+- [ ] Full loop paper-trading on broker paper/sandbox accounts (stocks only:
+      OANDA practice path BLOCKED for India setup, so G0 is Alpaca-paper
+      stocks; forex rejoins only via an explicitly authorized venue),
       research plane attached, spend metering live.
 - [ ] Daily summaries + weekly replay checks running.
 - [ ] Baseline stats frozen for S3 (win rate, per-regime PnL over the paper window).
