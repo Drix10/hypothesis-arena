@@ -1409,3 +1409,24 @@ plane (Phase D) change any interface a future slice depends on?
 ## Addendum 77 — hosted CI green on EDGAR round-7 correction
 - Run 35959871294 on `27657b9`: stdlib + evidence + plane + kernel
   SUCCESS, EDGAR step success (47 tests hosted).
+
+## Addendum 78 — FRED/ALFRED source slice (implementation)
+- NEW `research-plane/sources/fred.py` + `tests/test_fred.py`
+  (20/20 warnings-as-errors, both styles): observations-only scope
+  + ALFRED realtime windows; FRED_API_KEY fail-closed (ConfigError,
+  never a default); sentinel-key test proves the credential is in
+  the query only, never errors/records/heartbeats/headers; 401/403
+  reported as key-denied; conservative 1/s pace + episode throttle;
+  HTTPError normalized + explicitly closed; "." values dropped;
+  day-granularity observed flagged estimated (ALFRED realtime
+  window carried); vintage fetch + replay-identical regression;
+  completion-stamped strict heartbeat; harvest envelope; partial
+  poll unhealthy; emit-before-seen dedupe; SERIES_CORE operating
+  set documented as non-frozen config. Wired into hosted CI stdlib
+  job beside EDGAR.
+- One test-side fix: harvest-envelope test now routes all core
+  series (harvest polls the full core set by design).
+- Runnable plane 128 with only the pre-existing Windows file-lock
+  failure; freeze PASS. Live FRED evidence (soak, p50/p99, live
+  ALFRED replay) OPEN — not claimed. No EDGAR/resolver/JEV/kernel/
+  plan changes. Treasury/BLS/BEA untouched — next slices.
