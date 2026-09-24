@@ -1216,3 +1216,32 @@ plane (Phase D) change any interface a future slice depends on?
   assembles these arrays.
 - Board: F IMPL-ACCEPTED + SOAK-OPEN, G v1 CLOSED, D NOT
   AUTHORIZED, poller/graph/f2/ingest track NEXT, H1 AFTER.
+
+## Addendum 64 — production EDGAR source slice (implementation)
+- NEW `research-plane/sources/edgar.py`: production adapter, NOT the
+  tier_a evidence probe (untouched). Locked scope only: submissions
+  recent-filings + single bounded companyfacts GET + ETag-cached
+  CIK map; UA `MiroHedge/phase0 contact=<MIRO_CONTACT>`, missing
+  contact raises ConfigError before any request; hard 10/s pacing
+  via token bucket; per-request timeout; 2MB body cap; 3 retries w/
+  injected jitter; 429 halves rate ONCE per episode + 1h throttle;
+  8-K/10-Q/10-K/Form-4 filter; 7-day recent window; 64-record cap.
+- Timestamps: observed_at_ns from regulator filingDate only;
+  missing/invalid/future rows dropped+counted, never estimated;
+  local time never substituted. Outage/empty -> ok=false/stale,
+  never fabricated records. No secrets (keyless source), no broker
+  access, errors carry no contact value (tested).
+- Harvest-callable: harvest(watchlist, epoch) -> (recs, stamps)
+  matching the graph envelope; fsync heartbeat (cadence 300/TTL
+  900) with healthy/stale/failed/invalid states mirroring the
+  earnings hardened pattern. No second persistence authority
+  (CIK cache + heartbeat only, atomic renames).
+- One suite-caught production fix: 429 re-doubled per retry (16x)
+  -> now one halving per episode. One test-side float tolerance.
+- Tests: 22/22 green (fake transport + fake clock, zero network).
+  Full plane suite: 83 runnable green except 2 PRE-EXISTING Windows
+  env failures (langgraph-absent import chain, PermissionError file
+  tear) — identical with the slice stashed. Freeze PASS.
+- Status: IMPLEMENTATION-COMPLETE, awaiting live operational
+  evidence (soak, zero-403 record, measured p50/p99) + independent
+  audit. No F/D/H1/poller-others/JEV/plan changes.
