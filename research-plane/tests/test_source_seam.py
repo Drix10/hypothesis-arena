@@ -568,6 +568,137 @@ class TestSourceSeam(unittest.TestCase):
         # Unknown source: nothing to merge into.
         self.assertEqual(seam._merge_hist("nope_src", []), 0)
 
+    def test_recovery_trusts_only_committed(self):
+        # Orphans (no manifest row), sha-corrupted committed files,
+        # missing-file rows, and forged hashes contribute NOTHING;
+        # the one verified committed generation recovers exactly.
+        from plane import emit as emit_mod
+        seam, _db = make_seam()
+        recs, _st, _h = seam.harvest(["SPY"], 3)
+        real = [r for r in recs
+                if r["source_id"] == "treasury_auctions"][0]
+        real_h = real["canonical_hash"]
+        outdir = tempfile.mkdtemp()
+        wm = {"entity_map_sha256": "a" * 64}
+        good_hist = {"treasury_auctions": [
+            {"h": real_h, "ts": 1000},
+            {"h": "f" * 64, "ts": 2000}]}  # forged: no lineage
+        _bid, good_path = emit_mod.emit_bundle(outdir, 7, [], wm,
+                                               good_hist)
+        # Orphan: valid shape + real hash, but NO manifest row.
+        orphan = {"schema_version": "f2", "research_epoch": 98,
+                  "bundle_id": "rp-98-" + "b" * 64, "commit": True,
+                  "watermarks": wm, "features": [],
+                  "history": {"treasury_auctions": [
+                      {"h": real_h, "ts": 9999}]}}
+        with open(os.path.join(outdir, "features-98-" + orphan[
+                "bundle_id"] + ".json"), "w",
+                  encoding="utf-8") as fh:
+            fh.write(json.dumps(orphan, sort_keys=True))
+        # Committed-but-corrupted: real manifest row, tampered bytes.
+        _bid2, corrupt_path = emit_mod.emit_bundle(
+            outdir, 8, [], wm,
+            {"treasury_auctions": [{"h": real_h, "ts": 8888}]})
+        with open(corrupt_path, "a", encoding="utf-8") as fh:
+            fh.write("corruption")
+        # Manifest row pointing at a missing file.
+        with open(os.path.join(outdir, "manifest.jsonl"), "a",
+                  encoding="utf-8") as fh:
+            fh.write(json.dumps(
+                {"bundle_id": "rp-99-" + "c" * 64,
+                 "research_epoch": 99, "feature_count": 0,
+                 "entity_map_sha256": "a" * 64, "commit": True,
+                 "path": "features-99-rp-99-" + "c" * 64 + ".json",
+                 "sha256": "d" * 64}, sort_keys=True) + "\n")
+        # Fresh seam (restart): only the verified committed history
+        # survives, forged hash dropped for lack of lineage.
+        seam2, _db2 = make_seam(
+            lineage_db=os.path.join(tempfile.mkdtemp(), "fresh.db"))
+        # Same durable lineage under a fresh process (tables first).
+        touch = seam2.store._connect()
+        touch.close()
+        con = sqlite3.connect(seam.store.db_path)
+        fresh = sqlite3.connect(seam2.store.db_path)
+        try:
+            for table in ("records", "seam_canonical"):
+                rows = con.execute(
+                    "SELECT * FROM %s" % table).fetchall()
+                cols = [c[1] for c in con.execute(
+                    "PRAGMA table_info(%s)" % table).fetchall()]
+                fresh.executemany(
+                    "INSERT INTO %s VALUES (%s)" % (
+                        table, ",".join(["?"] * len(cols))), rows)
+            fresh.commit()
+        finally:
+            con.close()
+            fresh.close()
+        got = seam2.restore_from_bundles(outdir)
+        self.assertEqual(got, {"treasury_auctions": 1}, got)
+        tail = seam2._hist["treasury_auctions"]
+        self.assertEqual(list(tail), [{"h": real_h, "ts": 1000}])
+
+    def test_projection_cross_checked_against_authority(self):
+        import sqlite3 as _sq
+        lineage_db = os.path.join(tempfile.mkdtemp(), "x.db")
+        seam, _db = make_seam(lineage_db=lineage_db)
+        recs, _st, _h = seam.harvest(["SPY"], 3)
+        rec = [r for r in recs
+               if r["source_id"] == "treasury_auctions"][0]
+        h = rec["canonical_hash"]
+
+        def wipe():
+            seam.store._by_hash.clear()
+
+        def proj(sql, args=()):
+            con = _sq.connect(lineage_db)
+            try:
+                con.execute(sql, args)
+                con.commit()
+            finally:
+                con.close()
+            wipe()
+
+        # Valid projection + valid authority -> resolves.
+        wipe()
+        self.assertIsNotNone(
+            seam.store.canonical_for({"canonical_hash": h}))
+        # Tampered projection JSON (kind altered, hash field kept) ->
+        # checksum mismatch -> fail closed.
+        con = _sq.connect(lineage_db)
+        try:
+            (raw_json,) = con.execute(
+                "SELECT canonical_json FROM seam_canonical WHERE "
+                "content_hash=?", (h,)).fetchone()
+        finally:
+            con.close()
+        tampered = json.loads(raw_json)
+        tampered["kind"] = "filing_event"
+        proj("UPDATE seam_canonical SET canonical_json=? WHERE "
+             "content_hash=?", (json.dumps(tampered), h))
+        self.assertIsNone(
+            seam.store.canonical_for({"canonical_hash": h}))
+        # Heal via re-note (same authority hash, fresh projection).
+        self.assertEqual(seam.store.note(rec, ING_NS), h)
+        # Wrong source under the authority row -> fail closed.
+        proj("UPDATE records SET source=? WHERE content_hash=?",
+             ("edgar_8k", h))
+        self.assertIsNone(
+            seam.store.canonical_for({"canonical_hash": h}))
+        proj("UPDATE records SET source=? WHERE content_hash=?",
+             ("treasury_auctions", h))
+        self.assertIsNotNone(
+            seam.store.canonical_for({"canonical_hash": h}))
+        # Missing authority row -> fail closed.
+        proj("DELETE FROM records WHERE content_hash=?", (h,))
+        self.assertIsNone(
+            seam.store.canonical_for({"canonical_hash": h}))
+        # Corrupt authority bytes -> fail closed.
+        self.assertEqual(seam.store.note(rec, ING_NS), h)
+        proj("UPDATE records SET raw_json=? WHERE content_hash=?",
+             ("{corrupt", h))
+        self.assertIsNone(
+            seam.store.canonical_for({"canonical_hash": h}))
+
     def test_miro_canonical_db_honored(self):
         import os as _os
         scratch = os.path.join(tempfile.mkdtemp(), "canon.db")

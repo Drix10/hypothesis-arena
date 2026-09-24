@@ -1796,3 +1796,52 @@ plane (Phase D) change any interface a future slice depends on?
   222 (only pre-existing Windows tear failure, proven on pristine
   tree); ctx green; freeze PASS. Live soak/p50-p99 OPEN parallel.
   No kernel/D/H1/JEV/risk/sizing/collector-behavior change.
+
+## Addendum 99 - seam restart/integrity closure (re-audit P1/P2 + WAE)
+- P1 CHECKPOINT-RESUME WATERMARKS: Seam.watermarks(state) now vouches
+  from the CURRENT cycle harvest state (graph-checkpointed stamps:
+  ok + checked_at_ns shape-checked, epoch from state) with process
+  memory as fallback only when no state is passed. Regression:
+  harvest completes -> emit crashes (outdir replaced by a file) ->
+  Runner memory discarded -> SAME thread_id resumes at the emit node
+  via app.invoke(None) on a fresh Runner (empty _by_hash AND empty
+  last_stamps) -> resumed emit publishes the original cycle's bundle
+  (ctx accepted>0) with the fresh adapters at polls==0 (no second
+  harvest, no manual publisher call). Memory-only watermarks would
+  have published nothing.
+- P1 VERIFIED-ONLY HISTORY: new plane.emit.committed_histories
+  (manifest rows + file-SHA + envelope-semantics verification, the
+  same chain as latest_complete; orphans/corrupt/mismatched files
+  contribute nothing). restore_from_bundles consumes ONLY those
+  generations AND binds every recovered hash to real records lineage
+  (content_hash + source) per entry, fail-closed. Regressions:
+  orphan file (valid shape, no manifest row) ignored; committed-
+  then-corrupted file ignored; missing-file manifest row ignored;
+  forged valid-shape hash inside a COMMITTED bundle dropped;
+  verified committed generation recovered exactly.
+- P1 PROJECTION CROSS-CHECK: seam_canonical gains tamper-evident
+  canon_sha + raw_sha (same commit as the authority ingest; older
+  two-column tables migrate via ADD COLUMN, old rows fail closed
+  until re-noted). Every memory-miss fallback verifies: projection
+  self-checksum + parse + hash identity + authority row present +
+  authority-bytes checksum + classify.content_hash(raw)==hash +
+  authority source == projection source_id. Regressions: valid
+  resolves; tampered JSON fails; wrong-source fails; missing row
+  fails; corrupt raw fails; wipe + valid DB recovers. Graph-produced
+  features resolve through this path (e2e authority re-check kept).
+- WAE HONESTY: fixed all unclosed-file ResourceWarnings in ACTIVE
+  plane tests (test_plane 8 sites, test_emit 4, test_hardening 3;
+  test-only with-blocks, no behavior change). Hosted CI now
+  enforces PYTHONWARNINGS=error on the full evidence job and the
+  full plane battery (stdlib job stays plain: frozen collector
+  suites, accurately stated).
+- Kept without regression: frozen authority hash, real pacing,
+  strict estimated bool, lineage fail-closed, heartbeat required,
+  healthy-only watermarking, honest same-ts history, one
+  Runner/Seam/adapters per process, seam-owned callback refusal,
+  graph-emit-only publishing, no kernel/D/H1/JEV/risk/sizing/
+  collector-behavior changes (protected-area diff empty).
+- 25/25 seam + 7/7 graph warnings-as-errors; evidence 185 clean
+  (test_sources: only pre-existing Windows tear failure, proven on
+  pristine tree, hosted Linux unaffected); ctx green; freeze PASS.
+  Live soak + measured p50/p99 explicitly OPEN (parallel evidence).

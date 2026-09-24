@@ -372,13 +372,15 @@ class LedgerTest(unittest.TestCase):
         for i in range(30):
             lease = led.reserve_call("c%d" % i, "AAPL", 100, 0)
             led.settle_call("c%d" % i, "AAPL", lease, 100)
-        raw = open(path, "rb").read()
+        with open(path, "rb") as _fh:
+            raw = _fh.read()
         target = None
         for off in range(100, len(raw), 251):
             mut = bytearray(raw)
             mut[off] ^= 0xFF
             probe = os.path.join(d, "probe.sqlite3")
-            open(probe, "wb").write(bytes(mut))
+            with open(probe, "wb") as _fh:
+                _fh.write(bytes(mut))
             try:
                 c2 = sqlite3.connect(probe)
                 integ = c2.execute("PRAGMA integrity_check").fetchone()
@@ -405,7 +407,8 @@ class LedgerTest(unittest.TestCase):
         self.assertIsNotNone(target, "no integrity-only corruption")
         mut = bytearray(raw)
         mut[target] ^= 0xFF
-        open(path, "wb").write(bytes(mut))
+        with open(path, "wb") as _fh:
+            _fh.write(bytes(mut))
         with self.assertRaises(r15.AbortCycle) as cm:
             budgets.BudgetLedger(path).snapshot("c0", "AAPL")
         self.assertIn("integrity",
@@ -716,7 +719,8 @@ class AttributionTest(unittest.TestCase):
             pr.join(60)
         con = sqlite3.connect(attribution._db_for(log))
         n = con.execute("SELECT COUNT(*) FROM spans").fetchone()[0]
-        lines = open(log, encoding="utf-8").read().strip().split("\n")
+        with open(log, encoding="utf-8") as _fh:
+            lines = _fh.read().strip().split("\n")
         con.close()
         self.assertEqual(n, 1)
         self.assertEqual(len(lines), 1)
@@ -833,8 +837,9 @@ class SpendTest(unittest.TestCase):
         self.assertEqual(gov.decision(now), ("cheap", "tier-2"))
         self.assertEqual(gov.thesis_cap(now), 200)
         self.assertEqual(gov.cheapest_model(), "cheap")
-        rows = open(os.path.join(d, "spend", "tier_journal.jsonl"),
-                    encoding="utf-8").read().strip().split("\n")
+        with open(os.path.join(d, "spend", "tier_journal.jsonl"),
+                    encoding="utf-8") as _fh:
+            rows = _fh.read().strip().split("\n")
         self.assertEqual(len(rows), 1)
         row = json.loads(rows[0])
         self.assertEqual((row["from"], row["to"]), (0, 2))
@@ -874,8 +879,9 @@ class SpendTest(unittest.TestCase):
         gov.evaluate(now)
         gov.evaluate(now + 10)
         gov.evaluate(now + 20)
-        rows = open(os.path.join(d, "spend", "tier_journal.jsonl"),
-                    encoding="utf-8").read().strip().split("\n")
+        with open(os.path.join(d, "spend", "tier_journal.jsonl"),
+                    encoding="utf-8") as _fh:
+            rows = _fh.read().strip().split("\n")
         self.assertEqual(len(rows), 1)
 
     def test_pre_call_hold_refuses_past_cap(self):
@@ -1273,7 +1279,8 @@ class DigestTest(unittest.TestCase):
         ok, why = digest.append_digest(d, 1, "S0", "hypothesize", "t")
         self.assertTrue(ok)
         self.assertEqual(why, "duplicate")
-        lines = open(path, encoding="utf-8").read().strip().split("\n")
+        with open(path, encoding="utf-8") as _fh:
+            lines = _fh.read().strip().split("\n")
         self.assertEqual(len(lines), 3)
 
 
@@ -1316,7 +1323,8 @@ class RetentionTest(unittest.TestCase):
 def _fixtures(d):
     raw = json.dumps(MAP, sort_keys=True).encode()
     mapp = os.path.join(d, "entity_map.json")
-    open(mapp, "wb").write(raw)
+    with open(mapp, "wb") as _fh:
+        _fh.write(raw)
     dbp = os.path.join(d, "canonical.db")
     con = sqlite3.connect(dbp)
     con.execute("CREATE TABLE records (content_hash TEXT, source TEXT)")

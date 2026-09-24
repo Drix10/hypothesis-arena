@@ -1442,7 +1442,8 @@ class PublisherHardeningTest(unittest.TestCase):
         d = tempfile.mkdtemp()
         mapp, _dbp, _msha = T._fixtures(d)
         state = {"epoch": 1, "fused": [self._cand()]}
-        base = _json.loads(open(mapp, encoding="utf-8").read())
+        with open(mapp, encoding="utf-8") as _fh:
+            base = _json.loads(_fh.read())
         cases = []
         bad = dict(base, cik_to_ticker={"ABC": "AAPL"})
         cases.append(bad)
@@ -1588,8 +1589,9 @@ class DigestConflictTest(unittest.TestCase):
         ok, why = digest_mod.append_digest(d, 1, "AAPL", "hypothesize",
                                            "thesis-TWO")
         self.assertEqual((ok, why), (False, "digest-conflict"))
-        rows = open(os.path.join(d, digest_mod.DIGEST_NAME),
-                    encoding="utf-8").read().strip().split("\n")
+        with open(os.path.join(d, digest_mod.DIGEST_NAME),
+                    encoding="utf-8") as _fh:
+            rows = _fh.read().strip().split("\n")
         self.assertEqual(len(rows), 1)  # first write wins
 
     def test_many_epochs_bound_memory(self):
@@ -1619,8 +1621,8 @@ class MirrorAndEmitBoundTest(unittest.TestCase):
         with open(log, "w", encoding="utf-8") as fh:
             fh.write("{corrupt\n")
         attribution.prune_spans(log)
-        rows = [l for l in open(log, encoding="utf-8")
-                if l.strip()]
+        with open(log, encoding="utf-8") as _fh:
+            rows = [l for l in _fh if l.strip()]
         self.assertEqual(len(rows), 1)
         self.assertIn('"span_id": "s1"', rows[0])
 

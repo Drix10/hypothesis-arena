@@ -223,6 +223,49 @@ class TestSeamGraph(unittest.TestCase):
         self.assertTrue(paths["heartbeat_dir"].endswith(
             os.path.join("data", "heartbeats")))
 
+    def test_checkpoint_resume_emits_after_harvest(self):
+        # Crash after harvest but before emit (outdir unusable), then
+        # a FRESH Runner (empty memory) resumes the SAME checkpoint
+        # thread: the resumed emit must publish using the ORIGINAL
+        # cycle's harvest coverage — no new harvest, no manual
+        # publisher call. Old memory-only watermarks would see zero
+        # coverage and publish nothing; state-derived watermarks emit.
+        d = tempfile.mkdtemp()
+        clock = SEAM_T.FakeClock()
+        lineage_db = os.path.join(tempfile.mkdtemp(), "l.db")
+        outdir = os.path.join(tempfile.mkdtemp(), "bundles")
+        os.makedirs(outdir)
+        tid = "rsume1"
+        r1, _c = production_runner(d, clock, lineage_db, outdir)
+        # Break emit only: replace the dir with a file AFTER
+        # construction (construction establishes the dir).
+        os.rmdir(outdir)
+        with open(outdir, "w", encoding="utf-8") as fh:
+            fh.write("x")
+        with self.assertRaises(Exception):
+            r1.run(["AAPL", "SPY"], 3, tid)
+        polls1 = [s.adapter.polls for s in r1.seam.sources]
+        self.assertTrue(all(p >= 1 for p in polls1))
+        # Fresh process equivalent: same checkpointer (d), same
+        # lineage DB, repaired outdir — but EMPTY seam memory.
+        os.unlink(outdir)
+        os.makedirs(outdir)
+        r2, _c = production_runner(d, clock, lineage_db, outdir)
+        self.assertEqual(r2.seam.store._by_hash, {})
+        self.assertEqual(r2.seam.last_stamps, {})
+        out2 = r2.app.invoke(
+            None, {"configurable": {"thread_id": tid}})
+        bid = out2.get("emitted")
+        self.assertTrue(isinstance(bid, str) and bid, out2)
+        # No new harvest happened on resume: the fresh adapters never
+        # polled — coverage came from the checkpointed cycle state.
+        polls2 = [s.adapter.polls for s in r2.seam.sources]
+        self.assertEqual(polls2, [0, 0, 0, 0, 0])
+        res2, _b2p = read_production_bundle(
+            self, out2, lineage_db, clock.t, outdir)
+        self.assertGreater(res2["stats"]["accepted"], 0,
+                           res2["stats"])
+
     def test_restart_recovers_lineage_and_history(self):
         # Three fresh Runners (new-process equivalents) over the SAME
         # lineage DB + bundle dir at +5h steps: canonical lookup

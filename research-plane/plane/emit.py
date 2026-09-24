@@ -279,6 +279,39 @@ def latest_complete(outdir):
     return None
 
 
+def committed_histories(outdir):
+    """(bundle_id, history) of manifest-committed VERIFIED generations,
+    newest-first. Directory presence is never an acceptance signal:
+    each generation must have a manifest row AND pass the same file
+    SHA + envelope-semantics verification as latest_complete. Orphan
+    files (crash between bundle rename and manifest append), corrupt
+    bytes, and manifest-mismatched envelopes contribute nothing."""
+    root = os.path.realpath(outdir)
+    rows = _manifest_rows(outdir)
+    rows.sort(key=lambda sr: (sr[1].get("research_epoch", -1), sr[0]),
+              reverse=True)
+    seen = set()
+    out = []
+    for _seq, row in rows:
+        bid = row.get("bundle_id")
+        if bid in seen:
+            continue
+        data = _verify_row(root, row.get("path"), row.get("sha256"))
+        if data is None or not _verify_semantics(data, row):
+            continue
+        seen.add(bid)
+        try:
+            env = json.loads(data.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            continue
+        if not isinstance(env, dict):
+            continue
+        hist = env.get("history")
+        if isinstance(hist, dict):
+            out.append((bid, hist))
+    return out
+
+
 BUNDLE_SEMANTIC_MAX_BYTES = 4 << 20
 
 

@@ -167,7 +167,8 @@ class EmitTest(unittest.TestCase):
         b2, p2 = emit_mod.emit_bundle(outdir, 7, [feat],
                                       watermarks(self.msha))
         self.assertEqual((b1, p1), (b2, p2))
-        man = open(os.path.join(outdir, "manifest.jsonl")).read().strip()
+        with open(os.path.join(outdir, "manifest.jsonl")) as _fh:
+            man = _fh.read().strip()
         self.assertEqual(len(man.splitlines()), 1)
 
     def test_partial_never_visible(self):
@@ -246,8 +247,8 @@ class EmitTest(unittest.TestCase):
         with ctx.Pool(4) as pool:
             got = pool.map(_emit_same, [args] * 4)
         self.assertEqual(len(set(g[0] for g in got)), 1)
-        rows = open(os.path.join(outdir, "manifest.jsonl")).read(
-        ).strip().splitlines()
+        with open(os.path.join(outdir, "manifest.jsonl")) as _fh:
+            rows = _fh.read().strip().splitlines()
         self.assertEqual(len(rows), 1)
 
     def test_corrupt_newest_falls_back(self):
@@ -323,8 +324,8 @@ class EmitTest(unittest.TestCase):
         self.assertIsNotNone(res.get("emitted"))
         tail = res["emitted"].rsplit("-", 1)[-1]
         self.assertEqual(len(tail), 64)  # full sha, never 16
-        env = json.loads(open(res["bundle_path"],
-                              encoding="utf-8").read())
+        with open(res["bundle_path"], encoding="utf-8") as _fh:
+            env = json.loads(_fh.read())
         fid = env["features"][0]["feature_id"]
         self.assertTrue(fid.startswith("f-"))
         self.assertEqual(len(fid), 66)
@@ -370,7 +371,8 @@ class EmitTest(unittest.TestCase):
         outdir = os.path.join(self.d, "out")
         # Evil generation: correct SHA in the manifest row, but the
         # envelope inside names a DIFFERENT bundle_id (and epoch).
-        env = json.loads(open(good, encoding="utf-8").read())
+        with open(good, encoding="utf-8") as _fh:
+            env = json.loads(_fh.read())
         env["bundle_id"] = "rp-99-evil"
         evil_raw = json.dumps(env, sort_keys=True,
                               separators=(",", ":")).encode()

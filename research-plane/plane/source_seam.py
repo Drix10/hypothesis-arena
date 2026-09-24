@@ -37,17 +37,22 @@ ARCHITECTURE BOUNDARY (explicit, not silent):
   a same-timestamp repeat appends nothing (no fabricated +1s, no
   manufactured coverage). The graph/state→publish path carries it to
   the bundle, preserving frozen-feed detection.
-- RESTART/RESUME: process memory (_by_hash, _hist) is a cache, never
-  the authority. Canonical lookup falls back to a seam-owned cache
-  TABLE in the same lineage DB (written atomically with the
-  authority ingest, keyed by the authority hash, read back on
-  memory miss; absent → None, fail closed). History is recovered
-  from durable accepted bundles (Seam.restore_from_bundles): only
-  persisted {h, ts} observations, re-validated shape + monotonicity,
-  bounded. No durable state → warming tail (no frozen-feed coverage
-  claimed, never fabricated). A resumed Runner over the same DB +
-  bundle dir therefore resolves the same hashes and carries the
-  same tail.
+- RESTART/RESUME: process memory (_by_hash, _hist, last_stamps)
+  is a cache, never the authority. Canonical lookup falls back to
+  a seam-owned projection TABLE in the same lineage DB (written
+  atomically with the authority ingest, tamper-evident via canon +
+  raw checksums, cross-checked against the frozen records row and
+  classify.content_hash(raw_json) on EVERY miss; absent/corrupt/
+  mismatched → fail closed). History recovers ONLY from
+  manifest-committed verified generations (plane.emit.
+  committed_histories — orphans/corrupt/mismatched files
+  contribute nothing), each hash bound to real records lineage per
+  source. Watermarks derive from the checkpointed cycle harvest
+  state (not memory), so a resumed emit reuses the original
+  cycle's coverage. No durable state → warming tail (no
+  frozen-feed coverage claimed, never fabricated). A resumed
+  Runner over the same DB + bundle dir + checkpointer therefore
+  resolves the same hashes and carries the same tail.
 """
 import collections
 import hashlib
@@ -82,7 +87,11 @@ HISTORY_PER_SOURCE_MAX = 8
 
 CANON_CACHE_DDL = (
     "CREATE TABLE IF NOT EXISTS seam_canonical ("
-    "content_hash TEXT PRIMARY KEY, canonical_json TEXT NOT NULL)")
+    "content_hash TEXT PRIMARY KEY, canonical_json TEXT NOT NULL, "
+    "canon_sha TEXT NOT NULL DEFAULT '', "
+    "raw_sha TEXT NOT NULL DEFAULT '')")
+CANON_CACHE_COLS = ("content_hash", "canonical_json", "canon_sha",
+                      "raw_sha")
 
 HIST_ENTRY_KEYS = frozenset(("h", "ts"))
 
@@ -298,8 +307,17 @@ class CanonicalStore:
         # Seam-owned projection cache (NOT a second authority: the
         # sole writer is note() from authority-returned data, keyed
         # by the authority hash; the reader falls back to it on
-        # memory miss after restart).
+        # memory miss after restart, cross-checked against the frozen
+        # authority row every time). Older two-column tables gain the
+        # checksum columns (unverifiable old rows fail closed by
+        # construction until re-noted).
         con.execute(CANON_CACHE_DDL)
+        have = {r[1] for r in con.execute(
+            "PRAGMA table_info(seam_canonical)").fetchall()}
+        for col in CANON_CACHE_COLS:
+            if col not in have:
+                con.execute("ALTER TABLE seam_canonical ADD COLUMN "
+                            "%s TEXT NOT NULL DEFAULT ''" % col)
         return con
 
     def note(self, rec, ingested_ns):
@@ -315,10 +333,21 @@ class CanonicalStore:
                 _verdict, ch, _first, _rev = \
                     _classify.ingest_signal(con, crec, _iso(ingested_ns))
                 canon = dict(canon, content_hash=ch)
+                canon_raw = json.dumps(canon, sort_keys=True)
+                raw_row = con.execute(
+                    "SELECT raw_json FROM records WHERE "
+                    "content_hash=?", (ch,)).fetchone()
+                raw_sha = hashlib.sha256(
+                    raw_row[0].encode("utf-8")).hexdigest() \
+                    if raw_row is not None else ""
                 con.execute(
                     "INSERT OR REPLACE INTO seam_canonical "
-                    "(content_hash, canonical_json) VALUES (?, ?)",
-                    (ch, json.dumps(canon, sort_keys=True)))
+                    "(content_hash, canonical_json, canon_sha, "
+                    "raw_sha) VALUES (?, ?, ?, ?)",
+                    (ch, canon_raw,
+                     hashlib.sha256(
+                         canon_raw.encode("utf-8")).hexdigest(),
+                     raw_sha))
                 con.commit()
             finally:
                 con.close()
@@ -336,29 +365,51 @@ class CanonicalStore:
         hit = self._by_hash.get(h)
         if hit is not None:
             return hit
-        # Restart path: reconstruct from the durable projection of
-        # the same authority (never a default, never recomputed
-        # trust). Unparseable/absent → None, fail closed.
+        # Restart path: the projection is cache-only, cross-checked
+        # against the frozen authority on EVERY miss. Tampered JSON,
+        # wrong source, missing/corrupt authority row -> None.
         if not isinstance(h, str) or not h:
             return None
         try:
             con = self._connect()
             try:
                 row = con.execute(
-                    "SELECT canonical_json FROM seam_canonical "
-                    "WHERE content_hash=?", (h,)).fetchone()
+                    "SELECT canonical_json, canon_sha, raw_sha FROM "
+                    "seam_canonical WHERE content_hash=?",
+                    (h,)).fetchone()
+                auth = con.execute(
+                    "SELECT source, raw_json FROM records WHERE "
+                    "content_hash=?", (h,)).fetchone()
             finally:
                 con.close()
         except Exception:
             return None
-        if row is None:
+        if row is None or auth is None:
+            return None
+        canon_json, canon_sha, raw_sha = row
+        if hashlib.sha256(canon_json.encode("utf-8")).hexdigest() \
+                != canon_sha:
             return None
         try:
-            canon = json.loads(row[0])
+            canon = json.loads(canon_json)
         except ValueError:
             return None
         if not isinstance(canon, dict) or \
                 canon.get("content_hash") != h:
+            return None
+        auth_source, auth_raw = auth
+        if not isinstance(auth_raw, str):
+            return None
+        if hashlib.sha256(auth_raw.encode("utf-8")).hexdigest() \
+                != raw_sha:
+            return None
+        try:
+            auth_parsed = json.loads(auth_raw)
+        except ValueError:
+            return None
+        if _classify.content_hash(auth_parsed) != h:
+            return None
+        if auth_source != canon.get("source_id"):
             return None
         self._by_hash[h] = canon
         return canon
@@ -422,19 +473,33 @@ class Seam:
             cand["provenance_url"] = canon["provenance_url"]
         return [cand]
 
-    def watermarks(self, _state=None):
+    def watermarks(self, state=None):
         """Seam-owned publisher callback: per-source
-        {last_observation_at, cursor} from the latest harvest stamps
-        (same-cycle only; a resumed process re-harvests before any
-        emit, so no stale vouching). Only healthy polls vouch."""
+        {last_observation_at, cursor}. Checkpoint-resume safe: the
+        stamps come from the CURRENT cycle's harvest state (which the
+        graph checkpoints — a resumed emit reuses the original
+        cycle's coverage), falling back to process memory only when
+        the caller passes no state. Only healthy polls vouch."""
+        stamps = None
+        epoch = self.last_epoch
+        if isinstance(state, dict):
+            if isinstance(state.get("stamps"), dict) and \
+                    state["stamps"]:
+                stamps = state["stamps"]
+            if type(state.get("epoch")) is int:
+                epoch = state["epoch"]
+        if stamps is None:
+            stamps = self.last_stamps
         out = {}
-        for sid, stamp in self.last_stamps.items():
-            if not stamp.get("ok"):
+        for sid, stamp in stamps.items():
+            if not isinstance(stamp, dict) or not stamp.get("ok"):
                 continue
-            out[sid] = {
-                "last_observation_at":
-                    int(stamp["checked_at_ns"] // 1000000000),
-                "cursor": "seam-e%d" % self.last_epoch}
+            checked = stamp.get("checked_at_ns")
+            if type(checked) is not int or checked <= 0:
+                continue
+            out[sid] = {"last_observation_at": checked // 1000000000,
+                        "cursor": "seam-e%d" % epoch
+                        if type(epoch) is int else "seam-unknown"}
         return out
 
     @staticmethod
@@ -460,39 +525,61 @@ class Seam:
                 kept += 1
         return kept
 
+    def _history_lineage_ok(self, con, sid, h):
+        """A recovered history hash is vouched ONLY if the frozen
+        authority holds that exact hash under that exact source."""
+        try:
+            row = con.execute(
+                "SELECT 1 FROM records WHERE content_hash=? AND "
+                "source=?", (h, sid)).fetchone()
+        except Exception:
+            return False
+        return row is not None
+
     def restore_from_bundles(self, outdir):
         """Restart recovery: rebuild bounded history tails from
-        durable accepted bundles (features-*.json). Only persisted
-        observations, never synthesized. Returns {source: kept}. No
-        bundles → empty tails = explicit warming (no frozen-feed
-        coverage claimed until real polls rebuild depth)."""
+        manifest-committed VERIFIED generations only (see
+        plane.emit.committed_histories — orphans, corrupt bytes, and
+        manifest-mismatched envelopes contribute nothing). Each
+        recovered hash must additionally be bound to real canonical
+        lineage for its source, else that entry is dropped fail-
+        closed. Only persisted observations, never synthesized.
+        Returns {source: kept}. No committed generations → empty
+        tails = explicit warming (no frozen-feed coverage claimed
+        until real polls rebuild depth)."""
+        from . import emit as _emit_mod
         recovered = {}
         pooled = {}
         try:
-            names = sorted(os.listdir(outdir))
-        except OSError:
+            generations = _emit_mod.committed_histories(outdir)
+        except Exception:
             return recovered
-        for name in names:
-            if not (name.startswith("features-") and
-                    name.endswith(".json")):
-                continue
-            try:
-                with open(os.path.join(outdir, name),
-                          encoding="utf-8") as fh:
-                    bundle = json.load(fh)
-            except (OSError, ValueError):
-                continue
-            hist = bundle.get("history") if isinstance(bundle,
-                                                       dict) else None
+        for _bid, hist in generations:
             if not isinstance(hist, dict):
                 continue
             for sid, entries in hist.items():
                 if isinstance(entries, list):
                     pooled.setdefault(sid, []).extend(entries)
-        for sid, entries in pooled.items():
-            # Single merge: an honest bounded suffix of everything
-            # durable (shape-checked, sorted, strictly increasing).
-            recovered[sid] = self._merge_hist(sid, entries)
+        try:
+            con = self.store._connect()
+        except Exception:
+            return recovered
+        try:
+            for sid, entries in pooled.items():
+                if sid not in self._hist:
+                    continue
+                bound = [e for e in entries
+                         if self._valid_hist_entry(e) and
+                         self._history_lineage_ok(con, sid, e["h"])]
+                # Single merge: an honest bounded suffix of everything
+                # durable (sorted, strictly increasing).
+                if bound:
+                    recovered[sid] = self._merge_hist(sid, bound)
+        finally:
+            try:
+                con.close()
+            except Exception:
+                pass
         return recovered
 
     def harvest(self, watchlist, epoch):
