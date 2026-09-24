@@ -12,7 +12,7 @@
   [![JEV](https://img.shields.io/badge/JEV-v3_calibrated-7B2CBF)](./plan/03-jev-decision-layer.md)
   [![Stage](https://img.shields.io/badge/Capital-G0_PAPER_only-00D4AA)](./plan/10-capital-gates-and-spend-control.md)
 
-  **Status: P3.1 ACCEPTED (+ amended/re-signed) · P3.2 FROZEN · P3.3 ACCEPTED · P3.4 = quarantine · P3.5 ACTIVE (A–C DONE, D NOT AUTHORIZED, E IMPLEMENTED pending audit acceptance, F+ OPEN). Paper only. No live capital.**
+  **Status: P3.1 ACCEPTED · P3.2 FROZEN · P3.3 ACCEPTED · P3.4 = quarantine · P3.5 ACTIVE (E/F/G ACCEPTED, D NOT AUTHORIZED, pollers EDGAR/FRED/Treasury ACCEPTED, BLS/BEA NEXT, H1 OPEN). Paper only. No live capital.**
 
 </div>
 
@@ -63,8 +63,8 @@ Three principles that shape everything:
 | Signal collector (`collector/`: poll, classify, soak, ctx) | Built, tested, pipeline green |
 | JEV sidecar (`collector/jev.py`: 4 questions, spend-capped, signed answers) | Accepted/frozen |
 | C++ kernel (`kernel/`: validator, state, decision table) | P3.1 + P3.2 frozen, **P3.3 accepted** |
-| Risk/sizing/execution (P3.5) | ACTIVE: veto + ingest slices landed and build-gated; Slice E (STAGE verify) IMPLEMENTED pending audit acceptance; D NOT AUTHORIZED; sizing/execution not started |
-| Research plane, paper loop (G0) | PARTIAL: 6-node graph + spend/ledger control plane built, 255-test battery green; deployment evidence ACCEPTED + hardened. Status words — PROVEN (probe/evidence proves the tested capability) vs WIRED (a production caller consumes it) vs EXECUTION-READY (H1 order lifecycle exists + drilled): Tier-A sources PROVEN (EDGAR/FRED/BEA/Alpaca-read/earnings-gate); production poller/consumer wiring + H1 execution OPEN, so the loop is NOT execution-ready. OANDA practice BLOCKED (India ineligible) — alt-FX venue research, no signup. 7-day proof OPEN (see TODO.md Phase-D gate) |
+| Risk/sizing/execution (P3.5) | ACTIVE: E (STAGE verify) + F (feed gaps) + G (Snapshot v1) ACCEPTED; D NOT AUTHORIZED; H1 router/journal/reconcile = the remaining build |
+| Research plane, paper loop (G0) | PARTIAL: 6-node graph + spend/ledger control plane built, 155-test runnable battery green; deployment evidence ACCEPTED + hardened. Status words — PROVEN (probe/evidence proves the tested capability) vs WIRED (a production caller consumes it) vs EXECUTION-READY (H1 order lifecycle exists + drilled): Tier-A adapters ACCEPTED + hosted-green (EDGAR 47, FRED 24, Treasury 23 tests) with live soak/p50-p99 evidence OPEN; BEA/Alpaca-read/earnings-gate PROVEN as probes; graph-consumer wiring + H1 execution OPEN, so the loop is NOT execution-ready. OANDA practice BLOCKED (India ineligible) — stocks-only G0 on Alpaca paper. 7-day proof OPEN (see TODO.md Phase-D gate) |
 
 Paper only until 30 clean days plus a human signature. No exceptions.
 Promotion of anything (model, stage) needs 200 decisions + 100 closed
@@ -94,8 +94,7 @@ Contact for SEC user-agent: `MIRO_CONTACT` env. FRED key: `FRED_API_KEY` env (sk
 plan/           # the spec. 14 docs + manifest, read 00-INDEX first. Plan wins every argument.
 collector/      # Python: signal collection, classification, ctx reader, JEV sidecar; tests in tests/
 kernel/         # C++: boundary validator, typed state, decision table, veto, ingest; tests in tests/
-research-plane/ # plane/ (graph+spend), sources/ (probes+gates), tests/ (255 battery), sandbox/ (deployment evidence), lessons/
-research/       # HISTORICAL memos (P1.5 reconciliation record). Read-only.
+research-plane/ # plane/ (graph+spend), sources/ (probes+gates), tests/ (runnable battery), sandbox/ (deployment evidence), lessons/
 scripts/        # freeze-check.sh (repo fingerprint), ops scripts
 data/           # local only, gitignored. Signals, soak evidence, journals live here.
 .env / .env.example  # canonical config + template (sole loader: collector/config.py)

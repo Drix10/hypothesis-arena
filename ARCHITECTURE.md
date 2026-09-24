@@ -285,13 +285,13 @@ Direct children (13 tracked files):
 - `lessons/lessons.jsonl` — ACTIVE Tier-D output (12/12 graded).
 - `requirements.txt` — ACTIVE pinned plane deps (`==` only).
 
-## 6. research/ (2, HISTORICAL — RETAINED)
+## 6. research/ (REMOVED — P1-era memos deleted, full text in git history)
 
-- `js-gap-analysis.md` — P1.5 Jane-Street gap analysis (DONE, no code).
-- `p15-phase2-readiness.md` — reconciliation memo (its "not
-  implemented" statements describe P1.4-close state, not today).
-  Retained: TODO.md references both as the reconciliation record;
-  deletion would break the reference and destroy audit trail.
+The two HISTORICAL memos (`js-gap-analysis.md`, `p15-phase2-readiness.md`)
+were removed: their content is superseded (contracted work landed in
+plan/13 §13.7, plan/05 §5.1c, P1.5/doc 11, doc 03 case 29, doc 11 §11.1a)
+and the bytes remain recoverable via git history. TODO.md keeps the
+completion record.
 
 ## 7. data/ (UNTRACKED runtime, never committed)
 
