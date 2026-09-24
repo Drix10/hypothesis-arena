@@ -1635,3 +1635,14 @@ plane (Phase D) change any interface a future slice depends on?
   test_downstream_registry_admission (both registries + adapter
   kind matches registration). BEA behavior otherwise unchanged.
   BEA acceptance NOT claimed; live evidence OPEN.
+
+## Addendum 94 - BEA code ACCEPTED (independent integration audit)
+- Independent audit of 9ef8956 ACCEPTED BEA downstream integration:
+  ctx_read + schema registration correct, resolver admission works,
+  plan/09 Tier-A placement confirmed, manifest/sources.json/classify
+  correctly untouched, regressions prove admission + rejections,
+  hosted 36042332716 green. No new defect.
+- BEA code ACCEPTED (implementation + correction + integration).
+  Live soak + measured p50/p99 remain OPEN parallel evidence.
+  Known blemish (not correctness): 9ef8956 baked a CRLF->LF flip of
+  ctx_read.py; left as history per audit instruction, no rewrite.
