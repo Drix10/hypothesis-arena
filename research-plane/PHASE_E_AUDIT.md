@@ -1245,3 +1245,7 @@ plane (Phase D) change any interface a future slice depends on?
 - Status: IMPLEMENTATION-COMPLETE, awaiting live operational
   evidence (soak, zero-403 record, measured p50/p99) + independent
   audit. No F/D/H1/poller-others/JEV/plan changes.
+
+## Addendum 65 — hosted CI green on EDGAR source slice
+- Run 35948979472 on `a2e6e57`: stdlib + evidence + plane + kernel
+  SUCCESS (plane runs the venv-pinned suite incl. test_edgar).
