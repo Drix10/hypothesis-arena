@@ -58,6 +58,8 @@ jobs:
         run: python3 research-plane/tests/test_sources.py
       - name: plane EDGAR adapter (stdlib only)
         run: python3 research-plane/tests/test_edgar.py
+      - name: plane FRED adapter (stdlib only)
+        run: python3 research-plane/tests/test_fred.py
 
   plane:
     runs-on: ubuntu-latest
