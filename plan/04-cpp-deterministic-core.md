@@ -66,6 +66,23 @@ STAGE (human-signed, doc 10) ─────────────┤
    calibration summary (doc 11), then `context_hash` (SHA-256 of canonical
    serialization over **all** of it — features included, or replay is a lie).
    No raw texts, no prose: the digest is not snapshot material.
+   Frozen G Snapshot v1 contract (audit ruling 2026-09-24): IN: marks,
+   session, indicators, regime, VaR/correlation flags, portfolio, last
+   complete feature bundle, per-source source_status (frozen JEV
+   vocabulary, doc 03 sec. 3.5: healthy|stale|failed|not_scheduled|
+   unavailable|na), stage, research_revision, calibration summary.
+   EXPLICITLY DEFERRED: `change` — no frozen numeric unit, reference
+   point, or horizon exists, so v1 excludes it from the Snapshot and
+   context_hash entirely; a future versioned contract must freeze
+   representation, unit/scale, reference point, time horizon, and
+   missing/invalid semantics first. H1 must not reconstruct or infer
+   `change` from another field and must not treat its absence as zero.
+   Also DEFERRED: sentiment/signal-bucket representation — doc 03
+   forbids numeric sentiment scores; the future representation is the
+   discrete `signal_buckets` concept (trigger_6h/context_6h) whose
+   exact C++ typed schema is not yet frozen. Never substitute a
+   numeric score. context_hash covers exactly the v1 IN set;
+   absence is not zero.
    `context_hash` ≠ JEV `state_hash` (frozen distinction, doc 03 §3.5a):
    context_hash is the kernel's Snapshot digest; state_hash is the digest
    of the full JEV request state (which embeds context_hash as one field).

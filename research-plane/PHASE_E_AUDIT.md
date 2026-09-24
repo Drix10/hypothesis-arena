@@ -1177,3 +1177,21 @@ plane (Phase D) change any interface a future slice depends on?
 ## Addendum 60 — hosted CI green on Slice G test closure
 - Run 35941951526 on `5b7e5aa`: stdlib + evidence + plane + kernel
   SUCCESS.
+
+## Addendum 61 — Slice G v1 contract closure (audit rulings applied)
+- Q1 (change): DEFERRED per ruling. Plan 04 sec. 4.2.3 amended: v1
+  excludes `change` from Snapshot/context_hash; H1 must not infer
+  it or treat absence as zero. No numeric representation invented.
+- Q2 (source_status): G now uses exactly the frozen JEV vocabulary
+  (healthy|stale|failed|not_scheduled|unavailable|na); the G-local
+  fresh|stale|absent|invalid set is gone, with a build gate
+  forbidding the retired literals. Tests: old spellings rejected,
+  all six frozen states validate.
+- Q3 (sentiment): `sentiment_d6[4]` + kSentiment REMOVED (11-section
+  v1, mask 0x7FF); signal buckets deferred to a future typed schema.
+  No numeric substitute introduced.
+- Golden canonical bytes regenerated for the v1 shape (new
+  context_hash 184e9826...); 9-of-9 set-empty + 2 integer
+  set-zero-valid coverage preserved; ghost/mutation/10k/bounded
+  green. Suite + full kernel gate PASS normal+hardened; freeze PASS.
+  No F/D/H1/poller/JEV/research-plane changes.

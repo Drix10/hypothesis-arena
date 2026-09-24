@@ -103,11 +103,7 @@ std::string ValidateSnapshot(const Snapshot& s) {
         return "regime-incoherent";
     if (!(s.present_mask & kRegime) && has_regime)
         return "regime-ghost";
-    // sentiment/var_corr are plain integers: ghost = nonzero while clear.
-    bool has_sent = (s.sentiment_d6[0] | s.sentiment_d6[1] |
-                     s.sentiment_d6[2] | s.sentiment_d6[3]) != 0;
-    if (!(s.present_mask & kSentiment) && has_sent)
-        return "sentiment-ghost";
+    // var_corr is a plain integer: ghost = nonzero while clear.
     if (s.var_corr_flags & ~0x3u) return "varcorr-reserved";
     bool has_vc = s.var_corr_flags != 0;
     if (!(s.present_mask & kVarCorr) && has_vc) return "varcorr-ghost";
@@ -159,7 +155,7 @@ std::string ValidateSnapshot(const Snapshot& s) {
         return "calib-incoherent";  // verdict is the section core;
     if (!(s.present_mask & kCalib) && has_calib)
         return "calib-ghost";
-    if (s.present_mask & ~0xFFFu) return "mask-reserved";
+    if (s.present_mask & ~0x7FFu) return "mask-reserved";
     return "";
 }
 
@@ -200,10 +196,6 @@ std::string CanonicalSnapshot(const Snapshot& s) {
     o += ",\"present_mask\":" + std::to_string(s.present_mask);
     o += ",\"regime\":" + Esc(s.regime);
     o += ",\"research_revision\":" + std::to_string(s.research_revision);
-    o += ",\"sentiment_d6\":[" + std::to_string(s.sentiment_d6[0]) + "," +
-         std::to_string(s.sentiment_d6[1]) + "," +
-         std::to_string(s.sentiment_d6[2]) + "," +
-         std::to_string(s.sentiment_d6[3]) + "]";
     o += ",\"session\":" + Esc(s.session);
     o += ",\"sources\":[";
     for (size_t i = 0; i < s.sources.size(); ++i) {

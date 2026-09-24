@@ -32,7 +32,6 @@ static ctx::Snapshot Full() {
     in.atr_d6 = 2500000LL;
     s.indicators.push_back(in);
     s.regime = "trend";
-    s.sentiment_d6[0] = 100000LL;
     s.var_corr_flags = 0;
     s.equity_ud = 100000000000LL;
     s.exposure_ud = 0;
@@ -42,13 +41,13 @@ static ctx::Snapshot Full() {
     s.feature_bundle_hash = std::string(64, 'a');
     ctx::SourceStatus src;
     src.name = "edgar";
-    src.state = "fresh";
+    src.state = "healthy";
     s.sources.push_back(src);
     s.stage = "G0_PAPER";
     s.research_revision = 7;
     s.calib = "pass";
     s.brier_d6 = 210000LL;
-    s.present_mask = 0xFFFu;
+    s.present_mask = 0x7FFu;
     return s;
 }
 
@@ -147,11 +146,34 @@ int main() {
         s.regime = "trend";
         Check(ValidateSnapshot(s) == "regime-ghost", "ghost-regime");
     }
+    // source vocabulary is the frozen JEV set; the old G-local
+    // spellings are rejected, never mapped.
     {
-        Snapshot s;
-        s.sentiment_d6[2] = 5;
-        Check(ValidateSnapshot(s) == "sentiment-ghost",
-              "ghost-sentiment");
+        Snapshot s = Full();
+        s.sources[0].state = "fresh";
+        Check(ValidateSnapshot(s) == "source-row", "source-no-fresh");
+    }
+    {
+        Snapshot s = Full();
+        s.sources[0].state = "absent";
+        Check(ValidateSnapshot(s) == "source-row", "source-no-absent");
+    }
+    {
+        Snapshot s = Full();
+        s.sources[0].state = "invalid";
+        Check(ValidateSnapshot(s) == "source-row", "source-no-invalid");
+    }
+    {
+        // every frozen JEV state validates
+        const char* states[] = {"healthy", "stale", "failed",
+                                "not_scheduled", "unavailable", "na"};
+        bool ok = true;
+        for (int i = 0; i < 6; ++i) {
+            Snapshot s = Full();
+            s.sources[0].state = states[i];
+            if (ValidateSnapshot(s) != "") ok = false;
+        }
+        Check(ok, "source-all-six");
     }
     {
         Snapshot s;
@@ -175,7 +197,7 @@ int main() {
         Snapshot s;
         SourceStatus src;
         src.name = "edgar";
-        src.state = "fresh";
+        src.state = "healthy";
         s.sources.push_back(src);
         Check(ValidateSnapshot(s) == "sources-ghost",
               "ghost-sources");
@@ -203,7 +225,7 @@ int main() {
               "ghost-brier");
     }
     // set-but-empty rejections for every section whose empty state is
-    // distinct from a valid zero (9 of 12; the 3 pure-integer sections
+    // distinct from a valid zero (9 of 11; the 2 pure-integer sections
     // below have no such distinction by design). Bare()+solo-bit
     // proves the failure is the target section, not a ghost elsewhere.
     {
@@ -260,16 +282,9 @@ int main() {
         Check(ValidateSnapshot(s) == "calib-incoherent",
               "set-empty-calib");
     }
-    // The 3 pure-integer sections: all-zero is BOTH the empty state
+    // The 2 pure-integer sections: all-zero is BOTH the empty state
     // and a legitimate present value, so set+zero is VALID (solo-bit
     // masks prove no ghost trip either).
-    {
-        Snapshot s;
-        s.present_mask = kSentiment;
-        Check(ValidateSnapshot(s) == "", "set-zero-sentiment");
-        s.sentiment_d6[1] = 9;
-        Check(ValidateSnapshot(s) == "", "set-nonzero-sentiment");
-    }
     {
         Snapshot s;
         s.present_mask = kVarCorr;
@@ -285,13 +300,12 @@ int main() {
         Check(ValidateSnapshot(s) == "", "set-nonzero-portfolio");
     }
     // legitimate present zeros stay valid: flat book, zero flags,
-    // zero sentiment, zero brier with verdict set.
+    // zero brier with verdict set.
     {
         Snapshot s = Full();
         s.exposure_ud = 0;
         s.pending_count = 0;
         s.var_corr_flags = 0;
-        s.sentiment_d6[0] = 0;
         s.brier_d6 = 0;
         Check(ValidateSnapshot(s) == "", "present-zeros-valid");
     }
@@ -368,10 +382,9 @@ int main() {
                   "\"vwap_ud\":337000000,\"z_d6\":1200000}],\"marks\":[{"
                   "\"ask_ud\":337220000,\"bid_ud\":337120000,\"mark_ud\":"
                   "337220000,\"symbol\":\"AAPL\"}],\"pending_count\":0,"
-                  "\"present_mask\":4095,\"regime\":\"trend\","
-                  "\"research_revision\":7,\"sentiment_d6\":[100000,0,0,"
-                  "0],\"session\":\"open\",\"sources\":[{\"name\":"
-                  "\"edgar\",\"state\":\"fresh\"}],\"stage\":\"G0_PAPER\","
+                  "\"present_mask\":2047,\"regime\":\"trend\","
+                  "\"research_revision\":7,\"session\":\"open\",\"sources\":[{\"name\":"
+                  "\"edgar\",\"state\":\"healthy\"}],\"stage\":\"G0_PAPER\","
                   "\"var_corr_flags\":0}",
               "golden-canonical");
     }

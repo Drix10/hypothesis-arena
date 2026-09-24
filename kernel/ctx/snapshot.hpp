@@ -32,24 +32,29 @@ inline bool IsCalib(const std::string& s) {
     return s == "pass" || s == "insufficient" || s == "breach";
 }
 inline bool IsSourceState(const std::string& s) {
-    return s == "fresh" || s == "stale" || s == "absent" ||
-           s == "invalid";
+    // Frozen JEV vocabulary (doc 03 sec. 3.5). No G-local second
+    // ontology; no lossy mapping at H1.
+    return s == "healthy" || s == "stale" || s == "failed" ||
+           s == "not_scheduled" || s == "unavailable" || s == "na";
 }
 
 // Presence bits: which provider sections are actually filled.
+// v1: 11 sections. DEFERRED (no bit, no field, no zero placeholder):
+// `change` (no frozen representation) and sentiment/signal buckets
+// (doc 03 forbids numeric sentiment; discrete signal_buckets schema
+// not yet frozen). Absence is not zero: H1 must not infer either.
 enum Present : uint32_t {
     kMarks = 1u << 0,
     kSession = 1u << 1,
     kIndicators = 1u << 2,
     kRegime = 1u << 3,
-    kSentiment = 1u << 4,
-    kVarCorr = 1u << 5,
-    kPortfolio = 1u << 6,
-    kFeatures = 1u << 7,
-    kSources = 1u << 8,
-    kStage = 1u << 9,
-    kResearch = 1u << 10,
-    kCalib = 1u << 11,
+    kVarCorr = 1u << 4,
+    kPortfolio = 1u << 5,
+    kFeatures = 1u << 6,
+    kSources = 1u << 7,
+    kStage = 1u << 8,
+    kResearch = 1u << 9,
+    kCalib = 1u << 10,
 };
 
 struct Mark {
@@ -77,7 +82,6 @@ struct Snapshot {
     std::string session;              // open|closed|holiday|early_close
     std::vector<SymInd> indicators;   // <= 5, kIndicators
     std::string regime;               // IsRegime, kRegime
-    int64_t sentiment_d6[4] = {0, 0, 0, 0};  // kSentiment
     uint32_t var_corr_flags = 0;      // kVarCorr (bit0 var, bit1 corr)
     int64_t equity_ud = 0;            // kPortfolio
     int64_t exposure_ud = 0;
@@ -87,7 +91,7 @@ struct Snapshot {
     std::string feature_bundle_hash;  // 64 hex
     std::vector<SourceStatus> sources;  // <= 8, kSources
     std::string stage;                // Slice E vocabulary, kStage
-    uint64_t research_revision = 0;   // kResearch
+    uint64_t research_revision = 0;   // kResearch (0 IS absent)
     std::string calib;                // IsCalib, kCalib
     int64_t brier_d6 = 0;             // trailing-200 Brier, D6
     uint32_t present_mask = 0;

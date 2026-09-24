@@ -133,8 +133,12 @@ g++ $FLAGS -o test_context ctx/test_context.cpp ctx/context.cpp
     echo "GATE FAIL: regime vocabulary moved/duplicated"; exit 1; }
 [ "$(grep -c 's == "pass" || s == "insufficient" || s == "breach"' ctx/snapshot.hpp)" = "1" ] || {
     echo "GATE FAIL: calib vocabulary moved/duplicated"; exit 1; }
-[ "$(grep -c 's == "fresh" || s == "stale" || s == "absent"' ctx/snapshot.hpp)" = "1" ] || {
+[ "$(grep -c 's == "healthy" || s == "stale" || s == "failed"' ctx/snapshot.hpp)" = "1" ] || {
     echo "GATE FAIL: source vocabulary moved/duplicated"; exit 1; }
+# The retired G-local spellings must not reappear as literals.
+if grep -nE '"fresh"|"absent"|"invalid"' ctx/snapshot.hpp ctx/context.cpp; then
+    echo "GATE FAIL: retired source vocabulary present"; exit 1;
+fi
 [ "$(grep -c 's == "open" || s == "closed" || s == "holiday"' ctx/snapshot.hpp)" = "1" ] || {
     echo "GATE FAIL: session vocabulary moved/duplicated"; exit 1; }
 if grep -nE '"G1_TINY"|"G2_SCALED"|"G3_FULL"' ctx/snapshot.hpp ctx/context.cpp; then
