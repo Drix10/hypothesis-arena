@@ -31,7 +31,7 @@ con = sqlite3.connect(DB)
 con.execute("CREATE TABLE records (source, source_id, content_hash)")
 # Hashes exist under EVERY registered source: lineage binds hash AND source.
 for _src in ("edgar_8k", "fed_monetary", "ecb_mid", "treasury_auctions",
-             "bls_empsit", "fred_macro"):
+             "bls_empsit", "fred_macro", "bea_nipa_gdp"):
     con.execute("INSERT INTO records VALUES (?,?,?)", (_src, "x", H1))
     con.execute("INSERT INTO records VALUES (?,?,?)", (_src, "y", H2))
 con.commit()
@@ -57,7 +57,8 @@ def wm_full(*sources):
     {last_observation_at, cursor} for the given sources."""
     sha = hashlib.sha256(open(MAP, "rb").read()).hexdigest()
     srcs = sources or ("edgar_8k", "fed_monetary", "ecb_mid",
-                       "treasury_auctions", "bls_empsit", "fred_macro")
+                       "treasury_auctions", "bls_empsit", "fred_macro",
+                       "bea_nipa_gdp")
     return {"entity_map_version": "entity-v1",
             "entity_map_sha256": sha,
             "sources": {s: {"last_observation_at": int(NOW) - 300,
@@ -529,6 +530,25 @@ r = run([feat(observed_at_ns=IN_SESSION,
               ingested_at_ns=IN_SESSION - 10 ** 9)], name="bing-ord")
 check("ingested-before-observed",
       r["stats"]["reasons"].get("ingested-before-observed") == 1
+      and r["stats"]["accepted"] == 0)
+
+# 39. BEA NIPA GDP namespace admission (registration proof)
+bea_hist = {"history": {"bea_nipa_gdp": [dated(H1, NOW - 3000),
+                                             dated(H1, NOW - 1500),
+                                             dated(H1, NOW - 100)]}}
+bea = feat(source_id="bea_nipa_gdp", symbols=["SPY"],
+           kind="macro_release")
+r = run([bea], extra=bea_hist, name="bbea")
+check("bea-admitted", r["stats"]["accepted"] == 1)
+r = run([feat(source_id="bea_nipa_gdp", symbols=["SPY"],
+              kind="calendar_ahead")], extra=bea_hist, name="bbea2")
+check("bea-wrong-kind",
+      r["stats"]["reasons"].get("kind-no-emitter") == 1
+      and r["stats"]["accepted"] == 0)
+r = run([feat(source_id="nope_src", symbols=["SPY"],
+              kind="macro_release")], name="bunknown")
+check("unknown-source-still-rejected",
+      r["stats"]["reasons"].get("source-unknown") == 1
       and r["stats"]["accepted"] == 0)
 
 print("ALL CTX CHECKS PASS")

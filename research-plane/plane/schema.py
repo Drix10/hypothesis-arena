@@ -38,6 +38,8 @@ EMITTERS = {
     "treasury_auctions": ("macro_release", "calendar_ahead"),
     "bls_empsit": ("macro_release", "calendar_ahead"),
     "fred_macro": ("macro_release", "calendar_ahead"),
+    # BEA NIPA GDP: macro_release only (see ctx_read.SOURCE_KINDS).
+    "bea_nipa_gdp": ("macro_release",),
 }
 
 # Frozen source reliability tier for confidence computation (doc 09 tiers).
@@ -48,6 +50,8 @@ SOURCE_TIER = {
     "treasury_auctions": "high",
     "bls_empsit": "high",
     "fred_macro": "medium",
+    # BEA is doc-09 Tier A (TRIGGER macro): high, like Treasury/BLS.
+    "bea_nipa_gdp": "high",
 }
 SOURCE_TTL_S = {
     "edgar_8k": 45 * 60,
@@ -56,6 +60,7 @@ SOURCE_TTL_S = {
     "treasury_auctions": 18 * 3600,
     "bls_empsit": 18 * 3600,
     "fred_macro": 18 * 3600,
+    "bea_nipa_gdp": 18 * 3600,
 }
 
 

@@ -360,6 +360,29 @@ class TestBEA(unittest.TestCase):
         self.assertIn("no-usable-records", hb["error"])
         self.assertLessEqual(len(hb["error"]), 200)
 
+    def test_downstream_registry_admission(self):
+        import os as _os
+        import sys as _sys
+        _sys.path.insert(
+            0, _os.path.abspath(_os.path.join(ROOT, "..")))
+        from plane import schema
+        from collector import ctx_read
+        self.assertEqual(schema.EMITTERS["bea_nipa_gdp"],
+                         ("macro_release",))
+        self.assertEqual(schema.SOURCE_TTL_S["bea_nipa_gdp"], 64800)
+        self.assertEqual(schema.SOURCE_TIER["bea_nipa_gdp"], "high")
+        self.assertIn("bea_nipa_gdp", ctx_read.SOURCE_IDS)
+        self.assertEqual(
+            ctx_read.SOURCE_KINDS["bea_nipa_gdp"], {"macro_release"})
+        self.assertEqual(
+            ctx_read.SOURCE_COVER_MIN["bea_nipa_gdp"], 1080)
+        # Adapter emits exactly the registered kind, nothing else.
+        a = adapter(ok_routes([row()]))
+        recs, _info = a.poll(today=TODAY)
+        self.assertEqual(recs[0]["kind"], "macro_release")
+        self.assertIn(recs[0]["kind"],
+                      ctx_read.SOURCE_KINDS[recs[0]["source_id"]])
+
     def test_steady_state_duplicates_stay_healthy(self):
         clock = FakeClock()
         a = adapter(ok_routes([row()]), clock)

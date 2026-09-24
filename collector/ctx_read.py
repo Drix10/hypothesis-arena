@@ -41,7 +41,7 @@ OPTIONAL_FIELDS = {"feature_id", "canonical_hashes", "entity_ref",
 HEX64 = re.compile("^[0-9a-f]{64}$")
 SOURCE_COVER_MIN = {"edgar_8k": 45, "fed_monetary": 180, "ecb_mid": 180,
                       "treasury_auctions": 1080, "bls_empsit": 1080,
-                      "fred_macro": 1080}
+                      "fred_macro": 1080, "bea_nipa_gdp": 1080}
 SOURCE_IDS = frozenset(SOURCE_COVER_MIN)  # frozen source namespace (X11)
 # Frozen source->kind emission registry: which kinds each source may emit.
 # Directional/osint/sentiment/regime kinds have NO frozen emitter: they need
@@ -54,6 +54,10 @@ SOURCE_KINDS = {
     "bls_empsit": {"macro_release", "calendar_ahead"},
     "ecb_mid": {"macro_release", "calendar_ahead"},
     "fred_macro": {"macro_release", "calendar_ahead"},
+    # BEA NIPA GDP emits macro_release ONLY (annual headline values;
+    # no calendar-ahead concept in this adapter). calendar_ahead for
+    # this source is kind-no-emitter by design, not an omission.
+    "bea_nipa_gdp": {"macro_release"},
 }
 BUNDLE_REQUIRED = {"schema_version", "research_epoch", "bundle_id",
                    "commit", "watermarks", "features"}

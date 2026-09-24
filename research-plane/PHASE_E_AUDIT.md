@@ -1617,3 +1617,21 @@ plane (Phase D) change any interface a future slice depends on?
   good/bad numeric vectors + end-to-end malformed drop. No source,
   schema, timestamp, or model change. BEA acceptance NOT claimed;
   live evidence OPEN.
+
+## Addendum 93 - BEA downstream namespace registration (audit fix)
+- Re-audit proved bea_nipa_gdp absent from the frozen downstream
+  namespace (ctx_read SOURCE_IDS/KINDS/COVER, schema EMITTERS/TIER/
+  TTL): adapter records could not traverse f2 admission. Verified
+  against plans BEFORE changing: doc 09 Tier-A table lists BEA as
+  TRIGGER macro (option 1 intended); manifest owns no source list;
+  classify.py branches are collector-poll scoped (BEA not polled
+  there) so untouched; no exact-set test assertions exist.
+- Minimal analogous registration: ctx_read COVER 1080 + KINDS
+  {macro_release} (annual values only; calendar_ahead stays
+  kind-no-emitter by design); schema EMITTERS (macro_release,),
+  TIER high (doc-09 Tier A), TTL 64800.
+- Regressions: ctx suite bea-admitted (fresh-history bundle),
+  bea-wrong-kind, unknown-source-still-rejected; BEA suite
+  test_downstream_registry_admission (both registries + adapter
+  kind matches registration). BEA behavior otherwise unchanged.
+  BEA acceptance NOT claimed; live evidence OPEN.
