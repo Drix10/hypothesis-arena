@@ -1482,3 +1482,17 @@ plane (Phase D) change any interface a future slice depends on?
 - Run 36015299638 on `f02cffd`: stdlib + evidence + plane + kernel
   SUCCESS, Treasury step success (13 tests hosted). Workflow-scope
   token confirmed working — no delivery split needed anymore.
+
+## Addendum 84 — Treasury correction (single commit)
+- BLOCKER (empty health): `data=[]` and all-rows-dropped now yield
+  ok=False with last_ok_ts frozen; health requires >= 1 usable
+  record. Partial success (>= 1 record) stays healthy with drops
+  visible. Regressions: empty, all-invalid, mixed, last_ok-pinned.
+- Page capacity matches cap: auctions_query page[size]=64 (was 20);
+  URL asserted exactly. Truncation path genuinely reachable.
+- Provenance corrected to treasury-securities-auctions-data, exact
+  assertion. Strict YMD for both dates + 9-char alnum CUSIP;
+  fixtures updated to valid CUSIPs; midnight stays estimated.
+- 18/18 Treasury green warnings-as-errors (both styles, def-count
+  matched); runnable plane 150 with only the pre-existing Windows
+  failure; freeze PASS. Live Treasury evidence still OPEN.

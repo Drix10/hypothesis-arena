@@ -31,7 +31,9 @@ KIND = "macro_release"
 
 BASE = ("https://api.fiscaldata.treasury.gov/services/api/"
         "fiscal_service/v1/accounting/od/auctions_query"
-        "?sort=-record_date&page%5Bsize%5D=20")
+        "?sort=-record_date&page%5Bsize%5D=64")
+PROVENANCE = ("https://fiscaldata.treasury.gov/datasets/"
+              "treasury-securities-auctions-data/")
 
 UA_BASE = "MiroHedge/phase0"
 SYMBOLS = ["EURUSD", "USDJPY", "SPY"]  # operating config, not frozen
@@ -61,6 +63,24 @@ def _next_tmp_seq():
 def contact_from_env(env=None):
     src = os.environ if env is None else env
     return src.get("MIRO_CONTACT", "").strip()
+
+
+def _valid_ymd(s):
+    if not isinstance(s, str) or not re.match(
+            r"^\d{4}-\d{2}-\d{2}$", s):
+        return False
+    try:
+        time.strptime(s, "%Y-%m-%d")
+        return True
+    except ValueError:
+        return False
+
+
+def _valid_cusip(s):
+    """Treasury CUSIP: 9-character alphanumeric identifier."""
+    if not isinstance(s, str) or len(s) != 9:
+        return False
+    return all(c.isalnum() and c.isascii() for c in s)
 
 
 def _utc_today():
@@ -222,6 +242,16 @@ class Adapter:
             self.last_error = "missing-data"
             info["completed_at"] = self.clock()
             return [], info
+        if not data:
+            # Empty provider payload is NOT healthy: freshness must
+            # never reset on zero usable source content.
+            info["errors"].append("empty-data")
+            self.failures += 1
+            self.last_error = "empty-data"
+            info["completed_at"] = self.clock()
+            if info["completed_at"] - self.last_ok_ts > TTL_S:
+                info["stale"] = True
+            return [], info
         recs = []
         for row in data:
             if not isinstance(row, dict):
@@ -230,8 +260,13 @@ class Adapter:
             cusip = row.get("cusip")
             rec_date = row.get("record_date")
             auc_date = row.get("auction_date") or rec_date
-            if not isinstance(cusip, str) or not cusip or \
-                    not isinstance(rec_date, str):
+            if not _valid_cusip(cusip):
+                info["dropped"] += 1  # malformed identifier: never
+                continue  # a dedupe key, never emitted unvalidated
+            if not _valid_ymd(rec_date):
+                info["dropped"] += 1
+                continue
+            if not _valid_ymd(auc_date):
                 info["dropped"] += 1
                 continue
             obs_ns = _date_to_ns(auc_date, today_s)
@@ -261,14 +296,15 @@ class Adapter:
                 if isinstance(row.get("security_type", ""), str) else "",
                 "observed_at_ns": obs_ns,
                 "observed_at_estimated": True,
-                "provenance_url":
-                    "https://fiscaldata.treasury.gov/datasets/"
-                    "treasury-securities-auction-data/",
+                "provenance_url": PROVENANCE,
             })
         info["records"] = len(recs)
         done = self.clock()
         info["completed_at"] = done
-        if not info["errors"]:
+        # Content health: zero usable records never resets freshness,
+        # even with clean transport. Partial success ( >= 1 record )
+        # stays healthy with drops visible.
+        if not info["errors"] and recs:
             info["ok"] = True
             self.last_ok_ts = done
             self.last_error = ""

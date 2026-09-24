@@ -87,12 +87,12 @@ class TestTreasury(unittest.TestCase):
         a = adapter({"auctions_query": (200, json.dumps({"data": [
             {"cusip": "", "record_date": "2026-09-20"},
             {"record_date": "2026-09-20"},
-            {"cusip": "X", "record_date": "2099-01-01"},
+            {"cusip": "912797AAX", "record_date": "2099-01-01"},
             "not-a-dict"]}).encode())})
         recs, info = a.poll(today=TODAY)
         self.assertEqual(recs, [])
         self.assertEqual(info["dropped"], 4)
-        self.assertTrue(info["ok"])  # transport clean, content filtered
+        self.assertFalse(info["ok"])  # zero usable: never healthy
 
     def test_timeout_500_malformed_empty_oversized(self):
         cases = ({"auctions_query": TimeoutError("t")}, "TimeoutError",
@@ -129,7 +129,7 @@ class TestTreasury(unittest.TestCase):
         first = a.throttle_until
         clock.t = first + 1
         a.transport.routes["auctions_query"] = \
-            (200, auctions_body([("C1", "2026-09-20", "2026-09-18")]))
+            (200, auctions_body([("912797AA1", "2026-09-20", "2026-09-18")]))
         recs, info = a.poll(today=TODAY)
         self.assertEqual(a.interval, treasury.MIN_INTERVAL_S)
         self.assertTrue(info["ok"])
@@ -153,7 +153,7 @@ class TestTreasury(unittest.TestCase):
 
     def test_stale_and_replay(self):
         clock = FakeClock()
-        rows = [("C9", "2026-09-20", "2026-09-18")]
+        rows = [("912797AA9", "2026-09-20", "2026-09-18")]
         a = adapter(ok_routes(rows), clock)
         r1, info = a.poll(today=TODAY)
         self.assertFalse(info["stale"])
@@ -167,7 +167,7 @@ class TestTreasury(unittest.TestCase):
         self.assertTrue(info3["stale"])
 
     def test_truncated_eligible_next_poll(self):
-        rows = [("C%04d" % i, "2026-09-20", "2026-09-18")
+        rows = [("91279%04d" % i, "2026-09-20", "2026-09-18")
                 for i in range(70)]
         a = adapter(ok_routes(rows))
         r1, i1 = a.poll(today=TODAY)
@@ -178,14 +178,14 @@ class TestTreasury(unittest.TestCase):
         self.assertEqual(i2["truncated"], 0)
 
     def test_harvest_envelope(self):
-        a = adapter(ok_routes([("C1", "2026-09-20", "2026-09-18")]))
+        a = adapter(ok_routes([("912797AA1", "2026-09-20", "2026-09-18")]))
         recs, stamps = a.harvest(["SPY"], 3)
         self.assertEqual(len(recs), 1)
         self.assertTrue(stamps["treasury_auctions"]["ok"])
         self.assertEqual(stamps["treasury_auctions"]["epoch"], 3)
 
     def test_heartbeat(self):
-        a = adapter(ok_routes([("C1", "2026-09-20", "2026-09-18")]))
+        a = adapter(ok_routes([("912797AA1", "2026-09-20", "2026-09-18")]))
         _r, info = a.poll(today=TODAY)
         hb = a.heartbeat(info)
         with tempfile.TemporaryDirectory() as d:
@@ -230,7 +230,7 @@ class TestTreasury(unittest.TestCase):
 
     def test_delayed_heartbeat_stale(self):
         clock = FakeClock()
-        a = adapter(ok_routes([("C1", "2026-09-20", "2026-09-18")]),
+        a = adapter(ok_routes([("912797AA1", "2026-09-20", "2026-09-18")]),
                     clock)
         _r, info = a.poll(today=TODAY)
         t0 = info["completed_at"]
@@ -241,6 +241,74 @@ class TestTreasury(unittest.TestCase):
             p = os.path.join(d, "hb.json")
             a.write_heartbeat(p, hb)
             self.assertEqual(a.read_heartbeat(p)["state"], "stale")
+
+    def test_empty_data_not_healthy(self):
+        clock = FakeClock()
+        a = adapter(ok_routes([("912797AA1", "2026-09-20",
+                                "2026-09-18")]), clock)
+        _r, info = a.poll(today=TODAY)
+        self.assertTrue(info["ok"])
+        t_ok = a.last_ok_ts
+        self.assertGreater(t_ok, 0)
+        a.transport.routes = {"auctions_query":
+                              (200, auctions_body([]))}
+        recs, info2 = a.poll(today=TODAY)
+        self.assertEqual(recs, [])
+        self.assertFalse(info2["ok"])
+        self.assertEqual(a.last_ok_ts, t_ok)  # never advances
+        self.assertTrue(any("empty-data" in e
+                            for e in info2["errors"]))
+
+    def test_all_invalid_not_healthy(self):
+        clock = FakeClock()
+        a = adapter(ok_routes([("912797AA1", "2026-09-20",
+                                "2026-09-18")]), clock)
+        _r, _i = a.poll(today=TODAY)
+        t_ok = a.last_ok_ts
+        bad = {"data": [{"cusip": "BAD!!",  # not 9-alnum
+                            "record_date": "2026-09-20",
+                            "auction_date": "2026-09-18"},
+                           {"cusip": "912797AA2",
+                            "record_date": "2026-13-99",  # bad date
+                            "auction_date": "2026-09-18"},
+                           {"cusip": "912797AA3",
+                            "record_date": "2026-09-20",
+                            "auction_date": "not-a-date"}]}
+        a.transport.routes = {"auctions_query":
+                              (200, json.dumps(bad).encode())}
+        recs, info = a.poll(today=TODAY)
+        self.assertEqual(recs, [])
+        self.assertFalse(info["ok"])
+        self.assertEqual(a.last_ok_ts, t_ok)
+        self.assertEqual(info["dropped"], 3)
+
+    def test_mixed_valid_invalid_stays_healthy(self):
+        a = adapter({"auctions_query": (200, json.dumps({"data": [
+            {"cusip": "912797AA1", "record_date": "2026-09-20",
+             "auction_date": "2026-09-18", "security_type": "Bill"},
+            {"cusip": "short", "record_date": "2026-09-20",
+             "auction_date": "2026-09-18"}]}).encode())})
+        recs, info = a.poll(today=TODAY)
+        self.assertEqual(len(recs), 1)
+        self.assertTrue(info["ok"])
+        self.assertEqual(info["dropped"], 1)
+        self.assertEqual(recs[0]["cusip"], "912797AA1")
+
+    def test_page_size_matches_cap_and_exact_url(self):
+        a = adapter(ok_routes([]))
+        a.poll(today=TODAY)
+        urls = [c[0] for c in a.transport.calls]
+        self.assertEqual(len(urls), 1)
+        self.assertIn("page%5Bsize%5D=64", urls[0])
+        self.assertIn("sort=-record_date", urls[0])
+
+    def test_exact_provenance_url(self):
+        a = adapter(ok_routes([("912797AA1", "2026-09-20",
+                                "2026-09-18")]))
+        recs, _info = a.poll(today=TODAY)
+        self.assertEqual(recs[0]["provenance_url"],
+                         "https://fiscaldata.treasury.gov/datasets/"
+                         "treasury-securities-auctions-data/")
 
 
 if __name__ == "__main__":
