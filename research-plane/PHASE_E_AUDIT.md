@@ -1477,3 +1477,8 @@ plane (Phase D) change any interface a future slice depends on?
 - Runnable plane 145 with only the pre-existing Windows file-lock
   failure; freeze PASS. Live Treasury evidence OPEN — not claimed.
   No EDGAR/FRED/resolver/JEV/kernel/plan changes. BLS/BEA NEXT.
+
+## Addendum 83 — hosted CI green on Treasury slice (first try w/ scope)
+- Run 36015299638 on `f02cffd`: stdlib + evidence + plane + kernel
+  SUCCESS, Treasury step success (13 tests hosted). Workflow-scope
+  token confirmed working — no delivery split needed anymore.
