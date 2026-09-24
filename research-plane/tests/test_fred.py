@@ -262,6 +262,48 @@ class TestFred(unittest.TestCase):
         self.assertIsNone(rows)
         self.assertTrue(err)
 
+    def test_vintage_realtime_never_synthesized(self):
+        # missing start
+        bad = {"observations": [{"date": "2019-04-01",
+                                   "value": "100.0",
+                                   "realtime_end": "2020-01-01"}]}
+        a = adapter({"observations": (200, json.dumps(bad).encode())})
+        rows, err = a.fetch_vintage("GDP", "2020-01-01", "2020-01-01")
+        self.assertIsNone(rows)
+        self.assertIn("realtime", err)
+        # malformed date
+        bad = {"observations": [{"date": "2019-04-01",
+                                   "value": "100.0",
+                                   "realtime_start": "2020-13-01",
+                                   "realtime_end": "2020-01-01"}]}
+        a = adapter({"observations": (200, json.dumps(bad).encode())})
+        rows, err = a.fetch_vintage("GDP", "2020-01-01", "2020-01-01")
+        self.assertIsNone(rows)
+        # mismatched window: response values carried, never requested
+        got = {"observations": [{"date": "2019-04-01",
+                                   "value": "100.0",
+                                   "realtime_start": "2019-06-01",
+                                   "realtime_end": "2019-06-01"}]}
+        a = adapter({"observations": (200, json.dumps(got).encode())})
+        rows, err = a.fetch_vintage("GDP", "2020-01-01", "2020-01-01")
+        self.assertEqual(err, "")
+        self.assertEqual(rows[0][2], "2019-06-01")
+        self.assertEqual(rows[0][3], "2019-06-01")
+
+    def test_latest_is_max_date_not_last_row(self):
+        body = json.dumps({"observations": [
+            {"date": "2026-04-01", "value": "32486.066"},
+            {"date": "2026-01-01", "value": "32000.0"},
+            {"date": "2025-10-01", "value": "."}]}).encode()
+        a = adapter({"observations": (200, body)})
+        recs, info = a.poll({"GDP": ("GDP", ["SPY"])}, today=TODAY)
+        self.assertTrue(info["ok"])
+        self.assertEqual(len(recs), 1)
+        self.assertEqual(recs[0]["date"], "2026-04-01")
+        self.assertEqual(recs[0]["value"], "32486.066")
+        urls = [c[0] for c in a.transport.calls]
+        self.assertTrue(all("sort_order=asc" in u for u in urls))
+
     def test_harvest_envelope(self):
         routes = {}
         for sid in fred.SERIES_CORE:

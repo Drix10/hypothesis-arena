@@ -1443,3 +1443,15 @@ plane (Phase D) change any interface a future slice depends on?
   premature — the CI-wiring commit is local-only until a
   workflow-scope push lands it. No hosted FRED verification is
   claimed until a run checks out the CI commit and logs 20+/20+.
+
+## Addendum 80 — FRED vintage/latest hardening (single commit)
+- Vintage provenance: rows must carry their own valid YYYY-MM-DD
+  realtime_start/end; missing/malformed rejected, never
+  synthesized from request params. Mismatched returned windows are
+  carried as returned (provider truth, not caller intent).
+- Latest selection: explicit sort_order=asc requested AND max valid
+  observation date selected deterministically; out-of-order rows
+  cannot become latest. 24/24 FRED green warnings-as-errors.
+- Runnable plane 132 with only the pre-existing Windows file-lock
+  failure; freeze PASS. No EDGAR/resolver/JEV/kernel/plan changes.
+  Hosted FRED suite still awaits the workflow-scope CI push.

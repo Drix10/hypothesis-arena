@@ -91,6 +91,17 @@ def key_from_env(env=None):
     return src.get("FRED_API_KEY", "").strip()
 
 
+def _valid_ymd(s):
+    if not isinstance(s, str) or not re.match(
+            r"^\d{4}-\d{2}-\d{2}$", s):
+        return False
+    try:
+        time.strptime(s, "%Y-%m-%d")
+        return True
+    except ValueError:
+        return False
+
+
 def _utc_today():
     return time.strftime("%Y-%m-%d", time.gmtime())
 
@@ -262,7 +273,7 @@ class Adapter:
                            realtime_end=None, observation_start=None,
                            observation_end=None):
         """Raw observation rows (+ realtime window echoed)."""
-        params = {"series_id": series_id}
+        params = {"series_id": series_id, "sort_order": "asc"}
         for k, v in (("realtime_start", realtime_start),
                      ("realtime_end", realtime_end),
                      ("observation_start", observation_start),
@@ -290,10 +301,14 @@ class Adapter:
             if not isinstance(o, dict):
                 return None, "vintage-row-shape"
             d, v = o.get("date"), o.get("value")
+            rs, re_ = o.get("realtime_start"), o.get("realtime_end")
             if not isinstance(d, str) or not isinstance(v, str):
                 return None, "vintage-row-shape"
-            rows.append((d, v, o.get("realtime_start", realtime_start),
-                         o.get("realtime_end", realtime_end)))
+            # Provenance is NEVER synthesized from request parameters:
+            # each row must carry its own valid realtime window.
+            if not _valid_ymd(rs) or not _valid_ymd(re_):
+                return None, "vintage-realtime-malformed"
+            rows.append((d, v, rs, re_))
         return rows, ""
 
     def poll(self, series=None, today=None):
@@ -316,19 +331,27 @@ class Adapter:
             if not obs:
                 info["errors"].append("%s:empty-observations" % sid)
                 continue
-            last = obs[-1]
-            if not isinstance(last, dict):
-                info["errors"].append("%s:row-shape" % sid)
+            # Latest = maximum valid observation date. sort_order=asc
+            # is requested explicitly, but selection never trusts order:
+            # an out-of-order row cannot become "latest".
+            best = None
+            for o in obs:
+                if not isinstance(o, dict):
+                    continue
+                date, val = o.get("date"), o.get("value")
+                if not isinstance(date, str) or \
+                        not isinstance(val, str) or \
+                        val.strip() in ("", "."):
+                    continue
+                if _date_to_ns(date, today_s) is None:
+                    continue
+                if best is None or date > best[0]:
+                    best = (date, val, o)
+            if best is None:
+                info["dropped"] += 1  # no usable value: never fabricate
                 continue
-            date, val = last.get("date"), last.get("value")
-            if not isinstance(date, str) or not isinstance(val, str) \
-                    or val.strip() in ("", "."):
-                info["dropped"] += 1  # missing value: never fabricate
-                continue
-            obs_ns = _date_to_ns(date, today_s)
-            if obs_ns is None:
-                info["dropped"] += 1
-                continue
+            date, val, last = best
+            obs_ns = _date_to_ns(date, today_s)  # valid by selection
             key = (sid, date, val)
             if key in self._seen:
                 info["duplicates"] += 1
