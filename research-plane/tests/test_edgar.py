@@ -26,15 +26,24 @@ TICKERS = {"0": {"cik_str": 320193, "ticker": "AAPL",
 
 def submissions(rows):
     recent = {"accessionNumber": [], "filingDate": [], "form": [],
-              "primaryDocument": [], "items": []}
-    for acc, date, form, doc, items in rows:
+              "primaryDocument": [], "items": [],
+              "acceptanceDateTime": []}
+    for row in rows:
+        acc, date, form, doc, items = row[:5]
+        acc_dt = row[5] if len(row) > 5 else None
         recent["accessionNumber"].append(acc)
         recent["filingDate"].append(date)
         recent["form"].append(form)
         recent["primaryDocument"].append(doc)
         recent["items"].append(items)
+        recent["acceptanceDateTime"].append(acc_dt)
     return {"cik": "320193", "name": "Apple Inc",
             "filings": {"recent": recent}}
+
+
+def noon_24():
+    import calendar as _cal
+    return float(_cal.timegm((2026, 9, 24, 12, 0, 0, 0, 0, 0)))
 
 
 class FakeClock:
@@ -553,6 +562,122 @@ class TestEdgar(unittest.TestCase):
         got, err = a.fetch_facts(320193)
         self.assertEqual(err, "")
         self.assertEqual(got["cik"], 320193)
+
+    # ---- audit-round-4: timestamp / heartbeat / issuer authority ----
+
+    def test_acceptance_time_is_observed(self):
+        import calendar as _cal
+        rows = [("0000320193-26-000100", "2026-09-22", "8-K",
+                 "d.htm", "5.02", "2026-09-22T16:01:00.000Z")]
+        clock = FakeClock(t=noon_24())
+        a = adapter_c(self.sub_routes(rows), clock)
+        recs, info = a.poll(["AAPL"], today=TODAY)
+        self.assertTrue(info["ok"])
+        self.assertEqual(len(recs), 1)
+        expect = _cal.timegm((2026, 9, 22, 16, 1, 0, 0, 0, 0)) * 10**9
+        self.assertEqual(recs[0]["observed_at_ns"], expect)
+        self.assertFalse(recs[0]["observed_at_estimated"])
+        self.assertEqual(recs[0]["entity_ref"],
+                         {"cik": "0000320193"})
+
+    def test_midnight_fallback_is_estimated(self):
+        rows = [("0000320193-26-000101", "2026-09-22", "8-K",
+                 "d.htm", "")]
+        clock = FakeClock(t=noon_24())
+        a = adapter_c(self.sub_routes(rows), clock)
+        recs, info = a.poll(["AAPL"], today=TODAY)
+        self.assertEqual(len(recs), 1)
+        self.assertTrue(recs[0]["observed_at_estimated"])
+        # midnight, never acceptance: strictly before any same-day accept
+        import calendar as _cal
+        midnight = _cal.timegm((2026, 9, 22, 0, 0, 0, 0, 0, 0)) * 10**9
+        self.assertEqual(recs[0]["observed_at_ns"], midnight)
+
+    def test_future_acceptance_dropped(self):
+        import calendar as _cal
+        rows = [("0000320193-26-000102", "2026-09-24", "8-K",
+                 "d.htm", "", "2026-09-24T18:00:00Z")]
+        clock = FakeClock(t=noon_24())  # 12:00, acceptance at 18:00
+        a = adapter_c(self.sub_routes(rows), clock)
+        recs, info = a.poll(["AAPL"], today=TODAY)
+        self.assertEqual(recs, [])  # not yet available: never emitted
+        self.assertEqual(info["dropped"], 1)
+        # after acceptance passes, the same row emits with exact time
+        clock.t = float(_cal.timegm((2026, 9, 24, 19, 0, 0, 0, 0, 0)))
+        recs2, info2 = a.poll(["AAPL"], today=TODAY)
+        self.assertEqual(len(recs2), 1)
+        self.assertFalse(recs2[0]["observed_at_estimated"])
+
+    def test_malformed_acceptance_array_rejected(self):
+        bad = {"filings": {"recent": {
+            "accessionNumber": ["a1"], "form": ["8-K"],
+            "filingDate": ["2026-09-22"],
+            "acceptanceDateTime": ["2026-09-22T16:00:00Z", "extra"]}}}
+        a = adapter(self.sub_routes([], extra={
+            "https://data.sec.gov/submissions/CIK0000320193.json":
+                (200, json.dumps(bad).encode())}))
+        recs, info = a.poll(["AAPL"], today=TODAY)
+        self.assertEqual(recs, [])
+        self.assertTrue(any("malformed" in e for e in info["errors"]))
+
+    def test_delayed_heartbeat_does_not_refresh(self):
+        clock = FakeClock(t=noon_24())
+        rows = [("0000320193-26-000103", "2026-09-22", "8-K",
+                 "d.htm", "")]
+        a = adapter_c(self.sub_routes(rows), clock)
+        recs, info = a.poll(["AAPL"], today=TODAY)
+        self.assertTrue(info["ok"])
+        t0 = info["completed_at"]
+        self.assertGreater(t0, 0)
+        clock.t += edgar.TTL_S + 1  # writer delayed past TTL
+        hb = a.heartbeat(info)
+        self.assertEqual(hb["ts"], t0)  # poll time, not write time
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "hb.json")
+            a.write_heartbeat(p, hb)
+            self.assertEqual(a.read_heartbeat(p)["state"], "stale")
+
+    def test_pinned_map_drives_binding(self):
+        rows = [("0000320193-26-000104", "2026-09-22", "8-K",
+                 "d.htm", "")]
+        routes = self.sub_routes(rows)
+        clock = FakeClock(t=noon_24())
+        a = adapter_c(routes, clock,
+                      entity_map={"AAPL": 320193})
+        recs, info = a.poll(["AAPL"], today=TODAY)
+        self.assertEqual(info["tickers"], "pinned")
+        self.assertEqual(len(recs), 1)
+        self.assertEqual(recs[0]["entity_ref"],
+                         {"cik": "0000320193"})
+        urls = [c[0] for c in a.transport.calls]
+        self.assertTrue(all("tickers" not in u.split("/")[-1]
+                            for u in urls))
+        self.assertFalse(any("company_tickers" in u for u in urls))
+
+    def test_pinned_map_mismatch_never_emits_foreign_cik(self):
+        # Pinned map says AAPL is CIK 999999: the request MUST go to
+        # the pinned CIK (404 here), never to the SEC-file CIK.
+        routes = {edgar.TICKERS_URL: (200, tickers_body()),
+                  "https://data.sec.gov/submissions/CIK0000999999.json":
+                      (404, b"not found")}
+        a = adapter(routes, entity_map={"AAPL": 999999})
+        recs, info = a.poll(["AAPL"], today=TODAY)
+        self.assertEqual(recs, [])
+        urls = [c[0] for c in a.transport.calls]
+        self.assertTrue(any("CIK0000999999" in u for u in urls))
+        self.assertFalse(any("CIK0000320193" in u for u in urls))
+        self.assertFalse(any("company_tickers" in u for u in urls))
+
+    def test_explicit_empty_env_means_empty(self):
+        import os as _os
+        from unittest import mock as _mock
+        with _mock.patch.dict(_os.environ, {}, clear=True):
+            self.assertEqual(edgar.contact_from_env({}), "")
+            with self.assertRaises(edgar.ConfigError):
+                edgar.build(contact=None, env={})
+            a = edgar.build(contact=None,
+                            env={"MIRO_CONTACT": CONTACT})
+            self.assertEqual(a.contact, CONTACT)
 
 
 if __name__ == "__main__":

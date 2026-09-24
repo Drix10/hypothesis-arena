@@ -1311,3 +1311,27 @@ plane (Phase D) change any interface a future slice depends on?
 ## Addendum 69 — hosted CI green on EDGAR round-3 correction
 - Run 35953068725 on `8874a73`: stdlib + evidence + plane + kernel
   SUCCESS, EDGAR step success (34 tests hosted).
+
+## Addendum 70 — EDGAR audit-round-4 correction (single commit)
+- BLOCKER (acceptance time): `_acceptance_to_ns` parses the source's
+  own acceptanceDateTime (strict `YYYY-MM-DDTHH:MM:SS[.ffffff]Z`,
+  round-trip validated) and uses it as observed_at_ns when sane;
+  rows without one carry filing-date midnight EXPLICITLY flagged
+  `observed_at_estimated: True` (context-only downstream per doc 09
+  R12, never TRIGGER); future acceptance (>now+skew) is DROPPED as
+  not-yet-available, never estimated. Regression: pre-acceptance
+  poll emits nothing; post-acceptance poll emits the exact second.
+- Heartbeat authority: `completed_at` stamped in info at poll
+  completion; `heartbeat()` uses that exact ts (fallback to now
+  only for hand-made info). Delayed-write regression proves stale.
+- Issuer binding: build-time pinned `entity_map` drives CIK solely
+  (SEC ticker file never consulted, proven by URL capture); without
+  a map the SEC-resolved CIK is carried visibly as
+  `entity_ref: {"cik": "0000320193"}` — the exact shape the frozen
+  resolver binds/rejects against the pinned map. Mismatch test:
+  pinned foreign CIK requests only that CIK, emits nothing valid.
+- Config: `contact_from_env({})` now means empty (None = process
+  env); tested with cleared environ.
+- 42/42 EDGAR green warnings-as-errors (both styles); runnable
+  plane 103 with only the pre-existing Windows file-lock failure;
+  freeze PASS. Live SEC evidence still OPEN — not claimed.

@@ -34,6 +34,7 @@ import calendar
 import json
 import math
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -89,6 +90,37 @@ def _utc_today():
     return time.strftime("%Y-%m-%d", time.gmtime())
 
 
+def _acceptance_to_ns(val, filing_midnight_ns, now_s):
+    """Authoritative SEC acceptance datetime -> ns, or None.
+    Strict shape YYYY-MM-DDTHH:MM:SS[.ffffff]Z only; must not predate
+    the filing-date midnight and must not exceed now+skew (a filing
+    whose acceptance lies in the future is not yet available —
+    admitting it would be lookahead). Returns (ns, future) where
+    future=True means present-but-not-yet-available (drop the row)."""
+    if val is None:
+        return None, False
+    if not isinstance(val, str):
+        return None, False
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})"
+                 r"(?:\.(\d{1,6}))?Z$", val)
+    if not m:
+        return None, False
+    try:
+        y, mo, d, hh, mm, ss = (int(m.group(i)) for i in range(1, 7))
+        tt = time.strptime("%04d-%02d-%02d %02d:%02d:%02d" %
+                            (y, mo, d, hh, mm, ss), "%Y-%m-%d %H:%M:%S")
+        frac = m.group(7)
+        micros = int((frac + "000000")[:6]) if frac else 0
+    except ValueError:
+        return None, False
+    ns = calendar.timegm(tt) * 1000000000 + micros * 1000
+    if ns < filing_midnight_ns:
+        return None, False  # inconsistent: fall back to estimated
+    if ns > int((now_s + SKEW_ALLOW_S) * 1000000000):
+        return None, True  # not yet available: drop, never estimate
+    return ns, False
+
+
 def _filing_date_to_ns(date_s, today_s):
     """Regulator publication date -> ns. None on missing/invalid/future."""
     if not isinstance(date_s, str) or len(date_s) != 10:
@@ -112,8 +144,8 @@ def _filing_date_to_ns(date_s, today_s):
 
 
 def contact_from_env(env=None):
-    c = (env or os.environ).get("MIRO_CONTACT", "")
-    return c.strip()
+    src = os.environ if env is None else env
+    return src.get("MIRO_CONTACT", "").strip()
 
 
 def _read_capped(r):
@@ -165,7 +197,8 @@ class Adapter:
 
     def __init__(self, contact, transport=None, clock=None, sleeper=None,
                  jitter=None, backoff_base_s=BACKOFF_BASE_S,
-                 cache_dir=None, timeout_s=DEFAULT_TIMEOUT_S, mono=None):
+                 cache_dir=None, timeout_s=DEFAULT_TIMEOUT_S, mono=None,
+                 entity_map=None):
         if not contact or not contact.strip():
             raise ConfigError("edgar: MIRO_CONTACT missing — refusing "
                               "to poll without SEC fair-access contact")
@@ -182,6 +215,20 @@ class Adapter:
         self.backoff_base = backoff_base_s
         self.timeout_s = timeout_s
         self.cache_dir = cache_dir
+        # Pinned issuer binding {SYMBOL: cik}: when supplied, CIK comes
+        # ONLY from this map (the SEC ticker file is never consulted).
+        # When absent (standalone/tests), the SEC file resolves and the
+        # resolved CIK is carried visibly in every record for downstream
+        # binding against the pinned map (resolver rejects unmapped).
+        self.entity_map = None
+        if entity_map is not None:
+            self.entity_map = {}
+            for sym, cik in entity_map.items():
+                try:
+                    self.entity_map[str(sym).upper()] = int(cik)
+                except (TypeError, ValueError):
+                    raise ConfigError("edgar: bad entity_map CIK for %s" %
+                                      sym)
         self.interval = MIN_INTERVAL_S
         self.throttle_until = 0.0
         self._next_ok = 0.0
@@ -378,7 +425,12 @@ class Adapter:
                    for v in arr):
                 return None
             opt.append([v or "" for v in arr])
-        return core[0], core[1], core[2], opt[0], opt[1]
+        acc_dt = recent.get("acceptanceDateTime", [None] * n)
+        if not isinstance(acc_dt, list) or len(acc_dt) != n:
+            return None
+        if any(v is not None and not isinstance(v, str) for v in acc_dt):
+            return None
+        return core[0], core[1], core[2], opt[0], opt[1], list(acc_dt)
 
     @staticmethod
     def _ticker_index(raw):
@@ -418,18 +470,23 @@ class Adapter:
         self.polls += 1
         info = {"ok": False, "stale": True, "errors": [],
                 "dropped": 0, "duplicates": 0, "records": 0,
-                "truncated": 0, "tickers": ""}
+                "truncated": 0, "tickers": "", "completed_at": 0.0}
         try:
             cutoff_ns = int((now - LOOKBACK_DAYS * 86400) * 1000000000)
         except (OverflowError, ValueError):
             cutoff_ns = 0
-        tickers, tick_state, tick_err = self._load_tickers()
+        tickers = {}
+        if self.entity_map is not None:
+            tickers, tick_state, tick_err = self.entity_map, "pinned", ""
+        else:
+            tickers, tick_state, tick_err = self._load_tickers()
         info["tickers"] = tick_state
         if tick_err:
             info["errors"].append(tick_err)
         if not tickers:
             self.failures += 1
             self.last_error = tick_err or "no ticker map"
+            info["completed_at"] = self.clock()
             return [], info
         recs = []
         for sym in symbols:
@@ -452,7 +509,7 @@ class Adapter:
             if parsed is None:
                 info["errors"].append("%s:submissions-malformed" % sym)
                 continue
-            accs, forms, dates, pdocs, items_arr = parsed
+            accs, forms, dates, pdocs, items_arr, acc_dts = parsed
             for i in range(len(accs)):
                 acc, form, fdate = accs[i], forms[i], dates[i]
                 pdoc, items = pdocs[i], items_arr[i]
@@ -463,10 +520,22 @@ class Adapter:
                 if acc in self._seen:
                     info["duplicates"] += 1
                     continue
-                obs_ns = _filing_date_to_ns(fdate, today_s)
-                if obs_ns is None:
+                midnight_ns = _filing_date_to_ns(fdate, today_s)
+                if midnight_ns is None:
                     info["dropped"] += 1  # missing/invalid/future:
-                    continue  # never estimate, never substitute now
+                    continue  # never estimate silently, never use now
+                # Authoritative acceptance time when the source gives
+                # one; otherwise filing-date midnight EXPLICITLY marked
+                # estimated (context-only downstream, never TRIGGER).
+                acc_ns, not_yet = _acceptance_to_ns(
+                    acc_dts[i], midnight_ns, now)
+                if not_yet:
+                    info["dropped"] += 1  # accepted in the future:
+                    continue  # not available yet — admitting it is
+                if acc_ns is None:  # lookahead
+                    obs_ns, estimated = midnight_ns, True
+                else:
+                    obs_ns, estimated = acc_ns, False
                 if obs_ns < cutoff_ns:
                     continue  # outside the recent window, not an error
                 if len(recs) >= MAX_RECORDS:
@@ -483,6 +552,8 @@ class Adapter:
                     "items": items,
                     "primary_document": pdoc,
                     "observed_at_ns": obs_ns,
+                    "observed_at_estimated": estimated,
+                    "entity_ref": {"cik": "%010d" % cik},
                     "provenance_url":
                         "https://www.sec.gov/Archives/edgar/data/%d/%s/"
                         % (cik, acc_nodash),
@@ -497,6 +568,7 @@ class Adapter:
         # Freshness is measured at COMPLETION: a slow poll/retry
         # episode must not publish fresh health from a stale start.
         done = self.clock()
+        info["completed_at"] = done
         # Health is source-level: ANY requested-symbol failure keeps the
         # poll unhealthy. Successful records are preserved; missing ones
         # are never fabricated. last_ok advances only on a fully clean
@@ -527,8 +599,18 @@ class Adapter:
 
     # -- heartbeat (ops side; mirrors earnings.py hardened pattern) --
     def heartbeat(self, info):
-        now = self.clock()
-        return {"version": HEARTBEAT_VERSION, "ts": now,
+        # Freshness derives from the completed poll, never from the
+        # moment heartbeat() is called: a delayed write must not
+        # refresh an old poll. Fallback to now only for hand-made info
+        # that carries no completion stamp.
+        ts = info.get("completed_at") or 0.0
+        try:
+            ts = float(ts)
+        except (TypeError, ValueError):
+            ts = 0.0
+        if not (ts > 0) or ts != ts:
+            ts = self.clock()
+        return {"version": HEARTBEAT_VERSION, "ts": ts,
                 "cadence_s": CADENCE_S, "ttl_s": TTL_S,
                 "ok": bool(info.get("ok", False)),
                 "stale": bool(info.get("stale", True)),
