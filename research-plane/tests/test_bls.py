@@ -298,6 +298,22 @@ class TestBLS(unittest.TestCase):
             t1 = a.last_ok_ts
             self.assertFalse(info["stale"])
 
+    def test_weekday_tz_semantics(self):
+        # 21 Sep 2026 is a Monday: Foo token, Tue mismatch, FOO
+        # zone, and leap-second 60 all drop; EDT and +0000 emit.
+        rows = [("g1", "T", "Foo, 21 Sep 2026 08:30:00 EDT"),
+                ("g2", "T", "Tue, 21 Sep 2026 08:30:00 EDT"),
+                ("g3", "T", "Mon, 21 Sep 2026 08:30:00 FOO"),
+                ("g4", "T", "Mon, 21 Sep 2026 08:30:60 EDT"),
+                ("g5", "T", "Mon, 21 Sep 2026 08:30:00 +0000")]
+        a = adapter(ok_routes(rows))
+        recs, info = a.poll(today=TODAY)
+        self.assertEqual([r["guid"] for r in recs], ["g5"])
+        self.assertEqual(info["dropped"], 4)
+        self.assertTrue(info["ok"])
+        self.assertEqual(recs[0]["observed_at_ns"],
+                         day_ns(2026, 9, 21))
+
     def test_strict_rfc822_shape(self):
         lax = [("g1", "T", "21 Sep 2026 08:30:00 EDT"),
                ("g2", "T", "Mon, 1 Sep 2026 08:30:00 EDT"),

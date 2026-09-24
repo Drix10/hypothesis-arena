@@ -44,6 +44,15 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 
+# RFC-822 timezone forms accepted on this feed: standard named zones
+# plus numeric ±HHMM. Arbitrary tokens (FOO) are never valid zones.
+_TZ_NAMES = frozenset(("UT", "GMT", "Z", "EST", "EDT", "CST",
+                       "CDT", "MST", "MDT", "PST", "PDT"))
+_TZ_NUM_RE = re.compile(r"^[+-](?:[01]\d|2[0-3])[0-5]\d$")
+_WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+_DATE_RE = re.compile(r"^([A-Za-z]{3}), (\d{2} [A-Za-z]{3} \d{4} "
+                       r"\d{2}:\d{2}:\d{2}) (\S+)$")
+
 SOURCE_ID = "bls_empsit"
 KIND = "macro_release"
 
@@ -91,20 +100,34 @@ def _pubdate_to_day_ns(s, today_s):
     missing weekday, 1-digit days, 2-digit years), so the full
     'Day, DD Mon YYYY HH:MM:SS TZ' shape is enforced by regex and
     parsedate only checks semantic validity (ranges, leap days).
+    Beyond shape, the weekday token must equal the calendar weekday
+    of the parsed date (parsedate ignores mismatches), the clock
+    fields must be in range (leap-second 60 rejected), and the
+    timezone token must be a standard named zone or numeric ±HHMM
+    (arbitrary tokens parse naive and are rejected).
     Day-granularity by contract: the time-of-day is never treated
     as an authoritative instant. Future publication days rejected.
     """
     if not isinstance(s, str):
         return None
-    s = s.strip()
-    if not re.match(r"^[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} "
-                     r"\d{2}:\d{2}:\d{2} \S+$", s):
+    m = _DATE_RE.match(s.strip())
+    if not m:
+        return None
+    wkday_tok, _rest, tz_tok = m.groups()
+    if wkday_tok not in _WEEKDAYS:
+        return None
+    if tz_tok.upper() not in _TZ_NAMES and \
+            not _TZ_NUM_RE.match(tz_tok):
         return None
     try:
-        dt = parsedate_to_datetime(s)
+        dt = parsedate_to_datetime(s.strip())
     except (TypeError, ValueError):
         return None
-    if dt is None:
+    if dt is None or dt.tzinfo is None:
+        return None
+    if dt.hour > 23 or dt.minute > 59 or dt.second > 59:
+        return None
+    if _WEEKDAYS[dt.weekday()] != wkday_tok:
         return None
     try:
         day = "%04d-%02d-%02d" % (dt.year, dt.month, dt.day)

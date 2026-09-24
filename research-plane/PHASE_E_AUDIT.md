@@ -1558,3 +1558,18 @@ plane (Phase D) change any interface a future slice depends on?
   asserted), _read_capped exact-MAX vs MAX+1 boundary.
 - BLS code acceptance NOT claimed: pending hosted proof of this
   commit + independent re-audit. Live evidence OPEN.
+
+## Addendum 89 - BLS weekday/TZ semantic strictness (re-audit fix)
+- Re-audit proved the shape gate still accepted Foo weekdays,
+  weekday/date mismatches, and arbitrary TZ tokens. Fixed narrowly:
+  weekday token must equal the calendar weekday of the parsed date
+  (explicit Mon..Sun table, locale-independent); TZ restricted to
+  UT/GMT/Z/EST/EDT/CST/CDT/MST/MDT/PST/PDT or numeric +-HHMM with
+  range-checked fields; naive datetimes rejected; clock fields
+  range-checked (leap-second 60 rejected, matching EDGAR precedent).
+- Regression test_weekday_tz_semantics: 4 adversarial rows drop,
+  numeric-+0000 row emits with record-day midnight. No timestamp
+  model, source, or schema change.
+- 21/21 BLS green warnings-as-errors (both styles). BLS code
+  acceptance NOT claimed: pending hosted proof + independent audit.
+  Live evidence OPEN.
