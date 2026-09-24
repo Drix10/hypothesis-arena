@@ -12,12 +12,15 @@ the graph harvest-node contract); classification into frozen f2
 happens downstream in extract/emit, never here. No f2 fields are
 invented or reinterpreted.
 
-Timestamps: observed_at_ns comes from the regulator's own filingDate
-field. Rows with missing/invalid/future filingDate are DROPPED
-(counted, never estimated) — an estimated timestamp must never become
-TRIGGER-eligible evidence, and local observation time is never
-substituted. Outage/empty means stale/expired downstream, never
-fabricated neutral data. Exits are unaffected (this adapter cannot
+Timestamps: observed_at_ns comes from the source's own
+acceptanceDateTime when it parses strictly; that value is the SEC
+acceptance time BY CONTRACT, not a measured first-availability stamp
+(availability lags acceptance by minutes the source never timestamps).
+Rows without a usable acceptance carry filing-date midnight EXPLICITLY
+flagged observed_at_estimated (context-only downstream, never TRIGGER).
+Future acceptance is dropped as not-yet-available; local observation
+time is never substituted. Outage/empty means stale/expired downstream,
+never fabricated neutral data. Exits are unaffected (this adapter cannot
 reach broker state, journals, HALT, or STAGE).
 
 Side effects: none by default except the optional heartbeat file and
@@ -107,13 +110,31 @@ def _acceptance_to_ns(val, filing_midnight_ns, now_s):
         return None, False
     try:
         y, mo, d, hh, mm, ss = (int(m.group(i)) for i in range(1, 7))
-        tt = time.strptime("%04d-%02d-%02d %02d:%02d:%02d" %
-                            (y, mo, d, hh, mm, ss), "%Y-%m-%d %H:%M:%S")
-        frac = m.group(7)
-        micros = int((frac + "000000")[:6]) if frac else 0
     except ValueError:
         return None, False
-    ns = calendar.timegm(tt) * 1000000000 + micros * 1000
+    # Genuinely strict fields: strptime accepts second=60 and timegm
+    # normalizes it into a DIFFERENT instant. An authoritative boundary
+    # must never be a normalized smuggle.
+    if not (1990 <= y <= 2100 and 1 <= mo <= 12):
+        return None, False
+    leap = (y % 4 == 0 and (y % 100 != 0 or y % 400 == 0))
+    dim = [31, 29 if leap else 28, 31, 30, 31, 30,
+           31, 31, 30, 31, 30, 31][mo - 1]
+    if not (1 <= d <= dim and 0 <= hh <= 23 and 0 <= mm <= 59 and
+            0 <= ss <= 59):
+        return None, False
+    try:
+        frac = m.group(7)
+        micros = int((frac + "000000")[:6]) if frac else 0
+        epoch = calendar.timegm((y, mo, d, hh, mm, ss, 0, 0, 0))
+    except (ValueError, OverflowError):
+        return None, False
+    # Round-trip: the epoch must convert back to the exact fields.
+    back = time.gmtime(epoch)
+    if (back.tm_year, back.tm_mon, back.tm_mday, back.tm_hour,
+            back.tm_min, back.tm_sec) != (y, mo, d, hh, mm, ss):
+        return None, False
+    ns = epoch * 1000000000 + micros * 1000
     if ns < filing_midnight_ns:
         return None, False  # inconsistent: fall back to estimated
     if ns > int((now_s + SKEW_ALLOW_S) * 1000000000):
@@ -217,7 +238,10 @@ class Adapter:
         self.cache_dir = cache_dir
         # Pinned issuer binding {SYMBOL: cik}: when supplied, CIK comes
         # ONLY from this map (the SEC ticker file is never consulted).
-        # When absent (standalone/tests), the SEC file resolves and the
+        # Production wiring must derive this reverse lookup MECHANICALLY
+        # from the single pinned collector/entity_map.json (CIK->ticker),
+        # never from a second independent map. When absent
+        # (standalone/tests), the SEC file resolves and the
         # resolved CIK is carried visibly in every record for downstream
         # binding against the pinned map (resolver rejects unmapped).
         self.entity_map = None
@@ -622,11 +646,19 @@ class Adapter:
         if len(data.encode("utf-8")) > HEARTBEAT_MAX_BYTES:
             raise ConfigError("heartbeat too large")
         tmp = "%s.tmp-%d-%d" % (path, os.getpid(), _next_tmp_seq())
-        with open(tmp, "w", encoding="utf-8") as fh:
-            fh.write(data)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(data)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, path)
+            tmp = None
+        finally:
+            if tmp is not None and os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except Exception:
+                    pass
 
     @staticmethod
     def _valid_heartbeat(hb):

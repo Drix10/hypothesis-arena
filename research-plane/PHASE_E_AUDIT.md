@@ -1339,3 +1339,25 @@ plane (Phase D) change any interface a future slice depends on?
 ## Addendum 71 — hosted CI green on EDGAR round-4 correction
 - Run 35955270740 on `39c8771`: stdlib + evidence + plane + kernel
   SUCCESS, EDGAR step success (42 tests hosted).
+
+## Addendum 72 — EDGAR audit-round-5 correction (single commit)
+- Heartbeat tmp cleanup: `write_heartbeat` removes its unique temp
+  on EVERY failure path incl. `os.replace` failure (try/finally +
+  tmp=None-on-commit, earnings pattern). Regression injects replace
+  failure and proves zero orphans.
+- Strict acceptance parser: explicit calendar ranges (month/day w/
+  leap-year lengths, hour<=23, min/sec<=59 — leap-second 60 now
+  rejected, not normalized) plus epoch round-trip validation before
+  any value becomes authoritative. Adversarial sweep (sec 60, min
+  61, hour 25, missing Z, Feb 30, month 13, garbage) proves every
+  one falls back to flagged-estimated midnight, never to a shifted
+  authoritative instant.
+- Docs: module docstring now states acceptanceDateTime-preferred /
+  midnight-estimated-fallback and acceptance-vs-availability
+  semantics; entity_map comment pins mechanical derivation from
+  the single collector/entity_map.json for future wiring.
+- One self-caught edit slip repaired before green: a restore edit
+  dropped the delayed-heartbeat def line (44-def count verified).
+- 44/44 EDGAR green warnings-as-errors (both styles); runnable
+  plane 105 with only the pre-existing Windows file-lock failure;
+  freeze PASS. Live SEC evidence still OPEN — not claimed.

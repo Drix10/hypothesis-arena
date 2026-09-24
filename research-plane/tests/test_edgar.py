@@ -620,6 +620,44 @@ class TestEdgar(unittest.TestCase):
         self.assertEqual(recs, [])
         self.assertTrue(any("malformed" in e for e in info["errors"]))
 
+    def test_leap_second_never_authoritative(self):
+        import calendar as _cal
+        bad_times = ["2026-09-22T16:01:60Z",   # leap-second smuggle
+                     "2026-09-22T16:61:00Z",   # minute 61
+                     "2026-09-22T25:01:00Z",   # hour 25
+                     "2026-09-22T16:01:00",    # missing Z
+                     "2026-02-30T16:01:00Z",   # impossible date
+                     "2026-13-01T00:00:00Z",   # month 13
+                     "not-a-time"]
+        for i, bad in enumerate(bad_times):
+            rows = [("0000320193-26-%06d" % (200 + i), "2026-09-22",
+                     "8-K", "d.htm", "", bad)]
+            clock = FakeClock(t=noon_24())
+            a = adapter_c(self.sub_routes(rows), clock)
+            recs, info = a.poll(["AAPL"], today=TODAY)
+            self.assertEqual(len(recs), 1, bad)  # kept, not dropped
+            self.assertTrue(recs[0]["observed_at_estimated"], bad)
+            midnight = _cal.timegm((2026, 9, 22, 0, 0, 0, 0, 0, 0))
+            self.assertEqual(recs[0]["observed_at_ns"],
+                             midnight * 10**9, bad)
+
+    def test_heartbeat_tmp_cleaned_on_replace_failure(self):
+        import os as _os
+        from unittest import mock as _mock
+        a = adapter(self.sub_routes([]))
+        _recs, info = a.poll(["AAPL"], today=TODAY)
+        hb = a.heartbeat(info)
+        with tempfile.TemporaryDirectory() as d:
+            p = _os.path.join(d, "hb.json")
+            before = set(_os.listdir(d))
+            with _mock.patch.object(_os, "replace",
+                                    side_effect=OSError("locked")):
+                with self.assertRaises(OSError):
+                    a.write_heartbeat(p, hb)
+            orphans = [f for f in _os.listdir(d)
+                       if f not in before]
+            self.assertEqual(orphans, [])
+
     def test_delayed_heartbeat_does_not_refresh(self):
         clock = FakeClock(t=noon_24())
         rows = [("0000320193-26-000103", "2026-09-22", "8-K",
