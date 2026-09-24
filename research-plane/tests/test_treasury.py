@@ -369,6 +369,27 @@ class TestTreasury(unittest.TestCase):
             t1 = a.last_ok_ts
             self.assertFalse(info["stale"])
 
+    def test_all_invalid_carries_explicit_reason(self):
+        clock = FakeClock()
+        a = adapter(ok_routes([("912797AA1", "2026-09-20",
+                                "2026-09-18")]), clock)
+        _r, _i = a.poll(today=TODAY)
+        t_ok = a.last_ok_ts
+        bad = {"data": [{"cusip": "BAD!!",
+                            "record_date": "2026-09-20",
+                            "auction_date": "2026-09-18"}]}
+        a.transport.routes = {"auctions_query":
+                              (200, json.dumps(bad).encode())}
+        recs, info = a.poll(today=TODAY)
+        self.assertEqual(recs, [])
+        self.assertFalse(info["ok"])
+        self.assertEqual(a.last_ok_ts, t_ok)
+        self.assertIn("no-usable-records", info["errors"])
+        self.assertIn("no-usable-records", a.last_error)
+        hb = a.heartbeat(info)
+        self.assertIn("no-usable-records", hb["error"])
+        self.assertLessEqual(len(hb["error"]), 200)
+
 
 if __name__ == "__main__":
     unittest.main()

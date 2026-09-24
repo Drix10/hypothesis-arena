@@ -319,6 +319,10 @@ class Adapter:
             self.last_error = ""
             info["stale"] = (done - now) > TTL_S
         else:
+            if not info["errors"]:
+                # Nonempty payload, zero usable rows: fail closed AND
+                # say so. (Empty data returns early as empty-data.)
+                info["errors"].append("no-usable-records")
             self.failures += 1
             self.last_error = "; ".join(info["errors"][:3])
         if done - self.last_ok_ts > TTL_S:

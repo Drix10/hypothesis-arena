@@ -1511,3 +1511,14 @@ plane (Phase D) change any interface a future slice depends on?
 - 22/22 Treasury green warnings-as-errors (both styles); runnable
   plane 154 with only the pre-existing Windows failure; freeze PASS.
   Live Treasury evidence still OPEN. Treasury NOT CLOSED.
+
+## Addendum 86 - Treasury closure (observability + accepted)
+- Independent re-audit ACCEPTED Treasury implementation/correctness
+  (record_date publication authority, required auction_date, usable-
+  row steady-state health, page-64, exact provenance).
+- Final hardening: nonempty/all-invalid payload now records explicit
+  bounded no-usable-records in info errors, last_error, and heartbeat
+  error (was: ok=false with blank reason). No fail-open/fail-closed,
+  TTL, pacing, retry, dedupe, truncation, timestamp, or schema change.
+- 23/23 Treasury green warnings-as-errors (both styles). Live soak +
+  measured p50/p99 remain OPEN, unclaimed. No BLS/BEA work in scope.
