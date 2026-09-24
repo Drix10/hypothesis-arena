@@ -93,13 +93,18 @@ def _utc_today():
     return time.strftime("%Y-%m-%d", time.gmtime())
 
 
-def _acceptance_to_ns(val, filing_midnight_ns, now_s):
+def _acceptance_to_ns(val, now_s):
     """Authoritative SEC acceptance datetime -> ns, or None.
-    Strict shape YYYY-MM-DDTHH:MM:SS[.ffffff]Z only; must not predate
-    the filing-date midnight and must not exceed now+skew (a filing
-    whose acceptance lies in the future is not yet available —
-    admitting it would be lookahead). Returns (ns, future) where
-    future=True means present-but-not-yet-available (drop the row)."""
+    Strict shape YYYY-MM-DDTHH:MM:SS[.ffffff]Z only, with explicit
+    calendar ranges plus epoch round-trip validation. The timestamp
+    must not exceed now+skew (a filing whose acceptance lies in the
+    future is not yet available — admitting it would be lookahead).
+    NO filing-date comparison: the SEC assigns next-business-day
+    filing dates to after-hours acceptances, so a legitimate
+    acceptance routinely predates filing-date midnight. Old events
+    are handled by the lookback cutoff, not here.
+    Returns (ns, future) where future=True means present-but-
+    not-yet-available (drop the row)."""
     if val is None:
         return None, False
     if not isinstance(val, str):
@@ -135,8 +140,6 @@ def _acceptance_to_ns(val, filing_midnight_ns, now_s):
             back.tm_min, back.tm_sec) != (y, mo, d, hh, mm, ss):
         return None, False
     ns = epoch * 1000000000 + micros * 1000
-    if ns < filing_midnight_ns:
-        return None, False  # inconsistent: fall back to estimated
     if ns > int((now_s + SKEW_ALLOW_S) * 1000000000):
         return None, True  # not yet available: drop, never estimate
     return ns, False
@@ -551,8 +554,7 @@ class Adapter:
                 # Authoritative acceptance time when the source gives
                 # one; otherwise filing-date midnight EXPLICITLY marked
                 # estimated (context-only downstream, never TRIGGER).
-                acc_ns, not_yet = _acceptance_to_ns(
-                    acc_dts[i], midnight_ns, now)
+                acc_ns, not_yet = _acceptance_to_ns(acc_dts[i], now)
                 if not_yet:
                     info["dropped"] += 1  # accepted in the future:
                     continue  # not available yet — admitting it is
@@ -577,6 +579,12 @@ class Adapter:
                     "primary_document": pdoc,
                     "observed_at_ns": obs_ns,
                     "observed_at_estimated": estimated,
+                    # INTEGRATION GATE (frozen resolver contract):
+                    # estimated MUST map to published_ns=None +
+                    # permanent context cap at canonical-wiring time.
+                    # Copying an estimated instant into published_ns
+                    # would wrongly earn source trust. Do not invent a
+                    # parser here; do not touch the frozen resolver.
                     "entity_ref": {"cik": "%010d" % cik},
                     "provenance_url":
                         "https://www.sec.gov/Archives/edgar/data/%d/%s/"

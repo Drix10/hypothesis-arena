@@ -1365,3 +1365,23 @@ plane (Phase D) change any interface a future slice depends on?
 ## Addendum 73 — hosted CI green on EDGAR round-5 correction
 - Run 35956762723 on `e708b5e`: stdlib + evidence + plane + kernel
   SUCCESS, EDGAR step success (44 tests hosted).
+
+## Addendum 74 — EDGAR round-6 correction (single commit)
+- Cross-date acceptance: removed the `ns < filing_midnight_ns`
+  rejection. After-hours acceptances carrying next-business-day
+  filing dates stay authoritative (strict shape/calendar/round-trip
+  + future policy unchanged; old events still bounded by the
+  lookback cutoff, no calendar dependency invented). Regression:
+  Fri 21:00 acceptance + Mon filing date emits the exact Friday
+  instant with estimated=False.
+- INTEGRATION GATE (recorded, not fixed here): estimated EDGAR
+  timestamps MUST map to resolver published_ns=None + permanent
+  context cap at canonical-wiring time; never copy an estimated
+  instant into published_ns. Production CIK wiring must derive
+  symbol->CIK mechanically from collector/entity_map.json.
+- One self-caught edit slip repaired before green (placeholder def
+  with a space + dropped neighbor def lines; def-count and
+  per-test listing verified: 45 defs, 45 pass).
+- 45/45 EDGAR green warnings-as-errors (both styles); runnable
+  plane 106 with only the pre-existing Windows file-lock failure;
+  freeze PASS. Live SEC evidence still OPEN — not claimed.

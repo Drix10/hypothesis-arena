@@ -608,6 +608,21 @@ class TestEdgar(unittest.TestCase):
         self.assertEqual(len(recs2), 1)
         self.assertFalse(recs2[0]["observed_at_estimated"])
 
+    def test_premidnight_acceptance_stays_authoritative(self):
+        import calendar as _cal
+        # SEC after-hours rule: Friday 21:00 acceptance carries
+        # Monday's filing date. The acceptance instant—not Monday
+        # midnight, and never an estimated fallback—is authoritative.
+        rows = [("0000320193-26-000110", "2026-09-21", "8-K",
+                 "d.htm", "5.02", "2026-09-18T21:00:00Z")]
+        clock = FakeClock(t=noon_24())
+        a = adapter_c(self.sub_routes(rows), clock)
+        recs, info = a.poll(["AAPL"], today=TODAY)
+        self.assertEqual(len(recs), 1)  # emits, not demoted
+        expect = _cal.timegm((2026, 9, 18, 21, 0, 0, 0, 0, 0)) * 10**9
+        self.assertEqual(recs[0]["observed_at_ns"], expect)
+        self.assertFalse(recs[0]["observed_at_estimated"])
+
     def test_malformed_acceptance_array_rejected(self):
         bad = {"filings": {"recent": {
             "accessionNumber": ["a1"], "form": ["8-K"],
