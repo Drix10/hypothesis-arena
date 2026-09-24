@@ -1573,3 +1573,10 @@ plane (Phase D) change any interface a future slice depends on?
 - 21/21 BLS green warnings-as-errors (both styles). BLS code
   acceptance NOT claimed: pending hosted proof + independent audit.
   Live evidence OPEN.
+
+## Addendum 90 - BLS code ACCEPTED (independent re-audit)
+- Independent re-audit of 7817f20 + hosted 36036667089 CLOSED BLS
+  implementation/correctness: weekday/date consistency, constrained
+  TZ forms, naive rejection, clock/leap checks all accepted.
+- BLS code ACCEPTED. Live soak + measured p50/p99 remain OPEN
+  operational evidence, running in parallel (never retro-blocking).
