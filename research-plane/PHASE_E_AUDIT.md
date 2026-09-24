@@ -1496,3 +1496,18 @@ plane (Phase D) change any interface a future slice depends on?
 - 18/18 Treasury green warnings-as-errors (both styles, def-count
   matched); runnable plane 150 with only the pre-existing Windows
   failure; freeze PASS. Live Treasury evidence still OPEN.
+
+## Addendum 85 - Treasury timestamp-authority correction
+- record_date is the publication authority: observed_at_ns comes from
+  record_date midnight (estimated), never auction_date. A future
+  auction_date with current record_date now EMITS (announced auction
+  is published information today); future record_date DROPS.
+- auction_date is REQUIRED event metadata: the record_date fallback
+  is removed; missing/empty/malformed auction_date is dropped, never
+  synthesized. Preserved verbatim on emit.
+- Duplicate-only steady-state polls stay healthy: health uses a
+  usable-row count (new or already-seen), so unchanged datasets keep
+  advancing last_ok_ts instead of aging into stale.
+- 22/22 Treasury green warnings-as-errors (both styles); runnable
+  plane 154 with only the pre-existing Windows failure; freeze PASS.
+  Live Treasury evidence still OPEN. Treasury NOT CLOSED.

@@ -310,6 +310,65 @@ class TestTreasury(unittest.TestCase):
                          "https://fiscaldata.treasury.gov/datasets/"
                          "treasury-securities-auctions-data/")
 
+    def test_future_auction_is_published_info(self):
+        # record_date=today (published), auction_date=tomorrow
+        # (announced): MUST emit, timestamp from record_date.
+        a = adapter(ok_routes([("912797AA1", "2026-09-24",
+                                "2026-09-25")]))
+        recs, info = a.poll(today=TODAY)
+        self.assertTrue(info["ok"])
+        self.assertEqual(len(recs), 1)
+        import calendar as _cal
+        import time as _t
+        expect = int(_cal.timegm(
+            _t.strptime("2026-09-24", "%Y-%m-%d")) * 1000000000)
+        self.assertEqual(recs[0]["observed_at_ns"], expect)
+        self.assertEqual(recs[0]["auction_date"], "2026-09-25")
+        self.assertTrue(recs[0]["observed_at_estimated"])
+
+    def test_future_record_date_dropped(self):
+        a = adapter(ok_routes([("912797AA1", "2026-09-25",
+                                "2026-09-26")]))
+        recs, info = a.poll(today=TODAY)
+        self.assertEqual(recs, [])
+        self.assertFalse(info["ok"])
+        self.assertEqual(info["dropped"], 1)
+
+    def test_auction_date_never_synthesized(self):
+        rows = [{"cusip": "912797AA1", "record_date": "2026-09-20"},
+                {"cusip": "912797AA2", "record_date": "2026-09-20",
+                 "auction_date": ""},
+                {"cusip": "912797AA3", "record_date": "2026-09-20",
+                 "auction_date": "09/18/2026"},
+                {"cusip": "912797AA4", "record_date": "2026-09-20",
+                 "auction_date": "2026-09-18",
+                 "security_type": "Bill"}]
+        a = adapter({"auctions_query":
+                     (200, json.dumps({"data": rows}).encode())})
+        recs, info = a.poll(today=TODAY)
+        self.assertEqual(len(recs), 1)
+        self.assertEqual(recs[0]["auction_date"], "2026-09-18")
+        self.assertEqual(info["dropped"], 3)
+        self.assertTrue(info["ok"])
+
+    def test_steady_state_duplicates_stay_healthy(self):
+        clock = FakeClock()
+        a = adapter(ok_routes([("912797AA1", "2026-09-20",
+                                "2026-09-18")]), clock)
+        r1, i1 = a.poll(today=TODAY)
+        self.assertEqual(len(r1), 1)
+        self.assertTrue(i1["ok"])
+        t1 = a.last_ok_ts
+        for _ in range(5):
+            clock.t += 60
+            r, info = a.poll(today=TODAY)
+            self.assertEqual(r, [])
+            self.assertEqual(info["duplicates"], 1)
+            self.assertTrue(info["ok"])
+            self.assertGreater(a.last_ok_ts, t1)
+            t1 = a.last_ok_ts
+            self.assertFalse(info["stale"])
+
 
 if __name__ == "__main__":
     unittest.main()

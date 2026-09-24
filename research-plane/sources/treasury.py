@@ -5,9 +5,12 @@ Locked scope: api.fiscaldata.treasury.gov auction results
 UA carries MIRO_CONTACT when configured (polite, SEC-style); the
 source does not require it, so absence warns instead of blocking.
 
-Timestamps: auction_date is day-granularity -> observed_at_ns is
-midnight EXPLICITLY flagged observed_at_estimated (context-only
-downstream, never TRIGGER). cusip+record_date is the PK dedupe key.
+Timestamps: record_date is the PUBLICATION date and the sole source
+of observed_at_ns (midnight, explicitly estimated: day-granularity,
+never an authoritative instant). auction_date is EVENT metadata and
+may be future (announced auctions) while record_date is current;
+a future auction_date is never a future observation. cusip+record_date
+is the PK dedupe key.
 
 Rate: conservative 1 req/s operating pace. 3 retries, jittered
 backoff, 429 halves once per episode with deterministic recovery.
@@ -223,6 +226,7 @@ class Adapter:
         today_s = today or _utc_today()
         now = self.clock()
         self.polls += 1
+        usable = 0
         info = {"ok": False, "stale": True, "errors": [], "dropped": 0,
                 "duplicates": 0, "records": 0, "truncated": 0,
                 "completed_at": 0.0}
@@ -259,20 +263,25 @@ class Adapter:
                 continue
             cusip = row.get("cusip")
             rec_date = row.get("record_date")
-            auc_date = row.get("auction_date") or rec_date
+            auc_date = row.get("auction_date")
             if not _valid_cusip(cusip):
                 info["dropped"] += 1  # malformed identifier: never
                 continue  # a dedupe key, never emitted unvalidated
             if not _valid_ymd(rec_date):
                 info["dropped"] += 1
                 continue
+            # auction_date is REQUIRED event metadata: never
+            # synthesized, but may be future (announced auction).
             if not _valid_ymd(auc_date):
                 info["dropped"] += 1
                 continue
-            obs_ns = _date_to_ns(auc_date, today_s)
+            # record_date is the publication date and the sole
+            # availability authority; future => not yet published.
+            obs_ns = _date_to_ns(rec_date, today_s)
             if obs_ns is None:
                 info["dropped"] += 1
                 continue
+            usable += 1  # valid source row, new or already seen
             key = (cusip, rec_date)
             if key in self._seen:
                 info["duplicates"] += 1
@@ -290,8 +299,7 @@ class Adapter:
                 "kind": KIND,
                 "cusip": cusip,
                 "record_date": rec_date,
-                "auction_date": auc_date
-                if isinstance(auc_date, str) else rec_date,
+                "auction_date": auc_date,
                 "security_type": row.get("security_type", "")
                 if isinstance(row.get("security_type", ""), str) else "",
                 "observed_at_ns": obs_ns,
@@ -301,10 +309,11 @@ class Adapter:
         info["records"] = len(recs)
         done = self.clock()
         info["completed_at"] = done
-        # Content health: zero usable records never resets freshness,
-        # even with clean transport. Partial success ( >= 1 record )
-        # stays healthy with drops visible.
-        if not info["errors"] and recs:
+        # Content health: >= 1 USABLE row (new or already-seen
+        # duplicate) keeps the source fresh. Zero usable rows never
+        # resets freshness, even with clean transport. Partial
+        # success stays healthy with drops visible.
+        if not info["errors"] and usable:
             info["ok"] = True
             self.last_ok_ts = done
             self.last_error = ""
