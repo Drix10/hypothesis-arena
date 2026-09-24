@@ -1195,3 +1195,7 @@ plane (Phase D) change any interface a future slice depends on?
   set-zero-valid coverage preserved; ghost/mutation/10k/bounded
   green. Suite + full kernel gate PASS normal+hardened; freeze PASS.
   No F/D/H1/poller/JEV/research-plane changes.
+
+## Addendum 62 — hosted CI green on Slice G v1 contract closure
+- Run 35945952755 on `aad16ca`: stdlib + evidence + plane + kernel
+  SUCCESS.
