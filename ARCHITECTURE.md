@@ -161,7 +161,23 @@ accepted research-plane adapters (EDGAR/FRED/Treasury/BLS/BEA) ARE
 the graph harvest implementation — pure I/O, no LLM — orchestrated
 once by `research-plane/plane/source_seam.py`, which owns the single
 adapter singletons, stamps, heartbeats, and the canonical mapping
-into resolver/f2. The frozen P1 collector path above is untouched
+into resolver/f2. The tracked production composition is
+`research-plane/plane/runner.py::build_production_runner`: one
+Runner owns one Seam + one graph app for the process lifetime and
+binds ALL THREE seam-owned graph callbacks — `harvest`,
+`parser_extract` (adapter rec → lineage-bound parser candidate),
+and `resolve_emit` (`canonical_for` = seam store lookup,
+`source_watermarks` = seam watermarks). The caller supplies only
+unrelated deps (LLM providers, fuse, budgets, spend); supplying any
+seam-owned callback is a ConfigError. The graph's own emit node is
+the sole publisher caller; the emitted bundle path surfaces on the
+cycle output. Restart/resume: memory is cache-only; canonical
+lookup falls back to the durable seam_canonical projection (same
+DB, same commit as the authority ingest; absent → fail closed) and
+history tails recover from durable accepted bundles
+(`restore_from_bundles`, shape/monotonicity re-validated,
+bounded); no durable state → warming tail with no frozen-feed
+coverage claimed. The frozen P1 collector path above is untouched
 and keeps running; within Phase 2.5 there is exactly one poll path
 per source. Nothing in the seam trades.
 
@@ -195,7 +211,21 @@ per source. Nothing in the seam trades.
 
 ## 5. research-plane/ (ACTIVE)
 
-### plane/ (16)
+### plane/ (18)
+
+- `runner.py` — TRACKED production composition
+  (`build_production_runner`): owns one Seam + graph app per
+  process, binds the three seam-owned callbacks
+  (harvest/parser_extract/resolve_emit), requires the heartbeat
+  sink, resolves the MIRO_CANONICAL_DB-honoring lineage DB +
+bundle outdir + pinned map, restores durable history. Caller
+  supplies unrelated deps only; seam-owned overrides refused.
+- `source_seam.py` — Phase-2.5 harvest seam (plan/08 §8.3): five
+  adapter singletons, real pacing (sleep/monotonic), stamps +
+  heartbeats, frozen-collector canonical lineage (shared records
+  table, authority hash), durable canonical projection +
+  bundle-history recovery for restart, seam-owned watermarks +
+  parser extract. Exactly one poll path per source.
 
 - `graph.py` — 6-node `run_cycle`; per-epoch budget threads;
   single-run-per-process guard; aborted checkpoints terminal.
@@ -230,8 +260,11 @@ per source. Nothing in the seam trades.
 
 ### sources/ (5)
 
-Readiness probes + gates (evidence + veto logic; NOT the production
-poller — that is `collector/collect.py`). Egress, stated exactly:
+Readiness probes + gates (evidence + veto logic; NOT the P1
+production poller — that is `collector/collect.py`). The five
+accepted adapters additionally serve as the Phase-2.5 graph harvest
+implementation (see §4 reconciliation — exactly one poll path per
+source, owned by the seam). Egress, stated exactly:
 `sandbox/` worker containers egress ONLY via Squid (proven 5/5);
 host-side probes here (`tier_a.py`, `earnings.py`, live-provider
 probe driver) use DIRECT `urllib`/httpx from the build host and do
@@ -254,7 +287,7 @@ Evidence JSON; exit 0 always.
 - `tier_a_evidence.json` — committed Tier-A measurement (immutable
   audit evidence, not runtime input).
 
-### tests/ (5 files + battery)
+### tests/ (7 files + battery)
 
 - `test_plane.py` (108) — graph/R15/cadence/attribution/workers.
 - `test_hardening.py` (116) — fail-closed regressions, Rounds 1–9.
@@ -263,6 +296,10 @@ Evidence JSON; exit 0 always.
   probe via setpriv; CI `evidence` job).
 - `test_sources.py` — calendar gate (3) + earnings veto (6);
   CI `evidence` job.
+- `test_source_seam.py` (23) — harvest→authority→resolver→reader
+  legs, stdlib evidence job.
+- `test_seam_graph.py` (6) — tracked production Runner end-to-end
+  + restart recovery, plane job (langgraph).
 
 ### sandbox/ (13 files + 2 subdirs: deployment evidence machinery)
 
@@ -309,11 +346,17 @@ collector/plane runtime outputs. Local-only by `.gitignore`.
 
 ## 8. Cross-component flows
 
-Production: Tier-A/B source → `collector/collect.py` (TTL/heartbeat/
-keys) → classify → `data/signals/<day>.jsonl` → plane `graph.py`
-(LLM context via `workers.py`, spend-governed, checkpointed) →
-`features.jsonl` + emit bundles → kernel `jev_validate` → `risk/veto`
-→ `decision_table` → paper fills (doc 06 §6.5). Gating overlay:
+Production (P1 frozen path): Tier-A/B source → `collector/collect.py`
+(TTL/heartbeat/keys) → classify → `data/signals/<day>.jsonl` →
+plane `graph.py` (LLM context via `workers.py`, spend-governed,
+checkpointed) → `features.jsonl` + emit bundles → kernel
+`jev_validate` → `risk/veto` → `decision_table` → paper fills
+(doc 06 §6.5). Production (Phase-2.5 seam path, plan/08 §8.3): the
+five accepted adapters → `source_seam.py` harvest (canonical lineage
+via frozen classify into the shared records table) → graph nodes
+(seam `parser_extract` binds authority lineage to candidates) →
+graph emit (seam-bound `resolve_emit`: store lookup + watermarks)
+→ emit bundle → frozen `ctx_read`. Gating overlay:
 earnings veto + session calendar suppress entries; exits never gated.
 Failure overlay: DOWN → stale heartbeat → features expire (absent ≠
 neutral); calendar missing → zero entries; unknown spend → block →
@@ -337,10 +380,12 @@ mirror (missing ledger raises, never $0).
   file, CI wiring, `.env.example` (additive consumed keys only).
 - FUTURE: Slice D; live capital past G0_PAPER; production broker
   pollers + H1 execution (order router/journal/ack/reconcile);
-  production FRED/BEA poller→feature wiring; production earnings
-  poller→graph consumer wiring (source-level TTL/heartbeat PROVEN);
-  7-day run; profit/calibration feeds (G-stage); registry
-  publication (optional); P3.5 sizing/execution.
+  production earnings poller→graph consumer wiring (source-level
+  TTL/heartbeat PROVEN); 7-day run; profit/calibration feeds
+  (G-stage); registry publication (optional); P3.5 sizing/execution.
+  (The five-adapter poller→feature seam — EDGAR/FRED/Treasury/BLS/
+  BEA harvest→parser→resolve→bundle→ctx — is SHIPPED, pending audit
+  acceptance; live soak/p50-p99 per source stays OPEN by design.)
 - Current Phase-D credentials (ONLY): OpenRouter, FRED/ALFRED, BEA,
   Alpaca paper. OANDA practice BLOCKED (India ineligible, Addendum
   39) — alt-FX venue research only, no signup. No other keys exist.

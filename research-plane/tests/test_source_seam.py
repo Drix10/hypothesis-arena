@@ -487,6 +487,87 @@ class TestSourceSeam(unittest.TestCase):
         for entries in h2.values():
             self.assertEqual(len(entries), 1)
 
+    def test_parser_extract_binds_lineage(self):
+        # Seam-owned parser extract: adapter rec -> candidate with
+        # the AUTHORITY hash; lineage-less input yields nothing.
+        seam, _db = make_seam()
+        recs, _st, _h = seam.harvest(["SPY"], 3)
+        rec = [r for r in recs
+               if r["source_id"] == "treasury_auctions"][0]
+        self.assertIn("canonical_hash", rec)
+
+        class Budget:
+            charged = 0
+
+            def charge_tool(self):
+                self.charged += 1
+
+        got = seam.parser_extract(rec, Budget())
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["origin"], "parser")
+        self.assertEqual(got[0]["canonical_hash"],
+                         rec["canonical_hash"])
+        self.assertEqual(got[0]["value"], {"type": "count", "v": 1})
+        self.assertEqual(seam.parser_extract({"source_id": "x"},
+                                             Budget()), [])
+        self.assertEqual(seam.parser_extract(
+            {"canonical_hash": "0" * 64}, Budget()), [])
+
+    def test_canonical_lookup_survives_restart(self):
+        # Memory wiped (new-process equivalent): the same hash still
+        # resolves from the durable projection of the same authority.
+        seam, _db = make_seam()
+        recs, _st, _h = seam.harvest(["SPY"], 3)
+        rec = [r for r in recs
+               if r["source_id"] == "treasury_auctions"][0]
+        h = rec["canonical_hash"]
+        before = seam.store.canonical_for({"canonical_hash": h})
+        self.assertIsNotNone(before)
+        seam.store._by_hash.clear()
+        after = seam.store.canonical_for({"canonical_hash": h})
+        self.assertEqual(after, before)
+        self.assertIsNone(seam.store.canonical_for(
+            {"canonical_hash": "f" * 64}))
+
+    def test_watermarks_vouch_healthy_only(self):
+        routes = {"auctions_query": (200, {}, auctions_body()),
+                  "empsit.rss": (200, {}, rss_body())}
+        seam = source_seam.build_seam(
+            env={}, clock=FakeClock().now, sleeper=lambda d: None,
+            mono=FakeClock().mono,
+            transports={"treasury": FakeTransport(routes),
+                        "bls": FakeTransport(routes)},
+            contact="", fred_key="", bea_id="",
+            lineage_db_path=os.path.join(tempfile.mkdtemp(), "l.db"))
+        seam.harvest(["AAPL", "SPY"], 3)
+        wm = seam.watermarks(None)
+        self.assertIn("treasury_auctions", wm)
+        self.assertIn("bls_empsit", wm)
+        self.assertNotIn("edgar_8k", wm)  # failed poll vouches nothing
+        entry = wm["treasury_auctions"]
+        self.assertEqual(set(entry), {"last_observation_at", "cursor"})
+        self.assertEqual(entry["last_observation_at"], int(NOW))
+
+    def test_merge_hist_honest_suffix(self):
+        # Malformed/nonmonotonic persisted entries never corrupt the
+        # tail: only shape-valid strictly-newer observations kept.
+        seam, _db = make_seam()
+        # Note: only lowercase-hex h values are valid persisted
+        # observations ("g"*64 is correctly rejected).
+        n = seam._merge_hist("treasury_auctions", [
+            {"h": "g" * 64, "ts": 100},
+            {"h": "bad", "ts": 200},
+            {"h": "a" * 64, "ts": -5},
+            {"h": "a" * 64, "ts": 50},
+            {"h": "b" * 64, "ts": 100},
+            {"nope": 1}])
+        self.assertEqual(n, 2)
+        dq = seam._hist["treasury_auctions"]
+        self.assertEqual(list(dq), [{"h": "a" * 64, "ts": 50},
+                                    {"h": "b" * 64, "ts": 100}])
+        # Unknown source: nothing to merge into.
+        self.assertEqual(seam._merge_hist("nope_src", []), 0)
+
     def test_miro_canonical_db_honored(self):
         import os as _os
         scratch = os.path.join(tempfile.mkdtemp(), "canon.db")

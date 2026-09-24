@@ -37,6 +37,17 @@ ARCHITECTURE BOUNDARY (explicit, not silent):
   a same-timestamp repeat appends nothing (no fabricated +1s, no
   manufactured coverage). The graph/state→publish path carries it to
   the bundle, preserving frozen-feed detection.
+- RESTART/RESUME: process memory (_by_hash, _hist) is a cache, never
+  the authority. Canonical lookup falls back to a seam-owned cache
+  TABLE in the same lineage DB (written atomically with the
+  authority ingest, keyed by the authority hash, read back on
+  memory miss; absent → None, fail closed). History is recovered
+  from durable accepted bundles (Seam.restore_from_bundles): only
+  persisted {h, ts} observations, re-validated shape + monotonicity,
+  bounded. No durable state → warming tail (no frozen-feed coverage
+  claimed, never fabricated). A resumed Runner over the same DB +
+  bundle dir therefore resolves the same hashes and carries the
+  same tail.
 """
 import collections
 import hashlib
@@ -68,6 +79,12 @@ ENTITY_MAP_REL = os.path.join("collector", "entity_map.json")
 LINEAGE_DB_REL = os.path.join("data", "canonical.db")
 
 HISTORY_PER_SOURCE_MAX = 8
+
+CANON_CACHE_DDL = (
+    "CREATE TABLE IF NOT EXISTS seam_canonical ("
+    "content_hash TEXT PRIMARY KEY, canonical_json TEXT NOT NULL)")
+
+HIST_ENTRY_KEYS = frozenset(("h", "ts"))
 
 
 def _repo_root():
@@ -278,6 +295,11 @@ class CanonicalStore:
             os.makedirs(parent, exist_ok=True)
         con = sqlite3.connect(self.db_path)
         _classify.init_db(con)
+        # Seam-owned projection cache (NOT a second authority: the
+        # sole writer is note() from authority-returned data, keyed
+        # by the authority hash; the reader falls back to it on
+        # memory miss after restart).
+        con.execute(CANON_CACHE_DDL)
         return con
 
     def note(self, rec, ingested_ns):
@@ -292,13 +314,17 @@ class CanonicalStore:
             try:
                 _verdict, ch, _first, _rev = \
                     _classify.ingest_signal(con, crec, _iso(ingested_ns))
+                canon = dict(canon, content_hash=ch)
+                con.execute(
+                    "INSERT OR REPLACE INTO seam_canonical "
+                    "(content_hash, canonical_json) VALUES (?, ?)",
+                    (ch, json.dumps(canon, sort_keys=True)))
                 con.commit()
             finally:
                 con.close()
         except Exception:
             self.lineage_errors += 1
             return None
-        canon = dict(canon, content_hash=ch)
         self._by_hash[ch] = canon
         self.lineage_noted += 1
         return ch
@@ -306,7 +332,36 @@ class CanonicalStore:
     def canonical_for(self, candidate):
         if not isinstance(candidate, dict):
             return None
-        return self._by_hash.get(candidate.get("canonical_hash"))
+        h = candidate.get("canonical_hash")
+        hit = self._by_hash.get(h)
+        if hit is not None:
+            return hit
+        # Restart path: reconstruct from the durable projection of
+        # the same authority (never a default, never recomputed
+        # trust). Unparseable/absent → None, fail closed.
+        if not isinstance(h, str) or not h:
+            return None
+        try:
+            con = self._connect()
+            try:
+                row = con.execute(
+                    "SELECT canonical_json FROM seam_canonical "
+                    "WHERE content_hash=?", (h,)).fetchone()
+            finally:
+                con.close()
+        except Exception:
+            return None
+        if row is None:
+            return None
+        try:
+            canon = json.loads(row[0])
+        except ValueError:
+            return None
+        if not isinstance(canon, dict) or \
+                canon.get("content_hash") != h:
+            return None
+        self._by_hash[h] = canon
+        return canon
 
     def items(self):
         """Public read access: (content_hash, canonical) pairs."""
@@ -337,6 +392,108 @@ class Seam:
         self.store = CanonicalStore(db_path=db_path, env=env)
         self._hist = {s.source_id: collections.deque(
             maxlen=HISTORY_PER_SOURCE_MAX) for s in self.sources}
+        self.last_stamps = {}
+        self.last_epoch = None
+
+    def parser_extract(self, rec, budget):
+        """Seam-owned deterministic extract (deps[\"parser_extract\"]):
+        adapter record -> parser candidate carrying ONLY
+        authority-resolved lineage. Unknown/missing lineage yields no
+        candidate (dropped + counted downstream, never emitted)."""
+        try:
+            budget.charge_tool()
+        except Exception:
+            raise
+        h = rec.get("canonical_hash") if isinstance(rec, dict) \
+            else None
+        canon = self.store.canonical_for({"canonical_hash": h}) \
+            if isinstance(h, str) else None
+        if canon is None:
+            return []
+        cand = {"kind": canon["kind"],
+                "value": dict(canon["value"]),
+                "symbols": list(canon["symbols"]),
+                "effect": canon["effect"],
+                "canonical_hash": canon["content_hash"],
+                "origin": "parser"}
+        if canon.get("entity_ref") is not None:
+            cand["entity_ref"] = dict(canon["entity_ref"])
+        if canon.get("provenance_url"):
+            cand["provenance_url"] = canon["provenance_url"]
+        return [cand]
+
+    def watermarks(self, _state=None):
+        """Seam-owned publisher callback: per-source
+        {last_observation_at, cursor} from the latest harvest stamps
+        (same-cycle only; a resumed process re-harvests before any
+        emit, so no stale vouching). Only healthy polls vouch."""
+        out = {}
+        for sid, stamp in self.last_stamps.items():
+            if not stamp.get("ok"):
+                continue
+            out[sid] = {
+                "last_observation_at":
+                    int(stamp["checked_at_ns"] // 1000000000),
+                "cursor": "seam-e%d" % self.last_epoch}
+        return out
+
+    @staticmethod
+    def _valid_hist_entry(e):
+        return isinstance(e, dict) and set(e) == HIST_ENTRY_KEYS \
+            and isinstance(e.get("h"), str) and len(e["h"]) == 64 \
+            and all(c in "0123456789abcdef" for c in e["h"]) \
+            and type(e.get("ts")) is int and e["ts"] > 0
+
+    def _merge_hist(self, sid, entries):
+        """Merge persisted observations: shape-checked, sorted,
+        strictly increasing only, bounded. Returns count kept."""
+        dq = self._hist.get(sid)
+        if dq is None:
+            return 0
+        good = sorted((e for e in entries
+                       if self._valid_hist_entry(e)),
+                      key=lambda e: e["ts"])
+        kept = 0
+        for e in good:
+            if not dq or e["ts"] > dq[-1]["ts"]:
+                dq.append({"h": e["h"], "ts": e["ts"]})
+                kept += 1
+        return kept
+
+    def restore_from_bundles(self, outdir):
+        """Restart recovery: rebuild bounded history tails from
+        durable accepted bundles (features-*.json). Only persisted
+        observations, never synthesized. Returns {source: kept}. No
+        bundles → empty tails = explicit warming (no frozen-feed
+        coverage claimed until real polls rebuild depth)."""
+        recovered = {}
+        pooled = {}
+        try:
+            names = sorted(os.listdir(outdir))
+        except OSError:
+            return recovered
+        for name in names:
+            if not (name.startswith("features-") and
+                    name.endswith(".json")):
+                continue
+            try:
+                with open(os.path.join(outdir, name),
+                          encoding="utf-8") as fh:
+                    bundle = json.load(fh)
+            except (OSError, ValueError):
+                continue
+            hist = bundle.get("history") if isinstance(bundle,
+                                                       dict) else None
+            if not isinstance(hist, dict):
+                continue
+            for sid, entries in hist.items():
+                if isinstance(entries, list):
+                    pooled.setdefault(sid, []).extend(entries)
+        for sid, entries in pooled.items():
+            # Single merge: an honest bounded suffix of everything
+            # durable (shape-checked, sorted, strictly increasing).
+            recovered[sid] = self._merge_hist(sid, entries)
+        return recovered
 
     def harvest(self, watchlist, epoch):
         recs_all = []
@@ -363,11 +520,14 @@ class Seam:
             for r in recs:
                 # Fail-closed BEFORE publish: without authoritative
                 # lineage persistence the record is not harvestable.
+                # The authority hash rides ON the record downstream so
+                # the graph's parser path can only ever emit
+                # authority-resolved lineage (never prose alone).
                 h = self.store.note(r, ingested_ns)
                 if h is None:
                     dropped_lineage += 1
                     continue
-                kept.append(r)
+                kept.append(dict(r, canonical_hash=h))
                 last_h = h
             recs_all.extend(kept)
             stamp = {
@@ -400,6 +560,8 @@ class Seam:
                     # (ok/stale) still describes the poll itself.
                     stamps[src.source_id]["heartbeat_error"] = \
                         "%s" % type(e).__name__
+        self.last_stamps = stamps
+        self.last_epoch = epoch
         return recs_all, stamps, hist
 
 

@@ -1746,3 +1746,53 @@ plane (Phase D) change any interface a future slice depends on?
   pre-existing Windows failure); ctx green; freeze PASS. Live
   soak/p50-p99 OPEN parallel. No kernel/D/H1/JEV/collector-behavior
   change.
+
+## Addendum 98 - seam production-boundary v3 (re-audit P0/P1/P2 fixes)
+- P0 PRODUCTION PUBLISHER WIRING (the central defect): the graph's
+  own emit node now publishes through seam-owned callbacks.
+  build_runner binds THREE seam-owned deps (harvest, parser_extract,
+  resolve_emit) and REFUSES caller-supplied ones (ConfigError each —
+  regression-proven, so no test fake can silently override). The
+  missing link the re-audit exposed: harvest stamps the authority
+  hash ON each kept record, and seam.parser_extract converts adapter
+  rec -> parser candidate carrying ONLY authority-resolved lineage
+  (lineage-less input yields no candidate). publish.resolve_emit
+  receives {outdir, map_path, canonical_for=store lookup,
+  watermarks=seam watermarks}; the bundle path surfaces on the cycle
+  output. No manual second publisher invocation exists anywhere.
+- P0 ONE TRUE E2E: test_one_true_end_to_end runs
+  build_production_runner -> Runner.run -> graph.run_cycle ->
+  seam.harvest -> graph nodes (seam parser_extract) -> graph emit ->
+  real publish.resolve_emit -> real emit_bundle -> frozen ctx_read
+  (accepted>0), history present, every graph-produced feature hash ==
+  classify.content_hash(stored raw_json). AST sentinel proves the
+  test module binds no canonical_for/source_watermarks/_canon.
+- P0 FRESH CALLER: production_graph_deps documents the caller side
+  (GraphTest deps minus the three seam-owned); composition refuses
+  all three overrides. Dependency split documented in runner.py.
+- P1 RESTART CANONICAL: seam_canonical projection table in the same
+  lineage DB, written in the same commit as the authority ingest,
+  keyed by the authority hash; canonical_for falls back to it on
+  memory miss (corrupt/absent -> None, fail closed). Regression:
+  harvest -> wipe memory -> same hash resolves identically.
+- P1 RESTART HISTORY: Seam.restore_from_bundles rebuilds bounded
+  tails from durable accepted bundles (shape + monotonicity
+  re-validated; single global merge = honest suffix). No bundles ->
+  explicit warming (no frozen coverage claimed). Restart regression:
+  3 fresh Runners at +5h steps over same DB+bundles; tails recover
+  exactly ([ts0, ts0+5h, ts0+10h]); cycle-3 read gives accepted=5 /
+  rejected=5 / {frozen-feed:4, ttl-expired:1, inference-capped:5} —
+  the recovered tail trips frozen-feed for the 4 same-hash sources
+  (span 10h >= 9h cover/2), the 10.5h-old filing layer-honestly
+  ttl-expires past its 45min TTL.
+- P2 DOCS: ARCHITECTURE.md reconciled (§4 composition/ownership/
+  restart, §5 runner+seam entries, §8 dual production paths, §9
+  FRED/BEA wiring moved FUTURE->SHIPPED-pending-acceptance, tests
+  list current).
+- Kept without regression: real sleep/monotonic, strict estimated
+  flag, same-ts history, lineage fail-closed, heartbeat required,
+  outage isolation, one adapter per Runner lifetime.
+- 23/23 seam (stdlib) + 6/6 graph (plane) warnings-as-errors; plane
+  222 (only pre-existing Windows tear failure, proven on pristine
+  tree); ctx green; freeze PASS. Live soak/p50-p99 OPEN parallel.
+  No kernel/D/H1/JEV/risk/sizing/collector-behavior change.
