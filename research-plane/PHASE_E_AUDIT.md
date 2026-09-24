@@ -1671,3 +1671,38 @@ plane (Phase D) change any interface a future slice depends on?
   forex-only watchlist. Plane 210 (only pre-existing Windows
   failure); ctx suite green; freeze PASS. Wired into hosted CI.
   Live soak/p50-p99 stay OPEN parallel. No kernel/D/H1/JEV change.
+
+## Addendum 96 - seam production-boundary corrections (audit fixes)
+- Exact audit findings closed, preferring seam fixes (no adapter
+  semantic changes):
+  1. PACING: build_seam now takes explicit sleeper/mono (production
+     defaults time.sleep/time.monotonic; tests inject). Regression
+     wires a stepped mono + recording sleeper and proves the second
+     harvest actually waits; adapter mono identity asserted.
+  2. REAL GRAPH PATH: new plane/runner.py (stdlib-safe lazy graph
+     import) owns one seam + one app per process; build_runner binds
+     seam.harvest into build_graph deps. tests/test_seam_graph.py
+     (plane job, venv) proves real run_cycle -> seam adapters ->
+     raw/stamps/history + cross-cycle adapter sharing.
+  3. REAL PUBLISH PATH: test_production_publish_path runs fused
+     parser candidates through publish.resolve_emit (real watermarks
+     callback) and the emitted file through frozen ctx_read.
+  4. LINEAGE PERSISTENCE: CanonicalStore.note() writes the shared
+     canonical records table (same authority ctx_read checks; same
+     keying; INSERT OR IGNORE + touch; verdict new, parser seam-v1,
+     per-source adapter PKs, NULL-safe published). DDL pinned equal
+     to classify.init_db by test. No test-seeded rows anywhere.
+  5. HISTORY: harvest returns (recs, stamps, history) -- one bounded
+     honest entry per source per poll, strictly increasing ts, only
+     noted records; graph validation + bundle path carry it.
+  6. HEARTBEAT FAILURE: write exceptions mark stamp heartbeat_error
+     visibly; poll health still describes the poll. Regression uses
+     a file-as-dir to force failure.
+  7. ESTIMATED STRICTNESS: observed_at_estimated must be real bool
+     (missing stays conservative); 'false'/0/1/None/etc. reject.
+  8. SINGLETON: Runner owns seam+app for life; regression proves
+     adapter identity + per-cycle polls across two real cycles.
+- 16/16 seam + 2/2 graph tests warnings-as-errors (both styles for
+  seam; graph via venv script + module modes). Plane 215 (only
+  pre-existing Windows failure); ctx green; freeze PASS. Live
+  soak/p50-p99 OPEN parallel. No kernel/D/H1/JEV change.

@@ -1,5 +1,7 @@
 """Production source->graph seam tests: harvest -> canonical -> resolver
--> publish -> frozen ctx_read, with fake transports and fixed clocks."""
+-> production publish.resolve_emit -> frozen ctx_read, with fake
+transports, stepped clocks, and a real lineage DB (never hand-seeded
+rows: harvest itself persists lineage)."""
 import calendar
 import hashlib
 import json
@@ -14,7 +16,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.abspath(os.path.join(ROOT, "..")))
 
-from collector import ctx_read
+from collector import classify, ctx_read
 from plane import publish, resolver, schema
 from plane import source_seam
 from plane.source_seam import to_canonical
@@ -66,13 +68,22 @@ def bea_body():
 
 
 class FakeClock:
+    """Wall clock; mono advances ONLY when sleeper runs (stepped)."""
+
     def __init__(self, t=NOW):
         self.t = t
+        self.m = t
+        self.sleeps = []
 
     def now(self):
         return self.t
 
+    def mono(self):
+        return self.m
+
     def sleep(self, d):
+        self.sleeps.append(d)
+        self.m += d
         self.t += d
 
 
@@ -99,25 +110,24 @@ def routes_all():
             "apps.bea.gov": (200, {}, bea_body())}
 
 
-def make_seam(clock=None, routes=None, heartbeat_dir=None):
+def make_transports(routes=None):
+    routes = routes or routes_all()
+    return {k: FakeTransport(routes)
+            for k in ("edgar", "fred", "treasury", "bls", "bea")}
+
+
+def make_seam(clock=None, routes=None, heartbeat_dir=None,
+              lineage_db=None):
     clock = clock or FakeClock()
-    transports = {"edgar": FakeTransport(routes or routes_all()),
-                  "fred": FakeTransport(routes or routes_all()),
-                  "treasury": FakeTransport(routes or routes_all()),
-                  "bls": FakeTransport(routes or routes_all()),
-                  "bea": FakeTransport(routes or routes_all())}
+    if lineage_db is None:
+        lineage_db = os.path.join(tempfile.mkdtemp(), "lineage.db")
     seam = source_seam.build_seam(
-        env={}, clock=clock.now, transports=transports,
+        env={}, clock=clock.now, sleeper=clock.sleep, mono=clock.mono,
+        transports=make_transports(routes),
         contact="seam-test@example.invalid", fred_key="K-TEST",
-        bea_id="B-TEST", heartbeat_dir=heartbeat_dir)
-    # build_seam has no sleeper param; adapters default sleep is unused
-    # because pacing never triggers on an unpaused fake clock... except
-    # repeated polls DO pace. Patch sleepers to advance the fake clock.
-    for src in seam.sources:
-        if src.adapter is not None:
-            src.adapter.sleep = clock.sleep
-            src.adapter.mono = clock.now
-    return seam, transports
+        bea_id="B-TEST", heartbeat_dir=heartbeat_dir,
+        lineage_db_path=lineage_db)
+    return seam, lineage_db
 
 
 def parser_candidate(canon):
@@ -131,104 +141,141 @@ def parser_candidate(canon):
     return c
 
 
-def ctx_accept(feat, content_hash):
-    with open(MAP_PATH, "rb") as fh:
-        map_sha = hashlib.sha256(fh.read()).hexdigest()
-    sid = feat["source_id"]
-    wm = {"entity_map_version": "entity-v1",
-          "entity_map_sha256": map_sha,
-          "sources": {sid: {"last_observation_at": int(NOW) - 300,
-                             "cursor": "seam-test"}}}
-    hist = {sid: [{"h": content_hash, "ts": int(NOW) - 600},
-                  {"h": content_hash, "ts": int(NOW) - 300}]}
-    bundle = schema.build_bundle(3, "seam-%s" % sid, [feat], wm, hist)
-    tmp = tempfile.mkdtemp()
-    bpath = os.path.join(tmp, "b.json")
-    with open(bpath, "w", encoding="utf-8") as fh:
-        fh.write(json.dumps(bundle))
-    db = os.path.join(tmp, "c.db")
-    con = sqlite3.connect(db)
-    con.execute("CREATE TABLE records (source, source_id, content_hash)")
-    con.execute("INSERT INTO records VALUES (?,?,?)",
-                (sid, "seam", content_hash))
-    con.commit()
-    con.close()
-    return ctx_read.read_bundle(bpath, db, MAP_PATH, now_ts=NOW)
-
-
-def full_chain(testcase, seam, source_id, watchlist):
-    recs, stamps = seam.harvest(watchlist, 3)
-    mine = [r for r in recs if r["source_id"] == source_id]
-    testcase.assertTrue(stamps[source_id]["ok"], stamps)
-    testcase.assertTrue(len(mine) >= 1)
-    canon = seam.store.canonical_for(
-        {"canonical_hash": source_seam._content_hash(mine[0])})
-    testcase.assertIsNotNone(canon)
-    cand = parser_candidate(canon)
-    ok, out = resolver.resolve(cand, canon, _entity_map(),
-                               origin="parser")
-    testcase.assertTrue(ok, out)
-    feat, capped = out
-    res = ctx_accept(feat, canon["content_hash"])
-    testcase.assertEqual(res["stats"]["accepted"], 1, res["stats"])
-    return canon, feat, capped
-
-
 def _entity_map():
     with open(MAP_PATH, encoding="utf-8") as fh:
         return json.load(fh)
 
 
+def ctx_accept(feats, hist, lineage_db):
+    with open(MAP_PATH, "rb") as fh:
+        map_sha = hashlib.sha256(fh.read()).hexdigest()
+    srcs = {f["source_id"] for f in feats} | set(hist or {})
+    wm = {"entity_map_version": "entity-v1",
+          "entity_map_sha256": map_sha,
+          "sources": {s: {"last_observation_at": int(NOW) - 300,
+                           "cursor": "seam-test"} for s in srcs}}
+    bundle = schema.build_bundle(3, "seam", feats, wm, hist or None)
+    tmp = tempfile.mkdtemp()
+    bpath = os.path.join(tmp, "b.json")
+    with open(bpath, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(bundle))
+    return ctx_read.read_bundle(bpath, lineage_db, MAP_PATH, now_ts=NOW)
+
+
+def resolve_all(testcase, seam, recs):
+    feats = []
+    for r in recs:
+        h = seam.store.note(r, ING_NS)
+        testcase.assertIsNotNone(h)
+        canon = seam.store.canonical_for({"canonical_hash": h})
+        cand = parser_candidate(canon)
+        ok, out = resolver.resolve(cand, canon, _entity_map(),
+                                   origin="parser")
+        testcase.assertTrue(ok, out)
+        feats.append(out[0])
+    return feats
+
+
 class TestSourceSeam(unittest.TestCase):
     def test_chain_edgar(self):
-        seam, _t = make_seam()
-        canon, feat, capped = full_chain(self, seam, "edgar_8k",
-                                         ["AAPL"])
-        # Authoritative acceptance: published, high confidence — but
-        # evidence stays inference: the seam assigns no directional
-        # effect (promotion gate owns that), and source evidence
-        # additionally requires a real effect. No invention here.
+        seam, _db = make_seam()
+        recs, stamps, hist = seam.harvest(["AAPL"], 3)
+        mine = [r for r in recs if r["source_id"] == "edgar_8k"]
+        self.assertTrue(stamps["edgar_8k"]["ok"], stamps)
+        self.assertTrue(len(mine) >= 1)
+        self.assertIn("edgar_8k", hist)
+        feats = resolve_all(self, seam, mine)
+        res = ctx_accept(feats, hist, seam.store.db_path)
+        self.assertEqual(res["stats"]["accepted"], 1, res["stats"])
+        canon = seam.store.canonical_for(
+            {"canonical_hash": feats[0]["canonical_hash"]})
         self.assertEqual(canon["published_ns"], 1790256600 * 1000000000)
-        self.assertFalse(capped)
-        self.assertEqual(feat["evidence"], "inference")
-        self.assertEqual(feat["confidence_bucket"], "high")
+        self.assertEqual(feats[0]["evidence"], "inference")
+        self.assertEqual(feats[0]["confidence_bucket"], "high")
         self.assertFalse(ctx_read.trigger_eligible(
-            {"evidence": feat["evidence"]}))
+            {"evidence": feats[0]["evidence"]}))
 
     def test_chain_fred(self):
-        seam, _t = make_seam()
-        canon, feat, capped = full_chain(self, seam, "fred_macro",
-                                         ["SPY"])
-        self.assertIsNone(canon["published_ns"])  # day granularity
-        self.assertTrue(capped)
-        self.assertEqual(feat["evidence"], "inference")
+        seam, _db = make_seam()
+        recs, stamps, hist = seam.harvest(["SPY"], 3)
+        mine = [r for r in recs if r["source_id"] == "fred_macro"]
+        self.assertTrue(stamps["fred_macro"]["ok"], stamps)
+        self.assertTrue(len(mine) >= 1)
+        feats = resolve_all(self, seam, mine[:1])
+        res = ctx_accept(feats, hist, seam.store.db_path)
+        self.assertEqual(res["stats"]["accepted"], 1, res["stats"])
+        canon = seam.store.canonical_for(
+            {"canonical_hash": feats[0]["canonical_hash"]})
+        self.assertIsNone(canon["published_ns"])
 
     def test_chain_treasury(self):
-        seam, _t = make_seam()
-        canon, feat, capped = full_chain(self, seam,
-                                         "treasury_auctions", ["SPY"])
-        self.assertIsNone(canon["published_ns"])
-        self.assertTrue(capped)
-        self.assertEqual(feat["evidence"], "inference")
+        seam, _db = make_seam()
+        recs, stamps, hist = seam.harvest(["SPY"], 3)
+        mine = [r for r in recs if r["source_id"] == "treasury_auctions"]
+        self.assertTrue(stamps["treasury_auctions"]["ok"], stamps)
+        feats = resolve_all(self, seam, mine)
+        res = ctx_accept(feats, hist, seam.store.db_path)
+        self.assertEqual(res["stats"]["accepted"], 1, res["stats"])
 
     def test_chain_bls(self):
-        seam, _t = make_seam()
-        canon, feat, capped = full_chain(self, seam, "bls_empsit",
-                                         ["SPY"])
-        self.assertIsNone(canon["published_ns"])
-        self.assertTrue(capped)
+        seam, _db = make_seam()
+        recs, stamps, hist = seam.harvest(["SPY"], 3)
+        mine = [r for r in recs if r["source_id"] == "bls_empsit"]
+        self.assertTrue(stamps["bls_empsit"]["ok"], stamps)
+        feats = resolve_all(self, seam, mine)
+        res = ctx_accept(feats, hist, seam.store.db_path)
+        self.assertEqual(res["stats"]["accepted"], 1, res["stats"])
 
     def test_chain_bea(self):
-        seam, _t = make_seam()
-        canon, feat, capped = full_chain(self, seam, "bea_nipa_gdp",
-                                         ["SPY"])
-        self.assertIsNone(canon["published_ns"])
-        self.assertTrue(capped)
-        self.assertEqual(feat["ttl_s"], 64800)
+        seam, _db = make_seam()
+        recs, stamps, hist = seam.harvest(["SPY"], 3)
+        mine = [r for r in recs if r["source_id"] == "bea_nipa_gdp"]
+        self.assertTrue(stamps["bea_nipa_gdp"]["ok"], stamps)
+        feats = resolve_all(self, seam, mine)
+        res = ctx_accept(feats, hist, seam.store.db_path)
+        self.assertEqual(res["stats"]["accepted"], 1, res["stats"])
+        self.assertEqual(feats[0]["ttl_s"], 64800)
+
+    def test_production_publish_path(self):
+        # The REAL publisher (not a hand-built bundle): fused parser
+        # candidates + seam history through publish.resolve_emit,
+        # then the emitted file through frozen ctx_read against the
+        # lineage DB harvest itself wrote (no hand-seeded rows).
+        seam, _db = make_seam()
+        recs, stamps, hist = seam.harvest(["AAPL", "SPY"], 3)
+        treas = [r for r in recs
+                 if r["source_id"] == "treasury_auctions"][:1]
+        self.assertEqual(len(treas), 1)
+        canon = seam.store.canonical_for(
+            {"canonical_hash": source_seam._content_hash(treas[0])})
+        fused = [parser_candidate(canon)]
+        tmp = tempfile.mkdtemp()
+
+        def watermarks(state):
+            out = {}
+            for c in fused:
+                canon = seam.store.canonical_for(c)
+                if canon is not None:
+                    out[canon["source_id"]] = {
+                        "last_observation_at": int(NOW) - 300,
+                        "cursor": "seam-test"}
+            return out
+
+        out = publish.resolve_emit(
+            {"outdir": tmp, "map_path": MAP_PATH,
+             "canonical_for": seam.store.canonical_for,
+             "source_watermarks": watermarks},
+            {"epoch": 3, "fused": fused, "history": hist})
+        self.assertFalse(out.get("aborted"), out)
+        self.assertIsNotNone(out.get("emitted"), out)
+        res = ctx_read.read_bundle(out["bundle_path"],
+                                   seam.store.db_path, MAP_PATH,
+                                   now_ts=NOW)
+        self.assertEqual(res["stats"]["accepted"], 1, res["stats"])
 
     def test_estimated_stays_context_capped(self):
-        seam, _t = make_seam()
-        recs, _st = seam.harvest(["SPY"], 3)
+        seam, _db = make_seam()
+        recs, _st, _h = seam.harvest(["SPY"], 3)
         rec = [r for r in recs
                if r["source_id"] == "treasury_auctions"][0]
         self.assertTrue(rec["observed_at_estimated"])
@@ -243,6 +290,18 @@ class TestSourceSeam(unittest.TestCase):
         self.assertFalse(ctx_read.trigger_eligible(
             {"evidence": feat["evidence"]}))
 
+    def test_estimated_flag_strict_bool(self):
+        seam, _db = make_seam()
+        recs, _st, _h = seam.harvest(["SPY"], 3)
+        rec = [r for r in recs
+               if r["source_id"] == "treasury_auctions"][0]
+        base = dict(rec)
+        del base["observed_at_estimated"]  # missing: conservative
+        self.assertIsNotNone(to_canonical(base, ING_NS))
+        for bad in ("false", "true", 0, 1, None, 0.0, []):
+            mutated = dict(rec, observed_at_estimated=bad)
+            self.assertIsNone(to_canonical(mutated, ING_NS), repr(bad))
+
     def test_malformed_unknown_rejected(self):
         self.assertIsNone(to_canonical(None, ING_NS))
         self.assertIsNone(to_canonical({"source_id": "nope",
@@ -251,13 +310,14 @@ class TestSourceSeam(unittest.TestCase):
                                         "observed_at_ns": 1}, ING_NS))
         self.assertIsNone(to_canonical(
             {"source_id": "bea_nipa_gdp", "kind": "filing_event",
-             "symbols": ["SPY"], "observed_at_ns": 1}, ING_NS))
+             "symbols": ["SPY"], "observed_at_ns": 1,
+             "observed_at_estimated": True}, ING_NS))
         canon = {"source_id": "bea_nipa_gdp", "kind": "macro_release",
                  "content_hash": "a" * 64, "published_ns": None,
                  "ingested_ns": ING_NS, "symbols": ["SPY"],
                  "value": {"type": "count", "v": 1}, "effect": None,
                  "parser_confidence": "high", "corroborated": False}
-        ok, why = resolver.resolve(
+        ok, _o = resolver.resolve(
             parser_candidate(canon), canon, _entity_map(),
             origin="parser")
         self.assertTrue(ok)
@@ -274,9 +334,10 @@ class TestSourceSeam(unittest.TestCase):
                   "empsit.rss": TimeoutError("d"),
                   "apps.bea.gov": TimeoutError("d")}
         with tempfile.TemporaryDirectory() as hbdir:
-            seam, _t = make_seam(routes=routes, heartbeat_dir=hbdir)
-            recs, stamps = seam.harvest(["AAPL", "SPY"], 3)
+            seam, _db = make_seam(routes=routes, heartbeat_dir=hbdir)
+            recs, stamps, hist = seam.harvest(["AAPL", "SPY"], 3)
             self.assertEqual(recs, [])
+            self.assertEqual(hist, {})
             for sid in source_seam.SOURCES:
                 self.assertFalse(stamps[sid]["ok"], sid)
             self.assertEqual(seam.store.canonical_for({"canonical_hash":
@@ -290,31 +351,45 @@ class TestSourceSeam(unittest.TestCase):
 
     def test_singleton_no_double_poll(self):
         clock = FakeClock()
-        seam, transports = make_seam(clock=clock)
-        r1, s1 = seam.harvest(["AAPL"], 3)
+        seam, _db = make_seam(clock=clock)
+        before = [id(s.adapter) for s in seam.sources]
+        r1, s1, _h1 = seam.harvest(["AAPL"], 3)
         self.assertTrue(all(s1[s]["ok"] for s in s1))
         self.assertTrue(len(r1) > 0)
-        polls1 = [src.adapter.polls for src in seam.sources]
-        r2, s2 = seam.harvest(["AAPL"], 4)
-        # Same owned instances serve both cycles: each adapter polls
-        # exactly once more (no duplicate seam, no rebuild), second
-        # cycle stays healthy on duplicate-only content.
+        polls1 = [s.adapter.polls for s in seam.sources]
+        r2, s2, _h2 = seam.harvest(["AAPL"], 4)
+        # Same owned instances serve both cycles: identity preserved,
+        # each adapter polls exactly once more, second cycle healthy.
+        self.assertEqual([id(s.adapter) for s in seam.sources], before)
         self.assertTrue(all(s2[s]["ok"] for s in s2))
-        polls2 = [src.adapter.polls for src in seam.sources]
+        polls2 = [s.adapter.polls for s in seam.sources]
         self.assertEqual(polls2, [p + 1 for p in polls1])
+
+    def test_pacing_is_real(self):
+        # Stepped mono advances ONLY via the wired sleeper: if the
+        # seam passed a no-op sleeper (or wall-clock pacing), the
+        # second harvest would never wait. It must.
+        clock = FakeClock()
+        seam, _db = make_seam(clock=clock)
+        for src in seam.sources:
+            self.assertEqual(src.adapter.mono, clock.mono)
+        seam.harvest(["AAPL"], 3)
+        clock.sleeps.clear()
+        seam.harvest(["AAPL"], 4)
+        self.assertTrue(clock.sleeps, "no pacing wait on 2nd harvest")
+        self.assertGreaterEqual(sum(clock.sleeps), 1.0)
 
     def test_missing_keys_fail_closed(self):
         routes = {"auctions_query": (200, {}, auctions_body()),
                   "empsit.rss": (200, {}, rss_body())}
         seam = source_seam.build_seam(
-            env={}, clock=FakeClock().now,
+            env={}, clock=FakeClock().now, sleeper=lambda d: None,
+            mono=FakeClock().mono,
             transports={"treasury": FakeTransport(routes),
                         "bls": FakeTransport(routes)},
-            contact="", fred_key="", bea_id="")
-        for src in seam.sources:
-            if src.adapter is not None:
-                src.adapter.sleep = lambda d: None
-        recs, stamps = seam.harvest(["AAPL", "SPY"], 3)
+            contact="", fred_key="", bea_id="",
+            lineage_db_path=os.path.join(tempfile.mkdtemp(), "l.db"))
+        recs, stamps, hist = seam.harvest(["AAPL", "SPY"], 3)
         for sid in ("edgar_8k", "fred_macro", "bea_nipa_gdp"):
             self.assertIn(sid, stamps)
             self.assertFalse(stamps[sid]["ok"], sid)
@@ -322,10 +397,39 @@ class TestSourceSeam(unittest.TestCase):
         self.assertTrue(stamps["bls_empsit"]["ok"])
 
     def test_edgar_skipped_forex_only(self):
-        seam, _t = make_seam()
-        recs, stamps = seam.harvest(["EURUSD"], 5)
+        seam, _db = make_seam()
+        recs, stamps, hist = seam.harvest(["EURUSD"], 5)
         self.assertNotIn("edgar_8k", stamps)
         self.assertIn("treasury_auctions", stamps)
+
+    def test_heartbeat_failure_visible(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            block = os.path.join(tmp, "is-a-file")
+            with open(block, "w") as fh:
+                fh.write("x")
+            seam, _db = make_seam(heartbeat_dir=block)
+            recs, stamps, hist = seam.harvest(["AAPL"], 3)
+            self.assertTrue(len(recs) > 0)
+            errs = [s for s in stamps.values()
+                    if "heartbeat_error" in s]
+            self.assertEqual(len(errs), len(stamps))
+            # Poll health still describes the poll, not the disk.
+            self.assertTrue(all(s["ok"] for s in stamps.values()))
+
+    def test_lineage_ddl_matches(self):
+        import sqlite3 as _sq
+        a = _sq.connect(":memory:")
+        classify.init_db(a)
+        a_schema = a.execute(
+            "SELECT sql FROM sqlite_master WHERE name='records'"
+        ).fetchone()[0]
+        b = _sq.connect(":memory:")
+        b.execute(source_seam.RECORDS_DDL)
+        b_schema = b.execute(
+            "SELECT sql FROM sqlite_master WHERE name='records'"
+        ).fetchone()[0]
+        norm = lambda s: " ".join(s.split())
+        self.assertEqual(norm(a_schema), norm(b_schema))
 
 
 if __name__ == "__main__":

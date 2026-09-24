@@ -84,6 +84,7 @@ jobs:
           python3 research-plane/tests/test_plane.py
           python3 research-plane/tests/test_hardening.py
           python3 research-plane/tests/test_emit.py
+          python3 research-plane/tests/test_seam_graph.py
 
   kernel:
     runs-on: ubuntu-latest
