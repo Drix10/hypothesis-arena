@@ -1580,3 +1580,23 @@ plane (Phase D) change any interface a future slice depends on?
   TZ forms, naive rejection, clock/leap checks all accepted.
 - BLS code ACCEPTED. Live soak + measured p50/p99 remain OPEN
   operational evidence, running in parallel (never retro-blocking).
+
+## Addendum 91 - BEA source slice (implementation)
+- NEW research-plane/sources/bea.py + tests/test_bea.py (19/19
+  warnings-as-errors, both styles): ONE locked GetData call
+  (NIPA/T10101/Frequency=A, clock-derived Year prev,cur); keyed
+  source fail-closed without BEA_USER_ID; key in query string only,
+  proven absent from all errors/heartbeats; HTTP-200 nested
+  Results.Error/BEAAPI.Error classified denied with bounded
+  description (never denial-masked transport); strict 4-digit
+  TimePeriod not future; SeriesCode-else-LineNumber identity never
+  synthesized; DataValue finite-numeric (commas ok; (NA)/inf/nan
+  dropped); period-Jan-1 midnight estimated; (table,series,period)
+  PK dedupe; empty-data/no-usable-records fail closed; duplicate-only
+  healthy via usable count; 1/s pace + episode throttle; HTTPError
+  normalized + closed; 2MB cap; counted truncation; strict heartbeat
+  + tmp cleanup; harvest envelope. Wired into hosted CI stdlib job.
+  Probes run BEFORE tests: 10 envelope variants, year/value/series
+  edges, key isolation, query lock, build fail-closed — all correct.
+  Live BEA evidence OPEN. No EDGAR/FRED/Treasury/BLS/resolver/JEV/
+  kernel/D/H1 changes. BEA code acceptance NOT claimed (re-audit).
