@@ -1280,3 +1280,9 @@ plane (Phase D) change any interface a future slice depends on?
 - 31/31 EDGAR green; runnable plane 92 with only the pre-existing
   Windows file-lock failure; freeze PASS. Live SEC evidence (soak,
   zero-403, p50/p99) still OPEN — not claimed.
+
+## Addendum 67 — hosted CI verifies the EDGAR suite (new step green)
+- Run 35950609393 on `4db4939`: stdlib + evidence + plane + kernel
+  SUCCESS, with the new evidence-job step `plane EDGAR adapter
+  (stdlib only)` -> success. The 31-test adapter suite is now
+  hosted-verified, not just locally green.
