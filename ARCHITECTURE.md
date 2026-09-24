@@ -156,6 +156,15 @@ Production ingestion path: the poller that turns outside data into
 see §5. The collector is the production path; sources/ probes are
 evidence and gating, not the poller.)
 
+Reconciliation (Phase-2.5 seam, plan/08 §8.3 governs): the five
+accepted research-plane adapters (EDGAR/FRED/Treasury/BLS/BEA) ARE
+the graph harvest implementation — pure I/O, no LLM — orchestrated
+once by `research-plane/plane/source_seam.py`, which owns the single
+adapter singletons, stamps, heartbeats, and the canonical mapping
+into resolver/f2. The frozen P1 collector path above is untouched
+and keeps running; within Phase 2.5 there is exactly one poll path
+per source. Nothing in the seam trades.
+
 - `collect.py` — poller. UA-bearing fetch, per-source TTL/heartbeat,
   `needs_key` gating, stale→expire (absent ≠ neutral), >50% poll
   failure over 24h disables + alerts. Reads: `sources.json`,

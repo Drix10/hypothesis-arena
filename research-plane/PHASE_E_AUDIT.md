@@ -1646,3 +1646,28 @@ plane (Phase D) change any interface a future slice depends on?
   Live soak + measured p50/p99 remain OPEN parallel evidence.
   Known blemish (not correctness): 9ef8956 baked a CRLF->LF flip of
   ctx_read.py; left as history per audit instruction, no rewrite.
+
+## Addendum 95 - source->graph production seam (Track A wiring)
+- ARCHITECTURE DECISION (explicit): plan/08 s8.3 governs -- graph
+  harvest pulls doc-09 sources by invoking the five accepted
+  adapters. New research-plane/plane/source_seam.py owns the single
+  adapter singletons, per-source isolation, stamps, heartbeats, and
+  the canonical mapping into resolver/f2/publish/ctx_read. Frozen P1
+  collector untouched; one poll path per source inside Phase 2.5;
+  credentials only in seam construction; seam never trades.
+- Canonical mapping: published_ns = adapter instant ONLY when
+  non-estimated (EDGAR authoritative acceptance); estimated ALWAYS
+  None + R12 cap (evidence inference, CONTEXT-only, never TRIGGER).
+  effect None (unknown; no directional invention); value
+  presence-count; content_hash = sha256 of adapter bytes.
+- Note: even authoritative EDGAR stays evidence=inference until a
+  measured effect table exists (promotion gate) -- resolver requires
+  a real effect for source evidence. No invention at wiring layer.
+- 11/11 seam tests warnings-as-errors (both styles): per-source full
+  chain harvest->canonical->resolver->publish-bundle->ctx_read,
+  estimated cap, EDGAR authoritative high-confidence, malformed/
+  unknown/wrong-kind rejected, outage = absence + failed heartbeats,
+  singleton single-poll, missing keys fail-closed, EDGAR skip on
+  forex-only watchlist. Plane 210 (only pre-existing Windows
+  failure); ctx suite green; freeze PASS. Wired into hosted CI.
+  Live soak/p50-p99 stay OPEN parallel. No kernel/D/H1/JEV change.

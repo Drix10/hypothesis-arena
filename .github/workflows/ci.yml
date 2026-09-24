@@ -66,6 +66,8 @@ jobs:
         run: python3 research-plane/tests/test_bls.py
       - name: plane BEA adapter (stdlib only)
         run: python3 research-plane/tests/test_bea.py
+      - name: plane source-seam integration (stdlib only)
+        run: python3 research-plane/tests/test_source_seam.py
 
   plane:
     runs-on: ubuntu-latest
