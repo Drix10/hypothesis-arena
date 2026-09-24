@@ -1706,3 +1706,43 @@ plane (Phase D) change any interface a future slice depends on?
   seam; graph via venv script + module modes). Plane 215 (only
   pre-existing Windows failure); ctx green; freeze PASS. Live
   soak/p50-p99 OPEN parallel. No kernel/D/H1/JEV change.
+
+## Addendum 97 - seam production-boundary corrections v2 (audit fixes)
+- Exact second-audit findings closed, seam-side (no adapter, no
+  collector semantic changes):
+  1. PRODUCTION COMPOSITION: new tracked caller
+     plane/runner.py::build_production_runner (heartbeat sink
+     required, MIRO_CANONICAL_DB-honoring lineage default, owned
+     seam+app, caller-supplied LLM deps only). build_runner refuses
+     heartbeat-less construction (ConfigError, regression-proven).
+  2. ONE TRUE E2E: test_seam_graph.test_one_true_end_to_end runs
+     production runner -> run_cycle -> owned seam -> store lookup ->
+     publish.resolve_emit -> emitted bundle -> frozen ctx_read
+     (accepted>0) + history present + every emitted (source_id,hash)
+     row-proven in the authoritative lineage DB. Standalone
+     publish-leg test reframed as a leg unit, not the chain.
+  3. CANONICAL AUTHORITY: seam hashing REMOVED. Each adapter record
+     is adapted to the frozen collector canonical shape, validated
+     by frozen validate_record + temporal_violation, ingested by
+     frozen ingest_signal into the SHARED records table; the
+     RETURNED hash is the resolver/ctx canonical_hash (proven equal
+     to classify.content_hash of the stored row). Same authority,
+     same table, same hash contract.
+  4. MIRO_CANONICAL_DB honored by seam default (resolution matches
+     frozen collector rule; regression proves writes land in the
+     scratch DB ctx_read reads).
+  5. LINEAGE FAIL-CLOSED: persist/validate failure -> note() None ->
+     record excluded from recs_all with visible lineage_dropped per
+     source stamp; nothing publishable without lineage (regression
+     with unwritable DB: recs empty, store empty, drops visible).
+  6. HISTORY HONESTY: append strictly on newer ACTUAL poll ts; same
+     instant repeats append nothing (regression: fixed clock, two
+     polls, identical single-entry tails, sources healthy).
+  7. HEARTBEAT SINK: production requires explicit dir (or composed
+     default data/heartbeats); tests inject tmp dirs.
+  8. LIFECYCLE: two REAL cycles share Runner/Seam/adapter identities
+     with polls+1 each (tautology removed).
+- 19/19 seam + 3/3 graph tests warnings-as-errors. Plane 218 (only
+  pre-existing Windows failure); ctx green; freeze PASS. Live
+  soak/p50-p99 OPEN parallel. No kernel/D/H1/JEV/collector-behavior
+  change.

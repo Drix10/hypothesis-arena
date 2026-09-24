@@ -19,23 +19,41 @@ ARCHITECTURE BOUNDARY (explicit, not silent):
   backoff, and 429 throttle actually wait). Tests inject fakes via
   explicit build_seam params — never by patching adapters after
   construction.
-- Lineage: CanonicalStore.note() persists each canonical row into the
-  SAME canonical records table the frozen ctx reader checks
-  (source, source_id, content_hash keying; INSERT OR IGNORE + touch,
-  mirroring collector/classify.py). Same authority, same table — not
-  a second one. parser_version "seam-v1" marks the writer honestly.
+- CANONICAL AUTHORITY: there is exactly one canonicalization — the
+  frozen collector/classify.py (validate_record + temporal_violation
+  + ingest_signal + content_hash over source/source_id/title/text/
+  url/links/published_at, volatile timing excluded). The seam adapts
+  each adapter record into that canonical-record shape, validates
+  with the frozen validator, ingests with the frozen ingester into
+  the SHARED records table, and uses the RETURNED hash as the
+  resolver/ctx_read canonical_hash. No parallel hash namespace, no
+  seam-v1 hashing, no invented verdicts (ingest assigns them).
+- Lineage DB honors MIRO_CANONICAL_DB exactly like the frozen
+  collector/reader; a lineage persistence/validation failure is
+  fail-closed BEFORE publish (the record never enters recs_all, the
+  drop is counted visibly per source).
 - History: harvest returns (recs, stamps, history) with bounded
-  per-source {h, ts} observations (no fabrication: only noted
-  records; monotonic ts enforced). The graph/state→publish path
-  carries it to the bundle, preserving frozen-feed detection.
+  per-source {h, ts} observations using ONLY actual poll timestamps;
+  a same-timestamp repeat appends nothing (no fabricated +1s, no
+  manufactured coverage). The graph/state→publish path carries it to
+  the bundle, preserving frozen-feed detection.
 """
 import collections
 import hashlib
 import json
 import os
 import sqlite3
+import sys
 import time
 from datetime import datetime, timezone
+
+try:
+    from collector import classify as _classify
+except ImportError:  # pragma: no cover - production path bootstrap
+    _HERE = os.path.abspath(os.path.dirname(__file__))
+    sys.path.insert(0, os.path.abspath(
+        os.path.join(_HERE, "..", "..")))
+    from collector import classify as _classify
 
 from sources import bea as _bea
 from sources import bls as _bls
@@ -49,22 +67,22 @@ SOURCES = ("edgar_8k", "fred_macro", "treasury_auctions", "bls_empsit",
 ENTITY_MAP_REL = os.path.join("collector", "entity_map.json")
 LINEAGE_DB_REL = os.path.join("data", "canonical.db")
 
-# Canonical records table DDL, byte-identical in shape to
-# collector/classify.py::init_db (test_lineage_ddl_matches pins it).
-RECORDS_DDL = (
-    "CREATE TABLE IF NOT EXISTS records(\n"
-    "      source TEXT, source_id TEXT, content_hash TEXT,\n"
-    "      first_seen_at TEXT, last_seen_at TEXT, published_at TEXT,\n"
-    "      retrieved_at TEXT, revision_id TEXT, verdict TEXT, raw_json TEXT,\n"
-    "      parser_version TEXT, PRIMARY KEY(source, source_id, content_hash))")
-
-SEAM_PARSER_VERSION = "seam-v1"
 HISTORY_PER_SOURCE_MAX = 8
 
 
 def _repo_root():
     here = os.path.abspath(os.path.dirname(__file__))
     return os.path.abspath(os.path.join(here, "..", ".."))
+
+
+def default_lineage_db_path(env=None):
+    """Same resolution as the frozen collector/reader: explicit
+    MIRO_CANONICAL_DB wins, else the repo canonical DB."""
+    src = os.environ if env is None else env
+    override = (src.get("MIRO_CANONICAL_DB", "") or "").strip()
+    if override:
+        return override
+    return os.path.join(_repo_root(), LINEAGE_DB_REL)
 
 
 def _load_sym_to_cik(path=None):
@@ -80,12 +98,6 @@ def _load_sym_to_cik(path=None):
             except (TypeError, ValueError):
                 continue
     return out
-
-
-def _content_hash(rec):
-    return hashlib.sha256(
-        json.dumps(rec, sort_keys=True, separators=(",", ":"),
-                   ensure_ascii=True).encode("utf-8")).hexdigest()
 
 
 def _pk_of(rec):
@@ -131,14 +143,62 @@ def _iso(ns):
                                   tz=timezone.utc).isoformat()
 
 
+def _collector_record(rec, estimated, retrieved_iso):
+    """Adapter record -> frozen collector canonical-record shape.
+
+    Only fields the collector authority owns (its KNOWN_FIELDS):
+    identity, human labels, provenance URL, publication/observation
+    instants. Labels are deterministic mechanical renderings, never
+    interpretations (no direction, no scores, no prose).
+    """
+    src = rec.get("source_id")
+    pk = _pk_of(rec)
+    if pk is None:
+        return None
+    obs_iso = _iso(rec["observed_at_ns"])
+    if estimated:
+        pub_iso = None
+    else:
+        pub_iso = _iso(rec["observed_at_ns"])
+    if src == "edgar_8k":
+        title = "%s %s" % (rec.get("form", ""), pk)
+        text = rec.get("items", "") or ""
+    elif src == "fred_macro":
+        title = "%s %s" % (rec.get("series_id", ""), rec.get("date", ""))
+        text = rec.get("value", "") or ""
+    elif src == "treasury_auctions":
+        title = "Treasury auction %s %s" % (
+            rec.get("cusip", ""), rec.get("record_date", ""))
+        text = rec.get("security_type", "") or ""
+    elif src == "bls_empsit":
+        title = rec.get("title", "") or ""
+        text = ""
+    elif src == "bea_nipa_gdp":
+        title = "%s %s %s" % (rec.get("table", ""),
+                              rec.get("series", ""),
+                              rec.get("time_period", ""))
+        text = rec.get("data_value", "") or ""
+    else:
+        return None
+    url = rec.get("provenance_url", "") or ""
+    return {"id": pk, "source": src, "source_id": pk,
+            "title": title.strip(), "text": text, "url": url,
+            "links": [], "observed_at": obs_iso,
+            "published_at": pub_iso, "published_estimated": estimated}
+
+
 def to_canonical(rec, ingested_ns):
     """Adapter record -> frozen resolver canonical shape (or None).
 
-    Returns None on any defect (missing keys, wrong types,
-    unregistered source/kind, non-bool estimated flag): the caller
-    counts, never emits. observed_at_estimated MUST be a real bool
-    when present (missing stays conservative/estimated); truthy
-    strings/ints must never decide timestamp authority.
+    The canonical_hash is produced by the FROZEN collector authority
+    (validate + temporal check + ingest into the shared records
+    table), never by seam-local hashing. Returns None on any defect
+    (missing keys, wrong types, unregistered source/kind, non-bool
+    estimated flag, frozen-validation failure, temporal violation,
+    lineage persistence failure): the caller counts, never emits.
+    observed_at_estimated MUST be a real bool when present (missing
+    stays conservative/estimated); truthy strings/ints must never
+    decide timestamp authority.
     """
     if not isinstance(rec, dict):
         return None
@@ -161,22 +221,30 @@ def to_canonical(rec, ingested_ns):
     flag = rec.get("observed_at_estimated", True)
     if type(flag) is not bool:
         return None
-    # Timestamp authority: estimated instants NEVER become
-    # published_ns (resolver would treat them as source truth).
-    pub_ns = None if flag else obs_ns
+    crec = _collector_record(rec, flag, _iso(ingested_ns))
+    if crec is None:
+        return None
+    if _classify.validate_record(crec) is not None:
+        return None
+    if _classify.temporal_violation(crec, _iso(ingested_ns)) is not None:
+        return None
     ref = rec.get("entity_ref")
     if ref is not None and not isinstance(ref, dict):
         return None
-    # value is presence-count (one validated source row exists),
-    # never a measure and never directional: the resolver requires a
-    # value dict, and count-1 states exactly what this layer knows.
+    # Timestamp authority: estimated instants NEVER become
+    # published_ns (resolver would treat them as source truth).
+    pub_ns = None if flag else obs_ns
     return {
         "source_id": src,
         "kind": kind,
-        "content_hash": _content_hash(rec),
+        "content_hash": None,  # filled by CanonicalStore.note()
         "published_ns": pub_ns,
         "ingested_ns": ingested_ns,
         "symbols": list(syms),
+        # value is presence-count (one validated source row exists),
+        # never a measure and never directional: the resolver requires
+        # a value dict, and count-1 states exactly what this layer
+        # knows.
         "value": {"type": "count", "v": 1},
         "effect": None,
         "parser_confidence": "high",
@@ -184,86 +252,65 @@ def to_canonical(rec, ingested_ns):
         "entity_ref": dict(ref) if ref is not None else None,
         "provenance_url": rec.get("provenance_url", ""),
         "observed_at_estimated": flag,
+        "_collector_record": crec,
     }
 
 
 class CanonicalStore:
-    """hash -> canonical registry + lineage persistence.
+    """hash -> canonical registry over the shared lineage table.
 
-    note() converts AND persists the canonical row into the shared
-    records table (same authority ctx_read checks). A persistence
-    failure is counted (lineage_errors) and the record is still
-    returned: downstream lineage checks fail closed and loudly rather
-    than harvest silently dropping evidence.
+    note() converts via to_canonical() and persists through the
+    FROZEN collector ingester. Validation, temporal, or persistence
+    failure returns None (fail-closed BEFORE publish); successes are
+    counted per outcome for ops visibility.
     """
 
-    def __init__(self, db_path=None):
+    def __init__(self, db_path=None, env=None):
         self._by_hash = {}
-        self.db_path = db_path
+        self.db_path = db_path or default_lineage_db_path(env)
         self.lineage_errors = 0
+        self.lineage_noted = 0
         self._db_ready = False
 
-    def _ensure_db(self):
-        if self._db_ready or not self.db_path:
-            return self.db_path is not None
-        try:
-            parent = os.path.dirname(os.path.abspath(self.db_path))
-            if parent:
-                os.makedirs(parent, exist_ok=True)
-            con = sqlite3.connect(self.db_path)
-            try:
-                con.execute(RECORDS_DDL)
-                con.commit()
-            finally:
-                con.close()
-            self._db_ready = True
-            return True
-        except Exception:
-            return False
-
-    def _persist(self, canon, rec, ingested_ns):
-        pk = _pk_of(rec)
-        if pk is None or not self._ensure_db():
-            return False
-        pub_ns = canon["published_ns"]
-        try:
-            con = sqlite3.connect(self.db_path)
-            try:
-                con.execute(
-                    "INSERT OR IGNORE INTO records VALUES"
-                    "(?,?,?,?,?,?,?,?,?,?,?)",
-                    (canon["source_id"], pk, canon["content_hash"],
-                     _iso(ingested_ns), _iso(ingested_ns),
-                     _iso(pub_ns) if pub_ns is not None else None,
-                     _iso(ingested_ns), None, "new",
-                     json.dumps(rec, sort_keys=True, separators=(
-                         ",", ":"), ensure_ascii=True),
-                     SEAM_PARSER_VERSION))
-                con.execute(
-                    "UPDATE records SET last_seen_at=? WHERE source=?"
-                    " AND source_id=? AND content_hash=?",
-                    (_iso(ingested_ns), canon["source_id"], pk,
-                     canon["content_hash"]))
-                con.commit()
-            finally:
-                con.close()
-            return True
-        except Exception:
-            return False
+    def _connect(self):
+        parent = os.path.dirname(os.path.abspath(self.db_path))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        con = sqlite3.connect(self.db_path)
+        _classify.init_db(con)
+        return con
 
     def note(self, rec, ingested_ns):
         canon = to_canonical(rec, ingested_ns)
         if canon is None:
             return None
-        self._by_hash[canon["content_hash"]] = canon
-        if not self._persist(canon, rec, ingested_ns):
+        crec = canon.pop("_collector_record", None)
+        if crec is None:
+            return None
+        try:
+            con = self._connect()
+            try:
+                _verdict, ch, _first, _rev = \
+                    _classify.ingest_signal(con, crec, _iso(ingested_ns))
+                con.commit()
+            finally:
+                con.close()
+        except Exception:
             self.lineage_errors += 1
-        return canon["content_hash"]
+            return None
+        canon = dict(canon, content_hash=ch)
+        self._by_hash[ch] = canon
+        self.lineage_noted += 1
+        return ch
 
     def canonical_for(self, candidate):
         if not isinstance(candidate, dict):
             return None
         return self._by_hash.get(candidate.get("canonical_hash"))
+
+    def items(self):
+        """Public read access: (content_hash, canonical) pairs."""
+        return list(self._by_hash.items())
 
 
 class _Source:
@@ -283,11 +330,11 @@ class _Source:
 
 class Seam:
     def __init__(self, sources, heartbeat_dir=None, clock=None,
-                 db_path=None):
+                 db_path=None, env=None):
         self.sources = list(sources)
         self.heartbeat_dir = heartbeat_dir
         self.clock = clock or time.time
-        self.store = CanonicalStore(db_path=db_path)
+        self.store = CanonicalStore(db_path=db_path, env=env)
         self._hist = {s.source_id: collections.deque(
             maxlen=HISTORY_PER_SOURCE_MAX) for s in self.sources}
 
@@ -311,27 +358,34 @@ class Seam:
             if info.get("skipped"):
                 continue  # not scheduled this cycle: no stamp
             kept = []
+            dropped_lineage = 0
+            last_h = None
             for r in recs:
-                if self.store.note(r, ingested_ns) is None:
-                    continue  # defective: counted downstream by
-                kept.append(r)  # absence (no canonical, no lineage)
+                # Fail-closed BEFORE publish: without authoritative
+                # lineage persistence the record is not harvestable.
+                h = self.store.note(r, ingested_ns)
+                if h is None:
+                    dropped_lineage += 1
+                    continue
+                kept.append(r)
+                last_h = h
             recs_all.extend(kept)
-            stamps[src.source_id] = {
+            stamp = {
                 "ok": bool(info.get("ok", False)),
                 "stale": bool(info.get("stale", True)),
                 "checked_at_ns": ingested_ns,
                 "records": int(info.get("records", len(kept))),
                 "epoch": epoch}
+            if dropped_lineage:
+                stamp["lineage_dropped"] = dropped_lineage
+            stamps[src.source_id] = stamp
             dq = self._hist[src.source_id]
             if kept:
-                # One entry per source per poll (head observation):
-                # ctx history demands strictly increasing ts, so the
-                # tick advances past the previous entry when the clock
-                # has not (fake clocks, fast retries). No fabrication:
-                # only actually-noted records extend history.
-                ts = ingested_s if not dq else max(dq[-1]["ts"] + 1,
-                                                   ingested_s)
-                dq.append({"h": _content_hash(kept[-1]), "ts": ts})
+                # Honest history only: append strictly on a newer
+                # ACTUAL poll timestamp. A same-timestamp repeat keeps
+                # the existing tail (never a fabricated +1).
+                if not dq or ingested_s > dq[-1]["ts"]:
+                    dq.append({"h": last_h, "ts": ingested_s})
             if dq:
                 hist[src.source_id] = list(dq)
             if self.heartbeat_dir:
@@ -365,9 +419,10 @@ def build_seam(env=None, heartbeat_dir=None, clock=None, sleeper=None,
     misconfigured source: the failure becomes its stamp, fail-closed.
     Production wiring is real: sleeper defaults to time.sleep and
     pacing runs on time.monotonic unless tests inject fakes.
-    lineage_db_path defaults to the shared canonical DB (same
-    authority ctx_read checks); tests inject a scratch path.
-    Explicit key/contact overrides exist for tests; default is env.
+    lineage_db_path defaults to the MIRO_CANONICAL_DB-honoring shared
+    canonical DB (same authority ctx_read checks); tests inject a
+    scratch path. Explicit key/contact overrides exist for tests;
+    default is env.
     """
     src_env = os.environ if env is None else env
     clock = clock or time.time
@@ -392,8 +447,6 @@ def build_seam(env=None, heartbeat_dir=None, clock=None, sleeper=None,
         kw.setdefault("backoff_base_s", 0.0)
         return kw
 
-    if lineage_db_path is None:
-        lineage_db_path = os.path.join(_repo_root(), LINEAGE_DB_REL)
     sources = []
     try:
         ed = _edgar.Adapter(contact, entity_map=sym_to_cik,
@@ -429,4 +482,4 @@ def build_seam(env=None, heartbeat_dir=None, clock=None, sleeper=None,
                                config_error="%s" % type(e).__name__))
     # Deterministic source order (registration order above).
     return Seam(sources, heartbeat_dir=heartbeat_dir, clock=clock,
-                db_path=lineage_db_path)
+                db_path=lineage_db_path, env=src_env)

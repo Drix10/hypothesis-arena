@@ -1,7 +1,13 @@
-"""Production source->graph seam tests: harvest -> canonical -> resolver
--> production publish.resolve_emit -> frozen ctx_read, with fake
-transports, stepped clocks, and a real lineage DB (never hand-seeded
-rows: harvest itself persists lineage)."""
+"""Production source->graph seam tests: harvest -> frozen collector
+authority -> resolver -> publisher leg -> frozen ctx_read, with fake
+transports, stepped clocks, and the REAL lineage DB harvest writes
+(never hand-seeded rows).
+
+The one true end-to-end (production runner -> run_cycle -> seam ->
+resolve_emit -> bundle -> ctx_read) lives in test_seam_graph.py
+(plane job); this file proves every seam leg deterministically in
+the stdlib evidence job.
+"""
 import calendar
 import hashlib
 import json
@@ -68,7 +74,11 @@ def bea_body():
 
 
 class FakeClock:
-    """Wall clock; mono advances ONLY when sleeper runs (stepped)."""
+    """Stepped mono (pacing waits advance it); wall time frozen.
+
+    Splitting the two is deliberate: adapter pacing runs on mono,
+    while poll/record timestamps read the frozen wall clock — so a
+    repeat poll provably reuses the same instant (history test)."""
 
     def __init__(self, t=NOW):
         self.t = t
@@ -84,7 +94,6 @@ class FakeClock:
     def sleep(self, d):
         self.sleeps.append(d)
         self.m += d
-        self.t += d
 
 
 class FakeTransport:
@@ -236,29 +245,53 @@ class TestSourceSeam(unittest.TestCase):
         self.assertEqual(res["stats"]["accepted"], 1, res["stats"])
         self.assertEqual(feats[0]["ttl_s"], 64800)
 
-    def test_production_publish_path(self):
-        # The REAL publisher (not a hand-built bundle): fused parser
-        # candidates + seam history through publish.resolve_emit,
-        # then the emitted file through frozen ctx_read against the
-        # lineage DB harvest itself wrote (no hand-seeded rows).
+    def test_hash_is_authority_hash(self):
+        # The emitted canonical_hash is EXACTLY the frozen authority's
+        # stored hash for that row (same table ctx_read checks) — not
+        # a seam-local digest of adapter JSON.
+        seam, _db = make_seam()
+        recs, _st, _h = seam.harvest(["SPY"], 3)
+        rec = [r for r in recs
+               if r["source_id"] == "treasury_auctions"][0]
+        h = seam.store.note(rec, ING_NS)
+        con = sqlite3.connect(seam.store.db_path)
+        try:
+            rows = con.execute(
+                "SELECT source_id, content_hash, raw_json, verdict,"
+                " parser_version FROM records").fetchall()
+        finally:
+            con.close()
+        match = [r for r in rows if r[1] == h]
+        self.assertEqual(len(match), 1)
+        self.assertEqual(match[0][1],
+                         classify.content_hash(json.loads(match[0][2])))
+
+    def test_publisher_leg_unit(self):
+        # Publisher-leg unit (NOT the full chain): fused candidates
+        # through the real publish.resolve_emit into frozen ctx_read.
+        # The one true end-to-end lives in test_seam_graph.py.
         seam, _db = make_seam()
         recs, stamps, hist = seam.harvest(["AAPL", "SPY"], 3)
         treas = [r for r in recs
                  if r["source_id"] == "treasury_auctions"][:1]
         self.assertEqual(len(treas), 1)
-        canon = seam.store.canonical_for(
-            {"canonical_hash": source_seam._content_hash(treas[0])})
+        h = seam.store.note(treas[0], ING_NS)
+        canon = seam.store.canonical_for({"canonical_hash": h})
         fused = [parser_candidate(canon)]
         tmp = tempfile.mkdtemp()
 
         def watermarks(state):
             out = {}
             for c in fused:
-                canon = seam.store.canonical_for(c)
-                if canon is not None:
-                    out[canon["source_id"]] = {
+                hit = seam.store.canonical_for(c)
+                if hit is not None:
+                    out[hit["source_id"]] = {
                         "last_observation_at": int(NOW) - 300,
                         "cursor": "seam-test"}
+            for sid in (hist or {}):
+                out.setdefault(sid, {
+                    "last_observation_at": int(NOW) - 300,
+                    "cursor": "seam-test"})
             return out
 
         out = publish.resolve_emit(
@@ -279,7 +312,9 @@ class TestSourceSeam(unittest.TestCase):
         rec = [r for r in recs
                if r["source_id"] == "treasury_auctions"][0]
         self.assertTrue(rec["observed_at_estimated"])
-        canon = to_canonical(rec, ING_NS)
+        h = seam.store.note(rec, ING_NS)
+        self.assertIsNotNone(h)
+        canon = seam.store.canonical_for({"canonical_hash": h})
         cand = parser_candidate(canon)
         ok, out = resolver.resolve(cand, canon, _entity_map(),
                                    origin="parser")
@@ -301,6 +336,10 @@ class TestSourceSeam(unittest.TestCase):
         for bad in ("false", "true", 0, 1, None, 0.0, []):
             mutated = dict(rec, observed_at_estimated=bad)
             self.assertIsNone(to_canonical(mutated, ING_NS), repr(bad))
+        # note() inherits the same strictness (fail-closed persist).
+        h = seam.store.note(dict(rec, observed_at_estimated="false"),
+                            ING_NS)
+        self.assertIsNone(h)
 
     def test_malformed_unknown_rejected(self):
         self.assertIsNone(to_canonical(None, ING_NS))
@@ -358,8 +397,6 @@ class TestSourceSeam(unittest.TestCase):
         self.assertTrue(len(r1) > 0)
         polls1 = [s.adapter.polls for s in seam.sources]
         r2, s2, _h2 = seam.harvest(["AAPL"], 4)
-        # Same owned instances serve both cycles: identity preserved,
-        # each adapter polls exactly once more, second cycle healthy.
         self.assertEqual([id(s.adapter) for s in seam.sources], before)
         self.assertTrue(all(s2[s]["ok"] for s in s2))
         polls2 = [s.adapter.polls for s in seam.sources]
@@ -416,20 +453,64 @@ class TestSourceSeam(unittest.TestCase):
             # Poll health still describes the poll, not the disk.
             self.assertTrue(all(s["ok"] for s in stamps.values()))
 
-    def test_lineage_ddl_matches(self):
-        import sqlite3 as _sq
-        a = _sq.connect(":memory:")
-        classify.init_db(a)
-        a_schema = a.execute(
-            "SELECT sql FROM sqlite_master WHERE name='records'"
-        ).fetchone()[0]
-        b = _sq.connect(":memory:")
-        b.execute(source_seam.RECORDS_DDL)
-        b_schema = b.execute(
-            "SELECT sql FROM sqlite_master WHERE name='records'"
-        ).fetchone()[0]
-        norm = lambda s: " ".join(s.split())
-        self.assertEqual(norm(a_schema), norm(b_schema))
+    def test_lineage_failure_fails_closed(self):
+        # A lineage DB that cannot be written (a directory): the
+        # record must NOT become publishable, and the drop must be
+        # visible per source.
+        with tempfile.TemporaryDirectory() as tmp:
+            seam, _db = make_seam(lineage_db=os.path.join(tmp, "sub"))
+            os.makedirs(os.path.join(tmp, "sub"))
+            recs, stamps, hist = seam.harvest(["SPY"], 3)
+            self.assertEqual(recs, [])
+            self.assertEqual(hist, {})
+            dropped = [s for s in stamps.values()
+                       if s.get("lineage_dropped", 0) > 0]
+            self.assertTrue(len(dropped) > 0)
+            self.assertGreater(seam.store.lineage_errors, 0)
+            # Nothing in the store: no downstream publication possible.
+            self.assertEqual(seam.store._by_hash, {})
+
+    def test_history_never_fabricates(self):
+        # Fixed wall clock, two identical polls: the second adds NO
+        # new dated observation (same instant is not new coverage),
+        # the tail keeps a single honest entry, sources stay healthy.
+        # (Pacing still waits on the stepped mono clock.)
+        clock = FakeClock()
+        seam, _db = make_seam(clock=clock)
+        _r1, s1, h1 = seam.harvest(["SPY"], 3)
+        self.assertTrue(all(s1[s]["ok"] for s in s1))
+        before = {k: list(v) for k, v in h1.items()}
+        self.assertTrue(before)
+        _r2, s2, h2 = seam.harvest(["SPY"], 4)
+        self.assertTrue(all(s2[s]["ok"] for s in s2))
+        self.assertEqual(h2, before)
+        for entries in h2.values():
+            self.assertEqual(len(entries), 1)
+
+    def test_miro_canonical_db_honored(self):
+        import os as _os
+        scratch = os.path.join(tempfile.mkdtemp(), "canon.db")
+        seam = source_seam.build_seam(
+            env={"MIRO_CANONICAL_DB": scratch,
+                 "MIRO_CONTACT": "x@example.invalid",
+                 "FRED_API_KEY": "k", "BEA_USER_ID": "b"},
+            clock=FakeClock().now, sleeper=lambda d: None,
+            mono=FakeClock().mono, transports=make_transports(),
+            lineage_db_path=None)
+        self.assertEqual(seam.store.db_path, scratch)
+        recs, stamps, hist = seam.harvest(["SPY"], 3)
+        self.assertTrue(len(recs) > 0)
+        con = sqlite3.connect(scratch)
+        try:
+            n = con.execute("SELECT COUNT(*) FROM records").fetchone()
+        finally:
+            con.close()
+        self.assertGreater(n[0], 0)
+        # Default resolution matches the frozen collector's own rule.
+        self.assertEqual(
+            source_seam.default_lineage_db_path({}),
+            os.path.join(source_seam._repo_root(), "data",
+                         "canonical.db"))
 
 
 if __name__ == "__main__":
