@@ -199,19 +199,28 @@ def _default_transport(url, headers, timeout_s):
             return r.status, h, _read_capped(r)
     except urllib.error.HTTPError as e:
         try:
-            body = _read_capped(e)
-        except Exception:
-            body = b""
-        try:
-            h = {k.lower(): v for k, v in (e.headers.items() if
-                                           e.headers else [])}
-        except Exception:
-            h = {}
-        try:
-            status = int(e.code)
-        except (TypeError, ValueError):
-            raise OSError("bad HTTP status: %r" % (e.code,))
-        return status, h, body
+            try:
+                body = _read_capped(e)
+            except Exception:
+                body = b""
+            try:
+                h = {k.lower(): v for k, v in (e.headers.items() if
+                                               e.headers else [])}
+            except Exception:
+                h = {}
+            try:
+                status = int(e.code)
+            except (TypeError, ValueError):
+                raise OSError("bad HTTP status: %r" % (e.code,))
+            return status, h, body
+        finally:
+            # Deterministic closure: HTTPError is a file-like response
+            # and CPython does not reliably finalize its fp (notably
+            # on Windows). 429/5xx are NORMAL retry paths here.
+            try:
+                e.close()
+            except Exception:
+                pass
     except Exception:
         raise
 
@@ -478,7 +487,16 @@ class Adapter:
 
     # -- companyfacts (same limiter; no crawl, single bounded GET) --
     def fetch_facts(self, cik):
-        url = COMPANYFACTS_URL % int(cik)
+        try:
+            cik = int(cik)
+        except (TypeError, ValueError):
+            return None, "cik-malformed"
+        if self.entity_map is not None and \
+                cik not in self.entity_map.values():
+            # Pinned map is the sole CIK authority: a foreign CIK is
+            # rejected BEFORE any request (zero transport calls).
+            return None, "cik-unmapped"
+        url = COMPANYFACTS_URL % cik
         status, _h, body, err = self._get(url)
         if err or body is None:
             return None, err
@@ -486,6 +504,16 @@ class Adapter:
             return json.loads(body.decode("utf-8")), ""
         except Exception:
             return None, "companyfacts-malformed"
+
+    def fetch_facts_for(self, symbol):
+        """Companyfacts resolved from a symbol through the pinned map.
+        Requires a configured entity_map (no dynamic authority)."""
+        if self.entity_map is None:
+            return None, "no-entity-map"
+        cik = self.entity_map.get(str(symbol).upper())
+        if not cik:
+            return None, "unknown-symbol:%s" % symbol
+        return self.fetch_facts(cik)
 
     # -- poll --------------------------------------------------------
     def poll(self, symbols, since=None, today=None):

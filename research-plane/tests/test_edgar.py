@@ -732,6 +732,72 @@ class TestEdgar(unittest.TestCase):
                             env={"MIRO_CONTACT": CONTACT})
             self.assertEqual(a.contact, CONTACT)
 
+    def test_foreign_cik_rejected_without_request(self):
+        routes = {edgar.TICKERS_URL: (200, tickers_body())}
+        a = adapter(routes, entity_map={"AAPL": 320193})
+        before = len(a.transport.calls)
+        got, err = a.fetch_facts(789019)  # MSFT: not in pinned map
+        self.assertIsNone(got)
+        self.assertEqual(err, "cik-unmapped")
+        self.assertEqual(len(a.transport.calls), before)  # zero calls
+        # symbol-resolved path works through the same authority
+        a.transport.routes[
+            "https://data.sec.gov/api/xbrl/companyfacts/CIK0000320193.json"] \
+            = (200, b'{"cik": 320193}')
+        got, err = a.fetch_facts_for("AAPL")
+        self.assertEqual(err, "")
+        self.assertEqual(got["cik"], 320193)
+        got, err = a.fetch_facts_for("ZZZZ")
+        self.assertIsNone(got)
+        self.assertTrue(err.startswith("unknown-symbol"))
+        # standalone (no map) keeps old behavior: request attempted
+        b = adapter(routes)
+        before_b = len(b.transport.calls)
+        b.fetch_facts(789019)
+        self.assertGreater(len(b.transport.calls), before_b)
+
+    def test_httperror_explicitly_closed(self):
+        import io
+        import urllib.error
+        import urllib.request
+        from unittest import mock
+
+        closed = []
+
+        class Tracked(io.BytesIO):
+            def close(self):
+                closed.append(True)
+                super().close()
+
+        err429 = urllib.error.HTTPError(
+            "https://x", 429, "Too Many Requests", {}, Tracked(b"s"))
+        with mock.patch.object(urllib.request, "urlopen",
+                               side_effect=err429):
+            st, _h, body = edgar._default_transport("https://x", {}, 30)
+        self.assertEqual(st, 429)
+        self.assertEqual(body, b"s")
+        self.assertEqual(closed, [True])
+
+        # body-read failure still closes
+        closed2 = []
+
+        class BadRead(Tracked):
+            def read(self, *a, **k):
+                raise OSError("read blew up")
+
+            def close(self):
+                closed2.append(True)
+                super().close()
+
+        err500 = urllib.error.HTTPError(
+            "https://x", 500, "Server Error", {}, BadRead(b"e"))
+        with mock.patch.object(urllib.request, "urlopen",
+                               side_effect=err500):
+            st, _h, body = edgar._default_transport("https://x", {}, 30)
+        self.assertEqual(st, 500)
+        self.assertEqual(body, b"")
+        self.assertEqual(closed2, [True])
+
 
 if __name__ == "__main__":
     unittest.main()

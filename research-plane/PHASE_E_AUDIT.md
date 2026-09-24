@@ -1389,3 +1389,19 @@ plane (Phase D) change any interface a future slice depends on?
 ## Addendum 75 — hosted CI green on EDGAR round-6 correction
 - Run 35958477959 on `e424362`: stdlib + evidence + plane + kernel
   SUCCESS, EDGAR step success (45 tests hosted).
+
+## Addendum 76 — EDGAR round-7 correction (single commit)
+- Pinned CIK covers companyfacts: `fetch_facts` rejects foreign
+  CIKs (`cik-unmapped`) BEFORE any request when a map is
+  configured; new `fetch_facts_for(symbol)` resolves through the
+  pinned map (unknown/no-map are explicit errors, never fetches).
+  Regression proves zero transport calls for foreign CIK +
+  standalone behavior preserved without a map.
+- HTTPError deterministic close: try/finally `e.close()` after
+  bounded body/header extraction (CPython Windows finalization
+  gap). Regressions with close-tracking fp prove close on both
+  the normal 429 path and the body-read-failure path.
+- No acceptance/estimated/resolver/entity-map changes. 47/47
+  EDGAR green warnings-as-errors (both styles, def-count matched);
+  runnable plane 108 with only the pre-existing Windows file-lock
+  failure; freeze PASS. Live SEC evidence still OPEN — not claimed.
