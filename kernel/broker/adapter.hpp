@@ -42,6 +42,11 @@ struct ProtectedOrder {
 struct OrderAck {
     bool accepted = false;
     bool protection_accepted = false;  // broker ack covers protection
+    bool transport_ok = false;  // submit executed authoritatively;
+                                // false = transport failure/unknown
+                                // (NOT a rejection — reconcile)
+    bool authoritative_reject = false;  // broker refused (4xx with a
+                                        // shaped error): terminal
     std::int64_t filled_qty = 0;       // filled at ack time (often 0)
     char reason[64];                   // frozen adapter code on reject
 };

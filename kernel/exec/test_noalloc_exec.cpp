@@ -44,6 +44,7 @@ int main() {
     VenueCtx venue;
     venue.broker[0] = '\0';  // IDLE always rejects (no mint): core only
     RouteObs obs;
+    obs.client_id[0] = '\0';  // untagged: identity gate stays out
     RouteMachine m;
     g_allocs = 0;
     for (int i = 0; i < 20000; ++i) {

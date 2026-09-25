@@ -2116,3 +2116,40 @@ P0-1 repair kind: JOURNAL_REPAIR now journals frozen "reconcile"
   no execution. H1 correctness/drill gate now complete at unit/
   drill level; Phase-4 operational rows (live wiring, 30-day run,
   out-of-band receipt) stay H2.
+
+## Addendum 111 - H1 third corrective (audit of 73a4509)
+P0-1 query truth table: 404 -> transport_ok+absent (router journals
+  terminal cancel directly — no UUID exists to DELETE); 2xx+id ->
+  found; 2xx-malformed/5xx/transport-fail -> unknown (reconcile).
+  Regressions: query-404-absent, query-malformed, query-500-unknown
+  (+ prior valid-order mapping).
+P0-2 send ambiguity: OrderAck carries transport_ok +
+  authoritative_reject. 422 -> terminal journaled cancel; transport
+  failure / malformed 2xx -> QUERY_ONCE under the same client ID
+  (ambiguous-reconcile; never CANCELLED on a missing POST reply).
+P0-3 protection proof: strict legs-array rule (>= 2 top-level leg
+  objects, >= 2 leg ids, tp+sl markers INSIDE the array;
+  string-aware bracket match; unbalanced/non-array refused) for both
+  submit-ack and query. Bare markers outside legs refused
+  (regression); one-leg and unbalanced refused.
+P0-4 bounded budget: kQueryMaxAttempts=3 persisted in machine +
+  snapshot; every QUERY_ONCE emission consumes one; exhaustion ->
+  JOURNAL_UNKNOWN + symbol freeze (never infinite, never a resend).
+P1-5 identity ordering: RouteObs carries client_id; non-IDLE
+  machines ignore foreign-tagged observations (exec:foreign-
+  observation); 24 permutations of four distinct consistent events
+  converge (no wrong terminal, identical trace/fill/ID, chains
+  verify). Tie-break frozen: matching identity applies by receipt
+  order; foreign never applies; broker sequence numbers reserved
+  (not invented).
+P1-6 snapshots: writer validates + serializes canonical cid/bid
+  (garbage refused: snap-writer-refuses-garbage); restore applies
+  the same grammar; attempts digit added (old scratch snapshots
+  invalid by construction — runtime-only format).
+Also: cancel_failed vs silence (silence re-checks); corrupt
+  PROTECTED-without-flag fails closed (sweep-found, now 13x2x512).
+Suites: router 86 + journal 23 + broker 47 + drills 75 +
+  noalloc-exec 0, normal+hardened, freeze PASS. Slice D / P3.x /
+  collector / research / plan untouched; transport unwired live;
+  no execution. Bounded query semantics: 1 initial + 2 transport-
+  failure re-issues, same identity, then UNKNOWN+freeze.

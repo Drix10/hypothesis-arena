@@ -216,10 +216,30 @@ int main() {
         auto r2 = RouteStep(r1.next, in, venue, o);
         o.adapter_responded = true;
         o.ack.accepted = false;
+        o.ack.authoritative_reject = true;
         auto r3 = RouteStep(r2.next, in, venue, o);
         Check(r3.action == RouteAction::JOURNAL_CANCEL &&
                   r3.next.state == RouteState::CANCELLED,
               "entry-rejected");
+        // Ambiguous send (transport failure): reconcile same ID.
+        auto r3b = RouteStep(r2.next, in, venue, o);
+        (void)r3b;
+        RouteObs oa = o;
+        oa.ack.authoritative_reject = false;
+        auto r3c = RouteStep(r2.next, in, venue, oa);
+        Check(r3c.action == RouteAction::QUERY_ONCE &&
+                  r3c.next.state == RouteState::QUERY_SENT,
+              "ambiguous-reconciles");
+        // Budget exhaustion: third transport failure freezes.
+        RouteMachine mx;
+        mx.state = RouteState::QUERY_SENT;
+        mx.query_attempts = 3;
+        RouteObs ox = OpenMarket();
+        ox.query.transport_ok = false;
+        auto rx = RouteStep(mx, in, venue, ox);
+        Check(rx.action == RouteAction::JOURNAL_UNKNOWN &&
+                  rx.freeze_symbol,
+              "reconcile-exhausted");
     }
     // 8. naked ack (no protection) -> cancel path, never hold naked
     {
@@ -481,7 +501,7 @@ int main() {
         int checked = 0;
         for (int st = 0; st <= 12; ++st)
             for (int pok = 0; pok <= 1; ++pok)
-                for (int bits = 0; bits < 256; ++bits) {
+                for (int bits = 0; bits < 512; ++bits) {
                     RouteMachine m;
                     m.state = static_cast<RouteState>(st);
                     m.kind = IntentKind::ENTRY;
@@ -492,6 +512,8 @@ int main() {
                     o.adapter_responded = (bits & 2) != 0;
                     o.ack.accepted = (bits & 4) != 0;
                     o.ack.protection_accepted = (bits & 8) != 0;
+                    o.ack.transport_ok = (bits & 256) != 0;
+                    o.ack.authoritative_reject = (bits & 512) != 0;
                     o.query_due = (bits & 16) != 0;
                     o.query.found = (bits & 1) != 0;
                     o.query.filled_qty = (bits & 4) ? 100 : 0;
@@ -587,6 +609,7 @@ int main() {
             m.client_id[64] = '\0';
             m.broker_id[63] = '\0';
             m.filled_qty = st * 7;
+            m.query_attempts = (std::uint8_t)(st % 4);
             m.emergency = (st & 2) != 0;
             m.protection_ok = (st & 4) != 0;
             char buf[256];
@@ -598,6 +621,7 @@ int main() {
             std::snprintf(name, sizeof(name), "snap-%d", st);
             bool same = ok && q.state == m.state &&
                         q.kind == m.kind &&
+                        q.query_attempts == m.query_attempts &&
                         q.filled_qty == m.filled_qty &&
                         q.emergency == m.emergency &&
                         q.protection_ok == m.protection_ok;
@@ -609,34 +633,53 @@ int main() {
         }
         RouteMachine q;
         Check(!RestoreMachine(nullptr, &q), "snap-null");
-        Check(!RestoreMachine("H1:0:0:0:0:0::", nullptr),
+        Check(!RestoreMachine("H1:0:0:0:0:0:0::", nullptr),
               "snap-null-out");
         Check(!RestoreMachine("X1:0:0:0:0:0::", &q), "snap-tag");
-        Check(!RestoreMachine("H1:13:0:0:0:0::", &q), "snap-state");
+        Check(!RestoreMachine("H1:13:0:0:0:0:0::", &q), "snap-state");
         Check(!RestoreMachine("H1:0:2:0:0:0::", &q), "snap-kind");
-        Check(!RestoreMachine("H1:0:0:0:0:0:ZZ:", &q), "snap-hex");
-        Check(!RestoreMachine("H1:0:0:0:0:0::extra", &q),
+        Check(!RestoreMachine("H1:0:0:0:0:0:0:ZZ:", &q), "snap-hex");
+        Check(!RestoreMachine("H1:0:0:0:0:0:0::extra", &q),
               "snap-trailing");
-        Check(!RestoreMachine("H1:0:0:0:0:0:", &q), "snap-short");
+        Check(!RestoreMachine("H1:0:0:0:0:0:0:", &q), "snap-short");
         // UUID grammar: hyphens exact, lowercase hex, 36 chars.
         Check(!RestoreMachine(
-                  "H1:0:0:0:0:0::0193ABCD-1234-5678-9abc-def012345678",
+                  "H1:0:0:0:0:0:0::0193ABCD-1234-5678-9abc-def012345678",
                   &q),
               "snap-uuid-upper");
         Check(!RestoreMachine(
-                  "H1:0:0:0:0:0::0193abcd1234-5678-9abc-def012345678",
+                  "H1:0:0:0:0:0:0::0193abcd1234-5678-9abc-def012345678",
                   &q),
               "snap-uuid-hyphen");
-        Check(!RestoreMachine("H1:0:0:0:0:0::0193abcd", &q),
+        Check(!RestoreMachine("H1:0:0:0:0:0:0::0193abcd", &q),
               "snap-uuid-short");
         Check(!RestoreMachine(
-                  "H1:0:0:0:0:0::0193abcd-1234-5678-9abc-def01234567X",
+                  "H1:0:0:0:0:0:0::0193abcd-1234-5678-9abc-def01234567X",
                   &q),
               "snap-uuid-char");
         // Empty broker id restores (no UUID observed yet).
-        Check(RestoreMachine("H1:2:0:0:0:0::", &q) &&
+        Check(RestoreMachine("H1:2:0:0:0:0:0::", &q) &&
                   q.broker_id[0] == '\0',
               "snap-empty-bid");
+        // Writer refuses un-restorable machines (garbage must never
+        // be persisted: an unrecoverable snapshot is a crash-path lie).
+        {
+            using jev::exec::SnapshotMachine;
+            RouteMachine mw;
+            mw.state = RouteState::QUERY_SENT;
+            for (int i = 0; i < 64; ++i) mw.client_id[i] = 'a';
+            mw.client_id[64] = '\0';
+            const char* bad = "not-a-uuid!";
+            int i = 0;
+            while (bad[i]) {
+                mw.broker_id[i] = bad[i];
+                ++i;
+            }
+            mw.broker_id[i] = '\0';
+            char buf[256];
+            Check(!SnapshotMachine(mw, buf, sizeof(buf)),
+                  "snap-writer-refuses-garbage");
+        }
         char tiny[8];
         RouteMachine m;
         Check(!SnapshotMachine(m, nullptr, 64), "snap-ser-null");

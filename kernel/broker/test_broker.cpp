@@ -178,8 +178,8 @@ int main() {
         AlpacaPaperAdapter ad(Fake);
         g_calls = 0;
         g_status = 200;g_reply =
-            "{\"id\":\"o1\",\"take_profit\":{\"limit_price\":\"240.00\"},"
-            "\"stop_loss\":{\"stop_price\":\"220.00\"}}";
+            "{\"id\":\"o1\",\"legs\":[{\"id\":\"l-tp\",\"take_profit\":{\"limit_price\":\"240.00\"}},"
+            "{\"id\":\"l-sl\",\"stop_loss\":{\"stop_price\":\"220.00\"}}]}";
         auto ack = ad.SubmitProtected(o);
         Check(g_calls == 1, "bracket-single-call");
         Check(g_last_method[0] == 'P' && g_last_method[1] == 'O' &&
@@ -194,25 +194,52 @@ int main() {
         Check(Has(g_last_body, "stop_loss"), "bracket-sl");
         Check(ack.accepted && ack.protection_accepted, "bracket-acked");
         // Legs missing from the reply -> protection NOT accepted.
-        g_reply = "{\"id\":\"o2\"}";
+        // (Markers outside a legs array prove nothing: this body
+        // carries both markers with NO legs and must still refuse.)
+        g_reply = "{\"id\":\"o2\",\"take_profit\":{},\"stop_loss\":{}}";
         auto ack2 = ad.SubmitProtected(o);
         Check(ack2.accepted && !ack2.protection_accepted,
               "naked-leg-detected");
-        // Broker reject -> refused.
-        g_status = 422;
+        // One leg only -> refused. Unbalanced legs -> refused.
+        g_reply =
+            "{\"id\":\"o3\",\"legs\":[{\"id\":\"l-tp\",\"take_profit\":{}}]}";
         auto ack3 = ad.SubmitProtected(o);
-        Check(!ack3.accepted, "broker-reject");
+        Check(ack3.accepted && !ack3.protection_accepted,
+              "one-leg-refused");
+        g_reply = "{\"id\":\"o4\",\"legs\":[{\"id\":\"l\"";
+        auto ack4 = ad.SubmitProtected(o);
+        Check(ack4.accepted && !ack4.protection_accepted,
+              "unbalanced-refused");
+        // P0-2 send outcomes: 422 authoritative; 500/malformed-200
+        // ambiguous (reconcile, never terminal here).
+        g_status = 422;
+        g_reply = "{\"code\":40010001,\"message\":\"bad\"}";
+        auto r422 = ad.SubmitProtected(o);
+        Check(!r422.accepted && r422.authoritative_reject &&
+                  !r422.transport_ok,
+              "send-422-authoritative");
+        g_status = 500;
+        auto r500 = ad.SubmitProtected(o);
+        Check(!r500.accepted && !r500.authoritative_reject &&
+                  !r500.transport_ok,
+              "send-500-ambiguous");
+        g_status = 200;
+        g_reply = "{\"ok\":true}";
+        auto rmal = ad.SubmitProtected(o);
+        Check(!rmal.accepted && !rmal.authoritative_reject &&
+                  !rmal.transport_ok,
+              "send-malformed-ambiguous");
         g_status = 200;
         // Bad spec never touches the transport.
         ProtectedOrder bad = o;
         bad.qty_shares = 0;
         int before = g_calls;
-        auto ack4 = ad.SubmitProtected(bad);
-        Check(!ack4.accepted && g_calls == before, "bad-spec-blocked");
+        auto ack5 = ad.SubmitProtected(bad);
+        Check(!ack5.accepted && g_calls == before, "bad-spec-blocked");
         // No transport -> closed with a reason.
         AlpacaPaperAdapter dead(nullptr);
-        auto ack5 = dead.SubmitProtected(o);
-        Check(!ack5.accepted && ack5.reason[0] != '\0',
+        auto ack6 = dead.SubmitProtected(o);
+        Check(!ack6.accepted && ack6.reason[0] != '\0',
               "unwired-closed");
     }
     // 4. query uses GET by-client-id; cancel uses DELETE by UUID.
@@ -220,8 +247,8 @@ int main() {
         AlpacaPaperAdapter ad(Fake);
         g_status = 200;
         g_reply =
-            "{\"id\":\"0193abcd-uuid\",\"filled_qty\":\"10\","
-            "take_profit\":{},\"stop_loss\":{}}";
+            "{\"id\":\"0193abcd-uuid\",\"filled_qty\":\"10\",\"legs\":[{\"id\":\"l1\",\"take_profit\":{}},"
+            "{\"id\":\"l2\",\"stop_loss\":{}}]}";
         char id[65];
         for (int i = 0; i < 64; ++i) id[i] = 'q';
         id[64] = '\0';
@@ -263,10 +290,20 @@ int main() {
         auto c4 = ad.Cancel(q.broker_order_id);
         Check(!c4.confirmed, "cancel-422");
         g_status = 200;
-        // Lookup with no id marker: not found (never a phantom).
+        // Lookup with no id marker on 200: MALFORMED, not absent.
         g_reply = "{}";
+        auto qmal = ad.QueryOnce(id);
+        Check(!qmal.found && !qmal.transport_ok, "query-malformed");
+        // Real 404: authoritative absent (no UUID to DELETE; the
+        // router journals a terminal cancel, never CANCEL_SENT).
+        g_status = 404;
         auto q404 = ad.QueryOnce(id);
-        Check(!q404.found, "query-not-found");
+        Check(!q404.found && q404.transport_ok, "query-404-absent");
+        // 500: unknown, never absent.
+        g_status = 500;
+        auto q500 = ad.QueryOnce(id);
+        Check(!q500.found && !q500.transport_ok, "query-500-unknown");
+        g_status = 200;
         // Repair is a LIMIT OCO with opposing side + sane prices.
         ProtectedOrder o;
         o.symbol[0] = 'S';

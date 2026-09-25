@@ -48,6 +48,22 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
     o.next = m;
     o.next.kind = intent.kind;
     const bool is_exit = (intent.kind == risk::IntentKind::EXIT);
+    // Identity gate (P1-5): a machine with an established identity
+    // ignores tagged observations for a FOREIGN order. Untagged
+    // observations apply by receipt order (legacy/test path).
+    if (m.state != RouteState::IDLE && m.client_id[0] != '\0' &&
+        obs.client_id[0] != '\0') {
+        bool same = true;
+        for (int i = 0; i < 65; ++i) {
+            if (m.client_id[i] != obs.client_id[i]) same = false;
+            if (m.client_id[i] == '\0') break;
+        }
+        if (!same) {
+            o.action = RouteAction::NONE;
+            o.reason = "exec:foreign-observation";
+            return o;
+        }
+    }
     switch (m.state) {
         case RouteState::IDLE: {
             if (!IntentShapeOk(intent)) return Reject(o, "exec:bad-intent");
@@ -109,11 +125,30 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                 return o;
             }
             if (obs.adapter_responded && !obs.ack.accepted) {
-                // Rejected entry: journal the cancel, terminal.
-                o.action = RouteAction::JOURNAL_CANCEL;
-                o.next.state = RouteState::CANCELLED;
-                o.journal_kind = "cancel";
-                o.reason = "exec:entry-rejected";
+                if (obs.ack.authoritative_reject) {
+                    // Broker refused (shaped 4xx): terminal, journaled.
+                    o.action = RouteAction::JOURNAL_CANCEL;
+                    o.next.state = RouteState::CANCELLED;
+                    o.journal_kind = "cancel";
+                    o.reason = "exec:entry-rejected";
+                    return o;
+                }
+                // Ambiguous send (transport failure / malformed 2xx):
+                // reconcile under the SAME client ID — never a terminal
+                // rejection, never a fresh send (no send exists from
+                // any non-IDLE state). Consumes query budget.
+                if (o.next.query_attempts < kQueryMaxAttempts) {
+                    ++o.next.query_attempts;
+                    o.action = RouteAction::QUERY_ONCE;
+                    o.next.state = RouteState::QUERY_SENT;
+                    o.reason = "exec:ambiguous-reconcile";
+                    return o;
+                }
+                o.action = RouteAction::JOURNAL_UNKNOWN;
+                o.next.state = RouteState::UNKNOWN_FROZEN;
+                o.journal_kind = "unknown";
+                o.freeze_symbol = true;
+                o.reason = "exec:reconcile-exhausted";
                 return o;
             }
             if (obs.adapter_responded && obs.ack.accepted &&
@@ -133,10 +168,21 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                 o.reason = "exec:repair-now";
                 return o;
             }
-            // Accepted (or timed out): exactly one status query.
-            o.action = RouteAction::QUERY_ONCE;
-            o.next.state = RouteState::QUERY_SENT;
-            o.reason = "exec:query-once";
+            // Accepted (or timed out): the status query, within budget.
+            // The first emission always proceeds (the send it reconciles
+            // already happened); re-issues need remaining budget.
+            if (o.next.query_attempts < kQueryMaxAttempts) {
+                ++o.next.query_attempts;
+                o.action = RouteAction::QUERY_ONCE;
+                o.next.state = RouteState::QUERY_SENT;
+                o.reason = "exec:query-once";
+                return o;
+            }
+            o.action = RouteAction::JOURNAL_UNKNOWN;
+            o.next.state = RouteState::UNKNOWN_FROZEN;
+            o.journal_kind = "unknown";
+            o.freeze_symbol = true;
+            o.reason = "exec:reconcile-exhausted";
             return o;
         }
         case RouteState::QUERY_SENT: {
@@ -148,11 +194,20 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
             const broker::OrderQuery& q = obs.query;
             if (!q.transport_ok) {
                 // Lookup itself failed (not "order absent"): re-issue
-                // the lookup under the same identity. This is query
-                // reconcile, not a second send — the send happened
-                // once upstream and no entry path exists from here.
-                o.action = RouteAction::QUERY_ONCE;
-                o.reason = "exec:query-retry";
+                // the lookup under the same identity while budget
+                // remains; on exhaustion freeze for S2/human rather
+                // than looping forever or assuming absence.
+                if (o.next.query_attempts < kQueryMaxAttempts) {
+                    ++o.next.query_attempts;
+                    o.action = RouteAction::QUERY_ONCE;
+                    o.reason = "exec:query-retry";
+                    return o;
+                }
+                o.action = RouteAction::JOURNAL_UNKNOWN;
+                o.next.state = RouteState::UNKNOWN_FROZEN;
+                o.journal_kind = "unknown";
+                o.freeze_symbol = true;
+                o.reason = "exec:reconcile-exhausted";
                 return o;
             }
             if (q.found) Copy64(o.next.broker_id, q.broker_order_id);
@@ -340,9 +395,10 @@ namespace jev {
 namespace exec {
 
 namespace {
-// Fixed snapshot: "H1:<state>:<kind>:<filled>:<emg>:<pok>:<cid>:<bid>"
+// Fixed snapshot: "H1:<state>:<kind>:<filled>:<emg>:<pok>:<att>:<cid>:<bid>"
 // client id is lowercase-hex-or-empty; broker id is the venue UUID
-// grammar (or empty); both bounded and validated.
+// grammar (or empty); attempts is the persisted query budget (0..9);
+// all bounded and validated.
 bool IsHexEmpty(const char* s, std::size_t maxlen, char* dst,
                 std::size_t dn) {
     std::size_t i = 0;
@@ -391,16 +447,17 @@ bool SnapshotMachine(const RouteMachine& m, char* out, std::size_t n) {
     int kd = (m.kind == risk::IntentKind::EXIT) ? 1 : 0;
     if (st < 0 || st > 12 || m.filled_qty < 0 || m.filled_qty > 999999999)
         return false;
+    if (m.query_attempts > 9) return false;
     // Writer-side strictness: refuse to persist a machine whose ids
     // cannot be restored (garbage in storage is a crash-path lie).
     char cid[65], bid[64];
     if (!IsHexEmpty(m.client_id, 64, cid, sizeof(cid))) return false;
     if (!IsUuidField(m.broker_id, bid, sizeof(bid))) return false;
-    int w = std::snprintf(out, n, "H1:%d:%d:%lld:%d:%d:%s:%s", st, kd,
+    int w = std::snprintf(out, n, "H1:%d:%d:%lld:%d:%d:%d:%s:%s", st, kd,
                           (long long)m.filled_qty,
                           m.emergency ? 1 : 0,
-                          m.protection_ok ? 1 : 0, m.client_id,
-                          m.broker_id);
+                          m.protection_ok ? 1 : 0, m.query_attempts,
+                          cid, bid);
     return w > 0 && static_cast<std::size_t>(w) < n;
 }
 
@@ -438,13 +495,16 @@ bool RestoreMachine(const char* s, RouteMachine* out) {
         return false;
     int emg = p[0] - '0';
     int pok = p[2] - '0';
-    p += 4;
+    if (p[4] < '0' || p[4] > '9' || p[5] != ':') return false;
+    int att = p[4] - '0';
+    p += 6;
     RouteMachine m;
     m.state = static_cast<RouteState>(st);
     m.kind = (kd == 1) ? risk::IntentKind::EXIT : risk::IntentKind::ENTRY;
     m.filled_qty = (std::int64_t)fq;
     m.emergency = (emg == 1);
     m.protection_ok = (pok == 1);
+    m.query_attempts = (std::uint8_t)att;
     if (!IsHexEmpty(p, 64, m.client_id, sizeof(m.client_id)))
         return false;
     while (*p != '\0' && *p != ':') ++p;

@@ -80,6 +80,108 @@ void FormatCents(char* dst, std::size_t n, std::int64_t cents) {
     std::snprintf(dst, n, "%lld.%02lld", (long long)(cents / 100),
                   (long long)(cents % 100));
 }
+// Strict legs proof (P0-3): protection is active ONLY when the reply
+// carries a "legs" ARRAY with >= 2 top-level leg objects, >= 2 leg
+// ids, and both take_profit and stop_loss markers INSIDE that array.
+// Bare substrings elsewhere in the body prove nothing (echoed request
+// fields, error text). String-aware bracket matching; unbalanced or
+// non-array legs -> false (unknown, never active).
+bool LegsProtected(const char* body) {
+    if (!body) return false;
+    const char* key = "\"legs\":";
+    const char* arr = nullptr;
+    for (const char* p = body; *p; ++p) {
+        const char* a = p;
+        const char* b = key;
+        while (*a && *b && *a == *b) {
+            ++a;
+            ++b;
+        }
+        if (!*b) {
+            arr = a;
+            break;
+        }
+    }
+    if (!arr) return false;
+    while (*arr == ' ' || *arr == '\t' || *arr == '\n' ||
+           *arr == '\r')
+        ++arr;
+    if (*arr != '[') return false;
+    const char* q = arr + 1;
+    int depth = 1;
+    bool in_str = false;
+    while (*q && depth > 0) {
+        if (in_str) {
+            if (*q == '\\' && q[1])
+                ++q;
+            else if (*q == '"')
+                in_str = false;
+        } else {
+            if (*q == '"')
+                in_str = true;
+            else if (*q == '[' || *q == '{')
+                ++depth;
+            else if (*q == ']' || *q == '}')
+                --depth;
+        }
+        ++q;
+    }
+    if (depth != 0) return false;
+    int legs = 0;
+    int ids = 0;
+    bool tp = false;
+    bool sl = false;
+    int d = 0;
+    in_str = false;
+    for (const char* p = arr; p < q; ++p) {
+        if (in_str) {
+            if (*p == '\\' && (p + 1) < q)
+                ++p;
+            else if (*p == '"')
+                in_str = false;
+            continue;
+        }
+        if (*p == '"') {
+            in_str = true;
+            continue;
+        }
+        if (*p == '{') {
+            if (d == 1) ++legs;
+            ++d;
+        } else if (*p == '}') {
+            --d;
+        } else if (*p == '[') {
+            ++d;
+        } else if (*p == ']') {
+            --d;
+        }
+    }
+    if (in_str) return false;
+    for (const char* p = arr; p < q; ++p) {
+        if (p[0] == '"' && p[1] == 'i' && p[2] == 'd' && p[3] == '"' &&
+            p[4] == ':')
+            ++ids;
+        if (!tp && p[0] == 't') {
+            const char* w = "take_profit";
+            const char* a = p;
+            while (a < q && *w && *a == *w) {
+                ++a;
+                ++w;
+            }
+            if (!*w) tp = true;
+        }
+        if (!sl && p[0] == 's') {
+            const char* w = "stop_loss";
+            const char* a = p;
+            while (a < q && *w && *a == *w) {
+                ++a;
+                ++w;
+            }
+            if (!*w) sl = true;
+        }
+    }
+    return legs >= 2 && ids >= 2 && tp && sl;
+}
 }  // namespace
 
 OrderAck AlpacaPaperAdapter::SubmitProtected(
@@ -121,16 +223,28 @@ OrderAck AlpacaPaperAdapter::SubmitProtected(
     req.path = "/v2/orders";
     req.body = body;
     HttpResult r = transport_(req);
-    if (r.status < 200 || r.status >= 300) {
+    // Three outcomes, never collapsed (P0-2):
+    //   4xx shaped refusal -> authoritative_reject (terminal upstream)
+    //   2xx + order id   -> accepted (protection per legs, below)
+    //   anything else (5xx, transport failure, malformed 2xx) ->
+    //     ambiguous: accepted=false WITHOUT authoritative_reject
+    //     (the router reconciles under the same ID).
+    if (r.status >= 400 && r.status < 500) {
+        ack.authoritative_reject = true;
         CopyField("broker-reject", ack.reason, sizeof(ack.reason));
         return ack;
     }
-    // Protection is accepted ONLY when the transport confirms every
-    // leg of the bracket (entry + TP + SL markers in the reply).
-    ack.accepted = Contains(r.body, "\"id\"");
-    ack.protection_accepted =
-        ack.accepted && Contains(r.body, "take_profit") &&
-        Contains(r.body, "stop_loss");
+    if (r.status < 200 || r.status >= 300 ||
+        !Contains(r.body, "\"id\"")) {
+        CopyField("transport-unknown", ack.reason,
+                  sizeof(ack.reason));
+        return ack;
+    }
+    ack.transport_ok = true;
+    ack.accepted = true;
+    // Protection is accepted ONLY when the reply proves every leg of
+    // the bracket via the strict legs rule (P0-3).
+    ack.protection_accepted = ack.accepted && LegsProtected(r.body);
     if (ack.accepted && !ack.protection_accepted)
         CopyField("protection-missing", ack.reason,
                   sizeof(ack.reason));
@@ -154,21 +268,28 @@ OrderQuery AlpacaPaperAdapter::QueryOnce(
     req.path = path;
     req.body = "";
     HttpResult r = transport_(req);
+    // Three outcomes (P0-1):
+    //   404              -> authoritative absent (cancel path needs no
+    //                         UUID; the router journals a terminal cancel)
+    //   2xx + order id   -> found (UUID required for DELETE)
+    //   2xx malformed / 5xx / transport failure -> unknown (reconcile,
+    //     never "absent": a malformed 200 is not proof of absence).
+    if (r.status == 404) {
+        q.transport_ok = true;
+        return q;
+    }
     if (r.status < 200 || r.status >= 300) return q;
-    // The lookup executed: this answer is authoritative (even a
-    // no-id reply means absent, not unknown).
-    q.transport_ok = true;
-    // Distinguish not-found (no id marker) from a broken reply: only
-    // an id-bearing reply is a found order. The UUID is REQUIRED for
-    // the real DELETE cancel path (no second lookup hidden anywhere).
+    // Only an id-bearing 2xx reply is a found order (the UUID is
+    // REQUIRED for the real DELETE cancel path). A 2xx without an id
+    // is malformed -> unknown, never "absent".
     if (!ExtractQuoted(r.body, "id", q.broker_order_id,
                        sizeof(q.broker_order_id)))
         return q;
+    q.transport_ok = true;
     q.found = true;
     q.cancelled = Contains(r.body, "\"canceled\"") ||
                   Contains(r.body, "\"cancelled\"");
-    q.protection_active = Contains(r.body, "take_profit") &&
-                          Contains(r.body, "stop_loss");
+    q.protection_active = LegsProtected(r.body);
     // filled_qty extraction: needle "\"filled_qty\":\"" + digits.
     const char* needle = "\"filled_qty\":\"";
     for (const char* p = r.body; *p; ++p) {

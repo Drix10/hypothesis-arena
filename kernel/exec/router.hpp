@@ -107,6 +107,11 @@ struct RouteObs {
                                  // never UNKNOWN
     bool executed = false;  // exit order confirmed executed
     bool repair_ok = false;  // EstablishProtection attempt confirmed
+    // Identity tag (P1-5): observations carry the client ID they
+    // report on. A non-IDLE machine ignores tagged observations for
+    // a FOREIGN identity (never mutates on another order's events).
+    // Empty = untagged (legacy/test path: applies by receipt order).
+    char client_id[65]{};
     risk::KillLevel kill = risk::KillLevel::NONE;
     bool feed_stale = false;     // feed stale > 30 s (Slice F flag)
     bool stage_entry_ok = false;  // verified stage permits entries
@@ -123,7 +128,15 @@ struct RouteMachine {
     bool emergency = false;
     bool protection_ok = false;  // positively confirmed protection;
                                  // PROTECTED requires this (P0 rule)
+    std::uint8_t query_attempts = 0;  // bounded lookup budget (P0-4):
+                                      // QUERY_MAX_ATTEMPTS total QUERY_ONCE
+                                      // emissions, persisted across restart
 };
+
+inline constexpr int kQueryMaxAttempts = 3;  // 1 initial + 2 transport-
+                                             // failure re-issues; then
+                                             // UNKNOWN+freeze (never
+                                             // infinite, never a resend)
 
 struct RouteOut {
     RouteAction action = RouteAction::NONE;

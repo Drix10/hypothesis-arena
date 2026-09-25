@@ -448,10 +448,17 @@ int main() {
         RouteObs o2 = OpenMarket();
         auto e1 = RouteStep(m2, c.in, c.venue, o2);
         auto e2 = RouteStep(e1.next, c.in, c.venue, o2);
-        o2.ack.accepted = false;  // transport-level refusal surfaces here
+        o2.ack.accepted = false;  // authoritative broker refusal
+        o2.ack.authoritative_reject = true;
         auto e3 = RouteStep(e2.next, c.in, c.venue, o2);
         Check(e3.action == RouteAction::JOURNAL_CANCEL,
               "outage-broker-no-naked-risk");
+        // transport-level ambiguity reconciles instead of cancelling.
+        RouteObs o2b = o2;
+        o2b.ack.authoritative_reject = false;
+        auto e3b = RouteStep(e2.next, c.in, c.venue, o2b);
+        Check(e3b.action == RouteAction::QUERY_ONCE,
+              "outage-broker-ambiguity-reconciles");
         // JEV down -> SOFT via the REAL Slice D evaluator (no D change:
         // H1 consumes the level as a frozen input).
         jev::kill::KillInputs ki;
