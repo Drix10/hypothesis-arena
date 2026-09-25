@@ -104,6 +104,13 @@ static void SetExitAck(RouteObs& o) {
     o.exit_ack.transport_ok = true;
     o.exit_ack.filled_qty = 100;
 }
+// Emergency/partial close observation (DEAD + cumulative qty).
+static void SetExitDead(RouteObs& o, std::int64_t qty) {
+    o.exit_responded = true;
+    o.exit_ack.state = CloseState::DEAD;
+    o.exit_ack.transport_ok = true;
+    o.exit_ack.filled_qty = qty;
+}
 static void SetUuid(char (&d)[64]) {
     const char* u = "0193abcd-1234-5678-9abc-def012345678";
     for (int i = 0; u[i]; ++i) d[i] = u[i];
@@ -249,7 +256,8 @@ int main() {
                   r3.next.state == RouteState::CLOSED,
               "exit-closed");
     }
-    // 6. emergency exception: EXIT journal fails -> act, then buffer
+    // 6. emergency exception: EXIT journal fails -> act first, then
+    // the SAME exit machinery (ordering differs, row still lands).
     {
         OrderIntent ex = in;
         ex.kind = IntentKind::EXIT;
@@ -263,11 +271,80 @@ int main() {
                   r2.next.state == RouteState::EXIT_EMERGENCY &&
                   r2.next.emergency,
               "emergency-exec-first");
+        // Executed flag WITHOUT ack detail: reconcile by ID under
+        // budget — never blind CLOSED without an authoritative qty.
         o.executed = true;
-        auto r3 = Step(r2.next, ex, venue, o);
+        auto r2b = Step(r2.next, ex, venue, o);
+        Check(r2b.action == RouteAction::QUERY_ONCE &&
+                  r2b.next.state == RouteState::EXIT_EMERGENCY &&
+                  r2b.next.emergency,
+              "emergency-flag-reconciles");
+        // The query answer lands back in the reconcile path:
+        // QUERY_SENT adopts it, full fill buffers home.
+        RouteObs oq = OpenMarket();
+        oq.adapter_responded = true;
+        oq.query.transport_ok = true;
+        oq.query.found = true;
+        oq.query.filled_qty = 100;
+        SetUuid(oq.query.broker_order_id);
+        auto r2c = Step(r2b.next, ex, venue, oq);
+        Check(r2c.action == RouteAction::NONE &&
+                  r2c.next.state == RouteState::QUERY_SENT,
+              "emergency-to-query");
+        auto r2d = Step(r2c.next, ex, venue, oq);
+        Check(r2d.action == RouteAction::BUFFER_EMERGENCY &&
+                  r2d.next.state == RouteState::CLOSED &&
+                  r2d.next.exit_closed_qty == 100,
+              "emergency-query-buffers");
+        // Authoritative full FILLED -> BUFFER (the row never landed
+        // via the normal path) + CLOSED at exactly full qty.
+        RouteObs oe = OpenMarket();
+        SetExitAck(oe);
+        auto r3 = Step(r2.next, ex, venue, oe);
         Check(r3.action == RouteAction::BUFFER_EMERGENCY &&
-                  r3.next.state == RouteState::CLOSED,
+                  r3.next.state == RouteState::CLOSED &&
+                  r3.next.filled_qty == 100 && r3.next.emergency,
               "emergency-buffered");
+    }
+    // 6b. emergency partial: a DEAD+40 emergency close folds the
+    // 40, mints Y for exactly 60, and still buffers the terminal
+    // (remainder managed across restart, never stranded).
+    {
+        OrderIntent ex = in;
+        ex.kind = IntentKind::EXIT;
+        RouteMachine m;
+        m.kind = IntentKind::EXIT;
+        RouteObs o = OpenMarket();
+        auto r1 = Step(m, ex, venue, o);
+        o.journal_ok = false;
+        auto re = Step(r1.next, ex, venue, o);
+        Check(re.next.state == RouteState::EXIT_EMERGENCY,
+              "emg-armed");
+        RouteObs od = OpenMarket();
+        SetExitDead(od, 40);
+        auto rd = Step(re.next, ex, venue, od);
+        Check(rd.action == RouteAction::EXECUTE_EXIT &&
+                  rd.next.exit_attempt == 1 &&
+                  rd.next.exit_closed_qty == 40 &&
+                  rd.exit_qty == 60 && rd.next.emergency &&
+                  rd.next.state == RouteState::EXIT_EMERGENCY,
+              "emergency-dead-mints");
+        // Restart mid-recovery: Y's full fill still buffers home.
+        char sng[320];
+        Check(SnapshotMachine(rd.next, sng, sizeof(sng)),
+              "emg-snaps");
+        RouteMachine qe;
+        Check(RestoreMachine(sng, &qe) &&
+                  qe.exit_closed_qty == 40 && qe.emergency,
+              "emg-restores");
+        RouteObs of = OpenMarket();
+        SetExitAck(of);
+        of.exit_ack.filled_qty = 60;
+        auto rf = Step(qe, ex, venue, of);
+        Check(rf.action == RouteAction::BUFFER_EMERGENCY &&
+                  rf.next.state == RouteState::CLOSED &&
+                  rf.next.exit_closed_qty == 100,
+              "emergency-buffered-100");
     }
     // 7. rejected entry -> journal cancel, terminal
     {
@@ -1116,6 +1193,170 @@ int main() {
             Check(m_f.action == RouteAction::JOURNAL_FILL &&
                       m_f.next.filled_qty == 100,
                   "xauth-ulid-over-rest");
+        }
+        // P0 cross-family LIFECYCLE authority: a no-event REST
+        // snapshot may add monotonic fill knowledge but can NEVER
+        // originate a terminal transition against ULID-established
+        // live stream state. Adversarial case: stream shows X live
+        // (partial 40, ULID high-water); later REST with no event
+        // claims X canceled at 40. Floor check alone accepts it
+        // (40 >= 40) — the lifecycle rule must still refuse to mint
+        // Y or otherwise act as X's definitive death.
+        {
+            OrderIntent ex = in;
+            ex.kind = IntentKind::EXIT;
+            // Crafted stream-live EXIT machine: QUERY_SENT, live
+            // partial 40 folded, ULID high-water, real binding.
+            RouteMachine mx;
+            mx.state = RouteState::QUERY_SENT;
+            mx.kind = IntentKind::EXIT;
+            for (int i = 0; i < 64; ++i) mx.client_id[i] = 'c';
+            mx.client_id[64] = '\0';
+            const char* iix = "intent-001";
+            int ixi = 0;
+            while (iix[ixi]) {
+                mx.intent_id[ixi] = iix[ixi];
+                ++ixi;
+            }
+            mx.intent_id[ixi] = '\0';
+            mx.symbol[0] = 'A';
+            mx.symbol[1] = 'A';
+            mx.symbol[2] = 'P';
+            mx.symbol[3] = 'L';
+            mx.symbol[4] = '\0';
+            mx.exit_closed_qty = 40;
+            mx.exit_counted_qty = 40;
+            mx.filled_qty = 40;
+            RouteObs ue = OpenMarket();
+            SetUlid(ue, 1780000005000ULL, 3u);
+            for (int i = 0; i < 33; ++i)
+                mx.last_event_id[i] = ue.event_id[i];
+            // Stale REST terminal: canceled, same qty, NO event.
+            RouteObs st = OpenMarket();
+            for (int i = 0; i < 65; ++i) st.client_id[i] = 'c';
+            st.adapter_responded = true;
+            st.query.transport_ok = true;
+            st.query.found = true;
+            st.query.cancelled = true;
+            st.query.filled_qty = 40;
+            SetUuid(st.query.broker_order_id);
+            auto rs = Step(mx, ex, venue, st);
+            Check(rs.action == RouteAction::QUERY_ONCE &&
+                      rs.next.state == RouteState::QUERY_SENT &&
+                      rs.next.exit_closed_qty == 40 &&
+                      rs.next.exit_attempt == 0 &&
+                      rs.next.client_id[0] == 'c',
+                  "xrest-terminal-reconciles");
+            // Restart between sources: still no mint, same totals.
+            char snx[320];
+            Check(SnapshotMachine(mx, snx, sizeof(snx)),
+                  "xrest-snaps");
+            RouteMachine qx;
+            Check(RestoreMachine(snx, &qx), "xrest-restores");
+            auto rr = Step(qx, ex, venue, st);
+            Check(rr.action == RouteAction::QUERY_ONCE &&
+                      rr.next.exit_attempt == 0 &&
+                      rr.next.exit_closed_qty == 40,
+                  "xrest-restart-reconciles");
+            // Reverse: a NEWER event-carrying ULID cancel (broker
+            // time after the stream high-water) IS definitive —
+            // ULID-vs-ULID orders it, and the mint proceeds.
+            RouteObs nc = OpenMarket();
+            for (int i = 0; i < 65; ++i) nc.client_id[i] = 'c';
+            nc.adapter_responded = true;
+            nc.query.transport_ok = true;
+            nc.query.found = true;
+            nc.query.cancelled = true;
+            nc.query.filled_qty = 40;
+            SetUuid(nc.query.broker_order_id);
+            SetUlid(nc, 1780000006000ULL, 3u);
+            auto rn = Step(mx, ex, venue, nc);
+            Check(rn.action == RouteAction::EXECUTE_EXIT &&
+                      rn.next.exit_attempt == 1 &&
+                      rn.exit_qty == 60,
+                  "xrest-newer-ulid-mints");
+            // Stale REST protection-state: a snapshot with no legs
+            // must NOT unset positively confirmed protection.
+            RouteMachine mp;
+            mp.state = RouteState::QUERY_SENT;
+            for (int i = 0; i < 64; ++i) mp.client_id[i] = 'd';
+            mp.client_id[64] = '\0';
+            const char* iip = "intent-001";
+            int ipi = 0;
+            while (iip[ipi]) {
+                mp.intent_id[ipi] = iip[ipi];
+                ++ipi;
+            }
+            mp.intent_id[ipi] = '\0';
+            mp.symbol[0] = 'A';
+            mp.symbol[1] = 'A';
+            mp.symbol[2] = 'P';
+            mp.symbol[3] = 'L';
+            mp.symbol[4] = '\0';
+            mp.protection_ok = true;
+            mp.filled_qty = 100;
+            RouteObs sp = OpenMarket();
+            for (int i = 0; i < 65; ++i) sp.client_id[i] = 'd';
+            sp.adapter_responded = true;
+            sp.query.transport_ok = true;
+            sp.query.found = true;
+            sp.query.filled_qty = 100;
+            sp.query.protection_active = false;
+            sp.query.bracket_class = false;
+            SetUuid(sp.query.broker_order_id);
+            auto rp = Step(mp, in, venue, sp);
+            Check(rp.action == RouteAction::JOURNAL_FILL &&
+                      rp.next.state == RouteState::PROTECTED,
+                  "xrest-protection-stands");
+        }
+        // Entry-side uncertain terminals: a no-event 404 or a
+        // no-event canceled claim against stream-live state
+        // reconciles (QUERY_ONCE), never terminals directly.
+        {
+            // Crafted stream-live ENTRY machine in QUERY_SENT.
+            RouteMachine me;
+            me.state = RouteState::QUERY_SENT;
+            for (int i = 0; i < 64; ++i) me.client_id[i] = 'e';
+            me.client_id[64] = '\0';
+            const char* iie = "intent-001";
+            int iei = 0;
+            while (iie[iei]) {
+                me.intent_id[iei] = iie[iei];
+                ++iei;
+            }
+            me.intent_id[iei] = '\0';
+            me.symbol[0] = 'A';
+            me.symbol[1] = 'A';
+            me.symbol[2] = 'P';
+            me.symbol[3] = 'L';
+            me.symbol[4] = '\0';
+            RouteObs ue2 = OpenMarket();
+            SetUlid(ue2, 1780000005000ULL, 5u);
+            for (int i = 0; i < 33; ++i)
+                me.last_event_id[i] = ue2.event_id[i];
+            // No-event 404 against the live order.
+            RouteObs s404 = OpenMarket();
+            for (int i = 0; i < 65; ++i) s404.client_id[i] = 'e';
+            s404.adapter_responded = true;
+            s404.query.transport_ok = true;
+            s404.query.found = false;
+            auto r404 = Step(me, in, venue, s404);
+            Check(r404.action == RouteAction::QUERY_ONCE &&
+                      r404.next.state == RouteState::QUERY_SENT,
+                  "xrest-404-reconciles");
+            // No-event canceled+0 against the live order.
+            RouteObs scx = OpenMarket();
+            for (int i = 0; i < 65; ++i) scx.client_id[i] = 'e';
+            scx.adapter_responded = true;
+            scx.query.transport_ok = true;
+            scx.query.found = true;
+            scx.query.cancelled = true;
+            scx.query.filled_qty = 0;
+            SetUuid(scx.query.broker_order_id);
+            auto rcx = Step(me, in, venue, scx);
+            Check(rcx.action == RouteAction::QUERY_ONCE &&
+                      rcx.next.state == RouteState::QUERY_SENT,
+                  "xrest-cancel-reconciles");
         }
         // Restart after the mint keeps attempt+id (no double-mint).
         char snapd[320];

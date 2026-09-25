@@ -328,6 +328,7 @@ struct Drive {
             r.action == RouteAction::JOURNAL_CANCEL ||
             r.action == RouteAction::JOURNAL_UNKNOWN ||
             r.action == RouteAction::JOURNAL_EXIT ||
+            r.action == RouteAction::BUFFER_EMERGENCY ||
             r.action == RouteAction::JOURNAL_REPAIR) {
             if (r.action == RouteAction::WRITE_JOURNAL) ++intent_rows;
             if (sink) sink->append(r.journal_kind, c.in.intent_id,
@@ -1015,6 +1016,85 @@ int main() {
         for (int i = 0; yw[i]; ++i)
             if (d2.m.broker_id[i] != yw[i]) ybid = false;
         Check(ybid, "px-broker-id-is-y");
+    }
+    // 9. P0 emergency-partial E2E (adapter + router + restart):
+    // journal fails on EXIT intent 100 -> execute X now (100) ->
+    // X reports DEAD+40 -> Y mints for exactly 60 -> restart -> Y
+    // posts 60 -> Y fills 60 -> BUFFER terminal at exactly 100
+    // (the delayed row lands through the durable buffer; journal
+    // chain verifies). No stranded remainder, no overshoot.
+    {
+        g_exit_posts = 0;
+        g_exit_x_posts = 0;
+        g_exit_mode = 0;
+        g_exit_first_id[0] = '\0';
+        Ctx c = GoodCtx("intent-010", "SPY");
+        c.in.kind = IntentKind::EXIT;
+        Sink sink;
+        Drive d;
+        d.m.kind = IntentKind::EXIT;
+        RouteObs o = OpenMarket();
+        d.step(c, o, &sink);  // WRITE (journal attempt)
+        o.journal_ok = false;
+        d.step(c, o, &sink);  // journal failed -> EXECUTE_EMERGENCY
+        Check(d.m.state == RouteState::EXIT_EMERGENCY &&
+                  d.m.emergency && d.last_exit_qty == 100,
+              "pem-armed");
+        jev::broker::AlpacaPaperAdapter ad(FakeExit);
+        char xid[65];
+        for (int i = 0; i < 65; ++i) xid[i] = d.m.client_id[i];
+        auto x0 = ad.MarketClose("SPY", d.last_exit_qty,
+                                 OrderSide::SELL, xid);
+        Check(g_exit_posts == 1 && g_exit_last_qty == 100 &&
+                  x0.state == jev::broker::CloseState::PENDING,
+              "pem-first-post-100");
+        // PENDING reconciles; the query reports X canceled+40.
+        RouteObs op = OpenMarket();
+        op.exit_responded = true;
+        op.exit_ack = x0;
+        d.step(c, op, &sink);
+        Check(d.m.state == RouteState::QUERY_SENT, "pem-reconciles");
+        RouteObs oq = OpenMarket();
+        oq.adapter_responded = true;
+        oq.query.transport_ok = true;
+        oq.query.found = true;
+        oq.query.cancelled = true;
+        oq.query.filled_qty = 40;
+        oq.query.close_state = jev::broker::CloseState::DEAD;
+        SetUuid(oq.query.broker_order_id);
+        d.step(c, oq, &sink);
+        Check(d.m.state == RouteState::EXIT_SENT &&
+                  d.m.emergency && d.m.exit_attempt == 1 &&
+                  d.m.exit_closed_qty == 40 &&
+                  d.last_exit_qty == 60,
+              "pem-mints-remainder");
+        char snap1[320];
+        Check(SnapshotMachine(d.m, snap1, sizeof(snap1)),
+              "pem-snaps");
+        Drive d2;
+        Check(RestoreMachine(snap1, &d2.m) &&
+                  d2.m.exit_closed_qty == 40 && d2.m.emergency,
+              "pem-restores");
+        // Restarted caller re-derives Y's size from the snapshot.
+        long long re_qty = 100 - d2.m.exit_closed_qty;
+        char yid[65];
+        for (int i = 0; i < 65; ++i) yid[i] = d2.m.client_id[i];
+        g_exit_mode = 3;
+        auto y0 =
+            ad.MarketClose("SPY", re_qty, OrderSide::SELL, yid);
+        Check(re_qty == 60 && g_exit_last_qty == 60 &&
+                  y0.state == jev::broker::CloseState::FILLED,
+              "pem-second-post-60");
+        RouteObs of = OpenMarket();
+        of.exit_responded = true;
+        of.exit_ack = y0;
+        d2.step(c, of, &sink);
+        Check(d2.m.state == RouteState::CLOSED &&
+                  d2.m.exit_closed_qty == 100 && sink.verify(),
+              "pem-buffered-100");
+        Check(g_exit_x_posts == 1 && g_exit_qtys[0] == 100 &&
+                  g_exit_qtys[1] == 60,
+              "pem-no-overshoot");
     }
     if (g_fail == 0) std::printf("DRILL SUITE: ALL PASS (%d checks)\n",
                                  g_count);

@@ -529,16 +529,19 @@ int main() {
                   !qsmp.bracket_class,
               "query-simple-no-bracket");
         // P1-1 query status normalization (exit reconciliation
-        // reads this, not just filled/cancelled).
+        // reads this, not just filled/cancelled). Venue truth:
+        // "partially_filled" is the order status (PARTIAL);
+        // trade-event spellings never classify (checked below).
         const char* statuses[10] = {
-            "filled", "partially_filled", "partial_fill", "new",
+            "filled", "partially_filled", "new",
             "accepted", "pending_new", "calculated", "canceled",
-            "rejected", "expired"};
+            "rejected", "expired", "done_for_day"};
         const CloseState want_st[10] = {
-            CloseState::FILLED, CloseState::PARTIAL, CloseState::PARTIAL,
-            CloseState::PENDING, CloseState::PENDING, CloseState::PENDING,
-            CloseState::PENDING, CloseState::DEAD, CloseState::DEAD,
-            CloseState::DEAD};
+            CloseState::FILLED, CloseState::PARTIAL,
+            CloseState::PENDING, CloseState::PENDING,
+            CloseState::PENDING, CloseState::PENDING,
+            CloseState::DEAD, CloseState::DEAD, CloseState::DEAD,
+            CloseState::UNKNOWN};
         for (int si = 0; si < 10; ++si) {
             char qb[256];
             std::snprintf(
@@ -555,11 +558,20 @@ int main() {
         // Unlisted statuses (done_for_day/replaced/...) stay UNKNOWN.
         g_reply =
             "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
-            "\"status\":\"done_for_day\",\"filled_qty\":\"10\"}";
-        auto qdd = ad.QueryOnce(id);
-        Check(qdd.found &&
-                  qdd.close_state == CloseState::UNKNOWN,
-              "query-status-unlisted");
+            "\"status\":\"replaced\",\"filled_qty\":\"10\"}";
+        auto qrp = ad.QueryOnce(id);
+        Check(qrp.found &&
+                  qrp.close_state == CloseState::UNKNOWN,
+              "query-status-replaced-unknown");
+        // Trade-event spellings are never order statuses: "fill"
+        // and "partial_fill" both classify UNKNOWN (fail closed).
+        g_reply =
+            "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
+            "\"status\":\"partial_fill\",\"filled_qty\":\"10\"}";
+        auto qpf = ad.QueryOnce(id);
+        Check(qpf.found &&
+                  qpf.close_state == CloseState::UNKNOWN,
+              "query-status-partial-fill-unknown");
         // Bare "fill" is a trade event, not an order status.
         g_reply =
             "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
@@ -678,6 +690,15 @@ int main() {
                   mp2.state == CloseState::PARTIAL &&
                   mp2.filled_qty == 4,
               "close-partial-reconciles");
+        // Trade-event "partial_fill" is not an order status:
+        // ambiguous/unknown, never authoritative PARTIAL.
+        g_reply =
+            "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
+            "\"status\":\"partial_fill\",\"filled_qty\":\"4\"}";
+        auto mpf = ad.MarketClose("AAPL", 10, OrderSide::SELL, xid);
+        Check(!mpf.executed && !mpf.transport_ok &&
+                  mpf.state == CloseState::UNKNOWN,
+              "close-partial-fill-rejected");
         // canceled/rejected/expired -> DEAD (definitive non-exec).
         g_reply =
             "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","

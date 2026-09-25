@@ -72,7 +72,9 @@ enum class RouteState : std::uint8_t {
     CANCELLED = 7,        // terminal: nothing filled, order dead
     UNKNOWN_FROZEN = 8,   // terminal: cancel failed; symbol must freeze
     EXIT_SENT = 9,        // normal exit order in flight
-    EXIT_EMERGENCY = 10,  // journal failed on EXIT: executed first
+    EXIT_EMERGENCY = 10,  // journal failed on EXIT: executed first,
+                          // then the SAME exit accounting/reconcile
+                          // machinery (terminal buffers the row)
     CLOSED = 11,          // terminal (exits; emergency flag records path)
     REPAIR_SENT = 12      // protection repair in flight (recovery-only)
 };
@@ -141,7 +143,13 @@ struct RouteObs {
     //     broker-stream state. REST is reconciliation, not a
     //     competing sequence: fills are monotonic (a snapshot below
     //     the established floor is stale), protection never unsets,
-    //     terminals never un-terminal. No fake cross-family
+    //     terminals never un-terminal. Lifecycle authority: a
+    //     no-event REST snapshot may add monotonic fill knowledge
+    //     but can NEVER originate a terminal transition
+    //     (cancel/dead/absent-terminal) against ULID-established
+    //     live stream state — such an observation reconciles
+    //     (re-query within budget, else freeze) until stream
+    //     confirmation or S2/human resolution. No fake cross-family
     //     comparison is ever invented.
     char event_id[33]{};
     std::uint64_t event_seq = 0;

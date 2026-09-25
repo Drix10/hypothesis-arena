@@ -112,18 +112,22 @@ std::int64_t StrictQty(const char* body) {
 // string onto the close lifecycle for EXIT reconciliation. Entries
 // keep their own found/filled/cancelled/protection verdicts; exits
 // reconcile on this (replaced/done_for_day/suspended etc. are never
-// silently collapsed into generic found+qty).
+// silently collapsed into generic found+qty). Venue truth: order
+// statuses are "filled" / "partially_filled"; bare "fill" and
+// "partial_fill" are TRADE-EVENT names, never order statuses ->
+// UNKNOWN (fail closed, never an authoritative lifecycle).
 CloseState ClassifyStatus(const char* st) {
     if (!st || !st[0]) return CloseState::UNKNOWN;
     // exact-match helper over bounded literals. NOTE: the venue
-    // order status is "filled" (terminal); bare "fill" is a
-    // trade-event type, never an order status -> UNKNOWN.
+    // order statuses are "filled" (terminal) and
+    // "partially_filled"; bare "fill" / "partial_fill" are
+    // trade-event types, never order statuses -> UNKNOWN.
     const char* const words[] = {
-        "filled",         "partial_fill", "partially_filled",
+        "filled",         "partially_filled",
         "accepted",       "pending_new",  "new",
         "calculated",     "canceled",     "rejected",
         "expired"};
-    for (int w = 0; w < 10; ++w) {
+    for (int w = 0; w < 9; ++w) {
         const char* b = words[w];
         const char* a = st;
         while (*a && *b && *a == *b) {
@@ -132,8 +136,8 @@ CloseState ClassifyStatus(const char* st) {
         }
         if (*a != '\0' || *b != '\0') continue;
         if (w == 0) return CloseState::FILLED;
-        if (w <= 2) return CloseState::PARTIAL;
-        if (w <= 6) return CloseState::PENDING;
+        if (w == 1) return CloseState::PARTIAL;
+        if (w <= 5) return CloseState::PENDING;
         return CloseState::DEAD;
     }
     return CloseState::UNKNOWN;
@@ -485,7 +489,7 @@ OrderQuery AlpacaPaperAdapter::QueryOnce(
     if (r.status < 200 || r.status >= 300) return q;
     // UUID grammar enforced on QUERY too (P0-3): an unvalidated id
     // must never reach DELETE. Bad id -> unknown, never "absent".
-    char oid[64];
+    char oid[64] = {};
     if (!ExtractQuoted(r.body, "id", oid, sizeof(oid)) ||
         !IsBrokerUuid(oid))
         return q;
@@ -500,7 +504,10 @@ OrderQuery AlpacaPaperAdapter::QueryOnce(
     q.cancelled = Contains(r.body, "\"canceled\"") ||
                   Contains(r.body, "\"cancelled\"");
     // Normalized status for exit reconciliation (P1-1).
-    char qs[32];
+    // Zero-init: only ExtractQuoted-success bytes are significant,
+    // and fixed-offset reads below must never touch indeterminate
+    // bytes on short statuses.
+    char qs[32] = {};
     if (ExtractQuoted(r.body, "status", qs, sizeof(qs)))
         q.close_state = ClassifyStatus(qs);
     q.protection_active = LegsProtected(r.body);
@@ -577,30 +584,33 @@ CloseResult AlpacaPaperAdapter::MarketClose(const char* symbol,
     // CLOSED); dead states -> definitive non-execution; anything
     // else (or malformed qty) -> ambiguous/unknown.
     if (r.status < 200 || r.status >= 300) return c;
-    char oid[64];
+    char oid[64] = {};
     if (!ExtractQuoted(r.body, "id", oid, sizeof(oid)) ||
         !IsBrokerUuid(oid))
         return c;
-    char st[32];
+    // Zero-init (P1 audit): ExtractQuoted writes the value + NUL
+    // only; fixed-offset reads below (st[6]/st[16]/...) must be
+    // DEFINED for short statuses like "new" — indeterminate bytes
+    // are never compared, and every compare is length-checked
+    // against its literal (value bytes, then exact NUL position).
+    char st[32] = {};
     if (!ExtractQuoted(r.body, "status", st, sizeof(st))) return c;
     bool fill = true;
     const char* want = "filled";
     for (int i = 0; want[i]; ++i)
         if (st[i] != want[i]) fill = false;
     if (st[6] != '\0') fill = false;
+    // Order-status truth: ONLY "partially_filled" is PARTIAL.
+    // "partial_fill" is the trade-event name -> unknown (same
+    // category error as bare "fill", now closed).
     bool partial = false;
     if (!fill) {
-        const char* p1 = "partial_fill";
         const char* p2 = "partially_filled";
-        bool m1 = true;
-        for (int i = 0; p1[i]; ++i)
-            if (st[i] != p1[i]) m1 = false;
-        if (st[12] != '\0') m1 = false;
         bool m2 = true;
         for (int i = 0; p2[i]; ++i)
             if (st[i] != p2[i]) m2 = false;
         if (st[16] != '\0') m2 = false;
-        partial = m1 || m2;
+        partial = m2;
     }
     bool pending = false;
     if (!fill && !partial) {

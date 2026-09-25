@@ -128,7 +128,10 @@ bool IntentMatches(const RouteMachine& m, const OrderIntent& in) {
 bool IsUuidField(const char* s, char* dst, std::size_t dn) {
     if (dn < 37) return false;
     if (s[0] == '\0') {
-        dst[0] = '\0';
+        // Empty restores as no-UUID: zero the WHOLE buffer (callers
+        // copy the full fixed buffer, so even the empty case must
+        // be byte-deterministic past the NUL).
+        for (std::size_t i = 0; i < dn; ++i) dst[i] = '\0';
         return true;
     }
     for (int i = 0; i < 36; ++i) {
@@ -184,6 +187,114 @@ RouteOut FreezeUnknown(RouteOut& o, const char* reason) {
     o.freeze_symbol = true;
     o.reason = reason;
     return o;
+}
+// Stream-live authority (cross-family lifecycle rule): the last
+// applied event is a broker-stream ULID (broker-time identity).
+// A no-event REST snapshot carries no broker-time, so it can add
+// monotonic fill knowledge but can NEVER originate a terminal
+// transition (cancel/dead/absent-terminal) against this state —
+// such an observation reconciles (re-query within budget, else
+// freeze) until stream confirmation or S2/human resolution. Deaths
+// the machine itself requested (CANCEL_SENT confirmations) are
+// unaffected: expected, never invented.
+bool StreamLive(const RouteMachine& m) { return IsUlid(m.last_event_id); }
+// Exit terminal with the ordering exception honored: the emergency
+// path never landed its intent row via WRITE_JOURNAL, so it closes
+// through the durable BUFFER (ordering differs, row-skipping
+// never). Callers set filled_qty + broker UUID before this.
+RouteOut ExitClosed(RouteOut& o, const char* reason) {
+    if (o.next.emergency) {
+        o.action = RouteAction::BUFFER_EMERGENCY;
+    } else {
+        o.action = RouteAction::JOURNAL_EXIT;
+    }
+    o.next.state = RouteState::CLOSED;
+    o.journal_kind = "exit";
+    o.reason = reason;
+    return o;
+}
+// Uncertain-terminal reconcile: a no-event REST terminal claim
+// against stream-live state. Fold already applied by the caller;
+// this only chooses reconcile-vs-freeze (never mint/terminal).
+RouteOut RestTerminalReconcile(RouteOut& o, const char* reason) {
+    if (o.next.query_attempts < kQueryMaxAttempts) {
+        ++o.next.query_attempts;
+        o.action = RouteAction::QUERY_ONCE;
+        o.reason = reason;
+        return o;
+    }
+    return FreezeUnknown(o, "exec:reconcile-exhausted");
+}
+// Shared exit-ack machinery (EXIT_SENT + EXIT_EMERGENCY, P0
+// emergency fix): fold the authoritative cumulative qty; flat ->
+// terminal (BUFFER under the emergency ordering exception,
+// JOURNAL otherwise); DEAD-short -> mint the remainder under a new
+// sub-ID; short-FILLED (contradictory full-completion) ->
+// reconcile; PARTIAL/PENDING/ambiguous -> reconcile by ID under
+// budget. Never CLOSED on a partial, never a blind second send,
+// never a double-close (restart reconciles the same way: no send
+// from non-IDLE). Overfill -> freeze for S2/human.
+RouteOut ExitAckStep(RouteOut& o, const RouteMachine& m,
+                     const OrderIntent& intent, const VenueCtx& venue,
+                     const broker::CloseResult& ca) {
+    if (ca.transport_ok &&
+        (ca.state == broker::CloseState::FILLED ||
+         ca.state == broker::CloseState::DEAD)) {
+        if (!FoldExitFill(o.next, intent, ca.filled_qty)) {
+            return FreezeUnknown(o, "exec:exit-overfill");
+        }
+        if (o.next.exit_closed_qty == intent.qty_shares) {
+            o.next.filled_qty = o.next.exit_closed_qty;
+            if (ca.broker_order_id[0] != '\0' &&
+                broker::IsBrokerUuid(ca.broker_order_id)) {
+                Copy64(o.next.broker_id, ca.broker_order_id);
+            }
+            return ExitClosed(o, "exec:exited");
+        }
+        if (ca.state == broker::CloseState::DEAD) {
+            // Burned ID, remainder open: mint next identity.
+            if (m.exit_attempt >= 9) {
+                return FreezeUnknown(
+                    o, "exec:exit-attempts-exhausted");
+            }
+            char nid[65];
+            std::uint8_t natt =
+                (std::uint8_t)(m.exit_attempt + 1);
+            if (!MintExitSubId(intent, venue, natt, nid)) {
+                return FreezeUnknown(
+                    o, "exec:exit-identity-failed");
+            }
+            o.next.exit_attempt = natt;
+            Copy65(o.next.client_id, nid);
+            o.next.broker_id[0] = '\0';
+            o.next.exit_counted_qty = 0;
+            o.next.filled_qty = o.next.exit_closed_qty;
+            o.exit_qty =
+                intent.qty_shares - o.next.exit_closed_qty;
+            o.action = RouteAction::EXECUTE_EXIT;
+            o.reason = "exec:exit-new-identity";
+            return o;
+        }
+        // Short FILLED (contradictory full-completion):
+        // reconcile the remainder, never CLOSED.
+        o.next.filled_qty = o.next.exit_closed_qty;
+        if (o.next.query_attempts < kQueryMaxAttempts) {
+            ++o.next.query_attempts;
+            o.action = RouteAction::QUERY_ONCE;
+            o.next.state = RouteState::QUERY_SENT;
+            o.reason = "exec:exit-short-fill";
+            return o;
+        }
+        return FreezeUnknown(o, "exec:reconcile-exhausted");
+    }
+    if (o.next.query_attempts < kQueryMaxAttempts) {
+        ++o.next.query_attempts;
+        o.action = RouteAction::QUERY_ONCE;
+        o.next.state = RouteState::QUERY_SENT;
+        o.reason = "exec:exit-reconcile";
+        return o;
+    }
+    return FreezeUnknown(o, "exec:reconcile-exhausted");
 }
 }  // namespace
 
@@ -544,11 +655,19 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                     }
                     if (o.next.exit_closed_qty == intent.qty_shares) {
                         o.next.filled_qty = o.next.exit_closed_qty;
-                        o.action = RouteAction::JOURNAL_EXIT;
-                        o.next.state = RouteState::CLOSED;
-                        o.journal_kind = "exit";
-                        o.reason = "exec:exit-reconciled";
-                        return o;
+                        return ExitClosed(o, "exec:exit-reconciled");
+                    }
+                    // No-event REST death against stream-live state
+                    // is an UNCERTAIN terminal (the snapshot carries
+                    // no broker-time to prove it postdates the
+                    // stream): fold stands, but never mint/terminal
+                    // on it — reconcile within budget, else freeze
+                    // for S2/human. Event-carrying terminals already
+                    // passed the domain ordering above.
+                    if (obs.event_id[0] == '\0' &&
+                        StreamLive(o.next)) {
+                        return RestTerminalReconcile(
+                            o, "exec:rest-terminal-unconfirmed");
                     }
                     if (m.exit_attempt >= 9) {
                         o.action = RouteAction::JOURNAL_UNKNOWN;
@@ -590,11 +709,7 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                 }
                 if (o.next.exit_closed_qty == intent.qty_shares) {
                     o.next.filled_qty = o.next.exit_closed_qty;
-                    o.action = RouteAction::JOURNAL_EXIT;
-                    o.next.state = RouteState::CLOSED;
-                    o.journal_kind = "exit";
-                    o.reason = "exec:exit-reconciled";
-                    return o;
+                    return ExitClosed(o, "exec:exit-reconciled");
                 }
                 o.next.filled_qty = o.next.exit_closed_qty;
                 if (o.next.query_attempts < kQueryMaxAttempts) {
@@ -611,6 +726,13 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                 // is necessary. Journal the terminal cancellation
                 // DIRECTLY; never enter CANCEL_SENT for a
                 // nonexistent order, never request a confirmation.
+                // Exception: a no-event 404 against stream-live
+                // state is uncertain (stale lookup, not proof the
+                // live order died) — reconcile, never terminalize.
+                if (obs.event_id[0] == '\0' && StreamLive(o.next)) {
+                    return RestTerminalReconcile(
+                        o, "exec:rest-terminal-unconfirmed");
+                }
                 o.next.filled_qty = 0;
                 o.action = RouteAction::JOURNAL_CANCEL;
                 o.next.state = RouteState::CANCELLED;
@@ -620,6 +742,11 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
             }
             if (q.cancelled && q.filled_qty == 0) {
                 // Already dead, nothing filled: straight to terminal.
+                // Same uncertain-terminal exception as 404 above.
+                if (obs.event_id[0] == '\0' && StreamLive(o.next)) {
+                    return RestTerminalReconcile(
+                        o, "exec:rest-terminal-unconfirmed");
+                }
                 o.next.filled_qty = 0;
                 o.action = RouteAction::JOURNAL_CANCEL;
                 o.next.state = RouteState::CANCELLED;
@@ -777,102 +904,49 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
         case RouteState::EXIT_SENT: {
             // Exit execution identity: the close rides the machine's
             // stable client ID at the caller-supplied o.exit_qty.
-            // No observation yet -> wait. FILLED (authoritative
-            // cumulative qty): fold it; flat (closed == requested)
-            // -> terminal with the AUTHORITATIVE total, short ->
-            // reconcile (never CLOSED on a partial, P0-1).
-            // DEAD (definitive non-execution): fold its qty too
-            // (a canceled close may have partially filled — that
-            // fill is real, never erased); flat -> CLOSED, else
-            // burn the ID and mint the next sub-identity for the
-            // REMAINDER only (P0-2, P1-4). PARTIAL/PENDING/ambiguous
-            // -> reconcile by ID under budget (never a blind second
-            // send, never a double-close). Restart reconciles the
-            // same way: no send from non-IDLE. Overfill (broker
-            // claims more closed than held) -> freeze for S2/human.
+            // Shared machinery (ExitAckStep): fold the authoritative
+            // cumulative qty; terminal only on full completion;
+            // mint/reconcile otherwise — documented there.
             if (!obs.exit_responded) {
                 o.action = RouteAction::NONE;
                 o.reason = "exec:awaiting-exit";
                 return o;
             }
-            const broker::CloseResult& ca = obs.exit_ack;
-            if (ca.transport_ok &&
-                (ca.state == broker::CloseState::FILLED ||
-                 ca.state == broker::CloseState::DEAD)) {
-                if (!FoldExitFill(o.next, intent, ca.filled_qty)) {
-                    return FreezeUnknown(o, "exec:exit-overfill");
-                }
-                if (o.next.exit_closed_qty == intent.qty_shares) {
-                    o.next.filled_qty = o.next.exit_closed_qty;
-                    if (ca.broker_order_id[0] != '\0' &&
-                        broker::IsBrokerUuid(ca.broker_order_id)) {
-                        Copy64(o.next.broker_id, ca.broker_order_id);
-                    }
-                    o.action = RouteAction::JOURNAL_EXIT;
-                    o.next.state = RouteState::CLOSED;
-                    o.journal_kind = "exit";
-                    o.reason = "exec:exited";
-                    return o;
-                }
-                if (ca.state == broker::CloseState::DEAD) {
-                    // Burned ID, remainder open: mint next identity.
-                    if (m.exit_attempt >= 9) {
-                        return FreezeUnknown(
-                            o, "exec:exit-attempts-exhausted");
-                    }
-                    char nid[65];
-                    std::uint8_t natt =
-                        (std::uint8_t)(m.exit_attempt + 1);
-                    if (!MintExitSubId(intent, venue, natt, nid)) {
-                        return FreezeUnknown(
-                            o, "exec:exit-identity-failed");
-                    }
-                    o.next.exit_attempt = natt;
-                    Copy65(o.next.client_id, nid);
-                    o.next.broker_id[0] = '\0';
-                    o.next.exit_counted_qty = 0;
-                    o.next.filled_qty = o.next.exit_closed_qty;
-                    o.exit_qty =
-                        intent.qty_shares - o.next.exit_closed_qty;
-                    o.action = RouteAction::EXECUTE_EXIT;
-                    o.reason = "exec:exit-new-identity";
-                    return o;
-                }
-                // Short FILLED (contradictory full-completion):
-                // reconcile the remainder, never CLOSED.
-                o.next.filled_qty = o.next.exit_closed_qty;
-                if (o.next.query_attempts < kQueryMaxAttempts) {
-                    ++o.next.query_attempts;
-                    o.action = RouteAction::QUERY_ONCE;
-                    o.next.state = RouteState::QUERY_SENT;
-                    o.reason = "exec:exit-short-fill";
-                    return o;
-                }
-                return FreezeUnknown(o, "exec:reconcile-exhausted");
-            }
-            if (o.next.query_attempts < kQueryMaxAttempts) {
-                ++o.next.query_attempts;
-                o.action = RouteAction::QUERY_ONCE;
-                o.next.state = RouteState::QUERY_SENT;
-                o.reason = "exec:exit-reconcile";
-                return o;
-            }
-            return FreezeUnknown(o, "exec:reconcile-exhausted");
+            return ExitAckStep(o, m, intent, venue, obs.exit_ack);
         }
         case RouteState::EXIT_EMERGENCY: {
-            if (!obs.executed) {
-                o.action = RouteAction::NONE;
-                o.reason = "exec:awaiting-emergency";
-                return o;
+            // Frozen emergency exception (doc 06 sec. 6.1): the
+            // journal write failed mid-emergency, so execution came
+            // first. The exception changes ORDERING only — the exit
+            // runs the SAME authoritative accounting/reconcile
+            // machinery as EXIT_SENT (a partial/dead emergency close
+            // preserves cumulative closed qty and keeps managing the
+            // remainder); only the terminal differs (BUFFER: the row
+            // still lands, durably buffered now and appended at the
+            // first safe moment). Never CLOSED without authoritative
+            // full completion: an executed flag WITHOUT ack detail
+            // reconciles by ID, never terminals blind.
+            if (!obs.exit_responded) {
+                // A query answer belongs to the reconcile path:
+                // adopt QUERY_SENT so the caller re-feeds this SAME
+                // observation there (emergency flag persists, so the
+                // terminal still buffers). Without this the
+                // executed-without-ack reconcile would dead-end.
+                if (obs.adapter_responded && obs.query.transport_ok) {
+                    o.action = RouteAction::NONE;
+                    o.next.state = RouteState::QUERY_SENT;
+                    o.reason = "exec:emergency-to-query";
+                    return o;
+                }
+                if (!obs.executed) {
+                    o.action = RouteAction::NONE;
+                    o.reason = "exec:awaiting-emergency";
+                    return o;
+                }
+                return RestTerminalReconcile(
+                    o, "exec:emergency-reconcile");
             }
-            // Row still lands: caller buffers it durably now (then
-            // appends at the first safe moment).
-            o.action = RouteAction::BUFFER_EMERGENCY;
-            o.next.state = RouteState::CLOSED;
-            o.next.emergency = true;
-            o.journal_kind = "exit";
-            o.reason = "exec:emergency-buffered";
-            return o;
+            return ExitAckStep(o, m, intent, venue, obs.exit_ack);
         }
         case RouteState::PROTECTED:
             // A success claim without confirmed protection is a
