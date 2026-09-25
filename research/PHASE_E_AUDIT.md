@@ -2403,3 +2403,49 @@ Suites: router 185 + journal 23 + broker 106 + drills 111 +
   collector / research / plan untouched; transport unwired live;
   no execution. Quantity invariant holds on every exit path;
   burned IDs are never resubmitted; partials can never overshoot.
+
+## Addendum 117 - H1 ninth corrective (audit of 0765fbb)
+P0 emergency accounting: EXIT_EMERGENCY runs the SAME authoritative
+  exit-ack machinery as EXIT_SENT (shared ExitAckStep: fold, flat-only
+  terminal, DEAD-short mint, short/ambiguous reconcile, overfill
+  freeze). The frozen doc-06 exception changes ORDERING only: the
+  terminal buffers the row (BUFFER_EMERGENCY, journal_kind exit)
+  instead of JOURNAL_EXIT, via ExitClosed (all three flat-terminal
+  sites gate on m.emergency). An executed flag WITHOUT ack detail
+  reconciles by ID (QUERY_ONCE, then emergency-to-query adopts the
+  answer into QUERY_SENT), never CLOSED blind without qty.
+  Regressions: emergency-exec-first/flag-reconciles/to-query/
+  query-buffers/buffered, emg/emergency-dead-mints (+restart,
+  emergency-buffered-100), pem-* E2E (emergency 100 -> X PENDING ->
+  query X canceled+40 -> Y mints 60 -> restart -> Y posts 60 ->
+  Y fills 60 -> BUFFER at exactly 100, chain verifies, X once).
+P0 lifecycle authority: StreamLive (last event is a broker ULID) +
+  no-event REST terminal (cancel/dead/404-absent, entries and exits)
+  -> fold monotonic qty, then QUERY_ONCE (exec:rest-terminal-
+  unconfirmed) within budget, else freeze — never mint/terminal on
+  an observation that carries no broker-time. Event-carrying newer
+  ULID terminals still apply (ULID-vs-ULID). Deaths the machine
+  requested (CANCEL_SENT) unaffected. Protection already monotonic
+  (never unsets) — now proven. Regressions: xrest-terminal-
+  reconciles/snaps/restores/restart-reconciles, xrest-newer-ulid-
+  mints, xrest-protection-stands, xrest-404-reconciles,
+  xrest-cancel-reconciles.
+P1 status truth: ClassifyStatus accepts partially_filled (PARTIAL)
+  and rejects partial_fill (-> UNKNOWN); MarketClose inline matcher
+  likewise (only partially_filled). Regressions: query-status-9
+  (done_for_day UNKNOWN in-array), query-status-replaced-unknown,
+  query-status-partial-fill-unknown, close-partial-fill-rejected.
+P1 init hygiene: zero-init st/qs/oid buffers; IsUuidField zero-fills
+  the full buffer incl. the empty path (fixes a REAL analyzer-found
+  uninit read: empty-ack UUID -> Copy64 over indeterminate tail).
+  Hardened -fanalyzer warning-free.
+Suites: router 201 + journal 23 + broker 108 + drills 120 +
+  noalloc-exec 0, normal+hardened, P3.1 GATE PASS, freeze PASS.
+  Slice D / P3.x / collector / research / plan untouched; transport
+  unwired live; no execution. H1 router/broker correctness: no open
+  correctness findings from audits 1-9 remain in the router kernel.
+  H1 operational integration (caller-owned runner: durable journal
+  file I/O + fsync/restart-load/retention/backup/summary, S2
+  reconcile loop, fault-injection outage drills, frozen paper fill
+  model harness, kill drills, plan-06 sec-6.5 rows) is OPEN by
+  design — see report. P3.5 OPEN, G0 NOT READY, no G0 execution.
