@@ -1,7 +1,20 @@
 {
+  "method": "transport-layer fault injection (TimeoutError on the real Treasury urllib transport); controlled proof, NOT a natural outage",
   "ok": true,
   "phases": {
     "A_healthy": {
+      "bundle_feat_sources": {
+        "bea_nipa_gdp": 25,
+        "edgar_8k": 1,
+        "fred_macro": 6,
+        "treasury_auctions": 32
+      },
+      "bundle_history_sources": [
+        "bea_nipa_gdp",
+        "edgar_8k",
+        "fred_macro",
+        "treasury_auctions"
+      ],
       "bundle_sources": {
         "bea_nipa_gdp": 25,
         "edgar_8k": 1,
@@ -17,10 +30,42 @@
         "rejected": 1,
         "rejection_rate": 0.015625
       },
-      "emitted": "rp-10-9b845f1e409e823135df5f2e33a34e25ab9d663dfc7549d3fc639d1e7b4a46f7",
+      "emitted": "rp-10-20cad48d284874d528a74d5f439030c93ecdd75ee0a396b30dfd72b7acb1aad9",
       "empty": false,
       "epoch": 10,
       "fused": 85,
+      "heartbeats": {
+        "bea_nipa_gdp": {
+          "error": "",
+          "ok": true,
+          "records": 25,
+          "stale": false
+        },
+        "bls_empsit": {
+          "error": "bad-envelope",
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        "edgar_8k": {
+          "error": "",
+          "ok": true,
+          "records": 1,
+          "stale": false
+        },
+        "fred_macro": {
+          "error": "",
+          "ok": true,
+          "records": 6,
+          "stale": false
+        },
+        "treasury_auctions": {
+          "error": "",
+          "ok": true,
+          "records": 53,
+          "stale": false
+        }
+      },
       "records": 85,
       "stamps": {
         "bea_nipa_gdp": {
@@ -57,23 +102,33 @@
       "watermarks": {
         "bea_nipa_gdp": {
           "cursor": "seam-e10",
-          "last_observation_at": 1790322826
+          "last_observation_at": 1790324913
         },
         "edgar_8k": {
           "cursor": "seam-e10",
-          "last_observation_at": 1790322826
+          "last_observation_at": 1790324913
         },
         "fred_macro": {
           "cursor": "seam-e10",
-          "last_observation_at": 1790322826
+          "last_observation_at": 1790324913
         },
         "treasury_auctions": {
           "cursor": "seam-e10",
-          "last_observation_at": 1790322826
+          "last_observation_at": 1790324913
         }
       }
     },
     "B_fault_1": {
+      "bundle_feat_sources": {
+        "bea_nipa_gdp": 25,
+        "edgar_8k": 1,
+        "fred_macro": 6
+      },
+      "bundle_history_sources": [
+        "bea_nipa_gdp",
+        "edgar_8k",
+        "fred_macro"
+      ],
       "bundle_sources": {
         "bea_nipa_gdp": 25,
         "edgar_8k": 1,
@@ -88,10 +143,42 @@
         "rejected": 1,
         "rejection_rate": 0.03125
       },
-      "emitted": "rp-11-b98b0a53b4b0c9152a0faadee79d24023b110242e82dceb7498da96fec10d93a",
+      "emitted": "rp-11-906e8bc9e30987fa9838cf76adb20b48f0bc1fc8f273b8fbfd82d0051b1910ea",
       "empty": false,
       "epoch": 11,
       "fused": 32,
+      "heartbeats": {
+        "bea_nipa_gdp": {
+          "error": "",
+          "ok": true,
+          "records": 25,
+          "stale": false
+        },
+        "bls_empsit": {
+          "error": "bad-envelope",
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        "edgar_8k": {
+          "error": "",
+          "ok": true,
+          "records": 1,
+          "stale": false
+        },
+        "fred_macro": {
+          "error": "",
+          "ok": true,
+          "records": 6,
+          "stale": false
+        },
+        "treasury_auctions": {
+          "error": "TimeoutError",
+          "ok": false,
+          "records": 0,
+          "stale": true
+        }
+      },
       "records": 32,
       "stamps": {
         "bea_nipa_gdp": {
@@ -128,19 +215,29 @@
       "watermarks": {
         "bea_nipa_gdp": {
           "cursor": "seam-e11",
-          "last_observation_at": 1790322836
+          "last_observation_at": 1790324923
         },
         "edgar_8k": {
           "cursor": "seam-e11",
-          "last_observation_at": 1790322836
+          "last_observation_at": 1790324923
         },
         "fred_macro": {
           "cursor": "seam-e11",
-          "last_observation_at": 1790322836
+          "last_observation_at": 1790324923
         }
       }
     },
     "B_fault_2": {
+      "bundle_feat_sources": {
+        "bea_nipa_gdp": 25,
+        "edgar_8k": 1,
+        "fred_macro": 6
+      },
+      "bundle_history_sources": [
+        "bea_nipa_gdp",
+        "edgar_8k",
+        "fred_macro"
+      ],
       "bundle_sources": {
         "bea_nipa_gdp": 25,
         "edgar_8k": 1,
@@ -155,10 +252,42 @@
         "rejected": 1,
         "rejection_rate": 0.03125
       },
-      "emitted": "rp-12-05e6b9b322045ee5ed2a3d385f721640c647993db6038448d0abf31f2d8e548f",
+      "emitted": "rp-12-703daaa3b1fb239fc3afd034638d0259907b51b58be948d41d8fd97dc5bedfbe",
       "empty": false,
       "epoch": 12,
       "fused": 32,
+      "heartbeats": {
+        "bea_nipa_gdp": {
+          "error": "",
+          "ok": true,
+          "records": 25,
+          "stale": false
+        },
+        "bls_empsit": {
+          "error": "bad-envelope",
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        "edgar_8k": {
+          "error": "",
+          "ok": true,
+          "records": 1,
+          "stale": false
+        },
+        "fred_macro": {
+          "error": "",
+          "ok": true,
+          "records": 6,
+          "stale": false
+        },
+        "treasury_auctions": {
+          "error": "TimeoutError",
+          "ok": false,
+          "records": 0,
+          "stale": true
+        }
+      },
       "records": 32,
       "stamps": {
         "bea_nipa_gdp": {
@@ -195,19 +324,31 @@
       "watermarks": {
         "bea_nipa_gdp": {
           "cursor": "seam-e12",
-          "last_observation_at": 1790322846
+          "last_observation_at": 1790324933
         },
         "edgar_8k": {
           "cursor": "seam-e12",
-          "last_observation_at": 1790322846
+          "last_observation_at": 1790324933
         },
         "fred_macro": {
           "cursor": "seam-e12",
-          "last_observation_at": 1790322846
+          "last_observation_at": 1790324933
         }
       }
     },
     "C_recovered": {
+      "bundle_feat_sources": {
+        "bea_nipa_gdp": 25,
+        "edgar_8k": 1,
+        "fred_macro": 6,
+        "treasury_auctions": 32
+      },
+      "bundle_history_sources": [
+        "bea_nipa_gdp",
+        "edgar_8k",
+        "fred_macro",
+        "treasury_auctions"
+      ],
       "bundle_sources": {
         "bea_nipa_gdp": 25,
         "edgar_8k": 1,
@@ -223,10 +364,42 @@
         "rejected": 1,
         "rejection_rate": 0.015625
       },
-      "emitted": "rp-13-31a4c58fb127968acb83572145c63dac99adeb7c94e9fd484ce7320ec6d71c41",
+      "emitted": "rp-13-f20e86a94264207e844a2903a22b8f6d5bfb56a6c81651e82158ea5f5c1d37e4",
       "empty": false,
       "epoch": 13,
       "fused": 85,
+      "heartbeats": {
+        "bea_nipa_gdp": {
+          "error": "",
+          "ok": true,
+          "records": 25,
+          "stale": false
+        },
+        "bls_empsit": {
+          "error": "bad-envelope",
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        "edgar_8k": {
+          "error": "",
+          "ok": true,
+          "records": 1,
+          "stale": false
+        },
+        "fred_macro": {
+          "error": "",
+          "ok": true,
+          "records": 6,
+          "stale": false
+        },
+        "treasury_auctions": {
+          "error": "",
+          "ok": true,
+          "records": 53,
+          "stale": false
+        }
+      },
       "records": 85,
       "stamps": {
         "bea_nipa_gdp": {
@@ -263,19 +436,19 @@
       "watermarks": {
         "bea_nipa_gdp": {
           "cursor": "seam-e13",
-          "last_observation_at": 1790322856
+          "last_observation_at": 1790324943
         },
         "edgar_8k": {
           "cursor": "seam-e13",
-          "last_observation_at": 1790322856
+          "last_observation_at": 1790324943
         },
         "fred_macro": {
           "cursor": "seam-e13",
-          "last_observation_at": 1790322856
+          "last_observation_at": 1790324943
         },
         "treasury_auctions": {
           "cursor": "seam-e13",
-          "last_observation_at": 1790322856
+          "last_observation_at": 1790324943
         }
       }
     }
@@ -284,5 +457,5 @@
     "calls": 10,
     "injected_failures": 8
   },
-  "ts": 1790322825
+  "ts": 1790324913
 }

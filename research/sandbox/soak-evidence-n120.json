@@ -1,0 +1,4495 @@
+{
+  "cycles": 120,
+  "sources": {
+    "bea_nipa_gdp": {
+      "all_ok": true,
+      "heartbeat_ok": true,
+      "n": 120,
+      "p50_ms": 1032.0,
+      "p99_ms": 1725.3,
+      "polls": [
+        {
+          "errors": [],
+          "ms": 938.0,
+          "ok": true,
+          "records": 25,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1000.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1015.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1000.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 985.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1000.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1187.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1000.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 969.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1156.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1031.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 954.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1109.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1047.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 953.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1094.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1000.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1047.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 312.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1688.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1046.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1110.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 969.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1093.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1094.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1016.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 968.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1110.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1047.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1015.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 938.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1047.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1109.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 953.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1094.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 984.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 360.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1687.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1016.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 953.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 984.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1094.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 984.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1047.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1016.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1109.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1000.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1078.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1016.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1063.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1046.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1032.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1031.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1000.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 937.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1016.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1078.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1141.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1109.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1000.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1078.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1016.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1156.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1031.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1110.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 984.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1000.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1031.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1000.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 985.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1047.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1031.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1000.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1078.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 969.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1062.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 375.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1782.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1109.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1094.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1140.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1032.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1062.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 922.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1156.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1016.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1047.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1015.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1047.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1110.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1015.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 360.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1734.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1094.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1047.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1031.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1047.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1015.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1032.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1109.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1047.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1109.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 985.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1015.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1031.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1172.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1032.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1218.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1016.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 953.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1078.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1016.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1031.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 969.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1094.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        }
+      ]
+    },
+    "bls_empsit": {
+      "all_ok": false,
+      "heartbeat_ok": false,
+      "n": 120,
+      "p50_ms": 1000.0,
+      "p99_ms": 1063.0,
+      "polls": [
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 47.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1016.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1031.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 953.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1047.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1031.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 938.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1015.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1031.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 985.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 984.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1047.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1016.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 968.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1125.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 860.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1031.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 984.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1016.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1016.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1047.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 953.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 984.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1016.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 984.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 984.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1032.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 968.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1063.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 937.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1016.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1031.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 985.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1047.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 937.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1031.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 969.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1063.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 921.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1032.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 984.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1047.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1016.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 984.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 984.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 985.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1047.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 984.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 969.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1031.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 969.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1015.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1016.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 984.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1016.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 953.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1031.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 985.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1015.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1016.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 984.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 985.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1031.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 984.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1016.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 984.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1016.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 969.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1015.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 985.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1047.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 968.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1032.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 968.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1016.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 984.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1032.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 984.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1016.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 984.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1016.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1015.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1016.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 953.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1031.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 985.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 968.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1032.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1015.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1016.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 969.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        }
+      ]
+    },
+    "edgar_8k": {
+      "all_ok": true,
+      "heartbeat_ok": true,
+      "n": 120,
+      "p50_ms": 125.0,
+      "p99_ms": 297.0,
+      "polls": [
+        {
+          "errors": [],
+          "ms": 203.0,
+          "ok": true,
+          "records": 1,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 93.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 79.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 109.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 109.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 110.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 218.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 79.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 109.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 78.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 156.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 172.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 94.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 78.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 188.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 296.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 219.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 94.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 141.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 93.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 203.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 94.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 156.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 141.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 94.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 94.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 265.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 203.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 94.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 94.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 94.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 421.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 157.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 93.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 297.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 94.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 203.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 110.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 93.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 94.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 109.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 94.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 156.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 110.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 140.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 110.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 109.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 94.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 94.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 109.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 141.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 172.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 140.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 94.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 297.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 94.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 156.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 172.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 187.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 156.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 141.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 141.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 109.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 109.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 94.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 172.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 141.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 109.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 141.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 78.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 156.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 109.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 266.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 94.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 109.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 219.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 109.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 110.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 93.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 110.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 94.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 109.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 172.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 94.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 109.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 172.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 109.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 94.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 109.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 141.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 94.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 93.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 110.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 78.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        }
+      ]
+    },
+    "fred_macro": {
+      "all_ok": true,
+      "heartbeat_ok": true,
+      "n": 120,
+      "p50_ms": 6016.0,
+      "p99_ms": 7401.3,
+      "polls": [
+        {
+          "errors": [],
+          "ms": 6359.0,
+          "ok": true,
+          "records": 6,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6094.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6203.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5860.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6062.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5875.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6047.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5906.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6000.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6797.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6047.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5937.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5985.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6000.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6000.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5969.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6046.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6282.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5718.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6672.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5750.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6047.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6000.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6578.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5860.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6047.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5937.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6016.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 7593.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5719.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5953.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6110.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5922.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5953.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6047.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5968.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6047.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6219.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6156.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5875.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6438.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5984.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5984.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6016.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6109.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5954.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5921.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6875.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6016.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6203.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5703.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6110.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6047.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5937.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6172.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5797.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6078.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6656.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5922.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6031.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5875.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6047.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5969.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6375.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5578.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6016.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6015.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6344.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6234.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5782.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6015.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5969.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6031.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6157.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5828.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6078.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5890.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 7313.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5906.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5719.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5984.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6000.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6266.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5766.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5984.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6031.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6188.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6578.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6219.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5906.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6031.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6141.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5812.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6047.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6031.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6000.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 7422.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5594.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6016.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6031.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6562.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5844.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5734.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6047.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5969.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6016.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 7031.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6078.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5906.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6094.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6703.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6063.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5953.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6140.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5875.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5985.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6719.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6000.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        }
+      ]
+    },
+    "treasury_auctions": {
+      "all_ok": true,
+      "heartbeat_ok": true,
+      "n": 120,
+      "p50_ms": 2578.0,
+      "p99_ms": 3226.3,
+      "polls": [
+        {
+          "errors": [],
+          "ms": 3250.0,
+          "ok": true,
+          "records": 53,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 3578.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2609.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2875.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2563.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2593.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2594.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2531.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2594.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2641.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2562.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2578.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2563.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2578.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2719.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2500.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2562.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2594.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2656.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2891.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2594.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2484.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2531.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2594.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2625.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2734.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2813.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2594.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2546.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 3125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2844.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2672.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2500.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2547.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2484.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2500.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2953.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2594.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2531.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2516.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2609.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2594.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2563.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2515.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2594.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2516.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2578.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2531.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2531.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2516.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2578.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2625.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2516.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2687.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2516.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2687.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2578.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2907.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2734.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2484.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2610.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2547.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2578.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2625.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2578.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2516.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2531.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2547.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2672.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2593.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2641.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2531.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2656.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2641.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2531.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2532.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2531.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2594.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2500.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2640.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2547.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2531.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2516.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2609.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2532.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2531.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2531.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2516.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2687.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2875.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2531.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2594.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2641.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2562.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2657.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2593.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2610.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2578.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2609.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2563.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2672.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2531.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2578.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2578.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2547.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2562.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2579.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2671.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2579.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2546.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2594.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2594.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2625.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2578.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2641.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2578.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2500.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2578.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2641.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2562.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        }
+      ]
+    }
+  },
+  "ts": 1790323602,
+  "watchlist": [
+    "AAPL",
+    "SPY"
+  ]
+}
