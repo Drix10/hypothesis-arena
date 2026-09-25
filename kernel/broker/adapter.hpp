@@ -40,13 +40,15 @@ struct ProtectedOrder {
 };
 
 // Close-order lifecycle (Alpaca order states): a 2xx + UUID only
-// proves the close order EXISTS. FILLED = status fill (full
-// completion, the only terminal); PARTIAL = partial_fill /
-// partially_filled (reconcile remainder, never CLOSED); PENDING =
+// proves the close order EXISTS. FILLED = status "filled" (full
+// completion, the only terminal); PARTIAL = "partially_filled"
+// (reconcile remainder, never CLOSED); PENDING =
 // accepted/pending_new/new/calculated (wait/reconcile, NOT executed);
 // DEAD = canceled/rejected/expired (definitive non-execution);
 // UNKNOWN = unrecognized/missing status or malformed qty (reconcile).
-// Partial fill is never flat: CLOSED requires filled >= close size.
+// Bare "fill" / "partial_fill" are TRADE-EVENT names, never order
+// statuses (-> UNKNOWN). Partial fill is never flat: CLOSED requires
+// filled >= close size.
 enum class CloseState : std::uint8_t {
     UNKNOWN = 0,
     PENDING = 1,

@@ -39,8 +39,10 @@ void Copy33(char (&dst)[33], const char (&src)[33]) {
 }
 // ULID utilities (broker-native event identity): 26 chars Crockford
 // base32; first 10 chars = 48-bit timestamp ms (top 2 bits zero).
-// Decodes broker TIME from the preserved identity — no synthetic
-// sequence, no transformation (identity compares verbatim too).
+// Decodes venue STREAM-ORDER from the preserved identity — no
+// synthetic sequence, no transformation (identity compares verbatim
+// too). This is publication ordering on the venue stream, NOT a
+// business-event timestamp (fill/cancel time arrives separately).
 int CrockVal(char c) {
     if (c >= '0' && c <= '9') return c - '0';
     if (c >= 'A' && c <= 'H') return c - 'A' + 10;
@@ -70,8 +72,8 @@ bool UlidTimeMs(const char* s, std::uint64_t* out) {
     *out = v;
     return true;
 }
-// Broker-time order: older timestamp first; same-ms ties break by
-// full-string compare (timestamp + randomness are both ordered).
+// Venue stream order: older publication first; same-ms ties break
+// by full-string compare (timestamp + randomness are both ordered).
 // -1/0/+1. Both inputs must be valid ULIDs (checked by caller).
 int CmpUlid(const char* a, const char* b) {
     std::uint64_t ta = 0;
@@ -339,8 +341,10 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
         return o;
     }
     // Sequence authority (doc 13 sec. 13.7): ULID-vs-ULID compares
-    // by BROKER time (timestamp, then full-string tiebreak) — real
-    // event ordering from the preserved venue identity. Non-ULID
+    // by VENUE STREAM ORDER (publication sequence decoded from the
+    // identity: timestamp, then full-string tiebreak) — real event
+    // ordering from the preserved venue identity, never a claim
+    // about business-event time. Non-ULID
     // ids use the caller-assigned monotonic seq per machine
     // (single-source poll ordering only): exact redelivery
     // collapses, older seq is stale, same-seq different-id is a
@@ -739,6 +743,21 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                 o.journal_kind = "cancel";
                 o.reason = "exec:absent-direct";
                 return o;
+            }
+            // Stream-live lifecycle authority, general entry rule
+            // (P1 audit): a no-event REST terminal claim — canceled
+            // / normalized DEAD / full FILLED, ANY qty — never
+            // establishes an entry transition by itself against
+            // ULID-established live state. Monotonic fill knowledge
+            // was already folded above; the lifecycle verdict
+            // reconciles first (budget, else freeze). This subsumes
+            // the canceled+0 case below (kept explicit).
+            if (obs.event_id[0] == '\0' && StreamLive(o.next) &&
+                (q.cancelled ||
+                 q.close_state == broker::CloseState::DEAD ||
+                 q.close_state == broker::CloseState::FILLED)) {
+                return RestTerminalReconcile(
+                    o, "exec:rest-terminal-unconfirmed");
             }
             if (q.cancelled && q.filled_qty == 0) {
                 // Already dead, nothing filled: straight to terminal.

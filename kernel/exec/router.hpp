@@ -134,9 +134,13 @@ struct RouteObs {
     // unchanged; 32-hex poll tags are also accepted. Bounded token
     // [A-Za-z0-9_-], max 32 chars, snapshot-persisted verbatim.
     // Ordering authority (doc 13 sec. 13.7) is DOMAIN-SEPARATED:
-    //   ULID-vs-ULID: broker-time compare (timestamp, then full
-    //     string). Older-after-newer is stale even when it arrived
-    //     later; exact redelivery collapses.
+    //   ULID-vs-ULID: broker STREAM-ORDER compare (venue sequence
+    //     decoded from the identity: timestamp, then full-string
+    //     tiebreak). Older-after-newer is stale even when it arrived
+    //     later; exact redelivery collapses. This orders
+    //     PUBLICATION on the venue stream — explicitly NOT a claim
+    //     about business-event timestamps (fill/cancel time), which
+    //     the venue reports separately.
     //   non-ULID-vs-non-ULID: caller-seq rules (single-source poll
     //     ordering only — explicitly NOT broker authority).
     //   cross-family / no-event REST snapshots: NEVER regress
@@ -146,11 +150,11 @@ struct RouteObs {
     //     terminals never un-terminal. Lifecycle authority: a
     //     no-event REST snapshot may add monotonic fill knowledge
     //     but can NEVER originate a terminal transition
-    //     (cancel/dead/absent-terminal) against ULID-established
-    //     live stream state — such an observation reconciles
-    //     (re-query within budget, else freeze) until stream
-    //     confirmation or S2/human resolution. No fake cross-family
-    //     comparison is ever invented.
+    //     (cancel/dead/absent-terminal, entries and exits at any
+    //     qty) against ULID-established live stream state — such an
+    //     observation reconciles (re-query within budget, else
+    //     freeze) until stream confirmation or S2/human resolution.
+    //     No fake cross-family comparison is ever invented.
     char event_id[33]{};
     std::uint64_t event_seq = 0;
     risk::KillLevel kill = risk::KillLevel::NONE;

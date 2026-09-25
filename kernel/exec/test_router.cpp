@@ -1357,6 +1357,61 @@ int main() {
             Check(rcx.action == RouteAction::QUERY_ONCE &&
                       rcx.next.state == RouteState::QUERY_SENT,
                   "xrest-cancel-reconciles");
+            // No-event canceled + POSITIVE fill: same rule (the
+            // terminal claim carries no ordering authority at any
+            // qty — reconcile, never PARTIAL/terminal on it).
+            RouteObs scp = OpenMarket();
+            for (int i = 0; i < 65; ++i) scp.client_id[i] = 'e';
+            scp.adapter_responded = true;
+            scp.query.transport_ok = true;
+            scp.query.found = true;
+            scp.query.cancelled = true;
+            scp.query.filled_qty = 40;
+            SetUuid(scp.query.broker_order_id);
+            auto rcp = Step(me, in, venue, scp);
+            Check(rcp.action == RouteAction::QUERY_ONCE &&
+                      rcp.next.state == RouteState::QUERY_SENT &&
+                      rcp.next.filled_qty == 0,
+                  "xrest-cancel-fill-reconciles");
+            // No-event normalized DEAD + fill: same rule.
+            RouteObs sdd = OpenMarket();
+            for (int i = 0; i < 65; ++i) sdd.client_id[i] = 'e';
+            sdd.adapter_responded = true;
+            sdd.query.transport_ok = true;
+            sdd.query.found = true;
+            sdd.query.filled_qty = 40;
+            sdd.query.close_state = CloseState::DEAD;
+            SetUuid(sdd.query.broker_order_id);
+            auto rdd = Step(me, in, venue, sdd);
+            Check(rdd.action == RouteAction::QUERY_ONCE &&
+                      rdd.next.state == RouteState::QUERY_SENT,
+                  "xrest-dead-fill-reconciles");
+            // No-event full FILLED against live state: a conflicting
+            // terminal completion claim reconciles too (never
+            // PROTECTED on an unordered snapshot).
+            RouteObs sff = OpenMarket();
+            for (int i = 0; i < 65; ++i) sff.client_id[i] = 'e';
+            sff.adapter_responded = true;
+            sff.query.transport_ok = true;
+            sff.query.found = true;
+            sff.query.filled_qty = 100;
+            sff.query.protection_active = true;
+            sff.query.close_state = CloseState::FILLED;
+            SetUuid(sff.query.broker_order_id);
+            auto rff = Step(me, in, venue, sff);
+            Check(rff.action == RouteAction::QUERY_ONCE &&
+                      rff.next.state == RouteState::QUERY_SENT,
+                  "xrest-fill-reconciles");
+            // Restart: the suppression survives the crash image.
+            char snm[320];
+            Check(SnapshotMachine(me, snm, sizeof(snm)),
+                  "xrest-entry-snaps");
+            RouteMachine qm;
+            Check(RestoreMachine(snm, &qm), "xrest-entry-restores");
+            auto rmr = Step(qm, in, venue, scp);
+            Check(rmr.action == RouteAction::QUERY_ONCE &&
+                      rmr.next.state == RouteState::QUERY_SENT,
+                  "xrest-entry-restart-reconciles");
         }
         // Restart after the mint keeps attempt+id (no double-mint).
         char snapd[320];
