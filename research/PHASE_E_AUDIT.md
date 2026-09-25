@@ -1909,3 +1909,27 @@ plane (Phase D) change any interface a future slice depends on?
   byte-identical + bad-key denied = PASS).
 - Harness-only + evidence files. Seam CLOSED/ACCEPTED; Phase D
   operational gate OPEN; H1 NOT AUTHORIZED, not started.
+
+## Addendum 103 - healthy/stale/healthy runtime proof + asserted live pass
+- Stale/recovery (research/sandbox/stale_recovery.py,
+  stale-recovery.json): fault injected ONLY at the transport layer
+  (real Treasury urllib transport vs TimeoutError switch); adapters,
+  seam, pacing, lineage, publisher, reader all real; fresh seam per
+  phase over shared lineage DB + outdir; invariants asserted
+  in-script (exit 1 on violation).
+  A healthy: 85 records, treasury ok, 32 treasury features, ctx 63
+  accepted. B faulted x2: treasury stale, 0 records, ZERO treasury
+  features, uncovered treasury history dropped from the bundle,
+  31 accepted from unrelated sources, treasury heartbeat bad.
+  C recovered: treasury ok again, 32 treasury features, ctx 63
+  accepted, heartbeat good. Transport: 10 calls, 8 injected
+  failures. Proven: stale-is-absent (never neutral/duplicated),
+  outage cannot contribute, unrelated sources continue, recovery
+  restores eligibility, heartbeat/TTL agree with seam state.
+- Live pass hardened (seam_live_pass.py): now asserts non-empty
+  emission, bundle-file existence, manifest commitment, 64-cap,
+  accepted+rejected reconciliation, BLS-zero, and per-feature
+  authority resolution (records row + source + content_hash);
+  exit 1 on violation. Re-ran clean: invariants ok=True.
+- Seam CLOSED/ACCEPTED; H1 untouched. Phase-D gate OPEN (BLS live
+  egress, longer soak still needed).
