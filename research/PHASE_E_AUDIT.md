@@ -2449,3 +2449,52 @@ Suites: router 201 + journal 23 + broker 108 + drills 120 +
   reconcile loop, fault-injection outage drills, frozen paper fill
   model harness, kill drills, plan-06 sec-6.5 rows) is OPEN by
   design — see report. P3.5 OPEN, G0 NOT READY, no G0 execution.
+
+## Addendum 118 - H1 tenth corrective + G0 runner (audit of 9ee41dc)
+B1 router (51003d9): entry StreamLive rule generalized — no-event
+  REST canceled/normalized-DEAD/full-FILLED at ANY qty reconciles
+  (exec:rest-terminal-unconfirmed) against ULID stream-live state,
+  never PARTIALs/terminals on the snapshot; fills are NOT adopted
+  from authority-suspect observations (whole-observation distrust,
+  re-query re-establishes). Contract wording: ULID = venue stream
+  ordering authority (publication order), explicitly not business-
+  event time. Regressions: xrest-cancel-fill/dead-fill/fill-
+  reconciles + entry-restart. Suites: router 207, broker 108.
+  Exits unchanged by design (x_dead suppression + monotonic fold
+  already cover; full-fill adoption is qty-convergence, lower risk).
+B2 runner (d4f1bbe, kernel/runner/): RouteStep stays the pure core;
+  all I/O/durability at the caller seam. store.{hpp,cpp} (Append +
+  fsync/commit, AtomicWrite, journal file/load/verify, snapshots,
+  intent registration, freeze set, STAGE chain verify + G0 gate,
+  alerts.jsonl, 90-day retention by filename date, byte-copy backup,
+  summary-from-journal); events.{hpp,cpp} (bounded SSE parser with
+  queue + resync, trade-event classification fill/life/bust with
+  ULID + strict qty, QueryToClose funnel, ShapeStreamFill pure);
+  runner.{hpp,cpp} (Recover: stage/journal-chain/snapshot+intent/
+  emergency-drain/reconcile-first with SENT_UNACKED query_due +
+  PARTIAL journal re-derive; Cycle: stage/kill/HALT re-check, stream
+  drain + stamp + bust/life-forced REST, 12-iteration slots, S2,
+  MEDIUM flatten, freeze on UNKNOWN, reserve-pinned slots);
+  Dispatch pre-flights every non-idempotent send by stable id
+  (found = adopt, 404 = send, failure = ambiguous reconcile), so
+  recovery can never double-send; main.cpp production entry with
+  null transport (cannot order until Phase 4 wires HTTPS).
+  Verification: RUNNER SUITE 120/120 (stage gate, entry/exit/dead
+  E2E, crash images at SENT_UNACKED/QUERY-reconcile/EXIT_SENT/
+  PARTIAL, S2 cadence + quiet, bust-force, emergency buffer +
+  drain, redaction, retention/backup, fill-model exactness, MEDIUM
+  flatten, corrupt-journal HARD refusal, SSE/map/shape units) +
+  full battery normal+hardened (router 207, journal 23, broker 108,
+  drills 120, runner 120, noallocs 0), P3.1 GATE PASS, freeze PASS.
+  Live socket + HTTPS remain Phase 4 (declared seams, fixture-
+  proven shapes); no live capital, no execution.
+Sec-6.5 ledger after B2: GREEN (harness-proven): kill-switch drill
+  (HALT + MEDIUM flatten, exits alive), summary-from-journal,
+  frozen fill model, retention/backup/redaction. OPEN (wall-clock /
+  live): 30 clean days, real out-of-band notification (v1 channel
+  alerts.jsonl implemented), full outage-table E2E. PARTIAL:
+  reconcile drill (reconcile-first/S2/bust proven; position-vs-
+  broker drift-directive comparison not yet implemented).
+  P3.5 stays OPEN (integration green, H2 evidence pending). G0 NOT
+  STARTED — no G0 execution until the integration gate is green;
+  the runner binary refuses without a human-signed G0 STAGE file.
