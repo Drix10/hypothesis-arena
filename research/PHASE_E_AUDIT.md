@@ -2021,3 +2021,41 @@ plane (Phase D) change any interface a future slice depends on?
 - TODO cleaned: Slice D authorization consumed, H1-next-awaiting-
   authorization stated consistently (was stale/contradictory).
   No contract or plan change. H1 NOT started; no execution.
+
+## Addendum 108 - H1 implemented (authorized packet v3)
+- Code: kernel/exec/router.{hpp,cpp} (pure RouteStep machine: IDLE
+  entry gate (kill/stale/stage/frozen/shape/scalar-vocabulary) ->
+  JOURNAL_PENDING (no-row-no-send entries; emergency exception for
+  EXIT) -> SENT_UNACKED -> QUERY_SENT (exactly one query) ->
+  PROTECTED | PARTIAL_AWAIT (journal partial, cancel remainder) |
+  CANCEL_SENT -> CANCELLED | UNKNOWN_FROZEN (+freeze flag, never
+  "filled") | EXIT_SENT/EXIT_EMERGENCY -> CLOSED. One stable client
+  ID minted once per intent (frozen recipe, 0x1F separators);
+  missing ack reconciles via query, never mints fresh. Naked ack or
+  filled-without-protection routes to cancel, never holds naked.
+  Exits ignore kill/stale/stage gates. Drift ordering documented +
+  patterned in-test (EXIT closes before ENTRY).
+- kernel/log/journal.{hpp,cpp}: 9 frozen row kinds, hex64 chain,
+  VerifyRow/VerifyChain (genesis/seq/prev rules), RedactionOk
+  (280-char cap + credential-token scan).
+- kernel/broker/: IAdapter (SubmitProtected/QueryOnce/Cancel/
+  EstablishProtection-recovery-only); AlpacaPaperAdapter over
+  injected HttpPost (unwired fails closed; bracket body hand-built;
+  protection acked only when ALL legs confirm; repair is opposing
+  OCO); MakeClientOrderId; PaperFillPrice (frozen adverse-spread,
+  min 1bp, integer cents).
+- Tests: router 40 (happy, journal-first, bad-intent/scale, all
+  gates, exit survival, emergency, reject/naked/timeout/empty/
+  partial/unknown paths, ID stability, crash-reconcile-first,
+  duplicate quiet, drift pattern) + journal 23 (admission, tamper,
+  chain breaks, all kinds, redaction) + broker 28 (ID recipe,
+  fill model, bracket shape/ack mapping, query/cancel/repair) +
+  noalloc-exec 0 (12 states x 32 obs, ID-mint excluded as
+  documented cycle-path). Green normal+hardened via build.sh
+  (new isolation gates: no answers/confidence/sizing/clock/
+  network tokens in H1 files; heap gate on router core).
+- Sizing stays upstream (router verifies frozen scalar vocabulary
+  only); kernel_state.hpp untouched (no ack-surface needed yet —
+  H1 drives through explicit inputs); Slice D/P3.x/collector/
+  research/plan untouched. Live transport unwired (Phase 4);
+  no execution, no credentials.

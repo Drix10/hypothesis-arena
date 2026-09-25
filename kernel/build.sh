@@ -111,6 +111,39 @@ g++ $FLAGS -o test_kill kill/test_kill.cpp kill/switch.cpp
 # nothing (comments stripped: the discipline note names the tokens).
 g++ $FLAGS -static-libstdc++ -static-libgcc -Wl,--wrap,malloc -Wl,--wrap,calloc -Wl,--wrap,realloc -o test_noalloc_kill kill/test_noalloc_kill.cpp kill/switch.cpp
 ./test_noalloc_kill
+# H1 gate [correctness + drill]: router lifecycle, journal chain,
+# broker recipe + Alpaca protected-entry semantics (doc 06 sec. 6.1,
+# packet v3: lifecycle-only router, journal-before-order, E1).
+g++ $FLAGS -o test_router exec/test_router.cpp exec/router.cpp broker/adapter.cpp
+./test_router
+g++ $FLAGS -o test_journal log/test_journal.cpp log/journal.cpp
+./test_journal
+g++ $FLAGS -o test_broker broker/test_broker.cpp broker/adapter.cpp broker/alpaca_paper.cpp
+./test_broker
+# H1 zero-malloc contract: the router STEP CORE allocates nothing
+# (identity minting at IDLE is documented cycle-path and excluded
+# here; the loop covers the IDLE-reject path + every post-identity
+# state x observation shape).
+g++ $FLAGS -static-libstdc++ -static-libgcc -Wl,--wrap,malloc -Wl,--wrap,calloc -Wl,--wrap,realloc -o test_noalloc_exec exec/test_noalloc_exec.cpp exec/router.cpp broker/adapter.cpp
+./test_noalloc_exec
+if sed 's|//.*||' exec/router.hpp exec/router.cpp | grep -nE "std::string|std::vector|malloc|calloc|realloc|strdup|operator new"; then
+    echo "GATE FAIL: heap use in router step core"
+    exit 1
+fi
+# H1 isolation: no model-answer reads, no confidence, no risk-path
+# computation tokens, no clocks, no network affordances in H1 kernel
+# files (comments stripped; journal/broker std::string is documented
+# cycle-path, same class as Slice E).
+for tok in '\.enter\(\)' 'latent_risk\(\)' 'conviction\(\)' 'family\(\)' \
+           'ValidatedJEVAnswerSetV3' 'confidence' 'StageScale' \
+           'PendingNotional' 'ReservedRisk' 'BuyingPower' \
+           'DriftSelection' 'EvaluateVeto' 'clock\(' 'chrono' \
+           'gettime' 'socket' 'popen' 'system\(' 'curl' 'getaddrinfo'; do
+    if sed 's|//.*||' exec/router.hpp exec/router.cpp log/journal.hpp log/journal.cpp broker/adapter.hpp broker/adapter.cpp broker/alpaca_paper.hpp broker/alpaca_paper.cpp | grep -nE "$tok"; then
+        echo "GATE FAIL: forbidden path in H1 ($tok)"
+        exit 1
+    fi
+done
 if sed 's|//.*||' kill/switch.hpp kill/switch.cpp | grep -nE "std::string|std::vector|malloc|calloc|realloc|strdup|operator new"; then
     echo "GATE FAIL: heap use in kill evaluation path"
     exit 1
