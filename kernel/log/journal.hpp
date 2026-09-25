@@ -1,4 +1,9 @@
-// H1 — durable journal (doc 05 sec. 5.5, doc 06 sec. 6.1/6.5).
+// H1 — journal row formatter/verifier (doc 05 sec. 5.5, doc 06 sec.
+// 6.1/6.5). Pure kernel contract: format, hash-chain, verify — NO
+// file I/O here. Durable persistence is a caller-owned seam: the G0
+// runner owns append + fsync/atomic durability + restart load +
+// 90-day retention + daily backup + summary-from-journal. A drill
+// Sink proves row-shape/chain logic only, never on-disk durability.
 //
 // Append-only decision/order rows chained by prev_hash; nothing trades
 // without a row (journal-before-order), except the frozen emergency-exit

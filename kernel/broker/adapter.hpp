@@ -45,9 +45,19 @@ struct OrderAck {
     bool transport_ok = false;  // submit executed authoritatively;
                                 // false = transport failure/unknown
                                 // (NOT a rejection — reconcile)
-    bool authoritative_reject = false;  // broker refused (4xx with a
+    bool authoritative_reject = false;  // permanent broker input
+                                        // refusal (400/422 with a
                                         // shaped error): terminal
+    bool auth_failure = false;  // 401/403: credentials dead — never
+                                // a trade rejection (reconcile,
+                                // budget-bounded, then freeze)
+    bool rate_limited = false;  // 429: throttled — wait/retry via
+                                // reconcile, never terminal
     std::int64_t filled_qty = 0;       // filled at ack time (often 0)
+    char broker_order_id[64]{};  // broker UUID from the accepted POST
+                                 // (persisted before any cancel;
+                                 // zero-init: garbage never rides
+                                 // the crash path)
     char reason[64];                   // frozen adapter code on reject
 };
 
@@ -56,7 +66,12 @@ struct OrderQuery {
     std::int64_t filled_qty = 0;
     bool cancelled = false;
     bool protection_active = false;
-    int broker_status = 0;  // adapter-declared code; 0 = ok/unknown-none
+    int broker_status = 0;  // last lookup HTTP status (evidence,
+                            // not control flow)
+    bool auth_failure = false;  // 401/403 on lookup (reconcile,
+                                // then freeze — never "absent")
+    bool rate_limited = false;  // 429 on lookup (reconcile, never
+                                // terminal)
     bool transport_ok = false;  // lookup executed authoritatively;
                                 // false = transport failure/unknown
                                 // (NOT "order absent" — an empty

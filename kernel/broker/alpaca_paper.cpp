@@ -80,12 +80,25 @@ void FormatCents(char* dst, std::size_t n, std::int64_t cents) {
     std::snprintf(dst, n, "%lld.%02lld", (long long)(cents / 100),
                   (long long)(cents % 100));
 }
-// Strict legs proof (P0-3): protection is active ONLY when the reply
-// carries a "legs" ARRAY with >= 2 top-level leg objects, >= 2 leg
-// ids, and both take_profit and stop_loss markers INSIDE that array.
-// Bare substrings elsewhere in the body prove nothing (echoed request
-// fields, error text). String-aware bracket matching; unbalanced or
-// non-array legs -> false (unknown, never active).
+// Strict legs proof (P1-4): protection is active ONLY when the reply
+// carries a "legs" ARRAY of EXACTLY 2 top-level leg objects where
+// each leg carries its own distinct non-empty "id", exactly one leg
+// is TP-shaped ("type":"limit") and exactly one is SL-shaped
+// ("type":"stop" or "type":"stop_limit"), and the order declares
+// both take_profit and stop_loss. Roles bind to legs by venue type,
+// never by co-located markers: duplicate ids, duplicate roles,
+// 1-leg or 3-leg arrays, unbalanced or non-array legs -> false
+// (unknown, never active). String-aware bracket matching; bounded
+// and allocation-free (two fixed id buffers).
+//
+// Authoritative shapes (P0-2, single query, no hidden second lookup):
+//   submit ack  = POST /v2/orders bracket response (the venue returns
+//                 the created bracket with its legs populated);
+//   reconcile   = GET /v2/orders:by_client_order_id Order entity
+//                 (?client_order_id only — no nested param is
+//                 documented there, so legs are trusted ONLY when
+//                 strictly proven; absence routes to the repair path,
+//                 never to an assumed-protected state).
 bool LegsProtected(const char* body) {
     if (!body) return false;
     const char* key = "\"legs\":";
@@ -127,12 +140,15 @@ bool LegsProtected(const char* body) {
         ++q;
     }
     if (depth != 0) return false;
-    int legs = 0;
-    int ids = 0;
-    bool tp = false;
-    bool sl = false;
+    // Split the array into its top-level leg objects; each leg gets
+    // its own region [start, end). More than 3 legs refuses early
+    // (bracket/OCO means exactly 2; anything else is not our shape).
+    const char* start[4] = {nullptr, nullptr, nullptr, nullptr};
+    const char* stop[4] = {nullptr, nullptr, nullptr, nullptr};
+    int nlegs = 0;
     int d = 0;
     in_str = false;
+    const char* cur = nullptr;
     for (const char* p = arr; p < q; ++p) {
         if (in_str) {
             if (*p == '\\' && (p + 1) < q)
@@ -146,41 +162,94 @@ bool LegsProtected(const char* body) {
             continue;
         }
         if (*p == '{') {
-            if (d == 1) ++legs;
+            if (d == 1) {
+                if (nlegs >= 4) return false;
+                start[nlegs] = p;
+                cur = p;
+            }
             ++d;
         } else if (*p == '}') {
             --d;
+            if (d == 1 && cur) {
+                stop[nlegs] = p + 1;
+                ++nlegs;
+                cur = nullptr;
+            }
         } else if (*p == '[') {
             ++d;
         } else if (*p == ']') {
             --d;
         }
     }
-    if (in_str) return false;
-    for (const char* p = arr; p < q; ++p) {
-        if (p[0] == '"' && p[1] == 'i' && p[2] == 'd' && p[3] == '"' &&
-            p[4] == ':')
-            ++ids;
-        if (!tp && p[0] == 't') {
-            const char* w = "take_profit";
-            const char* a = p;
-            while (a < q && *w && *a == *w) {
-                ++a;
-                ++w;
+    if (in_str || cur) return false;
+    if (nlegs != 2) return false;  // exactly the bracket/OCO pair
+    // Per-leg roles (bound by venue leg type) + distinct ids.
+    char id0[64] = {0};
+    char id1[64] = {0};
+    int roles = 0;  // bit0 = leg0 TP, bit1 = leg0 SL,
+                    // bit2 = leg1 TP, bit3 = leg1 SL
+    for (int L = 0; L < 2; ++L) {
+        char* idb = (L == 0) ? id0 : id1;
+        // First quoted "id":"..." fully inside this leg.
+        bool got_id = false;
+        for (const char* p = start[L]; p < stop[L] && !got_id; ++p) {
+            if (p[0] != '"' || p[1] != 'i' || p[2] != 'd' ||
+                p[3] != '"' || p[4] != ':')
+                continue;
+            const char* v = p + 5;
+            while (v < stop[L] && (*v == ' ' || *v == '\t')) ++v;
+            if (v >= stop[L] || *v != '"') continue;
+            ++v;
+            std::size_t n = 0;
+            while (v < stop[L] && *v != '"' && n + 1 < sizeof(id0)) {
+                idb[n++] = *v++;
             }
-            if (!*w) tp = true;
+            if (v >= stop[L] || *v != '"' || n == 0) continue;
+            idb[n] = '\0';
+            got_id = true;
         }
-        if (!sl && p[0] == 's') {
-            const char* w = "stop_loss";
-            const char* a = p;
-            while (a < q && *w && *a == *w) {
-                ++a;
-                ++w;
-            }
-            if (!*w) sl = true;
+        if (!got_id) return false;
+        // Role by venue leg type, scanned inside this leg only.
+        bool tp = false;
+        bool sl = false;
+        for (const char* p = start[L]; p < stop[L]; ++p) {
+            if (p[0] != '"' || p[1] != 't' || p[2] != 'y' ||
+                p[3] != 'p' || p[4] != 'e' || p[5] != '"' ||
+                p[6] != ':')
+                continue;
+            const char* v = p + 7;
+            while (v < stop[L] && (*v == ' ' || *v == '\t')) ++v;
+            if (v >= stop[L] || *v != '"') continue;
+            ++v;
+            // TP leg: "limit". SL leg: "stop" or "stop_limit".
+            if (v[0] == 'l' && v[1] == 'i' && v[2] == 'm' &&
+                v[3] == 'i' && v[4] == 't' && v[5] == '"')
+                tp = true;
+            else if (v[0] == 's' && v[1] == 't' && v[2] == 'o' &&
+                     v[3] == 'p' &&
+                     (v[4] == '"' ||
+                      (v[4] == '_' && v[5] == 'l' && v[6] == 'i' &&
+                       v[7] == 'm' && v[8] == 'i' && v[9] == 't' &&
+                       v[10] == '"')))
+                sl = true;
         }
+        if (tp && !sl)
+            roles |= (L == 0) ? 1 : 4;
+        else if (sl && !tp)
+            roles |= (L == 0) ? 2 : 8;
+        else
+            return false;  // untyped leg, or a both/neither leg
     }
-    return legs >= 2 && ids >= 2 && tp && sl;
+    if (id0[0] == '\0' || id1[0] == '\0') return false;
+    bool same = true;
+    for (int i = 0; id0[i] || id1[i]; ++i)
+        if (id0[i] != id1[i]) same = false;
+    if (same) return false;  // duplicate leg ids
+    // Exactly one TP leg and one SL leg, plus the order-level
+    // declared protections (the venue's own TP/SL parameters).
+    if (roles != (1 | 8) && roles != (2 | 4)) return false;
+    return Contains(body, "take_profit") &&
+           Contains(body, "stop_loss");
 }
 }  // namespace
 
@@ -223,13 +292,29 @@ OrderAck AlpacaPaperAdapter::SubmitProtected(
     req.path = "/v2/orders";
     req.body = body;
     HttpResult r = transport_(req);
-    // Three outcomes, never collapsed (P0-2):
-    //   4xx shaped refusal -> authoritative_reject (terminal upstream)
-    //   2xx + order id   -> accepted (protection per legs, below)
-    //   anything else (5xx, transport failure, malformed 2xx) ->
-    //     ambiguous: accepted=false WITHOUT authoritative_reject
+    // Classified outcomes, never collapsed (P1-7):
+    //   400/422 shaped refusal -> authoritative_reject (permanent
+    //     input refusal: terminal upstream)
+    //   401/403            -> auth_failure (credentials dead: never
+    //     a trade rejection; reconcile, then freeze)
+    //   429                -> rate_limited (throttled: reconcile via
+    //     the same query path, never terminal)
+    //   2xx + order id    -> accepted (UUID captured below;
+    //     protection per legs)
+    //   anything else (other 4xx, 5xx, transport failure, malformed
+    //     2xx) -> ambiguous: accepted=false with no authority flag
     //     (the router reconciles under the same ID).
-    if (r.status >= 400 && r.status < 500) {
+    if (r.status == 401 || r.status == 403) {
+        ack.auth_failure = true;
+        CopyField("auth-failure", ack.reason, sizeof(ack.reason));
+        return ack;
+    }
+    if (r.status == 429) {
+        ack.rate_limited = true;
+        CopyField("rate-limited", ack.reason, sizeof(ack.reason));
+        return ack;
+    }
+    if (r.status == 400 || r.status == 422) {
         ack.authoritative_reject = true;
         CopyField("broker-reject", ack.reason, sizeof(ack.reason));
         return ack;
@@ -242,6 +327,17 @@ OrderAck AlpacaPaperAdapter::SubmitProtected(
     }
     ack.transport_ok = true;
     ack.accepted = true;
+    // The accepted POST returns the broker UUID (P0-3): the router
+    // persists it before any cancel path. No id -> ambiguous (the
+    // query by client ID resolves it; never cancel blind).
+    if (!ExtractQuoted(r.body, "id", ack.broker_order_id,
+                       sizeof(ack.broker_order_id))) {
+        ack.transport_ok = false;
+        ack.accepted = false;
+        CopyField("transport-unknown", ack.reason,
+                  sizeof(ack.reason));
+        return ack;
+    }
     // Protection is accepted ONLY when the reply proves every leg of
     // the bracket via the strict legs rule (P0-3).
     ack.protection_accepted = ack.accepted && LegsProtected(r.body);
@@ -268,14 +364,26 @@ OrderQuery AlpacaPaperAdapter::QueryOnce(
     req.path = path;
     req.body = "";
     HttpResult r = transport_(req);
-    // Three outcomes (P0-1):
+    q.broker_status = r.status;
+    // Three outcomes (P0-1), plus classified failures (P1-7):
     //   404              -> authoritative absent (cancel path needs no
     //                         UUID; the router journals a terminal cancel)
     //   2xx + order id   -> found (UUID required for DELETE)
-    //   2xx malformed / 5xx / transport failure -> unknown (reconcile,
-    //     never "absent": a malformed 200 is not proof of absence).
+    //   401/403          -> auth_failure (never "absent")
+    //   429              -> rate_limited (reconcile, never terminal)
+    //   2xx malformed / other 4xx / 5xx / transport failure ->
+    //     unknown (reconcile, never "absent": a malformed 200 is
+    //     not proof of absence).
     if (r.status == 404) {
         q.transport_ok = true;
+        return q;
+    }
+    if (r.status == 401 || r.status == 403) {
+        q.auth_failure = true;
+        return q;
+    }
+    if (r.status == 429) {
+        q.rate_limited = true;
         return q;
     }
     if (r.status < 200 || r.status >= 300) return q;
@@ -402,9 +510,10 @@ bool AlpacaPaperAdapter::EstablishProtection(
     req.path = "/v2/orders";
     req.body = body;
     HttpResult r = transport_(req);
+    // The OCO repair reply proves both legs via the same strict
+    // legs rule (a bare 2xx never counts as protected).
     return (r.status >= 200 && r.status < 300) &&
-           Contains(r.body, "take_profit") &&
-           Contains(r.body, "stop_loss");
+           LegsProtected(r.body);
 }
 
 }  // namespace broker

@@ -177,9 +177,17 @@ int main() {
         o.intent_id[64] = '\0';
         AlpacaPaperAdapter ad(Fake);
         g_calls = 0;
-        g_status = 200;g_reply =
-            "{\"id\":\"o1\",\"legs\":[{\"id\":\"l-tp\",\"take_profit\":{\"limit_price\":\"240.00\"}},"
-            "{\"id\":\"l-sl\",\"stop_loss\":{\"stop_price\":\"220.00\"}}]}";
+        g_status = 200;
+        g_reply =
+            "{\"id\":\"6d7c5cb4-2682-4a53-a742-5df876a2d1aa\","
+            "\"status\":\"accepted\",\"symbol\":\"SPY\",\"qty\":\"10\","
+            "\"side\":\"buy\",\"type\":\"market\",\"order_class\":\"bracket\","
+            "\"take_profit\":{\"limit_price\":\"240.00\"},"
+            "\"stop_loss\":{\"stop_price\":\"220.00\"},\"legs\":["
+            "{\"id\":\"11111111-2222-3333-4444-555555555555\","
+            "\"side\":\"sell\",\"type\":\"limit\"},"
+            "{\"id\":\"66666666-7777-8888-9999-000000000000\","
+            "\"side\":\"sell\",\"type\":\"stop\"}]}";
         auto ack = ad.SubmitProtected(o);
         Check(g_calls == 1, "bracket-single-call");
         Check(g_last_method[0] == 'P' && g_last_method[1] == 'O' &&
@@ -193,6 +201,10 @@ int main() {
         Check(Has(g_last_body, "take_profit"), "bracket-tp");
         Check(Has(g_last_body, "stop_loss"), "bracket-sl");
         Check(ack.accepted && ack.protection_accepted, "bracket-acked");
+        // P0-3: the accepted POST UUID is captured on the ack.
+        Check(Has(ack.broker_order_id,
+                  "6d7c5cb4-2682-4a53-a742-5df876a2d1aa"),
+              "post-uuid-captured");
         // Legs missing from the reply -> protection NOT accepted.
         // (Markers outside a legs array prove nothing: this body
         // carries both markers with NO legs and must still refuse.)
@@ -202,7 +214,8 @@ int main() {
               "naked-leg-detected");
         // One leg only -> refused. Unbalanced legs -> refused.
         g_reply =
-            "{\"id\":\"o3\",\"legs\":[{\"id\":\"l-tp\",\"take_profit\":{}}]}";
+            "{\"id\":\"o3\",\"take_profit\":{},\"stop_loss\":{},"
+            "\"legs\":[{\"id\":\"l-tp\",\"type\":\"limit\"}]}";
         auto ack3 = ad.SubmitProtected(o);
         Check(ack3.accepted && !ack3.protection_accepted,
               "one-leg-refused");
@@ -210,14 +223,74 @@ int main() {
         auto ack4 = ad.SubmitProtected(o);
         Check(ack4.accepted && !ack4.protection_accepted,
               "unbalanced-refused");
-        // P0-2 send outcomes: 422 authoritative; 500/malformed-200
-        // ambiguous (reconcile, never terminal here).
+        // Duplicate leg ids -> refused.
+        g_reply =
+            "{\"id\":\"o5\",\"take_profit\":{},\"stop_loss\":{},"
+            "\"legs\":[{\"id\":\"same\",\"type\":\"limit\"},"
+            "{\"id\":\"same\",\"type\":\"stop\"}]}";
+        auto ack5 = ad.SubmitProtected(o);
+        Check(ack5.accepted && !ack5.protection_accepted,
+              "duplicate-leg-id-refused");
+        // Duplicate roles (two limits) -> refused.
+        g_reply =
+            "{\"id\":\"o6\",\"take_profit\":{},\"stop_loss\":{},"
+            "\"legs\":[{\"id\":\"a\",\"type\":\"limit\"},"
+            "{\"id\":\"b\",\"type\":\"limit\"}]}";
+        auto ack6 = ad.SubmitProtected(o);
+        Check(ack6.accepted && !ack6.protection_accepted,
+              "duplicate-role-refused");
+        // Three legs -> refused (not the bracket/OCO pair).
+        g_reply =
+            "{\"id\":\"o7\",\"take_profit\":{},\"stop_loss\":{},"
+            "\"legs\":[{\"id\":\"a\",\"type\":\"limit\"},"
+            "{\"id\":\"b\",\"type\":\"stop\"},"
+            "{\"id\":\"c\",\"type\":\"limit\"}]}";
+        auto ack7 = ad.SubmitProtected(o);
+        Check(ack7.accepted && !ack7.protection_accepted,
+              "three-legs-refused");
+        // Untyped leg -> refused.
+        g_reply =
+            "{\"id\":\"o8\",\"take_profit\":{},\"stop_loss\":{},"
+            "\"legs\":[{\"id\":\"a\",\"type\":\"limit\"},"
+            "{\"id\":\"b\"}]}";
+        auto ack8 = ad.SubmitProtected(o);
+        Check(ack8.accepted && !ack8.protection_accepted,
+              "untyped-leg-refused");
+        // P1-7 send outcomes: 400/422 permanent; 401/403 auth;
+        // 429 throttled; other-4xx/500/malformed-200 ambiguous
+        // (reconcile, never terminal here).
         g_status = 422;
         g_reply = "{\"code\":40010001,\"message\":\"bad\"}";
         auto r422 = ad.SubmitProtected(o);
         Check(!r422.accepted && r422.authoritative_reject &&
-                  !r422.transport_ok,
+                  !r422.transport_ok && !r422.auth_failure &&
+                  !r422.rate_limited,
               "send-422-authoritative");
+        g_status = 400;
+        auto r400 = ad.SubmitProtected(o);
+        Check(!r400.accepted && r400.authoritative_reject,
+              "send-400-authoritative");
+        g_status = 401;
+        auto r401 = ad.SubmitProtected(o);
+        Check(!r401.accepted && !r401.authoritative_reject &&
+                  r401.auth_failure && !r401.transport_ok,
+              "send-401-auth");
+        g_status = 403;
+        auto r403 = ad.SubmitProtected(o);
+        Check(!r403.accepted && !r403.authoritative_reject &&
+                  r403.auth_failure,
+              "send-403-auth");
+        g_status = 429;
+        auto r429 = ad.SubmitProtected(o);
+        Check(!r429.accepted && !r429.authoritative_reject &&
+                  !r429.auth_failure && r429.rate_limited,
+              "send-429-rate");
+        g_status = 409;
+        auto r409 = ad.SubmitProtected(o);
+        Check(!r409.accepted && !r409.authoritative_reject &&
+                  !r409.auth_failure && !r409.rate_limited &&
+                  !r409.transport_ok,
+              "send-409-ambiguous");
         g_status = 500;
         auto r500 = ad.SubmitProtected(o);
         Check(!r500.accepted && !r500.authoritative_reject &&
@@ -234,12 +307,12 @@ int main() {
         ProtectedOrder bad = o;
         bad.qty_shares = 0;
         int before = g_calls;
-        auto ack5 = ad.SubmitProtected(bad);
-        Check(!ack5.accepted && g_calls == before, "bad-spec-blocked");
+        auto ack9 = ad.SubmitProtected(bad);
+        Check(!ack9.accepted && g_calls == before, "bad-spec-blocked");
         // No transport -> closed with a reason.
         AlpacaPaperAdapter dead(nullptr);
-        auto ack6 = dead.SubmitProtected(o);
-        Check(!ack6.accepted && ack6.reason[0] != '\0',
+        auto ack10 = dead.SubmitProtected(o);
+        Check(!ack10.accepted && ack10.reason[0] != '\0',
               "unwired-closed");
     }
     // 4. query uses GET by-client-id; cancel uses DELETE by UUID.
@@ -247,8 +320,9 @@ int main() {
         AlpacaPaperAdapter ad(Fake);
         g_status = 200;
         g_reply =
-            "{\"id\":\"0193abcd-uuid\",\"filled_qty\":\"10\",\"legs\":[{\"id\":\"l1\",\"take_profit\":{}},"
-            "{\"id\":\"l2\",\"stop_loss\":{}}]}";
+            "{\"id\":\"0193abcd-uuid\",\"filled_qty\":\"10\",\"take_profit\":{},\"stop_loss\":{},"
+            "\"legs\":[{\"id\":\"l1\",\"type\":\"limit\"},"
+            "{\"id\":\"l2\",\"type\":\"stop\"}]}";
         char id[65];
         for (int i = 0; i < 64; ++i) id[i] = 'q';
         id[64] = '\0';
@@ -303,6 +377,18 @@ int main() {
         g_status = 500;
         auto q500 = ad.QueryOnce(id);
         Check(!q500.found && !q500.transport_ok, "query-500-unknown");
+        // 401: auth failure, never "absent". 429: throttled.
+        // Status is recorded for evidence, not control flow.
+        g_status = 401;
+        auto q401 = ad.QueryOnce(id);
+        Check(!q401.found && !q401.transport_ok && q401.auth_failure &&
+                  q401.broker_status == 401,
+              "query-401-auth");
+        g_status = 429;
+        auto q429 = ad.QueryOnce(id);
+        Check(!q429.found && !q429.transport_ok && q429.rate_limited &&
+                  q429.broker_status == 429,
+              "query-429-rate");
         g_status = 200;
         // Repair is a LIMIT OCO with opposing side + sane prices.
         ProtectedOrder o;
@@ -321,7 +407,9 @@ int main() {
         o.client_order_id[64] = '\0';
         o.intent_id[64] = '\0';
         g_reply =
-            "{\"id\":\"o9\",\"take_profit\":{},\"stop_loss\":{}}";
+            "{\"id\":\"o9\",\"take_profit\":{},\"stop_loss\":{},"
+            "\"legs\":[{\"id\":\"r1\",\"type\":\"limit\"},"
+            "{\"id\":\"r2\",\"type\":\"stop\"}]}";
         bool rep = ad.EstablishProtection(o);
         Check(rep && Has(g_last_body, "\"order_class\":\"oco\"") &&
                   Has(g_last_body, "\"type\":\"limit\"") &&

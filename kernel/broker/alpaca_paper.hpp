@@ -8,6 +8,16 @@
 // the transport confirms every leg. Transport is injected: unit tests
 // prove the request shape and ack mapping against a fake; the live
 // HTTPS wiring belongs to Phase 4 (no live credentials in H1).
+//
+// Authoritative response shapes (single query, no hidden lookup):
+//   submit ack = POST /v2/orders bracket response (created bracket
+//     with legs populated; the UUID + legs proof ride this reply);
+//   reconcile  = GET /v2/orders:by_client_order_id?client_order_id=
+//     (Order entity; no nested param is documented there, so legs
+//     are trusted ONLY when strictly proven — absence routes to the
+//     repair path, never to assumed protection).
+// Outcome classes: 400/422 permanent refusal; 401/403 auth failure;
+// 429 throttled; anything else non-2xx/ambiguous (reconcile first).
 #include "adapter.hpp"
 
 namespace jev {

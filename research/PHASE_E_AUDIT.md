@@ -2153,3 +2153,48 @@ Suites: router 86 + journal 23 + broker 47 + drills 75 +
   collector / research / plan untouched; transport unwired live;
   no execution. Bounded query semantics: 1 initial + 2 transport-
   failure re-issues, same identity, then UNKNOWN+freeze.
+
+## Addendum 112 - H1 fourth corrective (audit of 57cce89)
+P0-1 retry-once: kQueryMaxAttempts=2 (1 initial + 1 retry, no third;
+  frozen doc 06 one-send-one-query + Slice H1 retry-once). Exhaustion
+  -> JOURNAL_UNKNOWN + freeze. Regressions: ambiguous-reconciles
+  (attempts==1), exactly-one-retry (attempts==2), no-third-query,
+  reconcile-exhausted, budget-snapshots/restores,
+  restart-no-fresh-budget.
+P0-2 authoritative shapes (single query, no hidden lookup): submit =
+  POST /v2/orders bracket response (legs populated); reconcile = GET
+  by_client_order_id Order entity (no nested param documented there:
+  legs trusted ONLY when strictly proven, absence -> repair path).
+  Documented in alpaca_paper.hpp + LegsProtected comment.
+P0-3 POST UUID: OrderAck.broker_order_id captured from the accepted
+  POST; router persists it (UUID-grammar validated, else reconcile
+  via bad-ack-id) BEFORE any cancel path; snapshot/restart preserves;
+  DELETE uses exactly it. E2E drill: e2e-post-naked ->
+  e2e-cancel-sent -> e2e-uuid-kept -> e2e-snapshots/restores ->
+  e2e-uuid-survives-restart -> e2e-delete-uses-uuid.
+P1-4 legs proof: exactly 2 legs, distinct non-empty ids, TP=limit leg
+  + SL=stop-family leg (type-bound roles), order-level TP/SL params.
+  Refused: naked (markers, no legs), one-leg, unbalanced, duplicate
+  ids, duplicate roles, three legs, untyped leg.
+P1-5/6 identity + ordering: gate strict (matching applies;
+  foreign/untagged ignored: gate-matching-applies/foreign-ignored/
+  untagged-ignored); 24 perms run with real matching tags
+  (Drive auto-tag = correct-caller model); duplicates idempotent
+  (gate-duplicate-idempotent + 25 drill-converge seeds); receipt-order
+  tie-break frozen for the REST snapshot class (no venue sequence
+  metadata on this path; broker sequences reserved, never invented).
+P1-7 4xx split: 400/422 authoritative_reject (terminal); 401/403
+  auth_failure; 429 rate_limited; other-4xx/5xx/malformed ambiguous.
+  Auth/rate reconcile within budget (auth-/rate-reconcile,
+  query-auth/rate reasons), then freeze — never terminal CANCELLED.
+  Regressions: send-400/422-authoritative, send-401/403-auth,
+  send-429-rate, send-409-ambiguous, query-401-auth, query-429-rate.
+P1-8 durability honesty: journal.hpp is a pure formatter/verifier;
+  persistence (append/fsync/restart-load/90-day/daily-backup/
+  summary-from-journal) is caller-owned, assigned to the G0 runner.
+  No kernel file I/O added.
+Suites: router 100 + journal 23 + broker 59 + drills 83 +
+  noalloc-exec 0, normal+hardened, freeze PASS. Slice D / P3.x /
+  collector / research / plan untouched; transport unwired live;
+  no execution. Query budget: 1 initial + 1 retry, same identity,
+  then UNKNOWN+freeze.

@@ -15,9 +15,10 @@
 //     exceptions) + the frozen emergency-exit exception (execute first,
 //     then buffer the row — a delayed exit beats a delayed row);
 //   one intent one stable identity (client ID computed once, reused);
-//   one send attempt + one query; after ambiguity, reconcile-first via
-//     broker query with the SAME identity (a missing ack never mints a
-//     fresh entry on its own);
+//   one send attempt + one status query + one retry (retry-once);
+//     after ambiguity, reconcile-first via broker query with the SAME
+//     identity (a missing ack never mints a fresh entry on its own);
+//     exhaustion fails closed to UNKNOWN + symbol freeze;
 //   entries forbidden under kill / stale feed / closed stage / frozen
 //     symbol; exits never gated by kill, feed, or stage;
 //   partials protect filled qty only; cancel-failed means
@@ -108,9 +109,10 @@ struct RouteObs {
     bool executed = false;  // exit order confirmed executed
     bool repair_ok = false;  // EstablishProtection attempt confirmed
     // Identity tag (P1-5): observations carry the client ID they
-    // report on. A non-IDLE machine ignores tagged observations for
-    // a FOREIGN identity (never mutates on another order's events).
-    // Empty = untagged (legacy/test path: applies by receipt order).
+    // report on. A machine with an established identity accepts ONLY
+    // matching tagged observations; foreign AND untagged observations
+    // are ignored (fail closed — an established machine never acts
+    // on an event it cannot attribute). IDLE has no identity yet.
     char client_id[65]{};
     risk::KillLevel kill = risk::KillLevel::NONE;
     bool feed_stale = false;     // feed stale > 30 s (Slice F flag)
@@ -128,15 +130,19 @@ struct RouteMachine {
     bool emergency = false;
     bool protection_ok = false;  // positively confirmed protection;
                                  // PROTECTED requires this (P0 rule)
-    std::uint8_t query_attempts = 0;  // bounded lookup budget (P0-4):
-                                      // QUERY_MAX_ATTEMPTS total QUERY_ONCE
-                                      // emissions, persisted across restart
+    std::uint8_t query_attempts = 0;  // retry-once budget (P0-1):
+                                      // 2 QUERY_ONCE emissions max
+                                      // (1 initial + 1 retry), then
+                                      // UNKNOWN+freeze; persisted
+                                      // across restart
 };
 
-inline constexpr int kQueryMaxAttempts = 3;  // 1 initial + 2 transport-
-                                             // failure re-issues; then
-                                             // UNKNOWN+freeze (never
-                                             // infinite, never a resend)
+inline constexpr int kQueryMaxAttempts = 2;  // frozen one-query /
+                                             // retry-once (doc 06:
+                                             // one send + one status
+                                             // query): 1 initial + 1
+                                             // retry, then UNKNOWN+freeze
+                                             // (never a resend)
 
 struct RouteOut {
     RouteAction action = RouteAction::NONE;
@@ -150,13 +156,22 @@ struct RouteOut {
 RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                    const VenueCtx& venue, const RouteObs& obs);
 
-// Durable restart seam (P1-1): the caller persists the machine after
+// Restart seam (caller-owned persistence): the caller persists the machine after
 // every step (fixed "H1:<...>" record into a caller buffer) and
 // restores it after death. RestoreMachine validates strictly:
 // unknown tags, out-of-range enums, overlong fields, or trailing
 // garbage -> false with *out untouched (fail closed). A restored
 // SENT_UNACKED/QUERY_SENT machine reconciles via query before any new
 // send (RouteStep has no send from non-IDLE states).
+// Frozen tie-break (doc 13 sec. 13.7, REST observation class): the
+// Alpaca REST lookup path returns state snapshots, not an event
+// stream — the venue supplies no usable per-event sequence metadata
+// on this path. The frozen deterministic rule is therefore receipt
+// order over identity-matched observations (foreign/untagged events
+// never apply, duplicates are idempotent by construction: same
+// tagged observation twice cannot fork the machine). Broker sequence
+// numbers are reserved for a future streaming class, never invented
+// here.
 bool SnapshotMachine(const RouteMachine& m, char* out,
                      std::size_t n);
 bool RestoreMachine(const char* s, RouteMachine* out);

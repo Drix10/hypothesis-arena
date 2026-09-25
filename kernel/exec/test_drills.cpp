@@ -98,6 +98,71 @@ static RouteObs OpenMarket() {
     o.stage_entry_ok = true;
     return o;
 }
+// Correct-caller model (shared with test_router): the harness
+// attributes its own events to its own order.
+static void Tag(RouteObs& o, const RouteMachine& m) {
+    for (int i = 0; i < 65; ++i) o.client_id[i] = m.client_id[i];
+}
+static void SetAckId(RouteObs& o) {
+    const char* u = "0193abcd-1234-5678-9abc-def012345678";
+    for (int i = 0; u[i]; ++i) o.ack.broker_order_id[i] = u[i];
+    o.ack.broker_order_id[36] = '\0';
+}
+// E2E fake transport: POST accepts with a UUID but no legs proof;
+// DELETE confirms when aimed at that UUID.
+static int g_e2e_calls = 0;
+static char g_e2e_path[160] = {0};
+static bool Has(const char* body, const char* needle) {
+    if (!body || !needle || !needle[0]) return false;
+    for (const char* p = body; *p; ++p) {
+        const char* a = p;
+        const char* b = needle;
+        while (*a && *b && *a == *b) {
+            ++a;
+            ++b;
+        }
+        if (!*b) return true;
+    }
+    return false;
+}
+static jev::broker::HttpResult FakeE2E(
+    const jev::broker::HttpRequest& req) {
+    jev::broker::HttpResult r;
+    const char* m = req.method;
+    bool is_post = m[0] == 'P' && m[1] == 'O';
+    bool is_del = m[0] == 'D' && m[1] == 'E' && m[2] == 'L';
+    if (is_post) {
+        r.status = 200;
+        const char* b =
+            "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
+            "\"status\":\"accepted\"}";
+        int i = 0;
+        while (b[i] && i < 2047) {
+            r.body[i] = b[i];
+            ++i;
+        }
+        r.body[i] = '\0';
+        return r;
+    }
+    if (is_del) {
+        ++g_e2e_calls;
+        int i = 0;
+        while (req.path[i] && i < 159) {
+            g_e2e_path[i] = req.path[i];
+            ++i;
+        }
+        g_e2e_path[i] = '\0';
+        r.status = Has(req.path,
+                        "0193abcd-1234-5678-9abc-def012345678")
+                       ? 204
+                       : 404;
+        r.body[0] = '\0';
+        return r;
+    }
+    r.status = 500;
+    r.body[0] = '\0';
+    return r;
+}
 
 // Journal sink: appends a row per WRITE_*/JOURNAL_* action with the
 // caller-owned chain (proves journal sufficiency for the summary).
@@ -150,7 +215,10 @@ struct Drive {
     int sn = 0;
     int intent_rows = 0;
     void step(const Ctx& c, const RouteObs& o, Sink* sink) {
-        auto r = jev::exec::RouteStep(m, c.in, c.venue, o);
+        RouteObs tagged = o;
+        if (m.state != RouteState::IDLE && m.client_id[0] != '\0')
+            Tag(tagged, m);
+        auto r = jev::exec::RouteStep(m, c.in, c.venue, tagged);
         if (r.action == RouteAction::WRITE_JOURNAL ||
             r.action == RouteAction::JOURNAL_FILL ||
             r.action == RouteAction::JOURNAL_PARTIAL ||
@@ -447,6 +515,7 @@ int main() {
         RouteMachine m2;
         RouteObs o2 = OpenMarket();
         auto e1 = RouteStep(m2, c.in, c.venue, o2);
+        Tag(o2, e1.next);  // attribute: the gate is live past IDLE
         auto e2 = RouteStep(e1.next, c.in, c.venue, o2);
         o2.ack.accepted = false;  // authoritative broker refusal
         o2.ack.authoritative_reject = true;
@@ -509,10 +578,12 @@ int main() {
         o.ack.accepted = true;
         o.ack.protection_accepted = false;
         o.ack.filled_qty = 50;
+        SetAckId(o);
         d.step(c, o, &sink);  // ESTABLISH (naked partial)
         Check(d.m.state == RouteState::REPAIR_SENT, "repair-entered");
         o.repair_ok = true;
         // capture the journal row the action demands, validate it
+        Tag(o, d.m);  // direct call: attribute explicitly
         auto r = jev::exec::RouteStep(d.m, c.in, c.venue, o);
         Check(r.action == RouteAction::JOURNAL_REPAIR, "repair-action");
         bool kind_ok = true;
@@ -569,6 +640,67 @@ int main() {
                      !sink.rows[i].intent_id.empty() &&
                      sink.rows[i].seq == (unsigned)i;
         Check(fields, "summary-fields");
+    }
+    // 6. P0-3 end-to-end: accepted-but-unprotected POST carries the
+    // broker UUID into the machine, across snapshot/restart, into
+    // the exact DELETE path (no hidden lookup anywhere).
+    {
+        Ctx c = GoodCtx("intent-006", "SPY");
+        Sink sink;
+        Drive d;
+        RouteObs o = OpenMarket();
+        d.step(c, o, &sink);  // WRITE intent
+        d.step(c, o, &sink);  // SEND
+        Check(d.m.state == RouteState::SENT_UNACKED, "e2e-sent");
+        // Real adapter over a fake transport: POST replies accepted
+        // with a broker UUID but no legs proof.
+        jev::broker::AlpacaPaperAdapter ad(FakeE2E);
+        jev::broker::ProtectedOrder po;
+        po.symbol[0] = 'S';
+        po.symbol[1] = 'P';
+        po.symbol[2] = 'Y';
+        po.symbol[3] = '\0';
+        po.side = jev::broker::OrderSide::BUY;
+        po.qty_shares = 10;
+        po.stop_cents = 50000;
+        po.tp_cents = 52000;
+        for (int i = 0; i < 64; ++i) {
+            po.client_order_id[i] = d.m.client_id[i];
+            po.intent_id[i] = 'e';
+        }
+        po.client_order_id[64] = '\0';
+        po.intent_id[64] = '\0';
+        auto ack = ad.SubmitProtected(po);
+        Check(ack.accepted && !ack.protection_accepted,
+              "e2e-post-naked");
+        RouteObs oa = OpenMarket();
+        oa.adapter_responded = true;
+        oa.ack = ack;
+        d.step(c, oa, &sink);
+        Check(d.m.state == RouteState::CANCEL_SENT,
+              "e2e-cancel-sent");
+        bool kept = true;
+        for (int i = 0; i < 37; ++i)
+            if (d.m.broker_id[i] != ack.broker_order_id[i])
+                kept = false;
+        Check(kept && d.m.broker_id[0] != '\0', "e2e-uuid-kept");
+        // Crash + restart: the UUID survives in the snapshot.
+        char snap[256];
+        Check(SnapshotMachine(d.m, snap, sizeof(snap)),
+              "e2e-snapshots");
+        RouteMachine rm;
+        Check(RestoreMachine(snap, &rm), "e2e-restores");
+        bool same = true;
+        for (int i = 0; i < 37; ++i)
+            if (rm.broker_id[i] != ack.broker_order_id[i]) same = false;
+        Check(same, "e2e-uuid-survives-restart");
+        // The cancel call DELETEs exactly that UUID.
+        g_e2e_calls = 0;
+        auto cr = ad.Cancel(rm.broker_id);
+        Check(cr.confirmed && g_e2e_calls == 1 &&
+                  Has(g_e2e_path,
+                      "0193abcd-1234-5678-9abc-def012345678"),
+              "e2e-delete-uses-uuid");
     }
     if (g_fail == 0) std::printf("DRILL SUITE: ALL PASS (%d checks)\n",
                                  g_count);

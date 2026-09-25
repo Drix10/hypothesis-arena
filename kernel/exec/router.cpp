@@ -34,6 +34,31 @@ void Copy65(char (&dst)[65], const char (&src)[65]) {
 void Copy64(char (&dst)[64], const char (&src)[64]) {
     for (int i = 0; i < 64; ++i) dst[i] = src[i];
 }
+// Broker UUID grammar (the venue's actual identifier shape): exactly
+// 8-4-4-4-12 lowercase hex with hyphens (36 chars), or empty (no UUID
+// observed yet). Anything else fails closed. Shared by the snapshot
+// reader/writer and the POST-UUID persistence gate below.
+bool IsUuidField(const char* s, char* dst, std::size_t dn) {
+    if (dn < 37) return false;
+    if (s[0] == '\0') {
+        dst[0] = '\0';
+        return true;
+    }
+    for (int i = 0; i < 36; ++i) {
+        char c = s[i];
+        if (c == '\0') return false;  // short
+        if (i == 8 || i == 13 || i == 18 || i == 23) {
+            if (c != '-') return false;
+        } else {
+            bool ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+            if (!ok) return false;
+        }
+        dst[i] = c;
+    }
+    if (s[36] != '\0' && s[36] != ':') return false;
+    dst[36] = '\0';
+    return true;
+}
 RouteOut Reject(RouteOut& o, const char* reason) {
     o.action = RouteAction::REJECT;
     o.next.state = RouteState::CANCELLED;
@@ -49,11 +74,16 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
     o.next.kind = intent.kind;
     const bool is_exit = (intent.kind == risk::IntentKind::EXIT);
     // Identity gate (P1-5): a machine with an established identity
-    // ignores tagged observations for a FOREIGN order. Untagged
-    // observations apply by receipt order (legacy/test path).
-    if (m.state != RouteState::IDLE && m.client_id[0] != '\0' &&
-        obs.client_id[0] != '\0') {
+    // accepts ONLY matching tagged observations. Foreign tags are
+    // ignored, and untagged observations are ignored too (an
+    // established machine never acts on an unattributable event).
+    if (m.state != RouteState::IDLE && m.client_id[0] != '\0') {
         bool same = true;
+        if (obs.client_id[0] == '\0') {
+            o.action = RouteAction::NONE;
+            o.reason = "exec:untagged-observation";
+            return o;
+        }
         for (int i = 0; i < 65; ++i) {
             if (m.client_id[i] != obs.client_id[i]) same = false;
             if (m.client_id[i] == '\0') break;
@@ -126,22 +156,28 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
             }
             if (obs.adapter_responded && !obs.ack.accepted) {
                 if (obs.ack.authoritative_reject) {
-                    // Broker refused (shaped 4xx): terminal, journaled.
+                    // Broker refused (400/422 shaped): terminal, journaled.
                     o.action = RouteAction::JOURNAL_CANCEL;
                     o.next.state = RouteState::CANCELLED;
                     o.journal_kind = "cancel";
                     o.reason = "exec:entry-rejected";
                     return o;
                 }
-                // Ambiguous send (transport failure / malformed 2xx):
-                // reconcile under the SAME client ID — never a terminal
-                // rejection, never a fresh send (no send exists from
-                // any non-IDLE state). Consumes query budget.
+                // Non-terminal send outcome (transport failure, 429,
+                // 401/403, malformed 2xx): reconcile under the SAME
+                // client ID — never a terminal rejection, never a
+                // fresh send (no send exists from any non-IDLE
+                // state). Consumes the retry-once budget.
+                const char* why = "exec:ambiguous-reconcile";
+                if (obs.ack.auth_failure)
+                    why = "exec:auth-reconcile";
+                else if (obs.ack.rate_limited)
+                    why = "exec:rate-reconcile";
                 if (o.next.query_attempts < kQueryMaxAttempts) {
                     ++o.next.query_attempts;
                     o.action = RouteAction::QUERY_ONCE;
                     o.next.state = RouteState::QUERY_SENT;
-                    o.reason = "exec:ambiguous-reconcile";
+                    o.reason = why;
                     return o;
                 }
                 o.action = RouteAction::JOURNAL_UNKNOWN;
@@ -153,6 +189,29 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
             }
             if (obs.adapter_responded && obs.ack.accepted &&
                 !obs.ack.protection_accepted) {
+                // P0-3: persist the POST UUID BEFORE any cancel path —
+                // CANCEL_REMAINDER needs a broker ID for DELETE, and
+                // no hidden lookup may mint one later. An unparseable
+                // id reconciles (the query resolves identity), never
+                // cancels blind.
+                char bid[64];
+                if (!IsUuidField(obs.ack.broker_order_id, bid,
+                                 sizeof(bid))) {
+                    if (o.next.query_attempts < kQueryMaxAttempts) {
+                        ++o.next.query_attempts;
+                        o.action = RouteAction::QUERY_ONCE;
+                        o.next.state = RouteState::QUERY_SENT;
+                        o.reason = "exec:bad-ack-id";
+                        return o;
+                    }
+                    o.action = RouteAction::JOURNAL_UNKNOWN;
+                    o.next.state = RouteState::UNKNOWN_FROZEN;
+                    o.journal_kind = "unknown";
+                    o.freeze_symbol = true;
+                    o.reason = "exec:reconcile-exhausted";
+                    return o;
+                }
+                Copy64(o.next.broker_id, bid);
                 o.next.filled_qty = obs.ack.filled_qty;
                 if (obs.ack.filled_qty == 0) {
                     // Nothing filled: cancel the naked order.
@@ -168,9 +227,32 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                 o.reason = "exec:repair-now";
                 return o;
             }
-            // Accepted (or timed out): the status query, within budget.
-            // The first emission always proceeds (the send it reconciles
-            // already happened); re-issues need remaining budget.
+            // Accepted (or timed out): persist the POST UUID when the
+            // ack carries one (same P0-3 rule: validated, else
+            // reconcile — the remainder-cancel path needs it).
+            if (obs.adapter_responded && obs.ack.accepted &&
+                obs.ack.broker_order_id[0] != '\0' &&
+                o.next.broker_id[0] == '\0') {
+                char bid[64];
+                if (!IsUuidField(obs.ack.broker_order_id, bid,
+                                 sizeof(bid))) {
+                    if (o.next.query_attempts < kQueryMaxAttempts) {
+                        ++o.next.query_attempts;
+                        o.action = RouteAction::QUERY_ONCE;
+                        o.next.state = RouteState::QUERY_SENT;
+                        o.reason = "exec:bad-ack-id";
+                        return o;
+                    }
+                    o.action = RouteAction::JOURNAL_UNKNOWN;
+                    o.next.state = RouteState::UNKNOWN_FROZEN;
+                    o.journal_kind = "unknown";
+                    o.freeze_symbol = true;
+                    o.reason = "exec:reconcile-exhausted";
+                    return o;
+                }
+                Copy64(o.next.broker_id, bid);
+            }
+            // The status query, within the retry-once budget.
             if (o.next.query_attempts < kQueryMaxAttempts) {
                 ++o.next.query_attempts;
                 o.action = RouteAction::QUERY_ONCE;
@@ -194,13 +276,19 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
             const broker::OrderQuery& q = obs.query;
             if (!q.transport_ok) {
                 // Lookup itself failed (not "order absent"): re-issue
-                // the lookup under the same identity while budget
-                // remains; on exhaustion freeze for S2/human rather
-                // than looping forever or assuming absence.
+                // the lookup under the same identity while the
+                // retry-once budget remains; on exhaustion freeze for
+                // S2/human rather than looping or assuming absence.
+                // Auth/rate failures are classified, never silent.
+                const char* why = "exec:query-retry";
+                if (q.auth_failure)
+                    why = "exec:query-auth";
+                else if (q.rate_limited)
+                    why = "exec:query-rate";
                 if (o.next.query_attempts < kQueryMaxAttempts) {
                     ++o.next.query_attempts;
                     o.action = RouteAction::QUERY_ONCE;
-                    o.reason = "exec:query-retry";
+                    o.reason = why;
                     return o;
                 }
                 o.action = RouteAction::JOURNAL_UNKNOWN;
@@ -413,32 +501,8 @@ bool IsHexEmpty(const char* s, std::size_t maxlen, char* dst,
     dst[i] = '\0';
     return true;
 }
-// Broker UUID grammar (the venue's actual identifier shape): exactly
-// 8-4-4-4-12 lowercase hex with hyphens (36 chars), or empty (no UUID
-// observed yet). Anything else fails closed. A hex-only validator
-// would reject every real broker ID on the crash path (UUIDs contain
-// hyphens); a loose validator would admit garbage.
-bool IsUuidField(const char* s, char* dst, std::size_t dn) {
-    if (dn < 37) return false;
-    if (s[0] == '\0') {
-        dst[0] = '\0';
-        return true;
-    }
-    for (int i = 0; i < 36; ++i) {
-        char c = s[i];
-        if (c == '\0') return false;  // short
-        if (i == 8 || i == 13 || i == 18 || i == 23) {
-            if (c != '-') return false;
-        } else {
-            bool ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
-            if (!ok) return false;
-        }
-        dst[i] = c;
-    }
-    if (s[36] != '\0' && s[36] != ':') return false;  // trailing garbage
-    dst[36] = '\0';
-    return true;
-}
+// (IsUuidField lives in the anonymous block above, shared with the
+// POST-UUID gate.)
 }  // namespace
 
 bool SnapshotMachine(const RouteMachine& m, char* out, std::size_t n) {

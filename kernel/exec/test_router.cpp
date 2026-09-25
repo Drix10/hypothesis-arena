@@ -22,6 +22,7 @@ using jev::exec::OrderIntent;
 using jev::exec::RouteAction;
 using jev::exec::RouteMachine;
 using jev::exec::RouteObs;
+using jev::exec::RouteOut;
 using jev::exec::RouteState;
 using jev::exec::VenueCtx;
 using jev::risk::IntentKind;
@@ -81,6 +82,25 @@ static RouteObs OpenMarket() {
     o.stage_entry_ok = true;
     return o;
 }
+// Test-harness correct-caller model: the harness attributes its own
+// events to its own order (tags obs with the machine identity).
+// Gate tests below call RouteStep directly with crafted tags.
+static void Tag(RouteObs& o, const RouteMachine& m) {
+    for (int i = 0; i < 65; ++i) o.client_id[i] = m.client_id[i];
+}
+// Fixture POST UUID (valid 8-4-4-4-12 grammar): accepted acks carry
+// the broker id the router must persist before any cancel path.
+static void SetAckId(RouteObs& o) {
+    const char* u = "0193abcd-1234-5678-9abc-def012345678";
+    for (int i = 0; u[i]; ++i) o.ack.broker_order_id[i] = u[i];
+    o.ack.broker_order_id[36] = '\0';
+}
+static RouteOut Step(const RouteMachine& m, const OrderIntent& in,
+                     const VenueCtx& v, RouteObs o) {
+    if (m.state != RouteState::IDLE && m.client_id[0] != '\0')
+        Tag(o, m);
+    return jev::exec::RouteStep(m, in, v, o);
+}
 
 int main() {
     using jev::exec::RouteStep;
@@ -90,33 +110,33 @@ int main() {
     {
         RouteMachine m;
         RouteObs o = OpenMarket();
-        auto r1 = RouteStep(m, in, venue, o);
+        auto r1 = Step(m, in, venue, o);
         Check(r1.action == RouteAction::WRITE_JOURNAL, "happy-journal");
-        auto r2 = RouteStep(r1.next, in, venue, o);
+        auto r2 = Step(r1.next, in, venue, o);
         Check(r2.action == RouteAction::SEND_PROTECTED, "happy-send");
         o.journal_ok = false;
         o.adapter_responded = false;
-        auto r3 = RouteStep(r2.next, in, venue, o);
+        auto r3 = Step(r2.next, in, venue, o);
         Check(r3.action == RouteAction::QUERY_ONCE, "happy-query");
         o.adapter_responded = true;
         o.query.found = true;
         o.query.transport_ok = true;
         o.query.filled_qty = 100;
         o.query.protection_active = true;
-        auto r4 = RouteStep(r3.next, in, venue, o);
+        auto r4 = Step(r3.next, in, venue, o);
         Check(r4.action == RouteAction::JOURNAL_FILL &&
                   r4.next.state == RouteState::PROTECTED,
               "happy-fill");
-        auto r5 = RouteStep(r4.next, in, venue, o);
+        auto r5 = Step(r4.next, in, venue, o);
         Check(r5.action == RouteAction::NONE, "happy-terminal");
     }
     // 2. journal-before-order is absolute for entries
     {
         RouteMachine m;
         RouteObs o = OpenMarket();
-        auto r1 = RouteStep(m, in, venue, o);
+        auto r1 = Step(m, in, venue, o);
         o.journal_ok = false;
-        auto r2 = RouteStep(r1.next, in, venue, o);
+        auto r2 = Step(r1.next, in, venue, o);
         Check(r2.action == RouteAction::REJECT &&
                   r2.next.state == RouteState::CANCELLED,
               "no-row-no-send");
@@ -127,21 +147,21 @@ int main() {
         RouteObs o = OpenMarket();
         OrderIntent bad = in;
         bad.qty_shares = 0;
-        Check(RouteStep(m, bad, venue, o).reason != nullptr &&
-                  RouteStep(m, bad, venue, o).action ==
+        Check(Step(m, bad, venue, o).reason != nullptr &&
+                  Step(m, bad, venue, o).action ==
                       RouteAction::REJECT,
               "reject-zero-qty");
         bad = in;
         bad.stop_cents = 0;
-        Check(RouteStep(m, bad, venue, o).action == RouteAction::REJECT,
+        Check(Step(m, bad, venue, o).action == RouteAction::REJECT,
               "reject-no-stop");
         bad = in;
         bad.scale_num = 2;
-        Check(RouteStep(m, bad, venue, o).action == RouteAction::REJECT,
+        Check(Step(m, bad, venue, o).action == RouteAction::REJECT,
               "reject-bad-scale");
         bad = in;
         bad.stage_num = 3;
-        Check(RouteStep(m, bad, venue, o).action == RouteAction::REJECT,
+        Check(Step(m, bad, venue, o).action == RouteAction::REJECT,
               "reject-bad-stage");
     }
     // 4. entry gates: kill / stale / stage / frozen
@@ -150,22 +170,22 @@ int main() {
         RouteObs o = OpenMarket();
         RouteObs k = o;
         k.kill = KillLevel::SOFT;
-        auto r = RouteStep(m, in, venue, k);
+        auto r = Step(m, in, venue, k);
         Check(r.action == RouteAction::REJECT, "gate-kill-soft");
         k.kill = KillLevel::HARD;
-        r = RouteStep(m, in, venue, k);
+        r = Step(m, in, venue, k);
         Check(r.action == RouteAction::REJECT, "gate-kill-hard");
         RouteObs s = o;
         s.feed_stale = true;
-        r = RouteStep(m, in, venue, s);
+        r = Step(m, in, venue, s);
         Check(r.action == RouteAction::REJECT, "gate-stale");
         RouteObs g = o;
         g.stage_entry_ok = false;
-        r = RouteStep(m, in, venue, g);
+        r = Step(m, in, venue, g);
         Check(r.action == RouteAction::REJECT, "gate-stage");
         RouteObs f = o;
         f.symbol_frozen = true;
-        r = RouteStep(m, in, venue, f);
+        r = Step(m, in, venue, f);
         Check(r.action == RouteAction::REJECT, "gate-frozen");
     }
     // 5. exits ignore kill/stale/stage gates
@@ -178,12 +198,12 @@ int main() {
         o.kill = KillLevel::HARD;
         o.feed_stale = true;
         o.stage_entry_ok = false;
-        auto r1 = RouteStep(m, ex, venue, o);
+        auto r1 = Step(m, ex, venue, o);
         Check(r1.action == RouteAction::WRITE_JOURNAL, "exit-gaps-open");
-        auto r2 = RouteStep(r1.next, ex, venue, o);
+        auto r2 = Step(r1.next, ex, venue, o);
         Check(r2.action == RouteAction::EXECUTE_EXIT, "exit-exec");
         o.executed = true;
-        auto r3 = RouteStep(r2.next, ex, venue, o);
+        auto r3 = Step(r2.next, ex, venue, o);
         Check(r3.action == RouteAction::JOURNAL_EXIT &&
                   r3.next.state == RouteState::CLOSED,
               "exit-closed");
@@ -195,15 +215,15 @@ int main() {
         RouteMachine m;
         m.kind = IntentKind::EXIT;
         RouteObs o = OpenMarket();
-        auto r1 = RouteStep(m, ex, venue, o);
+        auto r1 = Step(m, ex, venue, o);
         o.journal_ok = false;
-        auto r2 = RouteStep(r1.next, ex, venue, o);
+        auto r2 = Step(r1.next, ex, venue, o);
         Check(r2.action == RouteAction::EXECUTE_EMERGENCY &&
                   r2.next.state == RouteState::EXIT_EMERGENCY &&
                   r2.next.emergency,
               "emergency-exec-first");
         o.executed = true;
-        auto r3 = RouteStep(r2.next, ex, venue, o);
+        auto r3 = Step(r2.next, ex, venue, o);
         Check(r3.action == RouteAction::BUFFER_EMERGENCY &&
                   r3.next.state == RouteState::CLOSED,
               "emergency-buffered");
@@ -212,71 +232,176 @@ int main() {
     {
         RouteMachine m;
         RouteObs o = OpenMarket();
-        auto r1 = RouteStep(m, in, venue, o);
-        auto r2 = RouteStep(r1.next, in, venue, o);
+        auto r1 = Step(m, in, venue, o);
+        auto r2 = Step(r1.next, in, venue, o);
         o.adapter_responded = true;
         o.ack.accepted = false;
         o.ack.authoritative_reject = true;
-        auto r3 = RouteStep(r2.next, in, venue, o);
+        auto r3 = Step(r2.next, in, venue, o);
         Check(r3.action == RouteAction::JOURNAL_CANCEL &&
                   r3.next.state == RouteState::CANCELLED,
               "entry-rejected");
         // Ambiguous send (transport failure): reconcile same ID.
-        auto r3b = RouteStep(r2.next, in, venue, o);
-        (void)r3b;
         RouteObs oa = o;
         oa.ack.authoritative_reject = false;
-        auto r3c = RouteStep(r2.next, in, venue, oa);
+        auto r3c = Step(r2.next, in, venue, oa);
         Check(r3c.action == RouteAction::QUERY_ONCE &&
-                  r3c.next.state == RouteState::QUERY_SENT,
+                  r3c.next.state == RouteState::QUERY_SENT &&
+                  r3c.next.query_attempts == 1,
               "ambiguous-reconciles");
-        // Budget exhaustion: third transport failure freezes.
+        // Auth failure and rate limiting reconcile too — never a
+        // terminal trade rejection.
+        RouteObs oau = oa;
+        oau.ack.auth_failure = true;
+        auto rau = Step(r2.next, in, venue, oau);
+        Check(rau.action == RouteAction::QUERY_ONCE &&
+                  rau.next.state == RouteState::QUERY_SENT,
+              "auth-reconciles");
+        RouteObs orl = oa;
+        orl.ack.rate_limited = true;
+        auto rrl = Step(r2.next, in, venue, orl);
+        Check(rrl.action == RouteAction::QUERY_ONCE &&
+                  rrl.next.state == RouteState::QUERY_SENT,
+              "rate-reconciles");
+        // Retry-once budget (P0-1): one initial + one retry, no third.
+        RouteObs oq = OpenMarket();
+        oq.query.transport_ok = false;  // lookup failed, not absent
+        auto q2 = Step(r3c.next, in, venue, oq);
+        Check(q2.action == RouteAction::QUERY_ONCE &&
+                  q2.next.query_attempts == 2,
+              "exactly-one-retry");
+        auto q3 = Step(q2.next, in, venue, oq);
+        Check(q3.action == RouteAction::JOURNAL_UNKNOWN &&
+                  q3.next.state == RouteState::UNKNOWN_FROZEN &&
+                  q3.freeze_symbol,
+              "no-third-query");
+        // Budget exhaustion: consumed budget freezes.
         RouteMachine mx;
         mx.state = RouteState::QUERY_SENT;
-        mx.query_attempts = 3;
+        mx.query_attempts = 2;
         RouteObs ox = OpenMarket();
         ox.query.transport_ok = false;
-        auto rx = RouteStep(mx, in, venue, ox);
+        auto rx = Step(mx, in, venue, ox);
         Check(rx.action == RouteAction::JOURNAL_UNKNOWN &&
                   rx.freeze_symbol,
               "reconcile-exhausted");
+        // Restart preserves the consumed budget (snapshot round-trip
+        // at attempts=2 stays exhausted — a crash cannot mint a
+        // third lookup).
+        {
+            char snap[256];
+            Check(SnapshotMachine(q2.next, snap, sizeof(snap)),
+                  "budget-snapshots");
+            RouteMachine qr;
+            Check(RestoreMachine(snap, &qr) && qr.query_attempts == 2,
+                  "budget-restores");
+            auto qx = Step(qr, in, venue, oq);
+            // attempts==2 with a failed lookup -> exactly one retry
+            // left? No: 2 is the max, so this must freeze.
+            Check(qx.action == RouteAction::JOURNAL_UNKNOWN &&
+                      qx.freeze_symbol,
+                  "restart-no-fresh-budget");
+        }
+    }
+    // 7b. identity gate (P1-5/P1-6): matching tags apply, foreign
+    // tags are ignored, untagged obs on an established machine are
+    // ignored (fail closed — no unattributable event ever mutates).
+    // Direct RouteStep calls: the Step() harness would attribute.
+    {
+        RouteMachine m;
+        RouteObs o = OpenMarket();
+        auto r1 = RouteStep(m, in, venue, o);
+        Tag(o, r1.next);  // preamble attributed; the crafted
+                           // tags below are the actual test
+        auto r2 = RouteStep(r1.next, in, venue, o);
+        Check(r2.action == RouteAction::SEND_PROTECTED,
+              "gate-armed");
+        // Matching tag applies.
+        RouteObs ok = o;
+        Tag(ok, r2.next);
+        ok.adapter_responded = false;
+        auto rok = RouteStep(r2.next, in, venue, ok);
+        Check(rok.action == RouteAction::QUERY_ONCE,
+              "gate-matching-applies");
+        // Foreign tag ignored (state + attempts untouched).
+        RouteObs fr = ok;
+        fr.client_id[0] = (fr.client_id[0] == '0') ? '1' : '0';
+        auto rfr = RouteStep(r2.next, in, venue, fr);
+        Check(rfr.action == RouteAction::NONE &&
+                  rfr.next.query_attempts == 0,
+              "gate-foreign-ignored");
+        // Untagged on established machine ignored.
+        RouteObs un = ok;
+        un.client_id[0] = '\0';
+        auto run = RouteStep(r2.next, in, venue, un);
+        Check(run.action == RouteAction::NONE &&
+                  run.next.query_attempts == 0,
+              "gate-untagged-ignored");
+        // Duplicate delivery is idempotent: same tagged event twice
+        // cannot fork the machine or double-spend budget (second
+        // application waits on the in-flight query, attempts stay 1).
+        auto d1 = RouteStep(r2.next, in, venue, ok);
+        RouteObs ok2 = ok;
+        Tag(ok2, d1.next);
+        ok2.adapter_responded = false;
+        auto d2 = RouteStep(d1.next, in, venue, ok2);
+        Check(d1.action == RouteAction::QUERY_ONCE &&
+                  d1.next.query_attempts == 1 &&
+                  d2.action == RouteAction::NONE &&
+                  d2.next.query_attempts == 1 &&
+                  d2.next.state == d1.next.state,
+              "gate-duplicate-idempotent");
     }
     // 8. naked ack (no protection) -> cancel path, never hold naked
     {
         RouteMachine m;
         RouteObs o = OpenMarket();
-        auto r1 = RouteStep(m, in, venue, o);
-        auto r2 = RouteStep(r1.next, in, venue, o);
+        auto r1 = Step(m, in, venue, o);
+        auto r2 = Step(r1.next, in, venue, o);
         o.ack.accepted = true;
         o.ack.protection_accepted = false;
         o.ack.filled_qty = 0;
-        auto r3 = RouteStep(r2.next, in, venue, o);
+        SetAckId(o);
+        auto r3 = Step(r2.next, in, venue, o);
         Check(r3.action == RouteAction::CANCEL_REMAINDER &&
                   r3.next.state == RouteState::CANCEL_SENT,
               "naked-cancels");
+        // P0-3: the POST UUID was persisted BEFORE the cancel path.
+        bool id_kept = true;
+        for (int i = 0; i < 37; ++i)
+            if (r3.next.broker_id[i] != o.ack.broker_order_id[i])
+                id_kept = false;
+        Check(id_kept, "naked-uuid-persisted");
+        // Unparseable POST id: reconcile, never cancel blind.
+        RouteObs ob = o;
+        ob.ack.broker_order_id[0] = 'X';
+        auto r3b = Step(r2.next, in, venue, ob);
+        Check(r3b.action == RouteAction::QUERY_ONCE &&
+                  r3b.next.broker_id[0] == '\0',
+              "bad-ack-id-reconciles");
     }
     // 9. nothing filled -> cancel -> confirm -> cancelled
     {
         RouteMachine m;
         RouteObs o = OpenMarket();
-        auto r1 = RouteStep(m, in, venue, o);
-        auto r2 = RouteStep(r1.next, in, venue, o);
+        auto r1 = Step(m, in, venue, o);
+        auto r2 = Step(r1.next, in, venue, o);
         o.adapter_responded = false;
-        auto r3 = RouteStep(r2.next, in, venue, o);
+        auto r3 = Step(r2.next, in, venue, o);
         Check(r3.action == RouteAction::QUERY_ONCE, "timeout-queries");
         o.adapter_responded = true;
         o.query.found = true;
         o.query.transport_ok = true;
         o.query.filled_qty = 0;
-        auto r4 = RouteStep(r3.next, in, venue, o);
+        auto r4 = Step(r3.next, in, venue, o);
         Check(r4.action == RouteAction::CANCEL_REMAINDER, "empty-cancels");
         o.adapter_responded = false;
-        auto r5 = RouteStep(r4.next, in, venue, o);
+        auto r5 = Step(r4.next, in, venue, o);
         Check(r5.action == RouteAction::CONFIRM_CANCELLED,
               "cancel-confirm-step");
         o.adapter_responded = true;
         o.cancel_confirmed = true;
-        auto r6 = RouteStep(r4.next, in, venue, o);
+        auto r6 = Step(r4.next, in, venue, o);
         Check(r6.action == RouteAction::JOURNAL_CANCEL &&
                   r6.next.state == RouteState::CANCELLED,
               "cancel-closed");
@@ -285,29 +410,29 @@ int main() {
     {
         RouteMachine m;
         RouteObs o = OpenMarket();
-        auto r1 = RouteStep(m, in, venue, o);
-        auto r2 = RouteStep(r1.next, in, venue, o);
+        auto r1 = Step(m, in, venue, o);
+        auto r2 = Step(r1.next, in, venue, o);
         o.adapter_responded = false;
-        auto r3 = RouteStep(r2.next, in, venue, o);
+        auto r3 = Step(r2.next, in, venue, o);
         o.adapter_responded = true;
         o.query.found = true;
         o.query.transport_ok = true;
         o.query.filled_qty = 40;
         o.query.protection_active = true;
-        auto r4 = RouteStep(r3.next, in, venue, o);
+        auto r4 = Step(r3.next, in, venue, o);
         Check(r4.action == RouteAction::JOURNAL_PARTIAL &&
                   r4.next.state == RouteState::PARTIAL_AWAIT &&
                   r4.next.filled_qty == 40,
               "partial-journaled");
         o.journal_ok = false;
-        auto r4b = RouteStep(r4.next, in, venue, o);
+        auto r4b = Step(r4.next, in, venue, o);
         Check(r4b.action == RouteAction::NONE, "partial-waits-row");
         o.journal_ok = true;
-        auto r5 = RouteStep(r4.next, in, venue, o);
+        auto r5 = Step(r4.next, in, venue, o);
         Check(r5.action == RouteAction::CANCEL_REMAINDER, "partial-cancel");
         o.adapter_responded = true;
         o.cancel_confirmed = true;
-        auto r6 = RouteStep(r5.next, in, venue, o);
+        auto r6 = Step(r5.next, in, venue, o);
         Check(r6.action == RouteAction::JOURNAL_CANCEL &&
                   r6.next.state == RouteState::PROTECTED &&
                   r6.next.filled_qty == 40,
@@ -317,28 +442,28 @@ int main() {
     {
         RouteMachine m;
         RouteObs o = OpenMarket();
-        auto r1 = RouteStep(m, in, venue, o);
-        auto r2 = RouteStep(r1.next, in, venue, o);
+        auto r1 = Step(m, in, venue, o);
+        auto r2 = Step(r1.next, in, venue, o);
         o.adapter_responded = false;
-        auto r3 = RouteStep(r2.next, in, venue, o);
+        auto r3 = Step(r2.next, in, venue, o);
         o.adapter_responded = true;
         o.query.found = false;
         o.query.transport_ok = true;
-        auto r4 = RouteStep(r3.next, in, venue, o);
+        auto r4 = Step(r3.next, in, venue, o);
         o.cancel_confirmed = false;
         o.cancel_failed = true;  // explicit broker rejection -> UNKNOWN
-        auto r5 = RouteStep(r4.next, in, venue, o);
+        auto r5 = Step(r4.next, in, venue, o);
         Check(r5.action == RouteAction::JOURNAL_UNKNOWN &&
                   r5.next.state == RouteState::UNKNOWN_FROZEN &&
                   r5.freeze_symbol,
               "unknown-freezes");
-        auto r6 = RouteStep(r5.next, in, venue, o);
+        auto r6 = Step(r5.next, in, venue, o);
         Check(r6.action == RouteAction::NONE, "unknown-terminal");
         // Frozen symbol blocks the next intent on it.
         RouteMachine m2;
         RouteObs f = OpenMarket();
         f.symbol_frozen = true;
-        Check(RouteStep(m2, in, venue, f).action == RouteAction::REJECT,
+        Check(Step(m2, in, venue, f).action == RouteAction::REJECT,
               "frozen-blocks-next");
     }
     // 12. identity stability: two independent runs mint the same ID;
@@ -346,8 +471,8 @@ int main() {
     {
         RouteMachine m;
         RouteObs o = OpenMarket();
-        auto r1 = RouteStep(m, in, venue, o);
-        auto r1b = RouteStep(m, in, venue, o);
+        auto r1 = Step(m, in, venue, o);
+        auto r1b = Step(m, in, venue, o);
         bool same = true;
         for (int i = 0; i < 65; ++i)
             if (r1.next.client_id[i] != r1b.next.client_id[i]) same = false;
@@ -371,7 +496,7 @@ int main() {
         RouteObs o = OpenMarket();
         o.adapter_responded = false;
         o.query_due = true;
-        auto r = RouteStep(m, in, venue, o);
+        auto r = Step(m, in, venue, o);
         Check(r.action == RouteAction::QUERY_ONCE &&
                   r.next.state == RouteState::QUERY_SENT,
               "crash-reconciles-first");
@@ -380,7 +505,7 @@ int main() {
         o.query.transport_ok = true;
         o.query.filled_qty = 100;
         o.query.protection_active = true;
-        auto r2 = RouteStep(r.next, in, venue, o);
+        auto r2 = Step(r.next, in, venue, o);
         Check(r2.action == RouteAction::JOURNAL_FILL, "crash-adopts-fill");
     }
     // 14. duplicate delivery is idempotent: PROTECTED never re-journals.
@@ -392,7 +517,7 @@ int main() {
         o.query.found = true;
         o.query.transport_ok = true;
         o.query.filled_qty = 100;
-        auto r = RouteStep(m, in, venue, o);
+        auto r = Step(m, in, venue, o);
         Check(r.action == RouteAction::NONE, "duplicate-quiet");
     }
     // 15. drift-directive ordering pattern: EXIT closes before ENTRY.
@@ -402,13 +527,13 @@ int main() {
         RouteMachine me;
         me.kind = IntentKind::EXIT;
         RouteObs o = OpenMarket();
-        auto e1 = RouteStep(me, ex, venue, o);
-        auto e2 = RouteStep(e1.next, ex, venue, o);
+        auto e1 = Step(me, ex, venue, o);
+        auto e2 = Step(e1.next, ex, venue, o);
         o.executed = true;
-        auto e3 = RouteStep(e2.next, ex, venue, o);
+        auto e3 = Step(e2.next, ex, venue, o);
         Check(e3.next.state == RouteState::CLOSED, "drift-exit-closed");
         RouteMachine mn;
-        auto n1 = RouteStep(mn, in, venue, o);
+        auto n1 = Step(mn, in, venue, o);
         Check(n1.action == RouteAction::WRITE_JOURNAL, "entry-after-exit");
     }
     // 16. P0: filled-without-protection is NEVER a cancel of a
@@ -416,41 +541,42 @@ int main() {
     {
         RouteMachine m;
         RouteObs o = OpenMarket();
-        auto r1 = RouteStep(m, in, venue, o);
-        auto r2 = RouteStep(r1.next, in, venue, o);
+        auto r1 = Step(m, in, venue, o);
+        auto r2 = Step(r1.next, in, venue, o);
         // naked ack, partial fill -> ESTABLISH, not cancel
         o.ack.accepted = true;
         o.ack.protection_accepted = false;
         o.ack.filled_qty = 30;
-        auto r3 = RouteStep(r2.next, in, venue, o);
+        SetAckId(o);
+        auto r3 = Step(r2.next, in, venue, o);
         Check(r3.action == RouteAction::ESTABLISH_PROTECTION &&
                   r3.next.state == RouteState::REPAIR_SENT &&
                   r3.next.filled_qty == 30,
               "naked-partial-repairs");
         // naked ack, full fill -> ESTABLISH (no remainder exists)
         o.ack.filled_qty = 100;
-        auto r3b = RouteStep(r2.next, in, venue, o);
+        auto r3b = Step(r2.next, in, venue, o);
         Check(r3b.action == RouteAction::ESTABLISH_PROTECTION,
               "naked-full-repairs");
         // repair succeeds -> JOURNAL_REPAIR -> PROTECTED
         o.adapter_responded = true;
         o.repair_ok = true;
-        auto r4 = RouteStep(r3.next, in, venue, o);
+        auto r4 = Step(r3.next, in, venue, o);
         Check(r4.action == RouteAction::JOURNAL_REPAIR &&
                   r4.next.state == RouteState::PROTECTED &&
                   r4.next.protection_ok,
               "repair-protected");
         // repair fails -> flatten immediately, then exit journaled
-        auto r4f = RouteStep(r3.next, in, venue, o);
+        auto r4f = Step(r3.next, in, venue, o);
         (void)r4f;
         RouteObs of = o;
         of.repair_ok = false;
-        auto r5 = RouteStep(r3.next, in, venue, of);
+        auto r5 = Step(r3.next, in, venue, of);
         Check(r5.action == RouteAction::FLATTEN_NOW &&
                   r5.next.state == RouteState::EXIT_SENT,
               "repair-failed-flattens");
         of.executed = true;
-        auto r6 = RouteStep(r5.next, in, venue, of);
+        auto r6 = Step(r5.next, in, venue, of);
         Check(r6.action == RouteAction::JOURNAL_EXIT &&
                   r6.next.state == RouteState::CLOSED,
               "flatten-exited");
@@ -460,20 +586,20 @@ int main() {
     {
         RouteMachine m;
         RouteObs o = OpenMarket();
-        auto r1 = RouteStep(m, in, venue, o);
-        auto r2 = RouteStep(r1.next, in, venue, o);
+        auto r1 = Step(m, in, venue, o);
+        auto r2 = Step(r1.next, in, venue, o);
         o.adapter_responded = false;
-        auto r3 = RouteStep(r2.next, in, venue, o);
+        auto r3 = Step(r2.next, in, venue, o);
         o.adapter_responded = true;
         o.query.found = true;
         o.query.transport_ok = true;
         o.query.filled_qty = 40;
         o.query.protection_active = false;
-        auto r4 = RouteStep(r3.next, in, venue, o);
+        auto r4 = Step(r3.next, in, venue, o);
         Check(r4.action == RouteAction::ESTABLISH_PROTECTION,
               "query-partial-noprot-repairs");
         o.query.filled_qty = 100;
-        auto r4b = RouteStep(r3.next, in, venue, o);
+        auto r4b = Step(r3.next, in, venue, o);
         Check(r4b.action == RouteAction::ESTABLISH_PROTECTION,
               "query-full-noprot-repairs");
         // Crafted CANCEL_SENT with filled qty but no confirmed
@@ -486,12 +612,12 @@ int main() {
         mc.protection_ok = false;
         RouteObs oc = OpenMarket();
         oc.cancel_confirmed = true;
-        auto rc = RouteStep(mc, in, venue, oc);
+        auto rc = Step(mc, in, venue, oc);
         Check(rc.action == RouteAction::ESTABLISH_PROTECTION &&
                   rc.next.state == RouteState::REPAIR_SENT,
               "cancel-sent-unprotected-repairs");
         mc.protection_ok = true;
-        auto rc2 = RouteStep(mc, in, venue, oc);
+        auto rc2 = Step(mc, in, venue, oc);
         Check(rc2.next.state == RouteState::PROTECTED,
               "cancel-sent-protected-rests");
     }
@@ -501,7 +627,7 @@ int main() {
         int checked = 0;
         for (int st = 0; st <= 12; ++st)
             for (int pok = 0; pok <= 1; ++pok)
-                for (int bits = 0; bits < 512; ++bits) {
+                for (int bits = 0; bits < 4096; ++bits) {
                     RouteMachine m;
                     m.state = static_cast<RouteState>(st);
                     m.kind = IntentKind::ENTRY;
@@ -514,6 +640,8 @@ int main() {
                     o.ack.protection_accepted = (bits & 8) != 0;
                     o.ack.transport_ok = (bits & 256) != 0;
                     o.ack.authoritative_reject = (bits & 512) != 0;
+                    o.ack.auth_failure = (bits & 1024) != 0;
+                    o.ack.rate_limited = (bits & 2048) != 0;
                     o.query_due = (bits & 16) != 0;
                     o.query.found = (bits & 1) != 0;
                     o.query.filled_qty = (bits & 4) ? 100 : 0;
@@ -522,7 +650,7 @@ int main() {
                     o.repair_ok = (bits & 16) != 0;
                     o.query.transport_ok = (bits & 64) != 0;
                     o.cancel_failed = (bits & 128) != 0;
-                    auto r = RouteStep(m, in, venue, o);
+                    auto r = Step(m, in, venue, o);
                     bool ok = (r.next.state != RouteState::PROTECTED) ||
                               r.next.protection_ok;
                     checked += (r.next.state == RouteState::PROTECTED);
@@ -541,16 +669,16 @@ int main() {
     {
         RouteMachine m;
         RouteObs o = OpenMarket();
-        auto r1 = RouteStep(m, in, venue, o);
-        auto r2 = RouteStep(r1.next, in, venue, o);
+        auto r1 = Step(m, in, venue, o);
+        auto r2 = Step(r1.next, in, venue, o);
         o.adapter_responded = false;
-        auto r3 = RouteStep(r2.next, in, venue, o);
+        auto r3 = Step(r2.next, in, venue, o);
         o.adapter_responded = true;
         o.query.found = true;
         o.query.transport_ok = true;
         o.query.cancelled = true;
         o.query.filled_qty = 0;
-        auto r4 = RouteStep(r3.next, in, venue, o);
+        auto r4 = Step(r3.next, in, venue, o);
         Check(r4.action == RouteAction::JOURNAL_CANCEL &&
                   r4.next.state == RouteState::CANCELLED,
               "already-cancelled-direct");
@@ -560,7 +688,7 @@ int main() {
         RouteObs oq = OpenMarket();
         oq.adapter_responded = false;
         oq.query_due = false;
-        Check(RouteStep(mq, in, venue, oq).action ==
+        Check(Step(mq, in, venue, oq).action ==
                   RouteAction::NONE,
               "query-silence-waits");
         // silence (responded, neither flag) re-checks, never UNKNOWN.
@@ -568,7 +696,7 @@ int main() {
             RouteMachine mc;
             mc.state = RouteState::CANCEL_SENT;
             RouteObs os = OpenMarket();
-            auto rs = RouteStep(mc, in, venue, os);
+            auto rs = Step(mc, in, venue, os);
             Check(rs.action == RouteAction::CONFIRM_CANCELLED &&
                       rs.next.state == RouteState::CANCEL_SENT &&
                       !rs.freeze_symbol,
@@ -577,14 +705,14 @@ int main() {
         // lookup under the same identity — reconcile, not a resend.
         RouteObs of = OpenMarket();
         of.query.transport_ok = false;
-        auto rf = RouteStep(mq, in, venue, of);
+        auto rf = Step(mq, in, venue, of);
         Check(rf.action == RouteAction::QUERY_ONCE &&
                   rf.next.state == RouteState::QUERY_SENT,
               "query-transport-retry");
         // invalid state value: fail closed, never act.
         RouteMachine mb;
         mb.state = static_cast<RouteState>(99);
-        auto rb = RouteStep(mb, in, venue, OpenMarket());
+        auto rb = Step(mb, in, venue, OpenMarket());
         Check(rb.action == RouteAction::REJECT,
               "bad-state-fails-closed");
     }

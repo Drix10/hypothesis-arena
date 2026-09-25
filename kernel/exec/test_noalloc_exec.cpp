@@ -46,6 +46,7 @@ int main() {
     RouteObs obs;
     obs.client_id[0] = '\0';  // untagged: identity gate stays out
     RouteMachine m;
+    m.client_id[0] = '\0';  // no identity: gate stays out
     g_allocs = 0;
     for (int i = 0; i < 20000; ++i) {
         // All 12 states x 32 observation shapes (384 combos/block).
