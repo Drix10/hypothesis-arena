@@ -2357,3 +2357,49 @@ Suites: router 174 + journal 23 + broker 102 + drills 93 +
   collector / research / plan untouched; transport unwired live;
   no execution. Quantity invariant now holds on BOTH exit paths
   (direct ack + query); burned exit IDs are never resubmitted.
+
+## Addendum 116 - H1 eighth corrective (audit of 104af95)
+P0-1 status spelling: ClassifyStatus recognizes venue "filled"
+  (terminal); bare trade-event "fill" is UNKNOWN (rejected, never
+  an order status). All close/query fixtures use the real spelling.
+  Regressions: close-fill-word-rejected, query-status-fill-word;
+  close-fill-executed + query-status-0 now exercise "filled".
+P0-2 DEAD partials: MarketClose parses strict qty BEFORE the DEAD
+  branch — DEAD carries its authoritative cumulative fill; DEAD
+  with missing/malformed qty is UNKNOWN (never assumed zero).
+  Router folds every exit fill into persisted cumulative totals
+  (exit_closed monotonic total, exit_counted current-order counted;
+  overfill/contradiction freezes). Recovery targets remainder only
+  via RouteOut.exit_qty (caller submits exactly it under the new
+  sub-ID); restart re-derives intent.qty - exit_closed from the
+  snapshot (no caller persistence needed, never recomputed upward).
+  Flat (closed == requested) -> CLOSED with the authoritative total
+  on all three paths (direct FILLED, DEAD-with-full, query).
+  Regressions: close-dead-keeps-qty, close-dead-no-qty-unknown,
+  exit-dead-partial-remainder (closed 40, Y for 60),
+  exit-cancelled-partial-folds, px-* E2E (X posts 100 -> X canceled
+  +40 -> Y posts exactly 60 -> CLOSED at exactly 100; X posted once;
+  remaining + sub-ID survive every restart; Y UUID captured).
+P0/P1-3 authority domains: ULID-vs-ULID = broker-time order;
+  non-ULID = caller-seq rules (single-source only); no-event REST
+  snapshots NEVER regress established state — fills monotonic vs
+  the floor (entries: machine filled; exits: current-order
+  counted), protection never unsets, terminals never un-terminal
+  (exec:stale-snapshot, byte-identical ignore). No fake
+  cross-family comparison exists. Proven: crafted QUERY_SENT floor
+  40 + ULID high-water ignores later REST 30 (live + after
+  snapshot/restore, ULID bytes preserved); newer ULID still
+  applies over the floor. Regressions: xauth-stale-rest-ignored,
+  xauth-restart-snaps/loads/keeps-ulid/stale-ignored,
+  xauth-ulid-over-rest.
+P1-4 UUID hygiene: sub-ID rotation clears broker_id (X dies with
+  X); successful Y captures Y's UUID unconditionally when valid.
+  Regression: exit-mint-clears-uuid, px-broker-id-is-y. Validator
+  zero-fills ID tails (deterministic crash-path bytes; hardened
+  -fanalyzer clean). Cancel final adopts monotonically
+  (contradictory-lower final unattributed, never regresses).
+Suites: router 185 + journal 23 + broker 106 + drills 111 +
+  noalloc-exec 0, normal+hardened, freeze PASS. Slice D / P3.x /
+  collector / research / plan untouched; transport unwired live;
+  no execution. Quantity invariant holds on every exit path;
+  burned IDs are never resubmitted; partials can never overshoot.
