@@ -102,6 +102,30 @@ fi
 # resolves to the wrapped malloc.
 g++ $FLAGS -static-libstdc++ -static-libgcc -Wl,--wrap,malloc -Wl,--wrap,calloc -Wl,--wrap,realloc -o test_noalloc ingest/test_noalloc.cpp ingest/features.cpp
 ./test_noalloc
+# Slice D gate [correctness + drill]: kill evaluation, entry gate,
+# MEDIUM flatten FSM, HARD ordered sequence, persistence round-trip
+# (doc 10 sec. 10.3, R16; evaluation/actuation boundary per packet v2).
+g++ $FLAGS -o test_kill kill/test_kill.cpp kill/switch.cpp
+./test_kill
+# Slice D zero-malloc contract: evaluation + FSM + persistence allocate
+# nothing (comments stripped: the discipline note names the tokens).
+g++ $FLAGS -static-libstdc++ -static-libgcc -Wl,--wrap,malloc -Wl,--wrap,calloc -Wl,--wrap,realloc -o test_noalloc_kill kill/test_noalloc_kill.cpp kill/switch.cpp
+./test_noalloc_kill
+if sed 's|//.*||' kill/switch.hpp kill/switch.cpp | grep -nE "std::string|std::vector|malloc|calloc|realloc|strdup|operator new"; then
+    echo "GATE FAIL: heap use in kill evaluation path"
+    exit 1
+fi
+# Slice D isolation: evaluation never reads JEV answers, confidence, or
+# any network/process/research affordance (comments stripped; the test
+# files are allowed clocks for the non-blocking proof, switch.* never).
+for tok in '\.enter\(\)' 'latent_risk\(\)' 'conviction\(\)' 'family\(\)' \
+           'ValidatedJEVAnswerSetV3' 'confidence' 'popen' 'system\(' \
+           'socket' 'getaddrinfo' 'curl' 'clock\(' 'time\(' 'chrono'; do
+    if sed 's|//.*||' kill/switch.hpp kill/switch.cpp | grep -nE "$tok"; then
+        echo "GATE FAIL: forbidden path in kill ($tok)"
+        exit 1
+    fi
+done
 # Slice E gate [correctness]: STAGE chain verify, corruption fails to
 # G0_PAPER (doc 10 sec. 10.1 legacy bootstrap).
 g++ $FLAGS -o test_stage stage/test_stage.cpp stage/stage.cpp

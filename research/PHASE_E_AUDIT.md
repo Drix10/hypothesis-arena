@@ -1975,3 +1975,25 @@ plane (Phase D) change any interface a future slice depends on?
   NOT authorized; live/paper execution NOT authorized. Next
   decision is Slice D. Repo verified pre-H1 (no kernel/exec,
   log, broker, kill in tree).
+
+## Addendum 106 - Slice D implemented (authorized packet v2)
+- Code: kernel/kill/switch.hpp + switch.cpp (EvaluateLevel with
+  frozen HARD>MEDIUM>SOFT precedence + frozen reasons; EntriesAllowed
+  with restart-flag friction; StepFlatten exact 4-state FSM with
+  single issuance + true-closer recording + PROTECTION_ONLY; StepHard
+  7-phase ordered machine with non-gating re-establish/flatten notes
+  and unconfirmed-never-revokes; Serialize/ParseKill fixed "D1:d:d:d"
+  string-in/out, caller owns the file). Reuses jev::risk::KillLevel
+  (no second authority). Evaluation path: no I/O, clock, alloc,
+  JEV, confidence, network, research (grep-gated + runtime-proven).
+- Tests: test_kill 252 checks (trigger matrix, precedence, entry
+  gate, FSM matrix incl. 20-cycle PENDING stability, 84-combo
+  persistence round-trip, guards, HARD exact op order both paths,
+  50-cycle unconfirmed hold, 112-combo revoke/exit invariant,
+  100k-eval non-blocking) + test_noalloc_kill 0 allocs over 20k
+  mixed-path iterations. Green normal+hardened via build.sh.
+- Two implementation findings fixed: serialize length (8 chars, not
+  7) and spend-tier clamp (exactly 3 escalates, out-of-range never
+  a level — matches frozen tier vocabulary).
+- No changes outside kernel/kill/* + additive build.sh lines.
+  H1 NOT started; execution NOT started; next is H1 per §13.5.
