@@ -1882,3 +1882,30 @@ plane (Phase D) change any interface a future slice depends on?
   only, all_ok=False unambiguous). Frozen UA untouched.
 - Seam stays CLOSED/ACCEPTED (6fdeda7): this is evidence-layer only.
   Extended soak + BLS egress + TTL/outage behavior stay OPEN.
+
+## Addendum 102 - extended soak n=30 + live seam pass
+- Extended soak (source_soak.py --cycles 30, corrected percentiles,
+  soak-evidence-extended.json): 120/120 polls healthy with zero
+  errors on EDGAR/FRED/Treasury/BEA (p50s 125/6008/2563/1016ms;
+  p99s carry real long-tail samples, e.g. Treasury 7076.9ms);
+  BLS 30/30 live-403, fail-closed every cycle, heartbeat unhealthy.
+  n=30 is still probe-scale, not a long soak.
+- Live seam pass (sandbox/seam_live_pass.py, seam-live-pass.json):
+  ONE harvest through the real production seam (live transports,
+  real pacing/creds): 85 live records (EDGAR 1, FRED 6, Treasury
+  53, BEA 25, BLS 0) -> 85 fused parser candidates -> real
+  publish.resolve_emit (64-feature cap: 21 over-cap dropped) ->
+  emitted bundle -> frozen ctx_read: 63 accepted
+  (inference-capped) + 1 ttl-expired. BLS absence blocked nothing:
+  outage-is-absence proven on live data through the ACCEPTED path.
+- Observed transient: the first live-pass attempt (immediately
+  after the n=30 soak) showed FRED not-ok; the retry passed clean.
+  Plausibly server-side pacing after consecutive runs; reported as
+  observed + recovered, cause not proven. TTL/outage RECOVERY
+  (healthy->stale->healthy) stays OPEN — nothing here forced a
+  real recovery transition on a healthy source.
+- FRED/ALFRED vintage replay re-verified live this round
+  (fred_vintage_probe: observations + as-known-2020-01-01 replay
+  byte-identical + bad-key denied = PASS).
+- Harness-only + evidence files. Seam CLOSED/ACCEPTED; Phase D
+  operational gate OPEN; H1 NOT AUTHORIZED, not started.
