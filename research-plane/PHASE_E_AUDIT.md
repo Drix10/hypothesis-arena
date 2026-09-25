@@ -1865,3 +1865,20 @@ plane (Phase D) change any interface a future slice depends on?
   this round covers the live observations path. Extended soak +
   outage/TTL behavior stay OPEN parallel evidence. No code-path
   changes (harness + evidence only).
+
+## Addendum 101 - soak percentile correction (evidence-harness fix)
+- Re-audit found source_soak.pct() used nearest-rank (6-sample p50
+  picked the 4th ordered value, e.g. FRED 6016ms instead of the
+  5984.5ms median). Fixed to documented linear interpolation
+  (rank=q*(n-1), numpy linear method), same method for p50/p99,
+  with --selftest regression (15 cases: empty/singleton/pair/odd/
+  even/large/exact/interpolated/unsorted, 0 failures).
+- Evidence regenerated from the corrected harness (same 6-cycle
+  protocol, raw per-cycle samples preserved, n recorded, nothing
+  hand-edited): EDGAR n=6 p50=94/p99=837.5 ok; FRED n=6 p50=6000/
+  p99=6265.2 ok; Treasury n=6 p50=2711/p99=2887.7 ok; BEA n=6
+  p50=992.5/p99=1029.4 ok; BLS n=6 still 6/6 live-403 (unchanged
+  fail-closed evidence; its latency stats describe refused polls
+  only, all_ok=False unambiguous). Frozen UA untouched.
+- Seam stays CLOSED/ACCEPTED (6fdeda7): this is evidence-layer only.
+  Extended soak + BLS egress + TTL/outage behavior stay OPEN.
