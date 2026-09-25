@@ -4,12 +4,13 @@
     "bea_nipa_gdp": {
       "all_ok": true,
       "heartbeat_ok": true,
-      "p50_ms": 984.0,
-      "p99_ms": 1609.0,
+      "n": 6,
+      "p50_ms": 992.5,
+      "p99_ms": 1029.4,
       "polls": [
         {
           "errors": [],
-          "ms": 969.0,
+          "ms": 953.0,
           "ok": true,
           "records": 25,
           "stale": false
@@ -23,28 +24,28 @@
         },
         {
           "errors": [],
-          "ms": 406.0,
+          "ms": 1031.0,
           "ok": true,
           "records": 0,
           "stale": false
         },
         {
           "errors": [],
-          "ms": 1609.0,
+          "ms": 1000.0,
           "ok": true,
           "records": 0,
           "stale": false
         },
         {
           "errors": [],
-          "ms": 1016.0,
+          "ms": 1000.0,
           "ok": true,
           "records": 0,
           "stale": false
         },
         {
           "errors": [],
-          "ms": 984.0,
+          "ms": 985.0,
           "ok": true,
           "records": 0,
           "stale": false
@@ -54,14 +55,15 @@
     "bls_empsit": {
       "all_ok": false,
       "heartbeat_ok": false,
-      "p50_ms": 1000.0,
-      "p99_ms": 1015.0,
+      "n": 6,
+      "p50_ms": 984.5,
+      "p99_ms": 1015.2,
       "polls": [
         {
           "errors": [
             "bad-envelope"
           ],
-          "ms": 735.0,
+          "ms": 312.0,
           "ok": false,
           "records": 0,
           "stale": true
@@ -70,7 +72,7 @@
           "errors": [
             "bad-envelope"
           ],
-          "ms": 328.0,
+          "ms": 750.0,
           "ok": false,
           "records": 0,
           "stale": true
@@ -79,7 +81,16 @@
           "errors": [
             "bad-envelope"
           ],
-          "ms": 1015.0,
+          "ms": 1016.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 984.0,
           "ok": false,
           "records": 0,
           "stale": true
@@ -101,29 +112,28 @@
           "ok": false,
           "records": 0,
           "stale": true
-        },
-        {
-          "errors": [
-            "bad-envelope"
-          ],
-          "ms": 1000.0,
-          "ok": false,
-          "records": 0,
-          "stale": true
         }
       ]
     },
     "edgar_8k": {
       "all_ok": true,
       "heartbeat_ok": true,
+      "n": 6,
       "p50_ms": 94.0,
-      "p99_ms": 125.0,
+      "p99_ms": 837.5,
       "polls": [
         {
           "errors": [],
-          "ms": 93.0,
+          "ms": 875.0,
           "ok": true,
           "records": 1,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 94.0,
+          "ok": true,
+          "records": 0,
           "stale": false
         },
         {
@@ -149,14 +159,7 @@
         },
         {
           "errors": [],
-          "ms": 94.0,
-          "ok": true,
-          "records": 0,
-          "stale": false
-        },
-        {
-          "errors": [],
-          "ms": 94.0,
+          "ms": 78.0,
           "ok": true,
           "records": 0,
           "stale": false
@@ -166,40 +169,34 @@
     "fred_macro": {
       "all_ok": true,
       "heartbeat_ok": true,
-      "p50_ms": 6016.0,
-      "p99_ms": 6453.0,
+      "n": 6,
+      "p50_ms": 6000.0,
+      "p99_ms": 6265.2,
       "polls": [
         {
           "errors": [],
-          "ms": 5609.0,
+          "ms": 5594.0,
           "ok": true,
           "records": 6,
           "stale": false
         },
         {
           "errors": [],
-          "ms": 6094.0,
+          "ms": 6250.0,
           "ok": true,
           "records": 0,
           "stale": false
         },
         {
           "errors": [],
-          "ms": 6016.0,
+          "ms": 5781.0,
           "ok": true,
           "records": 0,
           "stale": false
         },
         {
           "errors": [],
-          "ms": 6453.0,
-          "ok": true,
-          "records": 0,
-          "stale": false
-        },
-        {
-          "errors": [],
-          "ms": 5640.0,
+          "ms": 6047.0,
           "ok": true,
           "records": 0,
           "stale": false
@@ -210,53 +207,61 @@
           "ok": true,
           "records": 0,
           "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6266.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
         }
       ]
     },
     "treasury_auctions": {
       "all_ok": true,
       "heartbeat_ok": true,
-      "p50_ms": 2750.0,
-      "p99_ms": 3266.0,
+      "n": 6,
+      "p50_ms": 2711.0,
+      "p99_ms": 2887.7,
       "polls": [
         {
           "errors": [],
-          "ms": 3172.0,
+          "ms": 2890.0,
           "ok": true,
           "records": 53,
           "stale": false
         },
         {
           "errors": [],
-          "ms": 3266.0,
+          "ms": 2813.0,
           "ok": true,
           "records": 0,
           "stale": false
         },
         {
           "errors": [],
-          "ms": 2750.0,
+          "ms": 2578.0,
           "ok": true,
           "records": 0,
           "stale": false
         },
         {
           "errors": [],
-          "ms": 2625.0,
+          "ms": 2500.0,
           "ok": true,
           "records": 0,
           "stale": false
         },
         {
           "errors": [],
-          "ms": 2593.0,
+          "ms": 2844.0,
           "ok": true,
           "records": 0,
           "stale": false
         },
         {
           "errors": [],
-          "ms": 2610.0,
+          "ms": 2609.0,
           "ok": true,
           "records": 0,
           "stale": false
@@ -264,7 +269,7 @@
       ]
     }
   },
-  "ts": 1790304441,
+  "ts": 1790305527,
   "watchlist": [
     "AAPL",
     "SPY"

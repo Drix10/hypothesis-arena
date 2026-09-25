@@ -29,10 +29,60 @@ from sources import treasury as treasury_mod
 
 
 def pct(vals, q):
+    """Linear-interpolation percentile (numpy 'linear' method):
+    rank = q*(n-1) on the sorted samples, interpolating between
+    adjacent ranks. Documented once, used for p50 and p99 alike.
+    Empty -> None (no evidence, never 0)."""
     if not vals:
         return None
     s = sorted(vals)
-    return round(s[min(len(s) - 1, int(q * len(s)))], 1)
+    if len(s) == 1:
+        return round(float(s[0]), 1)
+    rank = q * (len(s) - 1)
+    lo = int(rank)
+    hi = min(len(s) - 1, lo + 1)
+    frac = rank - lo
+    return round(s[lo] + (s[hi] - s[lo]) * frac, 1)
+
+
+def selftest():
+    """Regression coverage for pct(): empty/singleton/pair/odd/
+    even/large, exact ranks and interpolation. Run with --selftest."""
+    cases = [
+        ([], 0.5, None),
+        ([5.0], 0.5, 5.0),
+        ([5.0], 0.99, 5.0),
+        ([1.0, 3.0], 0.5, 2.0),
+        ([1.0, 3.0], 0.0, 1.0),
+        ([1.0, 3.0], 1.0, 3.0),
+        ([1.0, 2.0, 3.0], 0.5, 2.0),
+        # Even-count median interpolates (the round-1 bug: nearest-
+        # rank picked the upper middle instead).
+        ([5609.0, 5640.0, 5953.0, 6016.0, 6094.0, 6453.0], 0.5,
+         5984.5),
+        ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], 0.5, 3.5),
+        # (0.1ms display rounding applies after interpolation:
+        # 5.95 -> 6.0 and 99.01 -> 99.0 in binary float.)
+        ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], 0.99, 6.0),
+        ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], 0.0, 1.0),
+        ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], 1.0, 6.0),
+        (list(map(float, range(1, 101))), 0.5, 50.5),
+        (list(map(float, range(1, 101))), 0.99, 99.0),
+    ]
+    bad = 0
+    for vals, q, want in cases:
+        got = pct(vals, q)
+        if got != want:
+            print("pct FAIL: n=%d q=%s got=%r want=%r"
+                  % (len(vals), q, got, want))
+            bad += 1
+    # Unsorted input must not matter.
+    if pct([3.0, 1.0, 2.0], 0.5) != 2.0:
+        print("pct FAIL: unsorted")
+        bad += 1
+    print("pct selftest: %d cases, %d failures" % (len(cases) + 1,
+                                                    bad))
+    return 1 if bad else 0
 
 
 def main(argv):
@@ -115,7 +165,7 @@ def main(argv):
             hb_ok = hb.get("ok", False)
         except Exception as e:
             hb_ok = "heartbeat-error:%s" % type(e).__name__
-        ev["sources"][sid] = {"polls": polls,
+        ev["sources"][sid] = {"n": len(polls), "polls": polls,
                               "p50_ms": pct(samples, 0.5),
                               "p99_ms": pct(samples, 0.99),
                               "all_ok": all(p["ok"] for p in polls),
@@ -134,4 +184,6 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    if "--selftest" in sys.argv[1:]:
+        sys.exit(selftest())
     sys.exit(main(sys.argv[1:]))
