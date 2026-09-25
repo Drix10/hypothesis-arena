@@ -39,6 +39,22 @@ struct ProtectedOrder {
     char intent_id[65];
 };
 
+// Close-order lifecycle (Alpaca order states): a 2xx + UUID only
+// proves the close order EXISTS. FILLED = status fill (full
+// completion, the only terminal); PARTIAL = partial_fill /
+// partially_filled (reconcile remainder, never CLOSED); PENDING =
+// accepted/pending_new/new/calculated (wait/reconcile, NOT executed);
+// DEAD = canceled/rejected/expired (definitive non-execution);
+// UNKNOWN = unrecognized/missing status or malformed qty (reconcile).
+// Partial fill is never flat: CLOSED requires filled >= close size.
+enum class CloseState : std::uint8_t {
+    UNKNOWN = 0,
+    PENDING = 1,
+    PARTIAL = 2,
+    FILLED = 3,
+    DEAD = 4
+};
+
 struct OrderAck {
     bool accepted = false;
     bool protection_accepted = false;  // broker ack covers protection
@@ -67,6 +83,11 @@ struct OrderQuery {
     bool found = false;
     std::int64_t filled_qty = 0;
     bool cancelled = false;
+    CloseState close_state = CloseState::UNKNOWN;  // normalized
+                            // broker order status (exits reconcile
+                            // on this, not just filled/cancelled:
+                            // replaced/done_for_day/suspended etc.
+                            // are never silently collapsed)
     bool protection_active = false;  // legs strictly proven (nested)
     bool bracket_class = false;  // order_class bracket + TP/SL params
                                  // held as a unit, legs unexpanded
@@ -97,22 +118,6 @@ struct CancelResult {
     bool failed = false;    // explicit broker cancel refusal (422)
 };
 
-// Close-order lifecycle (Alpaca order states): a 2xx + UUID only
-// proves the close order EXISTS. FILLED = status fill (full
-// completion, the only terminal); PARTIAL = partial_fill /
-// partially_filled (reconcile remainder, never CLOSED); PENDING =
-// accepted/pending_new/new/calculated (wait/reconcile, NOT executed);
-// DEAD = canceled/rejected/expired (definitive non-execution);
-// UNKNOWN = unrecognized/missing status or malformed qty (reconcile).
-// Partial fill is never flat: CLOSED requires filled >= close size.
-enum class CloseState : std::uint8_t {
-    UNKNOWN = 0,
-    PENDING = 1,
-    PARTIAL = 2,
-    FILLED = 3,
-    DEAD = 4
-};
-
 struct CloseResult {
     CloseState state = CloseState::UNKNOWN;
     bool transport_ok = false;  // close resolved authoritatively;
@@ -127,6 +132,15 @@ struct CloseResult {
                             // only; a partial fill never sets this
 };
 
+// CancelResult.accepted stays "request accepted" (204/2xx+id),
+// never final cancellation. PRODUCTION SEAM (G0 runner owns it):
+// cancel_confirmed is produced ONLY from an authoritative final
+// observation — QueryOnce found+cancelled (REST) or the trade-update
+// stream's terminal canceled event — mapped to cancel_confirmed=true
+// plus cancel_filled_qty from that same observation. A bare 204 (or
+// any accepted-without-final sequence) must NEVER reach CANCELLED;
+// the router enforces this (accepted stays confirming), the tests
+// prove it (cancel-accepted-never-terminals, cancel-seam-rests).
 // Abstract adapter: the router drives these and ONLY these. Recovery
 // repair (re-establish protection on an acknowledged position) rides
 // EstablishProtection; it is never the normal entry path. Cancel and

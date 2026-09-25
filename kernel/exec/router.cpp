@@ -37,6 +37,74 @@ void Copy64(char (&dst)[64], const char (&src)[64]) {
 void Copy33(char (&dst)[33], const char (&src)[33]) {
     for (int i = 0; i < 33; ++i) dst[i] = src[i];
 }
+// ULID utilities (broker-native event identity): 26 chars Crockford
+// base32; first 10 chars = 48-bit timestamp ms (top 2 bits zero).
+// Decodes broker TIME from the preserved identity — no synthetic
+// sequence, no transformation (identity compares verbatim too).
+int CrockVal(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'A' && c <= 'H') return c - 'A' + 10;
+    if (c == 'J') return 18;
+    if (c == 'K') return 19;
+    if (c == 'M') return 20;
+    if (c == 'N') return 21;
+    if (c >= 'P' && c <= 'T') return c - 'P' + 22;
+    if (c >= 'V' && c <= 'Z') return c - 'V' + 28;
+    return -1;  // I, L, O, U, lowercase, symbols all invalid
+}
+bool IsUlid(const char* s) {
+    if (!s) return false;
+    for (int i = 0; i < 26; ++i) {
+        if (s[i] == '\0' || CrockVal(s[i]) < 0) return false;
+    }
+    return s[26] == '\0';
+}
+bool UlidTimeMs(const char* s, std::uint64_t* out) {
+    std::uint64_t v = 0;
+    for (int i = 0; i < 10; ++i) {
+        int d = CrockVal(s[i]);
+        if (d < 0) return false;
+        v = v * 32 + (unsigned)d;
+    }
+    if (v >= (1ULL << 48)) return false;
+    *out = v;
+    return true;
+}
+// Broker-time order: older timestamp first; same-ms ties break by
+// full-string compare (timestamp + randomness are both ordered).
+// -1/0/+1. Both inputs must be valid ULIDs (checked by caller).
+int CmpUlid(const char* a, const char* b) {
+    std::uint64_t ta = 0;
+    std::uint64_t tb = 0;
+    if (!UlidTimeMs(a, &ta) || !UlidTimeMs(b, &tb)) return 0;
+    if (ta != tb) return (ta < tb) ? -1 : 1;
+    for (int i = 0; i < 26; ++i) {
+        if (a[i] != b[i]) return (a[i] < b[i]) ? -1 : 1;
+    }
+    return 0;
+}
+// Exit sub-identity (P0-2): deterministic new client ID for attempt
+// N>=1, derived from the ORIGINAL bound intent (attributable) but
+// distinct from every burned ID (Alpaca uniqueness). The base
+// attempt-0 ID is the frozen recipe; sub-ids hash intent#eN.
+bool MintExitSubId(const OrderIntent& in, const VenueCtx& venue,
+                   std::uint8_t attempt, char (&out)[65]) {
+    if (attempt == 0 || attempt > 9) return false;
+    char sub[72];
+    int i = 0;
+    while (in.intent_id[i] != '\0' && i < 64) {
+        sub[i] = in.intent_id[i];
+        ++i;
+    }
+    if (i + 4 >= (int)sizeof(sub)) return false;
+    sub[i++] = '#';
+    sub[i++] = 'e';
+    sub[i++] = (char)('0' + attempt);
+    sub[i] = '\0';
+    return broker::MakeClientOrderId(venue.broker, venue.account,
+                                     venue.context_hash, in.symbol,
+                                     in.side, sub, out);
+}
 // Original-intent match (P0-4): intent_id + symbol + side + kind.
 // Fixed compares, no allocation; empty machine fields never match
 // a populated intent (a half-restored machine binds nothing).
@@ -126,29 +194,46 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
         o.reason = "exec:intent-mismatch";
         return o;
     }
-    // Sequence authority (doc 13 sec. 13.7): caller-owned monotonic
-    // seq per machine (venue REST supplies none). Exact redelivery
-    // collapses; older seq is stale; same seq + different id is a
-    // conflict (first applied wins); only newer seq applies. All
-    // ignores return the machine byte-identical.
+    // Sequence authority (doc 13 sec. 13.7): ULID-vs-ULID compares
+    // by BROKER time (timestamp, then full-string tiebreak) — real
+    // event ordering from the preserved venue identity. Non-ULID
+    // ids use the caller-assigned monotonic seq per machine
+    // (single-source poll ordering only): exact redelivery
+    // collapses, older seq is stale, same-seq different-id is a
+    // conflict (first applied wins), only newer seq applies.
+    // Cross-family (one ULID, one not) cannot be compared: apply
+    // (full-state convergence covers it; never a false stale).
+    // All ignores return the machine byte-identical.
     if (m.state != RouteState::IDLE && obs.event_id[0] != '\0' &&
         m.last_event_id[0] != '\0') {
-        if (obs.event_seq == m.last_event_seq) {
-            bool same_ev = true;
-            for (int i = 0; i < 33; ++i) {
-                if (m.last_event_id[i] != obs.event_id[i])
-                    same_ev = false;
-                if (m.last_event_id[i] == '\0') break;
+        bool oU = IsUlid(obs.event_id);
+        bool mU = IsUlid(m.last_event_id);
+        if (oU && mU) {
+            int c = CmpUlid(obs.event_id, m.last_event_id);
+            if (c <= 0) {
+                o.action = RouteAction::NONE;
+                o.reason = (c == 0) ? "exec:duplicate-event"
+                                    : "exec:stale-event";
+                return o;
             }
-            o.action = RouteAction::NONE;
-            o.reason = same_ev ? "exec:duplicate-event"
-                               : "exec:seq-conflict";
-            return o;
-        }
-        if (obs.event_seq < m.last_event_seq) {
-            o.action = RouteAction::NONE;
-            o.reason = "exec:stale-event";
-            return o;
+        } else if (!oU && !mU) {
+            if (obs.event_seq == m.last_event_seq) {
+                bool same_ev = true;
+                for (int i = 0; i < 33; ++i) {
+                    if (m.last_event_id[i] != obs.event_id[i])
+                        same_ev = false;
+                    if (m.last_event_id[i] == '\0') break;
+                }
+                o.action = RouteAction::NONE;
+                o.reason = same_ev ? "exec:duplicate-event"
+                                   : "exec:seq-conflict";
+                return o;
+            }
+            if (obs.event_seq < m.last_event_seq) {
+                o.action = RouteAction::NONE;
+                o.reason = "exec:stale-event";
+                return o;
+            }
         }
     }
     // Stamp the applied event (P1-9): a redelivery of this exact
@@ -191,6 +276,7 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
             o.next.side = intent.side;
             o.next.last_event_id[0] = '\0';
             o.next.last_event_seq = 0;
+            o.next.exit_attempt = 0;
             o.next.protection_ok = false;
             o.next.filled_qty = 0;
             o.action = RouteAction::WRITE_JOURNAL;
@@ -375,20 +461,54 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
             if (q.found) Copy64(o.next.broker_id, q.broker_order_id);
             if (is_exit) {
                 // Exit reconcile: the close order resolved.
-                // Cancelled-unfilled (or 404 absent — the close never
-                // landed) -> back to EXIT_SENT for same-ID re-issue
-                // (exits must complete; reconcile-first, never blind).
+                // 404 absent (the close never landed) -> back to
+                // EXIT_SENT for SAME-ID re-issue (nothing exists to
+                // collide with; reconcile-first, never blind).
+                // Cancelled-unfilled or DEAD-status -> the ID is
+                // burned: mint the next sub-identity (P0-2), never
+                // resubmit the dead ID.
                 // Filled at/above the close size -> flat: terminal
                 // with the AUTHORITATIVE quantity (never CLOSED on a
                 // mere partial, never intent.qty invented).
                 // Below size -> query again within budget (partial
                 // remainder stays managed), else freeze for S2/human.
-                if (!q.found ||
-                    (q.cancelled && q.filled_qty == 0)) {
+                if (!q.found) {
                     o.next.filled_qty = 0;
                     o.action = RouteAction::EXECUTE_EXIT;
                     o.next.state = RouteState::EXIT_SENT;
                     o.reason = "exec:exit-reissue";
+                    return o;
+                }
+                bool dead_empty =
+                    (q.cancelled && q.filled_qty == 0) ||
+                    (q.close_state == broker::CloseState::DEAD &&
+                     q.filled_qty == 0);
+                if (dead_empty) {
+                    if (m.exit_attempt >= 9) {
+                        o.action = RouteAction::JOURNAL_UNKNOWN;
+                        o.next.state = RouteState::UNKNOWN_FROZEN;
+                        o.journal_kind = "unknown";
+                        o.freeze_symbol = true;
+                        o.reason = "exec:exit-attempts-exhausted";
+                        return o;
+                    }
+                    char nid[65];
+                    std::uint8_t natt =
+                        (std::uint8_t)(m.exit_attempt + 1);
+                    if (!MintExitSubId(intent, venue, natt, nid)) {
+                        o.action = RouteAction::JOURNAL_UNKNOWN;
+                        o.next.state = RouteState::UNKNOWN_FROZEN;
+                        o.journal_kind = "unknown";
+                        o.freeze_symbol = true;
+                        o.reason = "exec:exit-identity-failed";
+                        return o;
+                    }
+                    o.next.exit_attempt = natt;
+                    Copy65(o.next.client_id, nid);
+                    o.next.filled_qty = 0;
+                    o.action = RouteAction::EXECUTE_EXIT;
+                    o.next.state = RouteState::EXIT_SENT;
+                    o.reason = "exec:exit-new-identity";
                     return o;
                 }
                 if (q.found && q.filled_qty >= intent.qty_shares) {
@@ -597,6 +717,25 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
             const broker::CloseResult& ca = obs.exit_ack;
             if (ca.transport_ok &&
                 ca.state == broker::CloseState::FILLED) {
+                // P0-1: full completion means filled >= requested.
+                // A short "fill" is contradictory: reconcile, never
+                // CLOSED on a partial (malformed qty never reaches
+                // here — the adapter reports it UNKNOWN).
+                if (ca.filled_qty < intent.qty_shares) {
+                    if (o.next.query_attempts < kQueryMaxAttempts) {
+                        ++o.next.query_attempts;
+                        o.action = RouteAction::QUERY_ONCE;
+                        o.next.state = RouteState::QUERY_SENT;
+                        o.reason = "exec:exit-short-fill";
+                        return o;
+                    }
+                    o.action = RouteAction::JOURNAL_UNKNOWN;
+                    o.next.state = RouteState::UNKNOWN_FROZEN;
+                    o.journal_kind = "unknown";
+                    o.freeze_symbol = true;
+                    o.reason = "exec:reconcile-exhausted";
+                    return o;
+                }
                 o.next.filled_qty = ca.filled_qty;
                 if (ca.broker_order_id[0] != '\0' &&
                     o.next.broker_id[0] == '\0' &&
@@ -612,8 +751,35 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
             }
             if (ca.transport_ok &&
                 ca.state == broker::CloseState::DEAD) {
+                // P0-2: the close order is definitively dead — the
+                // burned client ID is NEVER resubmitted (Alpaca
+                // rejects duplicate client_order_id). Mint the next
+                // deterministic sub-identity (attributable to the
+                // original bound intent) and re-issue under it.
+                // Mint failure -> freeze (never reuse, never invent).
+                if (m.exit_attempt >= 9) {
+                    o.action = RouteAction::JOURNAL_UNKNOWN;
+                    o.next.state = RouteState::UNKNOWN_FROZEN;
+                    o.journal_kind = "unknown";
+                    o.freeze_symbol = true;
+                    o.reason = "exec:exit-attempts-exhausted";
+                    return o;
+                }
+                char nid[65];
+                std::uint8_t natt =
+                    (std::uint8_t)(m.exit_attempt + 1);
+                if (!MintExitSubId(intent, venue, natt, nid)) {
+                    o.action = RouteAction::JOURNAL_UNKNOWN;
+                    o.next.state = RouteState::UNKNOWN_FROZEN;
+                    o.journal_kind = "unknown";
+                    o.freeze_symbol = true;
+                    o.reason = "exec:exit-identity-failed";
+                    return o;
+                }
+                o.next.exit_attempt = natt;
+                Copy65(o.next.client_id, nid);
                 o.action = RouteAction::EXECUTE_EXIT;
-                o.reason = "exec:exit-retry";
+                o.reason = "exec:exit-new-identity";
                 return o;
             }
             if (o.next.query_attempts < kQueryMaxAttempts) {
@@ -674,12 +840,14 @@ namespace exec {
 namespace {
 // Fixed snapshot:
 // "H1:<st>:<kd>:<filled>:<emg>:<pok>:<att>:<cid>:<bid>:
-//     <intent>:<sym>:<side>:<evid>:<evseq>"
+//     <intent>:<sym>:<side>:<evid>:<evseq>:<xatt>"
 // client id lowercase-hex-or-empty; broker id venue UUID or empty;
 // attempts persisted retry budget (0..2 = frozen kQueryMaxAttempts); intent = original intent_id
 // ([A-Za-z0-9_.-], 1..64) + symbol ([A-Z0-9.], 1..15) + side (0/1);
-// evid = last event id (32 hex or empty) + evseq digits. All bounded
-// and validated; writer refuses un-restorable machines.
+// evid = last event id (verbatim token or empty) + evseq digits;
+// xatt = exit sub-identity counter 0..9 (P0-2, persisted so a
+// restart never double-mints). All bounded and validated; writer
+// refuses un-restorable machines.
 bool IsHexEmpty(const char* s, std::size_t maxlen, char* dst,
                 std::size_t dn) {
     std::size_t i = 0;
@@ -717,12 +885,16 @@ bool IsTokenField(const char* s, std::size_t maxlen, bool sym_shape,
     return true;
 }
 bool IsEvId(const char* s, char* dst, std::size_t dn) {
+    // Verbatim broker identity (ULID) or hex32 poll tag: bounded
+    // token [A-Za-z0-9_-], max 32 chars, persisted UNCHANGED (never
+    // transformed — ULID time authority decodes from these bytes).
     if (dn < 33) return false;
     std::size_t i = 0;
     while (s[i] != '\0' && s[i] != ':') {
         if (i >= 32) return false;
         char c = s[i];
-        bool ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+        bool ok = (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') ||
+                  (c >= 'a' && c <= 'z') || c == '_' || c == '-';
         if (!ok) return false;
         dst[i] = c;
         ++i;
@@ -762,12 +934,13 @@ bool SnapshotMachine(const RouteMachine& m, char* out, std::size_t n) {
             return false;
     }
     if (!IsEvId(m.last_event_id, evid, sizeof(evid))) return false;
+    if (m.exit_attempt > 9) return false;
     int w = std::snprintf(
-        out, n, "H1:%d:%d:%lld:%d:%d:%d:%s:%s:%s:%s:%d:%s:%llu", st,
+        out, n, "H1:%d:%d:%lld:%d:%d:%d:%s:%s:%s:%s:%d:%s:%llu:%d", st,
         kd, (long long)m.filled_qty, m.emergency ? 1 : 0,
         m.protection_ok ? 1 : 0, m.query_attempts, cid, bid, iid, sym,
         (m.side == broker::OrderSide::SELL) ? 1 : 0, evid,
-        (unsigned long long)m.last_event_seq);
+        (unsigned long long)m.last_event_seq, m.exit_attempt);
     return w > 0 && static_cast<std::size_t>(w) < n;
 }
 
@@ -872,8 +1045,12 @@ bool RestoreMachine(const char* s, RouteMachine* out) {
         ++p;
         ++nd2;
     }
-    if (nd2 == 0 || *p != '\0') return false;
+    if (nd2 == 0 || *p != ':') return false;
+    ++p;
     m.last_event_seq = (std::uint64_t)es;
+    // Exit sub-identity counter: single digit 0..9, then NUL.
+    if (p[0] < '0' || p[0] > '9' || p[1] != '\0') return false;
+    m.exit_attempt = (std::uint8_t)(p[0] - '0');
     // Binding coherence: non-IDLE requires the full binding;
     // IDLE requires none of it.
     bool idle = (m.state == RouteState::IDLE);

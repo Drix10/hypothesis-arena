@@ -2310,3 +2310,50 @@ Suites: router 158 + journal 23 + broker 91 + drills 83 +
   collector / research / plan untouched; transport unwired live;
   no execution. 204-accepted-vs-final-canceled handling preserved
   (directionally correct per current cancel API).
+
+## Addendum 115 - H1 seventh corrective (audit of abd3d71)
+P0-1 direct-fill gate: EXIT_SENT FILLED requires filled >=
+  intent.qty (full completion means full); short "fill" (4 < 10)
+  reconciles via QUERY (exec:exit-short-fill), never CLOSED.
+  Regression: exit-short-fill-reconciles. (Malformed qty already
+  UNKNOWN at the adapter.)
+P0-2 exit sub-identity: DEFINITIVE death (DEAD ack /
+  cancelled-unfilled query) burns the client ID — Alpaca rejects
+  duplicate client_order_id, so recovery mints MintExitSubId
+  (hash of intent#eN, same venue recipe; attributable via the
+  unchanged bound intent_id). 404-absent keeps the SAME id
+  (nothing exists to collide). exit_attempt persisted in machine +
+  snapshot (no double-mint across restart; 9-attempt cap then
+  freeze). Mint failure -> UNKNOWN+freeze (never reuse, never
+  invent). E2E (fake transport): xid-first-post (X) -> xid-dead-
+  mints (attempt 1, id changed) -> xid-second-post-new-id (Y,
+  never X) -> xid-never-reused (X posted exactly once) ->
+  xid-closed; exitd-snapshots/restores/id-survives;
+  exit-cancelled-new-identity; exit-dead-attempt-2.
+P0-3/P0-4 broker-native ordering: event_id is the VERBATIM venue
+  identity (ULID 26-char stream ids pass through unchanged; hex32
+  poll tags accepted; token [A-Za-z0-9_-] <=32, snapshot-persisted
+  verbatim, never transformed). ULID-vs-ULID compares by broker
+  time (48-bit timestamp, full-string tiebreak): older-after-newer
+  is stale even when it ARRIVED later; exact redelivery collapses.
+  Non-ULID ids keep caller-seq rules (single-source poll ordering
+  only, explicitly not broker authority); cross-family applies
+  (never false-stale). Proven with real Alpaca-shaped ULID
+  fixtures: ulid-armed/newer-applies/snaps/stale-ignored/
+  duplicate-collapses/tiebreak-distinct/decisive/persists-winner.
+  Same-ms tiebreak is deterministic (lex-larger wins) with the
+  winner persisted in state bytes.
+P1-1 query status: ClassifyStatus normalizes 10 venue statuses to
+  CloseState (fill/PARTIAL/PENDING/DEAD); unlisted (done_for_day,
+  replaced, ...) -> UNKNOWN, never collapsed. Exit reconcile
+  branches on close_state (DEAD-empty joins the burn-ID path).
+  Regressions: query-status-0..9, query-status-unlisted.
+P1-2 cancel seam: adapter.hpp documents the G0 production rule
+  (cancel_confirmed ONLY from found+cancelled REST or terminal
+  stream event, with its qty; bare 204 never terminals — router
+  enforces, tests prove seam-no-bare-204 x3 + seam-rests).
+Suites: router 174 + journal 23 + broker 102 + drills 93 +
+  noalloc-exec 0, normal+hardened, freeze PASS. Slice D / P3.x /
+  collector / research / plan untouched; transport unwired live;
+  no execution. Quantity invariant now holds on BOTH exit paths
+  (direct ack + query); burned exit IDs are never resubmitted.

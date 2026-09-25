@@ -108,6 +108,34 @@ std::int64_t StrictQty(const char* body) {
     }
     return -1;  // field absent
 }
+// Normalized order-status classifier (P1-1): maps the venue status
+// string onto the close lifecycle for EXIT reconciliation. Entries
+// keep their own found/filled/cancelled/protection verdicts; exits
+// reconcile on this (replaced/done_for_day/suspended etc. are never
+// silently collapsed into generic found+qty).
+CloseState ClassifyStatus(const char* st) {
+    if (!st || !st[0]) return CloseState::UNKNOWN;
+    // exact-match helper over bounded literals
+    const char* const words[] = {
+        "fill",           "partial_fill", "partially_filled",
+        "accepted",       "pending_new",  "new",
+        "calculated",     "canceled",     "rejected",
+        "expired"};
+    for (int w = 0; w < 10; ++w) {
+        const char* b = words[w];
+        const char* a = st;
+        while (*a && *b && *a == *b) {
+            ++a;
+            ++b;
+        }
+        if (*a != '\0' || *b != '\0') continue;
+        if (w == 0) return CloseState::FILLED;
+        if (w <= 2) return CloseState::PARTIAL;
+        if (w <= 6) return CloseState::PENDING;
+        return CloseState::DEAD;
+    }
+    return CloseState::UNKNOWN;
+}
 // Bracket-held-as-unit (constructive proof): order_class bracket +
 // TP/SL object fields + the EXACT unexpanded representation
 // ("legs":null). Legs expanded -> the strict legs rule decides
@@ -469,6 +497,10 @@ OrderQuery AlpacaPaperAdapter::QueryOnce(
     q.filled_qty = fq;
     q.cancelled = Contains(r.body, "\"canceled\"") ||
                   Contains(r.body, "\"cancelled\"");
+    // Normalized status for exit reconciliation (P1-1).
+    char qs[32];
+    if (ExtractQuoted(r.body, "status", qs, sizeof(qs)))
+        q.close_state = ClassifyStatus(qs);
     q.protection_active = LegsProtected(r.body);
     q.bracket_class = BracketHeld(r.body);
     return q;

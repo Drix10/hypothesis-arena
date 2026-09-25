@@ -528,6 +528,38 @@ int main() {
         Check(qsmp.found && !qsmp.protection_active &&
                   !qsmp.bracket_class,
               "query-simple-no-bracket");
+        // P1-1 query status normalization (exit reconciliation
+        // reads this, not just filled/cancelled).
+        const char* statuses[10] = {
+            "fill", "partially_filled", "partial_fill", "new",
+            "accepted", "pending_new", "calculated", "canceled",
+            "rejected", "expired"};
+        const CloseState want_st[10] = {
+            CloseState::FILLED, CloseState::PARTIAL, CloseState::PARTIAL,
+            CloseState::PENDING, CloseState::PENDING, CloseState::PENDING,
+            CloseState::PENDING, CloseState::DEAD, CloseState::DEAD,
+            CloseState::DEAD};
+        for (int si = 0; si < 10; ++si) {
+            char qb[256];
+            std::snprintf(
+                qb, sizeof(qb),
+                "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
+                "\"status\":\"%s\",\"filled_qty\":\"10\"}",
+                statuses[si]);
+            g_reply = qb;
+            auto qst = ad.QueryOnce(id);
+            char qn[32];
+            std::snprintf(qn, sizeof(qn), "query-status-%d", si);
+            Check(qst.found && qst.close_state == want_st[si], qn);
+        }
+        // Unlisted statuses (done_for_day/replaced/...) stay UNKNOWN.
+        g_reply =
+            "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
+            "\"status\":\"done_for_day\",\"filled_qty\":\"10\"}";
+        auto qdd = ad.QueryOnce(id);
+        Check(qdd.found &&
+                  qdd.close_state == CloseState::UNKNOWN,
+              "query-status-unlisted");
         g_status = 200;
         // Repair is a LIMIT OCO with opposing side + sane prices.
         ProtectedOrder o;

@@ -122,6 +122,54 @@ static void SetEvent(RouteObs& o, unsigned seq) {
 // DELETE confirms when aimed at that UUID.
 static int g_e2e_calls = 0;
 static char g_e2e_path[160] = {0};
+// Exit sub-identity fake: logs every close POST client ID; scripted
+// lifecycle replies (0 = accepted/PENDING, 1 = fill/100).
+static int g_exit_posts = 0;
+static int g_exit_x_posts = 0;
+static char g_exit_last_id[65] = {0};
+static char g_exit_first_id[65] = {0};
+static int g_exit_mode = 0;
+static jev::broker::HttpResult FakeExit(
+    const jev::broker::HttpRequest& req) {
+    jev::broker::HttpResult r;
+    r.status = 200;
+    char cid[65] = {0};
+    const char* needle = "\"client_order_id\":\"";
+    for (const char* p = req.body; *p; ++p) {
+        const char* a = p;
+        const char* b = needle;
+        while (*a && *b && *a == *b) {
+            ++a;
+            ++b;
+        }
+        if (*b) continue;
+        for (int i = 0; i < 64 && a[i]; ++i) cid[i] = a[i];
+        cid[64] = '\0';
+        break;
+    }
+    ++g_exit_posts;
+    for (int i = 0; i < 65; ++i) g_exit_last_id[i] = cid[i];
+    if (g_exit_first_id[0] == '\0') {
+        for (int i = 0; i < 65; ++i) g_exit_first_id[i] = cid[i];
+    }
+    bool same_x = true;
+    for (int i = 0; i < 65; ++i)
+        if (cid[i] != g_exit_first_id[i]) same_x = false;
+    if (same_x) ++g_exit_x_posts;
+    const char* b =
+        (g_exit_mode == 1)
+            ? "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
+              "\"status\":\"fill\",\"filled_qty\":\"100\"}"
+            : "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
+              "\"status\":\"accepted\"}";
+    int i = 0;
+    while (b[i] && i < 2047) {
+        r.body[i] = b[i];
+        ++i;
+    }
+    r.body[i] = '\0';
+    return r;
+}
 static bool Has(const char* body, const char* needle) {
     if (!body || !needle || !needle[0]) return false;
     for (const char* p = body; *p; ++p) {
@@ -727,6 +775,95 @@ int main() {
                   Has(g_e2e_path,
                       "0193abcd-1234-5678-9abc-def012345678"),
               "e2e-delete-uses-uuid");
+    }
+    // 7. P0-2 exit sub-identity E2E (fake transport): first close
+    // uses ID X; broker reports DEAD; NO second POST carries X;
+    // recovery mints deterministic Y attributable to the intent.
+    // P1-2 cancel seam: cancel_confirmed comes ONLY from a
+    // found+cancelled query mapped with its authoritative qty —
+    // bare 204s never terminal (proven by repetition).
+    {
+        Ctx c = GoodCtx("intent-007", "SPY");
+        c.in.kind = IntentKind::EXIT;
+        Sink sink;
+        Drive d;
+        d.m.kind = IntentKind::EXIT;
+        RouteObs o = OpenMarket();
+        d.step(c, o, &sink);  // WRITE
+        d.step(c, o, &sink);  // EXECUTE_EXIT
+        Check(d.m.state == RouteState::EXIT_SENT, "xid-armed");
+        jev::broker::AlpacaPaperAdapter ad(FakeExit);
+        char xid[65];
+        for (int i = 0; i < 65; ++i) xid[i] = d.m.client_id[i];
+        // First close POST carries X.
+        auto c1 = ad.MarketClose("SPY", 100, OrderSide::SELL, xid);
+        Check(g_exit_posts == 1 && Has(g_exit_last_id, xid) &&
+                  c1.state == jev::broker::CloseState::PENDING,
+              "xid-first-post");
+        // Broker definitively reports DEAD -> new identity, attempt 1.
+        RouteObs od = OpenMarket();
+        od.exit_responded = true;
+        od.exit_ack = c1;
+        od.exit_ack.transport_ok = true;
+        od.exit_ack.state = jev::broker::CloseState::DEAD;
+        d.step(c, od, &sink);
+        Check(d.m.state == RouteState::EXIT_SENT &&
+                  d.m.exit_attempt == 1,
+              "xid-dead-mints");
+        bool changed = false;
+        for (int i = 0; i < 65; ++i)
+            if (d.m.client_id[i] != xid[i]) changed = true;
+        Check(changed, "xid-changed");
+        // Second close POST carries Y (never X again).
+        char yid[65];
+        for (int i = 0; i < 65; ++i) yid[i] = d.m.client_id[i];
+        g_exit_mode = 1;  // now fill fully
+        auto c2 = ad.MarketClose("SPY", 100, OrderSide::SELL, yid);
+        Check(g_exit_posts == 2 && Has(g_exit_last_id, yid) &&
+                  !Has(g_exit_last_id, xid) &&
+                  c2.state == jev::broker::CloseState::FILLED,
+              "xid-second-post-new-id");
+        // No POST in the log ever reused X.
+        Check(g_exit_x_posts == 1, "xid-never-reused");
+        // Close the machine with the authoritative fill.
+        RouteObs of = OpenMarket();
+        of.exit_responded = true;
+        of.exit_ack = c2;
+        d.step(c, of, &sink);
+        Check(d.m.state == RouteState::CLOSED, "xid-closed");
+        // P1-2: three bare-204 accepts in a row never terminal.
+        Ctx c2x = GoodCtx("intent-008", "SPY");
+        Drive d2;
+        RouteObs o2 = OpenMarket();
+        d2.step(c2x, o2, &sink);
+        d2.step(c2x, o2, &sink);
+        o2.adapter_responded = false;
+        d2.step(c2x, o2, &sink);  // QUERY
+        RouteObs on = OpenMarket();
+        on.adapter_responded = true;
+        on.query.transport_ok = true;
+        on.query.found = true;
+        on.query.filled_qty = 0;
+        d2.step(c2x, on, &sink);  // CANCEL_SENT
+        Check(d2.m.state == RouteState::CANCEL_SENT, "seam-armed");
+        for (int i = 0; i < 3; ++i) {
+            RouteObs oa2 = OpenMarket();
+            oa2.adapter_responded = true;
+            oa2.cancel_accepted = true;  // bare 204, no final
+            d2.step(c2x, oa2, &sink);
+        }
+        Check(d2.m.state == RouteState::CANCEL_SENT, "seam-no-bare-204");
+        // The seam: G0 maps a found+cancelled query (with its
+        // authoritative qty) to cancel_confirmed + cancel_filled_qty.
+        // Status rides the same observation (DEAD here); the mapping
+        // — never a bare 204 — is what terminals the machine.
+        RouteObs ofin = OpenMarket();
+        ofin.adapter_responded = true;
+        ofin.cancel_confirmed = true;  // mapped from found+cancelled
+        ofin.cancel_filled_qty = 0;    // authoritative final qty
+        d2.step(c2x, ofin, &sink);
+        Check(d2.m.state == RouteState::CANCELLED && sink.verify(),
+              "seam-rests");
     }
     if (g_fail == 0) std::printf("DRILL SUITE: ALL PASS (%d checks)\n",
                                  g_count);

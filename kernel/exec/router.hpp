@@ -127,21 +127,19 @@ struct RouteObs {
     // are ignored (fail closed — an established machine never acts
     // on an event it cannot attribute). IDLE has no identity yet.
     char client_id[65]{};
-    // Event identity + sequence (doc 13 sec. 13.7 ordering contract):
-    // each observation may carry an event id (32 hex or empty) + a
-    // caller-assigned monotonic sequence per machine (0 = none).
-    // The venue REST path supplies no usable broker sequence, so the
-    // SEQUENCE IS CALLER-OWNED (the G0 runner tags each poll in
-    // order); the router enforces it deterministically:
-    //   exact redelivery (same id+seq)  -> collapse (no double apply)
-    //   older seq than applied          -> stale, ignored
-    //   same seq, different id          -> conflict, first-wins
-    //   newer seq                       -> apply, advance high-water
-    // Observations are full broker-state snapshots: every consistent
-    // observation independently drives toward the same terminal, so
-    // any arrival order of a consistent set converges; the sequence
-    // rules additionally pin stale/conflicting deliveries. Proven by
-    // adversarial permutation, not assumed.
+    // Event identity (verbatim broker identity, never transformed):
+    // the Alpaca streaming event id (ULID, 26 chars) passes through
+    // unchanged; 32-hex poll tags are also accepted. Bounded token
+    // [A-Za-z0-9_-], max 32 chars, snapshot-persisted verbatim.
+    // Ordering authority (doc 13 sec. 13.7): ULID-vs-ULID compares
+    // by broker time (ULID timestamp, then full-string tiebreak) —
+    // genuine broker-event ordering. Non-ULID ids fall back to the
+    // caller-assigned monotonic seq per machine (single-source poll
+    // ordering ONLY, never broker authority): exact redelivery
+    // collapses, older seq is stale, same-seq different-id is a
+    // conflict (first applied wins), only newer seq applies.
+    // REST polls normally carry NO event (empty): full-state
+    // snapshots converge independently of arrival order.
     char event_id[33]{};
     std::uint64_t event_seq = 0;
     risk::KillLevel kill = risk::KillLevel::NONE;
@@ -164,9 +162,16 @@ struct RouteMachine {
     char intent_id[65]{};
     char symbol[16]{};
     broker::OrderSide side = broker::OrderSide::BUY;
-    // Last applied event (P1-9 duplicate collapse, persisted).
+    // Last applied event (sequence authority, persisted).
     char last_event_id[33]{};
     std::uint64_t last_event_seq = 0;
+    // Exit sub-order counter (P0-2): after a DEFINITIVE death
+    // (DEAD ack / cancelled-found), the burned client ID is never
+    // resubmitted — recovery mints a deterministic sub-identity
+    // (attempt N) attributable to the original bound intent.
+    // 404-absent re-issues keep the SAME id (nothing exists to
+    // collide with). Persisted across restart: no double-mint.
+    std::uint8_t exit_attempt = 0;
     std::int64_t filled_qty = 0;
     bool emergency = false;
     bool protection_ok = false;  // positively confirmed protection;
