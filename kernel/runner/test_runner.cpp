@@ -115,9 +115,10 @@ static void RemoveSandbox(const std::string& d) {
     RemoveDirectoryA(d.c_str());
 }
 #else
+#include <dirent.h>
+#include <unistd.h>
 static void MkDir(const std::string& d) { mkdir(d.c_str(), 0700); }
 static void RmDir(const std::string& d) { rmdir(d.c_str()); }
-#include <dirent.h>
 static void RemoveSandbox(const std::string& d) {
     DIR* dp = opendir(d.c_str());
     if (dp) {

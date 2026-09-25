@@ -13,7 +13,11 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
-#include <thread>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 
 #include "runner.hpp"
 
@@ -61,7 +65,11 @@ int main(int argc, char** argv) {
             std::printf("g0_runner: HARD stop\n");
             return 3;
         }
-        std::this_thread::sleep_for(std::chrono::seconds(1));
+#ifdef _WIN32
+        Sleep(1000);
+#else
+        sleep(1);
+#endif
     }
     jev::runner::Summary s;
     if (r.Summarize(&s)) {
