@@ -122,6 +122,16 @@ g++ $FLAGS -o test_broker broker/test_broker.cpp broker/adapter.cpp broker/alpac
 ./test_broker
 g++ $FLAGS -o test_drills exec/test_drills.cpp exec/router.cpp broker/adapter.cpp broker/alpaca_paper.cpp log/journal.cpp kill/switch.cpp
 ./test_drills
+# H1 integration gate [correctness + drill]: G0 runner — durable
+# journal/snapshots/freeze/STAGE/HALT/alerts, REST+stream reconcile,
+# S2 cadence, emergency buffer, kill flatten, crash recovery
+# (doc 06 sec. 6.1/6.2a/6.5, doc 10, doc 13 sec. 13.5 Slice H1).
+# The runner is cycle-path (files, std::string/vector allowed — the
+# noalloc gates cover the decision core, not durability). main.cpp
+# compiles as the production entry (transport null = fail closed).
+g++ $FLAGS -o test_runner runner/test_runner.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp broker/adapter.cpp broker/alpaca_paper.cpp log/journal.cpp kill/switch.cpp
+./test_runner
+g++ $FLAGS -o g0_runner runner/main.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp broker/adapter.cpp broker/alpaca_paper.cpp log/journal.cpp kill/switch.cpp
 # H1 zero-malloc contract: the router STEP CORE allocates nothing
 # (identity minting at IDLE is documented cycle-path and excluded
 # here; the loop covers the IDLE-reject path + every post-identity

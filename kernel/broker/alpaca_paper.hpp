@@ -1,4 +1,5 @@
 // H1 — Alpaca paper adapter (stocks-only G0 venue).
+#pragma once
 //
 // Declared semantics (frozen interface proof surface): units are whole
 // shares; partial fills are reported with exact filled qty; price
