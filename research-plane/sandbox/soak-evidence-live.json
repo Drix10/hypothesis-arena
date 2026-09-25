@@ -1,0 +1,272 @@
+{
+  "cycles": 6,
+  "sources": {
+    "bea_nipa_gdp": {
+      "all_ok": true,
+      "heartbeat_ok": true,
+      "p50_ms": 984.0,
+      "p99_ms": 1609.0,
+      "polls": [
+        {
+          "errors": [],
+          "ms": 969.0,
+          "ok": true,
+          "records": 25,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 953.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 406.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1609.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1016.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 984.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        }
+      ]
+    },
+    "bls_empsit": {
+      "all_ok": false,
+      "heartbeat_ok": false,
+      "p50_ms": 1000.0,
+      "p99_ms": 1015.0,
+      "polls": [
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 735.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 328.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1015.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 985.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        }
+      ]
+    },
+    "edgar_8k": {
+      "all_ok": true,
+      "heartbeat_ok": true,
+      "p50_ms": 94.0,
+      "p99_ms": 125.0,
+      "polls": [
+        {
+          "errors": [],
+          "ms": 93.0,
+          "ok": true,
+          "records": 1,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 94.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 78.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 94.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 94.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        }
+      ]
+    },
+    "fred_macro": {
+      "all_ok": true,
+      "heartbeat_ok": true,
+      "p50_ms": 6016.0,
+      "p99_ms": 6453.0,
+      "polls": [
+        {
+          "errors": [],
+          "ms": 5609.0,
+          "ok": true,
+          "records": 6,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6094.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6016.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6453.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5640.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5953.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        }
+      ]
+    },
+    "treasury_auctions": {
+      "all_ok": true,
+      "heartbeat_ok": true,
+      "p50_ms": 2750.0,
+      "p99_ms": 3266.0,
+      "polls": [
+        {
+          "errors": [],
+          "ms": 3172.0,
+          "ok": true,
+          "records": 53,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 3266.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2750.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2625.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2593.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2610.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        }
+      ]
+    }
+  },
+  "ts": 1790304441,
+  "watchlist": [
+    "AAPL",
+    "SPY"
+  ]
+}
