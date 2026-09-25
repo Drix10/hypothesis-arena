@@ -19,6 +19,9 @@
 //     after ambiguity, reconcile-first via broker query with the SAME
 //     identity (a missing ack never mints a fresh entry on its own);
 //     exhaustion fails closed to UNKNOWN + symbol freeze;
+//   ignored observations (foreign/untagged tag, intent mismatch,
+//     stale/conflicting sequence) return the machine byte-identical
+//     (callers may assign next unconditionally);
 //   entries forbidden under kill / stale feed / closed stage / frozen
 //     symbol; exits never gated by kill, feed, or stage;
 //   partials protect filled qty only; cancel-failed means
@@ -110,6 +113,10 @@ struct RouteObs {
     bool cancel_failed = false;  // explicit broker cancel rejection;
                                  // silence (none of the three) means
                                  // re-check, never UNKNOWN
+    std::int64_t cancel_filled_qty = -1;  // authoritative final fill
+                                 // on cancel_confirmed (-1 = absent:
+                                 // coverage unproven -> repair, never
+                                 // assume the stale machine qty)
     bool executed = false;  // exit order confirmed executed
     bool exit_responded = false;  // close attempt resolved (else wait)
     broker::CloseResult exit_ack;  // ambiguous exit reconciles by ID
@@ -120,11 +127,21 @@ struct RouteObs {
     // are ignored (fail closed — an established machine never acts
     // on an event it cannot attribute). IDLE has no identity yet.
     char client_id[65]{};
-    // Event identity + sequence (P1-9): each broker event carries
-    // its own id (32 hex or empty) + monotonic seq (0 = none). The
-    // single-step machine applies in receipt order; exact-duplicate
-    // deliveries (same id+seq already applied) collapse to NONE.
-    // Permuted distinct events converge (proven, not assumed).
+    // Event identity + sequence (doc 13 sec. 13.7 ordering contract):
+    // each observation may carry an event id (32 hex or empty) + a
+    // caller-assigned monotonic sequence per machine (0 = none).
+    // The venue REST path supplies no usable broker sequence, so the
+    // SEQUENCE IS CALLER-OWNED (the G0 runner tags each poll in
+    // order); the router enforces it deterministically:
+    //   exact redelivery (same id+seq)  -> collapse (no double apply)
+    //   older seq than applied          -> stale, ignored
+    //   same seq, different id          -> conflict, first-wins
+    //   newer seq                       -> apply, advance high-water
+    // Observations are full broker-state snapshots: every consistent
+    // observation independently drives toward the same terminal, so
+    // any arrival order of a consistent set converges; the sequence
+    // rules additionally pin stale/conflicting deliveries. Proven by
+    // adversarial permutation, not assumed.
     char event_id[33]{};
     std::uint64_t event_seq = 0;
     risk::KillLevel kill = risk::KillLevel::NONE;

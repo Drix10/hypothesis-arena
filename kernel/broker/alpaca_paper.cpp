@@ -108,10 +108,12 @@ std::int64_t StrictQty(const char* body) {
     }
     return -1;  // field absent
 }
-// Bracket-held-as-unit (P0-1 constructive proof): order_class
-// bracket + TP/SL object fields + legs null-or-absent (unexpanded,
-// never "protection absent"). Legs expanded -> the strict legs rule
-// decides instead (protection_active).
+// Bracket-held-as-unit (constructive proof): order_class bracket +
+// TP/SL object fields + the EXACT unexpanded representation
+// ("legs":null). Legs expanded -> the strict legs rule decides
+// instead (protection_active). Omitted/malformed legs ({}, string,
+// bool, [], ...) -> NEITHER (unknown/reconcile, never constructive:
+// only the documented nullable shape evidences held-as-unit).
 bool BracketHeld(const char* body) {
     if (!body) return false;
     if (!Contains(body, "\"order_class\":\"bracket\""))
@@ -119,9 +121,7 @@ bool BracketHeld(const char* body) {
     if (!Contains(body, "\"take_profit\":{") ||
         !Contains(body, "\"stop_loss\":{"))
         return false;
-    // Legs expanded -> strict proof owns the verdict, not this.
-    if (Contains(body, "\"legs\":[")) return false;
-    return true;
+    return Contains(body, "\"legs\":null");
 }
 // Strict legs proof (P1-4): protection is active ONLY when the reply
 // carries a "legs" ARRAY of EXACTLY 2 top-level leg objects where
@@ -390,6 +390,20 @@ OrderAck AlpacaPaperAdapter::SubmitProtected(
                   sizeof(ack.reason));
         return ack;
     }
+    // POST filled quantity is STRICT (P0-1): same bounded grammar as
+    // the query path. Missing/malformed -> ambiguous (the reconcile
+    // query establishes fills; never silent zero, which would route
+    // a filled order down the zero-fill cancel path).
+    std::int64_t pfq = StrictQty(r.body);
+    if (pfq < 0) {
+        ack.transport_ok = false;
+        ack.accepted = false;
+        ack.broker_order_id[0] = '\0';
+        CopyField("transport-unknown", ack.reason,
+                  sizeof(ack.reason));
+        return ack;
+    }
+    ack.filled_qty = pfq;
     // Protection is accepted ONLY when the reply proves every leg of
     // the bracket via the strict legs rule (P0-3).
     ack.protection_accepted = ack.accepted && LegsProtected(r.body);
@@ -465,6 +479,9 @@ CancelResult AlpacaPaperAdapter::Cancel(
     CancelResult c;
     if (!transport_ || !broker_order_id || !broker_order_id[0])
         return c;
+    // Boundary validation (P1-2): the UUID grammar holds at the API
+    // edge too — malformed/path-like IDs never touch the transport.
+    if (!IsBrokerUuid(broker_order_id)) return c;
     // Real cancel path: DELETE by broker UUID (resolved by the single
     // QueryOnce lookup; the adapter keeps no hidden lookup state, so
     // restart determinism is preserved).
@@ -520,19 +537,87 @@ CloseResult AlpacaPaperAdapter::MarketClose(const char* symbol,
     req.path = "/v2/orders";
     req.body = body;
     HttpResult r = transport_(req);
-    // Ambiguous (non-2xx / id-less 2xx) stays transport_not_ok:
-    // the caller reconciles by client ID before any second send.
+    // Close lifecycle (P0-2): 2xx + UUID only proves the close order
+    // EXISTS. Status decides: fill -> executed (full); partial ->
+    // reconcile remainder; pending states -> wait/reconcile (never
+    // CLOSED); dead states -> definitive non-execution; anything
+    // else (or malformed qty) -> ambiguous/unknown.
     if (r.status < 200 || r.status >= 300) return c;
     char oid[64];
     if (!ExtractQuoted(r.body, "id", oid, sizeof(oid)) ||
         !IsBrokerUuid(oid))
         return c;
+    char st[32];
+    if (!ExtractQuoted(r.body, "status", st, sizeof(st))) return c;
+    bool fill = true;
+    const char* want = "fill";
+    for (int i = 0; want[i]; ++i)
+        if (st[i] != want[i]) fill = false;
+    if (st[4] != '\0') fill = false;
+    bool partial = false;
+    if (!fill) {
+        const char* p1 = "partial_fill";
+        const char* p2 = "partially_filled";
+        bool m1 = true;
+        for (int i = 0; p1[i]; ++i)
+            if (st[i] != p1[i]) m1 = false;
+        if (st[12] != '\0') m1 = false;
+        bool m2 = true;
+        for (int i = 0; p2[i]; ++i)
+            if (st[i] != p2[i]) m2 = false;
+        if (st[16] != '\0') m2 = false;
+        partial = m1 || m2;
+    }
+    bool pending = false;
+    if (!fill && !partial) {
+        const char* const ps[] = {"accepted", "pending_new", "new",
+                                 "calculated"};
+        const int pl[] = {8, 11, 3, 10};
+        for (int k = 0; k < 4 && !pending; ++k) {
+            bool m = true;
+            for (int i = 0; i < pl[k]; ++i)
+                if (st[i] != ps[k][i]) m = false;
+            if (st[pl[k]] != '\0') m = false;
+            if (m) pending = true;
+        }
+    }
+    bool dead = false;
+    if (!fill && !partial && !pending) {
+        const char* const ds[] = {"canceled", "rejected", "expired"};
+        const int dl[] = {8, 8, 7};
+        for (int k = 0; k < 3 && !dead; ++k) {
+            bool m = true;
+            for (int i = 0; i < dl[k]; ++i)
+                if (st[i] != ds[k][i]) m = false;
+            if (st[dl[k]] != '\0') m = false;
+            if (m) dead = true;
+        }
+    }
+    if (!fill && !partial && !pending && !dead) return c;  // unknown
     CopyField(oid, c.broker_order_id, sizeof(c.broker_order_id));
     c.transport_ok = true;
+    if (dead) {
+        c.state = CloseState::DEAD;
+        return c;
+    }
+    if (pending) {
+        c.state = CloseState::PENDING;
+        return c;
+    }
+    // FILLED/PARTIAL carry an authoritative quantity (strict).
+    std::int64_t cfq = StrictQty(r.body);
+    if (cfq < 0) {
+        c.transport_ok = false;
+        c.broker_order_id[0] = '\0';
+        return c;
+    }
+    c.filled_qty = cfq;
+    if (partial) {
+        c.state = CloseState::PARTIAL;
+        return c;
+    }
+    c.state = CloseState::FILLED;
     c.executed = true;
-    // executed-without-fill-quantity is STILL executed (a market
-    // close fills immediately or not at all; the reconcile query
-    // confirms fills, and 404/absent routes back to re-issue).
     return c;
 }
 

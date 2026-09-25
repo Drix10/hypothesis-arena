@@ -19,6 +19,7 @@ static void Check(bool cond, const char* name) {
 }
 
 using jev::broker::AlpacaPaperAdapter;
+using jev::broker::CloseState;
 using jev::broker::HttpRequest;
 using jev::broker::HttpResult;
 using jev::broker::OrderSide;
@@ -180,7 +181,7 @@ int main() {
         g_status = 200;
         g_reply =
             "{\"id\":\"6d7c5cb4-2682-4a53-a742-5df876a2d1aa\","
-            "\"status\":\"accepted\",\"symbol\":\"SPY\",\"qty\":\"10\","
+            "\"status\":\"accepted\",\"symbol\":\"SPY\",\"qty\":\"10\",\"filled_qty\":\"0\","
             "\"side\":\"buy\",\"type\":\"market\",\"order_class\":\"bracket\","
             "\"take_profit\":{\"limit_price\":\"240.00\"},"
             "\"stop_loss\":{\"stop_price\":\"220.00\"},\"legs\":["
@@ -208,24 +209,24 @@ int main() {
         // Legs missing from the reply -> protection NOT accepted.
         // (Markers outside a legs array prove nothing: this body
         // carries both markers with NO legs and must still refuse.)
-        g_reply = "{\"id\":\"o2\",\"take_profit\":{},\"stop_loss\":{}}";
+        g_reply = "{\"id\":\"o2\",\"filled_qty\":\"0\",\"take_profit\":{},\"stop_loss\":{}}";
         auto ack2 = ad.SubmitProtected(o);
         Check(ack2.accepted && !ack2.protection_accepted,
               "naked-leg-detected");
         // One leg only -> refused. Unbalanced legs -> refused.
         g_reply =
-            "{\"id\":\"o3\",\"take_profit\":{},\"stop_loss\":{},"
+            "{\"id\":\"o3\",\"filled_qty\":\"0\",\"take_profit\":{},\"stop_loss\":{},"
             "\"legs\":[{\"id\":\"l-tp\",\"type\":\"limit\"}]}";
         auto ack3 = ad.SubmitProtected(o);
         Check(ack3.accepted && !ack3.protection_accepted,
               "one-leg-refused");
-        g_reply = "{\"id\":\"o4\",\"legs\":[{\"id\":\"l\"";
+        g_reply = "{\"id\":\"o4\",\"filled_qty\":\"0\",\"legs\":[{\"id\":\"l\"";
         auto ack4 = ad.SubmitProtected(o);
         Check(ack4.accepted && !ack4.protection_accepted,
               "unbalanced-refused");
         // Duplicate leg ids -> refused.
         g_reply =
-            "{\"id\":\"o5\",\"take_profit\":{},\"stop_loss\":{},"
+            "{\"id\":\"o5\",\"filled_qty\":\"0\",\"take_profit\":{},\"stop_loss\":{},"
             "\"legs\":[{\"id\":\"same\",\"type\":\"limit\"},"
             "{\"id\":\"same\",\"type\":\"stop\"}]}";
         auto ack5 = ad.SubmitProtected(o);
@@ -233,7 +234,7 @@ int main() {
               "duplicate-leg-id-refused");
         // Duplicate roles (two limits) -> refused.
         g_reply =
-            "{\"id\":\"o6\",\"take_profit\":{},\"stop_loss\":{},"
+            "{\"id\":\"o6\",\"filled_qty\":\"0\",\"take_profit\":{},\"stop_loss\":{},"
             "\"legs\":[{\"id\":\"a\",\"type\":\"limit\"},"
             "{\"id\":\"b\",\"type\":\"limit\"}]}";
         auto ack6 = ad.SubmitProtected(o);
@@ -241,7 +242,7 @@ int main() {
               "duplicate-role-refused");
         // Three legs -> refused (not the bracket/OCO pair).
         g_reply =
-            "{\"id\":\"o7\",\"take_profit\":{},\"stop_loss\":{},"
+            "{\"id\":\"o7\",\"filled_qty\":\"0\",\"take_profit\":{},\"stop_loss\":{},"
             "\"legs\":[{\"id\":\"a\",\"type\":\"limit\"},"
             "{\"id\":\"b\",\"type\":\"stop\"},"
             "{\"id\":\"c\",\"type\":\"limit\"}]}";
@@ -250,12 +251,58 @@ int main() {
               "three-legs-refused");
         // Untyped leg -> refused.
         g_reply =
-            "{\"id\":\"o8\",\"take_profit\":{},\"stop_loss\":{},"
+            "{\"id\":\"o8\",\"filled_qty\":\"0\",\"take_profit\":{},\"stop_loss\":{},"
             "\"legs\":[{\"id\":\"a\",\"type\":\"limit\"},"
             "{\"id\":\"b\"}]}";
         auto ack8 = ad.SubmitProtected(o);
         Check(ack8.accepted && !ack8.protection_accepted,
               "untyped-leg-refused");
+        // P0-1: accepted/naked POST with real fills populates the
+        // ack quantity (never silent zero).
+        g_reply =
+            "{\"id\":\"6d7c5cb4-2682-4a53-a742-5df876a2d1aa\","
+            "\"status\":\"accepted\",\"filled_qty\":\"30\"}";
+        auto ackf = ad.SubmitProtected(o);
+        Check(ackf.accepted && !ackf.protection_accepted &&
+                  ackf.filled_qty == 30,
+              "post-fill-populated");
+        // Missing/malformed POST qty -> ambiguous, never zero.
+        g_reply = "{\"id\":\"6d7c5cb4-2682-4a53-a742-5df876a2d1aa\"}";
+        auto ackm = ad.SubmitProtected(o);
+        Check(!ackm.accepted && !ackm.transport_ok,
+              "post-qty-missing-ambiguous");
+        g_reply =
+            "{\"id\":\"6d7c5cb4-2682-4a53-a742-5df876a2d1aa\","
+            "\"filled_qty\":\"lots\"}";
+        auto ackn = ad.SubmitProtected(o);
+        Check(!ackn.accepted && !ackn.transport_ok,
+              "post-qty-malformed-ambiguous");
+        g_status = 200;
+        // P1-1 legs representations: only null is constructive;
+        // object/string/bool/empty-array/omitted -> unknown.
+        const char* leg_shapes[5] = {
+            "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\",\"filled_qty\":\"10\",\"order_class\":\"bracket\","
+            "\"take_profit\":{},\"stop_loss\":{},\"legs\":{}}",
+            "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\",\"filled_qty\":\"10\",\"order_class\":\"bracket\","
+            "\"take_profit\":{},\"stop_loss\":{},\"legs\":\"x\"}",
+            "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\",\"filled_qty\":\"10\",\"order_class\":\"bracket\","
+            "\"take_profit\":{},\"stop_loss\":{},\"legs\":true}",
+            "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\",\"filled_qty\":\"10\",\"order_class\":\"bracket\","
+            "\"take_profit\":{},\"stop_loss\":{},\"legs\":[]}",
+            "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\",\"filled_qty\":\"10\",\"order_class\":\"bracket\","
+            "\"take_profit\":{},\"stop_loss\":{}}"};
+        const char* leg_names[5] = {"query-legs-object",
+                                    "query-legs-string",
+                                    "query-legs-bool",
+                                    "query-legs-empty",
+                                    "query-legs-omitted"};
+        for (int li = 0; li < 5; ++li) {
+            g_reply = leg_shapes[li];
+            auto ql = ad.QueryOnce(o.client_order_id);
+            Check(ql.found && !ql.protection_active &&
+                      !ql.bracket_class,
+                  leg_names[li]);
+        }
         // P1-7 send outcomes: 400/422 permanent; 401/403 auth;
         // 429 throttled; other-4xx/500/malformed-200 ambiguous
         // (reconcile, never terminal here).
@@ -368,6 +415,25 @@ int main() {
         g_status = 422;
         auto c4 = ad.Cancel(q.broker_order_id);
         Check(!c4.accepted && c4.failed, "cancel-422-failed");
+        // P1-2 Cancel boundary: malformed/path-like IDs never touch
+        // the transport (no DELETE issued).
+        g_status = 204;
+        g_calls = 0;
+        const char* bad_cancel[5] = {
+            "0193abcd", "0193ABCD-1234-5678-9ABC-DEF012345678",
+            "0193abcd_1234_5678_9abc_def012345678",
+            "orders/0193abcd-1234-5678-9abc-def012345678",
+            "0193abcd-1234-5678-9abc-def0123456789"};
+        const char* cx_names[5] = {"cancel-id-short",
+                                   "cancel-id-upper",
+                                   "cancel-id-hyphen",
+                                   "cancel-id-slash",
+                                   "cancel-id-long"};
+        for (int ci = 0; ci < 5; ++ci) {
+            auto cx = ad.Cancel(bad_cancel[ci]);
+            Check(!cx.accepted && !cx.failed && g_calls == 0,
+                  cx_names[ci]);
+        }
         g_status = 200;
         // Lookup with no id marker on 200: MALFORMED, not absent.
         g_reply = "{}";
@@ -501,30 +567,68 @@ int main() {
         int before = g_calls;
         Check(!ad.EstablishProtection(o) && g_calls == before,
               "repair-price-guard");
-        // MarketClose posts a plain market order carrying the exit's
-        // stable client ID; the UUID + transport-ok ride the ack.
+        // MarketClose posts a market order carrying the exit's stable
+        // client ID and reports the full close lifecycle (P0-2): a
+        // 2xx + UUID alone never means executed.
         g_calls = 0;
         g_status = 200;
-        g_reply =
-            "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
-            "\"status\":\"filled\",\"filled_qty\":\"10\"}";
         char xid[65];
         for (int i = 0; i < 64; ++i) xid[i] = 'x';
         xid[64] = '\0';
+        // fill -> executed, authoritative quantity.
+        g_reply =
+            "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
+            "\"status\":\"fill\",\"filled_qty\":\"10\"}";
         auto mc = ad.MarketClose("AAPL", 10, OrderSide::SELL, xid);
-        Check(mc.executed && mc.transport_ok && g_last_method[0] == 'P' &&
+        Check(mc.executed && mc.transport_ok &&
+                  mc.state == CloseState::FILLED && mc.filled_qty == 10 &&
+                  g_last_method[0] == 'P' &&
                   Has(g_last_path, "/v2/orders") &&
                   Has(g_last_body, "\"side\":\"sell\"") &&
                   Has(g_last_body, "\"client_order_id\":\"xxxx") &&
                   !Has(g_last_body, "order_class") &&
                   Has(mc.broker_order_id,
                       "0193abcd-1234-5678-9abc-def012345678"),
-              "close-market-plain");
+              "close-fill-executed");
+        // accepted/new/pending -> PENDING (wait/reconcile, NOT closed).
+        const char* pend[4] = {"accepted", "new", "pending_new",
+                               "calculated"};
+        for (int pi = 0; pi < 4; ++pi) {
+            char pb[160];
+            std::snprintf(
+                pb, sizeof(pb),
+                "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
+                "\"status\":\"%s\"}",
+                pend[pi]);
+            g_reply = pb;
+            auto mp = ad.MarketClose("AAPL", 10, OrderSide::SELL, xid);
+            Check(!mp.executed && mp.transport_ok &&
+                      mp.state == CloseState::PENDING,
+                  "close-pending-waits");
+        }
+        // partial fills -> PARTIAL with quantity (never CLOSED).
+        g_reply =
+            "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
+            "\"status\":\"partially_filled\",\"filled_qty\":\"4\"}";
+        auto mp2 = ad.MarketClose("AAPL", 10, OrderSide::SELL, xid);
+        Check(!mp2.executed && mp2.transport_ok &&
+                  mp2.state == CloseState::PARTIAL &&
+                  mp2.filled_qty == 4,
+              "close-partial-reconciles");
+        // canceled/rejected/expired -> DEAD (definitive non-exec).
+        g_reply =
+            "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
+            "\"status\":\"canceled\"}";
+        auto md = ad.MarketClose("AAPL", 10, OrderSide::SELL, xid);
+        Check(!md.executed && md.transport_ok &&
+                  md.state == CloseState::DEAD,
+              "close-dead-reissues");
         // Ambiguous close (response lost): not executed, no UUID —
         // the caller reconciles by client ID, never re-sends blind.
         g_status = 500;
         auto mc2 = ad.MarketClose("AAPL", 10, OrderSide::SELL, xid);
         Check(!mc2.executed && !mc2.transport_ok &&
+                  mc2.state == CloseState::UNKNOWN &&
                   mc2.broker_order_id[0] == '\0',
               "close-ambiguous-reconciles");
         g_status = 200;

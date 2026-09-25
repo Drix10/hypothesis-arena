@@ -2255,3 +2255,58 @@ Suites: router 135 + journal 23 + broker 72 + drills 83 +
   no execution. Reconcile shape: by-client-ID Order entity;
   legs-null bracket = held-as-unit (protected); 404 = direct
   terminal; POST + QUERY UUIDs validated; binding every step.
+
+## Addendum 114 - H1 sixth corrective (audit of 8d2d36f)
+P0-1 POST qty: SubmitProtected parses filled_qty with the strict
+  query grammar; missing/malformed -> ambiguous (UUID cleared, never
+  silent zero). Accepted/naked + filled 30 -> ESTABLISH_PROTECTION
+  with the real ack qty (naked-filled-repairs E2E); accepted/naked +
+  zero -> CANCEL_REMAINDER. Regressions: post-fill-populated,
+  post-qty-missing/malformed-ambiguous.
+P0-2 close lifecycle: CloseState FILLED/PARTIAL/PENDING/DEAD/UNKNOWN
+  from the status field (fill / partial_fill|partially_filled /
+  accepted|pending_new|new|calculated / canceled|rejected|expired /
+  else-unknown) + strict qty on FILLED/PARTIAL. Router: FILLED ->
+  CLOSED with the ACK qty (never intent.qty); PARTIAL/PENDING ->
+  reconcile (never CLOSED on a partial); DEAD -> same-ID re-issue;
+  exit query needs filled >= close size for CLOSED (authoritative
+  row qty), below-size re-queries within budget else freezes, 404 /
+  cancelled-unfilled re-issues. Regressions: close-fill-executed,
+  close-pending-waits x4, close-partial-reconciles, close-dead-
+  reissues, close-ambiguous/malformed-reconciles, exit-pending/
+  partial-reconciles, exit-dead-reissues, exit-query-partial-
+  reconciles, exit-query-exhausted-freezes.
+P0-3 byte-identity: o.next.kind assigned ONLY at the IDLE mint now;
+  all gate rejections (untagged/foreign/mismatch) + stale/conflict/
+  duplicate ignores return next byte-identical to m (proven by
+  snapshot-bytes equality for intent_id/symbol/side/kind mismatch +
+  foreign + untagged: ident-* family).
+P0-4 sequence authority: caller-owned monotonic seq per machine
+  (venue REST supplies none — owned by the G0 runner); router rules:
+  exact redelivery collapses, older seq stale-ignored, same-seq
+  different-id conflict first-wins, newer applies + advances
+  high-water (persisted). Adversarial proof: fresh-then-stale and
+  stale-then-fresh both end at the fresh fill (adv-stale-ignored);
+  live-machine conflict ignored (adv-conflict-first-wins);
+  ev-applies/duplicate-collapses/distinct-applies; 24 perms carry
+  identity+sequence (duplicate preserves identity).
+P1-1 legs shape: BracketHeld requires the exact "legs":null
+  representation (+ bracket class + TP/SL objects); {} / string /
+  bool / [] / omitted -> unknown (never constructive). Regressions:
+  query-legs-object/string/bool/empty/omitted.
+P1-2 Cancel boundary: IsBrokerUuid enforced before any transport
+  touch (5 malformed IDs, zero DELETEs: cancel-id-*).
+P1-3 budget: snapshot writer/reader accept exactly 0..2
+  (kQueryMaxAttempts); 3/9 refuse both ways (snap-att-3/9-refused,
+  snap-write-att-3-refused); round-trip covers 0..2.
+P1-4 final qty: cancel_confirmed with machine fills requires the
+  authoritative final qty for a PROTECTED claim (cancel_filled_qty;
+  0..999999999); absent qty + filled machine -> repair (never stale
+  assume). Regressions: cancel-no-qty-repairs,
+  cancel-final-authoritative-qty (40 stale -> 100 authoritative),
+  cancel-sent-protected-rests (with qty).
+Suites: router 158 + journal 23 + broker 91 + drills 83 +
+  noalloc-exec 0, normal+hardened, freeze PASS. Slice D / P3.x /
+  collector / research / plan untouched; transport unwired live;
+  no execution. 204-accepted-vs-final-canceled handling preserved
+  (directionally correct per current cancel API).

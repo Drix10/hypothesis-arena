@@ -17,6 +17,7 @@ static void Check(bool cond, const char* name) {
     }
 }
 
+using jev::broker::CloseState;
 using jev::broker::OrderSide;
 using jev::exec::OrderIntent;
 using jev::exec::RouteAction;
@@ -95,11 +96,13 @@ static void SetAckId(RouteObs& o) {
     for (int i = 0; u[i]; ++i) o.ack.broker_order_id[i] = u[i];
     o.ack.broker_order_id[36] = '\0';
 }
-// Definitive exit execution observation (close acked authoritatively).
+// Definitive exit execution observation (close FILLED, authoritative).
 static void SetExitAck(RouteObs& o) {
     o.exit_responded = true;
+    o.exit_ack.state = CloseState::FILLED;
     o.exit_ack.executed = true;
     o.exit_ack.transport_ok = true;
+    o.exit_ack.filled_qty = 100;
 }
 static void SetUuid(char (&d)[64]) {
     const char* u = "0193abcd-1234-5678-9abc-def012345678";
@@ -392,6 +395,16 @@ int main() {
             if (r3.next.broker_id[i] != o.ack.broker_order_id[i])
                 id_kept = false;
         Check(id_kept, "naked-uuid-persisted");
+        // P0-1 E2E: accepted/naked POST that already filled routes to
+        // protection repair (filled qty from the real ack), NEVER to
+        // the zero-fill cancel path.
+        RouteObs of = o;
+        of.ack.filled_qty = 30;
+        auto r3f = Step(r2.next, in, venue, of);
+        Check(r3f.action == RouteAction::ESTABLISH_PROTECTION &&
+                  r3f.next.state == RouteState::REPAIR_SENT &&
+                  r3f.next.filled_qty == 30,
+              "naked-filled-repairs");
         // Unparseable POST id: reconcile, never cancel blind.
         RouteObs ob = o;
         ob.ack.broker_order_id[0] = 'X';
@@ -452,6 +465,7 @@ int main() {
         Check(r5.action == RouteAction::CANCEL_REMAINDER, "partial-cancel");
         o.adapter_responded = true;
         o.cancel_confirmed = true;
+        o.cancel_filled_qty = 40;  // authoritative final quantity
         auto r6 = Step(r5.next, in, venue, o);
         Check(r6.action == RouteAction::JOURNAL_CANCEL &&
                   r6.next.state == RouteState::PROTECTED &&
@@ -638,9 +652,33 @@ int main() {
                   rc.next.state == RouteState::REPAIR_SENT,
               "cancel-sent-unprotected-repairs");
         mc.protection_ok = true;
+        oc.cancel_filled_qty = 50;  // authoritative: rests covered
         auto rc2 = Step(mc, in, venue, oc);
-        Check(rc2.next.state == RouteState::PROTECTED,
+        Check(rc2.next.state == RouteState::PROTECTED &&
+                  rc2.next.filled_qty == 50,
               "cancel-sent-protected-rests");
+        // Same machine, final observation WITHOUT authoritative
+        // quantity: coverage unproven -> repair, never assume.
+        RouteObs oc2 = OpenMarket();
+        oc2.cancel_confirmed = true;
+        auto rc3 = Step(mc, in, venue, oc2);
+        Check(rc3.action == RouteAction::ESTABLISH_PROTECTION,
+              "cancel-no-qty-repairs");
+        // P1-4: partial 40 -> cancel -> fills grow to authoritative
+        // total 100 -> PROTECTED with 100 (not stale 40).
+        RouteMachine mp;
+        mp.state = RouteState::CANCEL_SENT;
+        mp.kind = IntentKind::ENTRY;
+        mp.filled_qty = 40;
+        mp.protection_ok = true;
+        RouteObs op = OpenMarket();
+        op.cancel_confirmed = true;
+        op.cancel_filled_qty = 100;
+        auto rp = Step(mp, in, venue, op);
+        Check(rp.action == RouteAction::JOURNAL_CANCEL &&
+                  rp.next.state == RouteState::PROTECTED &&
+                  rp.next.filled_qty == 100,
+              "cancel-final-authoritative-qty");
     }
     // 18. P0 invariant sweep: no transition reaches PROTECTED without
     // positively confirmed protection (states x pok x obs combos).
@@ -789,6 +827,50 @@ int main() {
         Check(RouteStep(qr, in, venue, ok).action ==
                   RouteAction::QUERY_ONCE,
               "bind-restart-applies");
+        // P0-3: every mismatch flavor returns the machine
+        // BYTE-IDENTICAL (snapshot bytes equal before/after).
+        {
+            char before[320], after[320];
+            Check(SnapshotMachine(r2.next, before, sizeof(before)),
+                  "ident-snaps");
+            OrderIntent variants[4] = {other, osy, osd, ex};
+            const char* vnames[4] = {
+                "ident-intent-id", "ident-symbol", "ident-side",
+                "ident-kind"};
+            for (int vi = 0; vi < 4; ++vi) {
+                auto rv = RouteStep(r2.next, variants[vi], venue, ok);
+                bool act_ok = (rv.action == RouteAction::NONE);
+                bool bytes_ok =
+                    SnapshotMachine(rv.next, after, sizeof(after));
+                if (bytes_ok) {
+                    for (int bi = 0; before[bi] || after[bi]; ++bi)
+                        if (before[bi] != after[bi]) bytes_ok = false;
+                }
+                Check(act_ok && bytes_ok, vnames[vi]);
+            }
+            // Foreign + untagged observations: same guarantee.
+            RouteObs fr2 = ok;
+            fr2.client_id[0] =
+                (fr2.client_id[0] == '0') ? '1' : '0';
+            auto rf2 = RouteStep(r2.next, in, venue, fr2);
+            bool f_ok = (rf2.action == RouteAction::NONE) &&
+                        SnapshotMachine(rf2.next, after, sizeof(after));
+            if (f_ok) {
+                for (int bi = 0; before[bi] || after[bi]; ++bi)
+                    if (before[bi] != after[bi]) f_ok = false;
+            }
+            Check(f_ok, "ident-foreign");
+            RouteObs un2 = ok;
+            un2.client_id[0] = '\0';
+            auto ru2 = RouteStep(r2.next, in, venue, un2);
+            bool u_ok = (ru2.action == RouteAction::NONE) &&
+                        SnapshotMachine(ru2.next, after, sizeof(after));
+            if (u_ok) {
+                for (int bi = 0; before[bi] || after[bi]; ++bi)
+                    if (before[bi] != after[bi]) u_ok = false;
+            }
+            Check(u_ok, "ident-untagged");
+        }
     }
     // 19c. P0-2 authoritative 404 terminals directly (no CANCEL_SENT
     // for a nonexistent order); P0-1 bracket-held protects without
@@ -876,6 +958,47 @@ int main() {
         Check(r4.action == RouteAction::EXECUTE_EXIT &&
                   r4.next.state == RouteState::EXIT_SENT,
               "exit-absent-reissues");
+        // P0-2 close lifecycle: PENDING/PARTIAL reconcile (never
+        // CLOSED); DEAD re-issues; only FILLED terminals.
+        RouteObs op = OpenMarket();
+        op.exit_responded = true;
+        op.exit_ack.transport_ok = true;
+        op.exit_ack.state = CloseState::PENDING;
+        auto rp = Step(r2.next, ex, venue, op);
+        Check(rp.action == RouteAction::QUERY_ONCE,
+              "exit-pending-reconciles");
+        RouteObs op2 = OpenMarket();
+        op2.exit_responded = true;
+        op2.exit_ack.transport_ok = true;
+        op2.exit_ack.state = CloseState::PARTIAL;
+        op2.exit_ack.filled_qty = 40;
+        auto rp2 = Step(r2.next, ex, venue, op2);
+        Check(rp2.action == RouteAction::QUERY_ONCE &&
+                  rp2.next.state == RouteState::QUERY_SENT,
+              "exit-partial-reconciles");
+        RouteObs od = OpenMarket();
+        od.exit_responded = true;
+        od.exit_ack.transport_ok = true;
+        od.exit_ack.state = CloseState::DEAD;
+        auto rd = Step(r2.next, ex, venue, od);
+        Check(rd.action == RouteAction::EXECUTE_EXIT &&
+                  rd.next.state == RouteState::EXIT_SENT,
+              "exit-dead-reissues");
+        // Exit query partial (40 < 100): reconcile again, never
+        // CLOSED on a partial; exhaustion freezes for S2/human.
+        RouteObs oq = OpenMarket();
+        oq.adapter_responded = true;
+        oq.query.transport_ok = true;
+        oq.query.found = true;
+        oq.query.filled_qty = 40;
+        SetUuid(oq.query.broker_order_id);
+        auto rq2 = Step(rp2.next, ex, venue, oq);
+        Check(rq2.action == RouteAction::QUERY_ONCE,
+              "exit-query-partial-reconciles");
+        auto rq3 = Step(rq2.next, ex, venue, oq);
+        Check(rq3.action == RouteAction::JOURNAL_UNKNOWN &&
+                  rq3.freeze_symbol,
+              "exit-query-exhausted-freezes");
         // Restart of the ambiguous exit reconciles (no duplicate
         // close send: attempts preserved, query first).
         char snap[320];
@@ -964,6 +1087,71 @@ int main() {
         Check(a3.action == RouteAction::QUERY_ONCE &&
                   a3.next.query_attempts == 2,
               "ev-distinct-applies");
+        // P0-4 adversarial order: stale fill arriving AFTER the
+        // fresh fill is ignored (naive receipt-order would regress
+        // filled 100 -> 40); early-or-late, the final is identical.
+        {
+            // Order A: fresh (seq2, fill 100) then stale (seq1, 40).
+            RouteMachine ma;
+            RouteObs oa = OpenMarket();
+            auto a_r1 = Step(ma, in, venue, oa);
+            Tag(oa, a_r1.next);
+            auto a_r2 = Step(a_r1.next, in, venue, oa);
+            RouteObs fresh = OpenMarket();
+            Tag(fresh, a_r2.next);
+            fresh.adapter_responded = true;
+            fresh.query.transport_ok = true;
+            fresh.query.found = true;
+            fresh.query.filled_qty = 100;
+            fresh.query.protection_active = true;
+            SetUuid(fresh.query.broker_order_id);
+            SetEvent(fresh, 2);
+            // Drive to QUERY_SENT first (fresh ack, seq1).
+            RouteObs pre = OpenMarket();
+            Tag(pre, a_r2.next);
+            pre.adapter_responded = false;
+            SetEvent(pre, 1);
+            auto a_q = Step(a_r2.next, in, venue, pre);
+            Check(a_q.action == RouteAction::QUERY_ONCE, "adv-armed");
+            auto a_f = Step(a_q.next, in, venue, fresh);
+            Check(a_f.action == RouteAction::JOURNAL_FILL &&
+                      a_f.next.filled_qty == 100,
+                  "adv-fresh-applies");
+            // Late stale delivery (seq1 < high-water 2): ignored,
+            // machine byte-identical.
+            RouteObs stale = OpenMarket();
+            Tag(stale, a_f.next);
+            stale.adapter_responded = true;
+            stale.query.transport_ok = true;
+            stale.query.found = true;
+            stale.query.filled_qty = 40;
+            stale.query.protection_active = true;
+            SetUuid(stale.query.broker_order_id);
+            SetEvent(stale, 1);
+            char sb[320], sa[320];
+            Check(SnapshotMachine(a_f.next, sb, sizeof(sb)),
+                  "adv-snaps");
+            auto a_s = Step(a_f.next, in, venue, stale);
+            bool s_ok = (a_s.action == RouteAction::NONE) &&
+                        SnapshotMachine(a_s.next, sa, sizeof(sa));
+            if (s_ok) {
+                for (int bi = 0; sb[bi] || sa[bi]; ++bi)
+                    if (sb[bi] != sa[bi]) s_ok = false;
+            }
+            Check(s_ok, "adv-stale-ignored");
+            // Same-seq, different id on the live machine: conflict,
+            // first-wins (non-terminal proof, not a terminal echo).
+            RouteObs conf = OpenMarket();
+            Tag(conf, a_q.next);
+            conf.adapter_responded = false;
+            SetEvent(conf, 1);  // seq1 taken by pre (other id)
+            conf.event_id[0] =
+                (conf.event_id[0] == '0') ? '1' : '0';
+            auto a_c = Step(a_q.next, in, venue, conf);
+            Check(a_c.action == RouteAction::NONE &&
+                      a_c.next.query_attempts == 1,
+                  "adv-conflict-first-wins");
+        }
     }
     // 20. P1-1 seam: snapshot/restore round-trips + strict rejects.
     {
@@ -1006,7 +1194,7 @@ int main() {
             m.last_event_id[32] = '\0';
             m.last_event_seq = (std::uint64_t)(st * 3 + 1);
             m.filled_qty = st * 7;
-            m.query_attempts = (std::uint8_t)(st % 4);
+            m.query_attempts = (std::uint8_t)(st % 3);
             m.emergency = (st & 2) != 0;
             m.protection_ok = (st & 4) != 0;
             char buf[320];
@@ -1096,6 +1284,36 @@ int main() {
         Check(!RestoreMachine(
                   "H1:2:0:0:0:0:0:::intent-001:AAPL:0::x", &q),
               "snap-bad-evseq");
+        // P1-3: persisted budget is exactly 0..2 (frozen
+        // kQueryMaxAttempts); 3 and 9 refuse both ways.
+        Check(!RestoreMachine(
+                  "H1:2:0:0:0:0:3:::intent-001:AAPL:0::0", &q),
+              "snap-att-3-refused");
+        Check(!RestoreMachine(
+                  "H1:2:0:0:0:0:9:::intent-001:AAPL:0::0", &q),
+              "snap-att-9-refused");
+        {
+            RouteMachine mw2;
+            mw2.state = RouteState::QUERY_SENT;
+            mw2.query_attempts = 3;
+            for (int i = 0; i < 64; ++i) mw2.client_id[i] = 'a';
+            mw2.client_id[64] = '\0';
+            const char* iid2 = "intent-001";
+            int i2 = 0;
+            while (iid2[i2]) {
+                mw2.intent_id[i2] = iid2[i2];
+                ++i2;
+            }
+            mw2.intent_id[i2] = '\0';
+            mw2.symbol[0] = 'A';
+            mw2.symbol[1] = 'A';
+            mw2.symbol[2] = 'P';
+            mw2.symbol[3] = 'L';
+            mw2.symbol[4] = '\0';
+            char buf2[320];
+            Check(!SnapshotMachine(mw2, buf2, sizeof(buf2)),
+                  "snap-write-att-3-refused");
+        }
         // Writer refuses un-restorable machines (garbage must never
         // be persisted: an unrecoverable snapshot is a crash-path lie).
         {

@@ -89,8 +89,11 @@ RouteOut Reject(RouteOut& o, const char* reason) {
 RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                    const VenueCtx& venue, const RouteObs& obs) {
     RouteOut o;
+    // o.next starts as an EXACT copy of m; identity/binding checks
+    // below return it unchanged on ignore (P0-3: callers may assign
+    // next unconditionally — a rejected observation mutates nothing,
+    // not even kind). The IDLE branch is the only mint site.
     o.next = m;
-    o.next.kind = intent.kind;
     const bool is_exit = (intent.kind == risk::IntentKind::EXIT);
     // Identity gate (P1-5): a machine with an established identity
     // accepts ONLY matching tagged observations. Foreign tags are
@@ -116,26 +119,35 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
     // Intent binding (P0-4): a machine with an established intent
     // rejects steps driven under a DIFFERENT intent (restored
     // machines cannot be steered onto another order by caller
-    // mistake). Mismatch is ignored, never terminal (no mutation).
+    // mistake). Mismatch is ignored byte-identical, never terminal.
     if (m.state != RouteState::IDLE && m.intent_id[0] != '\0' &&
         !IntentMatches(m, intent)) {
         o.action = RouteAction::NONE;
         o.reason = "exec:intent-mismatch";
         return o;
     }
-    // Duplicate-event collapse (P1-9): an already-applied event
-    // (same id+seq) applies nothing twice.
+    // Sequence authority (doc 13 sec. 13.7): caller-owned monotonic
+    // seq per machine (venue REST supplies none). Exact redelivery
+    // collapses; older seq is stale; same seq + different id is a
+    // conflict (first applied wins); only newer seq applies. All
+    // ignores return the machine byte-identical.
     if (m.state != RouteState::IDLE && obs.event_id[0] != '\0' &&
-        m.last_event_id[0] != '\0' &&
-        obs.event_seq == m.last_event_seq) {
-        bool same_ev = true;
-        for (int i = 0; i < 33; ++i) {
-            if (m.last_event_id[i] != obs.event_id[i]) same_ev = false;
-            if (m.last_event_id[i] == '\0') break;
-        }
-        if (same_ev) {
+        m.last_event_id[0] != '\0') {
+        if (obs.event_seq == m.last_event_seq) {
+            bool same_ev = true;
+            for (int i = 0; i < 33; ++i) {
+                if (m.last_event_id[i] != obs.event_id[i])
+                    same_ev = false;
+                if (m.last_event_id[i] == '\0') break;
+            }
             o.action = RouteAction::NONE;
-            o.reason = "exec:duplicate-event";
+            o.reason = same_ev ? "exec:duplicate-event"
+                               : "exec:seq-conflict";
+            return o;
+        }
+        if (obs.event_seq < m.last_event_seq) {
+            o.action = RouteAction::NONE;
+            o.reason = "exec:stale-event";
             return o;
         }
     }
@@ -169,8 +181,9 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
             if (!ok) return Reject(o, "exec:bad-identity");
             Copy65(o.next.client_id, id);
             o.next.broker_id[0] = '\0';
-            // Bind the original intent (P0-4): id + symbol + side;
-            // kind is carried in o.next.kind above.
+            // Bind the original intent (sole mint site): kind + id +
+            // symbol + side. Every later step verifies this binding.
+            o.next.kind = intent.kind;
             for (int i = 0; i < 65; ++i)
                 o.next.intent_id[i] = intent.intent_id[i];
             for (int i = 0; i < 16; ++i)
@@ -361,12 +374,24 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
             }
             if (q.found) Copy64(o.next.broker_id, q.broker_order_id);
             if (is_exit) {
-                // Exit reconcile (P0-5): the close order resolved.
-                // Filled -> the close executed: terminal. Anything
-                // else (absent 404 included — the close never
-                // landed) -> back to EXIT_SENT for re-issue (exits
-                // must complete; reconcile-first, never blind).
-                if (q.found && q.filled_qty > 0) {
+                // Exit reconcile: the close order resolved.
+                // Cancelled-unfilled (or 404 absent — the close never
+                // landed) -> back to EXIT_SENT for same-ID re-issue
+                // (exits must complete; reconcile-first, never blind).
+                // Filled at/above the close size -> flat: terminal
+                // with the AUTHORITATIVE quantity (never CLOSED on a
+                // mere partial, never intent.qty invented).
+                // Below size -> query again within budget (partial
+                // remainder stays managed), else freeze for S2/human.
+                if (!q.found ||
+                    (q.cancelled && q.filled_qty == 0)) {
+                    o.next.filled_qty = 0;
+                    o.action = RouteAction::EXECUTE_EXIT;
+                    o.next.state = RouteState::EXIT_SENT;
+                    o.reason = "exec:exit-reissue";
+                    return o;
+                }
+                if (q.found && q.filled_qty >= intent.qty_shares) {
                     o.next.filled_qty = q.filled_qty;
                     o.action = RouteAction::JOURNAL_EXIT;
                     o.next.state = RouteState::CLOSED;
@@ -374,10 +399,18 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                     o.reason = "exec:exit-reconciled";
                     return o;
                 }
-                o.next.filled_qty = 0;
-                o.action = RouteAction::EXECUTE_EXIT;
-                o.next.state = RouteState::EXIT_SENT;
-                o.reason = "exec:exit-reissue";
+                o.next.filled_qty = q.filled_qty;
+                if (o.next.query_attempts < kQueryMaxAttempts) {
+                    ++o.next.query_attempts;
+                    o.action = RouteAction::QUERY_ONCE;
+                    o.reason = "exec:exit-partial-reconcile";
+                    return o;
+                }
+                o.action = RouteAction::JOURNAL_UNKNOWN;
+                o.next.state = RouteState::UNKNOWN_FROZEN;
+                o.journal_kind = "unknown";
+                o.freeze_symbol = true;
+                o.reason = "exec:reconcile-exhausted";
                 return o;
             }
             if (!q.found) {
@@ -490,25 +523,36 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
             }
             // Explicit final-canceled observation first: only this
             // terminals (204/request-accepted never does — P1-8).
+            // Coverage uses the AUTHORITATIVE final quantity (P1-4):
+            // while pending, fills may have grown past the stale
+            // machine qty. No authoritative qty -> coverage unproven
+            // -> repair (never assume the stale quantity protected).
             if (obs.cancel_confirmed) {
-                if (o.next.filled_qty == 0) {
+                std::int64_t fq = -1;
+                if (obs.cancel_filled_qty >= 0 &&
+                    obs.cancel_filled_qty <= 999999999)
+                    fq = obs.cancel_filled_qty;
+                if (o.next.filled_qty == 0 && fq <= 0) {
                     o.action = RouteAction::JOURNAL_CANCEL;
                     o.next.state = RouteState::CANCELLED;
                     o.journal_kind = "cancel";
                     o.reason = "exec:cancelled";
                     return o;
                 }
-                if (o.next.protection_ok) {
-                    // Remainder cancelled; the filled qty rests under
-                    // positively confirmed entry protection.
+                if (fq >= 0) o.next.filled_qty = fq;
+                if (o.next.protection_ok && fq >= 0) {
+                    // Remainder cancelled; the authoritative filled
+                    // qty rests under positively confirmed entry
+                    // protection.
                     o.action = RouteAction::JOURNAL_CANCEL;
                     o.next.state = RouteState::PROTECTED;
                     o.journal_kind = "cancel";
                     o.reason = "exec:partial-protected";
                     return o;
                 }
-                // Filled but protection never confirmed: repair before
-                // any claim of PROTECTED (the P0 invariant).
+                // Filled but protection never confirmed (or final qty
+                // unattributed): repair before any claim of PROTECTED
+                // (the P0 invariant).
                 o.action = RouteAction::ESTABLISH_PROTECTION;
                 o.next.state = RouteState::REPAIR_SENT;
                 o.reason = "exec:repair-now";
@@ -536,27 +580,29 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
             return o;
         }
         case RouteState::EXIT_SENT: {
-            // Exit execution identity (P0-5): the close rides the
-            // machine's stable client ID (caller submits MarketClose
-            // with it). No observation yet -> wait. Definitive
-            // non-execution -> re-issue (exits must complete).
-            // Ambiguous (response lost) -> reconcile by ID under the
+            // Exit execution identity: the close rides the machine's
+            // stable client ID. No observation yet -> wait. FILLED
+            // (full completion, authoritative qty) -> terminal.
+            // DEAD (canceled/rejected/expired: definitive
+            // non-execution) -> re-issue (exits must complete).
+            // PARTIAL/PENDING/ambiguous -> reconcile by ID under the
             // retry-once budget (never a blind second send, never a
-            // double-close). Restart reconciles the same way: no
-            // send exists from any non-IDLE state.
+            // double-close, never CLOSED on a partial). Restart
+            // reconciles the same way: no send from non-IDLE.
             if (!obs.exit_responded) {
                 o.action = RouteAction::NONE;
                 o.reason = "exec:awaiting-exit";
                 return o;
             }
-            if (obs.exit_ack.executed && obs.exit_ack.transport_ok) {
-                o.next.filled_qty = intent.qty_shares;
-                if (obs.exit_ack.broker_order_id[0] != '\0' &&
+            const broker::CloseResult& ca = obs.exit_ack;
+            if (ca.transport_ok &&
+                ca.state == broker::CloseState::FILLED) {
+                o.next.filled_qty = ca.filled_qty;
+                if (ca.broker_order_id[0] != '\0' &&
                     o.next.broker_id[0] == '\0' &&
-                    broker::IsBrokerUuid(obs.exit_ack.broker_order_id)) {
+                    broker::IsBrokerUuid(ca.broker_order_id)) {
                     for (int i = 0; i < 64; ++i)
-                        o.next.broker_id[i] =
-                            obs.exit_ack.broker_order_id[i];
+                        o.next.broker_id[i] = ca.broker_order_id[i];
                 }
                 o.action = RouteAction::JOURNAL_EXIT;
                 o.next.state = RouteState::CLOSED;
@@ -564,23 +610,24 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                 o.reason = "exec:exited";
                 return o;
             }
-            if (obs.exit_responded && !obs.exit_ack.transport_ok) {
-                if (o.next.query_attempts < kQueryMaxAttempts) {
-                    ++o.next.query_attempts;
-                    o.action = RouteAction::QUERY_ONCE;
-                    o.next.state = RouteState::QUERY_SENT;
-                    o.reason = "exec:exit-reconcile";
-                    return o;
-                }
-                o.action = RouteAction::JOURNAL_UNKNOWN;
-                o.next.state = RouteState::UNKNOWN_FROZEN;
-                o.journal_kind = "unknown";
-                o.freeze_symbol = true;
-                o.reason = "exec:reconcile-exhausted";
+            if (ca.transport_ok &&
+                ca.state == broker::CloseState::DEAD) {
+                o.action = RouteAction::EXECUTE_EXIT;
+                o.reason = "exec:exit-retry";
                 return o;
             }
-            o.action = RouteAction::EXECUTE_EXIT;
-            o.reason = "exec:exit-retry";
+            if (o.next.query_attempts < kQueryMaxAttempts) {
+                ++o.next.query_attempts;
+                o.action = RouteAction::QUERY_ONCE;
+                o.next.state = RouteState::QUERY_SENT;
+                o.reason = "exec:exit-reconcile";
+                return o;
+            }
+            o.action = RouteAction::JOURNAL_UNKNOWN;
+            o.next.state = RouteState::UNKNOWN_FROZEN;
+            o.journal_kind = "unknown";
+            o.freeze_symbol = true;
+            o.reason = "exec:reconcile-exhausted";
             return o;
         }
         case RouteState::EXIT_EMERGENCY: {
@@ -629,7 +676,7 @@ namespace {
 // "H1:<st>:<kd>:<filled>:<emg>:<pok>:<att>:<cid>:<bid>:
 //     <intent>:<sym>:<side>:<evid>:<evseq>"
 // client id lowercase-hex-or-empty; broker id venue UUID or empty;
-// attempts persisted retry budget (0..9); intent = original intent_id
+// attempts persisted retry budget (0..2 = frozen kQueryMaxAttempts); intent = original intent_id
 // ([A-Za-z0-9_.-], 1..64) + symbol ([A-Z0-9.], 1..15) + side (0/1);
 // evid = last event id (32 hex or empty) + evseq digits. All bounded
 // and validated; writer refuses un-restorable machines.
@@ -693,7 +740,9 @@ bool SnapshotMachine(const RouteMachine& m, char* out, std::size_t n) {
     int kd = (m.kind == risk::IntentKind::EXIT) ? 1 : 0;
     if (st < 0 || st > 12 || m.filled_qty < 0 || m.filled_qty > 999999999)
         return false;
-    if (m.query_attempts > 9) return false;
+    // Persisted budget matches the frozen runtime bound exactly
+    // (P1-3): a crash image must never authorize a third lookup.
+    if (m.query_attempts > (std::uint8_t)kQueryMaxAttempts) return false;
     // Writer-side strictness: refuse to persist a machine whose ids
     // cannot be restored (garbage in storage is a crash-path lie).
     // IDLE machines carry no binding yet (fields empty by
@@ -756,7 +805,8 @@ bool RestoreMachine(const char* s, RouteMachine* out) {
         return false;
     int emg = p[0] - '0';
     int pok = p[2] - '0';
-    if (p[4] < '0' || p[4] > '9' || p[5] != ':') return false;
+    if (p[4] < '0' || p[4] > ('0' + kQueryMaxAttempts) || p[5] != ':')
+        return false;
     int att = p[4] - '0';
     p += 6;
     RouteMachine m;

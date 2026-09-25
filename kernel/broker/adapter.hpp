@@ -48,12 +48,14 @@ struct OrderAck {
     bool authoritative_reject = false;  // permanent broker input
                                         // refusal (400/422 with a
                                         // shaped error): terminal
-    bool auth_failure = false;  // 401/403: credentials dead — never
+    bool auth_failure = false;  // 401: credentials dead — never
                                 // a trade rejection (reconcile,
                                 // budget-bounded, then freeze)
     bool rate_limited = false;  // 429: throttled — wait/retry via
                                 // reconcile, never terminal
-    std::int64_t filled_qty = 0;       // filled at ack time (often 0)
+    std::int64_t filled_qty = 0;  // filled at ack time (STRICT:
+                                  // missing/malformed qty makes the
+                                  // ack ambiguous, never silent zero)
     char broker_order_id[64]{};  // broker UUID from the accepted POST
                                  // (persisted before any cancel;
                                  // zero-init: garbage never rides
@@ -73,7 +75,7 @@ struct OrderQuery {
                                  // never "protection absent")
     int broker_status = 0;  // last lookup HTTP status (evidence,
                             // not control flow)
-    bool auth_failure = false;  // 401/403 on lookup (reconcile,
+    bool auth_failure = false;  // 401 on lookup (reconcile,
                                 // then freeze — never "absent")
     bool rate_limited = false;  // 429 on lookup (reconcile, never
                                 // terminal)
@@ -95,13 +97,34 @@ struct CancelResult {
     bool failed = false;    // explicit broker cancel refusal (422)
 };
 
+// Close-order lifecycle (Alpaca order states): a 2xx + UUID only
+// proves the close order EXISTS. FILLED = status fill (full
+// completion, the only terminal); PARTIAL = partial_fill /
+// partially_filled (reconcile remainder, never CLOSED); PENDING =
+// accepted/pending_new/new/calculated (wait/reconcile, NOT executed);
+// DEAD = canceled/rejected/expired (definitive non-execution);
+// UNKNOWN = unrecognized/missing status or malformed qty (reconcile).
+// Partial fill is never flat: CLOSED requires filled >= close size.
+enum class CloseState : std::uint8_t {
+    UNKNOWN = 0,
+    PENDING = 1,
+    PARTIAL = 2,
+    FILLED = 3,
+    DEAD = 4
+};
+
 struct CloseResult {
-    bool executed = false;
-    bool transport_ok = false;  // close executed authoritatively;
+    CloseState state = CloseState::UNKNOWN;
+    bool transport_ok = false;  // close resolved authoritatively;
                                 // false = ambiguous (response lost/
                                 // malformed — reconcile, never
                                 // "not executed")
+    std::int64_t filled_qty = 0;  // authoritative close filled qty
+                                  // (STRICT on FILLED/PARTIAL;
+                                  // malformed -> UNKNOWN)
     char broker_order_id[64]{};  // close-order UUID when available
+    bool executed = false;  // == (state == FILLED): full completion
+                            // only; a partial fill never sets this
 };
 
 // Abstract adapter: the router drives these and ONLY these. Recovery

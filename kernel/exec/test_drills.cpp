@@ -145,7 +145,7 @@ static jev::broker::HttpResult FakeE2E(
         r.status = 200;
         const char* b =
             "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
-            "\"status\":\"accepted\"}";
+            "\"status\":\"accepted\",\"filled_qty\":\"0\"}";
         int i = 0;
         while (b[i] && i < 2047) {
             r.body[i] = b[i];
@@ -344,6 +344,7 @@ int main() {
         queryEv.query.protection_active = true;
         RouteObs confirmEv = queryEv;
         confirmEv.cancel_confirmed = true;
+        confirmEv.cancel_filled_qty = 40;  // authoritative final qty
         RouteObs dupEv = queryEv;
         // P1-9: each distinct event bears identity+sequence (arrival
         // permutes below; identity/sequence never do). The duplicate
@@ -432,6 +433,7 @@ int main() {
         q.query.protection_active = true;
         RouteObs cc = fill;
         cc.cancel_confirmed = true;
+        cc.cancel_filled_qty = 40;  // authoritative final quantity
         // order: journal, send, query(fill 40), partial-row, cancel,
         // confirm — with the query observation duplicated once.
         d.step(c, fill, &sink);

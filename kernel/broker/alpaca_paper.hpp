@@ -21,8 +21,9 @@
 // dead, never an auth-outage classification); 429 throttled;
 // anything else non-2xx/ambiguous (reconcile first). DELETE 204 =
 // cancel REQUEST accepted (final cancel needs an explicit canceled
-// observation). MarketClose rides a stable client ID with UUID +
-// transport-ok capture for exit reconciliation.
+// observation). MarketClose rides a stable client ID and reports the
+// full close lifecycle (FILLED/PARTIAL/PENDING/DEAD/UNKNOWN) with a
+// strict quantity — a 2xx + UUID alone never means executed.
 #include "adapter.hpp"
 
 namespace jev {
