@@ -41,6 +41,11 @@ int main() {
         // Cycle the exercised surface: all flatten states x
         // observation shapes, all hard phases, serialize + parse
         // (valid and malformed), evaluation + entry gate.
+        // Decoupled indices: flatten state advances once per 32
+        // observation shapes ((i / 32) % 4), so every state sees every
+        // shape (all 4 x 32 = 128 combos per 128-iteration block).
+        // HARD phase uses i % 7: 7 is coprime to 32 and 128, so all
+        // 7 x 32 phase/observation combos occur too.
         fs.conditions_allow = (i & 1) != 0;
         fs.broker_confirms_flat = (i & 2) != 0;
         fs.closed_externally = (i & 4) != 0;
@@ -54,7 +59,7 @@ int main() {
         volatile auto e =
             jev::kill::EntriesAllowed(r.level, true, true);
         volatile auto f = jev::kill::StepFlatten(
-            static_cast<jev::kill::FlattenState>(i % 4), fs);
+            static_cast<jev::kill::FlattenState>((i / 32) % 4), fs);
         volatile auto h = jev::kill::StepHard(
             static_cast<jev::kill::HardPhase>(i % 7), hs);
         volatile auto s = jev::kill::SerializeKill(ps, buf, sizeof(buf));
