@@ -65,7 +65,12 @@ struct OrderQuery {
     bool found = false;
     std::int64_t filled_qty = 0;
     bool cancelled = false;
-    bool protection_active = false;
+    bool protection_active = false;  // legs strictly proven (nested)
+    bool bracket_class = false;  // order_class bracket + TP/SL params
+                                 // held as a unit, legs unexpanded
+                                 // (by-client-ID has no nested
+                                 // param: null legs = not expanded,
+                                 // never "protection absent")
     int broker_status = 0;  // last lookup HTTP status (evidence,
                             // not control flow)
     bool auth_failure = false;  // 401/403 on lookup (reconcile,
@@ -83,11 +88,20 @@ struct OrderQuery {
 };
 
 struct CancelResult {
-    bool confirmed = false;
+    bool accepted = false;  // 204/2xx+id: cancel REQUEST accepted —
+                            // NOT final cancellation (the order may
+                            // still be pending_cancel; terminal needs
+                            // an explicit final-canceled observation)
+    bool failed = false;    // explicit broker cancel refusal (422)
 };
 
 struct CloseResult {
     bool executed = false;
+    bool transport_ok = false;  // close executed authoritatively;
+                                // false = ambiguous (response lost/
+                                // malformed — reconcile, never
+                                // "not executed")
+    char broker_order_id[64]{};  // close-order UUID when available
 };
 
 // Abstract adapter: the router drives these and ONLY these. Recovery
@@ -103,10 +117,16 @@ class IAdapter {
     virtual CancelResult Cancel(const char broker_order_id[64]) = 0;
     virtual CloseResult MarketClose(const char* symbol,
                                     std::int64_t qty_shares,
-                                    OrderSide side) = 0;
+                                    OrderSide side,
+                                    const char client_order_id[65]) = 0;
     virtual bool EstablishProtection(const ProtectedOrder& o) = 0;
     virtual Venue venue() const = 0;
 };
+
+// Strict broker-UUID grammar (8-4-4-4-12 lowercase hex + hyphens):
+// shared by the adapter query path and the router crash-path gates.
+// False on null/empty/short/uppercase/bad-hyphen/path-like/overlong.
+bool IsBrokerUuid(const char* s);
 
 // Client order ID (frozen doc 06 sec. 6.1 recipe): one intent, one ID,
 // no attempt field (an attempt field would mint a fresh ID per retry

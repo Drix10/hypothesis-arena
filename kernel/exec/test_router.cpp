@@ -95,6 +95,26 @@ static void SetAckId(RouteObs& o) {
     for (int i = 0; u[i]; ++i) o.ack.broker_order_id[i] = u[i];
     o.ack.broker_order_id[36] = '\0';
 }
+// Definitive exit execution observation (close acked authoritatively).
+static void SetExitAck(RouteObs& o) {
+    o.exit_responded = true;
+    o.exit_ack.executed = true;
+    o.exit_ack.transport_ok = true;
+}
+static void SetUuid(char (&d)[64]) {
+    const char* u = "0193abcd-1234-5678-9abc-def012345678";
+    for (int i = 0; u[i]; ++i) d[i] = u[i];
+    d[36] = '\0';
+}
+// Distinct broker event: 32-hex id derived from seq + the seq itself.
+static void SetEvent(RouteObs& o, unsigned seq) {
+    for (int i = 0; i < 32; ++i) {
+        unsigned v = (seq * 7u + (unsigned)i * 13u) % 16u;
+        o.event_id[i] = (v < 10) ? (char)('0' + v) : (char)('a' + v - 10);
+    }
+    o.event_id[32] = '\0';
+    o.event_seq = (std::uint64_t)seq;
+}
 static RouteOut Step(const RouteMachine& m, const OrderIntent& in,
                      const VenueCtx& v, RouteObs o) {
     if (m.state != RouteState::IDLE && m.client_id[0] != '\0')
@@ -202,7 +222,7 @@ int main() {
         Check(r1.action == RouteAction::WRITE_JOURNAL, "exit-gaps-open");
         auto r2 = Step(r1.next, ex, venue, o);
         Check(r2.action == RouteAction::EXECUTE_EXIT, "exit-exec");
-        o.executed = true;
+        SetExitAck(o);
         auto r3 = Step(r2.next, ex, venue, o);
         Check(r3.action == RouteAction::JOURNAL_EXIT &&
                   r3.next.state == RouteState::CLOSED,
@@ -447,7 +467,8 @@ int main() {
         o.adapter_responded = false;
         auto r3 = Step(r2.next, in, venue, o);
         o.adapter_responded = true;
-        o.query.found = false;
+        o.query.found = true;  // found-but-empty: cancel path (a 404
+                               // would terminal directly now)
         o.query.transport_ok = true;
         auto r4 = Step(r3.next, in, venue, o);
         o.cancel_confirmed = false;
@@ -529,7 +550,7 @@ int main() {
         RouteObs o = OpenMarket();
         auto e1 = Step(me, ex, venue, o);
         auto e2 = Step(e1.next, ex, venue, o);
-        o.executed = true;
+        SetExitAck(o);
         auto e3 = Step(e2.next, ex, venue, o);
         Check(e3.next.state == RouteState::CLOSED, "drift-exit-closed");
         RouteMachine mn;
@@ -575,7 +596,7 @@ int main() {
         Check(r5.action == RouteAction::FLATTEN_NOW &&
                   r5.next.state == RouteState::EXIT_SENT,
               "repair-failed-flattens");
-        of.executed = true;
+        SetExitAck(of);
         auto r6 = Step(r5.next, in, venue, of);
         Check(r6.action == RouteAction::JOURNAL_EXIT &&
                   r6.next.state == RouteState::CLOSED,
@@ -631,6 +652,7 @@ int main() {
                     RouteMachine m;
                     m.state = static_cast<RouteState>(st);
                     m.kind = IntentKind::ENTRY;
+                    m.intent_id[0] = '\0';  // unbound: skip gate
                     m.filled_qty = 50;
                     m.protection_ok = (pok == 1);
                     RouteObs o = OpenMarket();
@@ -716,6 +738,233 @@ int main() {
         Check(rb.action == RouteAction::REJECT,
               "bad-state-fails-closed");
     }
+    // 19b. P0-4 intent binding: same intent applies; any drift in
+    // intent_id / symbol / side / kind is ignored (never terminal).
+    // Direct RouteStep: the Step() harness would hide the mismatch.
+    {
+        RouteMachine m;
+        RouteObs o = OpenMarket();
+        auto r1 = RouteStep(m, in, venue, o);
+        Tag(o, r1.next);  // preamble attributed; crafted below
+        auto r2 = RouteStep(r1.next, in, venue, o);
+        Check(r2.action == RouteAction::SEND_PROTECTED, "bind-armed");
+        RouteObs ok = o;
+        Tag(ok, r2.next);
+        ok.adapter_responded = false;
+        Check(RouteStep(r2.next, in, venue, ok).action ==
+                  RouteAction::QUERY_ONCE,
+              "bind-same-applies");
+        OrderIntent other = in;
+        other.intent_id[0] = 'X';
+        auto rx = RouteStep(r2.next, other, venue, ok);
+        Check(rx.action == RouteAction::NONE &&
+                  rx.next.state == RouteState::SENT_UNACKED,
+              "bind-intent-id-rejected");
+        OrderIntent osy = in;
+        osy.symbol[0] = 'X';
+        Check(RouteStep(r2.next, osy, venue, ok).action ==
+                  RouteAction::NONE,
+              "bind-symbol-rejected");
+        OrderIntent osd = in;
+        osd.side = (in.side == OrderSide::BUY) ? OrderSide::SELL
+                                               : OrderSide::BUY;
+        Check(RouteStep(r2.next, osd, venue, ok).action ==
+                  RouteAction::NONE,
+              "bind-side-rejected");
+        OrderIntent ex = in;
+        ex.kind = IntentKind::EXIT;
+        Check(RouteStep(r2.next, ex, venue, ok).action ==
+                  RouteAction::NONE,
+              "bind-entry-exit-rejected");
+        // Restart preserves the binding (snapshot round-trip still
+        // rejects the foreign intent and applies the original).
+        char snap[320];
+        Check(SnapshotMachine(r2.next, snap, sizeof(snap)),
+              "bind-snapshots");
+        RouteMachine qr;
+        Check(RestoreMachine(snap, &qr), "bind-restores");
+        Check(RouteStep(qr, other, venue, ok).action ==
+                  RouteAction::NONE,
+              "bind-restart-rejects");
+        Check(RouteStep(qr, in, venue, ok).action ==
+                  RouteAction::QUERY_ONCE,
+              "bind-restart-applies");
+    }
+    // 19c. P0-2 authoritative 404 terminals directly (no CANCEL_SENT
+    // for a nonexistent order); P0-1 bracket-held protects without
+    // legs; simple-class found-but-unprotected repairs (legitimate).
+    {
+        RouteMachine m;
+        RouteObs o = OpenMarket();
+        auto r1 = Step(m, in, venue, o);
+        auto r2 = Step(r1.next, in, venue, o);
+        RouteObs oq = OpenMarket();
+        oq.adapter_responded = false;
+        auto rq = Step(r2.next, in, venue, oq);
+        Check(rq.action == RouteAction::QUERY_ONCE, "absent-armed");
+        // 404: terminal cancel directly.
+        RouteObs o404 = OpenMarket();
+        o404.adapter_responded = true;
+        o404.query.transport_ok = true;
+        o404.query.found = false;
+        auto r404 = Step(rq.next, in, venue, o404);
+        Check(r404.action == RouteAction::JOURNAL_CANCEL &&
+                  r404.next.state == RouteState::CANCELLED &&
+                  r404.next.broker_id[0] == '\0',
+              "absent-404-direct");
+        // Bracket held as a unit (legs null): protected, no repair.
+        RouteObs ob = OpenMarket();
+        ob.adapter_responded = true;
+        ob.query.transport_ok = true;
+        ob.query.found = true;
+        ob.query.filled_qty = 100;
+        ob.query.bracket_class = true;
+        SetUuid(ob.query.broker_order_id);
+        auto rb2 = Step(rq.next, in, venue, ob);
+        Check(rb2.action == RouteAction::JOURNAL_FILL &&
+                  rb2.next.state == RouteState::PROTECTED,
+              "bracket-held-protected");
+        // Simple class, filled, no bracket: repair (legitimate — no
+        // bracket exists to duplicate).
+        RouteObs os = OpenMarket();
+        os.adapter_responded = true;
+        os.query.transport_ok = true;
+        os.query.found = true;
+        os.query.filled_qty = 100;
+        SetUuid(os.query.broker_order_id);
+        auto rs = Step(rq.next, in, venue, os);
+        Check(rs.action == RouteAction::ESTABLISH_PROTECTION,
+              "simple-filled-repairs");
+    }
+    // 19d. P0-5 exit reconciliation: definitive close terminals;
+    // ambiguous close reconciles by ID (no blind second send);
+    // 404 after close reconciles to re-issue; restart keeps the ID.
+    {
+        OrderIntent ex = in;
+        ex.kind = IntentKind::EXIT;
+        RouteMachine m;
+        m.kind = IntentKind::EXIT;
+        RouteObs o = OpenMarket();
+        auto r1 = Step(m, ex, venue, o);
+        auto r2 = Step(r1.next, ex, venue, o);
+        Check(r2.action == RouteAction::EXECUTE_EXIT, "exitx-armed");
+        // Ambiguous (response lost): reconcile, same ID, budget 1.
+        RouteObs oa = OpenMarket();
+        oa.exit_responded = true;
+        auto ra = Step(r2.next, ex, venue, oa);
+        Check(ra.action == RouteAction::QUERY_ONCE &&
+                  ra.next.state == RouteState::QUERY_SENT &&
+                  ra.next.query_attempts == 1,
+              "exit-ambiguous-reconciles");
+        // Query finds the close filled -> terminal, no second send.
+        RouteObs of = OpenMarket();
+        of.adapter_responded = true;
+        of.query.transport_ok = true;
+        of.query.found = true;
+        of.query.filled_qty = 100;
+        SetUuid(of.query.broker_order_id);
+        auto rf = Step(ra.next, ex, venue, of);
+        Check(rf.action == RouteAction::JOURNAL_EXIT &&
+                  rf.next.state == RouteState::CLOSED,
+              "exit-reconciled-closed");
+        // Query 404 (close never landed) -> re-issue, still same ID.
+        RouteObs o4 = OpenMarket();
+        o4.adapter_responded = true;
+        o4.query.transport_ok = true;
+        o4.query.found = false;
+        auto r4 = Step(ra.next, ex, venue, o4);
+        Check(r4.action == RouteAction::EXECUTE_EXIT &&
+                  r4.next.state == RouteState::EXIT_SENT,
+              "exit-absent-reissues");
+        // Restart of the ambiguous exit reconciles (no duplicate
+        // close send: attempts preserved, query first).
+        char snap[320];
+        Check(SnapshotMachine(ra.next, snap, sizeof(snap)),
+              "exitx-snapshots");
+        RouteMachine qx;
+        Check(RestoreMachine(snap, &qx), "exitx-restores");
+        RouteObs ow = OpenMarket();
+        ow.adapter_responded = false;
+        auto rw = Step(qx, ex, venue, ow);
+        Check(rw.action == RouteAction::NONE &&
+                  rw.next.state == RouteState::QUERY_SENT,
+              "exitx-restart-waits-query");
+    }
+    // 19e. P1-8 cancel accepted-vs-final: 204/request-accepted
+    // stays confirming; only explicit final-canceled terminals;
+    // explicit 422 fails to UNKNOWN.
+    {
+        RouteMachine m;
+        RouteObs o = OpenMarket();
+        auto r1 = Step(m, in, venue, o);
+        auto r2 = Step(r1.next, in, venue, o);
+        RouteObs oq = OpenMarket();
+        oq.adapter_responded = false;
+        auto rq = Step(r2.next, in, venue, oq);
+        RouteObs on = OpenMarket();
+        on.adapter_responded = true;
+        on.query.transport_ok = true;
+        on.query.found = true;
+        on.query.filled_qty = 0;
+        SetUuid(on.query.broker_order_id);
+        auto rn = Step(rq.next, in, venue, on);
+        Check(rn.action == RouteAction::CANCEL_REMAINDER &&
+                  rn.next.state == RouteState::CANCEL_SENT,
+              "ccl-armed");
+        // Accepted (204) but not final: stay confirming.
+        RouteObs oa = OpenMarket();
+        oa.adapter_responded = true;
+        oa.cancel_accepted = true;
+        auto ra2 = Step(rn.next, in, venue, oa);
+        Check(ra2.action == RouteAction::CONFIRM_CANCELLED &&
+                  ra2.next.state == RouteState::CANCEL_SENT,
+              "cancel-accepted-stays");
+        // Final canceled observed: terminal now.
+        RouteObs of2 = OpenMarket();
+        of2.adapter_responded = true;
+        of2.cancel_confirmed = true;
+        auto rf2 = Step(rn.next, in, venue, of2);
+        Check(rf2.action == RouteAction::JOURNAL_CANCEL &&
+                  rf2.next.state == RouteState::CANCELLED,
+              "cancel-final-terminals");
+        // Explicit 422: UNKNOWN, never terminal-cancel.
+        RouteObs ox = OpenMarket();
+        ox.adapter_responded = true;
+        ox.cancel_failed = true;
+        auto rx2 = Step(rn.next, in, venue, ox);
+        Check(rx2.action == RouteAction::JOURNAL_UNKNOWN &&
+                  rx2.freeze_symbol,
+              "cancel-refused-unknown");
+    }
+    // 19f. P1-9 event-bearing ordering: distinct events carry
+    // id+seq; duplicates collapse; permuted arrival converges.
+    {
+        RouteMachine m;
+        RouteObs o = OpenMarket();
+        auto r1 = Step(m, in, venue, o);
+        Tag(o, r1.next);
+        auto r2 = Step(r1.next, in, venue, o);
+        // Same event twice: second collapses (no double budget).
+        RouteObs e1 = OpenMarket();
+        Tag(e1, r2.next);
+        e1.adapter_responded = false;
+        SetEvent(e1, 1);
+        auto a1 = Step(r2.next, in, venue, e1);
+        Check(a1.action == RouteAction::QUERY_ONCE, "ev-applies");
+        auto a2 = Step(a1.next, in, venue, e1);
+        Check(a2.action == RouteAction::NONE &&
+                  a2.next.query_attempts == 1,
+              "ev-duplicate-collapses");
+        // A distinct event (new id+seq) still applies.
+        RouteObs e2 = OpenMarket();
+        Tag(e2, a1.next);
+        SetEvent(e2, 2);
+        e2.query.transport_ok = false;  // failed lookup, not silence
+        auto a3 = Step(a1.next, in, venue, e2);
+        Check(a3.action == RouteAction::QUERY_ONCE &&
+                  a3.next.query_attempts == 2,
+              "ev-distinct-applies");
+    }
     // 20. P1-1 seam: snapshot/restore round-trips + strict rejects.
     {
         using jev::exec::RestoreMachine;
@@ -736,11 +985,31 @@ int main() {
             m.broker_id[36] = '\0';
             m.client_id[64] = '\0';
             m.broker_id[63] = '\0';
+            // Original-intent binding (empty on IDLE only).
+            if (st != 0) {
+                const char* iid = "intent-001";
+                int i = 0;
+                while (iid[i]) {
+                    m.intent_id[i] = iid[i];
+                    ++i;
+                }
+                m.intent_id[i] = '\0';
+                m.symbol[0] = 'A';
+                m.symbol[1] = 'A';
+                m.symbol[2] = 'P';
+                m.symbol[3] = 'L';
+                m.symbol[4] = '\0';
+                m.side = (st & 8) ? OrderSide::SELL : OrderSide::BUY;
+            }
+            for (int i = 0; i < 32; ++i)
+                m.last_event_id[i] = (i % 2) ? 'b' : 'a';
+            m.last_event_id[32] = '\0';
+            m.last_event_seq = (std::uint64_t)(st * 3 + 1);
             m.filled_qty = st * 7;
             m.query_attempts = (std::uint8_t)(st % 4);
             m.emergency = (st & 2) != 0;
             m.protection_ok = (st & 4) != 0;
-            char buf[256];
+            char buf[320];
             RouteMachine q;
             bool ok =
                 SnapshotMachine(m, buf, sizeof(buf)) &&
@@ -752,43 +1021,81 @@ int main() {
                         q.query_attempts == m.query_attempts &&
                         q.filled_qty == m.filled_qty &&
                         q.emergency == m.emergency &&
+                        q.side == m.side &&
+                        q.last_event_seq == m.last_event_seq &&
                         q.protection_ok == m.protection_ok;
             for (int i = 0; i < 65 && same; ++i)
                 if (q.client_id[i] != m.client_id[i]) same = false;
             for (int i = 0; i < 64 && same; ++i)
                 if (q.broker_id[i] != m.broker_id[i]) same = false;
+            for (int i = 0; i < 65 && same; ++i)
+                if (q.intent_id[i] != m.intent_id[i]) same = false;
+            for (int i = 0; i < 16 && same; ++i)
+                if (q.symbol[i] != m.symbol[i]) same = false;
+            for (int i = 0; i < 33 && same; ++i)
+                if (q.last_event_id[i] != m.last_event_id[i])
+                    same = false;
             Check(same, name);
         }
         RouteMachine q;
         Check(!RestoreMachine(nullptr, &q), "snap-null");
-        Check(!RestoreMachine("H1:0:0:0:0:0:0::", nullptr),
+        Check(!RestoreMachine("H1:0:0:0:0:0:0:::::0::0", nullptr),
               "snap-null-out");
-        Check(!RestoreMachine("X1:0:0:0:0:0::", &q), "snap-tag");
-        Check(!RestoreMachine("H1:13:0:0:0:0:0::", &q), "snap-state");
-        Check(!RestoreMachine("H1:0:2:0:0:0::", &q), "snap-kind");
-        Check(!RestoreMachine("H1:0:0:0:0:0:0:ZZ:", &q), "snap-hex");
-        Check(!RestoreMachine("H1:0:0:0:0:0:0::extra", &q),
+        Check(!RestoreMachine("X1:0:0:0:0:0:0:::::0::0", &q),
+              "snap-tag");
+        Check(!RestoreMachine("H1:13:0:0:0:0:0:::intent-001:AAPL:0::0",
+                              &q),
+              "snap-state");
+        Check(!RestoreMachine("H1:0:2:0:0:0:0:::::0::0", &q),
+              "snap-kind");
+        Check(!RestoreMachine("H1:0:0:0:0:0:0:ZZ::::0::0", &q),
+              "snap-hex");
+        Check(!RestoreMachine("H1:0:0:0:0:0:0:::::0::0extra", &q),
               "snap-trailing");
         Check(!RestoreMachine("H1:0:0:0:0:0:0:", &q), "snap-short");
         // UUID grammar: hyphens exact, lowercase hex, 36 chars.
-        Check(!RestoreMachine(
-                  "H1:0:0:0:0:0:0::0193ABCD-1234-5678-9abc-def012345678",
-                  &q),
+        Check(!RestoreMachine("H1:0:0:0:0:0:0::0193ABCD-1234-5678-9abc-"
+                              "def012345678:::0::0",
+                              &q),
               "snap-uuid-upper");
-        Check(!RestoreMachine(
-                  "H1:0:0:0:0:0:0::0193abcd1234-5678-9abc-def012345678",
-                  &q),
+        Check(!RestoreMachine("H1:0:0:0:0:0:0::0193abcd1234-5678-9abc-"
+                              "def012345678:::0::0",
+                              &q),
               "snap-uuid-hyphen");
-        Check(!RestoreMachine("H1:0:0:0:0:0:0::0193abcd", &q),
+        Check(!RestoreMachine("H1:0:0:0:0:0:0::0193abcd:::0::0", &q),
               "snap-uuid-short");
-        Check(!RestoreMachine(
-                  "H1:0:0:0:0:0:0::0193abcd-1234-5678-9abc-def01234567X",
-                  &q),
+        Check(!RestoreMachine("H1:0:0:0:0:0:0::0193abcd-1234-5678-9abc-"
+                              "def01234567X:::0::0",
+                              &q),
               "snap-uuid-char");
-        // Empty broker id restores (no UUID observed yet).
-        Check(RestoreMachine("H1:2:0:0:0:0:0::", &q) &&
-                  q.broker_id[0] == '\0',
+        // Empty broker id restores (no UUID observed yet), binding
+        // intact.
+        Check(RestoreMachine("H1:2:0:0:0:0:0:::intent-001:AAPL:0::0",
+                             &q) &&
+                  q.broker_id[0] == '\0' && q.symbol[1] == 'A' &&
+                  q.side == OrderSide::BUY,
               "snap-empty-bid");
+        // Binding coherence: IDLE carries none; non-IDLE requires all.
+        Check(!RestoreMachine("H1:0:0:0:0:0:0:::intent-001:AAPL:0::0",
+                              &q),
+              "snap-idle-with-binding");
+        Check(!RestoreMachine("H1:2:0:0:0:0:0:::::0::0", &q),
+              "snap-binding-required");
+        Check(!RestoreMachine(
+                  "H1:2:0:0:0:0:0:::intent 001:AAPL:0::0", &q),
+              "snap-bad-intent");
+        Check(!RestoreMachine(
+                  "H1:2:0:0:0:0:0:::intent-001:aapl:0::0", &q),
+              "snap-bad-sym");
+        Check(!RestoreMachine(
+                  "H1:2:0:0:0:0:0:::intent-001:AAPL:2::0", &q),
+              "snap-bad-side");
+        Check(!RestoreMachine(
+                  "H1:2:0:0:0:0:0:::intent-001:AAPL:0:ZZ::0", &q),
+              "snap-bad-evid");
+        Check(!RestoreMachine(
+                  "H1:2:0:0:0:0:0:::intent-001:AAPL:0::x", &q),
+              "snap-bad-evseq");
         // Writer refuses un-restorable machines (garbage must never
         // be persisted: an unrecoverable snapshot is a crash-path lie).
         {
@@ -804,7 +1111,19 @@ int main() {
                 ++i;
             }
             mw.broker_id[i] = '\0';
-            char buf[256];
+            const char* iid = "intent-001";
+            i = 0;
+            while (iid[i]) {
+                mw.intent_id[i] = iid[i];
+                ++i;
+            }
+            mw.intent_id[i] = '\0';
+            mw.symbol[0] = 'A';
+            mw.symbol[1] = 'A';
+            mw.symbol[2] = 'P';
+            mw.symbol[3] = 'L';
+            mw.symbol[4] = '\0';
+            char buf[320];
             Check(!SnapshotMachine(mw, buf, sizeof(buf)),
                   "snap-writer-refuses-garbage");
         }

@@ -108,6 +108,16 @@ static void SetAckId(RouteObs& o) {
     for (int i = 0; u[i]; ++i) o.ack.broker_order_id[i] = u[i];
     o.ack.broker_order_id[36] = '\0';
 }
+// Distinct broker event: 32-hex id derived from seq + the seq itself
+// (P1-9: arrival permutes, identity/sequence ride the event).
+static void SetEvent(RouteObs& o, unsigned seq) {
+    for (int i = 0; i < 32; ++i) {
+        unsigned v = (seq * 7u + (unsigned)i * 13u) % 16u;
+        o.event_id[i] = (v < 10) ? (char)('0' + v) : (char)('a' + v - 10);
+    }
+    o.event_id[32] = '\0';
+    o.event_seq = (std::uint64_t)seq;
+}
 // E2E fake transport: POST accepts with a UUID but no legs proof;
 // DELETE confirms when aimed at that UUID.
 static int g_e2e_calls = 0;
@@ -335,8 +345,22 @@ int main() {
         RouteObs confirmEv = queryEv;
         confirmEv.cancel_confirmed = true;
         RouteObs dupEv = queryEv;
+        // P1-9: each distinct event bears identity+sequence (arrival
+        // permutes below; identity/sequence never do). The duplicate
+        // preserves the query event's exact identity.
+        SetEvent(ackEv, 1);
+        SetEvent(queryEv, 2);
+        SetEvent(confirmEv, 3);
+        dupEv.event_id[0] = '\0';  // placeholder, set below
         RouteObs ev[4] = {ackEv, queryEv, confirmEv, dupEv};
+        for (int i = 0; i < 32; ++i)
+            dupEv.event_id[i] = queryEv.event_id[i];
+        dupEv.event_id[32] = '\0';
+        dupEv.event_seq = queryEv.event_seq;
+        ev[3] = dupEv;
         RouteObs drain = confirmEv;
+        drain.event_id[0] = '\0';  // drain steps repeatedly: no
+        drain.event_seq = 0;        // event identity (never collapses)
         drain.journal_ok = true;
         int perm[4] = {0, 1, 2, 3};
         const char* want_trace[2] = {"partial", "cancel"};
@@ -697,7 +721,7 @@ int main() {
         // The cancel call DELETEs exactly that UUID.
         g_e2e_calls = 0;
         auto cr = ad.Cancel(rm.broker_id);
-        Check(cr.confirmed && g_e2e_calls == 1 &&
+        Check(cr.accepted && !cr.failed && g_e2e_calls == 1 &&
                   Has(g_e2e_path,
                       "0193abcd-1234-5678-9abc-def012345678"),
               "e2e-delete-uses-uuid");

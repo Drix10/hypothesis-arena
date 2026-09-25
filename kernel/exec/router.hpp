@@ -102,11 +102,17 @@ struct RouteObs {
     broker::OrderAck ack;
     bool query_due = false;  // caller: send resolved, one query now due
     broker::OrderQuery query;
-    bool cancel_confirmed = false;
+    bool cancel_confirmed = false;  // FINAL broker-canceled observed
+                                    // (status query/trade event —
+                                    // never a bare 204)
+    bool cancel_accepted = false;  // cancel REQUEST accepted (204):
+                                   // stay confirming, never terminal
     bool cancel_failed = false;  // explicit broker cancel rejection;
-                                 // silence (neither flag) means re-check,
-                                 // never UNKNOWN
+                                 // silence (none of the three) means
+                                 // re-check, never UNKNOWN
     bool executed = false;  // exit order confirmed executed
+    bool exit_responded = false;  // close attempt resolved (else wait)
+    broker::CloseResult exit_ack;  // ambiguous exit reconciles by ID
     bool repair_ok = false;  // EstablishProtection attempt confirmed
     // Identity tag (P1-5): observations carry the client ID they
     // report on. A machine with an established identity accepts ONLY
@@ -114,6 +120,13 @@ struct RouteObs {
     // are ignored (fail closed — an established machine never acts
     // on an event it cannot attribute). IDLE has no identity yet.
     char client_id[65]{};
+    // Event identity + sequence (P1-9): each broker event carries
+    // its own id (32 hex or empty) + monotonic seq (0 = none). The
+    // single-step machine applies in receipt order; exact-duplicate
+    // deliveries (same id+seq already applied) collapse to NONE.
+    // Permuted distinct events converge (proven, not assumed).
+    char event_id[33]{};
+    std::uint64_t event_seq = 0;
     risk::KillLevel kill = risk::KillLevel::NONE;
     bool feed_stale = false;     // feed stale > 30 s (Slice F flag)
     bool stage_entry_ok = false;  // verified stage permits entries
@@ -126,6 +139,17 @@ struct RouteMachine {
     char client_id[65]{};
     char broker_id[64]{};  // broker UUID from the single query lookup
                          // (cancel path uses this, never a re-query)
+    // Original-intent binding (P0-4): every non-IDLE step verifies
+    // the caller's intent matches what established the machine
+    // (intent_id + symbol + side + kind). Mismatch -> step ignored
+    // (never silent operation on another intent). Persisted across
+    // restart with the rest of the machine.
+    char intent_id[65]{};
+    char symbol[16]{};
+    broker::OrderSide side = broker::OrderSide::BUY;
+    // Last applied event (P1-9 duplicate collapse, persisted).
+    char last_event_id[33]{};
+    std::uint64_t last_event_seq = 0;
     std::int64_t filled_qty = 0;
     bool emergency = false;
     bool protection_ok = false;  // positively confirmed protection;

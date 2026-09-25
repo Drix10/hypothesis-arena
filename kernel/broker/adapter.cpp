@@ -7,6 +7,21 @@
 namespace jev {
 namespace broker {
 
+bool IsBrokerUuid(const char* s) {
+    if (!s || !s[0]) return false;
+    for (int i = 0; i < 36; ++i) {
+        char c = s[i];
+        if (c == '\0') return false;  // short
+        if (i == 8 || i == 13 || i == 18 || i == 23) {
+            if (c != '-') return false;
+        } else {
+            bool ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+            if (!ok) return false;  // uppercase/bad-hyphen/path char
+        }
+    }
+    return s[36] == '\0';  // exact length (overlong refused)
+}
+
 bool MakeClientOrderId(const char* broker, const char* account,
                        const char* context_hash_hex,
                        const char* symbol, OrderSide side,

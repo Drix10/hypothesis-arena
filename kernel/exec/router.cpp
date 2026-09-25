@@ -34,6 +34,25 @@ void Copy65(char (&dst)[65], const char (&src)[65]) {
 void Copy64(char (&dst)[64], const char (&src)[64]) {
     for (int i = 0; i < 64; ++i) dst[i] = src[i];
 }
+void Copy33(char (&dst)[33], const char (&src)[33]) {
+    for (int i = 0; i < 33; ++i) dst[i] = src[i];
+}
+// Original-intent match (P0-4): intent_id + symbol + side + kind.
+// Fixed compares, no allocation; empty machine fields never match
+// a populated intent (a half-restored machine binds nothing).
+bool IntentMatches(const RouteMachine& m, const OrderIntent& in) {
+    if (!m.intent_id[0] || !in.intent_id[0]) return false;
+    for (int i = 0; i < 65; ++i) {
+        if (m.intent_id[i] != in.intent_id[i]) return false;
+        if (m.intent_id[i] == '\0') break;
+    }
+    for (int i = 0; i < 16; ++i) {
+        if (m.symbol[i] != in.symbol[i]) return false;
+        if (m.symbol[i] == '\0') break;
+    }
+    if (m.side != in.side) return false;
+    return m.kind == in.kind;
+}
 // Broker UUID grammar (the venue's actual identifier shape): exactly
 // 8-4-4-4-12 lowercase hex with hyphens (36 chars), or empty (no UUID
 // observed yet). Anything else fails closed. Shared by the snapshot
@@ -94,6 +113,39 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
             return o;
         }
     }
+    // Intent binding (P0-4): a machine with an established intent
+    // rejects steps driven under a DIFFERENT intent (restored
+    // machines cannot be steered onto another order by caller
+    // mistake). Mismatch is ignored, never terminal (no mutation).
+    if (m.state != RouteState::IDLE && m.intent_id[0] != '\0' &&
+        !IntentMatches(m, intent)) {
+        o.action = RouteAction::NONE;
+        o.reason = "exec:intent-mismatch";
+        return o;
+    }
+    // Duplicate-event collapse (P1-9): an already-applied event
+    // (same id+seq) applies nothing twice.
+    if (m.state != RouteState::IDLE && obs.event_id[0] != '\0' &&
+        m.last_event_id[0] != '\0' &&
+        obs.event_seq == m.last_event_seq) {
+        bool same_ev = true;
+        for (int i = 0; i < 33; ++i) {
+            if (m.last_event_id[i] != obs.event_id[i]) same_ev = false;
+            if (m.last_event_id[i] == '\0') break;
+        }
+        if (same_ev) {
+            o.action = RouteAction::NONE;
+            o.reason = "exec:duplicate-event";
+            return o;
+        }
+    }
+    // Stamp the applied event (P1-9): a redelivery of this exact
+    // event collapses above. Stamping precedes the branch: every
+    // non-ignored observation counts as seen exactly once.
+    if (obs.event_id[0] != '\0') {
+        Copy33(o.next.last_event_id, obs.event_id);
+        o.next.last_event_seq = obs.event_seq;
+    }
     switch (m.state) {
         case RouteState::IDLE: {
             if (!IntentShapeOk(intent)) return Reject(o, "exec:bad-intent");
@@ -117,6 +169,15 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
             if (!ok) return Reject(o, "exec:bad-identity");
             Copy65(o.next.client_id, id);
             o.next.broker_id[0] = '\0';
+            // Bind the original intent (P0-4): id + symbol + side;
+            // kind is carried in o.next.kind above.
+            for (int i = 0; i < 65; ++i)
+                o.next.intent_id[i] = intent.intent_id[i];
+            for (int i = 0; i < 16; ++i)
+                o.next.symbol[i] = intent.symbol[i];
+            o.next.side = intent.side;
+            o.next.last_event_id[0] = '\0';
+            o.next.last_event_seq = 0;
             o.next.protection_ok = false;
             o.next.filled_qty = 0;
             o.action = RouteAction::WRITE_JOURNAL;
@@ -299,7 +360,40 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                 return o;
             }
             if (q.found) Copy64(o.next.broker_id, q.broker_order_id);
-            if (q.found && q.cancelled && q.filled_qty == 0) {
+            if (is_exit) {
+                // Exit reconcile (P0-5): the close order resolved.
+                // Filled -> the close executed: terminal. Anything
+                // else (absent 404 included — the close never
+                // landed) -> back to EXIT_SENT for re-issue (exits
+                // must complete; reconcile-first, never blind).
+                if (q.found && q.filled_qty > 0) {
+                    o.next.filled_qty = q.filled_qty;
+                    o.action = RouteAction::JOURNAL_EXIT;
+                    o.next.state = RouteState::CLOSED;
+                    o.journal_kind = "exit";
+                    o.reason = "exec:exit-reconciled";
+                    return o;
+                }
+                o.next.filled_qty = 0;
+                o.action = RouteAction::EXECUTE_EXIT;
+                o.next.state = RouteState::EXIT_SENT;
+                o.reason = "exec:exit-reissue";
+                return o;
+            }
+            if (!q.found) {
+                // transport_ok + !found happens ONLY on 404 (P0-2):
+                // authoritative absence — no UUID exists, no DELETE
+                // is necessary. Journal the terminal cancellation
+                // DIRECTLY; never enter CANCEL_SENT for a
+                // nonexistent order, never request a confirmation.
+                o.next.filled_qty = 0;
+                o.action = RouteAction::JOURNAL_CANCEL;
+                o.next.state = RouteState::CANCELLED;
+                o.journal_kind = "cancel";
+                o.reason = "exec:absent-direct";
+                return o;
+            }
+            if (q.cancelled && q.filled_qty == 0) {
                 // Already dead, nothing filled: straight to terminal.
                 o.next.filled_qty = 0;
                 o.action = RouteAction::JOURNAL_CANCEL;
@@ -308,7 +402,7 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                 o.reason = "exec:already-cancelled";
                 return o;
             }
-            if (!q.found || q.filled_qty == 0) {
+            if (q.filled_qty == 0) {
                 // Nothing (that we can see) filled: cancel, confirm,
                 // journal. Reconcile-first: the query already happened;
                 // a second send from this state is unrepresentable.
@@ -318,9 +412,16 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                 o.reason = "exec:nothing-filled";
                 return o;
             }
-            if (q.protection_active) o.next.protection_ok = true;
+            // Protection verdict, three states (P0-1): legs strictly
+            // proven -> confirmed; bracket held as a unit with legs
+            // unexpanded -> constructive (the venue holds the bracket;
+            // null legs = not expanded, never "absent"); otherwise
+            // genuinely absent -> repair path (legitimate: no bracket
+            // exists to duplicate).
+            if (q.protection_active || q.bracket_class)
+                o.next.protection_ok = true;
             o.next.filled_qty = q.filled_qty;
-            if (q.protection_active) {
+            if (o.next.protection_ok) {
                 if (q.filled_qty >= intent.qty_shares) {
                     o.action = RouteAction::JOURNAL_FILL;
                     o.next.state = RouteState::PROTECTED;
@@ -387,6 +488,8 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                 o.reason = "exec:confirm-cancel";
                 return o;
             }
+            // Explicit final-canceled observation first: only this
+            // terminals (204/request-accepted never does — P1-8).
             if (obs.cancel_confirmed) {
                 if (o.next.filled_qty == 0) {
                     o.action = RouteAction::JOURNAL_CANCEL;
@@ -412,33 +515,72 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                 return o;
             }
             // Cancel explicitly FAILED: UNKNOWN_EXECUTION (never
-            // "filled"). Silence (responded, neither flag) means the
-            // confirmation is not yet observed -> re-check, never
-            // UNKNOWN (UNKNOWN needs a positive failure). Freeze new
-            // orders for the symbol; reconcile per S2 with protection
-            // first. The freeze is caller-owned state.
-            if (!obs.cancel_failed) {
-                o.action = RouteAction::CONFIRM_CANCELLED;
-                o.reason = "exec:confirm-cancel";
+            // "filled"). A merely ACCEPTED request (204) is not
+            // final: stay confirming (the caller re-observes until
+            // the broker reports canceled). Silence (responded, no
+            // flag at all) means the confirmation is not yet
+            // observed -> re-check, never UNKNOWN (UNKNOWN needs a
+            // positive failure). Freeze new orders for the symbol;
+            // reconcile per S2 with protection first.
+            if (obs.cancel_failed) {
+                o.action = RouteAction::JOURNAL_UNKNOWN;
+                o.next.state = RouteState::UNKNOWN_FROZEN;
+                o.journal_kind = "unknown";
+                o.freeze_symbol = true;
+                o.reason = "exec:unknown-execution";
                 return o;
             }
-            o.action = RouteAction::JOURNAL_UNKNOWN;
-            o.next.state = RouteState::UNKNOWN_FROZEN;
-            o.journal_kind = "unknown";
-            o.freeze_symbol = true;
-            o.reason = "exec:unknown-execution";
+            o.action = RouteAction::CONFIRM_CANCELLED;
+            o.reason = obs.cancel_accepted ? "exec:cancel-accepted"
+                                           : "exec:confirm-cancel";
             return o;
         }
         case RouteState::EXIT_SENT: {
-            if (!obs.executed) {
+            // Exit execution identity (P0-5): the close rides the
+            // machine's stable client ID (caller submits MarketClose
+            // with it). No observation yet -> wait. Definitive
+            // non-execution -> re-issue (exits must complete).
+            // Ambiguous (response lost) -> reconcile by ID under the
+            // retry-once budget (never a blind second send, never a
+            // double-close). Restart reconciles the same way: no
+            // send exists from any non-IDLE state.
+            if (!obs.exit_responded) {
                 o.action = RouteAction::NONE;
                 o.reason = "exec:awaiting-exit";
                 return o;
             }
-            o.action = RouteAction::JOURNAL_EXIT;
-            o.next.state = RouteState::CLOSED;
-            o.journal_kind = "exit";
-            o.reason = "exec:exited";
+            if (obs.exit_ack.executed && obs.exit_ack.transport_ok) {
+                o.next.filled_qty = intent.qty_shares;
+                if (obs.exit_ack.broker_order_id[0] != '\0' &&
+                    o.next.broker_id[0] == '\0' &&
+                    broker::IsBrokerUuid(obs.exit_ack.broker_order_id)) {
+                    for (int i = 0; i < 64; ++i)
+                        o.next.broker_id[i] =
+                            obs.exit_ack.broker_order_id[i];
+                }
+                o.action = RouteAction::JOURNAL_EXIT;
+                o.next.state = RouteState::CLOSED;
+                o.journal_kind = "exit";
+                o.reason = "exec:exited";
+                return o;
+            }
+            if (obs.exit_responded && !obs.exit_ack.transport_ok) {
+                if (o.next.query_attempts < kQueryMaxAttempts) {
+                    ++o.next.query_attempts;
+                    o.action = RouteAction::QUERY_ONCE;
+                    o.next.state = RouteState::QUERY_SENT;
+                    o.reason = "exec:exit-reconcile";
+                    return o;
+                }
+                o.action = RouteAction::JOURNAL_UNKNOWN;
+                o.next.state = RouteState::UNKNOWN_FROZEN;
+                o.journal_kind = "unknown";
+                o.freeze_symbol = true;
+                o.reason = "exec:reconcile-exhausted";
+                return o;
+            }
+            o.action = RouteAction::EXECUTE_EXIT;
+            o.reason = "exec:exit-retry";
             return o;
         }
         case RouteState::EXIT_EMERGENCY: {
@@ -483,10 +625,14 @@ namespace jev {
 namespace exec {
 
 namespace {
-// Fixed snapshot: "H1:<state>:<kind>:<filled>:<emg>:<pok>:<att>:<cid>:<bid>"
-// client id is lowercase-hex-or-empty; broker id is the venue UUID
-// grammar (or empty); attempts is the persisted query budget (0..9);
-// all bounded and validated.
+// Fixed snapshot:
+// "H1:<st>:<kd>:<filled>:<emg>:<pok>:<att>:<cid>:<bid>:
+//     <intent>:<sym>:<side>:<evid>:<evseq>"
+// client id lowercase-hex-or-empty; broker id venue UUID or empty;
+// attempts persisted retry budget (0..9); intent = original intent_id
+// ([A-Za-z0-9_.-], 1..64) + symbol ([A-Z0-9.], 1..15) + side (0/1);
+// evid = last event id (32 hex or empty) + evseq digits. All bounded
+// and validated; writer refuses un-restorable machines.
 bool IsHexEmpty(const char* s, std::size_t maxlen, char* dst,
                 std::size_t dn) {
     std::size_t i = 0;
@@ -501,12 +647,48 @@ bool IsHexEmpty(const char* s, std::size_t maxlen, char* dst,
     dst[i] = '\0';
     return true;
 }
+bool IsTokenField(const char* s, std::size_t maxlen, bool sym_shape,
+                  char* dst, std::size_t dn) {
+    std::size_t i = 0;
+    while (s[i] != '\0' && s[i] != ':') {
+        if (i + 1 >= dn || i >= maxlen) return false;
+        char c = s[i];
+        bool ok;
+        if (sym_shape)
+            ok = (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+                 c == '.';
+        else
+            ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                 (c >= '0' && c <= '9') || c == '_' || c == '.' ||
+                 c == '-';
+        if (!ok) return false;
+        dst[i] = c;
+        ++i;
+    }
+    if (i == 0) return false;  // binding fields never empty
+    dst[i] = '\0';
+    return true;
+}
+bool IsEvId(const char* s, char* dst, std::size_t dn) {
+    if (dn < 33) return false;
+    std::size_t i = 0;
+    while (s[i] != '\0' && s[i] != ':') {
+        if (i >= 32) return false;
+        char c = s[i];
+        bool ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+        if (!ok) return false;
+        dst[i] = c;
+        ++i;
+    }
+    dst[i] = '\0';
+    return true;  // empty allowed (no event yet)
+}
 // (IsUuidField lives in the anonymous block above, shared with the
 // POST-UUID gate.)
 }  // namespace
 
 bool SnapshotMachine(const RouteMachine& m, char* out, std::size_t n) {
-    if (!out || n < 16) return false;
+    if (!out || n < 32) return false;
     int st = static_cast<int>(m.state);
     int kd = (m.kind == risk::IntentKind::EXIT) ? 1 : 0;
     if (st < 0 || st > 12 || m.filled_qty < 0 || m.filled_qty > 999999999)
@@ -514,14 +696,29 @@ bool SnapshotMachine(const RouteMachine& m, char* out, std::size_t n) {
     if (m.query_attempts > 9) return false;
     // Writer-side strictness: refuse to persist a machine whose ids
     // cannot be restored (garbage in storage is a crash-path lie).
+    // IDLE machines carry no binding yet (fields empty by
+    // construction); any non-IDLE machine must carry the full
+    // original-intent binding.
     char cid[65], bid[64];
     if (!IsHexEmpty(m.client_id, 64, cid, sizeof(cid))) return false;
     if (!IsUuidField(m.broker_id, bid, sizeof(bid))) return false;
-    int w = std::snprintf(out, n, "H1:%d:%d:%lld:%d:%d:%d:%s:%s", st, kd,
-                          (long long)m.filled_qty,
-                          m.emergency ? 1 : 0,
-                          m.protection_ok ? 1 : 0, m.query_attempts,
-                          cid, bid);
+    char iid[65] = {0};
+    char sym[16] = {0};
+    char evid[33] = {0};
+    bool bound = (m.state != RouteState::IDLE);
+    if (bound) {
+        if (!IsTokenField(m.intent_id, 64, false, iid, sizeof(iid)))
+            return false;
+        if (!IsTokenField(m.symbol, 15, true, sym, sizeof(sym)))
+            return false;
+    }
+    if (!IsEvId(m.last_event_id, evid, sizeof(evid))) return false;
+    int w = std::snprintf(
+        out, n, "H1:%d:%d:%lld:%d:%d:%d:%s:%s:%s:%s:%d:%s:%llu", st,
+        kd, (long long)m.filled_qty, m.emergency ? 1 : 0,
+        m.protection_ok ? 1 : 0, m.query_attempts, cid, bid, iid, sym,
+        (m.side == broker::OrderSide::SELL) ? 1 : 0, evid,
+        (unsigned long long)m.last_event_seq);
     return w > 0 && static_cast<std::size_t>(w) < n;
 }
 
@@ -574,13 +771,64 @@ bool RestoreMachine(const char* s, RouteMachine* out) {
     while (*p != '\0' && *p != ':') ++p;
     if (*p != ':') return false;
     ++p;
-    if (!IsUuidField(p, m.broker_id, sizeof(m.broker_id)))
+    // Empty bid (leading separator) restores as no-UUID; otherwise
+    // the strict venue grammar applies.
+    if (p[0] == ':') {
+        m.broker_id[0] = '\0';
+    } else if (!IsUuidField(p, m.broker_id, sizeof(m.broker_id))) {
         return false;
-    // IsUuidField stops at ':' or NUL; anything after the field must
-    // be the terminal NUL (no trailing garbage).
-    const char* e = p;
-    while (*e != '\0' && *e != ':') ++e;
-    if (*e != '\0') return false;
+    }
+    // Advance past the field to the next separator.
+    while (*p != '\0' && *p != ':') ++p;
+    if (*p != ':') return false;
+    ++p;
+    // Original-intent binding: intent_id may be empty ONLY on IDLE
+    // (nothing established yet); symbol+side ride the same rule.
+    // Non-empty intent requires a valid symbol and side digit.
+    bool has_iid = (*p != ':');
+    if (has_iid) {
+        if (!IsTokenField(p, 64, false, m.intent_id,
+                          sizeof(m.intent_id)))
+            return false;
+    } else {
+        m.intent_id[0] = '\0';
+    }
+    while (*p != '\0' && *p != ':') ++p;
+    if (*p != ':') return false;
+    ++p;
+    bool has_sym = (*p != ':');
+    if (has_sym) {
+        if (!IsTokenField(p, 15, true, m.symbol, sizeof(m.symbol)))
+            return false;
+    } else {
+        m.symbol[0] = '\0';
+    }
+    while (*p != '\0' && *p != ':') ++p;
+    if (*p != ':') return false;
+    ++p;
+    if ((p[0] != '0' && p[0] != '1') || p[1] != ':') return false;
+    m.side = (p[0] == '1') ? broker::OrderSide::SELL
+                           : broker::OrderSide::BUY;
+    p += 2;
+    if (!IsEvId(p, m.last_event_id, sizeof(m.last_event_id)))
+        return false;
+    while (*p != '\0' && *p != ':') ++p;
+    if (*p != ':') return false;
+    ++p;
+    unsigned long long es = 0;
+    int nd2 = 0;
+    while (*p >= '0' && *p <= '9' && nd2 < 20) {
+        es = es * 10 + (unsigned)(*p - '0');
+        ++p;
+        ++nd2;
+    }
+    if (nd2 == 0 || *p != '\0') return false;
+    m.last_event_seq = (std::uint64_t)es;
+    // Binding coherence: non-IDLE requires the full binding;
+    // IDLE requires none of it.
+    bool idle = (m.state == RouteState::IDLE);
+    if (!idle && (!has_iid || !has_sym)) return false;
+    if (idle && (has_iid || has_sym)) return false;
     *out = m;
     return true;
 }

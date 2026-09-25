@@ -2198,3 +2198,60 @@ Suites: router 100 + journal 23 + broker 59 + drills 83 +
   collector / research / plan untouched; transport unwired live;
   no execution. Query budget: 1 initial + 1 retry, same identity,
   then UNKNOWN+freeze.
+
+## Addendum 113 - H1 fifth corrective (audit of 17a765c)
+P0-1 reconcile shape: by-client-ID GET documents only client_order_id
+  (no nested param; legs otherwise null). Single-query verdict is now
+  three-state: legs strictly proven -> confirmed; order_class bracket
+  + TP/SL object fields with legs null/absent -> bracket-held-as-unit
+  (constructive: venue holds the bracket, null = unexpanded); simple
+  class found-but-unprotected -> genuinely absent -> repair legitimate
+  (no bracket exists to duplicate). Never routes unexpanded legs to
+  duplicate OCO. Regressions: query-legs-null-bracket-held,
+  query-simple-no-bracket, bracket-held-protected, simple-filled-repairs.
+  Order-level proof is field-based (order_class bracket/oco +
+  take_profit/stop_loss objects), never bare substrings.
+P0-2 404 direct: QUERY_SENT !found+transport_ok (404-only shape) ->
+  JOURNAL_CANCEL + CANCELLED immediately (absent-direct); no
+  CANCEL_SENT, no confirmation requested, broker_id stays empty.
+P0-3 query UUID: IsBrokerUuid shared (adapter.cpp) enforced on QUERY
+  (and close-ack) paths; malformed id -> unknown. Regressions:
+  query-id-short/upper/hyphen/slash/long.
+P0-4 intent binding: machine persists intent_id + symbol + side (+
+  kind); every non-IDLE step verifies IntentMatches, mismatch ->
+  NONE exec:intent-mismatch (never terminal, never silent apply);
+  snapshot v2 carries :intent:sym:side (IDLE none / non-IDLE full,
+  coherence-enforced). Regressions: bind-same-applies,
+  bind-intent-id/symbol/side/entry-exit-rejected, bind-snapshots/
+  restores/restart-rejects/restart-applies. Send-once is structural
+  (no send from non-IDLE) + budget persisted = frozen send/ack state.
+P0-5 exits: MarketClose rides stable client_order_id; CloseResult
+  captures UUID + transport_ok; EXIT_SENT definitive->CLOSED,
+  ambiguous->QUERY (shared retry-once budget), 404->EXECUTE_EXIT
+  re-issue (same ID); QUERY_SENT exit-kind resolves filled->CLOSED
+  else re-issue; restart reconciles first (exitx-restart-waits-query).
+  Emergency exception intact (executed-first path untouched).
+  Regressions: exit-ambiguous-reconciles, exit-reconciled-closed,
+  exit-absent-reissues, exitx-snapshots/restores, close-market-plain,
+  close-ambiguous/malformed-reconciles.
+P1-6 filled_qty: StrictQty requires "filled_qty":"<1-18 digits>";
+  missing/non-numeric/negative/overflow -> unknown (never zero).
+  Regressions: query-qty-missing/nonnumeric/negative/overflow.
+P1-7 403: buying-power terminal (authoritative_reject, reason
+  buying-power); 401 alone is auth_failure. Regression:
+  send-403-buying-power (replaces 403-as-auth).
+P1-8 cancel: CancelResult accepted (204/2xx+id) vs failed (422);
+  accepted stays confirming (cancel-accepted-stays); only explicit
+  final-canceled terminals (cancel-final-terminals); 422 -> UNKNOWN
+  (cancel-refused-unknown). 204 never terminals alone.
+P1-9 events: RouteObs event_id (32hex) + event_seq; machine persists
+  last applied; exact duplicates collapse (exec:duplicate-event);
+  receipt-order application with identity/seq preserved; 24 perms run
+  with identity-bearing events + duplicate preserving identity
+  (ev-applies/duplicate-collapses/distinct-applies; perm-* green).
+Suites: router 135 + journal 23 + broker 72 + drills 83 +
+  noalloc-exec 0, normal+hardened, freeze PASS. Slice D / P3.x /
+  collector / research / plan untouched; transport unwired live;
+  no execution. Reconcile shape: by-client-ID Order entity;
+  legs-null bracket = held-as-unit (protected); 404 = direct
+  terminal; POST + QUERY UUIDs validated; binding every step.

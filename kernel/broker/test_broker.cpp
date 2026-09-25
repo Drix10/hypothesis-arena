@@ -275,11 +275,13 @@ int main() {
         Check(!r401.accepted && !r401.authoritative_reject &&
                   r401.auth_failure && !r401.transport_ok,
               "send-401-auth");
+        // 403 on create-order = forbidden/buying-power (the ORDER
+        // is dead): terminal, never an auth-outage classification.
         g_status = 403;
         auto r403 = ad.SubmitProtected(o);
-        Check(!r403.accepted && !r403.authoritative_reject &&
-                  r403.auth_failure,
-              "send-403-auth");
+        Check(!r403.accepted && r403.authoritative_reject &&
+                  !r403.auth_failure && Has(r403.reason, "buying"),
+              "send-403-buying-power");
         g_status = 429;
         auto r429 = ad.SubmitProtected(o);
         Check(!r429.accepted && !r429.authoritative_reject &&
@@ -320,7 +322,8 @@ int main() {
         AlpacaPaperAdapter ad(Fake);
         g_status = 200;
         g_reply =
-            "{\"id\":\"0193abcd-uuid\",\"filled_qty\":\"10\",\"take_profit\":{},\"stop_loss\":{},"
+            "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\",\"filled_qty\":\"10\","
+            "\"order_class\":\"bracket\",\"take_profit\":{},\"stop_loss\":{},"
             "\"legs\":[{\"id\":\"l1\",\"type\":\"limit\"},"
             "{\"id\":\"l2\",\"type\":\"stop\"}]}";
         char id[65];
@@ -338,31 +341,33 @@ int main() {
         Check(q.found && q.filled_qty == 10 && q.protection_active,
               "query-maps");
         bool uuid_ok = true;
-        const char* want = "0193abcd-uuid";
+        const char* want = "0193abcd-1234-5678-9abc-def012345678";
         for (int i = 0; want[i]; ++i)
             if (q.broker_order_id[i] != want[i]) uuid_ok = false;
-        Check(uuid_ok && q.broker_order_id[13] == '\0', "query-uuid");
+        Check(uuid_ok && q.broker_order_id[36] == '\0', "query-uuid");
         // Cancel goes to DELETE /v2/orders/{uuid}: no hidden lookup.
-        g_reply = "{\"id\":\"0193abcd-uuid\"}";
+        g_reply = "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\"}";
         g_calls = 0;
         auto c = ad.Cancel(q.broker_order_id);
         Check(g_calls == 1, "cancel-single-call");
         Check(g_last_method[0] == 'D', "cancel-delete");
-        Check(Has(g_last_path, "/v2/orders/0193abcd-uuid"),
+        Check(Has(g_last_path, "/v2/orders/0193abcd-1234-5678-9abc-def012345678"),
               "cancel-uuid-path");
-        Check(c.confirmed, "cancel-confirms");
+        Check(c.accepted && !c.failed, "cancel-2xx-accepted");
         g_status = 500;
         auto c2 = ad.Cancel(q.broker_order_id);
-        Check(!c2.confirmed, "cancel-fail-open-never");
+        Check(!c2.accepted && !c2.failed, "cancel-fail-open-never");
         g_status = 200;
-        // Real Alpaca success: 204 No Content, empty body.
+        // Real Alpaca success: 204 No Content, empty body = request
+        // ACCEPTED, never final cancellation by itself.
         g_status = 204;
         g_reply = "";
         auto c3 = ad.Cancel(q.broker_order_id);
-        Check(c3.confirmed, "cancel-204-empty");
+        Check(c3.accepted && !c3.failed, "cancel-204-accepted");
+        // Explicit 422 = cancel refused.
         g_status = 422;
         auto c4 = ad.Cancel(q.broker_order_id);
-        Check(!c4.confirmed, "cancel-422");
+        Check(!c4.accepted && c4.failed, "cancel-422-failed");
         g_status = 200;
         // Lookup with no id marker on 200: MALFORMED, not absent.
         g_reply = "{}";
@@ -389,6 +394,74 @@ int main() {
         Check(!q429.found && !q429.transport_ok && q429.rate_limited &&
                   q429.broker_status == 429,
               "query-429-rate");
+        // P0-3 query UUID grammar: short/upper/bad-hyphen/slash/
+        // overlong ids are malformed (unknown), never found, never
+        // reach DELETE.
+        g_status = 200;
+        const char* bad_ids[5] = {
+            "{\"id\":\"0193abcd\",\"filled_qty\":\"10\"}",
+            "{\"id\":\"0193ABCD-1234-5678-9ABC-DEF012345678\","
+            "\"filled_qty\":\"10\"}",
+            "{\"id\":\"0193abcd_1234_5678_9abc_def012345678\","
+            "\"filled_qty\":\"10\"}",
+            "{\"id\":\"orders/0193abcd-1234-5678-9abc-"
+            "def012345678\",\"filled_qty\":\"10\"}",
+            "{\"id\":\"0193abcd-1234-5678-9abc-def0123456789\","
+            "\"filled_qty\":\"10\"}"};
+        const char* bad_names[5] = {
+            "query-id-short", "query-id-upper", "query-id-hyphen",
+            "query-id-slash", "query-id-long"};
+        for (int bi = 0; bi < 5; ++bi) {
+            g_reply = bad_ids[bi];
+            auto qb = ad.QueryOnce(id);
+            Check(!qb.found && !qb.transport_ok, bad_names[bi]);
+        }
+        // P1-6 filled_qty strict: missing/non-numeric/negative/
+        // overlong qty is unknown, never silent zero.
+        const char* bad_qty[4] = {
+            "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\"}",
+            "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
+            "\"filled_qty\":\"ten\"}",
+            "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
+            "\"filled_qty\":\"-3\"}",
+            "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
+            "\"filled_qty\":\"12345678901234567890\"}"};
+        const char* qty_names[4] = {"query-qty-missing",
+                                    "query-qty-nonnumeric",
+                                    "query-qty-negative",
+                                    "query-qty-overflow"};
+        for (int qi = 0; qi < 4; ++qi) {
+            g_reply = bad_qty[qi];
+            auto qq = ad.QueryOnce(id);
+            Check(!qq.found && !qq.transport_ok, qty_names[qi]);
+        }
+        // P0-1 by-client-ID shape: bracket held as a unit with legs
+        // null (unexpanded) -> bracket_class, NOT protection-absent.
+        g_reply =
+            "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
+            "\"client_order_id\":\"qqqq\",\"status\":\"filled\","
+            "\"symbol\":\"SPY\",\"qty\":\"10\",\"filled_qty\":\"10\","
+            "\"side\":\"buy\",\"type\":\"market\","
+            "\"order_class\":\"bracket\","
+            "\"take_profit\":{\"limit_price\":\"240.00\"},"
+            "\"stop_loss\":{\"stop_price\":\"220.00\"},"
+            "\"legs\":null}";
+        auto qnull = ad.QueryOnce(id);
+        Check(qnull.found && qnull.transport_ok &&
+                  !qnull.protection_active && qnull.bracket_class &&
+                  qnull.filled_qty == 10,
+              "query-legs-null-bracket-held");
+        // Same shape, simple order class -> genuinely no bracket:
+        // neither confirmed nor constructive (repair legitimate).
+        g_reply =
+            "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
+            "\"status\":\"filled\",\"symbol\":\"SPY\","
+            "\"qty\":\"10\",\"filled_qty\":\"10\",\"side\":\"buy\","
+            "\"type\":\"market\",\"legs\":null}";
+        auto qsmp = ad.QueryOnce(id);
+        Check(qsmp.found && !qsmp.protection_active &&
+                  !qsmp.bracket_class,
+              "query-simple-no-bracket");
         g_status = 200;
         // Repair is a LIMIT OCO with opposing side + sane prices.
         ProtectedOrder o;
@@ -407,7 +480,7 @@ int main() {
         o.client_order_id[64] = '\0';
         o.intent_id[64] = '\0';
         g_reply =
-            "{\"id\":\"o9\",\"take_profit\":{},\"stop_loss\":{},"
+            "{\"id\":\"o9\",\"order_class\":\"oco\",\"take_profit\":{},\"stop_loss\":{},"
             "\"legs\":[{\"id\":\"r1\",\"type\":\"limit\"},"
             "{\"id\":\"r2\",\"type\":\"stop\"}]}";
         bool rep = ad.EstablishProtection(o);
@@ -428,14 +501,37 @@ int main() {
         int before = g_calls;
         Check(!ad.EstablishProtection(o) && g_calls == before,
               "repair-price-guard");
-        // MarketClose posts a plain market order for exits.
+        // MarketClose posts a plain market order carrying the exit's
+        // stable client ID; the UUID + transport-ok ride the ack.
         g_calls = 0;
-        auto mc = ad.MarketClose("AAPL", 10, OrderSide::SELL);
-        Check(mc.executed && g_last_method[0] == 'P' &&
+        g_status = 200;
+        g_reply =
+            "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
+            "\"status\":\"filled\",\"filled_qty\":\"10\"}";
+        char xid[65];
+        for (int i = 0; i < 64; ++i) xid[i] = 'x';
+        xid[64] = '\0';
+        auto mc = ad.MarketClose("AAPL", 10, OrderSide::SELL, xid);
+        Check(mc.executed && mc.transport_ok && g_last_method[0] == 'P' &&
                   Has(g_last_path, "/v2/orders") &&
                   Has(g_last_body, "\"side\":\"sell\"") &&
-                  !Has(g_last_body, "order_class"),
+                  Has(g_last_body, "\"client_order_id\":\"xxxx") &&
+                  !Has(g_last_body, "order_class") &&
+                  Has(mc.broker_order_id,
+                      "0193abcd-1234-5678-9abc-def012345678"),
               "close-market-plain");
+        // Ambiguous close (response lost): not executed, no UUID —
+        // the caller reconciles by client ID, never re-sends blind.
+        g_status = 500;
+        auto mc2 = ad.MarketClose("AAPL", 10, OrderSide::SELL, xid);
+        Check(!mc2.executed && !mc2.transport_ok &&
+                  mc2.broker_order_id[0] == '\0',
+              "close-ambiguous-reconciles");
+        g_status = 200;
+        g_reply = "{\"ok\":true}";
+        auto mc3 = ad.MarketClose("AAPL", 10, OrderSide::SELL, xid);
+        Check(!mc3.executed && !mc3.transport_ok,
+              "close-malformed-reconciles");
     }
     if (g_fail == 0) std::printf("BROKER SUITE: ALL PASS (%d checks)\n",
                                  g_count);
