@@ -1845,3 +1845,23 @@ plane (Phase D) change any interface a future slice depends on?
   (test_sources: only pre-existing Windows tear failure, proven on
   pristine tree, hosted Linux unaffected); ctx green; freeze PASS.
   Live soak + measured p50/p99 explicitly OPEN (parallel evidence).
+
+## Addendum 100 - live soak round-1 (Track A operational evidence)
+- Harness: research-plane/sandbox/source_soak.py polls the five
+  ACCEPTED production adapters live (real pacing/backoff, 6 cycles,
+  per-poll latency/ok/records/errors + heartbeat files). Evidence:
+  research-plane/sandbox/soak-evidence-live.json. Exit 0 always.
+- Results: EDGAR p50=94ms p99=125ms all-ok (1 filing then
+  duplicate-steady-state); FRED p50=6016ms p99=6453ms all-ok (6
+  series at the conservative 1/s pace); Treasury p50=2750ms
+  p99=3266ms all-ok; BEA p50=984ms p99=1609ms all-ok; heartbeats
+  healthy for all four.
+- BLS: 6/6 live HTTP 403 from this egress (bot-filtered), adapter
+  recorded bad-envelope/stale + heartbeat ok=False every cycle —
+  fail-closed behavior PROVEN against a real live refusal (not a
+  fixture). BLS p50/p99 stays OPEN pending an allowed egress; the
+  frozen UA is NOT to be altered to evade the refusal.
+- FRED/ALFRED vintage replay remains PROVEN per Box 7 (Addendum 35);
+  this round covers the live observations path. Extended soak +
+  outage/TTL behavior stay OPEN parallel evidence. No code-path
+  changes (harness + evidence only).
