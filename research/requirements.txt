@@ -1,4 +1,4 @@
-# Frozen Phase-2.5 research-plane dependencies (doc 08; exact pins).
+# Frozen Phase-2.5 research dependencies (doc 08; exact pins).
 # Reproducibility: every runtime dep is == pinned (no floating ranges).
 # Install: python3 -m venv .venv && .venv/Scripts/python -m pip install -r requirements.txt
 langgraph==1.1.6

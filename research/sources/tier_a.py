@@ -10,7 +10,7 @@ nothing:
 - FRED/ALFRED: key-gated -> BLOCKED (no key in env), never silently
   downgraded. ALFRED vintage replay needs the same key.
 - Calendar: fail-closed gate result (missing -> CalendarMissing).
-Usage: python3 research-plane/sources/tier_a.py [--out PATH]
+Usage: python3 research/sources/tier_a.py [--out PATH]
 Writes evidence JSON. Exit 0 always (evidence, not a gate); the
 promotion gate reads the file, not the exit code.
 """

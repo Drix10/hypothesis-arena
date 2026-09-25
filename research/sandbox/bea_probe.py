@@ -12,7 +12,7 @@ Proves, with N=3 timed samples per call and zero secret leakage:
      denial).
 UserID comes from root .env via collector.config.load (never argv,
 never printed; URLs are redacted in all output). Exit 0 only if 1-4
-hold. Usage: python3 research-plane/sandbox/bea_probe.py [--out PATH]
+hold. Usage: python3 research/sandbox/bea_probe.py [--out PATH]
 """
 import json
 import sys

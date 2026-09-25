@@ -2,7 +2,7 @@
 # Linux deployment only: create the four trading identities (doc 08 sec. 8.2).
 # NOT run on dev hosts. After running, execute the isolation test:
 #   setpriv --reuid=miroresearch --regid=miroresearch --clear-groups \
-#     python3 research-plane/tests/test_isolation.py --tree /srv/mirohedge
+#     python3 research/tests/test_isolation.py --tree /srv/mirohedge
 set -euo pipefail
 for u in mirotrade miroresearch mirojev mirohuman; do
   id "$u" >/dev/null 2>&1 || useradd -m -s /usr/sbin/nologin "$u"
@@ -56,7 +56,7 @@ probe "mirotrade reads own broker.key" 0 as mirotrade test -r "$TREE/creds/broke
 probe "miroresearch writes own features dir" 0 as miroresearch test -w "$TREE/features"
 echo "--- repo isolation check as miroresearch ---"
 REPO="${REPO:-/mnt/c/Users/ggdri/Downloads/hypothesis-arena}"
-as miroresearch python3 "$REPO/research-plane/tests/test_isolation.py" --tree "$TREE" || FAIL=$((FAIL+1))
+as miroresearch python3 "$REPO/research/tests/test_isolation.py" --tree "$TREE" || FAIL=$((FAIL+1))
 echo "---"
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

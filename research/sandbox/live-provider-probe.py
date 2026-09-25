@@ -11,7 +11,7 @@ Pricing (OpenRouter contract 2026-09-23, meta/muse-spark-1.3-contributor):
   $0.10/M input + $0.20/M output -> worst-leg $0.00020/1k in the table.
 Call is capped to max_tokens=16 (~$0.00002 worst case).
 
-Usage: python3 research-plane/sandbox/live-provider-probe.py [--out PATH]
+Usage: python3 research/sandbox/live-provider-probe.py [--out PATH]
 Exit 0 only on: HTTP-200-class success AND tape totals present AND
 lease settled AND computed dollars > 0 and < reservation.
 NEVER prints the API key. Writes evidence JSON with --out.

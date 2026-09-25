@@ -15,7 +15,7 @@ Proves, with N=3 timed samples per call and zero secret leakage:
      never promoted, never retried as success).
 Key comes from root .env via collector.config.load (never argv, never
 printed; URLs are redacted in all output). Exit 0 only if 1-4 hold.
-Usage: python3 research-plane/sandbox/fred-vintage-probe.py [--out PATH]
+Usage: python3 research/sandbox/fred-vintage-probe.py [--out PATH]
 """
 import json
 import os

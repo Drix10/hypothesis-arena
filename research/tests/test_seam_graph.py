@@ -4,7 +4,7 @@ the GRAPH'S OWN emit node publishes through the seam-bound
 publisher — the test never invokes publish.resolve_emit itself.
 
 Runs in the plane job (pinned venv, langgraph) — NOT the stdlib
-evidence job. Run locally with the research-plane .venv python.
+evidence job. Run locally with the research .venv python.
 """
 import hashlib
 import json

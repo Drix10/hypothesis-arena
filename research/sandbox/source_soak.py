@@ -5,7 +5,7 @@ their real pacing/backoff, N cycles each, and records per-poll
 latency/ok/records/errors + heartbeat files. Evidence JSON only;
 exit 0 always (evidence, not a gate). Secrets never printed.
 
-Usage: python3 research-plane/sandbox/source_soak.py [--cycles N]
+Usage: python3 research/sandbox/source_soak.py [--cycles N]
   [--out PATH]
 Env (root .env via collector.config, the sole loader):
   MIRO_CONTACT (EDGAR fail-closed), FRED_API_KEY, BEA_USER_ID.

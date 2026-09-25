@@ -15,7 +15,7 @@ import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, ".."))  # repo root: collector/
-sys.path.insert(0, ROOT)  # research-plane/: plane/
+sys.path.insert(0, ROOT)  # research/: plane/
 
 from collector import ctx_read
 from plane import emit as emit_mod

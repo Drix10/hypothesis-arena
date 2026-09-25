@@ -15,7 +15,7 @@ Keys come from root .env via collector.config.load (never argv, never
 printed; secret never in URLs). PAPER base only — the base URL is
 pinned in code, not configurable. READ-ONLY: no order endpoints are
 called anywhere in this file. Exit 0 only if 1-4 hold.
-Usage: python3 research-plane/sandbox/alpaca_paper_probe.py [--out PATH]
+Usage: python3 research/sandbox/alpaca_paper_probe.py [--out PATH]
 """
 import json
 import math

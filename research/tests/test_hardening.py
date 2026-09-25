@@ -16,7 +16,7 @@ import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, ".."))  # repo root: collector/
-sys.path.insert(0, ROOT)  # research-plane/: plane/
+sys.path.insert(0, ROOT)  # research/: plane/
 
 import test_plane as T
 from plane import attribution, budgets, locks, r15

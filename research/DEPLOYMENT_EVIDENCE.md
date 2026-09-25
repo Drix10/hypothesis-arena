@@ -21,7 +21,7 @@ plane SUCCESS (249-test battery), kernel SUCCESS, evidence SUCCESS
 ## Box 8 — §8.6 remaining evidence — PARTIAL 2026-09-22
 
 - Kill -9 + resume + no-dupes PROVEN at runtime
-  (`research-plane/sandbox/kill9-resume.sh` + worker/verify/reconcile,
+  (`research/sandbox/kill9-resume.sh` + worker/verify/reconcile,
   real 6-node graph, fake models, SQLite checkpoints, 40 epochs):
   SIGKILL mid-run → same-thread resume records the killed attempt's
   ambiguity as unknown-spend and aborts (fail-closed, asserted) →
@@ -68,7 +68,7 @@ Exact Tier-A source-by-source matrix (plan §9.1 table is the requirement):
 | Earnings calendar (free/EDGAR-derived) | veto-side schedule | SPLIT 2026-09-22: gate implementation + live probe PROVEN (`sources/earnings.py` + 6 fail-closed tests; AAPL/MSFT 200s zero-403, p50 ~1.0s; July-2026 earnings detected; True-on-event / False-on-quiet / True-on-unknown). Tier-A operational wiring (working poller + TTL + heartbeat per §9.4) OPEN — source NOT YET FULLY PROVEN (audit correction) |
 | Fed/ECB monetary RSS (Tier-B official) | bonus coverage | PROVEN live (Fed p50 ~400ms, ECB p50 ~766ms, all-200) |
 
-- Artifact `research-plane/sandbox/tier-a-deploy-evidence.json` holds the
+- Artifact `research/sandbox/tier-a-deploy-evidence.json` holds the
   EDGAR+Fed+calendar run; Treasury/BLS/ECB measured ad-hoc (same urllib
   semantics as `sources/tier_a.py`; that probe itself unchanged by design
   — no scope creep for this pass).
@@ -85,7 +85,7 @@ Exact Tier-A source-by-source matrix (plan §9.1 table is the requirement):
 
 ## Box 6 — Langfuse server + attribution — PARTIAL 2026-09-22
 
-- Server SELF-HOSTED and healthy: `research-plane/sandbox/langfuse/`
+- Server SELF-HOSTED and healthy: `research/sandbox/langfuse/`
   `docker-compose.yml` (postgres:16-alpine + redis:7-alpine +
   clickhouse:24-alpine + langfuse:2, health-gated startup) boots to
   `/api/public/health → 200` (bring-up needed two honest fixes:
@@ -113,7 +113,7 @@ Exact Tier-A source-by-source matrix (plan §9.1 table is the requirement):
   `r15.WALL_S` is the same constant the cycle bound and prune
   already enforce). Deadline-parameterized, so proven at short
   deadlines — identical ladder at any value.
-- Script `research-plane/sandbox/kill-probe.py` on Linux (POSIX-only;
+- Script `research/sandbox/kill-probe.py` on Linux (POSIX-only;
   Windows signals vacuous): 4/4 PASS, exit 0. SIGTERM-trapping runaway
   → SIGKILL escalation, CallTimeout in 13.6s on a 3s deadline
   (bounded); cooperative sleeper → TERM death, CallTimeout in 3.3s;
@@ -122,7 +122,7 @@ Exact Tier-A source-by-source matrix (plan §9.1 table is the requirement):
 
 ## Box 4 — model credential + pricing config — PARTIAL 2026-09-22
 
-- Fail-closed PROVEN at runtime (`research-plane/sandbox/config-probe.py`,
+- Fail-closed PROVEN at runtime (`research/sandbox/config-probe.py`,
   venv python, 5/5 PASS exit 0, shipped constructors, no mocks): empty/None
   pricing → ConfigBlocked; provider without egress proxy → ConfigBlocked
   (never direct); without model_id → ConfigBlocked; bogus-key provider
@@ -162,14 +162,14 @@ Exact Tier-A source-by-source matrix (plan §9.1 table is the requirement):
 
 ## Box 3 — image pin/digest/SBOM/scan — PROVEN 2026-09-22
 
-- Base pinned in `research-plane/sandbox/Dockerfile`:
+- Base pinned in `research/sandbox/Dockerfile`:
   `python:3.11-slim-bookworm@sha256:a36c24f9…` (pre-existing pin).
 - Built `mirohedge/worker:sandbox-20260922`, digest
   `sha256:4da3c201…5834` (local build; no registry push — no
   registry credential exists on this host; RepoDigest records on push).
-- SBOM: `research-plane/sandbox/image-sbom.cyclonedx.json`
+- SBOM: `research/sandbox/image-sbom.cyclonedx.json`
   (CycloneDX 1.5, 194 components, sha256 `27e24676…`).
-- Scan: `research-plane/sandbox/image-scan.txt` (`docker scout cves`):
+- Scan: `research/sandbox/image-scan.txt` (`docker scout cves`):
   3C 14H 13M 40L, all inherited from the pinned bookworm base
   (worker layer adds only the ==-pinned pip set). Disposition: no
   silent upgrade — re-pin + rebuild + re-scan per the Dockerfile D3
@@ -177,17 +177,17 @@ Exact Tier-A source-by-source matrix (plan §9.1 table is the requirement):
 
 ## Box 2 — egress enforcement (§8.6 "Egress proven") — PROVEN 2026-09-22
 
-- Worker image built from `research-plane/sandbox/Dockerfile`:
+- Worker image built from `research/sandbox/Dockerfile`:
   `mirohedge/worker:sandbox-20260922`, image digest
   `sha256:4da3c2016be32467812b1fce4da00e67636605b100b0750caf6b35b4f68a5834`
   (local build; registry push + SBOM/scan are Box 3).
 - Topology: worker on `--internal` docker network `egress-inner` (no
   external route possible) + squid forward proxy (`egress-proxy`,
-  config `research-plane/sandbox/egress-proxy/squid.conf`: exact
+  config `research/sandbox/egress-proxy/squid.conf`: exact
   `dstdomain` allowlist = `www.sec.gov`, deny-all default) on both
   nets. Worker runs with the doc-08 flags (non-root 65532, read-only
   rootfs, cap-drop ALL, pids/memory/cpu limits).
-- Script `research-plane/sandbox/egress-probe.sh`: 5/5 PASS, exit 0.
+- Script `research/sandbox/egress-probe.sh`: 5/5 PASS, exit 0.
   allowlisted host transits (origin verdict, never proxy-403);
   `example.com` AND `data.sec.gov` die AT THE PROXY with 403
   (subdomain precision: allowlist is exact, not suffix-wide); direct
@@ -203,7 +203,7 @@ Exact Tier-A source-by-source matrix (plan §9.1 table is the requirement):
 
 ## Box 1 — OS-user isolation (§8.6 "Isolation proven") — PROVEN 2026-09-22
 
-- Script: `research-plane/sandbox/setup-identities.sh` (original deployment
+- Script: `research/sandbox/setup-identities.sh` (original deployment
   script restored + evidence probes appended; idempotent re-run), run as
   root on the deployment host: tree ready + 8/8 probes PASS, exit 0.
 - Users `mirotrade`, `miroresearch`, `mirojev`, `mirohuman` with private

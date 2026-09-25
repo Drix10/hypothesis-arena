@@ -36,7 +36,7 @@ Tracked (the "389" count includes these 7): `.env.example`,
   optional; broker/BEA keys stay out until a code path consumes them).
   Sole loader: `collector/config.py::_load_dotenv` (root file,
   allowlisted KEYS, exported environment wins). Designated consumer for
-  sandbox/research-plane Python: `collector.config.load()`. HONEST
+  sandbox/research Python: `collector.config.load()`. HONEST
   STATUS: the loader is implemented + tested
   (`collector/tests/test_config.py`); today the only production
   consumer is the collector itself (`collect.py` via config,
@@ -152,17 +152,17 @@ tests co-located)
 
 Production ingestion path: the poller that turns outside data into
 `data/signals/<day>.jsonl`. (Second live-access point:
-`research-plane/sources/` readiness probes + the earnings veto gate —
+`research/sources/` readiness probes + the earnings veto gate —
 see §5. The collector is the production path; sources/ probes are
 evidence and gating, not the poller.)
 
 Reconciliation (Phase-2.5 seam, plan/08 §8.3 governs): the five
-accepted research-plane adapters (EDGAR/FRED/Treasury/BLS/BEA) ARE
+accepted research adapters (EDGAR/FRED/Treasury/BLS/BEA) ARE
 the graph harvest implementation — pure I/O, no LLM — orchestrated
-once by `research-plane/plane/source_seam.py`, which owns the single
+once by `research/plane/source_seam.py`, which owns the single
 adapter singletons, stamps, heartbeats, and the canonical mapping
 into resolver/f2. The tracked production composition is
-`research-plane/plane/runner.py::build_production_runner`: one
+`research/plane/runner.py::build_production_runner`: one
 Runner owns one Seam + one graph app for the process lifetime and
 binds ALL THREE seam-owned graph callbacks — `harvest`,
 `parser_extract` (adapter rec → lineage-bound parser candidate),
@@ -193,7 +193,7 @@ per source. Nothing in the seam trades.
 - `jev.py` — JEV sidecar v3: pinned revision/provider, Ed25519
   sign/verify, spend ceiling, retry-once-HOLD; no key → HOLD.
 - `ctx_read.py` — frozen bundle/feature reader (`read_latest`);
-  validity owned here exclusively (research-plane `schema.py` never
+  validity owned here exclusively (research `schema.py` never
   re-validates). Also imported by plane emit + tests (import ≠ change).
 - `entity_map.json` — entity resolution map (config).
 - `sources.json` — source registry (incl. `needs_key: FRED_API_KEY`,
@@ -209,7 +209,7 @@ per source. Nothing in the seam trades.
   network. CI `stdlib` job. Failing hosted = pre-existing frozen
   failure (proven path-independent, Addendum 30).
 
-## 5. research-plane/ (ACTIVE)
+## 5. research/ (ACTIVE)
 
 ### plane/ (18)
 
@@ -322,7 +322,7 @@ Direct children (13 tracked files):
 - `tier-a-deploy-evidence.json` + `earnings-deploy-evidence.json` —
   immutable measurement artifacts (not runtime inputs).
 
-### research-plane root (4)
+### research root (4)
 
 - `DEPLOYMENT_EVIDENCE.md` — ACTIVE per-box proof log (current gate
   statuses live here).
@@ -375,7 +375,7 @@ mirror (missing ledger raises, never $0).
   carries the additive `RESEARCH_MODEL_ID` loader key per Addendum 32
   — the only exception), `plan/`, JEV
   contracts, `research/` memos, round addenda, evidence JSON artifacts.
-- ACTIVE: `research-plane/plane`, `sources`, `tests`, `sandbox`,
+- ACTIVE: `research/plane`, `sources`, `tests`, `sandbox`,
   `lessons.jsonl`, `requirements.txt`, `TODO.md`, `README.md`, this
   file, CI wiring, `.env.example` (additive consumed keys only).
 - FUTURE: Slice D; live capital past G0_PAPER; production broker

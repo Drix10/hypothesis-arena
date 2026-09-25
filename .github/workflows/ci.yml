@@ -6,7 +6,7 @@
 #     their own job so collector failure cannot mask them (Round-9
 #     audit gap: isolation used to be skipped behind the frozen
 #     collector loop, and sources never ran in CI at all).
-#  3. plane — full research-plane battery in the pinned venv, including
+#  3. plane — full research battery in the pinned venv, including
 #     the final-hardening P0 suite (concurrency, crash recovery,
 #     process boundary, publisher/manifest/reader/digest).
 #  4. kernel — deterministic C++ gates (normal mode; MinGW-only
@@ -53,21 +53,21 @@ jobs:
         with:
           python-version: "3.11"
       - name: plane isolation (stdlib only)
-        run: PYTHONWARNINGS=error python3 research-plane/tests/test_isolation.py
+        run: PYTHONWARNINGS=error python3 research/tests/test_isolation.py
       - name: plane sources (stdlib only)
-        run: PYTHONWARNINGS=error python3 research-plane/tests/test_sources.py
+        run: PYTHONWARNINGS=error python3 research/tests/test_sources.py
       - name: plane EDGAR adapter (stdlib only)
-        run: PYTHONWARNINGS=error python3 research-plane/tests/test_edgar.py
+        run: PYTHONWARNINGS=error python3 research/tests/test_edgar.py
       - name: plane FRED adapter (stdlib only)
-        run: PYTHONWARNINGS=error python3 research-plane/tests/test_fred.py
+        run: PYTHONWARNINGS=error python3 research/tests/test_fred.py
       - name: plane Treasury adapter (stdlib only)
-        run: PYTHONWARNINGS=error python3 research-plane/tests/test_treasury.py
+        run: PYTHONWARNINGS=error python3 research/tests/test_treasury.py
       - name: plane BLS adapter (stdlib only)
-        run: PYTHONWARNINGS=error python3 research-plane/tests/test_bls.py
+        run: PYTHONWARNINGS=error python3 research/tests/test_bls.py
       - name: plane BEA adapter (stdlib only)
-        run: PYTHONWARNINGS=error python3 research-plane/tests/test_bea.py
+        run: PYTHONWARNINGS=error python3 research/tests/test_bea.py
       - name: plane source-seam integration (stdlib only)
-        run: PYTHONWARNINGS=error python3 research-plane/tests/test_source_seam.py
+        run: PYTHONWARNINGS=error python3 research/tests/test_source_seam.py
 
   plane:
     runs-on: ubuntu-latest
@@ -78,13 +78,13 @@ jobs:
         with:
           python-version: "3.11"
       - name: install pinned plane deps
-        run: python3 -m pip install -r research-plane/requirements.txt
+        run: python3 -m pip install -r research/requirements.txt
       - name: plane battery (no external network; .invalid hosts only)
         run: |
-          PYTHONWARNINGS=error python3 research-plane/tests/test_plane.py
-          PYTHONWARNINGS=error python3 research-plane/tests/test_hardening.py
-          PYTHONWARNINGS=error python3 research-plane/tests/test_emit.py
-          PYTHONWARNINGS=error python3 research-plane/tests/test_seam_graph.py
+          PYTHONWARNINGS=error python3 research/tests/test_plane.py
+          PYTHONWARNINGS=error python3 research/tests/test_hardening.py
+          PYTHONWARNINGS=error python3 research/tests/test_emit.py
+          PYTHONWARNINGS=error python3 research/tests/test_seam_graph.py
 
   kernel:
     runs-on: ubuntu-latest

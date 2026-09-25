@@ -94,7 +94,7 @@ Contact for SEC user-agent: `MIRO_CONTACT` env. FRED key: `FRED_API_KEY` env (sk
 plan/           # the spec. 14 docs + manifest, read 00-INDEX first. Plan wins every argument.
 collector/      # Python: signal collection, classification, ctx reader, JEV sidecar; tests in tests/
 kernel/         # C++: boundary validator, typed state, decision table, veto, ingest; tests in tests/
-research-plane/ # plane/ (graph+spend), sources/ (probes+gates), tests/ (runnable battery), sandbox/ (deployment evidence), lessons/
+research/ # plane/ (graph+spend), sources/ (probes+gates), tests/ (runnable battery), sandbox/ (deployment evidence), lessons/
 scripts/        # freeze-check.sh (repo fingerprint), ops scripts
 data/           # local only, gitignored. Signals, soak evidence, journals live here.
 .env / .env.example  # canonical config + template (sole loader: collector/config.py)

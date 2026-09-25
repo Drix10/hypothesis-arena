@@ -8,7 +8,7 @@ bundle, and reads it with frozen ctx_read. Proves on live data:
 outage-is-absence (BLS contributes nothing, nothing blocks), and
 live records flow end-to-end through the ACCEPTED path.
 
-Usage: python3 research-plane/sandbox/seam_live_pass.py [--out PATH]
+Usage: python3 research/sandbox/seam_live_pass.py [--out PATH]
 Exit 0 always (evidence, not a gate). Secrets never printed.
 """
 import json
