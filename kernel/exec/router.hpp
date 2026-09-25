@@ -131,15 +131,18 @@ struct RouteObs {
     // the Alpaca streaming event id (ULID, 26 chars) passes through
     // unchanged; 32-hex poll tags are also accepted. Bounded token
     // [A-Za-z0-9_-], max 32 chars, snapshot-persisted verbatim.
-    // Ordering authority (doc 13 sec. 13.7): ULID-vs-ULID compares
-    // by broker time (ULID timestamp, then full-string tiebreak) —
-    // genuine broker-event ordering. Non-ULID ids fall back to the
-    // caller-assigned monotonic seq per machine (single-source poll
-    // ordering ONLY, never broker authority): exact redelivery
-    // collapses, older seq is stale, same-seq different-id is a
-    // conflict (first applied wins), only newer seq applies.
-    // REST polls normally carry NO event (empty): full-state
-    // snapshots converge independently of arrival order.
+    // Ordering authority (doc 13 sec. 13.7) is DOMAIN-SEPARATED:
+    //   ULID-vs-ULID: broker-time compare (timestamp, then full
+    //     string). Older-after-newer is stale even when it arrived
+    //     later; exact redelivery collapses.
+    //   non-ULID-vs-non-ULID: caller-seq rules (single-source poll
+    //     ordering only — explicitly NOT broker authority).
+    //   cross-family / no-event REST snapshots: NEVER regress
+    //     broker-stream state. REST is reconciliation, not a
+    //     competing sequence: fills are monotonic (a snapshot below
+    //     the established floor is stale), protection never unsets,
+    //     terminals never un-terminal. No fake cross-family
+    //     comparison is ever invented.
     char event_id[33]{};
     std::uint64_t event_seq = 0;
     risk::KillLevel kill = risk::KillLevel::NONE;
@@ -172,6 +175,16 @@ struct RouteMachine {
     // 404-absent re-issues keep the SAME id (nothing exists to
     // collide with). Persisted across restart: no double-mint.
     std::uint8_t exit_attempt = 0;
+    // Cumulative exit accounting (P0-2 partial-DEAD): exit_closed =
+    // total shares confirmed closed under this intent (monotonic,
+    // never regresses); exit_counted = amount already counted for
+    // the CURRENT sub-order (reset on every sub-ID rotation).
+    // Recovery order size = intent.qty - exit_closed (carried on
+    // RouteOut.exit_qty); flat ⟺ exit_closed >= intent.qty.
+    // Persisted: restart never re-closes closed shares (overshoot
+    // is impossible by construction).
+    std::int64_t exit_closed_qty = 0;
+    std::int64_t exit_counted_qty = 0;
     std::int64_t filled_qty = 0;
     bool emergency = false;
     bool protection_ok = false;  // positively confirmed protection;
@@ -193,6 +206,11 @@ inline constexpr int kQueryMaxAttempts = 2;  // frozen one-query /
 struct RouteOut {
     RouteAction action = RouteAction::NONE;
     RouteMachine next;
+    // EXECUTE_EXIT / EXECUTE_EMERGENCY carry the exact order size
+    // here (intent.qty - exit_closed_qty): the caller submits
+    // MarketClose with THIS qty and next.client_id, never a
+    // recomputed size (recovery orders target the remainder only).
+    std::int64_t exit_qty = 0;
     bool freeze_symbol = false;  // caller adds symbol to its freeze set
     const char* journal_kind = "intent";  // row the caller writes on
                                           // WRITE_*/JOURNAL_* actions

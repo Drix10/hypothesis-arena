@@ -1020,6 +1020,103 @@ int main() {
         Check(rd2.action == RouteAction::EXECUTE_EXIT &&
                   rd2.next.exit_attempt == 2 && neon2,
               "exit-dead-attempt-2");
+        // P0-2 partial DEAD: X filled 40 before cancel -> closed=40
+        // persists, Y targets exactly the remaining 60 (never 100).
+        RouteObs odp = OpenMarket();
+        odp.exit_responded = true;
+        odp.exit_ack.transport_ok = true;
+        odp.exit_ack.state = CloseState::DEAD;
+        odp.exit_ack.filled_qty = 40;
+        auto rdp = Step(r2.next, ex, venue, odp);
+        Check(rdp.action == RouteAction::EXECUTE_EXIT &&
+                  rdp.next.exit_attempt == 1 &&
+                  rdp.next.exit_closed_qty == 40 &&
+                  rdp.exit_qty == 60 &&
+                  rdp.next.broker_id[0] == '\0',
+              "exit-dead-partial-remainder");
+        // P1-4: the mint clears X's UUID (Y captures its own later).
+        Check(rd.next.broker_id[0] == '\0', "exit-mint-clears-uuid");
+        // P0/P1-3 stale REST snapshot vs ULID stream authority.
+        // Same client/order across both sources; restart-safe via
+        // persisted last-event. REST never regresses stream state.
+        {
+            // Non-trivial floor: crafted QUERY_SENT with an
+            // established fill floor 40 + ULID high-water (real
+            // binding, so it snapshots/restores like a crash image).
+            // A later no-event REST snapshot saying 30 would
+            // PARTIAL-regress under naive receipt order; the
+            // monotonic floor ignores it instead, byte-identical.
+            RouteMachine ms;
+            ms.state = RouteState::QUERY_SENT;
+            for (int i = 0; i < 64; ++i) ms.client_id[i] = 'a';
+            ms.client_id[64] = '\0';
+            const char* iid = "intent-001";
+            int ii = 0;
+            while (iid[ii]) {
+                ms.intent_id[ii] = iid[ii];
+                ++ii;
+            }
+            ms.intent_id[ii] = '\0';
+            ms.symbol[0] = 'A';
+            ms.symbol[1] = 'A';
+            ms.symbol[2] = 'P';
+            ms.symbol[3] = 'L';
+            ms.symbol[4] = '\0';
+            ms.filled_qty = 40;
+            RouteObs ue = OpenMarket();
+            SetUlid(ue, 1780000005000ULL, 3u);
+            for (int i = 0; i < 33; ++i)
+                ms.last_event_id[i] = ue.event_id[i];
+            RouteObs sr = OpenMarket();
+            for (int i = 0; i < 65; ++i) sr.client_id[i] = 'a';
+            sr.adapter_responded = true;
+            sr.query.transport_ok = true;
+            sr.query.found = true;
+            sr.query.filled_qty = 30;
+            sr.query.protection_active = true;
+            SetUuid(sr.query.broker_order_id);
+            auto s_s = Step(ms, in, venue, sr);
+            Check(s_s.action == RouteAction::NONE &&
+                      s_s.next.state == RouteState::QUERY_SENT &&
+                      s_s.next.filled_qty == 40,
+                  "xauth-stale-rest-ignored");
+            // Restart between sources: the persisted ULID floor
+            // still rejects the stale REST snapshot.
+            char snapx[320];
+            Check(SnapshotMachine(ms, snapx, sizeof(snapx)),
+                  "xauth-restart-snaps");
+            RouteMachine qx2;
+            Check(RestoreMachine(snapx, &qx2) && qx2.filled_qty == 40,
+                  "xauth-restart-loads");
+            bool ulid_kept = true;
+            for (int i = 0; i < 27 && ulid_kept; ++i)
+                if (qx2.last_event_id[i] != ue.event_id[i])
+                    ulid_kept = false;
+            Check(ulid_kept, "xauth-restart-keeps-ulid");
+            auto s_r = Step(qx2, in, venue, sr);
+            Check(s_r.action == RouteAction::NONE &&
+                      s_r.next.filled_qty == 40,
+                  "xauth-restart-stale-ignored");
+            // Reverse: a newer ULID 100 still applies over the REST
+            // floor (crafted QUERY_SENT, last empty).
+            RouteMachine mq2;
+            mq2.state = RouteState::QUERY_SENT;
+            mq2.client_id[0] = '\0';
+            mq2.intent_id[0] = '\0';
+            mq2.filled_qty = 40;
+            RouteObs mu = OpenMarket();
+            mu.adapter_responded = true;
+            mu.query.transport_ok = true;
+            mu.query.found = true;
+            mu.query.filled_qty = 100;
+            mu.query.protection_active = true;
+            SetUuid(mu.query.broker_order_id);
+            SetUlid(mu, 1780000006000ULL, 3u);
+            auto m_f = Step(mq2, in, venue, mu);
+            Check(m_f.action == RouteAction::JOURNAL_FILL &&
+                      m_f.next.filled_qty == 100,
+                  "xauth-ulid-over-rest");
+        }
         // Restart after the mint keeps attempt+id (no double-mint).
         char snapd[320];
         Check(SnapshotMachine(rd.next, snapd, sizeof(snapd)),
@@ -1073,6 +1170,22 @@ int main() {
         Check(rx.action == RouteAction::EXECUTE_EXIT &&
                   rx.next.exit_attempt == 1 && neonx,
               "exit-cancelled-new-identity");
+        // Cancelled WITH partial fills folds first: closed=40
+        // persists, Y targets the remaining 60 (never re-query a
+        // dead order, never resubmit for 100).
+        RouteObs ocp = OpenMarket();
+        ocp.adapter_responded = true;
+        ocp.query.transport_ok = true;
+        ocp.query.found = true;
+        ocp.query.cancelled = true;
+        ocp.query.filled_qty = 40;
+        SetUuid(ocp.query.broker_order_id);
+        auto rpc = Step(ra.next, ex, venue, ocp);
+        Check(rpc.action == RouteAction::EXECUTE_EXIT &&
+                  rpc.next.exit_attempt == 1 &&
+                  rpc.next.exit_closed_qty == 40 &&
+                  rpc.exit_qty == 60,
+              "exit-cancelled-partial-folds");
         // Restart of the ambiguous exit reconciles (no duplicate
         // close send: attempts preserved, query first).
         char snap[320];
@@ -1353,6 +1466,8 @@ int main() {
             m.filled_qty = st * 7;
             m.query_attempts = (std::uint8_t)(st % 3);
             m.exit_attempt = (std::uint8_t)(st % 2);
+            m.exit_closed_qty = (std::int64_t)((st * 11) % 101);
+            m.exit_counted_qty = (std::int64_t)((st * 7) % 101);
             m.emergency = (st & 2) != 0;
             m.protection_ok = (st & 4) != 0;
             char buf[320];
@@ -1366,6 +1481,8 @@ int main() {
                         q.kind == m.kind &&
                         q.query_attempts == m.query_attempts &&
                         q.exit_attempt == m.exit_attempt &&
+                        q.exit_closed_qty == m.exit_closed_qty &&
+                        q.exit_counted_qty == m.exit_counted_qty &&
                         q.filled_qty == m.filled_qty &&
                         q.emergency == m.emergency &&
                         q.side == m.side &&
@@ -1386,79 +1503,88 @@ int main() {
         }
         RouteMachine q;
         Check(!RestoreMachine(nullptr, &q), "snap-null");
-        Check(!RestoreMachine("H1:0:0:0:0:0:0:::::0::0:0", nullptr),
+        Check(!RestoreMachine("H1:0:0:0:0:0:0:::::0::0:0:0:0", nullptr),
               "snap-null-out");
-        Check(!RestoreMachine("X1:0:0:0:0:0:0:::::0::0:0", &q),
+        Check(!RestoreMachine("X1:0:0:0:0:0:0:::::0::0:0:0:0", &q),
               "snap-tag");
-        Check(!RestoreMachine("H1:13:0:0:0:0:0:::intent-001:AAPL:0::0:0",
+        Check(!RestoreMachine("H1:13:0:0:0:0:0:::intent-001:AAPL:0::0:0:0:0",
                               &q),
               "snap-state");
-        Check(!RestoreMachine("H1:0:2:0:0:0:0:::::0::0:0", &q),
+        Check(!RestoreMachine("H1:0:2:0:0:0:0:::::0::0:0:0:0", &q),
               "snap-kind");
-        Check(!RestoreMachine("H1:0:0:0:0:0:0:ZZ::::0::0:0", &q),
+        Check(!RestoreMachine("H1:0:0:0:0:0:0:ZZ::::0::0:0:0:0", &q),
               "snap-hex");
-        Check(!RestoreMachine("H1:0:0:0:0:0:0:::::0::0extra:0", &q),
+        Check(!RestoreMachine("H1:0:0:0:0:0:0:::::0::0extra:0:0:0", &q),
               "snap-trailing");
         Check(!RestoreMachine("H1:0:0:0:0:0:0:", &q), "snap-short");
         // UUID grammar: hyphens exact, lowercase hex, 36 chars.
         Check(!RestoreMachine("H1:0:0:0:0:0:0::0193ABCD-1234-5678-9abc-"
-                              "def012345678:::0::0:0",
+                              "def012345678:::0::0:0:0:0",
                               &q),
               "snap-uuid-upper");
         Check(!RestoreMachine("H1:0:0:0:0:0:0::0193abcd1234-5678-9abc-"
-                              "def012345678:::0::0:0",
+                              "def012345678:::0::0:0:0:0",
                               &q),
               "snap-uuid-hyphen");
-        Check(!RestoreMachine("H1:0:0:0:0:0:0::0193abcd:::0::0:0", &q),
+        Check(!RestoreMachine("H1:0:0:0:0:0:0::0193abcd:::0::0:0:0:0", &q),
               "snap-uuid-short");
         Check(!RestoreMachine("H1:0:0:0:0:0:0::0193abcd-1234-5678-9abc-"
-                              "def01234567X:::0::0:0",
+                              "def01234567X:::0::0:0:0:0",
                               &q),
               "snap-uuid-char");
         // Empty broker id restores (no UUID observed yet), binding
         // intact.
-        Check(RestoreMachine("H1:2:0:0:0:0:0:::intent-001:AAPL:0::0:0",
+        Check(RestoreMachine("H1:2:0:0:0:0:0:::intent-001:AAPL:0::0:0:0:0",
                              &q) &&
                   q.broker_id[0] == '\0' && q.symbol[1] == 'A' &&
                   q.side == OrderSide::BUY,
               "snap-empty-bid");
         // Binding coherence: IDLE carries none; non-IDLE requires all.
-        Check(!RestoreMachine("H1:0:0:0:0:0:0:::intent-001:AAPL:0::0:0",
+        Check(!RestoreMachine("H1:0:0:0:0:0:0:::intent-001:AAPL:0::0:0:0:0",
                               &q),
               "snap-idle-with-binding");
-        Check(!RestoreMachine("H1:2:0:0:0:0:0:::::0::0:0", &q),
+        Check(!RestoreMachine("H1:2:0:0:0:0:0:::::0::0:0:0:0", &q),
               "snap-binding-required");
         Check(!RestoreMachine(
-                  "H1:2:0:0:0:0:0:::intent 001:AAPL:0::0:0", &q),
+                  "H1:2:0:0:0:0:0:::intent 001:AAPL:0::0:0:0:0", &q),
               "snap-bad-intent");
         Check(!RestoreMachine(
-                  "H1:2:0:0:0:0:0:::intent-001:aapl:0::0:0", &q),
+                  "H1:2:0:0:0:0:0:::intent-001:aapl:0::0:0:0:0", &q),
               "snap-bad-sym");
         Check(!RestoreMachine(
-                  "H1:2:0:0:0:0:0:::intent-001:AAPL:2::0:0", &q),
+                  "H1:2:0:0:0:0:0:::intent-001:AAPL:2::0:0:0:0", &q),
               "snap-bad-side");
         Check(!RestoreMachine(
-                  "H1:2:0:0:0:0:0:::intent-001:AAPL:0:Z!::0:0", &q),
+                  "H1:2:0:0:0:0:0:::intent-001:AAPL:0:Z!::0:0:0:0", &q),
               "snap-bad-evid");
         Check(!RestoreMachine(
-                  "H1:2:0:0:0:0:0:::intent-001:AAPL:0::x:0", &q),
+                  "H1:2:0:0:0:0:0:::intent-001:AAPL:0::x:0:0:0", &q),
               "snap-bad-evseq");
         // P1-3: persisted budget is exactly 0..2 (frozen
         // kQueryMaxAttempts); 3 and 9 refuse both ways.
         Check(!RestoreMachine(
-                  "H1:2:0:0:0:0:3:::intent-001:AAPL:0::0:0", &q),
+                  "H1:2:0:0:0:0:3:::intent-001:AAPL:0::0:0:0:0", &q),
               "snap-att-3-refused");
         Check(!RestoreMachine(
-                  "H1:2:0:0:0:0:9:::intent-001:AAPL:0::0:0", &q),
+                  "H1:2:0:0:0:0:9:::intent-001:AAPL:0::0:0:0:0", &q),
               "snap-att-9-refused");
         // Exit sub-identity counter: exactly one digit 0..9.
         Check(!RestoreMachine(
-                  "H1:9:1:0:0:0:0:aa::intent-001:AAPL:0::0:X", &q),
+                  "H1:9:1:0:0:0:0:aa::intent-001:AAPL:0::0:X:0:0", &q),
               "snap-xatt-bad");
         Check(RestoreMachine(
-                  "H1:9:1:0:0:0:0:aa::intent-001:AAPL:0::0:3", &q) &&
-                  q.exit_attempt == 3,
+                  "H1:9:1:0:0:0:0:aa::intent-001:AAPL:0::0:3:40:30",
+                  &q) &&
+                  q.exit_attempt == 3 && q.exit_closed_qty == 40 &&
+                  q.exit_counted_qty == 30,
               "snap-xatt-roundtrip");
+        Check(!RestoreMachine(
+                  "H1:9:1:0:0:0:0:aa::intent-001:AAPL:0::0:3:40", &q),
+              "snap-ecount-short");
+        Check(!RestoreMachine(
+                  "H1:9:1:0:0:0:0:aa::intent-001:AAPL:0::0:3:40:30x",
+                  &q),
+              "snap-ecount-trailing");
         {
             RouteMachine mw2;
             mw2.state = RouteState::QUERY_SENT;

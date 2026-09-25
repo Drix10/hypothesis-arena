@@ -115,9 +115,11 @@ std::int64_t StrictQty(const char* body) {
 // silently collapsed into generic found+qty).
 CloseState ClassifyStatus(const char* st) {
     if (!st || !st[0]) return CloseState::UNKNOWN;
-    // exact-match helper over bounded literals
+    // exact-match helper over bounded literals. NOTE: the venue
+    // order status is "filled" (terminal); bare "fill" is a
+    // trade-event type, never an order status -> UNKNOWN.
     const char* const words[] = {
-        "fill",           "partial_fill", "partially_filled",
+        "filled",         "partial_fill", "partially_filled",
         "accepted",       "pending_new",  "new",
         "calculated",     "canceled",     "rejected",
         "expired"};
@@ -582,10 +584,10 @@ CloseResult AlpacaPaperAdapter::MarketClose(const char* symbol,
     char st[32];
     if (!ExtractQuoted(r.body, "status", st, sizeof(st))) return c;
     bool fill = true;
-    const char* want = "fill";
+    const char* want = "filled";
     for (int i = 0; want[i]; ++i)
         if (st[i] != want[i]) fill = false;
-    if (st[4] != '\0') fill = false;
+    if (st[6] != '\0') fill = false;
     bool partial = false;
     if (!fill) {
         const char* p1 = "partial_fill";
@@ -629,6 +631,17 @@ CloseResult AlpacaPaperAdapter::MarketClose(const char* symbol,
     CopyField(oid, c.broker_order_id, sizeof(c.broker_order_id));
     c.transport_ok = true;
     if (dead) {
+        // DEAD preserves the authoritative cumulative quantity:
+        // a canceled close may have partially filled first, and
+        // that fill is real. Missing/malformed -> UNKNOWN (never
+        // assume zero — zero would overshoot recovery).
+        std::int64_t dq = StrictQty(r.body);
+        if (dq < 0) {
+            c.transport_ok = false;
+            c.broker_order_id[0] = '\0';
+            return c;
+        }
+        c.filled_qty = dq;
         c.state = CloseState::DEAD;
         return c;
     }

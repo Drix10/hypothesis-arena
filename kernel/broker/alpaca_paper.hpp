@@ -23,7 +23,9 @@
 // cancel REQUEST accepted (final cancel needs an explicit canceled
 // observation). MarketClose rides a stable client ID and reports the
 // full close lifecycle (FILLED/PARTIAL/PENDING/DEAD/UNKNOWN) with a
-// strict quantity — a 2xx + UUID alone never means executed.
+// strict quantity — a 2xx + UUID alone never means executed. NOTE:
+// the venue order status is "filled" (bare "fill" is a trade-event
+// type, never an order status).
 #include "adapter.hpp"
 
 namespace jev {

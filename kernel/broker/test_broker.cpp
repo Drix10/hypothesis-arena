@@ -531,7 +531,7 @@ int main() {
         // P1-1 query status normalization (exit reconciliation
         // reads this, not just filled/cancelled).
         const char* statuses[10] = {
-            "fill", "partially_filled", "partial_fill", "new",
+            "filled", "partially_filled", "partial_fill", "new",
             "accepted", "pending_new", "calculated", "canceled",
             "rejected", "expired"};
         const CloseState want_st[10] = {
@@ -560,6 +560,13 @@ int main() {
         Check(qdd.found &&
                   qdd.close_state == CloseState::UNKNOWN,
               "query-status-unlisted");
+        // Bare "fill" is a trade event, not an order status.
+        g_reply =
+            "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
+            "\"status\":\"fill\",\"filled_qty\":\"10\"}";
+        auto qf = ad.QueryOnce(id);
+        Check(qf.found && qf.close_state == CloseState::UNKNOWN,
+              "query-status-fill-word");
         g_status = 200;
         // Repair is a LIMIT OCO with opposing side + sane prices.
         ProtectedOrder o;
@@ -607,10 +614,10 @@ int main() {
         char xid[65];
         for (int i = 0; i < 64; ++i) xid[i] = 'x';
         xid[64] = '\0';
-        // fill -> executed, authoritative quantity.
+        // filled -> executed, authoritative quantity.
         g_reply =
             "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
-            "\"status\":\"fill\",\"filled_qty\":\"10\"}";
+            "\"status\":\"filled\",\"filled_qty\":\"10\"}";
         auto mc = ad.MarketClose("AAPL", 10, OrderSide::SELL, xid);
         Check(mc.executed && mc.transport_ok &&
                   mc.state == CloseState::FILLED && mc.filled_qty == 10 &&
@@ -622,6 +629,30 @@ int main() {
                   Has(mc.broker_order_id,
                       "0193abcd-1234-5678-9abc-def012345678"),
               "close-fill-executed");
+        // Bare trade-event "fill" is NOT an order status -> UNKNOWN.
+        g_reply =
+            "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
+            "\"status\":\"fill\",\"filled_qty\":\"10\"}";
+        auto mf = ad.MarketClose("AAPL", 10, OrderSide::SELL, xid);
+        Check(!mf.executed && !mf.transport_ok &&
+                  mf.state == CloseState::UNKNOWN,
+              "close-fill-word-rejected");
+        // DEAD preserves partial quantity (canceled after 40 filled).
+        g_reply =
+            "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
+            "\"status\":\"canceled\",\"filled_qty\":\"40\"}";
+        auto mdc = ad.MarketClose("AAPL", 100, OrderSide::SELL, xid);
+        Check(!mdc.executed && mdc.transport_ok &&
+                  mdc.state == CloseState::DEAD && mdc.filled_qty == 40,
+              "close-dead-keeps-qty");
+        // DEAD without quantity -> UNKNOWN (never assume zero).
+        g_reply =
+            "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
+            "\"status\":\"canceled\"}";
+        auto mdu = ad.MarketClose("AAPL", 100, OrderSide::SELL, xid);
+        Check(!mdu.executed && !mdu.transport_ok &&
+                  mdu.state == CloseState::UNKNOWN,
+              "close-dead-no-qty-unknown");
         // accepted/new/pending -> PENDING (wait/reconcile, NOT closed).
         const char* pend[4] = {"accepted", "new", "pending_new",
                                "calculated"};
@@ -650,10 +681,10 @@ int main() {
         // canceled/rejected/expired -> DEAD (definitive non-exec).
         g_reply =
             "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
-            "\"status\":\"canceled\"}";
+            "\"status\":\"canceled\",\"filled_qty\":\"0\"}";
         auto md = ad.MarketClose("AAPL", 10, OrderSide::SELL, xid);
         Check(!md.executed && md.transport_ok &&
-                  md.state == CloseState::DEAD,
+                  md.state == CloseState::DEAD && md.filled_qty == 0,
               "close-dead-reissues");
         // Ambiguous close (response lost): not executed, no UUID —
         // the caller reconciles by client ID, never re-sends blind.

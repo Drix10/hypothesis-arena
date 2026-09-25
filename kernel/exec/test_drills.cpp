@@ -108,6 +108,11 @@ static void SetAckId(RouteObs& o) {
     for (int i = 0; u[i]; ++i) o.ack.broker_order_id[i] = u[i];
     o.ack.broker_order_id[36] = '\0';
 }
+static void SetUuid(char (&d)[64]) {
+    const char* u = "0193abcd-1234-5678-9abc-def012345678";
+    for (int i = 0; u[i]; ++i) d[i] = u[i];
+    d[36] = '\0';
+}
 // Distinct broker event: 32-hex id derived from seq + the seq itself
 // (P1-9: arrival permutes, identity/sequence ride the event).
 static void SetEvent(RouteObs& o, unsigned seq) {
@@ -122,13 +127,16 @@ static void SetEvent(RouteObs& o, unsigned seq) {
 // DELETE confirms when aimed at that UUID.
 static int g_e2e_calls = 0;
 static char g_e2e_path[160] = {0};
-// Exit sub-identity fake: logs every close POST client ID; scripted
-// lifecycle replies (0 = accepted/PENDING, 1 = fill/100).
+// Exit sub-identity fake: logs every close POST (client ID + qty);
+// scripted lifecycle replies (0 = accepted/PENDING, 1 = filled/100,
+// 2 = canceled+40 (partial DEAD), 3 = filled/60).
 static int g_exit_posts = 0;
 static int g_exit_x_posts = 0;
 static char g_exit_last_id[65] = {0};
 static char g_exit_first_id[65] = {0};
 static int g_exit_mode = 0;
+static long long g_exit_last_qty = 0;
+static long long g_exit_qtys[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 static jev::broker::HttpResult FakeExit(
     const jev::broker::HttpRequest& req) {
     jev::broker::HttpResult r;
@@ -149,6 +157,31 @@ static jev::broker::HttpResult FakeExit(
     }
     ++g_exit_posts;
     for (int i = 0; i < 65; ++i) g_exit_last_id[i] = cid[i];
+    // Log the requested qty (bounded needle parse).
+    long long pq = -1;
+    {
+        const char* qn = "\"qty\":\"";
+        for (const char* p = req.body; *p; ++p) {
+            const char* a = p;
+            const char* b = qn;
+            while (*a && *b && *a == *b) {
+                ++a;
+                ++b;
+            }
+            if (*b) continue;
+            long long v = 0;
+            int nd = 0;
+            while (*a >= '0' && *a <= '9' && nd < 18) {
+                v = v * 10 + (*a - '0');
+                ++a;
+                ++nd;
+            }
+            if (nd > 0 && *a == '"') pq = v;
+            break;
+        }
+    }
+    g_exit_last_qty = pq;
+    if (g_exit_posts <= 8) g_exit_qtys[g_exit_posts - 1] = pq;
     if (g_exit_first_id[0] == '\0') {
         for (int i = 0; i < 65; ++i) g_exit_first_id[i] = cid[i];
     }
@@ -156,12 +189,20 @@ static jev::broker::HttpResult FakeExit(
     for (int i = 0; i < 65; ++i)
         if (cid[i] != g_exit_first_id[i]) same_x = false;
     if (same_x) ++g_exit_x_posts;
-    const char* b =
-        (g_exit_mode == 1)
-            ? "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
-              "\"status\":\"fill\",\"filled_qty\":\"100\"}"
-            : "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
-              "\"status\":\"accepted\"}";
+    const char* b = nullptr;
+    if (g_exit_mode == 1) {
+        b = "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
+            "\"status\":\"filled\",\"filled_qty\":\"100\"}";
+    } else if (g_exit_mode == 2) {
+        b = "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
+            "\"status\":\"canceled\",\"filled_qty\":\"40\"}";
+    } else if (g_exit_mode == 3) {
+        b = "{\"id\":\"2233abcd-1234-5678-9abc-def012345678\","
+            "\"status\":\"filled\",\"filled_qty\":\"60\"}";
+    } else {
+        b = "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
+            "\"status\":\"accepted\"}";
+    }
     int i = 0;
     while (b[i] && i < 2047) {
         r.body[i] = b[i];
@@ -272,6 +313,10 @@ struct Drive {
     char snaps[16][256];
     int sn = 0;
     int intent_rows = 0;
+    // Last EXECUTE_EXIT size the router authorized (the caller
+    // submits exactly this qty under next.client_id — recovery
+    // orders target the remainder, never a recomputed size).
+    std::int64_t last_exit_qty = 0;
     void step(const Ctx& c, const RouteObs& o, Sink* sink) {
         RouteObs tagged = o;
         if (m.state != RouteState::IDLE && m.client_id[0] != '\0')
@@ -290,6 +335,9 @@ struct Drive {
             if (tn < 16) trace[tn++] = r.journal_kind;
         }
         m = r.next;
+        if (r.action == RouteAction::EXECUTE_EXIT ||
+            r.action == RouteAction::EXECUTE_EMERGENCY)
+            last_exit_qty = r.exit_qty;
         if (sn < 16) SnapshotMachine(m, snaps[sn++], 256);
     }
 };
@@ -795,8 +843,10 @@ int main() {
         jev::broker::AlpacaPaperAdapter ad(FakeExit);
         char xid[65];
         for (int i = 0; i < 65; ++i) xid[i] = d.m.client_id[i];
-        // First close POST carries X.
-        auto c1 = ad.MarketClose("SPY", 100, OrderSide::SELL, xid);
+        // First close POST carries X at the authorized qty.
+        auto c1 = ad.MarketClose("SPY", d.last_exit_qty,
+                                 OrderSide::SELL, xid);
+        Check(d.last_exit_qty == 100, "xid-first-qty");
         Check(g_exit_posts == 1 && Has(g_exit_last_id, xid) &&
                   c1.state == jev::broker::CloseState::PENDING,
               "xid-first-post");
@@ -818,7 +868,9 @@ int main() {
         char yid[65];
         for (int i = 0; i < 65; ++i) yid[i] = d.m.client_id[i];
         g_exit_mode = 1;  // now fill fully
-        auto c2 = ad.MarketClose("SPY", 100, OrderSide::SELL, yid);
+        auto c2 = ad.MarketClose("SPY", d.last_exit_qty,
+                                 OrderSide::SELL, yid);
+        Check(d.last_exit_qty == 100, "xid-second-qty");
         Check(g_exit_posts == 2 && Has(g_exit_last_id, yid) &&
                   !Has(g_exit_last_id, xid) &&
                   c2.state == jev::broker::CloseState::FILLED,
@@ -864,6 +916,105 @@ int main() {
         d2.step(c2x, ofin, &sink);
         Check(d2.m.state == RouteState::CANCELLED && sink.verify(),
               "seam-rests");
+    }
+    // 8. P0-2 partial-DEAD E2E (adapter + router + restart): intent
+    // 100 -> X posts 100 -> X canceled after filling 40 -> Y mints
+    // for exactly 60 -> Y fills 60 -> CLOSED at 100. No overshoot,
+    // no X reuse, remaining + sub-ID survive every restart.
+    {
+        g_exit_posts = 0;
+        g_exit_x_posts = 0;
+        g_exit_mode = 0;
+        g_exit_first_id[0] = '\0';
+        Ctx c = GoodCtx("intent-009", "SPY");
+        c.in.kind = IntentKind::EXIT;
+        Sink sink;
+        Drive d;
+        d.m.kind = IntentKind::EXIT;
+        RouteObs o = OpenMarket();
+        d.step(c, o, &sink);
+        d.step(c, o, &sink);
+        Check(d.m.state == RouteState::EXIT_SENT, "px-armed");
+        jev::broker::AlpacaPaperAdapter ad(FakeExit);
+        // X posts the router-authorized full 100 (first exit
+        // carries intent qty).
+        char xid[65];
+        for (int i = 0; i < 65; ++i) xid[i] = d.m.client_id[i];
+        auto x0 = ad.MarketClose("SPY", d.last_exit_qty,
+                                 OrderSide::SELL, xid);
+        Check(d.last_exit_qty == 100, "px-first-qty-100");
+        Check(g_exit_posts == 1 && g_exit_last_qty == 100 &&
+                  x0.state == jev::broker::CloseState::PENDING,
+              "px-first-post-100");
+        // PENDING reconciles; restart before the query lands.
+        RouteObs op = OpenMarket();
+        op.exit_responded = true;
+        op.exit_ack = x0;
+        d.step(c, op, &sink);
+        Check(d.m.state == RouteState::QUERY_SENT, "px-reconciles");
+        char snap1[320];
+        Check(SnapshotMachine(d.m, snap1, sizeof(snap1)),
+              "px-snaps-1");
+        Drive d1;
+        Check(RestoreMachine(snap1, &d1.m), "px-restores-1");
+        // X canceled after filling 40 (authoritative query) -> Y
+        // mints for the remaining 60 only.
+        RouteObs oq = OpenMarket();
+        oq.adapter_responded = true;
+        oq.query.transport_ok = true;
+        oq.query.found = true;
+        oq.query.cancelled = true;
+        oq.query.filled_qty = 40;
+        oq.query.close_state = jev::broker::CloseState::DEAD;
+        SetUuid(oq.query.broker_order_id);
+        d1.step(c, oq, &sink);
+        Check(d1.m.state == RouteState::EXIT_SENT &&
+                  d1.m.exit_attempt == 1 &&
+                  d1.m.exit_closed_qty == 40,
+              "px-mints-remainder");
+        bool y_new = false;
+        for (int i = 0; i < 65; ++i)
+            if (d1.m.client_id[i] != xid[i]) y_new = true;
+        Check(y_new, "px-id-rotated");
+        char snap2[320];
+        Check(SnapshotMachine(d1.m, snap2, sizeof(snap2)),
+              "px-snaps-2");
+        Drive d2;
+        Check(RestoreMachine(snap2, &d2.m) &&
+                  d2.m.exit_closed_qty == 40 && d2.m.exit_attempt == 1,
+              "px-restores-2");
+        // Y posts exactly the remainder: a restarted caller holds
+        // no action state, so it re-derives intent.qty - closed
+        // from the snapshot (deterministic, never recomputed
+        // upward). Both derivations must agree at 60.
+        char yid[65];
+        for (int i = 0; i < 65; ++i) yid[i] = d2.m.client_id[i];
+        Check(d1.last_exit_qty == 60, "px-exit-qty-60");
+        long long re_qty = 100 - d2.m.exit_closed_qty;
+        Check(re_qty == 60, "px-rederived-qty-60");
+        g_exit_mode = 3;
+        auto y0 = ad.MarketClose("SPY", re_qty,
+                                 OrderSide::SELL, yid);
+        Check(g_exit_posts == 2 && g_exit_last_qty == 60 &&
+                  y0.state == jev::broker::CloseState::FILLED &&
+                  y0.filled_qty == 60,
+              "px-second-post-60");
+        Check(g_exit_x_posts == 1 && g_exit_qtys[0] == 100 &&
+                  g_exit_qtys[1] == 60,
+              "px-no-overshoot");
+        // Y's authoritative fill closes the intent at exactly 100.
+        RouteObs of = OpenMarket();
+        of.exit_responded = true;
+        of.exit_ack = y0;
+        d2.step(c, of, &sink);
+        Check(d2.m.state == RouteState::CLOSED &&
+                  d2.m.exit_closed_qty == 100 && sink.verify(),
+              "px-closed-100");
+        bool ybid = true;
+        const char* yw = "2233abcd-1234-5678-9abc-def012345678";
+        for (int i = 0; yw[i]; ++i)
+            if (d2.m.broker_id[i] != yw[i]) ybid = false;
+        Check(ybid, "px-broker-id-is-y");
     }
     if (g_fail == 0) std::printf("DRILL SUITE: ALL PASS (%d checks)\n",
                                  g_count);

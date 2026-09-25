@@ -144,11 +144,44 @@ bool IsUuidField(const char* s, char* dst, std::size_t dn) {
     }
     if (s[36] != '\0' && s[36] != ':') return false;
     dst[36] = '\0';
+    // Zero the tail: callers copy the full fixed buffer (Copy64),
+    // so validated IDs are byte-deterministic past the NUL.
+    for (std::size_t i = 37; i < dn; ++i) dst[i] = '\0';
     return true;
 }
 RouteOut Reject(RouteOut& o, const char* reason) {
     o.action = RouteAction::REJECT;
     o.next.state = RouteState::CANCELLED;
+    o.reason = reason;
+    return o;
+}
+// Exit accounting: fold a current-order cumulative fill C into the
+// persisted totals (P0-2). exit_counted tracks the current sub-order
+// (reset on every sub-ID rotation); exit_closed is the cumulative
+// total (monotonic, never regresses). False = contradictory totals
+// (overfill / out-of-range: broker claims more closed than the
+// position holds) — caller freezes for S2/human, never caps.
+bool FoldExitFill(RouteMachine& nx, const OrderIntent& in,
+                  std::int64_t cur) {
+    if (cur < 0 || cur > 999999999) return false;
+    std::int64_t counted = nx.exit_counted_qty;
+    std::int64_t closed = nx.exit_closed_qty;
+    if (cur > counted) {
+        if (closed + (cur - counted) > 999999999) return false;
+        closed += cur - counted;
+        counted = cur;
+    }
+    if (closed < 0 || closed > in.qty_shares) return false;
+    nx.exit_closed_qty = closed;
+    nx.exit_counted_qty = counted;
+    return true;
+}
+// Terminal freeze helper (keeps the branches short).
+RouteOut FreezeUnknown(RouteOut& o, const char* reason) {
+    o.action = RouteAction::JOURNAL_UNKNOWN;
+    o.next.state = RouteState::UNKNOWN_FROZEN;
+    o.journal_kind = "unknown";
+    o.freeze_symbol = true;
     o.reason = reason;
     return o;
 }
@@ -291,6 +324,7 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                 // intents take the frozen emergency exception: act
                 // first, buffer the row durably, append after.
                 if (!is_exit) return Reject(o, "exec:no-row-no-send");
+                o.exit_qty = intent.qty_shares - o.next.exit_closed_qty;
                 o.action = RouteAction::EXECUTE_EMERGENCY;
                 o.next.state = RouteState::EXIT_EMERGENCY;
                 o.next.emergency = true;
@@ -303,6 +337,7 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                 o.reason = "exec:send-protected";
                 return o;
             }
+            o.exit_qty = intent.qty_shares;  // exit_closed == 0 here
             o.action = RouteAction::EXECUTE_EXIT;
             o.next.state = RouteState::EXIT_SENT;
             o.reason = "exec:exit";
@@ -458,6 +493,21 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                 o.reason = "exec:reconcile-exhausted";
                 return o;
             }
+            // Cross-family stale guard (P0/P1-3): fills are monotonic
+            // per order. A found snapshot below the established floor
+            // (entries: machine filled; exits: current-order counted)
+            // is stale REGARDLESS of family — REST never regresses
+            // stream state, ULID or otherwise. Never silently go
+            // backward; the fresher state stands.
+            if (q.found) {
+                std::int64_t floor = is_exit ? o.next.exit_counted_qty
+                                             : o.next.filled_qty;
+                if (q.filled_qty < floor) {
+                    o.action = RouteAction::NONE;
+                    o.reason = "exec:stale-snapshot";
+                    return o;
+                }
+            }
             if (q.found) Copy64(o.next.broker_id, q.broker_order_id);
             if (is_exit) {
                 // Exit reconcile: the close order resolved.
@@ -473,17 +523,33 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                 // Below size -> query again within budget (partial
                 // remainder stays managed), else freeze for S2/human.
                 if (!q.found) {
-                    o.next.filled_qty = 0;
+                    o.next.filled_qty = o.next.exit_closed_qty;
+                    o.exit_qty =
+                        intent.qty_shares - o.next.exit_closed_qty;
                     o.action = RouteAction::EXECUTE_EXIT;
                     o.next.state = RouteState::EXIT_SENT;
                     o.reason = "exec:exit-reissue";
                     return o;
                 }
-                bool dead_empty =
-                    (q.cancelled && q.filled_qty == 0) ||
-                    (q.close_state == broker::CloseState::DEAD &&
-                     q.filled_qty == 0);
-                if (dead_empty) {
+                // A canceled/DEAD close order will never fill
+                // further: fold its authoritative cumulative qty,
+                // then mint the remainder under a new ID (P0-2).
+                // Flat (closed == requested) -> terminal first.
+                bool x_dead =
+                    q.cancelled ||
+                    q.close_state == broker::CloseState::DEAD;
+                if (x_dead) {
+                    if (!FoldExitFill(o.next, intent, q.filled_qty)) {
+                        return FreezeUnknown(o, "exec:exit-overfill");
+                    }
+                    if (o.next.exit_closed_qty == intent.qty_shares) {
+                        o.next.filled_qty = o.next.exit_closed_qty;
+                        o.action = RouteAction::JOURNAL_EXIT;
+                        o.next.state = RouteState::CLOSED;
+                        o.journal_kind = "exit";
+                        o.reason = "exec:exit-reconciled";
+                        return o;
+                    }
                     if (m.exit_attempt >= 9) {
                         o.action = RouteAction::JOURNAL_UNKNOWN;
                         o.next.state = RouteState::UNKNOWN_FROZEN;
@@ -505,33 +571,39 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                     }
                     o.next.exit_attempt = natt;
                     Copy65(o.next.client_id, nid);
-                    o.next.filled_qty = 0;
+                    o.next.broker_id[0] = '\0';  // X dies with X
+                    o.next.exit_counted_qty = 0;  // new order counts
+                    o.next.filled_qty = o.next.exit_closed_qty;
+                    o.exit_qty =
+                        intent.qty_shares - o.next.exit_closed_qty;
                     o.action = RouteAction::EXECUTE_EXIT;
                     o.next.state = RouteState::EXIT_SENT;
                     o.reason = "exec:exit-new-identity";
                     return o;
                 }
-                if (q.found && q.filled_qty >= intent.qty_shares) {
-                    o.next.filled_qty = q.filled_qty;
+                // Fold the authoritative cumulative fill (P0-2):
+                // flat (closed == requested) -> terminal with the
+                // AUTHORITATIVE total; below size -> query again
+                // within budget, else freeze. Overfill -> freeze.
+                if (!FoldExitFill(o.next, intent, q.filled_qty)) {
+                    return FreezeUnknown(o, "exec:exit-overfill");
+                }
+                if (o.next.exit_closed_qty == intent.qty_shares) {
+                    o.next.filled_qty = o.next.exit_closed_qty;
                     o.action = RouteAction::JOURNAL_EXIT;
                     o.next.state = RouteState::CLOSED;
                     o.journal_kind = "exit";
                     o.reason = "exec:exit-reconciled";
                     return o;
                 }
-                o.next.filled_qty = q.filled_qty;
+                o.next.filled_qty = o.next.exit_closed_qty;
                 if (o.next.query_attempts < kQueryMaxAttempts) {
                     ++o.next.query_attempts;
                     o.action = RouteAction::QUERY_ONCE;
                     o.reason = "exec:exit-partial-reconcile";
                     return o;
                 }
-                o.action = RouteAction::JOURNAL_UNKNOWN;
-                o.next.state = RouteState::UNKNOWN_FROZEN;
-                o.journal_kind = "unknown";
-                o.freeze_symbol = true;
-                o.reason = "exec:reconcile-exhausted";
-                return o;
+                return FreezeUnknown(o, "exec:reconcile-exhausted");
             }
             if (!q.found) {
                 // transport_ok + !found happens ONLY on 404 (P0-2):
@@ -652,6 +724,9 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                 if (obs.cancel_filled_qty >= 0 &&
                     obs.cancel_filled_qty <= 999999999)
                     fq = obs.cancel_filled_qty;
+                // Contradictory-lower final (below the fresher
+                // floor): unattributed, never regress.
+                if (fq >= 0 && fq < o.next.filled_qty) fq = -1;
                 if (o.next.filled_qty == 0 && fq <= 0) {
                     o.action = RouteAction::JOURNAL_CANCEL;
                     o.next.state = RouteState::CANCELLED;
@@ -701,14 +776,20 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
         }
         case RouteState::EXIT_SENT: {
             // Exit execution identity: the close rides the machine's
-            // stable client ID. No observation yet -> wait. FILLED
-            // (full completion, authoritative qty) -> terminal.
-            // DEAD (canceled/rejected/expired: definitive
-            // non-execution) -> re-issue (exits must complete).
-            // PARTIAL/PENDING/ambiguous -> reconcile by ID under the
-            // retry-once budget (never a blind second send, never a
-            // double-close, never CLOSED on a partial). Restart
-            // reconciles the same way: no send from non-IDLE.
+            // stable client ID at the caller-supplied o.exit_qty.
+            // No observation yet -> wait. FILLED (authoritative
+            // cumulative qty): fold it; flat (closed == requested)
+            // -> terminal with the AUTHORITATIVE total, short ->
+            // reconcile (never CLOSED on a partial, P0-1).
+            // DEAD (definitive non-execution): fold its qty too
+            // (a canceled close may have partially filled — that
+            // fill is real, never erased); flat -> CLOSED, else
+            // burn the ID and mint the next sub-identity for the
+            // REMAINDER only (P0-2, P1-4). PARTIAL/PENDING/ambiguous
+            // -> reconcile by ID under budget (never a blind second
+            // send, never a double-close). Restart reconciles the
+            // same way: no send from non-IDLE. Overfill (broker
+            // claims more closed than held) -> freeze for S2/human.
             if (!obs.exit_responded) {
                 o.action = RouteAction::NONE;
                 o.reason = "exec:awaiting-exit";
@@ -716,71 +797,58 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
             }
             const broker::CloseResult& ca = obs.exit_ack;
             if (ca.transport_ok &&
-                ca.state == broker::CloseState::FILLED) {
-                // P0-1: full completion means filled >= requested.
-                // A short "fill" is contradictory: reconcile, never
-                // CLOSED on a partial (malformed qty never reaches
-                // here — the adapter reports it UNKNOWN).
-                if (ca.filled_qty < intent.qty_shares) {
-                    if (o.next.query_attempts < kQueryMaxAttempts) {
-                        ++o.next.query_attempts;
-                        o.action = RouteAction::QUERY_ONCE;
-                        o.next.state = RouteState::QUERY_SENT;
-                        o.reason = "exec:exit-short-fill";
-                        return o;
+                (ca.state == broker::CloseState::FILLED ||
+                 ca.state == broker::CloseState::DEAD)) {
+                if (!FoldExitFill(o.next, intent, ca.filled_qty)) {
+                    return FreezeUnknown(o, "exec:exit-overfill");
+                }
+                if (o.next.exit_closed_qty == intent.qty_shares) {
+                    o.next.filled_qty = o.next.exit_closed_qty;
+                    if (ca.broker_order_id[0] != '\0' &&
+                        broker::IsBrokerUuid(ca.broker_order_id)) {
+                        Copy64(o.next.broker_id, ca.broker_order_id);
                     }
-                    o.action = RouteAction::JOURNAL_UNKNOWN;
-                    o.next.state = RouteState::UNKNOWN_FROZEN;
-                    o.journal_kind = "unknown";
-                    o.freeze_symbol = true;
-                    o.reason = "exec:reconcile-exhausted";
+                    o.action = RouteAction::JOURNAL_EXIT;
+                    o.next.state = RouteState::CLOSED;
+                    o.journal_kind = "exit";
+                    o.reason = "exec:exited";
                     return o;
                 }
-                o.next.filled_qty = ca.filled_qty;
-                if (ca.broker_order_id[0] != '\0' &&
-                    o.next.broker_id[0] == '\0' &&
-                    broker::IsBrokerUuid(ca.broker_order_id)) {
-                    for (int i = 0; i < 64; ++i)
-                        o.next.broker_id[i] = ca.broker_order_id[i];
-                }
-                o.action = RouteAction::JOURNAL_EXIT;
-                o.next.state = RouteState::CLOSED;
-                o.journal_kind = "exit";
-                o.reason = "exec:exited";
-                return o;
-            }
-            if (ca.transport_ok &&
-                ca.state == broker::CloseState::DEAD) {
-                // P0-2: the close order is definitively dead — the
-                // burned client ID is NEVER resubmitted (Alpaca
-                // rejects duplicate client_order_id). Mint the next
-                // deterministic sub-identity (attributable to the
-                // original bound intent) and re-issue under it.
-                // Mint failure -> freeze (never reuse, never invent).
-                if (m.exit_attempt >= 9) {
-                    o.action = RouteAction::JOURNAL_UNKNOWN;
-                    o.next.state = RouteState::UNKNOWN_FROZEN;
-                    o.journal_kind = "unknown";
-                    o.freeze_symbol = true;
-                    o.reason = "exec:exit-attempts-exhausted";
+                if (ca.state == broker::CloseState::DEAD) {
+                    // Burned ID, remainder open: mint next identity.
+                    if (m.exit_attempt >= 9) {
+                        return FreezeUnknown(
+                            o, "exec:exit-attempts-exhausted");
+                    }
+                    char nid[65];
+                    std::uint8_t natt =
+                        (std::uint8_t)(m.exit_attempt + 1);
+                    if (!MintExitSubId(intent, venue, natt, nid)) {
+                        return FreezeUnknown(
+                            o, "exec:exit-identity-failed");
+                    }
+                    o.next.exit_attempt = natt;
+                    Copy65(o.next.client_id, nid);
+                    o.next.broker_id[0] = '\0';
+                    o.next.exit_counted_qty = 0;
+                    o.next.filled_qty = o.next.exit_closed_qty;
+                    o.exit_qty =
+                        intent.qty_shares - o.next.exit_closed_qty;
+                    o.action = RouteAction::EXECUTE_EXIT;
+                    o.reason = "exec:exit-new-identity";
                     return o;
                 }
-                char nid[65];
-                std::uint8_t natt =
-                    (std::uint8_t)(m.exit_attempt + 1);
-                if (!MintExitSubId(intent, venue, natt, nid)) {
-                    o.action = RouteAction::JOURNAL_UNKNOWN;
-                    o.next.state = RouteState::UNKNOWN_FROZEN;
-                    o.journal_kind = "unknown";
-                    o.freeze_symbol = true;
-                    o.reason = "exec:exit-identity-failed";
+                // Short FILLED (contradictory full-completion):
+                // reconcile the remainder, never CLOSED.
+                o.next.filled_qty = o.next.exit_closed_qty;
+                if (o.next.query_attempts < kQueryMaxAttempts) {
+                    ++o.next.query_attempts;
+                    o.action = RouteAction::QUERY_ONCE;
+                    o.next.state = RouteState::QUERY_SENT;
+                    o.reason = "exec:exit-short-fill";
                     return o;
                 }
-                o.next.exit_attempt = natt;
-                Copy65(o.next.client_id, nid);
-                o.action = RouteAction::EXECUTE_EXIT;
-                o.reason = "exec:exit-new-identity";
-                return o;
+                return FreezeUnknown(o, "exec:reconcile-exhausted");
             }
             if (o.next.query_attempts < kQueryMaxAttempts) {
                 ++o.next.query_attempts;
@@ -789,12 +857,7 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                 o.reason = "exec:exit-reconcile";
                 return o;
             }
-            o.action = RouteAction::JOURNAL_UNKNOWN;
-            o.next.state = RouteState::UNKNOWN_FROZEN;
-            o.journal_kind = "unknown";
-            o.freeze_symbol = true;
-            o.reason = "exec:reconcile-exhausted";
-            return o;
+            return FreezeUnknown(o, "exec:reconcile-exhausted");
         }
         case RouteState::EXIT_EMERGENCY: {
             if (!obs.executed) {
@@ -840,7 +903,7 @@ namespace exec {
 namespace {
 // Fixed snapshot:
 // "H1:<st>:<kd>:<filled>:<emg>:<pok>:<att>:<cid>:<bid>:
-//     <intent>:<sym>:<side>:<evid>:<evseq>:<xatt>"
+//     <intent>:<sym>:<side>:<evid>:<evseq>:<xatt>:<eclosed>:<ecounted>"
 // client id lowercase-hex-or-empty; broker id venue UUID or empty;
 // attempts persisted retry budget (0..2 = frozen kQueryMaxAttempts); intent = original intent_id
 // ([A-Za-z0-9_.-], 1..64) + symbol ([A-Z0-9.], 1..15) + side (0/1);
@@ -935,12 +998,16 @@ bool SnapshotMachine(const RouteMachine& m, char* out, std::size_t n) {
     }
     if (!IsEvId(m.last_event_id, evid, sizeof(evid))) return false;
     if (m.exit_attempt > 9) return false;
+    if (m.exit_closed_qty < 0 || m.exit_closed_qty > 999999999 ||
+        m.exit_counted_qty < 0 || m.exit_counted_qty > 999999999)
+        return false;
     int w = std::snprintf(
-        out, n, "H1:%d:%d:%lld:%d:%d:%d:%s:%s:%s:%s:%d:%s:%llu:%d", st,
-        kd, (long long)m.filled_qty, m.emergency ? 1 : 0,
+        out, n, "H1:%d:%d:%lld:%d:%d:%d:%s:%s:%s:%s:%d:%s:%llu:%d:%lld:%lld",
+        st, kd, (long long)m.filled_qty, m.emergency ? 1 : 0,
         m.protection_ok ? 1 : 0, m.query_attempts, cid, bid, iid, sym,
         (m.side == broker::OrderSide::SELL) ? 1 : 0, evid,
-        (unsigned long long)m.last_event_seq, m.exit_attempt);
+        (unsigned long long)m.last_event_seq, m.exit_attempt,
+        (long long)m.exit_closed_qty, (long long)m.exit_counted_qty);
     return w > 0 && static_cast<std::size_t>(w) < n;
 }
 
@@ -1048,9 +1115,30 @@ bool RestoreMachine(const char* s, RouteMachine* out) {
     if (nd2 == 0 || *p != ':') return false;
     ++p;
     m.last_event_seq = (std::uint64_t)es;
-    // Exit sub-identity counter: single digit 0..9, then NUL.
-    if (p[0] < '0' || p[0] > '9' || p[1] != '\0') return false;
+    // Exit sub-identity counter: single digit 0..9, then ':'.
+    if (p[0] < '0' || p[0] > '9' || p[1] != ':') return false;
     m.exit_attempt = (std::uint8_t)(p[0] - '0');
+    p += 2;
+    // Cumulative exit totals: two bounded ints, then NUL.
+    long long ec = 0;
+    int nd3 = 0;
+    while (*p >= '0' && *p <= '9' && nd3 < 9) {
+        ec = ec * 10 + (*p - '0');
+        ++p;
+        ++nd3;
+    }
+    if (nd3 == 0 || *p != ':') return false;
+    ++p;
+    long long en = 0;
+    int nd4 = 0;
+    while (*p >= '0' && *p <= '9' && nd4 < 9) {
+        en = en * 10 + (*p - '0');
+        ++p;
+        ++nd4;
+    }
+    if (nd4 == 0 || *p != '\0') return false;
+    m.exit_closed_qty = (std::int64_t)ec;
+    m.exit_counted_qty = (std::int64_t)en;
     // Binding coherence: non-IDLE requires the full binding;
     // IDLE requires none of it.
     bool idle = (m.state == RouteState::IDLE);
