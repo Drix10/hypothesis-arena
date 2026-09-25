@@ -1954,3 +1954,24 @@ plane (Phase D) change any interface a future slice depends on?
 - Seam CLOSED/ACCEPTED; H1 untouched. Phase-D gate OPEN (BLS live
   egress still the outstanding item; natural-outage observation
   remains nice-to-have, never a substitute for this proof).
+
+## Addendum 105 - H1 Authorization Packet v3 ACCEPTED (text only)
+- v3 accepted as the final H1 authorization TEXT (human audit; no
+  code, no plan edits). Resolves all v1/v2 findings: (a) sizing
+  owned exclusively by risk/veto, router lifecycle-only consuming
+  BuildEngineInputs; (b) kernel_state.hpp limited to the additive
+  read-only ack/reconciliation visibility surface (universe, epoch,
+  request_for, try_accept, validator binding, mutex/transitions,
+  P3.3 semantics all excluded); (c) normal entry structurally
+  protected-entry-only, protection repair recovery-only;
+  (d) frozen §13.5 sequence respected with no override — H1
+  spec/design may be prepared, implementation begins only when the
+  sequence permits; (e) retry = one attempt + one query,
+  reconcile-first, same identity, never a fresh entry on missing
+  ack. Venue Alpaca-paper-stocks-only; no live capital/FX/JEV/
+  research/collector changes; no confidence use.
+- State established: H1 spec/design authorized to prepare; H1
+  implementation BLOCKED on separate Slice D authorization; Slice D
+  NOT authorized; live/paper execution NOT authorized. Next
+  decision is Slice D. Repo verified pre-H1 (no kernel/exec,
+  log, broker, kill in tree).
