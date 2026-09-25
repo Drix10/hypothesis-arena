@@ -1,0 +1,1165 @@
+{
+  "cycles": 30,
+  "sources": {
+    "bea_nipa_gdp": {
+      "all_ok": true,
+      "heartbeat_ok": true,
+      "n": 30,
+      "p50_ms": 1016.0,
+      "p99_ms": 1147.0,
+      "polls": [
+        {
+          "errors": [],
+          "ms": 985.0,
+          "ok": true,
+          "records": 25,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 968.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1047.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 969.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 984.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 985.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1015.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1000.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1016.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1016.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 984.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 984.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1016.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1000.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1000.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1016.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 984.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1063.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1093.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1063.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1109.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 985.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1156.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1047.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1062.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1047.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1016.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 1062.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        }
+      ]
+    },
+    "bls_empsit": {
+      "all_ok": false,
+      "heartbeat_ok": false,
+      "n": 30,
+      "p50_ms": 1000.0,
+      "p99_ms": 1057.7,
+      "polls": [
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 109.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 953.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 984.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1016.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1031.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 985.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 968.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1016.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1016.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1047.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 921.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1032.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1015.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 985.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1031.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 969.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1015.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1016.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 969.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1062.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 985.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 953.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1000.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        {
+          "errors": [
+            "bad-envelope"
+          ],
+          "ms": 1015.0,
+          "ok": false,
+          "records": 0,
+          "stale": true
+        }
+      ]
+    },
+    "edgar_8k": {
+      "all_ok": true,
+      "heartbeat_ok": true,
+      "n": 30,
+      "p50_ms": 125.0,
+      "p99_ms": 1534.3,
+      "polls": [
+        {
+          "errors": [],
+          "ms": 2078.0,
+          "ok": true,
+          "records": 1,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 94.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 62.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 110.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 109.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 109.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 188.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 78.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 188.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 140.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 110.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 171.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 188.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 109.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 157.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 203.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 140.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 78.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 94.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 172.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 63.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 156.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 94.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 125.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 78.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        }
+      ]
+    },
+    "fred_macro": {
+      "all_ok": true,
+      "heartbeat_ok": true,
+      "n": 30,
+      "p50_ms": 6008.0,
+      "p99_ms": 7475.9,
+      "polls": [
+        {
+          "errors": [],
+          "ms": 5656.0,
+          "ok": true,
+          "records": 6,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6062.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6047.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5938.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5969.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6046.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6032.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6000.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6515.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6844.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6313.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5640.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6141.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6375.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5750.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5984.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6141.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5797.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 7734.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5859.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5875.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5969.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6063.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5968.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5985.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6000.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5953.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6016.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6312.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 6031.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        }
+      ]
+    },
+    "treasury_auctions": {
+      "all_ok": true,
+      "heartbeat_ok": true,
+      "n": 30,
+      "p50_ms": 2563.0,
+      "p99_ms": 7076.9,
+      "polls": [
+        {
+          "errors": [],
+          "ms": 2860.0,
+          "ok": true,
+          "records": 53,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 5047.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2593.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2563.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2578.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2531.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 7906.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2547.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2516.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2609.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2610.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2734.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2516.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2515.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2516.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2578.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2656.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2563.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2547.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2562.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2516.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2531.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2563.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2484.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2672.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2594.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2578.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2547.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2546.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        },
+        {
+          "errors": [],
+          "ms": 2563.0,
+          "ok": true,
+          "records": 0,
+          "stale": false
+        }
+      ]
+    }
+  },
+  "ts": 1790319239,
+  "watchlist": [
+    "AAPL",
+    "SPY"
+  ]
+}

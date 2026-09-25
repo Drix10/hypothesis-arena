@@ -1,0 +1,49 @@
+{
+  "ctx_stats": {
+    "accepted": 63,
+    "reasons": {
+      "inference-capped": 63,
+      "ttl-expired": 1
+    },
+    "rejected": 1,
+    "rejection_rate": 0.015625
+  },
+  "emitted": "rp-3-27658791bf526c826873ba57d31bcc63387746d60a8023f60c981a318740a7d1",
+  "empty": false,
+  "fused": 85,
+  "harvest_ms": 10203.0,
+  "records": 85,
+  "stamps": {
+    "bea_nipa_gdp": {
+      "errors": [],
+      "ok": true,
+      "records": 25,
+      "stale": false
+    },
+    "bls_empsit": {
+      "errors": [],
+      "ok": false,
+      "records": 0,
+      "stale": true
+    },
+    "edgar_8k": {
+      "errors": [],
+      "ok": true,
+      "records": 1,
+      "stale": false
+    },
+    "fred_macro": {
+      "errors": [],
+      "ok": true,
+      "records": 6,
+      "stale": false
+    },
+    "treasury_auctions": {
+      "errors": [],
+      "ok": true,
+      "records": 53,
+      "stale": false
+    }
+  },
+  "ts": 1790319831
+}
