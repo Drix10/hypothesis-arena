@@ -1,0 +1,288 @@
+{
+  "ok": true,
+  "phases": {
+    "A_healthy": {
+      "bundle_sources": {
+        "bea_nipa_gdp": 25,
+        "edgar_8k": 1,
+        "fred_macro": 6,
+        "treasury_auctions": 32
+      },
+      "ctx_stats": {
+        "accepted": 63,
+        "reasons": {
+          "inference-capped": 63,
+          "ttl-expired": 1
+        },
+        "rejected": 1,
+        "rejection_rate": 0.015625
+      },
+      "emitted": "rp-10-9b845f1e409e823135df5f2e33a34e25ab9d663dfc7549d3fc639d1e7b4a46f7",
+      "empty": false,
+      "epoch": 10,
+      "fused": 85,
+      "records": 85,
+      "stamps": {
+        "bea_nipa_gdp": {
+          "errors": [],
+          "ok": true,
+          "records": 25,
+          "stale": false
+        },
+        "bls_empsit": {
+          "errors": [],
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        "edgar_8k": {
+          "errors": [],
+          "ok": true,
+          "records": 1,
+          "stale": false
+        },
+        "fred_macro": {
+          "errors": [],
+          "ok": true,
+          "records": 6,
+          "stale": false
+        },
+        "treasury_auctions": {
+          "errors": [],
+          "ok": true,
+          "records": 53,
+          "stale": false
+        }
+      },
+      "watermarks": {
+        "bea_nipa_gdp": {
+          "cursor": "seam-e10",
+          "last_observation_at": 1790322826
+        },
+        "edgar_8k": {
+          "cursor": "seam-e10",
+          "last_observation_at": 1790322826
+        },
+        "fred_macro": {
+          "cursor": "seam-e10",
+          "last_observation_at": 1790322826
+        },
+        "treasury_auctions": {
+          "cursor": "seam-e10",
+          "last_observation_at": 1790322826
+        }
+      }
+    },
+    "B_fault_1": {
+      "bundle_sources": {
+        "bea_nipa_gdp": 25,
+        "edgar_8k": 1,
+        "fred_macro": 6
+      },
+      "ctx_stats": {
+        "accepted": 31,
+        "reasons": {
+          "inference-capped": 31,
+          "ttl-expired": 1
+        },
+        "rejected": 1,
+        "rejection_rate": 0.03125
+      },
+      "emitted": "rp-11-b98b0a53b4b0c9152a0faadee79d24023b110242e82dceb7498da96fec10d93a",
+      "empty": false,
+      "epoch": 11,
+      "fused": 32,
+      "records": 32,
+      "stamps": {
+        "bea_nipa_gdp": {
+          "errors": [],
+          "ok": true,
+          "records": 25,
+          "stale": false
+        },
+        "bls_empsit": {
+          "errors": [],
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        "edgar_8k": {
+          "errors": [],
+          "ok": true,
+          "records": 1,
+          "stale": false
+        },
+        "fred_macro": {
+          "errors": [],
+          "ok": true,
+          "records": 6,
+          "stale": false
+        },
+        "treasury_auctions": {
+          "errors": [],
+          "ok": false,
+          "records": 0,
+          "stale": true
+        }
+      },
+      "watermarks": {
+        "bea_nipa_gdp": {
+          "cursor": "seam-e11",
+          "last_observation_at": 1790322836
+        },
+        "edgar_8k": {
+          "cursor": "seam-e11",
+          "last_observation_at": 1790322836
+        },
+        "fred_macro": {
+          "cursor": "seam-e11",
+          "last_observation_at": 1790322836
+        }
+      }
+    },
+    "B_fault_2": {
+      "bundle_sources": {
+        "bea_nipa_gdp": 25,
+        "edgar_8k": 1,
+        "fred_macro": 6
+      },
+      "ctx_stats": {
+        "accepted": 31,
+        "reasons": {
+          "inference-capped": 31,
+          "ttl-expired": 1
+        },
+        "rejected": 1,
+        "rejection_rate": 0.03125
+      },
+      "emitted": "rp-12-05e6b9b322045ee5ed2a3d385f721640c647993db6038448d0abf31f2d8e548f",
+      "empty": false,
+      "epoch": 12,
+      "fused": 32,
+      "records": 32,
+      "stamps": {
+        "bea_nipa_gdp": {
+          "errors": [],
+          "ok": true,
+          "records": 25,
+          "stale": false
+        },
+        "bls_empsit": {
+          "errors": [],
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        "edgar_8k": {
+          "errors": [],
+          "ok": true,
+          "records": 1,
+          "stale": false
+        },
+        "fred_macro": {
+          "errors": [],
+          "ok": true,
+          "records": 6,
+          "stale": false
+        },
+        "treasury_auctions": {
+          "errors": [],
+          "ok": false,
+          "records": 0,
+          "stale": true
+        }
+      },
+      "watermarks": {
+        "bea_nipa_gdp": {
+          "cursor": "seam-e12",
+          "last_observation_at": 1790322846
+        },
+        "edgar_8k": {
+          "cursor": "seam-e12",
+          "last_observation_at": 1790322846
+        },
+        "fred_macro": {
+          "cursor": "seam-e12",
+          "last_observation_at": 1790322846
+        }
+      }
+    },
+    "C_recovered": {
+      "bundle_sources": {
+        "bea_nipa_gdp": 25,
+        "edgar_8k": 1,
+        "fred_macro": 6,
+        "treasury_auctions": 32
+      },
+      "ctx_stats": {
+        "accepted": 63,
+        "reasons": {
+          "inference-capped": 63,
+          "ttl-expired": 1
+        },
+        "rejected": 1,
+        "rejection_rate": 0.015625
+      },
+      "emitted": "rp-13-31a4c58fb127968acb83572145c63dac99adeb7c94e9fd484ce7320ec6d71c41",
+      "empty": false,
+      "epoch": 13,
+      "fused": 85,
+      "records": 85,
+      "stamps": {
+        "bea_nipa_gdp": {
+          "errors": [],
+          "ok": true,
+          "records": 25,
+          "stale": false
+        },
+        "bls_empsit": {
+          "errors": [],
+          "ok": false,
+          "records": 0,
+          "stale": true
+        },
+        "edgar_8k": {
+          "errors": [],
+          "ok": true,
+          "records": 1,
+          "stale": false
+        },
+        "fred_macro": {
+          "errors": [],
+          "ok": true,
+          "records": 6,
+          "stale": false
+        },
+        "treasury_auctions": {
+          "errors": [],
+          "ok": true,
+          "records": 53,
+          "stale": false
+        }
+      },
+      "watermarks": {
+        "bea_nipa_gdp": {
+          "cursor": "seam-e13",
+          "last_observation_at": 1790322856
+        },
+        "edgar_8k": {
+          "cursor": "seam-e13",
+          "last_observation_at": 1790322856
+        },
+        "fred_macro": {
+          "cursor": "seam-e13",
+          "last_observation_at": 1790322856
+        },
+        "treasury_auctions": {
+          "cursor": "seam-e13",
+          "last_observation_at": 1790322856
+        }
+      }
+    }
+  },
+  "transport": {
+    "calls": 10,
+    "injected_failures": 8
+  },
+  "ts": 1790322825
+}

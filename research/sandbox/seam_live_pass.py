@@ -93,6 +93,84 @@ def main(argv):
                                         st.get("errors", [])][:3]}
                       for s, st in stamps.items()},
           "ctx_stats": res["stats"]}
+    # Accounting invariants asserted in-script (exit 1 on any
+    # violation): the evidence script checks, not just dumps.
+    import sqlite3 as _sq
+    ok = True
+
+    def check(cond, msg):
+        nonlocal ok
+        if not cond:
+            ok = False
+            ev.setdefault("violations", []).append(msg)
+            print("VIOLATION: %s" % msg)
+
+    check(len(fused) > 0, "no fused candidates from live harvest")
+    check(out.get("emitted"),
+          "no emitted bundle despite fused candidates")
+    check(isinstance(bpath, str) and os.path.isfile(bpath),
+          "emitted bundle path missing")
+    if isinstance(bpath, str) and os.path.isfile(bpath):
+        with open(bpath, encoding="utf-8") as fh:
+            env = json.load(fh)
+        feats = env.get("features", [])
+        # Committed: manifest row present for the emitted id.
+        man_path = os.path.join(outdir, "manifest.jsonl")
+        try:
+            with open(man_path, encoding="utf-8") as fh:
+                committed = any(
+                    json.loads(line).get("bundle_id") ==
+                    out.get("emitted") for line in fh
+                    if line.strip())
+        except (OSError, ValueError):
+            committed = False
+        check(committed, "emitted bundle not manifest-committed")
+        # Contractual 64-feature cap.
+        check(len(feats) <= 64,
+              "bundle over 64-feature cap: %d" % len(feats))
+        if len(fused) > 64:
+            check(len(feats) == 64,
+                  "cap not applied: fused=%d feats=%d"
+                  % (len(fused), len(feats)))
+        # accepted + rejected reconciles with bundle features.
+        st = res["stats"]
+        check(st["accepted"] + st["rejected"] == len(feats),
+              "ctx accounting: %d+%d != %d feats"
+              % (st["accepted"], st["rejected"], len(feats)))
+        # BLS outage contributes zero accepted features while other
+        # sources remain usable.
+        check(all(f.get("source_id") != "bls_empsit"
+                  for f in feats),
+              "outage source contributed features")
+        check(any(f.get("source_id") != "bls_empsit"
+                  for f in feats),
+              "no usable-source features")
+        # Every emitted hash resolves against the frozen authority.
+        con = _sq.connect(lineage_db)
+        try:
+            for f in feats:
+                row = con.execute(
+                    "SELECT source, raw_json FROM records WHERE "
+                    "content_hash=?",
+                    (f["canonical_hash"],)).fetchone()
+                check(row is not None,
+                      "hash without authority row: %s"
+                      % f["canonical_hash"][:12])
+                if row is not None:
+                    from collector import classify as _clf
+                    check(row[0] == f["source_id"],
+                          "authority wrong source")
+                    try:
+                        parsed = json.loads(row[1])
+                    except ValueError:
+                        parsed = None
+                    check(parsed is not None and
+                          _clf.content_hash(parsed) ==
+                          f["canonical_hash"],
+                          "authority hash mismatch")
+        finally:
+            con.close()
+    ev["ok"] = bool(ok)
     print("harvest_ms=%s records=%d fused=%d emitted=%s ctx=%s" % (
         harvest_ms, len(recs), len(fused), out.get("emitted"),
         res["stats"]))
@@ -102,7 +180,8 @@ def main(argv):
     with open(out_path, "w", encoding="utf-8") as fh:
         fh.write(json.dumps(ev, indent=2, sort_keys=True))
     print("wrote %s" % out_path)
-    return 0
+    print("live-pass invariants: ok=%s" % ev["ok"])
+    return 0 if ev["ok"] else 1
 
 
 if __name__ == "__main__":

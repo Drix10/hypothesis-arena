@@ -8,10 +8,11 @@
     "rejected": 1,
     "rejection_rate": 0.015625
   },
-  "emitted": "rp-3-27658791bf526c826873ba57d31bcc63387746d60a8023f60c981a318740a7d1",
+  "emitted": "rp-3-3827063c2fb6c4fb08fed72fef8e849c89154aa37fe697db41a036f0344b4ff2",
   "empty": false,
   "fused": 85,
-  "harvest_ms": 10203.0,
+  "harvest_ms": 9766.0,
+  "ok": true,
   "records": 85,
   "stamps": {
     "bea_nipa_gdp": {
@@ -45,5 +46,5 @@
       "stale": false
     }
   },
-  "ts": 1790319831
+  "ts": 1790322903
 }
