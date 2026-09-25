@@ -76,16 +76,31 @@ FlattenOut StepFlatten(FlattenState s, const FlattenStep& in) {
                     "flatten:waiting-conditions"};
         }
         case FlattenState::FLATTEN_PENDING: {
+            // True-closer and confirmed-flat checks first: a flat
+            // position is FLATTENED regardless of failure flags (a
+            // stale failure observation never overrides observed flat).
+            // External close wins ties (broker-side reality over our
+            // ack; never claim switch credit falsely).
             if (in.closed_externally)
                 return {FlattenState::FLATTENED, false, Closer::STOP_TP,
                         "flatten:stop-tp-closed"};
             if (in.broker_confirms_flat)
                 return {FlattenState::FLATTENED, false,
                         Closer::SWITCH_FLATTEN, "flatten:flattened"};
-            // Staying in PENDING never re-issues: the single issuance
-            // happened on entry. The caller re-queries; a fresh order
-            // requires an explicit operator-level reset, not a cycle
-            // tick (no blind re-send loops, frozen).
+            if (in.venue_closed_terminal)
+                return {FlattenState::PROTECTION_ONLY, false,
+                        Closer::NONE, "flatten:protection-only"};
+            // Re-attempt (frozen sec. 10.3): the outstanding attempt
+            // is definitively terminal AND conditions allow AND the
+            // position is still open -> exactly one new issuance. The
+            // caller observes the fresh order in flight next cycle
+            // (prior_attempt_failed clears), so this cannot loop.
+            if (in.prior_attempt_failed && in.conditions_allow)
+                return {FlattenState::FLATTEN_PENDING, true,
+                        Closer::NONE, "flatten:reattempt"};
+            // In-flight (or unknown) -> re-query/wait, NO resend.
+            // Terminal failure under bad conditions -> wait, NO
+            // forced exit. Both stay PENDING silently.
             return {FlattenState::FLATTEN_PENDING, false, Closer::NONE,
                     "flatten:awaiting-ack"};
         }

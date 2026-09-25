@@ -202,6 +202,104 @@ int main() {
         Check(o.state == FlattenState::FLATTEN_PENDING &&
                   !o.issue_flatten,
               "flat-pending-stable");
+        // Re-attempt contract (frozen sec. 10.3): terminal failure +
+        // good conditions -> exactly one new issuance, still PENDING.
+        FlattenStep fail;
+        fail.prior_attempt_failed = true;
+        fail.conditions_allow = true;
+        o = StepFlatten(FlattenState::FLATTEN_PENDING, fail);
+        Check(o.state == FlattenState::FLATTEN_PENDING &&
+                  o.issue_flatten,
+              "flat-reattempt-once");
+        // Next cycle the fresh order is in flight (failure flag
+        // cleared by observation) -> zero resend.
+        o = StepFlatten(o.state, wait);
+        Check(o.state == FlattenState::FLATTEN_PENDING &&
+                  !o.issue_flatten,
+              "flat-post-reattempt-quiet");
+        // Terminal failure under bad conditions -> wait, no issue.
+        FlattenStep failbad;
+        failbad.prior_attempt_failed = true;
+        o = StepFlatten(FlattenState::FLATTEN_PENDING, failbad);
+        Check(o.state == FlattenState::FLATTEN_PENDING &&
+                  !o.issue_flatten,
+              "flat-failed-bad-conditions");
+        // Terminal failure with terminal venue -> PROTECTION_ONLY.
+        FlattenStep failterm;
+        failterm.prior_attempt_failed = true;
+        failterm.conditions_allow = true;
+        failterm.venue_closed_terminal = true;
+        o = StepFlatten(FlattenState::FLATTEN_PENDING, failterm);
+        Check(o.state == FlattenState::PROTECTION_ONLY &&
+                  !o.issue_flatten,
+              "flat-failed-terminal-venue");
+        // failed -> reattempt -> flat.
+        {
+            auto r1 =
+                StepFlatten(FlattenState::FLATTEN_PENDING, fail);
+            auto r2 =
+                StepFlatten(r1.state, ack);
+            Check(r1.issue_flatten &&
+                      r2.state == FlattenState::FLATTENED &&
+                      r2.closer == Closer::SWITCH_FLATTEN,
+                  "flat-failed-reattempt-flat");
+        }
+        // failed -> reattempt -> STOP/TP true closer.
+        {
+            auto r1 =
+                StepFlatten(FlattenState::FLATTEN_PENDING, fail);
+            auto r2 =
+                StepFlatten(r1.state, ext);
+            Check(r1.issue_flatten &&
+                      r2.state == FlattenState::FLATTENED &&
+                      r2.closer == Closer::STOP_TP,
+                  "flat-failed-reattempt-stoptp");
+        }
+        // Restart in PENDING with a reconciled failure observation:
+        // persistence round-trips, then the fresh observation issues.
+        {
+            using jev::kill::ParseKill;
+            using jev::kill::Persisted;
+            using jev::kill::SerializeKill;
+            Persisted p;
+            p.flatten = FlattenState::FLATTEN_PENDING;
+            char buf[16];
+            Persisted q;
+            bool ok = SerializeKill(p, buf, sizeof(buf)) &&
+                      ParseKill(buf, &q);
+            auto r = StepFlatten(q.flatten, fail);
+            Check(ok && r.issue_flatten, "flat-restart-reattempt");
+        }
+        // Malformed/impossible observations fail safely: external
+        // close wins ties; confirmed-flat beats a stale failure flag.
+        {
+            FlattenStep both;
+            both.broker_confirms_flat = true;
+            both.closed_externally = true;
+            auto r = StepFlatten(FlattenState::FLATTEN_PENDING, both);
+            Check(r.state == FlattenState::FLATTENED &&
+                      r.closer == Closer::STOP_TP,
+                  "flat-tie-external-wins");
+            FlattenStep stalefail;
+            stalefail.broker_confirms_flat = true;
+            stalefail.prior_attempt_failed = true;
+            stalefail.conditions_allow = true;
+            r = StepFlatten(FlattenState::FLATTEN_PENDING, stalefail);
+            Check(r.state == FlattenState::FLATTENED &&
+                      r.closer == Closer::SWITCH_FLATTEN &&
+                      !r.issue_flatten,
+                  "flat-stale-failure-overridden");
+        }
+        // ACTIVE has no outstanding attempt: the failure flag alone
+        // (conditions bad) issues nothing.
+        {
+            FlattenStep stray;
+            stray.prior_attempt_failed = true;
+            auto r = StepFlatten(FlattenState::MEDIUM_ACTIVE, stray);
+            Check(r.state == FlattenState::MEDIUM_ACTIVE &&
+                      !r.issue_flatten,
+                  "flat-active-ignores-stray-failure");
+        }
         o = StepFlatten(FlattenState::FLATTENED, wait);
         Check(o.state == FlattenState::FLATTENED && !o.issue_flatten,
               "flat-terminal-flat");

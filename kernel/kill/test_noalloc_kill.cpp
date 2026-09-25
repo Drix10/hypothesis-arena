@@ -33,25 +33,39 @@ int main() {
     in.halt_file = in.feed_stale_gt30s = true;
     in.spend_tier = 2;
     jev::kill::FlattenStep fs;
-    fs.conditions_allow = true;
     jev::kill::HardStep hs;
-    hs.protection_present = hs.protection_confirmed = true;
     jev::kill::Persisted ps;
     char buf[16];
     g_allocs = 0;  // static init above this line is not the path
     for (int i = 0; i < 20000; ++i) {
+        // Cycle the exercised surface: all flatten states x
+        // observation shapes, all hard phases, serialize + parse
+        // (valid and malformed), evaluation + entry gate.
+        fs.conditions_allow = (i & 1) != 0;
+        fs.broker_confirms_flat = (i & 2) != 0;
+        fs.closed_externally = (i & 4) != 0;
+        fs.venue_closed_terminal = (i & 8) != 0;
+        fs.prior_attempt_failed = (i & 16) != 0;
+        hs.protection_present = (i & 1) != 0;
+        hs.reestablished = (i & 2) != 0;
+        hs.flatten_acked = (i & 4) != 0;
+        hs.protection_confirmed = (i & 8) != 0;
         volatile auto r = jev::kill::EvaluateLevel(in);
         volatile auto e =
             jev::kill::EntriesAllowed(r.level, true, true);
         volatile auto f = jev::kill::StepFlatten(
-            FlattenState::MEDIUM_ACTIVE, fs);
-        volatile auto h =
-            jev::kill::StepHard(HardPhase::IDLE, hs);
+            static_cast<jev::kill::FlattenState>(i % 4), fs);
+        volatile auto h = jev::kill::StepHard(
+            static_cast<jev::kill::HardPhase>(i % 7), hs);
         volatile auto s = jev::kill::SerializeKill(ps, buf, sizeof(buf));
+        jev::kill::Persisted q;
+        volatile auto pk = jev::kill::ParseKill(
+            (i & 1) ? buf : "D1:9:0:0", &q);
         (void)e;
         (void)f;
         (void)h;
         (void)s;
+        (void)pk;
         if (i == 0 && r.level == jev::risk::KillLevel::NONE) return 1;
     }
     if (g_allocs != 0) {

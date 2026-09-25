@@ -1997,3 +1997,27 @@ plane (Phase D) change any interface a future slice depends on?
   a level — matches frozen tier vocabulary).
 - No changes outside kernel/kill/* + additive build.sh lines.
   H1 NOT started; execution NOT started; next is H1 per §13.5.
+
+## Addendum 107 - Slice D correction (FSM re-attempt + records)
+- Finding (independent audit of f039374): FLATTEN_PENDING could
+  never re-issue: no representation of terminal-failure vs
+  in-flight. Fixed with minimum frozen state: FlattenStep gains
+  prior_attempt_failed (broker-confirmed terminal failure,
+  position still open). PENDING + failed + conditions allow ->
+  exactly one re-issuance, still PENDING (caller clears the flag
+  once the fresh order is in flight: deterministic, bounded, no
+  per-cycle loop). PENDING + failed + bad conditions -> wait;
+  failed + terminal venue -> PROTECTION_ONLY. Tie-breaks pinned:
+  external close wins ties; confirmed-flat beats a stale failure
+  flag; ACTIVE ignores a stray failure flag. 10 new regressions
+  (in-flight quiet, one re-attempt, post-reattempt quiet,
+  bad-conditions, terminal venue, failed->flat, failed->STOP_TP,
+  restart reconcile, both tie-breaks, stray flag). Suite 262/262
+  normal+hardened.
+- Noalloc proof widened to traverse all flatten states x 32
+  observation shapes, all hard phases, serialize + valid/malformed
+  parse per iteration (20k, 0 allocs); evidence worded as the
+  exercised-path proof it is.
+- TODO cleaned: Slice D authorization consumed, H1-next-awaiting-
+  authorization stated consistently (was stale/contradictory).
+  No contract or plan change. H1 NOT started; no execution.

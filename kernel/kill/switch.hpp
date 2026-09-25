@@ -88,13 +88,23 @@ struct FlattenStep {
     bool broker_confirms_flat = false;
     bool closed_externally = false;    // stop/TP closed the position
     bool venue_closed_terminal = false;  // no flatten possible anymore
+    // Broker-confirmed terminal failure of the outstanding flatten
+    // attempt (rejected / cancelled / definitively not in flight)
+    // with the position still open. The ONLY input that permits a
+    // re-attempt from FLATTEN_PENDING: one new issuance per observed
+    // terminal failure (the caller clears it once the fresh order is
+    // in flight, so issuance is deterministic and bounded — never a
+    // per-cycle retry loop). False means in-flight-or-unknown.
+    bool prior_attempt_failed = false;
 };
 
 struct FlattenOut {
     FlattenState state = FlattenState::MEDIUM_ACTIVE;
-    bool issue_flatten = false;  // exactly one issuance per flatten:
-                                 // re-attempts fire ONLY by re-entering
-                                 // PENDING, never by staying in it
+    bool issue_flatten = false;  // exactly one issuance per observed
+                                 // order state: entry into PENDING from
+                                 // ACTIVE, or one re-attempt per observed
+                                 // terminal failure while PENDING. Never
+                                 // a per-cycle re-issue.
     Closer closer = Closer::NONE;
     const char* reason = "none";
 };
