@@ -51,7 +51,7 @@ Tracked (the "389" count includes these 7): `.env.example`,
   presence incl. `kernel/tests/test_p33.cpp`). Exit 0 = PASS.
 - `.github/workflows/ci.yml` — ACTIVE. Four independent jobs: `stdlib`
   (collector suites from `collector/tests/`, mocked IO), `evidence`
-  (isolation + sources), `plane` (255-test battery, no external net),
+  (isolation + sources), `plane` (250-test battery, no external net),
   `kernel` (build.sh + freeze pins). Known state: plane/kernel/evidence
   SUCCESS; stdlib FAILURE = pre-existing frozen-collector failure.
 
@@ -296,9 +296,9 @@ Evidence JSON; exit 0 always.
   probe via setpriv; CI `evidence` job).
 - `test_sources.py` — calendar gate (3) + earnings veto (6);
   CI `evidence` job.
-- `test_source_seam.py` (23) — harvest→authority→resolver→reader
+- `test_source_seam.py` (25) — harvest→authority→resolver→reader
   legs, stdlib evidence job.
-- `test_seam_graph.py` (6) — tracked production Runner end-to-end
+- `test_seam_graph.py` (7) — tracked production Runner end-to-end
   + restart recovery, plane job (langgraph).
 
 ### sandbox/ (13 files + 2 subdirs: deployment evidence machinery)
