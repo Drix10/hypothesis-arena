@@ -1933,3 +1933,24 @@ plane (Phase D) change any interface a future slice depends on?
   exit 1 on violation. Re-ran clean: invariants ok=True.
 - Seam CLOSED/ACCEPTED; H1 untouched. Phase-D gate OPEN (BLS live
   egress, longer soak still needed).
+
+## Addendum 104 - n=120 soak + tightened stale/recovery assertions
+- Longer soak (research/sandbox/soak-evidence-n120.json): 120
+  real-time polls per source, raw polls preserved, linear-
+  interpolation p50/p99. EDGAR p50=125/p99=297 ok; FRED
+  p50=6016/p99=7401.3 ok; Treasury p50=2578/p99=3226.3 ok; BEA
+  p50=1032/p99=1725.3 ok; BLS refusal-only (120 live 403,
+  fail-closed, hb=False). No fabrication, no backfill.
+- stale_recovery.py tightened to match the addendum claims: asserts
+  treasury ok/stale flags, reads back real heartbeat FILES per
+  phase (ok/stale/records/error), asserts the emitted bundle's
+  actual feature AND history source sets (stale treasury absent
+  from both, not inferred), and asserts semantic recovery
+  (C bundle composition == A baseline exactly). Labeled in-
+  artifact as controlled transport-layer fault injection, NOT a
+  natural outage. Also fixed a harness gap: seamb heartbeat/out
+  scratch dirs are now created in-script (FileNotFoundError had
+  left heartbeat reads empty). Re-ran: ok=True, no violations.
+- Seam CLOSED/ACCEPTED; H1 untouched. Phase-D gate OPEN (BLS live
+  egress still the outstanding item; natural-outage observation
+  remains nice-to-have, never a substitute for this proof).
