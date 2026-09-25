@@ -57,6 +57,7 @@ int main() {
         obs.query.filled_qty = (i & 6);
         obs.query.protection_active = (i & 8) != 0;
         obs.cancel_confirmed = (i & 16) != 0;
+        obs.cancel_failed = (i & 256) != 0;
         obs.executed = (i & 2) != 0;
         obs.repair_ok = (i & 32) != 0;
         obs.feed_stale = (i & 4) != 0;

@@ -2094,3 +2094,25 @@ drill level here: kill/reconcile integration drill, randomized
 ordering, crash durability, outage rows, summary/redaction paths.
 Phase-4 operational rows (30-day run, live bracket-ack proof, real
 transport, out-of-band receipt) stay H2.
+
+## Addendum 110 - H1 second corrective (audit of f5dd11c)
+P0-1 repair kind: JOURNAL_REPAIR now journals frozen "reconcile"
+  (tenth kind reverted; regression proves FormatRow+VerifyRow accept
+  the repair row). P0-2 UUIDs: broker_id grammar is 8-4-4-4-12
+  lowercase-hex+hyphens-or-empty, enforced writer- and reader-side;
+  crash-path ID fields zero-initialized; real-UUID round-trip +
+  upper/hyphen/short/char rejects; empty UUID restores. P0-3 cancel:
+  204-empty confirms, 422/500 refuse. transport_ok added to
+  OrderQuery (adapter sets on authoritative 2xx; 404-absent cancels,
+  transport failure re-issues the lookup same-identity, never a
+  resend). cancel_failed vs silence (silence re-checks;
+  UNKNOWN needs positive failure). Corrupt PROTECTED-without-flag
+  fails closed (sweep-found). P1 ordering: 24 permutations of four
+  distinct consistent events converge (no wrong terminal, identical
+  trace/ID/fill, chains verify) + partial-reality convergence.
+  Suites: router 83 + journal 23 + broker 41 + drills 74 +
+  noalloc-exec 0, normal+hardened, freeze PASS. Slice D / P3.x /
+  collector / research / plan untouched; transport unwired live;
+  no execution. H1 correctness/drill gate now complete at unit/
+  drill level; Phase-4 operational rows (live wiring, 30-day run,
+  out-of-band receipt) stay H2.

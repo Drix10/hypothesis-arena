@@ -146,6 +146,15 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                 return o;
             }
             const broker::OrderQuery& q = obs.query;
+            if (!q.transport_ok) {
+                // Lookup itself failed (not "order absent"): re-issue
+                // the lookup under the same identity. This is query
+                // reconcile, not a second send — the send happened
+                // once upstream and no entry path exists from here.
+                o.action = RouteAction::QUERY_ONCE;
+                o.reason = "exec:query-retry";
+                return o;
+            }
             if (q.found) Copy64(o.next.broker_id, q.broker_order_id);
             if (q.found && q.cancelled && q.filled_qty == 0) {
                 // Already dead, nothing filled: straight to terminal.
@@ -202,7 +211,11 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                 o.next.protection_ok = true;
                 o.action = RouteAction::JOURNAL_REPAIR;
                 o.next.state = RouteState::PROTECTED;
-                o.journal_kind = "repair";
+                // Frozen recovery vocabulary: the nine journal kinds
+                // are closed, so a successful repair journals as
+                // "reconcile" (never a tenth kind). JOURNAL_REPAIR
+                // names the router action; "reconcile" is the row.
+                o.journal_kind = "reconcile";
                 o.reason = "exec:repaired";
                 return o;
             }
@@ -255,9 +268,17 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                 o.reason = "exec:repair-now";
                 return o;
             }
-            // Cancel FAILED: UNKNOWN_EXECUTION (never "filled").
-            // Freeze new orders for the symbol; reconcile per S2 with
-            // protection first. The freeze is caller-owned state.
+            // Cancel explicitly FAILED: UNKNOWN_EXECUTION (never
+            // "filled"). Silence (responded, neither flag) means the
+            // confirmation is not yet observed -> re-check, never
+            // UNKNOWN (UNKNOWN needs a positive failure). Freeze new
+            // orders for the symbol; reconcile per S2 with protection
+            // first. The freeze is caller-owned state.
+            if (!obs.cancel_failed) {
+                o.action = RouteAction::CONFIRM_CANCELLED;
+                o.reason = "exec:confirm-cancel";
+                return o;
+            }
             o.action = RouteAction::JOURNAL_UNKNOWN;
             o.next.state = RouteState::UNKNOWN_FROZEN;
             o.journal_kind = "unknown";
@@ -320,7 +341,8 @@ namespace exec {
 
 namespace {
 // Fixed snapshot: "H1:<state>:<kind>:<filled>:<emg>:<pok>:<cid>:<bid>"
-// client/broker ids are lowercase-hex-or-empty, bounded, validated.
+// client id is lowercase-hex-or-empty; broker id is the venue UUID
+// grammar (or empty); both bounded and validated.
 bool IsHexEmpty(const char* s, std::size_t maxlen, char* dst,
                 std::size_t dn) {
     std::size_t i = 0;
@@ -335,6 +357,32 @@ bool IsHexEmpty(const char* s, std::size_t maxlen, char* dst,
     dst[i] = '\0';
     return true;
 }
+// Broker UUID grammar (the venue's actual identifier shape): exactly
+// 8-4-4-4-12 lowercase hex with hyphens (36 chars), or empty (no UUID
+// observed yet). Anything else fails closed. A hex-only validator
+// would reject every real broker ID on the crash path (UUIDs contain
+// hyphens); a loose validator would admit garbage.
+bool IsUuidField(const char* s, char* dst, std::size_t dn) {
+    if (dn < 37) return false;
+    if (s[0] == '\0') {
+        dst[0] = '\0';
+        return true;
+    }
+    for (int i = 0; i < 36; ++i) {
+        char c = s[i];
+        if (c == '\0') return false;  // short
+        if (i == 8 || i == 13 || i == 18 || i == 23) {
+            if (c != '-') return false;
+        } else {
+            bool ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+            if (!ok) return false;
+        }
+        dst[i] = c;
+    }
+    if (s[36] != '\0' && s[36] != ':') return false;  // trailing garbage
+    dst[36] = '\0';
+    return true;
+}
 }  // namespace
 
 bool SnapshotMachine(const RouteMachine& m, char* out, std::size_t n) {
@@ -343,6 +391,11 @@ bool SnapshotMachine(const RouteMachine& m, char* out, std::size_t n) {
     int kd = (m.kind == risk::IntentKind::EXIT) ? 1 : 0;
     if (st < 0 || st > 12 || m.filled_qty < 0 || m.filled_qty > 999999999)
         return false;
+    // Writer-side strictness: refuse to persist a machine whose ids
+    // cannot be restored (garbage in storage is a crash-path lie).
+    char cid[65], bid[64];
+    if (!IsHexEmpty(m.client_id, 64, cid, sizeof(cid))) return false;
+    if (!IsUuidField(m.broker_id, bid, sizeof(bid))) return false;
     int w = std::snprintf(out, n, "H1:%d:%d:%lld:%d:%d:%s:%s", st, kd,
                           (long long)m.filled_qty,
                           m.emergency ? 1 : 0,
@@ -397,10 +450,13 @@ bool RestoreMachine(const char* s, RouteMachine* out) {
     while (*p != '\0' && *p != ':') ++p;
     if (*p != ':') return false;
     ++p;
-    if (!IsHexEmpty(p, 63, m.broker_id, sizeof(m.broker_id)))
+    if (!IsUuidField(p, m.broker_id, sizeof(m.broker_id)))
         return false;
-    while (*p != '\0' && *p != ':') ++p;
-    if (*p != '\0') return false;  // trailing garbage
+    // IsUuidField stops at ':' or NUL; anything after the field must
+    // be the terminal NUL (no trailing garbage).
+    const char* e = p;
+    while (*e != '\0' && *e != ':') ++e;
+    if (*e != '\0') return false;
     *out = m;
     return true;
 }

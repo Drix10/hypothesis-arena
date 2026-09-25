@@ -102,6 +102,9 @@ struct RouteObs {
     bool query_due = false;  // caller: send resolved, one query now due
     broker::OrderQuery query;
     bool cancel_confirmed = false;
+    bool cancel_failed = false;  // explicit broker cancel rejection;
+                                 // silence (neither flag) means re-check,
+                                 // never UNKNOWN
     bool executed = false;  // exit order confirmed executed
     bool repair_ok = false;  // EstablishProtection attempt confirmed
     risk::KillLevel kill = risk::KillLevel::NONE;
@@ -113,8 +116,8 @@ struct RouteObs {
 struct RouteMachine {
     RouteState state = RouteState::IDLE;
     risk::IntentKind kind = risk::IntentKind::ENTRY;
-    char client_id[65];
-    char broker_id[64];  // broker UUID from the single query lookup
+    char client_id[65]{};
+    char broker_id[64]{};  // broker UUID from the single query lookup
                          // (cancel path uses this, never a re-query)
     std::int64_t filled_qty = 0;
     bool emergency = false;

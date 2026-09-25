@@ -198,6 +198,7 @@ int main() {
         o.ack.accepted = true;
         o.ack.protection_accepted = true;
         o.query.found = true;
+        o.query.transport_ok = true;
         o.query.filled_qty = 100;
         o.query.protection_active = true;
         for (int i = 0; i < 4; ++i) d.step(c, o, &sink);
@@ -218,6 +219,7 @@ int main() {
             o.ack.accepted = true;
             o.ack.protection_accepted = true;
             o.query.found = true;
+            o.query.transport_ok = true;
             o.query.filled_qty = 100;
             o.query.protection_active = true;
             if (i == dup_at || i > 4) {
@@ -234,8 +236,91 @@ int main() {
             if (d.m.client_id[i] != base.m.client_id[i]) ok = false;
         Check(ok, name);
     }
-    // 1b. second reality (partial fill): rotated + duplicated delivery
-    // converges to partial-cancel-protected with its own fixed trace.
+    // 1c. TRUE event-order permutations: four distinct broker events
+    // (accept / partial-fill query / cancel-confirm / duplicate
+    // query), mutually consistent under one partial-fill reality,
+    // arrive in all 24 orders from SENT_UNACKED. No permutation may
+    // reach a wrong terminal; after a causally-complete drain all 24
+    // converge to PROTECTED(40) with the identical journal trace.
+    // (Venue sequence metadata rides the transport/journal payload
+    // layer; the router's contract is convergence over consistent
+    // observation sets — proven here, not redefined away.)
+    {
+        Ctx c = GoodCtx("intent-005", "AAPL");
+        // Deterministic preamble to SENT_UNACKED (not permuted).
+        RouteObs pre = OpenMarket();
+        Drive lead;
+        Sink sink_lead;
+        lead.step(c, pre, &sink_lead);  // WRITE
+        lead.step(c, pre, &sink_lead);  // SEND
+        Check(lead.m.state == RouteState::SENT_UNACKED, "perm-armed");
+        RouteObs ackEv = OpenMarket();
+        ackEv.ack.accepted = true;
+        ackEv.ack.protection_accepted = true;
+        RouteObs queryEv = OpenMarket();
+        queryEv.ack.accepted = true;
+        queryEv.ack.protection_accepted = true;
+        queryEv.query.found = true;
+        queryEv.query.transport_ok = true;
+        queryEv.query.filled_qty = 40;
+        queryEv.query.protection_active = true;
+        RouteObs confirmEv = queryEv;
+        confirmEv.cancel_confirmed = true;
+        RouteObs dupEv = queryEv;
+        RouteObs ev[4] = {ackEv, queryEv, confirmEv, dupEv};
+        RouteObs drain = confirmEv;
+        drain.journal_ok = true;
+        int perm[4] = {0, 1, 2, 3};
+        const char* want_trace[2] = {"partial", "cancel"};
+        for (int p = 0; p < 24; ++p) {
+            Drive d;
+            d.m = lead.m;
+            Sink sink;
+            bool wrong_terminal = false;
+            for (int i = 0; i < 4; ++i) {
+                d.step(c, ev[perm[i]], &sink);
+                if (d.m.state == RouteState::CANCELLED ||
+                    d.m.state == RouteState::UNKNOWN_FROZEN)
+                    wrong_terminal = true;
+            }
+            for (int i = 0;
+                 i < 6 && d.m.state != RouteState::PROTECTED; ++i)
+                d.step(c, drain, &sink);
+            char name[40];
+            std::snprintf(name, sizeof(name), "perm-%d%d%d%d", perm[0],
+                          perm[1], perm[2], perm[3]);
+            bool ok = !wrong_terminal &&
+                      d.m.state == RouteState::PROTECTED &&
+                      d.m.filled_qty == 40 && d.tn == 2 &&
+                      sink.verify();
+            for (int i = 0; i < 2 && ok; ++i) {
+                const char* a = d.trace[i];
+                const char* b = want_trace[i];
+                while (*a && *b && *a == *b) {
+                    ++a;
+                    ++b;
+                }
+                if (*a != *b) ok = false;
+            }
+            for (int i = 0; i < 65 && ok; ++i)
+                if (d.m.client_id[i] != lead.m.client_id[i]) ok = false;
+            Check(ok, name);
+            // next lexicographic permutation of [0,1,2,3]
+            int k = 2;
+            while (k >= 0 && perm[k] > perm[k + 1]) --k;
+            if (k < 0) break;
+            int l = 3;
+            while (perm[l] < perm[k]) --l;
+            int t = perm[k];
+            perm[k] = perm[l];
+            perm[l] = t;
+            for (int a = k + 1, b = 3; a < b; ++a, --b) {
+                t = perm[a];
+                perm[a] = perm[b];
+                perm[b] = t;
+            }
+        }
+    }
     {
         Ctx c = GoodCtx("intent-001b", "AAPL");
         Sink sink;
@@ -250,6 +335,7 @@ int main() {
         RouteObs q = fill;
         q.journal_ok = false;
         q.query.found = true;
+        q.query.transport_ok = true;
         q.query.filled_qty = 40;
         q.query.protection_active = true;
         RouteObs cc = fill;
@@ -281,6 +367,7 @@ int main() {
         full.step(c, o, &sink_full);
         o.adapter_responded = true;
         o.query.found = true;
+        o.query.transport_ok = true;
         o.query.filled_qty = 100;
         o.query.protection_active = true;
         full.step(c, o, &sink_full);
@@ -303,6 +390,7 @@ int main() {
             w.ack.accepted = true;
             w.ack.protection_accepted = true;
             w.query.found = true;
+            w.query.transport_ok = true;
             w.query.filled_qty = 100;
             w.query.protection_active = true;
             Drive d;
@@ -401,7 +489,52 @@ int main() {
                   RouteAction::REJECT,
               "outage-research-blocks-entry");
     }
-    // 4. journal-only summary: counts derivable from rows alone; the
+    // 4. repair success journals through the FROZEN vocabulary: the
+    // JOURNAL_REPAIR action names kind "reconcile", which the real
+    // FormatRow/VerifyRow accept (no tenth kind exists or is needed).
+    {
+        Ctx c = GoodCtx("intent-004", "AAPL");
+        Drive d;
+        Sink sink;
+        RouteObs o = OpenMarket();
+        d.step(c, o, &sink);  // WRITE intent
+        d.step(c, o, &sink);  // SEND
+        o.ack.accepted = true;
+        o.ack.protection_accepted = false;
+        o.ack.filled_qty = 50;
+        d.step(c, o, &sink);  // ESTABLISH (naked partial)
+        Check(d.m.state == RouteState::REPAIR_SENT, "repair-entered");
+        o.repair_ok = true;
+        // capture the journal row the action demands, validate it
+        auto r = jev::exec::RouteStep(d.m, c.in, c.venue, o);
+        Check(r.action == RouteAction::JOURNAL_REPAIR, "repair-action");
+        bool kind_ok = true;
+        {
+            const char* k = r.journal_kind;
+            const char* want = "reconcile";
+            while (*k && *want && *k == *want) {
+                ++k;
+                ++want;
+            }
+            kind_ok = (*k == *want);
+        }
+        Check(kind_ok, "repair-frozen-kind");
+        char prevbuf[65];
+        if (sink.n == 0) {
+            for (int i = 0; i < 64; ++i) prevbuf[i] = '0';
+            prevbuf[64] = '\0';
+        } else {
+            const std::string& ph = sink.rows[sink.n - 1].row_hash;
+            for (int i = 0; i < 64; ++i) prevbuf[i] = ph[i];
+            prevbuf[64] = '\0';
+        }
+        Row row;
+        bool wok = jev::journal::FormatRow(7, 7000, r.journal_kind,
+                                           c.in.intent_id, sink.hex,
+                                           prevbuf, &row);
+        Check(wok && jev::journal::VerifyRow(row), "repair-journal-ok");
+    }
+    // 5. journal-only summary: counts derivable from rows alone; the
     // chain verifies over the whole drill sink.
     {
         Sink sink;

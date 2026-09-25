@@ -254,6 +254,15 @@ int main() {
         auto c2 = ad.Cancel(q.broker_order_id);
         Check(!c2.confirmed, "cancel-fail-open-never");
         g_status = 200;
+        // Real Alpaca success: 204 No Content, empty body.
+        g_status = 204;
+        g_reply = "";
+        auto c3 = ad.Cancel(q.broker_order_id);
+        Check(c3.confirmed, "cancel-204-empty");
+        g_status = 422;
+        auto c4 = ad.Cancel(q.broker_order_id);
+        Check(!c4.confirmed, "cancel-422");
+        g_status = 200;
         // Lookup with no id marker: not found (never a phantom).
         g_reply = "{}";
         auto q404 = ad.QueryOnce(id);

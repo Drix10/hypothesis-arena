@@ -52,7 +52,14 @@ struct OrderQuery {
     bool cancelled = false;
     bool protection_active = false;
     int broker_status = 0;  // adapter-declared code; 0 = ok/unknown-none
-    char broker_order_id[64];  // broker UUID from lookup (empty if none)
+    bool transport_ok = false;  // lookup executed authoritatively;
+                                // false = transport failure/unknown
+                                // (NOT "order absent" — an empty
+                                // answer on a dead transport must wait,
+                                // never cancel)
+    char broker_order_id[64]{};  // broker UUID from lookup (empty: none);
+                                 // zero-init: garbage must never ride
+                                 // the crash path
 };
 
 struct CancelResult {

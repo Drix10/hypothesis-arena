@@ -92,9 +92,9 @@ int main() {
     {
         const char* kinds[] = {"intent",  "fill",   "partial", "cancel",
                                "unknown", "exit",   "drift-directive",
-                               "demotion", "reconcile", "repair"};
+                               "demotion", "reconcile"};
         bool ok = true;
-        for (std::size_t i = 0; i < 10; ++i) {
+        for (std::size_t i = 0; i < 9; ++i) {
             Row k;
             ok = ok && FormatRow(i, 1000 + (int)i, kinds[i], "i-9",
                                  hex64, GenesisPrev().c_str(), &k) &&

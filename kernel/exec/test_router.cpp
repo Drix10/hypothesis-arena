@@ -100,6 +100,7 @@ int main() {
         Check(r3.action == RouteAction::QUERY_ONCE, "happy-query");
         o.adapter_responded = true;
         o.query.found = true;
+        o.query.transport_ok = true;
         o.query.filled_qty = 100;
         o.query.protection_active = true;
         auto r4 = RouteStep(r3.next, in, venue, o);
@@ -245,6 +246,7 @@ int main() {
         Check(r3.action == RouteAction::QUERY_ONCE, "timeout-queries");
         o.adapter_responded = true;
         o.query.found = true;
+        o.query.transport_ok = true;
         o.query.filled_qty = 0;
         auto r4 = RouteStep(r3.next, in, venue, o);
         Check(r4.action == RouteAction::CANCEL_REMAINDER, "empty-cancels");
@@ -269,6 +271,7 @@ int main() {
         auto r3 = RouteStep(r2.next, in, venue, o);
         o.adapter_responded = true;
         o.query.found = true;
+        o.query.transport_ok = true;
         o.query.filled_qty = 40;
         o.query.protection_active = true;
         auto r4 = RouteStep(r3.next, in, venue, o);
@@ -300,8 +303,10 @@ int main() {
         auto r3 = RouteStep(r2.next, in, venue, o);
         o.adapter_responded = true;
         o.query.found = false;
+        o.query.transport_ok = true;
         auto r4 = RouteStep(r3.next, in, venue, o);
         o.cancel_confirmed = false;
+        o.cancel_failed = true;  // explicit broker rejection -> UNKNOWN
         auto r5 = RouteStep(r4.next, in, venue, o);
         Check(r5.action == RouteAction::JOURNAL_UNKNOWN &&
                   r5.next.state == RouteState::UNKNOWN_FROZEN &&
@@ -352,6 +357,7 @@ int main() {
               "crash-reconciles-first");
         o.adapter_responded = true;
         o.query.found = true;
+        o.query.transport_ok = true;
         o.query.filled_qty = 100;
         o.query.protection_active = true;
         auto r2 = RouteStep(r.next, in, venue, o);
@@ -364,6 +370,7 @@ int main() {
         m.protection_ok = true;  // legitimate resting machine
         RouteObs o = OpenMarket();
         o.query.found = true;
+        o.query.transport_ok = true;
         o.query.filled_qty = 100;
         auto r = RouteStep(m, in, venue, o);
         Check(r.action == RouteAction::NONE, "duplicate-quiet");
@@ -439,6 +446,7 @@ int main() {
         auto r3 = RouteStep(r2.next, in, venue, o);
         o.adapter_responded = true;
         o.query.found = true;
+        o.query.transport_ok = true;
         o.query.filled_qty = 40;
         o.query.protection_active = false;
         auto r4 = RouteStep(r3.next, in, venue, o);
@@ -473,7 +481,7 @@ int main() {
         int checked = 0;
         for (int st = 0; st <= 12; ++st)
             for (int pok = 0; pok <= 1; ++pok)
-                for (int bits = 0; bits < 64; ++bits) {
+                for (int bits = 0; bits < 256; ++bits) {
                     RouteMachine m;
                     m.state = static_cast<RouteState>(st);
                     m.kind = IntentKind::ENTRY;
@@ -490,6 +498,8 @@ int main() {
                     o.query.protection_active = (bits & 8) != 0;
                     o.cancel_confirmed = (bits & 32) != 0;
                     o.repair_ok = (bits & 16) != 0;
+                    o.query.transport_ok = (bits & 64) != 0;
+                    o.cancel_failed = (bits & 128) != 0;
                     auto r = RouteStep(m, in, venue, o);
                     bool ok = (r.next.state != RouteState::PROTECTED) ||
                               r.next.protection_ok;
@@ -515,6 +525,7 @@ int main() {
         auto r3 = RouteStep(r2.next, in, venue, o);
         o.adapter_responded = true;
         o.query.found = true;
+        o.query.transport_ok = true;
         o.query.cancelled = true;
         o.query.filled_qty = 0;
         auto r4 = RouteStep(r3.next, in, venue, o);
@@ -530,6 +541,24 @@ int main() {
         Check(RouteStep(mq, in, venue, oq).action ==
                   RouteAction::NONE,
               "query-silence-waits");
+        // silence (responded, neither flag) re-checks, never UNKNOWN.
+        {
+            RouteMachine mc;
+            mc.state = RouteState::CANCEL_SENT;
+            RouteObs os = OpenMarket();
+            auto rs = RouteStep(mc, in, venue, os);
+            Check(rs.action == RouteAction::CONFIRM_CANCELLED &&
+                      rs.next.state == RouteState::CANCEL_SENT &&
+                      !rs.freeze_symbol,
+                  "cancel-silence-rechecks");
+        }
+        // lookup under the same identity — reconcile, not a resend.
+        RouteObs of = OpenMarket();
+        of.query.transport_ok = false;
+        auto rf = RouteStep(mq, in, venue, of);
+        Check(rf.action == RouteAction::QUERY_ONCE &&
+                  rf.next.state == RouteState::QUERY_SENT,
+              "query-transport-retry");
         // invalid state value: fail closed, never act.
         RouteMachine mb;
         mb.state = static_cast<RouteState>(99);
@@ -550,10 +579,11 @@ int main() {
                 int v = (i * 7 + st) % 16;
                 m.client_id[i] =
                     (v < 10) ? ('0' + v) : ('a' + v - 10);
-                if (i < 63)
-                    m.broker_id[i] =
-                        (v < 10) ? ('0' + v) : ('a' + v - 10);
             }
+            // Real UUID-shaped broker id (hyphens required by grammar).
+            const char* uuid = "0193abcd-1234-5678-9abc-def012345678";
+            for (int i = 0; i < 36; ++i) m.broker_id[i] = uuid[i];
+            m.broker_id[36] = '\0';
             m.client_id[64] = '\0';
             m.broker_id[63] = '\0';
             m.filled_qty = st * 7;
@@ -588,6 +618,25 @@ int main() {
         Check(!RestoreMachine("H1:0:0:0:0:0::extra", &q),
               "snap-trailing");
         Check(!RestoreMachine("H1:0:0:0:0:0:", &q), "snap-short");
+        // UUID grammar: hyphens exact, lowercase hex, 36 chars.
+        Check(!RestoreMachine(
+                  "H1:0:0:0:0:0::0193ABCD-1234-5678-9abc-def012345678",
+                  &q),
+              "snap-uuid-upper");
+        Check(!RestoreMachine(
+                  "H1:0:0:0:0:0::0193abcd1234-5678-9abc-def012345678",
+                  &q),
+              "snap-uuid-hyphen");
+        Check(!RestoreMachine("H1:0:0:0:0:0::0193abcd", &q),
+              "snap-uuid-short");
+        Check(!RestoreMachine(
+                  "H1:0:0:0:0:0::0193abcd-1234-5678-9abc-def01234567X",
+                  &q),
+              "snap-uuid-char");
+        // Empty broker id restores (no UUID observed yet).
+        Check(RestoreMachine("H1:2:0:0:0:0::", &q) &&
+                  q.broker_id[0] == '\0',
+              "snap-empty-bid");
         char tiny[8];
         RouteMachine m;
         Check(!SnapshotMachine(m, nullptr, 64), "snap-ser-null");

@@ -155,6 +155,9 @@ OrderQuery AlpacaPaperAdapter::QueryOnce(
     req.body = "";
     HttpResult r = transport_(req);
     if (r.status < 200 || r.status >= 300) return q;
+    // The lookup executed: this answer is authoritative (even a
+    // no-id reply means absent, not unknown).
+    q.transport_ok = true;
     // Distinguish not-found (no id marker) from a broken reply: only
     // an id-bearing reply is a found order. The UUID is REQUIRED for
     // the real DELETE cancel path (no second lookup hidden anywhere).
@@ -206,6 +209,13 @@ CancelResult AlpacaPaperAdapter::Cancel(
     req.path = path;
     req.body = "";
     HttpResult r = transport_(req);
+    // Successful DELETE is 204 No Content (empty body): the status
+    // alone confirms. Other 2xx require the id marker (never trust a
+    // bare 200 with no body); 4xx/5xx always fail.
+    if (r.status == 204) {
+        c.confirmed = true;
+        return c;
+    }
     c.confirmed =
         (r.status >= 200 && r.status < 300) && Contains(r.body, "\"id\"");
     return c;
