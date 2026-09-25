@@ -19,27 +19,36 @@ static void Check(bool cond, const char* name) {
 }
 
 using jev::broker::AlpacaPaperAdapter;
+using jev::broker::HttpRequest;
 using jev::broker::HttpResult;
 using jev::broker::OrderSide;
 using jev::broker::PaperFillPrice;
 using jev::broker::ProtectedOrder;
 using jev::broker::Quote;
 
+static char g_last_method[16];
 static char g_last_path[256];
 static char g_last_body[2048];
 static int g_calls = 0;
 static int g_status = 200;
 static const char* g_reply = "{\"id\":\"x\"}";
 
-static HttpResult Fake(const char* path, const char* body) {
+static HttpResult Fake(const HttpRequest& req) {
     ++g_calls;
     int i = 0;
-    while (path[i] && i < 255) {
-        g_last_path[i] = path[i];
+    while (req.method[i] && i < 15) {
+        g_last_method[i] = req.method[i];
+        ++i;
+    }
+    g_last_method[i] = '\0';
+    i = 0;
+    while (req.path[i] && i < 255) {
+        g_last_path[i] = req.path[i];
         ++i;
     }
     g_last_path[i] = '\0';
     i = 0;
+    const char* body = req.body ? req.body : "";
     while (body[i] && i < 2047) {
         g_last_body[i] = body[i];
         ++i;
@@ -168,12 +177,15 @@ int main() {
         o.intent_id[64] = '\0';
         AlpacaPaperAdapter ad(Fake);
         g_calls = 0;
-        g_status = 200;
-        g_reply =
+        g_status = 200;g_reply =
             "{\"id\":\"o1\",\"take_profit\":{\"limit_price\":\"240.00\"},"
             "\"stop_loss\":{\"stop_price\":\"220.00\"}}";
         auto ack = ad.SubmitProtected(o);
         Check(g_calls == 1, "bracket-single-call");
+        Check(g_last_method[0] == 'P' && g_last_method[1] == 'O' &&
+                  g_last_method[2] == 'S' && g_last_method[3] == 'T' &&
+                  g_last_method[4] == '\0',
+              "bracket-post");
         Check(Has(g_last_body, "\"order_class\":\"bracket\""),
               "bracket-class");
         Check(Has(g_last_body, "\"side\":\"buy\""), "bracket-side");
@@ -203,31 +215,50 @@ int main() {
         Check(!ack5.accepted && ack5.reason[0] != '\0',
               "unwired-closed");
     }
-    // 4. query / cancel / repair mapping
+    // 4. query uses GET by-client-id; cancel uses DELETE by UUID.
     {
         AlpacaPaperAdapter ad(Fake);
         g_status = 200;
         g_reply =
-            "{\"id\":\"o1\",\"filled_qty\":\"10\",\"take_profit\":{},"
-            "\"stop_loss\":{}}";
+            "{\"id\":\"0193abcd-uuid\",\"filled_qty\":\"10\","
+            "take_profit\":{},\"stop_loss\":{}}";
         char id[65];
         for (int i = 0; i < 64; ++i) id[i] = 'q';
         id[64] = '\0';
+        g_calls = 0;
         auto q = ad.QueryOnce(id);
+        Check(g_calls == 1, "query-single-call");
+        Check(g_last_method[0] == 'G' && g_last_method[1] == 'E' &&
+                  g_last_method[2] == 'T' && g_last_method[3] == '\0',
+              "query-get");
+        Check(Has(g_last_path,
+                  "/v2/orders:by_client_order_id?client_order_id="),
+              "query-path");
         Check(q.found && q.filled_qty == 10 && q.protection_active,
               "query-maps");
-        g_reply = "{\"id\":\"o1\",\"filled_qty\":\"0\",\"canceled\":true}";
-        auto q2 = ad.QueryOnce(id);
-        Check(q2.found && q2.cancelled && q2.filled_qty == 0,
-              "query-cancelled");
-        g_reply = "{\"id\":\"o1\"}";
-        auto c = ad.Cancel(id);
+        bool uuid_ok = true;
+        const char* want = "0193abcd-uuid";
+        for (int i = 0; want[i]; ++i)
+            if (q.broker_order_id[i] != want[i]) uuid_ok = false;
+        Check(uuid_ok && q.broker_order_id[13] == '\0', "query-uuid");
+        // Cancel goes to DELETE /v2/orders/{uuid}: no hidden lookup.
+        g_reply = "{\"id\":\"0193abcd-uuid\"}";
+        g_calls = 0;
+        auto c = ad.Cancel(q.broker_order_id);
+        Check(g_calls == 1, "cancel-single-call");
+        Check(g_last_method[0] == 'D', "cancel-delete");
+        Check(Has(g_last_path, "/v2/orders/0193abcd-uuid"),
+              "cancel-uuid-path");
         Check(c.confirmed, "cancel-confirms");
         g_status = 500;
-        auto c2 = ad.Cancel(id);
+        auto c2 = ad.Cancel(q.broker_order_id);
         Check(!c2.confirmed, "cancel-fail-open-never");
         g_status = 200;
-        // Repair uses the opposing side in one OCO (never the entry).
+        // Lookup with no id marker: not found (never a phantom).
+        g_reply = "{}";
+        auto q404 = ad.QueryOnce(id);
+        Check(!q404.found, "query-not-found");
+        // Repair is a LIMIT OCO with opposing side + sane prices.
         ProtectedOrder o;
         o.symbol[0] = 'S';
         o.symbol[1] = 'P';
@@ -247,8 +278,30 @@ int main() {
             "{\"id\":\"o9\",\"take_profit\":{},\"stop_loss\":{}}";
         bool rep = ad.EstablishProtection(o);
         Check(rep && Has(g_last_body, "\"order_class\":\"oco\"") &&
+                  Has(g_last_body, "\"type\":\"limit\"") &&
                   Has(g_last_body, "\"side\":\"sell\""),
-              "repair-oco-opposing");
+              "repair-oco-limit-opposing");
+        // Short recovery buys with stop above TP.
+        o.side = OrderSide::SELL;
+        o.stop_cents = 52000;
+        o.tp_cents = 50000;
+        Check(ad.EstablishProtection(o) &&
+                  Has(g_last_body, "\"side\":\"buy\""),
+              "repair-short-buys");
+        // Inverted prices refused without transport touch.
+        o.stop_cents = 50000;
+        o.tp_cents = 52000;  // tp above stop on a short = nonsense
+        int before = g_calls;
+        Check(!ad.EstablishProtection(o) && g_calls == before,
+              "repair-price-guard");
+        // MarketClose posts a plain market order for exits.
+        g_calls = 0;
+        auto mc = ad.MarketClose("AAPL", 10, OrderSide::SELL);
+        Check(mc.executed && g_last_method[0] == 'P' &&
+                  Has(g_last_path, "/v2/orders") &&
+                  Has(g_last_body, "\"side\":\"sell\"") &&
+                  !Has(g_last_body, "order_class"),
+              "close-market-plain");
     }
     if (g_fail == 0) std::printf("BROKER SUITE: ALL PASS (%d checks)\n",
                                  g_count);

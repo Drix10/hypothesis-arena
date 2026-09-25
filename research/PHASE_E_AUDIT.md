@@ -2059,3 +2059,38 @@ plane (Phase D) change any interface a future slice depends on?
   H1 drives through explicit inputs); Slice D/P3.x/collector/
   research/plan untouched. Live transport unwired (Phase 4);
   no execution, no credentials.
+
+## Addendum 109 - H1 corrective pass (independent audit findings)
+P0-1 protection-missing (safety): filled/partial without protection
+  now routes to ESTABLISH_PROTECTION (REPAIR_SENT, recovery-only);
+  repair-ok -> JOURNAL_REPAIR -> PROTECTED; repair-fail -> FLATTEN_NOW
+  -> EXIT_SENT -> journaled exit (never holds naked, never fakes a
+  cancel). CANCEL_SENT with filled qty but unconfirmed protection
+  repairs instead of claiming PROTECTED. Corrupt PROTECTED without
+  the flag fails closed (found by the new sweep, fixed). Invariant:
+  13 states x pok x 64 obs combos prove PROTECTED implies confirmed
+  protection. 17 new router regressions (76 total).
+P0-2 transport/API: HttpTransport carries GET/POST/DELETE; lookup is
+  GET /v2/orders:by_client_order_id?client_order_id=; cancel is
+  DELETE /v2/orders/{UUID from the single query} (no hidden adapter
+  state, restart-safe); exact method/path/query fake assertions.
+P0-3 OCO repair: type limit (not market), stop-limit leg, side/price
+  guards (long sells tp>stop; short buys stop>tp; inverted refused
+  without transport touch); MarketClose added for exits/flatten.
+P1-1 durability: SnapshotMachine/RestoreMachine strict fixed format
+  (13 states round-trip + 10 malformed rejects); crash-resume drill
+  (snapshot per step -> reload -> complete: same terminal/ID, one
+  intent row); randomized convergence (25 seeds + partial reality:
+  same terminal/trace/ID, chains verify).
+P1-2 drills (test_drills 45): convergence, crash, six §6.2a rows
+  (entries stop, exits alive; JEV-down via REAL Slice D level eval),
+  journal-only summary (counts derivable, chain verifies),
+  redaction/retention integration.
+P1-3 edges: already-cancelled direct path; bad-state REJECT;
+  silence-vs-notfound distinct; tie-breaks pinned.
+No Slice D / P3.x / collector / research / plan changes. Transport
+still unwired live (Phase 4); no execution. §6.5 rows closed at unit/
+drill level here: kill/reconcile integration drill, randomized
+ordering, crash durability, outage rows, summary/redaction paths.
+Phase-4 operational rows (30-day run, live bracket-ack proof, real
+transport, out-of-band receipt) stay H2.

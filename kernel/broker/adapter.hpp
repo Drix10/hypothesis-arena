@@ -52,21 +52,31 @@ struct OrderQuery {
     bool cancelled = false;
     bool protection_active = false;
     int broker_status = 0;  // adapter-declared code; 0 = ok/unknown-none
+    char broker_order_id[64];  // broker UUID from lookup (empty if none)
 };
 
 struct CancelResult {
     bool confirmed = false;
 };
 
+struct CloseResult {
+    bool executed = false;
+};
+
 // Abstract adapter: the router drives these and ONLY these. Recovery
 // repair (re-establish protection on an acknowledged position) rides
-// EstablishProtection; it is never the normal entry path.
+// EstablishProtection; it is never the normal entry path. Cancel and
+// MarketClose take the broker UUID / explicit symbol+qty (never a
+// second status query hidden inside a cancel).
 class IAdapter {
    public:
     virtual ~IAdapter() {}
     virtual OrderAck SubmitProtected(const ProtectedOrder& o) = 0;
     virtual OrderQuery QueryOnce(const char client_order_id[65]) = 0;
-    virtual CancelResult Cancel(const char client_order_id[65]) = 0;
+    virtual CancelResult Cancel(const char broker_order_id[64]) = 0;
+    virtual CloseResult MarketClose(const char* symbol,
+                                    std::int64_t qty_shares,
+                                    OrderSide side) = 0;
     virtual bool EstablishProtection(const ProtectedOrder& o) = 0;
     virtual Venue venue() const = 0;
 };

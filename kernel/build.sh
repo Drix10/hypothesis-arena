@@ -120,6 +120,8 @@ g++ $FLAGS -o test_journal log/test_journal.cpp log/journal.cpp
 ./test_journal
 g++ $FLAGS -o test_broker broker/test_broker.cpp broker/adapter.cpp broker/alpaca_paper.cpp
 ./test_broker
+g++ $FLAGS -o test_drills exec/test_drills.cpp exec/router.cpp broker/adapter.cpp broker/alpaca_paper.cpp log/journal.cpp kill/switch.cpp
+./test_drills
 # H1 zero-malloc contract: the router STEP CORE allocates nothing
 # (identity minting at IDLE is documented cycle-path and excluded
 # here; the loop covers the IDLE-reject path + every post-identity

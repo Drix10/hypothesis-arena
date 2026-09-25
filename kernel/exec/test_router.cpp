@@ -361,6 +361,7 @@ int main() {
     {
         RouteMachine m;
         m.state = RouteState::PROTECTED;
+        m.protection_ok = true;  // legitimate resting machine
         RouteObs o = OpenMarket();
         o.query.found = true;
         o.query.filled_qty = 100;
@@ -382,6 +383,215 @@ int main() {
         RouteMachine mn;
         auto n1 = RouteStep(mn, in, venue, o);
         Check(n1.action == RouteAction::WRITE_JOURNAL, "entry-after-exit");
+    }
+    // 16. P0: filled-without-protection is NEVER a cancel of a
+    // nonexistent remainder and NEVER silently PROTECTED. Repair now.
+    {
+        RouteMachine m;
+        RouteObs o = OpenMarket();
+        auto r1 = RouteStep(m, in, venue, o);
+        auto r2 = RouteStep(r1.next, in, venue, o);
+        // naked ack, partial fill -> ESTABLISH, not cancel
+        o.ack.accepted = true;
+        o.ack.protection_accepted = false;
+        o.ack.filled_qty = 30;
+        auto r3 = RouteStep(r2.next, in, venue, o);
+        Check(r3.action == RouteAction::ESTABLISH_PROTECTION &&
+                  r3.next.state == RouteState::REPAIR_SENT &&
+                  r3.next.filled_qty == 30,
+              "naked-partial-repairs");
+        // naked ack, full fill -> ESTABLISH (no remainder exists)
+        o.ack.filled_qty = 100;
+        auto r3b = RouteStep(r2.next, in, venue, o);
+        Check(r3b.action == RouteAction::ESTABLISH_PROTECTION,
+              "naked-full-repairs");
+        // repair succeeds -> JOURNAL_REPAIR -> PROTECTED
+        o.adapter_responded = true;
+        o.repair_ok = true;
+        auto r4 = RouteStep(r3.next, in, venue, o);
+        Check(r4.action == RouteAction::JOURNAL_REPAIR &&
+                  r4.next.state == RouteState::PROTECTED &&
+                  r4.next.protection_ok,
+              "repair-protected");
+        // repair fails -> flatten immediately, then exit journaled
+        auto r4f = RouteStep(r3.next, in, venue, o);
+        (void)r4f;
+        RouteObs of = o;
+        of.repair_ok = false;
+        auto r5 = RouteStep(r3.next, in, venue, of);
+        Check(r5.action == RouteAction::FLATTEN_NOW &&
+                  r5.next.state == RouteState::EXIT_SENT,
+              "repair-failed-flattens");
+        of.executed = true;
+        auto r6 = RouteStep(r5.next, in, venue, of);
+        Check(r6.action == RouteAction::JOURNAL_EXIT &&
+                  r6.next.state == RouteState::CLOSED,
+              "flatten-exited");
+    }
+    // 17. P0: query-side missing protection also repairs; cancel
+    // confirmation without confirmed protection repairs too.
+    {
+        RouteMachine m;
+        RouteObs o = OpenMarket();
+        auto r1 = RouteStep(m, in, venue, o);
+        auto r2 = RouteStep(r1.next, in, venue, o);
+        o.adapter_responded = false;
+        auto r3 = RouteStep(r2.next, in, venue, o);
+        o.adapter_responded = true;
+        o.query.found = true;
+        o.query.filled_qty = 40;
+        o.query.protection_active = false;
+        auto r4 = RouteStep(r3.next, in, venue, o);
+        Check(r4.action == RouteAction::ESTABLISH_PROTECTION,
+              "query-partial-noprot-repairs");
+        o.query.filled_qty = 100;
+        auto r4b = RouteStep(r3.next, in, venue, o);
+        Check(r4b.action == RouteAction::ESTABLISH_PROTECTION,
+              "query-full-noprot-repairs");
+        // Crafted CANCEL_SENT with filled qty but no confirmed
+        // protection (e.g. restored edge): confirm -> repair, never
+        // PROTECTED.
+        RouteMachine mc;
+        mc.state = RouteState::CANCEL_SENT;
+        mc.kind = IntentKind::ENTRY;
+        mc.filled_qty = 50;
+        mc.protection_ok = false;
+        RouteObs oc = OpenMarket();
+        oc.cancel_confirmed = true;
+        auto rc = RouteStep(mc, in, venue, oc);
+        Check(rc.action == RouteAction::ESTABLISH_PROTECTION &&
+                  rc.next.state == RouteState::REPAIR_SENT,
+              "cancel-sent-unprotected-repairs");
+        mc.protection_ok = true;
+        auto rc2 = RouteStep(mc, in, venue, oc);
+        Check(rc2.next.state == RouteState::PROTECTED,
+              "cancel-sent-protected-rests");
+    }
+    // 18. P0 invariant sweep: no transition reaches PROTECTED without
+    // positively confirmed protection (states x pok x obs combos).
+    {
+        int checked = 0;
+        for (int st = 0; st <= 12; ++st)
+            for (int pok = 0; pok <= 1; ++pok)
+                for (int bits = 0; bits < 64; ++bits) {
+                    RouteMachine m;
+                    m.state = static_cast<RouteState>(st);
+                    m.kind = IntentKind::ENTRY;
+                    m.filled_qty = 50;
+                    m.protection_ok = (pok == 1);
+                    RouteObs o = OpenMarket();
+                    o.journal_ok = (bits & 1) != 0;
+                    o.adapter_responded = (bits & 2) != 0;
+                    o.ack.accepted = (bits & 4) != 0;
+                    o.ack.protection_accepted = (bits & 8) != 0;
+                    o.query_due = (bits & 16) != 0;
+                    o.query.found = (bits & 1) != 0;
+                    o.query.filled_qty = (bits & 4) ? 100 : 0;
+                    o.query.protection_active = (bits & 8) != 0;
+                    o.cancel_confirmed = (bits & 32) != 0;
+                    o.repair_ok = (bits & 16) != 0;
+                    auto r = RouteStep(m, in, venue, o);
+                    bool ok = (r.next.state != RouteState::PROTECTED) ||
+                              r.next.protection_ok;
+                    checked += (r.next.state == RouteState::PROTECTED);
+                    if (!ok) {
+                        char name[48];
+                        std::snprintf(name, sizeof(name),
+                                      "prot-inv-%d-%d-%d", st, pok,
+                                      bits);
+                        Check(false, name);
+                    }
+                }
+        Check(checked > 0, "prot-inv-covered");
+    }
+    // 19. P1-3 edges: already-cancelled direct path; bad-state fails
+    // closed; transport silence waits (not-found vs failure distinct).
+    {
+        RouteMachine m;
+        RouteObs o = OpenMarket();
+        auto r1 = RouteStep(m, in, venue, o);
+        auto r2 = RouteStep(r1.next, in, venue, o);
+        o.adapter_responded = false;
+        auto r3 = RouteStep(r2.next, in, venue, o);
+        o.adapter_responded = true;
+        o.query.found = true;
+        o.query.cancelled = true;
+        o.query.filled_qty = 0;
+        auto r4 = RouteStep(r3.next, in, venue, o);
+        Check(r4.action == RouteAction::JOURNAL_CANCEL &&
+                  r4.next.state == RouteState::CANCELLED,
+              "already-cancelled-direct");
+        // transport silence (!responded, !due): wait, nothing else.
+        RouteMachine mq;
+        mq.state = RouteState::QUERY_SENT;
+        RouteObs oq = OpenMarket();
+        oq.adapter_responded = false;
+        oq.query_due = false;
+        Check(RouteStep(mq, in, venue, oq).action ==
+                  RouteAction::NONE,
+              "query-silence-waits");
+        // invalid state value: fail closed, never act.
+        RouteMachine mb;
+        mb.state = static_cast<RouteState>(99);
+        auto rb = RouteStep(mb, in, venue, OpenMarket());
+        Check(rb.action == RouteAction::REJECT,
+              "bad-state-fails-closed");
+    }
+    // 20. P1-1 seam: snapshot/restore round-trips + strict rejects.
+    {
+        using jev::exec::RestoreMachine;
+        using jev::exec::SnapshotMachine;
+        for (int st = 0; st <= 12; ++st) {
+            RouteMachine m;
+            m.state = static_cast<RouteState>(st);
+            m.kind = (st & 1) ? IntentKind::EXIT : IntentKind::ENTRY;
+            for (int i = 0; i < 64; ++i) {
+                // lowercase hex only (the strict parser requires it).
+                int v = (i * 7 + st) % 16;
+                m.client_id[i] =
+                    (v < 10) ? ('0' + v) : ('a' + v - 10);
+                if (i < 63)
+                    m.broker_id[i] =
+                        (v < 10) ? ('0' + v) : ('a' + v - 10);
+            }
+            m.client_id[64] = '\0';
+            m.broker_id[63] = '\0';
+            m.filled_qty = st * 7;
+            m.emergency = (st & 2) != 0;
+            m.protection_ok = (st & 4) != 0;
+            char buf[256];
+            RouteMachine q;
+            bool ok =
+                SnapshotMachine(m, buf, sizeof(buf)) &&
+                RestoreMachine(buf, &q);
+            char name[32];
+            std::snprintf(name, sizeof(name), "snap-%d", st);
+            bool same = ok && q.state == m.state &&
+                        q.kind == m.kind &&
+                        q.filled_qty == m.filled_qty &&
+                        q.emergency == m.emergency &&
+                        q.protection_ok == m.protection_ok;
+            for (int i = 0; i < 65 && same; ++i)
+                if (q.client_id[i] != m.client_id[i]) same = false;
+            for (int i = 0; i < 64 && same; ++i)
+                if (q.broker_id[i] != m.broker_id[i]) same = false;
+            Check(same, name);
+        }
+        RouteMachine q;
+        Check(!RestoreMachine(nullptr, &q), "snap-null");
+        Check(!RestoreMachine("H1:0:0:0:0:0::", nullptr),
+              "snap-null-out");
+        Check(!RestoreMachine("X1:0:0:0:0:0::", &q), "snap-tag");
+        Check(!RestoreMachine("H1:13:0:0:0:0::", &q), "snap-state");
+        Check(!RestoreMachine("H1:0:2:0:0:0::", &q), "snap-kind");
+        Check(!RestoreMachine("H1:0:0:0:0:0:ZZ:", &q), "snap-hex");
+        Check(!RestoreMachine("H1:0:0:0:0:0::extra", &q),
+              "snap-trailing");
+        Check(!RestoreMachine("H1:0:0:0:0:0:", &q), "snap-short");
+        char tiny[8];
+        RouteMachine m;
+        Check(!SnapshotMachine(m, nullptr, 64), "snap-ser-null");
+        Check(!SnapshotMachine(m, tiny, sizeof(tiny)), "snap-ser-small");
     }
     if (g_fail == 0) std::printf("ROUTER SUITE: ALL PASS (%d checks)\n",
                                  g_count);

@@ -1,6 +1,12 @@
 // H1 — router implementation. Pure step function; the caller owns
 // all I/O (broker adapter, journal file, freeze set, emergency
 // buffer). See the header for the frozen rules enforced here.
+//
+// Protection invariant (frozen doc 06 sec. 6.1): PROTECTED is entered
+// ONLY with positively confirmed broker-native protection. Any filled
+// position lacking protection routes to ESTABLISH_PROTECTION
+// (recovery-only repair) and, if repair fails, to immediate flatten —
+// never to a cancel of a nonexistent remainder, never to PROTECTED.
 #include "router.hpp"
 
 namespace jev {
@@ -22,8 +28,17 @@ bool IntentShapeOk(const OrderIntent& in) {
     if (!in.intent_id[0] || !in.symbol[0]) return false;
     return ScalarsOk(in);
 }
-void CopyId(char (&dst)[65], const char (&src)[65]) {
+void Copy65(char (&dst)[65], const char (&src)[65]) {
     for (int i = 0; i < 65; ++i) dst[i] = src[i];
+}
+void Copy64(char (&dst)[64], const char (&src)[64]) {
+    for (int i = 0; i < 64; ++i) dst[i] = src[i];
+}
+RouteOut Reject(RouteOut& o, const char* reason) {
+    o.action = RouteAction::REJECT;
+    o.next.state = RouteState::CANCELLED;
+    o.reason = reason;
+    return o;
 }
 }  // namespace
 
@@ -35,39 +50,16 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
     const bool is_exit = (intent.kind == risk::IntentKind::EXIT);
     switch (m.state) {
         case RouteState::IDLE: {
-            if (!IntentShapeOk(intent)) {
-                o.action = RouteAction::REJECT;
-                o.next.state = RouteState::CANCELLED;
-                o.reason = "exec:bad-intent";
-                return o;
-            }
+            if (!IntentShapeOk(intent)) return Reject(o, "exec:bad-intent");
             if (!is_exit) {
                 // Entry gate: kill, stale feed, closed stage, frozen
                 // symbol each forbid new risk (veto owns the rest).
-                if (obs.kill != risk::KillLevel::NONE) {
-                    o.action = RouteAction::REJECT;
-                    o.next.state = RouteState::CANCELLED;
-                    o.reason = "exec:kill";
-                    return o;
-                }
-                if (obs.feed_stale) {
-                    o.action = RouteAction::REJECT;
-                    o.next.state = RouteState::CANCELLED;
-                    o.reason = "exec:feed-stale";
-                    return o;
-                }
-                if (!obs.stage_entry_ok) {
-                    o.action = RouteAction::REJECT;
-                    o.next.state = RouteState::CANCELLED;
-                    o.reason = "exec:stage";
-                    return o;
-                }
-                if (obs.symbol_frozen) {
-                    o.action = RouteAction::REJECT;
-                    o.next.state = RouteState::CANCELLED;
-                    o.reason = "exec:frozen-symbol";
-                    return o;
-                }
+                if (obs.kill != risk::KillLevel::NONE)
+                    return Reject(o, "exec:kill");
+                if (obs.feed_stale) return Reject(o, "exec:feed-stale");
+                if (!obs.stage_entry_ok) return Reject(o, "exec:stage");
+                if (obs.symbol_frozen)
+                    return Reject(o, "exec:frozen-symbol");
             }
             // One stable identity per intent, computed once here and
             // carried in machine state (retries reuse it; a missing ack
@@ -76,13 +68,11 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
             bool ok = broker::MakeClientOrderId(
                 venue.broker, venue.account, venue.context_hash,
                 intent.symbol, intent.side, intent.intent_id, id);
-            if (!ok) {
-                o.action = RouteAction::REJECT;
-                o.next.state = RouteState::CANCELLED;
-                o.reason = "exec:bad-identity";
-                return o;
-            }
-            CopyId(o.next.client_id, id);
+            if (!ok) return Reject(o, "exec:bad-identity");
+            Copy65(o.next.client_id, id);
+            o.next.broker_id[0] = '\0';
+            o.next.protection_ok = false;
+            o.next.filled_qty = 0;
             o.action = RouteAction::WRITE_JOURNAL;
             o.next.state = RouteState::JOURNAL_PENDING;
             o.journal_kind = "intent";
@@ -94,12 +84,7 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                 // No row = no send for NORMAL entries (absolute). EXIT
                 // intents take the frozen emergency exception: act
                 // first, buffer the row durably, append after.
-                if (!is_exit) {
-                    o.action = RouteAction::REJECT;
-                    o.next.state = RouteState::CANCELLED;
-                    o.reason = "exec:no-row-no-send";
-                    return o;
-                }
+                if (!is_exit) return Reject(o, "exec:no-row-no-send");
                 o.action = RouteAction::EXECUTE_EMERGENCY;
                 o.next.state = RouteState::EXIT_EMERGENCY;
                 o.next.emergency = true;
@@ -133,16 +118,19 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
             }
             if (obs.adapter_responded && obs.ack.accepted &&
                 !obs.ack.protection_accepted) {
-                // Naked ack: protection missing -> establish now or
-                // flatten immediately (doc 06 sec. 6.1). The machine
-                // routes to cancel-remainder/confirm path with zero
-                // filled so far; the caller establishes protection or
-                // flattens before any new risk. Never hold naked
-                // awaiting a retry loop.
                 o.next.filled_qty = obs.ack.filled_qty;
-                o.action = RouteAction::CANCEL_REMAINDER;
-                o.next.state = RouteState::CANCEL_SENT;
-                o.reason = "exec:protection-missing";
+                if (obs.ack.filled_qty == 0) {
+                    // Nothing filled: cancel the naked order.
+                    o.action = RouteAction::CANCEL_REMAINDER;
+                    o.next.state = RouteState::CANCEL_SENT;
+                    o.reason = "exec:naked-empty-cancel";
+                    return o;
+                }
+                // Filled without protection: repair now (recovery-only
+                // path), never hold naked, never fake a cancel.
+                o.action = RouteAction::ESTABLISH_PROTECTION;
+                o.next.state = RouteState::REPAIR_SENT;
+                o.reason = "exec:repair-now";
                 return o;
             }
             // Accepted (or timed out): exactly one status query.
@@ -158,8 +146,17 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                 return o;
             }
             const broker::OrderQuery& q = obs.query;
-            if (!q.found || (q.found && q.filled_qty == 0 &&
-                             !q.cancelled)) {
+            if (q.found) Copy64(o.next.broker_id, q.broker_order_id);
+            if (q.found && q.cancelled && q.filled_qty == 0) {
+                // Already dead, nothing filled: straight to terminal.
+                o.next.filled_qty = 0;
+                o.action = RouteAction::JOURNAL_CANCEL;
+                o.next.state = RouteState::CANCELLED;
+                o.journal_kind = "cancel";
+                o.reason = "exec:already-cancelled";
+                return o;
+            }
+            if (!q.found || q.filled_qty == 0) {
                 // Nothing (that we can see) filled: cancel, confirm,
                 // journal. Reconcile-first: the query already happened;
                 // a second send from this state is unrepresentable.
@@ -169,30 +166,50 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                 o.reason = "exec:nothing-filled";
                 return o;
             }
-            if (q.filled_qty > 0 && q.filled_qty < intent.qty_shares) {
-                // Partial: journal the filled qty; protection covers
-                // filled ONLY; the remainder must cancel (never becomes
-                // PROTECTED on the full intended size).
-                o.next.filled_qty = q.filled_qty;
+            if (q.protection_active) o.next.protection_ok = true;
+            o.next.filled_qty = q.filled_qty;
+            if (q.protection_active) {
+                if (q.filled_qty >= intent.qty_shares) {
+                    o.action = RouteAction::JOURNAL_FILL;
+                    o.next.state = RouteState::PROTECTED;
+                    o.journal_kind = "fill";
+                    o.reason = "exec:protected";
+                    return o;
+                }
+                // Partial with protection: journal the filled qty;
+                // protection covers filled ONLY; the remainder must
+                // cancel (never PROTECTED on the full intended size).
                 o.action = RouteAction::JOURNAL_PARTIAL;
                 o.next.state = RouteState::PARTIAL_AWAIT;
                 o.journal_kind = "partial";
                 o.reason = "exec:partial";
                 return o;
             }
-            if (q.filled_qty >= intent.qty_shares && q.protection_active) {
-                o.next.filled_qty = q.filled_qty;
-                o.action = RouteAction::JOURNAL_FILL;
-                o.next.state = RouteState::PROTECTED;
-                o.journal_kind = "fill";
-                o.reason = "exec:protected";
+            // Filled (partial or full) WITHOUT protection: repair now.
+            // CANCEL_REMAINDER is not a substitute for protection.
+            o.action = RouteAction::ESTABLISH_PROTECTION;
+            o.next.state = RouteState::REPAIR_SENT;
+            o.reason = "exec:repair-now";
+            return o;
+        }
+        case RouteState::REPAIR_SENT: {
+            if (!obs.adapter_responded) {
+                o.action = RouteAction::NONE;
+                o.reason = "exec:awaiting-repair";
                 return o;
             }
-            // Filled but protection not active: same as naked ack.
-            o.next.filled_qty = q.filled_qty;
-            o.action = RouteAction::CANCEL_REMAINDER;
-            o.next.state = RouteState::CANCEL_SENT;
-            o.reason = "exec:protection-missing";
+            if (obs.repair_ok) {
+                o.next.protection_ok = true;
+                o.action = RouteAction::JOURNAL_REPAIR;
+                o.next.state = RouteState::PROTECTED;
+                o.journal_kind = "repair";
+                o.reason = "exec:repaired";
+                return o;
+            }
+            // Repair failed: flatten immediately (never hold naked).
+            o.action = RouteAction::FLATTEN_NOW;
+            o.next.state = RouteState::EXIT_SENT;
+            o.reason = "exec:repair-failed-flatten";
             return o;
         }
         case RouteState::PARTIAL_AWAIT: {
@@ -222,12 +239,20 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                     o.reason = "exec:cancelled";
                     return o;
                 }
-                // Partial remainder cancelled: position = filled qty
-                // under entry protection (bracket covered it).
-                o.action = RouteAction::JOURNAL_CANCEL;
-                o.next.state = RouteState::PROTECTED;
-                o.journal_kind = "cancel";
-                o.reason = "exec:partial-protected";
+                if (o.next.protection_ok) {
+                    // Remainder cancelled; the filled qty rests under
+                    // positively confirmed entry protection.
+                    o.action = RouteAction::JOURNAL_CANCEL;
+                    o.next.state = RouteState::PROTECTED;
+                    o.journal_kind = "cancel";
+                    o.reason = "exec:partial-protected";
+                    return o;
+                }
+                // Filled but protection never confirmed: repair before
+                // any claim of PROTECTED (the P0 invariant).
+                o.action = RouteAction::ESTABLISH_PROTECTION;
+                o.next.state = RouteState::REPAIR_SENT;
+                o.reason = "exec:repair-now";
                 return o;
             }
             // Cancel FAILED: UNKNOWN_EXECUTION (never "filled").
@@ -268,6 +293,13 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
             return o;
         }
         case RouteState::PROTECTED:
+            // A success claim without confirmed protection is a
+            // corrupted machine (every legitimate entry sets the
+            // flag): fail closed, never rest terminal on it.
+            if (!m.protection_ok) return Reject(o, "exec:bad-state");
+            o.action = RouteAction::NONE;
+            o.reason = "exec:terminal";
+            return o;
         case RouteState::CANCELLED:
         case RouteState::UNKNOWN_FROZEN:
         case RouteState::CLOSED:
@@ -275,9 +307,102 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
             o.reason = "exec:terminal";
             return o;
     }
-    o.action = RouteAction::NONE;
-    o.reason = "exec:terminal";
-    return o;
+    // Invalid state value (e.g. corrupted restore): fail closed, never
+    // act. RestoreMachine validates first; this is the backstop.
+    return Reject(o, "exec:bad-state");
+}
+
+}  // namespace exec
+}  // namespace jev
+
+namespace jev {
+namespace exec {
+
+namespace {
+// Fixed snapshot: "H1:<state>:<kind>:<filled>:<emg>:<pok>:<cid>:<bid>"
+// client/broker ids are lowercase-hex-or-empty, bounded, validated.
+bool IsHexEmpty(const char* s, std::size_t maxlen, char* dst,
+                std::size_t dn) {
+    std::size_t i = 0;
+    while (s[i] != '\0' && s[i] != ':') {
+        if (i + 1 >= dn || i >= maxlen) return false;
+        char c = s[i];
+        bool ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+        if (!ok) return false;
+        dst[i] = c;
+        ++i;
+    }
+    dst[i] = '\0';
+    return true;
+}
+}  // namespace
+
+bool SnapshotMachine(const RouteMachine& m, char* out, std::size_t n) {
+    if (!out || n < 16) return false;
+    int st = static_cast<int>(m.state);
+    int kd = (m.kind == risk::IntentKind::EXIT) ? 1 : 0;
+    if (st < 0 || st > 12 || m.filled_qty < 0 || m.filled_qty > 999999999)
+        return false;
+    int w = std::snprintf(out, n, "H1:%d:%d:%lld:%d:%d:%s:%s", st, kd,
+                          (long long)m.filled_qty,
+                          m.emergency ? 1 : 0,
+                          m.protection_ok ? 1 : 0, m.client_id,
+                          m.broker_id);
+    return w > 0 && static_cast<std::size_t>(w) < n;
+}
+
+bool RestoreMachine(const char* s, RouteMachine* out) {
+    if (!s || !out) return false;
+    if (s[0] != 'H' || s[1] != '1' || s[2] != ':') return false;
+    const char* p = s + 3;
+    // state
+    long st = 0;
+    int nd = 0;
+    while (*p >= '0' && *p <= '9' && nd < 3) {
+        st = st * 10 + (*p - '0');
+        ++p;
+        ++nd;
+    }
+    if (nd == 0 || nd > 2 || *p != ':' || st < 0 || st > 12) return false;
+    ++p;
+    // kind
+    if ((p[0] != '0' && p[0] != '1') || p[1] != ':') return false;
+    int kd = p[0] - '0';
+    p += 2;
+    // filled
+    long long fq = 0;
+    nd = 0;
+    while (*p >= '0' && *p <= '9' && nd < 9) {
+        fq = fq * 10 + (*p - '0');
+        ++p;
+        ++nd;
+    }
+    if (nd == 0 || *p != ':') return false;
+    ++p;
+    // emergency + protection flags
+    if ((p[0] != '0' && p[0] != '1') || p[1] != ':' ||
+        (p[2] != '0' && p[2] != '1') || p[3] != ':')
+        return false;
+    int emg = p[0] - '0';
+    int pok = p[2] - '0';
+    p += 4;
+    RouteMachine m;
+    m.state = static_cast<RouteState>(st);
+    m.kind = (kd == 1) ? risk::IntentKind::EXIT : risk::IntentKind::ENTRY;
+    m.filled_qty = (std::int64_t)fq;
+    m.emergency = (emg == 1);
+    m.protection_ok = (pok == 1);
+    if (!IsHexEmpty(p, 64, m.client_id, sizeof(m.client_id)))
+        return false;
+    while (*p != '\0' && *p != ':') ++p;
+    if (*p != ':') return false;
+    ++p;
+    if (!IsHexEmpty(p, 63, m.broker_id, sizeof(m.broker_id)))
+        return false;
+    while (*p != '\0' && *p != ':') ++p;
+    if (*p != '\0') return false;  // trailing garbage
+    *out = m;
+    return true;
 }
 
 }  // namespace exec

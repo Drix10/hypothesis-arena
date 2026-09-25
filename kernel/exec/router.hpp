@@ -69,7 +69,8 @@ enum class RouteState : std::uint8_t {
     UNKNOWN_FROZEN = 8,   // terminal: cancel failed; symbol must freeze
     EXIT_SENT = 9,        // normal exit order in flight
     EXIT_EMERGENCY = 10,  // journal failed on EXIT: executed first
-    CLOSED = 11           // terminal (exits; emergency flag records path)
+    CLOSED = 11,          // terminal (exits; emergency flag records path)
+    REPAIR_SENT = 12      // protection repair in flight (recovery-only)
 };
 
 enum class RouteAction : std::uint8_t {
@@ -87,7 +88,10 @@ enum class RouteAction : std::uint8_t {
     EXECUTE_EMERGENCY = 11,  // journal failed on EXIT: act now
     BUFFER_EMERGENCY = 12,   // caller buffers the row durably, then appends
     JOURNAL_EXIT = 13,
-    REJECT = 14  // HOLD with frozen reason; terminal for this intent
+    REJECT = 14,  // HOLD with frozen reason; terminal for this intent
+    ESTABLISH_PROTECTION = 15,  // recovery-only repair (never normal)
+    FLATTEN_NOW = 16,           // repair failed: flatten immediately
+    JOURNAL_REPAIR = 17         // repair confirmed -> PROTECTED
 };
 
 // Caller-performed observations since the last step.
@@ -99,6 +103,7 @@ struct RouteObs {
     broker::OrderQuery query;
     bool cancel_confirmed = false;
     bool executed = false;  // exit order confirmed executed
+    bool repair_ok = false;  // EstablishProtection attempt confirmed
     risk::KillLevel kill = risk::KillLevel::NONE;
     bool feed_stale = false;     // feed stale > 30 s (Slice F flag)
     bool stage_entry_ok = false;  // verified stage permits entries
@@ -109,8 +114,12 @@ struct RouteMachine {
     RouteState state = RouteState::IDLE;
     risk::IntentKind kind = risk::IntentKind::ENTRY;
     char client_id[65];
+    char broker_id[64];  // broker UUID from the single query lookup
+                         // (cancel path uses this, never a re-query)
     std::int64_t filled_qty = 0;
     bool emergency = false;
+    bool protection_ok = false;  // positively confirmed protection;
+                                 // PROTECTED requires this (P0 rule)
 };
 
 struct RouteOut {
@@ -124,6 +133,17 @@ struct RouteOut {
 
 RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                    const VenueCtx& venue, const RouteObs& obs);
+
+// Durable restart seam (P1-1): the caller persists the machine after
+// every step (fixed "H1:<...>" record into a caller buffer) and
+// restores it after death. RestoreMachine validates strictly:
+// unknown tags, out-of-range enums, overlong fields, or trailing
+// garbage -> false with *out untouched (fail closed). A restored
+// SENT_UNACKED/QUERY_SENT machine reconciles via query before any new
+// send (RouteStep has no send from non-IDLE states).
+bool SnapshotMachine(const RouteMachine& m, char* out,
+                     std::size_t n);
+bool RestoreMachine(const char* s, RouteMachine* out);
 
 }  // namespace exec
 }  // namespace jev

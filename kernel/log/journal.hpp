@@ -22,7 +22,8 @@ inline bool IsKnownKind(const char* k) {
     if (!k) return false;
     const char* known[] = {"intent",        "fill",      "partial",
                            "cancel",        "unknown",   "exit",
-                           "drift-directive", "demotion", "reconcile"};
+                           "drift-directive", "demotion", "reconcile",
+                           "repair"};
     for (std::size_t i = 0; i < sizeof(known) / sizeof(known[0]); ++i) {
         const char* a = k;
         const char* b = known[i];

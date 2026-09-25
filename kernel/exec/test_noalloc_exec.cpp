@@ -58,10 +58,12 @@ int main() {
         obs.query.protection_active = (i & 8) != 0;
         obs.cancel_confirmed = (i & 16) != 0;
         obs.executed = (i & 2) != 0;
+        obs.repair_ok = (i & 32) != 0;
         obs.feed_stale = (i & 4) != 0;
         obs.stage_entry_ok = (i & 8) != 0;
         obs.symbol_frozen = (i & 16) != 0;
-        m.state = static_cast<RouteState>((i / 32) % 12);
+        m.state = static_cast<RouteState>((i / 64) % 13);
+        m.protection_ok = (i & 64) != 0;
         volatile auto r =
             jev::exec::RouteStep(m, in, venue, obs);
         (void)r;
