@@ -2498,3 +2498,83 @@ Sec-6.5 ledger after B2: GREEN (harness-proven): kill-switch drill
   P3.5 stays OPEN (integration green, H2 evidence pending). G0 NOT
   STARTED — no G0 execution until the integration gate is green;
   the runner binary refuses without a human-signed G0 STAGE file.
+
+## Addendum 119 - Production-seam pass (review of afc3fd6)
+Twelve findings, fixed in plan order (ff69808, fe5ef68, ba3467a;
+hosted kernel/plane/evidence SUCCESS on ba3467a, stdlib still the
+pre-existing frozen-collector failure):
+1. Stream-fill semantics (P0): MapTradeEvent now reads the CUMULATIVE
+   order.filled_qty (anchored inside "order", strict digits) — never
+   the per-event qty. Regressions: 40+30 reads 70; no cumulative ->
+   NONE. Runner E2E converges both arrival orders on the newest ULID
+   with an empty queue and identical lookups.
+2. HARD kill (P0): Cycle no longer returns before managing risk.
+   HardStop runs the sec. 10.3 sequence — alert + drift-directive
+   rows, HALT file (stop survives restart), per-slot reconcile,
+   reprotect-if-missing, flatten/cancel attempts, protection left
+   active — then terminates false (no supervisor restart).
+   Credential revocation stays a Phase-4 transport step (null
+   transport cannot order). Tests: ENTRY reprotect+flatten (2
+   POSTs), EXIT cancel attempt, unfilled-found cancel vs 404-absent,
+   restart entry-blocked/exit-alive.
+3. Emergency drain (P0): one-row-per-turn protocol — append head
+   unless its exact line already sits in the chain (pre-crash
+   append), then atomically remove the head. Crash-after-row-N
+   regressions for N=0..2 converge to one chain + empty buffer;
+   broken heads refuse. (Also fixed: number parsing in the recovery
+   path can no longer throw.)
+4. Slot lifecycle (P1): deferred ReclaimDone sweep at Cycle/Submit
+   start (same-cycle Find unaffected). 20 sequential completes with
+   max_slots=4 prove admission never wedges on history.
+5. Recovery idempotency (P1): ids deduped (first wins + alert);
+   journaled-row + intent-file without snapshot rebuilds IDLE with
+   intent_rowed (additive router seam: skips WRITE, JOURNAL_PENDING
+   attests the verified row — exactly one intent row ever, proven);
+   row without either file, or snapshot without file, refuses.
+   Intent ids are filesystem-safe (traversal rejected pre-touch),
+   permanently bound (reuse refused), registered-once (journaled
+   re-registration refused, crash-retry allowed).
+6. Position reconciliation (P1): list_positions seam + account-level
+   S2 (same cadence): orphan/mismatch journals drift-directive +
+   alerts + forces per-symbol re-lookup; agreement stays quiet;
+   fetch failure alerts without freezing. Null seam = documented
+   bootstrap (known-order S2 only).
+7. Exit gating (P1): EXIT bypasses freeze + stage (old risk stays
+   managed under demotion/freeze); entries keep all gates.
+8. MEDIUM semantics (P1): medium.txt FSM (ACTIVE/PENDING/FLATTENED/
+   PROTECTION_ONLY), local ENTRY flatten via EXIT machinery,
+   broker-confirmed sweep of EVERY open position under venue-open +
+   spread-normal (pre-flighted deterministic sweep ids), no sweep
+   otherwise (protection stays, retry next cycle), restart
+   no-resend (Find + journal-terminal pre-checks), MEDIUM exit
+   finalizes PROTECTION_ONLY/FLATTENED.
+9. Stream seam (P1): per-slot bounded FIFO (8) — every event stamps
+   individually, duplicates drop (applied or queued), ULID-less
+   heads shape-or-funnel immediately, overflow alerts + forces REST,
+   seq-conflict heads drop (no perpetual spin). Parser errors now
+   alert + journal reconcile + nudge every live slot.
+10. Reconnect cursor (P1): last stamped ULID persisted (cursor.txt),
+    reloaded at Recover, exposed for the Phase-4 transport's
+    since_id. Loss replays more (duplicates drop), never less.
+11. Durability (P1): Dispatch reports broker-mutating transport;
+    persist failure across one freezes the slot LOUDLY (alert +
+    unknown row, no further drive; crash then refuses rather than
+    double-sends). Non-mutating persist failure keeps driving (the
+    row attests; crash rebuilds rowed or refuses). Registration
+    failure refuses pre-send with zero transport (sec. 6.1 proof).
+12. Ops rhythm (P1): DailyOps on day roll — chain verify (break =
+    HARD refuse), dated journal copy (live file keeps chaining),
+    90-day retention, backup/, appended summary.txt. Civil dates via
+    civil_from_days (epoch + 2023-01-01 pinned).
+Status after the pass: router effectively closed; broker fixtures
+strong; fill model closed; journal/durability proven (primitives +
+drain + persist gate); crash recovery proven (drain/N, rowed,
+dedupe, half-refuse); stream seam proven (cumulative, queue,
+duplicates, overflow, parser errors, cursor); S2 proven
+(known-order + position drift); kill integration proven (HARD
+sequence, MEDIUM FSM/sweep/gates, exit gating); long-run admission
+proven; daily ops wired. REMAINING for P3.5 closure: live HTTPS +
+socket + position/account endpoints + runtime credentials (Phase 4
+wiring), real G0 STAGE bootstrap, out-of-band alert adapter. H2
+(30d/outage-E2E/real notification) is downstream of P3.5 per sec.
+13.5 and never retro-blocks it. P3.5 OPEN; G0 NOT STARTED.
