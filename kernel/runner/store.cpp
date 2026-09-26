@@ -154,8 +154,13 @@ bool ReadLines(const char* path, std::vector<std::string>* out) {
         }
     }
     if (!cur.empty()) out->push_back(cur);
+    // A directory (or any unreadable node) opens but never
+    // yields bytes: report the read error instead of an empty
+    // success — callers treat "expected file, got nothing" as
+    // integrity failure, never as valid-empty.
+    bool ok = std::ferror(f) == 0;
     std::fclose(f);
-    return true;
+    return ok;
 }
 
 bool FileExists(const char* path) {

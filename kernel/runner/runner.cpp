@@ -406,11 +406,20 @@ bool G0Runner::Recover(const char** reason) {
                         xrec, sizeof(xrec)) &&
                     exec::RestoreMachine(xrec, &xm) &&
                     xm.state == exec::RouteState::CLOSED &&
-                    xm.exit_closed_qty > 0)
-                    AttributeClosedQty(
-                        xm.symbol[0] != '\0' ? xm.symbol : xid.symbol,
-                        xm.exit_closed_qty,
-                        deps_.now_ns(deps_.clock_ctx));
+                    xm.exit_closed_qty > 0) {
+                    // Best-effort replay: a persist failure rolls
+                    // back in-memory (durable stays old) and the
+                    // next reconcile retries — journal the miss.
+                    if (!AttributeClosedQty(
+                            xm.symbol[0] != '\0' ? xm.symbol
+                                                 : xid.symbol,
+                            xm.exit_closed_qty,
+                            deps_.now_ns(deps_.clock_ctx)))
+                        OpsRow("reconcile",
+                               rows[i].intent_id.c_str(),
+                               "attribution-unpersisted",
+                               deps_.now_ns(deps_.clock_ctx));
+                }
             }
             continue;
         }
@@ -1094,46 +1103,94 @@ bool G0Runner::OpsRow(const char* kind, const char* intent_id,
     return JournalWrite(kind, intent_id, body, now_ns);
 }
 
-long long G0Runner::HardChainRequest(const char* tag) {
-    if (!tag || !tag[0]) return 0;
-    std::vector<std::string> lns;
-    if (!ReadLines(P("hard-chain.txt").c_str(), &lns))
-        return 0;
-    long long req = 0;
-    for (std::size_t i = 0; i < lns.size(); ++i) {
-        char t[65] = {0};
-        long long r = 0;
-        if (std::sscanf(lns[i].c_str(), "%64s %lld", t,
-                         &r) == 2 &&
-            std::strcmp(t, tag) == 0 && r > 0)
-            req = r;  // last row wins
-    }
-    return req;
-}
-long long G0Runner::HardChainAttributed(const char* tag) {
-    if (!tag || !tag[0]) return 0;
-    std::vector<std::string> lns;
-    if (!ReadLines(P("hard-chain.txt").c_str(), &lns))
-        return 0;
-    long long at = 0;
+namespace {
+// Strict whole-file scan of hard-chain.txt: every row must be
+// `<tag> <requested> <attributed>` with requested > 0 and
+// 0 <= attributed <= requested; requested per tag is immutable;
+// attributed per tag is monotonically nondecreasing
+// (exact-duplicate rows are idempotent crash-retry evidence, not
+// conflicts). Blank/trailing-garbage/conflicting/regressed rows
+// all fail. When tag != nullptr, *req_out/*attr_out take that
+// tag's stable requested + last attributed (false when the tag
+// carries no row). The file is tiny (truncated at incident end)
+// so a capped linear table is exact, never allocating hot-path
+// memory beyond it.
+bool ScanChain(const std::vector<std::string>& lns,
+               const char* tag, long long* req_out,
+               long long* attr_out) {
+    struct Seen {
+        char t[65];
+        long long req;
+        long long attr;
+    };
+    Seen seen[64];
+    std::size_t nseen = 0;
+    bool have = false;
+    long long treq = 0, tattr = 0;
     for (std::size_t i = 0; i < lns.size(); ++i) {
         char t[65] = {0};
         long long r = 0, a = 0;
-        if (std::sscanf(lns[i].c_str(), "%64s %lld %lld", t,
-                         &r, &a) == 3 &&
-            std::strcmp(t, tag) == 0 && a > 0)
-            at = a;  // last row wins
+        int n = 0;
+        if (std::sscanf(lns[i].c_str(), "%64s %lld %lld %n", t,
+                         &r, &a, &n) != 3 ||
+            t[0] == '\0' || r <= 0 || a < 0 || a > r ||
+            lns[i].c_str()[n] != '\0')
+            return false;
+        std::size_t k = 0;
+        while (k < nseen &&
+               std::strcmp(seen[k].t, t) != 0)
+            ++k;
+        if (k < nseen) {
+            if (seen[k].req != r) return false;  // conflict
+            if (a < seen[k].attr) return false;  // regression
+            seen[k].attr = a;
+        } else {
+            if (nseen >= 64) return false;  // absurd: refuse
+            std::memcpy(seen[nseen].t, t, sizeof(seen[nseen].t));
+            seen[nseen].req = r;
+            seen[nseen].attr = a;
+            ++nseen;
+        }
+        if (tag && std::strcmp(t, tag) == 0) {
+            have = true;
+            treq = r;
+            tattr = a;
+        }
     }
-    return at;
+    if (tag) {
+        if (!have) return false;
+        if (req_out) *req_out = treq;
+        if (attr_out) *attr_out = tattr;
+    }
+    return true;
 }
-void G0Runner::NoteHardChain(const char* tag, long long requested,
+}  // namespace
+
+bool G0Runner::HardChainOk() {
+    std::vector<std::string> lns;
+    const char* p = P("hard-chain.txt").c_str();
+    if (!ReadLines(p, &lns)) return !FileExists(p);  // missing =
+                                                     // valid-empty
+    return ScanChain(lns, nullptr, nullptr, nullptr);
+}
+bool G0Runner::HardChainState(const char* tag, long long* req,
+                              long long* attr) {
+    if (!tag || !tag[0]) return false;
+    std::vector<std::string> lns;
+    const char* p = P("hard-chain.txt").c_str();
+    if (!ReadLines(p, &lns)) return false;  // missing/unreadable
+                                            // can never vouch
+    return ScanChain(lns, tag, req, attr);
+}
+bool G0Runner::NoteHardChain(const char* tag, long long requested,
                              long long attributed) {
-    if (!tag || !tag[0] || requested <= 0) return;
+    if (!tag || !tag[0] || requested <= 0) return false;
     if (attributed < 0) attributed = 0;
+    if (attributed > requested) return false;
     char ln[160];
     std::snprintf(ln, sizeof(ln), "%s %lld %lld", tag,
                     requested, attributed);
-    AppendLine(P("hard-chain.txt").c_str(), ln);
+    return AppendLine(P("hard-chain.txt").c_str(), ln);
 }
 bool G0Runner::HardCloseOnce(const char* symbol, long long qty,
                            broker::OrderSide eside, const char* hid,
@@ -1162,6 +1219,20 @@ bool G0Runner::HardCloseOnce(const char* symbol, long long qty,
         OpsRow("drift-directive",
                scope_intent ? scope_intent : "runner",
                "hard-close refused bad-args", now_ns);
+        return false;
+    }
+    // Integrity gate FIRST (before any broker interrogation): a
+    // present-but-invalid chain refuses every HARD send. Missing
+    // file is valid-empty (first incident); the per-id check
+    // below still vouches each broker-known id.
+    if (!HardChainOk()) {
+        OpsRow("drift-directive",
+               scope_intent ? scope_intent : "runner",
+               "hard-chain-invalid", now_ns);
+        Alert(P("alerts.jsonl").c_str(), "HARD",
+              "hard-chain-invalid",
+              scope_intent ? scope_intent : "", now_ns);
+        FreezeAdd(P("freeze.txt").c_str(), symbol);
         return false;
     }
     std::string id = hid ? hid : "";
@@ -1194,11 +1265,22 @@ bool G0Runner::HardCloseOnce(const char* symbol, long long qty,
         NoteQuarantineSym(symbol, pre.status_raw, "HARD",
                           now_ns);
         if (!pre.found) {
-            // Write-ahead: the chain owns this request before
-            // the POST flies (a crash between note and ack
-            // re-derives the same id and pre-flights it — a
-            // phantom row can only ever cause a gated re-POST).
-            NoteHardChain(id.c_str(), need, 0);
+            // Write-ahead ENFORCED: the chain owns this request
+            // before the POST flies (a crash between note and
+            // POST restarts into this same 404 and notes an
+            // idempotent duplicate row, then sends the same
+            // identity once). A failed note freezes + refuses —
+            // chain truth must exist before the close flies.
+            if (!NoteHardChain(id.c_str(), need, 0)) {
+                OpsRow("drift-directive",
+                       scope_intent ? scope_intent : "runner",
+                       "hard-chain-unwritable", now_ns);
+                Alert(P("alerts.jsonl").c_str(), "HARD",
+                      "hard-chain-unwritable",
+                      scope_intent ? scope_intent : "", now_ns);
+                FreezeAdd(P("freeze.txt").c_str(), symbol);
+                return false;
+            }
             broker::CloseResult c =
                 adapter_.MarketClose(symbol, need, eside, hcoid);
             char tb[280];
@@ -1214,19 +1296,55 @@ bool G0Runner::HardCloseOnce(const char* symbol, long long qty,
         broker::CloseResult c = QueryToClose(pre);
         long long filled = c.filled_qty;
         if (filled < 0) filled = 0;
-        // Exact per-id attribution: fold only what this id
-        // filled beyond what the chain already attributed for
-        // it (a crash between fill and attribute re-derives the
-        // same portion exactly once — settled fills are never
-        // re-subtracted, never re-folded).
-        long long already = HardChainAttributed(id.c_str());
+        // Chain-validated exact attribution: the broker knows
+        // this id, so the chain MUST vouch for it (stable request
+        // + monotonic attributed). A missing/corrupt/foreign row
+        // is an integrity failure — freeze + refuse, NEVER mint
+        // from current broker need. Only the not-yet-attributed
+        // portion folds (a crash between fill and attribute
+        // re-derives the same portion exactly once).
+        long long req = 0, already = 0;
+        if (!HardChainState(id.c_str(), &req, &already)) {
+            OpsRow("drift-directive",
+                   scope_intent ? scope_intent : "runner",
+                   "hard-chain-invalid", now_ns);
+            Alert(P("alerts.jsonl").c_str(), "HARD",
+                  "hard-chain-invalid", id.c_str(), now_ns);
+            FreezeAdd(P("freeze.txt").c_str(), symbol);
+            return false;
+        }
         long long portion = filled - already;
         if (portion < 0) portion = 0;
         if (portion > 0) {
-            AttributeClosedQty(symbol, portion, now_ns);
-            long long req = HardChainRequest(id.c_str());
-            if (req <= 0) req = need;
-            NoteHardChain(id.c_str(), req, already + portion);
+            // Durable-first: slots persist BEFORE the chain note
+            // advances. Unpersisted slots (rolled back inside)
+            // refuse with books exactly as before — the next
+            // pre-flight reconstructs this same portion once.
+            if (!AttributeClosedQty(symbol, portion, now_ns)) {
+                OpsRow("drift-directive",
+                       scope_intent ? scope_intent : "runner",
+                       "hard-close-attribution-unpersisted",
+                       now_ns);
+                Alert(P("alerts.jsonl").c_str(), "HARD",
+                      "hard-close-attribution-unpersisted",
+                      scope_intent ? scope_intent : "", now_ns);
+                return false;
+            }
+            // Slots durable, chain note failed: roll the slots
+            // back to old values (best-effort) so the books stay
+            // exactly as before, then freeze + refuse.
+            if (!NoteHardChain(id.c_str(), req,
+                               already + portion)) {
+                UnattributeClosedQty(symbol, now_ns);
+                OpsRow("drift-directive",
+                       scope_intent ? scope_intent : "runner",
+                       "hard-chain-note-failed", now_ns);
+                Alert(P("alerts.jsonl").c_str(), "HARD",
+                      "hard-chain-note-failed",
+                      scope_intent ? scope_intent : "", now_ns);
+                FreezeAdd(P("freeze.txt").c_str(), symbol);
+                return false;
+            }
         }
         char tb[280];
         std::snprintf(tb, sizeof(tb),
@@ -1244,20 +1362,11 @@ bool G0Runner::HardCloseOnce(const char* symbol, long long qty,
                           // re-sent (its fills attribute back)
         // Terminal-short: the id is burned (Alpaca client ids are
         // per-order unique — it can never carry another POST).
-        // Remainder = ORIGINAL request minus landed (chain
-        // truth — the current broker need only caps the send).
-        long long orig = HardChainRequest(id.c_str());
-        if (orig <= 0) {
-            // No chain row (pre-chain crash or foreign id):
-            // fail-closed fallback — assume the current need
-            // was the request (under-closes on settle lag, never
-            // over-closes; the next cycle retries).
-            orig = need;
-            OpsRow("drift-directive",
-                   scope_intent ? scope_intent : "runner",
-                   "hard-chain-miss", now_ns);
-        }
-        long long rem = orig - filled;
+        // Remainder = ORIGINAL chain request minus landed (chain
+        // truth, validated above — the current broker need only
+        // caps the send). No chain row is unreachable here: the
+        // found id passed validation, so req > 0 holds.
+        long long rem = req - filled;
         if (rem <= 0) {
             // Chain satisfied, yet the broker still shows need:
             // poll lag or foreign exposure — drift owns it (no
@@ -1387,10 +1496,27 @@ long long G0Runner::HardAdoptExit(Slot& s, long long epoch,
     if (fresh < 0) fresh = 0;
     if (fresh > rem) fresh = rem;
     if (fresh > 0) {
-        AttributeClosedQty(s.intent.symbol, fresh, now_ns);
+        // Durable-first, exit slot before entries: the bumps
+        // persist first (a failure rolls back in-memory only —
+        // nothing durable moved yet); then entry attribution
+        // (self-rollbacking); any failure folds NOTHING and the
+        // full remainder retries next cycle (doc 06 sec. 6.1b).
         s.m.exit_counted_qty += fresh;
         s.m.exit_closed_qty += fresh;
-        PersistSlot(s);
+        bool ok = PersistSlot(s);
+        if (ok) ok = AttributeClosedQty(s.intent.symbol, fresh,
+                                        now_ns);
+        if (!ok) {
+            s.m.exit_counted_qty -= fresh;
+            s.m.exit_closed_qty -= fresh;
+            PersistSlot(s);  // best-effort restore of old
+            OpsRow("drift-directive", s.intent.intent_id,
+                   "hard-adopt-exit-unpersisted", now_ns);
+            Alert(P("alerts.jsonl").c_str(), "HARD",
+                  "hard-adopt-exit-unpersisted",
+                  s.intent.intent_id, now_ns);
+            return rem;
+        }
     }
     long long rest = rem - fresh;
     std::snprintf(tb, sizeof(tb),
@@ -2030,7 +2156,7 @@ bool G0Runner::AllFlat() {
     return true;
 }
 
-void G0Runner::AttributeClosedQty(const char* symbol, long long qty,
+bool G0Runner::AttributeClosedQty(const char* symbol, long long qty,
                                    long long now_ns) {
     // An authoritative close quantity (flatten EXIT done-CLOSED,
     // sweep-order FILLED/PARTIAL) belongs to same-symbol ENTRY
@@ -2038,7 +2164,21 @@ void G0Runner::AttributeClosedQty(const char* symbol, long long qty,
     // claiming provable open after its position closed and S2
     // drifts on healthy flat forever. Leftover with no local
     // expectation is dropped (broker truth already rules S2).
-    if (!symbol || !symbol[0] || qty <= 0) return;
+    // Two-phase, durable-first: takes are computed read-only,
+    // then each slot is mutated+persisted. ANY persist failure
+    // rolls back in-memory takes everywhere AND re-persists
+    // already-written slots to old values (best-effort), then
+    // returns false — the caller must not advance dependent
+    // durable state, so the next pre-flight reconstructs exactly.
+    n_attr_takes_ = 0;  // any stale take list dies here
+    if (!symbol || !symbol[0] || qty <= 0) return false;
+    struct Take {
+        std::size_t idx;
+        long long take;
+        long long old_closed;
+    };
+    Take takes[64];
+    std::size_t ntake = 0;
     long long rem = qty;
     for (std::size_t i = 0; i < slots_.size() && rem > 0; ++i) {
         Slot& s = slots_[i];
@@ -2052,15 +2192,97 @@ void G0Runner::AttributeClosedQty(const char* symbol, long long qty,
         long long open = s.m.filled_qty - s.m.exit_closed_qty;
         if (open <= 0) continue;
         long long take = (open < rem) ? open : rem;
-        s.m.exit_closed_qty += take;
+        if (ntake >= 64) break;  // absurd: refuse the rest
+        takes[ntake].idx = i;
+        takes[ntake].take = take;
+        takes[ntake].old_closed = s.m.exit_closed_qty;
+        ++ntake;
         rem -= take;
-        PersistSlot(s);  // best-effort: the journal row attests
+    }
+    for (std::size_t k = 0; k < ntake; ++k) {
+        Slot& s = slots_[takes[k].idx];
+        s.m.exit_closed_qty += takes[k].take;
+        if (PersistSlot(s)) {
+            char tb[280];
+            std::snprintf(tb, sizeof(tb),
+                            "close-attributed id=%s qty=%lld",
+                            s.intent.intent_id, takes[k].take);
+            OpsRow("reconcile", s.intent.intent_id, tb, now_ns);
+            continue;
+        }
+        // Persist failed: roll back in-memory everywhere, and
+        // re-persist the already-written slots to old values
+        // (best-effort) so durable books are exactly as before.
+        for (std::size_t j = 0; j < ntake; ++j)
+            slots_[takes[j].idx].m.exit_closed_qty =
+                takes[j].old_closed;
+        n_attr_takes_ = 0;
+        bool rback = true;
+        for (std::size_t j = 0; j < k; ++j) {
+            if (!PersistSlot(slots_[takes[j].idx])) rback = false;
+        }
+        char fb[280];
+        std::snprintf(fb, sizeof(fb),
+                        "close-attribution-unpersisted sym=%s "
+                        "qty=%lld rolledback=%d",
+                        symbol, qty, rback ? 1 : 0);
+        OpsRow("reconcile", symbol, fb, now_ns);
+        if (!rback) {
+            // Durable rollback itself failed: books may diverge —
+            // freeze LOUD (forensic journal rows above own it).
+            FreezeAdd(P("freeze.txt").c_str(), symbol);
+            Alert(P("alerts.jsonl").c_str(), "HARD",
+                  "attribution-rollback-failed", symbol,
+                  now_ns);
+        }
+        return false;
+    }
+    // Exact take list for the immediate UnattributeClosedQty
+    // rollback (chain-note failure path only).
+    n_attr_takes_ = 0;
+    for (std::size_t k = 0;
+         k < ntake && n_attr_takes_ < 64; ++k) {
+        attr_takes_[n_attr_takes_].slot = takes[k].idx;
+        attr_takes_[n_attr_takes_].take = takes[k].take;
+        ++n_attr_takes_;
+    }
+    return true;
+}
+void G0Runner::UnattributeClosedQty(const char* symbol,
+                                    long long now_ns) {
+    // Exact inverse of the last successful AttributeClosedQty
+    // (per-slot take amounts, NOT a blind oldest-first pass —
+    // slots may carry pre-existing closed from normal reconcile).
+    // Used ONLY when the chain note failed after slots went
+    // durable — restoring all-old books so the next pre-flight
+    // reconstructs exactly. Any persist failure freezes LOUD.
+    if (!symbol || !symbol[0] || n_attr_takes_ == 0) {
+        n_attr_takes_ = 0;
+        return;
+    }
+    for (std::size_t k = 0; k < n_attr_takes_; ++k) {
+        if (attr_takes_[k].slot >= slots_.size()) continue;
+        Slot& s = slots_[attr_takes_[k].slot];
+        if (std::strcmp(s.intent.symbol, symbol) != 0) continue;
+        if (s.m.exit_closed_qty < attr_takes_[k].take)
+            s.m.exit_closed_qty = 0;
+        else
+            s.m.exit_closed_qty -= attr_takes_[k].take;
+        if (!PersistSlot(s)) {
+            FreezeAdd(P("freeze.txt").c_str(), symbol);
+            Alert(P("alerts.jsonl").c_str(), "HARD",
+                  "unattribute-persist-failed", symbol,
+                  now_ns);
+            n_attr_takes_ = 0;
+            return;
+        }
         char tb[280];
         std::snprintf(tb, sizeof(tb),
-                        "close-attributed id=%s qty=%lld",
-                        s.intent.intent_id, take);
+                        "close-unattributed id=%s qty=%lld",
+                        s.intent.intent_id, attr_takes_[k].take);
         OpsRow("reconcile", s.intent.intent_id, tb, now_ns);
     }
+    n_attr_takes_ = 0;
 }
 
 void G0Runner::MediumPass(long long now_ns) {
@@ -2168,9 +2390,11 @@ void G0Runner::MediumPass(long long now_ns) {
                 broker::CloseResult c = QueryToClose(pre);
                 if ((c.state == broker::CloseState::FILLED ||
                      c.state == broker::CloseState::PARTIAL) &&
-                    c.filled_qty > 0)
-                    AttributeClosedQty(ps[i].symbol, c.filled_qty,
-                                       now_ns);
+                    c.filled_qty > 0 &&
+                    !AttributeClosedQty(ps[i].symbol,
+                                       c.filled_qty, now_ns))
+                    OpsRow("reconcile", ps[i].symbol,
+                           "attribution-unpersisted", now_ns);
                 if (c.state == broker::CloseState::FILLED &&
                     c.filled_qty >= aq) {
                     // Fully swept by quantity — but the broker
@@ -2217,9 +2441,12 @@ void G0Runner::MediumPass(long long now_ns) {
                     broker::CloseResult rc = QueryToClose(rpre);
                     if ((rc.state == broker::CloseState::FILLED ||
                          rc.state == broker::CloseState::PARTIAL) &&
-                        rc.filled_qty > 0)
-                        AttributeClosedQty(ps[i].symbol,
-                                           rc.filled_qty, now_ns);
+                        rc.filled_qty > 0 &&
+                        !AttributeClosedQty(ps[i].symbol,
+                                           rc.filled_qty,
+                                           now_ns))
+                        OpsRow("reconcile", ps[i].symbol,
+                               "attribution-unpersisted", now_ns);
                     if (rc.state == broker::CloseState::DEAD) {
                         char tb[280];
                         std::snprintf(tb, sizeof(tb),
@@ -3042,10 +3269,12 @@ bool G0Runner::Cycle(long long now_ns) {
                 if (s.intent.kind ==
                         jev::risk::IntentKind::EXIT &&
                     s.m.state == exec::RouteState::CLOSED &&
-                    s.m.exit_closed_qty > 0)
-                    AttributeClosedQty(s.intent.symbol,
+                    s.m.exit_closed_qty > 0 &&
+                    !AttributeClosedQty(s.intent.symbol,
                                        s.m.exit_closed_qty,
-                                       now_ns);
+                                       now_ns))
+                    OpsRow("reconcile", s.intent.intent_id,
+                           "attribution-unpersisted", now_ns);
                 s.done = true;
                 break;
             }

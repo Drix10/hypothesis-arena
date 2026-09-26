@@ -2255,9 +2255,12 @@ int main() {
               "hs-close-sent");
         Check(Exists(r.dir + "/HALT"), "hs-halt");
     }
-    // 39. P0 HARD never blind-resends an issued close: the
-    // hard-close pre-flight finds the FILLED close and adopts it
-    // (exactly one repair POST across the whole HARD event).
+    // 39. P0 HARD never blind-resends an issued close: the dead
+    // process sent the close AND durably noted the chain
+    // (write-ahead precedes every POST, so a sent-but-unacked
+    // close always leaves a chain row) — the hard-close
+    // pre-flight finds the FILLED close and adopts it (exactly
+    // one repair POST across the whole HARD event).
     {
         Rig r;
         std::string cid;
@@ -2265,6 +2268,11 @@ int main() {
                           2, 100, &cid)
                    .empty(),
               "hr-image");
+        char htag0[64];
+        std::snprintf(htag0, sizeof(htag0), "hard-%lld-AAPL",
+                        g_now);
+        WriteFile(r.dir + "/hard-chain.txt",
+                  std::string(htag0) + " 100 0\n");
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "hr-recover");
         g_kill.drift_unresolvable = true;  // HARD
@@ -3357,6 +3365,294 @@ int main() {
                          10,
               "ec-exact-books");
         Check(Exists(r.dir + "/HALT"), "ec-halt");
+    }
+    // CW. Chain write-ahead ENFORCED (doc 06 sec. 6.1b): the
+    // chain file is unwritable -> the POST never flies (freeze +
+    // refuse, exactly zero POSTs). Filesystem fault injection
+    // (chain path as a directory) — no production test hooks.
+    {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-560", "AAPL", 0, 0,
+                          100, 2, 100, &cid)
+                   .empty(),
+              "cw-image");
+        g_positions.push_back(MkPos("AAPL", 100));
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "cw-recover");
+        g_kill.drift_unresolvable = true;  // HARD
+        MkDir(r.dir + "/hard-chain.txt");
+        PushRule("GET", "by_client_order_id", 200,
+                 HeldReply("filled", "100").c_str());
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        Check(!g.Cycle(g_now), "cw-terminates");
+        Check(CountMethod("POST", "/v2/orders") == 0,
+              "cw-zero-posts");
+        Check(jev::runner::FreezeHas((r.dir + "/freeze.txt").c_str(),
+                        "AAPL"),
+              "cw-frozen");
+        Check(Exists(r.dir + "/HALT"), "cw-halt");
+        // Either gate fires depending on platform directory
+        // visibility (invalid-content vs failed-note) — both
+        // are chain-integrity refusals, never a POST.
+        Check(ReadWhole(r.dir + "/alerts.jsonl").find(
+                  "hard-chain-") != std::string::npos,
+              "cw-alert");
+        RmDir(r.dir + "/hard-chain.txt");
+    }
+    // CX. Missing chain on a broker-known hard id is an
+    // integrity failure (doc 06 sec. 6.1b): sent in cycle 1,
+    // chain deleted, restart pre-flights terminal-short ->
+    // refuse (freeze, zero new POSTs), NEVER orig = need.
+    {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-561", "AAPL", 0, 0,
+                          100, 2, 100, &cid)
+                   .empty(),
+              "cx-image");
+        g_positions.push_back(MkPos("AAPL", 100));
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "cx-recover");
+        g_kill.drift_unresolvable = true;  // HARD
+        PushRule("GET", "by_client_order_id", 200,
+                 HeldReply("filled", "100").c_str());
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 PlainReply("accepted", "0").c_str());
+        Check(!g.Cycle(g_now), "cx-hard1");
+        Check(CountMethod("POST", "/v2/orders") == 1,
+              "cx-primary-sent");
+        Check(std::remove((r.dir + "/hard-chain.txt").c_str()) ==
+                  0,
+              "cx-chain-deleted");
+        G0Runner g2(r.cfg, r.deps);
+        Check(g2.Recover(nullptr), "cx-recover2");
+        PushRule("GET", "by_client_order_id", 200,
+                 HeldReply("filled", "100").c_str());
+        PushRule("GET", "by_client_order_id", 200,
+                 HeldReply("filled", "40").c_str());
+        Check(!g2.Cycle(g_now), "cx-hard2");
+        Check(CountMethod("POST", "/v2/orders") == 1,
+              "cx-no-mint-from-need");
+        Check(jev::runner::FreezeHas((r.dir + "/freeze.txt").c_str(),
+                        "AAPL"),
+              "cx-frozen");
+        Check(ReadWhole(r.dir + "/alerts.jsonl").find(
+                  "hard-chain-invalid") != std::string::npos,
+              "cx-alert");
+    }
+    // CY. Crash between chain note and broker POST: cycle 1
+    // notes durably but the POST transport-fails; restart
+    // pre-flights 404 and sends the SAME identity once (the
+    // duplicate chain row is idempotent evidence, not a
+    // conflict — the validator accepts it).
+    {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-562", "AAPL", 0, 0,
+                          100, 2, 100, &cid)
+                   .empty(),
+              "cy-image");
+        g_positions.push_back(MkPos("AAPL", 100));
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "cy-recover");
+        g_kill.drift_unresolvable = true;  // HARD
+        PushRule("GET", "by_client_order_id", 200,
+                 HeldReply("filled", "100").c_str());
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 500, "{}");
+        Check(!g.Cycle(g_now), "cy-hard1");
+        Check(CountMethod("POST", "/v2/orders") == 1,
+              "cy-note-then-fail");
+        G0Runner g2(r.cfg, r.deps);
+        Check(g2.Recover(nullptr), "cy-recover2");
+        PushRule("GET", "by_client_order_id", 200,
+                 HeldReply("filled", "100").c_str());
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 PlainReply("accepted", "0").c_str());
+        Check(!g2.Cycle(g_now), "cy-hard2");
+        Check(CountMethod("POST", "/v2/orders") == 2,
+              "cy-same-id-once");
+        std::string c0, c1;
+        for (std::size_t i = 0; i < g_log.size(); ++i) {
+            if (g_log[i].method != "POST") continue;
+            std::size_t f = g_log[i].body.find(
+                "client_order_id\":\"");
+            std::string c = (f == std::string::npos)
+                                ? ""
+                                : g_log[i].body.substr(f + 18,
+                                                       64);
+            if (c0.empty())
+                c0 = c;
+            else
+                c1 = c;
+        }
+        Check(!c0.empty() && c0 == c1, "cy-same-coid");
+        char htag[64];
+        std::snprintf(htag, sizeof(htag), "hard-%lld-AAPL",
+                        g_now);
+        Check(ReadWhole(r.dir + "/hard-chain.txt") ==
+                  std::string(htag) + " 100 0\n" +
+                      std::string(htag) + " 100 0\n",
+              "cy-idempotent-rows");
+    }
+    // CZ. Crash after POST with chain present: restart
+    // pre-flights the sufficient fill and adopts the SAME
+    // identity (zero new POSTs) — the write-ahead row is what
+    // makes adoption legitimate.
+    {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-563", "AAPL", 0, 0,
+                          100, 2, 100, &cid)
+                   .empty(),
+              "cz-image");
+        g_positions.push_back(MkPos("AAPL", 100));
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "cz-recover");
+        g_kill.drift_unresolvable = true;  // HARD
+        PushRule("GET", "by_client_order_id", 200,
+                 HeldReply("filled", "100").c_str());
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 PlainReply("accepted", "0").c_str());
+        Check(!g.Cycle(g_now), "cz-hard1");
+        Check(CountMethod("POST", "/v2/orders") == 1,
+              "cz-sent");
+        G0Runner g2(r.cfg, r.deps);
+        Check(g2.Recover(nullptr), "cz-recover2");
+        PushRule("GET", "by_client_order_id", 200,
+                 HeldReply("filled", "100").c_str());
+        PushRule("GET", "by_client_order_id", 200,
+                 HeldReply("filled", "100").c_str());
+        Check(!g2.Cycle(g_now), "cz-hard2");
+        Check(CountMethod("POST", "/v2/orders") == 1,
+              "cz-adopt-no-resend");
+        Check(!ReadWhole(r.dir + "/hard-chain.txt").empty(),
+              "cz-chain-present");
+    }
+    // CV. Chain integrity validation (doc 06 sec. 6.1b): every
+    // corruption shape refuses (freeze, zero POSTs) — attributed
+    // regression, malformed row, conflicting requested,
+    // attributed > requested. No broker-derived substitute.
+    for (int cv = 0; cv < 4; ++cv) {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        char iid[16];
+        std::snprintf(iid, sizeof(iid), "intent-57%d", cv);
+        std::string cid;
+        Check(!CrashImage(r.dir, iid, "AAPL", 0, 0, 100, 2,
+                          100, &cid)
+                   .empty(),
+              "cv-image");
+        g_positions.push_back(MkPos("AAPL", 100));
+        char htag[64];
+        std::snprintf(htag, sizeof(htag), "hard-%lld-AAPL",
+                        g_now);
+        std::string chain;
+        if (cv == 0)
+            chain = std::string(htag) + " 100 80\n" +
+                    std::string(htag) + " 100 20\n";
+        else if (cv == 1)
+            chain = std::string(htag) + " 100 0\n" +
+                    std::string("garbage-row\n");
+        else if (cv == 2)
+            chain = std::string(htag) + " 100 0\n" +
+                    std::string(htag) + " 90 0\n";
+        else
+            chain = std::string(htag) + " 100 120\n";
+        WriteFile(r.dir + "/hard-chain.txt", chain);
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "cv-recover");
+        g_kill.drift_unresolvable = true;  // HARD
+        PushRule("GET", "by_client_order_id", 200,
+                 HeldReply("filled", "100").c_str());
+        PushRule("GET", "by_client_order_id", 200,
+                 HeldReply("filled", "40").c_str());
+        Check(!g.Cycle(g_now), "cv-terminates");
+        Check(CountMethod("POST", "/v2/orders") == 0,
+              "cv-zero-posts");
+        Check(jev::runner::FreezeHas((r.dir + "/freeze.txt").c_str(),
+                        "AAPL"),
+              "cv-frozen");
+    }
+    // CD. Attribution durability (doc 06 sec. 6.1b): entry +100,
+    // hard close fills 40, the entry snapshot persist FAILS
+    // during attribution -> books stay exactly as before (chain
+    // still (hid,100,0), entry open still 100, zero POSTs); after
+    // the fault clears, restart converges to exactly 60 remaining
+    // (chain 40, one 60-share remainder) — no double-account,
+    // no under-account.
+    {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-565", "AAPL", 0, 0,
+                          100, 2, 100, &cid)
+                   .empty(),
+              "cd-image");
+        g_positions.push_back(MkPos("AAPL", 100));
+        char htag[64];
+        std::snprintf(htag, sizeof(htag), "hard-%lld-AAPL",
+                        g_now);
+        WriteFile(r.dir + "/hard-chain.txt",
+                  std::string(htag) + " 100 0\n");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "cd-recover");
+        g_kill.drift_unresolvable = true;  // HARD
+        MkDir(r.dir + "/snap-intent-565.txt");
+        MkDir(r.dir + "/snap-intent-565.txt.tmp");
+        PushRule("GET", "by_client_order_id", 200,
+                 HeldReply("filled", "100").c_str());
+        PushRule("GET", "by_client_order_id", 200,
+                 HeldReply("filled", "40").c_str());
+        Check(!g.Cycle(g_now), "cd-hard1");
+        Check(CountMethod("POST", "/v2/orders") == 0,
+              "cd-zero-posts");
+        Check(ReadWhole(r.dir + "/hard-chain.txt") ==
+                  std::string(htag) + " 100 0\n",
+              "cd-chain-unadvanced");
+        const auto* de = g.Find("intent-565");
+        Check(de && de->m.filled_qty - de->m.exit_closed_qty ==
+                         100,
+              "cd-books-unchanged");
+        RmDir(r.dir + "/snap-intent-565.txt");
+        RmDir(r.dir + "/snap-intent-565.txt.tmp");
+        G0Runner g2(r.cfg, r.deps);
+        Check(g2.Recover(nullptr), "cd-recover2");
+        PushRule("GET", "by_client_order_id", 200,
+                 HeldReply("filled", "100").c_str());
+        PushRule("GET", "by_client_order_id", 200,
+                 HeldReply("filled", "40").c_str());
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 PlainReply("accepted", "0").c_str());
+        Check(!g2.Cycle(g_now), "cd-hard2");
+        Check(CountMethod("POST", "/v2/orders") == 1,
+              "cd-one-remainder");
+        bool qty60 = false;
+        for (std::size_t i = 0; i < g_log.size(); ++i) {
+            if (g_log[i].method == "POST" &&
+                g_log[i].body.find("\"qty\":\"60\"") !=
+                    std::string::npos)
+                qty60 = true;
+        }
+        Check(qty60, "cd-remainder-qty");
+        const auto* de2 = g2.Find("intent-565");
+        Check(de2 && de2->m.filled_qty -
+                             de2->m.exit_closed_qty ==
+                         60,
+              "cd-exact-60");
+        Check(ReadWhole(r.dir + "/hard-chain.txt").find(
+                  std::string(htag) + " 100 40") !=
+                  std::string::npos,
+              "cd-chain-40");
     }
     // T7. Quarantine (doc 06 locked): a done_for_day entry freezes
     // its symbol on first sighting (one row), waits (no mint, no

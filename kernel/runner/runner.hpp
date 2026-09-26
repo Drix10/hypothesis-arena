@@ -198,6 +198,18 @@ class G0Runner {
     std::vector<Slot> slots_;
     std::uint64_t next_seq_ = 0;
     std::string prev_hash_;
+    // Scratch: exact take list of the last successful
+    // AttributeClosedQty (slot indices + amounts), consumed ONLY
+    // by the immediate UnattributeClosedQty rollback when the
+    // dependent chain note fails (doc 06 sec. 6.1b). Never read
+    // otherwise; zeroed on every Attribute entry and consumed on
+    // every Unattribute path.
+    struct AttrTake {
+        std::size_t slot;
+        long long take;
+    };
+    AttrTake attr_takes_[64];
+    std::size_t n_attr_takes_ = 0;
     bool stage_ok_ = false;
     bool halt_announced_ = false;
     long long last_cycle_ns_ = 0;
@@ -251,12 +263,22 @@ class G0Runner {
                        long long now_ns);
     // Original hard-order chain (doc 06 sec. 6.1b):
     // hard-chain.txt rows `<tag> <requested> <attributed>`,
-    // last row wins, noted write-ahead before every POST.
-    // Request/Attributed return 0 on miss (requested is always
-    // > 0 for a real row, so 0 = unknown).
-    long long HardChainRequest(const char* tag);
-    long long HardChainAttributed(const char* tag);
-    void NoteHardChain(const char* tag, long long requested,
+    // noted write-ahead before every POST. The reader validates
+    // the WHOLE file (never "last row wins"): requested per tag
+    // immutable, attributed monotonically nondecreasing,
+    // 0 <= attributed <= requested, no malformed rows, no
+    // conflicting requested (exact-duplicate rows are idempotent
+    // crash-retry evidence). HardChainState is true iff the file
+    // is valid AND the tag carries a row (req/attr out); missing
+    // file counts as valid-empty (first incident), anything else
+    // unreadable/invalid is an integrity failure. HardChainOk
+    // reports whole-file validity alone (404-path gate).
+    // NoteHardChain returns false when the row does not persist —
+    // the caller must then PREVENT the POST (fail closed).
+    bool HardChainState(const char* tag, long long* req,
+                        long long* attr);
+    bool HardChainOk();
+    bool NoteHardChain(const char* tag, long long requested,
                        long long attributed);
     // Incident epochs (doc 06 sec. 6.1b): MEDIUM mints once per
     // medium-enter (overwrite = new incident; crash reuses the
@@ -327,8 +349,21 @@ class G0Runner {
     // exits — the entry machine never learns its position closed
     // otherwise, and S2 would drift on healthy flat forever).
     // Leftover (no local expectation) is dropped, never invented.
-    void AttributeClosedQty(const char* symbol, long long qty,
+    // Two-phase and durable-first: takes are computed, then each
+    // slot is mutated+persisted; ANY persist failure rolls back
+    // in-memory takes everywhere AND re-persists already-written
+    // slots to old values (best-effort), then returns false — the
+    // caller must NOT advance any dependent durable state (the
+    // HARD chain note) and must refuse, so the next pre-flight
+    // reconstructs the same portion exactly once (doc 06 6.1b).
+    bool AttributeClosedQty(const char* symbol, long long qty,
                             long long now_ns);
+    // Exact inverse of the last successful AttributeClosedQty —
+    // call ONLY immediately after it succeeded and only when the
+    // dependent chain note failed (doc 06 sec. 6.1b). Consumes
+    // the take scratch (any other path leaves it for overwrite).
+    void UnattributeClosedQty(const char* symbol,
+                              long long now_ns);
     // Deterministic incident-scoped remainder id
     // hard-<epoch>-<SYM>-<qty> through the frozen recipe (pure:
     // re-derived identically on restart; never collides with the
