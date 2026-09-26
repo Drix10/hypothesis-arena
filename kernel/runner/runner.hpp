@@ -227,20 +227,37 @@ class G0Runner {
     // HARD/MEDIUM/S2/ops — caller-owned events, never order flow).
     bool OpsRow(const char* kind, const char* intent_id,
                 const char* text, long long now_ns);
-    void HardManageSlot(Slot& s, long long epoch, long long now_ns);
+    void HardManageSlot(Slot& s, long long epoch, long long now_ns,
+                        bool* owned);
     bool HardStop(long long now_ns, const char* why,
                   bool halt_at_entry);
     // Pre-flighted single close under a stable hard id (GET ->
     // found-sufficient: adopt, never resend; found-live: adopt;
     // found-short-terminal: deterministic incident remainder
     // hard-<epoch>-<SYM>-<qty> (pure, pre-flighted, bounded
-    // strictly-decreasing chain); 404: POST once; failure:
-    // journal + alert, fail closed). Shared by the slot path and
-    // the slotless-position path so HARD never blind-sends.
+    // strictly-decreasing chain); 404: POST once (chain noted
+    // write-ahead); failure: journal + alert, fail closed.
+    // Remainder derives from the ORIGINAL chain request
+    // (hard-chain.txt), never by subtracting a burned order's
+    // historical fill from a CURRENT broker number; the broker
+    // need caps the send (min(remainder, need)). Per-id
+    // attribution is exact (only the not-yet-attributed portion
+    // folds — crash-safe). Shared by the slot path, the
+    // slotless-position path, and EXIT replacement, so HARD
+    // never blind-sends.
     bool HardCloseOnce(const char* symbol, long long qty,
                        broker::OrderSide eside, const char* hid,
                        long long epoch, const char* scope_intent,
                        long long now_ns);
+    // Original hard-order chain (doc 06 sec. 6.1b):
+    // hard-chain.txt rows `<tag> <requested> <attributed>`,
+    // last row wins, noted write-ahead before every POST.
+    // Request/Attributed return 0 on miss (requested is always
+    // > 0 for a real row, so 0 = unknown).
+    long long HardChainRequest(const char* tag);
+    long long HardChainAttributed(const char* tag);
+    void NoteHardChain(const char* tag, long long requested,
+                       long long attributed);
     // Incident epochs (doc 06 sec. 6.1b): MEDIUM mints once per
     // medium-enter (overwrite = new incident; crash reuses the
     // file); HARD mints unless the incident continues (HALT
@@ -320,10 +337,17 @@ class G0Runner {
                                         const char* symbol,
                                         long long rem);
     void MediumPass(long long now_ns);
+    // Broker-confirmed flat (doc 06 sec. 6.1b teardown rule):
+    // seam present + query ok + every position zero. Missing or
+    // failing seam is UNKNOWN (false) — never flat. LocalFlat is
+    // the local-only half (no ENTRY open anywhere).
+    bool BrokerConfirmedFlat();
+    bool LocalFlat();
     // Live exposure for MEDIUM re-entry: local ENTRY open or any
-    // broker position (seam failure counts as exposure — never
-    // clear what cannot be seen). ClearMediumFiles drops the FSM
-    // file + the epoch file (closed/stale incident teardown).
+    // broker position. Missing/failing seam counts as exposure —
+    // never clear what cannot be seen (doc 06 sec. 6.1b).
+    // ClearMediumFiles drops the FSM file + the epoch file
+    // (closed/stale incident teardown).
     bool MediumHasExposure();
     void ClearMediumFiles();
     bool VenueOk(bool* open, bool* spread_ok);
