@@ -118,6 +118,25 @@ std::int64_t StrictQty(const char* body) {
 // UNKNOWN (fail closed, never an authoritative lifecycle).
 CloseState ClassifyStatus(const char* st) {
     if (!st || !st[0]) return CloseState::UNKNOWN;
+    // Quarantine override FIRST (doc 06 locked): these words must
+    // never route as their table state, in either direction — not
+    // DEAD (a resumed tomorrow-order or a live replacement id
+    // would meet a duplicate close) and not PENDING-forever
+    // (calculated is done-for-today, not working). UNKNOWN waits:
+    // reconcile, never mint, never terminal. Manual loop to match
+    // file style (no <cstring here).
+    const char* const quar[] = {"done_for_day", "calculated",
+                                "replaced"};
+    for (int w = 0; w < 3; ++w) {
+        const char* b = quar[w];
+        const char* a = st;
+        while (*a && *b && *a == *b) {
+            ++a;
+            ++b;
+        }
+        if (*a == '\0' && *b == '\0')
+            return CloseState::UNKNOWN;
+    }
     // exact-match helper over bounded literals. NOTE: the venue
     // order statuses are "filled" (terminal) and
     // "partially_filled"; bare "fill" / "partial_fill" are
@@ -135,17 +154,25 @@ CloseState ClassifyStatus(const char* st) {
     //   restated -> PENDING (corporate-action restatement, live);
     //   suspended -> PENDING (halted, may resume; never re-issue
     //     blind — pre-flight finds it under our id and waits);
-    //   done_for_day -> DEAD (terminal for the session);
-    //   replaced -> DEAD under this id (the replacement rides a
-    //     new id we do not track; re-issue under the stable id).
+    //   stopped -> PENDING (stop elected, trade guaranteed but not
+    //     yet occurred — a live working order, never a terminal);
+    //   accepted_for_bidding -> PENDING (with the venue, being
+    //     priced — live, never a terminal);
+    //   done_for_day / calculated / replaced -> UNKNOWN here (the
+    //     QUARANTINE set, doc 06 locked: may resume tomorrow /
+    //     unknown replacement id may be live — never generic DEAD,
+    //     never folded, never re-issued; the runner freezes the
+    //     symbol off status_raw on first sighting). canceled /
+    //   expired / rejected stay safe-DEAD (nothing live can
+    //   duplicate them: the burned-id remainder path applies).
     const char* const pending[] = {
         "accepted",      "pending_new",  "new",
-        "calculated",    "held",         "pending_replace",
+        "held",         "pending_replace",
         "pending_cancel", "suspended",    "restated",
-        "order_replace_rejected", "order_cancel_rejected"};
-    const char* const dead[] = {"canceled", "rejected", "expired",
-                                "done_for_day", "replaced"};
-    for (int w = 0; w < 11; ++w) {
+        "order_replace_rejected", "order_cancel_rejected",
+        "stopped", "accepted_for_bidding"};
+    const char* const dead[] = {"canceled", "rejected", "expired"};
+    for (int w = 0; w < 12; ++w) {
         const char* b = pending[w];
         const char* a = st;
         while (*a && *b && *a == *b) {
@@ -168,7 +195,7 @@ CloseState ClassifyStatus(const char* st) {
             return (w == 0) ? CloseState::FILLED
                             : CloseState::PARTIAL;
     }
-    for (int w = 0; w < 5; ++w) {
+    for (int w = 0; w < 3; ++w) {
         const char* b = dead[w];
         const char* a = st;
         while (*a && *b && *a == *b) {
@@ -546,8 +573,13 @@ OrderQuery AlpacaPaperAdapter::QueryOnce(
     // and fixed-offset reads below must never touch indeterminate
     // bytes on short statuses.
     char qs[32] = {};
-    if (ExtractQuoted(r.body, "status", qs, sizeof(qs)))
+    if (ExtractQuoted(r.body, "status", qs, sizeof(qs))) {
+        // Verbatim word rides along for the runner quarantine
+        // (doc 06 locked): the normalized state alone cannot tell
+        // done_for_day / calculated / replaced from generic DEAD.
+        CopyField(qs, q.status_raw, sizeof(q.status_raw));
         q.close_state = ClassifyStatus(qs);
+    }
     q.protection_active = LegsProtected(r.body);
     q.bracket_class = BracketHeld(r.body);
     return q;

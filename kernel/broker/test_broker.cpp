@@ -3,6 +3,7 @@
 // bracket: entry + TP + SL) and scripts acks; no live network exists
 // in H1. Usage: ./test_broker
 #include <cstdio>
+#include <cstring>
 
 #include "adapter.hpp"
 #include "alpaca_paper.hpp"
@@ -532,17 +533,21 @@ int main() {
         // reads this, not just filled/cancelled). Venue truth:
         // "partially_filled" is the order status (PARTIAL);
         // trade-event spellings never classify (checked below).
-        const char* statuses[10] = {
+        const char* statuses[14] = {
             "filled", "partially_filled", "new",
-            "accepted", "pending_new", "calculated", "canceled",
-            "rejected", "expired", "done_for_day"};
-        const CloseState want_st[10] = {
+            "accepted", "pending_new", "stopped",
+            "accepted_for_bidding", "held", "canceled",
+            "rejected", "expired", "done_for_day",
+            "calculated", "replaced"};
+        const CloseState want_st[14] = {
             CloseState::FILLED, CloseState::PARTIAL,
             CloseState::PENDING, CloseState::PENDING,
             CloseState::PENDING, CloseState::PENDING,
+            CloseState::PENDING, CloseState::PENDING,
             CloseState::DEAD, CloseState::DEAD, CloseState::DEAD,
-            CloseState::DEAD};
-        for (int si = 0; si < 10; ++si) {
+            CloseState::UNKNOWN, CloseState::UNKNOWN,
+            CloseState::UNKNOWN};
+        for (int si = 0; si < 14; ++si) {
             char qb[256];
             std::snprintf(
                 qb, sizeof(qb),
@@ -555,15 +560,26 @@ int main() {
             std::snprintf(qn, sizeof(qn), "query-status-%d", si);
             Check(qst.found && qst.close_state == want_st[si], qn);
         }
-        // Replaced orders are DEAD under the old id (the replacement
-        // rides a new id; the caller re-issues under the stable id).
+        // Quarantine words never route DEAD (doc 06 locked):
+        // replaced may have a live replacement id; done_for_day /
+        // calculated may resume tomorrow. UNKNOWN waits; the raw
+        // word rides along for the runner freeze/alert.
         g_reply =
             "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
             "\"status\":\"replaced\",\"filled_qty\":\"10\"}";
         auto qrp = ad.QueryOnce(id);
         Check(qrp.found &&
-                  qrp.close_state == CloseState::DEAD,
-              "query-status-replaced-dead");
+                  qrp.close_state == CloseState::UNKNOWN &&
+                  std::strcmp(qrp.status_raw, "replaced") == 0,
+              "query-status-replaced-quarantine");
+        g_reply =
+            "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
+            "\"status\":\"done_for_day\",\"filled_qty\":\"10\"}";
+        auto qdfd = ad.QueryOnce(id);
+        Check(qdfd.found &&
+                  qdfd.close_state == CloseState::UNKNOWN &&
+                  std::strcmp(qdfd.status_raw, "done_for_day") == 0,
+              "query-status-done-for-day-quarantine");
         // Trade-event spellings are never order statuses: "fill"
         // and "partial_fill" both classify UNKNOWN (fail closed).
         g_reply =
@@ -668,9 +684,11 @@ int main() {
         Check(!mdu.executed && !mdu.transport_ok &&
                   mdu.state == CloseState::UNKNOWN,
               "close-dead-no-qty-unknown");
-        // accepted/new/pending -> PENDING (wait/reconcile, NOT closed).
+        // accepted/new/pending/stopped/held -> PENDING
+        // (wait/reconcile, NOT closed). calculated is quarantine
+        // (UNKNOWN), not pending — see close-quarantine-waits.
         const char* pend[4] = {"accepted", "new", "pending_new",
-                               "calculated"};
+                               "stopped"};
         for (int pi = 0; pi < 4; ++pi) {
             char pb[160];
             std::snprintf(
@@ -716,11 +734,12 @@ int main() {
         // order_cancel_rejected -> PENDING (the order is alive:
         // wait/reconcile under the stable id, never re-issue
         // blind — the pre-flight finds it and waits).
-        const char* alive[7] = {
+        const char* alive[9] = {
             "held", "pending_replace", "pending_cancel",
             "suspended", "restated", "order_replace_rejected",
-            "order_cancel_rejected"};
-        for (int ai = 0; ai < 7; ++ai) {
+            "order_cancel_rejected", "stopped",
+            "accepted_for_bidding"};
+        for (int ai = 0; ai < 9; ++ai) {
             char ab[192];
             std::snprintf(
                 ab, sizeof(ab),
@@ -734,11 +753,13 @@ int main() {
                       ma.state == CloseState::PENDING,
                   "close-alive-waits");
         }
-        // done_for_day / replaced -> DEAD under this id (terminal
-        // here; the caller reconciles by re-issue under the same
-        // stable id, never assumes execution).
-        const char* gone[2] = {"done_for_day", "replaced"};
-        for (int gi = 0; gi < 2; ++gi) {
+        // done_for_day / calculated / replaced -> UNKNOWN, never
+        // DEAD (doc 06 locked quarantine: may resume, or an
+        // unknown replacement may be live — the caller waits and
+        // freezes, never mints a duplicate close).
+        const char* gone[3] = {"done_for_day", "calculated",
+                               "replaced"};
+        for (int gi = 0; gi < 3; ++gi) {
             char gb[192];
             std::snprintf(
                 gb, sizeof(gb),
@@ -748,9 +769,9 @@ int main() {
             g_reply = gb;
             auto mg = ad.MarketClose("AAPL", 10, OrderSide::SELL,
                                      xid);
-            Check(!mg.executed && mg.transport_ok &&
-                      mg.state == CloseState::DEAD,
-                  "close-terminal-reissues");
+            Check(!mg.executed && !mg.transport_ok &&
+                      mg.state == CloseState::UNKNOWN,
+                  "close-quarantine-waits");
         }
         // Ambiguous close (response lost): not executed, no UUID —
         // the caller reconciles by client ID, never re-sends blind.

@@ -144,6 +144,10 @@ struct Slot {
     bool absent_cancel = false;  // client-ID lookup proved absent
     bool cancel_via_query = false;  // final-cancel via lookup
     bool flatten_armed = false;  // MEDIUM flatten already issued
+    char quar_[32]{};  // quarantine status already rowed (doc 06
+                       // locked freeze/alert fires once per slot per
+                       // status — runtime-only, never snapshotted:
+                       // a crash re-rows once, never spams)
     long long last_s2_ns = 0;
 };
 
@@ -223,8 +227,9 @@ class G0Runner {
     // HARD/MEDIUM/S2/ops — caller-owned events, never order flow).
     bool OpsRow(const char* kind, const char* intent_id,
                 const char* text, long long now_ns);
-    void HardManageSlot(Slot& s, long long now_ns);
-    bool HardStop(long long now_ns, const char* why);
+    void HardManageSlot(Slot& s, long long epoch, long long now_ns);
+    bool HardStop(long long now_ns, const char* why,
+                  bool halt_at_entry);
     // Pre-flighted single close under a stable hard id (GET ->
     // found: adopt, never resend; 404: POST once; failure: journal
     // + alert, fail closed). Shared by the slot path and the
@@ -232,6 +237,49 @@ class G0Runner {
     bool HardCloseOnce(const char* symbol, long long qty,
                        broker::OrderSide eside, const char* hid,
                        const char* scope_intent, long long now_ns);
+    // Incident epochs (doc 06 sec. 6.1b): MEDIUM mints once per
+    // medium-enter (overwrite = new incident; crash reuses the
+    // file); HARD mints unless the incident continues (HALT
+    // present at entry — crash-mid-HARD). Clearing HALT ends the
+    // incident; a re-firing HARD is new (supersede journaled +
+    // alerted). Zero = no incident on file.
+    long long MediumEpoch() const;
+    long long MintMediumEpoch(long long now_ns);
+    long long HardEpochFor(long long now_ns, const char* reason,
+                           bool halt_at_entry);
+    // Single close-owner invariant (doc 06 sec. 6.1b): a symbol is
+    // locally covered while an active EXIT/flatten works it or an
+    // ENTRY's flatten is armed/landed — the broker sweep then
+    // reconciles but never SENDS for it.
+    bool LocalCloseCovers(const char* symbol) const;
+    // Total remaining qty of active non-terminal EXITs on a symbol
+    // (0 = no exit coverage). First covering slot index via out.
+    long long ExitCoverRemaining(const char* symbol,
+                                 std::size_t* first) const;
+    // HARD adopt-or-replace for one EXIT slot: live/filled-full ->
+    // adopt (journal, never cancel, never a second close); dead /
+    // absent -> replace the remainder under the incident hard id
+    // (pre-flighted, shared with every other hard path for the
+    // symbol — one position, one close).
+    void HardAdoptExit(Slot& s, long long epoch, long long now_ns);
+    // Quarantine sighting (doc 06 locked): first sighting per slot
+    // per status freezes the symbol + journals + alerts; repeats
+    // stay silent (the machine already waits on UNKNOWN).
+    void NoteQuarantine(Slot& s, const broker::OrderQuery& q,
+                        const char* scope, long long now_ns);
+    void NoteQuarantineSym(const char* symbol, const char* status,
+                           const char* scope, long long now_ns);
+    // True when a live incident-sweep close already owns this
+    // symbol (FlattenOnMedium arms and waits instead of submitting
+    // a competing flatten).
+    bool SweepLiveBlocks(const char* symbol,
+                         broker::OrderSide local_close_side,
+                         long long epoch);
+    // True when the entry's flatten EXIT resolved NON-closed
+    // (done slot, terminal, not CLOSED): ownership lapses back to
+    // the incident sweep — the intent id is single-use, so no
+    // re-arm, no resubmit, no freeze.
+    bool FlattenResolvedNotClosed(const Slot& s) const;
     // A live ENTRY slot with provable open covers its symbol (the
     // slot path manages it; the position sweep skips it — never
     // two closes for one position).
@@ -240,7 +288,7 @@ class G0Runner {
     // protection is unverifiable — flatten once (pre-flighted) +
     // journal + alert, never a second identity for one position.
     void HardManagePosition(const char* symbol, long long qty,
-                            long long now_ns);
+                            long long epoch, long long now_ns);
     // Attribute an authoritative close quantity to same-symbol
     // ENTRY slots, oldest first (flatten EXITs, sweep fills, manual
     // exits — the entry machine never learns its position closed

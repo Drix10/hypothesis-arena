@@ -1182,6 +1182,10 @@ int main() {
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "m-recover");
         g_kill.spend_tier = 3;  // MEDIUM
+        // Flatten's sweep-ownership check (both side-tags absent)
+        // precedes its own pre-flight.
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("GET", "by_client_order_id", 404, "{}");
         PushRule("GET", "by_client_order_id", 404, "{}");
         PushRule("GET", "by_client_order_id", 404, "{}");
         PushRule("POST", "/v2/orders", 200,
@@ -1285,7 +1289,10 @@ int main() {
                               nullptr),
               "hd-exit-alive");
     }
-    // 17. HARD on an EXIT with UUID: cancel attempted, then out.
+    // 17. HARD on an EXIT with UUID: the owned exit is ADOPTED
+    // (reconciled, never canceled to make room, never bypassed).
+    // A live exit journals its adoption with zero DELETEs and zero
+    // new closes; the process still terminates with HALT.
     {
         Rig r;
         std::string cid;
@@ -1298,13 +1305,23 @@ int main() {
         Check(g.Recover(nullptr), "hx-recover");
         g_kill.broker_auth_fail = true;  // HARD
         PushRule("GET", "by_client_order_id", 200,
-                 HeldReply("filled", "0").c_str());
-        PushRule("DELETE", "/v2/orders/", 422,
-                 "{\"error\":\"refused\"}");
+                 PlainReply("accepted", "0").c_str());
         Check(!g.Cycle(g_now), "hx-terminates");
-        Check(CountMethod("DELETE", "/v2/orders/") == 1,
-              "hx-cancel-attempted");
+        Check(CountMethod("DELETE", "/v2/orders/") == 0,
+              "hx-no-cancel");
+        Check(CountMethod("POST", "/v2/orders") == 0,
+              "hx-no-second-close");
         Check(Exists(r.dir + "/HALT"), "hx-halt-survives");
+        std::vector<jev::journal::Row> rows;
+        int hard_rows = 0;
+        if (jev::runner::JournalLoad(
+                (r.dir + "/journal.jsonl").c_str(), &rows)) {
+            for (std::size_t i = 0; i < rows.size(); ++i) {
+                if (rows[i].kind == "drift-directive")
+                    ++hard_rows;
+            }
+        }
+        Check(hard_rows >= 2, "hx-adopt-journaled");
     }
     // 18. HARD on a never-filled ENTRY: found -> cancel attempt;
     // 404-absent -> journaled, nothing to cancel. Either way the
@@ -1481,9 +1498,11 @@ int main() {
         Check(CountMethod("GET", "by_client_order_id") == 2,
               "pm-forces-reloukup");
     }
-    // 24. MEDIUM position sweep (venue open, spread normal):
-    // broker-confirmed +100 flattens via market AND the local
-    // ENTRY flattens via EXIT; FSM lands FLATTEN_PENDING.
+    // 24. MEDIUM single close (doc 06 sec. 6.1b): one 100-share
+    // position with local ENTRY coverage gets EXACTLY one close —
+    // the local flatten EXIT. The broker sweep reconciles (pre-
+    // flights) but never sends for the covered symbol; the
+    // flatten's drive closes and attributes the entry to zero.
     {
         Rig r;
         r.deps.list_positions = FakePositions;
@@ -1499,29 +1518,38 @@ int main() {
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "ms-recover");
         g_kill.spend_tier = 3;  // MEDIUM
+        // Flatten's sweep-ownership check (both side-tags, absent)
+        // + sweep pre-flight (absent, covered -> wait) + entry
+        // forced query (ambiguous, parks) + flatten pre-flight.
         PushRule("GET", "by_client_order_id", 404, "{}");
         PushRule("GET", "by_client_order_id", 404, "{}");
         PushRule("GET", "by_client_order_id", 404, "{}");
-        PushRule("POST", "/v2/orders", 200,
-                 HeldReply("filled", "100").c_str());
-        PushRule("POST", "/v2/orders", 200,
-                 HeldReply("filled", "100").c_str());
+        PushRule("GET", "by_client_order_id", 500, "{}");
+        PushRule("GET", "by_client_order_id", 404, "{}");
         PushRule("POST", "/v2/orders", 200,
                  HeldReply("filled", "100").c_str());
         Check(g.Cycle(g_now), "ms-cycle");
-        // Sweep row journaled with the broker-confirmed qty.
-        std::vector<jev::journal::Row> rows;
-        bool sweep_row = false;
-        if (jev::runner::JournalLoad(
-                (r.dir + "/journal.jsonl").c_str(), &rows)) {
-            for (std::size_t i = 0; i < rows.size(); ++i) {
-                if (rows[i].kind == "drift-directive")
-                    sweep_row = true;
-            }
+        // Exactly one close POST (the flatten) — the sweep sent
+        // nothing for its covered symbol.
+        Check(CountMethod("POST", "/v2/orders") == 1,
+              "ms-one-close");
+        // The single POST is the flatten (MarketClose carries no
+        // order_class body); a sweep send would be POST #2.
+        int market_posts = 0;
+        for (std::size_t i = 0; i < g_log.size(); ++i) {
+            if (g_log[i].method == "POST" &&
+                g_log[i].body.find("order_class") ==
+                    std::string::npos)
+                ++market_posts;
         }
-        Check(sweep_row, "ms-sweep-row");
+        Check(market_posts == 1, "ms-flatten-only-send");
         Check(g.Find("intent-170-flatten") != nullptr,
               "ms-local-flatten");
+        // The flatten's close attributed back to the entry (open
+        // zeroed — the entry machine stops claiming the shares).
+        const auto* me = g.Find("intent-170");
+        Check(me && me->m.filled_qty - me->m.exit_closed_qty == 0,
+              "ms-attributed");
         FILE* mf =
             std::fopen((r.dir + "/medium.txt").c_str(), "rb");
         char mbuf[64] = {0};
@@ -1550,6 +1578,11 @@ int main() {
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "mc-recover");
         g_kill.spend_tier = 3;  // MEDIUM
+        // Flatten's sweep-ownership check first (both side-tags
+        // absent — no sweep owns the symbol), then its own
+        // pre-flight + close + query.
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("GET", "by_client_order_id", 404, "{}");
         PushRule("GET", "by_client_order_id", 404, "{}");
         PushRule("POST", "/v2/orders", 200,
                  HeldReply("filled", "100").c_str());
@@ -1613,6 +1646,10 @@ int main() {
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "mr-recover");
         g_kill.spend_tier = 3;  // MEDIUM
+        // Flatten's sweep-ownership check (both side-tags absent)
+        // precedes its own pre-flight.
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("GET", "by_client_order_id", 404, "{}");
         PushRule("GET", "by_client_order_id", 404, "{}");
         PushRule("GET", "by_client_order_id", 404, "{}");
         PushRule("POST", "/v2/orders", 200,
@@ -2130,11 +2167,14 @@ int main() {
         Check(CountMethod("POST", "/v2/orders") ==
                   posts_before + 1,
               "hp-close-sent");
+        char htag[64];
+        std::snprintf(htag, sizeof(htag), "hard-%lld-AAPL",
+                        g_now);
         char hcoid[65] = {0};
         Check(jev::broker::MakeClientOrderId(
                   "alpaca-paper", "test",
                   std::string(64, 'a').c_str(), "AAPL",
-                  jev::broker::OrderSide::SELL, "hard-intent-300",
+                  jev::broker::OrderSide::SELL, htag,
                   hcoid),
               "hp-coid");
         char hpos[65] = {0};
@@ -2196,11 +2236,14 @@ int main() {
         Check(!g.Cycle(g_now), "hr-terminates");
         Check(CountMethod("POST", "/v2/orders") == 1,
               "hr-one-post");
+        char htag[64];
+        std::snprintf(htag, sizeof(htag), "hard-%lld-AAPL",
+                        g_now);
         char hcoid[65] = {0};
         Check(jev::broker::MakeClientOrderId(
                   "alpaca-paper", "test",
                   std::string(64, 'a').c_str(), "AAPL",
-                  jev::broker::OrderSide::SELL, "hard-intent-305",
+                  jev::broker::OrderSide::SELL, htag,
                   hcoid),
               "hr-coid");
         int hard_gets = 0;
@@ -2397,7 +2440,8 @@ int main() {
         Check(g.Cycle(g_now), "sw-cycle1");
         Check(CountMethod("POST", "/v2/orders") == 0,
               "sw-partial-parks");
-        // Dead base sweep -> one remainder under sweep-AAPL-100.
+        // Dead base sweep -> one incident remainder under
+        // medium-<epoch>-AAPL-100.
         PushRule("GET", "by_client_order_id", 200,
                  DeadReply("40").c_str());
         PushRule("GET", "by_client_order_id", 404, "{}");
@@ -2406,11 +2450,14 @@ int main() {
         Check(g.Cycle(g_now), "sw-cycle2");
         Check(CountMethod("POST", "/v2/orders") == 1,
               "sw-remainder-sent");
+        char rtag[64];
+        std::snprintf(rtag, sizeof(rtag),
+                        "medium-%lld-AAPL-100", g_now);
         char rcoid[65] = {0};
         Check(jev::broker::MakeClientOrderId(
                   "alpaca-paper", "test",
                   std::string(64, 'a').c_str(), "AAPL",
-                  jev::broker::OrderSide::SELL, "sweep-AAPL-100",
+                  jev::broker::OrderSide::SELL, rtag,
                   rcoid),
               "sw-coid");
         bool remainder_carries = false;
@@ -2436,13 +2483,14 @@ int main() {
     // trade-event word maps (identity-only, forces REST — never a
     // verdict, never NONE).
     {
-        const char* lifes[15] = {
+        const char* lifes[17] = {
             "new", "pending_new", "accepted", "calculated",
-            "canceled", "rejected", "expired", "done_for_day",
-            "replaced", "suspended", "pending_cancel",
-            "pending_replace", "order_replace_rejected",
-            "order_cancel_rejected", "restated"};
-        for (int li = 0; li < 15; ++li) {
+            "held", "stopped", "canceled", "rejected",
+            "expired", "done_for_day", "replaced", "suspended",
+            "pending_cancel", "pending_replace",
+            "order_replace_rejected", "order_cancel_rejected",
+            "restated"};
+        for (int li = 0; li < 17; ++li) {
             jev::runner::SseEvent ev;
             ev.id = MkUlid(1900000000000ULL, (unsigned)li);
             ev.type = lifes[li];
@@ -2521,6 +2569,391 @@ int main() {
         Check(al.find("hard-positions-unknown") !=
                   std::string::npos,
               "hu2-unknown-alert");
+    }
+    // T2. Converse ownership (doc 06 sec. 6.1b): a live
+    // incident-sweep close blocks the local flatten (arm + wait,
+    // zero POSTs); when the sweep lands FILLED-full, attribution
+    // zeroes the entry and the FSM finalizes — one position, one
+    // close, across the handoff.
+    {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        r.deps.venue_gate = FakeVenue;
+        g_venue_open = 1;
+        g_venue_spread = 1;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-400", "AAPL", 0, 0, 100,
+                          5, 100, &cid)
+                   .empty(),
+              "ow-image");
+        g_positions.push_back(MkPos("AAPL", 100));
+        // Hand-crafted live incident: FSM mid-flight + epoch file
+        // (exact runner byte format: no trailing newline).
+        WriteFile(r.dir + "/medium.txt", "FLATTEN_PENDING");
+        char ebe[32];
+        std::snprintf(ebe, sizeof(ebe), "%lld", g_now);
+        WriteFile(r.dir + "/medium-incident.txt",
+                  std::string(ebe) + "\n");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "ow-recover");
+        g_kill.spend_tier = 3;  // MEDIUM
+        // Cycle 1: flatten's sweep check finds the live sweep
+        // (PENDING) -> arm, no submit; sweep pre-flight finds it
+        // too -> await, no send; entry force parks.
+        PushRule("GET", "by_client_order_id", 200,
+                 PlainReply("accepted", "0").c_str());
+        PushRule("GET", "by_client_order_id", 200,
+                 PlainReply("accepted", "0").c_str());
+        PushRule("GET", "by_client_order_id", 500, "{}");
+        Check(g.Cycle(g_now), "ow-cycle1");
+        Check(CountMethod("POST", "/v2/orders") == 0,
+              "ow-no-competing-close");
+        Check(g.Find("intent-400-flatten") == nullptr,
+              "ow-no-flatten-submitted");
+        // Cycle 2: the sweep lands FILLED-full -> attribution
+        // zeroes the entry; the armed flatten never fires. Still
+        // zero POSTs. (The broker position still polls open this
+        // cycle — honest reconcile-then-settle across polls.)
+        PushRule("GET", "by_client_order_id", 200,
+                 HeldReply("filled", "100").c_str());
+        PushRule("GET", "by_client_order_id", 500, "{}");
+        Check(g.Cycle(g_now), "ow-cycle2");
+        Check(CountMethod("POST", "/v2/orders") == 0,
+              "ow-still-no-close");
+        const auto* oe = g.Find("intent-400");
+        Check(oe && oe->m.filled_qty - oe->m.exit_closed_qty ==
+                         0,
+              "ow-attributed");
+        Check(ReadWhole(r.dir + "/medium.txt") ==
+                  "FLATTEN_PENDING",
+              "ow-await-settle");
+        // Cycle 3: the broker poll shows flat -> FSM finalizes.
+        g_positions.clear();
+        Check(g.Cycle(g_now), "ow-cycle3");
+        Check(CountMethod("POST", "/v2/orders") == 0,
+              "ow-quiet-close");
+        Check(ReadWhole(r.dir + "/medium.txt") ==
+                  "FLATTENED",
+              "ow-finalized");
+    }
+    // T3. HARD with an ENTRY + a live EXIT on one position: the
+    // owned exit is adopted — never canceled, never bypassed with
+    // a second close. Zero DELETEs, zero POSTs, HALT, journaled.
+    {
+        Rig r;
+        std::string cid, xid;
+        Check(!CrashImage(r.dir, "intent-410", "AAPL", 0, 0, 100,
+                          2, 100, &cid)
+                   .empty(),
+              "hx2-entry");
+        Check(!CrashImage(r.dir, "intent-411", "AAPL", 0, 1, 100,
+                          9, 0, &xid)
+                   .empty(),
+              "hx2-exit");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "hx2-recover");
+        g_kill.drift_unresolvable = true;  // HARD
+        // Entry order found WITH protection (skip reprotect) +
+        // exit live in both visit orders (slot loop order is
+        // journal order, but either order converges).
+        PushRule("GET", "by_client_order_id", 200,
+                 HeldReply("filled", "100").c_str());
+        PushRule("GET", "by_client_order_id", 200,
+                 PlainReply("accepted", "0").c_str());
+        PushRule("GET", "by_client_order_id", 200,
+                 PlainReply("accepted", "0").c_str());
+        Check(!g.Cycle(g_now), "hx2-terminates");
+        Check(CountMethod("POST", "/v2/orders") == 0,
+              "hx2-no-second-close");
+        Check(CountMethod("DELETE", "/v2/orders/") == 0,
+              "hx2-no-cancel");
+        Check(Exists(r.dir + "/HALT"), "hx2-halt");
+        std::vector<jev::journal::Row> rows;
+        int hard_rows = 0;
+        if (jev::runner::JournalLoad(
+                (r.dir + "/journal.jsonl").c_str(), &rows)) {
+            for (std::size_t i = 0; i < rows.size(); ++i) {
+                if (rows[i].kind == "drift-directive")
+                    ++hard_rows;
+            }
+        }
+        Check(hard_rows >= 3, "hx2-adopt-journaled");
+    }
+    // T3b. HARD on exit-only broker exposure (no ENTRY slot): the
+    // position loop adopts the working EXIT instead of flattening
+    // slotless beside it — no hard-slotless alert, no POST.
+    {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        std::string xid;
+        Check(!CrashImage(r.dir, "intent-412", "AAPL", 0, 1, 100,
+                          9, 0, &xid)
+                   .empty(),
+              "hx3-exit");
+        g_positions.push_back(MkPos("AAPL", 100));
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "hx3-recover");
+        g_kill.broker_auth_fail = true;  // HARD
+        PushRule("GET", "by_client_order_id", 200,
+                 PlainReply("accepted", "0").c_str());
+        PushRule("GET", "by_client_order_id", 200,
+                 PlainReply("accepted", "0").c_str());
+        Check(!g.Cycle(g_now), "hx3-terminates");
+        Check(CountMethod("POST", "/v2/orders") == 0,
+              "hx3-no-close");
+        Check(ReadWhole(r.dir + "/alerts.jsonl").find(
+                  "hard-slotless") == std::string::npos,
+              "hx3-no-slotless-flatten");
+        Check(Exists(r.dir + "/HALT"), "hx3-halt");
+    }
+    // T3c. HARD on a dead EXIT (never landed): the remainder
+    // replaces under the ONE incident hard id — exactly one POST
+    // carrying the incident coid.
+    {
+        Rig r;
+        std::string xid;
+        Check(!CrashImage(r.dir, "intent-413", "AAPL", 0, 1, 100,
+                          9, 0, &xid)
+                   .empty(),
+              "hx4-exit");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "hx4-recover");
+        g_kill.drift_unresolvable = true;  // HARD
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 HeldReply("filled", "100").c_str());
+        Check(!g.Cycle(g_now), "hx4-terminates");
+        Check(CountMethod("POST", "/v2/orders") == 1,
+              "hx4-one-replace");
+        char htag[64];
+        std::snprintf(htag, sizeof(htag), "hard-%lld-AAPL",
+                        g_now);
+        char hcoid[65] = {0};
+        Check(jev::broker::MakeClientOrderId(
+                  "alpaca-paper", "test",
+                  std::string(64, 'a').c_str(), "AAPL",
+                  jev::broker::OrderSide::SELL, htag, hcoid),
+              "hx4-coid");
+        bool carries = false;
+        for (std::size_t i = 0; i < g_log.size(); ++i) {
+            if (g_log[i].method == "POST" &&
+                g_log[i].body.find(hcoid) != std::string::npos)
+                carries = true;
+        }
+        Check(carries, "hx4-incident-id");
+        Check(Exists(r.dir + "/HALT"), "hx4-halt");
+    }
+    // T4. Incident identity (doc 06 sec. 6.1b): two MEDIUM
+    // incidents on one symbol send two REAL closes under two
+    // distinct incident ids — the second never adopts the first's
+    // historical fill.
+    {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        r.deps.venue_gate = FakeVenue;
+        g_venue_open = 1;
+        g_venue_spread = 1;
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "ii-recover");
+        g_kill.spend_tier = 3;  // MEDIUM
+        g_positions.push_back(MkPos("AAPL", 100));
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 PlainReply("accepted", "0").c_str());
+        Check(g.Cycle(g_now), "ii-cycle1");
+        Check(CountMethod("POST", "/v2/orders") == 1,
+              "ii-first-close");
+        std::string coid1;
+        for (std::size_t i = 0; i < g_log.size(); ++i) {
+            if (g_log[i].method != "POST") continue;
+            std::size_t p =
+                g_log[i].body.find("client_order_id");
+            if (p != std::string::npos)
+                coid1 = g_log[i].body.substr(p, 96);
+        }
+        Check(!coid1.empty(), "ii-first-id");
+        // End incident 1: flat books finalize the FSM.
+        g_kill = jev::kill::KillInputs();
+        g_positions.clear();
+        Check(g.Cycle(g_now), "ii-cycle2");
+        Check(ReadWhole(r.dir + "/medium.txt") ==
+                  "FLATTENED",
+              "ii-incident1-done");
+        // Incident 2: operator reset + fresh exposure, later.
+        std::remove((r.dir + "/medium.txt").c_str());
+        g_positions.push_back(MkPos("AAPL", 100));
+        g_kill.spend_tier = 3;
+        g_now += 60000000000LL;
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 PlainReply("accepted", "0").c_str());
+        Check(g.Cycle(g_now), "ii-cycle3");
+        Check(CountMethod("POST", "/v2/orders") == 2,
+              "ii-second-close");
+        std::string coid2;
+        int posts = 0;
+        for (std::size_t i = 0; i < g_log.size(); ++i) {
+            if (g_log[i].method != "POST") continue;
+            if (++posts < 2) continue;
+            std::size_t p =
+                g_log[i].body.find("client_order_id");
+            if (p != std::string::npos)
+                coid2 = g_log[i].body.substr(p, 96);
+        }
+        Check(!coid2.empty() && coid2 != coid1,
+              "ii-distinct-incident-id");
+        char ebe[32];
+        std::snprintf(ebe, sizeof(ebe), "%lld", g_now);
+        Check(ReadWhole(r.dir + "/medium-incident.txt") ==
+                  std::string(ebe),
+              "ii-epoch-advanced");
+    }
+    // T5. HARD incident identity: crash-mid-HARD reuses the epoch
+    // (the in-flight close pre-flights found — never resent); a
+    // clean cycle after HALT-clear ends the incident, so the next
+    // HARD mints fresh and really closes.
+    {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "hi-recover");
+        g_kill.broker_auth_fail = true;  // HARD #1
+        g_positions.push_back(MkPos("SPY", 50));
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 HeldReply("filled", "50").c_str());
+        Check(!g.Cycle(g_now), "hi-hard1");
+        Check(CountMethod("POST", "/v2/orders") == 1,
+              "hi-first-close");
+        std::string coid1;
+        for (std::size_t i = 0; i < g_log.size(); ++i) {
+            if (g_log[i].method != "POST") continue;
+            std::size_t p =
+                g_log[i].body.find("client_order_id");
+            if (p != std::string::npos)
+                coid1 = g_log[i].body.substr(p, 96);
+        }
+        Check(!coid1.empty(), "hi-first-id");
+        char ebe[32];
+        std::snprintf(ebe, sizeof(ebe), "%lld", g_now);
+        Check(ReadWhole(r.dir + "/hard-incident.txt").find(ebe) ==
+                  0,
+              "hi-epoch-minted");
+        // Crash-mid-HARD restart (HALT still present): the close
+        // pre-flights FOUND -> adopted, zero new POSTs, same epoch.
+        G0Runner g2(r.cfg, r.deps);
+        Check(g2.Recover(nullptr), "hi-recover2");
+        PushRule("GET", "by_client_order_id", 200,
+                 HeldReply("filled", "50").c_str());
+        Check(!g2.Cycle(g_now), "hi-hard2");
+        Check(CountMethod("POST", "/v2/orders") == 1,
+              "hi-no-resend");
+        Check(ReadWhole(r.dir + "/hard-incident.txt").find(ebe) ==
+                  0,
+              "hi-epoch-reused");
+        // Operator ends the incident: HALT cleared + clean cycle
+        // truncates the file; the next HARD mints fresh.
+        std::remove((r.dir + "/HALT").c_str());
+        g_kill = jev::kill::KillInputs();
+        g_positions.clear();
+        Check(g2.Cycle(g_now), "hi-clean");
+        Check(ReadWhole(r.dir + "/hard-incident.txt").empty(),
+              "hi-incident-cleared");
+        g_kill.broker_auth_fail = true;  // HARD #2
+        g_positions.push_back(MkPos("SPY", 50));
+        g_now += 60000000000LL;
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 HeldReply("filled", "50").c_str());
+        Check(!g2.Cycle(g_now), "hi-hard3");
+        Check(CountMethod("POST", "/v2/orders") == 2,
+              "hi-second-close");
+        std::string coid2;
+        int posts = 0;
+        for (std::size_t i = 0; i < g_log.size(); ++i) {
+            if (g_log[i].method != "POST") continue;
+            if (++posts < 2) continue;
+            std::size_t p =
+                g_log[i].body.find("client_order_id");
+            if (p != std::string::npos)
+                coid2 = g_log[i].body.substr(p, 96);
+        }
+        Check(!coid2.empty() && coid2 != coid1,
+              "hi-distinct-incident-id");
+    }
+    // T7. Quarantine (doc 06 locked): a done_for_day entry freezes
+    // its symbol on first sighting (one row), waits (no mint, no
+    // terminal), and repeats stay silent.
+    {
+        Rig r;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-420", "AAPL", 0, 0, 100,
+                          3, 50, &cid)
+                   .empty(),
+              "qz-image");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "qz-recover");
+        PushRule("GET", "by_client_order_id", 200,
+                 "{\"id\":\"0193abcd-1234-5678-9abc-"
+                 "def012345678\",\"status\":\"done_for_day\","
+                 "\"filled_qty\":\"50\"}");
+        Check(g.Cycle(g_now), "qz-cycle1");
+        Check(ReadWhole(r.dir + "/freeze.txt").find("AAPL") !=
+                  std::string::npos,
+              "qz-frozen");
+        Check(CountMethod("POST", "/v2/orders") == 0,
+              "qz-no-mint");
+        std::vector<jev::journal::Row> rows;
+        int qrows = 0;
+        if (jev::runner::JournalLoad(
+                (r.dir + "/journal.jsonl").c_str(), &rows)) {
+            for (std::size_t i = 0; i < rows.size(); ++i) {
+                if (rows[i].kind == "reconcile") ++qrows;
+            }
+        }
+        Check(qrows == 1, "qz-one-row");
+        // Second sighting (next S2 cadence): silent.
+        g_now += 901LL * 1000000000LL;
+        PushRule("GET", "by_client_order_id", 200,
+                 "{\"id\":\"0193abcd-1234-5678-9abc-"
+                 "def012345678\",\"status\":\"done_for_day\","
+                 "\"filled_qty\":\"50\"}");
+        Check(g.Cycle(g_now), "qz-cycle2");
+        rows.clear();
+        qrows = 0;
+        if (jev::runner::JournalLoad(
+                (r.dir + "/journal.jsonl").c_str(), &rows)) {
+            for (std::size_t i = 0; i < rows.size(); ++i) {
+                if (rows[i].kind == "reconcile") ++qrows;
+            }
+        }
+        Check(qrows == 1, "qz-silent-repeat");
+        Check(CountMethod("POST", "/v2/orders") == 0,
+              "qz-still-no-mint");
+    }
+    // T7b. A replaced EXIT mints NO new identity (the replacement
+    // id is unknown — never silently adopted, never duplicated):
+    // freeze + wait, zero POSTs.
+    {
+        Rig r;
+        std::string xid;
+        Check(!CrashImage(r.dir, "intent-421", "AAPL", 0, 1, 100,
+                          9, 0, &xid)
+                   .empty(),
+              "qz2-image");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "qz2-recover");
+        PushRule("GET", "by_client_order_id", 200,
+                 "{\"id\":\"0193abcd-1234-5678-9abc-"
+                 "def012345678\",\"status\":\"replaced\","
+                 "\"filled_qty\":\"10\"}");
+        Check(g.Cycle(g_now), "qz2-cycle");
+        Check(CountMethod("POST", "/v2/orders") == 0,
+              "qz2-no-sub-identity");
+        Check(ReadWhole(r.dir + "/freeze.txt").find("AAPL") !=
+                  std::string::npos,
+              "qz2-frozen");
     }
     if (g_fail == 0)
         std::printf("RUNNER SUITE: ALL PASS (%d checks)\n", g_count);

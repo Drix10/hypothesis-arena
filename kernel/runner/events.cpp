@@ -81,10 +81,16 @@ bool IsFillWord(const char* t) {
            std::strcmp(t, "partial_fill") == 0;
 }
 bool IsLifeWord(const char* t) {
+    // Identity-only lifecycle words (doc 06 locked): force REST,
+    // never a direct router verdict. held (venue-held) + stopped
+    // (trade guaranteed, not yet occurred) are live working states
+    // per the current trade_updates contract — same treatment.
     const char* const ws[] = {"new",
                               "pending_new",
                               "accepted",
                               "calculated",
+                              "held",
+                              "stopped",
                               "canceled",
                               "rejected",
                               "expired",

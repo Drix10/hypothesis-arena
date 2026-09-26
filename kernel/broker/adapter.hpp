@@ -90,6 +90,12 @@ struct OrderQuery {
                             // on this, not just filled/cancelled:
                             // replaced/done_for_day/suspended etc.
                             // are never silently collapsed)
+    char status_raw[32]{};  // verbatim venue status word (zero-
+                             // filled when absent/unparseable). The
+                             // runner quarantines done_for_day /
+                             // calculated / replaced off this (doc
+                             // 06 locked) — the normalized state
+                             // alone cannot carry that distinction.
     bool protection_active = false;  // legs strictly proven (nested)
     bool bracket_class = false;  // order_class bracket + TP/SL params
                                  // held as a unit, legs unexpanded
