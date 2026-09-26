@@ -184,6 +184,26 @@ static jev::exec::OrderIntent GoodIntent(const char* id, const char* sym,
                       : jev::risk::IntentKind::ENTRY;
     return in;
 }
+// Real 26-char ULIDs (Crockford base32, ms + randomness) — the
+// router only orders genuine ULIDs; hand-typed lookalikes of the
+// wrong length fall into the caller-seq family (seq-conflict).
+static std::string MkUlid(std::uint64_t ms, unsigned rand) {
+    static const char* kC = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+    char u[27];
+    std::uint64_t m = ms;
+    for (int i = 9; i >= 0; --i) {
+        u[i] = kC[m & 31u];
+        m >>= 5;
+    }
+    unsigned r = rand;
+    for (int i = 25; i >= 10; --i) {
+        u[i] = kC[r & 31u];
+        r = r * 1103515245u + 12345u;
+        r >>= 7;
+    }
+    u[26] = '\0';
+    return u;
+}
 struct Rig {
     std::string dir;
     jev::runner::RunnerConfig cfg;
@@ -327,11 +347,16 @@ int main() {
         jev::runner::SseEvent e4;
         Check(!w.Next(&e4) && w.errors() == 1, "sse-overlong");
         // Classification: fill/life/bust/unknown/untagged.
+        // Payloads use the real trade-event shape: per-event qty
+        // beside the nested order object carrying the CUMULATIVE
+        // filled_qty (the ONLY quantity the seam may use).
         jev::runner::SseEvent f;
         f.id = "01J000000000000000000000009";
         f.type = "partial_fill";
         f.data =
-            "{\"client_order_id\":\"abc123\",\"qty\":\"40\"}";
+            "{\"event\":\"partial_fill\",\"order\":{\"client_"
+            "order_id\":\"abc123\",\"filled_qty\":\"40\"},"
+            "\"qty\":\"40\"}";
         auto mf = jev::runner::MapTradeEvent(f);
         Check(mf.kind == jev::runner::StreamKind::FILL &&
                   mf.filled_qty == 40 &&
@@ -339,6 +364,25 @@ int main() {
                   std::string(mf.event_id) ==
                       "01J000000000000000000000009",
               "map-fill");
+        // Cumulative wins over per-event qty: event filled 30 of
+        // THIS execution, order cumulative is 70 (40 + 30). The
+        // old seam read 30 here (last-write-wins understatement).
+        f.data =
+            "{\"event\":\"partial_fill\",\"order\":{\"client_"
+            "order_id\":\"abc123\",\"filled_qty\":\"70\"},"
+            "\"qty\":\"30\"}";
+        auto mc = jev::runner::MapTradeEvent(f);
+        Check(mc.kind == jev::runner::StreamKind::FILL &&
+                  mc.filled_qty == 70,
+              "map-cumulative-not-event-qty");
+        // No cumulative inside the order object -> NONE: reconcile
+        // instead of inventing from event qty.
+        f.data =
+            "{\"event\":\"partial_fill\",\"order\":{\"client_"
+            "order_id\":\"abc123\"},\"qty\":\"30\"}";
+        Check(jev::runner::MapTradeEvent(f).kind ==
+                  jev::runner::StreamKind::NONE,
+              "map-no-cumulative");
         f.type = "canceled";
         auto ml = jev::runner::MapTradeEvent(f);
         Check(ml.kind == jev::runner::StreamKind::LIFE &&
@@ -357,7 +401,9 @@ int main() {
                   jev::runner::StreamKind::NONE,
               "map-untagged");
         f.data =
-            "{\"client_order_id\":\"abc123\",\"qty\":\"x\"}";
+            "{\"event\":\"partial_fill\",\"order\":{\"client_"
+            "order_id\":\"abc123\",\"filled_qty\":\"x\"},"
+            "\"qty\":\"40\"}";
         Check(jev::runner::MapTradeEvent(f).kind ==
                   jev::runner::StreamKind::NONE,
               "map-badqty");
@@ -506,8 +552,10 @@ int main() {
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "st-recover");
         g_stream =
-            "event: partial_fill\ndata: {\"client_order_id\":\"" +
-            cid + "\",\"qty\":\"40\"}\n\n";
+            "event: partial_fill\ndata: {\"event\":\"partial_"
+            "fill\",\"order\":{\"client_order_id\":\"" +
+            cid +
+            "\",\"filled_qty\":\"40\"},\"qty\":\"40\"}\n\n";
         PushRule("GET", "by_client_order_id", 200,
                  DeadReply("40").c_str());
         PushRule("GET", "by_client_order_id", 404, "{}");
@@ -550,8 +598,10 @@ int main() {
         Check(g.Recover(nullptr), "stb-recover");
         g_stream =
             "id: 01J000000000000000000000003\nevent: partial_fill\n"
-            "data: {\"client_order_id\":\"" +
-            cid + "\",\"qty\":\"40\"}\n\n";
+            "data: {\"event\":\"partial_fill\",\"order\":{\""
+            "client_order_id\":\"" +
+            cid +
+            "\",\"filled_qty\":\"40\"},\"qty\":\"40\"}\n\n";
         Check(g.Cycle(g_now), "stb-cycle");
         const auto* s = g.Find("intent-021");
         Check(s && s->done &&
@@ -573,6 +623,184 @@ int main() {
                       "01J000000000000000000000003") !=
                       std::string::npos,
               "st-ulid-stamped");
+        // Durable cursor tracks the last stamped ULID.
+        std::string cur;
+        FILE* cf =
+            std::fopen((r.dir + "/cursor.txt").c_str(), "rb");
+        char cbuf[64] = {0};
+        std::size_t cn =
+            cf ? std::fread(cbuf, 1, sizeof(cbuf) - 1, cf) : 0;
+        if (cf) std::fclose(cf);
+        if (cn > 0) cur = cbuf;
+        Check(cur == "01J000000000000000000000003",
+              "st-cursor-durable");
+        G0Runner g2(r.cfg, r.deps);
+        Check(g2.Recover(nullptr) &&
+                  g2.cursor() ==
+                      "01J000000000000000000000003",
+              "st-cursor-reloads");
+    }
+    // 4c. Two fills, one cycle, cumulative (40 then 70 — NOT 30):
+    // both arrival orders converge identically (newest ULID wins
+    // position; the queue fully drains; no POST). The shaped
+    // PARTIAL is unconfirmed by definition, so with dead transport
+    // both orders reconcile-exhaust identically (cf. 4b) — the
+    // seam's job is preservation + cumulative sourcing, the
+    // router's is authority/convergence.
+    for (int ord = 0; ord < 2; ++ord) {
+        Rig r;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-022", "SPY", 0, 1,
+                          100, 9, 0, &cid)
+                   .empty(),
+              "cc-image");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "cc-recover");
+        std::string ua = MkUlid(100, 7);   // older publication
+        std::string ub = MkUlid(200, 9);   // newer publication
+        std::string ea =
+            "id: " + ua + "\nevent: partial_fill\n"
+            "data: {\"event\":\"partial_fill\",\"order\":{\""
+            "client_order_id\":\"" +
+            cid +
+            "\",\"filled_qty\":\"40\"},\"qty\":\"40\"}\n\n";
+        std::string eb =
+            "id: " + ub + "\nevent: partial_fill\n"
+            "data: {\"event\":\"partial_fill\",\"order\":{\""
+            "client_order_id\":\"" +
+            cid +
+            "\",\"filled_qty\":\"70\"},\"qty\":\"30\"}\n\n";
+        // NOTE: B's per-event qty is 30 while cumulative is 70 —
+        // the old seam shaped 30 here (last-write-wins).
+        g_stream = (ord == 0) ? (ea + eb) : (eb + ea);
+        Check(g.Cycle(g_now), "cc-cycle");
+        const auto* s = g.Find("intent-022");
+        Check(s && s->done &&
+                  s->m.state ==
+                      jev::exec::RouteState::UNKNOWN_FROZEN &&
+                  std::string(s->m.last_event_id) == ub &&
+                  s->sev_n_ == 0,
+              ord == 0 ? "cc-ordered-converges"
+                       : "cc-reversed-converges");
+        // S2 + the reconcile-exhaust retries (all 500): identical
+        // count in both orders proves identical convergence.
+        Check(CountMethod("GET", "by_client_order_id") == 3,
+              ord == 0 ? "cc-same-lookups" : "cc-same-lookups-rev");
+        Check(CountMethod("POST", "/v2/orders") == 0,
+              ord == 0 ? "cc-no-post" : "cc-no-post-rev");
+    }
+    // 4d. Duplicate delivery: the same ULID twice stamps once.
+    {
+        Rig r;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-023", "SPY", 0, 1,
+                          100, 9, 0, &cid)
+                   .empty(),
+              "du-image");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "du-recover");
+        std::string ud = MkUlid(300, 11);
+        std::string one =
+            "id: " + ud + "\nevent: partial_fill\n"
+            "data: {\"event\":\"partial_fill\",\"order\":{\""
+            "client_order_id\":\"" +
+            cid +
+            "\",\"filled_qty\":\"40\"},\"qty\":\"40\"}\n\n";
+        g_stream = one + one;  // venue redelivers
+        Check(g.Cycle(g_now), "du-cycle");
+        const auto* s = g.Find("intent-023");
+        // One stamp + one shape (the redelivery drops at the seam):
+        // same reconcile-exhaust terminal as a single delivery.
+        Check(s && s->done &&
+                  s->m.state ==
+                      jev::exec::RouteState::UNKNOWN_FROZEN &&
+                  std::string(s->m.last_event_id) == ud &&
+                  s->sev_n_ == 0,
+              "du-stamps-once");
+    }
+    // 4e. Queue overflow (9 events, cap 8): position is never
+    // silently lost — alert + a real lookup on the NEXT cycle
+    // (S2 already fired this cycle, so the nudge must cause one
+    // more). LIFE events (no shaping, just stamp + forced REST)
+    // keep the slot parked so the lookup count is exact: S2#1 +
+    // nudge#2 + one refresh per stamped head (8). No POST ever.
+    {
+        Rig r;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-024", "SPY", 0, 1,
+                          100, 9, 0, &cid)
+                   .empty(),
+              "ov-image");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "ov-recover");
+        PushRule("GET", "by_client_order_id", 500, "{}");
+        Check(g.Cycle(g_now), "ov-cycle1");  // S2 GET#1
+        Check(CountMethod("GET", "by_client_order_id") == 1,
+              "ov-s2-first");
+        g_stream.clear();
+        for (int k = 0; k < 9; ++k) {
+            std::string uk = MkUlid(400 + (std::uint64_t)k, 13);
+            g_stream += "id: " + uk +
+                        "\nevent: accepted\ndata: "
+                        "{\"event\":\"accepted\",\"order\":{\""
+                        "client_order_id\":\"" +
+                        cid + "\"}}" + "\n\n";
+        }
+        Check(g.Cycle(g_now), "ov-cycle2");
+        FILE* af =
+            std::fopen((r.dir + "/alerts.jsonl").c_str(), "rb");
+        char abuf[4096] = {0};
+        std::size_t an =
+            af ? std::fread(abuf, 1, sizeof(abuf) - 1, af) : 0;
+        if (af) std::fclose(af);
+        Check(an > 0 &&
+                  std::string(abuf).find("stream-overflow") !=
+                      std::string::npos,
+              "ov-alerts");
+        Check(CountMethod("GET", "by_client_order_id") == 10,
+              "ov-forces-rest");
+        const auto* os = g.Find("intent-024");
+        Check(os && !os->done &&
+                  os->m.state == jev::exec::RouteState::EXIT_SENT &&
+                  os->sev_n_ == 0,
+              "ov-parked-drained");
+        Check(CountMethod("POST", "/v2/orders") == 0,
+              "ov-no-post");
+    }
+    // 4f. Parser failure (overlong line): alert + reconcile row +
+    // a real lookup on the next cycle (nudge proven, not assumed).
+    {
+        Rig r;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-025", "SPY", 0, 1,
+                          100, 9, 0, &cid)
+                   .empty(),
+              "pe-image");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "pe-recover");
+        PushRule("GET", "by_client_order_id", 500, "{}");
+        Check(g.Cycle(g_now), "pe-cycle1");  // S2 GET#1
+        g_stream = std::string(5000, 'x') + "\n\n";
+        PushRule("GET", "by_client_order_id", 500, "{}");
+        Check(g.Cycle(g_now), "pe-cycle2");
+        FILE* af =
+            std::fopen((r.dir + "/alerts.jsonl").c_str(), "rb");
+        char abuf[4096] = {0};
+        std::size_t an =
+            af ? std::fread(abuf, 1, sizeof(abuf) - 1, af) : 0;
+        if (af) std::fclose(af);
+        Check(an > 0 &&
+                  std::string(abuf).find("sse-error") !=
+                      std::string::npos,
+              "pe-alerts");
+        std::vector<jev::journal::Row> rows;
+        Check(jev::runner::JournalLoad(
+                      (r.dir + "/journal.jsonl").c_str(), &rows) &&
+                  !rows.empty() &&
+                  rows.back().kind == "reconcile",
+              "pe-reconcile-row");
+        Check(CountMethod("GET", "by_client_order_id") == 2,
+              "pe-nudges-s2");
     }
     // 5. Exit E2E + dead remainder: X posts 100 -> DEAD+40 -> Y posts
     // exactly 60 -> CLOSED at 100.
@@ -715,8 +943,10 @@ int main() {
         Check(g.Cycle(g_now), "b-cycle1");  // S2 forced GET#1 (500)
         g_stream =
             "id: 01J000000000000000000000002\nevent: trade_bust\n"
-            "data: {\"client_order_id\":\"" +
-            cid + "\",\"qty\":\"40\"}\n\n";
+            "data: {\"event\":\"trade_bust\",\"order\":{\""
+            "client_order_id\":\"" +
+            cid +
+            "\",\"filled_qty\":\"40\"},\"qty\":\"40\"}\n\n";
         Check(g.Cycle(g_now), "b-cycle2");
         Check(CountMethod("GET", "by_client_order_id") == 2,
               "b-forces-rest");

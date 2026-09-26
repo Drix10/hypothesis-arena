@@ -59,6 +59,18 @@ struct RunnerConfig {
 // Per-intent durable slot (machine + follow-up inbox). Snapshot file
 // persists m after every state-changing step; inbox is memory-only
 // (a crash re-derives it via reconcile-first — never a resend).
+// Stream events queue per slot (bounded FIFO, arrival order): every
+// event is stamped individually — the seam never collapses several
+// same-order events into one observation (40+30 stays 70, never the
+// last write winning). Duplicates (id == applied ULID, or already
+// queued) drop at the seam; overflow forces REST + alerts instead
+// of silently losing position.
+struct StreamEvt {
+    char id[33]{};
+    StreamKind kind = StreamKind::NONE;
+    std::int64_t cumulative = 0;  // FILL: order.filled_qty
+    bool force = false;           // LIFE/BUST: REST once stamped
+};
 struct Slot {
     exec::OrderIntent intent;
     exec::RouteMachine m;
@@ -86,13 +98,15 @@ struct Slot {
     // failure blocking fresh reconciliation).
     bool has_forced_q = false;
     broker::OrderQuery forced_q;
-    // Stream staging (per-cycle): a pending ULID stamps position
-    // first; fills shape per state after the stamp; LIFE/BUST set
-    // force_flag (REST now, once stamped).
-    char pending_event[33]{};
-    bool has_stream_fill = false;
-    std::int64_t stream_fill_qty = 0;
-    bool force_flag = false;
+    // Stream queue (arrival FIFO, one stamped per drive iteration).
+    enum { kStreamQ = 8 };
+    StreamEvt sev_[kStreamQ];
+    int sev_n_ = 0;
+    // A stamped FILL waits here as cumulative qty for the shaping
+    // iteration (stamp and shape are separate RouteSteps).
+    bool has_shaping = false;
+    std::int64_t shaping_qty = 0;
+    bool stream_overflow_ = false;  // queue full: REST + alert
     // Confirm-loop guard (CANCEL_SENT re-checks are budget-free in
     // the router; the runner bounds them and fails explicitly).
     int confirm_tries = 0;
@@ -123,6 +137,12 @@ class G0Runner {
     bool Summarize(Summary* out) const;
     std::size_t slots() const { return slots_.size(); }
     const Slot* Find(const char* intent_id) const;
+    const std::string& cursor() const { return cursor_; }
+    // Durable stream cursor (last stamped venue ULID, "" when
+    // none): the Phase-4 transport resumes live SSE with this as
+    // since_id (replay, not re-subscribe-from-now). Missing file =
+    // empty cursor (first run); cursor loss only replays more (
+    // duplicates drop at the seam), never less.
 
    private:
     RunnerConfig cfg_;
@@ -135,6 +155,9 @@ class G0Runner {
     bool halt_announced_ = false;
     long long last_cycle_ns_ = 0;
     SseParser sse_;
+    long long sse_seen_ = 0;  // parser errors already acted on
+    std::string cursor_;      // last stamped ULID (durable)
+    bool cursor_dirty_ = false;
 
     std::string P(const char* name) const;
     std::string SnapPath(const char* intent_id) const;

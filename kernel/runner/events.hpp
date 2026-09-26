@@ -54,14 +54,15 @@ class SseParser {
 
 // ---- trade-event mapping -------------------------------------------
 // Maps one SSE trade event onto neutral, attributable facts. Fills
-// carry qty; lifecycle words carry identity only (NO router verdict
-// — the runner funnels actual state through forced REST); bust and
-// correct ALWAYS force authoritative REST reconciliation (a busted
-// fill must not linger as monotonic truth). Unknown types or
-// unattributable events (no client order id) -> kind NONE (ignored).
-// The RUNNER shapes these per machine state (query-shaped obs for
-// QUERY_SENT, close-shaped obs for EXIT_SENT); this module never
-// decides routing.
+// carry the CUMULATIVE order quantity (order.filled_qty — never the
+// per-event qty); lifecycle words carry identity only (NO router
+// verdict — the runner funnels actual state through forced REST);
+// bust and correct ALWAYS force authoritative REST reconciliation
+// (a busted fill must not linger as monotonic truth). Unknown types
+// or unattributable events (no client order id) -> kind NONE
+// (ignored). The RUNNER shapes these per machine state
+// (query-shaped obs for QUERY_SENT, close-shaped obs for EXIT_SENT);
+// this module never decides routing.
 enum class StreamKind : std::uint8_t {
     NONE = 0,  // unknown/unattributable: ignore
     FILL = 1,  // fill / partial_fill + strict qty
@@ -72,7 +73,11 @@ struct StreamObs {
     StreamKind kind = StreamKind::NONE;
     char client_id[65]{};
     char event_id[33]{};  // SSE id (venue ULID when present)
-    std::int64_t filled_qty = 0;  // FILL only
+    // FILL only: CUMULATIVE order filled_qty (order-level, what
+    // the router floors on). The per-event qty is DELIBERATELY
+    // not extracted — treating event qty as cumulative understates
+    // fills (40+30 would read as 30, not 70).
+    std::int64_t filled_qty = 0;
 };
 StreamObs MapTradeEvent(const SseEvent& ev);
 

@@ -9,9 +9,9 @@ namespace runner {
 namespace {
 // Bounded needle extract: first "key":"value" (charset + max len
 // enforced). False = absent/malformed/overlong.
-bool NeedleStr(const char* body, const char* key, char* out,
-               std::size_t n, bool digits_only) {
-    if (!body || !key || !out || n == 0) return false;
+bool NeedleStrAt(const char* from, const char* key, char* out,
+                 std::size_t n, bool digits_only) {
+    if (!from || !key || !out || n == 0) return false;
     char needle[64];
     std::size_t k = 0;
     needle[k++] = '"';
@@ -24,7 +24,7 @@ bool NeedleStr(const char* body, const char* key, char* out,
     needle[k++] = ':';
     needle[k++] = '"';
     needle[k] = '\0';
-    for (const char* p = body; *p; ++p) {
+    for (const char* p = from; *p; ++p) {
         const char* a = p;
         const char* b = needle;
         while (*a && *b && *a == *b) {
@@ -48,6 +48,31 @@ bool NeedleStr(const char* body, const char* key, char* out,
         if (a[i] != '"' || i == 0) return false;
         out[i] = '\0';
         return true;
+    }
+    return false;
+}
+bool NeedleStr(const char* body, const char* key, char* out,
+               std::size_t n, bool digits_only) {
+    if (!body) return false;
+    return NeedleStrAt(body, key, out, n, digits_only);
+}
+// Anchored extract: the FIRST key occurrence at/after the anchor
+// substring (for nested objects — e.g. inside "order"). False
+// when the anchor is absent (strict: never fall back to an outer
+// scope that could carry a same-named field).
+bool NeedleStrAfter(const char* body, const char* anchor,
+                    const char* key, char* out, std::size_t n,
+                    bool digits_only) {
+    if (!body || !anchor) return false;
+    for (const char* p = body; *p; ++p) {
+        const char* a = p;
+        const char* b = anchor;
+        while (*a && *b && *a == *b) {
+            ++a;
+            ++b;
+        }
+        if (*b) continue;
+        return NeedleStrAt(a, key, out, n, digits_only);
     }
     return false;
 }
@@ -192,10 +217,16 @@ StreamObs MapTradeEvent(const SseEvent& ev) {
         so.kind = StreamKind::LIFE;
         return so;
     }
-    // Fill words carry qty (strict digits); malformed qty -> NONE
-    // (reconcile instead, never silent zero).
+    // Fill words carry the CUMULATIVE order quantity
+    // (order.filled_qty) — NEVER the per-event qty. Alpaca's
+    // partial_fill.qty is the shares filled by THAT event; only
+    // order.filled_qty is the order-level cumulative the router
+    // floors on. Absent/unparseable cumulative -> NONE (reconcile
+    // instead, never silent zero, never event-qty-as-cumulative).
     char qbuf[20] = {0};
-    if (!NeedleStr(d, "qty", qbuf, sizeof(qbuf), true)) return so;
+    if (!NeedleStrAfter(d, "\"order\"", "filled_qty", qbuf,
+                        sizeof(qbuf), true))
+        return so;
     long long q = 0;
     for (int i = 0; qbuf[i]; ++i) q = q * 10 + (qbuf[i] - '0');
     if (q <= 0 || q > 999999999) return so;

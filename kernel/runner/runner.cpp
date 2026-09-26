@@ -34,6 +34,13 @@ bool IsTerminalState(exec::RouteState st) {
            st == exec::RouteState::UNKNOWN_FROZEN ||
            st == exec::RouteState::CLOSED;
 }
+// Pop the stamped/consumed queue head (bounded shift, max 8).
+void ShiftStreamQ(Slot& s) {
+    if (s.sev_n_ <= 0) return;
+    for (int i = 0; i + 1 < s.sev_n_; ++i) s.sev_[i] = s.sev_[i + 1];
+    s.sev_[s.sev_n_ - 1] = StreamEvt();
+    --s.sev_n_;
+}
 // Journal body vocabulary (bounded, pre-redacted, <=280 chars).
 bool BodyFor(const char* kind, const exec::OrderIntent& in,
              long long qty, const char* note, char* out,
@@ -202,6 +209,13 @@ bool G0Runner::Recover(const char** reason) {
         if (reason) *reason = kChain;
         return false;
     }
+    // Durable stream cursor (missing = first run, empty cursor).
+    std::vector<std::string> clns;
+    if (ReadLines(P("cursor.txt").c_str(), &clns) && !clns.empty())
+        cursor_ = clns[0];
+    else
+        cursor_.clear();
+    cursor_dirty_ = false;
     // Active intents = journal "intent" rows without a terminal row
     // (fill/cancel/unknown/exit). Each needs BOTH its crash image
     // (machine) and its intent file (economics — qty/stop/tp are
@@ -695,20 +709,74 @@ bool G0Runner::Cycle(long long now_ns) {
                 Slot& s = slots_[i];
                 if (!s.active || s.done) continue;
                 if (!SameId(s.m.client_id, so.client_id)) continue;
-                if (so.event_id[0]) {
-                    CopyStr(s.pending_event, sizeof(s.pending_event), so.event_id);
+                // Duplicate delivery drops at the seam: already
+                // applied (== machine ULID) or already queued.
+                // Overflow never silently loses position: flag +
+                // force REST + alert at the slot pass below.
+                if (so.event_id[0] != '\0' &&
+                    std::strcmp(so.event_id, s.m.last_event_id) ==
+                        0)
+                    continue;
+                bool dup = false;
+                // ULID-less events are never deduped (no identity
+                // to compare — each one stamps/shapes in turn).
+                if (so.event_id[0] != '\0') {
+                    for (int qi = 0; qi < s.sev_n_; ++qi) {
+                        if (std::strcmp(s.sev_[qi].id, so.event_id) ==
+                            0) {
+                            dup = true;
+                            break;
+                        }
+                    }
                 }
-                if (so.kind == StreamKind::FILL) {
-                    s.has_stream_fill = true;
-                    s.stream_fill_qty = so.filled_qty;
-                } else {
-                    s.force_flag = true;  // LIFE/BUST: REST now
+                if (dup) continue;
+                if (s.sev_n_ >= Slot::kStreamQ) {
+                    s.stream_overflow_ = true;
+                    continue;
                 }
+                StreamEvt qe;
+                CopyStr(qe.id, sizeof(qe.id), so.event_id);
+                qe.kind = so.kind;
+                qe.cumulative = so.filled_qty;  // order cumulative
+                qe.force = (so.kind != StreamKind::FILL);
+                s.sev_[s.sev_n_++] = qe;
+            }
+        }
+        // Parser failures are control-flow, not just a counter:
+        // alert + reconcile journal row + nudge every live slot to
+        // a real lookup (a good held answer still suppresses the
+        // extra query — MaybeForce owns that call).
+        if (sse_.errors() != sse_seen_) {
+            sse_seen_ = sse_.errors();
+            Alert(P("alerts.jsonl").c_str(), "FEED", "sse-error",
+                  "parser dropped input; reconciling", now_ns);
+            char ebody[280];
+            std::snprintf(ebody, sizeof(ebody),
+                            "sse-errors count=%lld", sse_seen_);
+            if (jev::journal::RedactionOk(ebody))
+                JournalWrite("reconcile", "runner", ebody,
+                             now_ns);
+            for (std::size_t i = 0; i < slots_.size(); ++i) {
+                if (slots_[i].active && !slots_[i].done)
+                    slots_[i].last_s2_ns = 0;
             }
         }
     }
     // 4. Drive every slot (bounded iterations; persist on change).
     // S2/refresh runs FIRST so fresh answers feed this same cycle.
+    // Overflow (queue full dropped position) fails closed here:
+    // alert + force a real lookup on the next pass.
+    for (std::size_t i = 0; i < slots_.size(); ++i) {
+        Slot& s = slots_[i];
+        if (!s.active || s.done) continue;
+        if (s.stream_overflow_) {
+            s.stream_overflow_ = false;
+            Alert(P("alerts.jsonl").c_str(), "FEED",
+                  "stream-overflow",
+                  s.intent.intent_id, now_ns);
+            s.last_s2_ns = 0;
+        }
+    }
     for (std::size_t i = 0; i < slots_.size(); ++i) {
         Slot& s = slots_[i];
         if (!s.active || s.done) continue;
@@ -793,10 +861,29 @@ bool G0Runner::Cycle(long long now_ns) {
                 obs.executed = true;
                 s.executed_flag = false;
             }
-            // Pending stream event stamps first (position only).
-            if (s.pending_event[0]) {
+            // Queue head stamps first (one event per iteration —
+            // the seam never collapses several events into one).
+            // ULID-less heads carry no stampable identity: a FILL
+            // shapes directly from cumulative, LIFE/BUST funnel to
+            // forced REST now (never parked behind a stamp that
+            // cannot happen).
+            while (s.sev_n_ > 0 && s.sev_[0].id[0] == '\0') {
+                if (s.sev_[0].kind == StreamKind::FILL) {
+                    s.has_shaping = true;
+                    s.shaping_qty = s.sev_[0].cumulative;
+                } else if (!s.has_forced_q ||
+                           !s.forced_q.transport_ok) {
+                    s.forced_q =
+                        adapter_.QueryOnce(s.m.client_id);
+                    s.has_forced_q = true;
+                    s.last_s2_ns = now_ns;
+                }
+                ShiftStreamQ(s);
+            }
+            bool fed_event = (s.sev_n_ > 0);
+            if (fed_event) {
                 CopyStr(obs.event_id, sizeof(obs.event_id),
-                        s.pending_event);
+                        s.sev_[0].id);
             }
             // Forced REST answer: consumed where the machine reads
             // it, else held. QUERY_SENT takes the query; EXIT states
@@ -805,12 +892,12 @@ bool G0Runner::Cycle(long long now_ns) {
             // positively proven protection verdict. Anything else
             // (or a failed lookup) holds for S2/refresh.
             bool fed_forced = false;
-            if (s.has_forced_q && !s.pending_event[0]) {
+            if (s.has_forced_q && !fed_event) {
                 if (s.m.state == exec::RouteState::QUERY_SENT) {
                     obs.adapter_responded = true;
                     obs.query = s.forced_q;
                     s.has_forced_q = false;
-                    s.has_stream_fill = false;  // REST supersedes
+                    s.has_shaping = false;  // REST supersedes
                     fed_forced = true;
                     have_answer = true;
                 } else if (s.m.state ==
@@ -823,7 +910,7 @@ bool G0Runner::Cycle(long long now_ns) {
                         obs.exit_responded = true;
                         obs.exit_ack = c;
                         s.has_forced_q = false;
-                        s.has_stream_fill = false;  // REST supersedes
+                        s.has_shaping = false;  // REST supersedes
                         fed_forced = true;
                         have_answer = true;
                     }
@@ -835,7 +922,7 @@ bool G0Runner::Cycle(long long now_ns) {
                     obs.cancel_confirmed = true;
                     obs.cancel_filled_qty = s.forced_q.filled_qty;
                     s.has_forced_q = false;
-                    s.has_stream_fill = false;  // REST supersedes
+                    s.has_shaping = false;  // REST supersedes
                     fed_forced = true;
                     have_answer = true;
                 } else if (s.m.state ==
@@ -847,21 +934,22 @@ bool G0Runner::Cycle(long long now_ns) {
                     obs.adapter_responded = true;
                     obs.repair_ok = true;
                     s.has_forced_q = false;
-                    s.has_stream_fill = false;  // REST supersedes
+                    s.has_shaping = false;  // REST supersedes
                     fed_forced = true;
                     have_answer = true;
                 }
             }
-            // Stream fill shaped per state (after any stamp step).
-            // REST answers always win ties (authoritative snapshot
-            // over event): shaping applies only with no query
-            // answer pending this iteration.
-            if (s.has_stream_fill && !s.pending_event[0] &&
-                !fed_forced && !have_answer) {
+            // A stamped FILL shapes here (CUMULATIVE order qty —
+            // never per-event qty). REST answers always win ties
+            // (authoritative snapshot over event): shaping applies
+            // only with no event stamped and no query answer pending
+            // this iteration.
+            if (s.has_shaping && !fed_event && !fed_forced &&
+                !have_answer) {
                 long long rem = s.intent.qty_shares -
                                 s.m.exit_closed_qty;
-                ShapedFill f =
-                    ShapeStreamFill(s.m.state, rem, s.stream_fill_qty);
+                ShapedFill f = ShapeStreamFill(s.m.state, rem,
+                                               s.shaping_qty);
                 if (f.feed_query) {
                     obs.adapter_responded = true;
                     obs.query = f.q;
@@ -873,37 +961,42 @@ bool G0Runner::Cycle(long long now_ns) {
                             obs.query.broker_order_id[bi] =
                                 s.m.broker_id[bi];
                     }
-                    s.has_stream_fill = false;
+                    s.has_shaping = false;
                 } else if (f.feed_close) {
                     obs.exit_responded = true;
                     obs.exit_ack = f.c;
-                    s.has_stream_fill = false;
+                    s.has_shaping = false;
                 }
             }
             exec::RouteOut o =
                 exec::RouteStep(s.m, s.intent, cfg_.venue, obs);
-            // Stamp accounting: a consumed pending event clears.
+            // Stamp accounting on the fed head: stamped -> shape
+            // (FILL cumulative) / force (LIFE/BUST) + advance the
+            // durable cursor; stale/duplicate verdict -> drop.
             // Bounded compare (both fields <= 32 + NUL).
-            if (s.pending_event[0]) {
+            if (fed_event && s.sev_n_ > 0) {
                 bool stamped = false;
+                const char* hid = s.sev_[0].id;
                 for (int k = 0;
-                     k < 33 &&
-                     s.pending_event[k] == o.next.last_event_id[k];
+                     k < 33 && hid[k] == o.next.last_event_id[k];
                      ++k) {
-                    if (s.pending_event[k] == '\0') {
+                    if (hid[k] == '\0') {
                         stamped = true;
                         break;
                     }
                 }
                 if (stamped) {
-                    s.pending_event[0] = '\0';
+                    if (s.sev_[0].kind == StreamKind::FILL) {
+                        s.has_shaping = true;
+                        s.shaping_qty = s.sev_[0].cumulative;
+                    }
                     // A stamped LIFE/BUST event triggers its forced
                     // REST now (one lookup, held for consumption;
-                    // S2 clock restarts so this never doubles). A held
-                    // FAILED answer refreshes (stale failure never
-                    // blocks fresh reconciliation); a good held answer
-                    // is never stacked.
-                    if (s.force_flag &&
+                    // S2 clock restarts so this never doubles). A
+                    // held FAILED answer refreshes (stale failure
+                    // never blocks fresh reconciliation); a good held
+                    // answer is never stacked.
+                    if (s.sev_[0].force &&
                         (!s.has_forced_q ||
                          !s.forced_q.transport_ok)) {
                         s.forced_q =
@@ -911,16 +1004,21 @@ bool G0Runner::Cycle(long long now_ns) {
                         s.has_forced_q = true;
                         s.last_s2_ns = now_ns;
                     }
-                    s.force_flag = false;
+                    if (hid[0] != '\0') {
+                        cursor_ = hid;
+                        cursor_dirty_ = true;
+                    }
+                    ShiftStreamQ(s);
                 } else if (o.action == exec::RouteAction::NONE &&
                            o.reason &&
                            (std::strcmp(o.reason,
                                         "exec:stale-event") == 0 ||
                             std::strcmp(o.reason,
                                         "exec:duplicate-event") ==
-                                0)) {
-                    s.pending_event[0] = '\0';  // old news: drop
-                    s.force_flag = false;
+                                0 ||
+                            std::strcmp(o.reason,
+                                        "exec:seq-conflict") == 0)) {
+                    ShiftStreamQ(s);  // old news: drop
                 }
             }
             bool changed = (o.next.state != s.m.state);
@@ -958,18 +1056,16 @@ bool G0Runner::Cycle(long long now_ns) {
                     }
                 }
             }
-            bool stream_live = (s.has_stream_fill ||
-                                s.pending_event[0] ||
-                                s.force_flag) &&
+            bool stream_live = (s.sev_n_ > 0 || s.has_shaping) &&
                                (s.m.state ==
                                     exec::RouteState::QUERY_SENT ||
                                 s.m.state ==
                                     exec::RouteState::EXIT_SENT ||
                                 s.m.state ==
                                     exec::RouteState::EXIT_EMERGENCY);
-            // Pending stamps feed every non-terminal state (position
+            // Queued stamps feed every non-terminal state (position
             // advances even while waiting), so they always count.
-            if (s.pending_event[0]) stream_live = true;
+            if (s.sev_n_ > 0) stream_live = true;
             if (o.action == exec::RouteAction::NONE && !changed &&
                 !s.has_journal && !s.has_ack && !s.has_query &&
                 !s.has_exit && !s.has_cancel_result &&
@@ -980,6 +1076,12 @@ bool G0Runner::Cycle(long long now_ns) {
         }
     }
     last_cycle_ns_ = now_ns;
+    // Durable cursor: best-effort (loss only replays more —
+    // duplicates drop at the seam — never less).
+    if (cursor_dirty_) {
+        AtomicWrite(P("cursor.txt").c_str(), cursor_.c_str());
+        cursor_dirty_ = false;
+    }
     return true;
 }
 
