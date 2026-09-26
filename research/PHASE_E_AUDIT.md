@@ -2750,3 +2750,60 @@ adapter. H2 stays downstream per sec. 13.5. P3.5 OPEN (human
 close); G0 NOT STARTED. Next report should be the P3.5 close
 candidate pending the Phase-4 wiring gate — no further audit
 cycle proposed.
+
+## Addendum 122 - Final safety pass (re-audit of 02b2dc3, 2c3f919)
+Four control-path blockers (three P0 + one P1), fixed with the
+router core untouched (no router file changed) and null transport
+kept. Protocol decided in plan first (5b6d171 amends doc 06 sec.
+6.1b). Hosted kernel/plane/evidence SUCCESS on 2c3f919 (stdlib =
+pre-existing collector failure). Suites: runner 551, broker 125,
+router 209, both modes + freeze PASS.
+1. MEDIUM re-entry (P0): the runner AUTO-CLEARS the closed
+   (FLATTENED) or stale (no local open AND no broker position)
+   incident — FSM file + epoch file — on any non-MEDIUM cycle, so
+   the next automatic trigger re-enters fresh with a NEW epoch; no
+   operator file edit exists in the loop. Crash-mid-incident keeps
+   in-progress files (exposure present), so its epoch is reused; a
+   FLATTENED file seen WITH live exposure is stale (clear + fresh
+   enter with a medium-re-enter alert), never suppression. Seam
+   failure counts as exposure (never clear what cannot be seen).
+   Regression: T4 reworked into R1 — second close really sent
+   with a distinct id and zero manual deletions.
+2. HARD broker-qty authority (P0): the slot path closes the SIGNED
+   broker qty uncovered by reconciled exits, in the broker
+   direction; local/broker disagreement journals drift but never
+   changes the qty (phantom-local with broker-flat closes
+   NOTHING + alerts; direction mismatch closes the actual exposure
+   + alerts). Position-loop ENTRY symbols stay slot-path-owned
+   (sized from broker — no re-close); exit-only symbols reconcile
+   all exits and close only the remainder. Local-open sizing is
+   the journaled fallback when the seam is absent/failing.
+   Regressions R2a-d: +100/+50 closes 50; +100/+150 closes 150;
+   +100/-100 closes BUY 100 + drift alert; flat/+100 closes 100 —
+   exactly one POST each.
+3. HARD remainder identity (P0): HardCloseOnce chains
+   deterministically — found-sufficient/live adopts; found-short
+   terminal mints hard-<epoch>-<SYM>-<remaining> (pure,
+   pre-flighted, strictly-decreasing, never colliding with the
+   suffix-less primary; primary-absent still posts the primary);
+   transport failure waits; the 4-round cap freezes. Same rule on
+   every path including EXIT replacement (shared function).
+   Regression R3: primary-100 FILLED-40 terminal -> restart (same
+   incident, HALT kept) sends exactly one 60-share remainder under
+   a distinct id; a third restart sends nothing.
+4. Multiple EXIT coherence (P1): CollectCoverExits replaces
+   first-only sampling everywhere (slot path + position loop) —
+   every covering exit is adopted-or-replaced (each returning its
+   still-exposed qty) before the uncovered remainder computes.
+   Regression R4: ENTRY +100 with EXIT A 50 DEAD + EXIT B 50 LIVE
+   sends exactly one 50-share replace (A, legitimate) and no
+   100-share double-close while B lives.
+Status: MEDIUM re-entry proven; HARD broker authority proven
+(over/under/opposite/flat); remainder chain proven
+(mint/reuse/exhaust); multi-exit proven; transport decision
+untouched. REMAINING for P3.5 closure: Phase-4 live WS adapter +
+position/account endpoints + runtime credentials, real G0 STAGE
+bootstrap, out-of-band alert adapter. H2 stays downstream per
+sec. 13.5. P3.5 OPEN (human close); G0 NOT STARTED. This is the
+final engineering close candidate — no further code pass
+proposed before the Phase-4 wiring gate.
