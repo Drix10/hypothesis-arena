@@ -2807,3 +2807,71 @@ bootstrap, out-of-band alert adapter. H2 stays downstream per
 sec. 13.5. P3.5 OPEN (human close); G0 NOT STARTED. This is the
 final engineering close candidate — no further code pass
 proposed before the Phase-4 wiring gate.
+
+## Addendum 123 - Re-audit pass (2c3f919 findings, 5710bb7)
+Two P0s + one P1 + one cumulative seam, fixed with the router
+core untouched (no router file changed) and null transport kept.
+Protocol decided in plan first (84c295e amends doc 06 sec. 6.1b).
+Local: runner 594, broker 125, router 209, both modes + freeze
+PASS. Hosted 36277720270: kernel/plane/evidence SUCCESS,
+stdlib FAILURE (pre-existing collector step — the workflow as a
+whole is FAILURE, reported as such, not "CI green").
+1. Remainder vs current broker (P0): the remainder now derives
+   from the ORIGINAL chain request (hard-chain.txt `<tag>`/
+   `<requested>`/`<attributed>`, write-ahead before every POST,
+   last row wins, truncated with the incident) — never by
+   subtracting a burned order's historical fill from a CURRENT
+   broker number. Each send is min(chain-remainder, broker-need);
+   zero need sends nothing; chain-satisfied-yet-broker-open
+   alerts (drift owns it, no second incident identity); the
+   4-round cap freezes. Per-id attribution folds only the
+   not-yet-attributed portion (crash-exact). Regressions: R3
+   rewritten to the realistic progression (100 -> terminal-40 ->
+   broker +60 -> exactly one 60-share remainder, then quiet open
+   and quiet settled) and R3x (EXIT-originated: dead-40 replace
+   60 -> that order terminal-40 -> exactly one 20 remainder).
+2. MEDIUM teardown certification (P0): clearing requires
+   BROKER-CONFIRMED flat (seam present + ok + all zero) AND
+   (file == FLATTENED or local flat); the leaving-medium
+   finalizer writes FLATTENED only when AllFlat() is
+   broker-certified (uncertified-flat stays in progress).
+   Missing/failing seam = UNKNOWN: FLATTENED + epoch retained.
+   Regression MS a-e (retain missing, retain failing,
+   auto-clear on restore, fresh epoch + real close, zero manual
+   deletes). The no-seam production main.cpp consequently
+   retains FLATTENED (safe) while the MEDIUM re-entry path still
+   mints fresh on live exposure.
+3. Slot-failure fallback (P1): HardManageSlot reports ownership
+   (reconciled, not blind, not frozen-waiting); the position
+   loop skips an ENTRY symbol only when every open ENTRY was
+   demonstrably managed, else falls back to broker-sized
+   management under the SAME incident id (pre-flight dedupes —
+   the skip is an optimization, not the mutex). Frozen symbols
+   are never position-loop-closed. Regression HB (entry query
+   500 + broker +100 -> exactly one 100-share close, HALT).
+4. Cumulative fills (P0 seam, router contract honored):
+   HardAdoptExit folds only beyond the slot's own
+   exit_counted_qty (per-current-order memory), bumps counted +
+   closed + persists; the old FILLED>=rem adopt mask (which hid
+   genuinely unaccounted remainders behind phantom attribution)
+   is unified into terminal fold + replace. Regression EC
+   (40-counted DEAD-40 -> zero refold, entry open stays exactly
+   10, exactly one 10-share replace).
+Harness honesty fix (found by the evidence, fixed in passing):
+CrashImage overwrote journal.jsonl per call, so multi-image
+tests rebuilt ONLY the last slot (T3/R4 were vacuous — passing
+but proving single-slot behavior). CrashImage now appends
+properly chained rows; T3 is now honestly entry+exit (adopt,
+zero closes) and R4 honestly three-slot (one 50-share replace,
+no 100-share double). Collateral: test 39's second event now
+expects exact-books flow (one repair total, cancel attempt on
+the zero-open stray, zero close resends — purpose intact), and
+my R3 asserts were renamed hrc-* (they had collided with test
+39's hr-* names).
+Status: chain-vs-broker proven; teardown certified; fallback
+proven; cumulative exactness proven. REMAINING for P3.5 closure:
+Phase-4 live WS adapter + position/account endpoints + runtime
+credentials, real G0 STAGE bootstrap, out-of-band alert adapter.
+H2 stays downstream per sec. 13.5. P3.5 OPEN (human close); G0
+NOT STARTED. Final engineering close candidate — no further
+code pass proposed before the Phase-4 wiring gate.
