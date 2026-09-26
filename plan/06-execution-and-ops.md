@@ -108,6 +108,27 @@ the file (the incident is over; tidy for forensics).
 - Intent-bound ids (`<intent>-repair`, `<intent>-flatten`, exit
 sub-identities) need no epoch: intent ids are permanently bound and
 single-use (§6.1), so they cannot collide across incidents.
+- MEDIUM FSM auto-clear: `medium.txt` is cleared (with the epoch
+file) on any non-MEDIUM cycle once the incident is closed (file ==
+FLATTENED) or stale (no local open AND no broker position) — a
+later automatic MEDIUM trigger re-enters fresh with a NEW epoch;
+no operator file edit is ever required. Crash-mid-incident reuses
+the files (in-progress state + epoch survive). A FLATTENED file
+seen WITH live exposure is stale (clear + fresh enter), never
+suppression.
+- HARD quantity authority: the SIGNED BROKER POSITION (the position
+endpoint is the account's current open-position source) sizes every
+HARD close when the seam answers — the slot path closes only the
+broker quantity uncovered by reconciled exits, in the broker
+direction; local/broker disagreement journals drift but never
+changes the qty. Local-open sizing is the fallback ONLY when the
+seam is absent/failing (journaled). Position-loop symbols with
+ENTRY slots are slot-path-owned; exit-only symbols reconcile ALL
+covering exits (every one queried, none assumed) and close only
+the remainder. A found-short terminal hard order mints a
+deterministic incident-scoped remainder `hard-<epoch>-<SYM>-<qty>`
+(pure, pre-flighted, strictly-decreasing chain, never colliding
+with the primary id; primary-absent still posts the primary).
 
 ## 6.2 Reflection (after every closed trade)
 
