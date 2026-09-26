@@ -81,10 +81,21 @@ bool IsFillWord(const char* t) {
            std::strcmp(t, "partial_fill") == 0;
 }
 bool IsLifeWord(const char* t) {
-    const char* const ws[] = {"new",       "pending_new", "accepted",
-                              "calculated", "canceled",    "rejected",
-                              "expired",    "done_for_day", "replaced",
-                              "suspended",  "pending_cancel"};
+    const char* const ws[] = {"new",
+                              "pending_new",
+                              "accepted",
+                              "calculated",
+                              "canceled",
+                              "rejected",
+                              "expired",
+                              "done_for_day",
+                              "replaced",
+                              "suspended",
+                              "pending_cancel",
+                              "pending_replace",
+                              "order_replace_rejected",
+                              "order_cancel_rejected",
+                              "restated"};
     for (std::size_t i = 0; i < sizeof(ws) / sizeof(ws[0]); ++i) {
         if (std::strcmp(t, ws[i]) == 0) return true;
     }

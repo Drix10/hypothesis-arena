@@ -122,23 +122,61 @@ CloseState ClassifyStatus(const char* st) {
     // order statuses are "filled" (terminal) and
     // "partially_filled"; bare "fill" / "partial_fill" are
     // trade-event types, never order statuses -> UNKNOWN.
-    const char* const words[] = {
-        "filled",         "partially_filled",
-        "accepted",       "pending_new",  "new",
-        "calculated",     "canceled",     "rejected",
-        "expired"};
-    for (int w = 0; w < 9; ++w) {
-        const char* b = words[w];
+    // Frozen lifecycle policy (Alpaca order/status + trade-event
+    // vocabulary): PENDING = alive-or-unknown-live (wait/reconcile,
+    // never re-issue blind — the stable-id pre-flight dedupes);
+    // DEAD = terminally non-executing under this id (reconcile by
+    // re-issue under the same stable id, never assume execution);
+    // UNKNOWN = event-only names or unrecognized (fail closed).
+    //   held -> PENDING (venue-held, still live);
+    //   pending_replace / pending_cancel -> PENDING (in flight);
+    //   order_replace_rejected / order_cancel_rejected -> PENDING
+    //     (the order itself survives the rejected request);
+    //   restated -> PENDING (corporate-action restatement, live);
+    //   suspended -> PENDING (halted, may resume; never re-issue
+    //     blind — pre-flight finds it under our id and waits);
+    //   done_for_day -> DEAD (terminal for the session);
+    //   replaced -> DEAD under this id (the replacement rides a
+    //     new id we do not track; re-issue under the stable id).
+    const char* const pending[] = {
+        "accepted",      "pending_new",  "new",
+        "calculated",    "held",         "pending_replace",
+        "pending_cancel", "suspended",    "restated",
+        "order_replace_rejected", "order_cancel_rejected"};
+    const char* const dead[] = {"canceled", "rejected", "expired",
+                                "done_for_day", "replaced"};
+    for (int w = 0; w < 11; ++w) {
+        const char* b = pending[w];
         const char* a = st;
         while (*a && *b && *a == *b) {
             ++a;
             ++b;
         }
-        if (*a != '\0' || *b != '\0') continue;
-        if (w == 0) return CloseState::FILLED;
-        if (w == 1) return CloseState::PARTIAL;
-        if (w <= 5) return CloseState::PENDING;
-        return CloseState::DEAD;
+        if (*a == '\0' && *b == '\0')
+            return CloseState::PENDING;
+    }
+    // exact terminal words (manual loop: no <cstring here).
+    const char* const term[] = {"filled", "partially_filled"};
+    for (int w = 0; w < 2; ++w) {
+        const char* b = term[w];
+        const char* a = st;
+        while (*a && *b && *a == *b) {
+            ++a;
+            ++b;
+        }
+        if (*a == '\0' && *b == '\0')
+            return (w == 0) ? CloseState::FILLED
+                            : CloseState::PARTIAL;
+    }
+    for (int w = 0; w < 5; ++w) {
+        const char* b = dead[w];
+        const char* a = st;
+        while (*a && *b && *a == *b) {
+            ++a;
+            ++b;
+        }
+        if (*a == '\0' && *b == '\0')
+            return CloseState::DEAD;
     }
     return CloseState::UNKNOWN;
 }
@@ -613,29 +651,14 @@ CloseResult AlpacaPaperAdapter::MarketClose(const char* symbol,
         partial = m2;
     }
     bool pending = false;
-    if (!fill && !partial) {
-        const char* const ps[] = {"accepted", "pending_new", "new",
-                                 "calculated"};
-        const int pl[] = {8, 11, 3, 10};
-        for (int k = 0; k < 4 && !pending; ++k) {
-            bool m = true;
-            for (int i = 0; i < pl[k]; ++i)
-                if (st[i] != ps[k][i]) m = false;
-            if (st[pl[k]] != '\0') m = false;
-            if (m) pending = true;
-        }
-    }
     bool dead = false;
-    if (!fill && !partial && !pending) {
-        const char* const ds[] = {"canceled", "rejected", "expired"};
-        const int dl[] = {8, 8, 7};
-        for (int k = 0; k < 3 && !dead; ++k) {
-            bool m = true;
-            for (int i = 0; i < dl[k]; ++i)
-                if (st[i] != ds[k][i]) m = false;
-            if (st[dl[k]] != '\0') m = false;
-            if (m) dead = true;
-        }
+    if (!fill && !partial) {
+        // Single frozen matrix (ClassifyStatus owns the venue
+        // lifecycle vocabulary): PENDING = alive, DEAD = terminal
+        // under this id. Anything else stays unknown/fail-closed.
+        CloseState cs = ClassifyStatus(st);
+        pending = (cs == CloseState::PENDING);
+        dead = (cs == CloseState::DEAD);
     }
     if (!fill && !partial && !pending && !dead) return c;  // unknown
     CopyField(oid, c.broker_order_id, sizeof(c.broker_order_id));
@@ -700,12 +723,12 @@ bool AlpacaPaperAdapter::EstablishProtection(
         body, sizeof(body),
         "{\"symbol\":\"%.15s\",\"qty\":\"%lld\",\"side\":\"%s\","
         "\"type\":\"limit\",\"time_in_force\":\"day\","
-        "\"order_class\":\"oco\","
+        "\"client_order_id\":\"%.64s\",\"order_class\":\"oco\","
         "\"take_profit\":{\"limit_price\":\"%s\"},"
         "\"stop_loss\":{\"stop_price\":\"%s\",\"limit_price\":\"%s\"}}",
         o.symbol, (long long)o.qty_shares,
         is_long ? "sell" : "buy",  // protection opposes the position
-        tp, sl, sl);
+        o.client_order_id, tp, sl, sl);
     if (w <= 0 || w >= static_cast<int>(sizeof(body))) return false;
     HttpRequest req;
     req.method = "POST";

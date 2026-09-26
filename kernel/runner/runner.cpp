@@ -78,6 +78,34 @@ int JournalIntentState(const std::string& dir, const char* intent_id) {
     }
     return st;
 }
+// Repair sub-identity: "<intent>-repair" hashed through the frozen
+// client-ID recipe (own deterministic id, restart-stable, never the
+// entry id — the venue rejects duplicate client_order_id). Pure
+// function: recovery re-derives it with no snapshot field, so the
+// frozen router format never changes. Unrepresentable only when
+// fields are empty (the recipe's own rule); then the caller fails
+// the repair and the router takes the flatten fallback (doc 06
+// sec. 6.1: establish now OR flatten immediately).
+bool RepairClientId(const char* broker, const char* account,
+                    const char* ctx_hex, const char* symbol,
+                    broker::OrderSide protect_side,
+                    const char* intent_id, char* coid_out) {
+    if (!intent_id || !coid_out) return false;
+    std::string rid = intent_id;
+    rid += "-repair";
+    return broker::MakeClientOrderId(broker, account, ctx_hex,
+                                     symbol, protect_side,
+                                     rid.c_str(), coid_out);
+}
+// REPAIR_SENT reconciles the REPAIR order, not the entry: the
+// lookup id follows the repair sub-identity while the machine
+// waits on it (everywhere else the stable entry id rules).
+const char* LookupIdFor(const Slot& s) {
+    if (s.m.state == exec::RouteState::REPAIR_SENT &&
+        s.has_repair_id && s.repair_coid[0] != '\0')
+        return s.repair_coid;
+    return s.m.client_id;
+}
 // Journal body vocabulary (bounded, pre-redacted, <=280 chars).
 bool BodyFor(const char* kind, const exec::OrderIntent& in,
              long long qty, const char* note, char* out,
@@ -92,11 +120,15 @@ bool BodyFor(const char* kind, const exec::OrderIntent& in,
 G0Runner::G0Runner(const RunnerConfig& cfg, const RunnerDeps& deps)
     : cfg_(cfg), deps_(deps), adapter_(deps.transport) {
     prev_hash_ = journal::GenesisPrev();
-    // SubmitIntent enforces slots_.size() <= max_slots, so this
-    // capacity is never exceeded: Slot& refs stay valid when
-    // MEDIUM-flatten appends mid-cycle (no reallocation, ever).
-    slots_.reserve((std::size_t)(cfg_.max_slots > 0 ? cfg_.max_slots
-                                                     : 16));
+    // Capacity is never exceeded: entries stop at max_slots, exits
+    // (which must never wedge behind entry capacity — refusing an
+    // exit strands risk) stop at twice that. Both bounds hold
+    // BEFORE any push, so Slot& refs never dangle on reallocation
+    // mid-cycle (MEDIUM-flatten appends while the drive loop holds
+    // refs). The 2x ceiling is the documented worst case: every
+    // live entry carrying one live exit at once.
+    long long cap = (cfg_.max_slots > 0 ? cfg_.max_slots : 16);
+    slots_.reserve((std::size_t)(cap * 2));
 }
 
 std::string G0Runner::P(const char* name) const {
@@ -302,7 +334,31 @@ bool G0Runner::Recover(const char** reason) {
                 break;
             }
         }
-        if (term) continue;
+        if (term) {
+            // Terminal EXITs still owe their closed quantity to the
+            // parent entries when the done-hook never ran (crash
+            // between the close and the attribution): re-attribute
+            // from the surviving snapshot. Idempotent — capped by
+            // provable open, so a hook that already ran is a no-op.
+            IntentDesc xid;
+            if (LoadIntent(IntentPath(rows[i].intent_id.c_str()).c_str(),
+                           &xid) &&
+                xid.kind == 1 && xid.symbol[0] != '\0') {
+                char xrec[320];
+                exec::RouteMachine xm;
+                if (LoadSnapshot(
+                        SnapPath(rows[i].intent_id.c_str()).c_str(),
+                        xrec, sizeof(xrec)) &&
+                    exec::RestoreMachine(xrec, &xm) &&
+                    xm.state == exec::RouteState::CLOSED &&
+                    xm.exit_closed_qty > 0)
+                    AttributeClosedQty(
+                        xm.symbol[0] != '\0' ? xm.symbol : xid.symbol,
+                        xm.exit_closed_qty,
+                        deps_.now_ns(deps_.clock_ctx));
+            }
+            continue;
+        }
         // Deduplicate (a duplicated intent row is itself a chain
         // anomaly: first wins, alerted, never two slots).
         bool seen = false;
@@ -341,7 +397,7 @@ bool G0Runner::Recover(const char** reason) {
                     if (reason) *reason = kSnap;
                     return false;
                 }
-                if (slots_.size() >= (std::size_t)cfg_.max_slots)
+                if (slots_.size() >= (std::size_t)(2 * cfg_.max_slots))
                     break;
                 Slot s;
                 CopyStr(s.intent.intent_id,
@@ -368,7 +424,7 @@ bool G0Runner::Recover(const char** reason) {
             if (reason) *reason = kSnap;
             return false;
         }
-        if (slots_.size() >= (std::size_t)cfg_.max_slots) break;
+        if (slots_.size() >= (std::size_t)(2 * cfg_.max_slots)) break;
         Slot s;
         if (has_snap) {
             exec::RouteMachine m;
@@ -404,6 +460,28 @@ bool G0Runner::Recover(const char** reason) {
             // owns it. Never invent economics.
             if (reason) *reason = kSnap;
             return false;
+        }
+        if (s.m.state == exec::RouteState::REPAIR_SENT) {
+            // The dead process may have POSTed the repair under
+            // its sub-identity: re-derive it (pure function — no
+            // snapshot field needed) so reconcile-first queries
+            // the repair order, never the entry. Derivation
+            // failure falls back to the entry id (the repair was
+            // unrepresentable; the router flattens from there).
+            broker::OrderSide pside =
+                (s.intent.side == broker::OrderSide::BUY)
+                    ? broker::OrderSide::SELL
+                    : broker::OrderSide::BUY;
+            char rcoid[65] = {0};
+            if (RepairClientId(cfg_.venue.broker,
+                               cfg_.venue.account,
+                               cfg_.venue.context_hash,
+                               s.intent.symbol, pside,
+                               s.intent.intent_id, rcoid)) {
+                CopyStr(s.repair_coid, sizeof(s.repair_coid),
+                        rcoid);
+                s.has_repair_id = true;
+            }
         }
         s.active = true;
         s.last_s2_ns = 0;  // first cycle reconciles first
@@ -468,12 +546,14 @@ bool G0Runner::SubmitIntent(const exec::OrderIntent& in,
             return false;
         }
     }
-    if (slots_.size() >= (std::size_t)cfg_.max_slots) {
+    long long cap = is_exit ? cfg_.max_slots * 2 : cfg_.max_slots;
+    if (cap <= 0) cap = is_exit ? 32 : 16;
+    if ((long long)slots_.size() >= cap) {
         // One deferred sweep before refusing: completed work frees
         // capacity (long runs never wedge on history).
         ReclaimDone();
     }
-    if (slots_.size() >= (std::size_t)cfg_.max_slots) {
+    if ((long long)slots_.size() >= cap) {
         if (reason) *reason = kCap;
         return false;
     }
@@ -573,7 +653,7 @@ void G0Runner::MaybeForceQuery(Slot& s, long long now_ns) {
     bool due = (now_ns - s.last_s2_ns) >=
                deps_.s2_seconds * 1000000000LL;
     if (!due) return;
-    s.forced_q = adapter_.QueryOnce(s.m.client_id);
+    s.forced_q = adapter_.QueryOnce(LookupIdFor(s));
     s.has_forced_q = true;
     s.last_s2_ns = now_ns;
 }
@@ -640,13 +720,105 @@ bool G0Runner::OpsRow(const char* kind, const char* intent_id,
     return JournalWrite(kind, intent_id, body, now_ns);
 }
 
+bool G0Runner::HardCloseOnce(const char* symbol, long long qty,
+                           broker::OrderSide eside, const char* hid,
+                           const char* scope_intent,
+                           long long now_ns) {
+    // Pre-flighted single close under a stable hard id: GET ->
+    // found: adopt the close state (an in-flight close is
+    // journaled, never re-sent — the process dies right after) ->
+    // 404: POST exactly once -> transport failure: journal +
+    // alert, fail closed. Any id, any caller, same rule.
+    char hcoid[65] = {0};
+    if (!hid || !hid[0] || !broker::MakeClientOrderId(
+                               cfg_.venue.broker, cfg_.venue.account,
+                               cfg_.venue.context_hash, symbol,
+                               eside, hid, hcoid)) {
+        OpsRow("drift-directive", scope_intent,
+               "hard-close id-unrepresentable", now_ns);
+        Alert(P("alerts.jsonl").c_str(), "HARD",
+              "hard-close-no-id", scope_intent, now_ns);
+        return false;
+    }
+    broker::OrderQuery pre = adapter_.QueryOnce(hcoid);
+    if (pre.transport_ok && pre.found) {
+        broker::CloseResult c = QueryToClose(pre);
+        char tb[280];
+        std::snprintf(tb, sizeof(tb),
+                        "hard-close id=%s found state=%d filled=%lld",
+                        hid, (int)c.state, (long long)c.filled_qty);
+        OpsRow("drift-directive", scope_intent, tb, now_ns);
+        return c.state == broker::CloseState::FILLED &&
+               c.filled_qty >= qty;
+    }
+    if (pre.transport_ok && !pre.found) {
+        broker::CloseResult c =
+            adapter_.MarketClose(symbol, qty, eside, hcoid);
+        char tb[280];
+        std::snprintf(tb, sizeof(tb),
+                        "hard-close id=%s sent=%d", hid,
+                        c.transport_ok ? 1 : 0);
+        OpsRow("drift-directive", scope_intent, tb, now_ns);
+        return c.transport_ok;
+    }
+    OpsRow("drift-directive", scope_intent,
+           "hard-close lookup-failed", now_ns);
+    Alert(P("alerts.jsonl").c_str(), "HARD",
+          "hard-close-unknown", scope_intent, now_ns);
+    return false;
+}
+
+bool G0Runner::CoveredBySlot(const char* symbol) const {
+    if (!symbol) return false;
+    for (std::size_t i = 0; i < slots_.size(); ++i) {
+        const Slot& s = slots_[i];
+        if (!s.active) continue;
+        if (s.intent.kind != jev::risk::IntentKind::ENTRY) continue;
+        if (std::strcmp(s.intent.symbol, symbol) != 0) continue;
+        if (s.m.filled_qty - s.m.exit_closed_qty > 0) return true;
+    }
+    return false;
+}
+
+void G0Runner::HardManagePosition(const char* symbol, long long qty,
+                                  long long now_ns) {
+    // Slotless open position under HARD: no intent economics on
+    // file, so broker-side protection is UNVERIFIABLE (no stop/tp
+    // to re-establish with — inventing them would be a sizing
+    // decision, and sizing is risk-owned). Flatten once under the
+    // deterministic position id (pre-flighted: a pre-crash close
+    // is adopted, never re-sent) + journal + alert. The flatten
+    // attempt is the protection when none can be verified.
+    if (!symbol || !symbol[0] || qty == 0) return;
+    broker::OrderSide eside = (qty > 0) ? broker::OrderSide::SELL
+                                        : broker::OrderSide::BUY;
+    long long aq = qty > 0 ? qty : -qty;
+    std::string hid = std::string("hard-pos-") + symbol;
+    char tb[280];
+    std::snprintf(tb, sizeof(tb),
+                    "hard-manage sym=%.15s slotless qty=%lld "
+                    "protection-unverifiable flatten-only",
+                    symbol, (long long)qty);
+    OpsRow("drift-directive", "runner", tb, now_ns);
+    Alert(P("alerts.jsonl").c_str(), "HARD", "hard-slotless",
+          tb, now_ns);
+    HardCloseOnce(symbol, aq, eside, hid.c_str(), "runner",
+                  now_ns);
+}
+
 void G0Runner::HardManageSlot(Slot& s, long long now_ns) {
     // §10.3 per-position pass (best-effort transport, journaled):
     // reconcile -> verify broker-native protection (re-establish
     // if missing and possible) -> flatten/cancel attempt. NEVER
     // destructive: failures leave protection active; the process
-    // terminates right after regardless.
-    if (!s.active || s.done || IsTerminalState(s.m.state)) return;
+    // terminates right after regardless. Done-PROTECTED slots are
+    // managed (they ARE live positions); only provably empty
+    // terminals (CANCELLED/UNKNOWN/CLOSED) are skipped.
+    if (!s.active) return;
+    if (s.m.state == exec::RouteState::CANCELLED ||
+        s.m.state == exec::RouteState::UNKNOWN_FROZEN ||
+        s.m.state == exec::RouteState::CLOSED)
+        return;
     if (s.m.client_id[0] == '\0') return;  // never sent: no risk
     broker::OrderQuery q = adapter_.QueryOnce(s.m.client_id);
     if (!q.transport_ok) {
@@ -660,23 +832,53 @@ void G0Runner::HardManageSlot(Slot& s, long long now_ns) {
             s.m.filled_qty - s.m.exit_closed_qty;
         bool prot = q.protection_active || q.bracket_class;
         if (!prot && q.found && open > 0) {
-            // Re-establish broker-native protection if possible.
-            broker::ProtectedOrder po{};
-            CopyStr(po.symbol, sizeof(po.symbol), s.intent.symbol);
-            po.side = s.intent.side;
-            po.qty_shares = s.m.filled_qty > 0 ? s.m.filled_qty
-                                               : s.intent.qty_shares;
-            po.stop_cents = s.intent.stop_cents;
-            po.tp_cents = s.intent.tp_cents;
-            CopyStr(po.client_order_id, sizeof(po.client_order_id),
-                      s.m.client_id);
-            CopyStr(po.intent_id, sizeof(po.intent_id),
-                      s.intent.intent_id);
-            bool ok = adapter_.EstablishProtection(po);
+            // Re-establish broker-native protection if possible —
+            // under the REPAIR sub-identity (never the entry id:
+            // the venue rejects duplicate client_order_id). The
+            // repair id is pre-flighted too: already-protected
+            // adoptions skip the POST; anything else attempts
+            // exactly one repair (flatten covers the rest).
+            broker::OrderSide pside =
+                (s.intent.side == broker::OrderSide::BUY)
+                    ? broker::OrderSide::SELL
+                    : broker::OrderSide::BUY;
+            char rcoid[65] = {0};
+            bool have_rid = RepairClientId(
+                cfg_.venue.broker, cfg_.venue.account,
+                cfg_.venue.context_hash, s.intent.symbol, pside,
+                s.intent.intent_id, rcoid);
+            bool ok = false;
+            const char* how = "no-id";
+            if (have_rid) {
+                broker::OrderQuery pre = adapter_.QueryOnce(rcoid);
+                if (pre.transport_ok && pre.found &&
+                    (pre.protection_active || pre.bracket_class)) {
+                    ok = true;  // repair already landed pre-crash
+                    how = "adopted";
+                } else if (pre.transport_ok && !pre.found) {
+                    broker::ProtectedOrder po{};
+                    CopyStr(po.symbol, sizeof(po.symbol),
+                            s.intent.symbol);
+                    po.side = s.intent.side;
+                    po.qty_shares = s.m.filled_qty > 0
+                                        ? s.m.filled_qty
+                                        : s.intent.qty_shares;
+                    po.stop_cents = s.intent.stop_cents;
+                    po.tp_cents = s.intent.tp_cents;
+                    CopyStr(po.client_order_id,
+                            sizeof(po.client_order_id), rcoid);
+                    CopyStr(po.intent_id, sizeof(po.intent_id),
+                            s.intent.intent_id);
+                    ok = adapter_.EstablishProtection(po);
+                    how = "posted";
+                } else {
+                    how = "lookup-failed";
+                }
+            }
             char tb[280];
             std::snprintf(tb, sizeof(tb),
-                            "hard-manage id=%s reprotect=%d",
-                            s.intent.intent_id, ok ? 1 : 0);
+                            "hard-manage id=%s reprotect=%d %s",
+                            s.intent.intent_id, ok ? 1 : 0, how);
             OpsRow("drift-directive", s.intent.intent_id, tb,
                    now_ns);
         }
@@ -705,30 +907,24 @@ void G0Runner::HardManageSlot(Slot& s, long long now_ns) {
             return;
         }
         if (open > 0) {
-            // Attempt flatten under a deterministic hard id
-            // (single pass — the process terminates after).
+            // Attempt flatten under a deterministic hard id —
+            // pre-flighted (a pre-crash close is adopted, never
+            // re-sent): same one-send rule as every other close.
             std::string hid =
                 std::string("hard-") + s.intent.intent_id;
-            if (hid.size() > 64) hid.resize(64);
-            char hcoid[65] = {0};
             broker::OrderSide eside =
                 (s.intent.side == broker::OrderSide::BUY)
                     ? broker::OrderSide::SELL
                     : broker::OrderSide::BUY;
-            if (broker::MakeClientOrderId(
-                    cfg_.venue.broker, cfg_.venue.account,
-                    cfg_.venue.context_hash, s.intent.symbol, eside,
-                    hid.c_str(), hcoid)) {
-                broker::CloseResult c = adapter_.MarketClose(
-                    s.intent.symbol, open, eside, hcoid);
-                char tb[280];
-                std::snprintf(tb, sizeof(tb),
-                                "hard-manage id=%s flatten=%d",
-                                s.intent.intent_id,
-                                c.transport_ok ? 1 : 0);
-                OpsRow("drift-directive", s.intent.intent_id, tb,
-                       now_ns);
-            }
+            bool sent = HardCloseOnce(s.intent.symbol, open, eside,
+                                      hid.c_str(),
+                                      s.intent.intent_id, now_ns);
+            char tb[280];
+            std::snprintf(tb, sizeof(tb),
+                            "hard-manage id=%s flatten=%d",
+                            s.intent.intent_id, sent ? 1 : 0);
+            OpsRow("drift-directive", s.intent.intent_id, tb,
+                   now_ns);
         }
         return;
     }
@@ -763,6 +959,32 @@ bool G0Runner::HardStop(long long now_ns, const char* why) {
     if (hf) std::fclose(hf);
     for (std::size_t i = 0; i < slots_.size(); ++i)
         HardManageSlot(slots_[i], now_ns);
+    // §10.3 operates on EVERY open position — including ordinary
+    // protected holdings whose slots already reclaimed (PROTECTED
+    // is terminal, so no slot survives success). The authoritative
+    // position list drives this pass; symbols a live slot covers
+    // are skipped (the slot path above already managed them — one
+    // position, one close, never two identities).
+    if (deps_.list_positions) {
+        Position ps[64];
+        int n = deps_.list_positions(deps_.positions_ctx, ps, 64);
+        if (n < 0) {
+            OpsRow("drift-directive", "runner",
+                   "hard-positions-unavailable", now_ns);
+            Alert(P("alerts.jsonl").c_str(), "HARD",
+                  "hard-positions-unknown", "lookup failed",
+                  now_ns);
+        }
+        for (int i = 0; n >= 0 && i < n; ++i) {
+            if (ps[i].symbol[0] == '\0' || ps[i].qty == 0)
+                continue;
+            if (CoveredBySlot(ps[i].symbol)) continue;
+            HardManagePosition(ps[i].symbol, ps[i].qty, now_ns);
+        }
+    } else {
+        OpsRow("drift-directive", "runner",
+               "hard-no-position-seam", now_ns);
+    }
     return false;  // terminate: supervisor must NOT restart
 }
 
@@ -776,14 +998,21 @@ bool G0Runner::VenueOk(bool* open, bool* spread_ok) {
 }
 
 int G0Runner::LocalNet(const char* symbol) const {
-    // Signed local open per symbol over ENTRY slots only
-    // (filled minus closed; exits are managers, not positions).
+    // Signed local open per symbol over ENTRY slots with provable
+    // open (filled minus closed; exits are managers, not
+    // positions). PROTECTED is included: it IS the normal open
+    // position (terminal only because its lifecycle is complete —
+    // the shares are still live). CANCELLED/UNKNOWN_FROZEN/CLOSED
+    // carry no provable open and are excluded.
     long long net = 0;
     for (std::size_t i = 0; i < slots_.size(); ++i) {
         const Slot& s = slots_[i];
-        if (!s.active || s.done) continue;
+        if (!s.active) continue;
         if (s.intent.kind != jev::risk::IntentKind::ENTRY) continue;
-        if (IsTerminalState(s.m.state)) continue;
+        if (s.m.state == exec::RouteState::CANCELLED ||
+            s.m.state == exec::RouteState::UNKNOWN_FROZEN ||
+            s.m.state == exec::RouteState::CLOSED)
+            continue;
         if (std::strcmp(s.intent.symbol, symbol) != 0) continue;
         long long open = s.m.filled_qty - s.m.exit_closed_qty;
         if (open < 0) open = 0;
@@ -797,7 +1026,8 @@ int G0Runner::LocalNet(const char* symbol) const {
 
 void G0Runner::PositionCheck(long long now_ns) {
     // Account-level S2: authoritative broker positions vs local
-    // expectation (orphans + qty mismatch both count as drift).
+    // expectation over the UNION of both symbol sets (broker-only
+    // = orphan; local-only = vanished; qty mismatch = drift).
     // Drift journals + alerts + forces per-symbol re-lookup; it
     // never orders (flattening is MEDIUM/HARD-owned).
     if (!deps_.list_positions) return;  // Phase-4 seam absent
@@ -812,14 +1042,62 @@ void G0Runner::PositionCheck(long long now_ns) {
               "positions-unavailable", "lookup failed", now_ns);
         return;
     }
+    // Local expectation per symbol (same provable-open rule as
+    // LocalNet: PROTECTED included, managers excluded).
+    struct SymOpen {
+        char sym[16];
+        long long qty;
+    };
+    SymOpen local[64];
+    int ln = 0;
+    for (std::size_t k = 0; k < slots_.size() && ln < 64; ++k) {
+        const Slot& s = slots_[k];
+        if (!s.active) continue;
+        if (s.intent.kind != jev::risk::IntentKind::ENTRY) continue;
+        if (s.m.state == exec::RouteState::CANCELLED ||
+            s.m.state == exec::RouteState::UNKNOWN_FROZEN ||
+            s.m.state == exec::RouteState::CLOSED)
+            continue;
+        long long open = s.m.filled_qty - s.m.exit_closed_qty;
+        if (open <= 0) continue;
+        long long signed_open =
+            (s.intent.side == broker::OrderSide::BUY) ? open
+                                                      : -open;
+        int at = -1;
+        for (int j = 0; j < ln; ++j) {
+            if (std::strcmp(local[j].sym, s.intent.symbol) == 0) {
+                at = j;
+                break;
+            }
+        }
+        if (at < 0) {
+            CopyStr(local[ln].sym, sizeof(local[ln].sym),
+                    s.intent.symbol);
+            local[ln].qty = signed_open;
+            ++ln;
+        } else {
+            local[at].qty += signed_open;
+        }
+    }
+    bool matched[64] = {false};
     for (int i = 0; i < n; ++i) {
         if (ps[i].symbol[0] == '\0') continue;
-        int local = LocalNet(ps[i].symbol);
-        if ((long long)local == ps[i].qty) continue;
+        long long expect = 0;
+        bool have_local = false;
+        for (int j = 0; j < ln; ++j) {
+            if (std::strcmp(local[j].sym, ps[i].symbol) == 0) {
+                expect = local[j].qty;
+                have_local = true;
+                matched[j] = true;
+                break;
+            }
+        }
+        if (have_local && expect == ps[i].qty) continue;
         char tb[280];
         std::snprintf(tb, sizeof(tb),
-                        "position-drift sym=%.15s local=%d broker=%lld",
-                        ps[i].symbol, local, (long long)ps[i].qty);
+                        "position-drift sym=%.15s local=%lld broker=%lld%s",
+                        ps[i].symbol, expect, (long long)ps[i].qty,
+                        have_local ? "" : " orphan");
         Alert(P("alerts.jsonl").c_str(), "S2", "position-drift",
               tb, now_ns);
         OpsRow("drift-directive", "runner", tb, now_ns);
@@ -830,11 +1108,40 @@ void G0Runner::PositionCheck(long long now_ns) {
                 s.last_s2_ns = 0;  // force re-lookup this cycle
         }
     }
+    for (int j = 0; j < ln; ++j) {
+        if (matched[j] || local[j].qty == 0) continue;
+        char tb[280];
+        std::snprintf(tb, sizeof(tb),
+                        "position-drift sym=%.15s local=%lld broker=0 "
+                        "local-only",
+                        local[j].sym, local[j].qty);
+        Alert(P("alerts.jsonl").c_str(), "S2", "position-drift",
+              tb, now_ns);
+        OpsRow("drift-directive", "runner", tb, now_ns);
+        for (std::size_t k = 0; k < slots_.size(); ++k) {
+            Slot& s = slots_[k];
+            if (!s.active || s.done) continue;
+            if (std::strcmp(s.intent.symbol, local[j].sym) == 0)
+                s.last_s2_ns = 0;
+        }
+    }
 }
 
 void G0Runner::ReclaimDone() {
+    // Done slots leave — EXCEPT live ENTRY positions: a done
+    // PROTECTED slot with provable open is not history, it is the
+    // local position record (S2, MEDIUM/HARD coverage, and close
+    // attribution all read it). It becomes reclaimable once its
+    // open attributes to zero (flatten/sweep/exit closes) — until
+    // then capacity counts it as live risk.
     for (std::size_t i = 0; i < slots_.size();) {
-        if (slots_[i].active && slots_[i].done) {
+        const Slot& s = slots_[i];
+        bool live_position =
+            s.active && s.done &&
+            s.intent.kind == jev::risk::IntentKind::ENTRY &&
+            s.m.state == exec::RouteState::PROTECTED &&
+            s.m.filled_qty - s.m.exit_closed_qty > 0;
+        if (s.active && s.done && !live_position) {
             slots_.erase(slots_.begin() + (int)i);
         } else {
             ++i;
@@ -891,9 +1198,15 @@ bool G0Runner::DailyOps(long long now_ns) {
 bool G0Runner::AllFlat() {
     for (std::size_t i = 0; i < slots_.size(); ++i) {
         const Slot& s = slots_[i];
-        if (!s.active || s.done) continue;
+        if (!s.active) continue;
         if (s.intent.kind != jev::risk::IntentKind::ENTRY) continue;
-        if (IsTerminalState(s.m.state)) continue;
+        // PROTECTED counts: it is a live position until its open
+        // is attributed to zero (flatten/sweep closes attribute
+        // back — an unattributed PROTECTED is provably NOT flat).
+        if (s.m.state == exec::RouteState::CANCELLED ||
+            s.m.state == exec::RouteState::UNKNOWN_FROZEN ||
+            s.m.state == exec::RouteState::CLOSED)
+            continue;
         if (s.m.filled_qty - s.m.exit_closed_qty > 0) return false;
     }
     if (deps_.list_positions) {
@@ -905,6 +1218,39 @@ bool G0Runner::AllFlat() {
         }
     }
     return true;
+}
+
+void G0Runner::AttributeClosedQty(const char* symbol, long long qty,
+                                   long long now_ns) {
+    // An authoritative close quantity (flatten EXIT done-CLOSED,
+    // sweep-order FILLED/PARTIAL) belongs to same-symbol ENTRY
+    // slots, oldest first. Without this the entry machine keeps
+    // claiming provable open after its position closed and S2
+    // drifts on healthy flat forever. Leftover with no local
+    // expectation is dropped (broker truth already rules S2).
+    if (!symbol || !symbol[0] || qty <= 0) return;
+    long long rem = qty;
+    for (std::size_t i = 0; i < slots_.size() && rem > 0; ++i) {
+        Slot& s = slots_[i];
+        if (!s.active) continue;
+        if (s.intent.kind != jev::risk::IntentKind::ENTRY) continue;
+        if (s.m.state == exec::RouteState::CANCELLED ||
+            s.m.state == exec::RouteState::UNKNOWN_FROZEN ||
+            s.m.state == exec::RouteState::CLOSED)
+            continue;
+        if (std::strcmp(s.intent.symbol, symbol) != 0) continue;
+        long long open = s.m.filled_qty - s.m.exit_closed_qty;
+        if (open <= 0) continue;
+        long long take = (open < rem) ? open : rem;
+        s.m.exit_closed_qty += take;
+        rem -= take;
+        PersistSlot(s);  // best-effort: the journal row attests
+        char tb[280];
+        std::snprintf(tb, sizeof(tb),
+                        "close-attributed id=%s qty=%lld",
+                        s.intent.intent_id, take);
+        OpsRow("reconcile", s.intent.intent_id, tb, now_ns);
+    }
 }
 
 void G0Runner::MediumPass(long long now_ns) {
@@ -952,7 +1298,14 @@ void G0Runner::MediumPass(long long now_ns) {
     }
     // Broker-confirmed sweep: EVERY open position, venue-open +
     // spread-normal only. Unknown/closed venue (or absent seam) =
-    // no sweep — protection stays, retry next cycle.
+    // no sweep — protection stays, retry next cycle. A found sweep
+    // order is reconciled, never assumed pending: its FILLED/PARTIAL
+    // quantity attributes back to local entries; a terminally DEAD
+    // sweep (or a FILLED sweep with the position still open) mints
+    // ONE deterministic remainder (sweep-<SYM>-<qty> under the
+    // current broker qty — pre-flighted, so each distinct id sends
+    // at most once); an exhausted remainder (found-DEAD twice)
+    // journals + alerts for a human instead of spinning.
     bool open = false, spread = false;
     if (VenueOk(&open, &spread) && deps_.list_positions) {
         Position ps[64];
@@ -971,8 +1324,74 @@ void G0Runner::MediumPass(long long now_ns) {
                     sid.c_str(), hcoid))
                 continue;
             broker::OrderQuery pre = adapter_.QueryOnce(hcoid);
+            if (!pre.transport_ok) continue;  // retry next cycle
             if (pre.transport_ok && pre.found) {
-                pending = true;  // already flattening: await ack
+                broker::CloseResult c = QueryToClose(pre);
+                if ((c.state == broker::CloseState::FILLED ||
+                     c.state == broker::CloseState::PARTIAL) &&
+                    c.filled_qty > 0)
+                    AttributeClosedQty(ps[i].symbol, c.filled_qty,
+                                       now_ns);
+                if (c.state == broker::CloseState::FILLED &&
+                    c.filled_qty >= aq)
+                    continue;  // fully swept: nothing to do
+                if (c.state == broker::CloseState::PENDING ||
+                    c.state == broker::CloseState::UNKNOWN ||
+                    c.state == broker::CloseState::PARTIAL) {
+                    // Live or ambiguous: await it (a PARTIAL still
+                    // working is NOT a remainder — a second full
+                    // order would over-close when it lands).
+                    pending = true;
+                    continue;
+                }
+                // DEAD, or FILLED-short of the live position:
+                // deterministic remainder under the CURRENT qty.
+                char rqty[24];
+                std::snprintf(rqty, sizeof(rqty), "%lld", aq);
+                std::string rsid =
+                    sid + "-" + rqty;
+                char rhcoid[65] = {0};
+                if (!broker::MakeClientOrderId(
+                        cfg_.venue.broker, cfg_.venue.account,
+                        cfg_.venue.context_hash, ps[i].symbol,
+                        eside, rsid.c_str(), rhcoid))
+                    continue;
+                broker::OrderQuery rpre =
+                    adapter_.QueryOnce(rhcoid);
+                if (!rpre.transport_ok) continue;
+                if (rpre.transport_ok && rpre.found) {
+                    broker::CloseResult rc = QueryToClose(rpre);
+                    if ((rc.state == broker::CloseState::FILLED ||
+                         rc.state == broker::CloseState::PARTIAL) &&
+                        rc.filled_qty > 0)
+                        AttributeClosedQty(ps[i].symbol,
+                                           rc.filled_qty, now_ns);
+                    if (rc.state == broker::CloseState::DEAD) {
+                        char tb[280];
+                        std::snprintf(tb, sizeof(tb),
+                                        "medium-sweep-exhausted sym=%.15s",
+                                        ps[i].symbol);
+                        OpsRow("drift-directive", "runner", tb,
+                               now_ns);
+                        Alert(P("alerts.jsonl").c_str(), "MEDIUM",
+                              "sweep-exhausted", tb, now_ns);
+                    } else {
+                        pending = true;
+                    }
+                    continue;
+                }
+                broker::CloseResult c2 = adapter_.MarketClose(
+                    ps[i].symbol, aq, eside, rhcoid);
+                if (c2.transport_ok) {
+                    pending = true;
+                    char tb[280];
+                    std::snprintf(tb, sizeof(tb),
+                                    "medium-sweep sym=%.15s qty=%lld",
+                                    ps[i].symbol, aq);
+                    OpsRow("drift-directive", "runner", tb,
+                           now_ns);
+                }
+                // Lookup failure: retry next cycle (no blind send).
                 continue;
             }
             if (pre.transport_ok && !pre.found) {
@@ -1199,11 +1618,44 @@ bool G0Runner::Dispatch(Slot& s, const exec::RouteOut& o,
                                                : s.intent.qty_shares;
             po.stop_cents = s.intent.stop_cents;
             po.tp_cents = s.intent.tp_cents;
-            CopyStr(po.client_order_id, sizeof(po.client_order_id), s.m.client_id);
-            CopyStr(po.intent_id, sizeof(po.intent_id), s.intent.intent_id);
+            // Own deterministic sub-identity (never the entry id:
+            // the venue rejects duplicate client_order_id). Same
+            // crash-window dedupe as sends: found = adopt (an
+            // existing repair proves protection only when its legs
+            // do); 404 = POST once under the repair id; failure =
+            // ambiguous (the router flattens — doc 06 sec. 6.1 OR).
+            broker::OrderSide pside =
+                (s.intent.side == broker::OrderSide::BUY)
+                    ? broker::OrderSide::SELL
+                    : broker::OrderSide::BUY;
+            char rcoid[65] = {0};
             s.has_repair = true;
-            s.repair_ok = adapter_.EstablishProtection(po);
-            return true;  // repair POST is broker-mutating
+            s.repair_ok = false;
+            if (!RepairClientId(cfg_.venue.broker,
+                                cfg_.venue.account,
+                                cfg_.venue.context_hash,
+                                s.intent.symbol, pside,
+                                s.intent.intent_id, rcoid)) {
+                OpsRow("reconcile", s.intent.intent_id,
+                       "repair-id-unrepresentable", now_ns);
+                return false;
+            }
+            CopyStr(s.repair_coid, sizeof(s.repair_coid), rcoid);
+            s.has_repair_id = true;
+            CopyStr(po.client_order_id, sizeof(po.client_order_id),
+                      rcoid);
+            CopyStr(po.intent_id, sizeof(po.intent_id),
+                      s.intent.intent_id);
+            bool posted = false;
+            broker::OrderQuery pre = adapter_.QueryOnce(rcoid);
+            if (pre.transport_ok && pre.found) {
+                s.repair_ok = pre.protection_active ||
+                              pre.bracket_class;
+            } else if (pre.transport_ok && !pre.found) {
+                s.repair_ok = adapter_.EstablishProtection(po);
+                posted = true;
+            }
+            return posted;
         }
         case RouteAction::FLATTEN_NOW:
             FlattenOnMedium(s, now_ns);
@@ -1311,6 +1763,15 @@ bool G0Runner::Cycle(long long now_ns) {
         while (sse_.Next(&ev)) {
             StreamObs so = MapTradeEvent(ev);
             if (so.kind == StreamKind::NONE) continue;
+            // Account-level cursor: every successfully parsed venue
+            // event advances the durable replay position — matched
+            // to a live slot or not (unmatched events move only the
+            // cursor, never router state; stalling on foreign orders
+            // would replay forever under since_id).
+            if (so.event_id[0] != '\0') {
+                cursor_ = so.event_id;
+                cursor_dirty_ = true;
+            }
             for (std::size_t i = 0; i < slots_.size(); ++i) {
                 Slot& s = slots_[i];
                 if (!s.active || s.done || s.frozen) continue;
@@ -1495,7 +1956,7 @@ bool G0Runner::Cycle(long long now_ns) {
                 } else if (!s.has_forced_q ||
                            !s.forced_q.transport_ok) {
                     s.forced_q =
-                        adapter_.QueryOnce(s.m.client_id);
+                        adapter_.QueryOnce(LookupIdFor(s));
                     s.has_forced_q = true;
                     s.last_s2_ns = now_ns;
                 }
@@ -1621,7 +2082,7 @@ bool G0Runner::Cycle(long long now_ns) {
                         (!s.has_forced_q ||
                          !s.forced_q.transport_ok)) {
                         s.forced_q =
-                            adapter_.QueryOnce(s.m.client_id);
+                            adapter_.QueryOnce(LookupIdFor(s));
                         s.has_forced_q = true;
                         s.last_s2_ns = now_ns;
                     }
@@ -1667,6 +2128,16 @@ bool G0Runner::Cycle(long long now_ns) {
                 // rowed path or refuses) — keep driving.
             }
             if (IsTerminalState(s.m.state)) {
+                // A closed EXIT proves its quantity shut: attribute
+                // it to same-symbol entries (oldest first) so the
+                // entry machine stops claiming provable open.
+                if (s.intent.kind ==
+                        jev::risk::IntentKind::EXIT &&
+                    s.m.state == exec::RouteState::CLOSED &&
+                    s.m.exit_closed_qty > 0)
+                    AttributeClosedQty(s.intent.symbol,
+                                       s.m.exit_closed_qty,
+                                       now_ns);
                 s.done = true;
                 break;
             }

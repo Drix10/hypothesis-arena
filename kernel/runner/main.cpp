@@ -4,6 +4,16 @@
 // CANNOT order by construction today (every adapter call refuses
 // transport-unwired; the machine reconciles, never sends).
 //
+// DEPLOYMENT CONTRACT (who owns what — the binary never supervises
+// itself): the operator starts exactly one instance per dir with a
+// human-created STAGE file; a SUPERVISOR owns the continuous window
+// (restarts, 30-day H2 coverage) and MUST NEVER auto-restart after
+// a HARD stop (exit 3 — forensics first, doc 10 sec. 10.3); resume
+// after a HALT-less restart needs the explicit --resume flag (doc 06
+// sec. 6.4 friction: without it the binary reconciles + manages
+// exits but submits nothing new). cycles=0 runs until HARD/refused
+// (the H2 unbounded mode); 1..1000000 runs bounded.
+//
 // The operator: creates <dir>/STAGE (human-signed G0_PAPER, capital
 // 0, chained attest per plan/10 sec. 10.5), starts exactly one
 // instance per dir. Intents arrive from the risk path (not yet
@@ -30,18 +40,30 @@ long long WallNs(void*) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    if (argc < 2 || argc > 3) {
-        std::printf("usage: g0_runner <dir> [cycles]\n");
+    if (argc < 2 || argc > 4) {
+        std::printf("usage: g0_runner <dir> [cycles] [--resume]\n");
         return 2;
     }
     long long cycles = 1;
-    if (argc == 3) {
+    bool resume = false;
+    for (int a = 2; a < argc; ++a) {
+        const char* p = argv[a];
+        if (p[0] == '-' && p[1] == '-' && p[2] != '\0') {
+            if (std::strcmp(p, "--resume") == 0) {
+                resume = true;
+                continue;
+            }
+            return 2;
+        }
+        if (cycles != 1) return 2;  // one count at most
         cycles = 0;
-        for (const char* p = argv[2]; *p; ++p) {
+        for (; *p; ++p) {
             if (*p < '0' || *p > '9') return 2;
             cycles = cycles * 10 + (*p - '0');
         }
-        if (cycles <= 0 || cycles > 1000000) return 2;
+        // 0 = unbounded (supervisor-owned window); 1..1000000
+        // bounded. Unbounded still stops on HARD/refused.
+        if (cycles < 0 || cycles > 1000000) return 2;
     }
     jev::runner::RunnerConfig cfg;
     cfg.dir = argv[1];
@@ -52,15 +74,16 @@ int main(int argc, char** argv) {
     jev::runner::RunnerDeps deps;
     deps.transport = nullptr;  // Phase 4 wires live HTTPS (fail closed)
     deps.now_ns = WallNs;
-    deps.restart_flag = true;  // operator-started (sec. 6.4 friction:
-                               // flagless auto-restarts stay gated)
+    deps.restart_flag = resume;  // sec. 6.4 friction: flagless
+                                 // starts reconcile + manage exits
+                                 // but submit nothing new
     jev::runner::G0Runner r(cfg, deps);
     const char* reason = nullptr;
     if (!r.Recover(&reason)) {
         std::printf("g0_runner: refused: %s\n", reason ? reason : "?");
         return 2;
     }
-    for (long long i = 0; i < cycles; ++i) {
+    for (long long i = 0; cycles == 0 || i < cycles; ++i) {
         if (!r.Cycle(WallNs(nullptr))) {
             std::printf("g0_runner: HARD stop\n");
             return 3;

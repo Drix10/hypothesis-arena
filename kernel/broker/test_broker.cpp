@@ -541,7 +541,7 @@ int main() {
             CloseState::PENDING, CloseState::PENDING,
             CloseState::PENDING, CloseState::PENDING,
             CloseState::DEAD, CloseState::DEAD, CloseState::DEAD,
-            CloseState::UNKNOWN};
+            CloseState::DEAD};
         for (int si = 0; si < 10; ++si) {
             char qb[256];
             std::snprintf(
@@ -555,14 +555,15 @@ int main() {
             std::snprintf(qn, sizeof(qn), "query-status-%d", si);
             Check(qst.found && qst.close_state == want_st[si], qn);
         }
-        // Unlisted statuses (done_for_day/replaced/...) stay UNKNOWN.
+        // Replaced orders are DEAD under the old id (the replacement
+        // rides a new id; the caller re-issues under the stable id).
         g_reply =
             "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
             "\"status\":\"replaced\",\"filled_qty\":\"10\"}";
         auto qrp = ad.QueryOnce(id);
         Check(qrp.found &&
-                  qrp.close_state == CloseState::UNKNOWN,
-              "query-status-replaced-unknown");
+                  qrp.close_state == CloseState::DEAD,
+              "query-status-replaced-dead");
         // Trade-event spellings are never order statuses: "fill"
         // and "partial_fill" both classify UNKNOWN (fail closed).
         g_reply =
@@ -603,7 +604,9 @@ int main() {
         bool rep = ad.EstablishProtection(o);
         Check(rep && Has(g_last_body, "\"order_class\":\"oco\"") &&
                   Has(g_last_body, "\"type\":\"limit\"") &&
-                  Has(g_last_body, "\"side\":\"sell\""),
+                  Has(g_last_body, "\"side\":\"sell\"") &&
+                  Has(g_last_body,
+                      "\"client_order_id\":\"cccc"),
               "repair-oco-limit-opposing");
         // Short recovery buys with stop above TP.
         o.side = OrderSide::SELL;
@@ -707,6 +710,48 @@ int main() {
         Check(!md.executed && md.transport_ok &&
                   md.state == CloseState::DEAD && md.filled_qty == 0,
               "close-dead-reissues");
+        // Frozen lifecycle matrix (Alpaca order/status + trade-event
+        // vocabulary): held / pending_replace / pending_cancel /
+        // suspended / restated / order_replace_rejected /
+        // order_cancel_rejected -> PENDING (the order is alive:
+        // wait/reconcile under the stable id, never re-issue
+        // blind — the pre-flight finds it and waits).
+        const char* alive[7] = {
+            "held", "pending_replace", "pending_cancel",
+            "suspended", "restated", "order_replace_rejected",
+            "order_cancel_rejected"};
+        for (int ai = 0; ai < 7; ++ai) {
+            char ab[192];
+            std::snprintf(
+                ab, sizeof(ab),
+                "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
+                "\"status\":\"%s\"}",
+                alive[ai]);
+            g_reply = ab;
+            auto ma = ad.MarketClose("AAPL", 10, OrderSide::SELL,
+                                     xid);
+            Check(!ma.executed && ma.transport_ok &&
+                      ma.state == CloseState::PENDING,
+                  "close-alive-waits");
+        }
+        // done_for_day / replaced -> DEAD under this id (terminal
+        // here; the caller reconciles by re-issue under the same
+        // stable id, never assumes execution).
+        const char* gone[2] = {"done_for_day", "replaced"};
+        for (int gi = 0; gi < 2; ++gi) {
+            char gb[192];
+            std::snprintf(
+                gb, sizeof(gb),
+                "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
+                "\"status\":\"%s\",\"filled_qty\":\"0\"}",
+                gone[gi]);
+            g_reply = gb;
+            auto mg = ad.MarketClose("AAPL", 10, OrderSide::SELL,
+                                     xid);
+            Check(!mg.executed && mg.transport_ok &&
+                      mg.state == CloseState::DEAD,
+                  "close-terminal-reissues");
+        }
         // Ambiguous close (response lost): not executed, no UUID —
         // the caller reconciles by client ID, never re-sends blind.
         g_status = 500;

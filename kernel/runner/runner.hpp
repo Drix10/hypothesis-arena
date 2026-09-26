@@ -115,6 +115,13 @@ struct Slot {
     // failure blocking fresh reconciliation).
     bool has_forced_q = false;
     broker::OrderQuery forced_q;
+    // Repair-order identity (ESTABLISH_PROTECTION rides its own
+    // deterministic sub-id, never the entry id — the venue rejects
+    // duplicate client_order_id). Re-derived on recovery (pure
+    // function of venue + economics), so no snapshot field is
+    // needed and the frozen router format never changes.
+    bool has_repair_id = false;
+    char repair_coid[65]{};
     // Stream queue (arrival FIFO, one stamped per drive iteration).
     enum { kStreamQ = 8 };
     StreamEvt sev_[kStreamQ];
@@ -153,8 +160,10 @@ class G0Runner {
     // Submit an authorized intent. ENTRY gated on bad-id / cap /
     // kill / HALT / stage / freeze / universe-cap. EXIT bypasses
     // freeze + stage (old risk stays managed when STAGE demotes or
-    // a symbol freezes — the frozen operating rule); both need a
-    // filesystem-safe id, and an intent id is permanently bound to
+    // a symbol freezes — the frozen operating rule) AND the entry
+    // slot cap (refusing an exit strands risk; exits stop only at
+    // the 2x hard ceiling that backs the no-realloc guarantee).
+    // Every submit needs a
     // one immutable intent (reuse with different economics, or any
     // re-registration of a journaled intent, is refused). False =
     // refused (reason static).
@@ -167,11 +176,16 @@ class G0Runner {
     std::size_t slots() const { return slots_.size(); }
     const Slot* Find(const char* intent_id) const;
     const std::string& cursor() const { return cursor_; }
-    // Durable stream cursor (last stamped venue ULID, "" when
-    // none): the Phase-4 transport resumes live SSE with this as
-    // since_id (replay, not re-subscribe-from-now). Missing file =
-    // empty cursor (first run); cursor loss only replays more (
-    // duplicates drop at the seam), never less.
+    // Durable stream cursor (last PROCESSED venue ULID, "" when
+    // none): every successfully parsed venue event advances it —
+    // matched to a slot or not (the SSE stream is account-level;
+    // stalling on unmatched orders would replay forever). Matched
+    // events still stamp through the slot queue; foreign events
+    // move only the cursor, never router state. The Phase-4
+    // transport resumes live SSE with this as since_id (replay,
+    // not re-subscribe-from-now). Missing file = empty cursor
+    // (first run); cursor loss only replays more (duplicates drop
+    // at the seam), never less.
 
    private:
     RunnerConfig cfg_;
@@ -211,9 +225,34 @@ class G0Runner {
                 const char* text, long long now_ns);
     void HardManageSlot(Slot& s, long long now_ns);
     bool HardStop(long long now_ns, const char* why);
+    // Pre-flighted single close under a stable hard id (GET ->
+    // found: adopt, never resend; 404: POST once; failure: journal
+    // + alert, fail closed). Shared by the slot path and the
+    // slotless-position path so HARD never blind-sends.
+    bool HardCloseOnce(const char* symbol, long long qty,
+                       broker::OrderSide eside, const char* hid,
+                       const char* scope_intent, long long now_ns);
+    // A live ENTRY slot with provable open covers its symbol (the
+    // slot path manages it; the position sweep skips it — never
+    // two closes for one position).
+    bool CoveredBySlot(const char* symbol) const;
+    // Slotless open position under HARD: no economics on file, so
+    // protection is unverifiable — flatten once (pre-flighted) +
+    // journal + alert, never a second identity for one position.
+    void HardManagePosition(const char* symbol, long long qty,
+                            long long now_ns);
+    // Attribute an authoritative close quantity to same-symbol
+    // ENTRY slots, oldest first (flatten EXITs, sweep fills, manual
+    // exits — the entry machine never learns its position closed
+    // otherwise, and S2 would drift on healthy flat forever).
+    // Leftover (no local expectation) is dropped, never invented.
+    void AttributeClosedQty(const char* symbol, long long qty,
+                            long long now_ns);
     void MediumPass(long long now_ns);
     bool VenueOk(bool* open, bool* spread_ok);
     int LocalNet(const char* symbol) const;  // signed local open
+    // (PROTECTED included: it IS the normal open position —
+    // filled minus closed; CANCELLED/UNKNOWN/CLOSED excluded)
     void PositionCheck(long long now_ns);
     bool AllFlat();
     // Terminal slots leave the vector at the next Cycle/Submit
