@@ -124,6 +124,13 @@ struct Slot {
     bool has_shaping = false;
     std::int64_t shaping_qty = 0;
     bool stream_overflow_ = false;  // queue full: REST + alert
+    bool intent_rowed = false;  // journal holds the intent row
+                                // (crash pre-first-persist): IDLE skips
+                                // WRITE, JOURNAL_PENDING attests it
+    bool frozen = false;  // durability failed across a mutating
+                          // send: never drive blind (fail closed +
+                          // loud); crash recovery then refuses rather
+                          // than risk a double-send
     // Confirm-loop guard (CANCEL_SENT re-checks are budget-free in
     // the router; the runner bounds them and fails explicitly).
     int confirm_tries = 0;
@@ -181,6 +188,7 @@ class G0Runner {
     std::string cursor_;      // last stamped ULID (durable)
     bool cursor_dirty_ = false;
     long long last_pos_ns_ = 0;  // account position check clock
+    long long last_ops_day_ = 0;  // §6.3 rhythm clock (0 = run now)
 
     std::string P(const char* name) const;
     std::string SnapPath(const char* intent_id) const;
@@ -191,7 +199,9 @@ class G0Runner {
     bool DrainEmergency();
     bool PersistSlot(Slot& s);
     bool LoadSlot(Slot& s, const char* intent_id);
-    void Dispatch(Slot& s, const exec::RouteOut& o, long long now_ns);
+    // Dispatch returns true when broker-mutating transport fired
+    // (POST/DELETE — the persist that follows is load-bearing).
+    bool Dispatch(Slot& s, const exec::RouteOut& o, long long now_ns);
     void MaybeForceQuery(Slot& s, long long now_ns);
     bool FlattenOnMedium(Slot& s, long long now_ns);
     bool EntriesAllowedNow() const;
@@ -206,6 +216,15 @@ class G0Runner {
     int LocalNet(const char* symbol) const;  // signed local open
     void PositionCheck(long long now_ns);
     bool AllFlat();
+    // Terminal slots leave the vector at the next Cycle/Submit
+    // (history stays in journal + snapshots; capacity is for live
+    // work, not memory of the dead). Find-after-terminal within
+    // the SAME cycle still sees the slot.
+    void ReclaimDone();
+    // §6.3 daily rhythm on day roll (verified chain, dated journal
+    // copy, 90-day retention, backup, appended summary). False =
+    // chain break (HARD, like Recover).
+    bool DailyOps(long long now_ns);
 };
 
 }  // namespace runner

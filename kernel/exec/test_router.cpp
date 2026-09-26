@@ -154,6 +154,22 @@ int main() {
     using jev::exec::RouteStep;
     OrderIntent in = GoodEntry();
     VenueCtx venue = GoodVenue();
+    // intent_rowed: crash between the journaled intent row and the
+    // first snapshot skips WRITE (never a second intent row); the
+    // default path still journals first.
+    {
+        RouteMachine m;
+        RouteObs o = OpenMarket();
+        o.intent_rowed = true;
+        auto r1 = Step(m, in, venue, o);
+        Check(r1.action == RouteAction::NONE &&
+                  r1.next.state == RouteState::JOURNAL_PENDING,
+              "rowed-skips-write");
+        RouteObs o2 = OpenMarket();
+        auto r2 = Step(m, in, venue, o2);
+        Check(r2.action == RouteAction::WRITE_JOURNAL,
+              "unrowed-writes");
+    }
     // 1. entry happy path: journal -> send -> query -> fill
     {
         RouteMachine m;

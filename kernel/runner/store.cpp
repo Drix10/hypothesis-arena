@@ -3,11 +3,15 @@
 
 #include <cstdio>
 #include <cstring>
+#include <cerrno>
 
 #ifdef _WIN32
+#include <direct.h>
 #include <io.h>
 #define DUR_COMMIT(f) _commit(_fileno(f))
 #else
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <unistd.h>
 #define DUR_COMMIT(f) fsync(fileno(f))
 #endif
@@ -22,6 +26,17 @@ bool CommitFile(FILE* f) {
     if (std::fflush(f) != 0) return false;
     return DUR_COMMIT(f) == 0;
 }
+std::string Trim(const std::string& s) {
+    std::size_t a = 0;
+    while (a < s.size() && (s[a] == ' ' || s[a] == '\t')) ++a;
+    std::size_t b = s.size();
+    while (b > a && (s[b - 1] == ' ' || s[b - 1] == '\t' ||
+                     s[b - 1] == '\r' || s[b - 1] == '\n'))
+        --b;
+    return s.substr(a, b - a);
+}
+}  // namespace
+
 // Parse "seq|ts|kind|intent|payload|prev|row" into a Row (strict:
 // exactly 7 fields, then VerifyRow).
 bool ParseRowLine(const std::string& ln, journal::Row* out) {
@@ -68,16 +83,18 @@ bool ParseRowLine(const std::string& ln, journal::Row* out) {
     *out = r;
     return true;
 }
-std::string Trim(const std::string& s) {
-    std::size_t a = 0;
-    while (a < s.size() && (s[a] == ' ' || s[a] == '\t')) ++a;
-    std::size_t b = s.size();
-    while (b > a && (s[b - 1] == ' ' || s[b - 1] == '\t' ||
-                     s[b - 1] == '\r' || s[b - 1] == '\n'))
-        --b;
-    return s.substr(a, b - a);
+
+// Serialize one journal row to its canonical line (JournalAppend
+// formats inline; the drain path needs the same bytes to compare
+// buffer lines against the live tail).
+bool RowLine(const journal::Row& r, char* out, std::size_t n) {
+    int w = std::snprintf(out, n, "%llu|%lld|%s|%s|%s|%s|%s",
+                          (unsigned long long)r.seq,
+                          (long long)r.ts_ns, r.kind.c_str(),
+                          r.intent_id.c_str(), r.payload_hash.c_str(),
+                          r.prev_hash.c_str(), r.row_hash.c_str());
+    return w > 0 && static_cast<std::size_t>(w) < n;
 }
-}  // namespace
 
 bool AppendLine(const char* path, const char* line) {
     if (!path || !line) return false;
@@ -540,6 +557,42 @@ bool BackupFile(const char* src, const char* dst) {
         return false;
     }
     return true;
+}
+
+bool CopyFileBytes(const char* src, const char* dst) {
+    // Same contract as BackupFile (byte-copy + OS-commit + atomic
+    // rename); the dated journal copy IS a backup with a rhythm
+    // name, so one implementation serves both.
+    return BackupFile(src, dst);
+}
+
+bool MkDirIfMissing(const char* dir) {
+    if (!dir || dir[0] == '\0') return false;
+#ifdef _WIN32
+    if (_mkdir(dir) == 0) return true;
+#else
+    if (mkdir(dir, 0700) == 0) return true;
+#endif
+    return errno == EEXIST;
+}
+
+void CivilFromDays(long long z, int* y, unsigned* m, unsigned* d) {
+    // Howard Hinnant's civil_from_days (public domain algorithm):
+    // days since 1970-01-01 -> proleptic-Gregorian y/m/d.
+    z += 719468;
+    long long era = (z >= 0 ? z : z - 146096) / 146097;
+    unsigned doe = (unsigned)(z - era * 146097);  // [0, 146096]
+    unsigned yoe =
+        (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    long long yy = (long long)yoe + era * 400;
+    unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    unsigned mp = (5 * doy + 2) / 153;
+    unsigned dd = doy - (153 * mp + 2) / 5 + 1;
+    unsigned mm = mp + (mp < 10 ? 3 : -9);
+    yy += (mm <= 2) ? 1 : 0;
+    if (y) *y = (int)yy;
+    if (m) *m = mm;
+    if (d) *d = dd;
 }
 
 bool SummarizeJournal(const char* path, Summary* out) {

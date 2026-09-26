@@ -161,6 +161,11 @@ struct RouteObs {
     bool feed_stale = false;     // feed stale > 30 s (Slice F flag)
     bool stage_entry_ok = false;  // verified stage permits entries
     bool symbol_frozen = false;   // caller-owned UNKNOWN freeze set
+    // Crash seam (runner-owned): the journal ALREADY holds this
+    // intent's row (written pre-crash, snapshot lost before the
+    // first persist) — skip the WRITE, never a second row. Default
+    // false preserves the journal-first path everywhere else.
+    bool intent_rowed = false;
 };
 
 struct RouteMachine {

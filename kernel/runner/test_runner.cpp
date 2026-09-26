@@ -130,7 +130,15 @@ static void RemoveSandbox(const std::string& d) {
         do {
             std::string n = fd.cFileName;
             if (n == "." || n == "..") continue;
-            DeleteFileA((d + "\\" + n).c_str());
+            std::string full = d + "\\" + n;
+            DWORD a = GetFileAttributesA(full.c_str());
+            if (a != INVALID_FILE_ATTRIBUTES &&
+                (a & FILE_ATTRIBUTE_DIRECTORY)) {
+                RemoveSandbox(full);
+                RemoveDirectoryA(full.c_str());
+            } else {
+                DeleteFileA(full.c_str());
+            }
         } while (FindNextFileA(h, &fd));
         FindClose(h);
     }
@@ -139,6 +147,8 @@ static void RemoveSandbox(const std::string& d) {
 #else
 #include <dirent.h>
 #include <unistd.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 static void MkDir(const std::string& d) { mkdir(d.c_str(), 0700); }
 static void RmDir(const std::string& d) { rmdir(d.c_str()); }
 static void RemoveSandbox(const std::string& d) {
@@ -148,7 +158,14 @@ static void RemoveSandbox(const std::string& d) {
         while ((e = readdir(dp)) != nullptr) {
             std::string n = e->d_name;
             if (n == "." || n == "..") continue;
-            std::remove((d + "/" + n).c_str());
+            std::string full = d + "/" + n;
+            struct stat st;
+            if (stat(full.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
+                RemoveSandbox(full);
+                rmdir(full.c_str());
+            } else {
+                std::remove(full.c_str());
+            }
         }
         closedir(dp);
     }
@@ -183,6 +200,17 @@ static void WriteFile(const std::string& p, const std::string& b) {
     FILE* f = std::fopen(p.c_str(), "wb");
     std::fwrite(b.data(), 1, b.size(), f);
     std::fclose(f);
+}
+static std::string ReadWhole(const std::string& p) {
+    FILE* f = std::fopen(p.c_str(), "rb");
+    if (!f) return "";
+    std::string out;
+    char buf[4096];
+    std::size_t n = 0;
+    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0)
+        out.append(buf, n);
+    std::fclose(f);
+    return out;
 }
 static void WriteStageG0(const std::string& dir) {
     std::string body =
@@ -388,6 +416,20 @@ static bool CrashFlatten(const std::string& dir, const char* fid,
                   0LL, fcid, fid, sym, 0);
     WriteFile(dir + "/snap-" + std::string(fid) + ".txt", snap);
     return true;
+}
+// Craft one emergency/journal row line (chained): FormatRow +
+// canonical serialization for mid-drain crash images.
+static std::string EmgRow(std::uint64_t seq, long long ts,
+                          const char* kind, const char* iid,
+                          const char* body, const char* prev) {
+    jev::journal::Row r;
+    if (!jev::journal::FormatRow(seq, ts, kind, iid,
+                                 jev::Sha256Hex(body).c_str(), prev,
+                                 &r))
+        return "";
+    char ln[1024];
+    if (!jev::runner::RowLine(r, ln, sizeof(ln))) return "";
+    return ln;
 }
 
 int main() {
@@ -1642,6 +1684,318 @@ int main() {
         if (mf) std::fclose(mf);
         Check(mn > 0 && std::string(mbuf) == "PROTECTION_ONLY",
               "mp-protection-only");
+    }
+    // 29. Emergency drain crash seams: for a 2-row buffer, every
+    // mid-drain crash image (applied 0, 1, 2 rows) converges to
+    // exactly one chain + an empty buffer. Live starter rows come
+    // from CrashImage (valid files for the slot rebuild).
+    for (int applied = 0; applied <= 2; ++applied) {
+        Rig r;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-180", "AAPL", 0, 0, 100,
+                          2, 0, &cid)
+                   .empty(),
+              "dr-image");
+        std::vector<jev::journal::Row> jr0;
+        Check(jev::runner::JournalLoad(
+                      (r.dir + "/journal.jsonl").c_str(), &jr0) &&
+                  jr0.size() == 1,
+              "dr-row0");
+        std::string e1 = EmgRow(
+            1, g_now, "partial", "intent-180", "p1",
+            jr0[0].row_hash.c_str());
+        jev::journal::Row pr1;
+        Check(jev::runner::ParseRowLine(e1.c_str(), &pr1),
+              "dr-parse1");
+        std::string e2 = EmgRow(2, g_now, "partial", "intent-180",
+                               "p2", pr1.row_hash.c_str());
+        Check(!e1.empty() && !e2.empty(), "dr-crafted");
+        // Crash image: `applied` rows already in the journal AND
+        // still heading the buffer (append-then-remove torn).
+        std::string journal = ReadWhole(r.dir + "/journal.jsonl");
+        std::string emg = e1 + "\n" + e2 + "\n";
+        if (applied >= 1) journal += e1 + "\n";
+        if (applied >= 2) journal += e2 + "\n";
+        WriteFile(r.dir + "/journal.jsonl", journal.c_str());
+        WriteFile(r.dir + "/emergency.jsonl", emg.c_str());
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "dr-recover");
+        std::vector<jev::journal::Row> rows;
+        Check(jev::runner::JournalLoad(
+                      (r.dir + "/journal.jsonl").c_str(), &rows) &&
+                  rows.size() == 3 && rows[0].seq == 0 &&
+                  rows[1].seq == 1 && rows[2].seq == 2 &&
+                  rows[1].prev_hash == rows[0].row_hash &&
+                  rows[2].prev_hash == rows[1].row_hash,
+              applied == 0 ? "dr-converge-0"
+              : applied == 1 ? "dr-converge-1"
+                             : "dr-converge-2");
+        Check(jev::runner::JournalVerifyFile(
+                  (r.dir + "/journal.jsonl").c_str()),
+              applied == 0 ? "dr-chain-0"
+              : applied == 1 ? "dr-chain-1"
+                             : "dr-chain-2");
+        FILE* ef =
+            std::fopen((r.dir + "/emergency.jsonl").c_str(), "rb");
+        char ebuf[64] = {0};
+        std::size_t en =
+            ef ? std::fread(ebuf, 1, sizeof(ebuf) - 1, ef) : 999;
+        if (ef) std::fclose(ef);
+        Check(en == 0, applied == 0 ? "dr-empty-0"
+                        : applied == 1 ? "dr-empty-1"
+                                       : "dr-empty-2");
+    }
+    // 30. Broken emergency head refuses recovery (fail closed).
+    {
+        Rig r;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-181", "AAPL", 0, 0, 100,
+                          2, 0, &cid)
+                   .empty(),
+              "dx-image");
+        WriteFile(r.dir + "/emergency.jsonl",
+                  "1|2|partial|intent-181|00|GARBAGE|ff\n");
+        G0Runner g(r.cfg, r.deps);
+        Check(!g.Recover(nullptr), "dx-refuses");
+    }
+    // 31. Crash between the journaled intent row and the first
+    // snapshot: recovery attests the row (IDLE skips WRITE —
+    // exactly ONE intent row ever) and the lifecycle completes.
+    // (The row is hand-placed: a live cycle would drive past the
+    // torn state instead of parking in it.)
+    {
+        Rig r;
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "rw-recover");
+        Check(g.SubmitIntent(GoodIntent("intent-190", "AAPL",
+                                        false, 100),
+                             nullptr),
+              "rw-submit");
+        std::string row0 = EmgRow(
+            0, g_now, "intent", "intent-190", "submit",
+            jev::journal::GenesisPrev().c_str());
+        Check(!row0.empty(), "rw-row0");
+        WriteFile(r.dir + "/journal.jsonl", row0 + "\n");
+        G0Runner g2(r.cfg, r.deps);
+        Check(g2.Recover(nullptr), "rw-recover2");
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 BracketReply("accepted", "0").c_str());
+        PushRule("GET", "by_client_order_id", 200,
+                 HeldReply("filled", "100").c_str());
+        Check(g2.Cycle(g_now), "rw-cycle2");
+        const auto* s = g2.Find("intent-190");
+        Check(s && s->done &&
+                  s->m.state == jev::exec::RouteState::PROTECTED,
+              "rw-protected");
+        std::vector<jev::journal::Row> rows;
+        int intent_rows = 0;
+        if (jev::runner::JournalLoad(
+                (r.dir + "/journal.jsonl").c_str(), &rows)) {
+            for (std::size_t i = 0; i < rows.size(); ++i) {
+                if (rows[i].kind == "intent" &&
+                    rows[i].intent_id == "intent-190")
+                    ++intent_rows;
+            }
+        }
+        Check(intent_rows == 1, "rw-one-row");
+        Check(CountMethod("POST", "/v2/orders") == 1,
+              "rw-one-post");
+    }
+    // 32. Half registrations refuse: a journaled row with NEITHER
+    // crash image nor intent file is S2/human territory; with the
+    // file present the rowed path recovers.
+    {
+        Rig r;
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "hr-recover");
+        Check(g.SubmitIntent(GoodIntent("intent-191", "AAPL",
+                                        false, 100),
+                             nullptr),
+              "hr-submit");
+        std::string row0 = EmgRow(
+            0, g_now, "intent", "intent-191", "submit",
+            jev::journal::GenesisPrev().c_str());
+        Check(!row0.empty(), "hr-row0");
+        WriteFile(r.dir + "/journal.jsonl", row0 + "\n");
+        Check(std::remove((r.dir + "/intent-intent-191.txt").c_str()) ==
+                  0,
+              "hr-tear-file");
+        G0Runner g2(r.cfg, r.deps);
+        Check(!g2.Recover(nullptr), "hr-refuses-no-file");
+        WriteFile(r.dir + "/intent-intent-191.txt",
+                  "AAPL|0|0|100|22000|24000\n");
+        G0Runner g3(r.cfg, r.deps);
+        Check(g3.Recover(nullptr), "hr-rowed-recovers");
+    }
+    // 33. Duplicate intent rows: first wins, one slot, alerted —
+    // never two slots driving one id.
+    {
+        Rig r;
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "dd-recover");
+        Check(g.SubmitIntent(GoodIntent("intent-192", "AAPL",
+                                        false, 100),
+                             nullptr),
+              "dd-submit");
+        std::string row0 = EmgRow(
+            0, g_now, "intent", "intent-192", "submit",
+            jev::journal::GenesisPrev().c_str());
+        jev::journal::Row pr0;
+        Check(jev::runner::ParseRowLine(row0.c_str(), &pr0),
+              "dd-parse");
+        std::string row1 = EmgRow(1, g_now, "intent", "intent-192",
+                                 "submit", pr0.row_hash.c_str());
+        Check(!row0.empty() && !row1.empty(), "dd-rows");
+        WriteFile(r.dir + "/journal.jsonl",
+                  (row0 + "\n" + row1 + "\n").c_str());
+        G0Runner g2(r.cfg, r.deps);
+        Check(g2.Recover(nullptr), "dd-recover2");
+        Check(g2.slots() == 1 &&
+                  g2.Find("intent-192") != nullptr,
+              "dd-one-slot");
+        FILE* af =
+            std::fopen((r.dir + "/alerts.jsonl").c_str(), "rb");
+        char abuf[4096] = {0};
+        std::size_t an =
+            af ? std::fread(abuf, 1, sizeof(abuf) - 1, af) : 0;
+        if (af) std::fclose(af);
+        Check(an > 0 &&
+                  std::string(abuf).find("recover-dup-intent") !=
+                      std::string::npos,
+              "dd-alerted");
+    }
+    // 34. Long-run capacity: 20 sequential completes with
+    // max_slots=4 — deferred reclamation keeps admission open
+    // (without it the 5th submit wedges forever).
+    {
+        Rig r;
+        r.cfg.max_slots = 4;
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "lc-recover");
+        bool all_ok = true;
+        for (int k = 0; k < 20; ++k) {
+            char iid[32];
+            std::snprintf(iid, sizeof(iid), "intent-2%02d", k);
+            if (!g.SubmitIntent(GoodIntent(iid, "AAPL", false, 100),
+                                nullptr)) {
+                all_ok = false;
+                break;
+            }
+            PushRule("GET", "by_client_order_id", 404, "{}");
+            PushRule("POST", "/v2/orders", 200,
+                     BracketReply("accepted", "0").c_str());
+            PushRule("GET", "by_client_order_id", 200,
+                     HeldReply("filled", "100").c_str());
+            if (!g.Cycle(g_now)) {
+                all_ok = false;
+                break;
+            }
+            const auto* s = g.Find(iid);
+            if (!s || !s->done ||
+                s->m.state != jev::exec::RouteState::PROTECTED) {
+                all_ok = false;
+                break;
+            }
+        }
+        Check(all_ok, "lc-twenty-complete");
+        Check(g.slots() <= 4, "lc-bounded");
+        Check(jev::runner::JournalVerifyFile(
+                  (r.dir + "/journal.jsonl").c_str()),
+              "lc-chain");
+    }
+    // 35. Snapshot failure across a mutating send freezes loudly:
+    // exactly one POST, journal intact, zero further transport.
+    {
+        Rig r;
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "pz-recover");
+        Check(g.SubmitIntent(GoodIntent("intent-200", "AAPL",
+                                        false, 100),
+                             nullptr),
+              "pz-submit");
+        // Block the snapshot path with a directory.
+#ifdef _WIN32
+        _mkdir((r.dir + "/snap-intent-200.txt").c_str());
+#else
+        mkdir((r.dir + "/snap-intent-200.txt").c_str(), 0700);
+#endif
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 BracketReply("accepted", "0").c_str());
+        Check(g.Cycle(g_now), "pz-cycle");
+        const auto* s = g.Find("intent-200");
+        Check(s && s->frozen, "pz-frozen");
+        Check(CountMethod("POST", "/v2/orders") == 1,
+              "pz-one-post");
+        Check(jev::runner::JournalVerifyFile(
+                  (r.dir + "/journal.jsonl").c_str()),
+              "pz-chain");
+        int gets = CountMethod("GET", "by_client_order_id");
+        int posts = CountMethod("POST", "/v2/orders");
+        Check(g.Cycle(g_now), "pz-cycle2");
+        Check(CountMethod("GET", "by_client_order_id") == gets &&
+                  CountMethod("POST", "/v2/orders") == posts,
+              "pz-no-further-transport");
+    }
+    // 36. §6.1 pre-send durability: a failed intent registration
+    // refuses the submit with zero transport (nothing unsent can
+    // exist without its durable identity).
+    {
+        Rig r;
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "ps-recover");
+#ifdef _WIN32
+        _mkdir((r.dir + "/intent-intent-201.txt").c_str());
+#else
+        mkdir((r.dir + "/intent-intent-201.txt").c_str(), 0700);
+#endif
+        Check(!g.SubmitIntent(GoodIntent("intent-201", "AAPL",
+                                         false, 100),
+                              nullptr),
+              "ps-refused");
+        Check(g_log.empty(), "ps-zero-transport");
+    }
+    // 37. §6.3 rhythm on day roll: verify + dated copy + backup +
+    // summary; ancient dated copies prune; a mid-run break refuses.
+    {
+        int cy = 0;
+        unsigned cm = 0, cd = 0;
+        jev::runner::CivilFromDays(0, &cy, &cm, &cd);
+        Check(cy == 1970 && cm == 1 && cd == 1, "ops-epoch");
+        jev::runner::CivilFromDays(19358, &cy, &cm, &cd);
+        Check(cy == 2023 && cm == 1 && cd == 1, "ops-known-date");
+        Rig r;
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "ops-recover");
+        std::string orow = EmgRow(
+            0, g_now, "intent", "intent-ops", "submit",
+            jev::journal::GenesisPrev().c_str());
+        Check(!orow.empty(), "ops-row");
+        WriteFile(r.dir + "/journal.jsonl", orow + "\n");
+        Check(g.Cycle(g_now), "ops-cycle1");
+        long long day = g_now / 86400000000000LL;
+        jev::runner::CivilFromDays(day, &cy, &cm, &cd);
+        char stamp[16];
+        std::snprintf(stamp, sizeof(stamp), "%04d%02u%02u", cy, cm,
+                      cd);
+        Check(Exists(r.dir + "/journal-" + stamp + ".jsonl"),
+              "ops-dated-copy");
+        Check(Exists(r.dir + "/summary.txt"), "ops-summary");
+        Check(Exists(r.dir + "/backup/journal-" + stamp + ".jsonl"),
+              "ops-backup");
+        // Ancient copy prunes on the next roll; then corruption on
+        // the roll after refuses the cycle (mid-run HARD).
+        WriteFile(r.dir + "/journal-20000101.jsonl", "x\n");
+        g_now += 2LL * 86400000000000LL;
+        Check(g.Cycle(g_now), "ops-cycle2");
+        Check(!Exists(r.dir + "/journal-20000101.jsonl"),
+              "ops-pruned");
+        std::string bad = ReadWhole(r.dir + "/journal.jsonl");
+        WriteFile(r.dir + "/journal.jsonl",
+                  (bad + "GARBAGE\n").c_str());
+        g_now += 2LL * 86400000000000LL;
+        Check(!g.Cycle(g_now), "ops-break-refuses");
     }
     if (g_fail == 0)
         std::printf("RUNNER SUITE: ALL PASS (%d checks)\n", g_count);

@@ -38,6 +38,11 @@ bool FileExists(const char* path);
 // [A-Za-z0-9_.-], hashes lowercase hex, kinds frozen vocabulary).
 bool JournalAppend(const char* path, const journal::Row& r);
 bool JournalLoad(const char* path, std::vector<journal::Row>* out);
+// Strict re-parse of one canonical journal line (same grammar as
+// the live file; malformed numbers fail, never throw).
+bool ParseRowLine(const std::string& ln, journal::Row* out);
+// Serialize one row to its canonical line (false on truncation).
+bool RowLine(const journal::Row& r, char* out, std::size_t n);
 // Load + VerifyChain. False on any break (caller HARD-kills).
 bool JournalVerifyFile(const char* path);
 // payload_hash input: sha256 over the kind-specific body (<=280 chars,
@@ -90,6 +95,15 @@ bool Alert(const char* path, const char* level, const char* code,
            const char* detail, long long ts_ns);
 
 // ---- retention / backup / summary ----------------------------------
+// Byte-copy src -> dst (fails closed on any short read/write).
+bool CopyFileBytes(const char* src, const char* dst);
+// Make a directory when missing (single level; true when the dir
+// exists afterwards, false only when creation was needed and
+// failed).
+bool MkDirIfMissing(const char* dir);
+// Unix-day (days since 1970-01-01) -> proleptic-Gregorian y/m/d
+// (Howard Hinnant's civil_from_days — for dated journal names).
+void CivilFromDays(long long z, int* y, unsigned* m, unsigned* d);
 // Delete journal-YYYYMMDD.jsonl files in dir older than 90 days
 // (filename dates only; unparseable names are kept, never deleted).
 bool RetainJournals(const char* dir, long long now_unix_day,

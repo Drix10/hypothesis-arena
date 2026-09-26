@@ -138,73 +138,73 @@ bool G0Runner::EmergencyAppend(const journal::Row& r) {
 }
 
 bool G0Runner::DrainEmergency() {
-    std::vector<std::string> lns;
-    if (!ReadLines(P("emergency.jsonl").c_str(), &lns)) return true;
-    bool any = false;
-    for (std::size_t i = 0; i < lns.size(); ++i) {
-        if (!lns[i].empty()) {
-            any = true;
-            break;
-        }
-    }
-    if (!any) return true;
-    // Single-writer: emergency rows were sequenced against the live
-    // tail, so drain = move lines + verify the joined chain.
+    // Crash-idempotent, one row per turn: append the head (unless
+    // the journal tail already IS the head — a pre-crash append),
+    // then remove the head from the buffer file. ANY crash
+    // restarts the turn; convergence = full chain + empty buffer,
+    // never a duplicate row, never a half-drain refusal.
+    std::string jp = P("journal.jsonl");
+    std::string ep = P("emergency.jsonl");
     std::vector<journal::Row> jr;
-    if (!JournalLoad(P("journal.jsonl").c_str(), &jr)) return false;
-    std::vector<journal::Row> er;
-    for (std::size_t i = 0; i < lns.size(); ++i) {
-        if (lns[i].empty()) continue;
-        // Strict re-parse (same grammar as the live file).
-        std::string ln = lns[i];
-        journal::Row r;
-        std::vector<std::string> f;
-        std::string cur;
-        for (char c : ln) {
-            if (c == '|') {
-                f.push_back(cur);
-                cur.clear();
-            } else {
-                cur.push_back(c);
+    if (!JournalLoad(jp.c_str(), &jr)) return false;
+    // Every applied line (live file first, then each appended head):
+    // a buffer head matching ANY of these was already drained by a
+    // dead process — drop it, never re-append. Anything else that
+    // does not chain to the tail is a genuine break (refuse).
+    std::vector<std::string> jlines;
+    ReadLines(jp.c_str(), &jlines);  // missing = empty (JournalLoad
+                                     // above already gated readability)
+    std::vector<std::string> seen;
+    for (std::size_t i = 0; i < jlines.size(); ++i) {
+        if (!jlines[i].empty()) seen.push_back(jlines[i]);
+    }
+    std::string tail = journal::GenesisPrev();
+    if (!jr.empty()) tail = jr.back().row_hash;
+    for (;;) {
+        std::vector<std::string> lns;
+        if (!ReadLines(ep.c_str(), &lns)) return true;  // no buffer
+        std::size_t head = lns.size();
+        for (std::size_t i = 0; i < lns.size(); ++i) {
+            if (!lns[i].empty()) {
+                head = i;
+                break;
             }
         }
-        f.push_back(cur);
-        if (f.size() != 7) return false;
-        if (!journal::FormatRow(
-                (std::uint64_t)std::stoull(f[0]),
-                (std::int64_t)std::stoll(f[1]), f[2].c_str(),
-                f[3].c_str(), f[4].c_str(), f[5].c_str(), &r))
-            return false;
-        if (r.row_hash != f[6]) return false;
-        er.push_back(r);
+        if (head == lns.size()) {
+            AtomicWrite(ep.c_str(), "");
+            return true;  // drained
+        }
+        journal::Row r;
+        if (!ParseRowLine(lns[head], &r)) return false;
+        if (r.prev_hash == tail) {
+            // Fresh row: append, advance the tail, remember it.
+            char ln[1024];
+            if (!RowLine(r, ln, sizeof(ln))) return false;
+            if (!AppendLine(jp.c_str(), ln)) return false;
+            seen.push_back(lns[head]);
+            tail = r.row_hash;
+        } else {
+            // Not chained to the tail: already applied (the exact
+            // line sits in the chain — a pre-crash append) or a
+            // genuine chain break (refuse loudly, never skip).
+            bool applied = false;
+            for (std::size_t i = 0; i < seen.size(); ++i) {
+                if (seen[i] == lns[head]) {
+                    applied = true;
+                    break;
+                }
+            }
+            if (!applied) return false;
+        }
+        // Remove the head (atomic rewrite); loop for the next row.
+        std::string rest;
+        for (std::size_t i = head + 1; i < lns.size(); ++i) {
+            if (lns[i].empty()) continue;
+            rest += lns[i];
+            rest += "\n";
+        }
+        if (!AtomicWrite(ep.c_str(), rest.c_str())) return false;
     }
-    if (er.empty()) {
-        AtomicWrite(P("emergency.jsonl").c_str(), "");
-        return true;
-    }
-    // Continuity: head links to the live tail (or genesis), then the
-    // emergency rows chain among themselves.
-    std::string expect_prev =
-        jr.empty() ? journal::GenesisPrev() : jr.back().row_hash;
-    if (er[0].prev_hash != expect_prev) return false;
-    for (std::size_t i = 1; i < er.size(); ++i) {
-        if (er[i].prev_hash != er[i - 1].row_hash) return false;
-        if (er[i].seq != er[i - 1].seq + 1) return false;
-    }
-    for (std::size_t i = 0; i < er.size(); ++i) {
-        char ln[1024];
-        int w = std::snprintf(
-            ln, sizeof(ln), "%llu|%lld|%s|%s|%s|%s|%s",
-            (unsigned long long)er[i].seq, (long long)er[i].ts_ns,
-            er[i].kind.c_str(), er[i].intent_id.c_str(),
-            er[i].payload_hash.c_str(), er[i].prev_hash.c_str(),
-            er[i].row_hash.c_str());
-        if (w <= 0 || w >= static_cast<int>(sizeof(ln))) return false;
-        if (!AppendLine(P("journal.jsonl").c_str(), ln)) return false;
-        prev_hash_ = er[i].row_hash;
-        next_seq_ = er[i].seq + 1;
-    }
-    return AtomicWrite(P("emergency.jsonl").c_str(), "");
 }
 
 bool G0Runner::PersistSlot(Slot& s) {
@@ -246,6 +246,28 @@ bool G0Runner::Recover(const char** reason) {
         if (reason) *reason = kChain;
         return false;
     }
+    // Post-drain reload: recovery decides from the JOINED chain
+    // (drained emergency rows are journal rows now). Re-verify —
+    // the drain appended, so trust but verify.
+    if (!JournalVerifyFile(P("journal.jsonl").c_str())) {
+        Alert(P("alerts.jsonl").c_str(), "HARD", "journal-chain-break",
+              "post-drain chain fails VerifyChain",
+              deps_.now_ns(deps_.clock_ctx));
+        if (reason) *reason = kChain;
+        return false;
+    }
+    rows.clear();
+    if (!JournalLoad(P("journal.jsonl").c_str(), &rows)) {
+        if (reason) *reason = kChain;
+        return false;
+    }
+    if (!rows.empty()) {
+        next_seq_ = rows.back().seq + 1;
+        prev_hash_ = rows.back().row_hash;
+    } else {
+        next_seq_ = 0;
+        prev_hash_ = journal::GenesisPrev();
+    }
     // Durable stream cursor (missing = first run, empty cursor).
     std::vector<std::string> clns;
     if (ReadLines(P("cursor.txt").c_str(), &clns) && !clns.empty())
@@ -280,7 +302,23 @@ bool G0Runner::Recover(const char** reason) {
                 break;
             }
         }
-        if (!term) ids.push_back(rows[i].intent_id);
+        if (term) continue;
+        // Deduplicate (a duplicated intent row is itself a chain
+        // anomaly: first wins, alerted, never two slots).
+        bool seen = false;
+        for (std::size_t k = 0; k < ids.size(); ++k) {
+            if (ids[k] == rows[i].intent_id) {
+                seen = true;
+                break;
+            }
+        }
+        if (seen) {
+            Alert(P("alerts.jsonl").c_str(), "HARD",
+                  "recover-dup-intent", rows[i].intent_id.c_str(),
+                  deps_.now_ns(deps_.clock_ctx));
+            continue;
+        }
+        ids.push_back(rows[i].intent_id);
     }
     for (std::size_t i = 0; i < ids.size(); ++i) {
         char rec[320];
@@ -290,6 +328,43 @@ bool G0Runner::Recover(const char** reason) {
         bool has_intent = LoadIntent(
             IntentPath(ids[i].c_str()).c_str(), &id);
         if (has_snap != has_intent) {
+            // Half a registration cannot be driven: EITHER file
+            // alone is S2/human territory (refuse loudly). The one
+            // exception is the crash between the journaled intent
+            // row and the first snapshot WITH the intent file
+            // present — that rebuilds IDLE with the row attested
+            // (nothing was ever sent: the send comes steps after
+            // the first persist, so the fresh mint below is safe
+            // and pre-flight dedupes it).
+            if (!has_snap && has_intent) {
+                if (id.qty <= 0 || id.symbol[0] == '\0') {
+                    if (reason) *reason = kSnap;
+                    return false;
+                }
+                if (slots_.size() >= (std::size_t)cfg_.max_slots)
+                    break;
+                Slot s;
+                CopyStr(s.intent.intent_id,
+                        sizeof(s.intent.intent_id), ids[i].c_str());
+                CopyStr(s.intent.symbol, sizeof(s.intent.symbol),
+                        id.symbol);
+                s.intent.side = (id.side == 1)
+                                     ? broker::OrderSide::SELL
+                                     : broker::OrderSide::BUY;
+                s.intent.kind = (id.kind == 1)
+                                     ? jev::risk::IntentKind::EXIT
+                                     : jev::risk::IntentKind::ENTRY;
+                s.intent.qty_shares = id.qty;
+                s.intent.stop_cents = id.stop;
+                s.intent.tp_cents = id.tp;
+                s.m = exec::RouteMachine();
+                s.m.kind = s.intent.kind;
+                s.active = true;
+                s.intent_rowed = true;
+                s.last_s2_ns = 0;
+                slots_.push_back(s);
+                continue;
+            }
             if (reason) *reason = kSnap;
             return false;
         }
@@ -323,23 +398,12 @@ bool G0Runner::Recover(const char** reason) {
             s.intent.tp_cents = id.tp;
             s.m = m;
         } else {
-            // Intent row journaled, no crash image: the send never
-            // reached a persisted state — restart the lifecycle
-            // from IDLE under the registered economics.
-            CopyStr(s.intent.intent_id, sizeof(s.intent.intent_id),
-                      ids[i].c_str());
-            CopyStr(s.intent.symbol, sizeof(s.intent.symbol), id.symbol);
-            s.intent.side = (id.side == 1)
-                                 ? broker::OrderSide::SELL
-                                 : broker::OrderSide::BUY;
-            s.intent.kind = (id.kind == 1)
-                                 ? jev::risk::IntentKind::EXIT
-                                 : jev::risk::IntentKind::ENTRY;
-            s.intent.qty_shares = id.qty;
-            s.intent.stop_cents = id.stop;
-            s.intent.tp_cents = id.tp;
-            s.m = exec::RouteMachine();
-            s.m.kind = s.intent.kind;
+            // Neither crash image nor intent file under a journaled
+            // intent row: half a registration (operator deleted
+            // files, or disk lost them) — refuse loudly, S2/human
+            // owns it. Never invent economics.
+            if (reason) *reason = kSnap;
+            return false;
         }
         s.active = true;
         s.last_s2_ns = 0;  // first cycle reconciles first
@@ -403,6 +467,11 @@ bool G0Runner::SubmitIntent(const exec::OrderIntent& in,
             if (reason) *reason = kStage;
             return false;
         }
+    }
+    if (slots_.size() >= (std::size_t)cfg_.max_slots) {
+        // One deferred sweep before refusing: completed work frees
+        // capacity (long runs never wedge on history).
+        ReclaimDone();
     }
     if (slots_.size() >= (std::size_t)cfg_.max_slots) {
         if (reason) *reason = kCap;
@@ -763,6 +832,62 @@ void G0Runner::PositionCheck(long long now_ns) {
     }
 }
 
+void G0Runner::ReclaimDone() {
+    for (std::size_t i = 0; i < slots_.size();) {
+        if (slots_[i].active && slots_[i].done) {
+            slots_.erase(slots_.begin() + (int)i);
+        } else {
+            ++i;
+        }
+    }
+}
+
+bool G0Runner::DailyOps(long long now_ns) {
+    long long day = now_ns / 86400000000000LL;
+    if (day == last_ops_day_) return true;
+    last_ops_day_ = day;
+    // 00:00 verify: a mid-run chain break is HARD (forensics
+    // first), exactly like a boot-time break.
+    if (!JournalVerifyFile(P("journal.jsonl").c_str())) {
+        Alert(P("alerts.jsonl").c_str(), "HARD", "journal-chain-break",
+              "mid-run chain fails VerifyChain",
+              deps_.now_ns(deps_.clock_ctx));
+        return false;
+    }
+    int y = 0;
+    unsigned mo = 0, dd = 0;
+    CivilFromDays(day, &y, &mo, &dd);
+    char stamp[16];
+    std::snprintf(stamp, sizeof(stamp), "%04d%02u%02u", y, mo, dd);
+    // Dated journal copy (the live file keeps chaining — the copy
+    // is the retention unit, never a rotation that forks the
+    // chain).
+    CopyFileBytes(P("journal.jsonl").c_str(),
+             (cfg_.dir + "/journal-" + stamp + ".jsonl").c_str());
+    int kept = 0, pruned = 0;
+    if (!RetainJournals(cfg_.dir.c_str(), day, &kept, &pruned))
+        Alert(P("alerts.jsonl").c_str(), "OPS", "retention-failed",
+              stamp, now_ns);
+    MkDirIfMissing((cfg_.dir + "/backup").c_str());
+    if (!BackupFile(P("journal.jsonl").c_str(),
+                    (cfg_.dir + "/backup/journal-" + stamp +
+                     ".jsonl")
+                        .c_str()))
+        Alert(P("alerts.jsonl").c_str(), "OPS", "backup-failed",
+              stamp, now_ns);
+    Summary sm;
+    if (SummarizeJournal(P("journal.jsonl").c_str(), &sm)) {
+        char sline[256];
+        if (FormatSummary(sm, sline, sizeof(sline))) {
+            std::string s = std::string(stamp) + " " + sline + "\n";
+            if (!AppendLine(P("summary.txt").c_str(), s.c_str()))
+                Alert(P("alerts.jsonl").c_str(), "OPS",
+                      "summary-failed", stamp, now_ns);
+        }
+    }
+    return true;
+}
+
 bool G0Runner::AllFlat() {
     for (std::size_t i = 0; i < slots_.size(); ++i) {
         const Slot& s = slots_[i];
@@ -901,7 +1026,7 @@ void G0Runner::MediumPass(long long now_ns) {
     }
 }
 
-void G0Runner::Dispatch(Slot& s, const exec::RouteOut& o,
+bool G0Runner::Dispatch(Slot& s, const exec::RouteOut& o,
                         long long now_ns) {
     using exec::RouteAction;
     char body[280];
@@ -916,7 +1041,7 @@ void G0Runner::Dispatch(Slot& s, const exec::RouteOut& o,
             } else {
                 s.journal_ok = false;
             }
-            return;
+            return false;
         case RouteAction::SEND_PROTECTED: {
             broker::ProtectedOrder po{};
             CopyStr(po.symbol, sizeof(po.symbol), s.intent.symbol);
@@ -935,6 +1060,11 @@ void G0Runner::Dispatch(Slot& s, const exec::RouteOut& o,
             // sends blind).
             s.has_ack = true;
             s.query_due = false;
+            // True only when this dispatch POSTed (adopted acks and
+            // read-only pre-flights never count — the persist that
+            // follows is load-bearing exactly when the broker
+            // changed state).
+            bool posted = false;
             broker::OrderQuery pre =
                 adapter_.QueryOnce(po.client_order_id);
             if (pre.transport_ok && pre.found) {
@@ -952,16 +1082,17 @@ void G0Runner::Dispatch(Slot& s, const exec::RouteOut& o,
             } else if (pre.transport_ok && !pre.found) {
                 s.ack = adapter_.SubmitProtected(po);
                 s.query_due = true;  // send resolved: query now due
+                posted = true;
             } else {
                 s.ack = broker::OrderAck();  // ambiguous: reconcile
                 s.query_due = true;
             }
-            return;
+            return posted;
         }
         case RouteAction::QUERY_ONCE:
             s.has_query = true;
             s.query = adapter_.QueryOnce(s.m.client_id);
-            return;
+            return false;
         case RouteAction::EXECUTE_EXIT:
         case RouteAction::EXECUTE_EMERGENCY: {
             broker::OrderSide eside =
@@ -973,6 +1104,7 @@ void G0Runner::Dispatch(Slot& s, const exec::RouteOut& o,
             // adopt it via QueryToClose instead of re-POSTing.
             s.has_exit = true;
             s.has_journal = false;
+            bool closed_posted = false;
             broker::OrderQuery pre =
                 adapter_.QueryOnce(o.next.client_id);
             if (pre.transport_ok && pre.found) {
@@ -981,11 +1113,12 @@ void G0Runner::Dispatch(Slot& s, const exec::RouteOut& o,
                 s.exit_ack = adapter_.MarketClose(
                     s.intent.symbol, o.exit_qty, eside,
                     o.next.client_id);
+                closed_posted = true;
             } else {
                 s.exit_ack =
                     broker::CloseResult();  // ambiguous: reconcile
             }
-            return;
+            return closed_posted;
         }
         case RouteAction::BUFFER_EMERGENCY: {
             journal::Row r;
@@ -999,7 +1132,7 @@ void G0Runner::Dispatch(Slot& s, const exec::RouteOut& o,
                 prev_hash_ = r.row_hash;
                 ++next_seq_;
             }
-            return;
+            return false;
         }
         case RouteAction::CANCEL_REMAINDER: {
             // No UUID (identity never established) -> reconcile by
@@ -1013,7 +1146,7 @@ void G0Runner::Dispatch(Slot& s, const exec::RouteOut& o,
                     s.has_cancel_result = true;  // marker: confirmed
                     s.cancel_accepted = true;    // absent-direct path
                     s.absent_cancel = true;
-                    return;
+                    return false;
                 }
                 if (q.transport_ok && q.found &&
                     q.broker_order_id[0] != '\0') {
@@ -1027,7 +1160,7 @@ void G0Runner::Dispatch(Slot& s, const exec::RouteOut& o,
                 adapter_.Cancel(s.m.broker_id);
             s.cancel_accepted = c.accepted;
             s.cancel_failed = c.failed;
-            return;
+            return true;  // DELETE is broker-mutating
         }
         case RouteAction::CONFIRM_CANCELLED: {
             if (++s.confirm_tries > 6) {
@@ -1037,7 +1170,7 @@ void G0Runner::Dispatch(Slot& s, const exec::RouteOut& o,
                 s.absent_cancel = false;
                 s.cancel_accepted = false;
                 s.cancel_failed = true;
-                return;
+                return false;
             }
             broker::OrderQuery q = adapter_.QueryOnce(s.m.client_id);
             if (q.transport_ok && q.found && q.cancelled) {
@@ -1054,7 +1187,7 @@ void G0Runner::Dispatch(Slot& s, const exec::RouteOut& o,
                 s.cancel_accepted = false;
                 s.cancel_failed = false;
             }
-            return;
+            return false;
         }
         case RouteAction::ESTABLISH_PROTECTION: {
             broker::ProtectedOrder po{};
@@ -1070,13 +1203,13 @@ void G0Runner::Dispatch(Slot& s, const exec::RouteOut& o,
             CopyStr(po.intent_id, sizeof(po.intent_id), s.intent.intent_id);
             s.has_repair = true;
             s.repair_ok = adapter_.EstablishProtection(po);
-            return;
+            return true;  // repair POST is broker-mutating
         }
         case RouteAction::FLATTEN_NOW:
             FlattenOnMedium(s, now_ns);
             s.has_journal = false;
             s.journal_ok = false;
-            return;
+            return false;
         case RouteAction::JOURNAL_FILL:
         case RouteAction::JOURNAL_PARTIAL:
         case RouteAction::JOURNAL_CANCEL:
@@ -1099,17 +1232,22 @@ void G0Runner::Dispatch(Slot& s, const exec::RouteOut& o,
             if (o.action == RouteAction::JOURNAL_UNKNOWN) {
                 FreezeAdd(P("freeze.txt").c_str(), s.intent.symbol);
             }
-            return;
+            return false;
         }
         case RouteAction::NONE:
         case RouteAction::REJECT:
         default:
-            return;
+            return false;
     }
 }
 
 bool G0Runner::Cycle(long long now_ns) {
     if (now_ns <= 0 || !deps_.now_ns) return false;
+    // Deferred reclamation: done slots leave now (history stays in
+    // journal + snapshots). Find-after-terminal within the SAME
+    // cycle still sees the slot — the sweep only runs here and at
+    // SubmitIntent, never mid-drive.
+    ReclaimDone();
     // 1. STAGE re-read every cycle (demotions apply immediately).
     const char* sr = nullptr;
     if (!StageGateG0(P("STAGE").c_str(), &sr)) {
@@ -1175,7 +1313,7 @@ bool G0Runner::Cycle(long long now_ns) {
             if (so.kind == StreamKind::NONE) continue;
             for (std::size_t i = 0; i < slots_.size(); ++i) {
                 Slot& s = slots_[i];
-                if (!s.active || s.done) continue;
+                if (!s.active || s.done || s.frozen) continue;
                 if (!SameId(s.m.client_id, so.client_id)) continue;
                 // Duplicate delivery drops at the seam: already
                 // applied (== machine ULID) or already queued.
@@ -1239,7 +1377,7 @@ bool G0Runner::Cycle(long long now_ns) {
     // alert + force a real lookup on the next pass.
     for (std::size_t i = 0; i < slots_.size(); ++i) {
         Slot& s = slots_[i];
-        if (!s.active || s.done) continue;
+        if (!s.active || s.done || s.frozen) continue;
         if (s.stream_overflow_) {
             s.stream_overflow_ = false;
             Alert(P("alerts.jsonl").c_str(), "FEED",
@@ -1250,7 +1388,7 @@ bool G0Runner::Cycle(long long now_ns) {
     }
     for (std::size_t i = 0; i < slots_.size(); ++i) {
         Slot& s = slots_[i];
-        if (!s.active || s.done) continue;
+        if (!s.active || s.done || s.frozen) continue;
         MaybeForceQuery(s, now_ns);
         for (int it = 0; it < 12; ++it) {
             exec::RouteObs obs;
@@ -1330,6 +1468,19 @@ bool G0Runner::Cycle(long long now_ns) {
             if (s.executed_flag) {
                 obs.executed = true;
                 s.executed_flag = false;
+            }
+            // Crash seam: IDLE machines rebuilt from a journaled
+            // row (snapshot lost pre-first-persist) skip the WRITE
+            // via obs.intent_rowed; the JOURNAL_PENDING step then
+            // consumes this recovery attestation (the row is IN the
+            // verified chain — attested, not synthetic).
+            if (s.m.state == exec::RouteState::IDLE)
+                obs.intent_rowed = s.intent_rowed;
+            if (s.intent_rowed &&
+                s.m.state == exec::RouteState::JOURNAL_PENDING &&
+                !s.has_journal) {
+                obs.journal_ok = true;
+                s.intent_rowed = false;
             }
             // Queue head stamps first (one event per iteration —
             // the seam never collapses several events into one).
@@ -1493,8 +1644,28 @@ bool G0Runner::Cycle(long long now_ns) {
             }
             bool changed = (o.next.state != s.m.state);
             s.m = o.next;
-            Dispatch(s, o, now_ns);
-            PersistSlot(s);
+            bool mutated = Dispatch(s, o, now_ns);
+            if (!PersistSlot(s)) {
+                if (mutated) {
+                    // Broker-mutating transport crossed a
+                    // non-durable boundary (ack/close state could
+                    // not be persisted): freeze LOUDLY and stop
+                    // driving this slot. Continuing blind risks a
+                    // post-crash double-send (identity + ack state
+                    // both live only in the lost snapshot); a crash
+                    // now refuses recovery instead — visible, human.
+                    s.frozen = true;
+                    Alert(P("alerts.jsonl").c_str(), "HARD",
+                          "persist-failed", s.intent.intent_id,
+                          now_ns);
+                    OpsRow("unknown", s.intent.intent_id,
+                           "persist-failed", now_ns);
+                    break;
+                }
+                // Non-mutating persist failure: any journal row
+                // still attests the step (crash rebuilds via the
+                // rowed path or refuses) — keep driving.
+            }
             if (IsTerminalState(s.m.state)) {
                 s.done = true;
                 break;
@@ -1546,6 +1717,8 @@ bool G0Runner::Cycle(long long now_ns) {
         }
     }
     last_cycle_ns_ = now_ns;
+    // §6.3 rhythm on day roll (verify/copy/retain/backup/summary).
+    if (!DailyOps(now_ns)) return false;
     // Durable cursor: best-effort (loss only replays more —
     // duplicates drop at the seam — never less).
     if (cursor_dirty_) {

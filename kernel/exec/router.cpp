@@ -427,6 +427,16 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
             o.next.exit_attempt = 0;
             o.next.protection_ok = false;
             o.next.filled_qty = 0;
+            if (obs.intent_rowed) {
+                // The row predates the crash (nothing was ever sent
+                // under any id — the send comes steps later, so the
+                // fresh mint below is safe and pre-flight dedupes
+                // it). Skip WRITE: a second intent row would fork
+                // the journal's meaning of registration.
+                o.next.state = RouteState::JOURNAL_PENDING;
+                o.reason = "exec:journal-recovered";
+                return o;
+            }
             o.action = RouteAction::WRITE_JOURNAL;
             o.next.state = RouteState::JOURNAL_PENDING;
             o.journal_kind = "intent";
