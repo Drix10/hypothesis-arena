@@ -131,16 +131,44 @@ deterministic incident-scoped remainder `hard-<epoch>-<SYM>-<qty>`
 with the primary id; primary-absent still posts the primary).
 - HARD chain truth vs broker gate: the remainder derives from the
 ORIGINAL hard-order chain (`hard-chain.txt`: `<tag> <requested>`
-`<attributed>`, write-ahead before every POST, last row wins),
-never by subtracting a burned order's historical fill from a
-CURRENT broker number (settled fills are gone from the broker —
-re-subtracting them under-closes). The broker position
-independently caps the send (`min(chain-remainder, broker-need)`;
-zero need sends nothing). Per-id attribution is exact (only the
-not-yet-attributed portion folds, crash-safe via the chain).
+`<attributed>`, write-ahead before every POST), never by subtracting
+a burned order's historical fill from a CURRENT broker number (settled
+fills are gone from the broker — re-subtracting them under-closes).
+The broker position independently caps the send (`min(chain-remainder,
+broker-need)`; zero need sends nothing). Per-id attribution is exact
+(only the not-yet-attributed portion folds, crash-safe via the chain).
 EXIT adoption attributes only beyond the slot's own
 `exit_counted_qty` (the router's per-current-order memory) and
 bumps it — an already-counted cumulative fill never folds twice.
+- HARD chain write-ahead enforcement: `NoteHardChain` returns
+success/failure and a failed chain write PREVENTS the POST (freeze
++ alert + refuse — chain truth must exist before the close flies).
+A missing/corrupt/unreadable chain for a broker-known hard id is an
+integrity failure (freeze + alert + refuse) — NEVER `orig = need`,
+never reconstructed from current broker quantity. Crash between
+note and POST restarts into a 404 and safely sends the same
+identity once; crash after POST restarts into adoption of the
+same identity (pre-flight dedupe, never a second identity).
+- HARD chain integrity validation: the reader validates the whole
+file, not "last row wins" — requested quantity per tag is immutable,
+attributed is monotonically nondecreasing, 0 <= attributed <=
+requested, no malformed records, no conflicting requested values,
+no silent skipping of bad rows (exact-duplicate rows are idempotent
+crash-retry evidence, not conflicts). Any violation fails the HARD
+path closed (freeze + alert + refuse), never a broker-derived
+substitute quantity.
+- HARD attribution durability: slot accounting persists BEFORE the
+durable chain attribution advances — `AttributeClosedQty` is
+two-phase (compute takes, then mutate+persist per slot; any persist
+failure rolls back in-memory AND re-persists already-written slots
+to their old values, best-effort, then reports failure) and returns
+success/failure. The HARD path advances the chain note only when
+all slot persists succeeded (and rolls every slot back to old
+values when the chain note itself fails); otherwise it journals +
+alerts + refuses with books exactly as before the attempt, so the
+next pre-flight reconstructs the same portion exactly once. The
+un-advanced chain plus the old snapshots ARE the fail-closed
+recovery state — no second source, no broker-derived fill-in.
 - MEDIUM teardown certification: clearing an incident requires
 BROKER-CONFIRMED flat (seam present + query ok + all zero) AND
 (local flat or file == FLATTENED). Missing/failing seam =
