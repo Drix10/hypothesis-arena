@@ -129,6 +129,32 @@ the remainder. A found-short terminal hard order mints a
 deterministic incident-scoped remainder `hard-<epoch>-<SYM>-<qty>`
 (pure, pre-flighted, strictly-decreasing chain, never colliding
 with the primary id; primary-absent still posts the primary).
+- HARD chain truth vs broker gate: the remainder derives from the
+ORIGINAL hard-order chain (`hard-chain.txt`: `<tag> <requested>`
+`<attributed>`, write-ahead before every POST, last row wins),
+never by subtracting a burned order's historical fill from a
+CURRENT broker number (settled fills are gone from the broker —
+re-subtracting them under-closes). The broker position
+independently caps the send (`min(chain-remainder, broker-need)`;
+zero need sends nothing). Per-id attribution is exact (only the
+not-yet-attributed portion folds, crash-safe via the chain).
+EXIT adoption attributes only beyond the slot's own
+`exit_counted_qty` (the router's per-current-order memory) and
+bumps it — an already-counted cumulative fill never folds twice.
+- MEDIUM teardown certification: clearing an incident requires
+BROKER-CONFIRMED flat (seam present + query ok + all zero) AND
+(local flat or file == FLATTENED). Missing/failing seam =
+UNKNOWN/exposure-present: FLATTENED is retained, never cleared;
+`AllFlat()` alone never certifies an incident over. The MEDIUM
+re-entry path is unchanged (FLATTENED + live exposure clears +
+fresh enter — the seam-present case).
+- HARD slot-failure fallback: the position loop skips an ENTRY
+symbol only when the slot path demonstrably owned it this cycle
+(reconciled, not blind, not frozen-waiting); a blind/failed slot
+falls through to broker-sized management under the SAME incident
+id (the pre-flight keeps one close — the skip is an optimization,
+not the mutual-exclusion mechanism). Frozen symbols are never
+position-loop-closed (freeze = wait, exits stay alive via slots).
 
 ## 6.2 Reflection (after every closed trade)
 
