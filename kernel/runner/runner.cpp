@@ -823,33 +823,94 @@ bool G0Runner::FlattenResolvedNotClosed(const Slot& s) const {
     if (!fs || !fs->done) return false;
     return fs->m.state != exec::RouteState::CLOSED;
 }
-long long G0Runner::ExitCoverRemaining(const char* symbol,
-                                       std::size_t* first) const {
-    // Summed remaining qty of every active non-terminal EXIT on
-    // the symbol (intent qty minus closed-to-date, floored at 0).
-    // HARD closes only the uncovered remainder against this.
+int G0Runner::CollectCoverExits(const char* symbol,
+                                 std::vector<std::size_t>* idx,
+                                 long long* total) {
+    // Every active non-terminal EXIT on the symbol (indices +
+    // summed intent-minus-closed, floored at 0). Callers
+    // reconcile EACH one — first-only sampling let a dead first
+    // exit mask a live second.
     long long tot = 0;
-    std::size_t fi = slots_.size();
-    if (!symbol || !symbol[0]) {
-        if (first) *first = fi;
-        return 0;
-    }
-    for (std::size_t i = 0; i < slots_.size(); ++i) {
-        const Slot& s = slots_[i];
-        if (!s.active || s.done) continue;
-        if (s.intent.kind != jev::risk::IntentKind::EXIT)
-            continue;
-        if (IsTerminalState(s.m.state)) continue;
-        if (std::strcmp(s.intent.symbol, symbol) != 0) continue;
-        long long rem =
-            s.intent.qty_shares - s.m.exit_closed_qty;
-        if (rem > 0) {
-            tot += rem;
-            if (fi == slots_.size()) fi = i;
+    int n = 0;
+    if (idx) idx->clear();
+    if (symbol && symbol[0]) {
+        for (std::size_t i = 0; i < slots_.size(); ++i) {
+            const Slot& s = slots_[i];
+            if (!s.active || s.done) continue;
+            if (s.intent.kind != jev::risk::IntentKind::EXIT)
+                continue;
+            if (IsTerminalState(s.m.state)) continue;
+            if (std::strcmp(s.intent.symbol, symbol) != 0)
+                continue;
+            if (s.m.client_id[0] == '\0') continue;
+            long long rem =
+                s.intent.qty_shares - s.m.exit_closed_qty;
+            if (rem > 0) {
+                tot += rem;
+                if (idx) idx->push_back(i);
+                ++n;
+            }
         }
     }
-    if (first) *first = fi;
-    return tot;
+    if (total) *total = tot;
+    return n;
+}
+bool G0Runner::BrokerQty(const char* symbol, long long* out) {
+    // Signed broker position for one symbol. False = no seam or
+    // failing endpoint (callers fall back + journal; unknown is
+    // never flat).
+    if (out) *out = 0;
+    if (!symbol || !symbol[0] || !out) return false;
+    if (!deps_.list_positions) return false;
+    Position ps[64];
+    int n = deps_.list_positions(deps_.positions_ctx, ps, 64);
+    if (n < 0) return false;
+    long long q = 0;
+    for (int i = 0; i < n; ++i) {
+        if (ps[i].symbol[0] == '\0') continue;
+        if (std::strcmp(ps[i].symbol, symbol) != 0) continue;
+        q += ps[i].qty;
+    }
+    *out = q;
+    return true;
+}
+std::string G0Runner::HardRemainderTag(long long epoch,
+                                        const char* symbol,
+                                        long long rem) {
+    char tb[64];
+    std::snprintf(tb, sizeof(tb), "hard-%lld-%.15s-%lld",
+                    epoch, symbol ? symbol : "", rem);
+    return std::string(tb);
+}
+bool G0Runner::MediumHasExposure() {
+    // Local ENTRY open, or any broker position. Seam failure
+    // counts as exposure (fail closed: never clear an incident
+    // that cannot be seen).
+    for (std::size_t i = 0; i < slots_.size(); ++i) {
+        const Slot& s = slots_[i];
+        if (!s.active) continue;
+        if (s.intent.kind != jev::risk::IntentKind::ENTRY)
+            continue;
+        if (s.m.state == exec::RouteState::CANCELLED ||
+            s.m.state == exec::RouteState::UNKNOWN_FROZEN ||
+            s.m.state == exec::RouteState::CLOSED)
+            continue;
+        if (s.m.filled_qty - s.m.exit_closed_qty > 0)
+            return true;
+    }
+    if (!deps_.list_positions) return false;
+    Position ps[64];
+    int n = deps_.list_positions(deps_.positions_ctx, ps, 64);
+    if (n < 0) return true;
+    for (int i = 0; i < n; ++i) {
+        if (ps[i].symbol[0] != '\0' && ps[i].qty != 0)
+            return true;
+    }
+    return false;
+}
+void G0Runner::ClearMediumFiles() {
+    AtomicWrite(P("medium.txt").c_str(), "");
+    AtomicWrite(P("medium-incident.txt").c_str(), "");
 }
 void G0Runner::NoteQuarantine(Slot& s, const broker::OrderQuery& q,
                               const char* scope, long long now_ns) {
@@ -1017,53 +1078,121 @@ bool G0Runner::OpsRow(const char* kind, const char* intent_id,
 
 bool G0Runner::HardCloseOnce(const char* symbol, long long qty,
                            broker::OrderSide eside, const char* hid,
+                           long long epoch,
                            const char* scope_intent,
                            long long now_ns) {
-    // Pre-flighted single close under a stable hard id: GET ->
-    // found: adopt the close state (an in-flight close is
-    // journaled, never re-sent — the process dies right after) ->
-    // 404: POST exactly once -> transport failure: journal +
-    // alert, fail closed. Any id, any caller, same rule.
-    char hcoid[65] = {0};
-    if (!hid || !hid[0] || !broker::MakeClientOrderId(
-                               cfg_.venue.broker, cfg_.venue.account,
-                               cfg_.venue.context_hash, symbol,
-                               eside, hid, hcoid)) {
-        OpsRow("drift-directive", scope_intent,
-               "hard-close id-unrepresentable", now_ns);
-        Alert(P("alerts.jsonl").c_str(), "HARD",
-              "hard-close-no-id", scope_intent, now_ns);
+    // Pre-flighted single close under a stable hard id, with a
+    // deterministic incident remainder chain: GET ->
+    // found-sufficient (filled >= need): adopt, never resend ->
+    // found-live (PENDING/PARTIAL/UNKNOWN): adopt, the working
+    // order owns the qty -> found-short-terminal (FILLED-short /
+    // DEAD): mint hard-<epoch>-<SYM>-<remaining> (pure —
+    // re-derived identically after a crash; never collides with
+    // the primary id, which carries no qty suffix) and pre-flight
+    // THAT -> 404 (primary or remainder): POST exactly once ->
+    // transport failure: journal + alert, fail closed. The chain
+    // strictly decreases (need minus landed, landed > 0 each
+    // round... except dead-zero-fill, which still advances to a
+    // fresh id once) and is hard-capped: exhaustion freezes.
+    // Any id, any caller, same rule — including EXIT replacement.
+    if (!symbol || !symbol[0] || qty <= 0 || epoch <= 0) {
+        OpsRow("drift-directive",
+               scope_intent ? scope_intent : "runner",
+               "hard-close refused bad-args", now_ns);
         return false;
     }
-    broker::OrderQuery pre = adapter_.QueryOnce(hcoid);
-    if (pre.transport_ok && pre.found) {
-        NoteQuarantineSym(symbol, pre.status_raw, "HARD", now_ns);
+    std::string id = hid ? hid : "";
+    long long need = qty;
+    for (int round = 0; round < 4; ++round) {
+        char hcoid[65] = {0};
+        if (id.empty() || !broker::MakeClientOrderId(
+                                 cfg_.venue.broker,
+                                 cfg_.venue.account,
+                                 cfg_.venue.context_hash, symbol,
+                                 eside, id.c_str(), hcoid)) {
+            OpsRow("drift-directive",
+                   scope_intent ? scope_intent : "runner",
+                   "hard-close id-unrepresentable", now_ns);
+            Alert(P("alerts.jsonl").c_str(), "HARD",
+                  "hard-close-no-id",
+                  scope_intent ? scope_intent : "", now_ns);
+            return false;
+        }
+        broker::OrderQuery pre = adapter_.QueryOnce(hcoid);
+        if (!pre.transport_ok) {
+            OpsRow("drift-directive",
+                   scope_intent ? scope_intent : "runner",
+                   "hard-close lookup-failed", now_ns);
+            Alert(P("alerts.jsonl").c_str(), "HARD",
+                  "hard-close-unknown",
+                  scope_intent ? scope_intent : "", now_ns);
+            return false;
+        }
+        NoteQuarantineSym(symbol, pre.status_raw, "HARD",
+                          now_ns);
+        if (!pre.found) {
+            broker::CloseResult c =
+                adapter_.MarketClose(symbol, need, eside, hcoid);
+            char tb[280];
+            std::snprintf(tb, sizeof(tb),
+                            "hard-close id=%s sent=%d qty=%lld",
+                            id.c_str(),
+                            c.transport_ok ? 1 : 0, need);
+            OpsRow("drift-directive",
+                   scope_intent ? scope_intent : "runner", tb,
+                   now_ns);
+            return c.transport_ok;
+        }
         broker::CloseResult c = QueryToClose(pre);
         char tb[280];
         std::snprintf(tb, sizeof(tb),
-                        "hard-close id=%s found state=%d filled=%lld",
-                        hid, (int)c.state, (long long)c.filled_qty);
-        OpsRow("drift-directive", scope_intent, tb, now_ns);
-        return c.state == broker::CloseState::FILLED &&
-               c.filled_qty >= qty;
+                        "hard-close id=%s found state=%d "
+                        "filled=%lld need=%lld",
+                        id.c_str(), (int)c.state,
+                        (long long)c.filled_qty, need);
+        OpsRow("drift-directive",
+               scope_intent ? scope_intent : "runner", tb,
+               now_ns);
+        if (c.filled_qty >= need) return true;  // sufficient
+        if (c.state == broker::CloseState::PENDING ||
+            c.state == broker::CloseState::PARTIAL ||
+            c.state == broker::CloseState::UNKNOWN)
+            return true;  // working/ambiguous: adopted, never
+                          // re-sent (its fills attribute back)
+        // Terminal-short: the id is burned (Alpaca client ids are
+        // per-order unique — it can never carry another POST).
+        // Remainder = need minus landed, under a fresh
+        // incident-scoped id.
+        long long landed = c.filled_qty;
+        if (landed < 0) landed = 0;
+        if (landed > 0)
+            AttributeClosedQty(symbol, landed, now_ns);
+        long long need2 = need - landed;
+        if (need2 <= 0) return true;
+        std::string id2 =
+            HardRemainderTag(epoch, symbol, need2);
+        if (id2 == id) {
+            OpsRow("drift-directive",
+                   scope_intent ? scope_intent : "runner",
+                   "hard-close remainder-stuck", now_ns);
+            FreezeAdd(P("freeze.txt").c_str(), symbol);
+            return false;
+        }
+        char rb[280];
+        std::snprintf(rb, sizeof(rb),
+                        "hard-close remainder %s -> %s qty=%lld",
+                        id.c_str(), id2.c_str(), need2);
+        OpsRow("drift-directive",
+               scope_intent ? scope_intent : "runner", rb,
+               now_ns);
+        id = id2;
+        need = need2;
     }
-    if (pre.transport_ok && !pre.found) {
-        broker::CloseResult c =
-            adapter_.MarketClose(symbol, qty, eside, hcoid);
-        char tb[280];
-        std::snprintf(tb, sizeof(tb),
-                        "hard-close id=%s sent=%d", hid,
-                        c.transport_ok ? 1 : 0);
-        OpsRow("drift-directive", scope_intent, tb, now_ns);
-        return c.transport_ok;
-    }
-    OpsRow("drift-directive", scope_intent,
-           "hard-close lookup-failed", now_ns);
-    Alert(P("alerts.jsonl").c_str(), "HARD",
-          "hard-close-unknown", scope_intent, now_ns);
+    OpsRow("drift-directive", scope_intent ? scope_intent : "runner",
+           "hard-close remainder-exhausted", now_ns);
+    FreezeAdd(P("freeze.txt").c_str(), symbol);
     return false;
 }
-
 bool G0Runner::CoveredBySlot(const char* symbol) const {
     if (!symbol) return false;
     for (std::size_t i = 0; i < slots_.size(); ++i) {
@@ -1076,8 +1205,8 @@ bool G0Runner::CoveredBySlot(const char* symbol) const {
     return false;
 }
 
-void G0Runner::HardAdoptExit(Slot& s, long long epoch,
-                            long long now_ns) {
+long long G0Runner::HardAdoptExit(Slot& s, long long epoch,
+                                long long now_ns) {
     // Doc-06-sec.-6.1b adopt-or-replace: the owned exit is
     // reconciled, never canceled to make room, never bypassed.
     // Live (or filled-full) -> adopt: journal, no orders. Dead /
@@ -1086,20 +1215,27 @@ void G0Runner::HardAdoptExit(Slot& s, long long epoch,
     // symbol — the pre-flight, not a cancel, is what prevents two
     // closes). Landed qty attributes to entries oldest-first, so
     // the replacement sizes off provable remainder, never intent.
+    // Returns the qty still exposed (0 when adopted, landed-full,
+    // or replaced-working; the unfixable remainder otherwise) so
+    // callers reconciling MANY exits sum exposure, never sample
+    // the first.
     if (!s.active || s.done ||
         s.intent.kind != jev::risk::IntentKind::EXIT)
-        return;
-    if (s.m.client_id[0] == '\0') return;
+        return 0;
+    if (s.m.client_id[0] == '\0') return 0;
     broker::OrderQuery q = adapter_.QueryOnce(s.m.client_id);
     NoteQuarantine(s, q, "HARD", now_ns);
-    if (!q.transport_ok) {
-        OpsRow("drift-directive", s.intent.intent_id,
-               "hard-adopt-exit lookup-failed", now_ns);
-        return;
-    }
     long long rem =
         s.intent.qty_shares - s.m.exit_closed_qty;
     if (rem < 0) rem = 0;
+    if (!q.transport_ok) {
+        // Blind on the exit: HARD fails toward flatten (the
+        // pre-flight still guards the incident id). The whole
+        // remainder counts as exposed.
+        OpsRow("drift-directive", s.intent.intent_id,
+               "hard-adopt-exit lookup-failed", now_ns);
+        return rem;
+    }
     broker::OrderSide eside =
         (s.intent.side == broker::OrderSide::BUY)
             ? broker::OrderSide::SELL
@@ -1114,11 +1250,12 @@ void G0Runner::HardAdoptExit(Slot& s, long long epoch,
                         s.intent.intent_id, rem);
         OpsRow("drift-directive", s.intent.intent_id, tb,
                now_ns);
-        if (rem > 0)
+        if (rem > 0 &&
             HardCloseOnce(s.intent.symbol, rem, eside,
-                          hid.c_str(), s.intent.intent_id,
-                          now_ns);
-        return;
+                          hid.c_str(), epoch,
+                          s.intent.intent_id, now_ns))
+            return 0;
+        return rem;
     }
     broker::CloseResult c = QueryToClose(q);
     if ((c.state == broker::CloseState::FILLED &&
@@ -1135,7 +1272,7 @@ void G0Runner::HardAdoptExit(Slot& s, long long epoch,
                         (long long)c.filled_qty);
         OpsRow("drift-directive", s.intent.intent_id, tb,
                now_ns);
-        return;
+        return 0;
     }
     // DEAD or FILLED-short: fold the landed qty to entries, then
     // replace only the provable remainder (same incident id the
@@ -1149,10 +1286,13 @@ void G0Runner::HardAdoptExit(Slot& s, long long epoch,
     std::snprintf(tb, sizeof(tb),
                     "hard-adopt-exit id=%s dead replace=%lld",
                     s.intent.intent_id, rest);
-    OpsRow("drift-directive", s.intent.intent_id, tb, now_ns);
-    if (rest > 0)
+    OpsRow("drift-directive", s.intent.intent_id, tb,
+           now_ns);
+    if (rest > 0 &&
         HardCloseOnce(s.intent.symbol, rest, eside, hid.c_str(),
-                      s.intent.intent_id, now_ns);
+                      epoch, s.intent.intent_id, now_ns))
+        return 0;
+    return rest;
 }
 void G0Runner::HardManagePosition(const char* symbol, long long qty,
                                   long long epoch, long long now_ns) {
@@ -1178,7 +1318,7 @@ void G0Runner::HardManagePosition(const char* symbol, long long qty,
     OpsRow("drift-directive", "runner", tb, now_ns);
     Alert(P("alerts.jsonl").c_str(), "HARD", "hard-slotless",
           tb, now_ns);
-    HardCloseOnce(symbol, aq, eside, hid.c_str(), "runner",
+    HardCloseOnce(symbol, aq, eside, hid.c_str(), epoch, "runner",
                   now_ns);
 }
 
@@ -1297,78 +1437,86 @@ void G0Runner::HardManageSlot(Slot& s, long long epoch,
             // Attempt flatten under the INCIDENT hard id (shared
             // with the exit path and the slotless path — the
             // pre-flight dedupes them into one close per symbol).
-            // Exit coverage reconciles first: the owned exit is
-            // adopted, and only the uncovered remainder closes here
-            // (never a second full close, never a cancel).
+            // Exit coverage reconciles first: EVERY covering exit
+            // is adopted-or-replaced (never first-only — a dead
+            // first exit must not mask a live second), and only
+            // the uncovered remainder closes here (never a second
+            // full close, never a cancel). Quantity authority is
+            // the SIGNED BROKER POSITION when the seam answers
+            // (doc 06 sec. 6.1b): local open sizes only when the
+            // seam is absent/failing, journaled.
+            std::string hid = HardTag(epoch, s.intent.symbol);
+            std::vector<std::size_t> cidx;
+            long long cover_tot = 0;
+            CollectCoverExits(s.intent.symbol, &cidx,
+                              &cover_tot);
+            long long exposed = 0;
+            for (std::size_t k = 0; k < cidx.size(); ++k)
+                exposed += HardAdoptExit(slots_[cidx[k]], epoch,
+                                         now_ns);
+            // Working cover = exit qty minus still-exposed.
+            long long working = cover_tot - exposed;
+            if (working < 0) working = 0;
+            long long bq = 0;
+            bool have_bq = BrokerQty(s.intent.symbol, &bq);
+            long long uncovered = 0;
             broker::OrderSide eside =
                 (s.intent.side == broker::OrderSide::BUY)
                     ? broker::OrderSide::SELL
                     : broker::OrderSide::BUY;
-            std::string hid = HardTag(epoch, s.intent.symbol);
-            std::size_t fi = slots_.size();
-            long long cover =
-                ExitCoverRemaining(s.intent.symbol, &fi);
-            long long uncovered = open;
-            if (cover > 0 && fi < slots_.size()) {
-                Slot& e = slots_[fi];
-                broker::OrderQuery eq =
-                    adapter_.QueryOnce(e.m.client_id);
-                NoteQuarantine(e, eq, "HARD", now_ns);
-                if (!eq.transport_ok) {
-                    // Blind on the exit: HARD fails toward flatten
-                    // (ambiguity journaled — the pre-flight still
-                    // guards the incident id).
+            if (have_bq) {
+                // Broker authority: close the broker qty the
+                // exits do not already own, in the broker
+                // direction. Local/broker disagreement is drift
+                // (journaled) — never a qty change.
+                long long aq = bq > 0 ? bq : -bq;
+                eside = (bq > 0) ? broker::OrderSide::SELL
+                                 : broker::OrderSide::BUY;
+                uncovered = aq - working;
+                if (uncovered < 0) uncovered = 0;
+                long long local_dir =
+                    (s.intent.side == broker::OrderSide::BUY)
+                        ? 1
+                        : -1;
+                long long bdir =
+                    (bq > 0) ? 1 : (bq < 0 ? -1 : 0);
+                char tb[280];
+                std::snprintf(tb, sizeof(tb),
+                                "hard-manage id=%s broker=%lld "
+                                "local-open=%lld working=%lld "
+                                "uncovered=%lld",
+                                s.intent.intent_id, bq, open,
+                                working, uncovered);
+                OpsRow("drift-directive", s.intent.intent_id, tb,
+                       now_ns);
+                if (bq == 0 && open > 0) {
                     OpsRow("drift-directive",
                            s.intent.intent_id,
-                           "hard-exit-unknown close-full-open",
-                           now_ns);
-                } else if (!eq.found) {
-                    // The exit never landed: zero coverage, the
-                    // full open closes (its replacement is
-                    // subsumed — same incident id, no collision).
-                    cover = 0;
+                           "hard-phantom-local no-close", now_ns);
+                    Alert(P("alerts.jsonl").c_str(), "HARD",
+                          "hard-phantom-local",
+                          s.intent.intent_id, now_ns);
+                    uncovered = 0;
+                } else if (bdir != 0 && bdir != local_dir) {
                     OpsRow("drift-directive",
                            s.intent.intent_id,
-                           "hard-exit-absent close-full-open",
-                           now_ns);
-                } else {
-                    broker::CloseResult ec = QueryToClose(eq);
-                    bool live =
-                        ec.state ==
-                            broker::CloseState::PENDING ||
-                        ec.state ==
-                            broker::CloseState::PARTIAL ||
-                        ec.state ==
-                            broker::CloseState::UNKNOWN;
-                    if (live) {
-                        // Working: the whole covering qty closes
-                        // under its own id — adopt, close the rest.
-                        cover = cover > open ? open : cover;
-                    } else {
-                        // Dead/short: only landed qty counts.
-                        long long landed = ec.filled_qty;
-                        if (landed < 0) landed = 0;
-                        if (landed > e.intent.qty_shares)
-                            landed = e.intent.qty_shares;
-                        cover = landed;
-                    }
-                    char tb[280];
-                    std::snprintf(tb, sizeof(tb),
-                                    "hard-exit-covers id=%s exit=%s "
-                                    "live=%d cover=%lld open=%lld",
-                                    s.intent.intent_id,
-                                    e.intent.intent_id,
-                                    live ? 1 : 0, cover, open);
-                    OpsRow("drift-directive",
-                           s.intent.intent_id, tb, now_ns);
-                    uncovered = open - cover;
-                    if (uncovered < 0) uncovered = 0;
+                           "hard-direction-drift", now_ns);
+                    Alert(P("alerts.jsonl").c_str(), "HARD",
+                          "hard-direction-drift",
+                          s.intent.intent_id, now_ns);
                 }
+            } else {
+                // No seam: local sizing, journaled fallback.
+                uncovered = open - working;
+                if (uncovered < 0) uncovered = 0;
+                OpsRow("drift-directive", s.intent.intent_id,
+                       "hard-no-position-seam local-sizing",
+                       now_ns);
             }
             bool sent = false;
-            if (uncovered > 0) {
+            if (uncovered > 0 && epoch > 0) {
                 sent = HardCloseOnce(s.intent.symbol, uncovered,
-                                      eside, hid.c_str(),
+                                      eside, hid.c_str(), epoch,
                                       s.intent.intent_id, now_ns);
             }
             char tb[280];
@@ -1404,10 +1552,11 @@ bool G0Runner::HardStop(long long now_ns, const char* why,
         HardManageSlot(slots_[i], epoch, now_ns);
     // §10.3 operates on EVERY open position — including slotless
     // holdings the position list reports. Per-symbol ownership:
-    // an ENTRY with provable open was managed by its slot path;
-    // an in-flight EXIT is adopted-or-replaced (never a second
-    // close); only truly uncovered symbols flatten here — all
-    // under the one incident hard id, so the paths pre-flight
+    // an ENTRY slot path sized its close from the SIGNED BROKER
+    // qty already (broker authority — never re-close here); an
+    // exit-only symbol reconciles ALL covering exits and closes
+    // only the remainder; only truly uncovered symbols flatten —
+    // all under the one incident hard id, so the paths pre-flight
     // each other instead of stacking closes.
     if (deps_.list_positions) {
         Position ps[64];
@@ -1423,10 +1572,42 @@ bool G0Runner::HardStop(long long now_ns, const char* why,
             if (ps[i].symbol[0] == '\0' || ps[i].qty == 0)
                 continue;
             if (CoveredBySlot(ps[i].symbol)) continue;
-            std::size_t fi = slots_.size();
-            if (ExitCoverRemaining(ps[i].symbol, &fi) > 0 &&
-                fi < slots_.size()) {
-                HardAdoptExit(slots_[fi], epoch, now_ns);
+            std::vector<std::size_t> cidx;
+            long long cover_tot = 0;
+            CollectCoverExits(ps[i].symbol, &cidx, &cover_tot);
+            if (!cidx.empty()) {
+                // Exit-owned symbol: reconcile EVERY covering
+                // exit, close only the genuinely uncovered
+                // remainder (a dead first exit never masks a
+                // live second).
+                long long exposed = 0;
+                for (std::size_t k = 0; k < cidx.size(); ++k)
+                    exposed += HardAdoptExit(slots_[cidx[k]],
+                                             epoch, now_ns);
+                long long working = cover_tot - exposed;
+                if (working < 0) working = 0;
+                long long aq =
+                    ps[i].qty > 0 ? ps[i].qty : -ps[i].qty;
+                long long uncovered = aq - working;
+                if (uncovered < 0) uncovered = 0;
+                if (uncovered == 0) continue;
+                broker::OrderSide eside =
+                    (ps[i].qty > 0) ? broker::OrderSide::SELL
+                                    : broker::OrderSide::BUY;
+                std::string hid =
+                    HardTag(epoch, ps[i].symbol);
+                char tb[280];
+                std::snprintf(tb, sizeof(tb),
+                                "hard-manage sym=%.15s exit-owned "
+                                "broker=%lld working=%lld "
+                                "uncovered=%lld",
+                                ps[i].symbol, ps[i].qty, working,
+                                uncovered);
+                OpsRow("drift-directive", "runner", tb,
+                       now_ns);
+                HardCloseOnce(ps[i].symbol, uncovered, eside,
+                              hid.c_str(), epoch, "runner",
+                              now_ns);
                 continue;
             }
             HardManagePosition(ps[i].symbol, ps[i].qty, epoch,
@@ -1731,7 +1912,20 @@ void G0Runner::MediumPass(long long now_ns) {
         Alert(P("alerts.jsonl").c_str(), "MEDIUM", "medium-enter",
               "entries stopped, flattening", now_ns);
     }
-    if (cur == "FLATTENED") return;  // terminal: nothing to do
+    if (cur == "FLATTENED") {
+        // Terminal — unless live exposure says the file is
+        // stale (a later incident with the FSM never cleared:
+        // clear + fresh enter mints a new epoch; suppression of
+        // a real later MEDIUM is the forbidden outcome).
+        if (!MediumHasExposure()) return;
+        ClearMediumFiles();
+        AtomicWrite(mp.c_str(), "MEDIUM_ACTIVE");
+        cur = "MEDIUM_ACTIVE";
+        MintMediumEpoch(now_ns);
+        Alert(P("alerts.jsonl").c_str(), "MEDIUM",
+              "medium-re-enter",
+              "stale FLATTENED, new incident", now_ns);
+    }
     long long epoch = MediumEpoch();
     bool pending = false;  // flatten work ordered, awaiting ack
     // Local ENTRY slots flatten through the EXIT machinery
@@ -2228,7 +2422,12 @@ bool G0Runner::Cycle(long long now_ns) {
     }
     // Leaving MEDIUM with the FSM file present finalizes it once:
     // flat -> FLATTENED, else PROTECTION_ONLY (stops/TP own the
-    // remainder — never a silent return to normal).
+    // remainder — never a silent return to normal). A closed
+    // (FLATTENED) or stale (no exposure left) incident is then
+    // AUTO-CLEARED with its epoch file — the next automatic
+    // MEDIUM trigger re-enters fresh (new epoch); no operator
+    // file edit is required. Crash-mid-incident keeps in-progress
+    // files (exposure present), so its epoch is reused.
     if (lr.level != jev::risk::KillLevel::MEDIUM) {
         std::vector<std::string> mlns;
         if (ReadLines(P("medium.txt").c_str(), &mlns) &&
@@ -2245,6 +2444,15 @@ bool G0Runner::Cycle(long long now_ns) {
                 OpsRow("drift-directive", "runner",
                        "medium-protection-only", now_ns);
             }
+        }
+        std::vector<std::string> clns;
+        if (ReadLines(P("medium.txt").c_str(), &clns) &&
+            !clns.empty() &&
+            (clns[0] == "FLATTENED" ||
+             !MediumHasExposure())) {
+            ClearMediumFiles();
+            OpsRow("drift-directive", "runner",
+                   "medium-incident-cleared", now_ns);
         }
     } else {
         MediumPass(now_ns);

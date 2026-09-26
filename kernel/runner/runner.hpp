@@ -231,12 +231,16 @@ class G0Runner {
     bool HardStop(long long now_ns, const char* why,
                   bool halt_at_entry);
     // Pre-flighted single close under a stable hard id (GET ->
-    // found: adopt, never resend; 404: POST once; failure: journal
-    // + alert, fail closed). Shared by the slot path and the
-    // slotless-position path so HARD never blind-sends.
+    // found-sufficient: adopt, never resend; found-live: adopt;
+    // found-short-terminal: deterministic incident remainder
+    // hard-<epoch>-<SYM>-<qty> (pure, pre-flighted, bounded
+    // strictly-decreasing chain); 404: POST once; failure:
+    // journal + alert, fail closed). Shared by the slot path and
+    // the slotless-position path so HARD never blind-sends.
     bool HardCloseOnce(const char* symbol, long long qty,
                        broker::OrderSide eside, const char* hid,
-                       const char* scope_intent, long long now_ns);
+                       long long epoch, const char* scope_intent,
+                       long long now_ns);
     // Incident epochs (doc 06 sec. 6.1b): MEDIUM mints once per
     // medium-enter (overwrite = new incident; crash reuses the
     // file); HARD mints unless the incident continues (HALT
@@ -252,16 +256,23 @@ class G0Runner {
     // ENTRY's flatten is armed/landed — the broker sweep then
     // reconciles but never SENDS for it.
     bool LocalCloseCovers(const char* symbol) const;
-    // Total remaining qty of active non-terminal EXITs on a symbol
-    // (0 = no exit coverage). First covering slot index via out.
-    long long ExitCoverRemaining(const char* symbol,
-                                 std::size_t* first) const;
+    // All covering EXIT slot indices on a symbol + summed
+    // remaining qty (0 = no exit coverage). Every covering exit
+    // is reconciled by the caller (queried, none assumed) before
+    // any uncovered remainder computes — first-only sampling is
+    // forbidden (a dead first exit must never mask a live one).
+    int CollectCoverExits(const char* symbol,
+                          std::vector<std::size_t>* idx,
+                          long long* total);
     // HARD adopt-or-replace for one EXIT slot: live/filled-full ->
     // adopt (journal, never cancel, never a second close); dead /
     // absent -> replace the remainder under the incident hard id
     // (pre-flighted, shared with every other hard path for the
-    // symbol — one position, one close).
-    void HardAdoptExit(Slot& s, long long epoch, long long now_ns);
+    // symbol — one position, one close). Returns the qty of this
+    // exit still exposed (0 when adopted, landed-full, or
+    // replaced-working; the unfixable remainder otherwise).
+    long long HardAdoptExit(Slot& s, long long epoch,
+                            long long now_ns);
     // Quarantine sighting (doc 06 locked): first sighting per slot
     // per status freezes the symbol + journals + alerts; repeats
     // stay silent (the machine already waits on UNKNOWN).
@@ -280,6 +291,11 @@ class G0Runner {
     // the incident sweep — the intent id is single-use, so no
     // re-arm, no resubmit, no freeze.
     bool FlattenResolvedNotClosed(const Slot& s) const;
+    // Signed broker position for one symbol (the endpoint is the
+    // authoritative current exposure). False when the seam is
+    // absent or failing — callers fall back to local sizing and
+    // journal it, never treat unknown as flat.
+    bool BrokerQty(const char* symbol, long long* out);
     // A live ENTRY slot with provable open covers its symbol (the
     // slot path manages it; the position sweep skips it — never
     // two closes for one position).
@@ -296,7 +312,20 @@ class G0Runner {
     // Leftover (no local expectation) is dropped, never invented.
     void AttributeClosedQty(const char* symbol, long long qty,
                             long long now_ns);
+    // Deterministic incident-scoped remainder id
+    // hard-<epoch>-<SYM>-<qty> through the frozen recipe (pure:
+    // re-derived identically on restart; never collides with the
+    // primary hard id, which carries no qty suffix).
+    static std::string HardRemainderTag(long long epoch,
+                                        const char* symbol,
+                                        long long rem);
     void MediumPass(long long now_ns);
+    // Live exposure for MEDIUM re-entry: local ENTRY open or any
+    // broker position (seam failure counts as exposure — never
+    // clear what cannot be seen). ClearMediumFiles drops the FSM
+    // file + the epoch file (closed/stale incident teardown).
+    bool MediumHasExposure();
+    void ClearMediumFiles();
     bool VenueOk(bool* open, bool* spread_ok);
     int LocalNet(const char* symbol) const;  // signed local open
     // (PROTECTED included: it IS the normal open position —

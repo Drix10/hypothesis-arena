@@ -2744,10 +2744,12 @@ int main() {
         Check(carries, "hx4-incident-id");
         Check(Exists(r.dir + "/HALT"), "hx4-halt");
     }
-    // T4. Incident identity (doc 06 sec. 6.1b): two MEDIUM
-    // incidents on one symbol send two REAL closes under two
-    // distinct incident ids — the second never adopts the first's
-    // historical fill.
+    // T4/R1. Incident identity + AUTOMATIC re-entry (doc 06 sec.
+    // 6.1b): two MEDIUM incidents on one symbol send two REAL
+    // closes under two distinct incident ids — the second never
+    // adopts the first's historical fill, and NO operator file
+    // deletion happens between them (the runner auto-clears the
+    // closed incident).
     {
         Rig r;
         r.deps.list_positions = FakePositions;
@@ -2773,15 +2775,18 @@ int main() {
                 coid1 = g_log[i].body.substr(p, 96);
         }
         Check(!coid1.empty(), "ii-first-id");
-        // End incident 1: flat books finalize the FSM.
+        // End incident 1: flat books + kill cleared -> the runner
+        // AUTO-CLEARS the closed incident (FSM + epoch files go
+        // empty, journaled) — no manual deletion.
         g_kill = jev::kill::KillInputs();
         g_positions.clear();
         Check(g.Cycle(g_now), "ii-cycle2");
-        Check(ReadWhole(r.dir + "/medium.txt") ==
-                  "FLATTENED",
-              "ii-incident1-done");
-        // Incident 2: operator reset + fresh exposure, later.
-        std::remove((r.dir + "/medium.txt").c_str());
+        Check(ReadWhole(r.dir + "/medium.txt").empty(),
+              "ii-auto-cleared");
+        Check(ReadWhole(r.dir + "/medium-incident.txt").empty(),
+              "ii-epoch-cleared");
+        // Incident 2: fresh exposure, later. Fresh enter mints a
+        // new epoch and really sends.
         g_positions.push_back(MkPos("AAPL", 100));
         g_kill.spend_tier = 3;
         g_now += 60000000000LL;
@@ -2881,6 +2886,188 @@ int main() {
         }
         Check(!coid2.empty() && coid2 != coid1,
               "hi-distinct-incident-id");
+    }
+    // R2. HARD quantity authority (doc 06 sec. 6.1b): the SIGNED
+    // broker position sizes the close — local +100 vs broker +50
+    // closes 50 (not 100); vs +150 closes 150 (nothing unmanaged);
+    // vs -100 closes BUY 100 (the actual exposure) + drift alert;
+    // flat local vs broker +100 closes 100. Exactly one POST each.
+    for (int rc = 0; rc < 4; ++rc) {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        long long bq = (rc == 0)   ? 50
+                       : (rc == 1) ? 150
+                       : (rc == 2) ? -100
+                                   : 100;
+        g_positions.push_back(MkPos("AAPL", bq));
+        std::string cid;
+        if (rc < 3) {
+            Check(!CrashImage(r.dir, "intent-500", "AAPL", 0,
+                              0, 100, 2, 100, &cid)
+                       .empty(),
+                  "bq-image");
+        }
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "bq-recover");
+        g_kill.drift_unresolvable = true;  // HARD
+        if (rc < 3) {
+            // Entry order found WITH protection (reprotect
+            // skipped — this case is about close qty, not
+            // protection).
+            PushRule("GET", "by_client_order_id", 200,
+                     HeldReply("filled", "100").c_str());
+        }
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 PlainReply("accepted", "0").c_str());
+        Check(!g.Cycle(g_now), "bq-terminates");
+        Check(CountMethod("POST", "/v2/orders") == 1,
+              "bq-one-close");
+        char wantq[32], wants[32];
+        std::snprintf(wantq, sizeof(wantq), "\"qty\":\"%lld\"",
+                        bq > 0 ? bq : -bq);
+        std::snprintf(wants, sizeof(wants), "\"side\":\"%s\"",
+                        bq > 0 ? "sell" : "buy");
+        bool gotq = false, gots = false;
+        for (std::size_t i = 0; i < g_log.size(); ++i) {
+            if (g_log[i].method != "POST") continue;
+            if (g_log[i].body.find(wantq) != std::string::npos)
+                gotq = true;
+            if (g_log[i].body.find(wants) != std::string::npos)
+                gots = true;
+        }
+        Check(gotq, "bq-broker-qty");
+        Check(gots, "bq-broker-side");
+        if (rc == 2) {
+            Check(ReadWhole(r.dir + "/alerts.jsonl").find(
+                      "hard-direction-drift") !=
+                      std::string::npos,
+                  "bq-drift-alert");
+        }
+        Check(Exists(r.dir + "/HALT"), "bq-halt");
+    }
+    // R3. HARD remainder identity (doc 06 sec. 6.1b): primary 100
+    // fills 40 then dies -> restart under the SAME incident
+    // (HALT present, epoch reused) sends exactly one 60-share
+    // remainder under hard-<epoch>-<SYM>-60 (never reusing the
+    // burned primary id); a further restart sends nothing.
+    {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "hr-recover");
+        g_kill.broker_auth_fail = true;  // HARD #1
+        g_positions.push_back(MkPos("AAPL", 100));
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 PlainReply("accepted", "0").c_str());
+        Check(!g.Cycle(g_now), "hr-hard1");
+        Check(CountMethod("POST", "/v2/orders") == 1,
+              "hr-primary-sent");
+        std::string coid1;
+        for (std::size_t i = 0; i < g_log.size(); ++i) {
+            if (g_log[i].method != "POST") continue;
+            std::size_t p =
+                g_log[i].body.find("client_order_id");
+            if (p != std::string::npos)
+                coid1 = g_log[i].body.substr(p, 96);
+        }
+        Check(!coid1.empty(), "hr-primary-id");
+        // Restart, same incident (HALT kept, poll still shows
+        // 100 — the 40 fill settles async): the primary
+        // pre-flights FILLED-40 terminal -> exactly one 60
+        // remainder, new identity.
+        G0Runner g2(r.cfg, r.deps);
+        Check(g2.Recover(nullptr), "hr-recover2");
+        PushRule("GET", "by_client_order_id", 200,
+                 HeldReply("filled", "40").c_str());
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 PlainReply("accepted", "0").c_str());
+        Check(!g2.Cycle(g_now), "hr-hard2");
+        Check(CountMethod("POST", "/v2/orders") == 2,
+              "hr-one-remainder");
+        std::string coid2;
+        int posts = 0;
+        bool qty60 = false;
+        for (std::size_t i = 0; i < g_log.size(); ++i) {
+            if (g_log[i].method != "POST") continue;
+            if (++posts < 2) continue;
+            std::size_t p =
+                g_log[i].body.find("client_order_id");
+            if (p != std::string::npos)
+                coid2 = g_log[i].body.substr(p, 96);
+            if (g_log[i].body.find("\"qty\":\"60\"") !=
+                std::string::npos)
+                qty60 = true;
+        }
+        Check(!coid2.empty() && coid2 != coid1,
+              "hr-remainder-distinct-id");
+        Check(qty60, "hr-remainder-60");
+        // Third cycle: primary FILLED-40 + remainder FILLED-60
+        // both sufficient -> zero new orders, forever.
+        G0Runner g3(r.cfg, r.deps);
+        Check(g3.Recover(nullptr), "hr-recover3");
+        PushRule("GET", "by_client_order_id", 200,
+                 HeldReply("filled", "40").c_str());
+        PushRule("GET", "by_client_order_id", 200,
+                 HeldReply("filled", "60").c_str());
+        Check(!g3.Cycle(g_now), "hr-hard3");
+        Check(CountMethod("POST", "/v2/orders") == 2,
+              "hr-no-resend");
+    }
+    // R4. Multiple EXIT coherence (doc 06 sec. 6.1b): ENTRY +100
+    // with EXIT A 50 DEAD + EXIT B 50 LIVE under HARD reconciles
+    // BOTH exits — A's 50 replaces (one legitimate POST), B's 50
+    // adopts, and NO second 100-share close fires while B lives.
+    {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        std::string cid, aid, bid;
+        Check(!CrashImage(r.dir, "intent-510", "AAPL", 0, 0,
+                          100, 2, 100, &cid)
+                   .empty(),
+              "mx-entry");
+        Check(!CrashImage(r.dir, "intent-511", "AAPL", 0, 1,
+                          50, 9, 0, &aid)
+                   .empty(),
+              "mx-a");
+        Check(!CrashImage(r.dir, "intent-512", "AAPL", 0, 1,
+                          50, 9, 0, &bid)
+                   .empty(),
+              "mx-b");
+        g_positions.push_back(MkPos("AAPL", 100));
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "mx-recover");
+        g_kill.drift_unresolvable = true;  // HARD
+        // Journal order: entry, A, B. Entry order protected;
+        // A absent (replace posts under the incident id); B
+        // live (adopts); the entry close computes zero; both
+        // exit branches adopt (A finds its own replace live).
+        PushRule("GET", "by_client_order_id", 200,
+                 HeldReply("filled", "100").c_str());
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 PlainReply("accepted", "0").c_str());
+        PushRule("GET", "by_client_order_id", 200,
+                 PlainReply("accepted", "0").c_str());
+        PushRule("GET", "by_client_order_id", 200,
+                 PlainReply("accepted", "0").c_str());
+        PushRule("GET", "by_client_order_id", 200,
+                 PlainReply("accepted", "0").c_str());
+        Check(!g.Cycle(g_now), "mx-terminates");
+        Check(CountMethod("POST", "/v2/orders") == 1,
+              "mx-one-replace");
+        bool big = false;
+        for (std::size_t i = 0; i < g_log.size(); ++i) {
+            if (g_log[i].method != "POST") continue;
+            if (g_log[i].body.find("\"qty\":\"100\"") !=
+                std::string::npos)
+                big = true;
+        }
+        Check(!big, "mx-no-double-close");
+        Check(Exists(r.dir + "/HALT"), "mx-halt");
     }
     // T7. Quarantine (doc 06 locked): a done_for_day entry freezes
     // its symbol on first sighting (one row), waits (no mint, no
