@@ -90,6 +90,28 @@ static int FakeStream(void*, char* buf, int n) {
     g_stream_off += (std::size_t)take;
     return take;
 }
+static std::vector<jev::runner::Position> g_positions;
+static int g_pos_fail = 0;
+static int FakePositions(void*, jev::runner::Position* out, int cap) {
+    if (g_pos_fail) return -1;
+    int n = ((int)g_positions.size() < cap) ? (int)g_positions.size()
+                                            : cap;
+    for (int i = 0; i < n; ++i) out[i] = g_positions[i];
+    return n;
+}
+static jev::runner::Position MkPos(const char* sym, long long qty) {
+    jev::runner::Position p;
+    std::strncpy(p.symbol, sym, 15);
+    p.qty = qty;
+    return p;
+}
+static int g_venue_open = 0, g_venue_spread = 0, g_venue_fail = 0;
+static bool FakeVenue(void*, bool* open, bool* spread) {
+    if (g_venue_fail) return false;
+    *open = g_venue_open != 0;
+    *spread = g_venue_spread != 0;
+    return true;
+}
 
 static jev::kill::KillInputs g_kill;
 static void FakeKill(void*, jev::kill::KillInputs* out) { *out = g_kill; }
@@ -228,6 +250,11 @@ struct Rig {
         g_stream_off = 0;
         g_kill = jev::kill::KillInputs();
         g_now = 1800000000000000000LL;
+        g_positions.clear();
+        g_pos_fail = 0;
+        g_venue_open = 0;
+        g_venue_spread = 0;
+        g_venue_fail = 0;
     }
 };
 static const char* kUuid = "0193abcd-1234-5678-9abc-def012345678";
@@ -279,7 +306,8 @@ static std::string DeadReply(const char* fq) {
 static std::string CrashImage(const std::string& dir, const char* iid,
                               const char* sym, int side01, int kind01,
                               long long qty, int st, long long filled,
-                              std::string* cid_out) {
+                              std::string* cid_out,
+                              const char* bid = "") {
     char cid[65];
     if (!jev::broker::MakeClientOrderId(
             "alpaca-paper", "test", std::string(64, 'a').c_str(), sym,
@@ -308,10 +336,58 @@ static std::string CrashImage(const std::string& dir, const char* iid,
     WriteFile(dir + "/intent-" + std::string(iid) + ".txt", iln);
     char snap[320];
     std::snprintf(snap, sizeof(snap),
-                  "H1:%d:%d:%lld:0:0:0:%s::%s:%s:%d::0:0:0:0", st,
-                  kind01, filled, cid, iid, sym, side01);
+                  "H1:%d:%d:%lld:0:0:0:%s:%s:%s:%s:%d::0:0:0:0", st,
+                  kind01, filled, cid, bid ? bid : "", iid, sym,
+                  side01);
     WriteFile(dir + "/snap-" + std::string(iid) + ".txt", snap);
     return cid;
+}
+// Crash a flatten EXIT alongside its entry: intent row (chained),
+// intent file, EXIT_SENT snapshot with its own stable client id —
+// the "dead process sent the close, ack pending" image. The
+// entry image (seq 0) must already exist.
+static bool CrashFlatten(const std::string& dir, const char* fid,
+                         const char* sym, long long qty) {
+    std::vector<jev::journal::Row> jr;
+    if (!jev::runner::JournalLoad((dir + "/journal.jsonl").c_str(),
+                                  &jr) ||
+        jr.empty())
+        return false;
+    char fcid[65];
+    if (!jev::broker::MakeClientOrderId(
+            "alpaca-paper", "test", std::string(64, 'a').c_str(),
+            sym, jev::broker::OrderSide::BUY, fid, fcid))
+        return false;
+    std::string body = std::string("intent sym=") + sym;
+    jev::journal::Row r;
+    if (!jev::journal::FormatRow(1, 1800000000000000000LL, "intent",
+                                 fid,
+                                 jev::Sha256Hex(body).c_str(),
+                                 jr.back().row_hash.c_str(), &r))
+        return false;
+    char ln[1024];
+    std::snprintf(ln, sizeof(ln), "%llu|%lld|%s|%s|%s|%s|%s",
+                  (unsigned long long)r.seq, (long long)r.ts_ns,
+                  r.kind.c_str(), r.intent_id.c_str(),
+                  r.payload_hash.c_str(), r.prev_hash.c_str(),
+                  r.row_hash.c_str());
+    FILE* f =
+        std::fopen((dir + "/journal.jsonl").c_str(), "ab");
+    if (!f) return false;
+    std::string line = std::string(ln) + "\n";
+    std::size_t w = std::fwrite(line.data(), 1, line.size(), f);
+    std::fclose(f);
+    if (w != line.size()) return false;
+    char iln[128];
+    std::snprintf(iln, sizeof(iln), "%s|%d|%d|%lld|22000|24000", sym,
+                  0, 1, qty);
+    WriteFile(dir + "/intent-" + std::string(fid) + ".txt", iln);
+    char snap[320];
+    std::snprintf(snap, sizeof(snap),
+                  "H1:%d:%d:%lld:0:0:0:%s::%s:%s:%d::0:0:0:0", 9, 1,
+                  0LL, fcid, fid, sym, 0);
+    WriteFile(dir + "/snap-" + std::string(fid) + ".txt", snap);
+    return true;
 }
 
 int main() {
@@ -1097,6 +1173,475 @@ int main() {
         Check(!g.Recover(nullptr), "jb-refuses");
         Check(Exists(r.dir + "/alerts.jsonl"),
               "jb-alerts");
+    }
+    // 16. HARD manages old risk before terminating (sec. 10.3):
+    // crafted open ENTRY (filled 100, no protection) + HARD kill
+    // -> reprotect POST + flatten POST, hard journal rows, HALT
+    // file, cycle returns false (supervisor must not restart).
+    {
+        Rig r;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-100", "AAPL", 0, 0, 100,
+                          5, 100, &cid)
+                   .empty(),
+              "hd-image");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "hd-recover");
+        g_kill.drift_unresolvable = true;  // HARD
+        PushRule("GET", "by_client_order_id", 200,
+                 "{\"id\":\"0193abcd-1234-5678-9abc-"
+                 "def012345678\",\"status\":\"accepted\","
+                 "\"filled_qty\":\"100\"}");
+        PushRule("POST", "/v2/orders", 200,
+                 BracketReply("accepted", "100").c_str());
+        PushRule("POST", "/v2/orders", 200,
+                 HeldReply("filled", "100").c_str());
+        Check(!g.Cycle(g_now), "hd-terminates");
+        Check(CountMethod("POST", "/v2/orders") == 2,
+              "hd-reprotect-plus-flatten");
+        Check(Exists(r.dir + "/HALT"), "hd-halt-survives");
+        std::vector<jev::journal::Row> rows;
+        int hard_rows = 0;
+        if (jev::runner::JournalLoad(
+                (r.dir + "/journal.jsonl").c_str(), &rows)) {
+            for (std::size_t i = 0; i < rows.size(); ++i) {
+                if (rows[i].kind == "drift-directive") ++hard_rows;
+            }
+        }
+        Check(hard_rows >= 2, "hd-journaled");
+        // Restart: HALT blocks entries, exits stay submittable.
+        g_kill = jev::kill::KillInputs();
+        G0Runner g2(r.cfg, r.deps);
+        Check(g2.Recover(nullptr), "hd-restart");
+        Check(!g2.SubmitIntent(GoodIntent("intent-101", "AAPL",
+                                          false, 10),
+                               nullptr),
+              "hd-entry-blocked");
+        Check(g2.SubmitIntent(GoodIntent("intent-102", "AAPL",
+                                         true, 10),
+                              nullptr),
+              "hd-exit-alive");
+    }
+    // 17. HARD on an EXIT with UUID: cancel attempted, then out.
+    {
+        Rig r;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-110", "SPY", 0, 1, 100,
+                          9, 0, &cid,
+                          "0193abcd-1234-5678-9abc-def012345678")
+                   .empty(),
+              "hx-image");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "hx-recover");
+        g_kill.broker_auth_fail = true;  // HARD
+        PushRule("GET", "by_client_order_id", 200,
+                 HeldReply("filled", "0").c_str());
+        PushRule("DELETE", "/v2/orders/", 422,
+                 "{\"error\":\"refused\"}");
+        Check(!g.Cycle(g_now), "hx-terminates");
+        Check(CountMethod("DELETE", "/v2/orders/") == 1,
+              "hx-cancel-attempted");
+        Check(Exists(r.dir + "/HALT"), "hx-halt-survives");
+    }
+    // 18. HARD on a never-filled ENTRY: found -> cancel attempt;
+    // 404-absent -> journaled, nothing to cancel. Either way the
+    // process terminates (false) with zero entry-side POSTs.
+    for (int hcase = 0; hcase < 2; ++hcase) {
+        Rig r;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-120", "AAPL", 0, 0, 100,
+                          2, 0, &cid)
+                   .empty(),
+              "hu-image");
+        // SENT_UNACKED, filled 0: POST may have landed, ack lost.
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "hu-recover");
+        g_kill.determinism_fail = true;  // HARD
+        if (hcase == 0) {
+            PushRule("GET", "by_client_order_id", 200,
+                     HeldReply("accepted", "0").c_str());
+            PushRule("DELETE", "/v2/orders/", 204, "");
+        } else {
+            PushRule("GET", "by_client_order_id", 404, "{}");
+        }
+        Check(!g.Cycle(g_now), "hu-terminates");
+        Check(CountMethod("DELETE", "/v2/orders/") ==
+                  (hcase == 0 ? 1 : 0),
+              hcase == 0 ? "hu-cancel-found" : "hu-no-cancel-404");
+        Check(CountMethod("POST", "/v2/orders") == 0,
+              hcase == 0 ? "hu-no-post" : "hu-no-post404");
+    }
+    // 19. Exit gating + intent permanence: EXIT bypasses freeze /
+    // stage; ids are safe-grammar, permanent, and non-reusable.
+    {
+        Rig r;
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "xg-recover");
+        Check(jev::runner::FreezeAdd((r.dir + "/freeze.txt").c_str(),
+                                     "AAPL"),
+              "xg-freeze");
+        Check(!g.SubmitIntent(GoodIntent("intent-130", "AAPL",
+                                         false, 10),
+                              nullptr),
+              "xg-entry-frozen");
+        Check(g.SubmitIntent(GoodIntent("intent-131", "AAPL",
+                                        true, 10),
+                             nullptr),
+              "xg-exit-despite-freeze");
+        // Demoted stage: entries stop, exits still manage.
+        WriteFile(r.dir + "/STAGE", "garbage\n");
+        Check(g.Cycle(g_now), "xg-cycle");
+        Check(!g.SubmitIntent(GoodIntent("intent-132", "SPY",
+                                         false, 10),
+                              nullptr),
+              "xg-entry-destaged");
+        Check(g.SubmitIntent(GoodIntent("intent-133", "SPY",
+                                        true, 10),
+                             nullptr),
+              "xg-exit-despite-stage");
+        // Path traversal never touches the filesystem.
+        const char* rs = nullptr;
+        Check(!g.SubmitIntent(GoodIntent("../evil", "SPY", false,
+                                         10),
+                              &rs),
+              "xg-bad-id");
+        Check(!Exists(r.dir + "/intent-..-evil.txt") &&
+                  !Exists(r.dir + "/intent-../evil.txt"),
+              "xg-no-escape");
+    }
+    // 20. Intent-id permanence across restarts.
+    {
+        Rig r;
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "xp-recover");
+        Check(g.SubmitIntent(GoodIntent("intent-140", "AAPL",
+                                        false, 100),
+                             nullptr),
+              "xp-submit");
+        // Same id, different economics while live: refused (dup).
+        Check(!g.SubmitIntent(GoodIntent("intent-140", "AAPL",
+                                         false, 200),
+                              nullptr),
+              "xp-dup-refused-live");
+        // Restart before any journal row: identical economics is
+        // an idempotent crash-retry (no duplicate registration).
+        G0Runner g2(r.cfg, r.deps);
+        Check(g2.Recover(nullptr), "xp-recover2");
+        Check(g2.SubmitIntent(GoodIntent("intent-140", "AAPL",
+                                         false, 100),
+                              nullptr),
+              "xp-retry-allowed");
+        Check(g2.Cycle(g_now), "xp-cycle");  // journals intent
+        // Restart after the intent row: the slot is rebuilt, so a
+        // resubmit is refused (live dup today; already-registered
+        // once done slots reclaim in the lifecycle pass).
+        G0Runner g3(r.cfg, r.deps);
+        Check(g3.Recover(nullptr), "xp-recover3");
+        Check(!g3.SubmitIntent(GoodIntent("intent-140", "AAPL",
+                                          false, 100),
+                               nullptr),
+              "xp-resubmit-refused");
+    }
+    // 21. Position drift: orphan + mismatch journal/alert/force;
+    // agreement stays quiet.
+    {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        g_positions.push_back(MkPos("AAPL", 40));  // orphan
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "pd-recover");
+        Check(g.Cycle(g_now), "pd-cycle");
+        FILE* af =
+            std::fopen((r.dir + "/alerts.jsonl").c_str(), "rb");
+        char abuf[4096] = {0};
+        std::size_t an =
+            af ? std::fread(abuf, 1, sizeof(abuf) - 1, af) : 0;
+        if (af) std::fclose(af);
+        Check(an > 0 &&
+                  std::string(abuf).find("position-drift") !=
+                      std::string::npos,
+              "pd-orphan-alerts");
+        std::vector<jev::journal::Row> rows;
+        bool drift_row = false;
+        if (jev::runner::JournalLoad(
+                (r.dir + "/journal.jsonl").c_str(), &rows)) {
+            for (std::size_t i = 0; i < rows.size(); ++i) {
+                if (rows[i].kind == "drift-directive")
+                    drift_row = true;
+            }
+        }
+        Check(drift_row, "pd-orphan-row");
+    }
+    // 22. Local/broker agreement: no drift rows, no alerts.
+    {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-150", "AAPL", 0, 0, 100,
+                          5, 40, &cid)
+                   .empty(),
+              "pa-image");
+        g_positions.push_back(MkPos("AAPL", 40));
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "pa-recover");
+        PushRule("GET", "by_client_order_id", 500, "{}");
+        Check(g.Cycle(g_now), "pa-cycle");
+        Check(!Exists(r.dir + "/alerts.jsonl"), "pa-quiet");
+        std::vector<jev::journal::Row> rows;
+        bool drift_row = false;
+        if (jev::runner::JournalLoad(
+                (r.dir + "/journal.jsonl").c_str(), &rows)) {
+            for (std::size_t i = 0; i < rows.size(); ++i) {
+                if (rows[i].kind == "drift-directive")
+                    drift_row = true;
+            }
+        }
+        Check(!drift_row, "pa-no-row");
+    }
+    // 23. Qty mismatch forces a real re-lookup of that symbol.
+    {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-160", "AAPL", 0, 0, 100,
+                          5, 40, &cid)
+                   .empty(),
+              "pm-image");
+        g_positions.push_back(MkPos("AAPL", 100));  // vs local 40
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "pm-recover");
+        PushRule("GET", "by_client_order_id", 500, "{}");
+        Check(g.Cycle(g_now), "pm-cycle1");  // S2 GET#1
+        g_now += 901LL * 1000000000LL;
+        PushRule("GET", "by_client_order_id", 500, "{}");
+        Check(g.Cycle(g_now), "pm-cycle2");  // drift GET#2
+        Check(CountMethod("GET", "by_client_order_id") == 2,
+              "pm-forces-reloukup");
+    }
+    // 24. MEDIUM position sweep (venue open, spread normal):
+    // broker-confirmed +100 flattens via market AND the local
+    // ENTRY flattens via EXIT; FSM lands FLATTEN_PENDING.
+    {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        r.deps.venue_gate = FakeVenue;
+        g_venue_open = 1;
+        g_venue_spread = 1;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-170", "AAPL", 0, 0, 100,
+                          5, 100, &cid)
+                   .empty(),
+              "ms-image");
+        g_positions.push_back(MkPos("AAPL", 100));
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "ms-recover");
+        g_kill.spend_tier = 3;  // MEDIUM
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 HeldReply("filled", "100").c_str());
+        PushRule("POST", "/v2/orders", 200,
+                 HeldReply("filled", "100").c_str());
+        PushRule("POST", "/v2/orders", 200,
+                 HeldReply("filled", "100").c_str());
+        Check(g.Cycle(g_now), "ms-cycle");
+        // Sweep row journaled with the broker-confirmed qty.
+        std::vector<jev::journal::Row> rows;
+        bool sweep_row = false;
+        if (jev::runner::JournalLoad(
+                (r.dir + "/journal.jsonl").c_str(), &rows)) {
+            for (std::size_t i = 0; i < rows.size(); ++i) {
+                if (rows[i].kind == "drift-directive")
+                    sweep_row = true;
+            }
+        }
+        Check(sweep_row, "ms-sweep-row");
+        Check(g.Find("intent-170-flatten") != nullptr,
+              "ms-local-flatten");
+        FILE* mf =
+            std::fopen((r.dir + "/medium.txt").c_str(), "rb");
+        char mbuf[64] = {0};
+        std::size_t mn =
+            mf ? std::fread(mbuf, 1, sizeof(mbuf) - 1, mf) : 0;
+        if (mf) std::fclose(mf);
+        Check(mn > 0 && std::string(mbuf) == "FLATTEN_PENDING",
+              "ms-pending");
+    }
+    // 25. MEDIUM venue-closed: no sweep (FSM still tracks the
+    // ordered local flatten as PENDING — ACTIVE means nothing
+    // ordered yet). Local flatten still issued (its own broker
+    // refuse is safe).
+    {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        r.deps.venue_gate = FakeVenue;
+        g_venue_open = 0;  // closed
+        g_venue_spread = 1;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-171", "AAPL", 0, 0, 100,
+                          5, 100, &cid)
+                   .empty(),
+              "mc-image");
+        g_positions.push_back(MkPos("AAPL", 100));
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "mc-recover");
+        g_kill.spend_tier = 3;  // MEDIUM
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 HeldReply("filled", "100").c_str());
+        PushRule("GET", "by_client_order_id", 200,
+                 HeldReply("filled", "100").c_str());
+        Check(g.Cycle(g_now), "mc-cycle");
+        std::vector<jev::journal::Row> rows;
+        bool sweep_row = false;
+        if (jev::runner::JournalLoad(
+                (r.dir + "/journal.jsonl").c_str(), &rows)) {
+            for (std::size_t i = 0; i < rows.size(); ++i) {
+                if (rows[i].kind == "drift-directive")
+                    sweep_row = true;
+            }
+        }
+        Check(!sweep_row, "mc-no-sweep");
+        Check(g.Find("intent-171-flatten") != nullptr,
+              "mc-local-flatten");
+        FILE* mf =
+            std::fopen((r.dir + "/medium.txt").c_str(), "rb");
+        char mbuf[64] = {0};
+        std::size_t mn =
+            mf ? std::fread(mbuf, 1, sizeof(mbuf) - 1, mf) : 0;
+        if (mf) std::fclose(mf);
+        Check(mn > 0 && std::string(mbuf) == "FLATTEN_PENDING",
+              "mc-pending-no-sweep");
+    }
+    // 26. MEDIUM all-flat: FSM lands FLATTENED, no orders sent.
+    {
+        Rig r;
+        r.deps.list_positions = FakePositions;  // empty = flat
+        r.deps.venue_gate = FakeVenue;
+        g_venue_open = 1;
+        g_venue_spread = 1;
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "mf-recover");
+        g_kill.spend_tier = 3;  // MEDIUM
+        Check(g.Cycle(g_now), "mf-cycle");
+        Check(g_log.empty(), "mf-no-transport");
+        FILE* mf =
+            std::fopen((r.dir + "/medium.txt").c_str(), "rb");
+        char mbuf[64] = {0};
+        std::size_t mn =
+            mf ? std::fread(mbuf, 1, sizeof(mbuf) - 1, mf) : 0;
+        if (mf) std::fclose(mf);
+        Check(mn > 0 && std::string(mbuf) == "FLATTENED",
+              "mf-flat");
+    }
+    // 27. MEDIUM restart: PENDING reloads, no second flatten EXIT.
+    {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        r.deps.venue_gate = FakeVenue;
+        g_venue_open = 1;
+        g_venue_spread = 1;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-172", "AAPL", 0, 0, 100,
+                          5, 100, &cid)
+                   .empty(),
+              "mr-image");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "mr-recover");
+        g_kill.spend_tier = 3;  // MEDIUM
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 HeldReply("filled", "100").c_str());
+        Check(g.Cycle(g_now), "mr-cycle1");
+        const auto* mf1 = g.Find("intent-172-flatten");
+        Check(mf1 && mf1->done &&
+                  mf1->m.state == jev::exec::RouteState::CLOSED,
+              "mr-flatten-closed");
+        // Completed flatten is never re-ordered: restart sees the
+        // terminal exit row, submits nothing, freezes nothing.
+        G0Runner g2(r.cfg, r.deps);
+        Check(g2.Recover(nullptr), "mr-recover2");
+        Check(g2.Cycle(g_now), "mr-cycle2");
+        Check(g2.Find("intent-172-flatten") == nullptr,
+              "mr-no-resubmit");
+        Check(g2.slots() == 1, "mr-entry-only");
+        Check(!Exists(r.dir + "/freeze.txt"),
+              "mr-no-spurious-freeze");
+        FILE* mmf =
+            std::fopen((r.dir + "/medium.txt").c_str(), "rb");
+        char mmbuf[64] = {0};
+        std::size_t mmn =
+            mmf ? std::fread(mmbuf, 1, sizeof(mmbuf) - 1, mmf) : 0;
+        if (mmf) std::fclose(mmf);
+        Check(mmn > 0 && std::string(mmbuf) == "FLATTEN_PENDING",
+              "mr-still-pending");
+    }
+    // 27b. In-flight flatten across restart: crafted adopted
+    // close (EXIT_SENT, no terminal row) reloads, parks on dead
+    // transport, and MEDIUM never orders a second flatten — the
+    // journal keeps exactly ONE fid intent row, zero POSTs.
+    {
+        Rig r;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-174", "AAPL", 0, 0, 100,
+                          5, 100, &cid)
+                   .empty(),
+              "mi-image");
+        Check(CrashFlatten(r.dir, "intent-174-flatten", "AAPL",
+                           100),
+              "mi-flatten-image");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "mi-recover");
+        Check(g.slots() == 2, "mi-both-reload");
+        g_kill.spend_tier = 3;  // MEDIUM
+        PushRule("GET", "by_client_order_id", 500, "{}");
+        PushRule("GET", "by_client_order_id", 500, "{}");
+        Check(g.Cycle(g_now), "mi-cycle");
+        Check(g.Find("intent-174-flatten") != nullptr,
+              "mi-flatten-survives");
+        Check(g.slots() == 2, "mi-no-second-flatten");
+        Check(CountMethod("POST", "/v2/orders") == 0,
+              "mi-no-resend");
+        std::vector<jev::journal::Row> rows;
+        int fid_intents = 0;
+        if (jev::runner::JournalLoad(
+                (r.dir + "/journal.jsonl").c_str(), &rows)) {
+            for (std::size_t i = 0; i < rows.size(); ++i) {
+                if (rows[i].kind == "intent" &&
+                    rows[i].intent_id == "intent-174-flatten")
+                    ++fid_intents;
+            }
+        }
+        Check(fid_intents == 1, "mi-one-registration");
+    }
+    // 28. Leaving MEDIUM with open risk: PROTECTION_ONLY, alerted.
+    {
+        Rig r;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-173", "AAPL", 0, 0, 100,
+                          5, 100, &cid)
+                   .empty(),
+              "mp-image");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "mp-recover");
+        g_kill.spend_tier = 3;  // MEDIUM
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 HeldReply("filled", "40").c_str());
+        Check(g.Cycle(g_now), "mp-cycle1");
+        g_kill = jev::kill::KillInputs();  // MEDIUM clears
+        PushRule("GET", "by_client_order_id", 500, "{}");
+        Check(g.Cycle(g_now), "mp-cycle2");
+        FILE* mf =
+            std::fopen((r.dir + "/medium.txt").c_str(), "rb");
+        char mbuf[64] = {0};
+        std::size_t mn =
+            mf ? std::fread(mbuf, 1, sizeof(mbuf) - 1, mf) : 0;
+        if (mf) std::fclose(mf);
+        Check(mn > 0 && std::string(mbuf) == "PROTECTION_ONLY",
+              "mp-protection-only");
     }
     if (g_fail == 0)
         std::printf("RUNNER SUITE: ALL PASS (%d checks)\n", g_count);

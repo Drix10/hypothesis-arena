@@ -32,6 +32,11 @@
 namespace jev {
 namespace runner {
 
+// Authoritative broker position (signed shares; +long/-short).
+struct Position {
+    char symbol[16]{};
+    long long qty = 0;
+};
 // Injected seams (deterministic under test, live in Phase 4).
 struct RunnerDeps {
     broker::HttpTransport transport = nullptr;  // null = fail closed
@@ -45,6 +50,18 @@ struct RunnerDeps {
     void* kill_ctx = nullptr;
     bool restart_flag = false;  // operator restart-with-flag (sec. 6.4)
     long long s2_seconds = 900;  // 15-min REST reconcile (doc 01)
+    // Authoritative position list: fills out[cap], returns count
+    // (0 = flat), <0 = lookup failed. Null = seam absent (Phase 4:
+    // S2 is known-order reconciliation only, MEDIUM flattens local
+    // slots only — documented bootstrap limits).
+    int (*list_positions)(void* ctx, Position* out, int cap) = nullptr;
+    void* positions_ctx = nullptr;
+    // Venue gate for the MEDIUM position sweep: open + spread
+    // normal. False = unknown/closed (fail closed: no sweep,
+    // protection stays, retry next cycle). Null = seam absent.
+    bool (*venue_gate)(void* ctx, bool* open, bool* spread_ok) =
+        nullptr;
+    void* venue_ctx = nullptr;
 };
 
 struct RunnerConfig {
@@ -126,9 +143,14 @@ class G0Runner {
     // stable id, so recovery can never double-send). False =
     // refuse to run (reason static).
     bool Recover(const char** reason);
-    // Submit an authorized intent (ENTRY gated on kill/HALT/stage/
-    // freeze/universe-cap; EXIT always accepted except frozen
-    // symbol/stage-refusal). False = refused (reason static).
+    // Submit an authorized intent. ENTRY gated on bad-id / cap /
+    // kill / HALT / stage / freeze / universe-cap. EXIT bypasses
+    // freeze + stage (old risk stays managed when STAGE demotes or
+    // a symbol freezes — the frozen operating rule); both need a
+    // filesystem-safe id, and an intent id is permanently bound to
+    // one immutable intent (reuse with different economics, or any
+    // re-registration of a journaled intent, is refused). False =
+    // refused (reason static).
     bool SubmitIntent(const exec::OrderIntent& in, const char** reason);
     // One full cycle: stream drain -> slots (bounded iterations) ->
     // S2 -> HALT/kill/stage re-check. Returns false on HARD stop.
@@ -158,6 +180,7 @@ class G0Runner {
     long long sse_seen_ = 0;  // parser errors already acted on
     std::string cursor_;      // last stamped ULID (durable)
     bool cursor_dirty_ = false;
+    long long last_pos_ns_ = 0;  // account position check clock
 
     std::string P(const char* name) const;
     std::string SnapPath(const char* intent_id) const;
@@ -172,6 +195,17 @@ class G0Runner {
     void MaybeForceQuery(Slot& s, long long now_ns);
     bool FlattenOnMedium(Slot& s, long long now_ns);
     bool EntriesAllowedNow() const;
+    // Ops journal row (drift-directive/reconcile/demotion for
+    // HARD/MEDIUM/S2/ops — caller-owned events, never order flow).
+    bool OpsRow(const char* kind, const char* intent_id,
+                const char* text, long long now_ns);
+    void HardManageSlot(Slot& s, long long now_ns);
+    bool HardStop(long long now_ns, const char* why);
+    void MediumPass(long long now_ns);
+    bool VenueOk(bool* open, bool* spread_ok);
+    int LocalNet(const char* symbol) const;  // signed local open
+    void PositionCheck(long long now_ns);
+    bool AllFlat();
 };
 
 }  // namespace runner

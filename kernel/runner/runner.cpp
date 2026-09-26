@@ -34,12 +34,49 @@ bool IsTerminalState(exec::RouteState st) {
            st == exec::RouteState::UNKNOWN_FROZEN ||
            st == exec::RouteState::CLOSED;
 }
+// Filesystem-safe intent id (also the intent-file name infix):
+// alnum + '-'/'_' only, 1..64 chars. Rejects path traversal
+// ("../") BEFORE any filesystem touch.
+bool IsSafeId(const char* s) {
+    if (!s || s[0] == '\0') return false;
+    int n = 0;
+    while (s[n] != '\0') {
+        char c = s[n];
+        if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') ||
+              (c >= 'a' && c <= 'z') || c == '-' || c == '_'))
+            return false;
+        ++n;
+        if (n > 64) return false;
+    }
+    return true;
+}
 // Pop the stamped/consumed queue head (bounded shift, max 8).
 void ShiftStreamQ(Slot& s) {
     if (s.sev_n_ <= 0) return;
     for (int i = 0; i + 1 < s.sev_n_; ++i) s.sev_[i] = s.sev_[i + 1];
     s.sev_[s.sev_n_ - 1] = StreamEvt();
     --s.sev_n_;
+}
+// Journal truth for an intent id: 0 = no intent row, 1 = intent
+// row only (in flight or crashed before terminal), 2 = terminal
+// row present (fill/cancel/unknown/exit). Crash seams consult this
+// instead of assuming (a completed flatten is never re-ordered).
+int JournalIntentState(const std::string& dir, const char* intent_id) {
+    if (!intent_id) return 0;
+    std::vector<journal::Row> jr;
+    if (!JournalLoad((dir + "/journal.jsonl").c_str(), &jr))
+        return 0;
+    int st = 0;
+    for (std::size_t i = 0; i < jr.size(); ++i) {
+        if (jr[i].intent_id != intent_id) continue;
+        if (jr[i].kind == "intent") {
+            if (st == 0) st = 1;
+        } else if (jr[i].kind == "fill" || jr[i].kind == "cancel" ||
+                   jr[i].kind == "unknown" || jr[i].kind == "exit") {
+            st = 2;
+        }
+    }
+    return st;
 }
 // Journal body vocabulary (bounded, pre-redacted, <=280 chars).
 bool BodyFor(const char* kind, const exec::OrderIntent& in,
@@ -336,40 +373,91 @@ bool G0Runner::Recover(const char** reason) {
 
 bool G0Runner::SubmitIntent(const exec::OrderIntent& in,
                             const char** reason) {
+    static const char kBadId[] = "submit-bad-id";
     static const char kFrozen[] = "submit-frozen-symbol";
     static const char kStage[] = "submit-stage-refused";
     static const char kCap[] = "submit-slot-cap";
     static const char kDup[] = "submit-duplicate";
     static const char kGated[] = "submit-entry-gated";
-    if (!in.intent_id[0] || !in.symbol[0] || in.qty_shares <= 0)
+    static const char kReuse[] = "submit-id-reuse";
+    static const char kReg[] = "submit-already-registered";
+    if (!IsSafeId(in.intent_id) || !in.symbol[0] ||
+        in.qty_shares <= 0) {
+        if (reason) *reason = kBadId;
         return false;
+    }
     if (Find(in.intent_id)) {
         if (reason) *reason = kDup;
         return false;
     }
-    if (FreezeHas(P("freeze.txt").c_str(), in.symbol)) {
-        if (reason) *reason = kFrozen;
-        return false;
-    }
-    if (!stage_ok_) {
-        if (reason) *reason = kStage;
-        return false;
+    bool is_exit = (in.kind == jev::risk::IntentKind::EXIT);
+    // EXIT bypasses freeze + stage (old risk stays managed under
+    // demotion/freeze); entries need both. Identity first in all
+    // cases (no filesystem touch before the grammar passes).
+    if (!is_exit) {
+        if (FreezeHas(P("freeze.txt").c_str(), in.symbol)) {
+            if (reason) *reason = kFrozen;
+            return false;
+        }
+        if (!stage_ok_) {
+            if (reason) *reason = kStage;
+            return false;
+        }
     }
     if (slots_.size() >= (std::size_t)cfg_.max_slots) {
         if (reason) *reason = kCap;
         return false;
     }
-    bool is_exit = (in.kind == jev::risk::IntentKind::EXIT);
     if (!is_exit && !EntriesAllowedNow()) {
         if (reason) *reason = kGated;
         return false;
     }
-    // Durable registration FIRST (immutable economics for crash
-    // recovery); a failed registration refuses the intent.
-    if (!SaveIntent(IntentPath(in.intent_id).c_str(), in.symbol,
-                    (in.side == broker::OrderSide::BUY) ? 0 : 1,
-                    is_exit ? 1 : 0, in.qty_shares, in.stop_cents,
-                    in.tp_cents)) {
+    // Intent-id permanence: an existing record is bound forever to
+    // exactly one immutable intent. Different economics under the
+    // same id is refused outright; identical economics with a
+    // journaled intent row is an already-registered order (refuse —
+    // the row, not a resubmission, owns the lifecycle); identical
+    // economics with NO journal row is a crash-retry between
+    // registration and the first cycle (idempotent resume).
+    std::string ipath = IntentPath(in.intent_id);
+    if (FileExists(ipath.c_str())) {
+        IntentDesc old;
+        if (!LoadIntent(ipath.c_str(), &old)) {
+            if (reason) *reason = kReuse;
+            return false;
+        }
+        int side01 = (in.side == broker::OrderSide::BUY) ? 0 : 1;
+        int kind01 = is_exit ? 1 : 0;
+        if (std::strcmp(old.symbol, in.symbol) != 0 ||
+            old.side != side01 || old.kind != kind01 ||
+            old.qty != in.qty_shares || old.stop != in.stop_cents ||
+            old.tp != in.tp_cents) {
+            if (reason) *reason = kReuse;
+            return false;
+        }
+        std::vector<journal::Row> jr;
+        bool loaded = JournalLoad(P("journal.jsonl").c_str(), &jr);
+        bool rowed = false;
+        if (loaded) {
+            for (std::size_t i = 0; i < jr.size(); ++i) {
+                if (jr[i].kind == "intent" &&
+                    jr[i].intent_id == in.intent_id) {
+                    rowed = true;
+                    break;
+                }
+            }
+        }
+        if (rowed) {
+            if (reason) *reason = kReg;
+            return false;
+        }
+        // Crash-retry: the record already holds these economics —
+        // resume without rewriting it.
+    } else if (!SaveIntent(ipath.c_str(), in.symbol,
+                            (in.side == broker::OrderSide::BUY) ? 0
+                                                                : 1,
+                            is_exit ? 1 : 0, in.qty_shares,
+                            in.stop_cents, in.tp_cents)) {
         if (reason) *reason = kGated;
         return false;
     }
@@ -427,20 +515,42 @@ bool G0Runner::FlattenOnMedium(Slot& s, long long now_ns) {
     if (IsTerminalState(s.m.state)) return true;
     if (s.m.filled_qty <= 0) return true;  // nothing to flatten
     if (s.flatten_armed) return true;
-    // Recovery-only flatten: EXIT for the filled qty under a derived
-    // id (file-safe charset; too-long -> freeze + alert instead).
-    std::string base = s.intent.intent_id;
-    if (base.size() + 8 > 64) {
+    // Restart coherence: a flatten EXIT from the dead process may
+    // already exist (pre-flight dedupe makes its drive safe) —
+    // never order a second one.
+    std::string fid0 = std::string(s.intent.intent_id) + "-flatten";
+    if (fid0.size() > 64) {
+        // No representable flatten id: freeze the symbol + alert
+        // (a human owns the position; never a blind submit).
         FreezeAdd(P("freeze.txt").c_str(), s.intent.symbol);
         Alert(P("alerts.jsonl").c_str(), "MEDIUM", "flatten-id-long",
               s.intent.intent_id, now_ns);
         return true;
     }
+    if (Find(fid0.c_str())) {
+        s.flatten_armed = true;
+        return true;
+    }
+    // A terminally-closed flatten needs no resubmit even when its
+    // slot is gone (done slots will reclaim); an intent row with no
+    // terminal and no slot is incoherent -> freeze, never resubmit.
+    int js = JournalIntentState(cfg_.dir, fid0.c_str());
+    if (js == 2) {
+        s.flatten_armed = true;
+        return true;
+    }
+    if (js == 1) {
+        FreezeAdd(P("freeze.txt").c_str(), s.intent.symbol);
+        Alert(P("alerts.jsonl").c_str(), "MEDIUM",
+              "flatten-orphan", s.intent.intent_id, now_ns);
+        return true;
+    }
+    // Recovery-only flatten: EXIT for the filled qty under the
+    // derived id (length + pre-existence already gated via fid0).
     exec::OrderIntent ex = s.intent;
     ex.kind = jev::risk::IntentKind::EXIT;
     ex.qty_shares = s.m.filled_qty;
-    std::string fid = base + "-flatten";
-    CopyStr(ex.intent_id, sizeof(ex.intent_id), fid.c_str());
+    CopyStr(ex.intent_id, sizeof(ex.intent_id), fid0.c_str());
     ex.intent_id[64] = '\0';
     const char* rs = nullptr;
     if (!SubmitIntent(ex, &rs)) {
@@ -449,6 +559,346 @@ bool G0Runner::FlattenOnMedium(Slot& s, long long now_ns) {
     }
     s.flatten_armed = true;
     return true;
+}
+
+bool G0Runner::OpsRow(const char* kind, const char* intent_id,
+                    const char* text, long long now_ns) {
+    if (!kind || !intent_id || !text || now_ns <= 0) return false;
+    if (!journal::IsKnownKind(kind)) return false;
+    char body[280];
+    int w = std::snprintf(body, sizeof(body), "%.200s", text);
+    if (w <= 0 || !jev::journal::RedactionOk(body)) return false;
+    return JournalWrite(kind, intent_id, body, now_ns);
+}
+
+void G0Runner::HardManageSlot(Slot& s, long long now_ns) {
+    // §10.3 per-position pass (best-effort transport, journaled):
+    // reconcile -> verify broker-native protection (re-establish
+    // if missing and possible) -> flatten/cancel attempt. NEVER
+    // destructive: failures leave protection active; the process
+    // terminates right after regardless.
+    if (!s.active || s.done || IsTerminalState(s.m.state)) return;
+    if (s.m.client_id[0] == '\0') return;  // never sent: no risk
+    broker::OrderQuery q = adapter_.QueryOnce(s.m.client_id);
+    if (!q.transport_ok) {
+        OpsRow("drift-directive", s.intent.intent_id,
+               "hard-manage lookup-failed", now_ns);
+        return;
+    }
+    bool is_exit = (s.intent.kind == jev::risk::IntentKind::EXIT);
+    if (!is_exit) {
+        long long open =
+            s.m.filled_qty - s.m.exit_closed_qty;
+        bool prot = q.protection_active || q.bracket_class;
+        if (!prot && q.found && open > 0) {
+            // Re-establish broker-native protection if possible.
+            broker::ProtectedOrder po{};
+            CopyStr(po.symbol, sizeof(po.symbol), s.intent.symbol);
+            po.side = s.intent.side;
+            po.qty_shares = s.m.filled_qty > 0 ? s.m.filled_qty
+                                               : s.intent.qty_shares;
+            po.stop_cents = s.intent.stop_cents;
+            po.tp_cents = s.intent.tp_cents;
+            CopyStr(po.client_order_id, sizeof(po.client_order_id),
+                      s.m.client_id);
+            CopyStr(po.intent_id, sizeof(po.intent_id),
+                      s.intent.intent_id);
+            bool ok = adapter_.EstablishProtection(po);
+            char tb[280];
+            std::snprintf(tb, sizeof(tb),
+                            "hard-manage id=%s reprotect=%d",
+                            s.intent.intent_id, ok ? 1 : 0);
+            OpsRow("drift-directive", s.intent.intent_id, tb,
+                   now_ns);
+        }
+        if (open <= 0) {
+            // Nothing filled — but the order may exist unacked at
+            // the broker (POST landed, ack lost). Found + UUID ->
+            // attempt cancel; 404-absent -> journal it, no orders
+            // exist to cancel.
+            if (q.found && q.broker_order_id[0] != '\0') {
+                broker::CancelResult c =
+                    adapter_.Cancel(q.broker_order_id);
+                char tb[280];
+                std::snprintf(tb, sizeof(tb),
+                                "hard-manage id=%s cancel-unfilled=%d",
+                                s.intent.intent_id,
+                                c.accepted ? 1 : 0);
+                OpsRow("drift-directive", s.intent.intent_id, tb,
+                       now_ns);
+            } else if (q.found || !q.transport_ok) {
+                OpsRow("drift-directive", s.intent.intent_id,
+                       "hard-manage unfilled-unresolved", now_ns);
+            } else {
+                OpsRow("drift-directive", s.intent.intent_id,
+                       "hard-manage unfilled-absent", now_ns);
+            }
+            return;
+        }
+        if (open > 0) {
+            // Attempt flatten under a deterministic hard id
+            // (single pass — the process terminates after).
+            std::string hid =
+                std::string("hard-") + s.intent.intent_id;
+            if (hid.size() > 64) hid.resize(64);
+            char hcoid[65] = {0};
+            broker::OrderSide eside =
+                (s.intent.side == broker::OrderSide::BUY)
+                    ? broker::OrderSide::SELL
+                    : broker::OrderSide::BUY;
+            if (broker::MakeClientOrderId(
+                    cfg_.venue.broker, cfg_.venue.account,
+                    cfg_.venue.context_hash, s.intent.symbol, eside,
+                    hid.c_str(), hcoid)) {
+                broker::CloseResult c = adapter_.MarketClose(
+                    s.intent.symbol, open, eside, hcoid);
+                char tb[280];
+                std::snprintf(tb, sizeof(tb),
+                                "hard-manage id=%s flatten=%d",
+                                s.intent.intent_id,
+                                c.transport_ok ? 1 : 0);
+                OpsRow("drift-directive", s.intent.intent_id, tb,
+                       now_ns);
+            }
+        }
+        return;
+    }
+    // EXIT in flight: cancel attempt (never a second close — the
+    // machine owns closes; HARD only tries to stop the remainder).
+    if (s.m.broker_id[0] != '\0') {
+        broker::CancelResult c = adapter_.Cancel(s.m.broker_id);
+        char tb[280];
+        std::snprintf(tb, sizeof(tb),
+                        "hard-manage id=%s cancel=%d",
+                        s.intent.intent_id,
+                        c.accepted ? 1 : 0);
+        OpsRow("drift-directive", s.intent.intent_id, tb, now_ns);
+    } else {
+        OpsRow("drift-directive", s.intent.intent_id,
+               "hard-manage exit-no-uuid", now_ns);
+    }
+}
+
+bool G0Runner::HardStop(long long now_ns, const char* why) {
+    // §10.3 HARD: entries already stop at the kill gate. Verify
+    // broker-native protection on every open position (re-establish
+    // if missing and possible), attempt flatten/cancel, leave
+    // broker-side protection ACTIVE, then terminate. Credential
+    // revocation is a Phase-4 transport step (the null transport
+    // cannot order by construction); the HALT file makes the stop
+    // survive restart (entries stay blocked, exits stay alive).
+    Alert(P("alerts.jsonl").c_str(), "HARD", "kill-hard",
+          why ? why : "", now_ns);
+    OpsRow("drift-directive", "runner", "hard-stop", now_ns);
+    FILE* hf = std::fopen(P("HALT").c_str(), "ab");
+    if (hf) std::fclose(hf);
+    for (std::size_t i = 0; i < slots_.size(); ++i)
+        HardManageSlot(slots_[i], now_ns);
+    return false;  // terminate: supervisor must NOT restart
+}
+
+bool G0Runner::VenueOk(bool* open, bool* spread_ok) {
+    if (!deps_.venue_gate) return false;  // unknown: fail closed
+    bool o = false, sp = false;
+    if (!deps_.venue_gate(deps_.venue_ctx, &o, &sp)) return false;
+    if (open) *open = o;
+    if (spread_ok) *spread_ok = sp;
+    return o && sp;
+}
+
+int G0Runner::LocalNet(const char* symbol) const {
+    // Signed local open per symbol over ENTRY slots only
+    // (filled minus closed; exits are managers, not positions).
+    long long net = 0;
+    for (std::size_t i = 0; i < slots_.size(); ++i) {
+        const Slot& s = slots_[i];
+        if (!s.active || s.done) continue;
+        if (s.intent.kind != jev::risk::IntentKind::ENTRY) continue;
+        if (IsTerminalState(s.m.state)) continue;
+        if (std::strcmp(s.intent.symbol, symbol) != 0) continue;
+        long long open = s.m.filled_qty - s.m.exit_closed_qty;
+        if (open < 0) open = 0;
+        net += (s.intent.side == broker::OrderSide::BUY) ? open
+                                                         : -open;
+    }
+    if (net > 999999999) net = 999999999;
+    if (net < -999999999) net = -999999999;
+    return (int)net;
+}
+
+void G0Runner::PositionCheck(long long now_ns) {
+    // Account-level S2: authoritative broker positions vs local
+    // expectation (orphans + qty mismatch both count as drift).
+    // Drift journals + alerts + forces per-symbol re-lookup; it
+    // never orders (flattening is MEDIUM/HARD-owned).
+    if (!deps_.list_positions) return;  // Phase-4 seam absent
+    bool due = (now_ns - last_pos_ns_) >=
+               deps_.s2_seconds * 1000000000LL;
+    if (!due) return;
+    last_pos_ns_ = now_ns;
+    Position ps[64];
+    int n = deps_.list_positions(deps_.positions_ctx, ps, 64);
+    if (n < 0) {
+        Alert(P("alerts.jsonl").c_str(), "S2",
+              "positions-unavailable", "lookup failed", now_ns);
+        return;
+    }
+    for (int i = 0; i < n; ++i) {
+        if (ps[i].symbol[0] == '\0') continue;
+        int local = LocalNet(ps[i].symbol);
+        if ((long long)local == ps[i].qty) continue;
+        char tb[280];
+        std::snprintf(tb, sizeof(tb),
+                        "position-drift sym=%.15s local=%d broker=%lld",
+                        ps[i].symbol, local, (long long)ps[i].qty);
+        Alert(P("alerts.jsonl").c_str(), "S2", "position-drift",
+              tb, now_ns);
+        OpsRow("drift-directive", "runner", tb, now_ns);
+        for (std::size_t k = 0; k < slots_.size(); ++k) {
+            Slot& s = slots_[k];
+            if (!s.active || s.done) continue;
+            if (std::strcmp(s.intent.symbol, ps[i].symbol) == 0)
+                s.last_s2_ns = 0;  // force re-lookup this cycle
+        }
+    }
+}
+
+bool G0Runner::AllFlat() {
+    for (std::size_t i = 0; i < slots_.size(); ++i) {
+        const Slot& s = slots_[i];
+        if (!s.active || s.done) continue;
+        if (s.intent.kind != jev::risk::IntentKind::ENTRY) continue;
+        if (IsTerminalState(s.m.state)) continue;
+        if (s.m.filled_qty - s.m.exit_closed_qty > 0) return false;
+    }
+    if (deps_.list_positions) {
+        Position ps[64];
+        int n = deps_.list_positions(deps_.positions_ctx, ps, 64);
+        if (n < 0) return false;  // unknown != flat
+        for (int i = 0; i < n; ++i) {
+            if (ps[i].qty != 0) return false;
+        }
+    }
+    return true;
+}
+
+void G0Runner::MediumPass(long long now_ns) {
+    // §10.3 MEDIUM + frozen FSM (medium.txt): MEDIUM_ACTIVE ->
+    // FLATTEN_PENDING -> FLATTENED | PROTECTION_ONLY. Entries stop
+    // at the kill gate; every open position flattens via market
+    // when the venue is open and the spread is normal, else stops/
+    // TP own the risk and the flatten re-attempts every cycle.
+    // Re-attempts fire ONLY from ordered-but-unacked flatten work
+    // (no blind re-issue); a restart reloads the file and
+    // reconciles first (pre-flight dedupe never resends).
+    std::string mp = P("medium.txt");
+    std::vector<std::string> lns;
+    std::string cur;
+    if (ReadLines(mp.c_str(), &lns) && !lns.empty()) cur = lns[0];
+    if (cur != "MEDIUM_ACTIVE" && cur != "FLATTEN_PENDING" &&
+        cur != "FLATTENED" && cur != "PROTECTION_ONLY")
+        cur.clear();
+    if (cur.empty()) {
+        AtomicWrite(mp.c_str(), "MEDIUM_ACTIVE");
+        cur = "MEDIUM_ACTIVE";
+        OpsRow("demotion", "runner", "medium-enter", now_ns);
+        Alert(P("alerts.jsonl").c_str(), "MEDIUM", "medium-enter",
+              "entries stopped, flattening", now_ns);
+    }
+    if (cur == "FLATTENED") return;  // terminal: nothing to do
+    bool pending = false;  // flatten work ordered, awaiting ack
+    // Local ENTRY slots flatten through the EXIT machinery
+    // (EXIT submits bypass stage/freeze — old risk stays managed).
+    std::size_t before = slots_.size();
+    for (std::size_t i = 0; i < slots_.size(); ++i) {
+        if (FlattenOnMedium(slots_[i], now_ns) &&
+            slots_.size() > before)
+            pending = true;
+    }
+    for (std::size_t i = 0; i < slots_.size(); ++i) {
+        const Slot& s = slots_[i];
+        if (!s.active || s.done) continue;
+        std::string fid =
+            std::string(s.intent.intent_id) + "-flatten";
+        if (Find(fid.c_str())) {
+            pending = true;  // flatten EXIT still working
+            break;
+        }
+    }
+    // Broker-confirmed sweep: EVERY open position, venue-open +
+    // spread-normal only. Unknown/closed venue (or absent seam) =
+    // no sweep — protection stays, retry next cycle.
+    bool open = false, spread = false;
+    if (VenueOk(&open, &spread) && deps_.list_positions) {
+        Position ps[64];
+        int n = deps_.list_positions(deps_.positions_ctx, ps, 64);
+        for (int i = 0; n >= 0 && i < n; ++i) {
+            if (ps[i].symbol[0] == '\0' || ps[i].qty == 0) continue;
+            std::string sid = std::string("sweep-") + ps[i].symbol;
+            char hcoid[65] = {0};
+            broker::OrderSide eside = (ps[i].qty > 0)
+                                          ? broker::OrderSide::SELL
+                                          : broker::OrderSide::BUY;
+            long long aq = ps[i].qty > 0 ? ps[i].qty : -ps[i].qty;
+            if (!broker::MakeClientOrderId(
+                    cfg_.venue.broker, cfg_.venue.account,
+                    cfg_.venue.context_hash, ps[i].symbol, eside,
+                    sid.c_str(), hcoid))
+                continue;
+            broker::OrderQuery pre = adapter_.QueryOnce(hcoid);
+            if (pre.transport_ok && pre.found) {
+                pending = true;  // already flattening: await ack
+                continue;
+            }
+            if (pre.transport_ok && !pre.found) {
+                broker::CloseResult c = adapter_.MarketClose(
+                    ps[i].symbol, aq, eside, hcoid);
+                if (c.transport_ok) {
+                    pending = true;
+                    char tb[280];
+                    std::snprintf(tb, sizeof(tb),
+                                    "medium-sweep sym=%.15s qty=%lld",
+                                    ps[i].symbol, aq);
+                    OpsRow("drift-directive", "runner", tb,
+                           now_ns);
+                }
+                // Lookup failure: retry next cycle (no blind send).
+            }
+        }
+    }
+    if (AllFlat()) {
+        AtomicWrite(mp.c_str(), "FLATTENED");
+        OpsRow("reconcile", "runner", "medium-flat", now_ns);
+        Alert(P("alerts.jsonl").c_str(), "MEDIUM", "medium-flat",
+              "all positions flat", now_ns);
+        return;
+    }
+    // Not flat: PENDING while flatten work is outstanding OR an
+    // achieved flatten covers the remaining open (completed close
+    // whose entry machine still claims filled — S2/human
+    // attributes it; re-flattening would over-close). ACTIVE only
+    // while open risk has NO flatten coverage at all (venue
+    // blocked or nothing ordered yet — retry next cycle).
+    bool covered = pending;
+    for (std::size_t i = 0; i < slots_.size() && !covered; ++i) {
+        const Slot& s = slots_[i];
+        if (!s.active || s.done) continue;
+        if (s.intent.kind != jev::risk::IntentKind::ENTRY) continue;
+        if (IsTerminalState(s.m.state)) continue;
+        if (s.m.filled_qty - s.m.exit_closed_qty <= 0) continue;
+        std::string fid =
+            std::string(s.intent.intent_id) + "-flatten";
+        const Slot* fs = Find(fid.c_str());
+        if (fs && !fs->done) covered = true;
+        if (JournalIntentState(cfg_.dir, fid.c_str()) == 2)
+            covered = true;  // terminal close on file
+    }
+    if (covered) {
+        if (cur != "FLATTEN_PENDING")
+            AtomicWrite(mp.c_str(), "FLATTEN_PENDING");
+    } else if (cur != "MEDIUM_ACTIVE") {
+        AtomicWrite(mp.c_str(), "MEDIUM_ACTIVE");
+    }
 }
 
 void G0Runner::Dispatch(Slot& s, const exec::RouteOut& o,
@@ -677,13 +1127,31 @@ bool G0Runner::Cycle(long long now_ns) {
         ki = kill::KillInputs();
     if (FileExists(P("HALT").c_str())) ki.halt_file = true;
     kill::LevelResult lr = kill::EvaluateLevel(ki);
-    if (lr.level == jev::risk::KillLevel::HARD) {
-        Alert(P("alerts.jsonl").c_str(), "HARD", "kill-hard",
-              lr.reason, now_ns);
-        return false;
+    if (lr.level == jev::risk::KillLevel::HARD)
+        return HardStop(now_ns, lr.reason);
+    // Leaving MEDIUM with the FSM file present finalizes it once:
+    // flat -> FLATTENED, else PROTECTION_ONLY (stops/TP own the
+    // remainder — never a silent return to normal).
+    if (lr.level != jev::risk::KillLevel::MEDIUM) {
+        std::vector<std::string> mlns;
+        if (ReadLines(P("medium.txt").c_str(), &mlns) &&
+            !mlns.empty() && mlns[0] != "FLATTENED" &&
+            mlns[0] != "PROTECTION_ONLY") {
+            if (AllFlat()) {
+                AtomicWrite(P("medium.txt").c_str(), "FLATTENED");
+            } else {
+                AtomicWrite(P("medium.txt").c_str(),
+                            "PROTECTION_ONLY");
+                Alert(P("alerts.jsonl").c_str(), "MEDIUM",
+                      "protection-only",
+                      "stops own the remainder", now_ns);
+                OpsRow("drift-directive", "runner",
+                       "medium-protection-only", now_ns);
+            }
+        }
+    } else {
+        MediumPass(now_ns);
     }
-    bool medium =
-        (lr.level == jev::risk::KillLevel::MEDIUM);
     if (ki.halt_file && !halt_announced_) {
         Alert(P("alerts.jsonl").c_str(), "SOFT", "halt-present",
               "entries stopped, exits alive", now_ns);
@@ -764,6 +1232,9 @@ bool G0Runner::Cycle(long long now_ns) {
     }
     // 4. Drive every slot (bounded iterations; persist on change).
     // S2/refresh runs FIRST so fresh answers feed this same cycle.
+    // Account position check rides the same cadence (drift journals
+    // + alerts + forces per-symbol re-lookup; never orders).
+    PositionCheck(now_ns);
     // Overflow (queue full dropped position) fails closed here:
     // alert + force a real lookup on the next pass.
     for (std::size_t i = 0; i < slots_.size(); ++i) {
@@ -780,7 +1251,6 @@ bool G0Runner::Cycle(long long now_ns) {
     for (std::size_t i = 0; i < slots_.size(); ++i) {
         Slot& s = slots_[i];
         if (!s.active || s.done) continue;
-        if (medium) FlattenOnMedium(s, now_ns);
         MaybeForceQuery(s, now_ns);
         for (int it = 0; it < 12; ++it) {
             exec::RouteObs obs;
