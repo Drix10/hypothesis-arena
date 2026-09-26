@@ -2665,3 +2665,88 @@ proven. REMAINING for P3.5 closure: Phase-4 live HTTPS + socket
 + position/account endpoints + runtime credentials, real G0
 STAGE bootstrap, out-of-band alert adapter. H2 stays downstream
 per sec. 13.5. P3.5 OPEN (human close); G0 NOT STARTED.
+
+## Addendum 121 - Close-ownership invariant (re-audit of 7e30c89, 02b2dc3)
+Six findings (three duplicate-order/identity P0s + vocab + status
+policy + transport), fixed with the router core untouched (no router
+file changed) and null transport kept. Protocol decisions were
+plan-edited first (a656f64: doc 06 sec. 6.1b, status freeze,
+doc 04 Phase-4 transport). Hosted kernel/plane/evidence SUCCESS on
+02b2dc3 (stdlib = pre-existing collector failure). Suites: runner
+502, broker 125, router 209, both modes + freeze PASS.
+1. MEDIUM duplicate close (P0): the sweep now reconciles always but
+   SENDS only for uncovered symbols (LocalCloseCovers: active EXIT,
+   armed/landed flatten; frozen symbols stay sweep-owned since no
+   local close can ever appear for them). Conversely FlattenOnMedium
+   pre-flights the incident sweep ids (both side-tags) and arms +
+   waits on a live sweep instead of submitting. A flatten that
+   resolves non-closed hands ownership back (no re-arm: intent ids
+   are single-use); landed-closed stays quiet. Regressions: reworked
+   ms (EXACTLY one close POST for 100 shares, sweep sends nothing)
+   + new T2 (live sweep blocks flatten across two cycles, then
+   FILLED-full attributes, FSM awaits broker settle PENDING, then
+   FLATTENED — reconcile-then-settle modeled honestly). Supporting
+   fix the work forced: a FILLED-full sweep holds PENDING until the
+   broker poll confirms flat (a poll that never confirms is S2
+   drift, loud, with no re-send).
+2. HARD exit overlap (P0): the EXIT cancel branch is GONE (canceling
+   the owned close stranded exposure — the exact hazard). EXIT slots
+   adopt-or-replace (live/filled-full = adopt, zero orders; dead/
+   absent = replace the provable remainder). ENTRY slots reconcile
+   covering EXITs first (one GET) and close ONLY the uncovered
+   remainder; the position loop adopts exit-covered symbols and
+   flattens only truly uncovered ones. All three hard paths share
+   the ONE incident hard id per (symbol, side), so they pre-flight
+   each other instead of stacking. Regressions: reworked hx (adopt,
+   zero DELETEs), new T3 (ENTRY + live EXIT = adopt, no second
+   close, no cancel), T3b (exit-only exposure = adopt, no slotless
+   flatten), T3c (dead exit = exactly one incident-id replace).
+3. Incident identity (P0): sweep/remainder/hard ids derive
+   medium-<epoch>-<SYM>[-qty] / hard-<epoch>-<SYM> through the
+   frozen recipe. MEDIUM mints at medium-enter (overwrite = new
+   incident by definition; crash reuses the file). HARD mints
+   unless HALT-at-entry proves continuation (crash-mid-HARD);
+   clearing HALT ends the incident (human owns the interim), a
+   re-fire is new (supersede journaled + alerted), and a clean
+   non-HARD cycle truncates (read-first: common cycles pay one
+   small read). Intent-bound ids need no epoch (single-use by
+   permanent binding). Regressions: T4 (two MEDIUM incidents, two
+   distinct real closes), T5 (crash reuses + adopts with zero
+   resends; post-HALT-clear mints fresh with a distinct close).
+4. Vocabulary (P1): held + stopped join IsLifeWord (17-word test);
+   stopped + accepted_for_bidding join PENDING in ClassifyStatus
+   (both live working states per the current order-lifecycle doc).
+   accepted_for_bidding is REST-status-only (not a stream word).
+5. Status freeze (P1, doc 06 locked + code): done_for_day /
+   calculated / replaced NEVER route DEAD — QueryOnce maps them to
+   UNKNOWN (reconcile, never mint, never terminal) and keeps the
+   verbatim word in status_raw; the runner freezes the symbol +
+   journals + alerts on first sighting per slot (repeats silent),
+   at every query funnel (dispatch, forced, exit, repair, sweep,
+   hard). Filled qty is authoritative-for-today but never folded
+   (tomorrow's resumption would double-count); next-session
+   exposure is a new intent/new id, operator-authorized. Canceled/
+   expired/rejected stay safe-DEAD (nothing live can duplicate).
+   Regressions: T7 (done_for_day entry freezes, one row, repeats
+   silent, zero POSTs), T7b (replaced EXIT mints no sub-identity,
+   zero POSTs), broker quarantine + raw-word tests. Note: the
+   reviewer's "DEAD -> reissue-same-ID" read was slightly stale —
+   the router already minted new sub-ids on DEAD (same-ID only on
+   provable-404); the genuine hazards were replaced-live-duplicate
+   and done_for_day-resume-double, both now quarantined. Caught
+   while editing: a hardcoded `w < 5` DEAD loop read 2 past the
+   shrunken table (UB) — now `w < 3`.
+6. Phase-4 transport (P1, plan only, verified against live Alpaca
+   docs): G0 paper = WS paper-api + trade_updates (no SSE, no
+   since_id — resume is re-subscribe); Broker SSE is a different
+   contract, not assumed interchangeable. Seam stays wire-agnostic
+   (RouteStep consumes shaped obs only). No code.
+Status: MEDIUM single-owner proven; HARD exit-adopt proven;
+incident epochs proven (mint/reuse/clear/supersede); quarantine
+proven; vocab + matrix frozen; transport decided. REMAINING for
+P3.5 closure: Phase-4 live WS adapter + position/account endpoints
++ runtime credentials, real G0 STAGE bootstrap, out-of-band alert
+adapter. H2 stays downstream per sec. 13.5. P3.5 OPEN (human
+close); G0 NOT STARTED. Next report should be the P3.5 close
+candidate pending the Phase-4 wiring gate — no further audit
+cycle proposed.
