@@ -2578,3 +2578,90 @@ socket + position/account endpoints + runtime credentials (Phase 4
 wiring), real G0 STAGE bootstrap, out-of-band alert adapter. H2
 (30d/outage-E2E/real notification) is downstream of P3.5 per sec.
 13.5 and never retro-blocks it. P3.5 OPEN; G0 NOT STARTED.
+
+## Addendum 120 - Final seam pass (review of ba3467a, 7e30c89)
+Ten findings, fixed without touching the router core (one additive
+fact reused as-is) or any frozen contract. Hosted kernel/plane/
+evidence SUCCESS on 7e30c89 (stdlib = pre-existing collector
+failure). Suites: runner 425, broker 117, router 209, both modes.
+1. HARD on open positions (P0): PROTECTED slots with provable open
+   are NO LONGER RECLAIMED — the done slot is the local position
+   record (S2, MEDIUM/HARD coverage, close attribution all read
+   it; it becomes reclaimable at zero open). So HARD manages
+   ordinary protected holdings through the slot path (protection
+   verified with real economics, flatten under a pre-flighted
+   hard-<intent> id), and the position sweep handles only
+   uncovered symbols under hard-pos-<SYM> (one position, one
+   close — the sweep pre-flights the same way). Regressions: full
+   E2E to PROTECTED, slot survives, HARD flattens exactly once
+   with no repair POST and no sweep double; birth-slotless
+   positions flatten via the sweep. Design note: this supersedes
+   the literal "reclaim then HARD" scenario — keeping the record
+   is strictly stronger (HARD can reprotect, not just flatten).
+2. Repair identity (P0): ESTABLISH_PROTECTION (normal path and
+   HARD path) rides <intent>-repair through the frozen recipe —
+   never the entry id. Founders: the repair POST now CARRIES its
+   client_order_id (the old body sent none — unreconcilable by
+   construction). Pre-flight per repair id (found+protected =
+   adopt; 404 = POST once; failure = flatten fallback per sec.
+   6.1 OR). REPAIR_SENT lookups follow the repair id (runner-only
+   routing; router untouched), re-derived at Recover as a pure
+   function. Regressions: naked-fill E2E carries the repair coid
+   (entry coid absent); REPAIR_SENT restart adopts with zero
+   POSTs; HARD reprotect uses the sub-id (proven distinct).
+3. HARD flatten pre-flight (P0): all HARD closes funnel through
+   HardCloseOnce (found = adopt; 404 = POST once; failure =
+   journal + alert). Regression: issued FILLED close pre-flights
+   found across two supervised HARD events with zero close POSTs.
+4. S2 union (P1): LocalNet + PositionCheck share one
+   provable-open rule (PROTECTED included; CANCELLED/UNKNOWN/
+   CLOSED excluded) over the UNION of local and broker symbols —
+   broker-only (orphan), local-only, and mismatch all drift;
+   agreement (long and short) is quiet. Regressions (a)-(d) green.
+5. Sweep remainder (P1): found sweeps reconcile (FILLED/PARTIAL
+   qty attributes to local entries; PENDING/UNKNOWN/PARTIAL-live
+   park); DEAD or FILLED-short mints ONE remainder under
+   sweep-<SYM>-<current-qty> (pre-flighted; each distinct id sends
+   at most once); exhausted remainders alert instead of spinning.
+   Regressions: partial-parks, dead-mints-remainder (id proven in
+   the POST body), exhausted-alerts.
+6. Lifecycle vocabulary (P1): pending_replace,
+   order_replace_rejected, order_cancel_rejected, restated join
+   IsLifeWord (identity-only, force REST). All 15 words unit-proven.
+7. Cursor (P1): every parsed venue event advances cursor.txt —
+   matched or not (foreign events move only the cursor).
+   Regression: foreign + active events in one stream, cursor lands
+   past both, restart resumes there.
+8. Restart friction (P1): --resume flag (default: reconcile +
+   manage exits, submit nothing new). Binary smoke-proven
+   (usage/refusal/unbounded/flagless codes). Submit-level
+   regression: flagless ENTRY refused, EXIT alive, flag resumes.
+9. Status matrix (P1): ClassifyStatus is now the single frozen
+   matrix (held/pending_replace/pending_cancel/suspended/
+   restated/replace-rejected/cancel-rejected = PENDING;
+   done_for_day/replaced = DEAD; fill/partial_fill = UNKNOWN) and
+   MarketClose's inline duplicate was unified onto it. Broker
+   suite extended (alive-waits x7, terminal-reissues x2).
+10. Production entry (P1): cycles=0 runs until HARD/refused (the
+    H2 unbounded mode, smoke-proven); the deployment contract
+    (supervisor owns the window + restarts, never auto-restart
+    after exit 3, resume needs --resume) is printed in the usage
+    text and the file header.
+Supporting changes this pass required (all runner-owned):
+close attribution (EXIT-done and sweep fills attribute to
+same-symbol entries, oldest first; Recover re-attributes terminal
+EXIT snapshots, idempotent); EXIT bypasses the entry slot cap
+(refusing an exit strands risk; 2x hard ceiling backs the
+no-realloc guarantee); MEDIUM test 27 now honestly finalizes
+FLATTENED after attribution (was PENDING on phantom open).
+Status: router closed; broker matrix frozen; journal/durability
+proven; crash recovery proven; stream seam proven (cumulative,
+queue, duplicates, overflow, parser errors, account cursor); S2
+proven (known-order + union drift); kill integration proven
+(HARD slot + slotless paths, MEDIUM FSM/sweep/remainder/gates,
+exit gating); long-run proven (cap binds open risk, exits
+bypass, 20 closes, chain intact); daily ops wired; binary modes
+proven. REMAINING for P3.5 closure: Phase-4 live HTTPS + socket
++ position/account endpoints + runtime credentials, real G0
+STAGE bootstrap, out-of-band alert adapter. H2 stays downstream
+per sec. 13.5. P3.5 OPEN (human close); G0 NOT STARTED.
