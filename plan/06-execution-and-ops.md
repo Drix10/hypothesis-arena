@@ -66,6 +66,49 @@ intent (risk PASS) → re-check HALT file → journal row → send entry +
   conviction table and before the R2 check. An order that is legal at G3 and
   illegal at G1 is rejected at G1, with the stage named in the HOLD reason.
 
+## 6.1b Close ownership + incident identity (frozen)
+
+One position, one close. Per (symbol, side) and per incident, exactly one
+close identity may be live. Every kill-path close is pre-flighted (GET by
+the stable id first — found adopts, 404 sends once, failure waits), and
+the pre-flight is the mutual-exclusion mechanism between close owners:
+
+- MEDIUM: the local flatten EXIT owns the close when one is active, armed,
+  or landed; otherwise the broker sweep owns it. The sweep reconciles
+always (fills attribute back) but SENDS only for uncovered symbols — a
+covered symbol waits on its local close. A local flatten never submits
+against a live sweep close: it arms and waits, and attribution zeroes
+the entry when the sweep lands. A flatten that resolves non-closed hands
+ownership back to the sweep (re-arm is forbidden — the intent id is
+single-use, so only the incident sweep id can carry the next close).
+- HARD: an in-flight EXIT is adopted when live (no cancel to make room)
+or replaced when dead/absent — never bypassed with a second identity.
+An ENTRY with exit coverage closes only its uncovered remainder. All
+hard closes for one (symbol, side) share the incident hard id, so the
+slot path, the exit path, and the slotless-position path pre-flight
+each other instead of stacking closes.
+
+Kill-path close ids are incident-scoped (Alpaca `client_order_id` is
+unique per order — a historical filled id reused for a later incident
+would adopt-away a live position's close):
+
+- `medium-<epoch>-<SYM>` (sweep) and `medium-<epoch>-<SYM>-<qty>`
+  (remainder), hashed through the §6.1 recipe. The epoch is minted once
+per MEDIUM incident at medium-enter (`medium-incident.txt`) and
+  overwritten only by a new enter — which BY DEFINITION is a new
+incident (a crash mid-incident keeps the FSM file, so it reuses).
+- `hard-<epoch>-<SYM>` for every HARD close of that (symbol, side).
+The epoch lives in `hard-incident.txt` as `<epoch>` + kill reason. A
+crash mid-HARD keeps HALT, so the next HardStop reuses the epoch
+(minting new would double the in-flight closes). Clearing HALT ends
+the incident (a human owns the interim — the journal shows what flew);
+a re-firing HARD is a new incident with a new epoch, and the supersede
+is journaled + alerted. A clean non-HARD cycle with no HALT truncates
+the file (the incident is over; tidy for forensics).
+- Intent-bound ids (`<intent>-repair`, `<intent>-flatten`, exit
+sub-identities) need no epoch: intent ids are permanently bound and
+single-use (§6.1), so they cannot collide across incidents.
+
 ## 6.2 Reflection (after every closed trade)
 
 Row appended: entry context_hash, exit context_hash, PnL, slippage vs intent,
@@ -145,6 +188,21 @@ system fails toward paper.**
 - Exits never depend on JEV freshness, thesis freshness, or WS health
   (hard stop/TP local; REST fallback). Only entries may wait on data.
 - Resume-from-HALT is manual. Always. So is every stage promotion (doc 10).
+- Broker-status quarantine (frozen, per current Alpaca order-lifecycle docs):
+  `done_for_day` and `calculated` (done for today — no further updates until
+  the next session; the order MAY resume) and `replaced` (a replacement order
+  under an unknown id may be live) are NEVER routed as generic DEAD. The id
+  is burned — never re-sent under the same `client_order_id` — and the filled
+  qty is authoritative-for-today but never folded (tomorrow's resumption would
+  double-count). First sighting freezes the symbol + journals + alerts; the
+  machine waits (UNKNOWN: reconcile, never mint, never terminal). Any
+  next-session exposure is a NEW intent under a NEW id, operator-authorized,
+  never automatic. (`canceled`/`expired`/`rejected` stay safe-DEAD: nothing
+  live can duplicate them, so the normal burned-id remainder path applies.)
+- Live-hold statuses (frozen): `held`, `stopped` (trade guaranteed, not yet
+  occurred), and `accepted_for_bidding` are PENDING — live working orders.
+  The runner waits (the pre-flight finds them under the stable id); it never
+  re-issues blind and never terminals on them.
 - Every outage default stops new risk and keeps old risk managed.
 - Paper fill rule (LOCKED 2026-09-18): BUY at mid + one full spread adverse,
   SELL at mid − one full spread adverse (min 1bp), full size, flagged

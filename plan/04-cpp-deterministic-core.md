@@ -50,6 +50,16 @@ STAGE (human-signed, doc 10) ─────────────┤
    flag), sequence-gap detection, reconnect with backoff. REST client lives alongside
    for exits + reconcile only. Session-aware: marks snapshot `session=closed` outside
    venue hours; closed feed is normal, not an alert.
+   Phase-4 transport decision (frozen, verified against current Alpaca docs):
+   the G0 paper account streams via `wss://paper-api.alpaca.markets/stream` +
+   `trade_updates` (WS frames, auth + listen handshake, no SSE framing, no
+   `since_id` — resume is re-subscribe, not replay-from-cursor). The
+   `/v2/events/trades` SSE contract (with `since_id`) belongs to the
+   Broker-API sandbox, a different account/contract — it is NOT assumed
+   interchangeable with the paper-account stream. The runner seam stays
+   wire-agnostic: `RouteStep` consumes shaped observations only, so the
+   Phase-4 adapter maps the paper-WS wire format (event + order object +
+   execution identity) without touching router core.
 2a. `ingest/features.cpp` — tails `features.jsonl`; validates schema version,
    bounds (≤64 retained, ≤16 into the JEV payload), enum/bucket types, and the
    **R12 timestamp rule**: drop anything with `observed_at_ns` in the future
