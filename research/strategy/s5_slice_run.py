@@ -55,10 +55,10 @@ def main():
                     s5.walk_folds(by_var[v], n_splits=2,
                                   holdout_start=_b)]
     chosen = s5.select_variant(stats)  # frozen BEFORE holdout use
-    # sequential evidence: closed deltas of the SELECTED variant only
+    # sequential evidence: closed deltas of the SELECTED variant only;
+    # interim stop => final is NOT RUN (prereg sequential_rule).
     _sd, _sy = s5.closed_stream(by_var[chosen])
-    seq_i = s5.seq_decision(_sd, _sy, "interim")
-    seq_f = s5.seq_decision(_sd, _sy, "final")
+    seq_i, seq_f = s5.seq_pair(_sd, _sy)
     # power on the deduplicated pre-holdout training population
     _seen, train_recs = set(), []
     for f in folds:
@@ -69,7 +69,9 @@ def main():
     pw = s5.power_study(train_recs, 0.15)
     assert not ({r["cid"] for r in holdout} &
                 {r["cid"] for r in train_recs})
-    # exact-CID holdout materialization (day reconstruction rejected)
+    # token-bound holdout materialization (day reconstruction,
+    # duplicates, wrong multipliers, fake sets all rejected)
+    tok = s5f.make_holdout_token(holdout, _bound)
     hset = s5f.assert_exact_holdout(holdout, holdout)
     h1x = {v: [r for r in by_var[v] if r["cid"] in hset]
            for v in s5.VARIANTS}
@@ -81,25 +83,17 @@ def main():
               for v in s5.VARIANTS}
         stress[lab] = {v: [r for r in sv[v] if r["cid"] in hset]
                        for v in s5.VARIANTS}
-    # sessions: UTC day boundaries with last-close marks per symbol
+    # sessions: 16:00 America/New_York closes (plan 11 CAL7); marks are
+    # the last bar at-or-before each ET close (after-hours never marks).
     sess = []
     for d in sorted({r["day"] for r in holdout}):
-        end = int(datetime.datetime.strptime(
-            d, "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc).
-            timestamp() * 1e9) + 86400 * 10 ** 9 - 1
+        close = s5.et_close_ns(d)
         closes = {}
         for sym, bs in bars.items():
-            last = None
-            for b in bs:
-                if b.ts_ns <= end:
-                    last = b.c
-                else:
-                    break
-            closes[sym] = last
-        sess.append({"day": d, "end_ts": end, "closes": closes})
-    bar = {"filtered_net_sharpe_gt": 1.0, "holm_adjusted_p_lt": 0.05,
-           "max_drawdown_pct_lte": 15.0, "min_closed_trades": 100}
-    rep = s5f.final_report(h1x, stress, sess, 100000.0, bar, hset,
+            closes[sym] = s5.last_close_at_or_before(bs, close)
+        sess.append({"day": d, "end_ts": close, "close_ns": close,
+                     "closes": closes})
+    rep = s5f.final_report(h1x, stress, sess, 100000.0, tok,
                            selected_variant=chosen)
     out = {"slice": s2_run.SLICE_ID, "n_stream": len(items),
            "n_holdout": len(holdout),

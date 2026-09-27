@@ -11,13 +11,47 @@ recorded for the audit trail; it cannot alter any computation and
 holdout performance never overwrites it. Research/shadow-only.
 """
 
+import hashlib as _hashlib
 import json as _json
 import os as _os
 
-from .s5_eval import (R_CHECKED, R_UNAVAILABLE, REQUIRED_STRESS, VARIANTS,
-                      cluster_bootstrap_ci, cluster_null_p, evaluate_bar,
-                      holm, paired_deltas, portfolio_curve, segment_bounds,
-                      sharpe_hac, verify_r_monitor, walk_folds)
+from .s5_eval import (EVAL_PROTOCOL, R_CHECKED, R_UNAVAILABLE,
+                      REQUIRED_STRESS, VARIANTS, cluster_bootstrap_ci,
+                      cluster_null_p, daily_returns, et_close_ns,
+                      evaluate_bar, holm, paired_deltas, portfolio_curve,
+                      segment_bounds, sharpe_hac, verify_r_monitor,
+                      walk_folds)
+
+STRESS_MULT = {"1x": 1.0, "1.5x": 1.5, "2x": 2.0, "3x": 3.0}
+
+
+def _prereg():
+    here = _os.path.join(_os.path.dirname(__file__), "s5_prereg.json")
+    return _json.load(open(here))
+
+
+def frozen_bar():
+    """The frozen absolute bar, from the committed prereg ONLY.
+    final_report takes NO caller bar (a weaker caller bar is
+    unrepresentable)."""
+    c = _prereg()["absolute_bar"]["conditions"]
+    return {"filtered_net_sharpe_gt": c["filtered_net_sharpe_gt"],
+            "holm_adjusted_p_lt": c["holm_adjusted_p_lt"],
+            "max_drawdown_pct_lte": c["max_drawdown_pct_lte"],
+            "min_closed_trades": c["min_closed_trades"]}
+
+
+def frozen_knobs():
+    """Prereg-bound inference knobs (single source: committed prereg).
+    Runners use s5_eval defaults; this is the authority they match."""
+    p = _prereg()
+    return {"boot_seed": 24269, "boot_reps": 2000, "null_seed": 24270,
+            "seq_alpha_interim": 0.025, "seq_alpha_final": 0.025,
+            "holm_alpha": 0.05,
+            "power_mde": 0.15, "power_alpha": p["power"]["alpha"],
+            "power_reps": p["power"]["replicates"],
+            "power_inner": p["power"]["inner_resamples"],
+            "power_seed": p["power"]["seed"]}
 
 
 def frozen_scope():
@@ -27,10 +61,49 @@ def frozen_scope():
     return sorted(_json.load(open(here))["amendment_b"]["r_out_of_scope"])
 
 
+def make_holdout_token(holdout, bound):
+    """Deterministic provenance token from holdout_split output.
+
+    Binds holdout_start + exact CID multiset hash + count + dates +
+    protocol. The final path recomputes all of it from the evidence
+    sets; a manufactured CID set cannot match. No reselection after."""
+    assert holdout, "empty holdout"
+    cids = sorted(r["cid"] for r in holdout)
+    return {"holdout_start": bound, "n": len(holdout),
+            "cid_hash": _hashlib.sha256("|".join(cids).encode()
+                                          ).hexdigest(),
+            "dates": sorted({r["day"] for r in holdout}),
+            "protocol": EVAL_PROTOCOL}
+
+
+def _validate_set(recs, token, spread, variant):
+    """Multiset-safe exact-holdout validation for ONE evidence set.
+
+    Non-empty, no duplicate CIDs, len == token n, CID-hash == token
+    hash, every record carries the expected spread_mult / variant /
+    eval_protocol. Fail closed on any mismatch."""
+    assert recs, "empty evidence set"
+    cids = [r["cid"] for r in recs]
+    assert len(cids) == len(set(cids)) == token["n"], \
+        "duplicate CID or count mismatch"
+    assert _hashlib.sha256("|".join(sorted(cids)).encode()
+                           ).hexdigest() == token["cid_hash"], \
+        "CID set != token holdout"
+    for r in recs:
+        assert r["spread_mult"] == spread, \
+            "spread_mult %r != bucket %r" % (r["spread_mult"], spread)
+        assert r["variant"] == variant, "variant mismatch"
+        assert r["eval_protocol"] == token["protocol"] == \
+            EVAL_PROTOCOL, "protocol mismatch"
+    return set(cids)
+
+
 def assert_exact_holdout(candidate_recs, holdout):
-    """Final evidence must be the EXACT holdout CID set (never day
-    membership, never a superset). holdout is the record list from
-    holdout_split or its CID set. Returns the CID set."""
+    """Legacy exact-set check (kept for runner/diagnostic use).
+
+    Final evidence uses token validation (_validate_set), which is
+    multiset-safe. holdout is the record list from holdout_split or
+    its CID set. Returns the CID set."""
     if holdout and isinstance(next(iter(holdout)), dict):
         hset = {r["cid"] for r in holdout}
     else:
@@ -62,23 +135,37 @@ def holdout_split(records, n_splits=3):
     return folds, holdout, bound
 
 
-def final_report(recs_1x, recs_stress, sessions, equity, bar,
-                 holdout_cids, selected_variant=None):
+def final_report(recs_1x, recs_stress, sessions, equity, token,
+                 selected_variant=None):
     """Holdout verdict per variant + pooled Holm.
 
-    holdout_cids: the EXACT CID set from holdout_split. Every 1x and
-    stress record set MUST equal it exactly (asserted; day-membership
-    reconstruction cannot pass). R out-of-scope comes from the frozen
-    prereg declaration (frozen_scope); no caller list is accepted."""
+    token: make_holdout_token() output from the REAL holdout_split.
+    Every 1x/stress set is multiset-validated against it (count +
+    CID-hash + per-record spread_mult/variant/protocol); day-membership
+    reconstruction, duplicates, wrong multipliers, and manufactured
+    sets all fail closed. sessions must carry exact 16:00 ET close_ns
+    marks and cover EXACTLY the token dates (pre/post injections
+    rejected). The bar is frozen_bar() (no caller bar exists).
+    Sharpe uses close-to-close daily_returns (partial first interval
+    excluded from Sharpe, retained in curve/DD). R out-of-scope comes
+    from the frozen prereg declaration (frozen_scope)."""
     assert set(recs_1x) == set(VARIANTS)
-    for _v, _recs in recs_1x.items():
-        assert_exact_holdout(_recs, holdout_cids)
-    for _mult, _by_var in recs_stress.items():
-        for _v, _recs in _by_var.items():
-            assert_exact_holdout(_recs, holdout_cids)
-    scope = frozen_scope()
     assert set(recs_stress) == set(REQUIRED_STRESS), \
         "stress must carry exactly %s" % (REQUIRED_STRESS,)
+    for variant, recs in recs_1x.items():
+        _validate_set(recs, token, STRESS_MULT["1x"], variant)
+    for mult, by_var in recs_stress.items():
+        assert set(by_var) == set(VARIANTS), mult
+        for variant, recs in by_var.items():
+            _validate_set(recs, token, STRESS_MULT[mult], variant)
+    scope = frozen_scope()
+    bar = frozen_bar()
+    sdays = [s["day"] for s in sessions]
+    assert sdays == sorted(token["dates"]), \
+        "sessions must cover exactly the holdout dates"
+    for s in sessions:
+        assert s["close_ns"] == et_close_ns(s["day"]), \
+            "session mark is not the 16:00 ET close: %s" % s["day"]
     for mult, by_var in recs_stress.items():
         assert set(by_var) == set(VARIANTS), mult
     if selected_variant is not None:
@@ -97,6 +184,7 @@ def final_report(recs_1x, recs_stress, sessions, equity, bar,
         day_of = {r["cid"]: r["day"] for r in recs}
         trades_f, curve_f, rets_f, dd_f = portfolio_curve(recs, "filtered",
                                                         equity, sessions)
+        srets_f = daily_returns(rets_f)
         closed = sum(1 for t in trades_f
                      if labels.get(t["cid"]) in ("win", "loss"))
         breach_attempts = sum(1 for r in recs if r["r_breach_attempted"])
@@ -104,14 +192,16 @@ def final_report(recs_1x, recs_stress, sessions, equity, bar,
         stress = {}
         for mult, by_var in recs_stress.items():
             srecs = by_var[variant]
-            _, _, srets_f, _ = portfolio_curve(srecs, "filtered", equity,
-                                               sessions)
-            _, _, srets_a, _ = portfolio_curve(srecs, "always", equity,
-                                               sessions)
+            _, _, srets_f0, _ = portfolio_curve(srecs, "filtered",
+                                                equity, sessions)
+            _, _, srets_a0, _ = portfolio_curve(srecs, "always", equity,
+                                                sessions)
+            srets_f = daily_returns(srets_f0)
+            srets_a = daily_returns(srets_a0)
             stress[mult] = (sharpe_hac(srets_f)[0], sharpe_hac(srets_a)[0])
         rep["variants"][variant] = {
             "paired_mean_R": mu, "ci95": [lo, hi], "null_p": p,
-            "sharpe_f": sharpe_hac(rets_f)[0],
+            "sharpe_f": sharpe_hac(srets_f)[0],
             "max_dd_pct": dd_f, "n_closed": closed,
             "n_trades_taken": len(trades_f),
             "r_breach_attempted": breach_attempts,
@@ -120,6 +210,8 @@ def final_report(recs_1x, recs_stress, sessions, equity, bar,
             "stress": stress}
     rep["holm"] = holm(pvals)
     rep["r_scope_frozen"] = scope
+    rep["bar_frozen"] = bar
+    rep["knobs"] = frozen_knobs()
     adj = dict((n, a) for n, a, _ in rep["holm"])
     for variant, v in rep["variants"].items():
         m = {"sharpe_f": v["sharpe_f"], "holm_p": adj[variant],

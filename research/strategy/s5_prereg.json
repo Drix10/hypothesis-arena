@@ -140,7 +140,9 @@
     ],
     "r_out_of_scope_rationale": "each needs live/online authoritative inputs absent in research (order/ack + account state, per-cycle snapshot equity + persisted HWMs for R5 intraday spike-to-trough, 480+24h vol baselines with data-age gates, trailing-30 correlation engine with freshness gates, broker adapter + venue calendar); no_r_breach means no taken trade violated a CHECKED rule; scope fails closed if any other rule is UNAVAILABLE",
     "r_monitor": "s5_eval.verify_r_monitor post-hoc verifies R3/R4/R5/R1-direction/R2-concurrency on the filtered taken ledger; violations join r_breach_attempted in r_breach_count",
-    "finalization": "s5_final holds holdout_split + final_report; holdout is terminal evidence, never fed back into select_variant; selected_variant may be echoed only"
+    "finalization": "s5_final holds holdout_split + final_report; holdout is terminal evidence, never fed back into select_variant; selected_variant may be echoed only",
+    "r_monitor_verifies": "R3-day, R3-symhour, R4 exact two-order flip machine (doc 05: direct LONG<->SHORT only; flat-mediated S5 transitions structurally cannot complete), R1-direction, R1-same-direction, R2-single, R2-total, R8-maxgate-via-v4, R12, R14, stop-rule",
+    "r5_correction": "R5-halt is UNAVAILABLE (amendment_c): the earlier monitor list naming R5 was stale and is corrected here; daily-close marks cannot observe intraday spike-to-trough against persisted HWMs"
   },
   "amendment_c": {
     "scope": "no threshold/alpha/MDE/search change; evidence-integrity only",
@@ -151,5 +153,15 @@
     "power": "record inputs, deduplicated by CID (n_unique_cids reported); each bootstrap cluster draw keeps a distinct synthetic label (repeated source draws never collapse); train-only, holdout-excluded",
     "embargo": "walk_folds derives the embargo horizon from pre-holdout records only when holdout_start is supplied; holdout time_exit metadata never enters selection",
     "frozen_scope": "final_report reads amendment_b r_out_of_scope from the committed prereg file (s5_final.frozen_scope); no caller-supplied scope accepted; the used list is echoed as rep[r_scope_frozen]"
+  },
+  "amendment_d": {
+    "scope": "evidence-authority only: no threshold/alpha/MDE/search-budget change; all inference knobs below are exact restatements of already-preregistered values",
+    "seeds": "implementation BOOT_SEED is the preregistered decimal 24269 (CI) with null at seed+1 = 24270; B=2000; regression test pins s5_eval constants to this file",
+    "bar_authority": "final_report takes NO caller bar; frozen_bar() reads absolute_bar.conditions from this file; rep echoes bar_frozen",
+    "knob_authority": "s5_eval defaults are the authority-matching values (BOOT_SEED 24269, BOOT_REPS 2000, SEQ_ALPHA 0.025/0.025, HOLM_ALPHA 0.05, POWER seed 41721/reps 200/inner 200/MDE +0.15/alpha 0.025); rep echoes frozen_knobs(); regression test pins both",
+    "holdout_token": "make_holdout_token binds holdout_start + n + CID-hash + dates + protocol; final path multiset-validates every 1x/stress set (count, uniqueness, hash, per-record spread_mult/variant/protocol); no reselection after finalization",
+    "sessions": "16:00 America/New_York session contract (plan 11 CAL7): marks are last bar at-or-before the ET close (after-hours never marks); sessions must carry exact close_ns and cover exactly the token dates; Sharpe uses close-to-close daily_returns (boundary-to-first-close stub stays in curve/DD, never in Sharpe); zero-trade days emit 0.0",
+    "sequential": "seq_pair: interim stop (futility or efficacy) => final is not_run, never computed on later observations; evidence stays on the fold-selected variant",
+    "r4": "exact doc-05 two-order machine (r4_completions); flat-mediated S5 trade transitions cannot complete a flip; direct-transition hostiles prove the machine"
   }
 }

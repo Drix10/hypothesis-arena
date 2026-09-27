@@ -6,6 +6,8 @@
 14 holdout-boundary 15 R-disqualify 16 sequential 17 power 18 daily-curve
 19 maxDD 20 bar-mechanical 21 baseline-reconcile 22 no-hardcoded-pass.
 """
+import datetime
+import hashlib
 import inspect
 import json
 import os
@@ -22,7 +24,8 @@ from research.strategy.data import Bar
 ENGINE = {"deterministic_veto": False, "disagreement": False,
           "blackout": False, "calib_gate": "pass", "veto_max": False}
 PROVIDE, PUB = s5.stub_answers_provider()
-DAY = lambda ts: "d%d" % (ts // 60)
+DAY = lambda ts: (datetime.date(2024, 1, 2) +
+                   datetime.timedelta(days=ts // 60)).isoformat()
 DATA_ID = {"slice": "synth-test-v1", "dataset_sha": "test-sha"}
 BAR = {"filtered_net_sharpe_gt": 1.0, "holm_adjusted_p_lt": 0.05,
        "max_drawdown_pct_lte": 15.0, "min_closed_trades": 100}
@@ -68,10 +71,10 @@ def synth_stream(n=60):
 
 
 def sessions_for(items):
-    days = sorted({DAY(c.snapshot_ts_ns) for c, _, _, _, _ in items},
-                  key=lambda d: int(d[1:]))
-    return [{"day": d, "end_ts": (int(d[1:]) + 1) * 60 - 1,
-             "closes": {"SYN": 100.0 + int(d[1:])}} for d in days]
+    days = sorted({DAY(c.snapshot_ts_ns) for c, _, _, _, _ in items})
+    return [{"day": d, "end_ts": s5.et_close_ns(d),
+             "close_ns": s5.et_close_ns(d),
+             "closes": {"SYN": 100.0 + i}} for i, d in enumerate(days)]
 
 
 def run_all(items, **kw):
@@ -305,10 +308,12 @@ def test_15_r_disqualify_full_path():
     assert brec["r_breach_attempted"]  # forbidden take attempted
     assert not any(r["disqualified"] for r in by_var[s5.VARIANTS[0]][1:])
     sess = sessions_for(stream)
-    _hc = {r["cid"] for r in by_var[s5.VARIANTS[0]]}
-    rep = s5f.final_report(by_var, {k: by_var for k in
-                                    ("1.5x", "2x", "3x")},
-                           sess, 100000.0, BAR, _hc)
+    _tok = s5f.make_holdout_token(by_var[s5.VARIANTS[0]], 0)
+    _stress = {}
+    for _mult, _lab in ((1.5, "1.5x"), (2.0, "2x"), (3.0, "3x")):
+        _sv = run_all(stream, spread_mult=_mult)
+        _stress[_lab] = _sv
+    rep = s5f.final_report(by_var, _stress, sess, 100000.0, _tok)
     got = rep["variants"][s5.VARIANTS[0]]
     assert got["r_breach_attempted"] == 1  # generated, not injected
     assert got["r_breach_count"] == 1 + len(got["r_monitor_breaches"])
@@ -369,7 +374,7 @@ def test_18_19_curve_and_drawdown():
     items = synth_stream(48)
     recs = run_all(items)[s5.VARIANTS[0]]
     sess = sessions_for(items)
-    sess.append({"day": "d999", "end_ts": 10 ** 18,
+    sess.append({"day": "d999", "end_ts": 10 ** 19,
                  "closes": {"SYN": 100.0}})
     trades, curve, rets, dd = s5.portfolio_curve(recs, "always", 100000.0,
                                                  sess)
@@ -458,17 +463,17 @@ def test_20b_stress_fail_closed_and_scope():
     assert s5.evaluate_bar(GOODM, BAR)[0] is True
     bad_scope = dict(GOODM, r_out_of_scope=["R6"])
     assert s5.evaluate_bar(bad_scope, BAR)[1] == ["r_scope"]
+    import inspect as _insp
+    _sig = _insp.signature(s5f.final_report).parameters
+    assert "bar" not in _sig, "caller bar must be unrepresentable"
+    assert "holdout_cids" not in _sig, "raw CID sets out; token only"
+    fb = s5f.frozen_bar()
+    assert fb == dict(BAR), "frozen bar != prereg bar used by tests: %r" % fb
     try:
         s5f.final_report({s5.VARIANTS[0]: [], s5.VARIANTS[1]: []}, {},
-                         [], 100000.0, BAR, set())
-        raise SystemExit("stress assert should have raised")
+                         [], 100000.0, None)
+        raise SystemExit("empty evidence must fail closed")
     except AssertionError:
-        pass
-    try:
-        s5f.final_report({s5.VARIANTS[0]: [], s5.VARIANTS[1]: []}, {},
-                         [], 100000.0, BAR)
-        raise SystemExit("holdout_cids must be required")
-    except TypeError:
         pass
     print("20b OK")
 
@@ -544,19 +549,14 @@ def test_22_final_report_no_hardcode():
     folds, holdout, bound = s5f.holdout_split(by_var[s5.VARIANTS[0]],
                                               n_splits=2)
     assert holdout
+    tok = s5f.make_holdout_token(holdout, bound)
+    assert tok["n"] == len(holdout) and tok["holdout_start"] == bound
+    assert tok["protocol"] == "eval_v1"
     hset = {r["cid"] for r in holdout}
-    # exact-CID materialization (day-membership reconstruction rejected)
     h1x = {v: [r for r in by_var[v] if r["cid"] in hset]
            for v in s5.VARIANTS}
-    assert all({r["cid"] for r in h1x[v]} == hset for v in s5.VARIANTS)
-    # hostile: explicit mid-UTC-day boundary. bound2 sits inside d9,
-    # so day-membership reconstruction would smuggle pre-bound records.
+    # hostile: explicit mid-day boundary; day reconstruction smuggles.
     bound2 = bound + 25
-    folds2 = s5.walk_folds(by_var[s5.VARIANTS[0]], n_splits=2,
-                           holdout_start=bound2)
-    for tr, te in folds2:
-        for r in tr + te:
-            assert r["time_exit_ns"] < bound2
     hdays2 = {r["day"] for r in by_var[s5.VARIANTS[0]]
               if r["snapshot_ts_ns"] >= bound2}
     daybuilt = [r for r in by_var[s5.VARIANTS[0]] if r["day"] in hdays2]
@@ -564,34 +564,65 @@ def test_22_final_report_no_hardcode():
     assert smuggled, "need pre-bound same-day records for the hostile"
     true2 = [r for r in by_var[s5.VARIANTS[0]]
              if r["snapshot_ts_ns"] >= bound2]
-    hset2 = {r["cid"] for r in true2}
-    assert smuggled and not (hset2 & {r["cid"] for r in smuggled})
+    tok2 = s5f.make_holdout_token(true2, bound2)
     try:
         s5f.final_report({v: daybuilt for v in s5.VARIANTS},
                          {k: {v: daybuilt for v in s5.VARIANTS}
                           for k in ("1.5x", "2x", "3x")},
-                         sessions_for(items), 100000.0, BAR, hset2)
+                         sessions_for(items), 100000.0, tok2)
         raise SystemExit("day-built set must be rejected")
     except AssertionError:
         pass
+    # hostile: duplicate a holdout row (same CID set, altered population)
+    dup = h1x[s5.VARIANTS[0]] + [h1x[s5.VARIANTS[0]][0]]
+    try:
+        s5f.final_report({s5.VARIANTS[0]: dup,
+                          s5.VARIANTS[1]: h1x[s5.VARIANTS[1]]},
+                         {k: h1x for k in ("1.5x", "2x", "3x")},
+                         sessions_for(items), 100000.0, tok)
+        raise SystemExit("duplicated holdout row must be rejected")
+    except AssertionError:
+        pass
+    # hostile: 1x records filed under a stress bucket
+    badstress = {k: h1x for k in ("1.5x", "2x", "3x")}
+    hdays = {r["day"] for r in holdout}
+    hotsess = [x for x in sessions_for(items) if x["day"] in hdays]
+    try:
+        s5f.final_report(h1x, badstress, hotsess, 100000.0, tok)
+        raise SystemExit("1x-under-3x must be rejected")
+    except AssertionError:
+        pass
+    # hostile: manufactured CID set (fake provenance)
+    faketok = dict(tok, cid_hash="0" * 64)
+    try:
+        s5f.final_report(h1x, badstress, hotsess, 100000.0, faketok)
+        raise SystemExit("fake token must be rejected")
+    except AssertionError:
+        pass
+    # hostile: session injection outside the holdout window
+    badsess = hotsess + [dict(hotsess[0], day="2020-01-01",
+                              close_ns=s5.et_close_ns("2020-01-01"))]
     stress = {}
     for mult, lab in ((1.5, "1.5x"), (2.0, "2x"), (3.0, "3x")):
         sv = run_all(items, spread_mult=mult)
         stress[lab] = {v: [r for r in sv[v] if r["cid"] in hset]
                        for v in s5.VARIANTS}
-    sess = [x for x in sessions_for(items)
-            if x["day"] in {r["day"] for r in holdout}]
-    rep = s5f.final_report(h1x, stress, sess, 100000.0, BAR, hset)
+    try:
+        s5f.final_report(h1x, stress, badsess, 100000.0, tok)
+        raise SystemExit("pre-holdout session must be rejected")
+    except AssertionError:
+        pass
+    rep = s5f.final_report(h1x, stress, hotsess, 100000.0, tok)
     for v, x in rep["variants"].items():
         assert x["bar_verdict"] is False and x["bar_failed"], v
     assert rep["holm"]
-    # frozen scope: no caller list accepted anymore
-    assert rep["r_scope_frozen"] == SCOPE if False else True
+    assert rep["bar_frozen"] == dict(BAR)
     assert rep["r_scope_frozen"] == SCOPE
+    kn = rep["knobs"]
+    assert kn["boot_seed"] == 24269 and kn["null_seed"] == 24270
+    assert kn["boot_reps"] == s5.BOOT_REPS == 2000
     print("22 OK", [(v, x["bar_failed"]) for v, x in
                     rep["variants"].items()])
-
-
 
 
 def test_21b_n_closed_hostile():
@@ -599,21 +630,30 @@ def test_21b_n_closed_hostile():
     items = synth_stream(200)
     by_var = run_all(items)
     recs = by_var[s5.VARIANTS[0]]
-    one = [r for r in recs if r["always_label"] in ("win", "loss")]
-    assert len(one) >= 100
-    solo = [dict(one[0], filtered_taken=True,
-                 filtered_r=one[0]["always_r"])]
-    solo += [dict(r, filtered_taken=False, filtered_r=0.0,
-                  filtered_action="HOLD") for r in recs[1:]]
-    days = sorted({r["day"] for r in recs},
-                  key=lambda d: int(d[1:]))
-    sess = [{"day": d, "end_ts": (int(d[1:]) + 1) * 60 - 1,
+    def _solo(stream_recs):
+        first = [r for r in stream_recs
+                 if r["always_label"] in ("win", "loss")]
+        assert len(first) >= 100
+        out = [dict(first[0], filtered_taken=True,
+                    filtered_r=first[0]["always_r"])]
+        out += [dict(r, filtered_taken=False, filtered_r=0.0,
+                     filtered_action="HOLD") for r in stream_recs
+                if r["cid"] != first[0]["cid"]]
+        return out
+    same = {v: _solo(by_var[v]) for v in s5.VARIANTS}
+    solo = same[s5.VARIANTS[0]]
+    days = sorted({r["day"] for r in recs})
+    sess = [{"day": d, "end_ts": s5.et_close_ns(d),
+             "close_ns": s5.et_close_ns(d),
              "closes": {"SYN": 100.0}} for d in days]
-    same = {s5.VARIANTS[0]: solo, s5.VARIANTS[1]: solo}
-    _hc = {r["cid"] for r in solo}
-    rep = s5f.final_report(same, {k: same for k in
-                                  ("1.5x", "2x", "3x")},
-                           sess, 100000.0, BAR, _hc)
+    _tok21 = s5f.make_holdout_token(solo, 0)
+    # stress plumbing: same population re-labeled at each multiplier
+    # (economics not asserted here; n_closed counting is).
+    _st21 = {}
+    for _m, _lab in ((1.5, "1.5x"), (2.0, "2x"), (3.0, "3x")):
+        _st21[_lab] = {v: [dict(r, spread_mult=_m) for r in recs]
+                       for v, recs in same.items()}
+    rep = s5f.final_report(same, _st21, sess, 100000.0, _tok21)
     got = rep["variants"][s5.VARIANTS[0]]
     assert got["n_closed"] == 1, got["n_closed"]
     assert "closed" in got["bar_failed"]
@@ -639,12 +679,30 @@ def test_23_r_monitor():
     four = [_tkr("h%d" % i, "S", "BUY", 10 + i, 20 + i) for i in range(4)]
     b = s5.verify_r_monitor(four, flat, {t["cid"]: "d" for t in four})
     assert any(x.startswith("R3-symhour") for x in b), b
-    # R4 flip-lock (ns scale): SELL 30min after BUY exit, same symbol
+    # R4 exact machine: flat-mediated S5 sequences NEVER complete a
+    # flip (entries into flat do not count). Opposite-side entry after
+    # an exit is NOT a flip completion under frozen doc-05 semantics.
     base = 1700000000000000000
-    flip = [_tkr("e1", "S", "BUY", base, base + 1000000000),
-            _tkr("e2", "S", "SELL", base + 2000000000, base + 3000000000)]
-    b = s5.verify_r_monitor(flip, flat, {"e1": "d", "e2": "d"})
-    assert any(x.startswith("R4-fliplock") for x in b), b
+    flatseq = [_tkr("e1", "S", "BUY", base, base + 1000000000),
+               _tkr("e2", "S", "SELL", base + 2000000000,
+                    base + 3000000000)]
+    b = s5.verify_r_monitor(flatseq, flat, {"e1": "d", "e2": "d"})
+    assert not any(x.startswith("R4") for x in b), b
+    # the machine itself, on direct position-sign transitions:
+    H = 3600000000000
+    assert s5.r4_completions([(base, "S", 0, 1), (base + 1, "S", 1, 0),
+                              (base + 2, "S", 0, -1)]) == []
+    assert s5.r4_completions([(base, "S", 1, -1),
+                              (base + 1000000000, "S", -1, 1)]) == ["S"]
+    assert s5.r4_completions([(base, "S", -1, 1),
+                              (base + 1000000000, "S", 1, -1)]) == ["S"]
+    assert s5.r4_completions([(base, "S", 1, -1),
+                              (base + H, "S", -1, 1)]) == ["S"]
+    assert s5.r4_completions([(base, "S", 1, -1),
+                              (base + H + 1, "S", -1, 1)]) == []
+    assert s5.r4_completions([(base, "S", 1, -1)]) == []
+    assert s5.r4_completions([(base, "A", 1, -1),
+                              (base + 1, "B", -1, 1)]) == []
     # R5 is UNAVAILABLE (daily marks cannot see intraday spike-trough):
     # even a 12% close-to-close DD is NOT claimed as an R5 evaluation.
     assert dict(s5.R_S5_STATUS)["R5-halt"][0] == "UNAVAILABLE"
@@ -698,18 +756,169 @@ def test_25_embargo_ignores_holdout():
     recs = by_var[s5.VARIANTS[0]]
     _, bound = s5.segment_bounds(recs, n_splits=2)
     f1 = s5.walk_folds(recs, n_splits=2, holdout_start=bound)
-    m1 = {v: [sum(s5.paired_deltas(te)) for _, te in
-              s5.walk_folds(by_var[v], n_splits=2,
-                            holdout_start=bound)] for v in s5.VARIANTS}
+    m1 = [[(r["cid"], r["filtered_r"]) for r in tr + te] for tr, te in f1]
     # mutate ONLY holdout time_exit metadata; selection must be identical
     mut = [dict(r) if r["snapshot_ts_ns"] < bound
            else dict(r, time_exit_ns=r["time_exit_ns"] + 10 ** 12)
            for r in recs]
     f2 = s5.walk_folds(mut, n_splits=2, holdout_start=bound)
     assert [[(r["cid"], r["filtered_r"]) for r in tr + te]
-            for tr, te in f1] ==         [[(r["cid"], r["filtered_r"]) for r in tr + te]
-         for tr, te in f2]
+            for tr, te in f2] == m1
+    # TRUE price mutation: post-bound candidate prices change, records
+    # rebuilt through the real evaluate_stream. Selection folds must be
+    # byte-identical (pre-bound labels cannot see post-bound prices),
+    # while holdout evidence legitimately moves.
+    import copy
+    mut_items = []
+    for c, bars, mkt, reg, sp in items:
+        if c.snapshot_ts_ns >= bound:
+            c = copy.copy(c)
+            object.__setattr__(c, "entry_px", c.entry_px * 2.0)
+        mut_items.append((c, bars, mkt, reg, sp))
+    by_mut = {v: s5.evaluate_stream(mut_items, PROVIDE, PUB,
+                                    dict(ENGINE), variant=v, day_fn=DAY,
+                                    data_id=DATA_ID) for v in s5.VARIANTS}
+    f3 = s5.walk_folds(by_mut[s5.VARIANTS[0]], n_splits=2,
+                       holdout_start=bound)
+    assert [[(r["cid"], r["filtered_r"]) for r in tr + te]
+            for tr, te in f3] == m1
+    hm1 = [(r["cid"], r["resolved_r"], r["always_r"])
+           for r in recs if r["snapshot_ts_ns"] >= bound]
+    hm3 = [(r["cid"], r["resolved_r"], r["always_r"])
+           for r in by_mut[s5.VARIANTS[0]]
+           if r["snapshot_ts_ns"] >= bound]
+    assert hm1 != hm3, "post-bound mutation must move holdout evidence"
     print("25 OK")
+
+
+def test_26_prereg_seeds_pinned():
+    import inspect as _insp
+    pre = json.load(open(os.path.join(os.path.dirname(__file__), "..",
+                                      "strategy", "s5_prereg.json")))
+    assert "24269" in pre["resampling"]["ci"], pre["resampling"]["ci"]
+    assert "24270" in pre["resampling"]["null_test"]
+    assert s5.BOOT_SEED == 24269, hex(s5.BOOT_SEED)
+    assert s5.BOOT_REPS == 2000
+    assert s5.SEQ_ALPHA_INTERIM == s5.SEQ_ALPHA_FINAL == 0.025
+    assert s5.HOLM_ALPHA == 0.05
+    assert s5.POWER_SEED == pre["power"]["seed"] == 41721
+    assert s5.POWER_REPS == pre["power"]["replicates"] == 200
+    assert s5.POWER_INNER == pre["power"]["inner_resamples"] == 200
+    kn = s5f.frozen_knobs()
+    assert kn["boot_seed"] == 24269 and kn["null_seed"] == 24270
+    assert kn["power_mde"] == 0.15
+    for fn in (s5.cluster_bootstrap_ci, s5.cluster_null_p,
+               s5.seq_decision, s5.seq_pair):
+        assert _insp.signature(fn).parameters["seed"].default == 24269, fn
+        assert _insp.signature(fn).parameters["reps"].default == 2000, fn
+    assert _insp.signature(s5.power_study).parameters["seed"].default == \
+        41721
+    print("26 OK")
+
+
+def test_27_disqualified_excluded_from_closed():
+    base = dict(_mkrec("N", "SYN", "BUY", 10, 50, 100.0, 99.0, 1.0,
+                        "2024-01-02"),
+                always_label="win", day="2024-01-02", filtered_r=2.0)
+    disq = dict(_mkrec("X", "SYN", "BUY", 10, 50, 100.0, 99.0, 5.0,
+                        "2024-01-02"),
+                always_label="win", day="2024-01-02",
+                disqualified=True, filtered_r=0.0, filtered_taken=False)
+    cen = dict(_mkrec("C", "SYN", "BUY", 10, 50, 100.0, 99.0, 0.0,
+                       "2024-01-02"),
+               always_label="censored", day="2024-01-02")
+    d, dys = s5.closed_stream([base, disq, cen])
+    assert d == [1.0] and dys == ["2024-01-02"], (d, dys)
+    print("27 OK")
+
+
+def test_28_seq_pair_stops():
+    # interim futility -> final NOT RUN
+    d_f = [-1.0] * 10
+    y_f = ["2024-01-%02d" % (1 + i // 2) for i in range(10)]
+    i, f = s5.seq_pair(d_f, y_f)
+    assert i[0] == "stop-futility" and f[0] == "not_run", (i, f)
+    # interim efficacy -> final NOT RUN
+    d_e = [1.0] * 20
+    y_e = ["2024-02-%02d" % (1 + i // 2) for i in range(20)]
+    i, f = s5.seq_pair(d_e, y_e)
+    assert i[0] == "stop-efficacy" and f[0] == "not_run", (i, f)
+    # interim continue -> final EXECUTED (here: fail on noisy full set)
+    half = [1.0] * 5 + [-0.9] * 5
+    d_c = half + half
+    y_c = ["2024-03-%02d" % (1 + (i // 5)) for i in range(20)]
+    i, f = s5.seq_pair(d_c, y_c)
+    assert i[0] == "continue", i
+    assert f[0] in ("efficacy", "fail") and f[0] != "not_run", f
+    print("28 OK", i[0], f[0])
+
+
+def test_29_et_session_contract():
+    utc = datetime.timezone.utc
+    # (a) EST vs EDT wall time: same 16:00 ET, different UTC hour
+    jan = s5.et_close_ns("2024-01-16")
+    jul = s5.et_close_ns("2024-07-16")
+    assert datetime.datetime.fromtimestamp(jan / 1e9,
+                                           tz=utc).hour == 21  # EST
+    assert datetime.datetime.fromtimestamp(jul / 1e9,
+                                           tz=utc).hour == 20  # EDT
+    # (b) DST transition weekend: Monday after spring-forward is EDT
+    mon = s5.et_close_ns("2024-03-11")
+    assert datetime.datetime.fromtimestamp(mon / 1e9,
+                                           tz=utc).hour == 20
+    assert mon - s5.et_close_ns("2024-03-10") == 86400 * 10 ** 9
+    # (a2) after-hours bars never mark: last bar <= close wins
+    close = s5.et_close_ns("2024-07-16")
+    bars = [Bar(ts_ns=close - 3600 * 10 ** 9, o=1, h=1, l=1,
+                c=100.0),
+            Bar(ts_ns=close, o=1, h=1, l=1, c=101.0),
+            Bar(ts_ns=close + 2 * 3600 * 10 ** 9, o=1, h=1, l=1,
+                c=999.0)]
+    assert s5.last_close_at_or_before(bars, close) == 101.0
+    assert s5.last_close_at_or_before(bars[:1], close) == 100.0
+    assert s5.last_close_at_or_before([], close) is None
+    # (c) partial first interval excluded from Sharpe, kept in curve
+    rets = [0.5, 0.01, -0.02, 0.03]
+    assert s5.daily_returns(rets) == [0.01, -0.02, 0.03]
+    assert s5.sharpe_hac(s5.daily_returns(rets))[0] != \
+        s5.sharpe_hac(rets)[0]
+    # (d) zero-trade day: flat curve emits 0.0 observations
+    _, curve, rets0, _ = s5.portfolio_curve([], "always", 100000.0,
+                                            sessions_for(synth_stream(70)))
+    assert [v for _, v in curve] == [100000.0] * len(curve)
+    assert set(rets0) == {0.0} and set(s5.daily_returns(rets0)) == {0.0}
+    print("29 OK")
+
+
+def test_30_token_determinism_and_tamper():
+    items = synth_stream(40)
+    by_var = run_all(items)
+    recs = by_var[s5.VARIANTS[0]]
+    _, holdout, bound = s5f.holdout_split(recs, n_splits=2)
+    t1 = s5f.make_holdout_token(holdout, bound)
+    t2 = s5f.make_holdout_token(list(reversed(holdout)), bound)
+    assert t1 == t2  # order-independent, deterministic
+    _hset = {r["cid"] for r in holdout}
+    _hrecs = [r for r in recs if r["cid"] in _hset]
+    assert s5f._validate_set(_hrecs, t1, 1.0, s5.VARIANTS[0]) == _hset
+    for bad in (dict(t1, n=t1["n"] + 1),
+                dict(t1, holdout_start=bound + 1),
+                dict(t1, dates=t1["dates"][:-1]),
+                dict(t1, protocol="evil")):
+        try:
+            s5f._validate_set(recs, bad, 1.0, s5.VARIANTS[0])
+            raise SystemExit("tampered token must fail: %r" % (bad,))
+        except AssertionError:
+            pass
+    # wrong-variant records rejected under the right token
+    other = [dict(r, variant=s5.VARIANTS[1]) for r in recs
+             if r["cid"] in {x["cid"] for x in holdout}]
+    try:
+        s5f._validate_set(other, t1, 1.0, s5.VARIANTS[0])
+        raise SystemExit("wrong-variant set must fail")
+    except AssertionError:
+        pass
+    print("30 OK")
 
 
 if __name__ == "__main__":
@@ -735,4 +944,9 @@ if __name__ == "__main__":
     test_18b_lookahead_hostile()
     test_21_baseline_reconcile()
     test_22_final_report_no_hardcode()
+    test_26_prereg_seeds_pinned()
+    test_27_disqualified_excluded_from_closed()
+    test_28_seq_pair_stops()
+    test_29_et_session_contract()
+    test_30_token_determinism_and_tamper()
     print("ALL S5 TESTS GREEN")

@@ -17,6 +17,7 @@ Contract (doc 11, eval_v1, s5_prereg.json v2):
 
 No live orders. No threshold tuning. No strategy redesign.
 """
+import datetime
 import hashlib
 import inspect
 import json
@@ -27,7 +28,7 @@ from . import backtest as bt
 
 EVAL_PROTOCOL = "eval_v1"
 BOOT_REPS = 2000
-BOOT_SEED = 0x5EED
+BOOT_SEED = 24269  # prereg resampling.ci seed (decimal, exact); null = +1
 POWER_REPS = 200
 POWER_INNER = 200
 POWER_SEED = 41721
@@ -263,10 +264,13 @@ def cluster_null_p(values, days, reps=BOOT_REPS, seed=BOOT_SEED):
 def closed_stream(records):
     """Prereg 'closed deltas': win/loss labels ONLY, snapshot-ordered.
 
-    Censored (time-exit) and excluded/disqualified records never enter a
-    closed-only procedure. Returns (deltas, days) for seq/null machinery."""
+    censored (time-exit), excluded AND disqualified records never enter
+    a closed-only procedure (disqualified keeps its diagnostic label, so
+    the label filter alone is insufficient). Returns (deltas, days) for
+    seq/null machinery."""
     recs = sorted((r for r in records
-                   if r["always_label"] in ("win", "loss")),
+                   if r["always_label"] in ("win", "loss")
+                   and not r["disqualified"]),
                   key=lambda r: r["snapshot_ts_ns"])
     return ([r["filtered_r"] - r["always_r"] for r in recs],
             [r["day"] for r in recs])
@@ -291,6 +295,57 @@ def seq_decision(deltas, days, look, reps=BOOT_REPS, seed=BOOT_SEED):
     mu = sum(deltas) / len(deltas)
     p = cluster_null_p(deltas, days, reps, seed)
     return ("efficacy" if p < SEQ_ALPHA_FINAL else "fail", mu, p)
+
+
+def seq_pair(deltas, days, reps=BOOT_REPS, seed=BOOT_SEED):
+    """The actual sequential procedure (prereg sequential_rule).
+
+    Interim first; if it stops (futility or efficacy) the final look
+    is NOT RUN on later observations — returned as ("not_run", None,
+    None), never silently computed. Only a 'continue' interim executes
+    the final look. Returns (interim, final)."""
+    interim = seq_decision(deltas, days, "interim", reps, seed)
+    if interim[0].startswith("stop"):
+        return (interim, ("not_run", None, None))
+    return (interim, seq_decision(deltas, days, "final", reps, seed))
+
+
+def daily_returns(rets):
+    """Close-to-close daily returns for Sharpe (plan 11 CAL7).
+
+    Drops the boundary-to-first-close stub interval: with a mid-session
+    holdout start that interval is partial and must never be mislabeled
+    a full daily observation. It stays in the equity curve (DD/base)
+    but never in the Sharpe vector."""
+    return list(rets[1:])
+
+
+def et_close_ns(day):
+    """16:00 America/New_York close for YYYY-MM-DD, in epoch ns.
+
+    Frozen session contract (plan 11 CAL7, plan 12): daily marks at the
+    16:00 ET equity close. stdlib zoneinfo (no dependency); DST handled
+    by the IANA database (same ET wall time, correct UTC offset)."""
+    from zoneinfo import ZoneInfo
+    y, m, d = (int(x) for x in day.split("-"))
+    return int(datetime.datetime(y, m, d, 16, 0,
+                                 tzinfo=ZoneInfo("America/New_York")
+                                 ).timestamp() * 1e9)
+
+
+def last_close_at_or_before(bars, close_ns):
+    """Last bar close with ts <= the 16:00 ET session close.
+
+    After-hours prints NEVER mark (plan 11: open positions marked at
+    the close, never at intra-day favorable prints). bars: objects
+    with .ts_ns/.c sorted by ts. Returns None if no bar qualifies."""
+    last = None
+    for b in bars:
+        if b.ts_ns <= close_ns:
+            last = b.c
+        else:
+            break
+    return last
 
 
 # ---- power study (pre-declared MDE, real-stream dependence) ----
@@ -550,10 +605,14 @@ def verify_r_monitor(trades, curve, day_of=None):
     """Post-hoc verification of CHECKED monitor rules on taken trades.
 
     day_of: {cid: day label} for the R3 day bucket (else '?' single bucket).
-    Time-based rules (R4 1h lock, R3 symbol-hour) apply only to ns-scale
+    Time-based rules (R3 symbol-hour) apply only to ns-scale
     timestamps; int-scale synthetic streams skip them (documented).
+    R4 is the frozen doc-05 two-order machine over position-sign
+    transitions (ns only; trade-derived S5 transitions are flat-mediated
+    and structurally cannot complete a flip — wired exactly, not
+    approximated).
     Returns [breach strings]. Pure function of the ledger + curve:
-    R3 day/symbol-hour churn, R4 flip-lock,
+    R3 day/symbol-hour churn, R4 exact two-order flip machine,
     R1 same-direction concurrency, R2 single/total concurrency.
     R5 is NOT monitored here (UNAVAILABLE: daily marks cannot observe
     intraday spike-to-trough against persisted HWMs)."""
@@ -571,16 +630,19 @@ def verify_r_monitor(trades, curve, day_of=None):
     for (sym, hr), ts in by_sym_hour.items():
         if len(ts) > 3:
             breaches.append("R3-symhour:%s:%s:%d" % (sym, hr, len(ts)))
-    # R4: opposite-side entry within 1h after same-symbol exit (ns only)
-    exits = {}
-    for t in sorted(trades, key=lambda x: x["entry_ts"]):
-        key = t["symbol"]
-        if key in exits and ns:
-            ets, eside = exits[key]
-            if t["side"] != eside and \
-                    0 <= t["entry_ts"] - ets < 3600000000000:
-                breaches.append("R4-fliplock:%s:%s" % (key, t["cid"]))
-        exits[key] = (t["exit_ts"], t["side"])
+    # R4 (frozen doc-05 machine): trade-derived position transitions go
+    # entries flat->sign, exits sign->flat — never a direct direction
+    # change, so S5's flat-mediated execution structurally cannot
+    # complete a flip (entries into flat do not count). Wired exactly;
+    # the machine itself is unit-proven (incl. direct-transition cases).
+    if ns:
+        trans = []
+        for t in trades:
+            sgn = 1 if t["side"] == "BUY" else -1
+            trans.append((t["entry_ts"], t["symbol"], 0, sgn))
+            trans.append((t["exit_ts"], t["symbol"], sgn, 0))
+        for sym in r4_completions(trans):
+            breaches.append("R4-fliplock:%s" % sym)
     # concurrency sweeps: same-direction (R1) and totals (R2)
     pts = []
     for t in trades:
@@ -606,6 +668,25 @@ def verify_r_monitor(trades, curve, day_of=None):
             live.pop(cid, None)
             syms[sym] = syms.get(sym, 1) - 1
     return sorted(set(breaches))
+
+def r4_completions(transitions):
+    """Frozen R4 state machine (doc 05 §R4).
+
+    transitions: [(ts_ns, symbol, from_sign, to_sign)] with signs in
+    (+1 long, -1 short, 0 flat). ONLY direct +1->-1 / -1->+1 orders
+    count as direction-changing: entries into flat and exits to flat
+    NEVER count. Two direction-changing orders on one symbol within 1h
+    (3600e9 ns, boundary inclusive) = one flip completion. Returns
+    [symbols with a completion]. Pure function, ns scale."""
+    HOUR = 3600000000000
+    last_dc, done = {}, set()
+    for ts, sym, frm, to in sorted(transitions):
+        if (frm, to) in ((1, -1), (-1, 1)):
+            if sym in last_dc and 0 <= ts - last_dc[sym] <= HOUR:
+                done.add(sym)
+            last_dc[sym] = ts
+    return sorted(done)
+
 
 def segment_bounds(records, n_splits=3):
     """Timestamp-only segmentation: (edges, holdout_start_ts).
