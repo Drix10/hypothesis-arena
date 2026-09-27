@@ -1168,8 +1168,8 @@ bool ScanChain(const std::vector<std::string>& lns,
 
 bool G0Runner::HardChainOk() {
     std::vector<std::string> lns;
-    const char* p = P("hard-chain.txt").c_str();
-    if (!ReadLines(p, &lns)) return !FileExists(p);  // missing =
+    std::string p = P("hard-chain.txt");
+    if (!ReadLines(p.c_str(), &lns)) return !FileExists(p.c_str());  // missing =
                                                      // valid-empty
     return ScanChain(lns, nullptr, nullptr, nullptr);
 }
@@ -1177,8 +1177,8 @@ bool G0Runner::HardChainState(const char* tag, long long* req,
                               long long* attr) {
     if (!tag || !tag[0]) return false;
     std::vector<std::string> lns;
-    const char* p = P("hard-chain.txt").c_str();
-    if (!ReadLines(p, &lns)) return false;  // missing/unreadable
+    std::string p = P("hard-chain.txt");
+    if (!ReadLines(p.c_str(), &lns)) return false;  // missing/unreadable
                                             // can never vouch
     return ScanChain(lns, tag, req, attr);
 }
