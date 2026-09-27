@@ -58,6 +58,13 @@ def mutate(c, fn, ans=None, **kw):
     return art
 
 
+def smutate(c, fn, ans=None, **kw):
+    """Re-signed mutation: reaches the targeted check instead of the sig."""
+    art = base_art(c, ans=ans, **kw)
+    fn(art["payload"])
+    return v4.sign_v4(art["payload"], SEED)
+
+
 VECTORS = []
 
 
@@ -118,6 +125,30 @@ def build():
     add("latent_hold", c,
         base_art(c, ans=answers(latent_risk=0.9)), "HOLD", "latent_risk")
     add("cross_symbol", msft, base_art(c), "HOLD", "v4_cid_mismatch")
+    add("type_field_number", c,
+        smutate(c, lambda p: p["candidate"].update(entry_px=100.0)),
+        "HOLD", "v4_malformed")
+    add("type_answer_string", c,
+        smutate(c, lambda p: p["answers"].update(enter="0.9")),
+        "HOLD", "v4_malformed")
+    add("type_answer_bool", c,
+        smutate(c, lambda p: p["answers"].update(enter=True)),
+        "HOLD", "v4_malformed")
+    add("type_created_string", c,
+        smutate(c, lambda p: p.update(created_at="1700000000")),
+        "HOLD", "v4_malformed")
+    add("type_epoch_string", c,
+        smutate(c, lambda p: p.update(snapshot_epoch="1700000000")),
+        "HOLD", "v4_malformed")
+    add("expiry_plus59", c,
+        smutate(c, lambda p: p.update(expires_at=NOW + 59)),
+        "HOLD", "v4_malformed")
+    add("expiry_plus61", c,
+        smutate(c, lambda p: p.update(expires_at=NOW + 61)),
+        "HOLD", "v4_malformed")
+    add("expiry_plus3600", c,
+        smutate(c, lambda p: p.update(expires_at=NOW + 3600)),
+        "HOLD", "v4_malformed")
 
 
 def main():

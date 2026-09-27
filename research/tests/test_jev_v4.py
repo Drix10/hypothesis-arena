@@ -205,6 +205,105 @@ def test_table_rows():
     print("table OK", len(rows), "rows")
 
 
+def test_wire_type_parity():
+    # Every JSON-type mismatch C++ rejects, Python must reject identically.
+    c = cand()
+
+    def signed_mut(fn):
+        art = artifact(c)
+        fn(art["payload"])
+        return v4.sign_v4(art["payload"], SEED)
+
+    cases = [
+        (lambda p: p["candidate"].update(entry_px=100.0)),
+        (lambda p: p["candidate"].update(snapshot_ts_ns=1000)),
+        (lambda p: p["answers"].update(enter="0.9")),
+        (lambda p: p["answers"].update(enter=True)),
+        (lambda p: p["answers"].update(latent_risk=0)),
+        (lambda p: p.update(created_at="1700000000")),
+        (lambda p: p.update(expires_at=NOW + 60.0)),
+        (lambda p: p.update(snapshot_epoch="1700000000")),
+        (lambda p: p.update(price_s=100.0)),
+        (lambda p: p["answers"].update(conviction=3)),
+    ]
+    for i, fn in enumerate(cases):
+        got = v4.evaluate_v4(c, signed_mut(fn), NOW, PUB, dict(ENGINE))
+        assert got == ("HOLD", "v4_malformed"), (i, got)
+    # int-valued enter/latent are NOT valid (C++ NUM-double branch only).
+    bad_int = signed_mut(lambda p: p["answers"].update(enter=1))
+    assert v4.evaluate_v4(c, bad_int, NOW, PUB, dict(ENGINE)) == \
+        ("HOLD", "v4_malformed")
+    print("wire_parity OK", len(cases) + 1, "rejections")
+
+
+def test_exact_sixty_expiry():
+    c = cand()
+
+    def signed_at(created, expires):
+        return v4.sign_v4(v4.make_v4_payload(c, MARKET, answers(), created,
+                                            expires), SEED)
+
+    assert v4.evaluate_v4(c, signed_at(NOW, NOW + 60), NOW, PUB,
+                          dict(ENGINE))[0] == "PASS_BASE"
+    for delta in (59, 61, 3600, 0):
+        got = v4.evaluate_v4(c, signed_at(NOW, NOW + delta), NOW, PUB,
+                             dict(ENGINE))
+        assert got == ("HOLD", "v4_malformed"), (delta, got)
+    old = signed_at(NOW - 300, NOW - 240)  # exact +60, but elapsed
+    assert v4.evaluate_v4(c, old, NOW, PUB, dict(ENGINE)) == \
+        ("HOLD", "v4_expired")
+    print("exact60 OK")
+
+
+def test_committed_vectors_agree():
+    # Differential proof: every committed kernel/v4 vector evaluates in
+    # Python to exactly its expect.json verdict (C++ suite asserts the same).
+    import json as _json
+    from research.strategy.gen_v4_vectors import cand as _gcand
+    vdir = os.path.join(os.path.dirname(__file__), "..", "..", "kernel",
+                        "v4")
+    by_name = {
+        "valid_sell_pass": _gcand(proposed_side="SELL",
+                                   proposed_family="mean_reversion",
+                                   entry_px=100.0, stop_px=101.0,
+                                   tp_px=98.0,
+                                   feature_snapshot_hash="b" * 64),
+        "execution_hold": _gcand(proposed_family="execution"),
+        "cross_symbol": _gcand(symbol="MSFT"),
+    }
+    names = sorted(f[:-14] for f in os.listdir(vdir)
+                   if f.endswith(".artifact.json"))
+    assert len(names) >= 20, names
+    for nm in names:
+        art = _json.load(open(os.path.join(vdir, nm + ".artifact.json")))
+        exp = _json.load(open(os.path.join(vdir, nm + ".expect.json")))
+        candidate = by_name.get(nm, _gcand())
+        pub = bytes.fromhex(exp["pubkey"])
+        got = v4.evaluate_v4(candidate, copy.deepcopy(art),
+                             exp["now_unix"], pub, dict(exp["engine"]))
+        assert (got[0], got[1]) == (exp["action"], exp["reason"]), \
+            (nm, got, exp["action"], exp["reason"])
+    print("vectors_agree OK", len(names), "vectors")
+
+
+def test_label_cost_record():
+    # Spread/cost inputs are part of the immutable evaluation record: the
+    # same candidate yields different labels under different recorded
+    # spreads, so S5 must bind the spread to the record, not the caller.
+    c = cand()
+    bars = [Bar(ts_ns=1001, o=100.0, h=100.5, l=99.5, c=100.1)]
+    r_lo = v4.resolve_v4_label(c, bars, entry_spread_bps=2.0)
+    r_hi = v4.resolve_v4_label(c, bars, entry_spread_bps=50.0)
+    assert r_lo["r_realized"] != r_hi["r_realized"]
+    rec_lo = {"cid": c.cid, "entry_spread_bps": 2.0,
+              "r": r_lo["r_realized"], "label": r_lo["label"]}
+    rec_hi = {"cid": c.cid, "entry_spread_bps": 50.0,
+              "r": r_hi["r_realized"], "label": r_hi["label"]}
+    assert rec_lo != rec_hi and rec_lo["cid"] == rec_hi["cid"]
+    print("cost_record OK", round(r_lo["r_realized"], 4),
+          round(r_hi["r_realized"], 4))
+
+
 def test_v3_frozen_untouched():
     import hashlib
     assert open("collector/jev.py", "rb").read().find(b"QVERSION = \"v3\"") >= 0
@@ -223,6 +322,10 @@ if __name__ == "__main__":
     test_no_side_emission()
     test_label_uses_actual_economics()
     test_fail_closed_matrix()
+    test_wire_type_parity()
+    test_exact_sixty_expiry()
+    test_committed_vectors_agree()
+    test_label_cost_record()
     test_cross_symbol_and_cross_cid_isolation()
     test_table_rows()
     test_v3_frozen_untouched()

@@ -176,21 +176,25 @@ inline V4Verdict ValidateV4(const std::string& artifact_json,
     std::string afam;
     if (!getStr(a, "edge_family", afam) || afam != fam)
         return Hold("v4_family_binding");
-    // 6. Decision-key recompute (all parts exact strings/ints).
+    // 6. Decision-key recompute. Wire types are strict per field:
+    // snapshot_epoch must be an integer JSON number (never a string,
+    // never a double); all other parts must be JSON strings.
     {
         std::string parts;
         for (int i = 0; i < 9; i++) {
             const jev::JVal* v = get(p, kDKeyOrder[i]);
             if (!v) return Hold("v4_malformed");
             std::string part;
-            if (v->t == jev::JVal::T::STR)
-                part = U32ToUtf8(v->s);
-            else if (v->t == jev::JVal::T::NUM && !v->num_double) {
+            if (i == 2) {  // snapshot_epoch
+                if (v->t != jev::JVal::T::NUM || v->num_double)
+                    return Hold("v4_malformed");
                 int64_t n = 0;
                 if (!ParseStrictUint(v->num, n)) return Hold("v4_malformed");
                 part = std::to_string(n);
-            } else
-                return Hold("v4_malformed");
+            } else {
+                if (v->t != jev::JVal::T::STR) return Hold("v4_malformed");
+                part = U32ToUtf8(v->s);
+            }
             if (i) parts += "|";
             parts += part;
         }
@@ -217,11 +221,14 @@ inline V4Verdict ValidateV4(const std::string& artifact_json,
                        canon.size(), sigraw))
         return Hold("v4_unauthenticated");
     // 8. Freshness (integer seconds; 60 s skew mirrors the sidecar).
+    // Frozen artifact rule: expires_at == created_at + 60 exactly.
     int64_t created = 0, expires = 0;
     const jev::JVal* jcr = get(p, "created_at");
     const jev::JVal* jex = get(p, "expires_at");
     if (!jcr || !jex || !ParseStrictInt(*jcr, created) ||
         !ParseStrictInt(*jex, expires))
+        return Hold("v4_malformed");
+    if (created > INT64_MAX - 60 || expires != created + 60)
         return Hold("v4_malformed");
     if (now_unix < 0 || created > now_unix + 60) return Hold("v4_malformed");
     if (now_unix > expires) return Hold("v4_expired");

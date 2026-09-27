@@ -94,6 +94,15 @@ def verify_v4_sig(artifact, pub):
     return ed_verify(pub, msg, sig)
 
 
+def _is_str(v):
+    return isinstance(v, str)
+
+
+def _is_int(v):
+    # bool is an int subclass: JSON true/false are NEVER integers here.
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
 def _num(s):
     try:
         v = float(s)
@@ -112,19 +121,38 @@ def evaluate_v4(candidate, artifact, now_unix, pubkey, engine):
     p = artifact.get("payload") if isinstance(artifact, dict) else None
     if not isinstance(p, dict):
         return ("HOLD", "v4_absent")
-    if p.get("question_set_version") != QVERSION_V4:
+    # Top-level wire shape mirrors C++ exactly (non-string hash/sig = absent).
+    if not _is_str(artifact.get("response_hash")) or \
+       not _is_str(artifact.get("signature")):
+        return ("HOLD", "v4_absent")
+    if not _is_str(p.get("question_set_version")) or \
+       p.get("question_set_version") != QVERSION_V4:
         return ("HOLD", "v4_contract_mismatch")
     c = p.get("candidate")
     if not isinstance(c, dict):
+        return ("HOLD", "v4_malformed")
+    # Every CID field must be a JSON string (C++ rejects numbers here).
+    if any(not _is_str(c.get(f)) for f in _ID_FIELDS) or \
+       not _is_str(c.get("cid")):
         return ("HOLD", "v4_malformed")
     if c.get("cid") != candidate.cid:
         return ("HOLD", "v4_cid_mismatch")
     if candidate_id(**{f: c.get(f) for f in _ID_FIELDS}) != candidate.cid:
         return ("HOLD", "v4_cid_mismatch")
+    if not _is_str(p.get("feature_snapshot_hash")) or \
+       not (1 <= len(p["feature_snapshot_hash"]) <= 256):
+        return ("HOLD", "v4_malformed")
     if p.get("feature_snapshot_hash") != candidate.feature_snapshot_hash:
         return ("HOLD", "v4_feature_binding")
+    if not _is_str(p.get("symbol")):
+        return ("HOLD", "v4_malformed")
     if p.get("symbol") != candidate.symbol:
         return ("HOLD", "v4_symbol_binding")
+    for f in ("price_s", "spread_bps_s", "session", "regime"):
+        if not _is_str(p.get(f)):
+            return ("HOLD", "v4_malformed")
+    if not _is_int(p.get("snapshot_epoch")):
+        return ("HOLD", "v4_malformed")
     nums = {k: _num(c.get(k)) for k in ("entry_px", "stop_px", "tp_px")}
     if any(v is None or v <= 0 for v in nums.values()):
         return ("HOLD", "v4_malformed")
@@ -141,31 +169,37 @@ def evaluate_v4(candidate, artifact, now_unix, pubkey, engine):
     a = p.get("answers")
     if not isinstance(a, dict):
         return ("HOLD", "v4_malformed")
-    if a.get("edge_family") != candidate.proposed_family:
+    if not _is_str(a.get("edge_family")) or \
+       a.get("edge_family") != candidate.proposed_family:
         return ("HOLD", "v4_family_binding")
+    if not _is_str(p.get("decision_key")) or \
+       len(p["decision_key"]) != 64:
+        return ("HOLD", "v4_malformed")
     if v4_decision_key(p) != p.get("decision_key"):
         return ("HOLD", "v4_decision_binding")
     if sha256_hex(canon(p)) != artifact.get("response_hash"):
         return ("HOLD", "v4_response_binding")
     if not verify_v4_sig(artifact, pubkey):
         return ("HOLD", "v4_unauthenticated")
-    try:
-        created, expires = int(p["created_at"]), int(p["expires_at"])
-    except (KeyError, TypeError, ValueError):
+    if not _is_int(p.get("created_at")) or not _is_int(p.get("expires_at")):
+        return ("HOLD", "v4_malformed")
+    created, expires = p["created_at"], p["expires_at"]
+    if expires != created + 60:
         return ("HOLD", "v4_malformed")
     if not (created <= now_unix + CLOCK_SKEW_S):
         return ("HOLD", "v4_malformed")
     if not (now_unix <= expires):
         return ("HOLD", "v4_expired")
-    try:
-        enter = float(a["enter"])
-        latent = float(a["latent_risk"])
-    except (KeyError, TypeError, ValueError):
+    if not isinstance(a.get("enter"), float) or \
+       not isinstance(a.get("latent_risk"), float):
+        # C++ requires JSON floats here (NUM-double branch); ints/bools/
+        # strings are malformed on both sides.
         return ("HOLD", "v4_malformed")
+    enter, latent = float(a["enter"]), float(a["latent_risk"])
     if not (0.0 <= enter <= 1.0 and 0.0 <= latent <= 1.0):
         return ("HOLD", "v4_malformed")
     conv = a.get("conviction")
-    if conv not in CONVICTIONS:
+    if not _is_str(conv) or conv not in CONVICTIONS:
         return ("HOLD", "v4_malformed")
     # v4 table (§3.2 rows, candidate-specific enter). First HOLD wins.
     if engine.get("deterministic_veto"):

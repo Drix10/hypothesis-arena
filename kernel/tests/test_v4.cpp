@@ -54,7 +54,10 @@ int main(int argc, char** argv) {
         "valid_pass", "valid_sell_pass", "max_elevated", "cid_mismatch",
         "side_altered", "entry_altered", "stop_altered", "timeexit_altered",
         "feature_binding", "family_substitute", "expired", "bad_signature",
-        "execution_hold", "no_edge", "latent_hold", "cross_symbol"};
+        "execution_hold", "no_edge", "latent_hold", "cross_symbol",
+        "type_field_number", "type_answer_string", "type_answer_bool",
+        "type_created_string", "type_epoch_string", "expiry_plus59",
+        "expiry_plus61", "expiry_plus3600"};
     int ran = 0;
     for (const char* nm : kNames) {
         std::string art =
