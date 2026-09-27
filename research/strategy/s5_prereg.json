@@ -123,5 +123,22 @@
     "power": "s5_eval.power_study",
     "sequential": "s5_eval.seq_decision",
     "validate": "s5_eval.r_validate"
+  },
+  "amendment_b": {
+    "scope": "no threshold/alpha/MDE/search change; statistical-integrity only",
+    "purge": "walk_folds requires holdout_start (boundary timestamp, not data); every selection record satisfies time_exit_ns < holdout_start; last test fold purged too; holdout_split asserts invariant + disjointness",
+    "n_closed": "FILTERED-POLICY taken closed trades only (filtered portfolio trades with win/loss labels, post-admission); HOLDs/rejects/disqualified/censored never count",
+    "stress": "exact key set {1.5x,2x,3x}, each a finite (filtered, always) Sharpe pair from re-resolved economics; anything else fails closed",
+    "r_classification": "research/strategy/s5_eval.py R_S5_STATUS: CHECKED (R1-positions, R1-same-direction, R2-single, R2-total, R3-churn, R4-fliplock, R5-halt run-local, R8-maxgate via v4, R12, R14, stop-rule), NOT_APPLICABLE (R10-spend, R11-isolation, R13-calib, R15-caps, R16-killswitch, R17-escalation), UNAVAILABLE (R1-pending, R2-pending, R6-vol, R7-corr, R9-venue)",
+    "r_out_of_scope": [
+      "R1-pending",
+      "R2-pending",
+      "R6-vol",
+      "R7-corr",
+      "R9-venue"
+    ],
+    "r_out_of_scope_rationale": "each needs live/online authoritative inputs absent in research (order/ack + account state, 480+24h vol baselines with data-age gates, trailing-30 correlation engine with freshness gates, broker adapter + venue calendar); no_r_breach means no taken trade violated a CHECKED rule; scope fails closed if any other rule is UNAVAILABLE",
+    "r_monitor": "s5_eval.verify_r_monitor post-hoc verifies R3/R4/R5/R1-direction/R2-concurrency on the filtered taken ledger; violations join r_breach_attempted in r_breach_count",
+    "finalization": "s5_final holds holdout_split + final_report; holdout is terminal evidence, never fed back into select_variant; selected_variant may be echoed only"
   }
 }

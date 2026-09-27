@@ -26,6 +26,13 @@ DAY = lambda ts: "d%d" % (ts // 60)
 DATA_ID = {"slice": "synth-test-v1", "dataset_sha": "test-sha"}
 BAR = {"filtered_net_sharpe_gt": 1.0, "holm_adjusted_p_lt": 0.05,
        "max_drawdown_pct_lte": 15.0, "min_closed_trades": 100}
+SCOPE = json.load(open(os.path.join(os.path.dirname(__file__), "..",
+                                    "strategy",
+                                    "s5_prereg.json")))["amendment_b"]["r_out_of_scope"]
+GOODM = {"sharpe_f": 1.5, "holm_p": 0.01, "max_dd_pct": 5.0, "n_closed": 200,
+         "stress": {"1.5x": (1.2, 0.5), "2x": (1.1, 0.4), "3x": (1.0, 0.3)},
+         "r_breach_count": 0, "r_unavailable": list(s5.R_UNAVAILABLE),
+         "r_out_of_scope": SCOPE}
 
 
 def synth_stream(n=60):
@@ -190,27 +197,52 @@ def test_13_variant_family():
     print("13 OK", t, st)
 
 
-def test_14_holdout_boundary():
+def test_14_holdout_boundary_and_purge():
     items = synth_stream(72)
     recs = run_all(items)[s5.VARIANTS[0]]
-    folds = s5.walk_folds(recs, n_splits=2)
+    _, bound = s5.segment_bounds(recs, n_splits=2)
+    folds = s5.walk_folds(recs, n_splits=2, holdout_start=bound)
     assert len(folds) == 2
     assert all(isinstance(f, tuple) and len(f) == 2 for f in folds)
     s5.select_variant_signature_clean()
-    assert list(inspect.signature(s5.select_variant).parameters) == \
-        ["fold_stats"]
-    assert not [a for a in dir(s5) if "holdout" in a.lower()], \
-        "selection module must expose no holdout API"
-    _, holdout = s5f.holdout_split(recs, n_splits=2)
-    assert holdout
+    assert list(inspect.signature(s5.select_variant).parameters) ==         ["fold_stats"]
+    assert not [a for a in dir(s5) if "holdout" in a.lower()],         "selection module must expose no holdout API"
+    # preferred invariant on every selection record
+    for tr, te in folds:
+        for r in tr + te:
+            assert r["time_exit_ns"] < bound
+    folds3, holdout, bound3 = s5f.holdout_split(recs, n_splits=2)
+    assert bound3 == bound and holdout
     hmin = min(r["snapshot_ts_ns"] for r in holdout)
     assert all(r["snapshot_ts_ns"] < hmin
-               for tr, te in folds for r in tr + te)
-    stats = {v: [sum(s5.paired_deltas(te)) for _, te in
-                   s5.walk_folds(run_all(items)[v], n_splits=2)]
-             for v in s5.VARIANTS}
-    assert s5.select_variant(stats) in s5.VARIANTS
-    print("14 OK", len(holdout), "held out")
+               for tr, te in folds3 for r in tr + te)
+    # hostile: snapshot before bound, exit after bound -> excluded
+    c, aft, mkt, reg, sp = items[0]
+    cross = make_candidate(strategy_version="baseline_v1", symbol="SYN",
+                           snapshot_ts_ns=bound - 50,
+                           proposed_side="BUY", proposed_family="momentum",
+                           entry_px=100.0, stop_px=99.0, tp_px=200.0,
+                           time_exit_ns=bound + 500,
+                           exit_profile_version="exit_profile_v1",
+                           cost_model_version="paper_fill_v1",
+                           expected_cost_bps=0.0,
+                           feature_snapshot_hash="cross",
+                           feature_revision="r1")
+    flat = [Bar(ts_ns=bound - 50 + 1 + j, o=100.0, h=100.05, l=99.95,
+                c=100.0, spread_bps=2.0) for j in range(6)]
+    xr = s5.evaluate_stream([(cross, flat, mkt, reg, sp)], PROVIDE, PUB,
+                            dict(ENGINE), variant=s5.VARIANTS[0],
+                            day_fn=DAY, data_id=DATA_ID)
+    assert xr[0]["time_exit_ns"] > bound
+    falls = s5.walk_folds(recs + xr, n_splits=2, holdout_start=bound)
+    assert all(xr[0]["cid"] != r["cid"] for tr, te in falls
+               for r in tr + te)
+    # mutation of post-bound prices cannot move selection metrics
+    m1 = {v: [sum(s5.paired_deltas(te)) for _, te in
+              s5.walk_folds(run_all(items)[v], n_splits=2,
+                            holdout_start=bound)] for v in s5.VARIANTS}
+    assert s5.select_variant(m1) in s5.VARIANTS
+    print("14 OK", len(holdout), "held out; crossing record purged")
 
 
 def strong_provider():
@@ -273,12 +305,16 @@ def test_15_r_disqualify_full_path():
     assert brec["r_breach_attempted"]  # forbidden take attempted
     assert not any(r["disqualified"] for r in by_var[s5.VARIANTS[0]][1:])
     sess = sessions_for(stream)
-    rep = s5f.final_report(by_var, {}, sess, 100000.0, BAR)
+    rep = s5f.final_report(by_var, {k: by_var for k in
+                                    ("1.5x", "2x", "3x")},
+                           sess, 100000.0, BAR,
+                           r_out_of_scope=SCOPE)
     got = rep["variants"][s5.VARIANTS[0]]
-    assert got["r_breach_taken"] == 1  # generated, not injected
+    assert got["r_breach_attempted"] == 1  # generated, not injected
+    assert got["r_breach_count"] == 1 + len(got["r_monitor_breaches"])
     v, failed, _ = s5.evaluate_bar(
-        {"sharpe_f": 5.0, "holm_p": 0.001, "max_dd_pct": 1.0,
-         "n_closed": 500, "stress": {}, "r_breach_taken": got["r_breach_taken"]},
+        dict(GOODM, sharpe_f=5.0, holm_p=0.001, n_closed=500,
+             r_breach_count=got["r_breach_count"]),
         BAR)
     assert not v and failed == ["no_r_breach"]
     assert got["bar_verdict"] is False and "no_r_breach" in got["bar_failed"]
@@ -303,7 +339,8 @@ def test_16_sequential():
 
 def test_17_power():
     recs = run_all(synth_stream(60))[s5.VARIANTS[0]]
-    folds = s5.walk_folds(recs, n_splits=2)
+    _, bound17 = s5.segment_bounds(recs, n_splits=2)
+    folds = s5.walk_folds(recs, n_splits=2, holdout_start=bound17)
     tr = [r for f in folds for r in f[0]]
     vals = s5.paired_deltas(tr)
     dys = [r["day"] for r in tr]
@@ -316,7 +353,7 @@ def test_17_power():
         {"train_values", "train_days", "mde", "alpha", "reps", "seed",
          "target", "multipliers"}  # train-only inputs: no holdout slot
     assert p1["n_base"] == len(vals)
-    folds2, holdout2 = s5f.holdout_split(recs, n_splits=2)
+    folds2, holdout2, _ = s5f.holdout_split(recs, n_splits=2)
     hset = {r["cid"] for r in holdout2}
     power_in = [r for f in folds2 for r in f[0]]
     assert hset and not (hset & {r["cid"] for r in power_in})
@@ -387,6 +424,29 @@ def test_18b_lookahead_hostile():
     print("18b OK")
 
 
+def test_20b_stress_fail_closed_and_scope():
+    assert s5.evaluate_bar(dict(GOODM, stress={}), BAR)[1] == ["stress"]
+    assert s5.evaluate_bar(dict(GOODM, stress={"1.5x": (2.0, 1.0)}),
+                           BAR)[1] == ["stress"]
+    assert s5.evaluate_bar(dict(GOODM, stress={"1.5x": (2.0, 1.0),
+                                               "2x": (2.0, 1.0)}),
+                           BAR)[1] == ["stress"]
+    assert s5.evaluate_bar(dict(GOODM, stress={"1.5x": (2.0, 1.0),
+                                               "2x": (0.1, 0.5),
+                                               "3x": (2.0, 1.0)}),
+                           BAR)[1] == ["stress"]
+    assert s5.evaluate_bar(GOODM, BAR)[0] is True
+    bad_scope = dict(GOODM, r_out_of_scope=["R6"])
+    assert s5.evaluate_bar(bad_scope, BAR)[1] == ["r_scope"]
+    try:
+        s5f.final_report({s5.VARIANTS[0]: [], s5.VARIANTS[1]: []}, {},
+                         [], 100000.0, BAR)
+        raise SystemExit("stress assert should have raised")
+    except AssertionError:
+        pass
+    print("20b OK")
+
+
 def test_20_bar_mechanical_and_holm():
     assert s5.holm([("a", 0.04), ("b", 0.041)]) == \
         [("a", 0.08, False), ("b", 0.08, False)]  # cummax, not 0.041
@@ -394,14 +454,9 @@ def test_20_bar_mechanical_and_holm():
     assert all(abs(a - 0.3) < 1e-9 for _, a, _ in h3)  # decreasing products
     assert s5.holm([("v1", 0.01), ("v2", 0.04), ("v3", 0.30)])[0] == \
         ("v1", 0.03, True)
-    good = {"sharpe_f": 1.5, "holm_p": 0.01, "max_dd_pct": 5.0,
-            "n_closed": 200,
-            "stress": {"1.5x": (1.2, 0.5), "2x": (1.1, 0.4),
-                       "3x": (1.0, 0.3)},
-            "r_breach_taken": 0}
-    v, failed, checks = s5.evaluate_bar(good, BAR)
+    v, failed, checks = s5.evaluate_bar(dict(GOODM), BAR)
     assert v and failed == [] and all(checks.values())
-    badm = dict(good, sharpe_f=-0.5, holm_p=1.0)
+    badm = dict(GOODM, sharpe_f=-0.5, holm_p=1.0)
     v2, failed2, _ = s5.evaluate_bar(badm, BAR)
     assert not v2 and set(failed2) == {"sharpe_gt", "holm_p"}
     print("20 OK")
@@ -459,7 +514,7 @@ def test_21_baseline_reconcile():
 def test_22_final_report_no_hardcode():
     items = synth_stream(72)
     by_var = run_all(items)
-    folds, holdout = s5f.holdout_split(by_var[s5.VARIANTS[0]], n_splits=2)
+    folds, holdout, _ = s5f.holdout_split(by_var[s5.VARIANTS[0]], n_splits=2)
     assert holdout
     hdays = {r["day"] for r in holdout}
     h1x = {v: [r for r in by_var[v] if r["day"] in hdays]
@@ -470,12 +525,87 @@ def test_22_final_report_no_hardcode():
         stress[lab] = {v: [r for r in sv[v] if r["day"] in hdays]
                        for v in s5.VARIANTS}
     sess = [s for s in sessions_for(items) if s["day"] in hdays]
-    rep = s5f.final_report(h1x, stress, sess, 100000.0, BAR)
+    rep = s5f.final_report(h1x, stress, sess, 100000.0, BAR,
+                           r_out_of_scope=SCOPE)
     for v, s in rep["variants"].items():
         assert s["bar_verdict"] is False and s["bar_failed"], v
     assert rep["holm"]
     print("22 OK", [(v, s["bar_failed"]) for v, s in
                     rep["variants"].items()])
+
+
+
+
+def test_21b_n_closed_hostile():
+    # 200 closed candidates, filtered takes only 1 -> n_closed MUST be 1.
+    items = synth_stream(200)
+    by_var = run_all(items)
+    recs = by_var[s5.VARIANTS[0]]
+    one = [r for r in recs if r["always_label"] in ("win", "loss")]
+    assert len(one) >= 100
+    solo = [dict(one[0], filtered_taken=True,
+                 filtered_r=one[0]["always_r"])]
+    solo += [dict(r, filtered_taken=False, filtered_r=0.0,
+                  filtered_action="HOLD") for r in recs[1:]]
+    days = sorted({r["day"] for r in recs},
+                  key=lambda d: int(d[1:]))
+    sess = [{"day": d, "end_ts": (int(d[1:]) + 1) * 60 - 1,
+             "closes": {"SYN": 100.0}} for d in days]
+    same = {s5.VARIANTS[0]: solo, s5.VARIANTS[1]: solo}
+    rep = s5f.final_report(same, {k: same for k in
+                                  ("1.5x", "2x", "3x")},
+                           sess, 100000.0, BAR, r_out_of_scope=SCOPE)
+    got = rep["variants"][s5.VARIANTS[0]]
+    assert got["n_closed"] == 1, got["n_closed"]
+    assert "closed" in got["bar_failed"]
+    # 100 actually taken closed trades -> closed condition can pass
+    many = [dict(r, filtered_taken=True, filtered_r=r["always_r"],
+                 filtered_action="PASS_BASE") for r in recs
+            if r["always_label"] in ("win", "loss")][:100]
+    assert len(many) == 100
+    m2 = dict(GOODM, n_closed=100)
+    assert s5.evaluate_bar(m2, BAR)[0] is True
+    print("21b OK")
+
+
+def _tkr(cid, sym, side, ets, xts, con=25000.0, eq=100000.0):
+    return {"cid": cid, "symbol": sym, "side": side, "entry_ts": ets,
+            "exit_ts": xts, "con_usd": con, "entry_equity": eq,
+            "pnl_usd": 0.0, "spread_mult": 1.0, "policy": "always"}
+
+
+def test_23_r_monitor():
+    flat = [("d", 100000.0)]
+    assert s5.verify_r_monitor([], flat) == []
+    # R3 churn: 21 takes one day / 4 same-symbol same-hour
+    many = [_tkr("c%d" % i, "S", "BUY", 10 + i, 20 + i) for i in range(21)]
+    b = s5.verify_r_monitor(many, flat, {t["cid"]: "d" for t in many})
+    assert any(x.startswith("R3-day") for x in b), b
+    four = [_tkr("h%d" % i, "S", "BUY", 10 + i, 20 + i) for i in range(4)]
+    b = s5.verify_r_monitor(four, flat, {t["cid"]: "d" for t in four})
+    assert any(x.startswith("R3-symhour") for x in b), b
+    # R4 flip-lock (ns scale): SELL 30min after BUY exit, same symbol
+    base = 1700000000000000000
+    flip = [_tkr("e1", "S", "BUY", base, base + 1000000000),
+            _tkr("e2", "S", "SELL", base + 2000000000, base + 3000000000)]
+    b = s5.verify_r_monitor(flip, flat, {"e1": "d", "e2": "d"})
+    assert any(x.startswith("R4-fliplock") for x in b), b
+    # R5 halt: curve DD > 10
+    b = s5.verify_r_monitor([], [("a", 100.0), ("b", 89.0)])
+    assert any(x.startswith("R5-halt") for x in b), b
+    # R1 direction: 3 concurrent same-side
+    conc = [_tkr("k%d" % i, "S%d" % i, "BUY", 10, 999) for i in range(3)]
+    b = s5.verify_r_monitor(conc, flat, {t["cid"]: "d" for t in conc})
+    assert any(x.startswith("R1-direction") for x in b), b
+    # R2 single: con/eq > 25%
+    big = [_tkr("big", "S", "BUY", 10, 999, con=30000.0)]
+    b = s5.verify_r_monitor(big, flat, {"big": "d"})
+    assert any(x.startswith("R2-single") for x in b), b
+    # valid small ledger is clean
+    ok = [_tkr("o1", "A", "BUY", 10, 20), _tkr("o2", "B", "SELL", 30, 40)]
+    assert s5.verify_r_monitor(ok, flat, {"o1": "d",
+                                          "o2": "d"}) == []
+    print("23 OK")
 
 
 if __name__ == "__main__":
@@ -487,12 +617,15 @@ if __name__ == "__main__":
     test_10_11_bootstrap_and_null()
     test_12_cost_stress_reflected()
     test_13_variant_family()
-    test_14_holdout_boundary()
+    test_14_holdout_boundary_and_purge()
     test_15_r_disqualify_full_path()
     test_16_sequential()
     test_17_power()
     test_18_19_curve_and_drawdown()
     test_20_bar_mechanical_and_holm()
+    test_20b_stress_fail_closed_and_scope()
+    test_21b_n_closed_hostile()
+    test_23_r_monitor()
     test_18b_lookahead_hostile()
     test_21_baseline_reconcile()
     test_22_final_report_no_hardcode()

@@ -47,7 +47,7 @@ def main():
                                     variant=v, day_fn=DAY, data_id=data_id)
               for v in s5.VARIANTS}
     recs = by_var[s5.VARIANTS[0]]
-    folds, holdout = s5f.holdout_split(recs, n_splits=2)
+    folds, holdout, _bound = s5f.holdout_split(recs, n_splits=2)
     o = sorted(range(len(recs)), key=lambda i: recs[i]["snapshot_ts_ns"])
     seq_d = [s5.paired_deltas(recs)[i] for i in o]
     seq_y = [recs[i]["day"] for i in o]
@@ -58,9 +58,12 @@ def main():
                         [r["day"] for r in train_recs], 0.15)
     assert not ({r["cid"] for r in holdout} &
                 {r["cid"] for r in train_recs})
-    stats = {v: [sum(s5.paired_deltas(te)) for _, te in
-                   s5.walk_folds(by_var[v], n_splits=2)]
-             for v in s5.VARIANTS}
+    stats = {}
+    for v in s5.VARIANTS:
+        _, _b = s5.segment_bounds(by_var[v], n_splits=2)
+        stats[v] = [sum(s5.paired_deltas(te)) for _, te in
+                    s5.walk_folds(by_var[v], n_splits=2,
+                                  holdout_start=_b)]
     chosen = s5.select_variant(stats)
     hdays = {r["day"] for r in holdout}
     h1x = {v: [r for r in by_var[v] if r["day"] in hdays]
@@ -91,21 +94,30 @@ def main():
         sess.append({"day": d, "end_ts": end, "closes": closes})
     bar = {"filtered_net_sharpe_gt": 1.0, "holm_adjusted_p_lt": 0.05,
            "max_drawdown_pct_lte": 15.0, "min_closed_trades": 100}
-    rep = s5f.final_report(h1x, stress, sess, 100000.0, bar)
+    _scope = json.load(open(os.path.join(os.path.dirname(__file__),
+                                          "s5_prereg.json")))["amendment_b"]["r_out_of_scope"]
+    rep = s5f.final_report(h1x, stress, sess, 100000.0, bar,
+                           r_out_of_scope=_scope)
     out = {"slice": s2_run.SLICE_ID, "n_stream": len(items),
            "n_holdout": len(holdout),
+           "n_selection_train": sum(len(tr) for tr, _ in folds),
+           "n_selection_test": sum(len(te) for _, te in folds),
+           "selection_crossing_holdout": 0,  # asserted in holdout_split
            "answers": "stub-deterministic-v1 (PIPELINE PROOF ONLY)",
            "chosen": chosen,
            "sequential": {"interim": seq_i, "final": seq_f},
-           "power_mde0.15": pw, "holdout": rep}
+           "power_mde0.15": pw, "holdout": rep,
+           "r_rules_checked": rep["r_rules_checked"],
+           "r_rules_unavailable": rep["r_rules_unavailable"]}
     jp = "data/s5_out/s5_slice_stub.json"
     json.dump(out, open(jp, "w"), indent=2, default=str)
     for v, s in rep["variants"].items():
         print(f"{v}: n_ho={len(h1x[v])} meanR={s['paired_mean_R']:.4f} "
               f"CI=[{s['ci95'][0]:.4f},{s['ci95'][1]:.4f}] p={s['null_p']:.4f} "
               f"sharpe={s['sharpe_f']:.3f} dd={s['max_dd_pct']:.2f}% "
-              f"closed={s['n_closed']} bar={s['bar_verdict']} "
-              f"failed={s['bar_failed']}")
+              f"closed_taken={s['n_closed']}/{s['n_trades_taken']} "
+              f"breach={s['r_breach_count']} mon={s['r_monitor_breaches']} "
+              f"bar={s['bar_verdict']} failed={s['bar_failed']}")
     print("holm:", rep["holm"], "| chosen:", chosen)
     print("seq:", seq_i[0], "/", seq_f[0], "| power@1x:",
           pw["by_multiplier"][1], "required:", pw["required"])

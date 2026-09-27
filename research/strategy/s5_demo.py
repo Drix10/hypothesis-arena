@@ -33,10 +33,13 @@ def main():
                                     data_id=test_s5.DATA_ID)
               for v in s5.VARIANTS}
     recs = by_var[s5.VARIANTS[0]]
-    folds, holdout = s5f.holdout_split(recs, n_splits=2)
-    stats = {v: [sum(s5.paired_deltas(te)) for _, te in
-                   s5.walk_folds(by_var[v], n_splits=2)]
-             for v in s5.VARIANTS}
+    folds, holdout, _bound = s5f.holdout_split(recs, n_splits=2)
+    stats = {}
+    for v in s5.VARIANTS:
+        _, _b = s5.segment_bounds(by_var[v], n_splits=2)
+        stats[v] = [sum(s5.paired_deltas(te)) for _, te in
+                    s5.walk_folds(by_var[v], n_splits=2,
+                                  holdout_start=_b)]
     chosen = s5.select_variant(stats)
     dall = s5.paired_deltas(recs)
     o = sorted(range(len(recs)), key=lambda i: recs[i]["snapshot_ts_ns"])
@@ -59,7 +62,9 @@ def main():
         stress[lab] = {v: [r for r in sv[v] if r["day"] in hdays]
                        for v in s5.VARIANTS}
     sess = [s for s in test_s5.sessions_for(items) if s["day"] in hdays]
-    rep = s5f.final_report(h1x, stress, sess, 100000.0, bar)
+    _scope = pre["amendment_b"]["r_out_of_scope"]
+    rep = s5f.final_report(h1x, stress, sess, 100000.0, bar,
+                           r_out_of_scope=_scope)
     out = {"experiment_id": pre["experiment_id"], "protocol": "eval_v1",
            "prereg": "v2", "n_candidates": len(items),
            "answers": "stub-deterministic-v1 (MACHINERY PROOF ONLY)",

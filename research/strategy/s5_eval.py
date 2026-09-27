@@ -464,11 +464,122 @@ def brier(pairs):
     return (sum((p - y) ** 2 for p, y in closed) / len(closed), len(closed))
 
 
-# ---- selection / holdout boundary ----
+# ---- R1-R17 classification for the S5 research environment ----
+# CHECKED = evaluated on S5 inputs (enforced and/or post-hoc verified).
+# NOT_APPLICABLE = no agent/spend/stage/calibration object exists in S5.
+# UNAVAILABLE = needs live/online authoritative inputs absent in research;
+#   must be prereg-declared out-of-scope or the bar fails closed.
+R_S5_STATUS = {
+    "R1-positions": ("CHECKED", "sweep enforces max-3 + 1-per-symbol"),
+    "R1-same-direction": ("CHECKED", "post-hoc: never >2 concurrent"),
+    "R1-pending": ("UNAVAILABLE", "no order/ack model in research fills"),
+    "R2-single": ("CHECKED", "size_notional clamp + post-hoc verify"),
+    "R2-total": ("CHECKED", "sweep admission + post-hoc verify"),
+    "R2-pending": ("UNAVAILABLE", "no order/ack model in research fills"),
+    "R3-churn": ("CHECKED", "post-hoc: 20/day, 3/symbol/hour"),
+    "R4-fliplock": ("CHECKED", "post-hoc: no opposite entry <1h post-exit"),
+    "R5-halt": ("CHECKED", "post-hoc monitor: curve DD>10 run-local peak"),
+    "R6-vol": ("UNAVAILABLE", "no 480+24h baselines / data-age gates"),
+    "R7-corr": ("UNAVAILABLE", "no trailing-30 correlation engine"),
+    "R8-maxgate": ("CHECKED", "frozen v4 table per decision"),
+    "R9-venue": ("UNAVAILABLE", "no broker adapter / venue calendar"),
+    "R10-spend": ("NOT_APPLICABLE", "no AI spend object in S5"),
+    "R11-isolation": ("NOT_APPLICABLE", "no research-plane writes in S5"),
+    "R12-lookahead": ("CHECKED", "structural: bars[..i], tested"),
+    "R13-calib": ("NOT_APPLICABLE", "calibration tracked separately"),
+    "R14-disagree": ("CHECKED", "engine disagreement flag per decision"),
+    "R15-caps": ("NOT_APPLICABLE", "no research cycles in S5"),
+    "R16-killswitch": ("NOT_APPLICABLE", "no live stages in S5"),
+    "R17-escalation": ("NOT_APPLICABLE", "no stages in S5"),
+    "stop-rule": ("CHECKED", "frozen resolve exits per candidate"),
+}
+R_CHECKED = sorted(k for k, (s, _) in R_S5_STATUS.items() if s == "CHECKED")
+R_UNAVAILABLE = sorted(k for k, (s, _) in R_S5_STATUS.items()
+                       if s == "UNAVAILABLE")
+REQUIRED_STRESS = ("1.5x", "2x", "3x")
 
-def walk_folds(records, n_splits=3, embargo_frac=0.05):
-    """Walk-forward (train, test) folds ONLY. The holdout is NOT returned:
-    selection code receives folds and can never observe holdout records."""
+
+def verify_r_monitor(trades, curve, day_of=None):
+    """Post-hoc verification of CHECKED monitor rules on taken trades.
+
+    day_of: {cid: day label} for the R3 day bucket (else '?' single bucket).
+    Time-based rules (R4 1h lock, R3 symbol-hour) apply only to ns-scale
+    timestamps; int-scale synthetic streams skip them (documented).
+    Returns [breach strings]. Pure function of the ledger + curve:
+    R3 day/symbol-hour churn, R4 flip-lock, R5 DD>10 (run-local peak),
+    R1 same-direction concurrency, R2 single/total concurrency."""
+    breaches = []
+    day_of = day_of or {}
+    ns = any(t["entry_ts"] > 10 ** 12 for t in trades)
+    by_day, by_sym_hour = {}, {}
+    for t in trades:
+        by_day.setdefault(day_of.get(t["cid"], "?"), []).append(t)
+        hr = t["entry_ts"] // 3600000000000 if ns else t["entry_ts"] // 3600
+        by_sym_hour.setdefault((t["symbol"], hr), []).append(t)
+    for d, ts in by_day.items():
+        if len(ts) > 20:
+            breaches.append("R3-day:%s:%d" % (d, len(ts)))
+    for (sym, hr), ts in by_sym_hour.items():
+        if len(ts) > 3:
+            breaches.append("R3-symhour:%s:%s:%d" % (sym, hr, len(ts)))
+    # R4: opposite-side entry within 1h after same-symbol exit (ns only)
+    exits = {}
+    for t in sorted(trades, key=lambda x: x["entry_ts"]):
+        key = t["symbol"]
+        if key in exits and ns:
+            ets, eside = exits[key]
+            if t["side"] != eside and \
+                    0 <= t["entry_ts"] - ets < 3600000000000:
+                breaches.append("R4-fliplock:%s:%s" % (key, t["cid"]))
+        exits[key] = (t["exit_ts"], t["side"])
+    if max_drawdown(curve) > 10.0:
+        breaches.append("R5-halt:dd=%.2f" % max_drawdown(curve))
+    # concurrency sweeps: same-direction (R1) and totals (R2)
+    pts = []
+    for t in trades:
+        sgn = 1 if t["side"] == "BUY" else -1
+        pts.append((t["entry_ts"], 1, sgn, t["con_usd"],
+                    t["entry_equity"], t["cid"], t["symbol"]))
+        pts.append((t["exit_ts"], -1, sgn, t["con_usd"],
+                    t["entry_equity"], t["cid"], t["symbol"]))
+    pts.sort()
+    live, syms = {}, {}
+    for ts, kind, sgn, con, eq, cid, sym in pts:
+        if kind == 1:
+            live[cid] = (sgn, con, eq)
+            syms[sym] = syms.get(sym, 0) + 1
+            same = sum(1 for s, _, _ in live.values() if s == sgn)
+            if same > 2:
+                breaches.append("R1-direction:%s" % cid)
+            if con / eq > 0.25 + 1e-9:
+                breaches.append("R2-single:%s" % cid)
+            if sum(c for _, c, _ in live.values()) / eq > 0.75 + 1e-9:
+                breaches.append("R2-total:%s" % cid)
+        else:
+            live.pop(cid, None)
+            syms[sym] = syms.get(sym, 1) - 1
+    return sorted(set(breaches))
+
+def segment_bounds(records, n_splits=3):
+    """Timestamp-only segmentation: (edges, holdout_start_ts).
+
+    holdout_start is the first holdout record's snapshot ts — a boundary
+    timestamp, NOT holdout data. Selection may know the boundary; it must
+    never observe records at/after it."""
+    recs = sorted(records, key=lambda r: r["snapshot_ts_ns"])
+    n = len(recs)
+    edges = [i * n // (n_splits + 2) for i in range(n_splits + 3)]
+    return edges, recs[edges[n_splits + 1]]["snapshot_ts_ns"]
+
+
+def walk_folds(records, n_splits=3, embargo_frac=0.05, holdout_start=None):
+    """Walk-forward (train, test) folds ONLY, label-purged at BOTH ends.
+
+    holdout_start (required in the real path): NO selection record may
+    resolve at/after it — train AND test records with
+    time_exit_ns >= holdout_start are dropped, so no outcome used for
+    selection depends on any price inside the holdout window. The holdout
+    itself is NOT returned: selection never observes holdout records."""
     recs = sorted(records, key=lambda r: r["snapshot_ts_ns"])
     n = len(recs)
     if n_splits < 1 or n < n_splits + 3:
@@ -483,6 +594,11 @@ def walk_folds(records, n_splits=3, embargo_frac=0.05):
                  if r["time_exit_ns"] <= t_end]
         test = [r for r in recs[edges[k + 1]:edges[k + 2]]
                 if r["snapshot_ts_ns"] >= t_end + emb]
+        if holdout_start is not None:
+            # holdout-boundary purge: selection labels must resolve BEFORE
+            # the untouched window (preferred invariant).
+            train = [r for r in train if r["time_exit_ns"] < holdout_start]
+            test = [r for r in test if r["time_exit_ns"] < holdout_start]
         out.append((train, test))
     return out
 
@@ -502,16 +618,31 @@ def select_variant_signature_clean():
     assert list(params) == ["fold_stats"], list(params)
 
 
+def _stress_ok(stress):
+    """Fail-closed: exact three levels, each a finite (filtered, always)
+    Sharpe pair. Empty/partial/malformed -> False (never vacuous True)."""
+    if set(stress or {}) != set(REQUIRED_STRESS):
+        return False
+    try:
+        return all(math.isfinite(f) and math.isfinite(a) and f > a
+                   for f, a in (stress[k] for k in REQUIRED_STRESS))
+    except (TypeError, ValueError):
+        return False
+
+
 def evaluate_bar(metrics, bar):
-    """metrics: {sharpe_f, holm_p, max_dd_pct, n_closed, stress:{mult:
-    (sharpe_f, sharpe_a)}, r_breach_taken}. Returns (verdict, failed, detail)."""
+    """metrics: {sharpe_f, holm_p, max_dd_pct, n_closed, stress, breach(es),
+    r_unavailable, r_out_of_scope}. Fail-closed on stress shape and R scope.
+    Returns (verdict, failed, detail)."""
     checks = {
         "sharpe_gt": metrics["sharpe_f"] > bar["filtered_net_sharpe_gt"],
         "holm_p": metrics["holm_p"] < bar["holm_adjusted_p_lt"],
         "maxdd": metrics["max_dd_pct"] <= bar["max_drawdown_pct_lte"],
         "closed": metrics["n_closed"] >= bar["min_closed_trades"],
-        "stress": all(f > a for f, a in metrics["stress"].values()),
-        "no_r_breach": metrics["r_breach_taken"] == 0,
+        "stress": _stress_ok(metrics["stress"]),
+        "no_r_breach": metrics["r_breach_count"] == 0,
+        "r_scope": set(metrics["r_unavailable"]) <=
+        set(metrics["r_out_of_scope"]),
     }
     failed = [k for k, v in checks.items() if not v]
     return (not failed, failed, checks)
