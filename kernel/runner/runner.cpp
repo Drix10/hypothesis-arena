@@ -15,8 +15,10 @@
 #else
 #include <fcntl.h>
 #include <signal.h>
+#include <sys/file.h>
 #include <unistd.h>
 #endif
+#include <thread>
 
 namespace jev {
 namespace runner {
@@ -1061,63 +1063,109 @@ bool PidAlive(long long pid) {
     return errno == EPERM;  // exists but no permission to signal
 #endif
 }
+namespace {
+// Per-thread directory holds (paths this thread won and still
+// owns via a live instance). Thread-local: no shared state, no
+// mutex — the kernel primitive stays the sole arbiter, so a
+// concurrent two-taker race genuinely contends on it.
+thread_local std::vector<std::string> g_dir_holds;
+}  // namespace
 bool G0Runner::TakeDirLock() {
-    // One live runner per state directory (Phase-4 prerequisite):
-    // the lock file holds the owner PID, created exclusively (the
-    // race-free claim). Same PID re-enters (sequential Recovers in
-    // one process); a dead PID is stale (take over, rewrite);
-    // a live foreign PID refuses — two runners must never co-own
-    // one journal/snapshot/incident tree. Never released (crash
-    // leaves it; liveness arbitrates). A corrupt node refuses via
-    // the write failure below.
+    // One live runner per state directory (Phase-4 prerequisite).
+    // The mutual-exclusion mechanism is an OS process-lifetime
+    // ownership primitive (doc 06 sec. 6.1b) — flock(LOCK_EX|NB)
+    // on POSIX, an exclusive no-share open handle on Windows —
+    // acquired once per winning instance and held open while
+    // it lives (the open fd/handle IS the lock). Read sharing
+    // stays open (diagnostic PID reads always work); WRITE is
+    // never shared, so a second contender's exclusive open is
+    // denied while we live. A dead holder releases it in the
+    // kernel, so stale takeover has no
+    // check-then-act window: two concurrent takers serialize in
+    // the kernel into exactly one owner. The PID file is
+    // diagnostic only (owner identity for alerts, written through
+    // the held handle after winning) — never the arbiter.
+    // Same-thread re-entry is allowed (tracked in-process: one
+    // runner per process may Recover repeatedly, as the drills
+    // do); a different thread contends like a foreign process
+    // and loses. Holds are tracked per thread (no shared state,
+    // no mutex: the kernel primitive stays the sole arbiter, so
+    // a concurrent two-taker race genuinely contends on it).
+    // The winning INSTANCE owns the hold (members below): its
+    // destructor closes the handle and unregisters the path, so
+    // holds never leak and a later instance re-acquires through
+    // the kernel. Live instances keep the OS primitive open —
+    // one writer per directory holds while any instance of this
+    // process is alive on it.
     std::string lp = P("runner.lock");
-#ifdef _WIN32
-    int fd = _open(lp.c_str(), _O_CREAT | _O_EXCL | _O_WRONLY,
-                   _S_IREAD | _S_IWRITE);
-#else
-    int fd = ::open(lp.c_str(), O_CREAT | O_EXCL | O_WRONLY, 0600);
-#endif
+    for (std::size_t i = 0; i < g_dir_holds.size(); ++i) {
+        if (g_dir_holds[i] == lp) return true;
+    }
+    long long now =
+        deps_.now_ns ? deps_.now_ns(deps_.clock_ctx) : 0;
     char b[32];
     int w = std::snprintf(b, sizeof(b), "%lld", MyPid());
-    if (fd >= 0) {
-        bool ok = w > 0;
-        if (ok) {
-            std::size_t n = std::strlen(b);
+    if (w <= 0) return false;
+    std::size_t n = std::strlen(b);
 #ifdef _WIN32
-            ok = _write(fd, b, (unsigned)n) == (int)n;
-            _close(fd);
+    HANDLE h = CreateFileA(lp.c_str(), GENERIC_READ | GENERIC_WRITE,
+                           FILE_SHARE_READ, NULL, OPEN_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
 #else
-            ok = ::write(fd, b, n) == (ssize_t)n;
-            ::close(fd);
+    int fd = ::open(lp.c_str(), O_CREAT | O_RDWR, 0600);
+    if (fd < 0 || ::flock(fd, LOCK_EX | LOCK_NB) != 0) {
+        if (fd >= 0) ::close(fd);
 #endif
-        } else {
-#ifdef _WIN32
-            _close(fd);
-#else
-            ::close(fd);
-#endif
-        }
-        if (!ok) {
-            std::remove(lp.c_str());
-            return false;
-        }
-        return true;
-    }
-    std::vector<std::string> lns;
-    long long holder = 0;
-    if (ReadLines(lp.c_str(), &lns) && !lns.empty())
-        holder = ParseEpoch(lns);
-    if (holder == MyPid()) return true;
-    if (PidAlive(holder)) {
+        std::vector<std::string> lns;
+        std::string holder = "?";
+        if (ReadLines(lp.c_str(), &lns) && !lns.empty() &&
+            !lns[0].empty())
+            holder = lns[0];
+        char ab[280];
+        std::snprintf(ab, sizeof(ab),
+                        "foreign live runner owns this directory"
+                        " (holder=%s)",
+                        holder.c_str());
         OpsRow("drift-directive", "runner", "runner-lock-held",
-               deps_.now_ns ? deps_.now_ns(deps_.clock_ctx) : 0);
+               now);
         Alert(P("alerts.jsonl").c_str(), "HARD", "runner-lock-held",
-              "foreign live runner owns this directory",
-              deps_.now_ns ? deps_.now_ns(deps_.clock_ctx) : 0);
+              ab, now);
         return false;
     }
-    if (w <= 0) return false;
-    return AtomicWrite(lp.c_str(), b);
+    // Won: stamp our PID through the held handle (diagnostic),
+    // register the hold under this instance's ownership, and
+    // keep the handle open while this instance lives.
+#ifdef _WIN32
+    SetFilePointer(h, 0, NULL, FILE_BEGIN);
+    DWORD done = 0;
+    WriteFile(h, b, (DWORD)n, &done, NULL);
+    SetEndOfFile(h);
+    lock_os_ = (long long)(intptr_t)h;
+#else
+    (void)::ftruncate(fd, 0);
+    (void)::write(fd, b, n);
+    lock_os_ = (long long)fd;
+#endif
+    lock_path_ = lp;
+    lock_own_ = true;
+    g_dir_holds.push_back(lp);
+    return true;
+}
+G0Runner::~G0Runner() {
+    if (!lock_own_) return;
+    lock_own_ = false;
+    for (std::size_t i = 0; i < g_dir_holds.size(); ++i) {
+        if (g_dir_holds[i] == lock_path_) {
+            g_dir_holds.erase(g_dir_holds.begin() + (int)i);
+            break;
+        }
+    }
+#ifdef _WIN32
+    CloseHandle((HANDLE)(intptr_t)lock_os_);
+#else
+    ::close((int)lock_os_);
+#endif
 }
 bool G0Runner::SnapPositions(Position* ps, int cap,
                              int* n) const {

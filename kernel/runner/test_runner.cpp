@@ -14,6 +14,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "../broker/alpaca_paper.hpp"
@@ -5050,6 +5051,28 @@ int main() {
         Check(ReadWhole(r.dir + "/runner.lock") ==
                   std::string(me),
               "lk-lock-rewritten");
+    }
+    // LK2. Concurrent stale takeover (doc 06 sec. 6.1b): two
+    // takers racing on one stale lock serialize in the kernel
+    // into EXACTLY one owner. The hold is tracked per thread
+    // with no shared arbiter, so this race genuinely contends
+    // on the OS primitive (a PID-file check-then-act would let
+    // both through). Which taker wins varies; the XOR does not.
+    {
+        Rig r;
+        WriteFile(r.dir + "/runner.lock", "2147483647");
+        bool ok1 = false, ok2 = false;
+        std::thread t1([&] {
+            G0Runner g(r.cfg, r.deps);
+            ok1 = g.Recover(nullptr);
+        });
+        std::thread t2([&] {
+            G0Runner g(r.cfg, r.deps);
+            ok2 = g.Recover(nullptr);
+        });
+        t1.join();
+        t2.join();
+        Check(ok1 != ok2, "lk2-exactly-one-owner");
     }
     if (g_fail == 0)
         std::printf("RUNNER SUITE: ALL PASS (%d checks)\n", g_count);
