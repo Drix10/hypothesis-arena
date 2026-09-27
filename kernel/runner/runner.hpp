@@ -405,7 +405,8 @@ class G0Runner {
     // ClearMediumFiles drops the FSM file + the epoch file
     // (closed/stale incident teardown).
     bool MediumHasExposure();
-    void ClearMediumFiles();
+    // Incident-file cleanup; false = retry next cycle.
+    bool ClearMediumFiles();
     bool VenueOk(bool* open, bool* spread_ok);
     int LocalNet(const char* symbol) const;  // signed local open
     // (PROTECTED included: it IS the normal open position —

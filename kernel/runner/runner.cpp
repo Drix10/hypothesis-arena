@@ -1025,9 +1025,14 @@ bool G0Runner::BrokerConfirmedFlat() {
     }
     return true;
 }
-void G0Runner::ClearMediumFiles() {
-    AtomicWrite(P("medium.txt").c_str(), "");
-    AtomicWrite(P("medium-incident.txt").c_str(), "");
+bool G0Runner::ClearMediumFiles() {
+    // Teardown cleanup is load-bearing: both clears must land for
+    // the incident to be over. False keeps the incident files for
+    // the next cycle (plus caller alert) — never a half-cleared
+    // incident that mints fresh over stale state.
+    bool a = AtomicWrite(P("medium.txt").c_str(), "");
+    bool b = AtomicWrite(P("medium-incident.txt").c_str(), "");
+    return a && b;
 }
 void G0Runner::NoteQuarantine(Slot& s, const broker::OrderQuery& q,
                               const char* scope, long long now_ns) {
@@ -2528,7 +2533,13 @@ void G0Runner::MediumPass(long long now_ns) {
         cur != "FLATTENED" && cur != "PROTECTION_ONLY")
         cur.clear();
     if (cur.empty()) {
-        AtomicWrite(mp.c_str(), "MEDIUM_ACTIVE");
+        if (!AtomicWrite(mp.c_str(), "MEDIUM_ACTIVE")) {
+            OpsRow("reconcile", "runner",
+                   "medium-active-unpersisted", now_ns);
+            Alert(P("alerts.jsonl").c_str(), "MEDIUM",
+                  "medium-active-unpersisted", "", now_ns);
+            return;  // no FSM, no mint: the next cycle retries
+        }
         cur = "MEDIUM_ACTIVE";
         // A medium-enter IS a new incident (doc 06 sec. 6.1b):
         // mint the epoch BEFORE any sweep id derives (the crash
@@ -2550,8 +2561,19 @@ void G0Runner::MediumPass(long long now_ns) {
         // clear + fresh enter mints a new epoch; suppression of
         // a real later MEDIUM is the forbidden outcome).
         if (!MediumHasExposure()) return;
-        ClearMediumFiles();
-        AtomicWrite(mp.c_str(), "MEDIUM_ACTIVE");
+        if (!ClearMediumFiles()) {
+            OpsRow("reconcile", "runner",
+                   "medium-clear-unpersisted", now_ns);
+            Alert(P("alerts.jsonl").c_str(), "MEDIUM",
+                  "medium-clear-unpersisted", "", now_ns);
+        }
+        if (!AtomicWrite(mp.c_str(), "MEDIUM_ACTIVE")) {
+            OpsRow("reconcile", "runner",
+                   "medium-active-unpersisted", now_ns);
+            Alert(P("alerts.jsonl").c_str(), "MEDIUM",
+                  "medium-active-unpersisted", "", now_ns);
+            return;  // no FSM, no mint: the next cycle retries
+        }
         cur = "MEDIUM_ACTIVE";
         if (MintMediumEpoch(now_ns) <= 0) {
             // Exact revert: FLATTENED with no epoch re-runs the
@@ -2744,8 +2766,20 @@ void G0Runner::MediumPass(long long now_ns) {
             }
         }
     }
-    if (AllFlat()) {
-        AtomicWrite(mp.c_str(), "FLATTENED");
+    if (AllFlat() && BrokerConfirmedFlat()) {
+        // Certified flatten only: local flat AND broker-confirmed
+        // flat (a missing/failing seam retains the in-progress
+        // FSM — AllFlat alone never certifies, doc 06 sec. 6.1b).
+        // A failed FSM write keeps the previous file state +
+        // alerts (never a reported closure the files deny); the
+        // next cycle retries.
+        if (!AtomicWrite(mp.c_str(), "FLATTENED")) {
+            OpsRow("reconcile", "runner",
+                   "medium-flatten-unpersisted", now_ns);
+            Alert(P("alerts.jsonl").c_str(), "MEDIUM",
+                  "medium-flatten-unpersisted", "", now_ns);
+            return;
+        }
         OpsRow("reconcile", "runner", "medium-flat", now_ns);
         Alert(P("alerts.jsonl").c_str(), "MEDIUM", "medium-flat",
               "all positions flat", now_ns);
@@ -2771,11 +2805,24 @@ void G0Runner::MediumPass(long long now_ns) {
         if (JournalIntentState(cfg_.dir, fid.c_str()) == 2)
             covered = true;  // terminal close on file
     }
+    // Control-state writes are load-bearing: a failed persist keeps
+    // the previous file state (the rename never happened) + alerts;
+    // the next cycle retries the transition from the file.
     if (covered) {
-        if (cur != "FLATTEN_PENDING")
-            AtomicWrite(mp.c_str(), "FLATTEN_PENDING");
-    } else if (cur != "MEDIUM_ACTIVE") {
-        AtomicWrite(mp.c_str(), "MEDIUM_ACTIVE");
+        if (cur != "FLATTEN_PENDING" &&
+            !AtomicWrite(mp.c_str(), "FLATTEN_PENDING")) {
+            OpsRow("reconcile", "runner",
+                   "medium-fsm-unpersisted", now_ns);
+            Alert(P("alerts.jsonl").c_str(), "MEDIUM",
+                  "medium-fsm-unpersisted", "FLATTEN_PENDING",
+                  now_ns);
+        }
+    } else if (cur != "MEDIUM_ACTIVE" &&
+               !AtomicWrite(mp.c_str(), "MEDIUM_ACTIVE")) {
+        OpsRow("reconcile", "runner",
+               "medium-fsm-unpersisted", now_ns);
+        Alert(P("alerts.jsonl").c_str(), "MEDIUM",
+              "medium-fsm-unpersisted", "MEDIUM_ACTIVE", now_ns);
     }
 }
 
@@ -3094,22 +3141,35 @@ bool G0Runner::Cycle(long long now_ns) {
             !mlns.empty() && mlns[0] != "FLATTENED" &&
             mlns[0] != "PROTECTION_ONLY") {
             if (AllFlat() && BrokerConfirmedFlat()) {
-                AtomicWrite(P("medium.txt").c_str(), "FLATTENED");
+                if (!AtomicWrite(P("medium.txt").c_str(),
+                                 "FLATTENED")) {
+                    Alert(P("alerts.jsonl").c_str(), "MEDIUM",
+                          "medium-fsm-unpersisted", "FLATTENED",
+                          now_ns);
+                }
             } else if (!AllFlat()) {
-                AtomicWrite(P("medium.txt").c_str(),
-                            "PROTECTION_ONLY");
-                Alert(P("alerts.jsonl").c_str(), "MEDIUM",
-                      "protection-only",
-                      "stops own the remainder", now_ns);
-                OpsRow("drift-directive", "runner",
-                       "medium-protection-only", now_ns);
+                if (!AtomicWrite(P("medium.txt").c_str(),
+                                 "PROTECTION_ONLY")) {
+                    Alert(P("alerts.jsonl").c_str(), "MEDIUM",
+                          "medium-fsm-unpersisted",
+                          "PROTECTION_ONLY", now_ns);
+                } else {
+                    Alert(P("alerts.jsonl").c_str(), "MEDIUM",
+                          "protection-only",
+                          "stops own the remainder", now_ns);
+                    OpsRow("drift-directive", "runner",
+                           "medium-protection-only", now_ns);
+                }
             }
         }
         std::vector<std::string> clns;
         if (ReadLines(P("medium.txt").c_str(), &clns) &&
             !clns.empty() && BrokerConfirmedFlat() &&
             (clns[0] == "FLATTENED" || LocalFlat())) {
-            ClearMediumFiles();
+            if (!ClearMediumFiles()) {
+                Alert(P("alerts.jsonl").c_str(), "MEDIUM",
+                      "medium-clear-unpersisted", "", now_ns);
+            }
             OpsRow("drift-directive", "runner",
                    "medium-incident-cleared", now_ns);
         }

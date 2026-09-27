@@ -4333,6 +4333,46 @@ int main() {
                   std::string::npos,
               "hx-corrupt-alert");
     }
+    // FL. MEDIUM flatten certification (doc 06 sec. 6.1b): an
+    // in-progress FSM never becomes FLATTENED on local-only
+    // truth — broker confirmation is required. And an unwritable
+    // FSM refuses the enter (no mint, alert, retry next cycle).
+    {
+        Rig r;  // no seam, no slots: locally flat by vacuity
+        WriteFile(r.dir + "/medium.txt", "MEDIUM_ACTIVE");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "fl-recover");
+        Check(g.Cycle(g_now), "fl-cycle");
+        Check(ReadWhole(r.dir + "/medium.txt") ==
+                  "MEDIUM_ACTIVE",
+              "fl-no-cert-no-flatten");
+    }
+    {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        MkDir(r.dir + "/medium.txt");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "fl-recover2");
+        g_kill.spend_tier = 3;  // MEDIUM
+        Check(g.Cycle(g_now), "fl-cycle2");
+        Check(!Exists(r.dir + "/medium-incident.txt"),
+              "fl-no-mint");
+        Check(CountMethod("POST", "/v2/orders") == 0,
+              "fl-no-sweep");
+        Check(ReadWhole(r.dir + "/alerts.jsonl")
+                      .find("medium-active-unpersisted") !=
+                  std::string::npos,
+              "fl-alert");
+        RmDir(r.dir + "/medium.txt");
+        G0Runner g2(r.cfg, r.deps);
+        Check(g2.Recover(nullptr), "fl-recover3");
+        Check(g2.Cycle(g_now), "fl-cycle3");
+        char mbe[32];
+        std::snprintf(mbe, sizeof(mbe), "%lld", g_now);
+        Check(ReadWhole(r.dir + "/medium-incident.txt") ==
+                  std::string(mbe),
+              "fl-mint-retry");
+    }
     // CU. Cursor durability fails closed (doc 06 sec. 6.1b): a
     // foreign stream event dirties the cursor; an unwritable
     // cursor file fails the cycle (alert + journal) WITHOUT
