@@ -43,10 +43,19 @@ _SEEN_PATHS_MAX = 64
 _SEEN_KEYS_MAX = 4096
 
 
+class DigestCorrupt(Exception):
+    """The digest authority file holds a malformed row. The digest
+    file IS the first-write-wins authority — answering
+    duplicate/conflict/append from a subset would fork it — so a
+    malformed row poisons instead of skipping (fail closed, never
+    a reader subset)."""
+
+
 def _seen_keys(path):
     """path -> {key: text_sha}. Bounded per path (oldest evicted).
     A changed file rescans; the registry itself holds at most
-    _SEEN_PATHS_MAX paths."""
+    _SEEN_PATHS_MAX paths. Raises DigestCorrupt on any malformed
+    non-empty row."""
     import hashlib
     try:
         st = os.stat(path)
@@ -60,10 +69,12 @@ def _seen_keys(path):
     try:
         with open(path, encoding="utf-8") as fh:
             for line in fh:
+                if not line.strip():
+                    continue
                 try:
                     r = json.loads(line)
                 except ValueError:
-                    continue
+                    raise DigestCorrupt(path)
                 if isinstance(r, dict):
                     k = (r.get("research_epoch"), r.get("symbol"),
                          r.get("node"))
@@ -94,10 +105,12 @@ def _scan_key(path, key):
     try:
         with open(path, encoding="utf-8") as fh:
             for line in fh:
+                if not line.strip():
+                    continue
                 try:
                     r = json.loads(line)
                 except ValueError:
-                    continue
+                    raise DigestCorrupt(path)
                 if (isinstance(r, dict) and
                         (r.get("research_epoch"), r.get("symbol"),
                          r.get("node")) == key and
@@ -149,11 +162,20 @@ def append_digest(outdir, epoch, symbol, node, text, extra=None):
     os.makedirs(outdir, exist_ok=True)
     path = _digest_path(outdir)
     with locks.FileLock(path + ".lock", purpose="digest"):
-        prior = _seen_keys(path).get((epoch, symbol, node), "absent")
+        # A corrupt authority file refuses the whole append (never
+        # answer duplicate/conflict/append from a subset).
+        try:
+            prior = _seen_keys(path).get((epoch, symbol, node),
+                                         "absent")
+        except DigestCorrupt:
+            return False, "digest-corrupt"
         if prior == "absent":
             # Evicted from the bounded cache (ancient key): consult
             # the file before deciding duplicate/conflict/append.
-            scanned = _scan_key(path, (epoch, symbol, node))
+            try:
+                scanned = _scan_key(path, (epoch, symbol, node))
+            except DigestCorrupt:
+                return False, "digest-corrupt"
             if scanned is not None:
                 prior = scanned
                 _remember(path, epoch, symbol, node, scanned)

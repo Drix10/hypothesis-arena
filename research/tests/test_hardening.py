@@ -1594,6 +1594,25 @@ class DigestConflictTest(unittest.TestCase):
             rows = _fh.read().strip().split("\n")
         self.assertEqual(len(rows), 1)  # first write wins
 
+    def test_corrupt_poison_not_subset(self):
+        # A malformed digest row poisons the authority (fail
+        # closed): neither fresh appends nor exact-duplicate
+        # answers may come from a subset of the file.
+        from plane import digest as digest_mod
+        d = tempfile.mkdtemp()
+        ok, why = digest_mod.append_digest(d, 1, "AAPL", "hypothesize",
+                                           "thesis-one")
+        self.assertEqual((ok, why), (True, "ok"))
+        with open(os.path.join(d, digest_mod.DIGEST_NAME),
+                  "a", encoding="utf-8") as fh:
+            fh.write("{corrupt\n")
+        ok, why = digest_mod.append_digest(d, 2, "BBB", "hypothesize",
+                                           "other")
+        self.assertEqual((ok, why), (False, "digest-corrupt"))
+        ok, why = digest_mod.append_digest(d, 1, "AAPL", "hypothesize",
+                                           "thesis-one")
+        self.assertEqual((ok, why), (False, "digest-corrupt"))
+
     def test_many_epochs_bound_memory(self):
         from plane import digest as digest_mod
         d = tempfile.mkdtemp()
