@@ -6,14 +6,18 @@ selection code imports s5_eval only, which has NO holdout API
 is materialized here, in the final path, only after selection freezes.
 
 Terminal evidence step: holdout results are NEVER fed back into
-select_variant(). An optional selected_variant (from folds) may be
-recorded for the audit trail; it cannot alter any computation and
-holdout performance never overwrites it. Research/shadow-only.
+select_variant(). The split token's claimed variant is mechanically
+re-verified from the authoritative full streams (_validate_evidence
+0c); a caller-supplied selected_variant may only ECHO the
+token-bound selection, never override it. Sequential evidence follows
+only the verified selection. Research/shadow-only.
 """
 
 import hashlib as _hashlib
 import json as _json
+import math as _math
 import os as _os
+import sys as _sys
 
 from .s5_eval import (BOOT_REPS, BOOT_SEED, EVAL_PROTOCOL, HOLM_ALPHA,
                       POWER_INNER, POWER_REPS, POWER_SEED, R_CHECKED,
@@ -23,7 +27,7 @@ from .s5_eval import (BOOT_REPS, BOOT_SEED, EVAL_PROTOCOL, HOLM_ALPHA,
                       daily_returns, et_close_ns, et_open_ns, eval_hash,
                       evaluate_bar, holm, last_close_at_or_before,
                       paired_deltas, portfolio_curve, segment_bounds,
-                      sequential_inputs, seq_pair, sharpe_hac, utc_day,
+                      select_variant, sequential_inputs, seq_pair, sharpe_hac, utc_day,
                       verify_r_monitor, walk_folds)
 
 STRESS_MULT = {"1x": 1.0, "1.5x": 1.5, "2x": 2.0, "3x": 3.0}
@@ -213,8 +217,44 @@ def pinned_slice_root():
     Measured once over the frozen slice + frozen code, then frozen in
     s5_prereg.json experiments. Any data/code drift fails closed in
     final_report. Test fixtures NEVER use this (stream_roots marks
-    fixture roots explicitly)."""
+    fixture roots explicitly). Carries the authoritative production
+    bars_digest: the bars actually consumed MUST hash to it."""
     return dict(_prereg()["experiments"]["s2_slice_stream_root"])
+
+
+def _running_python_minor():
+    return "%d.%d" % (_sys.version_info[0],
+                        _sys.version_info[1])
+
+
+def _check_pin_interpreter(pin):
+    """The production pin reproduces ONLY under its measuring
+    interpreter (major.minor). Python 3.12 changed sum() to Neumaier
+    compensated summation: upstream frozen floats (backtest fhash via
+    baseline_v1.zscore20) differ in the last ulp across the 3.11/3.12
+    boundary, so record digests cannot match under a different minor.
+    Fail closed with both versions named - never misreport an
+    interpreter drift as evidence tampering."""
+    want = pin["measured_python_minor"]
+    got = _running_python_minor()
+    assert got == want, \
+        "production pin measured under %s, running %s" % (want, got)
+
+
+def _production_pin():
+    """The pinned production root (single parsed source for identity).
+
+    Production data identity == this pin's data_slice + dataset_sha.
+    Production inputs MUST present this root EXACTLY (dict equality);
+    a caller cannot substitute a self-minted root under the
+    production identity."""
+    return pinned_slice_root()
+
+
+def _is_production_identity(data_id):
+    pin = _production_pin()
+    return (data_id.get("slice") == pin["data_slice"]
+            and data_id.get("dataset_sha") == pin["dataset_sha"])
 
 
 def stream_roots(full_streams, data_id):
@@ -390,6 +430,11 @@ def _validate_evidence(split, recs_1x, recs_stress, full_streams,
        from the authoritative stream.
     Returns {cid: split-variant 1x record} (immutable reference map)."""
     folds, holdout, bound, token = split
+    # Interpreter gate FIRST: under a foreign minor every downstream
+    # digest comparison would misreport drift as tampering. Name both
+    # versions before any hash is compared.
+    if _is_production_identity(data_id):
+        _check_pin_interpreter(_production_pin())
     assert set(recs_1x) == set(VARIANTS)
     assert set(recs_stress) == set(REQUIRED_STRESS), \
         "stress must carry exactly %s" % (REQUIRED_STRESS,)
@@ -425,17 +470,68 @@ def _validate_evidence(split, recs_1x, recs_stress, full_streams,
                  root_expected["answers"]["provider"]), variant
         assert _record_digest(recs) == \
             root_expected["per_variant"][variant], variant
-    if "frozen_dataset_sha256" in root_expected:
+    # 0b. root-kind authority: the DATA IDENTITY determines which root
+    # is acceptable. Production identity (pinned slice + dataset sha)
+    # MUST present the pinned production root EXACTLY (dict equality,
+    # incl. stream hashes, answers triple, frozen hash, bars_digest) -
+    # a caller-minted root under the production identity fails even
+    # when self-consistent, and the consumed bars MUST hash to the
+    # PINNED bars_digest (mutate-bars + regenerate-proof fails: the
+    # proof agrees with the bars but the pin does not). Non-production
+    # identities MUST present an explicit test_fixture root. A
+    # frozen-flavored fixture (test_fixture + frozen hash + bars
+    # digest, NON-production identity) exercises the IDENTICAL
+    # triple-equality bars logic against its OWN root digest; a plain
+    # fixture carries no bars proof at all.
+    pin = _production_pin()
+    assert "bars_digest" in pin and "frozen_dataset_sha256" in pin, \
+        "pinned root must carry the authoritative bars digest"
+    assert "measured_python_minor" in pin, \
+        "pinned root must name its measuring interpreter"
+    if _is_production_identity(data_id):
+        _check_pin_interpreter(pin)
+        assert root_expected == pin, \
+            "production inputs must use the pinned root exactly"
         assert bars_proof is not None, "production root needs bars proof"
         assert bars_proof["frozen_dataset_sha256"] == \
-            root_expected["frozen_dataset_sha256"]
-        assert bars_proof["bars_digest"] == digest_bars(bars), \
-            "supplied bars != verified frozen bars"
-    elif root_expected.get("test_fixture"):
-        assert bars_proof is None, \
-            "fixture data must never carry production bars proof"
+            pin["frozen_dataset_sha256"]
+        assert bars_proof["bars_digest"] == pin["bars_digest"] == \
+            digest_bars(bars), "bars != pinned production bars digest"
+    elif root_expected.get("test_fixture") is True:
+        if "frozen_dataset_sha256" in root_expected:
+            assert bars_proof is not None, \
+                "frozen-flavored fixture needs bars proof"
+            assert bars_proof["frozen_dataset_sha256"] == \
+                root_expected["frozen_dataset_sha256"]
+            assert bars_proof["bars_digest"] == \
+                root_expected["bars_digest"] == digest_bars(bars), \
+                "bars != fixture root bars digest"
+        else:
+            assert bars_proof is None, \
+                "fixture data must never carry production bars proof"
+            assert "bars_digest" not in root_expected, \
+                "plain fixture must not carry a bars digest"
     else:
-        raise AssertionError("ambiguous root: neither frozen nor fixture")
+        raise AssertionError(
+            "ambiguous root: neither pinned production nor fixture")
+    # 0c. selection binding: the token's claimed variant MUST equal
+    # the mechanical fold selection recomputed from the AUTHORITATIVE
+    # full streams with the frozen holdout boundary (same
+    # segment/walk/select machinery as the selection path). A caller
+    # cannot smuggle selected_variant=B past a token for A, nor forge
+    # a token claiming B when the folds select A: sequential evidence
+    # follows ONLY the verified selection.
+    fold_stats = {}
+    for variant in VARIANTS:
+        _, _b = segment_bounds(full_streams[variant],
+                               n_splits=token["n_splits"])
+        assert _b == bound, "segmentation drifted from split bound"
+        fold_stats[variant] = [
+            sum(paired_deltas(te)) for _, te in
+            walk_folds(full_streams[variant],
+                       n_splits=token["n_splits"], holdout_start=_b)]
+    assert select_variant(fold_stats) == token["split_variant"], \
+        "token selection != mechanical fold selection"
     # 1. token integrity from the threaded holdout
     assert token["holdout_start"] == bound
     assert token["n"] == len(holdout)
@@ -513,26 +609,73 @@ def _validate_evidence(split, recs_1x, recs_stress, full_streams,
 
 BASELINE_MULTS = ("1x", "1.5x", "2x", "3x")
 
+# Authoritative baseline artifact identity. None while S2 acceptance
+# is OPEN: NO production baseline artifact exists, so any non-None
+# baseline under the production identity fails closed (baseline_gate
+# reads ABSENT only for baseline=None). When S2 is accepted, pin the
+# canonical baseline artifact hash here; metrics are trusted ONLY
+# under a pinned identity. Fixture identities exercise the gate
+# mechanics under self-hash only (never promotion evidence)."
+BASELINE_EXPECTED = None
 
-def baseline_gate(chall, baseline, proof, token):
+
+def _canon_baseline(v):
+    if isinstance(v, bool):
+        raise AssertionError("bool is not a baseline metric")
+    if isinstance(v, (int, float)):
+        return {"$num": canon_num(v)}
+    if isinstance(v, (str, type(None))):
+        return v
+    if isinstance(v, list):
+        return [_canon_baseline(x) for x in v]
+    if isinstance(v, dict):
+        return {k: _canon_baseline(v[k]) for k in sorted(v)}
+    raise AssertionError("non-canonical baseline field: %r" % type(v))
+
+
+def baseline_artifact_hash(baseline):
+    """Canonical baseline artifact identity (D6 fixed-point metrics).
+
+    SHA256 over the canonical artifact body - everything EXCEPT
+    artifact_sha256 itself. NaN/inf/bool/unknown types fail closed,
+    so fabricated metrics cannot hide behind float formatting."""
+    body = {k: _canon_baseline(baseline[k]) for k in sorted(baseline)
+            if k != "artifact_sha256"}
+    return _hashlib.sha256(_json.dumps(body, sort_keys=True).encode()
+                           ).hexdigest()
+
+
+def _is_production_proof(proof):
+    pin = _production_pin()
+    return (proof.get("data_slice") == pin["data_slice"]
+            and proof.get("dataset_sha") == pin["dataset_sha"])
+
+
+def baseline_gate(chall, baseline, proof, token, baseline_expected=None):
     """Mechanical challenger-vs-baseline_v1 gate (docs 07/11/12).
 
-    chall: {mult_label or '1x': filtered_sharpe, 'dd_1x': ..., } built
-    from the holdout rep (same window, same sessions, same costs).
-    baseline: frozen baseline_v1 holdout artifact {baseline_id,
-    data_slice, dataset_sha, dates, protocol, session_hash, metrics:
-    {mult: {sharpe_f, max_dd_pct, n_closed}}}. The artifact must carry
-    the EXACT session proof (session_hash equality with the challenger
-    proof + dates == full session calendar); the S2 report is NOT a
-    valid artifact (S2 acceptance OPEN => None => gate reads ABSENT,
-    promotion stays closed). Beats requires challenger net Sharpe >
-    baseline at ALL of 1x/1.5x/2x/3x with 1x drawdown not worse than
-    baseline. Returns (verdict, failed, detail)."""
+    Authority contract (mirrors the frozen stream root): the artifact
+    must carry artifact_sha256 == baseline_artifact_hash(artifact)
+    (self-identity; fabricated metrics fail the digest). Under the
+    PRODUCTION identity a pinned expected identity is ADDITIONALLY
+    required - baseline_expected is None while S2 acceptance is OPEN,
+    so any non-None production baseline fails closed as
+    baseline_unpinned (never trusted, never promotion). Under fixture
+    identities the self-hash gates the mechanics. Metrics must be
+    finite real numbers (bool/NaN/inf fail closed as malformed).
+    Beats requirements unchanged: challenger net Sharpe > baseline at
+    ALL of 1x/1.5x/2x/3x with 1x drawdown not worse than baseline."""
     if baseline is None:
         return (False, ["baseline_absent"],
                 {"status": "absent (S2 acceptance OPEN)"})
     failed, detail = [], {"status": "evaluated"}
     try:
+        assert baseline["artifact_sha256"] == \
+            baseline_artifact_hash(baseline), "artifact identity"
+        if _is_production_proof(proof):
+            assert baseline_expected is not None and \
+                baseline["artifact_sha256"] == baseline_expected, \
+                "unpinned production baseline artifact"
         assert baseline["baseline_id"] == "baseline_v1"
         assert baseline["protocol"] == EVAL_PROTOCOL
         assert baseline["data_slice"] == proof["data_slice"]
@@ -545,11 +688,18 @@ def baseline_gate(chall, baseline, proof, token):
         assert set(bm) == set(BASELINE_MULTS)
         for m in BASELINE_MULTS:
             for k in ("sharpe_f", "max_dd_pct", "n_closed"):
-                assert isinstance(bm[m][k], (int, float))
+                v = bm[m][k]
+                assert isinstance(v, (int, float)) and \
+                    not isinstance(v, bool), "non-numeric metric"
+                assert isinstance(v, int) or _math.isfinite(v), \
+                    "non-finite metric"
     except (KeyError, AssertionError, TypeError) as e:
         if isinstance(e, AssertionError) and "session" in str(e):
             return (False, ["baseline_session"],
                     {"status": "session-mismatch", "error": str(e)})
+        if isinstance(e, AssertionError) and "unpinned" in str(e):
+            return (False, ["baseline_unpinned"],
+                    {"status": "unpinned-production", "error": str(e)})
         return (False, ["baseline_malformed"], {"status": "malformed",
                                                  "error": str(e)})
     for m in BASELINE_MULTS:
@@ -584,8 +734,11 @@ def final_report(split, recs_1x, recs_stress, sessions, proof, bars,
     the selected variant's full stream (pre-holdout closed only) with
     frozen knobs — no caller-computed sequential enters; holdout CIDs
     are structurally excluded and asserted absent. baseline: frozen
-    baseline_v1 holdout artifact or None (S2 OPEN => None => gate
-    reads ABSENT, promotion stays closed). R scope from frozen prereg."""
+    baseline_v1 holdout artifact (artifact_sha256 self-identity +
+    pinned expected identity under production) or None (S2 OPEN =>
+    None => gate reads ABSENT, promotion stays closed). A caller
+    selected_variant may only echo the token-bound selection. R scope
+    from frozen prereg."""
     folds, holdout, bound, token = split
     _validate_evidence(split, recs_1x, recs_stress, full_streams,
                        root_expected, data_id, bars, bars_proof)
@@ -598,8 +751,13 @@ def final_report(split, recs_1x, recs_stress, sessions, proof, bars,
     assert proof == rproof, "session proof != canonical rebuild"
     first_day = token["dates"][0]
     include_first = bound <= et_open_ns(first_day)
-    sel = selected_variant or token["split_variant"]
-    assert sel in VARIANTS, sel
+    # Selection is token-bound AND mechanically verified (0c above):
+    # the caller may echo it, never override it. Sequential evidence
+    # follows ONLY the verified selection.
+    if selected_variant is not None:
+        assert selected_variant == token["split_variant"], \
+            "caller selection != token-bound selection"
+    sel = token["split_variant"]
     sd, sy, sc = sequential_inputs(full_streams[sel], bound)
     assert not (set(sc) & {r["cid"] for r in holdout}), \
         "holdout CID in sequential input"
@@ -612,7 +770,7 @@ def final_report(split, recs_1x, recs_stress, sessions, proof, bars,
     if selected_variant is not None:
         assert selected_variant in VARIANTS
     pvals, rep = [], {"variants": {},
-                      "selected_variant": selected_variant,
+                      "selected_variant": sel,
                       "split_token": token,
                       "session_proof": proof,
                       "first_interval_included": include_first,
@@ -676,7 +834,8 @@ def final_report(split, recs_1x, recs_stress, sessions, proof, bars,
         chall = {"1x": v["sharpe_f"], "dd_1x": v["max_dd_pct"]}
         for mult, (f, _a) in v["stress"].items():
             chall[mult] = f
-        bv, bf, bd = baseline_gate(chall, baseline, proof, token)
+        bv, bf, bd = baseline_gate(chall, baseline, proof, token,
+                                   BASELINE_EXPECTED)
         v["baseline_gate"] = {"verdict": bv, "failed": bf,
                               "detail": bd}
         v["promotion_ready"] = bool(verdict and bv)

@@ -100,6 +100,28 @@ def _roots(by_var, data_id=DATA_ID):
     return s5f.stream_roots(by_var, data_id)
 
 
+def _mechanical_winner(by_var, n_splits=2):
+    """Runner-identical fold selection from the full streams."""
+    stats = {}
+    for v in s5.VARIANTS:
+        _, b = s5.segment_bounds(by_var[v], n_splits=n_splits)
+        stats[v] = [sum(s5.paired_deltas(te)) for _, te in
+                    s5.walk_folds(by_var[v], n_splits=n_splits,
+                                  holdout_start=b)]
+    return s5.select_variant(stats)
+
+
+def _winner_split(by_var, n_splits=2):
+    """Mint the split on the MECHANICALLY SELECTED variant's stream.
+
+    The token's claimed variant must equal the recomputed fold
+    selection (final_report 0c): rigs mirror the runners (select,
+    then split the winner), never a hardcoded variant."""
+    return s5f.holdout_split(by_var[_mechanical_winner(by_var,
+                                                       n_splits)],
+                             n_splits=n_splits)
+
+
 def _frep(split, h1x, stress, sess, proof, bars, by_var, equity=100000.0,
           **kw):
     """final_report with fixture roots over the given full streams."""
@@ -347,7 +369,7 @@ def test_15_r_disqualify_full_path():
     assert brec["resolved_r"] == brec["resolved_r"]  # economics present
     assert brec["r_breach_attempted"]  # forbidden take attempted
     assert [r["cid"] for r in by_var[s5.VARIANTS[0]] if r["disqualified"]] == [brec["cid"]]
-    _split = s5f.holdout_split(by_var[s5.VARIANTS[0]], n_splits=2)
+    _split = _winner_split(by_var, n_splits=2)
     _folds, _holdout, _bound, _tok = _split
     assert brec["cid"] in {r["cid"] for r in _holdout}, \
         "disqualified probe must sit in holdout evidence"
@@ -523,7 +545,7 @@ def test_20b_stress_fail_closed_and_scope():
     import datetime as _dt
     _items = synth_stream(8)
     _by = run_all(_items)
-    _split = s5f.holdout_split(_by[s5.VARIANTS[0]], n_splits=2)
+    _split = _winner_split(_by, n_splits=2)
     _bars = bars_for(_items)
     _sess, _proof = s5f.build_holdout_sessions(_bars, _split[3], DATA_ID)
     _hset = {r["cid"] for r in _split[1]}
@@ -728,7 +750,7 @@ def test_23_r_monitor():
 def test_22_final_report_no_hardcode():
     items = synth_stream(72)
     by_var = run_all(items)
-    split = s5f.holdout_split(by_var[s5.VARIANTS[0]], n_splits=2)
+    split = _winner_split(by_var, n_splits=2)
     folds, holdout, bound, tok = split
     assert holdout and tok["n"] == len(holdout)
     assert tok["protocol"] == "eval_v1" and tok["record_hash"]
@@ -997,10 +1019,11 @@ def test_30_split_provenance():
     items = synth_stream(40)
     by_var = run_all(items)
     recs = by_var[s5.VARIANTS[0]]
-    split = s5f.holdout_split(recs, n_splits=2)
+    split = _winner_split(by_var, n_splits=2)
     folds, holdout, bound, t1 = split
+    v0split = s5f.holdout_split(recs, n_splits=2)
     split_b = s5f.holdout_split(list(reversed(recs)), n_splits=2)
-    assert split_b[3] == t1  # order-independent, deterministic mint
+    assert split_b[3] == v0split[3]  # order-independent mint
     hset = {r["cid"] for r in holdout}
     h1x = {v: [r for r in by_var[v] if r["cid"] in hset]
            for v in s5.VARIANTS}
@@ -1043,7 +1066,7 @@ def _small_split(n=24):
     """Helper: split + evidence + bars + sessions/proof for gate tests."""
     items = synth_stream(n)
     by_var = run_all(items)
-    split = s5f.holdout_split(by_var[s5.VARIANTS[0]], n_splits=2)
+    split = _winner_split(by_var, n_splits=2)
     folds, holdout, bound, tok = split
     hset = {r["cid"] for r in holdout}
     h1x = {v: [r for r in by_var[v] if r["cid"] in hset]
@@ -1162,13 +1185,16 @@ def test_33_boundary_first_interval():
 
 
 def _baseline_fixture(proof, token, sharpes, dd=5.0, n=200):
-    return {"baseline_id": "baseline_v1", "protocol": "eval_v1",
-            "data_slice": proof["data_slice"],
-            "dataset_sha": proof["dataset_sha"],
-            "session_hash": proof["session_hash"],
-            "dates": list(proof["session_dates"]),
-            "metrics": {m: {"sharpe_f": s, "max_dd_pct": dd, "n_closed": n}
-                        for m, s in sharpes.items()}}
+    art = {"baseline_id": "baseline_v1", "protocol": "eval_v1",
+           "data_slice": proof["data_slice"],
+           "dataset_sha": proof["dataset_sha"],
+           "session_hash": proof["session_hash"],
+           "dates": list(proof["session_dates"]),
+           "metrics": {m: {"sharpe_f": s, "max_dd_pct": dd,
+                             "n_closed": n}
+                       for m, s in sharpes.items()}}
+    art["artifact_sha256"] = s5f.baseline_artifact_hash(art)
+    return art
 
 
 def test_34_baseline_gate():
@@ -1192,14 +1218,23 @@ def test_34_baseline_gate():
     sesh = _baseline_fixture(proof, tok, {"1x": 0.0, "1.5x": 0.0,
                                           "2x": 0.0, "3x": 0.0})
     sesh["session_hash"] = "0" * 64
+    sesh["artifact_sha256"] = s5f.baseline_artifact_hash(sesh)
     v, f, d = s5f.baseline_gate(chall, sesh, proof, tok)
     assert v is False and f == ["baseline_session"], (v, f)
+    # (c2b) same mutation under the STALE hash -> malformed (identity
+    # covers content; the forgery invalidates the digest).
+    sesh_stale = _baseline_fixture(proof, tok, {"1x": 0.0, "1.5x": 0.0,
+                                                "2x": 0.0, "3x": 0.0})
+    sesh_stale["session_hash"] = "0" * 64
+    v, f, d = s5f.baseline_gate(chall, sesh_stale, proof, tok)
+    assert v is False and f == ["baseline_malformed"], (v, f)
     # (c3) candidate-day dates instead of the full session calendar
     sesh2 = _baseline_fixture(proof, tok, {"1x": 0.0, "1.5x": 0.0,
                                            "2x": 0.0, "3x": 0.0})
     sesh2["dates"] = list(tok["dates"])[:-1] or list(tok["dates"])
     if sesh2["dates"] == list(proof["session_dates"]):
         sesh2["dates"] = sesh2["dates"] + ["2099-01-01"]
+    sesh2["artifact_sha256"] = s5f.baseline_artifact_hash(sesh2)
     v, f, d = s5f.baseline_gate(chall, sesh2, proof, tok)
     assert v is False and f == ["baseline_session"], (v, f)
     # (d) losing baseline comparison -> beats_* failed
@@ -1317,7 +1352,7 @@ def test_37_frozen_bars_authority():
     # rebuilt sessions + rebuilt proof.
     items = synth_stream(24)
     by_var = run_all(items)
-    split = s5f.holdout_split(by_var[s5.VARIANTS[0]], n_splits=2)
+    split = _winner_split(by_var, n_splits=2)
     hset = {r["cid"] for r in split[1]}
     h1x = {v: [r for r in by_var[v] if r["cid"] in hset]
            for v in s5.VARIANTS}
@@ -1329,6 +1364,7 @@ def test_37_frozen_bars_authority():
     bars = bars_for(items)
     proot = dict(_roots(by_var))
     proot["frozen_dataset_sha256"] = "F" * 64
+    proot["bars_digest"] = s5f.digest_bars(bars)  # the pinned leg
     proof_ok = {"frozen_dataset_sha256": "F" * 64,
                 "bars_digest": s5f.digest_bars(bars),
                 "symbols": ["SYN"]}
@@ -1356,24 +1392,38 @@ def test_37_frozen_bars_authority():
         raise SystemExit("mutated bar + rebuilt proof must fail digest")
     except AssertionError:
         pass
+    # P0 hostile: mutate bars AND regenerate the proof (forged bars
+    # digest agrees with the forged bars) -> must STILL fail: the
+    # proof agrees with the bars but the PINNED root digest does not.
+    forged = {"frozen_dataset_sha256": "F" * 64,
+              "bars_digest": s5f.digest_bars(mutbars),
+              "symbols": ["SYN"]}
+    try:
+        s5f.final_report(split, h1x, stress, msess, mproof, mutbars,
+                         DATA_ID, 100000.0, by_var, proot,
+                         bars_proof=forged)
+        raise SystemExit("regenerated proof over forged bars must fail")
+    except AssertionError:
+        pass
     print("37 OK")
 
 
 def test_38_foreign_stream_rejected():
     items = synth_stream(40)
     by_var = run_all(items)
-    split = s5f.holdout_split(by_var[s5.VARIANTS[0]], n_splits=2)
+    split = _winner_split(by_var, n_splits=2)
     real_root = _roots(by_var)
     # reversed input mints the identical root (order-independent)
     rev = {v: list(reversed(recs)) for v, recs in by_var.items()}
     assert s5f.stream_roots(rev, DATA_ID) == real_root
+    v0split = s5f.holdout_split(by_var[s5.VARIANTS[0]], n_splits=2)
     assert s5f.holdout_split(list(reversed(
-        by_var[s5.VARIANTS[0]])), n_splits=2)[3] == split[3]
+        by_var[s5.VARIANTS[0]])), n_splits=2)[3] == v0split[3]
     # a DIFFERENT valid stream + its own valid token + matching
     # evidence FAILS against the real expected root.
     fitems = synth_stream(24)
     fby = run_all(fitems)
-    fsplit = s5f.holdout_split(fby[s5.VARIANTS[0]], n_splits=2)
+    fsplit = _winner_split(fby, n_splits=2)
     fhset = {r["cid"] for r in fsplit[1]}
     fh1x = {v: [r for r in fby[v] if r["cid"] in fhset]
             for v in s5.VARIANTS}
@@ -1401,7 +1451,7 @@ def test_38_foreign_stream_rejected():
 def test_39_sequential_excludes_holdout():
     items = synth_stream(48)
     by_var = run_all(items)
-    split = s5f.holdout_split(by_var[s5.VARIANTS[0]], n_splits=2)
+    split = _winner_split(by_var, n_splits=2)
     folds, holdout, bound, tok = split
     sel = tok["split_variant"]
     hset = {r["cid"] for r in holdout}
@@ -1453,7 +1503,7 @@ def test_40_gap_day_zero_observation():
     assert items and not any(DAY(c.snapshot_ts_ns) == gap
                              for c, _, _, _, _ in items)
     by_var = run_all(items)
-    split = s5f.holdout_split(by_var[s5.VARIANTS[0]], n_splits=2)
+    split = _winner_split(by_var, n_splits=2)
     folds, holdout, bound, tok = split
     assert tok["dates"][0] < gap < tok["dates"][-1]  # interior
     assert gap not in tok["dates"]  # no candidate that day
@@ -1486,16 +1536,23 @@ def test_40_gap_day_zero_observation():
 
 
 def test_41_d6_canon():
+    assert s5.D6_SCALE_PLACES == 6  # explicit documented scale
     assert s5.canon_num(100) == "i:100"
     assert s5.canon_num(-7) == "i:-7"
-    assert s5.canon_num(100.0).startswith("f:100")
+    assert s5.canon_num(100.0) == "f6:100.000000"  # scale in tag
     assert s5.canon_num(100) != s5.canon_num(100.0)  # type-tagged
     assert "e" not in format(__import__("decimal").Decimal(1e-7), "f")
     # equal doubles hash identically however constructed
     assert s5.canon_num(0.1) == s5.canon_num(1 / 10)
     assert s5.canon_num(100.0) == s5.canon_num(400.0 / 4)
-    # distinct doubles hash distinctly (exact binary expansion)
-    assert s5.canon_num(0.1 + 0.2) != s5.canon_num(0.3)
+    # sub-scale differences collapse BY DESIGN (fixed-point, not a bug)
+    assert s5.canon_num(0.1 + 0.2) == s5.canon_num(0.3)
+    assert s5.canon_num(100.0) == s5.canon_num(100.0000001)
+    assert s5.canon_num(1.000001) == s5.canon_num(1.0000014)
+    # scale-level differences stay distinct (economics preserved)
+    assert s5.canon_num(1.000001) != s5.canon_num(1.000002)
+    assert s5.canon_num(100.0) != s5.canon_num(100.000001)
+    assert s5.canon_num(-3.115) == "f6:-3.115000"
     # eval_hash: insertion order irrelevant, values canonical
     r1 = {"b": 1.5, "a": 100, "c": "x", "d": True, "e": None}
     r2 = {"e": None, "d": True, "c": "x", "a": 100, "b": 1.5}
@@ -1532,6 +1589,7 @@ def test_42_baseline_session_wiring():
         assert x["promotion_ready"] is False  # stub Sharpe loses
         assert "baseline_session" not in x["baseline_gate"]["failed"]
     badwin = dict(win, session_hash="1" * 64)
+    badwin["artifact_sha256"] = s5f.baseline_artifact_hash(badwin)
     rep2 = _frep(split, h1x, stress, sess, proof, bars, by_var,
                  baseline=badwin)
     assert all(x["baseline_gate"]["failed"] == ["baseline_session"]
@@ -1607,7 +1665,7 @@ def test_44_ns_boundary_branches():
                                         dict(ENGINE), variant=v,
                                         day_fn=day_ns, data_id=DATA_ID)
                   for v in s5.VARIANTS}
-        split = s5f.holdout_split(by_var[s5.VARIANTS[0]], n_splits=2)
+        split = _winner_split(by_var, n_splits=2)
         hset = {r["cid"] for r in split[1]}
         h1x = {v: [r for r in by_var[v] if r["cid"] in hset]
                for v in s5.VARIANTS}
@@ -1648,6 +1706,194 @@ def test_44_ns_boundary_branches():
         assert mv["n_sharpe_obs"] == 0, (v, mv["n_sharpe_obs"])
         assert pv["n_sharpe_obs"] == 1, (v, pv["n_sharpe_obs"])
     print("44 OK")
+
+def test_45_root_substitution_rejected():
+    pin = s5f.pinned_slice_root()
+    prod_id = {"slice": pin["data_slice"],
+               "dataset_sha": pin["dataset_sha"]}
+    items = synth_stream(24)
+    fby = run_all(items, data_id=prod_id)
+    fsplit = _winner_split(fby, n_splits=2)
+    fhset = {r["cid"] for r in fsplit[1]}
+    fh1x = {v: [r for r in fby[v] if r["cid"] in fhset]
+            for v in s5.VARIANTS}
+    fstress = {}
+    for mult, lab in ((1.5, "1.5x"), (2.0, "2x"), (3.0, "3x")):
+        fsv = run_all(items, spread_mult=mult, data_id=prod_id)
+        fstress[lab] = {v: [r for r in fsv[v] if r["cid"] in fhset]
+                        for v in s5.VARIANTS}
+    fbars = bars_for(items)
+    fsess, fproof = s5f.build_holdout_sessions(fbars, fsplit[3],
+                                               prod_id)
+    # hostile (a): foreign valid stream + OWN self-minted root +
+    # production data_id -> FAIL (production must equal the pin).
+    froot = s5f.stream_roots(fby, prod_id)
+    try:
+        s5f.final_report(fsplit, fh1x, fstress, fsess, fproof, fbars,
+                         prod_id, 100000.0, fby, froot)
+        raise SystemExit("self-minted root under prod identity "
+                         "must fail")
+    except AssertionError:
+        pass
+    # hostile (b): frozen-flavored self-minted root (own digest, own
+    # bars proof, all self-consistent) + production data_id -> FAIL.
+    froot2 = dict(froot)
+    froot2["frozen_dataset_sha256"] = pin["frozen_dataset_sha256"]
+    froot2["bars_digest"] = s5f.digest_bars(fbars)
+    fproof2 = {"frozen_dataset_sha256": pin["frozen_dataset_sha256"],
+               "bars_digest": s5f.digest_bars(fbars),
+               "symbols": ["SYN"]}
+    try:
+        s5f.final_report(fsplit, fh1x, fstress, fsess, fproof, fbars,
+                         prod_id, 100000.0, fby, froot2,
+                         bars_proof=fproof2)
+        raise SystemExit("frozen-flavored self-mint under prod "
+                         "identity must fail")
+    except AssertionError:
+        pass
+    # control: fixture stream + fixture root + fixture data_id passes.
+    split, h1x, stress, sess, proof, bars, by_var, root = \
+        _small_split()
+    rep = _frep(split, h1x, stress, sess, proof, bars, by_var)
+    assert rep["split_token"] == split[3]
+    print("45 OK")
+
+
+def test_46_selection_binding():
+    split, h1x, stress, sess, proof, bars, by_var, root = _small_split()
+    tok = split[3]
+    other = s5.VARIANTS[1] if tok["split_variant"] == s5.VARIANTS[0] \
+        else s5.VARIANTS[0]
+    # hostile (a): caller echoes the WRONG variant -> FAIL.
+    try:
+        _frep(split, h1x, stress, sess, proof, bars, by_var,
+              selected_variant=other)
+        raise SystemExit("caller override of selection must fail")
+    except AssertionError:
+        pass
+    # hostile (b): forged token claiming the other variant (split +
+    # evidence otherwise valid) -> FAIL.
+    badsplit = (split[0], split[1], split[2],
+                dict(tok, split_variant=other))
+    try:
+        _frep(badsplit, h1x, stress, sess, proof, bars, by_var)
+        raise SystemExit("forged token selection must fail")
+    except AssertionError:
+        pass
+    # hostile (c): split minted on the NON-selected variant's stream:
+    # token + evidence + root all self-consistent for B, but the
+    # mechanical fold selection from the full streams picks A -> FAIL.
+    items = synth_stream(24)
+    by2 = run_all(items)
+    wsplit = s5f.holdout_split(by2[other], n_splits=2)
+    assert wsplit[3]["split_variant"] == other
+    whset = {r["cid"] for r in wsplit[1]}
+    wh1x = {v: [r for r in by2[v] if r["cid"] in whset]
+            for v in s5.VARIANTS}
+    wstress = {}
+    for mult, lab in ((1.5, "1.5x"), (2.0, "2x"), (3.0, "3x")):
+        wsv = run_all(items, spread_mult=mult)
+        wstress[lab] = {v: [r for r in wsv[v] if r["cid"] in whset]
+                        for v in s5.VARIANTS}
+    wbars = bars_for(items)
+    wsess, wproof = s5f.build_holdout_sessions(wbars, wsplit[3],
+                                               DATA_ID)
+    try:
+        _frep(wsplit, wh1x, wstress, wsess, wproof, wbars, by2)
+        raise SystemExit("non-selected split must fail binding")
+    except AssertionError:
+        pass
+    # control: echoing the token-bound selection passes; the rep binds
+    # it (selection + sequential follow the verified variant).
+    rep = _frep(split, h1x, stress, sess, proof, bars, by_var,
+                selected_variant=tok["split_variant"])
+    assert rep["selected_variant"] == tok["split_variant"]
+    assert rep["sequential"]["variant"] == tok["split_variant"]
+    print("46 OK")
+
+
+def test_47_baseline_artifact_authority():
+    split, h1x, stress, sess, proof, bars, by_var, root = _small_split()
+    tok = split[3]
+    chall = {"1x": 0.5, "1.5x": 0.4, "2x": 0.3, "3x": 0.2, "dd_1x": 4.0}
+    win = _baseline_fixture(proof, tok, {"1x": 0.1, "1.5x": 0.1,
+                                         "2x": 0.1, "3x": 0.1}, dd=9.0)
+    assert s5f.BASELINE_EXPECTED is None  # S2 OPEN: nothing pinned
+    # (a) missing artifact identity -> malformed.
+    noh = dict(win)
+    del noh["artifact_sha256"]
+    v, f, d = s5f.baseline_gate(chall, noh, proof, tok)
+    assert v is False and f == ["baseline_malformed"], (v, f)
+    # (b) fabricated metrics under the STALE hash -> malformed
+    # (identity covers content; the forgery invalidates the digest).
+    fab = {**win, "metrics":
+           {m: {"sharpe_f": -99.0, "max_dd_pct": 0.0, "n_closed": 1}
+            for m in s5f.BASELINE_MULTS}}
+    v, f, d = s5f.baseline_gate(chall, fab, proof, tok)
+    assert v is False and f == ["baseline_malformed"], (v, f)
+    # (c) rehashed fabrication passes identity but loses on merits -
+    # authority never blesses values; only a pin could (none exists).
+    fab2 = dict(fab)
+    fab2["artifact_sha256"] = s5f.baseline_artifact_hash(fab2)
+    v, f, d = s5f.baseline_gate(chall, fab2, proof, tok)
+    # fabricated Sharpe (-99) is trivially beaten; only the DD leg
+    # fails on merits - identity never blesses values.
+    assert v is False and f == ["dd_1x"], f
+    # (d) bool/NaN/inf metrics fail closed (hash or gate, never
+    # trusted). NaN/inf cannot even be hashed; bool is not a number.
+    for bad in (True, float("nan"), float("inf")):
+        b = _baseline_fixture(proof, tok, {"1x": 0.1, "1.5x": 0.1,
+                                           "2x": 0.1, "3x": 0.1})
+        b["metrics"]["1x"]["sharpe_f"] = bad
+        try:
+            b["artifact_sha256"] = s5f.baseline_artifact_hash(b)
+            v, f, d = s5f.baseline_gate(chall, b, proof, tok)
+            assert v is False and f == ["baseline_malformed"], (v, f)
+        except AssertionError as e:
+            assert "malformed" in str(e) or "metric" in str(e) or \
+                "finite" in str(e) or "bool" in str(e) or \
+                "canonical" in str(e) or "identity" in str(e), e
+    # (e) production identity + non-None baseline -> UNPINNED
+    # fail-closed (S2 OPEN means no artifact may authorize promotion).
+    pin = s5f.pinned_slice_root()
+    pproof = dict(proof, data_slice=pin["data_slice"],
+                  dataset_sha=pin["dataset_sha"])
+    v, f, d = s5f.baseline_gate(chall, win, pproof, tok,
+                                s5f.BASELINE_EXPECTED)
+    assert v is False and f == ["baseline_unpinned"], (v, f)
+    # (f) None under production identity is still ABSENT (not an
+    # error): the current and only valid production state.
+    v, f, d = s5f.baseline_gate(chall, None, pproof, tok,
+                                s5f.BASELINE_EXPECTED)
+    assert v is False and f == ["baseline_absent"], (v, f)
+    print("47 OK")
+
+def test_48_pin_interpreter_bound():
+    import sys as _sys
+    pin = s5f.pinned_slice_root()
+    assert pin["measured_python_minor"] == "3.11"
+    assert s5f._running_python_minor() == \
+        "%d.%d" % _sys.version_info[:2]
+    if s5f._running_python_minor() == "3.11":
+        s5f._check_pin_interpreter(pin)  # measuring interpreter: pass
+    else:
+        # wrong interpreter: fail closed naming BOTH versions (drift,
+        # never misreported as tampering).
+        try:
+            s5f._check_pin_interpreter(pin)
+            raise SystemExit("wrong-interpreter production must fail")
+        except AssertionError as e:
+            assert "measured under 3.11" in str(e), e
+            assert "running %s" % s5f._running_python_minor() in \
+                str(e), e
+    # tampered interpreter field fails under every interpreter.
+    badpin = dict(pin, measured_python_minor="9.9")
+    try:
+        s5f._check_pin_interpreter(badpin)
+        raise SystemExit("tampered pin interpreter must fail")
+    except AssertionError:
+        pass
+    print("48 OK")
 
 if __name__ == "__main__":
     test_1_2_same_stream_same_economics()
@@ -1691,4 +1937,8 @@ if __name__ == "__main__":
     test_42_baseline_session_wiring()
     test_43_missing_mark_fails_closed()
     test_44_ns_boundary_branches()
+    test_45_root_substitution_rejected()
+    test_46_selection_binding()
+    test_47_baseline_artifact_authority()
+    test_48_pin_interpreter_bound()
     print("ALL S5 TESTS GREEN")

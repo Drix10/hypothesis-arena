@@ -50,23 +50,42 @@ VARIANT_RULE = {
 }
 
 
-def canon_num(x):
-    """D6 canonical number (plan 05): fixed-point, explicit, no float repr.
+# D6 fixed-point contract (plan 05: scaled integers / fixed-point
+# decimal WITH EXPLICIT PRECISION). Authority-hashed numerics
+# quantize to exactly D6_SCALE_PLACES decimal places
+# (ROUND_HALF_EVEN, the deterministic banker's rule). Scale rationale:
+# 1e-6 resolves sub-basis-point R/bps differences and sub-cent prices
+# below $1M - finer than any S5 economic threshold - while distinct
+# economic values never collide. Two values differing ONLY below the
+# scale share a serialization BY DESIGN (fixed-point, not a bug).
+# Economic calculations are untouched - floats stay floats; ONLY hash
+# serialization quantizes. The scale is embedded in the tag ("f6:")
+# so a future scale change cannot silently collide with old digests.
+D6_SCALE_PLACES = 6
+D6_QUANT = "0.000001"
 
-    Every hashed numerical field serializes through here. Floats use
-    their EXACT binary value expanded as base-10 fixed-point
-    (Decimal(float) is exact and platform-independent for IEEE
-    doubles); ints serialize as decimal integers. Type tags keep 100
-    (int) and 100.0 (float) distinct. Non-finite floats fail closed:
-    NaN/inf must never enter an authority hash. Economic calculations
-    are untouched — only hash serialization."""
-    from decimal import Decimal
+
+def canon_num(x):
+    """D6 canonical number (plan 05): fixed-point, explicit scale.
+
+    Every hashed numerical field serializes through here. Floats
+    quantize their exact binary value (Decimal(float) is exact and
+    platform-independent for IEEE doubles) to D6_SCALE_PLACES decimal
+    places, ROUND_HALF_EVEN; ints serialize as decimal integers.
+    Type tags keep 100 (int) and 100.0 (float) distinct, and the
+    scale rides in the float tag ("f6:"). Non-finite floats fail
+    closed: NaN/inf must never enter an authority hash. Economic
+    calculations are untouched - only hash serialization."""
+    from decimal import Decimal, ROUND_HALF_EVEN  # noqa: F811
     assert isinstance(x, (int, float)) and not isinstance(x, bool), \
         "non-numeric hashed field: %r" % type(x)
     if isinstance(x, int):
         return "i:%d" % x
     assert math.isfinite(x), "non-finite hashed field"
-    return "f:%s" % format(Decimal(x), "f")
+    from decimal import Decimal, ROUND_HALF_EVEN
+    q = Decimal(x).quantize(Decimal(D6_QUANT),
+                            rounding=ROUND_HALF_EVEN)
+    return "f6:%s" % format(q, "f")
 
 
 def _canon_val(v):
