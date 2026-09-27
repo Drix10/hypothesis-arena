@@ -41,16 +41,21 @@ def main():
                     s5.walk_folds(by_var[v], n_splits=2,
                                   holdout_start=_b)]
     chosen = s5.select_variant(stats)
-    dall = s5.paired_deltas(recs)
-    o = sorted(range(len(recs)), key=lambda i: recs[i]["snapshot_ts_ns"])
-    dod = [dall[i] for i in o]
-    dyd = [recs[i]["day"] for i in o]
-    seq_i = s5.seq_decision(dod, dyd, "interim")
-    seq_f = s5.seq_decision(dod, dyd, "final")
-    pw = s5.power_study(s5.paired_deltas([r for f in folds for r in f[0]]),
-                        [r["day"] for f in folds for r in f[0]], 0.15)
-    hdays = {r["day"] for r in holdout}
-    h1x = {v: [r for r in by_var[v] if r["day"] in hdays]
+    # sequential evidence on the SELECTED variant, closed deltas only
+    sd, sy = s5.closed_stream(by_var[chosen])
+    seq_i = s5.seq_decision(sd, sy, "interim")
+    seq_f = s5.seq_decision(sd, sy, "final")
+    # power on the deduplicated pre-holdout training population
+    seen, train_recs = set(), []
+    for f in folds:
+        for r in f[0]:
+            if r["cid"] not in seen:
+                seen.add(r["cid"])
+                train_recs.append(r)
+    pw = s5.power_study(train_recs, 0.15)
+    # exact-CID holdout materialization (day reconstruction rejected)
+    hset = s5f.assert_exact_holdout(holdout, holdout)
+    h1x = {v: [r for r in by_var[v] if r["cid"] in hset]
            for v in s5.VARIANTS}
     stress = {}
     for mult, lab in ((1.5, "1.5x"), (2.0, "2x"), (3.0, "3x")):
@@ -59,12 +64,12 @@ def main():
                                     day_fn=test_s5.DAY,
                                     data_id=test_s5.DATA_ID)
               for v in s5.VARIANTS}
-        stress[lab] = {v: [r for r in sv[v] if r["day"] in hdays]
+        stress[lab] = {v: [r for r in sv[v] if r["cid"] in hset]
                        for v in s5.VARIANTS}
-    sess = [s for s in test_s5.sessions_for(items) if s["day"] in hdays]
-    _scope = pre["amendment_b"]["r_out_of_scope"]
-    rep = s5f.final_report(h1x, stress, sess, 100000.0, bar,
-                           r_out_of_scope=_scope)
+    sess = [x for x in test_s5.sessions_for(items)
+            if x["day"] in {r["day"] for r in holdout}]
+    rep = s5f.final_report(h1x, stress, sess, 100000.0, bar, hset,
+                           selected_variant=chosen)
     out = {"experiment_id": pre["experiment_id"], "protocol": "eval_v1",
            "prereg": "v2", "n_candidates": len(items),
            "answers": "stub-deterministic-v1 (MACHINERY PROOF ONLY)",

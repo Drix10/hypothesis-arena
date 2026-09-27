@@ -129,16 +129,27 @@
     "purge": "walk_folds requires holdout_start (boundary timestamp, not data); every selection record satisfies time_exit_ns < holdout_start; last test fold purged too; holdout_split asserts invariant + disjointness",
     "n_closed": "FILTERED-POLICY taken closed trades only (filtered portfolio trades with win/loss labels, post-admission); HOLDs/rejects/disqualified/censored never count",
     "stress": "exact key set {1.5x,2x,3x}, each a finite (filtered, always) Sharpe pair from re-resolved economics; anything else fails closed",
-    "r_classification": "research/strategy/s5_eval.py R_S5_STATUS: CHECKED (R1-positions, R1-same-direction, R2-single, R2-total, R3-churn, R4-fliplock, R5-halt run-local, R8-maxgate via v4, R12, R14, stop-rule), NOT_APPLICABLE (R10-spend, R11-isolation, R13-calib, R15-caps, R16-killswitch, R17-escalation), UNAVAILABLE (R1-pending, R2-pending, R6-vol, R7-corr, R9-venue)",
+    "r_classification": "CHECKED (R1-positions, R1-same-direction, R2-single, R2-total, R3-churn, R4-fliplock, R8-maxgate via v4, R12, R14, stop-rule), NOT_APPLICABLE (R10-spend, R11-isolation, R13-calib, R15-caps, R16-killswitch, R17-escalation), UNAVAILABLE (R1-pending, R2-pending, R5-halt, R6-vol, R7-corr, R9-venue)",
     "r_out_of_scope": [
       "R1-pending",
       "R2-pending",
+      "R5-halt",
       "R6-vol",
       "R7-corr",
       "R9-venue"
     ],
-    "r_out_of_scope_rationale": "each needs live/online authoritative inputs absent in research (order/ack + account state, 480+24h vol baselines with data-age gates, trailing-30 correlation engine with freshness gates, broker adapter + venue calendar); no_r_breach means no taken trade violated a CHECKED rule; scope fails closed if any other rule is UNAVAILABLE",
+    "r_out_of_scope_rationale": "each needs live/online authoritative inputs absent in research (order/ack + account state, per-cycle snapshot equity + persisted HWMs for R5 intraday spike-to-trough, 480+24h vol baselines with data-age gates, trailing-30 correlation engine with freshness gates, broker adapter + venue calendar); no_r_breach means no taken trade violated a CHECKED rule; scope fails closed if any other rule is UNAVAILABLE",
     "r_monitor": "s5_eval.verify_r_monitor post-hoc verifies R3/R4/R5/R1-direction/R2-concurrency on the filtered taken ledger; violations join r_breach_attempted in r_breach_count",
     "finalization": "s5_final holds holdout_split + final_report; holdout is terminal evidence, never fed back into select_variant; selected_variant may be echoed only"
+  },
+  "amendment_c": {
+    "scope": "no threshold/alpha/MDE/search change; evidence-integrity only",
+    "holdout_materialization": "final 1x/stress sets MUST equal the exact holdout CID set from holdout_split (s5_final.assert_exact_holdout); day-membership reconstruction rejected; holdout_cids is a required final_report input",
+    "curve": "principal accounting on frozen adverse entry_fill (open BUY immediately reflects entry cost); curve[0] is starting equity (pre-window baseline) so first-session return and drawdown-from-capital are represented; frozen daily-close marking otherwise unchanged",
+    "r5": "UNAVAILABLE (see amendment_b): S5 daily-close marks cannot observe intraday spike-to-trough against persisted HWMs; a hostile intraday-spike/recovery test proves the monitor boundary honest",
+    "sequential": "closed_stream: win/loss labels ONLY (censored/excluded/disqualified never enter), snapshot-ordered; sequential evidence is computed on the fold-selected variant (selection on folds first, no holdout choice); final Holm still pools both pre-declared variants",
+    "power": "record inputs, deduplicated by CID (n_unique_cids reported); each bootstrap cluster draw keeps a distinct synthetic label (repeated source draws never collapse); train-only, holdout-excluded",
+    "embargo": "walk_folds derives the embargo horizon from pre-holdout records only when holdout_start is supplied; holdout time_exit metadata never enters selection",
+    "frozen_scope": "final_report reads amendment_b r_out_of_scope from the committed prereg file (s5_final.frozen_scope); no caller-supplied scope accepted; the used list is echoed as rep[r_scope_frozen]"
   }
 }

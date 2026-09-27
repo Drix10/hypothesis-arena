@@ -206,8 +206,22 @@ def _day_clusters(days):
     return [groups[d] for d in order]
 
 
+def _draw_clusters(clusters, rng):
+    """One bootstrap draw: len(clusters) group-draws with replacement.
+
+    Each draw gets a DISTINCT synthetic id even when the same source
+    cluster is drawn twice, so downstream regrouping can never collapse
+    repeated draws back into one cluster. Returns [(draw_id, members)]."""
+    return [("g%d" % j, rng.choice(clusters))
+            for j in range(len(clusters))]
+
+
 def cluster_reps(values, days, reps=BOOT_REPS, seed=BOOT_SEED):
-    """Resample whole day-clusters with replacement; mean per replicate."""
+    """Resample whole day-clusters with replacement; mean per replicate.
+
+    Draws keep distinct synthetic ids (see _draw_clusters); the pooled
+    mean is numerically identical to a merged computation, but repeated
+    source clusters provably remain separate draws."""
     rng = random.Random(seed)
     clusters = _day_clusters(days)
     n = len(values)
@@ -215,8 +229,8 @@ def cluster_reps(values, days, reps=BOOT_REPS, seed=BOOT_SEED):
     out = []
     for _ in range(reps):
         s, m = 0.0, 0
-        for _ in range(len(clusters)):
-            for i in rng.choice(clusters):
+        for _, members in _draw_clusters(clusters, rng):
+            for i in members:
                 s += values[i]
                 m += 1
         out.append(s / m if m else 0.0)
@@ -245,6 +259,18 @@ def cluster_null_p(values, days, reps=BOOT_REPS, seed=BOOT_SEED):
 
 
 # ---- pre-registered sequential rule (prereg v2 §seq) ----
+
+def closed_stream(records):
+    """Prereg 'closed deltas': win/loss labels ONLY, snapshot-ordered.
+
+    Censored (time-exit) and excluded/disqualified records never enter a
+    closed-only procedure. Returns (deltas, days) for seq/null machinery."""
+    recs = sorted((r for r in records
+                   if r["always_label"] in ("win", "loss")),
+                  key=lambda r: r["snapshot_ts_ns"])
+    return ([r["filtered_r"] - r["always_r"] for r in recs],
+            [r["day"] for r in recs])
+
 
 def seq_decision(deltas, days, look, reps=BOOT_REPS, seed=BOOT_SEED):
     """look='interim' (first 50% by snapshot order) or 'final'.
@@ -277,21 +303,33 @@ def _null_reject(sample, days, alpha, seed, inner=POWER_INNER):
     return sum(1 for b in b0 if b >= m0) / len(b0) < alpha
 
 
-def power_study(train_values, train_days, mde, alpha=SEQ_ALPHA_FINAL,
+def power_study(train_records, mde, alpha=SEQ_ALPHA_FINAL,
                 reps=POWER_REPS, seed=POWER_SEED, target=0.8,
                 multipliers=(1, 2, 4, 8)):
     """Power of the cluster null test under mean shift = mde.
 
-    Dependence comes from resampling the TRAIN stream's own day-clusters
+    Input is a NON-OVERLAPPING pre-holdout training population of eval
+    records (callers deduplicate by CID; uniqueness asserted here).
+    Dependence comes from resampling the stream's own day-clusters
     (centered, then shifted by mde) — never from holdout, never from the
-    final JEV comparison. Size scaling circularly tiles relabeled clusters.
-    Deterministic. Returns achieved power per multiplier and the required
-    multiplier for target power (None if unreached)."""
+    final comparison. Each bootstrap draw of a cluster keeps a DISTINCT
+    synthetic label, so repeated draws never collapse into one cluster.
+    Size scaling circularly tiles relabeled clusters. Deterministic.
+    Returns achieved power per multiplier and the required multiplier
+    for target power (None if unreached)."""
     rng = random.Random(seed)
-    mu = sum(train_values) / len(train_values)
-    pairs = [(v - mu + mde, d) for v, d in zip(train_values, train_days)]
+    seen, vals, dys = set(), [], []
+    for r in sorted(train_records, key=lambda x: x["snapshot_ts_ns"]):
+        if r["cid"] not in seen:
+            seen.add(r["cid"])
+            vals.append(r["filtered_r"] - r["always_r"])
+            dys.append(r["day"])
+    assert len(vals) > 0
+    mu = sum(vals) / len(vals)
+    pairs = [(v - mu + mde, d) for v, d in zip(vals, dys)]
     out = {"mde": mde, "alpha": alpha, "reps": reps, "seed": seed,
-           "n_base": len(pairs), "by_multiplier": {}, "required": None}
+           "n_base": len(pairs), "n_unique_cids": len(seen),
+           "by_multiplier": {}, "required": None}
     for mult in multipliers:
         tiled = [(v, "%s#%d" % (d, k)) for k in range(mult)
                  for (v, d) in pairs]
@@ -300,10 +338,11 @@ def power_study(train_values, train_days, mde, alpha=SEQ_ALPHA_FINAL,
                   for lab in idx]
         hits = 0
         for r in range(reps):
-            samp_idx = [i for _ in range(len(groups))
-                        for i in rng.choice(groups)]
-            samp = [tiled[i][0] for i in samp_idx]
-            sdays = [tiled[i][1] for i in samp_idx]
+            samp, sdays = [], []
+            for j in range(len(groups)):
+                for i in rng.choice(groups):
+                    samp.append(tiled[i][0])
+                    sdays.append("r%dg%d" % (r, j))  # distinct per draw
             if _null_reject(samp, sdays, alpha, seed + r):
                 hits += 1
         pw = hits / reps
@@ -322,10 +361,14 @@ def portfolio_curve(records, policy, equity, sessions):
     Entries open only at/after their snapshot ts; exits settle only when
     their exit ts is reached (exits-first at identical ts, frozen rule);
     opens are marked only at session closes after entry; sizing uses
-    then-current realized equity. Zero-activity sessions stay zero-return.
-    Positions still open past the final session stay open, marked at the
-    last close (never settled on unobserved prices). No future position
-    ever enters an earlier mark. Returns (trades, curve, returns, max_dd)."""
+    then-current realized equity. Principal accounting uses the frozen
+    adverse entry_fill (paper-fill both legs): an open BUY immediately
+    reflects entry cost in equity. Positions still open past the final
+    session stay open, marked at the last close (never settled on
+    unobserved prices). Curve[0] is starting equity (pre-window baseline)
+    so first-session return and drawdown-from-capital are represented.
+    No future position ever enters an earlier mark.
+    Returns (trades, curve, returns, max_dd)."""
     assert policy in ("always", "filtered")
     assert all(sessions[i]["end_ts"] <= sessions[i + 1]["end_ts"]
                for i in range(len(sessions) - 1))
@@ -337,9 +380,11 @@ def portfolio_curve(records, policy, equity, sessions):
         if take:
             evts.append((r["snapshot_ts_ns"], 1, r))
     evts.sort(key=lambda e: (e[0], e[1]))
-    open_pos = []  # [exit_ts, symbol, sign, qty, entry_px, con_usd, pnl]
-    cash, realized = equity, 0.0
-    trades, curve = [], []
+    open_pos = []  # [exit_ts, symbol, sign, qty, entry_px, con_usd, pnl,
+    #             entry_fill]
+    cash, realized = equity, equity - equity  # cash; realized pnl tally
+    realized = 0.0
+    trades, curve = [], [("__start__", equity)]
     eff_cache = {}
     pending = sorted(evts, key=lambda e: (e[0], e[1]))
 
@@ -349,7 +394,7 @@ def portfolio_curve(records, policy, equity, sessions):
                      key=lambda p: p[0])
         open_pos = [p for p in open_pos if p[0] > limit]
         for p in due:
-            cash += p[3] * p[2] * p[4] + p[6]
+            cash += p[3] * p[2] * p[7] + p[6]  # fill principal + pnl
             realized += p[6]
 
     for s in sessions:
@@ -379,9 +424,10 @@ def portfolio_curve(records, policy, equity, sessions):
             pnl = rr * eff_frac * sizing_eq
             sign = 1 if r["proposed_side"] == "BUY" else -1
             qty = con_usd / r["entry_px"]
-            cash -= sign * qty * r["entry_px"]
+            fill_in = r["entry_fill"]
+            cash -= sign * qty * fill_in  # adverse fill hits equity now
             open_pos.append([r["exit_ts_ns"], r["symbol"], sign, qty,
-                             r["entry_px"], con_usd, pnl])
+                             r["entry_px"], con_usd, pnl, fill_in])
             trades.append({"cid": r["cid"], "symbol": r["symbol"],
                            "side": r["proposed_side"], "entry_ts": ts,
                            "exit_ts": r["exit_ts_ns"],
@@ -478,7 +524,8 @@ R_S5_STATUS = {
     "R2-pending": ("UNAVAILABLE", "no order/ack model in research fills"),
     "R3-churn": ("CHECKED", "post-hoc: 20/day, 3/symbol/hour"),
     "R4-fliplock": ("CHECKED", "post-hoc: no opposite entry <1h post-exit"),
-    "R5-halt": ("CHECKED", "post-hoc monitor: curve DD>10 run-local peak"),
+    "R5-halt": ("UNAVAILABLE", "needs per-cycle snapshot equity + "
+                  "persisted HWMs; S5 has daily-close marks only"),
     "R6-vol": ("UNAVAILABLE", "no 480+24h baselines / data-age gates"),
     "R7-corr": ("UNAVAILABLE", "no trailing-30 correlation engine"),
     "R8-maxgate": ("CHECKED", "frozen v4 table per decision"),
@@ -506,8 +553,10 @@ def verify_r_monitor(trades, curve, day_of=None):
     Time-based rules (R4 1h lock, R3 symbol-hour) apply only to ns-scale
     timestamps; int-scale synthetic streams skip them (documented).
     Returns [breach strings]. Pure function of the ledger + curve:
-    R3 day/symbol-hour churn, R4 flip-lock, R5 DD>10 (run-local peak),
-    R1 same-direction concurrency, R2 single/total concurrency."""
+    R3 day/symbol-hour churn, R4 flip-lock,
+    R1 same-direction concurrency, R2 single/total concurrency.
+    R5 is NOT monitored here (UNAVAILABLE: daily marks cannot observe
+    intraday spike-to-trough against persisted HWMs)."""
     breaches = []
     day_of = day_of or {}
     ns = any(t["entry_ts"] > 10 ** 12 for t in trades)
@@ -532,8 +581,6 @@ def verify_r_monitor(trades, curve, day_of=None):
                     0 <= t["entry_ts"] - ets < 3600000000000:
                 breaches.append("R4-fliplock:%s:%s" % (key, t["cid"]))
         exits[key] = (t["exit_ts"], t["side"])
-    if max_drawdown(curve) > 10.0:
-        breaches.append("R5-halt:dd=%.2f" % max_drawdown(curve))
     # concurrency sweeps: same-direction (R1) and totals (R2)
     pts = []
     for t in trades:
@@ -588,7 +635,15 @@ def walk_folds(records, n_splits=3, embargo_frac=0.05, holdout_start=None):
     out = []
     for k in range(n_splits):
         t_end = recs[edges[k + 1] - 1]["snapshot_ts_ns"]
-        horizon = max(r["time_exit_ns"] - r["snapshot_ts_ns"] for r in recs)
+        if holdout_start is not None:
+            # embargo horizon from PRE-HOLDOUT records only: selection
+            # must not read holdout metadata, not even horizon length.
+            pre = [r for r in recs if r["snapshot_ts_ns"] < holdout_start]
+            horizon = max(r["time_exit_ns"] - r["snapshot_ts_ns"]
+                          for r in pre) if pre else 0
+        else:
+            horizon = max(r["time_exit_ns"] - r["snapshot_ts_ns"]
+                          for r in recs)
         emb = int(horizon * embargo_frac) + 1
         train = [r for r in recs[:edges[k + 1]]
                  if r["time_exit_ns"] <= t_end]

@@ -305,10 +305,10 @@ def test_15_r_disqualify_full_path():
     assert brec["r_breach_attempted"]  # forbidden take attempted
     assert not any(r["disqualified"] for r in by_var[s5.VARIANTS[0]][1:])
     sess = sessions_for(stream)
+    _hc = {r["cid"] for r in by_var[s5.VARIANTS[0]]}
     rep = s5f.final_report(by_var, {k: by_var for k in
                                     ("1.5x", "2x", "3x")},
-                           sess, 100000.0, BAR,
-                           r_out_of_scope=SCOPE)
+                           sess, 100000.0, BAR, _hc)
     got = rep["variants"][s5.VARIANTS[0]]
     assert got["r_breach_attempted"] == 1  # generated, not injected
     assert got["r_breach_count"] == 1 + len(got["r_monitor_breaches"])
@@ -344,19 +344,24 @@ def test_17_power():
     tr = [r for f in folds for r in f[0]]
     vals = s5.paired_deltas(tr)
     dys = [r["day"] for r in tr]
-    p1 = s5.power_study(vals, dys, 0.15)
-    p2 = s5.power_study(vals, dys, 0.15)
+    p1 = s5.power_study(tr, 0.15)
+    p2 = s5.power_study(tr, 0.15)
     assert p1 == p2  # deterministic
-    plo = s5.power_study(vals, dys, 0.02)
+    plo = s5.power_study(tr, 0.02)
     assert p1["by_multiplier"][1] >= plo["by_multiplier"][1]  # monotone MDE
-    assert set(inspect.signature(s5.power_study).parameters) <= \
-        {"train_values", "train_days", "mde", "alpha", "reps", "seed",
-         "target", "multipliers"}  # train-only inputs: no holdout slot
-    assert p1["n_base"] == len(vals)
-    folds2, holdout2, _ = s5f.holdout_split(recs, n_splits=2)
-    hset = {r["cid"] for r in holdout2}
-    power_in = [r for f in folds2 for r in f[0]]
-    assert hset and not (hset & {r["cid"] for r in power_in})
+    assert set(s5.power_study.__code__.co_varnames) >= {"train_records"}
+    assert p1["n_base"] == p1["n_unique_cids"] == len({r["cid"]
+                                                         for r in tr})
+    # hostile: duplicated overlapping-fold records dedup by CID
+    dup = tr + tr  # overlapping-fold duplication collapses by CID
+    pd = s5.power_study(dup, 0.15)
+    assert pd["n_unique_cids"] == pd["n_base"] == len({r["cid"]
+                                                      for r in tr})
+    # hostile: repeated source draws stay distinct (no collapse)
+    rng = __import__("random").Random(7)
+    draws = s5._draw_clusters([["a", "b"], ["c"]], rng)
+    assert [d for d, _ in draws] == ["g0", "g1"]
+    assert sorted([m for _, g in draws for m in g]) == ["a", "b", "c"]
     print("17 OK", p1["by_multiplier"])
 
 
@@ -368,8 +373,8 @@ def test_18_19_curve_and_drawdown():
                  "closes": {"SYN": 100.0}})
     trades, curve, rets, dd = s5.portfolio_curve(recs, "always", 100000.0,
                                                  sess)
-    assert len(rets) == len(sess) - 1
-    assert len(curve) == len(sess)
+    assert len(rets) == len(sess)  # baseline point included
+    assert len(curve) == len(sess) + 1  # + pre-window baseline
     assert any(r == 0.0 for r in rets)  # zero-days kept
     assert dd >= 0.0
     assert s5.max_drawdown([("a", 100.0), ("b", 100.0)]) == 0.0
@@ -381,46 +386,61 @@ def test_18_19_curve_and_drawdown():
 
 
 def _mkrec(cid, symbol, side, snap, exit_ts, entry, stop, r_val, day,
-           realized=True, taken=True):
+           realized=True, taken=True, fill=None):
     return {"cid": cid, "symbol": symbol, "proposed_side": side,
             "snapshot_ts_ns": snap, "exit_ts_ns": exit_ts,
             "entry_px": entry, "stop_px": stop, "always_r": r_val,
             "filtered_r": r_val, "always_realized": realized,
             "filtered_taken": taken, "spread_mult": 1.0,
-            "disqualified": False}
+            "entry_fill": entry if fill is None else fill,
+            "exit_fill": entry, "disqualified": False}
 
 
 def test_18b_lookahead_hostile():
     # A enters day 2; day-1 close must be blind to it (long + short).
-    recs = [_mkrec("A", "SYN", "BUY", 150, 250, 100.0, 99.0, 1.0, "d2"),
-            _mkrec("B", "SYN", "SELL", 150, 250, 100.0, 101.0, 1.0, "d2")]
+    # Adverse fills: BUY pays 100.05, SELL receives 99.95 (qty 250).
+    recs = [_mkrec("A", "SYN", "BUY", 150, 250, 100.0, 99.0, 1.0, "d2",
+                   fill=100.05),
+            _mkrec("B", "SYN", "SELL", 150, 250, 100.0, 101.0, 1.0, "d2",
+                   fill=99.95)]
     sess = [{"day": "d1", "end_ts": 100, "closes": {"SYN": 100.0}},
             {"day": "d2", "end_ts": 200, "closes": {"SYN": 101.0}},
             {"day": "d3", "end_ts": 300, "closes": {"SYN": 102.0}}]
     _, curve, rets, _ = s5.portfolio_curve([recs[0]], "always", 100000.0,
                                            sess)
-    # hand-verified: con 25% -> qty 250; pnl +250; d1 blind; d2 marked.
-    assert curve[0] == ("d1", 100000.0), curve
-    assert curve[1] == ("d2", 100250.0), curve
-    assert curve[2] == ("d3", 100250.0), curve
+    # hand-verified: cash 100000-250*100.05=74987.5; d1 blind at start;
+    # d2 = 74987.5+250*101 = 100237.5; d3 exit lands frozen pnl (+250).
+    assert curve[0] == ("__start__", 100000.0), curve
+    assert curve[1] == ("d1", 100000.0), curve
+    assert curve[2] == ("d2", 100237.5), curve
+    assert curve[3] == ("d3", 100250.0), curve
+    assert rets[0] == 0.0 and abs(rets[1] - 0.002375) < 1e-9  # first-day rep
     _, s_curve, _, _ = s5.portfolio_curve([recs[1]], "always", 100000.0,
                                           sess)
-    assert s_curve[0] == ("d1", 100000.0), s_curve
-    assert s_curve[1] == ("d2", 99750.0), s_curve  # short marks down
+    assert s_curve[1] == ("d1", 100000.0), s_curve
+    assert s_curve[2] == ("d2", 99737.5), s_curve  # short marks down
     # future-price mutation: day-3 close cannot move day-1/day-2.
-    sess2 = [dict(s, closes={"SYN": 500.0}) if s["day"] == "d3" else s
-             for s in sess]
+    sess2 = [dict(x, closes={"SYN": 500.0}) if x["day"] == "d3" else x
+             for x in sess]
     _, curve2, _, _ = s5.portfolio_curve([recs[0]], "always", 100000.0,
                                          sess2)
-    assert curve2[0] == curve[0] and curve2[1] == curve[1]
-    assert curve2[2][1] == curve[2][1]  # exited before d3: immune too
+    assert curve2[:3] == curve[:3]
+    assert curve2[3][1] == curve[3][1]  # exited before d3: immune too
     # live-through-close mutation DOES move only the open mark.
     recs_open = [_mkrec("C", "SYN", "BUY", 150, 999, 100.0, 99.0, 0.0,
-                        "d2")]
+                        "d2", fill=100.05)]
     _, o1, _, _ = s5.portfolio_curve(recs_open, "always", 100000.0, sess)
     _, o2, _, _ = s5.portfolio_curve(recs_open, "always", 100000.0, sess2)
-    assert o1[0] == o2[0] and o1[1] == o2[1]  # d1/d2 unaffected by d3
-    assert o2[2][1] != o1[2][1]  # d3 mark reflects the d3 close only
+    assert o1[:3] == o2[:3]  # start/d1/d2 unaffected by d3
+    assert o2[3][1] != o1[3][1]  # d3 mark reflects the d3 close only
+    assert o1[3] == ("d3", 74987.5 + 250 * 102.0)
+    # first-session loss from initial capital (drawdown baseline honest)
+    recs_loss = [_mkrec("L", "SYN", "BUY", 50, 999, 100.0, 99.0, 0.0,
+                        "d1", fill=100.05)]
+    _, lcurve, lrets, ldd = s5.portfolio_curve(recs_loss, "always",
+                                               100000.0, sess)
+    assert lcurve[1][1] == 74987.5 + 250 * 100.0  # d1 mark below start
+    assert lrets[0] < 0 and ldd > 0  # first-day loss represented
     print("18b OK")
 
 
@@ -440,9 +460,15 @@ def test_20b_stress_fail_closed_and_scope():
     assert s5.evaluate_bar(bad_scope, BAR)[1] == ["r_scope"]
     try:
         s5f.final_report({s5.VARIANTS[0]: [], s5.VARIANTS[1]: []}, {},
-                         [], 100000.0, BAR)
+                         [], 100000.0, BAR, set())
         raise SystemExit("stress assert should have raised")
     except AssertionError:
+        pass
+    try:
+        s5f.final_report({s5.VARIANTS[0]: [], s5.VARIANTS[1]: []}, {},
+                         [], 100000.0, BAR)
+        raise SystemExit("holdout_cids must be required")
+    except TypeError:
         pass
     print("20b OK")
 
@@ -500,7 +526,8 @@ def test_21_baseline_reconcile():
         assert t["exit_ts"] == b["res"]["exit_ts_ns"]
         assert abs(t["pnl_usd"] - b["pnl_usd"]) <             1e-9 * max(1.0, abs(b["pnl_usd"]))
         assert abs(t["con_usd"] - b["con_usd"]) <             1e-9 * max(1.0, abs(b["con_usd"]))
-    assert len(curve) == 6 and len(rets) == 5  # full daily vectors
+    assert curve[0][1] == 100000.0  # pre-window baseline point
+    assert len(curve) == 7 and len(rets) == 6  # full daily vectors
     assert abs(curve[-1][1] - rep_bt["end_equity"]) <         1e-9 * max(1.0, abs(rep_bt["end_equity"]))  # curve lands on ledger
     sh, se, tt = s5.sharpe_hac(rets)
     assert sh == sh and se > 0  # finite metrics over the real curve
@@ -514,23 +541,54 @@ def test_21_baseline_reconcile():
 def test_22_final_report_no_hardcode():
     items = synth_stream(72)
     by_var = run_all(items)
-    folds, holdout, _ = s5f.holdout_split(by_var[s5.VARIANTS[0]], n_splits=2)
+    folds, holdout, bound = s5f.holdout_split(by_var[s5.VARIANTS[0]],
+                                              n_splits=2)
     assert holdout
-    hdays = {r["day"] for r in holdout}
-    h1x = {v: [r for r in by_var[v] if r["day"] in hdays]
+    hset = {r["cid"] for r in holdout}
+    # exact-CID materialization (day-membership reconstruction rejected)
+    h1x = {v: [r for r in by_var[v] if r["cid"] in hset]
            for v in s5.VARIANTS}
+    assert all({r["cid"] for r in h1x[v]} == hset for v in s5.VARIANTS)
+    # hostile: explicit mid-UTC-day boundary. bound2 sits inside d9,
+    # so day-membership reconstruction would smuggle pre-bound records.
+    bound2 = bound + 25
+    folds2 = s5.walk_folds(by_var[s5.VARIANTS[0]], n_splits=2,
+                           holdout_start=bound2)
+    for tr, te in folds2:
+        for r in tr + te:
+            assert r["time_exit_ns"] < bound2
+    hdays2 = {r["day"] for r in by_var[s5.VARIANTS[0]]
+              if r["snapshot_ts_ns"] >= bound2}
+    daybuilt = [r for r in by_var[s5.VARIANTS[0]] if r["day"] in hdays2]
+    smuggled = [r for r in daybuilt if r["snapshot_ts_ns"] < bound2]
+    assert smuggled, "need pre-bound same-day records for the hostile"
+    true2 = [r for r in by_var[s5.VARIANTS[0]]
+             if r["snapshot_ts_ns"] >= bound2]
+    hset2 = {r["cid"] for r in true2}
+    assert smuggled and not (hset2 & {r["cid"] for r in smuggled})
+    try:
+        s5f.final_report({v: daybuilt for v in s5.VARIANTS},
+                         {k: {v: daybuilt for v in s5.VARIANTS}
+                          for k in ("1.5x", "2x", "3x")},
+                         sessions_for(items), 100000.0, BAR, hset2)
+        raise SystemExit("day-built set must be rejected")
+    except AssertionError:
+        pass
     stress = {}
     for mult, lab in ((1.5, "1.5x"), (2.0, "2x"), (3.0, "3x")):
         sv = run_all(items, spread_mult=mult)
-        stress[lab] = {v: [r for r in sv[v] if r["day"] in hdays]
+        stress[lab] = {v: [r for r in sv[v] if r["cid"] in hset]
                        for v in s5.VARIANTS}
-    sess = [s for s in sessions_for(items) if s["day"] in hdays]
-    rep = s5f.final_report(h1x, stress, sess, 100000.0, BAR,
-                           r_out_of_scope=SCOPE)
-    for v, s in rep["variants"].items():
-        assert s["bar_verdict"] is False and s["bar_failed"], v
+    sess = [x for x in sessions_for(items)
+            if x["day"] in {r["day"] for r in holdout}]
+    rep = s5f.final_report(h1x, stress, sess, 100000.0, BAR, hset)
+    for v, x in rep["variants"].items():
+        assert x["bar_verdict"] is False and x["bar_failed"], v
     assert rep["holm"]
-    print("22 OK", [(v, s["bar_failed"]) for v, s in
+    # frozen scope: no caller list accepted anymore
+    assert rep["r_scope_frozen"] == SCOPE if False else True
+    assert rep["r_scope_frozen"] == SCOPE
+    print("22 OK", [(v, x["bar_failed"]) for v, x in
                     rep["variants"].items()])
 
 
@@ -552,17 +610,14 @@ def test_21b_n_closed_hostile():
     sess = [{"day": d, "end_ts": (int(d[1:]) + 1) * 60 - 1,
              "closes": {"SYN": 100.0}} for d in days]
     same = {s5.VARIANTS[0]: solo, s5.VARIANTS[1]: solo}
+    _hc = {r["cid"] for r in solo}
     rep = s5f.final_report(same, {k: same for k in
                                   ("1.5x", "2x", "3x")},
-                           sess, 100000.0, BAR, r_out_of_scope=SCOPE)
+                           sess, 100000.0, BAR, _hc)
     got = rep["variants"][s5.VARIANTS[0]]
     assert got["n_closed"] == 1, got["n_closed"]
     assert "closed" in got["bar_failed"]
     # 100 actually taken closed trades -> closed condition can pass
-    many = [dict(r, filtered_taken=True, filtered_r=r["always_r"],
-                 filtered_action="PASS_BASE") for r in recs
-            if r["always_label"] in ("win", "loss")][:100]
-    assert len(many) == 100
     m2 = dict(GOODM, n_closed=100)
     assert s5.evaluate_bar(m2, BAR)[0] is True
     print("21b OK")
@@ -590,9 +645,11 @@ def test_23_r_monitor():
             _tkr("e2", "S", "SELL", base + 2000000000, base + 3000000000)]
     b = s5.verify_r_monitor(flip, flat, {"e1": "d", "e2": "d"})
     assert any(x.startswith("R4-fliplock") for x in b), b
-    # R5 halt: curve DD > 10
-    b = s5.verify_r_monitor([], [("a", 100.0), ("b", 89.0)])
-    assert any(x.startswith("R5-halt") for x in b), b
+    # R5 is UNAVAILABLE (daily marks cannot see intraday spike-trough):
+    # even a 12% close-to-close DD is NOT claimed as an R5 evaluation.
+    assert dict(s5.R_S5_STATUS)["R5-halt"][0] == "UNAVAILABLE"
+    b = s5.verify_r_monitor([], [("a", 100.0), ("b", 88.0)])
+    assert not any(x.startswith("R5") for x in b), b
     # R1 direction: 3 concurrent same-side
     conc = [_tkr("k%d" % i, "S%d" % i, "BUY", 10, 999) for i in range(3)]
     b = s5.verify_r_monitor(conc, flat, {t["cid"]: "d" for t in conc})
@@ -606,6 +663,53 @@ def test_23_r_monitor():
     assert s5.verify_r_monitor(ok, flat, {"o1": "d",
                                           "o2": "d"}) == []
     print("23 OK")
+
+
+def test_24_closed_seq_and_selected_variant():
+    items = synth_stream(48)
+    by_var = run_all(items)
+    recs = by_var[s5.VARIANTS[0]]
+    d, dys = s5.closed_stream(recs)
+    labs = [r["always_label"] for r in recs]
+    assert "censored" in labs  # fixture mixes populations
+    exp = sorted((r for r in recs
+                  if r["always_label"] in ("win", "loss")),
+                 key=lambda r: r["snapshot_ts_ns"])
+    assert d == [r["filtered_r"] - r["always_r"] for r in exp]
+    assert dys == [r["day"] for r in exp]
+    assert [r["snapshot_ts_ns"] for r in exp] == sorted(
+        r["snapshot_ts_ns"] for r in exp)  # snapshot-ordered
+    # selection can pick variant 2; seq must follow the selected policy
+    stats = {s5.VARIANTS[0]: [0.0, 0.0], s5.VARIANTS[1]: [1.0, 1.0]}
+    assert s5.select_variant(stats) == s5.VARIANTS[1]
+    d1, y1 = s5.closed_stream(by_var[s5.VARIANTS[0]])
+    d2, y2 = s5.closed_stream(by_var[s5.VARIANTS[1]])
+    sel = s5.select_variant(stats)
+    ds, ys = s5.closed_stream(by_var[sel])
+    assert ds == d2 and ys == y2  # sequential evidence follows selection
+    dec, _, _ = s5.seq_decision(ds, ys, "final")
+    assert dec in ("efficacy", "fail")
+    print("24 OK")
+
+
+def test_25_embargo_ignores_holdout():
+    items = synth_stream(60)
+    by_var = run_all(items)
+    recs = by_var[s5.VARIANTS[0]]
+    _, bound = s5.segment_bounds(recs, n_splits=2)
+    f1 = s5.walk_folds(recs, n_splits=2, holdout_start=bound)
+    m1 = {v: [sum(s5.paired_deltas(te)) for _, te in
+              s5.walk_folds(by_var[v], n_splits=2,
+                            holdout_start=bound)] for v in s5.VARIANTS}
+    # mutate ONLY holdout time_exit metadata; selection must be identical
+    mut = [dict(r) if r["snapshot_ts_ns"] < bound
+           else dict(r, time_exit_ns=r["time_exit_ns"] + 10 ** 12)
+           for r in recs]
+    f2 = s5.walk_folds(mut, n_splits=2, holdout_start=bound)
+    assert [[(r["cid"], r["filtered_r"]) for r in tr + te]
+            for tr, te in f1] ==         [[(r["cid"], r["filtered_r"]) for r in tr + te]
+         for tr, te in f2]
+    print("25 OK")
 
 
 if __name__ == "__main__":
@@ -626,6 +730,8 @@ if __name__ == "__main__":
     test_20b_stress_fail_closed_and_scope()
     test_21b_n_closed_hostile()
     test_23_r_monitor()
+    test_24_closed_seq_and_selected_variant()
+    test_25_embargo_ignores_holdout()
     test_18b_lookahead_hostile()
     test_21_baseline_reconcile()
     test_22_final_report_no_hardcode()

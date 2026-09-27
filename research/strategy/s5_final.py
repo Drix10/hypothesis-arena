@@ -11,10 +11,33 @@ recorded for the audit trail; it cannot alter any computation and
 holdout performance never overwrites it. Research/shadow-only.
 """
 
+import json as _json
+import os as _os
+
 from .s5_eval import (R_CHECKED, R_UNAVAILABLE, REQUIRED_STRESS, VARIANTS,
                       cluster_bootstrap_ci, cluster_null_p, evaluate_bar,
                       holm, paired_deltas, portfolio_curve, segment_bounds,
                       sharpe_hac, verify_r_monitor, walk_folds)
+
+
+def frozen_scope():
+    """The frozen amendment_b out-of-scope declaration, read from the
+    committed prereg file. The final path trusts NO caller-supplied list."""
+    here = _os.path.join(_os.path.dirname(__file__), "s5_prereg.json")
+    return sorted(_json.load(open(here))["amendment_b"]["r_out_of_scope"])
+
+
+def assert_exact_holdout(candidate_recs, holdout):
+    """Final evidence must be the EXACT holdout CID set (never day
+    membership, never a superset). holdout is the record list from
+    holdout_split or its CID set. Returns the CID set."""
+    if holdout and isinstance(next(iter(holdout)), dict):
+        hset = {r["cid"] for r in holdout}
+    else:
+        hset = set(holdout)
+    cset = {r["cid"] for r in candidate_recs}
+    assert cset == hset, "final set != exact holdout CIDs"
+    return hset
 
 
 def holdout_split(records, n_splits=3):
@@ -40,18 +63,20 @@ def holdout_split(records, n_splits=3):
 
 
 def final_report(recs_1x, recs_stress, sessions, equity, bar,
-                 r_out_of_scope=(), selected_variant=None):
+                 holdout_cids, selected_variant=None):
     """Holdout verdict per variant + pooled Holm.
 
-    recs_1x: {variant: records at 1x costs} on the SAME holdout stream.
-    recs_stress: {1.5x,2x,3x: {variant: records re-evaluated at that
-    spread multiplier}} — exact key set required (fail closed otherwise).
-    n_closed counts FILTERED-POLICY taken closed trades (post-admission),
-    never rejected/disqualified/censored candidates. R monitor breaches on
-    the filtered ledger join r_breach_attempted in the breach count; scope
-    fails closed unless every UNAVAILABLE rule is prereg-declared
-    out-of-scope. selected_variant is echoed only."""
+    holdout_cids: the EXACT CID set from holdout_split. Every 1x and
+    stress record set MUST equal it exactly (asserted; day-membership
+    reconstruction cannot pass). R out-of-scope comes from the frozen
+    prereg declaration (frozen_scope); no caller list is accepted."""
     assert set(recs_1x) == set(VARIANTS)
+    for _v, _recs in recs_1x.items():
+        assert_exact_holdout(_recs, holdout_cids)
+    for _mult, _by_var in recs_stress.items():
+        for _v, _recs in _by_var.items():
+            assert_exact_holdout(_recs, holdout_cids)
+    scope = frozen_scope()
     assert set(recs_stress) == set(REQUIRED_STRESS), \
         "stress must carry exactly %s" % (REQUIRED_STRESS,)
     for mult, by_var in recs_stress.items():
@@ -94,6 +119,7 @@ def final_report(recs_1x, recs_stress, sessions, equity, bar,
             "r_breach_count": breach_attempts + len(monitor),
             "stress": stress}
     rep["holm"] = holm(pvals)
+    rep["r_scope_frozen"] = scope
     adj = dict((n, a) for n, a, _ in rep["holm"])
     for variant, v in rep["variants"].items():
         m = {"sharpe_f": v["sharpe_f"], "holm_p": adj[variant],
@@ -101,7 +127,7 @@ def final_report(recs_1x, recs_stress, sessions, equity, bar,
              "stress": v["stress"],
              "r_breach_count": v["r_breach_count"],
              "r_unavailable": R_UNAVAILABLE,
-             "r_out_of_scope": list(r_out_of_scope)}
+             "r_out_of_scope": scope}
         verdict, failed, checks = evaluate_bar(m, bar)
         v["bar_verdict"], v["bar_failed"], v["bar_checks"] = \
             verdict, failed, checks

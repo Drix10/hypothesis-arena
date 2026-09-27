@@ -20,8 +20,8 @@ from research.strategy import s2_run
 
 ENGINE = {"deterministic_veto": False, "disagreement": False,
           "blackout": False, "calib_gate": "pass", "veto_max": False}
-DAY = lambda ts: datetime.datetime.utcfromtimestamp(
-    ts / 1e9).strftime("%Y-%m-%d")
+DAY = lambda ts: datetime.datetime.fromtimestamp(ts / 1e9,
+    tz=datetime.timezone.utc).strftime("%Y-%m-%d")
 
 
 def main():
@@ -48,25 +48,30 @@ def main():
               for v in s5.VARIANTS}
     recs = by_var[s5.VARIANTS[0]]
     folds, holdout, _bound = s5f.holdout_split(recs, n_splits=2)
-    o = sorted(range(len(recs)), key=lambda i: recs[i]["snapshot_ts_ns"])
-    seq_d = [s5.paired_deltas(recs)[i] for i in o]
-    seq_y = [recs[i]["day"] for i in o]
-    seq_i = s5.seq_decision(seq_d, seq_y, "interim")
-    seq_f = s5.seq_decision(seq_d, seq_y, "final")
-    train_recs = [r for f in folds for r in f[0]]
-    pw = s5.power_study(s5.paired_deltas(train_recs),
-                        [r["day"] for r in train_recs], 0.15)
-    assert not ({r["cid"] for r in holdout} &
-                {r["cid"] for r in train_recs})
     stats = {}
     for v in s5.VARIANTS:
         _, _b = s5.segment_bounds(by_var[v], n_splits=2)
         stats[v] = [sum(s5.paired_deltas(te)) for _, te in
                     s5.walk_folds(by_var[v], n_splits=2,
                                   holdout_start=_b)]
-    chosen = s5.select_variant(stats)
-    hdays = {r["day"] for r in holdout}
-    h1x = {v: [r for r in by_var[v] if r["day"] in hdays]
+    chosen = s5.select_variant(stats)  # frozen BEFORE holdout use
+    # sequential evidence: closed deltas of the SELECTED variant only
+    _sd, _sy = s5.closed_stream(by_var[chosen])
+    seq_i = s5.seq_decision(_sd, _sy, "interim")
+    seq_f = s5.seq_decision(_sd, _sy, "final")
+    # power on the deduplicated pre-holdout training population
+    _seen, train_recs = set(), []
+    for f in folds:
+        for r in f[0]:
+            if r["cid"] not in _seen:
+                _seen.add(r["cid"])
+                train_recs.append(r)
+    pw = s5.power_study(train_recs, 0.15)
+    assert not ({r["cid"] for r in holdout} &
+                {r["cid"] for r in train_recs})
+    # exact-CID holdout materialization (day reconstruction rejected)
+    hset = s5f.assert_exact_holdout(holdout, holdout)
+    h1x = {v: [r for r in by_var[v] if r["cid"] in hset]
            for v in s5.VARIANTS}
     stress = {}
     for mult, lab in ((1.5, "1.5x"), (2.0, "2x"), (3.0, "3x")):
@@ -74,11 +79,11 @@ def main():
                                     variant=v, spread_mult=mult,
                                     day_fn=DAY, data_id=data_id)
               for v in s5.VARIANTS}
-        stress[lab] = {v: [r for r in sv[v] if r["day"] in hdays]
+        stress[lab] = {v: [r for r in sv[v] if r["cid"] in hset]
                        for v in s5.VARIANTS}
     # sessions: UTC day boundaries with last-close marks per symbol
     sess = []
-    for d in sorted(hdays):
+    for d in sorted({r["day"] for r in holdout}):
         end = int(datetime.datetime.strptime(
             d, "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc).
             timestamp() * 1e9) + 86400 * 10 ** 9 - 1
@@ -94,10 +99,8 @@ def main():
         sess.append({"day": d, "end_ts": end, "closes": closes})
     bar = {"filtered_net_sharpe_gt": 1.0, "holm_adjusted_p_lt": 0.05,
            "max_drawdown_pct_lte": 15.0, "min_closed_trades": 100}
-    _scope = json.load(open(os.path.join(os.path.dirname(__file__),
-                                          "s5_prereg.json")))["amendment_b"]["r_out_of_scope"]
-    rep = s5f.final_report(h1x, stress, sess, 100000.0, bar,
-                           r_out_of_scope=_scope)
+    rep = s5f.final_report(h1x, stress, sess, 100000.0, bar, hset,
+                           selected_variant=chosen)
     out = {"slice": s2_run.SLICE_ID, "n_stream": len(items),
            "n_holdout": len(holdout),
            "n_selection_train": sum(len(tr) for tr, _ in folds),
