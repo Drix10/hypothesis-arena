@@ -1,1 +1,127 @@
-{"absolute_bar": {"conditions": {"filtered_net_sharpe_gt": 1.0, "holm_adjusted_p_lt": 0.05, "max_drawdown_pct_lte": 15.0, "min_closed_trades": 100, "no_r_breach_taken": true, "stress_beats": "filtered net Sharpe > always-take net Sharpe at 1.5x, 2x and 3x spread multipliers, each recomputed from re-resolved stressed economics"}, "evaluator": "s5_eval.evaluate_bar (mechanical; verdict + failed conditions returned, never hardcoded)", "scope": "holdout window, 1x costs unless stated"}, "calibration_separation": "Brier/log-loss on enter+latent over CLOSED labels only; NEVER mixed into efficacy or portfolio metrics.", "costs": {"levels": {"1.5x": "re-resolved", "1x": "paper_fill_v1 two-leg adverse fills", "2x": "re-resolved", "3x": "re-resolved"}, "note": "stress enters through backtest.resolve(spread_mult), never by scaling a 1x number"}, "created": "v2 supersedes v1 BEFORE any corrected-harness comparison is computed; v1 rationale preserved in git history. Variant names reconciled to implementation; resampling fixed to day-cluster bootstrap; sequential + power + bar-evaluator gaps closed.", "evaluation_protocol_version": "eval_v1", "experiment_id": "s5-paired-v1", "holdout": {"access": "holdout_split() is FINAL-path only, called after select_variant() freezes on folds; select_variant takes metrics only (signature-guarded); regression test proves no records/holdout parameter", "definition": "final time segment from holdout_split (walk_folds segments + 1)"}, "holm": {"alpha": 0.05, "direction": "one-sided: challenger strictly better", "family": "ONE pooled Holm over the union of declared variants (no per-family Holms)", "h0": "variant mean paired delta <= 0 (per variant)", "p_value": "cluster_null_p: P(centered day-cluster bootstrap mean >= observed mean)", "statistic": "mean paired delta (filtered_R - always_R) on the holdout window", "test": "Holm step-down"}, "leakage_guards": ["stream built first from bars[..i] only", "walk-forward with purge of boundary-overlapping labels + embargo gap", "thresholds frozen before window", "no hidden-window selection", "calibration outcomes never enter construction", "no JEV-derived label in the JEV decision", "power study on train folds only; holdout CIDs never enter power/sequential inputs"], "policies": {"ALWAYS_TAKE": "take every realized non-disqualified candidate at frozen economics", "JEV_FILTERED": "v4 evaluate under the variant reading; take only accepted; HOLD never fills; disqualified never taken by either policy"}, "portfolio": {"admission": "mirrors backtest.run (exits-first, one-per-symbol, max 3, 75% total notional, evolving realized equity)", "bandwidth": "floor(4*(n/100)^(2/9)) Bartlett", "curve": "daily equity with opens marked at session closes; zero-days kept; final session settles", "returns": "daily equity-relative changes; Sharpe = daily x sqrt(252); HAC SE Newey-West"}, "power": {"alpha": 0.025, "dependence": "train stream's own day-clusters, centered then shifted by MDE", "effect_MDE": "+0.15 mean paired R (declared before any JEV comparison; NOT estimated from results)", "replicates": 200, "required_N": "smallest size multiplier with power >= target (None if unreached)", "seed": 41721, "target_power": 0.8}, "resampling": {"ci": "percentile day-cluster bootstrap, B=2000, seed 24269", "clusters": "UTC snapshot day of the candidate (snapshot_ts date)", "null_test": "H0-centered day-cluster bootstrap, B=2000, seed 24270 (seed+1); p = P(boot >= observed); one-sided H1: mean > 0", "procedure": "day-cluster bootstrap (cluster-aware): resample whole snapshot-day clusters with replacement; preserves within-day dependence"}, "search_budget": {"declared_variants": ["filtered-conv-any", "filtered-enter-gte-80-strong-plus"], "family": "jev-filter-readings", "note": "v4 table FROZEN; variants are pre-declared readings of the same signed answers on the same window; Holm pools them."}, "sequential_rule": {"alpha_split": "Bonferroni 0.025 interim + 0.025 final (conservative under dependence; fixed, no post-hoc looks)", "decision": "interim: mean<=0 -> stop-futility; null p<0.025 -> stop-efficacy; else continue. Final: null p<0.025 -> efficacy else fail.", "evaluator": "s5_eval.seq_decision (deterministic replay; inputs snapshot-ordered)", "looks": ["interim at 50% of closed deltas by snapshot order", "final at 100%"]}, "status": "PRE-REGISTERED v2", "variants": {"filtered-conv-any": {"decision_rule": "take iff frozen v4 verdict in (PASS_BASE, PASS_ELEVATED_ELIGIBLE)", "resampling": "day-cluster bootstrap as above"}, "filtered-enter-gte-80-strong-plus": {"decision_rule": "take iff PASS_* AND answers.enter >= 0.8 AND answers.conviction in (strong, max)", "resampling": "day-cluster bootstrap as above"}}, "window": {"answers": "stub-deterministic-v1 ONLY for harness/pipeline proof - zero JEV-value claim until live-provider answers run under this same protocol", "stream": "synthetic deterministic stream (unit proofs) + S2 validation slice candidates (pipeline proof)"}}
+{
+  "absolute_bar": {
+    "conditions": {
+      "filtered_net_sharpe_gt": 1.0,
+      "holm_adjusted_p_lt": 0.05,
+      "max_drawdown_pct_lte": 15.0,
+      "min_closed_trades": 100,
+      "no_r_breach_taken": true,
+      "stress_beats": "filtered net Sharpe > always-take net Sharpe at 1.5x, 2x and 3x spread multipliers, each recomputed from re-resolved stressed economics"
+    },
+    "evaluator": "s5_eval.evaluate_bar (mechanical; verdict + failed conditions returned, never hardcoded)",
+    "scope": "holdout window, 1x costs unless stated"
+  },
+  "calibration_separation": "Brier/log-loss on enter+latent over CLOSED labels only; NEVER mixed into efficacy or portfolio metrics.",
+  "costs": {
+    "levels": {
+      "1.5x": "re-resolved",
+      "1x": "paper_fill_v1 two-leg adverse fills",
+      "2x": "re-resolved",
+      "3x": "re-resolved"
+    },
+    "note": "stress enters through backtest.resolve(spread_mult), never by scaling a 1x number"
+  },
+  "created": "v2 supersedes v1 BEFORE any corrected-harness comparison is computed; v1 rationale preserved in git history. Variant names reconciled to implementation; resampling fixed to day-cluster bootstrap; sequential + power + bar-evaluator gaps closed.",
+  "evaluation_protocol_version": "eval_v1",
+  "experiment_id": "s5-paired-v1",
+  "holdout": {
+    "access": "holdout_split() is FINAL-path only, called after select_variant() freezes on folds; select_variant takes metrics only (signature-guarded); regression test proves no records/holdout parameter",
+    "definition": "final time segment from holdout_split (walk_folds segments + 1)"
+  },
+  "holm": {
+    "alpha": 0.05,
+    "direction": "one-sided: challenger strictly better",
+    "family": "ONE pooled Holm over the union of declared variants (no per-family Holms)",
+    "h0": "variant mean paired delta <= 0 (per variant)",
+    "p_value": "cluster_null_p: P(centered day-cluster bootstrap mean >= observed mean)",
+    "statistic": "mean paired delta (filtered_R - always_R) on the holdout window",
+    "test": "Holm step-down"
+  },
+  "leakage_guards": [
+    "stream built first from bars[..i] only",
+    "walk-forward with purge of boundary-overlapping labels + embargo gap",
+    "thresholds frozen before window",
+    "no hidden-window selection",
+    "calibration outcomes never enter construction",
+    "no JEV-derived label in the JEV decision",
+    "power study on train folds only; holdout CIDs never enter power/sequential inputs"
+  ],
+  "policies": {
+    "ALWAYS_TAKE": "take every realized non-disqualified candidate at frozen economics",
+    "JEV_FILTERED": "v4 evaluate under the variant reading; take only accepted; HOLD never fills; disqualified never taken by either policy"
+  },
+  "portfolio": {
+    "admission": "mirrors backtest.run (exits-first, one-per-symbol, max 3, 75% total notional, evolving realized equity)",
+    "bandwidth": "floor(4*(n/100)^(2/9)) Bartlett",
+    "curve": "daily equity with opens marked at session closes; zero-days kept; final session settles",
+    "returns": "daily equity-relative changes; Sharpe = daily x sqrt(252); HAC SE Newey-West"
+  },
+  "power": {
+    "alpha": 0.025,
+    "dependence": "train stream's own day-clusters, centered then shifted by MDE",
+    "effect_MDE": "+0.15 mean paired R (declared before any JEV comparison; NOT estimated from results)",
+    "replicates": 200,
+    "required_N": "smallest size multiplier with power >= target (None if unreached)",
+    "seed": 41721,
+    "target_power": 0.8,
+    "inner_resamples": 200
+  },
+  "resampling": {
+    "ci": "percentile day-cluster bootstrap, B=2000, seed 24269",
+    "clusters": "UTC snapshot day of the candidate (snapshot_ts date)",
+    "null_test": "H0-centered day-cluster bootstrap, B=2000, seed 24270 (seed+1); p = P(boot >= observed); one-sided H1: mean > 0",
+    "procedure": "day-cluster bootstrap (cluster-aware): resample whole snapshot-day clusters with replacement; preserves within-day dependence"
+  },
+  "search_budget": {
+    "declared_variants": [
+      "filtered-conv-any",
+      "filtered-enter-gte-80-strong-plus"
+    ],
+    "family": "jev-filter-readings",
+    "note": "v4 table FROZEN; variants are pre-declared readings of the same signed answers on the same window; Holm pools them."
+  },
+  "sequential_rule": {
+    "alpha_split": "Bonferroni 0.025 interim + 0.025 final (conservative under dependence; fixed, no post-hoc looks)",
+    "decision": "interim: mean<=0 -> stop-futility; null p<0.025 -> stop-efficacy; else continue. Final: null p<0.025 -> efficacy else fail.",
+    "evaluator": "s5_eval.seq_decision (deterministic replay; inputs snapshot-ordered)",
+    "looks": [
+      "interim at 50% of closed deltas by snapshot order",
+      "final at 100%"
+    ]
+  },
+  "status": "PRE-REGISTERED v2",
+  "variants": {
+    "filtered-conv-any": {
+      "decision_rule": "take iff frozen v4 verdict in (PASS_BASE, PASS_ELEVATED_ELIGIBLE)",
+      "resampling": "day-cluster bootstrap as above"
+    },
+    "filtered-enter-gte-80-strong-plus": {
+      "decision_rule": "take iff PASS_* AND answers.enter >= 0.8 AND answers.conviction in (strong, max)",
+      "resampling": "day-cluster bootstrap as above"
+    }
+  },
+  "window": {
+    "answers": "stub-deterministic-v1 ONLY for harness/pipeline proof - zero JEV-value claim until live-provider answers run under this same protocol",
+    "stream": "synthetic deterministic stream (unit proofs) + S2 validation slice candidates (pipeline proof)"
+  },
+  "amendment_a": {
+    "scope": "no threshold/alpha/MDE change; structural only",
+    "final_module": "holdout_split + final_report live in research/strategy/s5_final.py; s5_eval exposes no holdout API (asserted); selection imports s5_eval only",
+    "policy_R": "disqualified candidates contribute zero policy R to both policies (diagnostic resolved_r + label retained); paired delta 0; never in portfolios",
+    "breach": "r_breach_attempted = disqualified AND JEV PASS AND realized; final_report sums it into r_breach_taken consumed by no_r_breach",
+    "holm": "proper step-down adjusted p-values with monotone cummax",
+    "portfolio": "single chronological sweep (entries open at/after snapshot ts, exits settle at exit ts with exits-first, marks only after entry, sizing on realized equity); still-open positions stay open marked at last close",
+    "power_inner": 200,
+    "reason": "re-audit FAIL findings 1-6 corrected; Variants/H0/alphas/MDE/search budget unchanged from v2"
+  },
+  "evaluators": {
+    "bar": "s5_eval.evaluate_bar",
+    "final": "s5_final.final_report",
+    "holdout": "s5_final.holdout_split",
+    "null_test": "s5_eval.cluster_null_p",
+    "portfolio": "s5_eval.portfolio_curve",
+    "power": "s5_eval.power_study",
+    "sequential": "s5_eval.seq_decision",
+    "validate": "s5_eval.r_validate"
+  }
+}

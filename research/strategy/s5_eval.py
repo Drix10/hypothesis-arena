@@ -29,7 +29,7 @@ EVAL_PROTOCOL = "eval_v1"
 BOOT_REPS = 2000
 BOOT_SEED = 0x5EED
 POWER_REPS = 200
-POWER_INNER = 100
+POWER_INNER = 200
 POWER_SEED = 41721
 HOLM_ALPHA = 0.05
 SEQ_ALPHA_INTERIM = 0.025
@@ -130,8 +130,18 @@ def evaluate_stream(items, answers_fn, pubkey, engine, variant,
                     a["conviction"] in ("strong", "max")):
                 action, reason = "HOLD", "strict_reading"
         disq, disq_reason = r_validate(c)
-        filt_r = res["r_realized"] if action.startswith("PASS") else 0.0
-        filt_taken = action.startswith("PASS") and res["realized"] and not disq
+        filt_pass = action.startswith("PASS")  # JEV verdict (pre-R-gate)
+        filt_r = res["r_realized"] if filt_pass else 0.0
+        filt_taken = filt_pass and res["realized"] and not disq
+        # policy outcomes: disqualified is never taken by either policy,
+        # so it contributes ZERO policy R (diagnostic economics kept in
+        # resolved_r / always_label). No false paired delta from forbiddens.
+        always_r = (res["r_realized"] if res["realized"] else 0.0) \
+            if not disq else 0.0
+        if disq:
+            filt_r = 0.0
+        # R-breach attempt: policy would have taken but frozen R forbids.
+        breach_attempted = bool(disq and filt_pass and res["realized"])
         exit_sp = _exit_spread(c, bars_after, res["exit_ts_ns"]) \
             if res["realized"] else 0.0
         rec = {
@@ -155,12 +165,15 @@ def evaluate_stream(items, answers_fn, pubkey, engine, variant,
             "spread_mult": spread_mult,
             "entry_fill": res["entry_fill"], "exit_fill": res["exit_fill"],
             "exit_ts_ns": res["exit_ts_ns"],
-            "always_r": res["r_realized"] if res["realized"] else 0.0,
+            "resolved_r": res["r_realized"],  # diagnostic only
+            "always_r": always_r,
             "always_label": res["label"],
             "always_realized": res["realized"] and not disq,
             "disqualified": disq, "disqualify_reason": disq_reason,
+            "filtered_pass": filt_pass,
             "filtered_action": action, "filtered_reason": reason,
             "filtered_r": filt_r, "filtered_taken": filt_taken,
+            "r_breach_attempted": breach_attempted,
             "regime": regime,
             "enter": art["payload"]["answers"]["enter"],
             "latent_risk": art["payload"]["answers"]["latent_risk"],
@@ -303,77 +316,85 @@ def power_study(train_values, train_days, mde, alpha=SEQ_ALPHA_FINAL,
 # ---- portfolio: daily curve with mark-to-close ----
 
 def portfolio_curve(records, policy, equity, sessions):
-    """Chronological R2-admission ledger mirroring backtest.run takes/sizes.
+    """Single chronological sweep: admission + marking in ts order.
 
     sessions: [{day, end_ts, closes:{symbol: px}}] chronological.
-    Open positions marked at session closes; zero sessions kept as
-    zero-return days. Final session settles remaining opens at its closes.
-    Returns (trades, curve[(day, equity)], returns, max_dd_pct)."""
+    Entries open only at/after their snapshot ts; exits settle only when
+    their exit ts is reached (exits-first at identical ts, frozen rule);
+    opens are marked only at session closes after entry; sizing uses
+    then-current realized equity. Zero-activity sessions stay zero-return.
+    Positions still open past the final session stay open, marked at the
+    last close (never settled on unobserved prices). No future position
+    ever enters an earlier mark. Returns (trades, curve, returns, max_dd)."""
     assert policy in ("always", "filtered")
-    evts = sorted(records, key=lambda r: (r["snapshot_ts_ns"], r["symbol"]))
-    open_pos = []  # [exit_ts, symbol, sign, qty, entry_px, con_usd, pnl]
-    cash, sizing_eq = equity, equity
-    trades, eff_cache = [], {}
-    # admission pass (identical rules to bt.run; JEV/disqualify gate only delta)
-    for r in evts:
-        ts = r["snapshot_ts_ns"]
-        still = []
-        for p in open_pos:
-            if p[0] <= ts:
-                sizing_eq += p[6]
-            else:
-                still.append(p)
-        open_pos = still
+    assert all(sessions[i]["end_ts"] <= sessions[i + 1]["end_ts"]
+               for i in range(len(sessions) - 1))
+    # event queue: (ts, kind, record) with exits(0) before entries(1)
+    evts = []
+    for r in records:
         take = (r["always_realized"] if policy == "always"
                 else r["filtered_taken"])
-        if not take:
-            continue
-        if any(p[1] == r["symbol"] for p in open_pos):
-            continue
-        if len(open_pos) >= MAX_POSITIONS:
-            continue
-        risk = abs(r["entry_px"] - r["stop_px"])
-        key = (r["cid"], round(sizing_eq, 6))
-        if key not in eff_cache:
-            eff_cache[key] = bt.size_notional(sizing_eq, risk, r["entry_px"])
-        _, con, _, _, eff_frac = eff_cache[key]
-        con_usd = con / 100.0 * sizing_eq
-        if (sum(p[5] for p in open_pos) + con_usd) / sizing_eq > \
-                R2_TOTAL_PCT / 100.0:
-            continue
-        rr = r["always_r"] if policy == "always" else r["filtered_r"]
-        pnl = rr * eff_frac * sizing_eq
-        sign = 1 if r["proposed_side"] == "BUY" else -1
-        qty = con_usd / r["entry_px"]
-        cash -= sign * qty * r["entry_px"]
-        open_pos.append([r["exit_ts_ns"], r["symbol"], sign, qty,
-                         r["entry_px"], con_usd, pnl])
-        trades.append({"cid": r["cid"], "symbol": r["symbol"],
-                       "side": r["proposed_side"], "entry_ts": ts,
-                       "exit_ts": r["exit_ts_ns"], "con_usd": con_usd,
-                       "entry_equity": sizing_eq, "pnl_usd": pnl,
-                       "spread_mult": r["spread_mult"], "policy": policy})
-    # curve pass: settle + mark per session
-    curve = []
+        if take:
+            evts.append((r["snapshot_ts_ns"], 1, r))
+    evts.sort(key=lambda e: (e[0], e[1]))
+    open_pos = []  # [exit_ts, symbol, sign, qty, entry_px, con_usd, pnl]
+    cash, realized = equity, 0.0
+    trades, curve = [], []
+    eff_cache = {}
+    pending = sorted(evts, key=lambda e: (e[0], e[1]))
+
+    def settle(limit):
+        nonlocal cash, realized, open_pos
+        due = sorted([p for p in open_pos if p[0] <= limit],
+                     key=lambda p: p[0])
+        open_pos = [p for p in open_pos if p[0] > limit]
+        for p in due:
+            cash += p[3] * p[2] * p[4] + p[6]
+            realized += p[6]
+
     for s in sessions:
         end = s["end_ts"]
-        still = []
-        for p in open_pos:
-            if p[0] <= end:
-                cash += p[3] * p[2] * p[4] + p[6]  # principal + pnl
-            else:
-                still.append(p)
-        open_pos = still
+        # merged ts order: exits due at/before each entry ts settle first
+        # (frozen exits-first at identical ts; chronological otherwise)
+        while pending and pending[0][0] <= end:
+            settle(pending[0][0])
+            _, _, r = pending.pop(0)
+            ts = r["snapshot_ts_ns"]
+            if any(p[1] == r["symbol"] for p in open_pos):
+                continue
+            if len(open_pos) >= MAX_POSITIONS:
+                continue
+            sizing_eq = equity + realized
+            risk = abs(r["entry_px"] - r["stop_px"])
+            key = (r["cid"], round(sizing_eq, 6))
+            if key not in eff_cache:
+                eff_cache[key] = bt.size_notional(sizing_eq, risk,
+                                                  r["entry_px"])
+            _, con, _, _, eff_frac = eff_cache[key]
+            con_usd = con / 100.0 * sizing_eq
+            if (sum(p[5] for p in open_pos) + con_usd) / sizing_eq > \
+                    R2_TOTAL_PCT / 100.0:
+                continue
+            rr = r["always_r"] if policy == "always" else r["filtered_r"]
+            pnl = rr * eff_frac * sizing_eq
+            sign = 1 if r["proposed_side"] == "BUY" else -1
+            qty = con_usd / r["entry_px"]
+            cash -= sign * qty * r["entry_px"]
+            open_pos.append([r["exit_ts_ns"], r["symbol"], sign, qty,
+                             r["entry_px"], con_usd, pnl])
+            trades.append({"cid": r["cid"], "symbol": r["symbol"],
+                           "side": r["proposed_side"], "entry_ts": ts,
+                           "exit_ts": r["exit_ts_ns"],
+                           "con_usd": con_usd,
+                           "entry_equity": sizing_eq, "pnl_usd": pnl,
+                           "spread_mult": r["spread_mult"],
+                           "policy": policy})
+        settle(end)  # exits due later in this session, before its mark
         mark = sum(p[2] * p[3] * s["closes"].get(p[1], p[4])
                    for p in open_pos)
         curve.append((s["day"], cash + mark))
-    # final settlement at last close for anything still open
-    if open_pos:
-        s = sessions[-1]
-        for p in open_pos:
-            cash += p[3] * p[2] * p[4] + p[6]
-        open_pos = []
-        curve[-1] = (s["day"], cash)
+    # Positions still open past the final session stay open, marked at the
+    # last close (computed in-loop above). Never settle the unobserved.
     rets = [(curve[i][1] - curve[i - 1][1]) / curve[i - 1][1]
             if curve[i - 1][1] else 0.0 for i in range(1, len(curve))]
     return trades, curve, rets, max_drawdown(curve)
@@ -414,15 +435,23 @@ def sharpe_hac(rets):
 
 
 def holm(pvals, alpha=HOLM_ALPHA):
-    """Holm step-down: [(name, adj_p, reject)] sorted by raw p."""
+    """Proper Holm step-down adjusted p-values (monotone cummax).
+
+    Sort by raw p; candidate adj = min(1, (m-i)*p_i); adjusted p_i =
+    cumulative MAX of candidates; reject while adj < alpha in order.
+    Returns [(name, adj_p, reject)] sorted by raw p."""
     m = len(pvals)
     ordered = sorted(pvals, key=lambda t: t[1])
+    cand = [min(1.0, (m - i) * p) for i, (_, p) in enumerate(ordered)]
+    adj, peak = [], 0.0
+    for c in cand:
+        peak = max(peak, c)
+        adj.append(peak)
     out, stop = [], False
-    for i, (name, p) in enumerate(ordered):
-        adj = min(1.0, (m - i) * p)
-        rej = (not stop) and (adj < alpha)
+    for (name, _), a in zip(ordered, adj):
+        rej = (not stop) and (a < alpha)
         stop = stop or not rej
-        out.append((name, adj, rej))
+        out.append((name, a, rej))
     return out
 
 
@@ -458,15 +487,6 @@ def walk_folds(records, n_splits=3, embargo_frac=0.05):
     return out
 
 
-def holdout_split(records, n_splits=3):
-    """FINAL path only: (folds, holdout). Called after selection freezes."""
-    folds = walk_folds(records, n_splits)
-    recs = sorted(records, key=lambda r: r["snapshot_ts_ns"])
-    n = len(recs)
-    edges = [i * n // (n_splits + 2) for i in range(n_splits + 3)]
-    return folds, recs[edges[n_splits + 1]:]
-
-
 def select_variant(fold_stats):
     """Pure metrics choice: {variant: [fold paired-mean...]} -> variant.
 
@@ -482,8 +502,6 @@ def select_variant_signature_clean():
     assert list(params) == ["fold_stats"], list(params)
 
 
-# ---- absolute bar (mechanical, prereg v2 §bar) ----
-
 def evaluate_bar(metrics, bar):
     """metrics: {sharpe_f, holm_p, max_dd_pct, n_closed, stress:{mult:
     (sharpe_f, sharpe_a)}, r_breach_taken}. Returns (verdict, failed, detail)."""
@@ -497,50 +515,3 @@ def evaluate_bar(metrics, bar):
     }
     failed = [k for k, v in checks.items() if not v]
     return (not failed, failed, checks)
-
-
-def final_report(recs_1x, recs_stress, sessions, equity, bar):
-    """Holdout verdict per variant + pooled Holm.
-
-    recs_1x: {variant: records at 1x costs} on the SAME holdout stream.
-    recs_stress: {mult_label: {variant: records re-evaluated at that
-    spread multiplier}} — cost stress enters through re-resolved economics,
-    never by scaling a 1x number."""
-    assert set(recs_1x) == set(VARIANTS)
-    pvals, rep = [], {"variants": {}}
-    for variant, recs in recs_1x.items():
-        d = paired_deltas(recs)
-        days = [r["day"] for r in recs]
-        mu, lo, hi = cluster_bootstrap_ci(d, days)
-        p = cluster_null_p(d, days)
-        pvals.append((variant, p))
-        _, _, rets_f, dd_f = portfolio_curve(recs, "filtered", equity,
-                                             sessions)
-        closed = sum(1 for r in recs
-                     if r["always_label"] in ("win", "loss"))
-        stress = {}
-        for mult, by_var in recs_stress.items():
-            srecs = by_var[variant]
-            _, _, srets_f, _ = portfolio_curve(srecs, "filtered", equity,
-                                               sessions)
-            _, _, srets_a, _ = portfolio_curve(srecs, "always", equity,
-                                               sessions)
-            stress[mult] = (sharpe_hac(srets_f)[0], sharpe_hac(srets_a)[0])
-        rep["variants"][variant] = {
-            "paired_mean_R": mu, "ci95": [lo, hi], "null_p": p,
-            "sharpe_f": sharpe_hac(portfolio_curve(
-                recs, "filtered", equity, sessions)[2])[0],
-            "max_dd_pct": dd_f, "n_closed": closed,
-            "r_breach_taken": sum(1 for r in recs
-                                  if r["disqualified"] and r["filtered_taken"]),
-            "stress": stress}
-    rep["holm"] = holm(pvals)
-    adj = dict((n, a) for n, a, _ in rep["holm"])
-    for variant, v in rep["variants"].items():
-        m = {"sharpe_f": v["sharpe_f"], "holm_p": adj[variant],
-             "max_dd_pct": v["max_dd_pct"], "n_closed": v["n_closed"],
-             "stress": v["stress"], "r_breach_taken": v["r_breach_taken"]}
-        verdict, failed, checks = evaluate_bar(m, bar)
-        v["bar_verdict"], v["bar_failed"], v["bar_checks"] = \
-            verdict, failed, checks
-    return rep

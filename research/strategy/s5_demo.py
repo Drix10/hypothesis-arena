@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tests"))
 
 from research.strategy import s5_eval as s5
+from research.strategy import s5_final as s5f
 import test_s5
 
 ENGINE = {"deterministic_veto": False, "disagreement": False,
@@ -32,7 +33,7 @@ def main():
                                     data_id=test_s5.DATA_ID)
               for v in s5.VARIANTS}
     recs = by_var[s5.VARIANTS[0]]
-    folds, holdout = s5.holdout_split(recs, n_splits=2)
+    folds, holdout = s5f.holdout_split(recs, n_splits=2)
     stats = {v: [sum(s5.paired_deltas(te)) for _, te in
                    s5.walk_folds(by_var[v], n_splits=2)]
              for v in s5.VARIANTS}
@@ -58,7 +59,7 @@ def main():
         stress[lab] = {v: [r for r in sv[v] if r["day"] in hdays]
                        for v in s5.VARIANTS}
     sess = [s for s in test_s5.sessions_for(items) if s["day"] in hdays]
-    rep = s5.final_report(h1x, stress, sess, 100000.0, bar)
+    rep = s5f.final_report(h1x, stress, sess, 100000.0, bar)
     out = {"experiment_id": pre["experiment_id"], "protocol": "eval_v1",
            "prereg": "v2", "n_candidates": len(items),
            "answers": "stub-deterministic-v1 (MACHINERY PROOF ONLY)",

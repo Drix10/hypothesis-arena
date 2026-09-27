@@ -14,6 +14,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from research.strategy import s5_eval as s5
+from research.strategy import s5_final as s5f
 from research.strategy import backtest as bt
 from research.strategy import s2_run
 
@@ -46,7 +47,17 @@ def main():
                                     variant=v, day_fn=DAY, data_id=data_id)
               for v in s5.VARIANTS}
     recs = by_var[s5.VARIANTS[0]]
-    folds, holdout = s5.holdout_split(recs, n_splits=2)
+    folds, holdout = s5f.holdout_split(recs, n_splits=2)
+    o = sorted(range(len(recs)), key=lambda i: recs[i]["snapshot_ts_ns"])
+    seq_d = [s5.paired_deltas(recs)[i] for i in o]
+    seq_y = [recs[i]["day"] for i in o]
+    seq_i = s5.seq_decision(seq_d, seq_y, "interim")
+    seq_f = s5.seq_decision(seq_d, seq_y, "final")
+    train_recs = [r for f in folds for r in f[0]]
+    pw = s5.power_study(s5.paired_deltas(train_recs),
+                        [r["day"] for r in train_recs], 0.15)
+    assert not ({r["cid"] for r in holdout} &
+                {r["cid"] for r in train_recs})
     stats = {v: [sum(s5.paired_deltas(te)) for _, te in
                    s5.walk_folds(by_var[v], n_splits=2)]
              for v in s5.VARIANTS}
@@ -80,11 +91,13 @@ def main():
         sess.append({"day": d, "end_ts": end, "closes": closes})
     bar = {"filtered_net_sharpe_gt": 1.0, "holm_adjusted_p_lt": 0.05,
            "max_drawdown_pct_lte": 15.0, "min_closed_trades": 100}
-    rep = s5.final_report(h1x, stress, sess, 100000.0, bar)
+    rep = s5f.final_report(h1x, stress, sess, 100000.0, bar)
     out = {"slice": s2_run.SLICE_ID, "n_stream": len(items),
            "n_holdout": len(holdout),
            "answers": "stub-deterministic-v1 (PIPELINE PROOF ONLY)",
-           "chosen": chosen, "holdout": rep}
+           "chosen": chosen,
+           "sequential": {"interim": seq_i, "final": seq_f},
+           "power_mde0.15": pw, "holdout": rep}
     jp = "data/s5_out/s5_slice_stub.json"
     json.dump(out, open(jp, "w"), indent=2, default=str)
     for v, s in rep["variants"].items():
@@ -94,6 +107,8 @@ def main():
               f"closed={s['n_closed']} bar={s['bar_verdict']} "
               f"failed={s['bar_failed']}")
     print("holm:", rep["holm"], "| chosen:", chosen)
+    print("seq:", seq_i[0], "/", seq_f[0], "| power@1x:",
+          pw["by_multiplier"][1], "required:", pw["required"])
     print("wrote", jp)
 
 

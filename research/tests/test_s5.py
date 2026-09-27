@@ -14,6 +14,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from research.strategy import s5_eval as s5
+from research.strategy import s5_final as s5f
 from research.strategy import backtest as bt
 from research.strategy.candidate import make_candidate
 from research.strategy.data import Bar
@@ -60,7 +61,8 @@ def synth_stream(n=60):
 
 
 def sessions_for(items):
-    days = sorted({DAY(c.snapshot_ts_ns) for c, _, _, _, _ in items})
+    days = sorted({DAY(c.snapshot_ts_ns) for c, _, _, _, _ in items},
+                  key=lambda d: int(d[1:]))
     return [{"day": d, "end_ts": (int(d[1:]) + 1) * 60 - 1,
              "closes": {"SYN": 100.0 + int(d[1:])}} for d in days]
 
@@ -133,7 +135,8 @@ def test_8b_replay_fields_bound():
               "spread_mult", "entry_fill", "exit_fill", "response_hash",
               "signature", "decision_key", "model", "revision",
               "provider", "data_slice", "dataset_sha", "eval_protocol",
-              "variant"):
+              "variant", "filtered_pass", "resolved_r",
+              "r_breach_attempted"):
         assert k in r, k
     assert r["eval_protocol"] == "eval_v1"
     assert r["variant"] in s5.VARIANTS
@@ -196,7 +199,9 @@ def test_14_holdout_boundary():
     s5.select_variant_signature_clean()
     assert list(inspect.signature(s5.select_variant).parameters) == \
         ["fold_stats"]
-    _, holdout = s5.holdout_split(recs, n_splits=2)
+    assert not [a for a in dir(s5) if "holdout" in a.lower()], \
+        "selection module must expose no holdout API"
+    _, holdout = s5f.holdout_split(recs, n_splits=2)
     assert holdout
     hmin = min(r["snapshot_ts_ns"] for r in holdout)
     assert all(r["snapshot_ts_ns"] < hmin
@@ -208,23 +213,27 @@ def test_14_holdout_boundary():
     print("14 OK", len(holdout), "held out")
 
 
-def test_15_r_disqualify():
+def strong_provider():
+    """Fixed strong answers, own key (adversarial determinism, not JEV)."""
+    from collector.jev import ed_pubkey
+    from research.strategy import jev_v4 as v4
+    seed = bytes.fromhex("cd" * 32)
+    pub = ed_pubkey(seed)
+
+    def provide(candidate, market, now_unix):
+        ans = {"enter": 0.95, "edge_family": candidate.proposed_family,
+               "conviction": "max", "latent_risk": 0.01}
+        payload = v4.make_v4_payload(candidate, market, ans, now_unix,
+                                     now_unix + 60)
+        art = v4.sign_v4(payload, seed)
+        return art, {"model": "test-strong", "revision": "t1",
+                     "provider": "test"}
+    return provide, pub
+
+
+def test_15_r_disqualify_full_path():
     items = synth_stream(12)
     c, aft, mkt, reg, sp = items[0]
-    bad = make_candidate(strategy_version="baseline_v1", symbol="SYN",
-                         snapshot_ts_ns=c.snapshot_ts_ns,
-                         proposed_side="BUY", proposed_family="macd",
-                         entry_px=c.entry_px, stop_px=c.stop_px,
-                         tp_px=c.tp_px, time_exit_ns=c.time_exit_ns,
-                         exit_profile_version="exit_profile_v1",
-                         cost_model_version="paper_fill_v1",
-                         expected_cost_bps=0.0,
-                         feature_snapshot_hash="bad",
-                         feature_revision="r1")
-    dq, reason = s5.r_validate(bad)
-    assert dq and reason == "bad_family"
-    ok, _ = s5.r_validate(c)
-    assert not ok
     unc, con, binds, _, _ = bt.size_notional(100000.0, 0.0001, 100.0)
     assert binds  # cap binding is sizing...
     good = make_candidate(strategy_version="baseline_v1", symbol="SYN",
@@ -238,16 +247,41 @@ def test_15_r_disqualify():
                           feature_snapshot_hash="binds",
                           feature_revision="r1")
     assert not s5.r_validate(good)[0]  # ...NOT a violation
-    recs = s5.evaluate_stream([(bad, aft, mkt, reg, sp)], PROVIDE, PUB,
-                              dict(ENGINE), variant=s5.VARIANTS[0],
-                              day_fn=DAY, data_id=DATA_ID)
-    assert recs[0]["disqualified"] and not recs[0]["filtered_taken"] \
-        and not recs[0]["always_realized"]
-    m = {"sharpe_f": 5.0, "holm_p": 0.001, "max_dd_pct": 1.0,
-         "n_closed": 500, "stress": {"1.5x": (2.0, 1.0)},
-         "r_breach_taken": 1}
-    v, failed, _ = s5.evaluate_bar(m, BAR)
-    assert not v and "no_r_breach" in failed
+    bad = make_candidate(strategy_version="baseline_v1", symbol="SYN",
+                         snapshot_ts_ns=c.snapshot_ts_ns,
+                         proposed_side="BUY", proposed_family="macd",
+                         entry_px=c.entry_px, stop_px=c.stop_px,
+                         tp_px=c.tp_px, time_exit_ns=c.time_exit_ns,
+                         exit_profile_version="exit_profile_v1",
+                         cost_model_version="paper_fill_v1",
+                         expected_cost_bps=0.0,
+                         feature_snapshot_hash="bad",
+                         feature_revision="r1")
+    assert s5.r_validate(bad) == (True, "bad_family")
+    sprovide, spub = strong_provider()
+    stream = [(bad, aft, mkt, reg, sp)] + items[1:6]
+    by_var = {v: s5.evaluate_stream(stream, sprovide, spub, dict(ENGINE),
+                                    variant=v, day_fn=DAY, data_id=DATA_ID)
+              for v in s5.VARIANTS}
+    brec = by_var[s5.VARIANTS[0]][0]
+    assert brec["disqualified"] and brec["filtered_pass"]  # JEV would take
+    assert not brec["filtered_taken"] and not brec["always_realized"]
+    assert brec["always_r"] == 0.0 and brec["filtered_r"] == 0.0  # finding 4
+    assert s5.paired_deltas([brec]) == [0.0]
+    assert brec["always_label"] == "censored"  # diagnostic label retained
+    assert brec["resolved_r"] == brec["resolved_r"]  # economics present
+    assert brec["r_breach_attempted"]  # forbidden take attempted
+    assert not any(r["disqualified"] for r in by_var[s5.VARIANTS[0]][1:])
+    sess = sessions_for(stream)
+    rep = s5f.final_report(by_var, {}, sess, 100000.0, BAR)
+    got = rep["variants"][s5.VARIANTS[0]]
+    assert got["r_breach_taken"] == 1  # generated, not injected
+    v, failed, _ = s5.evaluate_bar(
+        {"sharpe_f": 5.0, "holm_p": 0.001, "max_dd_pct": 1.0,
+         "n_closed": 500, "stress": {}, "r_breach_taken": got["r_breach_taken"]},
+        BAR)
+    assert not v and failed == ["no_r_breach"]
+    assert got["bar_verdict"] is False and "no_r_breach" in got["bar_failed"]
     print("15 OK")
 
 
@@ -282,6 +316,10 @@ def test_17_power():
         {"train_values", "train_days", "mde", "alpha", "reps", "seed",
          "target", "multipliers"}  # train-only inputs: no holdout slot
     assert p1["n_base"] == len(vals)
+    folds2, holdout2 = s5f.holdout_split(recs, n_splits=2)
+    hset = {r["cid"] for r in holdout2}
+    power_in = [r for f in folds2 for r in f[0]]
+    assert hset and not (hset & {r["cid"] for r in power_in})
     print("17 OK", p1["by_multiplier"])
 
 
@@ -303,7 +341,59 @@ def test_18_19_curve_and_drawdown():
     print("18_19 OK", len(trades), "trades, dd=%.2f" % dd)
 
 
-def test_20_bar_mechanical():
+
+
+def _mkrec(cid, symbol, side, snap, exit_ts, entry, stop, r_val, day,
+           realized=True, taken=True):
+    return {"cid": cid, "symbol": symbol, "proposed_side": side,
+            "snapshot_ts_ns": snap, "exit_ts_ns": exit_ts,
+            "entry_px": entry, "stop_px": stop, "always_r": r_val,
+            "filtered_r": r_val, "always_realized": realized,
+            "filtered_taken": taken, "spread_mult": 1.0,
+            "disqualified": False}
+
+
+def test_18b_lookahead_hostile():
+    # A enters day 2; day-1 close must be blind to it (long + short).
+    recs = [_mkrec("A", "SYN", "BUY", 150, 250, 100.0, 99.0, 1.0, "d2"),
+            _mkrec("B", "SYN", "SELL", 150, 250, 100.0, 101.0, 1.0, "d2")]
+    sess = [{"day": "d1", "end_ts": 100, "closes": {"SYN": 100.0}},
+            {"day": "d2", "end_ts": 200, "closes": {"SYN": 101.0}},
+            {"day": "d3", "end_ts": 300, "closes": {"SYN": 102.0}}]
+    _, curve, rets, _ = s5.portfolio_curve([recs[0]], "always", 100000.0,
+                                           sess)
+    # hand-verified: con 25% -> qty 250; pnl +250; d1 blind; d2 marked.
+    assert curve[0] == ("d1", 100000.0), curve
+    assert curve[1] == ("d2", 100250.0), curve
+    assert curve[2] == ("d3", 100250.0), curve
+    _, s_curve, _, _ = s5.portfolio_curve([recs[1]], "always", 100000.0,
+                                          sess)
+    assert s_curve[0] == ("d1", 100000.0), s_curve
+    assert s_curve[1] == ("d2", 99750.0), s_curve  # short marks down
+    # future-price mutation: day-3 close cannot move day-1/day-2.
+    sess2 = [dict(s, closes={"SYN": 500.0}) if s["day"] == "d3" else s
+             for s in sess]
+    _, curve2, _, _ = s5.portfolio_curve([recs[0]], "always", 100000.0,
+                                         sess2)
+    assert curve2[0] == curve[0] and curve2[1] == curve[1]
+    assert curve2[2][1] == curve[2][1]  # exited before d3: immune too
+    # live-through-close mutation DOES move only the open mark.
+    recs_open = [_mkrec("C", "SYN", "BUY", 150, 999, 100.0, 99.0, 0.0,
+                        "d2")]
+    _, o1, _, _ = s5.portfolio_curve(recs_open, "always", 100000.0, sess)
+    _, o2, _, _ = s5.portfolio_curve(recs_open, "always", 100000.0, sess2)
+    assert o1[0] == o2[0] and o1[1] == o2[1]  # d1/d2 unaffected by d3
+    assert o2[2][1] != o1[2][1]  # d3 mark reflects the d3 close only
+    print("18b OK")
+
+
+def test_20_bar_mechanical_and_holm():
+    assert s5.holm([("a", 0.04), ("b", 0.041)]) == \
+        [("a", 0.08, False), ("b", 0.08, False)]  # cummax, not 0.041
+    h3 = s5.holm([("a", 0.1), ("b", 0.11), ("c", 0.12)])
+    assert all(abs(a - 0.3) < 1e-9 for _, a, _ in h3)  # decreasing products
+    assert s5.holm([("v1", 0.01), ("v2", 0.04), ("v3", 0.30)])[0] == \
+        ("v1", 0.03, True)
     good = {"sharpe_f": 1.5, "holm_p": 0.01, "max_dd_pct": 5.0,
             "n_closed": 200,
             "stress": {"1.5x": (1.2, 0.5), "2x": (1.1, 0.4),
@@ -326,7 +416,7 @@ def test_21_baseline_reconcile():
             bs.append(Bar(ts_ns=i, o=px - 0.05, h=px + 0.2, l=px - 0.2,
                           c=px, spread_bps=2.0))
         bars[s] = bs
-    recs_bt, _ = bt.run(bars, universe_mode="diagnostic")
+    recs_bt, rep_bt = bt.run(bars, universe_mode="diagnostic")
     idx = {s: {b.ts_ns: i for i, b in enumerate(bs)}
            for s, bs in bars.items()}
     items = []
@@ -337,12 +427,13 @@ def test_21_baseline_reconcile():
                "spread_bps_s": "2.0", "session": "us_open",
                "regime": "trend"}
         items.append((c, bars[c.symbol][i + 1:], mkt, "trend", 2.0))
+    qday = lambda ts: "q%d" % (ts // 100)
     got = s5.evaluate_stream(items, PROVIDE, PUB, dict(ENGINE),
-                             variant=s5.VARIANTS[0], day_fn=DAY,
+                             variant=s5.VARIANTS[0], day_fn=qday,
                              data_id=DATA_ID)
-    days = sorted({DAY(c.snapshot_ts_ns) for c, _, _, _, _ in items})
-    sess = [{"day": d, "end_ts": 10 ** 18,
-             "closes": {s: bars[s][-1].c for s in bars}} for d in days]
+    sess = [{"day": "q%d" % k, "end_ts": (k + 1) * 100 - 1,
+             "closes": {s: bars[s][(k + 1) * 100 - 1].c for s in bars}}
+            for k in range(6)]  # genuinely chronological sessions
     trades, curve, rets, dd = s5.portfolio_curve(got, "always", 100000.0,
                                                  sess)
     bt_taken = [r for r in recs_bt if r["taken"]]
@@ -352,17 +443,23 @@ def test_21_baseline_reconcile():
         assert t["cid"] == b["c"].cid
         assert t["entry_ts"] == b["c"].snapshot_ts_ns
         assert t["exit_ts"] == b["res"]["exit_ts_ns"]
-        assert abs(t["pnl_usd"] - b["pnl_usd"]) < 1e-9 * max(1.0, abs(b["pnl_usd"]))
-        assert abs(t["con_usd"] - b["con_usd"]) < 1e-9 * max(1.0, abs(b["con_usd"]))
-    sh, _, _ = s5.sharpe_hac(rets)
-    assert sh == sh
-    print("21 OK", len(trades), "trades reconcile")
+        assert abs(t["pnl_usd"] - b["pnl_usd"]) <             1e-9 * max(1.0, abs(b["pnl_usd"]))
+        assert abs(t["con_usd"] - b["con_usd"]) <             1e-9 * max(1.0, abs(b["con_usd"]))
+    assert len(curve) == 6 and len(rets) == 5  # full daily vectors
+    assert abs(curve[-1][1] - rep_bt["end_equity"]) <         1e-9 * max(1.0, abs(rep_bt["end_equity"]))  # curve lands on ledger
+    sh, se, tt = s5.sharpe_hac(rets)
+    assert sh == sh and se > 0  # finite metrics over the real curve
+    sess2 = [dict(x) for x in sess]
+    sess2[-1] = dict(sess2[-1], closes={"P": 1e6, "Q": 1e6})
+    _, curve2, _, _ = s5.portfolio_curve(got, "always", 100000.0, sess2)
+    assert [c for c in curve2[:-1]] == [c for c in curve[:-1]]
+    print("21 OK", len(trades), "trades + full curve reconcile")
 
 
 def test_22_final_report_no_hardcode():
     items = synth_stream(72)
     by_var = run_all(items)
-    folds, holdout = s5.holdout_split(by_var[s5.VARIANTS[0]], n_splits=2)
+    folds, holdout = s5f.holdout_split(by_var[s5.VARIANTS[0]], n_splits=2)
     assert holdout
     hdays = {r["day"] for r in holdout}
     h1x = {v: [r for r in by_var[v] if r["day"] in hdays]
@@ -373,7 +470,7 @@ def test_22_final_report_no_hardcode():
         stress[lab] = {v: [r for r in sv[v] if r["day"] in hdays]
                        for v in s5.VARIANTS}
     sess = [s for s in sessions_for(items) if s["day"] in hdays]
-    rep = s5.final_report(h1x, stress, sess, 100000.0, BAR)
+    rep = s5f.final_report(h1x, stress, sess, 100000.0, BAR)
     for v, s in rep["variants"].items():
         assert s["bar_verdict"] is False and s["bar_failed"], v
     assert rep["holm"]
@@ -391,11 +488,12 @@ if __name__ == "__main__":
     test_12_cost_stress_reflected()
     test_13_variant_family()
     test_14_holdout_boundary()
-    test_15_r_disqualify()
+    test_15_r_disqualify_full_path()
     test_16_sequential()
     test_17_power()
     test_18_19_curve_and_drawdown()
-    test_20_bar_mechanical()
+    test_20_bar_mechanical_and_holm()
+    test_18b_lookahead_hostile()
     test_21_baseline_reconcile()
     test_22_final_report_no_hardcode()
     print("ALL S5 TESTS GREEN")
