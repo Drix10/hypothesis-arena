@@ -1064,11 +1064,18 @@ bool PidAlive(long long pid) {
 #endif
 }
 namespace {
-// Per-thread directory holds (paths this thread won and still
-// owns via a live instance). Thread-local: no shared state, no
-// mutex — the kernel primitive stays the sole arbiter, so a
-// concurrent two-taker race genuinely contends on it.
-thread_local std::vector<std::string> g_dir_holds;
+// Per-thread directory holds: the OS handle (fd /
+// HANDLE-as-integer) plus a reference count of live
+// same-thread runner instances on it. Thread-local: no shared
+// state, no mutex — the kernel primitive stays the sole
+// arbiter, so a concurrent two-taker race genuinely contends
+// on it. The handle closes only on the last reference out.
+struct DirHold {
+    std::string path;
+    int refs;
+    long long os;
+};
+thread_local std::vector<DirHold> g_dir_holds;
 }  // namespace
 bool G0Runner::TakeDirLock() {
     // One live runner per state directory (Phase-4 prerequisite).
@@ -1092,14 +1099,20 @@ bool G0Runner::TakeDirLock() {
     // no mutex: the kernel primitive stays the sole arbiter, so
     // a concurrent two-taker race genuinely contends on it).
     // The winning INSTANCE owns the hold (members below): its
-    // destructor closes the handle and unregisters the path, so
-    // holds never leak and a later instance re-acquires through
-    // the kernel. Live instances keep the OS primitive open —
-    // one writer per directory holds while any instance of this
-    // process is alive on it.
+    // destructor closes the handle and drops the last reference,
+    // so holds never leak and a later instance re-acquires
+    // through the kernel. Live instances keep the OS primitive
+    // open — one writer per directory holds while any instance
+    // of this process is alive on it.
+    if (lock_took_) return true;  // already counted: idempotent
     std::string lp = P("runner.lock");
     for (std::size_t i = 0; i < g_dir_holds.size(); ++i) {
-        if (g_dir_holds[i] == lp) return true;
+        if (g_dir_holds[i].path == lp) {
+            ++g_dir_holds[i].refs;
+            lock_took_ = true;
+            lock_path_ = lp;
+            return true;
+        }
     }
     char b[32];
     int w = std::snprintf(b, sizeof(b), "%lld", MyPid());
@@ -1131,39 +1144,44 @@ bool G0Runner::TakeDirLock() {
                        lp.c_str(), holder.c_str());
         return false;
     }
-    // Won: stamp our PID through the held handle (diagnostic),
-    // register the hold under this instance's ownership, and
-    // keep the handle open while this instance lives.
+    // Won: stamp our PID through the held handle (diagnostic)
+    // and register one reference under this instance.
 #ifdef _WIN32
     SetFilePointer(h, 0, NULL, FILE_BEGIN);
     DWORD done = 0;
     WriteFile(h, b, (DWORD)n, &done, NULL);
     SetEndOfFile(h);
-    lock_os_ = (long long)(intptr_t)h;
+    long long os = (long long)(intptr_t)h;
 #else
     (void)::ftruncate(fd, 0);
     (void)::write(fd, b, n);
-    lock_os_ = (long long)fd;
+    long long os = (long long)fd;
 #endif
+    DirHold hd;
+    hd.path = lp;
+    hd.refs = 1;
+    hd.os = os;
+    g_dir_holds.push_back(hd);
+    lock_took_ = true;
     lock_path_ = lp;
-    lock_own_ = true;
-    g_dir_holds.push_back(lp);
     return true;
 }
 G0Runner::~G0Runner() {
-    if (!lock_own_) return;
-    lock_own_ = false;
+    if (!lock_took_) return;
+    lock_took_ = false;
     for (std::size_t i = 0; i < g_dir_holds.size(); ++i) {
-        if (g_dir_holds[i] == lock_path_) {
+        if (g_dir_holds[i].path == lock_path_) {
+            if (--g_dir_holds[i].refs > 0) return;  // still held
+            long long os = g_dir_holds[i].os;
             g_dir_holds.erase(g_dir_holds.begin() + (int)i);
-            break;
+#ifdef _WIN32
+            CloseHandle((HANDLE)(intptr_t)os);
+#else
+            ::close((int)os);
+#endif
+            return;
         }
     }
-#ifdef _WIN32
-    CloseHandle((HANDLE)(intptr_t)lock_os_);
-#else
-    ::close((int)lock_os_);
-#endif
 }
 bool G0Runner::SnapPositions(Position* ps, int cap,
                              int* n) const {

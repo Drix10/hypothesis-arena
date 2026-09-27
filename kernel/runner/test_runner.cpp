@@ -5188,6 +5188,34 @@ int main() {
                   "runner-lock-held") == std::string::npos,
               "jx-no-shared-alert");
     }
+    // LR2. Refcounted same-thread holds (doc 06 sec. 6.1b):
+    // B's re-entry shares A's underlying OS hold. Destroying A
+    // must not release it while B lives (a foreign-thread
+    // contender still loses); destroying B releases it (a
+    // contender can then acquire).
+    {
+        Rig r;
+        G0Runner* a = new G0Runner(r.cfg, r.deps);
+        Check(a->Recover(nullptr), "lr2-recover-a");
+        G0Runner* b = new G0Runner(r.cfg, r.deps);
+        Check(b->Recover(nullptr), "lr2-recover-b");
+        delete a;
+        bool fok = false;
+        std::thread tf([&] {
+            G0Runner g(r.cfg, r.deps);
+            fok = g.Recover(nullptr);
+        });
+        tf.join();
+        Check(!fok, "lr2-held-after-a-destroyed");
+        delete b;
+        bool fok2 = false;
+        std::thread tf2([&] {
+            G0Runner g(r.cfg, r.deps);
+            fok2 = g.Recover(nullptr);
+        });
+        tf2.join();
+        Check(fok2, "lr2-released-after-b-destroyed");
+    }
     if (g_fail == 0)
         std::printf("RUNNER SUITE: ALL PASS (%d checks)\n", g_count);
     return g_fail ? 1 : 0;

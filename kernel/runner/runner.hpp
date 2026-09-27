@@ -237,15 +237,13 @@ class G0Runner {
     bool hard_latched_ = false;
     std::string cursor_;      // last stamped ULID (durable)
     bool cursor_dirty_ = false;
-    // Directory-lock hold owned by THIS instance (empty when
-    // this instance re-entered another's hold): the OS handle
-    // (fd / HANDLE-as-integer) stays open while alive. The
-    // destructor closes it and unregisters the path, so holds
-    // never leak (no fd exhaustion, no undeletable lock files)
-    // and a later instance re-acquires through the kernel.
-    std::string lock_path_;
-    long long lock_os_ = 0;
-    bool lock_own_ = false;
+    // Directory-lock take recorded by THIS instance (win or
+    // same-thread re-entry): the destructor drops exactly one
+    // reference. The underlying OS handle closes only on the
+    // last reference out, so a winning instance's destruction
+    // can never release the lock under a live re-entrant.
+    bool lock_took_ = false;
+    std::string lock_path_;  // directory taken (empty if none)
     long long last_pos_ns_ = 0;  // account position check clock
     long long last_ops_day_ = 0;  // §6.3 rhythm clock (0 = run now)
 
