@@ -215,6 +215,14 @@ class G0Runner {
     long long last_cycle_ns_ = 0;
     SseParser sse_;
     long long sse_seen_ = 0;  // parser errors already acted on
+    // Sticky HARD latch: set when the HALT state write fails, so
+    // a process that could not durably halt can never resume
+    // entry operation (or report a completed stop) on the
+    // strength of memory alone. Cleared only by a durable HALT.
+    // Survives within the process; across a restart the HALT
+    // FILE is the authority (its absence after a failed write +
+    // exit is operator territory — alerted loud, never silent).
+    bool hard_latched_ = false;
     std::string cursor_;      // last stamped ULID (durable)
     bool cursor_dirty_ = false;
     long long last_pos_ns_ = 0;  // account position check clock
@@ -228,6 +236,11 @@ class G0Runner {
     bool EmergencyAppend(const journal::Row& r);
     bool DrainEmergency();
     bool PersistSlot(Slot& s);
+    // Durable-HALT-or-latch: true once a HALT file exists or the
+    // in-memory latch fired (failed HALT persist). Entry gating
+    // and kill evaluation consult this, never the bare file
+    // probe — a process that failed to halt stays halted.
+    bool HardHalted() const;
     // Contract-checked position snapshot: fills ps (cap) and sets
     // *n. The seam promises 0 <= n <= cap; any other count is an
     // unavailable snapshot (false) — callers take their existing

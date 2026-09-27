@@ -4147,6 +4147,89 @@ int main() {
                   std::string::npos,
               "pl-unavailable-alert");
     }
+    // HL. HALT durability (doc 06 sec. 6.1b): the stop is claimed
+    // only once durably established. An unwritable HALT latches
+    // HARD in memory (entries stay blocked even with the kill
+    // cleared), journals + alerts, returns false with zero POSTs;
+    // writability restored, the restart converges.
+    {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-590", "AAPL", 0, 0,
+                          100, 5, 100, &cid)
+                   .empty(),
+              "hl-image");
+        MkDir(r.dir + "/HALT");
+        g_positions.push_back(MkPos("AAPL", 100));
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "hl-recover");
+        g_kill.drift_unresolvable = true;  // HARD
+        Check(!g.Cycle(g_now), "hl-refused");
+        Check(CountMethod("POST", "/v2/orders") == 0,
+              "hl-zero-posts");
+        Check(ReadWhole(r.dir + "/alerts.jsonl")
+                      .find("halt-unpersisted") !=
+                  std::string::npos,
+              "hl-alert");
+        // Latch proof: kill cleared, entries still refused.
+        g_kill = jev::kill::KillInputs();
+        Check(!g.SubmitIntent(
+                  GoodIntent("intent-591", "AAPL", false, 100),
+                  nullptr),
+              "hl-latch-blocks-entries");
+        RmDir(r.dir + "/HALT");
+        G0Runner g2(r.cfg, r.deps);
+        Check(g2.Recover(nullptr), "hl-recover2");
+        g_kill.drift_unresolvable = true;  // HARD
+        PushRule("GET", "by_client_order_id", 200,
+                 "{\"id\":\"0193abcd-1234-5678-9abc-"
+                 "def012345678\",\"status\":\"accepted\","
+                 "\"filled_qty\":\"100\"}");
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 BracketReply("accepted", "100").c_str());
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 HeldReply("filled", "100").c_str());
+        Check(!g2.Cycle(g_now), "hl-converges");
+        Check(CountMethod("POST", "/v2/orders") == 2,
+              "hl-reprotect-plus-flatten");
+    }
+    // HX. Unrecoverable HARD incident (doc 06 sec. 6.1b): durable
+    // HALT + missing/corrupt incident epoch refuses — never mints
+    // fresh ids over a live HALT. Zero POSTs either way.
+    {
+        Rig r;
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "hx-recover");
+        WriteFile(r.dir + "/HALT", "HALT\n");
+        g_kill.drift_unresolvable = true;  // HARD
+        Check(!g.Cycle(g_now), "hx-missing-refused");
+        Check(CountMethod("POST", "/v2/orders") == 0,
+              "hx-missing-zero-posts");
+        Check(!Exists(r.dir + "/hard-incident.txt"),
+              "hx-no-mint");
+        Check(ReadWhole(r.dir + "/alerts.jsonl")
+                      .find("hard-epoch-unrecoverable") !=
+                  std::string::npos,
+              "hx-missing-alert");
+    }
+    {
+        Rig r;
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "hx-recover2");
+        WriteFile(r.dir + "/HALT", "HALT\n");
+        WriteFile(r.dir + "/hard-incident.txt", "zzz\n");
+        g_kill.drift_unresolvable = true;  // HARD
+        Check(!g.Cycle(g_now), "hx-corrupt-refused");
+        Check(CountMethod("POST", "/v2/orders") == 0,
+              "hx-corrupt-zero-posts");
+        Check(ReadWhole(r.dir + "/alerts.jsonl")
+                      .find("hard-epoch-unrecoverable") !=
+                  std::string::npos,
+              "hx-corrupt-alert");
+    }
     // CU. Cursor durability fails closed (doc 06 sec. 6.1b): a
     // foreign stream event dirties the cursor; an unwritable
     // cursor file fails the cycle (alert + journal) WITHOUT
@@ -4232,6 +4315,12 @@ int main() {
                   std::string::npos,
               "he-alert");
         RmDir(r.dir + "/hard-incident.txt");
+        // The fault is cleared AND the operator ends the halted
+        // incident by clearing HALT (a lingering HALT with no
+        // recoverable incident epoch refuses — never mints fresh
+        // ids over a live HALT).
+        Check(std::remove((r.dir + "/HALT").c_str()) == 0,
+              "he-halt-cleared");
         G0Runner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "he-recover2");
         PushRule("GET", "by_client_order_id", 200,

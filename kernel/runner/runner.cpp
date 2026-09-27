@@ -703,7 +703,7 @@ bool G0Runner::EntriesAllowedNow() const {
         deps_.kill_inputs(deps_.kill_ctx, &ki);
     else
         ki = kill::KillInputs();
-    bool halt = FileExists(P("HALT").c_str());
+    bool halt = HardHalted();
     if (halt) ki.halt_file = true;
     kill::LevelResult lr = kill::EvaluateLevel(ki);
     return kill::EntriesAllowed(lr.level, halt, deps_.restart_flag);
@@ -791,10 +791,24 @@ long long G0Runner::HardEpochFor(long long now_ns,
     // in-flight closes double under fresh ids. Clearing HALT ends
     // the incident (a human owns the interim); a re-firing HARD is
     // new by definition. Clock-stuck guard as above.
+    // Unrecoverable incident: HALT present at entry but the epoch
+    // file missing/corrupt/unreadable means the incident identity
+    // cannot be resumed — minting fresh ids would double the
+    // in-flight closes the HALT exists to protect. Refuse (0) so
+    // the stop path halts without sending under a new identity.
     std::vector<std::string> lns;
     long long old = 0;
-    if (ReadLines(P("hard-incident.txt").c_str(), &lns))
-        old = ParseEpoch(lns);
+    bool have_incident = ReadLines(P("hard-incident.txt").c_str(),
+                                   &lns);
+    if (have_incident) old = ParseEpoch(lns);
+    if (halt_at_entry && (!have_incident || old <= 0)) {
+        OpsRow("drift-directive", "runner",
+               "hard-epoch-unrecoverable", now_ns);
+        Alert(P("alerts.jsonl").c_str(), "HARD",
+              "hard-epoch-unrecoverable",
+              reason ? reason : "", now_ns);
+        return 0;
+    }
     if (old > 0 && halt_at_entry) {
         char tb[280];
         std::snprintf(tb, sizeof(tb),
@@ -1963,6 +1977,9 @@ void G0Runner::HardManageSlot(Slot& s, long long epoch,
     }
 }
 
+bool G0Runner::HardHalted() const {
+    return hard_latched_ || FileExists(P("HALT").c_str());
+}
 bool G0Runner::HardStop(long long now_ns, const char* why,
                   bool halt_at_entry) {
     // §10.3 HARD: entries already stop at the kill gate. Verify
@@ -1975,8 +1992,21 @@ bool G0Runner::HardStop(long long now_ns, const char* why,
     Alert(P("alerts.jsonl").c_str(), "HARD", "kill-hard",
           why ? why : "", now_ns);
     OpsRow("drift-directive", "runner", "hard-stop", now_ns);
-    FILE* hf = std::fopen(P("HALT").c_str(), "ab");
-    if (hf) std::fclose(hf);
+    // HALT is a durable state write, not a best-effort touch: the
+    // stop is claimed only once it is durably established. A
+    // failed write latches HARD in memory (entries stay blocked
+    // via HardHalted), journals + alerts, and returns false — the
+    // process stays latched and retries instead of reporting a
+    // completed stop it cannot prove across a restart.
+    if (!AtomicWrite(P("HALT").c_str(), "HALT\n")) {
+        hard_latched_ = true;
+        OpsRow("drift-directive", "runner",
+               "halt-unpersisted", now_ns);
+        Alert(P("alerts.jsonl").c_str(), "HARD",
+              "halt-unpersisted", why ? why : "", now_ns);
+        return false;
+    }
+    hard_latched_ = false;
     long long epoch =
         HardEpochFor(now_ns, why, halt_at_entry);
     if (epoch <= 0) return false;  // no durable epoch: no new
@@ -3001,7 +3031,7 @@ bool G0Runner::Cycle(long long now_ns) {
         deps_.kill_inputs(deps_.kill_ctx, &ki);
     else
         ki = kill::KillInputs();
-    if (FileExists(P("HALT").c_str())) ki.halt_file = true;
+    if (HardHalted()) ki.halt_file = true;
     kill::LevelResult lr = kill::EvaluateLevel(ki);
     if (lr.level == jev::risk::KillLevel::HARD)
         return HardStop(now_ns, lr.reason, ki.halt_file);
