@@ -1,0 +1,366 @@
+{
+  "slice_id": "baseline_v1_validation_slice_s2_equities",
+  "strategy_version": "baseline_v1",
+  "strategy_file_sha256": "4f3306bfc2c16bb67b3391dd6ba54509f30a4379622ec49f4df6f921f8a43386",
+  "candidate_schema": "c1",
+  "cost_model": "paper_fill_v1",
+  "exit_profile": "exit_profile_v1",
+  "dataset_manifest": {
+    "source": "alpaca-market-data-v2",
+    "feed": "iex",
+    "timeframe": "1H",
+    "adjustment": "split",
+    "retrieval_utc": "2026-09-27T12:23:34.696990+00:00",
+    "window": {
+      "start": "2023-01-01T00:00:00Z",
+      "end": "2025-01-01T00:00:00Z"
+    },
+    "calendar": "America/New_York session filter 09:30-16:00, hourly opens 09:30..15:00 kept, others dropped",
+    "spread_note": "OHLC source carries no spread: spread_bps=0 -> paper_fill_v1 1bp floor leg applies; reported costs are a LOWER BOUND",
+    "symbols": {
+      "AAPL": {
+        "raw_bars": 3583,
+        "kept_1h_bars": 2992,
+        "sha256": "9a8276b499c33b84b124bb1e0ee098beeae75c395cb92477dabac0e18b067203"
+      },
+      "MSFT": {
+        "raw_bars": 3518,
+        "kept_1h_bars": 2992,
+        "sha256": "3cbf995d6f6d8658b6bd0af435101d85d3a2a4868254e5b6fd3a4b1138013648"
+      }
+    }
+  },
+  "universe": {
+    "universe_version": "universe_s2_v1",
+    "window": {
+      "start": "2023-01-01",
+      "end": "2025-01-01"
+    },
+    "members": [
+      {
+        "symbol": "AAPL",
+        "membership": "continuous S&P-500 across window",
+        "corp_actions_in_window": "none (split 2020-08 outside window; cash dividends unadjusted \u2014 see limits)",
+        "liquidity_filter": "median daily $vol > $50,000,000"
+      },
+      {
+        "symbol": "MSFT",
+        "membership": "continuous S&P-500 across window",
+        "corp_actions_in_window": "none (cash dividends unadjusted \u2014 see limits)",
+        "liquidity_filter": "median daily $vol > $50,000,000"
+      }
+    ],
+    "limits": [
+      "cash dividends unadjusted",
+      "IEX feed (no SIP)",
+      "spread unknown -> 1bp-floor cost legs (lower bound)",
+      "FX sleeve NOT in this artifact (source pending)"
+    ],
+    "artifact_hash": "2db2b91e4f14834f17016e1543710e861ea52b305129f1985a110faf5330790c"
+  },
+  "frozen_dataset_sha256": "e0d5a158302e3ba0f7731eaea859c5b928e8359a142d054a467ab37bdc3ac819",
+  "equity_usd": 100000.0,
+  "liquidity_median_daily_usd": {
+    "AAPL": 136461852.54500002,
+    "MSFT": 118734131.875
+  },
+  "universe_exclusions": {
+    "illiquid_symbols": [],
+    "fx_sleeve": "NOT INCLUDED (source pending)",
+    "pit_scope": "AAPL+MSFT continuous S&P members, 2023-01-01..2025-01-01"
+  },
+  "primary_eligible": {
+    "1.0": {
+      "candidates": 2272,
+      "mode": "eligible",
+      "realized": 0,
+      "realized_wins": 0,
+      "realized_time_exits": 0,
+      "calib_closed_winloss": 255,
+      "calib_censored": 1666,
+      "excluded": 351,
+      "universe_excluded": 1921,
+      "cap_excluded": {
+        "symbol": 0,
+        "maxpos": 0,
+        "total_r2": 0
+      },
+      "single_notional_binding_rate": 0.7561619718309859,
+      "total_notional_binding_rate": 0.0,
+      "max_position_binding_rate": 0.0,
+      "win_rate": 0.0,
+      "avg_r": 0.0,
+      "median_r": 0.0,
+      "expectancy_r": 0.0,
+      "net_pnl": 0,
+      "end_equity": 100000.0,
+      "avg_effective_risk_bps": 0.0,
+      "avg_effective_risk_frac": 0.0,
+      "avg_stop_bps": 0.0,
+      "avg_bars_held": 0.0,
+      "time_exit_rate": 0.0,
+      "turnover": 0.0,
+      "sharpe_ann": 0.0,
+      "max_dd": 0.0,
+      "session_days": 502
+    },
+    "1.5": {
+      "candidates": 2272,
+      "mode": "eligible",
+      "realized": 0,
+      "realized_wins": 0,
+      "realized_time_exits": 0,
+      "calib_closed_winloss": 255,
+      "calib_censored": 1666,
+      "excluded": 351,
+      "universe_excluded": 1921,
+      "cap_excluded": {
+        "symbol": 0,
+        "maxpos": 0,
+        "total_r2": 0
+      },
+      "single_notional_binding_rate": 0.7561619718309859,
+      "total_notional_binding_rate": 0.0,
+      "max_position_binding_rate": 0.0,
+      "win_rate": 0.0,
+      "avg_r": 0.0,
+      "median_r": 0.0,
+      "expectancy_r": 0.0,
+      "net_pnl": 0,
+      "end_equity": 100000.0,
+      "avg_effective_risk_bps": 0.0,
+      "avg_effective_risk_frac": 0.0,
+      "avg_stop_bps": 0.0,
+      "avg_bars_held": 0.0,
+      "time_exit_rate": 0.0,
+      "turnover": 0.0,
+      "sharpe_ann": 0.0,
+      "max_dd": 0.0,
+      "session_days": 502
+    },
+    "2.0": {
+      "candidates": 2272,
+      "mode": "eligible",
+      "realized": 0,
+      "realized_wins": 0,
+      "realized_time_exits": 0,
+      "calib_closed_winloss": 255,
+      "calib_censored": 1666,
+      "excluded": 351,
+      "universe_excluded": 1921,
+      "cap_excluded": {
+        "symbol": 0,
+        "maxpos": 0,
+        "total_r2": 0
+      },
+      "single_notional_binding_rate": 0.7561619718309859,
+      "total_notional_binding_rate": 0.0,
+      "max_position_binding_rate": 0.0,
+      "win_rate": 0.0,
+      "avg_r": 0.0,
+      "median_r": 0.0,
+      "expectancy_r": 0.0,
+      "net_pnl": 0,
+      "end_equity": 100000.0,
+      "avg_effective_risk_bps": 0.0,
+      "avg_effective_risk_frac": 0.0,
+      "avg_stop_bps": 0.0,
+      "avg_bars_held": 0.0,
+      "time_exit_rate": 0.0,
+      "turnover": 0.0,
+      "sharpe_ann": 0.0,
+      "max_dd": 0.0,
+      "session_days": 502
+    },
+    "3.0": {
+      "candidates": 2272,
+      "mode": "eligible",
+      "realized": 0,
+      "realized_wins": 0,
+      "realized_time_exits": 0,
+      "calib_closed_winloss": 255,
+      "calib_censored": 1666,
+      "excluded": 351,
+      "universe_excluded": 1921,
+      "cap_excluded": {
+        "symbol": 0,
+        "maxpos": 0,
+        "total_r2": 0
+      },
+      "single_notional_binding_rate": 0.7561619718309859,
+      "total_notional_binding_rate": 0.0,
+      "max_position_binding_rate": 0.0,
+      "win_rate": 0.0,
+      "avg_r": 0.0,
+      "median_r": 0.0,
+      "expectancy_r": 0.0,
+      "net_pnl": 0,
+      "end_equity": 100000.0,
+      "avg_effective_risk_bps": 0.0,
+      "avg_effective_risk_frac": 0.0,
+      "avg_stop_bps": 0.0,
+      "avg_bars_held": 0.0,
+      "time_exit_rate": 0.0,
+      "turnover": 0.0,
+      "sharpe_ann": 0.0,
+      "max_dd": 0.0,
+      "session_days": 502
+    }
+  },
+  "diagnostic_lower_bound": {
+    "1.0": {
+      "candidates": 2272,
+      "mode": "diagnostic",
+      "realized": 573,
+      "realized_wins": 8,
+      "realized_time_exits": 464,
+      "calib_closed_winloss": 255,
+      "calib_censored": 1666,
+      "excluded": 351,
+      "universe_excluded": 0,
+      "cap_excluded": {
+        "symbol": 1348,
+        "maxpos": 0,
+        "total_r2": 0
+      },
+      "single_notional_binding_rate": 0.7561619718309859,
+      "total_notional_binding_rate": 0.0,
+      "max_position_binding_rate": 0.0,
+      "win_rate": 0.013961605584642234,
+      "avg_r": -0.0493854682767421,
+      "median_r": -0.011315614412120197,
+      "expectancy_r": -0.0493854682767421,
+      "net_pnl": -5759.108996715404,
+      "end_equity": 94240.8910032846,
+      "avg_effective_risk_bps": 21.393543334684765,
+      "avg_effective_risk_frac": 0.002139354333468477,
+      "avg_stop_bps": 89.77878031984132,
+      "avg_bars_held": 4.0890052356020945,
+      "time_exit_rate": 0.8097731239092496,
+      "turnover": 135.08532173135805,
+      "sharpe_ann": -1.0900860889616866,
+      "max_dd": 0.06289228683877679,
+      "session_days": 502
+    },
+    "1.5": {
+      "candidates": 2272,
+      "mode": "diagnostic",
+      "realized": 573,
+      "realized_wins": 8,
+      "realized_time_exits": 464,
+      "calib_closed_winloss": 255,
+      "calib_censored": 1666,
+      "excluded": 351,
+      "universe_excluded": 0,
+      "cap_excluded": {
+        "symbol": 1348,
+        "maxpos": 0,
+        "total_r2": 0
+      },
+      "single_notional_binding_rate": 0.7561619718309859,
+      "total_notional_binding_rate": 0.0,
+      "max_position_binding_rate": 0.0,
+      "win_rate": 0.013961605584642234,
+      "avg_r": -0.06106688087415502,
+      "median_r": -0.0221721785841666,
+      "expectancy_r": -0.06106688087415502,
+      "net_pnl": -7055.293539018901,
+      "end_equity": 92944.7064609811,
+      "avg_effective_risk_bps": 21.393543334684765,
+      "avg_effective_risk_frac": 0.002139354333468477,
+      "avg_stop_bps": 89.77878031984132,
+      "avg_bars_held": 4.0890052356020945,
+      "time_exit_rate": 0.8097731239092496,
+      "turnover": 134.1648670871258,
+      "sharpe_ann": -1.3447591373879377,
+      "max_dd": 0.07410436130016955,
+      "session_days": 502
+    },
+    "2.0": {
+      "candidates": 2272,
+      "mode": "diagnostic",
+      "realized": 573,
+      "realized_wins": 8,
+      "realized_time_exits": 464,
+      "calib_closed_winloss": 255,
+      "calib_censored": 1666,
+      "excluded": 351,
+      "universe_excluded": 0,
+      "cap_excluded": {
+        "symbol": 1348,
+        "maxpos": 0,
+        "total_r2": 0
+      },
+      "single_notional_binding_rate": 0.7561619718309859,
+      "total_notional_binding_rate": 0.0,
+      "max_position_binding_rate": 0.0,
+      "win_rate": 0.013961605584642234,
+      "avg_r": -0.07274829347154173,
+      "median_r": -0.03302874275618345,
+      "expectancy_r": -0.07274829347154173,
+      "net_pnl": -8333.703057006174,
+      "end_equity": 91666.29694299382,
+      "avg_effective_risk_bps": 21.393543334684765,
+      "avg_effective_risk_frac": 0.002139354333468477,
+      "avg_stop_bps": 89.77878031984132,
+      "avg_bars_held": 4.0890052356020945,
+      "time_exit_rate": 0.8097731239092496,
+      "turnover": 133.2527658705237,
+      "sharpe_ann": -1.5980381102344356,
+      "max_dd": 0.08672613063947077,
+      "session_days": 502
+    },
+    "3.0": {
+      "candidates": 2272,
+      "mode": "diagnostic",
+      "realized": 573,
+      "realized_wins": 8,
+      "realized_time_exits": 464,
+      "calib_closed_winloss": 255,
+      "calib_censored": 1666,
+      "excluded": 351,
+      "universe_excluded": 0,
+      "cap_excluded": {
+        "symbol": 1348,
+        "maxpos": 0,
+        "total_r2": 0
+      },
+      "single_notional_binding_rate": 0.7561619718309859,
+      "total_notional_binding_rate": 0.0,
+      "max_position_binding_rate": 0.0,
+      "win_rate": 0.013961605584642234,
+      "avg_r": -0.09611111866634248,
+      "median_r": -0.054741871100246704,
+      "expectancy_r": -0.09611111866634248,
+      "net_pnl": -10838.165841996764,
+      "end_equity": 89161.83415800324,
+      "avg_effective_risk_bps": 21.393543334684765,
+      "avg_effective_risk_frac": 0.002139354333468477,
+      "avg_stop_bps": 89.77878031984132,
+      "avg_bars_held": 4.0890052356020945,
+      "time_exit_rate": 0.8097731239092496,
+      "turnover": 131.45328399359084,
+      "sharpe_ann": -2.0999115990140607,
+      "max_dd": 0.11145735586536004,
+      "session_days": 502
+    }
+  },
+  "diagnostic_per_symbol_1x": {
+    "AAPL": {
+      "n_realized": 284,
+      "pnl_usd": -4337.803081289308
+    },
+    "MSFT": {
+      "n_realized": 289,
+      "pnl_usd": -1421.3059154260968
+    }
+  },
+  "diagnostic_per_regime_1x": {
+    "trend": {
+      "n": 1940
+    },
+    "range": {
+      "n": 332
+    }
+  }
+}

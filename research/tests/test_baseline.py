@@ -125,8 +125,8 @@ def test_cost_applies_all_paths():
                        cost_model_version="paper_fill_v1", expected_cost_bps=4.0,
                        feature_snapshot_hash="h", feature_revision="synth")
     tp_bar = [Bar(ts_ns=1, o=100.0, h=102.5, l=99.5, c=101.0, spread_bps=10.0)]
-    r1 = bt.resolve(c, tp_bar, spread_mult=1.0, spread_bps=10.0)
-    r3 = bt.resolve(c, tp_bar, spread_mult=3.0, spread_bps=10.0)
+    r1 = bt.resolve(c, tp_bar, spread_mult=1.0, entry_spread_bps=10.0)
+    r3 = bt.resolve(c, tp_bar, spread_mult=3.0, entry_spread_bps=10.0)
     assert r1["label"] == "win" and r3["label"] == "win"
     assert r3["r_realized"] < r1["r_realized"] < 2.0, (r1, r3)
     # time-exit hold counts only bars within horizon
@@ -195,8 +195,15 @@ def test_backtest_runs_and_reports():
 
 
 def test_exact_25_boundary():
+    # budget = 100000 x 25/10000 = $250; unc = 250/risk x entry/1e5 x 100.
+    # entry=100, risk=1 -> shares=250, notional=$25,000 = exactly 25%.
     unc, con, binds, _, _ = bt.size_notional(100000.0, 1.0, 100.0)
     assert unc == 25.0 and con == 25.0 and not binds, (unc, con, binds)
+    # either side of the boundary: tighter risk binds, wider does not.
+    u_hi, c_hi, b_hi, _, _ = bt.size_notional(100000.0, 0.9999, 100.0)
+    assert u_hi > 25.0 and c_hi == 25.0 and b_hi, (u_hi, c_hi)
+    u_lo, c_lo, b_lo, _, _ = bt.size_notional(100000.0, 1.0001, 100.0)
+    assert u_lo < 25.0 and c_lo == u_lo and not b_lo, (u_lo, c_lo)
     print("exact_25 OK")
 
 
@@ -285,6 +292,10 @@ def test_universe_mode():
 
 
 def test_chrono_portfolio_invariants():
+    # R2 is NOTIONAL exposure vs snapshot equity: replay the event stream
+    # with evolving equity (exits land before same-ts entries) and check
+    # live notional/equity <= 75% at every timestamp. eff_frac (stop risk)
+    # must NEVER appear in this invariant.
     syms = {f"S{i}": mkbars(600, drift=0.002, ts0=i) for i in range(4)}
     recs, rep = bt.run(syms, universe_mode="diagnostic")
     pts = set()
@@ -296,7 +307,13 @@ def test_chrono_portfolio_invariants():
         live = [r for r in recs if r["taken"] and r["c"].snapshot_ts_ns <= t < r["res"]["exit_ts_ns"]]
         assert len(live) <= 3, ("max 3 violated", t, len(live))
         assert len({r["c"].symbol for r in live}) == len(live), ("one-per-symbol violated", t)
-        assert sum(r["eff_frac"] for r in live) <= 0.75 + 1e-12, ("R2 total violated", t)
+        # snapshot equity at t: start + all PnL that landed strictly before t
+        # (exits at t land first per the same-ts rule; use <= t for the check
+        # so the invariant holds under the admission-time equity)
+        landed = sum(r["pnl_usd"] for r in recs
+                     if r["taken"] and r["res"]["exit_ts_ns"] <= t)
+        eq = 100000.0 + landed
+        assert sum(r["con_usd"] for r in live) / eq <= 0.75 + 1e-9, ("R2 total violated", t)
     print("chrono_invariants OK", len(recs), "records checked")
 
 
@@ -308,6 +325,7 @@ if __name__ == "__main__":
     test_stop_first_and_tp()
     test_gap_and_censor()
     test_cost_stress_monotone()
+    test_cost_applies_all_paths()
     test_candidate_identity()
     test_r2_telemetry()
     test_backtest_runs_and_reports()

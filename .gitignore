@@ -51,3 +51,11 @@ Thumbs.db
 *.o
 *.a
 kernel/test_p31
+
+# S2 evidence: derived reports only (raw bars stay local)
+!data/
+data/*
+!data/s2_out/
+data/s2_out/*
+!data/s2_out/baseline_v1_report.json
+!data/s2_out/baseline_v1_report.md

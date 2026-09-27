@@ -76,23 +76,29 @@ def run_once(symbols_bars, spread_mult, mode):
              "eligible": r["eligible"], "regime": reg}
         by_sym.setdefault(c.symbol, []).append(e)
         by_reg.setdefault(reg or "unknown", []).append(e)
-        if r["taken"] and r["res"]["realized"]:
-            day = datetime.fromtimestamp(
-                c.snapshot_ts_ns / 1e9, NY).date().isoformat()
-            daily[day] = daily.get(day, 0.0) + r["pnl_usd"] / EQUITY
-    assert abs(sum(r["pnl_usd"] for r in recs if r["taken"]) - rep["net_pnl"]) < 1e-6
-    return recs, rep, by_sym, by_reg, daily
+    # realized ledger: PnL attributed to the ACTUAL EXIT date, returns vs
+    # beginning-of-day evolving equity (same authority as the backtester).
+    exits = sorted((r["res"]["exit_ts_ns"], r["pnl_usd"]) for r in recs
+                   if r["taken"] and r["res"]["realized"])
+    assert abs(sum(p for _, p in exits) - rep["net_pnl"]) < 1e-6
+    return recs, rep, by_sym, by_reg, exits
 
 
-def curve(daily, all_days):
-    rets = [daily.get(d, 0.0) for d in all_days]
-    sh = (statistics.mean(rets) / statistics.pstdev(rets) * math.sqrt(252.0)
-          if len(rets) > 1 and statistics.pstdev(rets) > 0 else 0.0)
-    eq, peak, mdd = 1.0, 1.0, 0.0
-    for x in rets:
-        eq *= (1 + x)
+def curve(exits, all_days):
+    """Equity path from the realized ledger: day PnL over beginning-of-day
+    equity; Sharpe on daily returns; max DD from the equity curve."""
+    day_pnl = {}
+    for ts_ns, pnl in exits:
+        day = datetime.fromtimestamp(ts_ns / 1e9, NY).date().isoformat()
+        day_pnl[day] = day_pnl.get(day, 0.0) + pnl
+    eq, peak, mdd, rets = EQUITY, EQUITY, 0.0, []
+    for d in all_days:
+        rets.append(day_pnl.get(d, 0.0) / eq)
+        eq += day_pnl.get(d, 0.0)
         peak = max(peak, eq)
         mdd = max(mdd, (peak - eq) / peak)
+    sh = (statistics.mean(rets) / statistics.pstdev(rets) * math.sqrt(252.0)
+          if len(rets) > 1 and statistics.pstdev(rets) > 0 else 0.0)
     return sh, mdd
 
 
@@ -115,8 +121,8 @@ def main():
     detail = None
     for mode in ("eligible", "diagnostic"):
         for mult in (1.0, 1.5, 2.0, 3.0):
-            recs, rep, by_sym, by_reg, daily = run_once(syms, mult, mode)
-            sh, mdd = curve(daily, all_days)
+            recs, rep, by_sym, by_reg, exits = run_once(syms, mult, mode)
+            sh, mdd = curve(exits, all_days)
             rep.update({"sharpe_ann": sh, "max_dd": mdd, "session_days": len(all_days)})
             out[mode][str(mult)] = {"rep": rep, "by_sym": by_sym, "by_reg": by_reg}
             if mode == "diagnostic" and mult == 1.0:
