@@ -278,6 +278,22 @@ economics intact — the runner treats PROTECTED as a live
 position everywhere else (reclamation guard, flatness,
 netting, HARD management), so restart must not demote it to
 slotless.
+- Recovery never orphans durable books: intents rebuild from
+journal rows, so an absent-or-empty journal with `snap-*` or
+`intent-*` artifacts on disk is torn state — recovery refuses
+for human recovery, never success-with-zero-slots. A virgin
+directory (no journal AND no slot books) still initializes as
+genesis.
+- FSM/epoch files are exact one-line shapes: trailing
+non-empty lines are corruption (refuse, never rewrite).
+`FileExists` stays the regular-file probe; `StatPath` maps
+ENOENT/ENOTDIR to ABSENT and every other stat failure to
+CORRUPT (fail closed, absent-vs-corrupt preserved).
+- Daily rhythm honesty: the ops-day clock advances only after
+the 00:00 chain verification succeeds (a failed verification
+retries the next cycle, never skips a day). The clean-cycle
+HARD truncations report failed writes instead of ignoring
+them.
 - Startup parsing is reject-before-overflow: CLI `cycles`
 accumulates decimal digits with a checked bound (oversized input
 refuses before any signed overflow), then the 0..1000000 window
@@ -297,25 +313,48 @@ no-share open handle on Windows): a dead holder releases it in
 the kernel, so stale takeover has no check-then-act window and
 two concurrent takers serialize into exactly one owner. The PID
 file is diagnostic only (owner identity for alerts), never the
-arbiter. Same-thread re-entry is allowed (tracked in-process);
-a different thread of the same process contends like a foreign
-process and loses. The underlying OS hold is reference-counted
-per thread: it stays held while ANY same-thread re-entrant
-runner still exists and is released only by the last one out —
-never released before process exit while a live holder
-remains. The lock-REFUSAL path mutates no shared state: no
+arbiter. The runner object is non-copyable and non-movable
+(mutable journal/slot state cannot be shared), and at most ONE
+live mutable runner object may hold a directory: repeated
+Recover on the SAME object stays idempotent, but a SECOND live
+object for the same directory is refused — two independent
+state machines must never share one ownership token (their
+separate next_seq_/prev_hash_/slots_ would fork the journal).
+A different thread of the same process contends like a foreign
+process and loses. The lock-REFUSAL path mutates no shared state: no
 journal row, no alert write, no file touch before ownership —
 diagnostics go to stderr only (a refusing contender with a
 fresh sequence/genesis must never append to a journal it does
 not own). Once ownership is established, normal journal/alert
 writes are allowed.
+- Recovery-before-mutation lifecycle: the constructor alone
+confers no mutation authority. `SubmitIntent()` and `Cycle()`
+refuse unless a successful `Recover()` established ownership
+(recovered AND lock held). Observers (`Find`, `slots`,
+`Summarize`) stay unguarded.
 - MEDIUM teardown certification: clearing an incident requires
 BROKER-CONFIRMED flat (seam present + query ok + all zero) AND
-(local flat or file == FLATTENED). Missing/failing seam =
+a terminal FSM state successfully persisted AND revalidated
+from disk in the same cycle AND a successful `ClearMediumFiles()`.
+The `medium-incident-cleared` row is emitted ONLY when the
+cleanup actually succeeded — never on a failed transition or a
+failed clear. Missing/failing seam =
 UNKNOWN/exposure-present: FLATTENED is retained, never cleared;
 `AllFlat()` alone never certifies an incident over. The MEDIUM
 re-entry path is unchanged (FLATTENED + live exposure clears +
 fresh enter — the seam-present case).
+- MEDIUM mint atomicity: a failed epoch mint can NEVER leave
+`medium.txt = MEDIUM_ACTIVE` with no durable epoch. The mint
+failure reverts the FSM so the next cycle retries; the
+rollback write itself is checked — if it fails, the cycle
+fails HARD and loud (never a successful return from a
+stranded ACTIVE+no-epoch state). An ACTIVE file
+with epoch 0 on ANY cycle (failed mint, lost incident file) is
+never treated as healthy: the cycle fails loud until an
+operator removes `medium.txt` for a fresh re-mint (safe: nothing
+was ever sent under an unminted epoch). A failed single write
+with the FSM still absent-or-empty retries next cycle (no
+strand, no sweep: the sweep stays gated on epoch > 0).
 - HARD slot-failure fallback: the position loop skips an ENTRY
 symbol only when the slot path demonstrably owned it this cycle
 (reconciled, not blind, not frozen-waiting); a blind/failed slot
