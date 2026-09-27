@@ -244,7 +244,12 @@ reads as the empty set; REGULAR-but-unreadable fails closed).
 A present regular MEDIUM FSM whose content is non-empty and
 outside the four legal states is corruption: refuse + alert,
 never mint a fresh incident over it (absent-or-empty still
-takes the fresh/mint-retry path).
+takes the fresh/mint-retry path). FSM validation is
+centralized and runs at EVERY cycle boundary regardless of
+kill level: the non-MEDIUM finalize/clear path validates
+before any transition, so a malformed file can never be
+rewritten into a legitimate-looking FLATTENED or
+PROTECTION_ONLY (corruption is never erased, only refused).
 - Broker position values: snapshots validate count AND rows —
 NUL-terminated non-empty symbols, no duplicates, qty within
 +/-999999999, `LLONG_MIN` refused. Any violation invalidates the
@@ -266,6 +271,13 @@ architecture limit (1..64; exits 2x) so `*2` arithmetic cannot
 overflow and fixed scratch tables cannot be over-indexed.
 - Windows durability: `AtomicWrite` uses true replacement semantics
 (`MoveFileEx` REPLACE+WRITE_THROUGH) — never remove-then-rename.
+- Recovery rebuilds live PROTECTED entries: CANCELLED /
+UNKNOWN_FROZEN / CLOSED skip rebuild (recovery-terminal), but
+PROTECTED rebuilds as an active slot with its journaled
+economics intact — the runner treats PROTECTED as a live
+position everywhere else (reclamation guard, flatness,
+netting, HARD management), so restart must not demote it to
+slotless.
 - Startup parsing is reject-before-overflow: CLI `cycles`
 accumulates decimal digits with a checked bound (oversized input
 refuses before any signed overflow), then the 0..1000000 window
@@ -287,7 +299,16 @@ two concurrent takers serialize into exactly one owner. The PID
 file is diagnostic only (owner identity for alerts), never the
 arbiter. Same-thread re-entry is allowed (tracked in-process);
 a different thread of the same process contends like a foreign
-process and loses. Never released before process exit.
+process and loses. The underlying OS hold is reference-counted
+per thread: it stays held while ANY same-thread re-entrant
+runner still exists and is released only by the last one out —
+never released before process exit while a live holder
+remains. The lock-REFUSAL path mutates no shared state: no
+journal row, no alert write, no file touch before ownership —
+diagnostics go to stderr only (a refusing contender with a
+fresh sequence/genesis must never append to a journal it does
+not own). Once ownership is established, normal journal/alert
+writes are allowed.
 - MEDIUM teardown certification: clearing an incident requires
 BROKER-CONFIRMED flat (seam present + query ok + all zero) AND
 (local flat or file == FLATTENED). Missing/failing seam =
