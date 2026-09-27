@@ -13,6 +13,7 @@
 #include <windows.h>
 #define DUR_COMMIT(f) _commit(_fileno(f))
 #else
+#include <dirent.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
