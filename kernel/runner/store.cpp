@@ -631,7 +631,6 @@ bool RetainJournals(const char* dir, long long now_unix_day, int* kept,
     return true;
 }
 #else
-#include <dirent.h>
 bool RetainJournals(const char* dir, long long now_unix_day, int* kept,
                     int* pruned) {
     int k = 0;

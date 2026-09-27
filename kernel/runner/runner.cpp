@@ -13,6 +13,7 @@
 #include <sys/stat.h>
 #include <windows.h>
 #else
+#include <dirent.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/file.h>
@@ -47,6 +48,75 @@ bool IsTerminalState(exec::RouteState st) {
            st == exec::RouteState::CANCELLED ||
            st == exec::RouteState::UNKNOWN_FROZEN ||
            st == exec::RouteState::CLOSED;
+}
+// Uncovered live books (doc 06 sec. 6.1b): true when the
+// directory holds slot books that claim LIVE risk with no
+// covering journal intent row in hand. Live risk = a snapshot
+// past the pre-send states (anything but IDLE /
+// JOURNAL_PENDING / recovery-terminal — the send comes steps
+// after the first persist, so a post-send machine without a
+// row is torn), an unreadable/unrestorable snapshot (cannot
+// prove inert — fail closed), or a snapshot with no matching
+// intent file (submit writes the intent first, so the
+// counterpart cannot be crash debris). Intent-only leftovers
+// (submit-before-first-cycle) and terminal books are NOT live
+// claims — they keep their established ignore/resume paths.
+// Stale AtomicWrite debris (*.tmp) is never a book.
+bool HasUncoveredLiveBooks(const std::string& dir) {
+    std::vector<std::string> snaps;
+#ifdef _WIN32
+    std::string pat = dir + "\\snap-*";
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(pat.c_str(), &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            snaps.push_back(fd.cFileName);
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+#else
+    DIR* dp = opendir(dir.c_str());
+    if (dp) {
+        struct dirent* e = nullptr;
+        while ((e = readdir(dp)) != nullptr) {
+            std::string nm = e->d_name;
+            if (nm.compare(0, 5, "snap-") == 0) snaps.push_back(nm);
+        }
+        closedir(dp);
+    }
+#endif
+    for (std::size_t i = 0; i < snaps.size(); ++i) {
+        const std::string& nm = snaps[i];
+        if (nm.size() >= 4 &&
+            nm.compare(nm.size() - 4, 4, ".tmp") == 0)
+            continue;  // crash debris, never a book
+        std::string infix = nm.substr(5);
+        if (infix.size() >= 4 &&
+            infix.compare(infix.size() - 4, 4, ".txt") == 0)
+            infix.erase(infix.size() - 4);
+        if (!FileExists(
+                (dir + "/intent-" + infix + ".txt").c_str()))
+            return true;  // half-registration, unattested
+        char rec[320];
+        if (!LoadSnapshot((dir + "/" + nm).c_str(), rec,
+                          sizeof(rec)))
+            return true;  // cannot prove inert
+        exec::RouteMachine m;
+        if (!exec::RestoreMachine(rec, &m)) return true;
+        // Recovery-terminal (CANCELLED / UNKNOWN_FROZEN /
+        // CLOSED) books need nothing; IDLE / JOURNAL_PENDING
+        // books predate any send. Anything else claims live
+        // risk — note PROTECTED is live here even though the
+        // drive loop treats it as terminal (round-3 recovery
+        // rule: restart must not demote it to slotless).
+        if (m.state != exec::RouteState::IDLE &&
+            m.state != exec::RouteState::JOURNAL_PENDING &&
+            m.state != exec::RouteState::CANCELLED &&
+            m.state != exec::RouteState::UNKNOWN_FROZEN &&
+            m.state != exec::RouteState::CLOSED)
+            return true;  // post-send progress without a row
+    }
+    return false;
 }
 // Centralized MEDIUM FSM read (doc 06 sec. 6.1b): EVERY cycle
 // boundary validates the persisted file before any transition,
@@ -349,6 +419,7 @@ bool G0Runner::Recover(const char** reason) {
     static const char kStage[] = "recover-stage-refused";
     static const char kChain[] = "recover-journal-broken";
     static const char kSnap[] = "recover-snapshot-bad";
+    static const char kOrphan[] = "recover-orphaned-state";
     if (!deps_.now_ns) {
         if (reason) *reason = "recover-no-clock";
         return false;
@@ -405,6 +476,34 @@ bool G0Runner::Recover(const char** reason) {
     } else {
         next_seq_ = 0;
         prev_hash_ = journal::GenesisPrev();
+    }
+    // Orphaned books (doc 06 sec. 6.1b): intents rebuild
+    // exclusively from journal intent rows, so durable
+    // snap-/intent- books with NO intent row in the journal
+    // (absent/empty journal, or a journal that lost them) are
+    // torn state — refuse for human recovery, never
+    // success-with-zero-slots (the position would silently
+    // leave local ownership). The no-intent-row form (not
+    // merely empty) keeps the refusal stable across retries:
+    // the refusal row below must never launder the orphan
+    // into a genesis. A virgin directory (no books) still
+    // initializes as genesis.
+    bool have_intent_row = false;
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        if (rows[i].kind == "intent") {
+            have_intent_row = true;
+            break;
+        }
+    }
+    if (!have_intent_row && HasUncoveredLiveBooks(cfg_.dir)) {
+        OpsRow("reconcile", "runner", "recover-orphaned-state",
+               deps_.now_ns(deps_.clock_ctx));
+        Alert(P("alerts.jsonl").c_str(), "HARD",
+              "recover-orphaned-state",
+              "slot books with no journal intent row",
+              deps_.now_ns(deps_.clock_ctx));
+        if (reason) *reason = kOrphan;
+        return false;
     }
     // Durable stream cursor (missing = first run, empty cursor).
     // A corrupt cursor refuses: replay-from-zero would silently

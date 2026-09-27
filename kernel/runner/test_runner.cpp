@@ -4680,6 +4680,53 @@ int main() {
               "fc-epoch-cleared");
         Check(cleared_rows() == 1, "fc-cleared-row");
     }
+    // OR. Orphaned durable books refuse recovery (doc 06 sec.
+    // 6.1b): an intent file + PROTECTED snapshot with the
+    // journal absent (then with the journal empty) is torn
+    // state — Recover refuses for human recovery, never
+    // success-with-zero-slots, and the refusal is stable
+    // across retries (the refusal row never launders the
+    // orphan into a genesis). A virgin directory still
+    // initializes as genesis.
+    {
+        Rig r;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-720", "AAPL", 0, 0,
+                          100, 4, 100, &cid, "", 1)
+                   .empty(),
+              "or-image");
+        std::remove((r.dir + "/journal.jsonl").c_str());
+        G0Runner g(r.cfg, r.deps);
+        const char* ors = nullptr;
+        Check(!g.Recover(&ors), "or-refuses-absent");
+        Check(ors &&
+                  std::string(ors) == "recover-orphaned-state",
+              "or-reason");
+        Check(g.slots() == 0, "or-no-slots");
+        G0Runner g2(r.cfg, r.deps);
+        Check(!g2.Recover(nullptr), "or-still-refuses");
+        Check(jev::runner::JournalVerifyFile(
+                  (r.dir + "/journal.jsonl").c_str()),
+              "or-chain-valid");
+    }
+    {
+        Rig r;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-721", "AAPL", 0, 0,
+                          100, 4, 100, &cid, "", 1)
+                   .empty(),
+              "or-image-empty");
+        WriteFile(r.dir + "/journal.jsonl", "");
+        G0Runner g(r.cfg, r.deps);
+        Check(!g.Recover(nullptr), "or-refuses-empty");
+        Check(g.slots() == 0, "or-no-slots-empty");
+    }
+    {
+        Rig r;
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "or-virgin");
+        Check(g.slots() == 0, "or-virgin-empty");
+    }
     // PK. Path integrity (doc 06 sec. 6.1b): a non-regular node
     // never reads as a missing file. Directory-in-place refuses
     // or fails closed at every state reader.
