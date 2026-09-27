@@ -29,6 +29,14 @@ bool AppendLine(const char* path, const char* line);
 // tmp + flush + OS-commit + rename (single-process atomic).
 bool AtomicWrite(const char* path, const char* data);
 bool ReadLines(const char* path, std::vector<std::string>* out);
+// Bounded variant: refuses (false, out cleared) when the file
+// exceeds max_bytes. For incident-scoped state files whose
+// lifecycle is tiny by construction (hard-chain.txt) — millions
+// of duplicate rows must never materialize into memory before
+// validation rejects them. The live journal keeps unbounded
+// reads under its own lifecycle contract (tracked separately).
+bool ReadLinesCapped(const char* path, std::vector<std::string>* out,
+                     std::size_t max_bytes);
 bool FileExists(const char* path);
 
 // ---- journal file -------------------------------------------------

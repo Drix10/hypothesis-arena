@@ -188,8 +188,8 @@ class G0Runner {
     // move only the cursor, never router state. The Phase-4
     // transport resumes live SSE with this as since_id (replay,
     // not re-subscribe-from-now). Missing file = empty cursor
-    // (first run); cursor loss only replays more (duplicates drop
-    // at the seam), never less.
+    // (first run); a failed cursor write fails the cycle (the
+    // dirty bit is kept for retry) — never a silent clear.
 
    private:
     RunnerConfig cfg_;
@@ -228,6 +228,11 @@ class G0Runner {
     bool EmergencyAppend(const journal::Row& r);
     bool DrainEmergency();
     bool PersistSlot(Slot& s);
+    // Contract-checked position snapshot: fills ps (cap) and sets
+    // *n. The seam promises 0 <= n <= cap; any other count is an
+    // unavailable snapshot (false) — callers take their existing
+    // unknown/failure branch, never index past the fixed buffer.
+    bool SnapPositions(Position* ps, int cap, int* n) const;
     bool LoadSlot(Slot& s, const char* intent_id);
     // Dispatch returns true when broker-mutating transport fired
     // (POST/DELETE — the persist that follows is load-bearing).
@@ -285,7 +290,10 @@ class G0Runner {
     // file); HARD mints unless the incident continues (HALT
     // present at entry — crash-mid-HARD). Clearing HALT ends the
     // incident; a re-firing HARD is new (supersede journaled +
-    // alerted). Zero = no incident on file.
+    // alerted). Zero = no incident on file. Minting is
+    // durable-or-nothing: 0 is also the write-failure return
+    // (no epoch file, no new identity — callers stop the
+    // incident path instead of minting unrecoverable ids).
     long long MediumEpoch() const;
     long long MintMediumEpoch(long long now_ns);
     long long HardEpochFor(long long now_ns, const char* reason,

@@ -92,8 +92,19 @@ static int FakeStream(void*, char* buf, int n) {
 }
 static std::vector<jev::runner::Position> g_positions;
 static int g_pos_fail = 0;
+static int g_posn_lie = 0;  // >0: adapter violates the seam
+                            // contract by REPORTING this count
+                            // (writes at most cap — the runner must
+                            // treat it as unavailable, never index
+                            // past the fixed buffer)
 static int FakePositions(void*, jev::runner::Position* out, int cap) {
     if (g_pos_fail) return -1;
+    if (g_posn_lie > 0) {
+        int w = (g_posn_lie < cap) ? g_posn_lie : cap;
+        if ((int)g_positions.size() < w) w = (int)g_positions.size();
+        for (int i = 0; i < w; ++i) out[i] = g_positions[i];
+        return g_posn_lie;
+    }
     int n = ((int)g_positions.size() < cap) ? (int)g_positions.size()
                                             : cap;
     for (int i = 0; i < n; ++i) out[i] = g_positions[i];
@@ -280,6 +291,7 @@ struct Rig {
         g_now = 1800000000000000000LL;
         g_positions.clear();
         g_pos_fail = 0;
+        g_posn_lie = 0;
         g_venue_open = 0;
         g_venue_spread = 0;
         g_venue_fail = 0;
@@ -543,6 +555,34 @@ int main() {
         Check(jev::runner::MapTradeEvent(f).kind ==
                   jev::runner::StreamKind::NONE,
               "map-no-cumulative");
+        // Overflow seam: 19 nines exceed LLONG_MAX — a naive
+        // accumulate-then-bound overflows BEFORE the cap test
+        // (UB). Must refuse, never wrap into a small qty.
+        f.type = "partial_fill";
+        f.data =
+            "{\"event\":\"partial_fill\",\"order\":{\"client_"
+            "order_id\":\"abc123\",\"filled_qty\":\"9999999"
+            "9999999999\"},\"qty\":\"1\"}";
+        Check(jev::runner::MapTradeEvent(f).kind ==
+                  jev::runner::StreamKind::NONE,
+              "map-fill-overflow-refused");
+        // Just over the share cap (10 digits): refuse.
+        f.data =
+            "{\"event\":\"partial_fill\",\"order\":{\"client_"
+            "order_id\":\"abc123\",\"filled_qty\":\"1000000"
+            "000\"},\"qty\":\"1\"}";
+        Check(jev::runner::MapTradeEvent(f).kind ==
+                  jev::runner::StreamKind::NONE,
+              "map-fill-over-cap-refused");
+        // Exactly at the cap: accept (boundary).
+        f.data =
+            "{\"event\":\"partial_fill\",\"order\":{\"client_"
+            "order_id\":\"abc123\",\"filled_qty\":\"9999999"
+            "99\"},\"qty\":\"1\"}";
+        auto mb2 = jev::runner::MapTradeEvent(f);
+        Check(mb2.kind == jev::runner::StreamKind::FILL &&
+                  mb2.filled_qty == 999999999,
+              "map-fill-max-cap");
         f.type = "canceled";
         auto ml = jev::runner::MapTradeEvent(f);
         Check(ml.kind == jev::runner::StreamKind::LIFE &&
@@ -3366,6 +3406,73 @@ int main() {
               "ec-exact-books");
         Check(Exists(r.dir + "/HALT"), "ec-halt");
     }
+    // R5. Broker-fill regression (doc 06 sec. 6.1b): the chain
+    // already attributes 40 of a 100-share request, then the
+    // broker reports filled=30 terminal for the same id. Nothing
+    // folds (30 < 40 already booked), the regression journals +
+    // alerts, and the remainder floors at the chain: 100 - 40 =
+    // 60 — never the regressed 100 - 30 = 70. Slotless shape
+    // (like R3): the position loop drives HardCloseOnce under
+    // the stable incident id on both cycles.
+    {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "rg-recover");
+        g_kill.drift_unresolvable = true;  // HARD
+        g_positions.push_back(MkPos("AAPL", 100));
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 PlainReply("accepted", "0").c_str());
+        Check(!g.Cycle(g_now), "rg-hard1");
+        Check(CountMethod("POST", "/v2/orders") == 1,
+              "rg-primary-sent");
+        // A prior fill attributed 40 (as if an earlier fill
+        // landed and attributed before the regression arrived).
+        char hid[64];
+        std::snprintf(hid, sizeof(hid), "hard-%lld-AAPL",
+                        g_now);
+        std::string old =
+            ReadWhole(r.dir + "/hard-chain.txt");
+        Check(old.find(std::string(hid) + " 100 0") !=
+                  std::string::npos,
+              "rg-chain-noted");
+        WriteFile(r.dir + "/hard-chain.txt",
+                  (old + std::string(hid) + " 100 40\n")
+                      .c_str());
+        // Restart: broker need 60, primary pre-flight reports
+        // the regressed 30 terminal.
+        G0Runner g2(r.cfg, r.deps);
+        Check(g2.Recover(nullptr), "rg-recover2");
+        g_positions.clear();
+        g_positions.push_back(MkPos("AAPL", 60));
+        PushRule("GET", "by_client_order_id", 200,
+                 HeldReply("filled", "30").c_str());
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 PlainReply("accepted", "0").c_str());
+        Check(!g2.Cycle(g_now), "rg-hard2");
+        Check(CountMethod("POST", "/v2/orders") == 2,
+              "rg-one-remainder");
+        bool qty60 = false, qty70 = false;
+        int posts = 0;
+        for (std::size_t i = 0; i < g_log.size(); ++i) {
+            if (g_log[i].method != "POST") continue;
+            if (++posts < 2) continue;
+            if (g_log[i].body.find("\"qty\":\"60\"") !=
+                std::string::npos)
+                qty60 = true;
+            if (g_log[i].body.find("\"qty\":\"70\"") !=
+                std::string::npos)
+                qty70 = true;
+        }
+        Check(qty60, "rg-remainder-60");
+        Check(!qty70, "rg-never-70");
+        Check(ReadWhole(r.dir + "/alerts.jsonl")
+                      .find("hard-close-fill-regressed") !=
+                  std::string::npos,
+              "rg-regressed-alert");
+    }
     // CW. Chain write-ahead ENFORCED (doc 06 sec. 6.1b): the
     // chain file is unwritable -> the POST never flies (freeze +
     // refuse, exactly zero POSTs). Filesystem fault injection
@@ -3726,6 +3833,275 @@ int main() {
         Check(ReadWhole(r.dir + "/freeze.txt").find("AAPL") !=
                   std::string::npos,
               "qz2-frozen");
+    }
+    // PL. Position-count contract (doc 06 sec. 6.1b): an adapter
+    // that reports n outside 0 <= n <= cap violates the seam —
+    // every path treats it as unavailable (never an index past
+    // the fixed buffer). g_posn_lie makes the fake report 65.
+    {
+        // (a) MEDIUM exposure + teardown certification fail
+        // closed: FLATTENED retained, never cleared.
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        g_posn_lie = 65;
+        g_positions.push_back(MkPos("AAPL", 100));
+        WriteFile(r.dir + "/medium.txt", "FLATTENED");
+        WriteFile(r.dir + "/medium-incident.txt",
+                  "1799999999000000000\n");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "pl-recover");
+        Check(g.Cycle(g_now), "pl-cycle");
+        Check(ReadWhole(r.dir + "/medium.txt") ==
+                  "FLATTENED",
+              "pl-retained-on-lie");
+        Check(CountMethod("POST", "/v2/orders") == 0,
+              "pl-no-mint-on-lie");
+    }
+    {
+        // (b) S2 drift check: unavailable snapshot alerts once,
+        // journals no drift row, cycle stays true.
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        g_posn_lie = 65;
+        g_positions.push_back(MkPos("AAPL", 40));
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "pl-recover2");
+        Check(g.Cycle(g_now), "pl-cycle2");
+        FILE* af =
+            std::fopen((r.dir + "/alerts.jsonl").c_str(),
+                       "rb");
+        char abuf[4096] = {0};
+        std::size_t an =
+            af ? std::fread(abuf, 1, sizeof(abuf) - 1, af) : 0;
+        if (af) std::fclose(af);
+        Check(an > 0 &&
+                  std::string(abuf).find(
+                      "positions-unavailable") !=
+                      std::string::npos,
+              "pl-lie-unavailable");
+        std::vector<jev::journal::Row> rows;
+        bool drift_row = false;
+        if (jev::runner::JournalLoad(
+                (r.dir + "/journal.jsonl").c_str(), &rows)) {
+            for (std::size_t i = 0; i < rows.size(); ++i) {
+                if (rows[i].kind == "drift-directive")
+                    drift_row = true;
+            }
+        }
+        Check(!drift_row, "pl-lie-no-drift");
+    }
+    {
+        // (c) HARD slot fallback: broker qty unknown -> the
+        // documented local-sizing fallback (one journaled
+        // 100-share close, never a blind broker qty, never an
+        // over-read). Entry reconciles absent (404); the broker
+        // size is unavailable (lie), so local open sizes.
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        g_posn_lie = 65;
+        g_positions.push_back(MkPos("AAPL", 100));
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-571", "AAPL", 0, 0,
+                          100, 2, 100, &cid)
+                   .empty(),
+              "pl-image");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "pl-recover3");
+        g_kill.drift_unresolvable = true;  // HARD
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 PlainReply("accepted", "0").c_str());
+        Check(!g.Cycle(g_now), "pl-terminates");
+        Check(CountMethod("POST", "/v2/orders") == 1,
+              "pl-one-local-close");
+        bool qty100 = false;
+        for (std::size_t i = 0; i < g_log.size(); ++i) {
+            if (g_log[i].method == "POST" &&
+                g_log[i].body.find("\"qty\":\"100\"") !=
+                    std::string::npos)
+                qty100 = true;
+        }
+        Check(qty100, "pl-local-qty");
+        Check(Exists(r.dir + "/HALT"), "pl-halt");
+    }
+    {
+        // (d) Double-blind: transport-failed entry sighting +
+        // unavailable broker snapshot -> order nothing (blind +
+        // unknown never mints), HALT still terminates.
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        g_posn_lie = 65;
+        g_positions.push_back(MkPos("AAPL", 100));
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-574", "AAPL", 0, 0,
+                          100, 2, 100, &cid)
+                   .empty(),
+              "pl-image2");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "pl-recover4");
+        g_kill.drift_unresolvable = true;  // HARD
+        PushRule("GET", "by_client_order_id", 500, "{}");
+        Check(!g.Cycle(g_now), "pl-terminates2");
+        Check(CountMethod("POST", "/v2/orders") == 0,
+              "pl-zero-posts-double-blind");
+        Check(Exists(r.dir + "/HALT"), "pl-halt2");
+        Check(ReadWhole(r.dir + "/alerts.jsonl")
+                      .find("hard-positions-unknown") !=
+                  std::string::npos,
+              "pl-unavailable-alert");
+    }
+    // CU. Cursor durability fails closed (doc 06 sec. 6.1b): a
+    // foreign stream event dirties the cursor; an unwritable
+    // cursor file fails the cycle (alert + journal) WITHOUT
+    // clearing the dirty bit; writability restored, the next
+    // cycle persists the same cursor and succeeds.
+    {
+        Rig r;
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "cu-recover");
+        g_stream =
+            "id: 01J000000000000000000000099\nevent: fill\n"
+            "data: {\"event\":\"fill\",\"order\":{\"client_"
+            "order_id\":\"ghost\",\"filled_qty\":\"10\"}}\n\n";
+        MkDir(r.dir + "/cursor.txt");
+        Check(!g.Cycle(g_now), "cu-cycle-refused");
+        Check(ReadWhole(r.dir + "/alerts.jsonl")
+                      .find("cursor-unpersisted") !=
+                  std::string::npos,
+              "cu-alert");
+        // Same process, writability restored: the kept dirty bit
+        // persists the same cursor and the cycle succeeds.
+        RmDir(r.dir + "/cursor.txt");
+        Check(g.Cycle(g_now), "cu-cycle2");
+        Check(ReadWhole(r.dir + "/cursor.txt") ==
+                  "01J000000000000000000000099",
+              "cu-cursor-persisted");
+    }
+    // ME. MEDIUM epoch mint is durable-or-nothing (doc 06 sec.
+    // 6.1b): an unwritable incident file refuses the mint (no
+    // sweep identity, FSM reverted so the next cycle retries);
+    // writability restored, the mint proceeds.
+    {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        WriteFile(r.dir + "/medium.txt", "");
+        MkDir(r.dir + "/medium-incident.txt");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "me-recover");
+        g_kill.spend_tier = 3;  // MEDIUM
+        Check(g.Cycle(g_now), "me-cycle");
+        Check(CountMethod("POST", "/v2/orders") == 0,
+              "me-no-mint");
+        Check(ReadWhole(r.dir + "/medium.txt").empty(),
+              "me-fsm-reverted");
+        Check(ReadWhole(r.dir + "/alerts.jsonl")
+                      .find("medium-epoch-unpersisted") !=
+                  std::string::npos,
+              "me-alert");
+        RmDir(r.dir + "/medium-incident.txt");
+        G0Runner g2(r.cfg, r.deps);
+        Check(g2.Recover(nullptr), "me-recover2");
+        Check(g2.Cycle(g_now), "me-cycle2");
+        char mbe[32];
+        std::snprintf(mbe, sizeof(mbe), "%lld", g_now);
+        Check(ReadWhole(r.dir + "/medium-incident.txt") ==
+                  std::string(mbe),
+              "me-mint-retry");
+    }
+    // HE. HARD epoch mint is durable-or-nothing: an unwritable
+    // incident file stops the incident path (HALT already blocks
+    // entries; zero POSTs); writability restored, the restart
+    // converges (reprotect + flatten, same incident shape as a
+    // clean HARD).
+    {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-572", "AAPL", 0, 0,
+                          100, 5, 100, &cid)
+                   .empty(),
+              "he-image");
+        MkDir(r.dir + "/hard-incident.txt");
+        g_positions.push_back(MkPos("AAPL", 100));
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "he-recover");
+        g_kill.drift_unresolvable = true;  // HARD
+        Check(!g.Cycle(g_now), "he-refused");
+        Check(CountMethod("POST", "/v2/orders") == 0,
+              "he-zero-posts");
+        Check(Exists(r.dir + "/HALT"), "he-halt");
+        Check(ReadWhole(r.dir + "/alerts.jsonl")
+                      .find("hard-epoch-unpersisted") !=
+                  std::string::npos,
+              "he-alert");
+        RmDir(r.dir + "/hard-incident.txt");
+        G0Runner g2(r.cfg, r.deps);
+        Check(g2.Recover(nullptr), "he-recover2");
+        PushRule("GET", "by_client_order_id", 200,
+                 "{\"id\":\"0193abcd-1234-5678-9abc-"
+                 "def012345678\",\"status\":\"accepted\","
+                 "\"filled_qty\":\"100\"}");
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 BracketReply("accepted", "100").c_str());
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 HeldReply("filled", "100").c_str());
+        Check(!g2.Cycle(g_now), "he-converges");
+        Check(CountMethod("POST", "/v2/orders") == 2,
+              "he-reprotect-plus-flatten");
+    }
+    // LL. Epoch overflow guard: a persisted LLONG_MAX epoch plus
+    // a stuck clock must refuse the old+1 mint (never wrap),
+    // journal + alert, send nothing.
+    {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        WriteFile(r.dir + "/medium.txt", "");
+        WriteFile(r.dir + "/medium-incident.txt",
+                  "9223372036854775807\n");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "ll-recover");
+        g_kill.spend_tier = 3;  // MEDIUM
+        Check(g.Cycle(g_now), "ll-cycle");
+        Check(CountMethod("POST", "/v2/orders") == 0,
+              "ll-no-mint");
+        Check(ReadWhole(r.dir + "/alerts.jsonl")
+                      .find("medium-epoch-overflow") !=
+                  std::string::npos,
+              "ll-alert");
+    }
+    // CB. Chain byte envelope (doc 06 sec. 6.1b): a hard-chain
+    // file past 64 KiB refuses before rows materialize (freeze
+    // + refuse, zero POSTs) — millions of valid duplicates can
+    // never drive unbounded memory.
+    {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-573", "AAPL", 0, 0,
+                          100, 2, 100, &cid)
+                   .empty(),
+              "cb-image");
+        g_positions.push_back(MkPos("AAPL", 100));
+        std::string big;
+        for (int i = 0; i < 6000; ++i)
+            big += "cb-h 100 0\n";
+        WriteFile(r.dir + "/hard-chain.txt", big.c_str());
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "cb-recover");
+        g_kill.drift_unresolvable = true;  // HARD
+        Check(!g.Cycle(g_now), "cb-refused");
+        Check(CountMethod("POST", "/v2/orders") == 0,
+              "cb-zero-posts");
+        Check(jev::runner::FreezeHas(
+                    (r.dir + "/freeze.txt").c_str(), "AAPL"),
+              "cb-frozen");
+        Check(ReadWhole(r.dir + "/alerts.jsonl")
+                      .find("hard-chain-invalid") !=
+                  std::string::npos,
+              "cb-alert");
     }
     if (g_fail == 0)
         std::printf("RUNNER SUITE: ALL PASS (%d checks)\n", g_count);

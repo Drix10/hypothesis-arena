@@ -244,9 +244,18 @@ StreamObs MapTradeEvent(const SseEvent& ev) {
     if (!NeedleStrAfter(d, "\"order\"", "filled_qty", qbuf,
                         sizeof(qbuf), true))
         return so;
+    // Overflow-safe bounded conversion: qbuf holds digits only
+    // (digits_only extract) but up to 19 of them — a naive
+    // accumulate-then-bound overflows signed long long BEFORE the
+    // cap test (undefined behavior). Reject before the arithmetic
+    // can exceed the share cap instead.
     long long q = 0;
-    for (int i = 0; qbuf[i]; ++i) q = q * 10 + (qbuf[i] - '0');
-    if (q <= 0 || q > 999999999) return so;
+    for (int i = 0; qbuf[i]; ++i) {
+        int dgt = qbuf[i] - '0';
+        if (q > (999999999LL - dgt) / 10) return so;
+        q = q * 10 + dgt;
+    }
+    if (q <= 0) return so;
     so.kind = StreamKind::FILL;
     so.filled_qty = (std::int64_t)q;
     return so;

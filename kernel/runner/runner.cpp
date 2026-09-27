@@ -3,6 +3,7 @@
 // single-writer (the operator starts one instance per dir).
 #include "runner.hpp"
 
+#include <climits>
 #include <cstdio>
 #include <cstring>
 
@@ -130,11 +131,15 @@ long long ParseEpoch(const std::vector<std::string>& lns) {
     if (lns.empty()) return 0;
     const std::string& e = lns[0];
     if (e.empty() || e.size() > 19) return 0;
+    // Checked accumulation: a 19-digit file value can exceed
+    // LLONG_MAX, and signed overflow is UB regardless of any
+    // after-the-fact sign test — refuse before it can happen.
     long long v = 0;
     for (std::size_t i = 0; i < e.size(); ++i) {
         if (e[i] < '0' || e[i] > '9') return 0;
-        v = v * 10 + (e[i] - '0');
-        if (v <= 0) return 0;  // overflow wraps: refuse
+        int dgt = e[i] - '0';
+        if (v > (LLONG_MAX - dgt) / 10) return 0;
+        v = v * 10 + dgt;
     }
     return v;
 }
@@ -737,11 +742,34 @@ long long G0Runner::MintMediumEpoch(long long now_ns) {
     // was empty/corrupt — a crash mid-incident keeps it, so it
     // never re-enters). Overwrite unconditionally; clock-stuck
     // guard keeps epochs monotonic so ids never repeat.
+    // Durable-or-nothing: no persisted epoch file, no new
+    // incident identity (a crash before the write lands must
+    // restart into the same re-mint, never into ids minted from
+    // an epoch the restart cannot recover). Failure returns 0
+    // (never a valid epoch); the caller reverts the FSM so the
+    // next cycle retries the mint.
     long long old = MediumEpoch();
-    long long e = now_ns > old ? now_ns : old + 1;
+    long long e = 0;
+    if (now_ns > old) {
+        e = now_ns;
+    } else if (old >= LLONG_MAX) {
+        OpsRow("demotion", "runner",
+               "medium-epoch-overflow", now_ns);
+        Alert(P("alerts.jsonl").c_str(), "MEDIUM",
+              "medium-epoch-overflow", "", now_ns);
+        return 0;
+    } else {
+        e = old + 1;
+    }
     char eb[32];
     std::snprintf(eb, sizeof(eb), "%lld", e);
-    AtomicWrite(P("medium-incident.txt").c_str(), eb);
+    if (!AtomicWrite(P("medium-incident.txt").c_str(), eb)) {
+        OpsRow("demotion", "runner",
+               "medium-epoch-unpersisted", now_ns);
+        Alert(P("alerts.jsonl").c_str(), "MEDIUM",
+              "medium-epoch-unpersisted", "", now_ns);
+        return 0;
+    }
     char tb[280];
     std::snprintf(tb, sizeof(tb), "medium-enter epoch=%lld", e);
     OpsRow("demotion", "runner", tb, now_ns);
@@ -774,11 +802,28 @@ long long G0Runner::HardEpochFor(long long now_ns,
         OpsRow("drift-directive", "runner", tb, now_ns);
         return old;
     }
-    long long e = now_ns > old ? now_ns : old + 1;
+    long long e = 0;
+    if (now_ns > old) {
+        e = now_ns;
+    } else if (old >= LLONG_MAX) {
+        OpsRow("drift-directive", "runner",
+               "hard-epoch-overflow", now_ns);
+        Alert(P("alerts.jsonl").c_str(), "HARD",
+              "hard-epoch-overflow", "", now_ns);
+        return 0;
+    } else {
+        e = old + 1;
+    }
     char eb[128];
     std::snprintf(eb, sizeof(eb), "%lld\n%.100s", e,
                   reason ? reason : "");
-    AtomicWrite(P("hard-incident.txt").c_str(), eb);
+    if (!AtomicWrite(P("hard-incident.txt").c_str(), eb)) {
+        OpsRow("drift-directive", "runner",
+               "hard-epoch-unpersisted", now_ns);
+        Alert(P("alerts.jsonl").c_str(), "HARD",
+              "hard-epoch-unpersisted", "", now_ns);
+        return 0;
+    }
     char tb[280];
     std::snprintf(tb, sizeof(tb),
                     "hard-incident-enter epoch=%lld", e);
@@ -864,16 +909,29 @@ int G0Runner::CollectCoverExits(const char* symbol,
     if (total) *total = tot;
     return n;
 }
+bool G0Runner::SnapPositions(Position* ps, int cap,
+                             int* n) const {
+    if (n) *n = 0;
+    if (!ps || cap <= 0 || !n) return false;
+    if (!deps_.list_positions) return false;
+    int got = deps_.list_positions(deps_.positions_ctx, ps, cap);
+    // Seam contract: 0 <= n <= cap. A violating adapter (65,
+    // 100, ...) must never drive an over-read of the fixed
+    // buffer — treat as unavailable, exactly like a lookup
+    // failure.
+    if (got < 0 || got > cap) return false;
+    *n = got;
+    return true;
+}
 bool G0Runner::BrokerQty(const char* symbol, long long* out) {
     // Signed broker position for one symbol. False = no seam or
     // failing endpoint (callers fall back + journal; unknown is
     // never flat).
     if (out) *out = 0;
     if (!symbol || !symbol[0] || !out) return false;
-    if (!deps_.list_positions) return false;
     Position ps[64];
-    int n = deps_.list_positions(deps_.positions_ctx, ps, 64);
-    if (n < 0) return false;
+    int n = 0;
+    if (!SnapPositions(ps, 64, &n)) return false;
     long long q = 0;
     for (int i = 0; i < n; ++i) {
         if (ps[i].symbol[0] == '\0') continue;
@@ -896,10 +954,9 @@ bool G0Runner::MediumHasExposure() {
     // failing seam counts as exposure (fail closed: never clear
     // an incident that cannot be seen — doc 06 sec. 6.1b).
     if (!LocalFlat()) return true;
-    if (!deps_.list_positions) return true;
     Position ps[64];
-    int n = deps_.list_positions(deps_.positions_ctx, ps, 64);
-    if (n < 0) return true;
+    int n = 0;
+    if (!SnapPositions(ps, 64, &n)) return true;
     for (int i = 0; i < n; ++i) {
         if (ps[i].symbol[0] != '\0' && ps[i].qty != 0)
             return true;
@@ -925,10 +982,9 @@ bool G0Runner::BrokerConfirmedFlat() {
     // Teardown certification (doc 06 sec. 6.1b): seam present +
     // query ok + every position zero. Anything else is UNKNOWN
     // (false) — AllFlat() alone never certifies an incident over.
-    if (!deps_.list_positions) return false;
     Position ps[64];
-    int n = deps_.list_positions(deps_.positions_ctx, ps, 64);
-    if (n < 0) return false;
+    int n = 0;
+    if (!SnapPositions(ps, 64, &n)) return false;
     for (int i = 0; i < n; ++i) {
         if (ps[i].symbol[0] != '\0' && ps[i].qty != 0)
             return false;
@@ -1115,6 +1171,48 @@ namespace {
 // carries no row). The file is tiny (truncated at incident end)
 // so a capped linear table is exact, never allocating hot-path
 // memory beyond it.
+// Strict chain row: `<tag> <requested> <attributed>\0` with
+// single SPACE separators, tag 1..64 non-space chars, numbers
+// strict decimal with reject-before-overflow conversion (never
+// scanf-family conversion on persisted numeric text — its
+// overflow behavior is implementation-defined). The writer
+// (NoteHardChain) emits exactly this shape, so strictness costs
+// nothing and any foreign/hand-edited row fails validation.
+bool ParseChainRow(const char* ln, char t[65], long long* r,
+                   long long* a) {
+    if (!ln || !t || !r || !a) return false;
+    std::size_t i = 0, ti = 0;
+    while (ln[i] != '\0' && ln[i] != ' ') {
+        if (ti >= 64) return false;
+        t[ti++] = ln[i++];
+    }
+    if (ti == 0 || ln[i] != ' ') return false;
+    t[ti] = '\0';
+    ++i;
+    long long rv = 0, av = 0;
+    bool dig = false;
+    while (ln[i] >= '0' && ln[i] <= '9') {
+        dig = true;
+        int dgt = ln[i] - '0';
+        if (rv > (LLONG_MAX - dgt) / 10) return false;
+        rv = rv * 10 + dgt;
+        ++i;
+    }
+    if (!dig || ln[i] != ' ') return false;
+    ++i;
+    dig = false;
+    while (ln[i] >= '0' && ln[i] <= '9') {
+        dig = true;
+        int dgt = ln[i] - '0';
+        if (av > (LLONG_MAX - dgt) / 10) return false;
+        av = av * 10 + dgt;
+        ++i;
+    }
+    if (!dig || ln[i] != '\0') return false;
+    *r = rv;
+    *a = av;
+    return true;
+}
 bool ScanChain(const std::vector<std::string>& lns,
                const char* tag, long long* req_out,
                long long* attr_out) {
@@ -1130,11 +1228,8 @@ bool ScanChain(const std::vector<std::string>& lns,
     for (std::size_t i = 0; i < lns.size(); ++i) {
         char t[65] = {0};
         long long r = 0, a = 0;
-        int n = 0;
-        if (std::sscanf(lns[i].c_str(), "%64s %lld %lld %n", t,
-                         &r, &a, &n) != 3 ||
-            t[0] == '\0' || r <= 0 || a < 0 || a > r ||
-            lns[i].c_str()[n] != '\0')
+        if (!ParseChainRow(lns[i].c_str(), t, &r, &a) ||
+            t[0] == '\0' || r <= 0 || a < 0 || a > r)
             return false;
         std::size_t k = 0;
         while (k < nseen &&
@@ -1169,8 +1264,12 @@ bool ScanChain(const std::vector<std::string>& lns,
 bool G0Runner::HardChainOk() {
     std::vector<std::string> lns;
     std::string p = P("hard-chain.txt");
-    if (!ReadLines(p.c_str(), &lns)) return !FileExists(p.c_str());  // missing =
-                                                     // valid-empty
+    // 64 KiB envelope: the chain is incident-scoped and tiny by
+    // construction — oversized input refuses before rows
+    // materialize (fail closed downstream: invalid chain).
+    if (!ReadLinesCapped(p.c_str(), &lns, 65536))
+        return !FileExists(p.c_str());  // missing =
+                                         // valid-empty
     return ScanChain(lns, nullptr, nullptr, nullptr);
 }
 bool G0Runner::HardChainState(const char* tag, long long* req,
@@ -1178,8 +1277,9 @@ bool G0Runner::HardChainState(const char* tag, long long* req,
     if (!tag || !tag[0]) return false;
     std::vector<std::string> lns;
     std::string p = P("hard-chain.txt");
-    if (!ReadLines(p.c_str(), &lns)) return false;  // missing/unreadable
-                                            // can never vouch
+    if (!ReadLinesCapped(p.c_str(), &lns, 65536))
+        return false;  // missing/unreadable/oversized can never
+                       // vouch
     return ScanChain(lns, tag, req, attr);
 }
 bool G0Runner::NoteHardChain(const char* tag, long long requested,
@@ -1315,6 +1415,26 @@ bool G0Runner::HardCloseOnce(const char* symbol, long long qty,
         }
         long long portion = filled - already;
         if (portion < 0) portion = 0;
+        // Monotonic authority: the chain's attributed quantity is
+        // the floor for remainder derivation. A broker observation
+        // that REGRESSES below already-attributed truth (poll lag,
+        // correction, identity confusion) is classified — drift
+        // owns the anomaly — and must never manufacture a larger
+        // replacement remainder (req - regressed > req - already).
+        long long eff = filled;
+        if (filled < already) {
+            char gb[280];
+            std::snprintf(gb, sizeof(gb),
+                            "hard-close id=%s fill-regressed "
+                            "broker=%lld chain=%lld",
+                            id.c_str(), filled, already);
+            OpsRow("drift-directive",
+                   scope_intent ? scope_intent : "runner", gb,
+                   now_ns);
+            Alert(P("alerts.jsonl").c_str(), "HARD",
+                  "hard-close-fill-regressed", gb, now_ns);
+            eff = already;
+        }
         if (portion > 0) {
             // Durable-first: slots persist BEFORE the chain note
             // advances. Unpersisted slots (rolled back inside)
@@ -1364,9 +1484,12 @@ bool G0Runner::HardCloseOnce(const char* symbol, long long qty,
         // per-order unique — it can never carry another POST).
         // Remainder = ORIGINAL chain request minus landed (chain
         // truth, validated above — the current broker need only
-        // caps the send). No chain row is unreachable here: the
-        // found id passed validation, so req > 0 holds.
-        long long rem = req - filled;
+        // caps the send). Landed floors at the chain-attributed
+        // quantity: a regressing broker observation never inflates
+        // the remainder (classified above). No chain row is
+        // unreachable here: the found id passed validation, so
+        // req > 0 holds.
+        long long rem = req - eff;
         if (rem <= 0) {
             // Chain satisfied, yet the broker still shows need:
             // poll lag or foreign exposure — drift owns it (no
@@ -1809,6 +1932,11 @@ bool G0Runner::HardStop(long long now_ns, const char* why,
     if (hf) std::fclose(hf);
     long long epoch =
         HardEpochFor(now_ns, why, halt_at_entry);
+    if (epoch <= 0) return false;  // no durable epoch: no new
+                                   // incident identity (HALT
+                                   // already blocks entries;
+                                   // the next cycle retries
+                                   // the mint)
     std::vector<char> slot_owned(slots_.size(), 0);
     for (std::size_t i = 0; i < slots_.size(); ++i) {
         bool ow = true;
@@ -1828,15 +1956,15 @@ bool G0Runner::HardStop(long long now_ns, const char* why,
     // their slots).
     if (deps_.list_positions) {
         Position ps[64];
-        int n = deps_.list_positions(deps_.positions_ctx, ps, 64);
-        if (n < 0) {
+        int n = 0;
+        if (!SnapPositions(ps, 64, &n)) {
             OpsRow("drift-directive", "runner",
                    "hard-positions-unavailable", now_ns);
             Alert(P("alerts.jsonl").c_str(), "HARD",
                   "hard-positions-unknown", "lookup failed",
                   now_ns);
         }
-        for (int i = 0; n >= 0 && i < n; ++i) {
+        for (int i = 0; i < n; ++i) {
             if (ps[i].symbol[0] == '\0' || ps[i].qty == 0)
                 continue;
             if (FreezeHas(P("freeze.txt").c_str(), ps[i].symbol))
@@ -1972,8 +2100,8 @@ void G0Runner::PositionCheck(long long now_ns) {
     if (!due) return;
     last_pos_ns_ = now_ns;
     Position ps[64];
-    int n = deps_.list_positions(deps_.positions_ctx, ps, 64);
-    if (n < 0) {
+    int n = 0;
+    if (!SnapPositions(ps, 64, &n)) {
         Alert(P("alerts.jsonl").c_str(), "S2",
               "positions-unavailable", "lookup failed", now_ns);
         return;
@@ -2147,8 +2275,9 @@ bool G0Runner::AllFlat() {
     }
     if (deps_.list_positions) {
         Position ps[64];
-        int n = deps_.list_positions(deps_.positions_ctx, ps, 64);
-        if (n < 0) return false;  // unknown != flat
+        int n = 0;
+        if (!SnapPositions(ps, 64, &n))
+            return false;  // unknown != flat
         for (int i = 0; i < n; ++i) {
             if (ps[i].qty != 0) return false;
         }
@@ -2308,7 +2437,13 @@ void G0Runner::MediumPass(long long now_ns) {
         // mint the epoch BEFORE any sweep id derives (the crash
         // window between mint and first sweep is safe — nothing
         // was sent under the new epoch yet, so a re-mint is free).
-        MintMediumEpoch(now_ns);
+        // Mint failure reverts the FSM so the next cycle retries
+        // (an ACTIVE file with no durable epoch would strand the
+        // incident id-less).
+        if (MintMediumEpoch(now_ns) <= 0) {
+            AtomicWrite(mp.c_str(), "");
+            return;
+        }
         Alert(P("alerts.jsonl").c_str(), "MEDIUM", "medium-enter",
               "entries stopped, flattening", now_ns);
     }
@@ -2321,7 +2456,13 @@ void G0Runner::MediumPass(long long now_ns) {
         ClearMediumFiles();
         AtomicWrite(mp.c_str(), "MEDIUM_ACTIVE");
         cur = "MEDIUM_ACTIVE";
-        MintMediumEpoch(now_ns);
+        if (MintMediumEpoch(now_ns) <= 0) {
+            // Exact revert: FLATTENED with no epoch re-runs the
+            // re-enter check (exposure gate + mint retry) next
+            // cycle instead of stranding an id-less ACTIVE.
+            AtomicWrite(mp.c_str(), "FLATTENED");
+            return;
+        }
         Alert(P("alerts.jsonl").c_str(), "MEDIUM",
               "medium-re-enter",
               "stale FLATTENED, new incident", now_ns);
@@ -2364,8 +2505,13 @@ void G0Runner::MediumPass(long long now_ns) {
     if (epoch > 0 && VenueOk(&open, &spread) &&
         deps_.list_positions) {
         Position ps[64];
-        int n = deps_.list_positions(deps_.positions_ctx, ps, 64);
-        for (int i = 0; n >= 0 && i < n; ++i) {
+        int n = 0;
+        if (!SnapPositions(ps, 64, &n)) n = 0;  // unavailable:
+                                               // sweep sees
+                                               // nothing (local
+                                               // slots still
+                                               // reconcile below)
+        for (int i = 0; i < n; ++i) {
             if (ps[i].symbol[0] == '\0' || ps[i].qty == 0) continue;
             std::string sid = SweepTag(epoch, ps[i].symbol);
             char hcoid[65] = {0};
@@ -3327,10 +3473,22 @@ bool G0Runner::Cycle(long long now_ns) {
     last_cycle_ns_ = now_ns;
     // §6.3 rhythm on day roll (verify/copy/retain/backup/summary).
     if (!DailyOps(now_ns)) return false;
-    // Durable cursor: best-effort (loss only replays more —
-    // duplicates drop at the seam — never less).
+    // Durable cursor: a failed write journals + alerts, KEEPS the
+    // dirty bit, and fails the cycle under the same contract as a
+    // failed day-roll — loss would silently replay from a stale
+    // position while reporting success. (A persisted cursor only
+    // skips already-seen events; duplicates still drop at the
+    // seam — never less.)
     if (cursor_dirty_) {
-        AtomicWrite(P("cursor.txt").c_str(), cursor_.c_str());
+        if (!AtomicWrite(P("cursor.txt").c_str(),
+                         cursor_.c_str())) {
+            OpsRow("drift-directive", "runner",
+                   "cursor-unpersisted", now_ns);
+            Alert(P("alerts.jsonl").c_str(), "CURSOR",
+                  "cursor-unpersisted", cursor_.c_str(),
+                  now_ns);
+            return false;
+        }
         cursor_dirty_ = false;
     }
     return true;

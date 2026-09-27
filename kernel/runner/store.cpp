@@ -164,6 +164,47 @@ bool ReadLines(const char* path, std::vector<std::string>* out) {
     return ok;
 }
 
+bool ReadLinesCapped(const char* path, std::vector<std::string>* out,
+                     std::size_t max_bytes) {
+    if (!path || !out) return false;
+    FILE* f = std::fopen(path, "rb");
+    if (!f) return false;
+    out->clear();
+    char buf[4096];
+    std::string cur;
+    std::size_t total = 0;
+    std::size_t n = 0;
+    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) {
+        total += n;
+        if (total > max_bytes) {
+            std::fclose(f);
+            out->clear();
+            return false;  // oversized: refuse before
+                           // materializing rows
+        }
+        for (std::size_t i = 0; i < n; ++i) {
+            if (buf[i] == '\n') {
+                if (!cur.empty() && cur.back() == '\r')
+                    cur.pop_back();
+                out->push_back(cur);
+                cur.clear();
+            } else {
+                if (cur.size() >= 4096) {
+                    std::fclose(f);
+                    out->clear();
+                    return false;
+                }
+                cur.push_back(buf[i]);
+            }
+        }
+    }
+    if (!cur.empty()) out->push_back(cur);
+    bool ok = std::ferror(f) == 0;
+    std::fclose(f);
+    if (!ok) out->clear();
+    return ok;
+}
+
 bool FileExists(const char* path) {
     // Regular file ONLY (a directory in place of a state file is
     // not "exists" — it is corruption/misplacement, and must
