@@ -24,10 +24,13 @@
 
 static int g_fail = 0;
 static int g_count = 0;
+static int g_first_fail = -1;  // TEMP-TRIAGE (revert)
 static void Check(bool ok, const char* name) {
     ++g_count;
     if (!ok) {
         ++g_fail;
+        // TEMP-TRIAGE (revert): first failure index -> exit code.
+        if (g_first_fail < 0) g_first_fail = g_count;
         std::printf("FAIL %s\n", name);
     }
 }
@@ -3729,5 +3732,7 @@ int main() {
     }
     if (g_fail == 0)
         std::printf("RUNNER SUITE: ALL PASS (%d checks)\n", g_count);
-    return g_fail ? 1 : 0;
+    // TEMP-TRIAGE (revert): encode first-failure index in exit.
+    if (g_fail) return 10 + (g_first_fail % 200);
+    return 0;
 }
