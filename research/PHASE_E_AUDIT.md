@@ -3149,3 +3149,55 @@ Status: all five items fixed with regressions. Hosted CI
 pending at push time; stdlib expected red (above) — the
 workflow must keep being reported as failed, never green.
 P3.5 still OPEN (human close); G0 NOT STARTED.
+
+## Addendum 128 - Re-audit round-3: four seams with regressions
+Plan f99188e, code 9e926d1/695af7c/4ca16e8/5ca9bd1 (one theme
+each). Router core zero-diff (verified 0113a20..HEAD --
+kernel/exec/ empty), null transport kept, no G0/live ordering.
+Local: router 209 + runner 939 + broker 125, normal + hardened
++ freeze PASS, zero litter, diff-check clean.
+1. P0 lock refusal writes nothing shared: the TakeDirLock
+failure path dropped OpsRow + Alert entirely — a refusing
+contender's fresh next_seq_/genesis can no longer fork an
+owned journal chain. Diagnostics go to stderr only (holder
+PID is still read for the message; reads never mutate).
+Regression JX (pre-existing nonempty journal + two
+concurrent contenders -> exactly one owner, JournalVerifyFile
+valid, row count unchanged, no runner-lock-held alert).
+Would fail on the old code (seq-0 append breaks the chain).
+2. P1 refcounted holds: the per-thread hold now carries the OS
+handle + a live-instance count. Win = 1, same-thread re-entry
+= +1 (second Takes on one instance are idempotent), each
+destructor drops one; the handle closes on the last out. A
+destroyed winner can no longer release the lock under a live
+re-entrant. Regression LR2 (A+B same thread, destroy A ->
+foreign-thread contender still loses; destroy B -> contender
+wins). Residual, documented: create/destroy are assumed
+same-thread (true in production and every drill); moving an
+instance across threads would address the wrong set.
+3. P1 PROTECTED rebuild: Recover skips only CANCELLED /
+UNKNOWN_FROZEN / CLOSED; PROTECTED rebuilds as an active slot
+with journaled economics (other IsTerminalState sites
+untouched — in-process terminal handling unchanged).
+Regression PR (PROTECTED snap + intent + terminal fill row ->
+one live slot, state + filled intact, survives a full cycle).
+Debugged honestly here: the first PR shape failed because
+CrashImage stamped protection_ok=0 (an incoherent machine —
+the router fail-closes it to CANCELLED by frozen rule), so
+CrashImage takes an additive pok param (default 0, existing
+callers unaffected) and PR stamps 1 like every real
+PROTECTED image.
+4. P1 centralized FSM validation: ReadMediumFsm (ABSENT / OK /
+CORRUPT / UNKNOWN) serves MediumPass AND the non-MEDIUM
+finalize/clear path — unknown/unreadable refuses + alerts at
+both, and the auto-clear predicate runs on the validated
+state, so GARBAGE can never become FLATTENED or
+PROTECTION_ONLY at any kill level. Regression MF2 (non-MEDIUM
++ GARBAGE -> cycle refuses, file untouched, unknown alert);
+MF + FL suites confirm the MediumPass and mint-retry shapes.
+Status: all four items fixed with regressions. Hosted CI
+pending at push time; stdlib expected red (date-sensitive
+test_pipeline.py aged-candidate, UNRESOLVED per Addendum 127
+— not weakened, human call). Workflow must keep being
+reported as failed, never green. P3.5 still OPEN (human
+close); G0 NOT STARTED.
