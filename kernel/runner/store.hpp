@@ -29,6 +29,12 @@ bool AppendLine(const char* path, const char* line);
 // tmp + flush + OS-commit + rename (single-process atomic).
 bool AtomicWrite(const char* path, const char* data);
 bool ReadLines(const char* path, std::vector<std::string>* out);
+// Path integrity: absent vs corrupt/non-regular are DISTINCT. A
+// directory/unreadable node must never read as a missing file —
+// callers fail closed on CORRUPT (refuse/freeze/halt-present),
+// never genesis/empty/missing.
+enum class PathKind { ABSENT, REGULAR, CORRUPT };
+PathKind StatPath(const char* path);
 // Bounded variant: refuses (false, out cleared) when the file
 // exceeds max_bytes. For incident-scoped state files whose
 // lifecycle is tiny by construction (hard-chain.txt) — millions

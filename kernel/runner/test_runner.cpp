@@ -132,6 +132,16 @@ static int g_tmpn = 0;
 #include <direct.h>
 #include <windows.h>
 static void MkDir(const std::string& d) { _mkdir(d.c_str()); }
+// Fault injection for "unwritable file, still readable" (disk-full
+// shaped): read-only regular file. Reads keep working — only
+// writes fail — so unlike a directory in place of the file this
+// does not conflate write failure with read corruption.
+static void MakeUnwritable(const std::string& p) {
+    _chmod(p.c_str(), _S_IREAD);
+}
+static void MakeWritable(const std::string& p) {
+    _chmod(p.c_str(), _S_IWRITE);
+}
 static void RmDir(const std::string& d) { RemoveDirectoryA(d.c_str()); }
 static void RemoveSandbox(const std::string& d) {
     std::string pat = d + "\\*";
@@ -162,6 +172,12 @@ static void RemoveSandbox(const std::string& d) {
 #include <sys/types.h>
 static void MkDir(const std::string& d) { mkdir(d.c_str(), 0700); }
 static void RmDir(const std::string& d) { rmdir(d.c_str()); }
+static void MakeUnwritable(const std::string& p) {
+    chmod(p.c_str(), 0444);
+}
+static void MakeWritable(const std::string& p) {
+    chmod(p.c_str(), 0644);
+}
 static void RemoveSandbox(const std::string& d) {
     DIR* dp = opendir(d.c_str());
     if (dp) {
@@ -1202,9 +1218,11 @@ int main() {
               "b-closed");
         Check(CountMethod("POST", "/v2/orders") == 0, "b-no-post");
     }
-    // 10. Emergency buffer: journal unwritable (path is a dir) ->
-    // EXIT executes, row buffers durably -> restore writability ->
-    // Recover drains -> chain verifies, emergency file empty.
+    // 10. Emergency buffer: journal unwritable (read-only file:
+    // writes fail, reads still work — the disk-full shape, not a
+    // corrupt node) -> EXIT executes, row buffers durably ->
+    // restore writability -> Recover drains -> chain verifies,
+    // emergency file empty.
     {
         Rig r;
         G0Runner g(r.cfg, r.deps);
@@ -1213,8 +1231,11 @@ int main() {
                                         100),
                             nullptr),
               "eb-submit");
-        std::remove((r.dir + "/journal.jsonl").c_str());
-        MkDir(r.dir + "/journal.jsonl");
+        // The intent row journals on the first drive turn, so the
+        // file must exist before revoking write permission (chmod
+        // on a missing path is a silent no-op).
+        WriteFile(r.dir + "/journal.jsonl", "");
+        MakeUnwritable(r.dir + "/journal.jsonl");
         PushRule("GET", "by_client_order_id", 404, "{}");
         PushRule("POST", "/v2/orders", 200,
                  HeldReply("filled", "100").c_str());
@@ -1225,7 +1246,7 @@ int main() {
               "eb-closed");
         Check(Exists(r.dir + "/emergency.jsonl"),
               "eb-buffered");
-        RmDir(r.dir + "/journal.jsonl");
+        MakeWritable(r.dir + "/journal.jsonl");
         G0Runner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "eb-recover2");
         Check(jev::runner::JournalVerifyFile(
@@ -4350,11 +4371,13 @@ int main() {
     {
         Rig r;
         r.deps.list_positions = FakePositions;
-        MkDir(r.dir + "/medium.txt");
+        MkDir(r.dir + "/medium.txt.tmp");
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "fl-recover2");
         g_kill.spend_tier = 3;  // MEDIUM
         Check(g.Cycle(g_now), "fl-cycle2");
+        Check(!Exists(r.dir + "/medium.txt"),
+              "fl-no-fsm");
         Check(!Exists(r.dir + "/medium-incident.txt"),
               "fl-no-mint");
         Check(CountMethod("POST", "/v2/orders") == 0,
@@ -4363,7 +4386,7 @@ int main() {
                       .find("medium-active-unpersisted") !=
                   std::string::npos,
               "fl-alert");
-        RmDir(r.dir + "/medium.txt");
+        RmDir(r.dir + "/medium.txt.tmp");
         G0Runner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "fl-recover3");
         Check(g2.Cycle(g_now), "fl-cycle3");
@@ -4372,6 +4395,88 @@ int main() {
         Check(ReadWhole(r.dir + "/medium-incident.txt") ==
                   std::string(mbe),
               "fl-mint-retry");
+    }
+    // PK. Path integrity (doc 06 sec. 6.1b): a non-regular node
+    // never reads as a missing file. Directory-in-place refuses
+    // or fails closed at every state reader.
+    {
+        // Journal-as-dir is corruption, not genesis: refuse.
+        Rig r;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-610", "AAPL", 0, 0,
+                          100, 2, 100, &cid)
+                   .empty(),
+              "pk-image");
+        Check(std::remove((r.dir + "/journal.jsonl").c_str()) ==
+                  0,
+              "pk-journal-removed");
+        MkDir(r.dir + "/journal.jsonl");
+        G0Runner g(r.cfg, r.deps);
+        const char* rsn = nullptr;
+        Check(!g.Recover(&rsn), "pk-journal-refused");
+        RmDir(r.dir + "/journal.jsonl");
+    }
+    {
+        // HALT-as-dir counts as halted: entries refused.
+        Rig r;
+        MkDir(r.dir + "/HALT");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "pk-recover");
+        Check(!g.SubmitIntent(
+                  GoodIntent("intent-611", "AAPL", false, 100),
+                  nullptr),
+              "pk-halt-blocks-entries");
+        RmDir(r.dir + "/HALT");
+    }
+    {
+        // Freeze-as-dir freezes (fail-closed frozen, never an
+        // empty set).
+        Rig r;
+        MkDir(r.dir + "/freeze.txt");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "pk-recover2");
+        Check(!g.SubmitIntent(
+                  GoodIntent("intent-612", "AAPL", false, 100),
+                  nullptr),
+              "pk-freeze-blocks-entries");
+        RmDir(r.dir + "/freeze.txt");
+    }
+    {
+        // Chain-as-dir is invalid (never valid-empty): the HARD
+        // gate refuses before any broker interrogation.
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        g_positions.push_back(MkPos("AAPL", 100));
+        MkDir(r.dir + "/hard-chain.txt");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "pk-recover3");
+        g_kill.drift_unresolvable = true;  // HARD
+        Check(!g.Cycle(g_now), "pk-refused");
+        Check(CountMethod("POST", "/v2/orders") == 0,
+              "pk-zero-posts");
+        Check(CountMethod("GET", "by_client_order_id") == 0,
+              "pk-zero-lookups");
+        Check(jev::runner::FreezeHas(
+                    (r.dir + "/freeze.txt").c_str(), "AAPL"),
+              "pk-frozen");
+        RmDir(r.dir + "/hard-chain.txt");
+    }
+    {
+        // FSM-as-dir never defaults to a fresh enter.
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        MkDir(r.dir + "/medium.txt");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "pk-recover4");
+        g_kill.spend_tier = 3;  // MEDIUM
+        Check(g.Cycle(g_now), "pk-cycle");
+        Check(!Exists(r.dir + "/medium-incident.txt"),
+              "pk-no-mint");
+        Check(ReadWhole(r.dir + "/alerts.jsonl")
+                      .find("medium-fsm-corrupt") !=
+                  std::string::npos,
+              "pk-alert");
+        RmDir(r.dir + "/medium.txt");
     }
     // CU. Cursor durability fails closed (doc 06 sec. 6.1b): a
     // foreign stream event dirties the cursor; an unwritable

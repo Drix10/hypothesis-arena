@@ -9,6 +9,7 @@
 #include <direct.h>
 #include <io.h>
 #include <sys/stat.h>
+#include <windows.h>
 #define DUR_COMMIT(f) _commit(_fileno(f))
 #else
 #include <sys/stat.h>
@@ -122,13 +123,23 @@ bool AtomicWrite(const char* path, const char* data) {
         return false;
     }
 #ifdef _WIN32
-    std::remove(path);  // rename fails on existing dest (documented)
-#endif
+    // True replacement semantics: remove-then-rename leaves NO
+    // state file on a crash between the two. MoveFileEx with
+    // REPLACE + WRITE_THROUGH is the crash-atomic primitive.
+    if (!MoveFileExA(tmp.c_str(), path,
+                      MOVEFILE_REPLACE_EXISTING |
+                      MOVEFILE_WRITE_THROUGH)) {
+        std::remove(tmp.c_str());
+        return false;
+    }
+    return true;
+#else
     if (std::rename(tmp.c_str(), path) != 0) {
         std::remove(tmp.c_str());
         return false;
     }
     return true;
+#endif
 }
 
 bool ReadLines(const char* path, std::vector<std::string>* out) {
@@ -205,23 +216,29 @@ bool ReadLinesCapped(const char* path, std::vector<std::string>* out,
     return ok;
 }
 
+PathKind StatPath(const char* path) {
+    if (!path) return PathKind::ABSENT;
+#ifdef _WIN32
+    struct _stat st;
+    if (_stat(path, &st) != 0) return PathKind::ABSENT;
+    return ((st.st_mode & _S_IFMT) == _S_IFREG)
+               ? PathKind::REGULAR
+               : PathKind::CORRUPT;
+#else
+    struct stat st;
+    if (stat(path, &st) != 0) return PathKind::ABSENT;
+    return S_ISREG(st.st_mode) ? PathKind::REGULAR
+                               : PathKind::CORRUPT;
+#endif
+}
 bool FileExists(const char* path) {
     // Regular file ONLY (a directory in place of a state file is
     // not "exists" — it is corruption/misplacement, and must
     // read as missing everywhere (Windows fopen already refuses
     // directories; POSIX opens them — stat converges the two).
-    // Callers treat missing as genesis/empty/refuse; a directory
-    // must never masquerade as valid-empty content.
-    if (!path) return false;
-#ifdef _WIN32
-    struct _stat st;
-    if (_stat(path, &st) != 0) return false;
-    return (st.st_mode & _S_IFMT) == _S_IFREG;
-#else
-    struct stat st;
-    if (stat(path, &st) != 0) return false;
-    return S_ISREG(st.st_mode);
-#endif
+    // Callers that need the absent/corrupt distinction use
+    // StatPath directly; FileExists stays the regular-file probe.
+    return StatPath(path) == PathKind::REGULAR;
 }
 
 bool JournalAppend(const char* path, const journal::Row& r) {
@@ -240,7 +257,10 @@ bool JournalLoad(const char* path, std::vector<journal::Row>* out) {
     std::vector<std::string> lns;
     if (!out) return false;
     out->clear();
-    if (!FileExists(path)) return true;  // no file = clean genesis
+    PathKind k = StatPath(path);
+    if (k == PathKind::ABSENT) return true;  // no file = clean genesis
+    if (k != PathKind::REGULAR)
+        return false;  // corrupt node: never valid-empty
     if (!ReadLines(path, &lns)) return false;
     for (std::size_t i = 0; i < lns.size(); ++i) {
         if (lns[i].empty()) continue;
@@ -294,6 +314,9 @@ bool FreezeAdd(const char* path, const char* symbol) {
 
 bool FreezeHas(const char* path, const char* symbol) {
     if (!symbol) return false;
+    // Fail-closed frozen: a corrupt freeze node freezes everything
+    // (freeze = wait) rather than reading as an empty set.
+    if (StatPath(path) == PathKind::CORRUPT) return true;
     std::vector<std::string> lns;
     if (!ReadLines(path, &lns)) return false;  // missing = empty set
     for (std::size_t i = 0; i < lns.size(); ++i) {

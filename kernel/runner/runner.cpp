@@ -254,6 +254,8 @@ bool G0Runner::DrainEmergency() {
     if (!jr.empty()) tail = jr.back().row_hash;
     for (;;) {
         std::vector<std::string> lns;
+        if (StatPath(ep.c_str()) == PathKind::CORRUPT)
+            return false;  // corrupt buffer: Recover refuses
         if (!ReadLines(ep.c_str(), &lns)) return true;  // no buffer
         std::size_t head = lns.size();
         for (std::size_t i = 0; i < lns.size(); ++i) {
@@ -361,6 +363,13 @@ bool G0Runner::Recover(const char** reason) {
         prev_hash_ = journal::GenesisPrev();
     }
     // Durable stream cursor (missing = first run, empty cursor).
+    // A corrupt cursor refuses: replay-from-zero would silently
+    // discard the durable replay position (human deletes it to
+    // re-anchor, never an automatic reset).
+    if (StatPath(P("cursor.txt").c_str()) == PathKind::CORRUPT) {
+        if (reason) *reason = kSnap;
+        return false;
+    }
     std::vector<std::string> clns;
     if (ReadLines(P("cursor.txt").c_str(), &clns) && !clns.empty())
         cursor_ = clns[0];
@@ -427,6 +436,21 @@ bool G0Runner::Recover(const char** reason) {
         IntentDesc id;
         bool has_intent = LoadIntent(
             IntentPath(ids[i].c_str()).c_str(), &id);
+        if (StatPath(SnapPath(ids[i].c_str()).c_str()) ==
+                PathKind::CORRUPT ||
+            StatPath(IntentPath(ids[i].c_str()).c_str()) ==
+                PathKind::CORRUPT) {
+            // Corrupt durable state is never rebuilt-over (the
+            // IDLE exception below is for never-written files
+            // only): human recovery.
+            OpsRow("reconcile", ids[i].c_str(),
+                   "snapshot-corrupt", deps_.now_ns(deps_.clock_ctx));
+            Alert(P("alerts.jsonl").c_str(), "HARD",
+                  "snapshot-corrupt", ids[i].c_str(),
+                  deps_.now_ns(deps_.clock_ctx));
+            if (reason) *reason = kSnap;
+            return false;
+        }
         if (ids_term[i] && (!has_snap || !has_intent)) {
             // Journal-terminal with missing durable state: the row
             // alone cannot prove the books (crash between the
@@ -658,6 +682,10 @@ bool G0Runner::SubmitIntent(const exec::OrderIntent& in,
     // economics with NO journal row is a crash-retry between
     // registration and the first cycle (idempotent resume).
     std::string ipath = IntentPath(in.intent_id);
+    if (StatPath(ipath.c_str()) == PathKind::CORRUPT) {
+        if (reason) *reason = kReuse;
+        return false;
+    }
     if (FileExists(ipath.c_str())) {
         IntentDesc old;
         if (!LoadIntent(ipath.c_str(), &old)) {
@@ -1306,9 +1334,10 @@ bool G0Runner::HardChainOk() {
     // 64 KiB envelope: the chain is incident-scoped and tiny by
     // construction — oversized input refuses before rows
     // materialize (fail closed downstream: invalid chain).
-    if (!ReadLinesCapped(p.c_str(), &lns, 65536))
-        return !FileExists(p.c_str());  // missing =
-                                         // valid-empty
+    PathKind ck = StatPath(p.c_str());
+    if (ck == PathKind::ABSENT) return true;  // missing = valid-empty
+    if (ck != PathKind::REGULAR) return false;  // corrupt: invalid
+    if (!ReadLinesCapped(p.c_str(), &lns, 65536)) return false;
     return ScanChain(lns, nullptr, nullptr, nullptr);
 }
 bool G0Runner::HardChainState(const char* tag, long long* req,
@@ -2003,7 +2032,10 @@ void G0Runner::HardManageSlot(Slot& s, long long epoch,
 }
 
 bool G0Runner::HardHalted() const {
-    return hard_latched_ || FileExists(P("HALT").c_str());
+    // Fail-closed halted: a corrupt HALT node (directory in place
+    // of the file) halts like a present one — never "no HALT".
+    return hard_latched_ ||
+           StatPath(P("HALT").c_str()) != PathKind::ABSENT;
 }
 bool G0Runner::HardStop(long long now_ns, const char* why,
                   bool halt_at_entry) {
@@ -2526,6 +2558,13 @@ void G0Runner::MediumPass(long long now_ns) {
     // (no blind re-issue); a restart reloads the file and
     // reconciles first (pre-flight dedupe never resends).
     std::string mp = P("medium.txt");
+    if (StatPath(mp.c_str()) == PathKind::CORRUPT) {
+        OpsRow("reconcile", "runner", "medium-fsm-corrupt",
+               now_ns);
+        Alert(P("alerts.jsonl").c_str(), "MEDIUM",
+              "medium-fsm-corrupt", "", now_ns);
+        return;  // never default a corrupt FSM to a fresh enter
+    }
     std::vector<std::string> lns;
     std::string cur;
     if (ReadLines(mp.c_str(), &lns) && !lns.empty()) cur = lns[0];
@@ -3136,6 +3175,16 @@ bool G0Runner::Cycle(long long now_ns) {
     // Crash-mid-incident keeps in-progress files (exposure
     // present or seam blind), so its epoch is reused.
     if (lr.level != jev::risk::KillLevel::MEDIUM) {
+        if (StatPath(P("medium.txt").c_str()) ==
+                PathKind::CORRUPT) {
+            // Corrupt incident FSM while leaving MEDIUM: finalize
+            // nothing, fail the cycle loud — human owns it.
+            OpsRow("reconcile", "runner", "medium-fsm-corrupt",
+                   now_ns);
+            Alert(P("alerts.jsonl").c_str(), "MEDIUM",
+                  "medium-fsm-corrupt", "", now_ns);
+            return false;
+        }
         std::vector<std::string> mlns;
         if (ReadLines(P("medium.txt").c_str(), &mlns) &&
             !mlns.empty() && mlns[0] != "FLATTENED" &&
@@ -3161,6 +3210,16 @@ bool G0Runner::Cycle(long long now_ns) {
                            "medium-protection-only", now_ns);
                 }
             }
+        }
+        if (StatPath(P("medium.txt").c_str()) ==
+                PathKind::CORRUPT) {
+            // Corrupt incident FSM at auto-clear: clear nothing,
+            // fail loud — human owns it.
+            OpsRow("reconcile", "runner", "medium-fsm-corrupt",
+                   now_ns);
+            Alert(P("alerts.jsonl").c_str(), "MEDIUM",
+                  "medium-fsm-corrupt", "", now_ns);
+            return false;
         }
         std::vector<std::string> clns;
         if (ReadLines(P("medium.txt").c_str(), &clns) &&
