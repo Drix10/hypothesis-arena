@@ -5,7 +5,7 @@ deterministic: sha256 over the frozen field recipe. No JEV output, no
 randomness, no post-creation mutation (frozen dataclass).
 """
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 CANDIDATE_SCHEMA_VERSION = "c1"
 
@@ -41,7 +41,7 @@ class Candidate:
     expected_cost_bps: float
     feature_snapshot_hash: str
     feature_revision: str
-    cid: str = ""  # filled by make_candidate; part of equality
+    cid: str = field(default="", init=False)  # always derived; unforgable
 
     def __post_init__(self):
         if self.proposed_side not in ("BUY", "SELL"):
@@ -52,8 +52,12 @@ class Candidate:
             raise ValueError("BUY must satisfy stop<entry<tp")
         if self.proposed_side == "SELL" and not (self.tp_px < self.entry_px < self.stop_px):
             raise ValueError("SELL must satisfy tp<entry<stop")
+        object.__setattr__(
+            self, "cid",
+            candidate_id(**{f: getattr(self, f) for f in _ID_FIELDS}))
 
 
 def make_candidate(**kw) -> Candidate:
-    cid = candidate_id(**{f: kw[f] for f in _ID_FIELDS})
-    return Candidate(cid=cid, **kw)
+    # cid is derived in __post_init__; the factory only forwards fields.
+    kw.pop("cid", None)
+    return Candidate(**kw)

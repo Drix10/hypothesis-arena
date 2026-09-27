@@ -70,6 +70,15 @@ def test_non_recipe_fields_share_cid():
     assert a.cid == b.cid and a != b
 
 
+def test_cid_unforgable():
+    direct = Candidate(**base_kw())
+    assert direct.cid == make_candidate(**base_kw()).cid
+    assert direct.cid == candidate_id(**{f: base_kw()[f] for f in _ID_FIELDS})
+    with pytest.raises(TypeError):
+        Candidate(**base_kw(), cid="forged")
+    print("cid_unforgable OK", direct.cid[:16])
+
+
 def test_immutable_after_construction():
     c = make_candidate(**base_kw())
     with pytest.raises(dataclasses.FrozenInstanceError):
@@ -127,6 +136,7 @@ if __name__ == "__main__":
     test_immutable_after_construction()
     test_malformed_rejected()
     test_omitted_authoritative_field_raises()
+    test_cid_unforgable()
     test_cache_isolation_by_cid()
     test_no_jev_coupling()
     print("ALL CANDIDATE TESTS GREEN")
