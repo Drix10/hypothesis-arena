@@ -1,0 +1,39 @@
+{
+  "payload": {
+    "answers": {
+      "conviction": "strong",
+      "edge_family": "momentum",
+      "enter": 0.2,
+      "latent_risk": 0.1
+    },
+    "candidate": {
+      "cid": "1f768ad8af9ba001080f4cb51eb7a7e2efddc71f878570bed739cf73b36ea10e",
+      "cost_model_version": "paper_fill_v1",
+      "entry_px": "100.0",
+      "exit_profile_version": "exit_profile_v1",
+      "feature_revision": "r1",
+      "proposed_family": "momentum",
+      "proposed_side": "BUY",
+      "snapshot_ts_ns": "1000",
+      "stop_px": "99.0",
+      "strategy_version": "baseline_v1",
+      "symbol": "AAPL",
+      "time_exit_ns": "2000",
+      "tp_px": "102.0"
+    },
+    "cid": "1f768ad8af9ba001080f4cb51eb7a7e2efddc71f878570bed739cf73b36ea10e",
+    "created_at": 1700000000,
+    "decision_key": "032274d71538cc75db281de2e1f678a1927ff8e984d4115e9ef832f439bb82de",
+    "expires_at": 1700000060,
+    "feature_snapshot_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "price_s": "100.0",
+    "question_set_version": "v4",
+    "regime": "trend",
+    "session": "us_open",
+    "snapshot_epoch": 1700000000,
+    "spread_bps_s": "2.0",
+    "symbol": "AAPL"
+  },
+  "response_hash": "451fb21857110a47c169a30ba43c442a02eb5c2d265c9d35af9f554045f929c6",
+  "signature": "ed620908caf34331990241400040eff82e55ecbaf80c6c2a17cc66e4f8f9d30da48cb53e2ed7a53559287ffd7ddfa1a0bc10f5bc5980dad7fb14d161a44e4a0f"
+}

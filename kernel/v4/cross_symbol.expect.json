@@ -1,0 +1,16 @@
+{
+  "action": "HOLD",
+  "engine": {
+    "blackout": false,
+    "calib_gate": "pass",
+    "deterministic_veto": false,
+    "disagreement": false,
+    "veto_max": false
+  },
+  "expected_cid": "a9ee0e3a0e793951a1c6e30d8468857bdb6efed7f87221aab56d970c6af123dd",
+  "expected_fhash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "expected_symbol": "MSFT",
+  "now_unix": 1700000000,
+  "pubkey": "ebc198b8b8bfae7723278c3b31629f29de72829797ccc8c2ccce6d9436a4cff2",
+  "reason": "v4_cid_mismatch"
+}

@@ -220,11 +220,12 @@ G0 integration → paper evidence.
 - [ ] S2 baseline economics report (trades/R-expectancy/Sharpe/DD/turnover,
       1×/1.5×/2×/3× cost stress, per-symbol/regime/FX-vs-stock, R2-binding rate
       + effective-risk telemetry). Record the result honestly; do not mutate v1.
-- [ ] S3 candidate contract c1 (deterministic ID, side/family/entry/stop/TP/
+- [x] S3 candidate contract c1 (deterministic ID, side/family/entry/stop/TP/
       time-exit bound pre-JEV, replay tests, cross-candidate cache isolation).
+      RELEASED at `1d22f01` (cid unforgable: init=False, 12-field recipe unchanged).
 - [ ] S4 JEV v4 candidate-bound contract (v3 frozen replay-only; v4 state carries
       candidate economics; label == trading payoff; family_fit critiques family,
-      never emits BUY/SELL) + validator/table/vectors.
+      never emits BUY/SELL) + validator/table/vectors. IN PROGRESS (re-audit pending).
 - [ ] S5 paired evaluation (always-take vs filtered-policy delta per candidate;
       pre-registered cluster-aware bootstrap + sequential rule + power study from
       the real candidate stream; absolute economic bar alongside baseline-beats).
