@@ -777,6 +777,8 @@ bool G0Runner::Recover(const char** reason) {
                    "attribution-unpersisted",
                    deps_.now_ns(deps_.clock_ctx));
     }
+    recovered_ = true;  // ownership + books established: this
+                         // object alone may now mutate
     return true;
 }
 
@@ -791,6 +793,13 @@ bool G0Runner::SubmitIntent(const exec::OrderIntent& in,
     static const char kReuse[] = "submit-id-reuse";
     static const char kReg[] = "submit-already-registered";
     static const char kJournal[] = "submit-journal-broken";
+    static const char kRec[] = "submit-not-recovered";
+    // Lifecycle first: the constructor alone confers no
+    // mutation authority (doc 06 sec. 6.1b).
+    if (!recovered_ || !lock_took_) {
+        if (reason) *reason = kRec;
+        return false;
+    }
     if (!IsSafeId(in.intent_id) || !in.symbol[0] ||
         in.qty_shares <= 0) {
         if (reason) *reason = kBadId;
@@ -3625,6 +3634,9 @@ bool G0Runner::Dispatch(Slot& s, const exec::RouteOut& o,
 
 bool G0Runner::Cycle(long long now_ns) {
     if (now_ns <= 0 || !deps_.now_ns) return false;
+    // Lifecycle first, like SubmitIntent: no mutation without a
+    // successful Recover (doc 06 sec. 6.1b).
+    if (!recovered_ || !lock_took_) return false;
     // Deferred reclamation: done slots leave now (history stays in
     // journal + snapshots). Find-after-terminal within the SAME
     // cycle still sees the slot — the sweep only runs here and at

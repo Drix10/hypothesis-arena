@@ -244,6 +244,11 @@ class G0Runner {
     // can never release the lock under a live re-entrant.
     bool lock_took_ = false;
     std::string lock_path_;  // directory taken (empty if none)
+    // Recovery-before-mutation lifecycle (doc 06 sec. 6.1b):
+    // set only by a fully successful Recover. SubmitIntent and
+    // Cycle refuse without it — the constructor alone confers
+    // no mutation authority.
+    bool recovered_ = false;
     long long last_pos_ns_ = 0;  // account position check clock
     long long last_ops_day_ = 0;  // §6.3 rhythm clock (0 = run now)
 

@@ -4727,6 +4727,34 @@ int main() {
         Check(g.Recover(nullptr), "or-virgin");
         Check(g.slots() == 0, "or-virgin-empty");
     }
+    // LG. Recovery-before-mutation lifecycle (doc 06 sec.
+    // 6.1b): the constructor alone confers no mutation
+    // authority. Without Recover, SubmitIntent and Cycle refuse
+    // and mutate nothing (no journal, no intent/snap files) —
+    // and the same object works normally once recovered.
+    {
+        Rig r;
+        G0Runner g(r.cfg, r.deps);
+        const char* lgr = nullptr;
+        Check(!g.SubmitIntent(GoodIntent("intent-731", "AAPL",
+                                          false, 100),
+                              &lgr),
+              "lg-submit-refuses");
+        Check(lgr && std::string(lgr) == "submit-not-recovered",
+              "lg-submit-reason");
+        Check(!g.Cycle(g_now), "lg-cycle-refuses");
+        Check(!Exists(r.dir + "/journal.jsonl"), "lg-no-journal");
+        Check(!Exists(r.dir + "/intent-intent-731.txt"),
+              "lg-no-intent");
+        Check(!Exists(r.dir + "/snap-intent-731.txt"),
+              "lg-no-snap");
+        Check(g.Recover(nullptr), "lg-recover");
+        Check(g.SubmitIntent(GoodIntent("intent-731", "AAPL",
+                                        false, 100),
+                             nullptr),
+              "lg-submit-after");
+        Check(g.Cycle(g_now), "lg-cycle-after");
+    }
     // PK. Path integrity (doc 06 sec. 6.1b): a non-regular node
     // never reads as a missing file. Directory-in-place refuses
     // or fails closed at every state reader.
