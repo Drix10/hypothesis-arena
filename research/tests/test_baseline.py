@@ -1,6 +1,6 @@
 """Deterministic strategy-stack tests (stdlib only, synthetic fixtures).
 
-Covers §30 baseline battery: deterministic replay, no-lookahead, PIT-shape
+Covers Â§30 baseline battery: deterministic replay, no-lookahead, PIT-shape
 handling, cost stress, stop/TP resolution, censoring, risk constraints,
 effective-risk telemetry, candidate identity/binding.
 """
@@ -183,20 +183,110 @@ def test_r2_telemetry():
 
 def test_backtest_runs_and_reports():
     syms = {"A": mkbars(600, drift=0.002), "B": mkbars(600, drift=-0.002)}
-    recs, rep = bt.run(syms)
+    recs, rep = bt.run(syms, universe_mode="diagnostic")
     assert rep["candidates"] == len(recs)
-    assert rep["realized"] + rep["portfolio_excluded_caps"] + rep["excluded"] == len(recs)
+    assert (rep["realized"] + sum(rep["cap_excluded"].values()) + rep["excluded"] == len(recs))
     assert abs(sum(r["pnl_usd"] for r in recs if r["taken"]) - rep["net_pnl"]) < 1e-9
-    assert 0.0 <= rep["win_rate"] <= 1.0 and 0.0 <= rep["r2_binding_rate"] <= 1.0
-    recs2, rep2 = bt.run(syms)
+    assert 0.0 <= rep["win_rate"] <= 1.0 and 0.0 <= rep["single_notional_binding_rate"] <= 1.0
+    recs2, rep2 = bt.run(syms, universe_mode="diagnostic")
     assert rep == rep2, "backtest must replay identically"
     print("backtest_report OK", {k: (round(v, 4) if isinstance(v, float) else v)
                                  for k, v in rep.items()})
 
 
+def test_exact_25_boundary():
+    unc, con, binds, _, _ = bt.size_notional(100000.0, 1.0, 100.0)
+    assert unc == 25.0 and con == 25.0 and not binds, (unc, con, binds)
+    print("exact_25 OK")
+
+
+def _force_gen(entry=100.0, stop=99.99, tp=100.02, horizon=10**18):
+    def gen(sym, bars, i, session_open=True, day_end_ns=None, is_fx=True, feature_rev="t"):
+        from research.strategy.candidate import make_candidate
+        return make_candidate(strategy_version="baseline_v1", symbol=sym,
+                              snapshot_ts_ns=bars[i].ts_ns, proposed_side="BUY",
+                              proposed_family="momentum", entry_px=entry, stop_px=stop,
+                              tp_px=tp, time_exit_ns=horizon,
+                              exit_profile_version="exit_profile_v1",
+                              cost_model_version="paper_fill_v1", expected_cost_bps=0.0,
+                              feature_snapshot_hash="h", feature_revision="t")
+    return gen
+
+
+def test_notional_caps_not_eff():
+    # 3 x 25% notional admitted; 4th rejected; eff-risk sum stays tiny
+    # while notional R2 is fully bound - the audit's exact point.
+    orig = bt.generate
+    bt.generate = _force_gen()
+    try:
+        from research.strategy.data import Bar
+        syms = {f"S{i}": [Bar(ts_ns=j, o=100.0, h=100.0, l=100.0, c=100.0) for j in range(6)] for i in range(4)}
+        recs, rep = bt.run(syms, universe_mode="diagnostic")
+    finally:
+        bt.generate = orig
+    taken = [r for r in recs if r["taken"]]
+    assert len(taken) == 3, len(taken)
+    assert all(abs(r["con"] - 25.0) < 1e-9 for r in taken)
+    assert sum(r["eff_frac"] for r in taken) < 0.001  # ~0.75bps vs 75% notional
+    rej = [r for r in recs if r["reason"] == "maxpos"]
+    assert rej, "fourth simultaneous candidate must be rejected"
+    assert rep["total_notional_binding_rate"] == 0.0  # structural: 3x25 == 75 exactly
+    print("notional_caps OK")
+
+
+def test_equity_evolves():
+    orig = bt.generate
+    bt.generate = _force_gen(entry=100.0, stop=99.0, tp=101.0)
+    try:
+        syms = {"E": mkbars(30, drift=-0.5, amp=0.0)}  # falling: BUYs stop out
+        recs, rep = bt.run(syms, universe_mode="diagnostic")
+    finally:
+        bt.generate = orig
+    taken = [r for r in recs if r["taken"]]
+    assert len(taken) >= 2, len(taken)
+    assert taken[1]["entry_equity"] < taken[0]["entry_equity"], "loss must shrink snapshot equity"
+    assert taken[1]["con_usd"] < taken[0]["con_usd"], "sizing must follow snapshot equity"
+    print("equity_evolves OK", taken[0]["entry_equity"], taken[1]["entry_equity"])
+
+
+def test_entry_spread_timing():
+    from research.strategy.costs import fill_px
+    from research.strategy.candidate import make_candidate
+    c = make_candidate(strategy_version="baseline_v1", symbol="T", snapshot_ts_ns=0,
+                       proposed_side="BUY", proposed_family="momentum",
+                       entry_px=100.0, stop_px=99.0, tp_px=102.0,
+                       time_exit_ns=10**18, exit_profile_version="exit_profile_v1",
+                       cost_model_version="paper_fill_v1", expected_cost_bps=0.0,
+                       feature_snapshot_hash="h", feature_revision="t")
+    aft = [Bar(ts_ns=1, o=100.0, h=102.5, l=99.5, c=101.0, spread_bps=50.0)]
+    r10 = bt.resolve(c, aft, entry_spread_bps=10.0)
+    r50 = bt.resolve(c, aft, entry_spread_bps=50.0)
+    assert r10["entry_fill"] == fill_px("BUY", 100.0, 10.0, 1.0), r10
+    assert r50["entry_fill"] == fill_px("BUY", 100.0, 50.0, 1.0), r50
+    assert r10["entry_fill"] != r50["entry_fill"], "entry must use candidate bar, not next bar"
+    print("entry_spread OK")
+
+
+def test_universe_mode():
+    syms = {"U": mkbars(600, drift=0.002)}  # spread_bps=2.0 default? no: mkbars spread=2.0
+    recs_e, _ = bt.run(syms, universe_mode="eligible")
+    assert all(not r["taken"] or r["eligible"] for r in recs_e)
+    orig2 = bt.generate
+    bt.generate = _force_gen()
+    try:
+        syms0 = {"U": [Bar(ts_ns=j, o=100.0, h=100.0, l=100.0, c=100.0, spread_bps=0.0) for j in range(6)]}
+        recs0, rep0 = bt.run(syms0, universe_mode="eligible")
+        recs1, _ = bt.run(syms0, universe_mode="diagnostic")
+    finally:
+        bt.generate = orig2
+    assert rep0["universe_excluded"] > 0 and all(not r["taken"] for r in recs0 if r["res"]["realized"])
+    assert any(r["taken"] for r in recs1), "diagnostic keeps the lower-bound experiment"
+    print("universe_mode OK")
+
+
 def test_chrono_portfolio_invariants():
     syms = {f"S{i}": mkbars(600, drift=0.002, ts0=i) for i in range(4)}
-    recs, rep = bt.run(syms)
+    recs, rep = bt.run(syms, universe_mode="diagnostic")
     pts = set()
     for r in recs:
         if r["taken"]:
@@ -221,5 +311,10 @@ if __name__ == "__main__":
     test_candidate_identity()
     test_r2_telemetry()
     test_backtest_runs_and_reports()
+    test_exact_25_boundary()
+    test_notional_caps_not_eff()
+    test_equity_evolves()
+    test_entry_spread_timing()
+    test_universe_mode()
     test_chrono_portfolio_invariants()
     print("ALL STRATEGY TESTS GREEN")
