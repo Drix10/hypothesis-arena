@@ -4739,6 +4739,59 @@ int main() {
               "fc-epoch-cleared");
         Check(cleared_rows() == 1, "fc-cleared-row");
     }
+    // FS. Strict incident-file shapes (doc 06 sec. 6.1b):
+    // trailing lines are corruption, and failed clean-cycle
+    // truncations report instead of silently ignoring.
+    {
+        // FSM with a trailing junk line refuses like GARBAGE.
+        Rig r;
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "fs-recover");
+        WriteFile(r.dir + "/medium.txt",
+                  "MEDIUM_ACTIVE\nGARBAGE\n");
+        Check(!g.Cycle(g_now), "fs-fsm-refuses");
+        Check(ReadWhole(r.dir + "/medium.txt") ==
+                  "MEDIUM_ACTIVE\nGARBAGE\n",
+              "fs-fsm-untouched");
+        Check(ReadWhole(r.dir + "/alerts.jsonl").find(
+                  "medium-fsm-unknown") != std::string::npos,
+              "fs-fsm-alert");
+    }
+    {
+        // Epoch file with trailing junk mints nothing: ACTIVE
+        // + unparseable epoch is never healthy.
+        Rig r;
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "fs-recover2");
+        g_kill.spend_tier = 3;  // MEDIUM
+        WriteFile(r.dir + "/medium.txt", "MEDIUM_ACTIVE");
+        WriteFile(r.dir + "/medium-incident.txt",
+                  "1800000000000000000\njunk\n");
+        Check(!g.Cycle(g_now), "fs-epoch-refuses");
+        Check(ReadWhole(r.dir + "/alerts.jsonl").find(
+                  "medium-epoch-missing") != std::string::npos,
+              "fs-epoch-alert");
+    }
+    {
+        // Failed clean-cycle truncation reports loud + keeps
+        // the file (never a silent half-teardown).
+        Rig r;
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "fs-recover3");
+        WriteFile(r.dir + "/hard-incident.txt", "5\n");
+        jev::runner::InjectWriteFault("hard-incident.txt", 0);
+        Check(g.Cycle(g_now), "fs-cycle-continues");
+        jev::runner::ClearWriteFaults();
+        Check(ReadWhole(r.dir + "/hard-incident.txt") == "5\n",
+              "fs-file-intact");
+        Check(ReadWhole(r.dir + "/alerts.jsonl").find(
+                  "hard-incident-untruncated") !=
+                  std::string::npos,
+              "fs-trunc-alert");
+        Check(jev::runner::JournalVerifyFile(
+                  (r.dir + "/journal.jsonl").c_str()),
+              "fs-chain-valid");
+    }
     // OR. Orphaned durable books refuse recovery (doc 06 sec.
     // 6.1b): an intent file + PROTECTED snapshot with the
     // journal absent (then with the journal empty) is torn

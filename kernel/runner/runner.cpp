@@ -137,6 +137,10 @@ MediumFsmRead ReadMediumFsm(const char* path, std::string* out) {
     std::vector<std::string> lns;
     if (!ReadLines(path, &lns)) return MediumFsmRead::UNKNOWN;
     if (lns.empty()) return MediumFsmRead::ABSENT;  // mint-retry
+    // Exact one-line shape: trailing non-empty lines are
+    // corruption (the writer emits exactly one line — anything
+    // else was appended or spliced, never attested).
+    if (lns.size() != 1) return MediumFsmRead::UNKNOWN;
     const std::string& cur = lns[0];
     if (cur != "MEDIUM_ACTIVE" && cur != "FLATTEN_PENDING" &&
         cur != "FLATTENED" && cur != "PROTECTION_ONLY")
@@ -234,10 +238,15 @@ bool IsQuarantineStatus(const char* st) {
     }
     return false;
 }
-// Strict epoch parse: all digits, fits int64, > 0. Anything else
-// (missing/corrupt file) = no incident.
-long long ParseEpoch(const std::vector<std::string>& lns) {
-    if (lns.empty()) return 0;
+// Strict epoch parse: all digits, fits int64, > 0, over exactly
+// max_lines file lines (medium-incident.txt is one line;
+// hard-incident.txt is epoch + one optional reason line).
+// Anything else (missing/corrupt file, trailing data) = no
+// incident. `123\njunk` on a one-line file is corruption,
+// never 123.
+long long ParseEpoch(const std::vector<std::string>& lns,
+                     std::size_t max_lines) {
+    if (lns.empty() || lns.size() > max_lines) return 0;
     const std::string& e = lns[0];
     if (e.empty() || e.size() > 19) return 0;
     // Checked accumulation: a 19-digit file value can exceed
@@ -977,7 +986,7 @@ long long G0Runner::MediumEpoch() const {
     std::vector<std::string> lns;
     if (!ReadLines(P("medium-incident.txt").c_str(), &lns))
         return 0;  // missing = no incident
-    return ParseEpoch(lns);
+    return ParseEpoch(lns, 1);
 }
 long long G0Runner::MintMediumEpoch(long long now_ns) {
     // A medium-enter IS a new incident by definition (the FSM file
@@ -1042,7 +1051,7 @@ long long G0Runner::HardEpochFor(long long now_ns,
     long long old = 0;
     bool have_incident = ReadLines(P("hard-incident.txt").c_str(),
                                    &lns);
-    if (have_incident) old = ParseEpoch(lns);
+    if (have_incident) old = ParseEpoch(lns, 2);
     if (halt_at_entry && (!have_incident || old <= 0)) {
         OpsRow("drift-directive", "runner",
                "hard-epoch-unrecoverable", now_ns);
@@ -2790,15 +2799,17 @@ void G0Runner::ReclaimDone() {
 bool G0Runner::DailyOps(long long now_ns) {
     long long day = now_ns / 86400000000000LL;
     if (day == last_ops_day_) return true;
-    last_ops_day_ = day;
     // 00:00 verify: a mid-run chain break is HARD (forensics
-    // first), exactly like a boot-time break.
+    // first), exactly like a boot-time break. The day clock
+    // advances ONLY after the verification succeeds — a failed
+    // verification retries next cycle, never skips a day.
     if (!JournalVerifyFile(P("journal.jsonl").c_str())) {
         Alert(P("alerts.jsonl").c_str(), "HARD", "journal-chain-break",
               "mid-run chain fails VerifyChain",
               deps_.now_ns(deps_.clock_ctx));
         return false;
     }
+    last_ops_day_ = day;
     int y = 0;
     unsigned mo = 0, dd = 0;
     CivilFromDays(day, &y, &mo, &dd);
@@ -3680,14 +3691,24 @@ bool G0Runner::Cycle(long long now_ns) {
         std::vector<std::string> hlns;
         if (ReadLines(P("hard-incident.txt").c_str(), &hlns) &&
             !hlns.empty()) {
-            AtomicWrite(P("hard-incident.txt").c_str(), "");
+            if (!AtomicWrite(P("hard-incident.txt").c_str(), "")) {
+                OpsRow("reconcile", "runner",
+                       "hard-incident-untruncated", now_ns);
+                Alert(P("alerts.jsonl").c_str(), "HARD",
+                      "hard-incident-untruncated", "", now_ns);
+            }
         }
         // The order chain belongs to the incident: it goes with
         // it (a new incident re-derives every id by pre-flight).
         std::vector<std::string> clns;
         if (ReadLines(P("hard-chain.txt").c_str(), &clns) &&
             !clns.empty()) {
-            AtomicWrite(P("hard-chain.txt").c_str(), "");
+            if (!AtomicWrite(P("hard-chain.txt").c_str(), "")) {
+                OpsRow("reconcile", "runner",
+                       "hard-chain-untruncated", now_ns);
+                Alert(P("alerts.jsonl").c_str(), "HARD",
+                      "hard-chain-untruncated", "", now_ns);
+            }
         }
     }
     // Leaving MEDIUM with the FSM file present finalizes it once:

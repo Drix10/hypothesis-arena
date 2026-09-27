@@ -260,16 +260,26 @@ bool ReadLinesCapped(const char* path, std::vector<std::string>* out,
 }
 
 PathKind StatPath(const char* path) {
+    // Absent vs corrupt stay DISTINCT (callers fail closed on
+    // CORRUPT, never genesis/empty/missing). Only genuinely-
+    // missing names read ABSENT (ENOENT/ENOTDIR); every other
+    // stat failure (EACCES/EIO/...) is CORRUPT — a permission
+    // or I/O fault must never collapse into "missing".
     if (!path) return PathKind::ABSENT;
 #ifdef _WIN32
     struct _stat st;
-    if (_stat(path, &st) != 0) return PathKind::ABSENT;
+    if (_stat(path, &st) != 0)
+        return (errno == ENOENT) ? PathKind::ABSENT
+                                 : PathKind::CORRUPT;
     return ((st.st_mode & _S_IFMT) == _S_IFREG)
                ? PathKind::REGULAR
                : PathKind::CORRUPT;
 #else
     struct stat st;
-    if (stat(path, &st) != 0) return PathKind::ABSENT;
+    if (stat(path, &st) != 0)
+        return (errno == ENOENT || errno == ENOTDIR)
+                   ? PathKind::ABSENT
+                   : PathKind::CORRUPT;
     return S_ISREG(st.st_mode) ? PathKind::REGULAR
                                : PathKind::CORRUPT;
 #endif
