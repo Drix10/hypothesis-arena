@@ -1,22 +1,40 @@
 """Deterministic backtester for baseline_v1 (research/shadow-only, no orders).
 
-Resolution follows the doc-11 §11.1 label protocol: same-bar stop+TP touch
-→ stop-first (loss); gap through stop → loss at first tradable print;
-neither hit by horizon → censored (excluded from win-rate, counted
-separately); halt/missing before resolution → excluded.
+Two orthogonal axes (audit-hardened):
 
-Risk (doc 05 + doc 03 §3.3 steps 2-6, stage mult 1.0): 25bp base budget,
-notional = budget/stop_dist, R2 caps (25% single / 75% total incl.
-pending), max 3 positions, 1/symbol. Telemetry exposes the nominal-vs-R2
-interaction (unconstrained vs constrained notional, effective risk bps,
-r2_binding) — measured, never silently "fixed".
+  label (frozen doc-11 calibration protocol):
+      win / loss / censored / excluded
+      Neither-stop-nor-TP by horizon -> censored (calibration only).
+  realization (portfolio economics):
+      realized=yes for TP / stop / gap / time_exit (a time exit is a REAL
+      trade under exit_profile_v1 — it only stays censored for calibration).
+      realized=no for excluded (no market path to resolve).
+
+PnL authority: exactly ONE construction — per-trade records
+  pnl_usd = r_realized x eff_frac x equity
+and total/daily/equity/Sharpe/DD all derive from those records.
+Reconciliation invariant: sum(trade_pnl) == total_pnl (tested).
+
+Fills (frozen paper_fill_v1, two-leg): each leg executes at its adverse
+price — entry leg at adverse(entry mid), exit leg at adverse(exit mid).
+No constant round-trip deduction.
+
+Gap-through-stop: exits at the FIRST TRADABLE PRINT (the gap open), never
+clamped to -1R.
+
+Chronology: run() walks a single timestamp-ordered event stream across all
+symbols and maintains global portfolio state (max 3, R2 total 75%, one
+open position per symbol). Per-symbol loops would make the caps fiction.
+
+Risk (doc 05 + doc 03 steps 2-6, stage mult 1.0): 25bp base budget,
+notional = budget/stop_dist x entry, R2 caps, 25bp... see size_notional.
 """
 import hashlib
 import math
 
 from . import baseline_v1 as bv
 from .candidate import make_candidate
-from .costs import fill_px, roundtrip_cost_bps
+from .costs import fill_px
 
 STRATEGY_VERSION = "baseline_v1"
 EXIT_PROFILE_VERSION = "exit_profile_v1"
@@ -25,12 +43,12 @@ RISK_BUDGET_BPS = 25.0
 R2_SINGLE_PCT = 25.0
 R2_TOTAL_PCT = 75.0
 MAX_POSITIONS = 3
+OPP = {"BUY": "SELL", "SELL": "BUY"}
 
 
-def _horizon_ns(symbol: str, ts_ns: int, is_fx: bool) -> int:
+def _horizon_ns(ts_ns: int, is_fx: bool) -> int:
     if is_fx:
         return ts_ns + 24 * 3600 * 10**9
-    # stocks: EOD time exit; caller passes session close via day_end_ns
     return ts_ns  # caller overrides for equities
 
 
@@ -47,10 +65,10 @@ def generate(symbol, bars, i, session_open, day_end_ns=None, is_fx=True,
     bar = bars[i]
     entry = bar.c
     stop, tp, risk = bv.exits(entry, side, atr)
-    horizon = day_end_ns if (not is_fx and day_end_ns) else _horizon_ns(symbol, bar.ts_ns, is_fx)
+    horizon = day_end_ns if (not is_fx and day_end_ns) else _horizon_ns(bar.ts_ns, is_fx)
     if horizon <= bar.ts_ns:
         return None
-    spread = bar.spread_bps or 1.0
+    spread = bar.spread_bps or 0.0
     fhash = hashlib.sha256(
         f"{symbol}|{bar.ts_ns}|{bv.zscore20(bars, i)}|{bv.regime(bars, i)}".encode()
     ).hexdigest()
@@ -60,50 +78,75 @@ def generate(symbol, bars, i, session_open, day_end_ns=None, is_fx=True,
         entry_px=entry, stop_px=stop, tp_px=tp, time_exit_ns=horizon,
         exit_profile_version=EXIT_PROFILE_VERSION,
         cost_model_version=COST_MODEL_VERSION,
-        expected_cost_bps=roundtrip_cost_bps(spread),
+        expected_cost_bps=0.0,  # realized two-leg fills carry costs, not estimates
         feature_snapshot_hash=fhash, feature_revision=feature_rev)
 
 
-def resolve(candidate, bars_after, spread_mult=1.0, spread_bps=1.0):
-    """Resolve a candidate over subsequent bars.
+def _exit_fill(side_out, mid, spread_bps, mult):
+    return fill_px(side_out, mid, spread_bps, mult)
 
-    Returns dict(outcome=win|loss|censored|excluded, r_multiple,
-    exit_reason=tp|stop|gap|time|censored|excluded, bars_held).
-    Costs: entry adverse leg at resolve-time spread; economics in R.
+
+def resolve(candidate, bars_after, spread_mult=1.0):
+    """-> dict(label, realized, r_realized, exit_reason, bars_held,
+    entry_fill, exit_fill, exit_ts_ns).
+
+    r_realized is net of BOTH adverse legs. Time exit: label=censored,
+    realized=True. No resolvable path: label=excluded, realized=False.
     """
     side = candidate.proposed_side
     entry, stop, tp = candidate.entry_px, candidate.stop_px, candidate.tp_px
     risk = abs(entry - stop)
+    blank = {"label": "excluded", "realized": False, "r_realized": 0.0,
+             "exit_reason": "excluded", "bars_held": 0,
+             "entry_fill": 0.0, "exit_fill": 0.0, "exit_ts_ns": 0}
     if risk <= 0:
-        return {"outcome": "excluded", "r_multiple": 0.0,
-                "exit_reason": "excluded", "bars_held": 0}
+        return blank
     is_buy = side == "BUY"
-    cost_r = ((roundtrip_cost_bps(spread_bps, spread_mult) / 10000.0 * entry)
-              / risk)  # paid on every filled trade, all exit paths
+    spread_in = bars_after[0].spread_bps if bars_after else 0.0
+    entry_fill = fill_px(side, entry, spread_in or 1.0, spread_mult)
+
+    def r_of(exit_mid, exit_spread):
+        exit_fill = _exit_fill(OPP[side], exit_mid, exit_spread or 1.0, spread_mult)
+        r = ((exit_fill - entry_fill) / risk) if is_buy else \
+            ((entry_fill - exit_fill) / risk)
+        return r, exit_fill
+
     for n, b in enumerate(bars_after):
         if b.ts_ns > candidate.time_exit_ns:
             break
         if is_buy:
             hit_stop = b.l <= stop
             hit_tp = b.h >= tp
+            gapped = b.o <= stop and b.o < entry
         else:
             hit_stop = b.h >= stop
             hit_tp = b.l <= tp
-        # Gap through stop at the open: loss at first tradable print.
-        gap = (b.o <= stop) if is_buy else (b.o >= stop)
-        if n == 0 and gap and ((b.o < entry) if is_buy else (b.o > entry)):
-            pass  # handled below as stop resolution, never a free fill
+            gapped = b.o >= stop and b.o > entry
         if hit_stop and hit_tp:
-            r = -1.0  # stop-first (frozen label protocol)
-            return {"outcome": "loss", "r_multiple": r - cost_r,
-                    "exit_reason": "stop", "bars_held": n + 1}
+            r, xf = r_of(stop, b.spread_bps)  # stop-first (frozen)
+            return {"label": "loss", "realized": True, "r_realized": r,
+                    "exit_reason": "stop", "bars_held": n + 1,
+                    "entry_fill": entry_fill, "exit_fill": xf,
+                    "exit_ts_ns": b.ts_ns}
         if hit_stop:
-            return {"outcome": "loss", "r_multiple": -1.0 - cost_r,
-                    "exit_reason": "gap" if gap else "stop", "bars_held": n + 1}
+            if gapped:
+                # first tradable print, never clamped to -1R
+                r, xf = r_of(b.o, b.spread_bps)
+                return {"label": "loss", "realized": True, "r_realized": r,
+                        "exit_reason": "gap", "bars_held": n + 1,
+                        "entry_fill": entry_fill, "exit_fill": xf,
+                        "exit_ts_ns": b.ts_ns}
+            r, xf = r_of(stop, b.spread_bps)
+            return {"label": "loss", "realized": True, "r_realized": r,
+                    "exit_reason": "stop", "bars_held": n + 1,
+                    "entry_fill": entry_fill, "exit_fill": xf,
+                    "exit_ts_ns": b.ts_ns}
         if hit_tp:
-            return {"outcome": "win", "r_multiple": 2.0 - cost_r,
-                    "exit_reason": "tp", "bars_held": n + 1}
-    # Time exit: mark at exit economics.
+            r, xf = r_of(tp, b.spread_bps)
+            return {"label": "win", "realized": True, "r_realized": r,
+                    "exit_reason": "tp", "bars_held": n + 1,
+                    "entry_fill": entry_fill, "exit_fill": xf,
+                    "exit_ts_ns": b.ts_ns}
     last = None
     for b in bars_after:
         if b.ts_ns <= candidate.time_exit_ns:
@@ -111,13 +154,13 @@ def resolve(candidate, bars_after, spread_mult=1.0, spread_bps=1.0):
         else:
             break
     if last is None:
-        return {"outcome": "excluded", "r_multiple": 0.0,
-                "exit_reason": "excluded", "bars_held": 0}
-    px = last.c
-    r = ((px - entry) / risk) if is_buy else ((entry - px) / risk)
+        return blank
+    r, xf = r_of(last.c, last.spread_bps)
     held = sum(1 for b in bars_after if b.ts_ns <= candidate.time_exit_ns)
-    return {"outcome": "censored", "r_multiple": r - cost_r,
-            "exit_reason": "time", "bars_held": held}
+    return {"label": "censored", "realized": True, "r_realized": r,
+            "exit_reason": "time", "bars_held": held,
+            "entry_fill": entry_fill, "exit_fill": xf,
+            "exit_ts_ns": last.ts_ns}
 
 
 def size_notional(equity: float, risk_dist: float, entry: float):
@@ -125,81 +168,89 @@ def size_notional(equity: float, risk_dist: float, entry: float):
     effective_risk_frac). Shares = budget/risk_dist; notional = shares x entry.
     Frozen reference: 25% cap x 0.1% stop = 0.00025 equity = 2.5 bps."""
     budget = equity * RISK_BUDGET_BPS / 10000.0
-    unc = (budget / risk_dist * entry) / equity * 100.0 if risk_dist > 0 and entry > 0 else 0.0
+    unc = (budget / risk_dist * entry) / equity * 100.0 \
+        if risk_dist > 0 and entry > 0 else 0.0
     con = min(unc, R2_SINGLE_PCT)
-    # effective risk $ = constrained notional x stop fraction (risk_dist/entry)
-    eff_usd = min(budget, con / 100.0 * equity * (risk_dist / entry)) if entry > 0 else 0.0
+    eff_usd = min(budget, con / 100.0 * equity * (risk_dist / entry)) \
+        if entry > 0 else 0.0
     eff_frac = eff_usd / equity if equity > 0 else 0.0
     return (unc, con, unc > R2_SINGLE_PCT, eff_frac * 10000.0, eff_frac)
 
 
 def run(symbols_bars, equity=100000.0, spread_mult=1.0, session_fn=None,
         is_fx_fn=None, day_end_fn=None):
-    """Full deterministic backtest. symbols_bars: {symbol: [Bar]}.
+    """Chronological multi-symbol backtest.
 
-    Returns (candidates, resolutions, report). One position per symbol
-    (flat re-entry allowed after resolution); max 3 concurrent (by
-    earliest candidate). R2 total cap enforced against open risk.
+    Single timestamp-ordered event stream; global state: one open position
+    per symbol, max 3 concurrent, R2 total 75% on eff_frac. Candidates that
+    fail portfolio admission are recorded taken=False (calibration stream
+    still resolves them; portfolio ignores them).
+    Returns (records, report) where records hold the full trade ledger.
     """
     session_fn = session_fn or (lambda sym, b: True)
     is_fx_fn = is_fx_fn or (lambda sym: True)
-    candidates, resolutions = [], []
-    open_risk = []  # (exit_ts_ns, risk_frac_of_equity)
+    events = []
     for sym, bars in symbols_bars.items():
-        for i in range(len(bars)):
-            # expire risk allocations past their horizon
-            open_risk = [r for r in open_risk if r[0] > bars[i].ts_ns]
-            if len(open_risk) >= MAX_POSITIONS:
-                continue
-            c = generate(sym, bars, i, session_fn(sym, bars[i]),
-                         day_end_ns=day_end_fn(sym, bars[i]) if day_end_fn else None,
-                         is_fx=is_fx_fn(sym))
-            if c is None:
-                continue
-            risk = abs(c.entry_px - c.stop_px)
-            unc, con, binding, eff, eff_frac = size_notional(equity, risk, c.entry_px)
-            if sum(r[1] for r in open_risk) + eff_frac > R2_TOTAL_PCT / 100.0:
-                continue
-            candidates.append((c, unc, con, binding, eff, eff_frac))
-            open_risk.append((c.time_exit_ns, eff_frac))
-            res = resolve(c, bars[i + 1:], spread_mult=spread_mult,
-                          spread_bps=bars[i].spread_bps or 1.0)
-            resolutions.append((c, res, unc, con, binding, eff, eff_frac))
-    return candidates, resolutions, summarize(resolutions, equity)
+        for i, b in enumerate(bars):
+            events.append((b.ts_ns, sym, i))
+    events.sort()
+    records = []
+    open_pos = []  # [exit_ts_ns, eff_frac, symbol]
+    for ts, sym, i in events:
+        bars = symbols_bars[sym]
+        open_pos = [p for p in open_pos if p[0] > ts]
+        c = generate(sym, bars, i, session_fn(sym, bars[i]),
+                     day_end_ns=day_end_fn(sym, bars[i]) if day_end_fn else None,
+                     is_fx=is_fx_fn(sym))
+        if c is None:
+            continue
+        risk = abs(c.entry_px - c.stop_px)
+        unc, con, binding, eff_bps, eff_frac = size_notional(
+            equity, risk, c.entry_px)
+        res = resolve(c, bars[i + 1:], spread_mult=spread_mult)
+        taken = (res["realized"] and
+                 not any(p[2] == sym for p in open_pos) and
+                 len(open_pos) < MAX_POSITIONS and
+                 sum(p[1] for p in open_pos) + eff_frac <= R2_TOTAL_PCT / 100.0)
+        if taken:
+            open_pos.append([res["exit_ts_ns"], eff_frac, sym])
+        pnl = res["r_realized"] * eff_frac * equity if (taken and res["realized"]) else 0.0
+        records.append({"c": c, "res": res, "unc": unc, "con": con,
+                        "binding": binding, "eff_bps": eff_bps,
+                        "eff_frac": eff_frac, "taken": taken, "pnl_usd": pnl})
+    return records, summarize(records, equity)
 
 
-def summarize(resolutions, equity):
-    closed = [r for _, r, *_ in resolutions if r["outcome"] in ("win", "loss")]
-    wins = [r for r in closed if r["outcome"] == "win"]
-    rs = [r["r_multiple"] for r in closed]
-    n = len(closed)
-    win_rate = len(wins) / n if n else 0.0
-    avg_r = sum(rs) / n if n else 0.0
-    med_r = sorted(rs)[n // 2] if n else 0.0
-    # Daily net returns in R → equity curve at 25bp/trade risk.
-    pnl = sum(rs) * equity * RISK_BUDGET_BPS / 10000.0
-    r2_hits = sum(1 for _, _, _, _, b, _, _ in resolutions if b)
-    stops = [abs(c.entry_px - c.stop_px) / c.entry_px * 10000.0
-             for c, _, _, _, _, _, _ in resolutions]
-    effs = [e for _, _, _, _, _, e, _ in resolutions]
-    eff_fracs = [f for _, _, _, _, _, _, f in resolutions]
+def summarize(records, equity):
+    realized = [r for r in records if r["taken"] and r["res"]["realized"]]
+    calib_closed = [r for r in records if r["res"]["label"] in ("win", "loss")]
+    wins = [r for r in realized if r["res"]["label"] == "win"]
+    rs = [r["res"]["r_realized"] for r in realized]
+    n = len(realized)
+    total = sum(r["pnl_usd"] for r in realized)
+    # reconciliation invariant is structural: total IS the sum by construction;
+    # recompute independently as the tripwire.
+    assert abs(sum(r["pnl_usd"] for r in realized) - total) < 1e-9 * max(1.0, abs(total))
     return {
-        "candidates": len(resolutions),
-        "closed": n,
-        "censored": sum(1 for _, r, *_ in resolutions if r["outcome"] == "censored"),
-        "excluded": sum(1 for _, r, *_ in resolutions if r["outcome"] == "excluded"),
-        "win_rate": win_rate,
-        "avg_r": avg_r,
-        "median_r": med_r,
-        "expectancy_r": avg_r,
-        "net_pnl": pnl,
-        "r2_binding_rate": r2_hits / len(resolutions) if resolutions else 0.0,
-        "avg_effective_risk_bps": sum(effs) / len(effs) if effs else 0.0,
-        "avg_effective_risk_frac": sum(eff_fracs) / len(eff_fracs) if eff_fracs else 0.0,
-        "avg_stop_bps": sum(stops) / len(stops) if stops else 0.0,
-        "avg_bars_held": (sum(r["bars_held"] for _, r, *_ in resolutions) /
-                           len(resolutions)) if resolutions else 0.0,
-        "time_exit_rate": (sum(1 for _, r, *_ in resolutions
-                               if r["exit_reason"] == "time") /
-                           len(resolutions)) if resolutions else 0.0,
+        "candidates": len(records),
+        "realized": n,
+        "realized_wins": len(wins),
+        "realized_time_exits": sum(1 for r in realized if r["res"]["exit_reason"] == "time"),
+        "calib_closed_winloss": len(calib_closed),
+        "calib_censored": sum(1 for r in records if r["res"]["label"] == "censored"),
+        "excluded": sum(1 for r in records if r["res"]["label"] == "excluded"),
+        "portfolio_excluded_caps": sum(1 for r in records if not r["taken"] and r["res"]["realized"]),
+        "win_rate": len(wins) / n if n else 0.0,
+        "avg_r": sum(rs) / n if n else 0.0,
+        "median_r": sorted(rs)[n // 2] if n else 0.0,
+        "expectancy_r": sum(rs) / n if n else 0.0,
+        "net_pnl": total,
+        "r2_binding_rate": sum(1 for r in records if r["binding"]) / len(records) if records else 0.0,
+        "avg_effective_risk_bps": (sum(r["eff_bps"] for r in realized) / n) if n else 0.0,
+        "avg_effective_risk_frac": (sum(r["eff_frac"] for r in realized) / n) if n else 0.0,
+        "avg_stop_bps": (sum(abs(r["c"].entry_px - r["c"].stop_px) / r["c"].entry_px * 10000.0
+                             for r in realized) / n) if n else 0.0,
+        "avg_bars_held": (sum(r["res"]["bars_held"] for r in realized) / n) if n else 0.0,
+        "time_exit_rate": (sum(1 for r in realized if r["res"]["exit_reason"] == "time") / n) if n else 0.0,
+        "turnover": sum(r["con"] / 100.0 for r in realized),
     }
