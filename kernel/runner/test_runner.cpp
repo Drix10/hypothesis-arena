@@ -94,11 +94,45 @@ static std::vector<jev::runner::Position> g_positions;
 static int g_pos_fail = 0;
 static int g_posn_lie = 0;  // >0: adapter violates the seam
                             // contract by REPORTING this count
+static int g_posn_bad = 0;  // >0: adapter returns a corrupt row
+                            // (1 unterminated symbol, 2 duplicate
+                            // symbols, 3 over-range qty, 4 LLONG_MIN
+                            // qty, 5 empty symbol) at a valid count
                             // (writes at most cap — the runner must
                             // treat it as unavailable, never index
                             // past the fixed buffer)
 static int FakePositions(void*, jev::runner::Position* out, int cap) {
     if (g_pos_fail) return -1;
+    if (g_posn_bad > 0 && cap > 0) {
+        // Corrupt row at a VALID count: the runner must reject the
+        // whole snapshot, never interpret the row.
+        if (g_posn_bad == 2 && cap > 1) {
+            jev::runner::Position a;
+            for (int b = 0; b < 16; ++b) a.symbol[b] = '\0';
+            a.symbol[0] = 'A';
+            a.qty = 10;
+            out[0] = a;
+            out[1] = a;
+            return 2;
+        }
+        jev::runner::Position p;
+        for (int b = 0; b < 16; ++b) p.symbol[b] = '\0';
+        p.qty = 10;
+        if (g_posn_bad == 1) {
+            for (int b = 0; b < 16; ++b) p.symbol[b] = 'A';
+        } else if (g_posn_bad == 3) {
+            p.symbol[0] = 'A';
+            p.symbol[1] = 'A';
+            p.symbol[2] = 'P';
+            p.symbol[3] = 'L';
+            p.qty = 1000000000LL;
+        } else if (g_posn_bad == 4) {
+            p.symbol[0] = 'A';
+            p.qty = (-9223372036854775807LL - 1);
+        }  // 5 leaves the symbol empty (qty 10).
+        out[0] = p;
+        return 1;
+    }
     if (g_posn_lie > 0) {
         int w = (g_posn_lie < cap) ? g_posn_lie : cap;
         if ((int)g_positions.size() < w) w = (int)g_positions.size();
@@ -308,6 +342,7 @@ struct Rig {
         g_positions.clear();
         g_pos_fail = 0;
         g_posn_lie = 0;
+        g_posn_bad = 0;
         g_venue_open = 0;
         g_venue_spread = 0;
         g_venue_fail = 0;
@@ -4477,6 +4512,66 @@ int main() {
                   std::string::npos,
               "pk-alert");
         RmDir(r.dir + "/medium.txt");
+    }
+    // PV. Position row validation (doc 06 sec. 6.1b): corrupt rows
+    // at a valid count invalidate the whole snapshot (unknown).
+    // Modes: 1 unterminated symbol, 2 duplicate symbols, 3
+    // over-range qty, 4 LLONG_MIN qty, 5 empty symbol.
+    for (int bad = 1; bad <= 5; ++bad) {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        g_posn_bad = bad;
+        g_positions.push_back(MkPos("AAPL", 40));
+        G0Runner g(r.cfg, r.deps);
+        char nm[32];
+        std::snprintf(nm, sizeof(nm), "pv-recover-%d", bad);
+        Check(g.Recover(nullptr), nm);
+        std::snprintf(nm, sizeof(nm), "pv-cycle-%d", bad);
+        Check(g.Cycle(g_now), nm);
+        FILE* af =
+            std::fopen((r.dir + "/alerts.jsonl").c_str(),
+                       "rb");
+        char abuf[4096] = {0};
+        std::size_t an =
+            af ? std::fread(abuf, 1, sizeof(abuf) - 1, af) : 0;
+        if (af) std::fclose(af);
+        std::snprintf(nm, sizeof(nm), "pv-unavailable-%d", bad);
+        Check(an > 0 &&
+                  std::string(abuf).find(
+                      "positions-unavailable") !=
+                      std::string::npos,
+              nm);
+        std::vector<jev::journal::Row> rows;
+        bool drift_row = false;
+        if (jev::runner::JournalLoad(
+                (r.dir + "/journal.jsonl").c_str(), &rows)) {
+            for (std::size_t i = 0; i < rows.size(); ++i) {
+                if (rows[i].kind == "drift-directive")
+                    drift_row = true;
+            }
+        }
+        std::snprintf(nm, sizeof(nm), "pv-no-drift-%d", bad);
+        Check(!drift_row, nm);
+        g_posn_bad = 0;
+    }
+    {
+        // Duplicate symbols also defeat teardown certification:
+        // FLATTENED retained, never cleared on ambiguity.
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        g_posn_bad = 2;
+        WriteFile(r.dir + "/medium.txt", "FLATTENED");
+        WriteFile(r.dir + "/medium-incident.txt",
+                  "1799999999000000000\n");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "pv-recover-dup");
+        Check(g.Cycle(g_now), "pv-cycle-dup");
+        Check(ReadWhole(r.dir + "/medium.txt") ==
+                  "FLATTENED",
+              "pv-retained-on-dup");
+        Check(CountMethod("POST", "/v2/orders") == 0,
+              "pv-no-mint-on-dup");
+        g_posn_bad = 0;
     }
     // CU. Cursor durability fails closed (doc 06 sec. 6.1b): a
     // foreign stream event dirties the cursor; an unwritable

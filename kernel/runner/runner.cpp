@@ -982,6 +982,32 @@ bool G0Runner::SnapPositions(Position* ps, int cap,
     // buffer — treat as unavailable, exactly like a lookup
     // failure.
     if (got < 0 || got > cap) return false;
+    // Row contract: every row NUL-terminated within its fixed
+    // field, non-empty symbol, qty inside the share domain (this
+    // also excludes LLONG_MIN, whose negation overflows), no
+    // duplicate symbols (ambiguous — silently picking one side
+    // would invent economics). Any violation invalidates the
+    // WHOLE snapshot: unknown, never partial trust.
+    for (int i = 0; i < got; ++i) {
+        bool term = false;
+        for (std::size_t b = 0; b < sizeof(ps[i].symbol); ++b) {
+            if (ps[i].symbol[b] == '\0') {
+                term = true;
+                break;
+            }
+        }
+        if (!term || ps[i].symbol[0] == '\0') return false;
+        if (ps[i].qty == LLONG_MIN ||
+            ps[i].qty < -999999999LL || ps[i].qty > 999999999LL)
+            return false;
+    }
+    for (int i = 0; i < got; ++i) {
+        for (int j = i + 1; j < got; ++j) {
+            if (std::strncmp(ps[i].symbol, ps[j].symbol,
+                             sizeof(ps[i].symbol)) == 0)
+                return false;
+        }
+    }
     *n = got;
     return true;
 }
