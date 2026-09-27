@@ -279,11 +279,16 @@ position everywhere else (reclamation guard, flatness,
 netting, HARD management), so restart must not demote it to
 slotless.
 - Recovery never orphans durable books: intents rebuild from
-journal rows, so an absent-or-empty journal with `snap-*` or
-`intent-*` artifacts on disk is torn state — recovery refuses
-for human recovery, never success-with-zero-slots. A virgin
-directory (no journal AND no slot books) still initializes as
-genesis.
+journal rows, so durable books that claim LIVE risk with no
+covering journal intent row are torn state — recovery refuses
+for human recovery, never success-with-zero-slots. Live risk
+means a snapshot past the pre-send states (anything but
+IDLE / JOURNAL_PENDING / recovery-terminal) or a snapshot
+with no matching intent file. Intent-only pre-send leftovers
+(the submit-before-first-cycle crash window) and terminal
+books keep their established ignore/resume paths, and a
+virgin directory (no journal AND no slot books) still
+initializes as genesis.
 - FSM/epoch files are exact one-line shapes: trailing
 non-empty lines are corruption (refuse, never rewrite).
 `FileExists` stays the regular-file probe; `StatPath` maps
