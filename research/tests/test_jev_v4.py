@@ -255,6 +255,39 @@ def test_exact_sixty_expiry():
     print("exact60 OK")
 
 
+def test_int_domain_parity():
+    # C++ ParseStrictUint domain: 0 <= v <= INT64_MAX, type-exact int.
+    MX = 9223372036854775807
+    assert v4._is_int(0) and v4._is_int(MX)
+    assert not v4._is_int(-1) and not v4._is_int(MX + 1)
+    assert not v4._is_int(True) and not v4._is_int(1.0)
+    c = cand()
+
+    def signed_mut(fn, rebalance=False):
+        art = artifact(c)
+        fn(art["payload"])
+        if rebalance:
+            art["payload"]["decision_key"] = \
+                v4.v4_decision_key(art["payload"])
+        return v4.sign_v4(art["payload"], SEED)
+
+    bad = [lambda p: p.update(snapshot_epoch=-1),
+           lambda p: p.update(created_at=-1, expires_at=59),
+           lambda p: p.update(expires_at=-1),
+           lambda p: p.update(snapshot_epoch=MX + 1),
+           lambda p: p.update(created_at=MX + 1, expires_at=MX + 61),
+           lambda p: p.update(expires_at=MX + 1)]
+    for i, fn in enumerate(bad):
+        got = v4.evaluate_v4(c, signed_mut(fn), NOW, PUB, dict(ENGINE))
+        assert got == ("HOLD", "v4_malformed"), (i, got)
+    ok = signed_mut(lambda p: p.update(snapshot_epoch=MX), rebalance=True)
+    assert v4.evaluate_v4(c, ok, NOW, PUB, dict(ENGINE))[0] == "PASS_BASE"
+    fut = signed_mut(lambda p: p.update(created_at=MX - 60, expires_at=MX))
+    assert v4.evaluate_v4(c, fut, NOW, PUB, dict(ENGINE)) == \
+        ("HOLD", "v4_malformed")
+    print("int_domain OK", len(bad) + 2, "cases")
+
+
 def test_committed_vectors_agree():
     # Differential proof: every committed kernel/v4 vector evaluates in
     # Python to exactly its expect.json verdict (C++ suite asserts the same).
@@ -326,6 +359,7 @@ if __name__ == "__main__":
     test_exact_sixty_expiry()
     test_committed_vectors_agree()
     test_label_cost_record()
+    test_int_domain_parity()
     test_cross_symbol_and_cross_cid_isolation()
     test_table_rows()
     test_v3_frozen_untouched()

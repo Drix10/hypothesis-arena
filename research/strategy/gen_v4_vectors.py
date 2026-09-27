@@ -65,6 +65,14 @@ def smutate(c, fn, ans=None, **kw):
     return v4.sign_v4(art["payload"], SEED)
 
 
+def rebind(c, fn, ans=None, **kw):
+    """Re-signed AND decision-key-rebound mutation: fully valid artifact."""
+    art = base_art(c, ans=ans, **kw)
+    fn(art["payload"])
+    art["payload"]["decision_key"] = v4.v4_decision_key(art["payload"])
+    return v4.sign_v4(art["payload"], SEED)
+
+
 VECTORS = []
 
 
@@ -149,6 +157,32 @@ def build():
     add("expiry_plus3600", c,
         smutate(c, lambda p: p.update(expires_at=NOW + 3600)),
         "HOLD", "v4_malformed")
+    MX = 9223372036854775807
+    add("epoch_minus1", c,
+        smutate(c, lambda p: p.update(snapshot_epoch=-1)),
+        "HOLD", "v4_malformed")
+    add("created_minus1", c,
+        smutate(c, lambda p: p.update(created_at=-1, expires_at=59)),
+        "HOLD", "v4_malformed")
+    add("expires_minus1", c,
+        smutate(c, lambda p: p.update(expires_at=-1)),
+        "HOLD", "v4_malformed")
+    add("epoch_int64max", c,
+        rebind(c, lambda p: p.update(snapshot_epoch=MX)),
+        "PASS_BASE", "strong")  # MAX itself is a valid epoch
+    add("epoch_int64max_plus1", c,
+        smutate(c, lambda p: p.update(snapshot_epoch=MX + 1)),
+        "HOLD", "v4_malformed")
+    add("created_int64max_plus1", c,
+        smutate(c, lambda p: p.update(created_at=MX + 1,
+                                      expires_at=MX + 61)),
+        "HOLD", "v4_malformed")
+    add("expires_int64max_plus1", c,
+        smutate(c, lambda p: p.update(expires_at=MX + 1)),
+        "HOLD", "v4_malformed")
+    add("expiry_int64max_future", c,
+        smutate(c, lambda p: p.update(created_at=MX - 60, expires_at=MX)),
+        "HOLD", "v4_malformed")  # exact +60, but far-future: both reject
 
 
 def main():

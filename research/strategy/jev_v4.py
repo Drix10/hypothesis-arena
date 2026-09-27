@@ -98,9 +98,13 @@ def _is_str(v):
     return isinstance(v, str)
 
 
+INT64_MAX = 9223372036854775807
+
+
 def _is_int(v):
-    # bool is an int subclass: JSON true/false are NEVER integers here.
-    return isinstance(v, int) and not isinstance(v, bool)
+    # C++ ParseStrictUint domain: decimal digits, non-negative, <= INT64_MAX.
+    # type() is X int (not isinstance): bools are already out, subclasses too.
+    return type(v) is int and 0 <= v <= INT64_MAX
 
 
 def _num(s):
