@@ -373,6 +373,34 @@ falls through to broker-sized management under the SAME incident
 id (the pre-flight keeps one close — the skip is an optimization,
 not the mutual-exclusion mechanism). Frozen symbols are never
 position-loop-closed (freeze = wait, exits stay alive via slots).
+- Per-book orphan coverage (round-5): orphan coverage is PER
+DURABLE BOOK, never global. Every snap book that claims live
+risk needs its OWN covering journal intent row; a live book
+with no covering row refuses recovery
+(`recover-orphaned-state`) even when the journal holds
+legitimate rows for OTHER books (a mixed journal must not
+launder an orphan into success). Journaled books keep their
+existing refusal rules (corrupt/half/missing durable state),
+and the intent-only pre-first-cycle window, terminal-book
+paths, and virgin-genesis initialization are unchanged.
+- Recovery revokes authority on entry (round-5): `Recover()`
+clears mutation authority FIRST, before any path can fail —
+any failed recovery leaves the object with NO mutation
+authority, even after an earlier success. Only a FULL success
+(validation + rebuild + attribution) sets it. Same-object
+repeated Recover stays idempotent, success-after-fix restores
+authority, and the held lock alone never implies recovery
+authority.
+- Terminal attribution is never dropped (round-5): a
+terminal EXIT whose closed quantity cannot be durably
+attributed keeps its accounting obligation. Recovery
+re-attribution failure refuses recovery (no `recovered_`);
+the in-cycle path retains the EXIT (never done, never
+reclaimable) so the next cycle retries deterministically
+(two-phase rollback inside the attribution makes the retry
+exact). No replacement close is submitted for an attribution
+persistence failure, and no broker-derived local accounting
+is manufactured.
 
 ## 6.2 Reflection (after every closed trade)
 
