@@ -1651,24 +1651,39 @@ long long G0Runner::HardAdoptExit(Slot& s, long long epoch,
     if (fresh < 0) fresh = 0;
     if (fresh > rem) fresh = rem;
     if (fresh > 0) {
-        // Durable-first, exit slot before entries: the bumps
-        // persist first (a failure rolls back in-memory only —
-        // nothing durable moved yet); then entry attribution
-        // (self-rollbacking); any failure folds NOTHING and the
-        // full remainder retries next cycle (doc 06 sec. 6.1b).
-        s.m.exit_counted_qty += fresh;
-        s.m.exit_closed_qty += fresh;
-        bool ok = PersistSlot(s);
-        if (ok) ok = AttributeClosedQty(s.intent.symbol, fresh,
-                                        now_ns);
-        if (!ok) {
-            s.m.exit_counted_qty -= fresh;
-            s.m.exit_closed_qty -= fresh;
-            PersistSlot(s);  // best-effort restore of old
+        // Crash-consistent order: durable parent-entry
+        // attribution lands BEFORE the EXIT counters persist. A
+        // crash between the two replays safely — the entries are
+        // already authoritative, the leftover drops against their
+        // reduced opens, the counters advance, and nothing folds
+        // twice. (The reverse order strands attribution forever:
+        // durable exit-counted with un-attributed entries replays
+        // to fresh = 0 and the quantity is permanently lost.)
+        // Entry attribution is self-rollbacking: any failure folds
+        // NOTHING (exit counters untouched) and the full remainder
+        // retries next cycle (doc 06 sec. 6.1b).
+        if (!AttributeClosedQty(s.intent.symbol, fresh,
+                                now_ns)) {
             OpsRow("drift-directive", s.intent.intent_id,
                    "hard-adopt-exit-unpersisted", now_ns);
             Alert(P("alerts.jsonl").c_str(), "HARD",
                   "hard-adopt-exit-unpersisted",
+                  s.intent.intent_id, now_ns);
+            return rem;
+        }
+        s.m.exit_counted_qty += fresh;
+        s.m.exit_closed_qty += fresh;
+        if (!PersistSlot(s)) {
+            // Entries durable, exit counters not: the in-memory
+            // bumps stand for this process, and a crash restarts
+            // from old counters — replay re-derives the same
+            // fresh, finds no remaining parent open (leftover
+            // drops), and converges the counters then.
+            OpsRow("drift-directive", s.intent.intent_id,
+                   "hard-adopt-exit-counters-unpersisted",
+                   now_ns);
+            Alert(P("alerts.jsonl").c_str(), "HARD",
+                  "hard-adopt-exit-counters-unpersisted",
                   s.intent.intent_id, now_ns);
             return rem;
         }

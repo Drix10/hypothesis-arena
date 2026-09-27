@@ -3557,6 +3557,118 @@ int main() {
                   std::string::npos,
               "lr-remainder-logical");
     }
+    // XA. Adopt crash ordering (doc 06 sec. 6.1b): durable entry
+    // attribution lands BEFORE the EXIT counters persist. An exit
+    // persist failure therefore leaves entries durably attributed
+    // with counters in memory (never the reverse: durable counters
+    // with lost attribution). A saturating restart then converges
+    // exactly — replay finds no remaining parent open, advances
+    // the counters once, and folds nothing twice.
+    {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        std::string cid, xid;
+        Check(!CrashImage(r.dir, "intent-580", "AAPL", 0, 0,
+                          100, 2, 100, &cid)
+                   .empty(),
+              "xa-entry");
+        Check(!CrashImage(r.dir, "intent-581", "AAPL", 0, 1,
+                          100, 9, 0, &xid)
+                   .empty(),
+              "xa-exit");
+        g_positions.push_back(MkPos("AAPL", 60));
+        MkDir(r.dir + "/snap-intent-581.txt");
+        MkDir(r.dir + "/snap-intent-581.txt.tmp");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "xa-recover");
+        g_kill.drift_unresolvable = true;  // HARD
+        PushRule("GET", "by_client_order_id", 200,
+                 HeldReply("filled", "100").c_str());
+        PushRule("GET", "by_client_order_id", 200,
+                 DeadReply("40").c_str());
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 PlainReply("accepted", "0").c_str());
+        Check(!g.Cycle(g_now), "xa-terminates");
+        // Entries attributed (100 -> 60) while the exit persist
+        // failed: the new order's alert, in-memory books exact,
+        // replacement still sent once.
+        Check(ReadWhole(r.dir + "/alerts.jsonl")
+                      .find("hard-adopt-exit-counters-"
+                            "unpersisted") != std::string::npos,
+              "xa-counters-alert");
+        const auto* xe = g.Find("intent-581");
+        Check(xe && xe->m.exit_counted_qty == 40,
+              "xa-exit-counted");
+        const auto* xn = g.Find("intent-580");
+        Check(xn && xn->m.filled_qty - xn->m.exit_closed_qty ==
+                         60,
+              "xa-entry-attributed");
+        Check(CountMethod("POST", "/v2/orders") == 1,
+              "xa-one-replace");
+        RmDir(r.dir + "/snap-intent-581.txt");
+        RmDir(r.dir + "/snap-intent-581.txt.tmp");
+    }
+    {
+        // Saturating restart: entry open exactly the fresh amount.
+        // Replay must advance the counters once and fold nothing
+        // twice (exactly one close-attributed row across the
+        // crash, entry exactly flat, exit exactly counted).
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        std::string cid, xid;
+        Check(!CrashImage(r.dir, "intent-582", "AAPL", 0, 0,
+                          40, 2, 40, &cid)
+                   .empty(),
+              "xa-entry2");
+        Check(!CrashImage(r.dir, "intent-583", "AAPL", 0, 1,
+                          40, 9, 0, &xid)
+                   .empty(),
+              "xa-exit2");
+        MkDir(r.dir + "/snap-intent-583.txt");
+        MkDir(r.dir + "/snap-intent-583.txt.tmp");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "xa-recover2");
+        g_kill.drift_unresolvable = true;  // HARD
+        PushRule("GET", "by_client_order_id", 200,
+                 HeldReply("filled", "40").c_str());
+        PushRule("GET", "by_client_order_id", 200,
+                 DeadReply("40").c_str());
+        Check(!g.Cycle(g_now), "xa-terminates2");
+        Check(ReadWhole(r.dir + "/alerts.jsonl")
+                      .find("hard-adopt-exit-counters-"
+                            "unpersisted") != std::string::npos,
+              "xa-counters-alert2");
+        RmDir(r.dir + "/snap-intent-583.txt");
+        RmDir(r.dir + "/snap-intent-583.txt.tmp");
+        G0Runner g2(r.cfg, r.deps);
+        Check(g2.Recover(nullptr), "xa-recover3");
+        PushRule("GET", "by_client_order_id", 200,
+                 HeldReply("filled", "40").c_str());
+        PushRule("GET", "by_client_order_id", 200,
+                 DeadReply("40").c_str());
+        Check(!g2.Cycle(g_now), "xa-converges");
+        const auto* xe = g2.Find("intent-583");
+        Check(xe && xe->m.exit_counted_qty == 40,
+              "xa-exit-recounted");
+        const auto* xn = g2.Find("intent-582");
+        Check(xn && xn->m.filled_qty - xn->m.exit_closed_qty ==
+                         0,
+              "xa-entry-flat");
+        std::vector<jev::journal::Row> rows;
+        int takes = 0;
+        if (jev::runner::JournalLoad(
+                (r.dir + "/journal.jsonl").c_str(), &rows)) {
+            for (std::size_t i = 0; i < rows.size(); ++i) {
+                if (rows[i].kind == "reconcile") ++takes;
+            }
+        }
+        // One attribution row from the first attempt; the replay
+        // folded nothing (drop, no row) — never twice.
+        Check(takes == 1, "xa-single-attribution");
+        Check(CountMethod("POST", "/v2/orders") == 0,
+              "xa-no-resend");
+    }
     // CW. Chain write-ahead ENFORCED (doc 06 sec. 6.1b): the
     // chain file is unwritable -> the POST never flies (freeze +
     // refuse, exactly zero POSTs). Filesystem fault injection
