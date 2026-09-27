@@ -4625,6 +4625,61 @@ int main() {
                   "medium-enter") != std::string::npos,
               "me-enter");
     }
+    // FC. Failed FLATTENED transition must not auto-clear
+    // (doc 06 sec. 6.1b): MEDIUM_ACTIVE on disk + broker/local
+    // flat + forced FLATTENED persistence failure -> the cycle
+    // continues (single failure, retry next) but clears
+    // nothing, emits no medium-incident-cleared row, and leaves
+    // both incident files intact. After the fault is removed the
+    // terminal persist + cleanup proceed normally.
+    {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "fc-recover");
+        WriteFile(r.dir + "/medium.txt", "MEDIUM_ACTIVE");
+        WriteFile(r.dir + "/medium-incident.txt",
+                  "1800000000000000000");
+        jev::runner::InjectWriteFault("medium.txt", 0);
+        Check(g.Cycle(g_now), "fc-cycle-continues");
+        jev::runner::ClearWriteFaults();
+        Check(ReadWhole(r.dir + "/medium.txt") ==
+                  "MEDIUM_ACTIVE",
+              "fc-no-transition");
+        Check(ReadWhole(r.dir + "/medium-incident.txt") ==
+                  "1800000000000000000",
+              "fc-epoch-intact");
+        // The cleared row's observable signature (journal
+        // bodies are hashes by frozen design):
+        // kind=drift-directive + intent=runner.
+        auto cleared_rows = [&] {
+            std::vector<jev::journal::Row> jr;
+            int n = 0;
+            if (!jev::runner::JournalLoad(
+                    (r.dir + "/journal.jsonl").c_str(), &jr))
+                return -1;
+            for (std::size_t i = 0; i < jr.size(); ++i) {
+                if (jr[i].kind == "drift-directive" &&
+                    jr[i].intent_id == "runner")
+                    ++n;
+            }
+            return n;
+        };
+        Check(cleared_rows() == 0, "fc-no-cleared-row");
+        Check(ReadWhole(r.dir + "/alerts.jsonl").find(
+                  "medium-fsm-unpersisted") != std::string::npos,
+              "fc-alert");
+        Check(jev::runner::JournalVerifyFile(
+                  (r.dir + "/journal.jsonl").c_str()),
+              "fc-chain-valid");
+        // Fault removed: terminal persist then cleanup.
+        Check(g.Cycle(g_now), "fc-retry");
+        Check(ReadWhole(r.dir + "/medium.txt").empty(),
+              "fc-cleared");
+        Check(ReadWhole(r.dir + "/medium-incident.txt").empty(),
+              "fc-epoch-cleared");
+        Check(cleared_rows() == 1, "fc-cleared-row");
+    }
     // PK. Path integrity (doc 06 sec. 6.1b): a non-regular node
     // never reads as a missing file. Directory-in-place refuses
     // or fails closed at every state reader.

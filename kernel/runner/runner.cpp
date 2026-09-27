@@ -3607,11 +3607,26 @@ bool G0Runner::Cycle(long long now_ns) {
                   "medium-fsm-unknown", "", now_ns);
             return false;
         }
-        if (!mcur.empty() && mcur != "FLATTENED" &&
-            mcur != "PROTECTION_ONLY") {
+        // Clear invariant (doc 06 sec. 6.1b): auto-clear runs
+        // ONLY after a terminal FSM state was successfully
+        // persisted AND revalidated from disk in this cycle. An
+        // entry-validated FLATTENED/PROTECTION_ONLY qualifies
+        // (ReadMediumFsm read it this cycle); anything else must
+        // be written now and read back before any clear.
+        bool term_ok =
+            (mcur == "FLATTENED" || mcur == "PROTECTION_ONLY");
+        if (!mcur.empty() && !term_ok) {
             if (AllFlat() && BrokerConfirmedFlat()) {
-                if (!AtomicWrite(P("medium.txt").c_str(),
-                                 "FLATTENED")) {
+                bool wrote = AtomicWrite(P("medium.txt").c_str(),
+                                         "FLATTENED");
+                std::string re;
+                if (wrote && ReadMediumFsm(P("medium.txt").c_str(),
+                                           &re) ==
+                                 MediumFsmRead::OK &&
+                    re == "FLATTENED") {
+                    mcur = "FLATTENED";
+                    term_ok = true;
+                } else {
                     Alert(P("alerts.jsonl").c_str(), "MEDIUM",
                           "medium-fsm-unpersisted", "FLATTENED",
                           now_ns);
@@ -3642,15 +3657,16 @@ bool G0Runner::Cycle(long long now_ns) {
             return false;
         }
         std::vector<std::string> clns;
-        if (ReadLines(P("medium.txt").c_str(), &clns) &&
+        if (term_ok && ReadLines(P("medium.txt").c_str(), &clns) &&
             !clns.empty() && BrokerConfirmedFlat() &&
             (mcur == "FLATTENED" || LocalFlat())) {
-            if (!ClearMediumFiles()) {
+            if (ClearMediumFiles()) {
+                OpsRow("drift-directive", "runner",
+                       "medium-incident-cleared", now_ns);
+            } else {
                 Alert(P("alerts.jsonl").c_str(), "MEDIUM",
                       "medium-clear-unpersisted", "", now_ns);
             }
-            OpsRow("drift-directive", "runner",
-                   "medium-incident-cleared", now_ns);
         }
     } else {
         if (!MediumPass(now_ns)) return false;
