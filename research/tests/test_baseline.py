@@ -85,7 +85,7 @@ def test_stop_first_and_tp():
     assert r["outcome"] == "loss" and r["exit_reason"] == "stop", r
     tp_only = [Bar(ts_ns=1, o=100.0, h=102.5, l=99.5, c=101.0)]
     r2 = bt.resolve(c, tp_only)
-    assert r2["outcome"] == "win" and r2["r_multiple"] == 2.0, r2
+    assert r2["outcome"] == "win" and abs(r2["r_multiple"] - (2.0 - 0.02)) < 1e-9, r2
     print("stop_first_and_tp OK")
 
 
@@ -108,6 +108,35 @@ def test_gap_and_censor():
 
 
 def test_cost_stress_monotone():
+    assert fill_px("BUY", 100.0, 2.0, 1.0) < fill_px("BUY", 100.0, 2.0, 3.0)
+    assert fill_px("SELL", 100.0, 2.0, 1.0) > fill_px("SELL", 100.0, 2.0, 3.0)
+    assert fill_px("BUY", 100.0, 0.0, 1.0) == 100.0 * 1.0001  # 1bp floor
+    print("cost_stress OK")
+
+
+def test_cost_applies_all_paths():
+    c = make_candidate(strategy_version="baseline_v1", symbol="T", snapshot_ts_ns=0,
+                       proposed_side="BUY", proposed_family="momentum",
+                       entry_px=100.0, stop_px=99.0, tp_px=102.0,
+                       time_exit_ns=10**18, exit_profile_version="exit_profile_v1",
+                       cost_model_version="paper_fill_v1", expected_cost_bps=4.0,
+                       feature_snapshot_hash="h", feature_revision="synth")
+    tp_bar = [Bar(ts_ns=1, o=100.0, h=102.5, l=99.5, c=101.0, spread_bps=10.0)]
+    r1 = bt.resolve(c, tp_bar, spread_mult=1.0, spread_bps=10.0)
+    r3 = bt.resolve(c, tp_bar, spread_mult=3.0, spread_bps=10.0)
+    assert r1["outcome"] == "win" and r3["outcome"] == "win"
+    assert r3["r_multiple"] < r1["r_multiple"] < 2.0, (r1, r3)
+    # time-exit hold counts only bars within horizon
+    bars = [Bar(ts_ns=i, o=100.0, h=100.5, l=99.5, c=100.1) for i in (1, 2, 3)]
+    c2 = make_candidate(strategy_version="baseline_v1", symbol="T", snapshot_ts_ns=0,
+                        proposed_side="BUY", proposed_family="momentum",
+                        entry_px=100.0, stop_px=99.0, tp_px=102.0,
+                        time_exit_ns=2, exit_profile_version="exit_profile_v1",
+                        cost_model_version="paper_fill_v1", expected_cost_bps=4.0,
+                        feature_snapshot_hash="h", feature_revision="synth")
+    rt = bt.resolve(c2, bars)
+    assert rt["outcome"] == "censored" and rt["bars_held"] == 2, rt
+    print("cost_all_paths OK", round(r1["r_multiple"], 4), round(r3["r_multiple"], 4))
     assert fill_px("BUY", 100.0, 2.0, 1.0) < fill_px("BUY", 100.0, 2.0, 3.0)
     assert fill_px("SELL", 100.0, 2.0, 1.0) > fill_px("SELL", 100.0, 2.0, 3.0)
     assert fill_px("BUY", 100.0, 0.0, 1.0) == 100.0 * 1.0001  # 1bp floor

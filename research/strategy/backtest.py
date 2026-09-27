@@ -78,6 +78,8 @@ def resolve(candidate, bars_after, spread_mult=1.0, spread_bps=1.0):
         return {"outcome": "excluded", "r_multiple": 0.0,
                 "exit_reason": "excluded", "bars_held": 0}
     is_buy = side == "BUY"
+    cost_r = ((roundtrip_cost_bps(spread_bps, spread_mult) / 10000.0 * entry)
+              / risk)  # paid on every filled trade, all exit paths
     for n, b in enumerate(bars_after):
         if b.ts_ns > candidate.time_exit_ns:
             break
@@ -93,13 +95,13 @@ def resolve(candidate, bars_after, spread_mult=1.0, spread_bps=1.0):
             pass  # handled below as stop resolution, never a free fill
         if hit_stop and hit_tp:
             r = -1.0  # stop-first (frozen label protocol)
-            return {"outcome": "loss", "r_multiple": r,
+            return {"outcome": "loss", "r_multiple": r - cost_r,
                     "exit_reason": "stop", "bars_held": n + 1}
         if hit_stop:
-            return {"outcome": "loss", "r_multiple": -1.0,
+            return {"outcome": "loss", "r_multiple": -1.0 - cost_r,
                     "exit_reason": "gap" if gap else "stop", "bars_held": n + 1}
         if hit_tp:
-            return {"outcome": "win", "r_multiple": 2.0,
+            return {"outcome": "win", "r_multiple": 2.0 - cost_r,
                     "exit_reason": "tp", "bars_held": n + 1}
     # Time exit: mark at exit economics.
     last = None
@@ -113,9 +115,9 @@ def resolve(candidate, bars_after, spread_mult=1.0, spread_bps=1.0):
                 "exit_reason": "excluded", "bars_held": 0}
     px = last.c
     r = ((px - entry) / risk) if is_buy else ((entry - px) / risk)
-    cost_r = (roundtrip_cost_bps(spread_bps, spread_mult) / 10000.0 * entry) / risk
+    held = sum(1 for b in bars_after if b.ts_ns <= candidate.time_exit_ns)
     return {"outcome": "censored", "r_multiple": r - cost_r,
-            "exit_reason": "time", "bars_held": len(bars_after)}
+            "exit_reason": "time", "bars_held": held}
 
 
 def size_notional(equity: float, risk_dist: float, entry: float):
