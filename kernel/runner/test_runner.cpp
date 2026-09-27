@@ -3473,6 +3473,90 @@ int main() {
                   std::string::npos,
               "rg-regressed-alert");
     }
+    // LR. Logical remainder identity (doc 06 sec. 6.1b): the chain
+    // records the LOGICAL request, never the broker-capped send.
+    // Primary 100, first send capped to broker need 20 (404 ->
+    // reuse, send 20, chain still says 100); later need 60 with
+    // 20 landed terminal -> the same incident closes the rest
+    // (remainder 80, send 60). A capped send must never rewrite
+    // the recorded request (old code conflicted the chain here
+    // and froze instead of converging).
+    {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "lr-recover");
+        g_kill.drift_unresolvable = true;  // HARD
+        g_positions.push_back(MkPos("AAPL", 100));
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 PlainReply("accepted", "0").c_str());
+        Check(!g.Cycle(g_now), "lr-hard1");
+        Check(CountMethod("POST", "/v2/orders") == 1,
+              "lr-primary-sent");
+        char hid[64];
+        std::snprintf(hid, sizeof(hid), "hard-%lld-AAPL",
+                        g_now);
+        Check(ReadWhole(r.dir + "/hard-chain.txt").find(
+                  std::string(hid) + " 100 0") !=
+                  std::string::npos,
+              "lr-chain-logical");
+        // Restart: broker need only 20, primary still unlanded
+        // (404) -> same identity sends 20, chain keeps 100.
+        G0Runner g2(r.cfg, r.deps);
+        Check(g2.Recover(nullptr), "lr-recover2");
+        g_positions.clear();
+        g_positions.push_back(MkPos("AAPL", 20));
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 PlainReply("accepted", "0").c_str());
+        Check(!g2.Cycle(g_now), "lr-hard2");
+        Check(CountMethod("POST", "/v2/orders") == 2,
+              "lr-capped-send");
+        bool qty20 = false;
+        for (std::size_t i = 0; i < g_log.size(); ++i) {
+            if (g_log[i].method == "POST" &&
+                g_log[i].body.find("\"qty\":\"20\"") !=
+                    std::string::npos)
+                qty20 = true;
+        }
+        Check(qty20, "lr-send-20");
+        Check(ReadWhole(r.dir + "/hard-chain.txt").find(
+                  std::string(hid) + " 100 0") !=
+                  std::string::npos,
+              "lr-chain-still-logical");
+        // Restart: broker need 60, primary landed 20 terminal ->
+        // remainder 80 under a new identity, send capped to 60.
+        G0Runner g3(r.cfg, r.deps);
+        Check(g3.Recover(nullptr), "lr-recover3");
+        g_positions.clear();
+        g_positions.push_back(MkPos("AAPL", 60));
+        PushRule("GET", "by_client_order_id", 200,
+                 HeldReply("filled", "20").c_str());
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 PlainReply("accepted", "0").c_str());
+        Check(!g3.Cycle(g_now), "lr-hard3");
+        Check(CountMethod("POST", "/v2/orders") == 3,
+              "lr-remainder-sent");
+        bool qty60 = false;
+        int posts = 0;
+        for (std::size_t i = 0; i < g_log.size(); ++i) {
+            if (g_log[i].method != "POST") continue;
+            if (++posts < 3) continue;
+            if (g_log[i].body.find("\"qty\":\"60\"") !=
+                std::string::npos)
+                qty60 = true;
+        }
+        Check(qty60, "lr-send-60");
+        char rid[64];
+        std::snprintf(rid, sizeof(rid), "hard-%lld-AAPL-80",
+                        g_now);
+        Check(ReadWhole(r.dir + "/hard-chain.txt").find(
+                  std::string(rid) + " 80 0") !=
+                  std::string::npos,
+              "lr-remainder-logical");
+    }
     // CW. Chain write-ahead ENFORCED (doc 06 sec. 6.1b): the
     // chain file is unwritable -> the POST never flies (freeze +
     // refuse, exactly zero POSTs). Filesystem fault injection

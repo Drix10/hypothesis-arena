@@ -1337,6 +1337,13 @@ bool G0Runner::HardCloseOnce(const char* symbol, long long qty,
     }
     std::string id = hid ? hid : "";
     long long need = qty;
+    // Logical remainder vs broker-capped send: the chain identity
+    // owns the LOGICAL quantity (what this incident must still
+    // close); each POST sends min(logical, current broker need).
+    // A stranded partial send converges by re-pre-flight under
+    // the SAME identity — never a second identity for one
+    // remainder, never a broker-capped request recorded as truth.
+    long long logical = qty;
     for (int round = 0; round < 4; ++round) {
         char hcoid[65] = {0};
         if (id.empty() || !broker::MakeClientOrderId(
@@ -1366,28 +1373,51 @@ bool G0Runner::HardCloseOnce(const char* symbol, long long qty,
                           now_ns);
         if (!pre.found) {
             // Write-ahead ENFORCED: the chain owns this request
-            // before the POST flies (a crash between note and
-            // POST restarts into this same 404 and notes an
-            // idempotent duplicate row, then sends the same
-            // identity once). A failed note freezes + refuses —
-            // chain truth must exist before the close flies.
-            if (!NoteHardChain(id.c_str(), need, 0)) {
-                OpsRow("drift-directive",
-                       scope_intent ? scope_intent : "runner",
-                       "hard-chain-unwritable", now_ns);
-                Alert(P("alerts.jsonl").c_str(), "HARD",
-                      "hard-chain-unwritable",
-                      scope_intent ? scope_intent : "", now_ns);
-                FreezeAdd(P("freeze.txt").c_str(), symbol);
-                return false;
+            // before the POST flies. The recorded request is the
+            // LOGICAL remainder — never the broker-capped send.
+            // An existing tag reuses its recorded request (chain
+            // truth is immutable): at most an exact-duplicate row
+            // is appended as crash-retry evidence, never a
+            // conflicting request. A failed note freezes + refuses.
+            long long req = 0, attr = 0;
+            bool have = HardChainState(id.c_str(), &req, &attr);
+            if (!have) {
+                req = logical;
+                if (!NoteHardChain(id.c_str(), req, 0)) {
+                    OpsRow("drift-directive",
+                           scope_intent ? scope_intent : "runner",
+                           "hard-chain-unwritable", now_ns);
+                    Alert(P("alerts.jsonl").c_str(), "HARD",
+                          "hard-chain-unwritable",
+                          scope_intent ? scope_intent : "", now_ns);
+                    FreezeAdd(P("freeze.txt").c_str(), symbol);
+                    return false;
+                }
+            } else if (attr == 0 && req == logical) {
+                // Crash-retry evidence only: the exact row already
+                // on file is re-noted (idempotent duplicate), so a
+                // note-then-POST-fail restart leaves the same
+                // proof it would have left before.
+                if (!NoteHardChain(id.c_str(), req, 0)) {
+                    OpsRow("drift-directive",
+                           scope_intent ? scope_intent : "runner",
+                           "hard-chain-unwritable", now_ns);
+                    Alert(P("alerts.jsonl").c_str(), "HARD",
+                          "hard-chain-unwritable",
+                          scope_intent ? scope_intent : "", now_ns);
+                    FreezeAdd(P("freeze.txt").c_str(), symbol);
+                    return false;
+                }
             }
+            long long send = (req < need) ? req : need;
             broker::CloseResult c =
-                adapter_.MarketClose(symbol, need, eside, hcoid);
+                adapter_.MarketClose(symbol, send, eside, hcoid);
             char tb[280];
             std::snprintf(tb, sizeof(tb),
-                            "hard-close id=%s sent=%d qty=%lld",
+                            "hard-close id=%s sent=%d "
+                            "logical=%lld qty=%lld",
                             id.c_str(),
-                            c.transport_ok ? 1 : 0, need);
+                            c.transport_ok ? 1 : 0, req, send);
             OpsRow("drift-directive",
                    scope_intent ? scope_intent : "runner", tb,
                    now_ns);
@@ -1522,6 +1552,8 @@ bool G0Runner::HardCloseOnce(const char* symbol, long long qty,
                now_ns);
         id = id2;
         need = send;
+        logical = rem;  // the new identity owns the full logical
+                        // remainder; the next POST caps it again
     }
     OpsRow("drift-directive", scope_intent ? scope_intent : "runner",
            "hard-close remainder-exhausted", now_ns);
