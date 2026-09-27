@@ -3320,7 +3320,19 @@ bool G0Runner::Cycle(long long now_ns) {
         while (budget > 0) {
             int n = deps_.stream_read(deps_.stream_ctx, buf,
                                       (int)sizeof(buf));
-            if (n <= 0) break;
+            // Transport contract: 0 <= n <= sizeof(buf). A
+            // negative or overlong return is a real feed fault
+            // (loud journal + alert, never silent no-data, never
+            // an over-read of the stack buffer).
+            if (n < 0 || n > (int)sizeof(buf)) {
+                OpsRow("drift-directive", "runner",
+                       "stream-read-fault", now_ns);
+                Alert(P("alerts.jsonl").c_str(), "FEED",
+                      "stream-read-fault", "bad read length",
+                      now_ns);
+                break;
+            }
+            if (n == 0) break;
             sse_.Feed(buf, (std::size_t)n);
             budget -= n;
         }

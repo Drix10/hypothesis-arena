@@ -82,7 +82,12 @@ static int CountMethod(const char* m, const char* psub) {
 
 static std::string g_stream;
 static std::size_t g_stream_off = 0;
+static int g_stream_fault = 0;  // !=0: transport contract
+                                // violator — return this instead
+                                // of stream bytes (5000 = overlong,
+                                // -1 = negative)
 static int FakeStream(void*, char* buf, int n) {
+    if (g_stream_fault != 0) return g_stream_fault;
     if (g_stream_off >= g_stream.size()) return 0;
     std::size_t left = g_stream.size() - g_stream_off;
     int take = (int)((left < (std::size_t)n) ? left : (std::size_t)n);
@@ -337,6 +342,7 @@ struct Rig {
         g_log.clear();
         g_stream.clear();
         g_stream_off = 0;
+        g_stream_fault = 0;
         g_kill = jev::kill::KillInputs();
         g_now = 1800000000000000000LL;
         g_positions.clear();
@@ -605,6 +611,31 @@ int main() {
         w.Feed(("data: " + big + "\n\n").c_str(), big.size() + 9);
         jev::runner::SseEvent e4;
         Check(!w.Next(&e4) && w.errors() == 1, "sse-overlong");
+        // Event-level envelope: individually-legal data: lines
+        // accumulating past 8 KiB reject + resync (never
+        // materialize unbounded memory before the blank line).
+        jev::runner::SseParser vo;
+        std::string vline(4000, 'y');
+        std::string vchunk = "data: " + vline + "\n";
+        for (int i = 0; i < 4; ++i)
+            vo.Feed(vchunk.c_str(), vchunk.size());
+        vo.Feed("\n", 1);
+        jev::runner::SseEvent e5;
+        Check(!vo.Next(&e5) && vo.errors() >= 1,
+              "sse-envelope");
+        // Just under the envelope still dispatches (the 2048
+        // application cap is MapTradeEvent's job, not the
+        // parser's).
+        jev::runner::SseParser vu;
+        std::string vline2(4000, 'z');
+        std::string vok =
+            "event: fill\ndata: " + vline2 + "\ndata: " +
+            vline2 + "\n\n";
+        vu.Feed(vok.c_str(), vok.size());
+        jev::runner::SseEvent e6;
+        Check(vu.Next(&e6) && e6.type == "fill" &&
+                  e6.data.size() == 8001,
+              "sse-envelope-ok");
         // Classification: fill/life/bust/unknown/untagged.
         // Payloads use the real trade-event shape: per-event qty
         // beside the nested order object carrying the CUMULATIVE
@@ -4780,6 +4811,34 @@ int main() {
         }
         Check(qty60, "sr-remainder-60");
         Check(!qty100again, "sr-never-stale-100");
+    }
+    // FT. Stream transport contract (doc 06 sec. 6.1b): a
+    // negative or overlong stream_read return is a real feed
+    // fault (loud journal + alert, cycle continues) — never
+    // silent no-data, never an over-read of the stack buffer.
+    {
+        Rig r;
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "ft-recover");
+        g_stream_fault = 5000;
+        Check(g.Cycle(g_now), "ft-cycle-huge");
+        Check(ReadWhole(r.dir + "/alerts.jsonl")
+                      .find("stream-read-fault") !=
+                  std::string::npos,
+              "ft-huge-alert");
+        g_stream_fault = 0;
+    }
+    {
+        Rig r;
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "ft-recover2");
+        g_stream_fault = -1;
+        Check(g.Cycle(g_now), "ft-cycle-negative");
+        Check(ReadWhole(r.dir + "/alerts.jsonl")
+                      .find("stream-read-fault") !=
+                  std::string::npos,
+              "ft-negative-alert");
+        g_stream_fault = 0;
     }
     if (g_fail == 0)
         std::printf("RUNNER SUITE: ALL PASS (%d checks)\n", g_count);

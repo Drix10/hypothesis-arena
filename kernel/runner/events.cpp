@@ -189,9 +189,19 @@ void SseParser::CommitLine(const std::string& ln) {
     } else if (ln.compare(0, 5, "data:") == 0) {
         std::string v = ln.substr(5);
         if (!v.empty() && v[0] == ' ') v = v.substr(1);
-        if (have_data_) data_ += "\n";
-        data_ += v;
-        have_data_ = true;
+        // Event-level envelope: lines are individually capped by
+        // the 4096 line resync, but data: lines accumulate across
+        // the event — thousands of them would materialize
+        // unbounded memory before the terminating blank line (and
+        // before MapTradeEvent's 2048 application cap). Reject +
+        // resync through the existing overlong machinery.
+        if (data_.size() + v.size() + 1 > 8192) {
+            dropped_ = true;
+        } else {
+            if (have_data_) data_ += "\n";
+            data_ += v;
+            have_data_ = true;
+        }
     }
 }
 
