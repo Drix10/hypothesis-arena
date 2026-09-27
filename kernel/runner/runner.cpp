@@ -1621,8 +1621,51 @@ bool G0Runner::HardCloseOnce(const char* symbol, long long qty,
             // truth is immutable): at most an exact-duplicate row
             // is appended as crash-retry evidence, never a
             // conflicting request. A failed note freezes + refuses.
+            // BURNED identity (doc 06 sec. 6.1b): a 404 on an id
+            // whose chain row already carries attributed fills
+            // means the broker settled/purged it — the tag is
+            // single-use and must NEVER POST again. Transition to
+            // the remainder identity (rem = requested -
+            // attributed; rem <= 0 refuses with the
+            // chain-satisfied alert) and pre-flight THAT; the
+            // burned row keeps its immutable original request.
             long long req = 0, attr = 0;
             bool have = HardChainState(id.c_str(), &req, &attr);
+            if (have && attr > 0) {
+                long long rem = req - attr;
+                if (rem <= 0) {
+                    OpsRow("drift-directive",
+                           scope_intent ? scope_intent : "runner",
+                           "hard-chain-satisfied-broker-open",
+                           now_ns);
+                    Alert(P("alerts.jsonl").c_str(), "HARD",
+                          "hard-chain-satisfied-broker-open",
+                          scope_intent ? scope_intent : "", now_ns);
+                    return false;
+                }
+                std::string id2 =
+                    HardRemainderTag(epoch, symbol, rem);
+                if (id2 == id) {
+                    OpsRow("drift-directive",
+                           scope_intent ? scope_intent : "runner",
+                           "hard-close remainder-stuck", now_ns);
+                    FreezeAdd(P("freeze.txt").c_str(), symbol);
+                    return false;
+                }
+                char bb[280];
+                std::snprintf(bb, sizeof(bb),
+                                "hard-close burned %s -> %s "
+                                "chain=%lld attributed=%lld",
+                                id.c_str(), id2.c_str(), req,
+                                attr);
+                OpsRow("drift-directive",
+                       scope_intent ? scope_intent : "runner", bb,
+                       now_ns);
+                id = id2;
+                need = (rem < need) ? rem : need;
+                logical = rem;
+                continue;  // pre-flight the remainder identity
+            }
             if (!have) {
                 req = logical;
                 if (!NoteHardChain(id.c_str(), req, 0)) {

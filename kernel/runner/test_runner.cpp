@@ -3684,6 +3684,74 @@ int main() {
                   std::string::npos,
               "lr-remainder-logical");
     }
+    // BI. Burned hard identity (doc 06 sec. 6.1b): a 404 on an
+    // id whose chain row already carries attributed fills must
+    // NEVER POST that tag again (single-use). Restart shape:
+    // primary requested=100, attributed=40, broker primary=404
+    // -> zero POSTs under the primary; the close continues
+    // under hard-<epoch>-AAPL-60 (send capped to 60).
+    {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "bi-recover");
+        char hid[64];
+        std::snprintf(hid, sizeof(hid), "hard-%lld-AAPL",
+                        g_now);
+        char inc[64];
+        std::snprintf(inc, sizeof(inc), "%lld\n", g_now);
+        WriteFile(r.dir + "/HALT", "HALT\n");
+        WriteFile(r.dir + "/hard-incident.txt", inc);
+        WriteFile(r.dir + "/hard-chain.txt",
+                  std::string(hid) + " 100 40\n");
+        g_kill.drift_unresolvable = true;  // HARD
+        g_positions.push_back(MkPos("AAPL", 100));
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 PlainReply("accepted", "0").c_str());
+        Check(!g.Cycle(g_now), "bi-hard");
+        Check(CountMethod("POST", "/v2/orders") == 1,
+              "bi-one-post");
+        char rid[64];
+        std::snprintf(rid, sizeof(rid), "hard-%lld-AAPL-60",
+                        g_now);
+        char ph[65] = {0}, rh[65] = {0};
+        Check(jev::broker::MakeClientOrderId(
+                  r.cfg.venue.broker, r.cfg.venue.account,
+                  r.cfg.venue.context_hash, "AAPL",
+                  jev::broker::OrderSide::SELL, hid, ph),
+              "bi-primary-hcoid");
+        Check(jev::broker::MakeClientOrderId(
+                  r.cfg.venue.broker, r.cfg.venue.account,
+                  r.cfg.venue.context_hash, "AAPL",
+                  jev::broker::OrderSide::SELL, rid, rh),
+              "bi-remainder-hcoid");
+        bool saw_prim = false, saw_rem = false, qty60 = false;
+        for (std::size_t i = 0; i < g_log.size(); ++i) {
+            if (g_log[i].method != "POST" ||
+                g_log[i].path.find("/v2/orders") ==
+                    std::string::npos)
+                continue;
+            if (g_log[i].body.find(ph) != std::string::npos)
+                saw_prim = true;
+            if (g_log[i].body.find(rh) != std::string::npos)
+                saw_rem = true;
+            if (g_log[i].body.find("\"qty\":\"60\"") !=
+                std::string::npos)
+                qty60 = true;
+        }
+        Check(!saw_prim, "bi-no-primary-post");
+        Check(saw_rem, "bi-remainder-post");
+        Check(qty60, "bi-send-60");
+        std::string ch = ReadWhole(r.dir + "/hard-chain.txt");
+        Check(ch.find(std::string(hid) + " 100 40") !=
+                  std::string::npos,
+              "bi-burned-row-immutable");
+        Check(ch.find(std::string(rid) + " 60 0") !=
+                  std::string::npos,
+              "bi-remainder-noted");
+    }
     // XA. Adopt crash ordering (doc 06 sec. 6.1b): durable entry
     // attribution lands BEFORE the EXIT counters persist. An exit
     // persist failure therefore leaves entries durably attributed
