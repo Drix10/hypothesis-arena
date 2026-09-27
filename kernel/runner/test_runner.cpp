@@ -15,6 +15,7 @@
 #include <sys/types.h>
 #include <string>
 #include <thread>
+#include <atomic>
 #include <vector>
 
 #include "../broker/alpaca_paper.hpp"
@@ -5451,18 +5452,27 @@ int main() {
     // with no shared arbiter, so this race genuinely contends
     // on the OS primitive (a PID-file check-then-act would let
     // both through). Which taker wins varies; the XOR does not.
+    // Barrier rendezvous: without it, thread-startup latency
+    // can serialize the attempts (the second starts after the
+    // first fully released — a legitimate takeover, not
+    // contention), making the XOR vacuous. The barrier forces
+    // genuine overlap: both flock while the other is
+    // microseconds away, so the kernel always has two live
+    // contenders to serialize.
     {
         Rig r;
         WriteFile(r.dir + "/runner.lock", "2147483647");
         bool ok1 = false, ok2 = false;
-        std::thread t1([&] {
+        std::atomic<int> arrived{0};
+        auto race = [&](bool* ok) {
             G0Runner g(r.cfg, r.deps);
-            ok1 = g.Recover(nullptr);
-        });
-        std::thread t2([&] {
-            G0Runner g(r.cfg, r.deps);
-            ok2 = g.Recover(nullptr);
-        });
+            ++arrived;
+            while (arrived.load() < 2) {
+            }
+            *ok = g.Recover(nullptr);
+        };
+        std::thread t1([&] { race(&ok1); });
+        std::thread t2([&] { race(&ok2); });
         t1.join();
         t2.join();
         Check(ok1 != ok2, "lk2-exactly-one-owner");
@@ -5473,7 +5483,9 @@ int main() {
     // journal chain stays valid. A refusing contender carries
     // a fresh next_seq_/genesis — appending it would fork the
     // owned chain — so refusal is stderr-only (no journal row,
-    // no alert write, no file touch).
+    // no alert write, no file touch). Same barrier rendezvous
+    // as LK2: both contenders must genuinely overlap for the
+    // exactly-one-owner claim to mean contention.
     {
         Rig r;
         std::string cid;
@@ -5482,14 +5494,16 @@ int main() {
                    .empty(),
               "jx-image");
         bool ok1 = false, ok2 = false;
-        std::thread t1([&] {
+        std::atomic<int> arrived{0};
+        auto race = [&](bool* ok) {
             G0Runner g(r.cfg, r.deps);
-            ok1 = g.Recover(nullptr);
-        });
-        std::thread t2([&] {
-            G0Runner g(r.cfg, r.deps);
-            ok2 = g.Recover(nullptr);
-        });
+            ++arrived;
+            while (arrived.load() < 2) {
+            }
+            *ok = g.Recover(nullptr);
+        };
+        std::thread t1([&] { race(&ok1); });
+        std::thread t2([&] { race(&ok2); });
         t1.join();
         t2.join();
         Check(ok1 != ok2, "jx-exactly-one-owner");
