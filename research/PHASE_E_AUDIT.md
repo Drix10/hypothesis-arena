@@ -3084,3 +3084,68 @@ proven where relevant. Hosted CI pending at push time; stdlib
 collector step expected to remain the (pre-existing, frozen)
 failure — workflow must keep being reported as failed, never
 green. P3.5 still OPEN (human close); G0 NOT STARTED.
+
+## Addendum 127 - Re-audit round-2: five seams with regressions
+Plan 59124fc, code 97244aa/6d00eaa/4990d91/0a9390f/4dcd6ac (one
+theme each). Router core zero-diff (verified
+207e59e..HEAD -- kernel/exec/ empty), null transport kept
+(main.cpp transport null), no G0/live ordering. Local: router
+209 + runner 916 + broker 125, normal + hardened + freeze PASS,
+zero litter, diff-check clean; binary-level huge-cycles run
+exits 2.
+1. P0 burned identity: 404 on a chain row with attr > 0 NEVER
+POSTs that tag again — transitions to
+hard-<epoch>-<SYM>-<rem> (rem = requested - attributed, rem <=
+0 takes the chain-satisfied alert), pre-flights the remainder
+identity, sends only under it; the burned row keeps its
+immutable request. Chained burns strictly decrease under the
+4-round cap (plus the remainder-stuck guard). Regression BI
+(restart: 100/40 + primary 404 -> zero POSTs under primary,
+POST under -60 with qty 60, rows "100 40" + "60 0").
+2. P0/P1 OS lock: flock(LOCK_EX|NB) / exclusive
+FILE_SHARE_READ handle, held open by the winning instance,
+PID file diagnostic-only (written through the held handle).
+Same-thread re-entry via a per-thread hold set (no shared
+state, no mutex — the kernel primitive stays the sole
+arbiter); foreign threads contend and lose. Destructor
+closes + unregisters (no fd leak, no undeletable lock files
+— an early leak shape littered every sandbox and was fixed
+before commit). No-share was also tried and reverted: it
+blocked our own diagnostic reads. Regression LK2 (two threads
+race one stale lock -> exactly one owner, stable over
+repeat runs) alongside the intact LK stale-takeover asserts.
+Residual, documented: if a winning instance is destroyed
+while a same-process re-entrant still cycles, the re-entrant
+runs on memory-only hold (shared fate in-process; the
+one-writer rule targets processes). PID-write failure is
+best-effort (ownership unaffected).
+3. P1 MEDIUM FSM: present-regular non-empty unknown content,
+or present-but-unreadable, refuses + alerts
+(medium-fsm-unknown), never mints over it. Absent-or-empty
+keeps the fresh/mint-retry path (the mint-revert "" shape
+still retries — FL suite green). Regression MF (GARBAGE
+untouched, unknown alert, no medium-enter).
+4. P1 freeze readability: ABSENT = empty set, CORRUPT =
+frozen (as before), REGULAR-but-unreadable = frozen (was:
+not-frozen). Regression FZ at unit level (absent/other/
+listed + POSIX chmod-000 shape, Windows-guarded with cause:
+chmod is not a read barrier there; hosted Linux runs it).
+5. P1 cycles overflow + HALT honesty: ParseCycles (store,
+unit-tested: 0/42/cap/empty/LLONG_MAX-exact pass,
+max+1/huge/nondigit/null refuse) wired into main (legacy
+empty = unbounded preserved); binary huge-number run exits
+2. HardStop comment corrected to the real lifecycle (latch +
+unproven + nonzero exit, supervisor owns recovery — no
+in-process retry exists in main).
+Stdlib provenance (auditor request): test_pipeline.py +
+classify.py byte-identical since 6fca6eb (2026-09-23); the
+red (`STALE/archaeology` at test_pipeline.py:145) is
+calendar-manifested — hardcoded 2026-09-18 record vs the
+7-day is_archaeology rule (age 5d on 9-23 = CONTEXT, 8d now
+= STALE). The CODE predates 207e59e; a red RUN before it
+cannot be proven. Verdict: UNRESOLVED, not weakened, human
+call (relative test dates) on the frozen collector.
+Status: all five items fixed with regressions. Hosted CI
+pending at push time; stdlib expected red (above) — the
+workflow must keep being reported as failed, never green.
+P3.5 still OPEN (human close); G0 NOT STARTED.
