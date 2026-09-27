@@ -140,6 +140,11 @@ broker-need)`; zero need sends nothing). Per-id attribution is exact
 EXIT adoption attributes only beyond the slot's own
 `exit_counted_qty` (the router's per-current-order memory) and
 bumps it — an already-counted cumulative fill never folds twice.
+A broker `filled_qty` REGRESSION below chain-attributed quantity
+is classified (journal + alert, drift owns the anomaly) and the
+remainder floors at the chain (`req - already`, never `req -
+regressed-filled`): a regressing observation can never
+manufacture a larger replacement remainder.
 - HARD chain write-ahead enforcement: `NoteHardChain` returns
 success/failure and a failed chain write PREVENTS the POST (freeze
 + alert + refuse — chain truth must exist before the close flies).
@@ -154,10 +159,18 @@ file, not "last row wins" — requested quantity per tag is immutable,
 attributed is monotonically nondecreasing, 0 <= attributed <=
 requested, no malformed records, no conflicting requested values,
 no silent skipping of bad rows (exact-duplicate rows are idempotent
-crash-retry evidence, not conflicts). Existence checks mean
+crash-retry evidence, not conflicts). Chain rows parse as strict
+single-space `<tag> <requested> <attributed>` with overflow-safe
+bounded decimal conversion (never scanf-family conversion on
+persisted numeric text). Existence checks mean
 regular-file on every platform (stat-converged: a directory in
 place of a state file reads as missing/genesis, never as
-valid-empty content, on Windows and POSIX alike). Any violation fails the HARD
+valid-empty content, on Windows and POSIX alike). `hard-chain.txt`
+additionally carries a hard byte envelope (64 KiB): oversized input
+refuses before materializing rows, so millions of duplicate rows
+can never drive unbounded memory (the live journal keeps its own
+lifecycle contract and is tracked separately as an operational
+scaling item, never silently rotated). Any violation fails the HARD
 path closed (freeze + alert + refuse), never a broker-derived
 substitute quantity.
 - HARD attribution durability: slot accounting persists BEFORE the
@@ -172,6 +185,27 @@ alerts + refuses with books exactly as before the attempt, so the
 next pre-flight reconstructs the same portion exactly once. The
 un-advanced chain plus the old snapshots ARE the fail-closed
 recovery state — no second source, no broker-derived fill-in.
+- Seam numeric parsing is overflow-safe everywhere broker or
+file text becomes a quantity: stream `filled_qty` accumulates with
+a reject-before-overflow bound (inputs above the share cap refuse
+before arithmetic can overflow); epoch files parse with the same
+checked conversion (oversized/overflowed epoch text refuses).
+- Position snapshots are contract-checked: every
+`list_positions(..., cap)` return must satisfy `0 <= n <= cap`;
+any other count is an unavailable snapshot (unknown/failure down
+the caller's existing fail-closed branch), never an index past
+the fixed buffer — a bad Phase-4 adapter cannot drive an
+over-read.
+- Cursor durability fails closed: a failed `cursor.txt` write
+journals + alerts, keeps the dirty bit, and fails the cycle
+under the same contract as a failed day-roll (never a silent
+clear that reports success while losing the replay position).
+- Incident epochs are durable-or-nothing: `MintMediumEpoch` and
+`HardEpochFor` mint no identity unless the epoch file write
+succeeds (failure returns no-epoch; callers stop the incident
+path and, for MEDIUM, revert the FSM so the next cycle retries
+the mint). The clock-stuck `old + 1` fallback refuses at
+`LLONG_MAX` instead of overflowing.
 - MEDIUM teardown certification: clearing an incident requires
 BROKER-CONFIRMED flat (seam present + query ok + all zero) AND
 (local flat or file == FLATTENED). Missing/failing seam =
