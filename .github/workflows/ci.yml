@@ -105,10 +105,13 @@ jobs:
         run: /tmp/triage_runner
       # TEMP-TRIAGE (revert): bracket the first failure.
       - name: triage slice 140
+        if: always()
         run: G0_STOP_AFTER=140 /tmp/triage_runner
       - name: triage slice 340
+        if: always()
         run: G0_STOP_AFTER=340 /tmp/triage_runner
       - name: triage slice 540
+        if: always()
         run: G0_STOP_AFTER=540 /tmp/triage_runner
       - name: deterministic kernel gates
         run: bash kernel/build.sh
