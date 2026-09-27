@@ -2875,3 +2875,62 @@ credentials, real G0 STAGE bootstrap, out-of-band alert adapter.
 H2 stays downstream per sec. 13.5. P3.5 OPEN (human close); G0
 NOT STARTED. Final engineering close candidate — no further
 code pass proposed before the Phase-4 wiring gate.
+
+## Addendum 124 - Chain durability pass (P0 write-ahead, P1 validation, slot persistence)
+Plan 9e92c05, code 2a92ac4, lifetime fix b9b990c, regular-file
+fix 3a97819. Router core untouched, null transport kept. Local:
+runner 660, broker 125, router 209, both modes + freeze PASS.
+Hosted: kernel/plane/evidence SUCCESS, stdlib FAILURE
+(pre-existing collector step on the frozen collector — workflow
+overall FAILURE, reported as such).
+1. P0 write-ahead enforced: NoteHardChain returns bool; a failed
+chain write prevents the POST (freeze + alert + refuse). The
+`orig = need` fallback is deleted: a broker-known hard id with
+no valid chain row is an integrity failure (freeze + refuse),
+never reconstructed from broker need. Crash between note and
+POST restarts into 404 and sends the same identity once
+(duplicate rows are idempotent evidence); crash after POST
+restarts into adoption. Regressions CW (unwritable chain ->
+zero POSTs + freeze), CX (deleted chain on sent id -> refuse,
+never mint-from-need), CY (note-then-500 -> same coid once,
+idempotent duplicate rows), CZ (chain-present adoption, zero
+new POSTs).
+2. P1 chain validation: ScanChain validates the whole file —
+requested immutable per tag, attributed monotonic
+nondecreasing, 0 <= attributed <= requested, no malformed rows,
+no conflicting requested, no silent skips. Violation freezes +
+refuses. Regression CV x4 (regression/garbage/conflict/over).
+Integrity gate runs before any broker interrogation.
+3. Attribution durability: AttributeClosedQty is two-phase
+(compute takes, mutate+persist per slot, rollback in-memory +
+durable on any failure) and returns bool; the HARD path notes
+the chain only after all slot persists succeed, and rolls slots
+back exactly (per-slot take scratch) when the chain note
+itself fails. HardAdoptExit persists the exit slot first, then
+attributes. Non-HARD callers journal on failure and retry.
+Regression CD (persist failure -> books exactly as before:
+chain (hid,100,0), open 100, zero POSTs; fault cleared ->
+restart converges to exactly open 60, chain 40, one 60-share
+remainder). Residual, documented: a power-loss crash strictly
+between the slot persists and the chain note restarts into a
+re-derivation over already-reduced opens (bounded, forensic
+close-attributed journal rows attest); single-fault injected
+cases are all exact.
+Portability incident (found by hosted CI, fixed here):
+POSIX fopen succeeds on directories while Windows refuses, so
+the new strict readers diverged (Linux treated a directory as
+unreadable-failure where Windows treated it as missing).
+FileExists now means regular-file on both (stat/_stat), and
+ReadLines reports read errors instead of empty-success — the
+eb emergency-buffer test failed on Linux only (DailyOps verify
+refused a directory journal; Windows read it as genesis).
+Fixed + proven by hosted kernel SUCCESS. Also fixed in passing:
+a dangling chain-path pointer (temporary lifetime) in the new
+chain readers, and test 39 now carries its chain row (a
+sent-but-unacked close always leaves write-ahead evidence).
+Status: chain write-ahead, chain integrity, and attribution
+durability proven. P3.5 correctness/drill side ready for human
+close; Phase-4 wiring (live WS adapter, position/account
+endpoints, runtime credentials, real G0 STAGE, out-of-band
+alerts) is the remaining gate. H2 stays downstream per
+sec. 13.5. P3.5 OPEN (human close); G0 NOT STARTED.

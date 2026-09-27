@@ -154,7 +154,10 @@ file, not "last row wins" — requested quantity per tag is immutable,
 attributed is monotonically nondecreasing, 0 <= attributed <=
 requested, no malformed records, no conflicting requested values,
 no silent skipping of bad rows (exact-duplicate rows are idempotent
-crash-retry evidence, not conflicts). Any violation fails the HARD
+crash-retry evidence, not conflicts). Existence checks mean
+regular-file on every platform (stat-converged: a directory in
+place of a state file reads as missing/genesis, never as
+valid-empty content, on Windows and POSIX alike). Any violation fails the HARD
 path closed (freeze + alert + refuse), never a broker-derived
 substitute quantity.
 - HARD attribution durability: slot accounting persists BEFORE the
