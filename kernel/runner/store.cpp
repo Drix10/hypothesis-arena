@@ -317,8 +317,12 @@ bool FreezeHas(const char* path, const char* symbol) {
     // Fail-closed frozen: a corrupt freeze node freezes everything
     // (freeze = wait) rather than reading as an empty set.
     if (StatPath(path) == PathKind::CORRUPT) return true;
+    // ABSENT reads as the empty set; a present-but-unreadable
+    // regular file fails closed (frozen) — an unknowable freeze
+    // state must never read as "not frozen" (doc 06 sec. 6.1b).
+    if (StatPath(path) == PathKind::ABSENT) return false;
     std::vector<std::string> lns;
-    if (!ReadLines(path, &lns)) return false;  // missing = empty set
+    if (!ReadLines(path, &lns)) return true;
     for (std::size_t i = 0; i < lns.size(); ++i) {
         if (lns[i] == symbol) return true;
     }

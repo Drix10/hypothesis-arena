@@ -4575,6 +4575,29 @@ int main() {
         Check(!g.Recover(&rsn), "pk-journal-refused");
         RmDir(r.dir + "/journal.jsonl");
     }
+    // FZ. Freeze readability (doc 06 sec. 6.1b): ABSENT reads as
+    // the empty set; a present-but-unreadable regular freeze file
+    // fails closed (frozen). The unreadable shape is POSIX-only
+    // (chmod 000 is not a read barrier on Windows).
+    {
+        Rig r;
+        std::string fp = r.dir + "/freeze.txt";
+        Check(!jev::runner::FreezeHas(fp.c_str(), "AAPL"),
+              "fz-absent-empty");
+        WriteFile(fp, "ZZZ");
+        Check(!jev::runner::FreezeHas(fp.c_str(), "AAPL"),
+              "fz-other-symbol");
+        Check(jev::runner::FreezeHas(fp.c_str(), "ZZZ"),
+              "fz-listed-frozen");
+#ifndef _WIN32
+        Check(::chmod(fp.c_str(), 0000) == 0, "fz-chmod");
+        Check(jev::runner::FreezeHas(fp.c_str(), "AAPL"),
+              "fz-unreadable-frozen");
+        Check(::chmod(fp.c_str(), 0600) == 0, "fz-restore");
+#endif
+        Check(!jev::runner::FreezeHas(fp.c_str(), "AAPL"),
+              "fz-readable-again");
+    }
     {
         // HALT-as-dir counts as halted: entries refused.
         Rig r;
