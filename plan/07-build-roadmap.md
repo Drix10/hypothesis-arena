@@ -225,7 +225,10 @@ G0 integration → paper evidence.
       RELEASED at `1d22f01` (cid unforgable: init=False, 12-field recipe unchanged).
 - [ ] S4 JEV v4 candidate-bound contract (v3 frozen replay-only; v4 state carries
       candidate economics; label == trading payoff; family_fit critiques family,
-      never emits BUY/SELL) + validator/table/vectors. IN PROGRESS (re-audit pending).
+      never emits BUY/SELL) + validator/table/vectors. RELEASED at `da61daa`
+      (32 vectors agree Python<->C++; wire/integer/expiry parity; v3 frozen).
+      Follow-ons: v4 CI build-gate amendment; model/revision/provider metadata
+      before production.
 - [ ] S5 paired evaluation (always-take vs filtered-policy delta per candidate;
       pre-registered cluster-aware bootstrap + sequential rule + power study from
       the real candidate stream; absolute economic bar alongside baseline-beats).
