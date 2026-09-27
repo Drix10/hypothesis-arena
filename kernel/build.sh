@@ -122,8 +122,6 @@ g++ $FLAGS -o test_broker broker/test_broker.cpp broker/adapter.cpp broker/alpac
 ./test_broker
 g++ $FLAGS -o test_drills exec/test_drills.cpp exec/router.cpp broker/adapter.cpp broker/alpaca_paper.cpp log/journal.cpp kill/switch.cpp
 ./test_drills
-# TEMP-TRIAGE (revert): early stop for CI failure visibility.
-if [ "${TRIAGE_STOP_BEFORE_RUNNER:-}" = "1" ]; then exit 0; fi
 # H1 integration gate [correctness + drill]: G0 runner — durable
 # journal/snapshots/freeze/STAGE/HALT/alerts, REST+stream reconcile,
 # S2 cadence, emergency buffer, kill flatten, crash recovery
