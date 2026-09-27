@@ -444,7 +444,7 @@ static std::string CrashImage(const std::string& dir, const char* iid,
                               const char* sym, int side01, int kind01,
                               long long qty, int st, long long filled,
                               std::string* cid_out,
-                              const char* bid = "") {
+                              const char* bid = "", int pok = 0) {
     char cid[65];
     if (!jev::broker::MakeClientOrderId(
             "alpaca-paper", "test", std::string(64, 'a').c_str(), sym,
@@ -491,8 +491,8 @@ static std::string CrashImage(const std::string& dir, const char* iid,
     WriteFile(dir + "/intent-" + std::string(iid) + ".txt", iln);
     char snap[320];
     std::snprintf(snap, sizeof(snap),
-                  "H1:%d:%d:%lld:0:0:0:%s:%s:%s:%s:%d::0:0:0:0", st,
-                  kind01, filled, cid, bid ? bid : "", iid, sym,
+                  "H1:%d:%d:%lld:0:%d:0:%s:%s:%s:%s:%d::0:0:0:0", st,
+                  kind01, filled, pok, cid, bid ? bid : "", iid, sym,
                   side01);
     WriteFile(dir + "/snap-" + std::string(iid) + ".txt", snap);
     return cid;
@@ -5215,6 +5215,62 @@ int main() {
         });
         tf2.join();
         Check(fok2, "lr2-released-after-b-destroyed");
+    }
+    // PR. PROTECTED rebuilds live (doc 06 sec. 6.1b): a durable
+    // PROTECTED snapshot + matching intent + terminal journal
+    // fill row restarts into an ACTIVE slot with its economics
+    // intact. CANCELLED / UNKNOWN_FROZEN / CLOSED stay
+    // recovery-terminal; PROTECTED is live everywhere else
+    // (reclamation guard, flatness, netting, HARD management),
+    // so restart must not demote it to slotless. The image
+    // stamps protection_ok (a real PROTECTED machine always
+    // carries it — without it the router fail-closes as a
+    // corrupted machine). The slot then survives a full cycle
+    // (downstream still sees it).
+    {
+        Rig r;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-710", "AAPL", 0, 0,
+                          100, 4, 100, &cid, "", 1)
+                   .empty(),
+              "pr-image");
+        std::vector<jev::journal::Row> pjr;
+        Check(jev::runner::JournalLoad(
+                  (r.dir + "/journal.jsonl").c_str(), &pjr) &&
+                  !pjr.empty(),
+              "pr-jr");
+        jev::journal::Row fr;
+        std::string fbody = "fill sym=AAPL";
+        Check(jev::journal::FormatRow(
+                  pjr.back().seq + 1, 1800000000000000000LL,
+                  "fill", "intent-710",
+                  jev::Sha256Hex(fbody).c_str(),
+                  pjr.back().row_hash.c_str(), &fr),
+              "pr-fill-row");
+        char fln[1024];
+        std::snprintf(fln, sizeof(fln), "%llu|%lld|%s|%s|%s|%s|%s",
+                      (unsigned long long)fr.seq,
+                      (long long)fr.ts_ns, fr.kind.c_str(),
+                      fr.intent_id.c_str(),
+                      fr.payload_hash.c_str(),
+                      fr.prev_hash.c_str(), fr.row_hash.c_str());
+        WriteFile(r.dir + "/journal.jsonl",
+                  ReadWhole(r.dir + "/journal.jsonl") +
+                      std::string(fln) + "\n");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "pr-recover");
+        Check(g.slots() == 1, "pr-one-slot");
+        const auto* s = g.Find("intent-710");
+        Check(s && s->active, "pr-slot-live");
+        Check(s->m.state == jev::exec::RouteState::PROTECTED,
+              "pr-state");
+        Check(s->m.filled_qty == 100, "pr-economics");
+        Check(g.Cycle(g_now), "pr-cycle");
+        const auto* s2 = g.Find("intent-710");
+        Check(s2 &&
+                  s2->m.state ==
+                      jev::exec::RouteState::PROTECTED,
+              "pr-survives-cycle");
     }
     if (g_fail == 0)
         std::printf("RUNNER SUITE: ALL PASS (%d checks)\n", g_count);

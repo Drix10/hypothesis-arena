@@ -534,7 +534,18 @@ bool G0Runner::Recover(const char** reason) {
                 if (reason) *reason = kSnap;
                 return false;
             }
-            if (IsTerminalState(m.state)) continue;
+            // Recovery-terminal: CANCELLED / UNKNOWN_FROZEN /
+            // CLOSED skip rebuild. PROTECTED is NOT
+            // recovery-terminal (doc 06 sec. 6.1b): the runner
+            // treats it as a live position everywhere else
+            // (reclamation guard, flatness, netting, HARD
+            // management), so a durable PROTECTED image rebuilds
+            // as an active slot with its economics intact —
+            // restart must not demote it to slotless.
+            if (m.state == exec::RouteState::CANCELLED ||
+                m.state == exec::RouteState::UNKNOWN_FROZEN ||
+                m.state == exec::RouteState::CLOSED)
+                continue;
             // Binding coherence: the crash image and the intent
             // file must describe the same order.
             if (std::strcmp(m.intent_id, ids[i].c_str()) != 0 ||
