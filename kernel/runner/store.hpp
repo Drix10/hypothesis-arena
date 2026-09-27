@@ -34,6 +34,16 @@ bool AppendLine(const char* path, const char* line);
 bool ParseCycles(const char* text, long long* out);
 // tmp + flush + OS-commit + rename (single-process atomic).
 bool AtomicWrite(const char* path, const char* data);
+// Deterministic write-fault injection (round-4 regression
+// seam — TESTS ONLY, production never calls these,
+// default-off). Fail the Nth upcoming AtomicWrite whose path
+// ends with `suffix` (skip 0 = the next matching write).
+// One-shot per slot: a fired fault disarms itself, and
+// ClearWriteFaults disarms everything (no fault can leak into
+// a later test). Up to 4 faults may be armed at once so a
+// double-failure shape (mint fails AND rollback fails) is expressible deterministically on every platform.
+void InjectWriteFault(const char* suffix, int skip);
+void ClearWriteFaults();
 bool ReadLines(const char* path, std::vector<std::string>* out);
 // Path integrity: absent vs corrupt/non-regular are DISTINCT. A
 // directory/unreadable node must never read as a missing file —

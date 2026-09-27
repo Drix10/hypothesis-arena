@@ -38,7 +38,48 @@ std::string Trim(const std::string& s) {
         --b;
     return s.substr(a, b - a);
 }
+// Write-fault injection slots (see store.hpp): matched by
+// path suffix, countdown decrements only on matching writes,
+// fire-once then disarm. Plain statics: fault tests are
+// single-threaded and faults are always cleared right after,
+// so no concurrent access can occur.
+struct WriteFault {
+    std::string suffix;
+    long skip = -1;  // <0 = disarmed
+};
+WriteFault g_write_faults[4];
+bool ConsumeWriteFault(const char* path) {
+    if (!path) return false;
+    std::string p = path;
+    for (int i = 0; i < 4; ++i) {
+        if (g_write_faults[i].skip < 0) continue;
+        const std::string& sfx = g_write_faults[i].suffix;
+        if (p.size() < sfx.size() ||
+            p.compare(p.size() - sfx.size(), sfx.size(), sfx) !=
+                0)
+            continue;
+        if (g_write_faults[i].skip == 0) {
+            g_write_faults[i].skip = -1;  // one-shot: disarm
+            return true;
+        }
+        --g_write_faults[i].skip;
+    }
+    return false;
+}
 }  // namespace
+void InjectWriteFault(const char* suffix, int skip) {
+    if (!suffix || skip < 0) return;
+    for (int i = 0; i < 4; ++i) {
+        if (g_write_faults[i].skip < 0) {
+            g_write_faults[i].suffix = suffix;
+            g_write_faults[i].skip = skip;
+            return;
+        }
+    }
+}
+void ClearWriteFaults() {
+    for (int i = 0; i < 4; ++i) g_write_faults[i].skip = -1;
+}
 
 // Parse "seq|ts|kind|intent|payload|prev|row" into a Row (strict:
 // exactly 7 fields, then VerifyRow).
@@ -112,6 +153,7 @@ bool AppendLine(const char* path, const char* line) {
 
 bool AtomicWrite(const char* path, const char* data) {
     if (!path || !data) return false;
+    if (ConsumeWriteFault(path)) return false;
     std::string tmp = std::string(path) + ".tmp";
     FILE* f = std::fopen(tmp.c_str(), "wb");
     if (!f) return false;

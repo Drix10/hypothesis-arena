@@ -419,7 +419,11 @@ class G0Runner {
     static std::string HardRemainderTag(long long epoch,
                                         const char* symbol,
                                         long long rem);
-    void MediumPass(long long now_ns);
+    // Returns false when the incident is stranded id-less
+    // (double persistence failure, or ACTIVE with epoch 0):
+    // the caller must fail the cycle loud, never treat the
+    // incident as healthy.
+    bool MediumPass(long long now_ns);
     // Broker-confirmed flat (doc 06 sec. 6.1b teardown rule):
     // seam present + query ok + every position zero. Missing or
     // failing seam is UNKNOWN (false) — never flat. LocalFlat is

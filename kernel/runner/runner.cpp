@@ -2871,7 +2871,7 @@ void G0Runner::UnattributeClosedQty(const char* symbol,
     n_attr_takes_ = 0;
 }
 
-void G0Runner::MediumPass(long long now_ns) {
+bool G0Runner::MediumPass(long long now_ns) {
     // §10.3 MEDIUM + frozen FSM (medium.txt): MEDIUM_ACTIVE ->
     // FLATTEN_PENDING -> FLATTENED | PROTECTION_ONLY. Entries stop
     // at the kill gate; every open position flattens via market
@@ -2888,7 +2888,7 @@ void G0Runner::MediumPass(long long now_ns) {
                now_ns);
         Alert(P("alerts.jsonl").c_str(), "MEDIUM",
               "medium-fsm-corrupt", "", now_ns);
-        return;  // never default a corrupt FSM to a fresh enter
+        return true;  // never default a corrupt FSM to a fresh enter
     }
     if (fr == MediumFsmRead::UNKNOWN) {
         // Present regular file with unknown content — or
@@ -2899,7 +2899,7 @@ void G0Runner::MediumPass(long long now_ns) {
                now_ns);
         Alert(P("alerts.jsonl").c_str(), "MEDIUM",
               "medium-fsm-unknown", "", now_ns);
-        return;
+        return true;
     }
     if (cur.empty()) {
         if (!AtomicWrite(mp.c_str(), "MEDIUM_ACTIVE")) {
@@ -2907,7 +2907,7 @@ void G0Runner::MediumPass(long long now_ns) {
                    "medium-active-unpersisted", now_ns);
             Alert(P("alerts.jsonl").c_str(), "MEDIUM",
                   "medium-active-unpersisted", "", now_ns);
-            return;  // no FSM, no mint: the next cycle retries
+            return true;  // no FSM, no mint: the next cycle retries
         }
         cur = "MEDIUM_ACTIVE";
         // A medium-enter IS a new incident (doc 06 sec. 6.1b):
@@ -2918,8 +2918,19 @@ void G0Runner::MediumPass(long long now_ns) {
         // (an ACTIVE file with no durable epoch would strand the
         // incident id-less).
         if (MintMediumEpoch(now_ns) <= 0) {
-            AtomicWrite(mp.c_str(), "");
-            return;
+            // Mint failure reverts the FSM so the next cycle
+            // retries — but the revert itself is CHECKED: a
+            // failed rollback would strand an id-less ACTIVE
+            // incident, so it fails the cycle HARD and loud
+            // instead of returning success (doc 06 sec. 6.1b).
+            if (!AtomicWrite(mp.c_str(), "")) {
+                OpsRow("reconcile", "runner",
+                       "medium-rollback-unpersisted", now_ns);
+                Alert(P("alerts.jsonl").c_str(), "HARD",
+                      "medium-rollback-unpersisted", "", now_ns);
+                return false;
+            }
+            return true;
         }
         Alert(P("alerts.jsonl").c_str(), "MEDIUM", "medium-enter",
               "entries stopped, flattening", now_ns);
@@ -2929,7 +2940,7 @@ void G0Runner::MediumPass(long long now_ns) {
         // stale (a later incident with the FSM never cleared:
         // clear + fresh enter mints a new epoch; suppression of
         // a real later MEDIUM is the forbidden outcome).
-        if (!MediumHasExposure()) return;
+        if (!MediumHasExposure()) return true;
         if (!ClearMediumFiles()) {
             OpsRow("reconcile", "runner",
                    "medium-clear-unpersisted", now_ns);
@@ -2941,21 +2952,42 @@ void G0Runner::MediumPass(long long now_ns) {
                    "medium-active-unpersisted", now_ns);
             Alert(P("alerts.jsonl").c_str(), "MEDIUM",
                   "medium-active-unpersisted", "", now_ns);
-            return;  // no FSM, no mint: the next cycle retries
+            return true;  // no FSM, no mint: the next cycle retries
         }
         cur = "MEDIUM_ACTIVE";
         if (MintMediumEpoch(now_ns) <= 0) {
             // Exact revert: FLATTENED with no epoch re-runs the
             // re-enter check (exposure gate + mint retry) next
-            // cycle instead of stranding an id-less ACTIVE.
-            AtomicWrite(mp.c_str(), "FLATTENED");
-            return;
+            // cycle instead of stranding an id-less ACTIVE —
+            // and the revert is checked like the fresh-enter
+            // one: a failed revert fails HARD, never healthy.
+            if (!AtomicWrite(mp.c_str(), "FLATTENED")) {
+                OpsRow("reconcile", "runner",
+                       "medium-rollback-unpersisted", now_ns);
+                Alert(P("alerts.jsonl").c_str(), "HARD",
+                      "medium-rollback-unpersisted", "", now_ns);
+                return false;
+            }
+            return true;
         }
         Alert(P("alerts.jsonl").c_str(), "MEDIUM",
               "medium-re-enter",
               "stale FLATTENED, new incident", now_ns);
     }
     long long epoch = MediumEpoch();
+    if (epoch <= 0) {
+        // ACTIVE on disk with no durable epoch (failed mint, or
+        // a lost incident file): this incident is id-less, so it
+        // is NEVER treated as healthy — the sweep below stays
+        // gated and the cycle fails loud every cycle until an
+        // operator removes medium.txt for a fresh re-mint (safe:
+        // nothing was ever sent under an unminted epoch).
+        OpsRow("reconcile", "runner", "medium-epoch-missing",
+               now_ns);
+        Alert(P("alerts.jsonl").c_str(), "HARD",
+              "medium-epoch-missing", "", now_ns);
+        return false;
+    }
     bool pending = false;  // flatten work ordered, awaiting ack
     // Local ENTRY slots flatten through the EXIT machinery
     // (EXIT submits bypass stage/freeze — old risk stays managed).
@@ -3193,12 +3225,12 @@ void G0Runner::MediumPass(long long now_ns) {
                    "medium-flatten-unpersisted", now_ns);
             Alert(P("alerts.jsonl").c_str(), "MEDIUM",
                   "medium-flatten-unpersisted", "", now_ns);
-            return;
+            return true;
         }
         OpsRow("reconcile", "runner", "medium-flat", now_ns);
         Alert(P("alerts.jsonl").c_str(), "MEDIUM", "medium-flat",
               "all positions flat", now_ns);
-        return;
+        return true;
     }
     // Not flat: PENDING while flatten work is outstanding OR an
     // achieved flatten covers the remaining open (completed close
@@ -3239,6 +3271,7 @@ void G0Runner::MediumPass(long long now_ns) {
         Alert(P("alerts.jsonl").c_str(), "MEDIUM",
               "medium-fsm-unpersisted", "MEDIUM_ACTIVE", now_ns);
     }
+    return true;
 }
 
 bool G0Runner::Dispatch(Slot& s, const exec::RouteOut& o,
@@ -3620,7 +3653,7 @@ bool G0Runner::Cycle(long long now_ns) {
                    "medium-incident-cleared", now_ns);
         }
     } else {
-        MediumPass(now_ns);
+        if (!MediumPass(now_ns)) return false;
     }
     if (ki.halt_file && !halt_announced_) {
         Alert(P("alerts.jsonl").c_str(), "SOFT", "halt-present",

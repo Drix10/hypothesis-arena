@@ -4572,6 +4572,59 @@ int main() {
                   "medium-fsm-unknown") != std::string::npos,
               "mf2-alert");
     }
+    // ME. Mint/rollback double failure (doc 06 sec. 6.1b):
+    // epoch persistence fails AND the FSM rollback fails. The
+    // cycle must fail loud — never a successful return from a
+    // stranded ACTIVE+no-epoch state — with no sweep POST, a
+    // valid journal, and a HARD rollback alert. The strand is
+    // never treated as healthy on retry (ACTIVE + epoch 0
+    // fails loud every cycle); operator removal of medium.txt
+    // returns to a fresh mint that succeeds normally.
+    {
+        Rig r;
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "me-recover");
+        g_kill.spend_tier = 3;  // MEDIUM
+        jev::runner::InjectWriteFault("medium-incident.txt", 0);
+        jev::runner::InjectWriteFault("medium.txt", 1);
+        g_log.clear();
+        Check(!g.Cycle(g_now), "me-cycle-fails");
+        jev::runner::ClearWriteFaults();
+        Check(ReadWhole(r.dir + "/medium.txt") ==
+                  "MEDIUM_ACTIVE",
+              "me-stranded-file");
+        Check(!Exists(r.dir + "/medium-incident.txt"),
+              "me-no-epoch");
+        Check(ReadWhole(r.dir + "/alerts.jsonl").find(
+                  "medium-rollback-unpersisted") !=
+                  std::string::npos,
+              "me-alert");
+        Check(jev::runner::JournalVerifyFile(
+                  (r.dir + "/journal.jsonl").c_str()),
+              "me-chain-valid");
+        bool posted = false;
+        for (std::size_t i = 0; i < g_log.size(); ++i) {
+            if (g_log[i].method.find("POST") !=
+                std::string::npos)
+                posted = true;
+        }
+        Check(!posted, "me-no-post");
+        // Retry through the strand: still loud, never healthy.
+        g_kill.spend_tier = 3;
+        Check(!g.Cycle(g_now), "me-still-stranded");
+        Check(ReadWhole(r.dir + "/alerts.jsonl").find(
+                  "medium-epoch-missing") != std::string::npos,
+              "me-missing-alert");
+        // Operator recovery: fresh mint succeeds normally.
+        std::remove((r.dir + "/medium.txt").c_str());
+        g_kill.spend_tier = 3;
+        Check(g.Cycle(g_now), "me-recovers");
+        Check(Exists(r.dir + "/medium-incident.txt"),
+              "me-epoch-minted");
+        Check(ReadWhole(r.dir + "/alerts.jsonl").find(
+                  "medium-enter") != std::string::npos,
+              "me-enter");
+    }
     // PK. Path integrity (doc 06 sec. 6.1b): a non-regular node
     // never reads as a missing file. Directory-in-place refuses
     // or fails closed at every state reader.
