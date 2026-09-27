@@ -206,6 +206,65 @@ succeeds (failure returns no-epoch; callers stop the incident
 path and, for MEDIUM, revert the FSM so the next cycle retries
 the mint). The clock-stuck `old + 1` fallback refuses at
 `LLONG_MAX` instead of overflowing.
+- HARD logical remainder identity: the chain requested quantity
+is the LOGICAL remainder, never the broker-capped send (`send =
+min(logical, broker_need)`; the chain records `logical`). A 404 on
+an existing tag reuses its recorded request/attribution and
+appends at most an exact-duplicate row — never a conflicting
+request. Stranded partial sends converge by re-pre-flight under
+the same identity (never a second identity for one remainder).
+- HARD cumulative EXIT crash ordering: durable parent-entry
+attribution lands BEFORE the EXIT `exit_counted_qty`/`exit_closed_qty`
+persist. A crash between the two replays safely: entries already
+authoritative, the leftover drops, counters advance, no double-fold,
+no permanently lost attribution.
+- HARD incident recovery: durable HALT + missing/corrupt/unreadable
+`hard-incident.txt` refuses (never mints a new epoch over a live
+HALT). Same-process mint retry is allowed only before any close
+flies under that epoch.
+- HALT durability: HALT is a durable state write (checked), backed
+by a sticky in-memory HARD latch consulted by entry gating — a
+failed HALT persist cannot yield entry operation or a false
+completed-stop. The stop is claimed only once durably established;
+otherwise the process stays latched and retries.
+- Recovery terminal-row rule: a journal terminal row never overrides
+a nonterminal durable snapshot (rebuild + reconcile), and journal-
+terminal + missing snapshot/intent refuses for human recovery.
+Terminal EXIT closed quantity re-attributes AFTER entries rebuild
+(capped, idempotent).
+- MEDIUM flatten certification: `FLATTENED` writes only on
+`AllFlat() && BrokerConfirmedFlat()`; missing/failing seam retains
+the in-progress FSM. Every FSM/cleanup transition is checked:
+persist-fail keeps the previous safe file state + alerts + retries.
+- State-file integrity: absent vs corrupt/non-regular are distinct.
+A directory/unreadable node never reads as missing (journal: refuse;
+HALT: present; freeze: frozen; chains/incidents/FSM: invalid/refuse).
+- Broker position values: snapshots validate count AND rows —
+NUL-terminated non-empty symbols, no duplicates, qty within
++/-999999999, `LLONG_MIN` refused. Any violation invalidates the
+whole snapshot (unknown).
+- MEDIUM sweep remainder: never from the stale snapshot after a
+terminal-short sweep — re-read authoritative broker position and
+send `min(logical_remainder, |fresh|)` (sign agreement required;
+unavailable fresh refuses to next cycle). Sweep remainder tags
+carry the derived remainder.
+- SSE/transport bounds: accumulated SSE `data:` payload is capped
+before materializing (oversize rejects + resyncs + counts); the
+runner enforces `0 <= stream_read <= buf` with negative/overlong
+returns treated as feed faults, never silent no-data.
+- Intent-ID permanence: journal history wins — a verified
+historical `intent` row for an ID refuses re-registration even when
+the intent file is gone (deleted-file re-submit refused).
+- Capacity is validated once: `max_slots` clamps to the fixed
+architecture limit (1..64; exits 2x) so `*2` arithmetic cannot
+overflow and fixed scratch tables cannot be over-indexed.
+- Windows durability: `AtomicWrite` uses true replacement semantics
+(`MoveFileEx` REPLACE+WRITE_THROUGH) — never remove-then-rename.
+- Clock split: wall clock owns audit timestamps/epochs/day
+accounting; a monotonic clock owns S2 cadence/elapsed timeouts.
+- Single-process ownership: one live runner per state directory
+(PID lock file with liveness check; same-process re-entry allowed,
+foreign live holder refused) — Phase-4 prerequisite.
 - MEDIUM teardown certification: clearing an incident requires
 BROKER-CONFIRMED flat (seam present + query ok + all zero) AND
 (local flat or file == FLATTENED). Missing/failing seam =
