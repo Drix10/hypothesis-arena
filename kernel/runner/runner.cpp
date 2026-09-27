@@ -1210,14 +1210,18 @@ bool PidAlive(long long pid) {
 }
 namespace {
 // Per-thread directory holds: the OS handle (fd /
-// HANDLE-as-integer) plus a reference count of live
-// same-thread runner instances on it. Thread-local: no shared
-// state, no mutex — the kernel primitive stays the sole
-// arbiter, so a concurrent two-taker race genuinely contends
-// on it. The handle closes only on the last reference out.
+// HANDLE-as-integer) plus the owning live instance. At most
+// ONE live object per directory per thread: the same object
+// re-acquiring is idempotent (tracked by its own lock_took_),
+// while a SECOND live object is refused — two independent
+// state machines must never share one ownership token (their
+// separate next_seq_/prev_hash_/slots_ would fork the
+// journal). Thread-local: no shared state, no mutex — the
+// kernel primitive stays the sole cross-thread arbiter, so a
+// concurrent two-taker race genuinely contends on it.
 struct DirHold {
     std::string path;
-    int refs;
+    const void* owner;  // live G0Runner holding this path
     long long os;
 };
 thread_local std::vector<DirHold> g_dir_holds;
@@ -1237,26 +1241,31 @@ bool G0Runner::TakeDirLock() {
     // the kernel into exactly one owner. The PID file is
     // diagnostic only (owner identity for alerts, written through
     // the held handle after winning) — never the arbiter.
-    // Same-thread re-entry is allowed (tracked in-process: one
-    // runner per process may Recover repeatedly, as the drills
-    // do); a different thread contends like a foreign process
+    // Same-object re-entry is idempotent (repeated Recover on
+    // the live owner); a SECOND live object on the same thread
+    // is refused below — one live mutable runner per directory.
+    // A different thread contends like a foreign process
     // and loses. Holds are tracked per thread (no shared state,
     // no mutex: the kernel primitive stays the sole arbiter, so
     // a concurrent two-taker race genuinely contends on it).
     // The winning INSTANCE owns the hold (members below): its
-    // destructor closes the handle and drops the last reference,
-    // so holds never leak and a later instance re-acquires
+    // destructor closes the handle and unregisters it, so holds
+    // never leak and a later instance re-acquires
     // through the kernel. Live instances keep the OS primitive
     // open — one writer per directory holds while any instance
     // of this process is alive on it.
-    if (lock_took_) return true;  // already counted: idempotent
+    if (lock_took_) return true;  // same object: idempotent
     std::string lp = P("runner.lock");
     for (std::size_t i = 0; i < g_dir_holds.size(); ++i) {
         if (g_dir_holds[i].path == lp) {
-            ++g_dir_holds[i].refs;
-            lock_took_ = true;
-            lock_path_ = lp;
-            return true;
+            // A second live object for the same directory
+            // (same thread) is refused with diagnostics to
+            // stderr only — no shared-state writes before
+            // ownership, like any other lock refusal.
+            std::fprintf(stderr,
+                           "g0_runner: second live runner dir=%s\n",
+                           lp.c_str());
+            return false;
         }
     }
     char b[32];
@@ -1304,7 +1313,7 @@ bool G0Runner::TakeDirLock() {
 #endif
     DirHold hd;
     hd.path = lp;
-    hd.refs = 1;
+    hd.owner = this;
     hd.os = os;
     g_dir_holds.push_back(hd);
     lock_took_ = true;
@@ -1315,8 +1324,8 @@ G0Runner::~G0Runner() {
     if (!lock_took_) return;
     lock_took_ = false;
     for (std::size_t i = 0; i < g_dir_holds.size(); ++i) {
-        if (g_dir_holds[i].path == lock_path_) {
-            if (--g_dir_holds[i].refs > 0) return;  // still held
+        if (g_dir_holds[i].path == lock_path_ &&
+            g_dir_holds[i].owner == this) {
             long long os = g_dir_holds[i].os;
             g_dir_holds.erase(g_dir_holds.begin() + (int)i);
 #ifdef _WIN32

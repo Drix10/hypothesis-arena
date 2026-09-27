@@ -335,6 +335,7 @@ struct Rig {
         std::strncpy(cfg.venue.account, "test", 31);
         std::string ch(64, 'a');
         std::strncpy(cfg.venue.context_hash, ch.c_str(), 64);
+        cfg.venue.context_hash[64] = 0;
         cfg.dir = dir;
         deps.transport = FakeCall;
         deps.stream_read = FakeStream;
@@ -916,6 +917,7 @@ int main() {
                           0, &cid)
                    .empty(),
               "stb-image");
+        {
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "stb-recover");
         g_stream =
@@ -956,6 +958,7 @@ int main() {
         if (cn > 0) cur = cbuf;
         Check(cur == "01J000000000000000000000003",
               "st-cursor-durable");
+        }
         G0Runner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr) &&
                   g2.cursor() ==
@@ -1295,6 +1298,7 @@ int main() {
     // emergency file empty.
     {
         Rig r;
+        {
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "eb-recover");
         Check(g.SubmitIntent(GoodIntent("intent-080", "SPY", true,
@@ -1317,6 +1321,7 @@ int main() {
         Check(Exists(r.dir + "/emergency.jsonl"),
               "eb-buffered");
         MakeWritable(r.dir + "/journal.jsonl");
+        }
         G0Runner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "eb-recover2");
         Check(jev::runner::JournalVerifyFile(
@@ -1440,6 +1445,7 @@ int main() {
                           5, 100, &cid)
                    .empty(),
               "hd-image");
+        {
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "hd-recover");
         g_kill.drift_unresolvable = true;  // HARD
@@ -1487,6 +1493,7 @@ int main() {
         Check(hard_rows >= 2, "hd-journaled");
         // Restart: HALT blocks entries, exits stay submittable.
         g_kill = jev::kill::KillInputs();
+        }
         G0Runner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "hd-restart");
         Check(!g2.SubmitIntent(GoodIntent("intent-101", "AAPL",
@@ -1601,6 +1608,7 @@ int main() {
     // 20. Intent-id permanence across restarts.
     {
         Rig r;
+        {
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "xp-recover");
         Check(g.SubmitIntent(GoodIntent("intent-140", "AAPL",
@@ -1614,6 +1622,8 @@ int main() {
               "xp-dup-refused-live");
         // Restart before any journal row: identical economics is
         // an idempotent crash-retry (no duplicate registration).
+        }
+        {
         G0Runner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "xp-recover2");
         Check(g2.SubmitIntent(GoodIntent("intent-140", "AAPL",
@@ -1624,6 +1634,7 @@ int main() {
         // Restart after the intent row: the slot is rebuilt, so a
         // resubmit is refused (live dup today; already-registered
         // once done slots reclaim in the lifecycle pass).
+        }
         G0Runner g3(r.cfg, r.deps);
         Check(g3.Recover(nullptr), "xp-recover3");
         Check(!g3.SubmitIntent(GoodIntent("intent-140", "AAPL",
@@ -1852,6 +1863,7 @@ int main() {
                           5, 100, &cid)
                    .empty(),
               "mr-image");
+        {
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "mr-recover");
         g_kill.spend_tier = 3;  // MEDIUM
@@ -1870,6 +1882,7 @@ int main() {
               "mr-flatten-closed");
         // Completed flatten is never re-ordered: restart sees the
         // terminal exit row, submits nothing, freezes nothing.
+        }
         G0Runner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "mr-recover2");
         Check(g2.Cycle(g_now), "mr-cycle2");
@@ -2032,6 +2045,7 @@ int main() {
     // torn state instead of parking in it.)
     {
         Rig r;
+        {
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "rw-recover");
         Check(g.SubmitIntent(GoodIntent("intent-190", "AAPL",
@@ -2043,6 +2057,7 @@ int main() {
             jev::journal::GenesisPrev().c_str());
         Check(!row0.empty(), "rw-row0");
         WriteFile(r.dir + "/journal.jsonl", row0 + "\n");
+        }
         G0Runner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "rw-recover2");
         PushRule("GET", "by_client_order_id", 404, "{}");
@@ -2074,6 +2089,7 @@ int main() {
     // file present the rowed path recovers.
     {
         Rig r;
+        {
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "hr-recover");
         Check(g.SubmitIntent(GoodIntent("intent-191", "AAPL",
@@ -2088,10 +2104,13 @@ int main() {
         Check(std::remove((r.dir + "/intent-intent-191.txt").c_str()) ==
                   0,
               "hr-tear-file");
+        }
+        {
         G0Runner g2(r.cfg, r.deps);
         Check(!g2.Recover(nullptr), "hr-refuses-no-file");
         WriteFile(r.dir + "/intent-intent-191.txt",
                   "AAPL|0|0|100|22000|24000\n");
+        }
         G0Runner g3(r.cfg, r.deps);
         Check(g3.Recover(nullptr), "hr-rowed-recovers");
     }
@@ -2099,6 +2118,7 @@ int main() {
     // never two slots driving one id.
     {
         Rig r;
+        {
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "dd-recover");
         Check(g.SubmitIntent(GoodIntent("intent-192", "AAPL",
@@ -2116,6 +2136,7 @@ int main() {
         Check(!row0.empty() && !row1.empty(), "dd-rows");
         WriteFile(r.dir + "/journal.jsonl",
                   (row0 + "\n" + row1 + "\n").c_str());
+        }
         G0Runner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "dd-recover2");
         Check(g2.slots() == 1 &&
@@ -2440,6 +2461,7 @@ int main() {
                         g_now);
         WriteFile(r.dir + "/hard-chain.txt",
                   std::string(htag0) + " 100 0\n");
+        {
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "hr-recover");
         g_kill.drift_unresolvable = true;  // HARD
@@ -2475,6 +2497,7 @@ int main() {
         // and the entry (fully attributed closed in event 1,
         // exact books) is now zero-open: no repair repost, just
         // the designed cancel attempt on the stray unfilled.
+        }
         G0Runner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "hr-recover2");
         PushRule("GET", "by_client_order_id", 200,
@@ -2745,12 +2768,14 @@ int main() {
             "id: " + ub + "\nevent: fill\ndata: "
             "{\"client_order_id\":\"" + cid + "\","
             "\"order\":{\"filled_qty\":\"50\"}}\n\n";
+        {
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "cu-recover");
         Check(g.Cycle(g_now), "cu-cycle");
         Check(g.cursor() == ub, "cu-advanced-past-foreign");
         Check(ReadWhole(r.dir + "/cursor.txt") == ub,
               "cu-durable");
+        }
         G0Runner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "cu-recover2");
         Check(g2.cursor() == ub, "cu-resumed");
@@ -2760,6 +2785,7 @@ int main() {
     {
         Rig r;
         r.deps.restart_flag = false;
+        {
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "rf-recover");
         Check(!g.SubmitIntent(GoodIntent("intent-350", "AAPL",
@@ -2771,6 +2797,7 @@ int main() {
                              nullptr),
               "rf-exit-alive");
         r.deps.restart_flag = true;
+        }
         G0Runner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "rf-recover2");
         Check(g2.SubmitIntent(GoodIntent("intent-352", "AAPL",
@@ -3044,6 +3071,9 @@ int main() {
     {
         Rig r;
         r.deps.list_positions = FakePositions;
+        std::string coid1;
+        char ebe[32];
+        {
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "hi-recover");
         g_kill.broker_auth_fail = true;  // HARD #1
@@ -3054,7 +3084,6 @@ int main() {
         Check(!g.Cycle(g_now), "hi-hard1");
         Check(CountMethod("POST", "/v2/orders") == 1,
               "hi-first-close");
-        std::string coid1;
         for (std::size_t i = 0; i < g_log.size(); ++i) {
             if (g_log[i].method != "POST") continue;
             std::size_t p =
@@ -3063,13 +3092,13 @@ int main() {
                 coid1 = g_log[i].body.substr(p, 96);
         }
         Check(!coid1.empty(), "hi-first-id");
-        char ebe[32];
         std::snprintf(ebe, sizeof(ebe), "%lld", g_now);
         Check(ReadWhole(r.dir + "/hard-incident.txt").find(ebe) ==
                   0,
               "hi-epoch-minted");
         // Crash-mid-HARD restart (HALT still present): the close
         // pre-flights FOUND -> adopted, zero new POSTs, same epoch.
+        }
         G0Runner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "hi-recover2");
         PushRule("GET", "by_client_order_id", 200,
@@ -3177,6 +3206,8 @@ int main() {
     {
         Rig r;
         r.deps.list_positions = FakePositions;
+        std::string coid1;
+        {
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "hrc-recover");
         g_kill.broker_auth_fail = true;  // HARD #1
@@ -3187,7 +3218,6 @@ int main() {
         Check(!g.Cycle(g_now), "hrc-hard1");
         Check(CountMethod("POST", "/v2/orders") == 1,
               "hrc-primary-sent");
-        std::string coid1;
         for (std::size_t i = 0; i < g_log.size(); ++i) {
             if (g_log[i].method != "POST") continue;
             std::size_t p =
@@ -3203,6 +3233,8 @@ int main() {
         // broker need (60), sends exactly one 60-share remainder
         // under the new deterministic identity (60 - 40 = 20
         // would leave 40 exposed — the old domain bug).
+        }
+        {
         G0Runner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "hrc-recover2");
         g_positions.clear();
@@ -3234,6 +3266,8 @@ int main() {
         Check(qty60, "hrc-remainder-60");
         // Third cycle, broker still +60: primary FILLED-40 +
         // remainder FILLED-60 both sufficient -> zero new orders.
+        }
+        {
         G0Runner g3(r.cfg, r.deps);
         Check(g3.Recover(nullptr), "hrc-recover3");
         PushRule("GET", "by_client_order_id", 200,
@@ -3244,6 +3278,7 @@ int main() {
         Check(CountMethod("POST", "/v2/orders") == 2,
               "hrc-no-resend");
         // Fourth cycle, broker fully settled (flat): quiet.
+        }
         G0Runner g4(r.cfg, r.deps);
         Check(g4.Recover(nullptr), "hrc-recover4");
         g_positions.clear();
@@ -3316,6 +3351,7 @@ int main() {
                           100, 9, 0, &xid)
                    .empty(),
               "hx-image");
+        {
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "hx-recover");
         g_kill.broker_auth_fail = true;  // HARD #1
@@ -3346,6 +3382,7 @@ int main() {
         Check(qty60, "hx-replace-qty");
         // Restart, broker settled to +60, the replace itself now
         // terminal-40: chain (60 - 40) sends exactly one 20.
+        }
         G0Runner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "hx-recover2");
         g_positions.clear();
@@ -3392,6 +3429,7 @@ int main() {
         WriteFile(r.dir + "/medium.txt", "FLATTENED");
         WriteFile(r.dir + "/medium-incident.txt",
                   "1799999999000000000\n");
+        {
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "ms-recover");
         // (a) missing seam: retained.
@@ -3406,6 +3444,7 @@ int main() {
         // construction; the seam itself fails or heals live).
         r.deps.list_positions = FakePositions;
         r.deps.venue_gate = FakeVenue;
+        }
         G0Runner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "ms-recover2");
         // (b) failing seam: retained.
@@ -3545,6 +3584,7 @@ int main() {
     {
         Rig r;
         r.deps.list_positions = FakePositions;
+        {
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "rg-recover");
         g_kill.drift_unresolvable = true;  // HARD
@@ -3570,6 +3610,7 @@ int main() {
                       .c_str());
         // Restart: broker need 60, primary pre-flight reports
         // the regressed 30 terminal.
+        }
         G0Runner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "rg-recover2");
         g_positions.clear();
@@ -3612,6 +3653,8 @@ int main() {
     {
         Rig r;
         r.deps.list_positions = FakePositions;
+        char hid[64];
+        {
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "lr-recover");
         g_kill.drift_unresolvable = true;  // HARD
@@ -3622,7 +3665,6 @@ int main() {
         Check(!g.Cycle(g_now), "lr-hard1");
         Check(CountMethod("POST", "/v2/orders") == 1,
               "lr-primary-sent");
-        char hid[64];
         std::snprintf(hid, sizeof(hid), "hard-%lld-AAPL",
                         g_now);
         Check(ReadWhole(r.dir + "/hard-chain.txt").find(
@@ -3631,6 +3673,8 @@ int main() {
               "lr-chain-logical");
         // Restart: broker need only 20, primary still unlanded
         // (404) -> same identity sends 20, chain keeps 100.
+        }
+        {
         G0Runner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "lr-recover2");
         g_positions.clear();
@@ -3655,6 +3699,7 @@ int main() {
               "lr-chain-still-logical");
         // Restart: broker need 60, primary landed 20 terminal ->
         // remainder 80 under a new identity, send capped to 60.
+        }
         G0Runner g3(r.cfg, r.deps);
         Check(g3.Recover(nullptr), "lr-recover3");
         g_positions.clear();
@@ -3823,6 +3868,7 @@ int main() {
               "xa-exit2");
         MkDir(r.dir + "/snap-intent-583.txt");
         MkDir(r.dir + "/snap-intent-583.txt.tmp");
+        {
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "xa-recover2");
         g_kill.drift_unresolvable = true;  // HARD
@@ -3837,6 +3883,7 @@ int main() {
               "xa-counters-alert2");
         RmDir(r.dir + "/snap-intent-583.txt");
         RmDir(r.dir + "/snap-intent-583.txt.tmp");
+        }
         G0Runner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "xa-recover3");
         PushRule("GET", "by_client_order_id", 200,
@@ -3913,6 +3960,7 @@ int main() {
                    .empty(),
               "cx-image");
         g_positions.push_back(MkPos("AAPL", 100));
+        {
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "cx-recover");
         g_kill.drift_unresolvable = true;  // HARD
@@ -3927,6 +3975,7 @@ int main() {
         Check(std::remove((r.dir + "/hard-chain.txt").c_str()) ==
                   0,
               "cx-chain-deleted");
+        }
         G0Runner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "cx-recover2");
         PushRule("GET", "by_client_order_id", 200,
@@ -3957,6 +4006,7 @@ int main() {
                    .empty(),
               "cy-image");
         g_positions.push_back(MkPos("AAPL", 100));
+        {
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "cy-recover");
         g_kill.drift_unresolvable = true;  // HARD
@@ -3967,6 +4017,7 @@ int main() {
         Check(!g.Cycle(g_now), "cy-hard1");
         Check(CountMethod("POST", "/v2/orders") == 1,
               "cy-note-then-fail");
+        }
         G0Runner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "cy-recover2");
         PushRule("GET", "by_client_order_id", 200,
@@ -4013,6 +4064,7 @@ int main() {
                    .empty(),
               "cz-image");
         g_positions.push_back(MkPos("AAPL", 100));
+        {
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "cz-recover");
         g_kill.drift_unresolvable = true;  // HARD
@@ -4024,6 +4076,7 @@ int main() {
         Check(!g.Cycle(g_now), "cz-hard1");
         Check(CountMethod("POST", "/v2/orders") == 1,
               "cz-sent");
+        }
         G0Runner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "cz-recover2");
         PushRule("GET", "by_client_order_id", 200,
@@ -4102,6 +4155,7 @@ int main() {
                         g_now);
         WriteFile(r.dir + "/hard-chain.txt",
                   std::string(htag) + " 100 0\n");
+        {
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "cd-recover");
         g_kill.drift_unresolvable = true;  // HARD
@@ -4123,6 +4177,7 @@ int main() {
               "cd-books-unchanged");
         RmDir(r.dir + "/snap-intent-565.txt");
         RmDir(r.dir + "/snap-intent-565.txt.tmp");
+        }
         G0Runner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "cd-recover2");
         PushRule("GET", "by_client_order_id", 200,
@@ -4425,6 +4480,7 @@ int main() {
               "hl-image");
         MkDir(r.dir + "/HALT");
         g_positions.push_back(MkPos("AAPL", 100));
+        {
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "hl-recover");
         g_kill.drift_unresolvable = true;  // HARD
@@ -4442,6 +4498,7 @@ int main() {
                   nullptr),
               "hl-latch-blocks-entries");
         RmDir(r.dir + "/HALT");
+        }
         G0Runner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "hl-recover2");
         g_kill.drift_unresolvable = true;  // HARD
@@ -4511,6 +4568,7 @@ int main() {
         Rig r;
         r.deps.list_positions = FakePositions;
         MkDir(r.dir + "/medium.txt.tmp");
+        {
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "fl-recover2");
         g_kill.spend_tier = 3;  // MEDIUM
@@ -4526,6 +4584,7 @@ int main() {
                   std::string::npos,
               "fl-alert");
         RmDir(r.dir + "/medium.txt.tmp");
+        }
         G0Runner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "fl-recover3");
         Check(g2.Cycle(g_now), "fl-cycle3");
@@ -4988,6 +5047,7 @@ int main() {
         r.deps.list_positions = FakePositions;
         WriteFile(r.dir + "/medium.txt", "");
         MkDir(r.dir + "/medium-incident.txt");
+        {
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "me-recover");
         g_kill.spend_tier = 3;  // MEDIUM
@@ -5001,6 +5061,7 @@ int main() {
                   std::string::npos,
               "me-alert");
         RmDir(r.dir + "/medium-incident.txt");
+        }
         G0Runner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "me-recover2");
         Check(g2.Cycle(g_now), "me-cycle2");
@@ -5025,6 +5086,7 @@ int main() {
               "he-image");
         MkDir(r.dir + "/hard-incident.txt");
         g_positions.push_back(MkPos("AAPL", 100));
+        {
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "he-recover");
         g_kill.drift_unresolvable = true;  // HARD
@@ -5043,6 +5105,7 @@ int main() {
         // ids over a live HALT).
         Check(std::remove((r.dir + "/HALT").c_str()) == 0,
               "he-halt-cleared");
+        }
         G0Runner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "he-recover2");
         PushRule("GET", "by_client_order_id", 200,
@@ -5123,6 +5186,7 @@ int main() {
         g_venue_open = 1;
         g_venue_spread = 1;
         g_positions.push_back(MkPos("AAPL", 100));
+        {
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "sr-recover");
         g_kill.spend_tier = 3;  // MEDIUM
@@ -5134,6 +5198,7 @@ int main() {
               "sr-sweep-sent");
         // Poll still shows 100 (lagged), but the sweep
         // terminally filled 40: truth is 60 open.
+        }
         G0Runner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "sr-recover2");
         PushRule("GET", "by_client_order_id", 200,
@@ -5388,33 +5453,45 @@ int main() {
                   "runner-lock-held") == std::string::npos,
               "jx-no-shared-alert");
     }
-    // LR2. Refcounted same-thread holds (doc 06 sec. 6.1b):
-    // B's re-entry shares A's underlying OS hold. Destroying A
-    // must not release it while B lives (a foreign-thread
-    // contender still loses); destroying B releases it (a
-    // contender can then acquire).
+    // LR2. One live mutable runner per directory (doc 06 sec.
+    // 6.1b): the runner is non-copyable/non-movable, and a
+    // second live object for the same directory is refused —
+    // two independent state machines must never share one
+    // ownership token. A recovers; B's Recover is refused on
+    // the same thread; B can mutate nothing (never recovered);
+    // A's hold survives B's destruction; after A dies a new
+    // instance acquires. Refusals write nothing shared, so the
+    // journal stays valid throughout.
     {
         Rig r;
         G0Runner* a = new G0Runner(r.cfg, r.deps);
         Check(a->Recover(nullptr), "lr2-recover-a");
         G0Runner* b = new G0Runner(r.cfg, r.deps);
-        Check(b->Recover(nullptr), "lr2-recover-b");
-        delete a;
+        Check(!b->Recover(nullptr), "lr2-second-refused");
+        Check(!b->SubmitIntent(GoodIntent("intent-730", "AAPL",
+                                          false, 100),
+                               nullptr),
+              "lr2-b-no-submit");
+        Check(!b->Cycle(g_now), "lr2-b-no-cycle");
+        delete b;
         bool fok = false;
         std::thread tf([&] {
             G0Runner g(r.cfg, r.deps);
             fok = g.Recover(nullptr);
         });
         tf.join();
-        Check(!fok, "lr2-held-after-a-destroyed");
-        delete b;
+        Check(!fok, "lr2-a-still-owns");
+        delete a;
         bool fok2 = false;
         std::thread tf2([&] {
             G0Runner g(r.cfg, r.deps);
             fok2 = g.Recover(nullptr);
         });
         tf2.join();
-        Check(fok2, "lr2-released-after-b-destroyed");
+        Check(fok2, "lr2-released-after-a-destroyed");
+        Check(jev::runner::JournalVerifyFile(
+                  (r.dir + "/journal.jsonl").c_str()),
+              "lr2-chain-valid");
     }
     // PR. PROTECTED rebuilds live (doc 06 sec. 6.1b): a durable
     // PROTECTED snapshot + matching intent + terminal journal

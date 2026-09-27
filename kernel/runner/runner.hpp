@@ -160,6 +160,14 @@ struct Slot {
 class G0Runner {
    public:
     G0Runner(const RunnerConfig& cfg, const RunnerDeps& deps);
+    // Non-copyable, non-movable: the runner owns mutable
+    // journal/slot/lock state that two objects must never share
+    // (two live state machines on one ownership token would
+    // fork the journal — doc 06 sec. 6.1b).
+    G0Runner(const G0Runner&) = delete;
+    G0Runner& operator=(const G0Runner&) = delete;
+    G0Runner(G0Runner&&) = delete;
+    G0Runner& operator=(G0Runner&&) = delete;
     // The directory lock is process-lifetime: the destructor
     // releases this instance's hold (close + unregister) so a
     // later instance re-acquires cleanly. Live instances keep
@@ -237,11 +245,11 @@ class G0Runner {
     bool hard_latched_ = false;
     std::string cursor_;      // last stamped ULID (durable)
     bool cursor_dirty_ = false;
-    // Directory-lock take recorded by THIS instance (win or
-    // same-thread re-entry): the destructor drops exactly one
-    // reference. The underlying OS handle closes only on the
-    // last reference out, so a winning instance's destruction
-    // can never release the lock under a live re-entrant.
+    // Directory-lock take recorded by THIS instance: at most
+    // one live object per directory (a second live object is
+    // refused in TakeDirLock, never co-counted). The destructor
+    // closes the OS handle and unregisters exactly this
+    // instance's hold.
     bool lock_took_ = false;
     std::string lock_path_;  // directory taken (empty if none)
     // Recovery-before-mutation lifecycle (doc 06 sec. 6.1b):
