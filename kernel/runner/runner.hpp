@@ -46,6 +46,12 @@ struct RunnerDeps {
     const char* stream_endpoint = nullptr;  // config label (evidence)
     long long (*now_ns)(void* ctx) = nullptr;  // REQUIRED (no clock in core)
     void* clock_ctx = nullptr;
+    // Monotonic elapsed clock for S2 cadence/operational timeouts
+    // (steady time — wall jumps must not distort reconcile
+    // rhythm). Null = follow now_ns (tests + transports without a
+    // split clock keep prior behavior exactly).
+    long long (*mono_ns)(void* ctx) = nullptr;
+    void* mono_ctx = nullptr;
     void (*kill_inputs)(void* ctx, kill::KillInputs* out) = nullptr;
     void* kill_ctx = nullptr;
     bool restart_flag = false;  // operator restart-with-flag (sec. 6.4)
@@ -239,6 +245,11 @@ class G0Runner {
     // Validated capacities (1..64 entries, 1..128 exits).
     int EntryCap() const;
     int ExitCap() const;
+    // Monotonic elapsed ns (mono clock when wired, else the given
+    // wall default) for S2 cadence/operational timeouts.
+    long long MonoNs(long long wall_ns) const;
+    // Single-process ownership lock for the state directory.
+    bool TakeDirLock();
     // Durable-HALT-or-latch: true once a HALT file exists or the
     // in-memory latch fired (failed HALT persist). Entry gating
     // and kill evaluation consult this, never the bare file
@@ -427,5 +438,8 @@ class G0Runner {
     bool DailyOps(long long now_ns);
 };
 
+// Process liveness for the directory lock (lock helper; also a
+// unit-tested seam). True for a live pid, false for dead/garbage.
+bool PidAlive(long long pid);
 }  // namespace runner
 }  // namespace jev

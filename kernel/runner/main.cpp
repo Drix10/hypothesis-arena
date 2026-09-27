@@ -37,6 +37,14 @@ long long WallNs(void*) {
                std::chrono::system_clock::now().time_since_epoch())
         .count();
 }
+// Monotonic elapsed clock for S2 cadence/operational timeouts.
+// Wall jumps (NTP, operator) must not distort reconcile rhythm;
+// audit timestamps/epochs/day accounting stay on WallNs.
+long long MonoNs(void*) {
+    return (long long)std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -74,6 +82,7 @@ int main(int argc, char** argv) {
     jev::runner::RunnerDeps deps;
     deps.transport = nullptr;  // Phase 4 wires live HTTPS (fail closed)
     deps.now_ns = WallNs;
+    deps.mono_ns = MonoNs;
     deps.restart_flag = resume;  // sec. 6.4 friction: flagless
                                  // starts reconcile + manage exits
                                  // but submit nothing new

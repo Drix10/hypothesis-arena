@@ -3,9 +3,20 @@
 // single-writer (the operator starts one instance per dir).
 #include "runner.hpp"
 
+#include <cerrno>
 #include <climits>
 #include <cstdio>
 #include <cstring>
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#include <sys/stat.h>
+#include <windows.h>
+#else
+#include <fcntl.h>
+#include <signal.h>
+#include <unistd.h>
+#endif
 
 namespace jev {
 namespace runner {
@@ -319,6 +330,12 @@ bool G0Runner::Recover(const char** reason) {
         return false;
     }
     stage_ok_ = true;
+    // Single-process ownership (Phase-4 prerequisite): a live
+    // foreign holder refuses the whole recovery, never co-owns.
+    if (!TakeDirLock()) {
+        if (reason) *reason = "recover-lock-held";
+        return false;
+    }
     // Journal: break = HARD, alert, refuse (doc 10: forensics first).
     if (!JournalVerifyFile(P("journal.jsonl").c_str())) {
         Alert(P("alerts.jsonl").c_str(), "HARD", "journal-chain-break",
@@ -759,7 +776,8 @@ bool G0Runner::SubmitIntent(const exec::OrderIntent& in,
     s.m = exec::RouteMachine();
     s.m.kind = in.kind;
     s.active = true;
-    s.last_s2_ns = deps_.now_ns ? deps_.now_ns(deps_.clock_ctx) : 0;
+    s.last_s2_ns = MonoNs(deps_.now_ns ? deps_.now_ns(deps_.clock_ctx)
+                                            : 0);
     slots_.push_back(s);
     return true;
 }
@@ -793,13 +811,15 @@ void G0Runner::MaybeForceQuery(Slot& s, long long now_ns) {
     // S2 cadence + reconcile-first (last_s2_ns = 0 at Recover):
     // one real lookup now, held until the machine consumes it.
     // Event/timer-driven only — never a polling loop (the router
-    // budget still bounds router-emitted QUERY_ONCE).
-    bool due = (now_ns - s.last_s2_ns) >=
+    // budget still bounds router-emitted QUERY_ONCE). Elapsed on
+    // the monotonic clock: wall jumps never force/skip lookups.
+    long long mono = MonoNs(now_ns);
+    bool due = (mono - s.last_s2_ns) >=
                deps_.s2_seconds * 1000000000LL;
     if (!due) return;
     s.forced_q = adapter_.QueryOnce(LookupIdFor(s));
     s.has_forced_q = true;
-    s.last_s2_ns = now_ns;
+    s.last_s2_ns = mono;
 }
 
 long long G0Runner::MediumEpoch() const {
@@ -1011,6 +1031,93 @@ int G0Runner::EntryCap() const {
 }
 int G0Runner::ExitCap() const {
     return EntryCap() * 2;  // <= 128: plain int math, no overflow
+}
+long long G0Runner::MonoNs(long long wall_ns) const {
+    if (deps_.mono_ns) return deps_.mono_ns(deps_.mono_ctx);
+    return wall_ns;
+}
+static long long MyPid() {
+#ifdef _WIN32
+    return (long long)GetCurrentProcessId();
+#else
+    return (long long)getpid();
+#endif
+}
+bool PidAlive(long long pid) {
+    if (pid <= 0) return false;
+#ifdef _WIN32
+    if (pid > 4294967295LL) return false;
+    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,
+                           FALSE, (DWORD)pid);
+    if (h == NULL) return false;
+    DWORD ec = 0;
+    bool ok =
+        GetExitCodeProcess(h, &ec) != FALSE && ec == STILL_ACTIVE;
+    CloseHandle(h);
+    return ok;
+#else
+    if (pid > 2147483647LL) return false;
+    if (::kill((pid_t)pid, 0) == 0) return true;
+    return errno == EPERM;  // exists but no permission to signal
+#endif
+}
+bool G0Runner::TakeDirLock() {
+    // One live runner per state directory (Phase-4 prerequisite):
+    // the lock file holds the owner PID, created exclusively (the
+    // race-free claim). Same PID re-enters (sequential Recovers in
+    // one process); a dead PID is stale (take over, rewrite);
+    // a live foreign PID refuses — two runners must never co-own
+    // one journal/snapshot/incident tree. Never released (crash
+    // leaves it; liveness arbitrates). A corrupt node refuses via
+    // the write failure below.
+    std::string lp = P("runner.lock");
+#ifdef _WIN32
+    int fd = _open(lp.c_str(), _O_CREAT | _O_EXCL | _O_WRONLY,
+                   _S_IREAD | _S_IWRITE);
+#else
+    int fd = ::open(lp.c_str(), O_CREAT | O_EXCL | O_WRONLY, 0600);
+#endif
+    char b[32];
+    int w = std::snprintf(b, sizeof(b), "%lld", MyPid());
+    if (fd >= 0) {
+        bool ok = w > 0;
+        if (ok) {
+            std::size_t n = std::strlen(b);
+#ifdef _WIN32
+            ok = _write(fd, b, (unsigned)n) == (int)n;
+            _close(fd);
+#else
+            ok = ::write(fd, b, n) == (ssize_t)n;
+            ::close(fd);
+#endif
+        } else {
+#ifdef _WIN32
+            _close(fd);
+#else
+            ::close(fd);
+#endif
+        }
+        if (!ok) {
+            std::remove(lp.c_str());
+            return false;
+        }
+        return true;
+    }
+    std::vector<std::string> lns;
+    long long holder = 0;
+    if (ReadLines(lp.c_str(), &lns) && !lns.empty())
+        holder = ParseEpoch(lns);
+    if (holder == MyPid()) return true;
+    if (PidAlive(holder)) {
+        OpsRow("drift-directive", "runner", "runner-lock-held",
+               deps_.now_ns ? deps_.now_ns(deps_.clock_ctx) : 0);
+        Alert(P("alerts.jsonl").c_str(), "HARD", "runner-lock-held",
+              "foreign live runner owns this directory",
+              deps_.now_ns ? deps_.now_ns(deps_.clock_ctx) : 0);
+        return false;
+    }
+    if (w <= 0) return false;
+    return AtomicWrite(lp.c_str(), b);
 }
 bool G0Runner::SnapPositions(Position* ps, int cap,
                              int* n) const {
@@ -2296,10 +2403,13 @@ void G0Runner::PositionCheck(long long now_ns) {
     // Drift journals + alerts + forces per-symbol re-lookup; it
     // never orders (flattening is MEDIUM/HARD-owned).
     if (!deps_.list_positions) return;  // Phase-4 seam absent
-    bool due = (now_ns - last_pos_ns_) >=
+    // Elapsed on the monotonic clock (wall jumps must not
+    // trigger/skip the account reconciliation rhythm).
+    long long mono = MonoNs(now_ns);
+    bool due = (mono - last_pos_ns_) >=
                deps_.s2_seconds * 1000000000LL;
     if (!due) return;
-    last_pos_ns_ = now_ns;
+    last_pos_ns_ = mono;
     Position ps[64];
     int n = 0;
     if (!SnapPositions(ps, 64, &n)) {

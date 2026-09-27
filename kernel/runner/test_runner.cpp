@@ -86,6 +86,8 @@ static int g_stream_fault = 0;  // !=0: transport contract
                                 // violator — return this instead
                                 // of stream bytes (5000 = overlong,
                                 // -1 = negative)
+static long long g_mono = 1800000000000000000LL;
+static long long FakeMono(void*) { return g_mono; }
 static int FakeStream(void*, char* buf, int n) {
     if (g_stream_fault != 0) return g_stream_fault;
     if (g_stream_off >= g_stream.size()) return 0;
@@ -343,6 +345,7 @@ struct Rig {
         g_stream.clear();
         g_stream_off = 0;
         g_stream_fault = 0;
+        g_mono = 1800000000000000000LL;
         g_kill = jev::kill::KillInputs();
         g_now = 1800000000000000000LL;
         g_positions.clear();
@@ -4921,6 +4924,64 @@ int main() {
                   std::string::npos,
               "ft-negative-alert");
         g_stream_fault = 0;
+    }
+    // CK. Clock split (doc 06 sec. 6.1b): S2 cadence runs on the
+    // monotonic clock. A wall jump alone never triggers the
+    // account reconciliation rhythm; a mono advance does.
+    {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        r.deps.mono_ns = FakeMono;
+        g_pos_fail = 1;  // every S2 run alerts, observably
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "ck-recover");
+        Check(g.Cycle(g_now), "ck-cycle1");
+        Check(ReadWhole(r.dir + "/alerts.jsonl").find(
+                  "positions-unavailable") != std::string::npos,
+              "ck-s2-ran");
+        // Wall jumps a day; mono does not move: no second run.
+        g_now += 86400000000000LL;
+        Check(g.Cycle(g_now), "ck-cycle2");
+        std::string al = ReadWhole(r.dir + "/alerts.jsonl");
+        std::size_t first = al.find("positions-unavailable");
+        Check(first != std::string::npos &&
+                  al.find("positions-unavailable",
+                           first + 1) == std::string::npos,
+              "ck-wall-jump-quiet");
+        // Mono advances past cadence: second run.
+        g_mono += 901LL * 1000000000LL;
+        Check(g.Cycle(g_now), "ck-cycle3");
+        al = ReadWhole(r.dir + "/alerts.jsonl");
+        first = al.find("positions-unavailable");
+        Check(first != std::string::npos &&
+                  al.find("positions-unavailable",
+                           first + 1) != std::string::npos,
+              "ck-mono-advance-runs");
+        g_pos_fail = 0;
+    }
+    // LK. Single-process ownership (doc 06 sec. 6.1b, Phase-4
+    // prerequisite): liveness distinguishes live/self/dead pids;
+    // a stale lock is taken over (rewritten to the owner).
+    {
+        Rig r;
+        long long self =
+#ifdef _WIN32
+            (long long)GetCurrentProcessId();
+#else
+            (long long)getpid();
+#endif
+        Check(jev::runner::PidAlive(self), "lk-self-alive");
+        Check(!jev::runner::PidAlive(2147483647LL),
+              "lk-dead-pid");
+        Check(!jev::runner::PidAlive(0), "lk-zero-pid");
+        WriteFile(r.dir + "/runner.lock", "2147483647");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "lk-takeover");
+        char me[32];
+        std::snprintf(me, sizeof(me), "%lld", self);
+        Check(ReadWhole(r.dir + "/runner.lock") ==
+                  std::string(me),
+              "lk-lock-rewritten");
     }
     if (g_fail == 0)
         std::printf("RUNNER SUITE: ALL PASS (%d checks)\n", g_count);
