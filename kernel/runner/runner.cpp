@@ -1101,8 +1101,6 @@ bool G0Runner::TakeDirLock() {
     for (std::size_t i = 0; i < g_dir_holds.size(); ++i) {
         if (g_dir_holds[i] == lp) return true;
     }
-    long long now =
-        deps_.now_ns ? deps_.now_ns(deps_.clock_ctx) : 0;
     char b[32];
     int w = std::snprintf(b, sizeof(b), "%lld", MyPid());
     if (w <= 0) return false;
@@ -1122,15 +1120,15 @@ bool G0Runner::TakeDirLock() {
         if (ReadLines(lp.c_str(), &lns) && !lns.empty() &&
             !lns[0].empty())
             holder = lns[0];
-        char ab[280];
-        std::snprintf(ab, sizeof(ab),
-                        "foreign live runner owns this directory"
-                        " (holder=%s)",
-                        holder.c_str());
-        OpsRow("drift-directive", "runner", "runner-lock-held",
-               now);
-        Alert(P("alerts.jsonl").c_str(), "HARD", "runner-lock-held",
-              ab, now);
+        // Refusal mutates NO shared state (doc 06 sec. 6.1b):
+        // no journal row (a contender's fresh next_seq_/genesis
+        // would fork an owned chain), no alert write, no file
+        // touch. Diagnostics go to stderr only — the supervisor
+        // owns them. Once ownership is established, normal
+        // journal/alert writes are allowed.
+        std::fprintf(stderr,
+                       "g0_runner: lock refused dir=%s holder=%s\n",
+                       lp.c_str(), holder.c_str());
         return false;
     }
     // Won: stamp our PID through the held handle (diagnostic),

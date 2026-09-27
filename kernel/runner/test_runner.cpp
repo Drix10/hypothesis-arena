@@ -5149,6 +5149,45 @@ int main() {
         t2.join();
         Check(ok1 != ok2, "lk2-exactly-one-owner");
     }
+    // JX. Lock refusal writes nothing shared (doc 06 sec.
+    // 6.1b): with a pre-existing nonempty journal, two
+    // concurrent contenders yield exactly one owner AND the
+    // journal chain stays valid. A refusing contender carries
+    // a fresh next_seq_/genesis — appending it would fork the
+    // owned chain — so refusal is stderr-only (no journal row,
+    // no alert write, no file touch).
+    {
+        Rig r;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-700", "AAPL", 0, 0,
+                          100, 2, 100, &cid)
+                   .empty(),
+              "jx-image");
+        bool ok1 = false, ok2 = false;
+        std::thread t1([&] {
+            G0Runner g(r.cfg, r.deps);
+            ok1 = g.Recover(nullptr);
+        });
+        std::thread t2([&] {
+            G0Runner g(r.cfg, r.deps);
+            ok2 = g.Recover(nullptr);
+        });
+        t1.join();
+        t2.join();
+        Check(ok1 != ok2, "jx-exactly-one-owner");
+        Check(jev::runner::JournalVerifyFile(
+                  (r.dir + "/journal.jsonl").c_str()),
+              "jx-journal-valid");
+        std::string jr = ReadWhole(r.dir + "/journal.jsonl");
+        std::size_t nl = 0;
+        for (char c : jr) {
+            if (c == '\n') ++nl;
+        }
+        Check(nl == 1, "jx-loser-appended-nothing");
+        Check(ReadWhole(r.dir + "/alerts.jsonl").find(
+                  "runner-lock-held") == std::string::npos,
+              "jx-no-shared-alert");
+    }
     if (g_fail == 0)
         std::printf("RUNNER SUITE: ALL PASS (%d checks)\n", g_count);
     return g_fail ? 1 : 0;
