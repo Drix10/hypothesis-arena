@@ -2627,8 +2627,9 @@ int main() {
         Check(g.Cycle(g_now), "sw-cycle1");
         Check(CountMethod("POST", "/v2/orders") == 0,
               "sw-partial-parks");
-        // Dead base sweep -> one incident remainder under
-        // medium-<epoch>-AAPL-100.
+        // Dead base sweep (40 landed of 100) -> one incident
+        // remainder under medium-<epoch>-AAPL-60 carrying the
+        // logical remainder, never the stale 100.
         PushRule("GET", "by_client_order_id", 200,
                  DeadReply("40").c_str());
         PushRule("GET", "by_client_order_id", 404, "{}");
@@ -2639,7 +2640,7 @@ int main() {
               "sw-remainder-sent");
         char rtag[64];
         std::snprintf(rtag, sizeof(rtag),
-                        "medium-%lld-AAPL-100", g_now);
+                        "medium-%lld-AAPL-60", g_now);
         char rcoid[65] = {0};
         Check(jev::broker::MakeClientOrderId(
                   "alpaca-paper", "test",
@@ -4730,6 +4731,55 @@ int main() {
                       .find("hard-chain-invalid") !=
                   std::string::npos,
               "cb-alert");
+    }
+    // SR. MEDIUM sweep remainder (doc 06 sec. 6.1b): after a
+    // terminal-short sweep the replacement never re-sends the
+    // stale snapshot size. Sweep 100 lands 40 terminal while the
+    // poll still shows 100 -> one 60-share remainder (the logical
+    // 100 - 40, capped by fresh exposure), never a second 100
+    // (which would over-close by the 40 already landed).
+    {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        r.deps.venue_gate = FakeVenue;
+        g_venue_open = 1;
+        g_venue_spread = 1;
+        g_positions.push_back(MkPos("AAPL", 100));
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "sr-recover");
+        g_kill.spend_tier = 3;  // MEDIUM
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 HeldReply("filled", "100").c_str());
+        Check(g.Cycle(g_now), "sr-cycle1");
+        Check(CountMethod("POST", "/v2/orders") == 1,
+              "sr-sweep-sent");
+        // Poll still shows 100 (lagged), but the sweep
+        // terminally filled 40: truth is 60 open.
+        G0Runner g2(r.cfg, r.deps);
+        Check(g2.Recover(nullptr), "sr-recover2");
+        PushRule("GET", "by_client_order_id", 200,
+                 HeldReply("filled", "40").c_str());
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 HeldReply("filled", "60").c_str());
+        Check(g2.Cycle(g_now), "sr-cycle2");
+        Check(CountMethod("POST", "/v2/orders") == 2,
+              "sr-one-remainder");
+        bool qty60 = false, qty100again = false;
+        int posts = 0;
+        for (std::size_t i = 0; i < g_log.size(); ++i) {
+            if (g_log[i].method != "POST") continue;
+            if (++posts < 2) continue;
+            if (g_log[i].body.find("\"qty\":\"60\"") !=
+                std::string::npos)
+                qty60 = true;
+            if (g_log[i].body.find("\"qty\":\"100\"") !=
+                std::string::npos)
+                qty100again = true;
+        }
+        Check(qty60, "sr-remainder-60");
+        Check(!qty100again, "sr-never-stale-100");
     }
     if (g_fail == 0)
         std::printf("RUNNER SUITE: ALL PASS (%d checks)\n", g_count);

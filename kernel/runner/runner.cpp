@@ -2719,7 +2719,8 @@ void G0Runner::MediumPass(long long now_ns) {
             if (pre.transport_ok && pre.found) {
                 broker::CloseResult c = QueryToClose(pre);
                 if ((c.state == broker::CloseState::FILLED ||
-                     c.state == broker::CloseState::PARTIAL) &&
+                     c.state == broker::CloseState::PARTIAL ||
+                     c.state == broker::CloseState::DEAD) &&
                     c.filled_qty > 0 &&
                     !AttributeClosedQty(ps[i].symbol,
                                        c.filled_qty, now_ns))
@@ -2745,17 +2746,62 @@ void G0Runner::MediumPass(long long now_ns) {
                     continue;
                 }
                 // DEAD, or FILLED-short of the live position:
-                // deterministic incident remainder under the
-                // CURRENT broker qty — pre-flighted, so each
-                // distinct id sends at most once. Covered symbols
-                // reconcile (above) but never mint: the owned
-                // local close carries the rest.
+                // the replacement derives from FRESH authoritative
+                // exposure re-read NOW — never from the stale
+                // snapshot aq that the terminal-short result
+                // already disproved. Size = min(logical remainder,
+                // |fresh|): flat sends nothing, drifted direction
+                // sends nothing (S2 owns the anomaly), unavailable
+                // fresh retries next cycle. The remainder tag
+                // carries the derived size (one identity per
+                // remainder, pre-flighted so each sends at most
+                // once). Covered symbols reconcile (above) but
+                // never mint: the owned local close carries
+                // the rest.
                 if (covered) {
                     pending = true;
                     continue;
                 }
+                long long landed = c.filled_qty;
+                if (landed < 0) landed = 0;
+                long long logical = aq - landed;
+                if (logical < 0) logical = 0;
+                long long fresh = 0;
+                if (!BrokerQty(ps[i].symbol, &fresh)) {
+                    OpsRow("drift-directive", "runner",
+                           "medium-sweep-fresh-unavailable",
+                           now_ns);
+                    Alert(P("alerts.jsonl").c_str(), "MEDIUM",
+                          "medium-sweep-fresh-unavailable",
+                          ps[i].symbol, now_ns);
+                    pending = true;
+                    continue;
+                }
+                long long dir =
+                    (fresh > 0) ? 1 : (fresh < 0 ? -1 : 0);
+                long long want =
+                    (eside == broker::OrderSide::SELL) ? 1 : -1;
+                if (fresh == 0) continue;  // flat: nothing to send
+                if (dir != want) {
+                    OpsRow("drift-directive", "runner",
+                           "medium-sweep-direction-drift",
+                           now_ns);
+                    Alert(P("alerts.jsonl").c_str(), "MEDIUM",
+                          "medium-sweep-direction-drift",
+                          ps[i].symbol, now_ns);
+                    pending = true;
+                    continue;
+                }
+                long long afresh =
+                    (fresh > 0) ? fresh : -fresh;
+                long long send =
+                    (logical < afresh) ? logical : afresh;
+                if (send <= 0) {
+                    pending = true;
+                    continue;
+                }
                 std::string rsid = SweepRemainderTag(
-                    epoch, ps[i].symbol, aq);
+                    epoch, ps[i].symbol, send);
                 char rhcoid[65] = {0};
                 if (!broker::MakeClientOrderId(
                         cfg_.venue.broker, cfg_.venue.account,
@@ -2792,14 +2838,14 @@ void G0Runner::MediumPass(long long now_ns) {
                     continue;
                 }
                 broker::CloseResult c2 = adapter_.MarketClose(
-                    ps[i].symbol, aq, eside, rhcoid);
+                    ps[i].symbol, send, eside, rhcoid);
                 if (c2.transport_ok) {
                     pending = true;
                     char tb[280];
                     std::snprintf(tb, sizeof(tb),
                                     "medium-sweep sym=%.15s qty=%lld "
                                     "id=%.60s",
-                                    ps[i].symbol, aq,
+                                    ps[i].symbol, send,
                                     rsid.c_str());
                     OpsRow("drift-directive", "runner", tb,
                            now_ns);
