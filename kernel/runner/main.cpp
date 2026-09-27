@@ -77,6 +77,7 @@ int main(int argc, char** argv) {
     std::strncpy(cfg.venue.account, "g0-paper", 31);
     std::strncpy(cfg.venue.context_hash,
                  "GENESIS-NO-SNAPSHOT-CONTEXT", 64);
+    cfg.venue.context_hash[64] = '\0';
     jev::runner::RunnerDeps deps;
     deps.transport = nullptr;  // Phase 4 wires live HTTPS (fail closed)
     deps.now_ns = WallNs;

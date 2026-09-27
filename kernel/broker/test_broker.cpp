@@ -133,6 +133,36 @@ int main() {
                                  "i", nullptr),
               "id-rejects-null");
     }
+    // 1b. Identity-hash inputs are length-bounded (doc 06 sec.
+    // 6.1b): a full-width UNTERMINATED context hashes exactly
+    // its 64 bytes — never stack garbage past them — identical
+    // to the NUL-terminated form, and stable across different
+    // trailing garbage. (Unterminated 64-char fields once made
+    // order ids nondeterministic across restarts, breaking
+    // pre-flight dedupe.)
+    {
+        char ctx[65];
+        for (int i = 0; i < 64; ++i) ctx[i] = 'a';
+        ctx[64] = 'X';  // garbage stand-in: must stay unread
+        char u[65] = {0}, v[65] = {0}, w[65] = {0};
+        bool oku = MakeClientOrderId("alpaca-paper", "test",
+                                       ctx, "AAPL", OrderSide::SELL,
+                                       "tag-1", u);
+        char ctx0[65];
+        for (int i = 0; i < 64; ++i) ctx0[i] = 'a';
+        ctx0[64] = 0;
+        bool okv = MakeClientOrderId("alpaca-paper", "test",
+                                       ctx0, "AAPL", OrderSide::SELL,
+                                       "tag-1", v);
+        ctx[64] = 'Y';  // different garbage: same identity
+        bool okw = MakeClientOrderId("alpaca-paper", "test",
+                                       ctx, "AAPL", OrderSide::SELL,
+                                       "tag-1", w);
+        bool same = oku && okv && okw;
+        for (int i = 0; i < 65 && same; ++i)
+            if (u[i] != v[i] || u[i] != w[i]) same = false;
+        Check(same, "id-bounded-context");
+    }
     // 2. paper fill model (frozen): adverse full spread, min 1bp
     {
         Quote q;

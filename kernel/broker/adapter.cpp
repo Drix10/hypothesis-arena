@@ -7,6 +7,20 @@
 namespace jev {
 namespace broker {
 
+namespace {
+// Length-bounded append for the frozen id recipe: valid inputs
+// (NUL inside the cap) hash byte-identically to before; a
+// full-width unterminated field truncates instead of reading
+// stack garbage into the identity (nondeterministic ids across
+// restarts would break pre-flight dedupe — doc 06 sec. 6.1b).
+void AppendCapped(std::string& out, const char* s,
+                  std::size_t cap) {
+    if (!s) return;
+    for (std::size_t i = 0; i < cap && s[i] != '\0'; ++i)
+        out.push_back(s[i]);
+}
+}  // namespace
+
 bool IsBrokerUuid(const char* s) {
     if (!s || !s[0]) return false;
     for (int i = 0; i < 36; ++i) {
@@ -31,17 +45,17 @@ bool MakeClientOrderId(const char* broker, const char* account,
         !symbol[0] || !intent_id || !intent_id[0] || !out65)
         return false;
     std::string joined;
-    joined += broker;
+    AppendCapped(joined, broker, 32);
     joined += '\x1f';
-    joined += account;
+    AppendCapped(joined, account, 32);
     joined += '\x1f';
-    joined += context_hash_hex;
+    AppendCapped(joined, context_hash_hex, 64);
     joined += '\x1f';
-    joined += symbol;
+    AppendCapped(joined, symbol, 16);
     joined += '\x1f';
     joined += (side == OrderSide::BUY) ? "BUY" : "SELL";
     joined += '\x1f';
-    joined += intent_id;
+    AppendCapped(joined, intent_id, 64);
     std::string hex = jev::Sha256Hex(joined);
     if (hex.size() != 64) return false;
     for (int i = 0; i < 64; ++i) out65[i] = hex[i];
