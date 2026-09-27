@@ -47,7 +47,8 @@ def main():
                                     variant=v, day_fn=DAY, data_id=data_id)
               for v in s5.VARIANTS}
     recs = by_var[s5.VARIANTS[0]]
-    folds, holdout, _bound = s5f.holdout_split(recs, n_splits=2)
+    split = s5f.holdout_split(recs, n_splits=2)
+    folds, holdout, _bound, tok = split
     stats = {}
     for v in s5.VARIANTS:
         _, _b = s5.segment_bounds(by_var[v], n_splits=2)
@@ -66,12 +67,11 @@ def main():
             if r["cid"] not in _seen:
                 _seen.add(r["cid"])
                 train_recs.append(r)
-    pw = s5.power_study(train_recs, 0.15)
+    pw = s5.power_study(train_recs, s5f.frozen_knobs()["power_mde"])
     assert not ({r["cid"] for r in holdout} &
                 {r["cid"] for r in train_recs})
-    # token-bound holdout materialization (day reconstruction,
-    # duplicates, wrong multipliers, fake sets all rejected)
-    tok = s5f.make_holdout_token(holdout, _bound)
+    # digest-bound split evidence (subsets, duplicates, wrong
+    # multipliers, mutated content all rejected)
     hset = s5f.assert_exact_holdout(holdout, holdout)
     h1x = {v: [r for r in by_var[v] if r["cid"] in hset]
            for v in s5.VARIANTS}
@@ -83,17 +83,12 @@ def main():
               for v in s5.VARIANTS}
         stress[lab] = {v: [r for r in sv[v] if r["cid"] in hset]
                        for v in s5.VARIANTS}
-    # sessions: 16:00 America/New_York closes (plan 11 CAL7); marks are
-    # the last bar at-or-before each ET close (after-hours never marks).
-    sess = []
-    for d in sorted({r["day"] for r in holdout}):
-        close = s5.et_close_ns(d)
-        closes = {}
-        for sym, bs in bars.items():
-            closes[sym] = s5.last_close_at_or_before(bs, close)
-        sess.append({"day": d, "end_ts": close, "close_ns": close,
-                     "closes": closes})
-    rep = s5f.final_report(h1x, stress, sess, 100000.0, tok,
+    # sessions built canonically inside the final path from the frozen
+    # bars (16:00 ET closes; after-hours never marks) and rebuild-
+    # verified there; forged closes unrepresentable.
+    sess, proof = s5f.build_holdout_sessions(bars, tok, data_id)
+    rep = s5f.final_report(split, h1x, stress, sess, proof, bars,
+                           data_id, 100000.0,
                            selected_variant=chosen)
     out = {"slice": s2_run.SLICE_ID, "n_stream": len(items),
            "n_holdout": len(holdout),

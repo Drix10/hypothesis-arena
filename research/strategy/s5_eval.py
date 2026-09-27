@@ -310,14 +310,26 @@ def seq_pair(deltas, days, reps=BOOT_REPS, seed=BOOT_SEED):
     return (interim, seq_decision(deltas, days, "final", reps, seed))
 
 
-def daily_returns(rets):
+def daily_returns(rets, include_first=False):
     """Close-to-close daily returns for Sharpe (plan 11 CAL7).
 
-    Drops the boundary-to-first-close stub interval: with a mid-session
-    holdout start that interval is partial and must never be mislabeled
-    a full daily observation. It stays in the equity curve (DD/base)
-    but never in the Sharpe vector."""
-    return list(rets[1:])
+    The boundary-to-first-close stub interval is included ONLY when the
+    caller proves (via holdout_start vs session open) that it holds a
+    complete session; otherwise it stays in the equity curve (DD/base)
+    but never in the Sharpe vector. Default excludes (fail closed)."""
+    return list(rets if include_first else rets[1:])
+
+
+def et_open_ns(day):
+    """09:30 America/New_York open for YYYY-MM-DD, in epoch ns.
+
+    Session-open companion to et_close_ns (plan 12 NYSE-session bars).
+    Used ONLY to decide whether a holdout boundary falls mid-session."""
+    from zoneinfo import ZoneInfo
+    y, m, d = (int(x) for x in day.split("-"))
+    return int(datetime.datetime(y, m, d, 9, 30,
+                                 tzinfo=ZoneInfo("America/New_York")
+                                 ).timestamp() * 1e9)
 
 
 def et_close_ns(day):
@@ -425,6 +437,10 @@ def portfolio_curve(records, policy, equity, sessions):
     No future position ever enters an earlier mark.
     Returns (trades, curve, returns, max_dd)."""
     assert policy in ("always", "filtered")
+    for s in sessions:
+        if "close_ns" in s:
+            assert s["end_ts"] == s["close_ns"], \
+                "end_ts/close_ns seam: %r" % (s,)
     assert all(sessions[i]["end_ts"] <= sessions[i + 1]["end_ts"]
                for i in range(len(sessions) - 1))
     # event queue: (ts, kind, record) with exits(0) before entries(1)
@@ -578,7 +594,9 @@ R_S5_STATUS = {
     "R2-total": ("CHECKED", "sweep admission + post-hoc verify"),
     "R2-pending": ("UNAVAILABLE", "no order/ack model in research fills"),
     "R3-churn": ("CHECKED", "post-hoc: 20/day, 3/symbol/hour"),
-    "R4-fliplock": ("CHECKED", "post-hoc: no opposite entry <1h post-exit"),
+    "R4-fliplock": ("CHECKED", "exact doc-05 two-order machine over "
+                      "position-sign transitions; flat-mediated S5 "
+                      "transitions structurally cannot complete"),
     "R5-halt": ("UNAVAILABLE", "needs per-cycle snapshot equity + "
                   "persisted HWMs; S5 has daily-close marks only"),
     "R6-vol": ("UNAVAILABLE", "no 480+24h baselines / data-age gates"),
@@ -599,6 +617,15 @@ R_CHECKED = sorted(k for k, (s, _) in R_S5_STATUS.items() if s == "CHECKED")
 R_UNAVAILABLE = sorted(k for k, (s, _) in R_S5_STATUS.items()
                        if s == "UNAVAILABLE")
 REQUIRED_STRESS = ("1.5x", "2x", "3x")
+R_SCOPE_NOTE = (
+    "S5 CHECKED = exact frozen semantics re-verified on the simulated "
+    "taken-trade ledger where the inputs exist (R1 direction/concurrency, "
+    "R2 single/total concentration, R3 day/symbol-hour churn, R4 two-order "
+    "flip machine, R8 v4-table gate, R12 structural no-lookahead, R14 "
+    "disagreement flag, stop-rule frozen exits). Live pending-order, "
+    "intraday-HWM, vol-baseline, correlation-engine, venue, spend, and "
+    "stage semantics stay UNAVAILABLE/NOT_APPLICABLE (see R_S5_STATUS); "
+    "they are never described as checked.")
 
 
 def verify_r_monitor(trades, curve, day_of=None):

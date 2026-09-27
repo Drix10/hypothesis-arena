@@ -163,5 +163,30 @@
     "sessions": "16:00 America/New_York session contract (plan 11 CAL7): marks are last bar at-or-before the ET close (after-hours never marks); sessions must carry exact close_ns and cover exactly the token dates; Sharpe uses close-to-close daily_returns (boundary-to-first-close stub stays in curve/DD, never in Sharpe); zero-trade days emit 0.0",
     "sequential": "seq_pair: interim stop (futility or efficacy) => final is not_run, never computed on later observations; evidence stays on the fold-selected variant",
     "r4": "exact doc-05 two-order machine (r4_completions); flat-mediated S5 trade transitions cannot complete a flip; direct-transition hostiles prove the machine"
+  },
+  "inference_knobs": {
+    "boot_seed": 24269,
+    "boot_reps": 2000,
+    "null_seed": 24270,
+    "seq_alpha_interim": 0.025,
+    "seq_alpha_final": 0.025,
+    "seq_reps": 2000,
+    "seq_seed": 24269,
+    "holm_alpha": 0.05,
+    "power_mde": 0.15,
+    "power_alpha": 0.025,
+    "power_reps": 200,
+    "power_inner": 200,
+    "power_seed": 41721,
+    "power_target": 0.8
+  },
+  "amendment_e": {
+    "scope": "final-evidence authority only; no threshold/alpha/MDE/search-budget change; all values below restate already-frozen numbers structurally",
+    "record_digest": "split token binds record_hash = SHA256(sorted eval_hash); per-record eval_hash recomputed in final path; stress/variant twins field-compared with STRESS_MUTABLE/VARIANT_MUTABLE allowlists",
+    "sessions": "built canonically inside final path from frozen bars (build_holdout_sessions); end_ts == close_ns asserted in portfolio_curve; session_hash + data slice/sha echoed as session_proof",
+    "first_interval": "boundary-aware via holdout_start vs 09:30 ET session open (et_open_ns); mid-session excludes the partial stub from Sharpe, exact-close includes the first full daily return",
+    "baseline_gate": "mechanical challenger-vs-baseline_v1 comparator (docs 07/11/12) on the same window/sessions/costs at 1x/1.5x/2x/3x; fail closed when artifact absent/malformed/mismatched; S2 OPEN so no valid artifact exists yet",
+    "knobs": "inference_knobs section is the single parsed source (frozen_knobs); check_knobs proves s5_eval defaults match; stale either side fails closed",
+    "r_scope": "R_S5_STATUS prose synced to exact implemented semantics (R4 two-order machine); R_SCOPE_NOTE echoed in rep; live pending/intraday-HWM/vol/corr/venue/spend/stage semantics stay UNAVAILABLE/NOT_APPLICABLE and are never described as checked"
   }
 }

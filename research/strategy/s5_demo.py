@@ -31,7 +31,8 @@ def main():
                                     data_id=test_s5.DATA_ID)
               for v in s5.VARIANTS}
     recs = by_var[s5.VARIANTS[0]]
-    folds, holdout, _bound = s5f.holdout_split(recs, n_splits=2)
+    split = s5f.holdout_split(recs, n_splits=2)
+    folds, holdout, _bound, tok = split
     stats = {}
     for v in s5.VARIANTS:
         _, _b = s5.segment_bounds(by_var[v], n_splits=2)
@@ -43,17 +44,17 @@ def main():
     # interim stop => final is NOT RUN (prereg sequential_rule).
     sd, sy = s5.closed_stream(by_var[chosen])
     seq_i, seq_f = s5.seq_pair(sd, sy)
-    # power on the deduplicated pre-holdout training population
+    # power on the deduplicated pre-holdout training population, MDE
+    # parsed from the prereg (no runner literal).
     seen, train_recs = set(), []
     for f in folds:
         for r in f[0]:
             if r["cid"] not in seen:
                 seen.add(r["cid"])
                 train_recs.append(r)
-    pw = s5.power_study(train_recs, 0.15)
-    # token-bound holdout materialization (day reconstruction,
-    # duplicates, wrong multipliers, fake sets all rejected)
-    tok = s5f.make_holdout_token(holdout, _bound)
+    pw = s5.power_study(train_recs, s5f.frozen_knobs()["power_mde"])
+    # digest-bound split evidence (subsets, duplicates, wrong
+    # multipliers, mutated content all rejected)
     hset = s5f.assert_exact_holdout(holdout, holdout)
     h1x = {v: [r for r in by_var[v] if r["cid"] in hset]
            for v in s5.VARIANTS}
@@ -66,9 +67,16 @@ def main():
               for v in s5.VARIANTS}
         stress[lab] = {v: [r for r in sv[v] if r["cid"] in hset]
                        for v in s5.VARIANTS}
-    sess = [x for x in test_s5.sessions_for(items)
-            if x["day"] in {r["day"] for r in holdout}]
-    rep = s5f.final_report(h1x, stress, sess, 100000.0, tok,
+    # synthetic bar panel matching the hand closes; sessions built
+    # canonically inside the final path and rebuild-verified.
+    _closes = {x["day"]: x["closes"]["SYN"]
+               for x in test_s5.sessions_for(items)}
+    bars = {"SYN": [test_s5.Bar(ts_ns=s5.et_close_ns(d), o=px, h=px,
+                                l=px, c=px) for d, px in
+                    sorted(_closes.items())]}
+    sess, proof = s5f.build_holdout_sessions(bars, tok, test_s5.DATA_ID)
+    rep = s5f.final_report(split, h1x, stress, sess, proof, bars,
+                           test_s5.DATA_ID, 100000.0,
                            selected_variant=chosen)
     out = {"experiment_id": pre["experiment_id"], "protocol": "eval_v1",
            "prereg": "v2", "n_candidates": len(items),

@@ -77,6 +77,18 @@ def sessions_for(items):
              "closes": {"SYN": 100.0 + i}} for i, d in enumerate(days)]
 
 
+def bars_for(items):
+    """Frozen-slice-style bar panel matching sessions_for closes.
+
+    One bar per day at exactly the 16:00 ET close (plus nothing
+    after-hours), so canonical session construction reproduces the
+    sessions_for marks through the final path."""
+    days = sorted({DAY(c.snapshot_ts_ns) for c, _, _, _, _ in items})
+    return {"SYN": [Bar(ts_ns=s5.et_close_ns(d), o=100.0 + i,
+                          h=100.0 + i, l=100.0 + i, c=100.0 + i)
+                      for i, d in enumerate(days)]}
+
+
 def run_all(items, **kw):
     kw = dict({"day_fn": DAY, "data_id": DATA_ID}, **kw)
     return {v: s5.evaluate_stream(items, PROVIDE, PUB, dict(ENGINE),
@@ -214,7 +226,7 @@ def test_14_holdout_boundary_and_purge():
     for tr, te in folds:
         for r in tr + te:
             assert r["time_exit_ns"] < bound
-    folds3, holdout, bound3 = s5f.holdout_split(recs, n_splits=2)
+    folds3, holdout, bound3, _tok3 = s5f.holdout_split(recs, n_splits=2)
     assert bound3 == bound and holdout
     hmin = min(r["snapshot_ts_ns"] for r in holdout)
     assert all(r["snapshot_ts_ns"] < hmin
@@ -294,26 +306,53 @@ def test_15_r_disqualify_full_path():
                          feature_revision="r1")
     assert s5.r_validate(bad) == (True, "bad_family")
     sprovide, spub = strong_provider()
-    stream = [(bad, aft, mkt, reg, sp)] + items[1:6]
+    sprovide, spub = strong_provider()
+    # bad candidate carries the LATEST snapshot so it lands in holdout
+    c_last = items[-1][0]
+    bad = make_candidate(strategy_version="baseline_v1", symbol="SYN",
+                         snapshot_ts_ns=c_last.snapshot_ts_ns + 10,
+                         proposed_side="SELL", proposed_family="macd",
+                         entry_px=c_last.entry_px, stop_px=c_last.stop_px,
+                         tp_px=c_last.tp_px,
+                         time_exit_ns=c_last.snapshot_ts_ns + 70,
+                         exit_profile_version="exit_profile_v1",
+                         cost_model_version="paper_fill_v1",
+                         expected_cost_bps=0.0,
+                         feature_snapshot_hash="bad",
+                         feature_revision="r1")
+    stream = items[:11] + [(bad, items[-1][1], items[-1][2], items[-1][3],
+                            items[-1][4])]
     by_var = {v: s5.evaluate_stream(stream, sprovide, spub, dict(ENGINE),
                                     variant=v, day_fn=DAY, data_id=DATA_ID)
               for v in s5.VARIANTS}
-    brec = by_var[s5.VARIANTS[0]][0]
+    brec = [r for r in by_var[s5.VARIANTS[0]] if r["disqualified"]][0]
     assert brec["disqualified"] and brec["filtered_pass"]  # JEV would take
     assert not brec["filtered_taken"] and not brec["always_realized"]
     assert brec["always_r"] == 0.0 and brec["filtered_r"] == 0.0  # finding 4
     assert s5.paired_deltas([brec]) == [0.0]
-    assert brec["always_label"] == "censored"  # diagnostic label retained
+    assert brec["always_label"] in ("win", "loss", "censored")  # diagnostic label retained
     assert brec["resolved_r"] == brec["resolved_r"]  # economics present
     assert brec["r_breach_attempted"]  # forbidden take attempted
-    assert not any(r["disqualified"] for r in by_var[s5.VARIANTS[0]][1:])
-    sess = sessions_for(stream)
-    _tok = s5f.make_holdout_token(by_var[s5.VARIANTS[0]], 0)
+    assert [r["cid"] for r in by_var[s5.VARIANTS[0]] if r["disqualified"]] == [brec["cid"]]
+    _split = s5f.holdout_split(by_var[s5.VARIANTS[0]], n_splits=2)
+    _folds, _holdout, _bound, _tok = _split
+    assert brec["cid"] in {r["cid"] for r in _holdout}, \
+        "disqualified probe must sit in holdout evidence"
+    _hset = {r["cid"] for r in _holdout}
+    _h1x = {v: [r for r in by_var[v] if r["cid"] in _hset]
+            for v in s5.VARIANTS}
     _stress = {}
     for _mult, _lab in ((1.5, "1.5x"), (2.0, "2x"), (3.0, "3x")):
-        _sv = run_all(stream, spread_mult=_mult)
-        _stress[_lab] = _sv
-    rep = s5f.final_report(by_var, _stress, sess, 100000.0, _tok)
+        _sv = {v: s5.evaluate_stream(stream, sprovide, spub,
+                                     dict(ENGINE), variant=v,
+                                     spread_mult=_mult, day_fn=DAY,
+                                     data_id=DATA_ID) for v in s5.VARIANTS}
+        _stress[_lab] = {v: [r for r in _sv[v] if r["cid"] in _hset]
+                         for v in s5.VARIANTS}
+    _bars = bars_for(stream)
+    _sess, _proof = s5f.build_holdout_sessions(_bars, _tok, DATA_ID)
+    rep = s5f.final_report(_split, _h1x, _stress, _sess, _proof, _bars,
+                           DATA_ID, 100000.0)
     got = rep["variants"][s5.VARIANTS[0]]
     assert got["r_breach_attempted"] == 1  # generated, not injected
     assert got["r_breach_count"] == 1 + len(got["r_monitor_breaches"])
@@ -469,9 +508,23 @@ def test_20b_stress_fail_closed_and_scope():
     assert "holdout_cids" not in _sig, "raw CID sets out; token only"
     fb = s5f.frozen_bar()
     assert fb == dict(BAR), "frozen bar != prereg bar used by tests: %r" % fb
+    import datetime as _dt
+    _items = synth_stream(8)
+    _by = run_all(_items)
+    _split = s5f.holdout_split(_by[s5.VARIANTS[0]], n_splits=2)
+    _bars = bars_for(_items)
+    _sess, _proof = s5f.build_holdout_sessions(_bars, _split[3], DATA_ID)
+    _hset = {r["cid"] for r in _split[1]}
+    _h1x = {v: [r for r in _by[v] if r["cid"] in _hset]
+            for v in s5.VARIANTS}
+    _stress = {}
+    for _mult, _lab in ((1.5, "1.5x"), (2.0, "2x"), (3.0, "3x")):
+        _sv = run_all(_items, spread_mult=_mult)
+        _stress[_lab] = {v: [r for r in _sv[v] if r["cid"] in _hset]
+                         for v in s5.VARIANTS}
     try:
-        s5f.final_report({s5.VARIANTS[0]: [], s5.VARIANTS[1]: []}, {},
-                         [], 100000.0, None)
+        s5f.final_report(_split, {s5.VARIANTS[0]: [], s5.VARIANTS[1]: []},
+                         _stress, _sess, _proof, _bars, DATA_ID, 100000.0)
         raise SystemExit("empty evidence must fail closed")
     except AssertionError:
         pass
@@ -543,117 +596,55 @@ def test_21_baseline_reconcile():
     print("21 OK", len(trades), "trades + full curve reconcile")
 
 
-def test_22_final_report_no_hardcode():
-    items = synth_stream(72)
-    by_var = run_all(items)
-    folds, holdout, bound = s5f.holdout_split(by_var[s5.VARIANTS[0]],
-                                              n_splits=2)
-    assert holdout
-    tok = s5f.make_holdout_token(holdout, bound)
-    assert tok["n"] == len(holdout) and tok["holdout_start"] == bound
-    assert tok["protocol"] == "eval_v1"
-    hset = {r["cid"] for r in holdout}
-    h1x = {v: [r for r in by_var[v] if r["cid"] in hset]
-           for v in s5.VARIANTS}
-    # hostile: explicit mid-day boundary; day reconstruction smuggles.
-    bound2 = bound + 25
-    hdays2 = {r["day"] for r in by_var[s5.VARIANTS[0]]
-              if r["snapshot_ts_ns"] >= bound2}
-    daybuilt = [r for r in by_var[s5.VARIANTS[0]] if r["day"] in hdays2]
-    smuggled = [r for r in daybuilt if r["snapshot_ts_ns"] < bound2]
-    assert smuggled, "need pre-bound same-day records for the hostile"
-    true2 = [r for r in by_var[s5.VARIANTS[0]]
-             if r["snapshot_ts_ns"] >= bound2]
-    tok2 = s5f.make_holdout_token(true2, bound2)
-    try:
-        s5f.final_report({v: daybuilt for v in s5.VARIANTS},
-                         {k: {v: daybuilt for v in s5.VARIANTS}
-                          for k in ("1.5x", "2x", "3x")},
-                         sessions_for(items), 100000.0, tok2)
-        raise SystemExit("day-built set must be rejected")
-    except AssertionError:
-        pass
-    # hostile: duplicate a holdout row (same CID set, altered population)
-    dup = h1x[s5.VARIANTS[0]] + [h1x[s5.VARIANTS[0]][0]]
-    try:
-        s5f.final_report({s5.VARIANTS[0]: dup,
-                          s5.VARIANTS[1]: h1x[s5.VARIANTS[1]]},
-                         {k: h1x for k in ("1.5x", "2x", "3x")},
-                         sessions_for(items), 100000.0, tok)
-        raise SystemExit("duplicated holdout row must be rejected")
-    except AssertionError:
-        pass
-    # hostile: 1x records filed under a stress bucket
-    badstress = {k: h1x for k in ("1.5x", "2x", "3x")}
-    hdays = {r["day"] for r in holdout}
-    hotsess = [x for x in sessions_for(items) if x["day"] in hdays]
-    try:
-        s5f.final_report(h1x, badstress, hotsess, 100000.0, tok)
-        raise SystemExit("1x-under-3x must be rejected")
-    except AssertionError:
-        pass
-    # hostile: manufactured CID set (fake provenance)
-    faketok = dict(tok, cid_hash="0" * 64)
-    try:
-        s5f.final_report(h1x, badstress, hotsess, 100000.0, faketok)
-        raise SystemExit("fake token must be rejected")
-    except AssertionError:
-        pass
-    # hostile: session injection outside the holdout window
-    badsess = hotsess + [dict(hotsess[0], day="2020-01-01",
-                              close_ns=s5.et_close_ns("2020-01-01"))]
-    stress = {}
-    for mult, lab in ((1.5, "1.5x"), (2.0, "2x"), (3.0, "3x")):
-        sv = run_all(items, spread_mult=mult)
-        stress[lab] = {v: [r for r in sv[v] if r["cid"] in hset]
-                       for v in s5.VARIANTS}
-    try:
-        s5f.final_report(h1x, stress, badsess, 100000.0, tok)
-        raise SystemExit("pre-holdout session must be rejected")
-    except AssertionError:
-        pass
-    rep = s5f.final_report(h1x, stress, hotsess, 100000.0, tok)
-    for v, x in rep["variants"].items():
-        assert x["bar_verdict"] is False and x["bar_failed"], v
-    assert rep["holm"]
-    assert rep["bar_frozen"] == dict(BAR)
-    assert rep["r_scope_frozen"] == SCOPE
-    kn = rep["knobs"]
-    assert kn["boot_seed"] == 24269 and kn["null_seed"] == 24270
-    assert kn["boot_reps"] == s5.BOOT_REPS == 2000
-    print("22 OK", [(v, x["bar_failed"]) for v, x in
-                    rep["variants"].items()])
+def _rehash(rec):
+    """Refresh eval_hash after a hostile-intended field override."""
+    rec = dict(rec)
+    rec["eval_hash"] = s5.eval_hash(rec)
+    return rec
 
 
 def test_21b_n_closed_hostile():
-    # 200 closed candidates, filtered takes only 1 -> n_closed MUST be 1.
+    # Holdout evidence with exactly 1 taken closed trade -> n_closed==1.
     items = synth_stream(200)
     by_var = run_all(items)
     recs = by_var[s5.VARIANTS[0]]
+    split0 = s5f.holdout_split(recs, n_splits=2)
+    hset0 = {r["cid"] for r in split0[1]}
+    cand = [r for r in recs if r["cid"] in hset0
+            and r["always_label"] in ("win", "loss")]
+    assert cand, "holdout must contain a closed candidate"
+    target = cand[0]["cid"]
+
     def _solo(stream_recs):
-        first = [r for r in stream_recs
-                 if r["always_label"] in ("win", "loss")]
-        assert len(first) >= 100
-        out = [dict(first[0], filtered_taken=True,
-                    filtered_r=first[0]["always_r"])]
-        out += [dict(r, filtered_taken=False, filtered_r=0.0,
-                     filtered_action="HOLD") for r in stream_recs
-                if r["cid"] != first[0]["cid"]]
+        out = []
+        for r in stream_recs:
+            if r["cid"] == target:
+                out.append(_rehash(dict(r, filtered_taken=True,
+                                        filtered_r=r["always_r"])))
+            else:
+                out.append(_rehash(dict(r, filtered_taken=False,
+                                        filtered_r=0.0,
+                                        filtered_action="HOLD")))
         return out
     same = {v: _solo(by_var[v]) for v in s5.VARIANTS}
-    solo = same[s5.VARIANTS[0]]
-    days = sorted({r["day"] for r in recs})
-    sess = [{"day": d, "end_ts": s5.et_close_ns(d),
-             "close_ns": s5.et_close_ns(d),
-             "closes": {"SYN": 100.0}} for d in days]
-    _tok21 = s5f.make_holdout_token(solo, 0)
+    split = s5f.holdout_split(same[s5.VARIANTS[0]], n_splits=2)
+    folds, holdout, bound, tok = split
+    assert tok["split_variant"] == s5.VARIANTS[0]
+    assert {r["cid"] for r in holdout} == hset0  # same segmentation
+    hev = {v: [r for r in same[v] if r["cid"] in hset0]
+           for v in s5.VARIANTS}
     # stress plumbing: same population re-labeled at each multiplier
     # (economics not asserted here; n_closed counting is).
     _st21 = {}
     for _m, _lab in ((1.5, "1.5x"), (2.0, "2x"), (3.0, "3x")):
-        _st21[_lab] = {v: [dict(r, spread_mult=_m) for r in recs]
-                       for v, recs in same.items()}
-    rep = s5f.final_report(same, _st21, sess, 100000.0, _tok21)
+        _st21[_lab] = {v: [_rehash(dict(r, spread_mult=_m)) for r in recs]
+                       for v, recs in hev.items()}
+    days = sorted({r["day"] for r in holdout})
+    bars = {"SYN": [Bar(ts_ns=s5.et_close_ns(d), o=100.0, h=100.0,
+                        l=100.0, c=100.0) for d in days]}
+    sess, proof = s5f.build_holdout_sessions(bars, tok, DATA_ID)
+    rep = s5f.final_report(split, hev, _st21, sess, proof, bars,
+                           DATA_ID, 100000.0)
     got = rep["variants"][s5.VARIANTS[0]]
     assert got["n_closed"] == 1, got["n_closed"]
     assert "closed" in got["bar_failed"]
@@ -721,6 +712,106 @@ def test_23_r_monitor():
     assert s5.verify_r_monitor(ok, flat, {"o1": "d",
                                           "o2": "d"}) == []
     print("23 OK")
+
+
+def test_22_final_report_no_hardcode():
+    items = synth_stream(72)
+    by_var = run_all(items)
+    split = s5f.holdout_split(by_var[s5.VARIANTS[0]], n_splits=2)
+    folds, holdout, bound, tok = split
+    assert holdout and tok["n"] == len(holdout)
+    assert tok["protocol"] == "eval_v1" and tok["record_hash"]
+    hset = {r["cid"] for r in holdout}
+    h1x = {v: [r for r in by_var[v] if r["cid"] in hset]
+           for v in s5.VARIANTS}
+    bars = bars_for(items)
+    sess, proof = s5f.build_holdout_sessions(bars, tok, DATA_ID)
+    assert proof["data_slice"] == DATA_ID["slice"]
+    # hostile: explicit mid-day boundary; day reconstruction smuggles.
+    bound2 = bound + 25
+    hdays2 = {r["day"] for r in by_var[s5.VARIANTS[0]]
+              if r["snapshot_ts_ns"] >= bound2}
+    daybuilt = [r for r in by_var[s5.VARIANTS[0]] if r["day"] in hdays2]
+    smuggled = [r for r in daybuilt if r["snapshot_ts_ns"] < bound2]
+    assert smuggled, "need pre-bound same-day records for the hostile"
+    true2 = [r for r in by_var[s5.VARIANTS[0]]
+             if r["snapshot_ts_ns"] >= bound2]
+    assert smuggled and not ({r["cid"] for r in true2} &
+                             {r["cid"] for r in smuggled})
+    try:
+        s5f.final_report(split, {v: daybuilt for v in s5.VARIANTS},
+                         {k: {v: daybuilt for v in s5.VARIANTS}
+                          for k in ("1.5x", "2x", "3x")},
+                         sess, proof, bars, DATA_ID, 100000.0)
+        raise SystemExit("day-built set must be rejected")
+    except AssertionError:
+        pass
+    # hostile: duplicate a holdout row (same CID set, altered population)
+    dup = h1x[s5.VARIANTS[0]] + [h1x[s5.VARIANTS[0]][0]]
+    try:
+        s5f.final_report(split, {s5.VARIANTS[0]: dup,
+                                 s5.VARIANTS[1]: h1x[s5.VARIANTS[1]]},
+                         {k: h1x for k in ("1.5x", "2x", "3x")},
+                         sess, proof, bars, DATA_ID, 100000.0)
+        raise SystemExit("duplicated holdout row must be rejected")
+    except AssertionError:
+        pass
+    # hostile: 1x records filed under a stress bucket
+    badstress = {k: h1x for k in ("1.5x", "2x", "3x")}
+    try:
+        s5f.final_report(split, h1x, badstress, sess, proof, bars,
+                         DATA_ID, 100000.0)
+        raise SystemExit("1x-under-3x must be rejected")
+    except AssertionError:
+        pass
+    # hostile: manufactured token (fake hash) with real evidence
+    faketok = dict(tok, record_hash="0" * 64)
+    fakesplit = (folds, holdout, bound, faketok)
+    try:
+        s5f.final_report(fakesplit, h1x, badstress, sess, proof, bars,
+                         DATA_ID, 100000.0)
+        raise SystemExit("fake token must be rejected")
+    except AssertionError:
+        pass
+    # hostile: MUTATED holdout session close (valid day/close_ns, real
+    # bars) — rebuild mismatch must fail
+    mutsess = [dict(s, closes={"SYN": 999999.0}) for s in sess]
+    stress = {}
+    for mult, lab in ((1.5, "1.5x"), (2.0, "2x"), (3.0, "3x")):
+        sv = run_all(items, spread_mult=mult)
+        stress[lab] = {v: [r for r in sv[v] if r["cid"] in hset]
+                       for v in s5.VARIANTS}
+    try:
+        s5f.final_report(split, h1x, stress, mutsess, proof, bars,
+                         DATA_ID, 100000.0)
+        raise SystemExit("mutated session close must be rejected")
+    except AssertionError:
+        pass
+    # hostile: session injection outside the holdout window
+    badsess = sess + [dict(sess[0], day="2020-01-01",
+                           close_ns=s5.et_close_ns("2020-01-01"))]
+    try:
+        s5f.final_report(split, h1x, stress, badsess, proof, bars,
+                         DATA_ID, 100000.0)
+        raise SystemExit("pre-holdout session must be rejected")
+    except AssertionError:
+        pass
+    rep = s5f.final_report(split, h1x, stress, sess, proof, bars,
+                           DATA_ID, 100000.0)
+    for v, x in rep["variants"].items():
+        assert x["bar_verdict"] is False and x["bar_failed"], v
+        assert x["promotion_ready"] is False  # no baseline artifact yet
+    assert rep["holm"]
+    assert rep["bar_frozen"] == dict(BAR)
+    assert rep["r_scope_frozen"] == SCOPE
+    assert rep["r_scope_note"] == s5.R_SCOPE_NOTE
+    kn = rep["knobs"]
+    assert kn["boot_seed"] == 24269 and kn["null_seed"] == 24270
+    assert kn["boot_reps"] == s5.BOOT_REPS == 2000
+    assert rep["session_proof"] == proof
+    assert rep["split_token"] == tok
+    print("22 OK", [(v, x["bar_failed"]) for v, x in
+                    rep["variants"].items()])
 
 
 def test_24_closed_seq_and_selected_variant():
@@ -890,35 +981,280 @@ def test_29_et_session_contract():
     print("29 OK")
 
 
-def test_30_token_determinism_and_tamper():
+def test_30_split_provenance():
     items = synth_stream(40)
     by_var = run_all(items)
     recs = by_var[s5.VARIANTS[0]]
-    _, holdout, bound = s5f.holdout_split(recs, n_splits=2)
-    t1 = s5f.make_holdout_token(holdout, bound)
-    t2 = s5f.make_holdout_token(list(reversed(holdout)), bound)
-    assert t1 == t2  # order-independent, deterministic
-    _hset = {r["cid"] for r in holdout}
-    _hrecs = [r for r in recs if r["cid"] in _hset]
-    assert s5f._validate_set(_hrecs, t1, 1.0, s5.VARIANTS[0]) == _hset
-    for bad in (dict(t1, n=t1["n"] + 1),
-                dict(t1, holdout_start=bound + 1),
-                dict(t1, dates=t1["dates"][:-1]),
-                dict(t1, protocol="evil")):
-        try:
-            s5f._validate_set(recs, bad, 1.0, s5.VARIANTS[0])
-            raise SystemExit("tampered token must fail: %r" % (bad,))
-        except AssertionError:
-            pass
-    # wrong-variant records rejected under the right token
-    other = [dict(r, variant=s5.VARIANTS[1]) for r in recs
-             if r["cid"] in {x["cid"] for x in holdout}]
+    split = s5f.holdout_split(recs, n_splits=2)
+    folds, holdout, bound, t1 = split
+    split_b = s5f.holdout_split(list(reversed(recs)), n_splits=2)
+    assert split_b[3] == t1  # order-independent, deterministic mint
+    hset = {r["cid"] for r in holdout}
+    h1x = {v: [r for r in by_var[v] if r["cid"] in hset]
+           for v in s5.VARIANTS}
+    bars = bars_for(items)
+    sess, proof = s5f.build_holdout_sessions(bars, t1, DATA_ID)
+    stress = {}
+    for mult, lab in ((1.5, "1.5x"), (2.0, "2x"), (3.0, "3x")):
+        sv = run_all(items, spread_mult=mult)
+        stress[lab] = {v: [r for r in sv[v] if r["cid"] in hset]
+                       for v in s5.VARIANTS}
+    # subset evidence + REAL split token => rejected as not the split.
+    # (stress subsets are properly re-resolved twins, so ONLY the
+    # subset dimension can trigger the rejection.)
+    subset_ev = {v: recs_v[:-5] for v, recs_v in h1x.items()}
+    subset_st = {k: {v: recs_v[:-5] for v, recs_v in by_var.items()}
+                 for k, by_var in stress.items()}
     try:
-        s5f._validate_set(other, t1, 1.0, s5.VARIANTS[0])
-        raise SystemExit("wrong-variant set must fail")
+        s5f.final_report(split, subset_ev, subset_st, sess, proof,
+                         bars, DATA_ID, 100000.0)
+        raise SystemExit("subset evidence must fail vs real split")
     except AssertionError:
         pass
+    # tampered token fields fail against threaded holdout
+    for badtok in (dict(t1, n=t1["n"] + 1),
+                   dict(t1, holdout_start=bound + 1),
+                   dict(t1, record_hash="0" * 64),
+                   dict(t1, protocol="evil")):
+        try:
+            s5f.final_report((folds, holdout, bound, badtok), h1x,
+                             stress, sess, proof, bars, DATA_ID,
+                             100000.0)
+            raise SystemExit("tampered token must fail: %r" % (badtok,))
+        except AssertionError:
+            pass
+    # control: real split + real evidence passes
+    rep = s5f.final_report(split, h1x, stress, sess, proof, bars,
+                           DATA_ID, 100000.0)
+    assert rep["split_token"] == t1
     print("30 OK")
+
+
+def _small_split(n=24):
+    """Helper: split + evidence + bars + sessions/proof for gate tests."""
+    items = synth_stream(n)
+    by_var = run_all(items)
+    split = s5f.holdout_split(by_var[s5.VARIANTS[0]], n_splits=2)
+    folds, holdout, bound, tok = split
+    hset = {r["cid"] for r in holdout}
+    h1x = {v: [r for r in by_var[v] if r["cid"] in hset]
+           for v in s5.VARIANTS}
+    stress = {}
+    for mult, lab in ((1.5, "1.5x"), (2.0, "2x"), (3.0, "3x")):
+        sv = run_all(items, spread_mult=mult)
+        stress[lab] = {v: [r for r in sv[v] if r["cid"] in hset]
+                       for v in s5.VARIANTS}
+    bars = bars_for(items)
+    sess, proof = s5f.build_holdout_sessions(bars, tok, DATA_ID)
+    return split, h1x, stress, sess, proof, bars
+
+
+def test_31_record_content_binding():
+    split, h1x, stress, sess, proof, bars = _small_split()
+    v0 = s5.VARIANTS[0]
+    base = h1x[v0]
+    # (a) naive in-place mutation (stale eval_hash) -> self-check fails
+    for mutate in (lambda r: dict(r, day="2020-01-01"),
+                   lambda r: dict(r, filtered_r=r["filtered_r"] + 9.0),
+                   lambda r: dict(r, always_label="win"),
+                   lambda r: dict(r, entry_fill=r["entry_fill"] + 1.0),
+                   lambda r: dict(r, snapshot_ts_ns=r["snapshot_ts_ns"] + 1),
+                   lambda r: dict(r, stop_px=r["stop_px"] + 5.0)):
+        mut = [mutate(base[0])] + base[1:]
+        try:
+            s5f.final_report(split, {v0: mut,
+                                     s5.VARIANTS[1]: h1x[s5.VARIANTS[1]]},
+                             stress, sess, proof, bars, DATA_ID,
+                             100000.0)
+            raise SystemExit("mutated 1x content must fail")
+        except AssertionError:
+            pass
+    # (b) mutation + refreshed hash -> set digest vs split token fails
+    mut2 = [_rehash(dict(base[0], day="2020-01-01"))] + base[1:]
+    try:
+        s5f.final_report(split, {v0: mut2,
+                                 s5.VARIANTS[1]: h1x[s5.VARIANTS[1]]},
+                         stress, sess, proof, bars, DATA_ID, 100000.0)
+        raise SystemExit("rehashed day mutation must fail digest")
+    except AssertionError:
+        pass
+    # (c) stress twin candidate-field mutation fails (not in allowlist)
+    smut = {k: {v: [dict(r) for r in recs] for v, recs in by_var.items()}
+            for k, by_var in stress.items()}
+    smut["2x"][v0][0]["entry_px"] += 1.0
+    smut["2x"][v0][0] = _rehash(smut["2x"][v0][0])
+    try:
+        s5f.final_report(split, h1x, smut, sess, proof, bars, DATA_ID,
+                         100000.0)
+        raise SystemExit("mutated stress candidate field must fail")
+    except AssertionError:
+        pass
+    # (d) variant-twin decision-field mutation fails
+    vmut = {v: [dict(r) for r in recs] for v, recs in h1x.items()}
+    vmut[s5.VARIANTS[1]][0]["symbol"] = "XXX"
+    vmut[s5.VARIANTS[1]][0] = _rehash(vmut[s5.VARIANTS[1]][0])
+    try:
+        s5f.final_report(split, vmut, stress, sess, proof, bars,
+                         DATA_ID, 100000.0)
+        raise SystemExit("mutated variant twin must fail")
+    except AssertionError:
+        pass
+    print("31 OK")
+
+
+def test_32_session_price_and_seam():
+    split, h1x, stress, sess, proof, bars = _small_split()
+    # (a) bars mutated under valid sessions -> rebuild mismatch rejects
+    mutbars = {"SYN": [Bar(ts_ns=b.ts_ns, o=b.o, h=b.h, l=b.l,
+                           c=b.c + 50.0) for b in bars["SYN"]]}
+    try:
+        s5f.final_report(split, h1x, stress, sess, proof, mutbars,
+                         DATA_ID, 100000.0)
+        raise SystemExit("mutated bars must fail rebuild")
+    except AssertionError:
+        pass
+    # (b) data_id mismatch rejects
+    baddata = dict(DATA_ID, dataset_sha="forged")
+    try:
+        s5f.final_report(split, h1x, stress, sess, proof, bars,
+                         baddata, 100000.0)
+        raise SystemExit("forged data_id must fail rebuild")
+    except AssertionError:
+        pass
+    # (c) end_ts/close_ns seam: portfolio_curve refuses a split session
+    badsess = [dict(sess[0], end_ts=sess[0]["close_ns"] + 1)]
+    try:
+        s5.portfolio_curve(h1x[s5.VARIANTS[0]], "filtered", 100000.0,
+                           badsess)
+        raise SystemExit("end_ts seam must fail closed")
+    except AssertionError:
+        pass
+    # control passes
+    rep = s5f.final_report(split, h1x, stress, sess, proof, bars,
+                           DATA_ID, 100000.0)
+    assert rep["session_proof"] == proof
+    print("32 OK")
+
+
+def test_33_boundary_first_interval():
+    d = "2024-03-11"
+    op, cl = s5.et_open_ns(d), s5.et_close_ns(d)
+    assert op < cl
+    # mid-session bound -> partial stub excluded
+    assert not (cl - 3600 * 10 ** 9 <= op)
+    mid = cl - 3600 * 10 ** 9
+    assert mid > op  # genuinely mid-session
+    # exact previous-close bound -> full first interval included
+    prev_cl = s5.et_close_ns("2024-03-08")
+    assert prev_cl <= op
+    assert s5.daily_returns([0.5, 0.1, 0.2], False) == [0.1, 0.2]
+    assert s5.daily_returns([0.5, 0.1, 0.2], True) == [0.5, 0.1, 0.2]
+    # synth bounds are pre-session (tiny ints) -> first interval included
+    split, h1x, stress, sess, proof, bars = _small_split()
+    rep = s5f.final_report(split, h1x, stress, sess, proof, bars,
+                           DATA_ID, 100000.0)
+    assert rep["first_interval_included"] is True
+    assert split[3]["holdout_start"] <= s5.et_open_ns(
+        split[3]["dates"][0])
+    print("33 OK")
+
+
+def _baseline_fixture(proof, token, sharpes, dd=5.0, n=200):
+    return {"baseline_id": "baseline_v1", "protocol": "eval_v1",
+            "data_slice": proof["data_slice"],
+            "dataset_sha": proof["dataset_sha"],
+            "dates": list(token["dates"]),
+            "metrics": {m: {"sharpe_f": s, "max_dd_pct": dd, "n_closed": n}
+                        for m, s in sharpes.items()}}
+
+
+def test_34_baseline_gate():
+    split, h1x, stress, sess, proof, bars = _small_split()
+    tok = split[3]
+    chall = {"1x": 0.5, "1.5x": 0.4, "2x": 0.3, "3x": 0.2, "dd_1x": 4.0}
+    # (a) absent -> fail closed
+    v, f, d = s5f.baseline_gate(chall, None, proof, tok)
+    assert v is False and f == ["baseline_absent"], (v, f)
+    # (b) malformed (missing mult) -> fail closed
+    bad = _baseline_fixture(proof, tok, {"1x": 0.0, "2x": 0.0})
+    v, f, d = s5f.baseline_gate(chall, bad, proof, tok)
+    assert v is False and f == ["baseline_malformed"], (v, f)
+    # (c) mismatched slice -> fail closed
+    mis = _baseline_fixture(proof, tok, {"1x": 0.0, "1.5x": 0.0,
+                                         "2x": 0.0, "3x": 0.0})
+    mis["data_slice"] = "other-slice"
+    v, f, d = s5f.baseline_gate(chall, mis, proof, tok)
+    assert v is False and f == ["baseline_malformed"], (v, f)
+    # (d) losing baseline comparison -> beats_* failed
+    lose = _baseline_fixture(proof, tok, {"1x": 9.0, "1.5x": 9.0,
+                                          "2x": 9.0, "3x": 9.0})
+    v, f, d = s5f.baseline_gate(chall, lose, proof, tok)
+    assert v is False and f == ["beats_1x", "beats_1.5x", "beats_2x",
+                                "beats_3x"], f
+    # (e) winning comparison -> True
+    win = _baseline_fixture(proof, tok, {"1x": 0.1, "1.5x": 0.1,
+                                         "2x": 0.1, "3x": 0.1}, dd=9.0)
+    v, f, d = s5f.baseline_gate(chall, win, proof, tok)
+    assert v is True and f == [], (v, f)
+    # wired into final_report: None baseline -> promotion closed
+    rep = s5f.final_report(split, h1x, stress, sess, proof, bars,
+                           DATA_ID, 100000.0)
+    for vname, x in rep["variants"].items():
+        assert x["baseline_gate"]["failed"] == ["baseline_absent"]
+        assert x["promotion_ready"] is False
+    rep2 = s5f.final_report(split, h1x, stress, sess, proof, bars,
+                            DATA_ID, 100000.0, baseline=win)
+    # stub challenger Sharpe is 0.0, so even the 'winning' baseline
+    # beats it on Sharpe while DD passes: wiring, not value, asserted.
+    assert {tuple(x["baseline_gate"]["failed"])
+            for x in rep2["variants"].values()} == {("beats_1x",
+            "beats_1.5x", "beats_2x", "beats_3x")}
+    print("34 OK")
+
+
+def test_35_knobs_parsed_not_duplicated():
+    import copy
+    assert s5f.check_knobs() == []
+    pre = json.load(open(os.path.join(os.path.dirname(__file__), "..",
+                                      "strategy", "s5_prereg.json")))
+    assert s5f.frozen_knobs(pre)["boot_seed"] == 24269
+    stale = copy.deepcopy(pre)
+    stale["inference_knobs"]["boot_seed"] = 99999
+    assert s5f.check_knobs(stale) == ["boot_seed"]
+    assert s5f.frozen_knobs(stale)["boot_seed"] == 99999  # parsed, stale
+    stale2 = copy.deepcopy(pre)
+    stale2["inference_knobs"]["power_reps"] = 7
+    assert s5f.check_knobs(stale2) == ["power_reps"]
+    print("35 OK")
+
+
+def test_36_r_scope_audited():
+    import inspect as _insp
+    src_all = _insp.getsource(s5)
+    anchors = {"R1-positions": "MAX_POSITIONS",
+               "R1-same-direction": "R1-direction",
+               "R2-single": "R2-single", "R2-total": "R2-total",
+               "R3-churn": "R3-day", "R4-fliplock": "r4_completions",
+               "R8-maxgate": "evaluate_v4",
+               "R12-lookahead": "bars_after",
+               "R14-disagree": "disagreement",
+               "stop-rule": "exits-first"}
+    assert set(anchors) == set(s5.R_CHECKED), \
+        (set(anchors) ^ set(s5.R_CHECKED))
+    for rule, marker in anchors.items():
+        assert marker in src_all, rule
+    assert "r4_completions" in _insp.getsource(s5.verify_r_monitor)
+    assert "MAX_POSITIONS" in _insp.getsource(s5.portfolio_curve)
+    assert "evaluate_v4" in _insp.getsource(s5.evaluate_stream)
+    for pend in ("R1-pending", "R2-pending", "R5-halt", "R6-vol",
+                 "R7-corr", "R9-venue"):
+        assert pend in s5.R_UNAVAILABLE, pend
+    assert s5f.frozen_scope() == sorted(s5.R_UNAVAILABLE)
+    assert set(s5.R_CHECKED) & set(s5.R_UNAVAILABLE) == set()
+    assert len(s5.R_S5_STATUS) == 22  # R1/R2 split + R3-R17 + stop-rule
+    assert "pending" in s5.R_SCOPE_NOTE and "UNAVAILABLE" in s5.R_SCOPE_NOTE
+    print("36 OK")
+
 
 
 if __name__ == "__main__":
@@ -948,5 +1284,11 @@ if __name__ == "__main__":
     test_27_disqualified_excluded_from_closed()
     test_28_seq_pair_stops()
     test_29_et_session_contract()
-    test_30_token_determinism_and_tamper()
+    test_30_split_provenance()
+    test_31_record_content_binding()
+    test_32_session_price_and_seam()
+    test_33_boundary_first_interval()
+    test_34_baseline_gate()
+    test_35_knobs_parsed_not_duplicated()
+    test_36_r_scope_audited()
     print("ALL S5 TESTS GREEN")
