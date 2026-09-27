@@ -202,8 +202,19 @@ static bool Exists(const std::string& p) {
 static std::string TmpDir() {
     // Relative sandbox (std::filesystem binaries fail to start on
     // this MinGW toolchain; plain C I/O works everywhere). Removed
-    // file-by-file at block end via RemoveSandbox.
-    std::string d = std::string("g0tmp") + std::to_string(++g_tmpn);
+    // file-by-file at block end via RemoveSandbox. PID-tagged:
+    // sequential processes sharing a workspace must never reuse a
+    // live sandbox name (stale state would silently join the run).
+    char pb[64];
+#ifdef _WIN32
+    std::snprintf(pb, sizeof(pb), "g0tmp%lu-%u",
+                    (unsigned long)GetCurrentProcessId(),
+                    (unsigned)++g_tmpn);
+#else
+    std::snprintf(pb, sizeof(pb), "g0tmp%u-%u",
+                    (unsigned)getpid(), (unsigned)++g_tmpn);
+#endif
+    std::string d = pb;
     MkDir(d);
     return d;
 }
