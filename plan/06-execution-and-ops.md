@@ -129,6 +129,12 @@ the remainder. A found-short terminal hard order mints a
 deterministic incident-scoped remainder `hard-<epoch>-<SYM>-<qty>`
 (pure, pre-flighted, strictly-decreasing chain, never colliding
 with the primary id; primary-absent still posts the primary).
+- Order-identity determinism: the frozen id recipe reads
+length-bounded field inputs (broker 32 / account 32 / context
+64 / symbol 16 / intent 64). A full-width unterminated field
+truncates instead of hashing stack garbage — nondeterministic
+ids across restarts would break pre-flight dedupe and risk
+re-sends under forked identities.
 - HARD chain truth vs broker gate: the remainder derives from the
 ORIGINAL hard-order chain (`hard-chain.txt`: `<tag> <requested>`
 `<attributed>`, write-ahead before every POST), never by subtracting
