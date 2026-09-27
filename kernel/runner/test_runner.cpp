@@ -442,19 +442,40 @@ static bool AppendRow(const std::string& dir, const char* kind,
 // Hand-written crash image: journal intent row + intent file + H1
 // snapshot — exactly what a dead process leaves behind. st: 2 =
 // SENT_UNACKED, 3 = QUERY_SENT, 9 = EXIT_SENT.
+// Durable book files WITHOUT a journal row: the orphan-image
+// half of CrashImage (a live book with no covering intent row
+// is torn state — used by mixed-journal orphan regressions).
+static std::string WriteBookFiles(const std::string& dir,
+                                  const char* iid, const char* sym,
+                                  int side01, int kind01,
+                                  long long qty, int st,
+                                  long long filled,
+                                  const char* bid, int pok) {
+    char cid[65];
+    if (!jev::broker::MakeClientOrderId(
+            "alpaca-paper", "test", std::string(64, 'a').c_str(),
+            sym,
+            side01 == 1 ? jev::broker::OrderSide::SELL
+                        : jev::broker::OrderSide::BUY,
+            iid, cid))
+        return "";
+    char iln[128];
+    std::snprintf(iln, sizeof(iln), "%s|%d|%d|%lld|22000|24000", sym,
+                  side01, kind01, qty);
+    WriteFile(dir + "/intent-" + std::string(iid) + ".txt", iln);
+    char snap[320];
+    std::snprintf(snap, sizeof(snap),
+                  "H1:%d:%d:%lld:0:%d:0:%s:%s:%s:%s:%d::0:0:0:0", st,
+                  kind01, filled, pok, cid, bid ? bid : "", iid, sym,
+                  side01);
+    WriteFile(dir + "/snap-" + std::string(iid) + ".txt", snap);
+    return cid;
+}
 static std::string CrashImage(const std::string& dir, const char* iid,
                               const char* sym, int side01, int kind01,
                               long long qty, int st, long long filled,
                               std::string* cid_out,
                               const char* bid = "", int pok = 0) {
-    char cid[65];
-    if (!jev::broker::MakeClientOrderId(
-            "alpaca-paper", "test", std::string(64, 'a').c_str(), sym,
-            side01 == 1 ? jev::broker::OrderSide::SELL
-                        : jev::broker::OrderSide::BUY,
-            iid, cid))
-        return "";
-    if (cid_out) *cid_out = cid;
     // Chained append (multi-image tests rebuild EVERY image:
     // overwrite would silently leave only the last slot alive
     // and multi-slot regressions would prove nothing).
@@ -487,16 +508,10 @@ static std::string CrashImage(const std::string& dir, const char* iid,
     std::size_t w = std::fwrite(line.data(), 1, line.size(), jf);
     std::fclose(jf);
     if (w != line.size()) return "";
-    char iln[128];
-    std::snprintf(iln, sizeof(iln), "%s|%d|%d|%lld|22000|24000", sym,
-                  side01, kind01, qty);
-    WriteFile(dir + "/intent-" + std::string(iid) + ".txt", iln);
-    char snap[320];
-    std::snprintf(snap, sizeof(snap),
-                  "H1:%d:%d:%lld:0:%d:0:%s:%s:%s:%s:%d::0:0:0:0", st,
-                  kind01, filled, pok, cid, bid ? bid : "", iid, sym,
-                  side01);
-    WriteFile(dir + "/snap-" + std::string(iid) + ".txt", snap);
+    std::string cid = WriteBookFiles(dir, iid, sym, side01, kind01,
+                                     qty, st, filled, bid, pok);
+    if (cid.empty()) return "";
+    if (cid_out) *cid_out = cid;
     return cid;
 }
 // Crash a flatten EXIT alongside its entry: intent row (chained),
@@ -4867,6 +4882,190 @@ int main() {
                              nullptr),
               "lg-submit-after");
         Check(g.Cycle(g_now), "lg-cycle-after");
+    }
+    // OM. Mixed-journal orphan (doc 06 sec. 6.1b): coverage is
+    // PER BOOK. A journal with a legitimate intent-A row plus
+    // valid A books must NOT launder a live PROTECTED orphan B
+    // (valid books, no intent-B row) into success — Recover
+    // refuses with recover-orphaned-state and zero slots, the
+    // chain stays valid, and deleting the orphan lets the same
+    // journal recover the legitimate book.
+    {
+        Rig r;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-740", "AAPL", 0, 0,
+                          100, 4, 100, &cid, "", 1)
+                   .empty(),
+              "om-image-a");
+        Check(!WriteBookFiles(r.dir, "intent-741", "AAPL", 0,
+                              0, 100, 4, 100, "", 1)
+                   .empty(),
+              "om-book-b");
+        G0Runner* gp = new G0Runner(r.cfg, r.deps);
+        G0Runner& g = *gp;
+        const char* omr = nullptr;
+        Check(!g.Recover(&omr), "om-mixed-refuses");
+        Check(omr &&
+                  std::string(omr) == "recover-orphaned-state",
+              "om-reason");
+        Check(g.slots() == 0, "om-no-slots");
+        Check(jev::runner::JournalVerifyFile(
+                  (r.dir + "/journal.jsonl").c_str()),
+              "om-chain-valid");
+        delete gp;  // release the directory lock before g2
+        std::remove((r.dir + "/intent-intent-741.txt").c_str());
+        std::remove((r.dir + "/snap-intent-741.txt").c_str());
+        G0Runner g2(r.cfg, r.deps);
+        Check(g2.Recover(nullptr), "om-recovers-after-rm");
+        Check(g2.slots() == 1, "om-one-slot");
+    }
+    // LG2. Failed second Recover revokes authority (doc 06 sec.
+    // 6.1b): Recover clears mutation authority on entry, so a
+    // recovery that fails after an earlier success leaves the
+    // object with NO authority — SubmitIntent/Cycle refuse and
+    // mutate nothing until a later Recover fully succeeds.
+    {
+        Rig r;
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "lg2-recover");
+        WriteFile(r.dir + "/journal.jsonl", "CORRUPT\n");
+        const char* lg2r = nullptr;
+        Check(!g.Recover(&lg2r), "lg2-second-fails");
+        Check(lg2r &&
+                  std::string(lg2r) == "recover-journal-broken",
+              "lg2-reason");
+        const char* lg2s = nullptr;
+        Check(!g.SubmitIntent(GoodIntent("intent-732", "AAPL",
+                                          false, 100),
+                              &lg2s),
+              "lg2-submit-refuses");
+        Check(lg2s &&
+                  std::string(lg2s) == "submit-not-recovered",
+              "lg2-submit-reason");
+        Check(!g.Cycle(g_now), "lg2-cycle-refuses");
+        Check(ReadWhole(r.dir + "/journal.jsonl") ==
+                  "CORRUPT\n",
+              "lg2-journal-untouched");
+        Check(!Exists(r.dir + "/intent-intent-732.txt"),
+              "lg2-no-intent");
+        Check(!Exists(r.dir + "/snap-intent-732.txt"),
+              "lg2-no-snap");
+        std::remove((r.dir + "/journal.jsonl").c_str());
+        Check(g.Recover(nullptr), "lg2-recovers-again");
+        Check(g.SubmitIntent(GoodIntent("intent-732", "AAPL",
+                                        false, 100),
+                             nullptr),
+              "lg2-submit-after");
+    }
+    // AT-A. Recovery-time terminal attribution failure refuses
+    // (doc 06 sec. 6.1b): ENTRY open=100 with a terminal CLOSED
+    // EXIT (closed=100) whose attribution persist faults must
+    // fail Recover (recover-attribution-unpersisted) with the
+    // entry durable byte-identical and mutation authority
+    // revoked; clearing the fault lets the same journal recover
+    // with the attribution landed (entry open zero).
+    {
+        Rig r;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-750", "AAPL", 0, 0,
+                          100, 2, 100, &cid)
+                   .empty(),
+              "aa-entry");
+        Check(!CrashImage(r.dir, "intent-751", "AAPL", 1, 1,
+                          100, 11, 0, &cid)
+                   .empty(),
+              "aa-exit");
+        Check(PatchClosedCounted(r.dir, "intent-751", 100, 0),
+              "aa-closed100");
+        Check(AppendRow(r.dir, "exit", "intent-751"), "aa-term");
+        std::string before =
+            ReadWhole(r.dir + "/snap-intent-750.txt");
+        jev::runner::InjectWriteFault("snap-intent-750.txt", 0);
+        G0Runner g(r.cfg, r.deps);
+        const char* aar = nullptr;
+        Check(!g.Recover(&aar), "aa-refuses");
+        Check(aar && std::string(aar) ==
+                          "recover-attribution-unpersisted",
+              "aa-reason");
+        jev::runner::ClearWriteFaults();
+        Check(ReadWhole(r.dir + "/snap-intent-750.txt") ==
+                  before,
+              "aa-entry-intact");
+        const char* aas = nullptr;
+        Check(!g.SubmitIntent(GoodIntent("intent-752", "AAPL",
+                                          false, 100),
+                              &aas),
+              "aa-no-mutate");
+        Check(aas && std::string(aas) == "submit-not-recovered",
+              "aa-no-mutate-reason");
+        Check(!g.Cycle(g_now), "aa-no-cycle");
+        Check(jev::runner::JournalVerifyFile(
+                  (r.dir + "/journal.jsonl").c_str()),
+              "aa-chain-valid");
+        Check(g.Recover(nullptr), "aa-recovers-after-fix");
+        const auto* ae = g.Find("intent-750");
+        Check(ae && ae->m.filled_qty - ae->m.exit_closed_qty ==
+                          0,
+              "aa-attributed");
+    }
+    // AT-B. In-cycle terminal attribution failure retains the
+    // EXIT (doc 06 sec. 6.1b): with ENTRY open=100, a closing
+    // EXIT whose attribution persist faults must NOT go done —
+    // the slot stays CLOSED-but-active with no duplicate broker
+    // close, and the next cycle retries deterministically
+    // (entry open zero, EXIT done, chain valid).
+    {
+        Rig r;
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "ab-recover");
+        Check(g.SubmitIntent(GoodIntent("intent-760", "AAPL",
+                                        false, 100),
+                             nullptr),
+              "ab-entry");
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 HeldReply("filled", "100").c_str());
+        Check(g.Cycle(g_now), "ab-fill");
+        const auto* abe = g.Find("intent-760");
+        Check(abe && abe->m.filled_qty -
+                            abe->m.exit_closed_qty ==
+                        100,
+              "ab-open");
+        Check(g.SubmitIntent(GoodIntent("intent-761", "AAPL",
+                                        true, 100),
+                             nullptr),
+              "ab-exit");
+        // One-shot fault, skip=1: the entry's routine persist
+        // consumes the skip; the attribution write fails.
+        jev::runner::InjectWriteFault("snap-intent-760.txt", 1);
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 HeldReply("filled", "100").c_str());
+        Check(g.Cycle(g_now), "ab-cycle");
+        jev::runner::ClearWriteFaults();
+        const auto* abx = g.Find("intent-761");
+        Check(abx && !abx->done &&
+                  abx->m.state == jev::exec::RouteState::CLOSED &&
+                  abx->m.exit_closed_qty == 100,
+              "ab-retained");
+        const auto* abe2 = g.Find("intent-760");
+        Check(abe2 && abe2->m.filled_qty -
+                             abe2->m.exit_closed_qty ==
+                         100,
+              "ab-entry-still-open");
+        Check(CountMethod("POST", "/v2/orders") == 2,
+              "ab-no-duplicate-close");
+        Check(g.Cycle(g_now), "ab-retry");
+        const auto* abx2 = g.Find("intent-761");
+        Check(abx2 && abx2->done, "ab-done-after-retry");
+        const auto* abe3 = g.Find("intent-760");
+        Check(abe3 && abe3->m.filled_qty -
+                             abe3->m.exit_closed_qty ==
+                         0,
+              "ab-entry-zero");
+        Check(jev::runner::JournalVerifyFile(
+                  (r.dir + "/journal.jsonl").c_str()),
+              "ab-chain-valid");
     }
     // PK. Path integrity (doc 06 sec. 6.1b): a non-regular node
     // never reads as a missing file. Directory-in-place refuses

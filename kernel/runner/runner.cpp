@@ -50,19 +50,23 @@ bool IsTerminalState(exec::RouteState st) {
            st == exec::RouteState::CLOSED;
 }
 // Uncovered live books (doc 06 sec. 6.1b): true when the
-// directory holds slot books that claim LIVE risk with no
-// covering journal intent row in hand. Live risk = a snapshot
-// past the pre-send states (anything but IDLE /
-// JOURNAL_PENDING / recovery-terminal — the send comes steps
-// after the first persist, so a post-send machine without a
-// row is torn), an unreadable/unrestorable snapshot (cannot
-// prove inert — fail closed), or a snapshot with no matching
-// intent file (submit writes the intent first, so the
+// directory holds a slot book that claims LIVE risk with no
+// covering journal intent row OF ITS OWN. Coverage is PER
+// BOOK: a mixed journal (legitimate rows for some books)
+// must never launder an orphan for another book into success.
+// Live risk = a snapshot past the pre-send states (anything
+// but IDLE / JOURNAL_PENDING / recovery-terminal — the send
+// comes steps after the first persist, so a post-send machine
+// without a row is torn), an unreadable/unrestorable snapshot
+// (cannot prove inert — fail closed), or a snapshot with no
+// matching intent file (submit writes the intent first, so the
 // counterpart cannot be crash debris). Intent-only leftovers
 // (submit-before-first-cycle) and terminal books are NOT live
 // claims — they keep their established ignore/resume paths.
 // Stale AtomicWrite debris (*.tmp) is never a book.
-bool HasUncoveredLiveBooks(const std::string& dir) {
+bool HasUncoveredLiveBook(const std::string& dir,
+                          const std::vector<std::string>& intent_ids,
+                          std::string* offender) {
     std::vector<std::string> snaps;
 #ifdef _WIN32
     std::string pat = dir + "\\snap-*";
@@ -95,26 +99,59 @@ bool HasUncoveredLiveBooks(const std::string& dir) {
             infix.compare(infix.size() - 4, 4, ".txt") == 0)
             infix.erase(infix.size() - 4);
         if (!FileExists(
-                (dir + "/intent-" + infix + ".txt").c_str()))
-            return true;  // half-registration, unattested
+                (dir + "/intent-" + infix + ".txt").c_str())) {
+            // Half-registration, unattested: a live claim with
+            // no economics file needs its own journal row.
+            bool covered = false;
+            for (std::size_t k = 0; k < intent_ids.size();
+                 ++k) {
+                if (intent_ids[k] == infix) {
+                    covered = true;
+                    break;
+                }
+            }
+            if (!covered) {
+                if (offender) *offender = infix;
+                return true;
+            }
+            continue;
+        }
         char rec[320];
-        if (!LoadSnapshot((dir + "/" + nm).c_str(), rec,
-                          sizeof(rec)))
-            return true;  // cannot prove inert
-        exec::RouteMachine m;
-        if (!exec::RestoreMachine(rec, &m)) return true;
-        // Recovery-terminal (CANCELLED / UNKNOWN_FROZEN /
-        // CLOSED) books need nothing; IDLE / JOURNAL_PENDING
-        // books predate any send. Anything else claims live
-        // risk — note PROTECTED is live here even though the
-        // drive loop treats it as terminal (round-3 recovery
-        // rule: restart must not demote it to slotless).
-        if (m.state != exec::RouteState::IDLE &&
-            m.state != exec::RouteState::JOURNAL_PENDING &&
-            m.state != exec::RouteState::CANCELLED &&
-            m.state != exec::RouteState::UNKNOWN_FROZEN &&
-            m.state != exec::RouteState::CLOSED)
-            return true;  // post-send progress without a row
+        bool live = true;
+        if (LoadSnapshot((dir + "/" + nm).c_str(), rec,
+                         sizeof(rec))) {
+            exec::RouteMachine m;
+            if (exec::RestoreMachine(rec, &m)) {
+                // Recovery-terminal (CANCELLED /
+                // UNKNOWN_FROZEN / CLOSED) books need nothing;
+                // IDLE / JOURNAL_PENDING books predate any send.
+                // Anything else claims live risk — note PROTECTED
+                // is live here even though the drive loop treats
+                // it as terminal (round-3 recovery rule: restart
+                // must not demote it to slotless).
+                live = (m.state != exec::RouteState::IDLE &&
+                        m.state !=
+                            exec::RouteState::JOURNAL_PENDING &&
+                        m.state !=
+                            exec::RouteState::CANCELLED &&
+                        m.state != exec::RouteState::
+                            UNKNOWN_FROZEN &&
+                        m.state != exec::RouteState::CLOSED);
+            }
+            // Unrestorable snapshot: cannot prove inert — live.
+        }
+        // Unreadable snapshot: cannot prove inert — live.
+        if (!live) continue;
+        for (std::size_t k = 0; k < intent_ids.size(); ++k) {
+            if (intent_ids[k] == infix) {
+                live = false;
+                break;
+            }
+        }
+        if (live) {  // post-send progress without its own row
+            if (offender) *offender = infix;
+            return true;
+        }
     }
     return false;
 }
@@ -429,6 +466,12 @@ bool G0Runner::Recover(const char** reason) {
     static const char kChain[] = "recover-journal-broken";
     static const char kSnap[] = "recover-snapshot-bad";
     static const char kOrphan[] = "recover-orphaned-state";
+    static const char kAttr[] = "recover-attribution-unpersisted";
+    // Authority revocation first (doc 06 sec. 6.1b): ANY failed
+    // recovery leaves this object with NO mutation authority —
+    // even after an earlier success. Only the full success at
+    // the end re-arms it; the held lock alone never implies it.
+    recovered_ = false;
     if (!deps_.now_ns) {
         if (reason) *reason = "recover-no-clock";
         return false;
@@ -487,29 +530,33 @@ bool G0Runner::Recover(const char** reason) {
         prev_hash_ = journal::GenesisPrev();
     }
     // Orphaned books (doc 06 sec. 6.1b): intents rebuild
-    // exclusively from journal intent rows, so durable
-    // snap-/intent- books with NO intent row in the journal
-    // (absent/empty journal, or a journal that lost them) are
-    // torn state — refuse for human recovery, never
-    // success-with-zero-slots (the position would silently
-    // leave local ownership). The no-intent-row form (not
-    // merely empty) keeps the refusal stable across retries:
-    // the refusal row below must never launder the orphan
-    // into a genesis. A virgin directory (no books) still
-    // initializes as genesis.
-    bool have_intent_row = false;
+    // exclusively from journal intent rows, so a durable book
+    // that claims LIVE risk with NO intent row OF ITS OWN in
+    // the journal is torn state — refuse for human recovery,
+    // never success-with-zero-slots and never success with
+    // the orphan silently dropped (the position would leave
+    // local ownership). Coverage is PER BOOK: a mixed journal
+    // with legitimate rows for other books must not launder
+    // an orphan into success. The refusal row below must never
+    // launder the orphan into a genesis (it is not an intent
+    // row — the next retry re-scans the same uncovered book).
+    // A virgin directory (no books) still initializes as
+    // genesis.
+    std::vector<std::string> journal_intent_ids;
     for (std::size_t i = 0; i < rows.size(); ++i) {
-        if (rows[i].kind == "intent") {
-            have_intent_row = true;
-            break;
-        }
+        if (rows[i].kind == "intent")
+            journal_intent_ids.push_back(rows[i].intent_id);
     }
-    if (!have_intent_row && HasUncoveredLiveBooks(cfg_.dir)) {
+    std::string orphan_book;
+    if (HasUncoveredLiveBook(cfg_.dir, journal_intent_ids,
+                              &orphan_book)) {
         OpsRow("reconcile", "runner", "recover-orphaned-state",
                deps_.now_ns(deps_.clock_ctx));
         Alert(P("alerts.jsonl").c_str(), "HARD",
               "recover-orphaned-state",
-              "slot books with no journal intent row",
+              ("slot books with no journal intent row: " +
+               orphan_book)
+                  .c_str(),
               deps_.now_ns(deps_.clock_ctx));
         if (reason) *reason = kOrphan;
         return false;
@@ -781,10 +828,26 @@ bool G0Runner::Recover(const char** reason) {
         if (!AttributeClosedQty(xm.symbol[0] != '\0' ? xm.symbol
                                                  : xid.symbol,
                                 xm.exit_closed_qty,
-                                deps_.now_ns(deps_.clock_ctx)))
+                                deps_.now_ns(deps_.clock_ctx))) {
+            // Terminal attribution is never dropped (doc 06 sec.
+            // 6.1b): a CLOSED EXIT whose quantity cannot land on
+            // the parent entries keeps its accounting obligation.
+            // Refuse recovery — the next attempt retries from
+            // the durable pre-attribution state (the attribution
+            // is self-rollbacking, so nothing is half-folded).
+            // Marking recovered_ here would strand the books: the
+            // entry keeps claiming open while no EXIT object
+            // remains to retry it.
             OpsRow("reconcile", ids[i].c_str(),
-                   "attribution-unpersisted",
+                   "recover-attribution-unpersisted",
                    deps_.now_ns(deps_.clock_ctx));
+            Alert(P("alerts.jsonl").c_str(), "HARD",
+                  "recover-attribution-unpersisted",
+                  ids[i].c_str(),
+                  deps_.now_ns(deps_.clock_ctx));
+            if (reason) *reason = kAttr;
+            return false;
+        }
     }
     recovered_ = true;  // ownership + books established: this
                          // object alone may now mutate
@@ -4217,15 +4280,30 @@ bool G0Runner::Cycle(long long now_ns) {
                 // A closed EXIT proves its quantity shut: attribute
                 // it to same-symbol entries (oldest first) so the
                 // entry machine stops claiming provable open.
+                // Attribution failure RETAINS the EXIT (doc 06 sec.
+                // 6.1b): marking it done would strand the books —
+                // the entry keeps claiming open while no EXIT
+                // object remains to retry it. The next cycle
+                // re-drives this quiescent CLOSED slot and retries
+                // deterministically (the attribution recomputes
+                // takes from current books and is self-rollbacking,
+                // so the retry folds exactly once). No replacement
+                // close is submitted for a persistence failure, and
+                // no broker-derived accounting is manufactured.
                 if (s.intent.kind ==
                         jev::risk::IntentKind::EXIT &&
                     s.m.state == exec::RouteState::CLOSED &&
                     s.m.exit_closed_qty > 0 &&
                     !AttributeClosedQty(s.intent.symbol,
                                        s.m.exit_closed_qty,
-                                       now_ns))
+                                       now_ns)) {
                     OpsRow("reconcile", s.intent.intent_id,
                            "attribution-unpersisted", now_ns);
+                    Alert(P("alerts.jsonl").c_str(), "HARD",
+                          "attribution-unpersisted",
+                          s.intent.intent_id, now_ns);
+                    break;
+                }
                 s.done = true;
                 break;
             }
