@@ -239,6 +239,12 @@ persist-fail keeps the previous safe file state + alerts + retries.
 - State-file integrity: absent vs corrupt/non-regular are distinct.
 A directory/unreadable node never reads as missing (journal: refuse;
 HALT: present; freeze: frozen; chains/incidents/FSM: invalid/refuse).
+A present-but-unreadable regular freeze file is frozen (ABSENT
+reads as the empty set; REGULAR-but-unreadable fails closed).
+A present regular MEDIUM FSM whose content is non-empty and
+outside the four legal states is corruption: refuse + alert,
+never mint a fresh incident over it (absent-or-empty still
+takes the fresh/mint-retry path).
 - Broker position values: snapshots validate count AND rows —
 NUL-terminated non-empty symbols, no duplicates, qty within
 +/-999999999, `LLONG_MIN` refused. Any violation invalidates the
@@ -260,11 +266,28 @@ architecture limit (1..64; exits 2x) so `*2` arithmetic cannot
 overflow and fixed scratch tables cannot be over-indexed.
 - Windows durability: `AtomicWrite` uses true replacement semantics
 (`MoveFileEx` REPLACE+WRITE_THROUGH) — never remove-then-rename.
+- Startup parsing is reject-before-overflow: CLI `cycles`
+accumulates decimal digits with a checked bound (oversized input
+refuses before any signed overflow), then the 0..1000000 window
+applies as before.
+- HALT lifecycle honesty: a failed HALT write latches HARD
+in-memory (entries blocked) and reports the stop as UNPROVEN —
+the caller exits nonzero and the supervisor/operator owns
+recovery. No comment or log may claim an in-process retry that
+the entry point does not perform.
 - Clock split: wall clock owns audit timestamps/epochs/day
 accounting; a monotonic clock owns S2 cadence/elapsed timeouts.
 - Single-process ownership: one live runner per state directory
-(PID lock file with liveness check; same-process re-entry allowed,
-foreign live holder refused) — Phase-4 prerequisite.
+— Phase-4 prerequisite. The mutual-exclusion mechanism is an OS
+process-lifetime ownership primitive held open for the whole
+process life (`flock(LOCK_EX|LOCK_NB)` on POSIX, an exclusive
+no-share open handle on Windows): a dead holder releases it in
+the kernel, so stale takeover has no check-then-act window and
+two concurrent takers serialize into exactly one owner. The PID
+file is diagnostic only (owner identity for alerts), never the
+arbiter. Same-thread re-entry is allowed (tracked in-process);
+a different thread of the same process contends like a foreign
+process and loses. Never released before process exit.
 - MEDIUM teardown certification: clearing an incident requires
 BROKER-CONFIRMED flat (seam present + query ok + all zero) AND
 (local flat or file == FLATTENED). Missing/failing seam =
