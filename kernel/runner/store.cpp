@@ -8,6 +8,7 @@
 #ifdef _WIN32
 #include <direct.h>
 #include <io.h>
+#include <sys/stat.h>
 #define DUR_COMMIT(f) _commit(_fileno(f))
 #else
 #include <sys/stat.h>
@@ -164,11 +165,22 @@ bool ReadLines(const char* path, std::vector<std::string>* out) {
 }
 
 bool FileExists(const char* path) {
+    // Regular file ONLY (a directory in place of a state file is
+    // not "exists" — it is corruption/misplacement, and must
+    // read as missing everywhere (Windows fopen already refuses
+    // directories; POSIX opens them — stat converges the two).
+    // Callers treat missing as genesis/empty/refuse; a directory
+    // must never masquerade as valid-empty content.
     if (!path) return false;
-    FILE* f = std::fopen(path, "rb");
-    if (!f) return false;
-    std::fclose(f);
-    return true;
+#ifdef _WIN32
+    struct _stat st;
+    if (_stat(path, &st) != 0) return false;
+    return (st.st_mode & _S_IFMT) == _S_IFREG;
+#else
+    struct stat st;
+    if (stat(path, &st) != 0) return false;
+    return S_ISREG(st.st_mode);
+#endif
 }
 
 bool JournalAppend(const char* path, const journal::Row& r) {
