@@ -187,8 +187,7 @@ G0Runner::G0Runner(const RunnerConfig& cfg, const RunnerDeps& deps)
     // mid-cycle (MEDIUM-flatten appends while the drive loop holds
     // refs). The 2x ceiling is the documented worst case: every
     // live entry carrying one live exit at once.
-    long long cap = (cfg_.max_slots > 0 ? cfg_.max_slots : 16);
-    slots_.reserve((std::size_t)(cap * 2));
+    slots_.reserve((std::size_t)ExitCap());
 }
 
 std::string G0Runner::P(const char* name) const {
@@ -481,7 +480,7 @@ bool G0Runner::Recover(const char** reason) {
                     if (reason) *reason = kSnap;
                     return false;
                 }
-                if (slots_.size() >= (std::size_t)(2 * cfg_.max_slots))
+                if (slots_.size() >= (std::size_t)ExitCap())
                     break;
                 Slot s;
                 CopyStr(s.intent.intent_id,
@@ -508,7 +507,7 @@ bool G0Runner::Recover(const char** reason) {
             if (reason) *reason = kSnap;
             return false;
         }
-        if (slots_.size() >= (std::size_t)(2 * cfg_.max_slots)) break;
+        if (slots_.size() >= (std::size_t)ExitCap()) break;
         Slot s;
         if (has_snap) {
             exec::RouteMachine m;
@@ -636,6 +635,7 @@ bool G0Runner::SubmitIntent(const exec::OrderIntent& in,
     static const char kGated[] = "submit-entry-gated";
     static const char kReuse[] = "submit-id-reuse";
     static const char kReg[] = "submit-already-registered";
+    static const char kJournal[] = "submit-journal-broken";
     if (!IsSafeId(in.intent_id) || !in.symbol[0] ||
         in.qty_shares <= 0) {
         if (reason) *reason = kBadId;
@@ -659,8 +659,7 @@ bool G0Runner::SubmitIntent(const exec::OrderIntent& in,
             return false;
         }
     }
-    long long cap = is_exit ? cfg_.max_slots * 2 : cfg_.max_slots;
-    if (cap <= 0) cap = is_exit ? 32 : 16;
+    long long cap = is_exit ? ExitCap() : EntryCap();
     if ((long long)slots_.size() >= cap) {
         // One deferred sweep before refusing: completed work frees
         // capacity (long runs never wedge on history).
@@ -719,13 +718,41 @@ bool G0Runner::SubmitIntent(const exec::OrderIntent& in,
         }
         // Crash-retry: the record already holds these economics —
         // resume without rewriting it.
-    } else if (!SaveIntent(ipath.c_str(), in.symbol,
-                            (in.side == broker::OrderSide::BUY) ? 0
-                                                                : 1,
-                            is_exit ? 1 : 0, in.qty_shares,
-                            in.stop_cents, in.tp_cents)) {
-        if (reason) *reason = kGated;
-        return false;
+    } else {
+        // Journal history wins: an intent file gone missing
+        // (operator deletion, disk loss) does not free the id. A
+        // verified historical intent row means permanently
+        // registered — refuse even though the file is absent
+        // (recreating it would fork one identity into two
+        // lifecycles). An unverifiable journal refuses too: the
+        // journal is the identity authority, and a broken chain
+        // cannot prove the id is fresh.
+        std::vector<journal::Row> hjr;
+        if (!JournalVerifyFile(P("journal.jsonl").c_str())) {
+            if (reason) *reason = kJournal;
+            return false;
+        }
+        bool historic = false;
+        if (JournalLoad(P("journal.jsonl").c_str(), &hjr)) {
+            for (std::size_t i = 0; i < hjr.size(); ++i) {
+                if (hjr[i].kind == "intent" &&
+                    hjr[i].intent_id == in.intent_id) {
+                    historic = true;
+                    break;
+                }
+            }
+        }
+        if (historic) {
+            if (reason) *reason = kReg;
+            return false;
+        }
+        if (!SaveIntent(ipath.c_str(), in.symbol,
+                        (in.side == broker::OrderSide::BUY) ? 0 : 1,
+                        is_exit ? 1 : 0, in.qty_shares,
+                        in.stop_cents, in.tp_cents)) {
+            if (reason) *reason = kGated;
+            return false;
+        }
     }
     Slot s;
     s.intent = in;
@@ -970,6 +997,20 @@ int G0Runner::CollectCoverExits(const char* symbol,
     }
     if (total) *total = tot;
     return n;
+}
+int G0Runner::EntryCap() const {
+    // One validated capacity: the fixed architecture limit is 64
+    // live entries (exits run at 2x so risk never wedges behind
+    // entry capacity). Larger configured values clamp — the *2
+    // arithmetic below cannot overflow and fixed scratch tables
+    // cannot be over-indexed. Non-positive falls back to 16 (the
+    // historic default), matching prior behavior exactly.
+    if (cfg_.max_slots < 1) return 16;
+    if (cfg_.max_slots > 64) return 64;
+    return (int)cfg_.max_slots;
+}
+int G0Runner::ExitCap() const {
+    return EntryCap() * 2;  // <= 128: plain int math, no overflow
 }
 bool G0Runner::SnapPositions(Position* ps, int cap,
                              int* n) const {

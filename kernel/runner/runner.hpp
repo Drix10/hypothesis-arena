@@ -236,6 +236,9 @@ class G0Runner {
     bool EmergencyAppend(const journal::Row& r);
     bool DrainEmergency();
     bool PersistSlot(Slot& s);
+    // Validated capacities (1..64 entries, 1..128 exits).
+    int EntryCap() const;
+    int ExitCap() const;
     // Durable-HALT-or-latch: true once a HALT file exists or the
     // in-memory latch fired (failed HALT persist). Entry gating
     // and kill evaluation consult this, never the bare file

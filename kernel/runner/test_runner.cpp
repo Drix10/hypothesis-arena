@@ -4812,6 +4812,88 @@ int main() {
         Check(qty60, "sr-remainder-60");
         Check(!qty100again, "sr-never-stale-100");
     }
+    // IP. Intent-ID permanence (doc 06 sec. 6.1b): journal history
+    // wins at both layers. A CLOSED-imaged slot is never rebuilt
+    // (terminal), so mid-run file deletion leaves no memory trace
+    // — yet re-submit is refused from the journal row alone (the
+    // old code recreated the file, forking one identity). Restart
+    // with a deleted file refuses at Recover (never invent).
+    {
+        Rig r;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-620", "AAPL", 0, 0,
+                          100, 11, 100, &cid)
+                   .empty(),
+              "ip-image");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "ip-recover");
+        Check(g.Find("intent-620") == nullptr,
+              "ip-terminal-unrebuilt");
+        Check(std::remove(
+                  (r.dir + "/intent-intent-620.txt").c_str()) ==
+                  0,
+              "ip-file-deleted");
+        const char* rsn = nullptr;
+        Check(!g.SubmitIntent(
+                  GoodIntent("intent-620", "AAPL", false, 100),
+                  &rsn),
+              "ip-reuse-refused");
+        Check(rsn && std::string(rsn) ==
+                         "submit-already-registered",
+              "ip-reason");
+        Check(!Exists(r.dir + "/intent-intent-620.txt"),
+              "ip-no-recreate");
+    }
+    {
+        Rig r;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-621", "AAPL", 0, 0,
+                          100, 2, 100, &cid)
+                   .empty(),
+              "ip-image2");
+        Check(std::remove(
+                  (r.dir + "/intent-intent-621.txt").c_str()) ==
+                  0,
+              "ip-file-deleted2");
+        G0Runner g(r.cfg, r.deps);
+        Check(!g.Recover(nullptr), "ip-restart-refused");
+    }
+    // MC. Capacity clamp (doc 06 sec. 6.1b): absurd configured
+    // max_slots clamps to the fixed architecture limit (64
+    // entries) — the *2 arithmetic cannot overflow and the 65th
+    // entry refuses. LLONG_MAX configures safely too.
+    {
+        Rig r;
+        r.cfg.max_slots = 1000000;
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "mc-recover");
+        bool all_ok = true;
+        for (int i = 0; i < 64; ++i) {
+            char iid[32];
+            std::snprintf(iid, sizeof(iid), "mc-%03d", i);
+            if (!g.SubmitIntent(
+                    GoodIntent(iid, "AAPL", false, 100),
+                    nullptr)) {
+                all_ok = false;
+                break;
+            }
+        }
+        Check(all_ok, "mc-64-accepted");
+        Check(!g.SubmitIntent(
+                  GoodIntent("mc-065", "AAPL", false, 100),
+                  nullptr),
+              "mc-65-refused");
+    }
+    {
+        Rig r;
+        r.cfg.max_slots = 9223372036854775807LL;
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "mc-recover2");
+        Check(g.SubmitIntent(
+                  GoodIntent("mc-big", "AAPL", false, 100),
+                  nullptr),
+              "mc-huge-config-safe");
+    }
     // FT. Stream transport contract (doc 06 sec. 6.1b): a
     // negative or overlong stream_read return is a real feed
     // fault (loud journal + alert, cycle continues) — never
