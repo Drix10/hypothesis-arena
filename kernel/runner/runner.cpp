@@ -2826,7 +2826,8 @@ void G0Runner::MediumPass(long long now_ns) {
     // (no blind re-issue); a restart reloads the file and
     // reconciles first (pre-flight dedupe never resends).
     std::string mp = P("medium.txt");
-    if (StatPath(mp.c_str()) == PathKind::CORRUPT) {
+    PathKind mk = StatPath(mp.c_str());
+    if (mk == PathKind::CORRUPT) {
         OpsRow("reconcile", "runner", "medium-fsm-corrupt",
                now_ns);
         Alert(P("alerts.jsonl").c_str(), "MEDIUM",
@@ -2834,11 +2835,26 @@ void G0Runner::MediumPass(long long now_ns) {
         return;  // never default a corrupt FSM to a fresh enter
     }
     std::vector<std::string> lns;
+    bool read_ok = ReadLines(mp.c_str(), &lns);
     std::string cur;
-    if (ReadLines(mp.c_str(), &lns) && !lns.empty()) cur = lns[0];
+    if (read_ok && !lns.empty()) cur = lns[0];
     if (cur != "MEDIUM_ACTIVE" && cur != "FLATTEN_PENDING" &&
-        cur != "FLATTENED" && cur != "PROTECTION_ONLY")
+        cur != "FLATTENED" && cur != "PROTECTION_ONLY") {
+        if (!cur.empty() ||
+            (mk == PathKind::REGULAR && !read_ok)) {
+            // Present regular file with unknown content — or
+            // present but unreadable: corruption, never a fresh
+            // incident minted over it (doc 06 sec. 6.1b). Absent
+            // (or empty, the mint-retry shape) still takes the
+            // fresh path below.
+            OpsRow("reconcile", "runner", "medium-fsm-unknown",
+                   now_ns);
+            Alert(P("alerts.jsonl").c_str(), "MEDIUM",
+                  "medium-fsm-unknown", "", now_ns);
+            return;
+        }
         cur.clear();
+    }
     if (cur.empty()) {
         if (!AtomicWrite(mp.c_str(), "MEDIUM_ACTIVE")) {
             OpsRow("reconcile", "runner",

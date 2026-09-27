@@ -4535,6 +4535,26 @@ int main() {
                   std::string(mbe),
               "fl-mint-retry");
     }
+    // MF. Malformed MEDIUM FSM (doc 06 sec. 6.1b): a present
+    // regular medium.txt with non-empty unknown content is
+    // corruption — refuse + alert, never mint a fresh incident
+    // over it. The file is left untouched and no medium-enter
+    // fires.
+    {
+        Rig r;
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "mf-recover");
+        WriteFile(r.dir + "/medium.txt", "GARBAGE");
+        g_kill.spend_tier = 3;  // MEDIUM: MediumPass runs
+        Check(g.Cycle(g_now), "mf-cycle");
+        Check(ReadWhole(r.dir + "/medium.txt") == "GARBAGE",
+              "mf-untouched");
+        std::string al = ReadWhole(r.dir + "/alerts.jsonl");
+        Check(al.find("medium-fsm-unknown") != std::string::npos,
+              "mf-alert");
+        Check(al.find("medium-enter") == std::string::npos,
+              "mf-no-enter");
+    }
     // PK. Path integrity (doc 06 sec. 6.1b): a non-regular node
     // never reads as a missing file. Directory-in-place refuses
     // or fails closed at every state reader.
