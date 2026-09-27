@@ -10,8 +10,6 @@
 // a dead process leaves behind. Recovery from those files IS the
 // crash test — no timing tricks.
 #include <cstdio>
-#include <cstdlib>
-#include <csignal>
 #include <cstring>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -26,19 +24,10 @@
 
 static int g_fail = 0;
 static int g_count = 0;
-static int g_first_fail = -1;  // TEMP-TRIAGE (revert)
-static int g_stop_after = -1;    // TEMP-TRIAGE (revert)
 static void Check(bool ok, const char* name) {
     ++g_count;
-    // TEMP-TRIAGE (revert): prefix-run support.
-    if (g_stop_after > 0 && g_count > g_stop_after) {
-        std::printf("STOP-OK %d\n", g_count - 1);
-        std::exit(0);
-    }
     if (!ok) {
         ++g_fail;
-        // TEMP-TRIAGE (revert): first failure index -> exit code.
-        if (g_first_fail < 0) g_first_fail = g_count;
         std::printf("FAIL %s\n", name);
     }
 }
@@ -202,19 +191,8 @@ static bool Exists(const std::string& p) {
 static std::string TmpDir() {
     // Relative sandbox (std::filesystem binaries fail to start on
     // this MinGW toolchain; plain C I/O works everywhere). Removed
-    // file-by-file at block end via RemoveSandbox. PID-tagged:
-    // sequential processes sharing a workspace must never reuse a
-    // live sandbox name (stale state would silently join the run).
-    char pb[64];
-#ifdef _WIN32
-    std::snprintf(pb, sizeof(pb), "g0tmp%lu-%u",
-                    (unsigned long)GetCurrentProcessId(),
-                    (unsigned)++g_tmpn);
-#else
-    std::snprintf(pb, sizeof(pb), "g0tmp%u-%u",
-                    (unsigned)getpid(), (unsigned)++g_tmpn);
-#endif
-    std::string d = pb;
+    // file-by-file at block end via RemoveSandbox.
+    std::string d = std::string("g0tmp") + std::to_string(++g_tmpn);
     MkDir(d);
     return d;
 }
@@ -498,14 +476,6 @@ static std::string EmgRow(std::uint64_t seq, long long ts,
 
 int main() {
     using jev::runner::G0Runner;
-    // TEMP-TRIAGE (revert): prefix-run support + SIGPIPE probe.
-    if (const char* se = std::getenv("G0_STOP_AFTER"))
-        g_stop_after = std::atoi(se);
-#ifdef SIGPIPE
-    std::signal(SIGPIPE, SIG_IGN);  // TEMP-TRIAGE: EPIPE, not death
-#else
-    (void)0;  // TEMP-TRIAGE: no SIGPIPE on this platform
-#endif
     // 0. Event seam units: SSE framing + classification + shaping.
     {
         jev::runner::SseParser p;
@@ -3759,7 +3729,5 @@ int main() {
     }
     if (g_fail == 0)
         std::printf("RUNNER SUITE: ALL PASS (%d checks)\n", g_count);
-    // TEMP-TRIAGE (revert): encode first-failure index in exit.
-    if (g_fail) return 10 + (g_first_fail % 200);
-    return 0;
+    return g_fail ? 1 : 0;
 }
