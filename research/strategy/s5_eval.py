@@ -1,37 +1,52 @@
 """S5 paired evaluation: ALWAYS_TAKE vs JEV_FILTERED (research/shadow-only).
 
-Contract (doc 11, eval_v1):
-- SAME deterministic candidate stream for both policies (paired at CID).
-- ALWAYS_TAKE resolves every candidate with frozen economics (backtest).
-- JEV_FILTERED invokes v4 (answers_fn supplied; stub in harness proofs,
-  never live provider) and takes only PASS_*; HOLD never fills.
-- Censored stays censored (label preserved); efficacy uses realized R.
-- Statistics: candidate-level paired delta with stationary-bootstrap CI;
-  daily portfolio returns/Sharpe with HAC SE (zero-days kept); Holm over
-  the PRE-DECLARED variant family; calibration (Brier) reported separately.
-- Replay: every record carries an eval-hash; byte-identical on re-run.
-- Leakage guards: stream built first (bars[..i] only); walk-forward splits
-  with purge + embargo; holdout segment inaccessible to selection;
-  thresholds frozen before the window; search budget declared in prereg.
+Contract (doc 11, eval_v1, s5_prereg.json v2):
+- SAME deterministic candidate stream, paired at CID.
+- ALWAYS_TAKE resolves every realized candidate at frozen economics.
+- JEV_FILTERED takes only v4 PASS_* (+ prereg variant reading); HOLD never fills.
+- Censored stays censored; Brier on CLOSED labels only.
+- Resampling: day-cluster bootstrap (cluster-aware by construction) for BOTH
+  the percentile CI and the null-centered one-sided test (separate procedures).
+- Sequential: two pre-registered looks (interim 50% / final) with Bonferroni
+  alpha split + futility stop. Power study on real-stream dependence with
+  pre-declared MDE. Walk-forward folds for selection; holdout enters ONLY the
+  separate final path after selection is frozen.
+- Portfolio: daily equity curve with open positions marked at session closes,
+  zero-days kept; Sharpe x sqrt(252) with Newey-West HAC SE; max drawdown
+  from the curve. Absolute bar mechanically evaluated, never hardcoded.
 
 No live orders. No threshold tuning. No strategy redesign.
 """
 import hashlib
+import inspect
 import json
 import math
 import random
 
 from . import backtest as bt
-from . import jev_v4 as v4
 
 EVAL_PROTOCOL = "eval_v1"
 BOOT_REPS = 2000
-BOOT_BLOCK_MEAN = 20
 BOOT_SEED = 0x5EED
+POWER_REPS = 200
+POWER_INNER = 100
+POWER_SEED = 41721
 HOLM_ALPHA = 0.05
+SEQ_ALPHA_INTERIM = 0.025
+SEQ_ALPHA_FINAL = 0.025
 R2_SINGLE_PCT = 25.0
 R2_TOTAL_PCT = 75.0
 MAX_POSITIONS = 3
+SIDES = ("BUY", "SELL")
+FAMILIES = ("mean_reversion", "momentum")
+
+# Prereg variant family (names/semantics EXACTLY as s5_prereg.json v2).
+VARIANTS = ("filtered-conv-any", "filtered-enter-gte-80-strong-plus")
+VARIANT_RULE = {
+    "filtered-conv-any": "take iff frozen v4 verdict in PASS_*",
+    "filtered-enter-gte-80-strong-plus":
+        "take iff PASS_* AND enter>=0.8 AND conviction in (strong, max)",
+}
 
 
 def eval_hash(record):
@@ -42,15 +57,13 @@ def eval_hash(record):
 
 def stub_answers_provider(model="stub-deterministic-v1",
                           revision="stub-v1", provider="s5-harness"):
-    """Deterministic stub (harness proofs ONLY, never JEV evidence).
-
-    Answers derive from CID alone; conviction cycles to exercise HOLD and
-    PASS paths. Signed with an ephemeral key; metadata labels the stub."""
+    """Deterministic stub (harness proofs ONLY, never JEV evidence)."""
     from collector.jev import ed_pubkey
     seed = bytes.fromhex("ab" * 32)
     pub = ed_pubkey(seed)
 
     def provide(candidate, market, now_unix):
+        from . import jev_v4 as v4
         rng = random.Random(int(candidate.cid[:16], 16))
         conv = ("flat", "lean", "strong", "max")[int(candidate.cid, 16) % 4]
         ans = {"enter": rng.random(), "edge_family": candidate.proposed_family,
@@ -64,16 +77,45 @@ def stub_answers_provider(model="stub-deterministic-v1",
     return provide, pub
 
 
-def evaluate_stream(items, answers_fn, pubkey, engine, spread_mult=1.0,
-                    variant="table"):
+def r_validate(candidate):
+    """Frozen-risk admission screen (uses R semantics, redesigns nothing).
+
+    A disqualified candidate must never be taken by any policy; the take
+    gate and the bar both consume the flag. Ordinary 25% cap binding is
+    sizing, NOT a violation (size_notional clamps; only degenerate asks
+    that break the R definition disqualify). Pure function of candidate."""
+    if candidate.proposed_side not in SIDES:
+        return (True, "bad_side")
+    if candidate.proposed_family not in FAMILIES:
+        return (True, "bad_family")
+    if not (candidate.entry_px > 0 and candidate.stop_px > 0 and
+            candidate.tp_px > 0):
+        return (True, "nonpositive_price")
+    if abs(candidate.entry_px - candidate.stop_px) <= 0:
+        return (True, "zero_risk")
+    if candidate.time_exit_ns <= candidate.snapshot_ts_ns:
+        return (True, "no_horizon")
+    return (False, "ok")
+
+
+def _exit_spread(candidate, bars_after, exit_ts_ns):
+    for b in bars_after:
+        if b.ts_ns == exit_ts_ns:
+            return b.spread_bps
+    return 0.0
+
+
+def evaluate_stream(items, answers_fn, pubkey, engine, variant,
+                    spread_mult=1.0, day_fn=None, data_id=None):
     """items: [(candidate, bars_after, market, regime, entry_spread_bps)].
 
-    variant 'table': take on v4 PASS_* (frozen table). Variant 'strict':
-    v4 PASS_* AND enter>=0.8 AND conviction in (strong, max) — a
-    pre-declared stricter reading of the SAME answers (prereg family).
-    Returns eval records (one per candidate, both policies). Deterministic.
-    """
-    assert variant in ("table", "strict")
+    variant in VARIANTS (prereg names). Deterministic. Every record binds
+    the exact frozen inputs needed for replay (candidate meta, two-leg
+    costs, spread multiplier, v4 response_hash+signature, data slice id)."""
+    from . import jev_v4 as v4
+    assert variant in VARIANTS, variant
+    day_fn = day_fn or (lambda ts: str(ts))
+    data_id = data_id or {"slice": "unspecified", "dataset_sha": "unspecified"}
     records = []
     for c, bars_after, market, regime, spread_bps in items:
         res = v4.resolve_v4_label(c, bars_after, spread_mult=spread_mult,
@@ -81,28 +123,42 @@ def evaluate_stream(items, answers_fn, pubkey, engine, spread_mult=1.0,
         art, meta = answers_fn(c, market, market["snapshot_epoch"])
         action, reason = v4.evaluate_v4(c, art, market["snapshot_epoch"],
                                         pubkey, engine)
-        if variant == "strict" and action.startswith("PASS"):
+        if variant == "filtered-enter-gte-80-strong-plus" and \
+                action.startswith("PASS"):
             a = art["payload"]["answers"]
             if not (a["enter"] >= 0.8 and
                     a["conviction"] in ("strong", "max")):
                 action, reason = "HOLD", "strict_reading"
+        disq, disq_reason = r_validate(c)
         filt_r = res["r_realized"] if action.startswith("PASS") else 0.0
-        filt_taken = action.startswith("PASS") and res["realized"]
+        filt_taken = action.startswith("PASS") and res["realized"] and not disq
+        exit_sp = _exit_spread(c, bars_after, res["exit_ts_ns"]) \
+            if res["realized"] else 0.0
         rec = {
             "eval_protocol": EVAL_PROTOCOL,
             "variant": variant,
             "cid": c.cid, "symbol": c.symbol,
             "snapshot_ts_ns": c.snapshot_ts_ns,
+            "day": day_fn(c.snapshot_ts_ns),
             "proposed_side": c.proposed_side,
             "proposed_family": c.proposed_family,
             "entry_px": c.entry_px, "stop_px": c.stop_px, "tp_px": c.tp_px,
             "time_exit_ns": c.time_exit_ns,
+            "strategy_version": c.strategy_version,
+            "exit_profile_version": c.exit_profile_version,
+            "cost_model_version": c.cost_model_version,
+            "expected_cost_bps": c.expected_cost_bps,
+            "feature_revision": c.feature_revision,
             "feature_snapshot_hash": c.feature_snapshot_hash,
             "entry_spread_bps": spread_bps,
+            "exit_spread_bps": exit_sp,
+            "spread_mult": spread_mult,
+            "entry_fill": res["entry_fill"], "exit_fill": res["exit_fill"],
             "exit_ts_ns": res["exit_ts_ns"],
             "always_r": res["r_realized"] if res["realized"] else 0.0,
             "always_label": res["label"],
-            "always_realized": res["realized"],
+            "always_realized": res["realized"] and not disq,
+            "disqualified": disq, "disqualify_reason": disq_reason,
             "filtered_action": action, "filtered_reason": reason,
             "filtered_r": filt_r, "filtered_taken": filt_taken,
             "regime": regime,
@@ -110,11 +166,13 @@ def evaluate_stream(items, answers_fn, pubkey, engine, spread_mult=1.0,
             "latent_risk": art["payload"]["answers"]["latent_risk"],
             "family_answer": art["payload"]["answers"]["edge_family"],
             "conviction": art["payload"]["answers"]["conviction"],
-            "artifact_hash": hashlib.sha256(
-                json.dumps(art, sort_keys=True).encode()).hexdigest(),
+            "response_hash": art["response_hash"],
+            "signature": art["signature"],
             "decision_key": art["payload"]["decision_key"],
             "model": meta["model"], "revision": meta["revision"],
             "provider": meta["provider"],
+            "data_slice": data_id["slice"],
+            "dataset_sha": data_id["dataset_sha"],
         }
         rec["eval_hash"] = eval_hash(rec)
         records.append(rec)
@@ -122,45 +180,211 @@ def evaluate_stream(items, answers_fn, pubkey, engine, spread_mult=1.0,
 
 
 def paired_deltas(records):
-    """Per-candidate filtered-minus-always R (HOLD contributes 0, never a fill)."""
     return [r["filtered_r"] - r["always_r"] for r in records]
 
 
-def stationary_bootstrap_ci(values, reps=BOOT_REPS, block_mean=BOOT_BLOCK_MEAN,
-                            seed=BOOT_SEED, alpha=0.05):
-    """Stationary (geometric-block) bootstrap CI for the mean. Seeded."""
+# ---- day-cluster bootstrap (cluster-aware dependence procedure) ----
+
+def _day_clusters(days):
+    order, groups = [], {}
+    for i, d in enumerate(days):
+        groups.setdefault(d, []).append(i)
+    order = sorted(groups)
+    return [groups[d] for d in order]
+
+
+def cluster_reps(values, days, reps=BOOT_REPS, seed=BOOT_SEED):
+    """Resample whole day-clusters with replacement; mean per replicate."""
     rng = random.Random(seed)
+    clusters = _day_clusters(days)
     n = len(values)
-    if n == 0:
-        return (0.0, 0.0, 0.0)
-    p = 1.0 / block_mean
-    means = []
+    assert n > 0
+    out = []
     for _ in range(reps):
-        s, total = 0.0, 0
-        i = rng.randrange(n)
-        while total < n:
-            s += values[i]
-            total += 1
-            i = i + 1 if rng.random() > p else rng.randrange(n)
-            if i >= n:
-                i %= n
-        means.append(s / total)
-    means.sort()
-    lo = means[int(alpha / 2 * reps)]
-    hi = means[int((1 - alpha / 2) * reps) - 1]
-    return (sum(values) / n, lo, hi)
+        s, m = 0.0, 0
+        for _ in range(len(clusters)):
+            for i in rng.choice(clusters):
+                s += values[i]
+                m += 1
+        out.append(s / m if m else 0.0)
+    return out
 
 
-def daily_returns_from_ledger(exit_pnls, all_days, start_equity):
-    """exit_pnls: [(day_str, pnl_usd)] realized. Zero-days kept (0.0)."""
-    by_day = {}
-    for d, p in exit_pnls:
-        by_day[d] = by_day.get(d, 0.0) + p
-    eq, rets = start_equity, []
-    for d in all_days:
-        rets.append(by_day.get(d, 0.0) / eq)
-        eq += by_day.get(d, 0.0)
-    return rets
+def cluster_bootstrap_ci(values, days, reps=BOOT_REPS, seed=BOOT_SEED,
+                         alpha=0.05):
+    """Percentile CI for the mean (dependence-aware; NOT a test)."""
+    means = sorted(cluster_reps(values, days, reps, seed))
+    return (sum(values) / len(values),
+            means[int(alpha / 2 * reps)],
+            means[int((1 - alpha / 2) * reps) - 1])
+
+
+def cluster_null_p(values, days, reps=BOOT_REPS, seed=BOOT_SEED):
+    """One-sided null p for H0: mean <= 0 vs H1: mean > 0.
+
+    The resample distribution is CENTERED under H0 (observed mean
+    subtracted) and p = P(boot mean >= observed mean). Separate procedure
+    from the CI with explicit null semantics."""
+    mu = sum(values) / len(values)
+    centered = [v - mu for v in values]
+    boots = cluster_reps(centered, days, reps, seed + 1)
+    return sum(1 for b in boots if b >= mu) / len(boots)
+
+
+# ---- pre-registered sequential rule (prereg v2 §seq) ----
+
+def seq_decision(deltas, days, look, reps=BOOT_REPS, seed=BOOT_SEED):
+    """look='interim' (first 50% by snapshot order) or 'final'.
+
+    Interim: futility stop if mean<=0; efficacy stop iff null p<0.025;
+    else continue. Final: efficacy iff null p<0.025 (Bonferroni over the
+    two pre-registered looks; conservative under dependence)."""
+    assert look in ("interim", "final")
+    if look == "interim":
+        half = len(deltas) // 2
+        d, dy = deltas[:half], days[:half]
+        mu = sum(d) / len(d)
+        if mu <= 0:
+            return ("stop-futility", mu, 1.0)
+        p = cluster_null_p(d, dy, reps, seed)
+        return ("stop-efficacy" if p < SEQ_ALPHA_INTERIM else "continue",
+                mu, p)
+    mu = sum(deltas) / len(deltas)
+    p = cluster_null_p(deltas, days, reps, seed)
+    return ("efficacy" if p < SEQ_ALPHA_FINAL else "fail", mu, p)
+
+
+# ---- power study (pre-declared MDE, real-stream dependence) ----
+
+def _null_reject(sample, days, alpha, seed, inner=POWER_INNER):
+    """Single null-test decision (shared by seq/final/power paths)."""
+    m0 = sum(sample) / len(sample)
+    c0 = [v - m0 for v in sample]
+    b0 = cluster_reps(c0, days, reps=inner, seed=seed)
+    return sum(1 for b in b0 if b >= m0) / len(b0) < alpha
+
+
+def power_study(train_values, train_days, mde, alpha=SEQ_ALPHA_FINAL,
+                reps=POWER_REPS, seed=POWER_SEED, target=0.8,
+                multipliers=(1, 2, 4, 8)):
+    """Power of the cluster null test under mean shift = mde.
+
+    Dependence comes from resampling the TRAIN stream's own day-clusters
+    (centered, then shifted by mde) — never from holdout, never from the
+    final JEV comparison. Size scaling circularly tiles relabeled clusters.
+    Deterministic. Returns achieved power per multiplier and the required
+    multiplier for target power (None if unreached)."""
+    rng = random.Random(seed)
+    mu = sum(train_values) / len(train_values)
+    pairs = [(v - mu + mde, d) for v, d in zip(train_values, train_days)]
+    out = {"mde": mde, "alpha": alpha, "reps": reps, "seed": seed,
+           "n_base": len(pairs), "by_multiplier": {}, "required": None}
+    for mult in multipliers:
+        tiled = [(v, "%s#%d" % (d, k)) for k in range(mult)
+                 for (v, d) in pairs]
+        idx = sorted(set(d for _, d in tiled))
+        groups = [[i for i, (_, d) in enumerate(tiled) if d == lab]
+                  for lab in idx]
+        hits = 0
+        for r in range(reps):
+            samp_idx = [i for _ in range(len(groups))
+                        for i in rng.choice(groups)]
+            samp = [tiled[i][0] for i in samp_idx]
+            sdays = [tiled[i][1] for i in samp_idx]
+            if _null_reject(samp, sdays, alpha, seed + r):
+                hits += 1
+        pw = hits / reps
+        out["by_multiplier"][mult] = pw
+        if pw >= target and out["required"] is None:
+            out["required"] = mult
+    return out
+
+
+# ---- portfolio: daily curve with mark-to-close ----
+
+def portfolio_curve(records, policy, equity, sessions):
+    """Chronological R2-admission ledger mirroring backtest.run takes/sizes.
+
+    sessions: [{day, end_ts, closes:{symbol: px}}] chronological.
+    Open positions marked at session closes; zero sessions kept as
+    zero-return days. Final session settles remaining opens at its closes.
+    Returns (trades, curve[(day, equity)], returns, max_dd_pct)."""
+    assert policy in ("always", "filtered")
+    evts = sorted(records, key=lambda r: (r["snapshot_ts_ns"], r["symbol"]))
+    open_pos = []  # [exit_ts, symbol, sign, qty, entry_px, con_usd, pnl]
+    cash, sizing_eq = equity, equity
+    trades, eff_cache = [], {}
+    # admission pass (identical rules to bt.run; JEV/disqualify gate only delta)
+    for r in evts:
+        ts = r["snapshot_ts_ns"]
+        still = []
+        for p in open_pos:
+            if p[0] <= ts:
+                sizing_eq += p[6]
+            else:
+                still.append(p)
+        open_pos = still
+        take = (r["always_realized"] if policy == "always"
+                else r["filtered_taken"])
+        if not take:
+            continue
+        if any(p[1] == r["symbol"] for p in open_pos):
+            continue
+        if len(open_pos) >= MAX_POSITIONS:
+            continue
+        risk = abs(r["entry_px"] - r["stop_px"])
+        key = (r["cid"], round(sizing_eq, 6))
+        if key not in eff_cache:
+            eff_cache[key] = bt.size_notional(sizing_eq, risk, r["entry_px"])
+        _, con, _, _, eff_frac = eff_cache[key]
+        con_usd = con / 100.0 * sizing_eq
+        if (sum(p[5] for p in open_pos) + con_usd) / sizing_eq > \
+                R2_TOTAL_PCT / 100.0:
+            continue
+        rr = r["always_r"] if policy == "always" else r["filtered_r"]
+        pnl = rr * eff_frac * sizing_eq
+        sign = 1 if r["proposed_side"] == "BUY" else -1
+        qty = con_usd / r["entry_px"]
+        cash -= sign * qty * r["entry_px"]
+        open_pos.append([r["exit_ts_ns"], r["symbol"], sign, qty,
+                         r["entry_px"], con_usd, pnl])
+        trades.append({"cid": r["cid"], "symbol": r["symbol"],
+                       "side": r["proposed_side"], "entry_ts": ts,
+                       "exit_ts": r["exit_ts_ns"], "con_usd": con_usd,
+                       "entry_equity": sizing_eq, "pnl_usd": pnl,
+                       "spread_mult": r["spread_mult"], "policy": policy})
+    # curve pass: settle + mark per session
+    curve = []
+    for s in sessions:
+        end = s["end_ts"]
+        still = []
+        for p in open_pos:
+            if p[0] <= end:
+                cash += p[3] * p[2] * p[4] + p[6]  # principal + pnl
+            else:
+                still.append(p)
+        open_pos = still
+        mark = sum(p[2] * p[3] * s["closes"].get(p[1], p[4])
+                   for p in open_pos)
+        curve.append((s["day"], cash + mark))
+    # final settlement at last close for anything still open
+    if open_pos:
+        s = sessions[-1]
+        for p in open_pos:
+            cash += p[3] * p[2] * p[4] + p[6]
+        open_pos = []
+        curve[-1] = (s["day"], cash)
+    rets = [(curve[i][1] - curve[i - 1][1]) / curve[i - 1][1]
+            if curve[i - 1][1] else 0.0 for i in range(1, len(curve))]
+    return trades, curve, rets, max_drawdown(curve)
+
+
+def max_drawdown(curve):
+    peak, dd = curve[0][1] if curve else 0.0, 0.0
+    for _, eq in curve:
+        peak = max(peak, eq)
+        dd = max(dd, (peak - eq) / peak if peak else 0.0)
+    return dd * 100.0
 
 
 def sharpe_hac(rets):
@@ -202,29 +426,6 @@ def holm(pvals, alpha=HOLM_ALPHA):
     return out
 
 
-def bootstrap_p(values, reps=BOOT_REPS, block_mean=BOOT_BLOCK_MEAN,
-                seed=BOOT_SEED):
-    """One-sided p: P(boot mean <= 0) under the stationary resample."""
-    rng = random.Random(seed + 1)
-    n = len(values)
-    if n == 0:
-        return 1.0
-    p = 1.0 / block_mean
-    hits = 0
-    for _ in range(reps):
-        s, total = 0.0, 0
-        i = rng.randrange(n)
-        while total < n:
-            s += values[i]
-            total += 1
-            i = i + 1 if rng.random() > p else rng.randrange(n)
-            if i >= n:
-                i %= n
-        if s / total <= 0:
-            hits += 1
-    return hits / reps
-
-
 def brier(pairs):
     """Mean (p - y)^2 over CLOSED labels only (censored never scored)."""
     closed = [(p, 1.0 if lab == "win" else 0.0) for p, lab in pairs
@@ -234,15 +435,15 @@ def brier(pairs):
     return (sum((p - y) ** 2 for p, y in closed) / len(closed), len(closed))
 
 
-def time_splits(records, n_splits=3, embargo_frac=0.05):
-    """Walk-forward over sorted snapshot times; embargo gap between train
-    and test; test windows never overlap; last segment = holdout."""
+# ---- selection / holdout boundary ----
+
+def walk_folds(records, n_splits=3, embargo_frac=0.05):
+    """Walk-forward (train, test) folds ONLY. The holdout is NOT returned:
+    selection code receives folds and can never observe holdout records."""
     recs = sorted(records, key=lambda r: r["snapshot_ts_ns"])
     n = len(recs)
     if n_splits < 1 or n < n_splits + 3:
         return []
-    # n_splits+2 segments: pair k trains [0..k], tests [k+1];
-    # the last segment is the untouched holdout.
     edges = [i * n // (n_splits + 2) for i in range(n_splits + 3)]
     out = []
     for k in range(n_splits):
@@ -250,54 +451,96 @@ def time_splits(records, n_splits=3, embargo_frac=0.05):
         horizon = max(r["time_exit_ns"] - r["snapshot_ts_ns"] for r in recs)
         emb = int(horizon * embargo_frac) + 1
         train = [r for r in recs[:edges[k + 1]]
-                 if r["time_exit_ns"] <= t_end]  # purge overlapping labels
+                 if r["time_exit_ns"] <= t_end]
         test = [r for r in recs[edges[k + 1]:edges[k + 2]]
                 if r["snapshot_ts_ns"] >= t_end + emb]
         out.append((train, test))
-    holdout = recs[edges[n_splits + 1]:]
-    return out, holdout
+    return out
 
 
-def portfolio_loop(records, policy, equity, spread_mult=1.0):
-    """Chronological R2-admission ledger mirroring backtest.run rules.
+def holdout_split(records, n_splits=3):
+    """FINAL path only: (folds, holdout). Called after selection freezes."""
+    folds = walk_folds(records, n_splits)
+    recs = sorted(records, key=lambda r: r["snapshot_ts_ns"])
+    n = len(recs)
+    edges = [i * n // (n_splits + 2) for i in range(n_splits + 3)]
+    return folds, recs[edges[n_splits + 1]:]
 
-    policy: 'always' (take all realized) | 'filtered' (take PASS realized).
-    Same event order/purge/sizing as bt.run; JEV gate is the only delta."""
-    assert policy in ("always", "filtered")
-    evts = sorted(records, key=lambda r: (r["snapshot_ts_ns"], r["symbol"]))
-    open_pos = []  # [exit_ts_ns, symbol, con_usd, pnl_usd]
-    eq, exits = equity, []
-    eff_cache = {}
-    for r in evts:
-        ts = r["snapshot_ts_ns"]
-        still = []
-        for p in open_pos:
-            if p[0] <= ts:
-                eq += p[3]
-                exits.append(p[3])
-            else:
-                still.append(p)
-        open_pos = still
-        take = r["always_realized"] if policy == "always" else \
-            (r["filtered_taken"] and r["always_realized"])
-        if not take:
-            continue
-        if any(p[1] == r["symbol"] for p in open_pos):
-            continue
-        if len(open_pos) >= MAX_POSITIONS:
-            continue
-        risk = abs(r["entry_px"] - r["stop_px"])
-        key = (r["cid"], round(eq, 6))
-        if key not in eff_cache:
-            eff_cache[key] = bt.size_notional(eq, risk, r["entry_px"])
-        unc, con, _, _, eff_frac = eff_cache[key]
-        con_usd = con / 100.0 * eq
-        if (sum(p[2] for p in open_pos) + con_usd) / eq > R2_TOTAL_PCT / 100.0:
-            continue
-        pnl = r["always_r" if policy == "always" else "filtered_r"] * \
-            eff_frac * eq
-        open_pos.append([r["exit_ts_ns"], r["symbol"], con_usd, pnl])
-    for p in open_pos:
-        eq += p[3]
-        exits.append(p[3])
-    return eq, exits
+
+def select_variant(fold_stats):
+    """Pure metrics choice: {variant: [fold paired-mean...]} -> variant.
+
+    Takes ONLY per-fold statistics, never records: the holdout boundary
+    is structural (see signature — no records parameter exists)."""
+    assert set(fold_stats) == set(VARIANTS), set(fold_stats)
+    return max(sorted(fold_stats), key=lambda v: sum(fold_stats[v]))
+
+
+def select_variant_signature_clean():
+    """Regression guard: select_variant must not accept records/holdout."""
+    params = inspect.signature(select_variant).parameters
+    assert list(params) == ["fold_stats"], list(params)
+
+
+# ---- absolute bar (mechanical, prereg v2 §bar) ----
+
+def evaluate_bar(metrics, bar):
+    """metrics: {sharpe_f, holm_p, max_dd_pct, n_closed, stress:{mult:
+    (sharpe_f, sharpe_a)}, r_breach_taken}. Returns (verdict, failed, detail)."""
+    checks = {
+        "sharpe_gt": metrics["sharpe_f"] > bar["filtered_net_sharpe_gt"],
+        "holm_p": metrics["holm_p"] < bar["holm_adjusted_p_lt"],
+        "maxdd": metrics["max_dd_pct"] <= bar["max_drawdown_pct_lte"],
+        "closed": metrics["n_closed"] >= bar["min_closed_trades"],
+        "stress": all(f > a for f, a in metrics["stress"].values()),
+        "no_r_breach": metrics["r_breach_taken"] == 0,
+    }
+    failed = [k for k, v in checks.items() if not v]
+    return (not failed, failed, checks)
+
+
+def final_report(recs_1x, recs_stress, sessions, equity, bar):
+    """Holdout verdict per variant + pooled Holm.
+
+    recs_1x: {variant: records at 1x costs} on the SAME holdout stream.
+    recs_stress: {mult_label: {variant: records re-evaluated at that
+    spread multiplier}} — cost stress enters through re-resolved economics,
+    never by scaling a 1x number."""
+    assert set(recs_1x) == set(VARIANTS)
+    pvals, rep = [], {"variants": {}}
+    for variant, recs in recs_1x.items():
+        d = paired_deltas(recs)
+        days = [r["day"] for r in recs]
+        mu, lo, hi = cluster_bootstrap_ci(d, days)
+        p = cluster_null_p(d, days)
+        pvals.append((variant, p))
+        _, _, rets_f, dd_f = portfolio_curve(recs, "filtered", equity,
+                                             sessions)
+        closed = sum(1 for r in recs
+                     if r["always_label"] in ("win", "loss"))
+        stress = {}
+        for mult, by_var in recs_stress.items():
+            srecs = by_var[variant]
+            _, _, srets_f, _ = portfolio_curve(srecs, "filtered", equity,
+                                               sessions)
+            _, _, srets_a, _ = portfolio_curve(srecs, "always", equity,
+                                               sessions)
+            stress[mult] = (sharpe_hac(srets_f)[0], sharpe_hac(srets_a)[0])
+        rep["variants"][variant] = {
+            "paired_mean_R": mu, "ci95": [lo, hi], "null_p": p,
+            "sharpe_f": sharpe_hac(portfolio_curve(
+                recs, "filtered", equity, sessions)[2])[0],
+            "max_dd_pct": dd_f, "n_closed": closed,
+            "r_breach_taken": sum(1 for r in recs
+                                  if r["disqualified"] and r["filtered_taken"]),
+            "stress": stress}
+    rep["holm"] = holm(pvals)
+    adj = dict((n, a) for n, a, _ in rep["holm"])
+    for variant, v in rep["variants"].items():
+        m = {"sharpe_f": v["sharpe_f"], "holm_p": adj[variant],
+             "max_dd_pct": v["max_dd_pct"], "n_closed": v["n_closed"],
+             "stress": v["stress"], "r_breach_taken": v["r_breach_taken"]}
+        verdict, failed, checks = evaluate_bar(m, bar)
+        v["bar_verdict"], v["bar_failed"], v["bar_checks"] = \
+            verdict, failed, checks
+    return rep

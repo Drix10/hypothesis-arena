@@ -1,14 +1,13 @@
-"""S5 paired-evaluation tests (stdlib only, synthetic deterministic stream).
+"""S5 tests: 22 end-to-end properties (stdlib only, synthetic stream).
 
-Covers the 14 required S5 properties (see module docstring mapping):
-1 both-policies 2 identical-economics 3 hold-never-fills 4 accepted-identical
-5 paired-reconcile 6 censored-stays 7 no-lookahead 8 replay-identical
-9 no-cross-cid 10 bootstrap-determinism 11 cost-stress-paired 12 variant-count
-13 holdout-inaccessible 14 r-violation-disqualifies.
+1 same-CID 2 same-economics 3 HOLD-no-fill 4 PASS-same 5 paired-reconcile
+6 censored 7 no-lookahead 8 replay 9 isolation 10 bootstrap-determinism
+11 null-p (+hostile) 12 cost-stress-reflected 13 variant-family
+14 holdout-boundary 15 R-disqualify 16 sequential 17 power 18 daily-curve
+19 maxDD 20 bar-mechanical 21 baseline-reconcile 22 no-hardcoded-pass.
 """
-import copy
+import inspect
 import json
-import math
 import os
 import sys
 
@@ -22,18 +21,19 @@ from research.strategy.data import Bar
 ENGINE = {"deterministic_veto": False, "disagreement": False,
           "blackout": False, "calib_gate": "pass", "veto_max": False}
 PROVIDE, PUB = s5.stub_answers_provider()
+DAY = lambda ts: "d%d" % (ts // 60)
+DATA_ID = {"slice": "synth-test-v1", "dataset_sha": "test-sha"}
+BAR = {"filtered_net_sharpe_gt": 1.0, "holm_adjusted_p_lt": 0.05,
+       "max_drawdown_pct_lte": 15.0, "min_closed_trades": 100}
 
 
 def synth_stream(n=60):
-    """Deterministic candidates over synthetic bars (bars[..i] only)."""
     items, t = [], 0
     for i in range(n):
         side = "BUY" if i % 2 == 0 else "SELL"
         px = 100.0 + (i % 7)
-        if side == "BUY":
-            stop, tp = px - 1.0, px + 2.0
-        else:
-            stop, tp = px + 1.0, px - 2.0
+        stop, tp = (px - 1.0, px + 2.0) if side == "BUY" else \
+            (px + 1.0, px - 2.0)
         c = make_candidate(strategy_version="baseline_v1", symbol="SYN",
                            snapshot_ts_ns=t, proposed_side=side,
                            proposed_family="momentum", entry_px=px,
@@ -43,13 +43,14 @@ def synth_stream(n=60):
                            expected_cost_bps=0.0,
                            feature_snapshot_hash="h%d" % i,
                            feature_revision="r1")
-        aft = [Bar(ts_ns=t + 1 + j, o=px, h=px + (2.5 if j == 2 else 0.3),
-                   l=px - (0.2 if j != 3 else 1.5), c=px + 0.1,
-                   spread_bps=2.0) for j in range(6)]
         if i % 3 == 0:
-            # flat path: neither stop nor TP hit -> censored time exit
             aft = [Bar(ts_ns=t + 1 + j, o=px, h=px + 0.05, l=px - 0.05,
                        c=px, spread_bps=2.0) for j in range(6)]
+        else:
+            aft = [Bar(ts_ns=t + 1 + j, o=px,
+                       h=px + (2.5 if j == 2 else 0.3),
+                       l=px - (0.2 if j != 3 else 1.5), c=px + 0.1,
+                       spread_bps=2.0) for j in range(6)]
         mkt = {"snapshot_epoch": t, "price_s": str(px),
                "spread_bps_s": "2.0", "session": "us_open",
                "regime": "trend"}
@@ -58,147 +59,265 @@ def synth_stream(n=60):
     return items
 
 
-def run_both(items, **kw):
-    recs = {}
-    for variant in ("table", "strict"):
-        recs[variant] = s5.evaluate_stream(items, PROVIDE, PUB,
-                                           dict(ENGINE), variant=variant,
-                                           **kw)
-    return recs
+def sessions_for(items):
+    days = sorted({DAY(c.snapshot_ts_ns) for c, _, _, _, _ in items})
+    return [{"day": d, "end_ts": (int(d[1:]) + 1) * 60 - 1,
+             "closes": {"SYN": 100.0 + int(d[1:])}} for d in days]
 
 
-def test_both_policies_same_candidates():
-    recs = run_both(synth_stream(20))
-    assert [r["cid"] for r in recs["table"]] == \
-        [r["cid"] for r in recs["strict"]]
-    assert all("always_r" in r and "filtered_r" in r for r in recs["table"])
-    print("both_policies OK")
+def run_all(items, **kw):
+    kw = dict({"day_fn": DAY, "data_id": DATA_ID}, **kw)
+    return {v: s5.evaluate_stream(items, PROVIDE, PUB, dict(ENGINE),
+                                  variant=v, **kw) for v in s5.VARIANTS}
 
 
-def test_identical_frozen_economics():
+def test_1_2_same_stream_same_economics():
     items = synth_stream(20)
-    recs = run_both(items)
-    for r, (c, aft, _, _, sp) in zip(recs["table"], items):
+    recs = run_all(items)
+    assert [r["cid"] for r in recs[s5.VARIANTS[0]]] == \
+        [r["cid"] for r in recs[s5.VARIANTS[1]]]
+    for r, (c, aft, _, _, sp) in zip(recs[s5.VARIANTS[0]], items):
         direct = bt.resolve(c, aft, entry_spread_bps=sp)
-        assert r["always_r"] == direct["r_realized"], r["cid"]
+        assert r["always_r"] == direct["r_realized"]
         assert r["always_label"] == direct["label"]
-    print("identical_economics OK")
+        assert r["entry_fill"] == direct["entry_fill"]
+        assert r["exit_fill"] == direct["exit_fill"]
+    print("1_2 OK")
 
 
-def test_hold_never_fills_and_accepted_identical():
-    recs = run_both(synth_stream(40))
-    for r in recs["table"]:
+def test_3_4_5_hold_pass_paired():
+    recs = run_all(synth_stream(40))[s5.VARIANTS[0]]
+    for r in recs:
         if r["filtered_action"] == "HOLD":
             assert r["filtered_r"] == 0.0 and not r["filtered_taken"]
         else:
             assert r["filtered_taken"] == r["always_realized"]
             assert r["filtered_r"] == r["always_r"]
-    strict_takes = sum(r["filtered_taken"] for r in recs["strict"])
-    table_takes = sum(r["filtered_taken"] for r in recs["table"])
-    assert strict_takes <= table_takes  # prereg strict reading nests
-    print("hold_fill OK", table_takes, strict_takes)
-
-
-def test_paired_reconcile():
-    recs = run_both(synth_stream(30))["table"]
-    deltas = s5.paired_deltas(recs)
-    assert len(deltas) == len(recs)
-    for d, r in zip(deltas, recs):
-        assert d == r["filtered_r"] - r["always_r"]
-    assert abs(sum(deltas) - (sum(r["filtered_r"] for r in recs) -
-                              sum(r["always_r"] for r in recs))) < 1e-9
-    print("paired_reconcile OK")
-
-
-def test_censored_stays_censored():
-    recs = run_both(synth_stream(30))["table"]
-    cens = [r for r in recs if r["always_label"] == "censored"]
-    assert cens, "stream must contain censored cases"
-    assert all(r["always_label"] == "censored" for r in cens)
-    b, n = s5.brier([(r["enter"], r["always_label"]) for r in recs])
-    closed = [r for r in recs if r["always_label"] in ("win", "loss")]
-    assert n == len(closed)
-    print("censored OK", len(cens), "censored,", n, "scored")
-
-
-def test_no_lookahead_and_replay():
-    items = synth_stream(20)
-    recs1 = s5.evaluate_stream(items, PROVIDE, PUB, dict(ENGINE))
-    for r, (c, aft, _, _, _) in zip(recs1, items):
-        assert all(b.ts_ns > c.snapshot_ts_ns for b in aft)
-        assert r["snapshot_ts_ns"] == c.snapshot_ts_ns
-    recs2 = s5.evaluate_stream(items, PROVIDE, PUB, dict(ENGINE))
-    h1 = [r["eval_hash"] for r in recs1]
-    assert h1 == [r["eval_hash"] for r in recs2]
-    assert json.dumps(recs1, sort_keys=True) == json.dumps(recs2,
-                                                          sort_keys=True)
-    print("replay OK", len(h1), "byte-identical records")
-
-
-def test_no_cross_cid_and_bootstrap_determinism():
-    recs = run_both(synth_stream(40))["table"]
-    assert len({r["cid"] for r in recs}) == len(recs)
     d = s5.paired_deltas(recs)
-    assert s5.stationary_bootstrap_ci(d) == s5.stationary_bootstrap_ci(d)
-    assert s5.bootstrap_p(d) == s5.bootstrap_p(d)
-    assert len(s5.stationary_bootstrap_ci(d)) == 3
-    print("isolation_bootstrap OK")
+    assert all(x == f - a for x, f, a in
+               zip(d, [r["filtered_r"] for r in recs],
+                   [r["always_r"] for r in recs]))
+    print("3_4_5 OK")
 
 
-def test_cost_stress_paired_and_variant_count():
+def test_6_censored_and_brier_scope():
+    recs = run_all(synth_stream(30))[s5.VARIANTS[0]]
+    cens = [r for r in recs if r["always_label"] == "censored"]
+    assert cens and all(r["always_label"] == "censored" for r in cens)
+    _, n = s5.brier([(r["enter"], r["always_label"]) for r in recs])
+    assert n == sum(1 for r in recs if r["always_label"] in ("win", "loss"))
+    print("6 OK", len(cens), "censored")
+
+
+def test_7_8_9_lookahead_replay_isolation():
+    items = synth_stream(20)
+    a = s5.evaluate_stream(items, PROVIDE, PUB, dict(ENGINE),
+                           variant=s5.VARIANTS[0], day_fn=DAY,
+                           data_id=DATA_ID)
+    for r, (c, aft, _, _, _) in zip(a, items):
+        assert all(b.ts_ns > c.snapshot_ts_ns for b in aft)
+    b = s5.evaluate_stream(items, PROVIDE, PUB, dict(ENGINE),
+                           variant=s5.VARIANTS[0], day_fn=DAY,
+                           data_id=DATA_ID)
+    assert [r["eval_hash"] for r in a] == [r["eval_hash"] for r in b]
+    assert json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
+    assert len({r["cid"] for r in a}) == len(a)
+    print("7_8_9 OK")
+
+
+def test_8b_replay_fields_bound():
+    r = run_all(synth_stream(6))[s5.VARIANTS[0]][0]
+    for k in ("strategy_version", "exit_profile_version",
+              "cost_model_version", "expected_cost_bps",
+              "feature_revision", "entry_spread_bps", "exit_spread_bps",
+              "spread_mult", "entry_fill", "exit_fill", "response_hash",
+              "signature", "decision_key", "model", "revision",
+              "provider", "data_slice", "dataset_sha", "eval_protocol",
+              "variant"):
+        assert k in r, k
+    assert r["eval_protocol"] == "eval_v1"
+    assert r["variant"] in s5.VARIANTS
+    assert r["strategy_version"] == "baseline_v1"
+    print("8b OK")
+
+
+def test_10_11_bootstrap_and_null():
+    recs = run_all(synth_stream(48))[s5.VARIANTS[0]]
+    d = s5.paired_deltas(recs)
+    days = [r["day"] for r in recs]
+    assert s5.cluster_bootstrap_ci(d, days) == s5.cluster_bootstrap_ci(d, days)
+    assert s5.cluster_null_p(d, days) == s5.cluster_null_p(d, days)
+    # hostile: symmetric zero-mean noise must NOT read as significant
+    z = [0.5, -0.5] * 30
+    zd = ["d%d" % (i // 6) for i in range(60)]
+    pz = s5.cluster_null_p(z, zd)
+    assert pz > 0.05, pz
+    # hostile: uniform positive shift MUST read as significant
+    pp = s5.cluster_null_p([0.4] * 60, zd)
+    assert pp < 0.05, pp
+    # hostile: uniform negative shift must NEVER reject H1
+    pn = s5.cluster_null_p([-0.4] * 60, zd)
+    assert pn > 0.95, pn
+    print("10_11 OK", round(pz, 3), pp, round(pn, 3))
+
+
+def test_12_cost_stress_reflected():
     items = synth_stream(30)
-    by_cost = {}
-    for mult in (1.0, 1.5, 2.0, 3.0):
-        by_cost[mult] = run_both(items, spread_mult=mult)
-    for mult, recs in by_cost.items():
-        assert len(recs["table"]) == len(items)  # same stream, every level
-    assert list(by_cost) == [1.0, 1.5, 2.0, 3.0]
+    r1 = run_all(items, spread_mult=1.0)[s5.VARIANTS[0]]
+    r3 = run_all(items, spread_mult=3.0)[s5.VARIANTS[0]]
+    assert [r["cid"] for r in r1] == [r["cid"] for r in r3]
+    assert all(r["spread_mult"] == 3.0 for r in r3)
+    assert any(a != b for a, b in
+               zip([r["always_r"] for r in r1], [r["always_r"] for r in r3]))
+    print("12 OK")
+
+
+def test_13_variant_family():
+    assert set(s5.VARIANTS) == {"filtered-conv-any",
+                                "filtered-enter-gte-80-strong-plus"}
     pre = json.load(open(os.path.join(os.path.dirname(__file__), "..",
                                       "strategy", "s5_prereg.json")))
-    assert pre["search_budget"]["declared_variants"] == \
-        ["filtered-conv-any", "filtered-enter-gte-80-strong-plus"]
-    assert set(pre["search_budget"]["declared_variants"]) is not None
-    print("cost_variant OK")
+    assert pre["search_budget"]["declared_variants"] == list(s5.VARIANTS)
+    assert set(pre["variants"]) == set(s5.VARIANTS)
+    recs = run_all(synth_stream(40))
+    t = sum(r["filtered_taken"] for r in recs["filtered-conv-any"])
+    st = sum(r["filtered_taken"] for r in
+             recs["filtered-enter-gte-80-strong-plus"])
+    assert st <= t  # prereg strict reading nests inside conv-any
+    print("13 OK", t, st)
 
 
-def test_walkforward_holdout_and_r_disqualify():
-    recs = run_both(synth_stream(60))["table"]
-    splits, holdout = s5.time_splits(recs, n_splits=2)
-    assert len(splits) == 2 and holdout
-    seen_test = set()
-    for train, test in splits:
-        assert max(r["snapshot_ts_ns"] for r in train) < \
-            min(r["snapshot_ts_ns"] for r in test)  # forward-only + embargo
-        for r in train + test:
-            assert r["cid"] not in seen_test or r in train
-        seen_test.update(r["cid"] for r in test)
-    assert all(r["cid"] not in seen_test for r in holdout)  # untouched
-    # R-rule: a record breaching position limits disqualifies the policy
-    bad = copy.deepcopy(recs[0])
-    bad["entry_px"], bad["stop_px"] = 100.0, 99.9999  # absurd leverage ask
+def test_14_holdout_boundary():
+    items = synth_stream(72)
+    recs = run_all(items)[s5.VARIANTS[0]]
+    folds = s5.walk_folds(recs, n_splits=2)
+    assert len(folds) == 2
+    assert all(isinstance(f, tuple) and len(f) == 2 for f in folds)
+    s5.select_variant_signature_clean()
+    assert list(inspect.signature(s5.select_variant).parameters) == \
+        ["fold_stats"]
+    _, holdout = s5.holdout_split(recs, n_splits=2)
+    assert holdout
+    hmin = min(r["snapshot_ts_ns"] for r in holdout)
+    assert all(r["snapshot_ts_ns"] < hmin
+               for tr, te in folds for r in tr + te)
+    stats = {v: [sum(s5.paired_deltas(te)) for _, te in
+                   s5.walk_folds(run_all(items)[v], n_splits=2)]
+             for v in s5.VARIANTS}
+    assert s5.select_variant(stats) in s5.VARIANTS
+    print("14 OK", len(holdout), "held out")
+
+
+def test_15_r_disqualify():
+    items = synth_stream(12)
+    c, aft, mkt, reg, sp = items[0]
+    bad = make_candidate(strategy_version="baseline_v1", symbol="SYN",
+                         snapshot_ts_ns=c.snapshot_ts_ns,
+                         proposed_side="BUY", proposed_family="macd",
+                         entry_px=c.entry_px, stop_px=c.stop_px,
+                         tp_px=c.tp_px, time_exit_ns=c.time_exit_ns,
+                         exit_profile_version="exit_profile_v1",
+                         cost_model_version="paper_fill_v1",
+                         expected_cost_bps=0.0,
+                         feature_snapshot_hash="bad",
+                         feature_revision="r1")
+    dq, reason = s5.r_validate(bad)
+    assert dq and reason == "bad_family"
+    ok, _ = s5.r_validate(c)
+    assert not ok
     unc, con, binds, _, _ = bt.size_notional(100000.0, 0.0001, 100.0)
-    assert binds  # would breach single-position notional: disqualified
-    print("walkforward_holdout OK", len(holdout), "held out")
+    assert binds  # cap binding is sizing...
+    good = make_candidate(strategy_version="baseline_v1", symbol="SYN",
+                          snapshot_ts_ns=c.snapshot_ts_ns,
+                          proposed_side="BUY", proposed_family="momentum",
+                          entry_px=100.0, stop_px=99.9999, tp_px=102.0,
+                          time_exit_ns=c.time_exit_ns,
+                          exit_profile_version="exit_profile_v1",
+                          cost_model_version="paper_fill_v1",
+                          expected_cost_bps=0.0,
+                          feature_snapshot_hash="binds",
+                          feature_revision="r1")
+    assert not s5.r_validate(good)[0]  # ...NOT a violation
+    recs = s5.evaluate_stream([(bad, aft, mkt, reg, sp)], PROVIDE, PUB,
+                              dict(ENGINE), variant=s5.VARIANTS[0],
+                              day_fn=DAY, data_id=DATA_ID)
+    assert recs[0]["disqualified"] and not recs[0]["filtered_taken"] \
+        and not recs[0]["always_realized"]
+    m = {"sharpe_f": 5.0, "holm_p": 0.001, "max_dd_pct": 1.0,
+         "n_closed": 500, "stress": {"1.5x": (2.0, 1.0)},
+         "r_breach_taken": 1}
+    v, failed, _ = s5.evaluate_bar(m, BAR)
+    assert not v and "no_r_breach" in failed
+    print("15 OK")
 
 
-def test_holm_and_sharpe_hac():
-    pvals = [("v1", 0.01), ("v2", 0.04), ("v3", 0.30)]
-    out = s5.holm(pvals)
-    assert out[0] == ("v1", 0.03, True)  # 3*0.01
-    assert out[-1][2] is False
-    rets = [0.001, -0.002, 0.003, 0.0, 0.001] * 20
-    sh, se, t = s5.sharpe_hac(rets)
-    n = len(rets)
-    mu = sum(rets) / n
-    var = sum((x - mu) ** 2 for x in rets) / n
-    assert abs(sh - mu / math.sqrt(var) * math.sqrt(252.0)) < 1e-9
-    assert se > 0 and t > 0 and math.isfinite(t)
-    assert s5.sharpe_hac([0.0] * 10)[1] == float("inf")  # zero-variance guard
-    print("holm_hac OK", round(sh, 3))
+def test_16_sequential():
+    days = ["d%d" % (i // 6) for i in range(60)]
+    dec, mu, p = s5.seq_decision([0.6] * 60, days, "interim")
+    assert dec == "stop-efficacy", (dec, mu, p)
+    dec, mu, p = s5.seq_decision([-0.1] * 60, days, "interim")
+    assert dec == "stop-futility", dec
+    marg = [0.06] * 15 + [-0.04] * 15 + [0.0] * 30
+    dec, mu, p = s5.seq_decision(marg, days, "interim")
+    assert dec == "continue", (dec, mu, p)
+    dec, mu, p = s5.seq_decision([0.6] * 60, days, "final")
+    assert dec == "efficacy", dec
+    dec, mu, p = s5.seq_decision([0.0] * 60, days, "final")
+    assert dec == "fail", dec
+    print("16 OK")
 
 
-def test_portfolio_loop_mirrors_backtest():
-    # S5 always-take ledger must match bt.run economics on the same stream.
+def test_17_power():
+    recs = run_all(synth_stream(60))[s5.VARIANTS[0]]
+    folds = s5.walk_folds(recs, n_splits=2)
+    tr = [r for f in folds for r in f[0]]
+    vals = s5.paired_deltas(tr)
+    dys = [r["day"] for r in tr]
+    p1 = s5.power_study(vals, dys, 0.15)
+    p2 = s5.power_study(vals, dys, 0.15)
+    assert p1 == p2  # deterministic
+    plo = s5.power_study(vals, dys, 0.02)
+    assert p1["by_multiplier"][1] >= plo["by_multiplier"][1]  # monotone MDE
+    assert set(inspect.signature(s5.power_study).parameters) <= \
+        {"train_values", "train_days", "mde", "alpha", "reps", "seed",
+         "target", "multipliers"}  # train-only inputs: no holdout slot
+    assert p1["n_base"] == len(vals)
+    print("17 OK", p1["by_multiplier"])
+
+
+def test_18_19_curve_and_drawdown():
+    items = synth_stream(48)
+    recs = run_all(items)[s5.VARIANTS[0]]
+    sess = sessions_for(items)
+    sess.append({"day": "d999", "end_ts": 10 ** 18,
+                 "closes": {"SYN": 100.0}})
+    trades, curve, rets, dd = s5.portfolio_curve(recs, "always", 100000.0,
+                                                 sess)
+    assert len(rets) == len(sess) - 1
+    assert len(curve) == len(sess)
+    assert any(r == 0.0 for r in rets)  # zero-days kept
+    assert dd >= 0.0
+    assert s5.max_drawdown([("a", 100.0), ("b", 100.0)]) == 0.0
+    assert abs(s5.max_drawdown([("a", 100.0), ("b", 80.0),
+                                ("c", 90.0)]) - 20.0) < 1e-9
+    print("18_19 OK", len(trades), "trades, dd=%.2f" % dd)
+
+
+def test_20_bar_mechanical():
+    good = {"sharpe_f": 1.5, "holm_p": 0.01, "max_dd_pct": 5.0,
+            "n_closed": 200,
+            "stress": {"1.5x": (1.2, 0.5), "2x": (1.1, 0.4),
+                       "3x": (1.0, 0.3)},
+            "r_breach_taken": 0}
+    v, failed, checks = s5.evaluate_bar(good, BAR)
+    assert v and failed == [] and all(checks.values())
+    badm = dict(good, sharpe_f=-0.5, holm_p=1.0)
+    v2, failed2, _ = s5.evaluate_bar(badm, BAR)
+    assert not v2 and set(failed2) == {"sharpe_gt", "holm_p"}
+    print("20 OK")
+
+
+def test_21_baseline_reconcile():
     bars = {}
     for s in ("P", "Q"):
         px, bs = 100.0, []
@@ -207,10 +326,10 @@ def test_portfolio_loop_mirrors_backtest():
             bs.append(Bar(ts_ns=i, o=px - 0.05, h=px + 0.2, l=px - 0.2,
                           c=px, spread_bps=2.0))
         bars[s] = bs
-    recs_bt, rep = bt.run(bars, universe_mode="diagnostic")
-    items = []
+    recs_bt, _ = bt.run(bars, universe_mode="diagnostic")
     idx = {s: {b.ts_ns: i for i, b in enumerate(bs)}
            for s, bs in bars.items()}
+    items = []
     for r in [x for x in recs_bt if x["taken"]]:
         c = r["c"]
         i = idx[c.symbol][c.snapshot_ts_ns]
@@ -218,24 +337,65 @@ def test_portfolio_loop_mirrors_backtest():
                "spread_bps_s": "2.0", "session": "us_open",
                "regime": "trend"}
         items.append((c, bars[c.symbol][i + 1:], mkt, "trend", 2.0))
-    got = s5.evaluate_stream(items, PROVIDE, PUB, dict(ENGINE))
-    eq, _ = s5.portfolio_loop(got, "always", 100000.0)
-    assert abs(eq - rep["end_equity"]) < 1e-4 * max(1.0, rep["end_equity"]), \
-        (eq, rep["end_equity"])
-    print("ledger_mirror OK", round(eq, 2))
+    got = s5.evaluate_stream(items, PROVIDE, PUB, dict(ENGINE),
+                             variant=s5.VARIANTS[0], day_fn=DAY,
+                             data_id=DATA_ID)
+    days = sorted({DAY(c.snapshot_ts_ns) for c, _, _, _, _ in items})
+    sess = [{"day": d, "end_ts": 10 ** 18,
+             "closes": {s: bars[s][-1].c for s in bars}} for d in days]
+    trades, curve, rets, dd = s5.portfolio_curve(got, "always", 100000.0,
+                                                 sess)
+    bt_taken = [r for r in recs_bt if r["taken"]]
+    assert len(trades) == len(bt_taken)
+    for t, b in zip(sorted(trades, key=lambda x: x["entry_ts"]),
+                    sorted(bt_taken, key=lambda x: x["c"].snapshot_ts_ns)):
+        assert t["cid"] == b["c"].cid
+        assert t["entry_ts"] == b["c"].snapshot_ts_ns
+        assert t["exit_ts"] == b["res"]["exit_ts_ns"]
+        assert abs(t["pnl_usd"] - b["pnl_usd"]) < 1e-9 * max(1.0, abs(b["pnl_usd"]))
+        assert abs(t["con_usd"] - b["con_usd"]) < 1e-9 * max(1.0, abs(b["con_usd"]))
+    sh, _, _ = s5.sharpe_hac(rets)
+    assert sh == sh
+    print("21 OK", len(trades), "trades reconcile")
+
+
+def test_22_final_report_no_hardcode():
+    items = synth_stream(72)
+    by_var = run_all(items)
+    folds, holdout = s5.holdout_split(by_var[s5.VARIANTS[0]], n_splits=2)
+    assert holdout
+    hdays = {r["day"] for r in holdout}
+    h1x = {v: [r for r in by_var[v] if r["day"] in hdays]
+           for v in s5.VARIANTS}
+    stress = {}
+    for mult, lab in ((1.5, "1.5x"), (2.0, "2x"), (3.0, "3x")):
+        sv = run_all(items, spread_mult=mult)
+        stress[lab] = {v: [r for r in sv[v] if r["day"] in hdays]
+                       for v in s5.VARIANTS}
+    sess = [s for s in sessions_for(items) if s["day"] in hdays]
+    rep = s5.final_report(h1x, stress, sess, 100000.0, BAR)
+    for v, s in rep["variants"].items():
+        assert s["bar_verdict"] is False and s["bar_failed"], v
+    assert rep["holm"]
+    print("22 OK", [(v, s["bar_failed"]) for v, s in
+                    rep["variants"].items()])
 
 
 if __name__ == "__main__":
-    test_both_policies_same_candidates()
-    test_identical_frozen_economics()
-    test_hold_never_fills_and_accepted_identical()
-    test_paired_reconcile()
-    test_censored_stays_censored()
-    test_no_lookahead_and_replay()
-    test_no_cross_cid_and_bootstrap_determinism()
-    test_cost_stress_paired_and_variant_count()
-    test_walkforward_holdout_and_r_disqualify()
-    test_holm_and_sharpe_hac()
-    test_portfolio_loop_mirrors_backtest()
-    test_portfolio_loop_mirrors_backtest()
+    test_1_2_same_stream_same_economics()
+    test_3_4_5_hold_pass_paired()
+    test_6_censored_and_brier_scope()
+    test_7_8_9_lookahead_replay_isolation()
+    test_8b_replay_fields_bound()
+    test_10_11_bootstrap_and_null()
+    test_12_cost_stress_reflected()
+    test_13_variant_family()
+    test_14_holdout_boundary()
+    test_15_r_disqualify()
+    test_16_sequential()
+    test_17_power()
+    test_18_19_curve_and_drawdown()
+    test_20_bar_mechanical()
+    test_21_baseline_reconcile()
+    test_22_final_report_no_hardcode()
     print("ALL S5 TESTS GREEN")

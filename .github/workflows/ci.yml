@@ -68,6 +68,8 @@ jobs:
         run: PYTHONWARNINGS=error python3 research/tests/test_bea.py
       - name: plane source-seam integration (stdlib only)
         run: PYTHONWARNINGS=error python3 research/tests/test_source_seam.py
+      - name: strategy S5 paired evaluation (stdlib only)
+        run: PYTHONWARNINGS=error python3 research/tests/test_s5.py
 
   plane:
     runs-on: ubuntu-latest
