@@ -119,13 +119,16 @@ def resolve(candidate, bars_after, spread_mult=1.0, spread_bps=1.0):
 
 
 def size_notional(equity: float, risk_dist: float, entry: float):
-    """-> (unconstrained_pct, constrained_pct, r2_binding, effective_risk_bps)."""
+    """-> (unconstrained_pct, constrained_pct, r2_binding, effective_risk_bps,
+    effective_risk_frac). Shares = budget/risk_dist; notional = shares x entry.
+    Frozen reference: 25% cap x 0.1% stop = 0.00025 equity = 2.5 bps."""
     budget = equity * RISK_BUDGET_BPS / 10000.0
-    unc = (budget / risk_dist) / equity * 100.0 if risk_dist > 0 else 0.0
+    unc = (budget / risk_dist * entry) / equity * 100.0 if risk_dist > 0 and entry > 0 else 0.0
     con = min(unc, R2_SINGLE_PCT)
     # effective risk $ = constrained notional x stop fraction (risk_dist/entry)
     eff_usd = min(budget, con / 100.0 * equity * (risk_dist / entry)) if entry > 0 else 0.0
-    return (unc, con, unc > R2_SINGLE_PCT, eff_usd / equity * 10000.0)
+    eff_frac = eff_usd / equity if equity > 0 else 0.0
+    return (unc, con, unc > R2_SINGLE_PCT, eff_frac * 10000.0, eff_frac)
 
 
 def run(symbols_bars, equity=100000.0, spread_mult=1.0, session_fn=None,
@@ -152,14 +155,14 @@ def run(symbols_bars, equity=100000.0, spread_mult=1.0, session_fn=None,
             if c is None:
                 continue
             risk = abs(c.entry_px - c.stop_px)
-            unc, con, binding, eff = size_notional(equity, risk, c.entry_px)
-            if sum(r[1] for r in open_risk) + eff / 10000.0 > R2_TOTAL_PCT / 100.0:
+            unc, con, binding, eff, eff_frac = size_notional(equity, risk, c.entry_px)
+            if sum(r[1] for r in open_risk) + eff_frac > R2_TOTAL_PCT / 100.0:
                 continue
-            candidates.append((c, unc, con, binding, eff))
-            open_risk.append((c.time_exit_ns, eff / 10000.0))
+            candidates.append((c, unc, con, binding, eff, eff_frac))
+            open_risk.append((c.time_exit_ns, eff_frac))
             res = resolve(c, bars[i + 1:], spread_mult=spread_mult,
                           spread_bps=bars[i].spread_bps or 1.0)
-            resolutions.append((c, res, unc, con, binding, eff))
+            resolutions.append((c, res, unc, con, binding, eff, eff_frac))
     return candidates, resolutions, summarize(resolutions, equity)
 
 
@@ -173,9 +176,11 @@ def summarize(resolutions, equity):
     med_r = sorted(rs)[n // 2] if n else 0.0
     # Daily net returns in R → equity curve at 25bp/trade risk.
     pnl = sum(rs) * equity * RISK_BUDGET_BPS / 10000.0
-    r2_hits = sum(1 for _, _, _, _, b, _ in resolutions if b)
+    r2_hits = sum(1 for _, _, _, _, b, _, _ in resolutions if b)
     stops = [abs(c.entry_px - c.stop_px) / c.entry_px * 10000.0
-             for c, _, _, _, _, _ in resolutions]
+             for c, _, _, _, _, _, _ in resolutions]
+    effs = [e for _, _, _, _, _, e, _ in resolutions]
+    eff_fracs = [f for _, _, _, _, _, _, f in resolutions]
     return {
         "candidates": len(resolutions),
         "closed": n,
@@ -187,6 +192,8 @@ def summarize(resolutions, equity):
         "expectancy_r": avg_r,
         "net_pnl": pnl,
         "r2_binding_rate": r2_hits / len(resolutions) if resolutions else 0.0,
+        "avg_effective_risk_bps": sum(effs) / len(effs) if effs else 0.0,
+        "avg_effective_risk_frac": sum(eff_fracs) / len(eff_fracs) if eff_fracs else 0.0,
         "avg_stop_bps": sum(stops) / len(stops) if stops else 0.0,
         "avg_bars_held": (sum(r["bars_held"] for _, r, *_ in resolutions) /
                            len(resolutions)) if resolutions else 0.0,

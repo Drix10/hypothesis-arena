@@ -138,12 +138,15 @@ def test_candidate_identity():
 
 
 def test_r2_telemetry():
-    unc, con, binding, eff = bt.size_notional(100000.0, 0.0001, 100.0)
-    assert binding and con == 25.0 and unc > 25.0, (unc, con)
-    assert eff <= 25.0 + 1e-9, eff  # effective risk capped by R2
-    unc2, con2, binding2, _ = bt.size_notional(100000.0, 5.0, 100.0)
-    assert not binding2 and con2 == unc2
-    print("r2_telemetry OK", round(unc, 2), round(eff, 2))
+    # Frozen reference: 25% cap x 0.1% stop = 0.00025 equity = 2.5 bps.
+    unc, con, binding, eff, frac = bt.size_notional(100000.0, 0.1, 100.0)
+    assert unc == 250.0 and con == 25.0 and binding, (unc, con)
+    assert eff == 2.5 and frac == 0.00025, (eff, frac)
+    # Tight stop, no R2 bind: full 25bp budget realized.
+    unc2, con2, binding2, eff2, frac2 = bt.size_notional(100000.0, 5.0, 100.0)
+    assert not binding2 and con2 == unc2 == 5.0, (unc2, con2)
+    assert eff2 == 25.0 and frac2 == 0.0025, (eff2, frac2)
+    print("r2_telemetry OK", round(unc, 2), round(eff, 4))
 
 
 def test_backtest_runs_and_reports():
