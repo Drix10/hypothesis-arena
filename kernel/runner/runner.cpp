@@ -48,6 +48,32 @@ bool IsTerminalState(exec::RouteState st) {
            st == exec::RouteState::UNKNOWN_FROZEN ||
            st == exec::RouteState::CLOSED;
 }
+// Centralized MEDIUM FSM read (doc 06 sec. 6.1b): EVERY cycle
+// boundary validates the persisted file before any transition,
+// at every kill level — a malformed file can never be
+// rewritten into a legitimate-looking state (corruption is
+// refused, never erased). ABSENT = missing-or-empty
+// (fresh/mint-retry path); OK = one of the four legal states;
+// CORRUPT = non-regular node; UNKNOWN = present-but-
+// unreadable or non-empty unknown content.
+enum class MediumFsmRead { ABSENT, OK, CORRUPT, UNKNOWN };
+MediumFsmRead ReadMediumFsm(const char* path, std::string* out) {
+    if (out) out->clear();
+    if (!path || !out) return MediumFsmRead::CORRUPT;
+    if (StatPath(path) == PathKind::CORRUPT)
+        return MediumFsmRead::CORRUPT;
+    if (StatPath(path) == PathKind::ABSENT)
+        return MediumFsmRead::ABSENT;
+    std::vector<std::string> lns;
+    if (!ReadLines(path, &lns)) return MediumFsmRead::UNKNOWN;
+    if (lns.empty()) return MediumFsmRead::ABSENT;  // mint-retry
+    const std::string& cur = lns[0];
+    if (cur != "MEDIUM_ACTIVE" && cur != "FLATTEN_PENDING" &&
+        cur != "FLATTENED" && cur != "PROTECTION_ONLY")
+        return MediumFsmRead::UNKNOWN;
+    *out = cur;
+    return MediumFsmRead::OK;
+}
 // Filesystem-safe intent id (also the intent-file name infix):
 // alnum + '-'/'_' only, 1..64 chars. Rejects path traversal
 // ("../") BEFORE any filesystem touch.
@@ -2855,34 +2881,25 @@ void G0Runner::MediumPass(long long now_ns) {
     // (no blind re-issue); a restart reloads the file and
     // reconciles first (pre-flight dedupe never resends).
     std::string mp = P("medium.txt");
-    PathKind mk = StatPath(mp.c_str());
-    if (mk == PathKind::CORRUPT) {
+    std::string cur;
+    MediumFsmRead fr = ReadMediumFsm(mp.c_str(), &cur);
+    if (fr == MediumFsmRead::CORRUPT) {
         OpsRow("reconcile", "runner", "medium-fsm-corrupt",
                now_ns);
         Alert(P("alerts.jsonl").c_str(), "MEDIUM",
               "medium-fsm-corrupt", "", now_ns);
         return;  // never default a corrupt FSM to a fresh enter
     }
-    std::vector<std::string> lns;
-    bool read_ok = ReadLines(mp.c_str(), &lns);
-    std::string cur;
-    if (read_ok && !lns.empty()) cur = lns[0];
-    if (cur != "MEDIUM_ACTIVE" && cur != "FLATTEN_PENDING" &&
-        cur != "FLATTENED" && cur != "PROTECTION_ONLY") {
-        if (!cur.empty() ||
-            (mk == PathKind::REGULAR && !read_ok)) {
-            // Present regular file with unknown content — or
-            // present but unreadable: corruption, never a fresh
-            // incident minted over it (doc 06 sec. 6.1b). Absent
-            // (or empty, the mint-retry shape) still takes the
-            // fresh path below.
-            OpsRow("reconcile", "runner", "medium-fsm-unknown",
-                   now_ns);
-            Alert(P("alerts.jsonl").c_str(), "MEDIUM",
-                  "medium-fsm-unknown", "", now_ns);
-            return;
-        }
-        cur.clear();
+    if (fr == MediumFsmRead::UNKNOWN) {
+        // Present regular file with unknown content — or
+        // present but unreadable: corruption, never a fresh
+        // incident minted over it (absent-or-empty still takes
+        // the fresh path below).
+        OpsRow("reconcile", "runner", "medium-fsm-unknown",
+               now_ns);
+        Alert(P("alerts.jsonl").c_str(), "MEDIUM",
+              "medium-fsm-unknown", "", now_ns);
+        return;
     }
     if (cur.empty()) {
         if (!AtomicWrite(mp.c_str(), "MEDIUM_ACTIVE")) {
@@ -3534,8 +3551,14 @@ bool G0Runner::Cycle(long long now_ns) {
     // Crash-mid-incident keeps in-progress files (exposure
     // present or seam blind), so its epoch is reused.
     if (lr.level != jev::risk::KillLevel::MEDIUM) {
-        if (StatPath(P("medium.txt").c_str()) ==
-                PathKind::CORRUPT) {
+        // Leaving MEDIUM finalizes the persisted FSM — but only
+        // after the same centralized validation (a malformed
+        // file is refused here too, never rewritten into a
+        // legitimate-looking state).
+        std::string mcur;
+        MediumFsmRead mfr =
+            ReadMediumFsm(P("medium.txt").c_str(), &mcur);
+        if (mfr == MediumFsmRead::CORRUPT) {
             // Corrupt incident FSM while leaving MEDIUM: finalize
             // nothing, fail the cycle loud — human owns it.
             OpsRow("reconcile", "runner", "medium-fsm-corrupt",
@@ -3544,10 +3567,15 @@ bool G0Runner::Cycle(long long now_ns) {
                   "medium-fsm-corrupt", "", now_ns);
             return false;
         }
-        std::vector<std::string> mlns;
-        if (ReadLines(P("medium.txt").c_str(), &mlns) &&
-            !mlns.empty() && mlns[0] != "FLATTENED" &&
-            mlns[0] != "PROTECTION_ONLY") {
+        if (mfr == MediumFsmRead::UNKNOWN) {
+            OpsRow("reconcile", "runner", "medium-fsm-unknown",
+                   now_ns);
+            Alert(P("alerts.jsonl").c_str(), "MEDIUM",
+                  "medium-fsm-unknown", "", now_ns);
+            return false;
+        }
+        if (!mcur.empty() && mcur != "FLATTENED" &&
+            mcur != "PROTECTION_ONLY") {
             if (AllFlat() && BrokerConfirmedFlat()) {
                 if (!AtomicWrite(P("medium.txt").c_str(),
                                  "FLATTENED")) {
@@ -3583,7 +3611,7 @@ bool G0Runner::Cycle(long long now_ns) {
         std::vector<std::string> clns;
         if (ReadLines(P("medium.txt").c_str(), &clns) &&
             !clns.empty() && BrokerConfirmedFlat() &&
-            (clns[0] == "FLATTENED" || LocalFlat())) {
+            (mcur == "FLATTENED" || LocalFlat())) {
             if (!ClearMediumFiles()) {
                 Alert(P("alerts.jsonl").c_str(), "MEDIUM",
                       "medium-clear-unpersisted", "", now_ns);

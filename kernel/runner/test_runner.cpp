@@ -4555,6 +4555,23 @@ int main() {
         Check(al.find("medium-enter") == std::string::npos,
               "mf-no-enter");
     }
+    // MF2. FSM validation outside MediumPass (doc 06 sec.
+    // 6.1b): the non-MEDIUM finalize/clear path validates
+    // before ANY transition. With medium.txt=GARBAGE at a
+    // non-MEDIUM kill level the cycle refuses + alerts and the
+    // file is never rewritten into a legitimate-looking state.
+    {
+        Rig r;
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "mf2-recover");
+        WriteFile(r.dir + "/medium.txt", "GARBAGE");
+        Check(!g.Cycle(g_now), "mf2-refuses");
+        Check(ReadWhole(r.dir + "/medium.txt") == "GARBAGE",
+              "mf2-untouched");
+        Check(ReadWhole(r.dir + "/alerts.jsonl").find(
+                  "medium-fsm-unknown") != std::string::npos,
+              "mf2-alert");
+    }
     // PK. Path integrity (doc 06 sec. 6.1b): a non-regular node
     // never reads as a missing file. Directory-in-place refuses
     // or fails closed at every state reader.
