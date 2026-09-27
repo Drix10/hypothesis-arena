@@ -188,5 +188,25 @@
     "baseline_gate": "mechanical challenger-vs-baseline_v1 comparator (docs 07/11/12) on the same window/sessions/costs at 1x/1.5x/2x/3x; fail closed when artifact absent/malformed/mismatched; S2 OPEN so no valid artifact exists yet",
     "knobs": "inference_knobs section is the single parsed source (frozen_knobs); check_knobs proves s5_eval defaults match; stale either side fails closed",
     "r_scope": "R_S5_STATUS prose synced to exact implemented semantics (R4 two-order machine); R_SCOPE_NOTE echoed in rep; live pending/intraday-HWM/vol/corr/venue/spend/stage semantics stay UNAVAILABLE/NOT_APPLICABLE and are never described as checked"
-  }
+  },
+  "experiments": {
+    "s2_slice_stream_root": {
+      "data_slice": "baseline_v1_validation_slice_s2_equities",
+      "dataset_sha": "e0d5a158302e3ba0f7731eaea859c5b928e8359a142d054a467ab37bdc3ac819",
+      "protocol": "eval_v1",
+      "stream_n": 2183,
+      "stream_cid_hash": "5629d741a6f6a8e84ea7dd187e721d55acff1135f4a48df4b05b317134a6a2d1",
+      "per_variant": {
+        "filtered-conv-any": "85b920f3bdae9bed4a9526808e9fc2e8ce297988c3cd41a2ae13849d337b3c35",
+        "filtered-enter-gte-80-strong-plus": "53a302261f47a4faabdd5cda80e09a60883caa24e55be2cbb61106129bc9664b"
+      },
+      "answers": {
+        "model": "stub-deterministic-v1",
+        "revision": "stub-v1",
+        "provider": "s5-harness"
+      },
+      "frozen_dataset_sha256": "e0d5a158302e3ba0f7731eaea859c5b928e8359a142d054a467ab37bdc3ac819"
+    }
+  },
+  "amendment_f": "Authority closure (no threshold/alpha/MDE/search change): (a) production bars verified against the committed S2 frozen identity (report frozen_dataset_sha256 over frozen copies + raw==frozen bytes + object digest of loaded bars); fixture roots carry no frozen hash and REQUIRE bars_proof=None. (b) complete-stream root pinned above (stream_n/CID hash/per-variant content digests/answers/data identity); final_report rejects any foreign valid stream+token. (c) sequential is derived inside the final path from the selected variant full stream (pre-holdout closed only, holdout CIDs asserted absent) with frozen knobs; empty input encodes as no-evidence/not_run. (d) CAL7 session calendar = every frozen-data session day across the holdout window (zero-book days stay observations); mid-session bound excludes the partial stub from Sharpe only. (e) D6: authority hashes use explicit fixed-point canonical numbers (canon_num), never float repr. (f) baseline artifacts must carry the exact challenger session proof (session_hash + full session dates); the S2 baseline_v1_report.json is NOT an S5 baseline artifact until an explicit conversion lands. (g) missing session marks for traded symbols fail closed (no entry-price fallback)."
 }

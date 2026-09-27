@@ -50,10 +50,46 @@ VARIANT_RULE = {
 }
 
 
+def canon_num(x):
+    """D6 canonical number (plan 05): fixed-point, explicit, no float repr.
+
+    Every hashed numerical field serializes through here. Floats use
+    their EXACT binary value expanded as base-10 fixed-point
+    (Decimal(float) is exact and platform-independent for IEEE
+    doubles); ints serialize as decimal integers. Type tags keep 100
+    (int) and 100.0 (float) distinct. Non-finite floats fail closed:
+    NaN/inf must never enter an authority hash. Economic calculations
+    are untouched — only hash serialization."""
+    from decimal import Decimal
+    assert isinstance(x, (int, float)) and not isinstance(x, bool), \
+        "non-numeric hashed field: %r" % type(x)
+    if isinstance(x, int):
+        return "i:%d" % x
+    assert math.isfinite(x), "non-finite hashed field"
+    return "f:%s" % format(Decimal(x), "f")
+
+
+def _canon_val(v):
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return {"$num": canon_num(v)}
+    if isinstance(v, (str, type(None))):
+        return v
+    raise AssertionError("non-canonical hashed field type: %r"
+                         % type(v))
+
+
 def eval_hash(record):
-    body = {k: record[k] for k in sorted(record) if k != "eval_hash"}
-    return hashlib.sha256(json.dumps(body, sort_keys=True,
-                                     default=str).encode()).hexdigest()
+    """Canonical content hash of an evaluation record (D6).
+
+    Sorted keys, fixed-point numbers, no language float formatting,
+    no default=str fallback (unknown types fail closed). ANY field
+    mutation changes the digest."""
+    body = {k: _canon_val(record[k]) for k in sorted(record)
+            if k != "eval_hash"}
+    return hashlib.sha256(json.dumps(body, sort_keys=True).encode()
+                          ).hexdigest()
 
 
 def stub_answers_provider(model="stub-deterministic-v1",
@@ -320,6 +356,35 @@ def daily_returns(rets, include_first=False):
     return list(rets if include_first else rets[1:])
 
 
+def utc_day(ts_ns):
+    """UTC calendar date (YYYY-MM-DD) of an ns timestamp.
+
+    S5 session-date basis (matches the runner DAY mapping): session
+    calendar derivation, token dates, and proof dates all use this."""
+    return datetime.datetime.fromtimestamp(ts_ns / 1e9,
+                                           tz=datetime.timezone.utc
+                                           ).strftime("%Y-%m-%d")
+
+
+def sequential_inputs(records, bound):
+    """Authoritative sequential population: post-selection, pre-holdout.
+
+    Closed (win/loss, non-disqualified) records resolving STRICTLY
+    before the holdout boundary, snapshot-ordered. Holdout records
+    (snapshot >= bound) are structurally unrepresentable here; labels
+    resolving at/after bound are excluded (they read holdout-window
+    prices). Returns (deltas, days, cids)."""
+    recs = sorted((r for r in records
+                   if r["snapshot_ts_ns"] < bound
+                   and r["time_exit_ns"] < bound
+                   and r["always_label"] in ("win", "loss")
+                   and not r["disqualified"]),
+                  key=lambda r: r["snapshot_ts_ns"])
+    return ([r["filtered_r"] - r["always_r"] for r in recs],
+            [r["day"] for r in recs],
+            [r["cid"] for r in recs])
+
+
 def et_open_ns(day):
     """09:30 America/New_York open for YYYY-MM-DD, in epoch ns.
 
@@ -507,7 +572,12 @@ def portfolio_curve(records, policy, equity, sessions):
                            "spread_mult": r["spread_mult"],
                            "policy": policy})
         settle(end)  # exits due later in this session, before its mark
-        mark = sum(p[2] * p[3] * s["closes"].get(p[1], p[4])
+        # Fail closed: a traded symbol with no mark on a session is a
+        # data break, never a flat valuation (no entry-price fallback).
+        for p in open_pos:
+            assert p[1] in s["closes"], \
+                "missing mark for traded %s on %s" % (p[1], s["day"])
+        mark = sum(p[2] * p[3] * s["closes"][p[1]]
                    for p in open_pos)
         curve.append((s["day"], cash + mark))
     # Positions still open past the final session stay open, marked at the

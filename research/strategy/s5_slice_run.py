@@ -24,9 +24,31 @@ DAY = lambda ts: datetime.datetime.fromtimestamp(ts / 1e9,
     tz=datetime.timezone.utc).strftime("%Y-%m-%d")
 
 
-def main():
-    manifest = json.load(open("data/s2_raw/dataset_manifest.json"))
+def load_frozen_slice():
+    """Verified production S2 slice: bars + identity + bars proof.
+
+    Provenance chain (reads S2 files only, edits nothing): the
+    committed baseline_v1_report.json carries frozen_dataset_sha256;
+    verify_frozen_files() asserts the local frozen copies hash to it
+    AND the raw files (bars load from raw) are byte-identical to the
+    frozen copies; digest_bars() then binds the loaded Bar objects.
+    Missing/regenerated data fails closed — never "manifest"."""
+    rawdir, outdir = "data/s2_raw", "data/s2_out"
+    report = os.path.join(outdir, "baseline_v1_report.json")
+    frozen = s5f.verify_frozen_files(rawdir, os.path.join(outdir,
+                                                           "dataset_frozen"),
+                                      report)
     bars = {s: s2_run.load(s) for s in ("AAPL", "MSFT")}
+    data_id = {"slice": s2_run.SLICE_ID,
+               "dataset_sha": frozen["frozen_dataset_sha256"]}
+    bars_proof = {"frozen_dataset_sha256": data_id["dataset_sha"],
+                  "bars_digest": s5f.digest_bars(bars),
+                  "symbols": sorted(bars)}
+    return bars, data_id, bars_proof
+
+
+def main():
+    bars, data_id, bars_proof = load_frozen_slice()
     idx = {s: {b.ts_ns: i for i, b in enumerate(bs)}
            for s, bs in bars.items()}
     bt_recs, _ = bt.run(bars, universe_mode="diagnostic")
@@ -41,14 +63,9 @@ def main():
         items.append((c, bars[c.symbol][i + 1:], mkt, "slice-unclassified",
                       bars[c.symbol][i].spread_bps))
     provide, pub = s5.stub_answers_provider()
-    data_id = {"slice": s2_run.SLICE_ID,
-               "dataset_sha": manifest.get("dataset_sha", "manifest")}
     by_var = {v: s5.evaluate_stream(items, provide, pub, dict(ENGINE),
                                     variant=v, day_fn=DAY, data_id=data_id)
               for v in s5.VARIANTS}
-    recs = by_var[s5.VARIANTS[0]]
-    split = s5f.holdout_split(recs, n_splits=2)
-    folds, holdout, _bound, tok = split
     stats = {}
     for v in s5.VARIANTS:
         _, _b = s5.segment_bounds(by_var[v], n_splits=2)
@@ -56,10 +73,10 @@ def main():
                     s5.walk_folds(by_var[v], n_splits=2,
                                   holdout_start=_b)]
     chosen = s5.select_variant(stats)  # frozen BEFORE holdout use
-    # sequential evidence: closed deltas of the SELECTED variant only;
-    # interim stop => final is NOT RUN (prereg sequential_rule).
-    _sd, _sy = s5.closed_stream(by_var[chosen])
-    seq_i, seq_f = s5.seq_pair(_sd, _sy)
+    # Split the SELECTED variant's stream (shared segmentation;
+    # snapshots/exits are variant-independent, pairing unaffected).
+    split = s5f.holdout_split(by_var[chosen], n_splits=2)
+    folds, holdout, _bound, tok = split
     # power on the deduplicated pre-holdout training population
     _seen, train_recs = set(), []
     for f in folds:
@@ -87,9 +104,17 @@ def main():
     # bars (16:00 ET closes; after-hours never marks) and rebuild-
     # verified there; forged closes unrepresentable.
     sess, proof = s5f.build_holdout_sessions(bars, tok, data_id)
+    # pinned production root (prereg experiments): the split stream +
+    # full streams + bars must reproduce the frozen identities.
+    # Sequential is DERIVED inside the final path (pre-holdout closed
+    # only); the rep carries the authoritative result.
+    root = s5f.pinned_slice_root()
     rep = s5f.final_report(split, h1x, stress, sess, proof, bars,
-                           data_id, 100000.0,
+                           data_id, 100000.0, by_var, root,
+                           bars_proof=bars_proof,
                            selected_variant=chosen)
+    seq_i, seq_f = rep["sequential"]["interim"], \
+        rep["sequential"]["final"]
     out = {"slice": s2_run.SLICE_ID, "n_stream": len(items),
            "n_holdout": len(holdout),
            "n_selection_train": sum(len(tr) for tr, _ in folds),

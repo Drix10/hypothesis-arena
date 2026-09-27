@@ -19,10 +19,11 @@ from .s5_eval import (BOOT_REPS, BOOT_SEED, EVAL_PROTOCOL, HOLM_ALPHA,
                       POWER_INNER, POWER_REPS, POWER_SEED, R_CHECKED,
                       R_SCOPE_NOTE, R_UNAVAILABLE, REQUIRED_STRESS,
                       SEQ_ALPHA_FINAL, SEQ_ALPHA_INTERIM, VARIANTS,
-                      cluster_bootstrap_ci, cluster_null_p, daily_returns,
-                      et_close_ns, et_open_ns, eval_hash, evaluate_bar,
-                      holm, last_close_at_or_before, paired_deltas,
-                      portfolio_curve, segment_bounds, sharpe_hac,
+                      canon_num, cluster_bootstrap_ci, cluster_null_p,
+                      daily_returns, et_close_ns, et_open_ns, eval_hash,
+                      evaluate_bar, holm, last_close_at_or_before,
+                      paired_deltas, portfolio_curve, segment_bounds,
+                      sequential_inputs, seq_pair, sharpe_hac, utc_day,
                       verify_r_monitor, walk_folds)
 
 STRESS_MULT = {"1x": 1.0, "1.5x": 1.5, "2x": 2.0, "3x": 3.0}
@@ -132,14 +133,19 @@ def _record_digest(recs):
                            ).hexdigest()
 
 
-def _mint_split_token(holdout, bound, n_splits, stream_n, edges):
+def _mint_split_token(holdout, bound, n_splits, stream_n, edges,
+                      stream_cid_hash, stream_record_hash):
     """Authoritative split token. Mint point is holdout_split() ONLY.
 
     Binds holdout_start + count + CID hash + RECORD-CONTENT digest +
-    dates + split variant + protocol + segmentation descriptor. The
-    final path recomputes every field from the threaded split tuple;
-    a subset (or any caller) minting its own token cannot reproduce
-    the real split's record digest against the real evidence."""
+    dates + split variant + protocol + segmentation descriptor +
+    COMPLETE-STREAM identity (stream_cid_hash over every stream CID,
+    stream_record_hash over every stream record). A different valid
+    stream mints a different root: its token cannot validate against
+    the pinned expected root. The final path recomputes every field
+    from the threaded split tuple + full streams; a subset (or any
+    caller) minting its own token cannot reproduce the real split's
+    digests."""
     assert holdout, "empty holdout"
     cids = sorted(r["cid"] for r in holdout)
     return {"holdout_start": bound, "n": len(holdout),
@@ -150,7 +156,9 @@ def _mint_split_token(holdout, bound, n_splits, stream_n, edges):
             "split_variant": holdout[0]["variant"],
             "protocol": EVAL_PROTOCOL,
             "n_splits": n_splits, "stream_n": stream_n,
-            "edges": list(edges)}
+            "edges": list(edges),
+            "stream_cid_hash": stream_cid_hash,
+            "stream_record_hash": stream_record_hash}
 
 
 def assert_exact_holdout(candidate_recs, holdout):
@@ -189,9 +197,111 @@ def holdout_split(records, n_splits=3):
     assert not (hset & {r["cid"] for tr, te in folds for r in tr + te}), \
         "holdout leaks into selection folds"
     assert min(r["snapshot_ts_ns"] for r in holdout) >= bound
+    scids = sorted(r["cid"] for r in recs)
+    stream_cid_hash = _hashlib.sha256("|".join(scids).encode()
+                                       ).hexdigest()
+    stream_record_hash = _record_digest(recs)
     token = _mint_split_token(holdout, bound, n_splits, len(recs),
-                              edges)
+                              edges, stream_cid_hash,
+                              stream_record_hash)
     return folds, holdout, bound, token
+
+
+def pinned_slice_root():
+    """Production expected root: the prereg-pinned S2 slice pin.
+
+    Measured once over the frozen slice + frozen code, then frozen in
+    s5_prereg.json experiments. Any data/code drift fails closed in
+    final_report. Test fixtures NEVER use this (stream_roots marks
+    fixture roots explicitly)."""
+    return dict(_prereg()["experiments"]["s2_slice_stream_root"])
+
+
+def stream_roots(full_streams, data_id):
+    """Expected-root shape for final_report (TEST-FIXTURE mint).
+
+    Derives the pinned-root structure from the given complete streams
+    and marks it test_fixture=True. Production NEVER calls this: the
+    production root is pinned in s5_prereg.json experiments (measured
+    once over the frozen slice, then frozen). final_report REQUIRES
+    bars_proof=None under a fixture root, so fixture data can never
+    be presented as production S2 evidence."""
+    assert set(full_streams) == set(VARIANTS)
+    triples, slices, shas, pers, n = set(), set(), set(), {}, None
+    for v, recs in full_streams.items():
+        assert recs, "empty stream %s" % v
+        if n is None:
+            n = len(recs)
+        assert len(recs) == n, "variant streams must pair 1:1"
+        for r in recs:
+            _check_record_self(r)
+            triples.add((r["model"], r["revision"], r["provider"]))
+            slices.add(r["data_slice"])
+            shas.add(r["dataset_sha"])
+        pers[v] = _record_digest(recs)
+    assert len(triples) == 1, triples
+    assert slices == {data_id["slice"]}, slices
+    assert shas == {data_id["dataset_sha"]}, shas
+    cids = sorted(r["cid"] for r in full_streams[VARIANTS[0]])
+    assert all(sorted(r["cid"] for r in recs) == cids
+               for recs in full_streams.values())
+    model, revision, provider = next(iter(triples))
+    return {"data_slice": data_id["slice"],
+            "dataset_sha": data_id["dataset_sha"],
+            "protocol": EVAL_PROTOCOL, "stream_n": n,
+            "stream_cid_hash": _hashlib.sha256("|".join(cids
+                                                  ).encode()).hexdigest(),
+            "per_variant": pers,
+            "answers": {"model": model, "revision": revision,
+                          "provider": provider},
+            "test_fixture": True}
+
+
+FROZEN_FILES = ("dataset_manifest.json", "universe_s2_v1.json",
+                "AAPL_1h.jsonl", "MSFT_1h.jsonl")
+
+
+def verify_frozen_files(raw_dir, frozen_dir, report_path):
+    """File-level frozen provenance for the production S2 slice.
+
+    Asserts: (a) sha256 over the frozen-dir files (sorted filenames,
+    raw bytes) EQUALS the committed report's frozen_dataset_sha256
+    (the S2 frozen identity — never invented here); (b) every frozen
+    file is byte-identical in raw_dir (the bars are loaded from raw,
+    so raw==frozen binds the loaded bytes to the frozen identity).
+    Returns {"frozen_dataset_sha256": h}. Missing data fails closed
+    (never a vacuous pass). Reads S2 files only; edits nothing."""
+    report = _json.load(open(report_path))
+    want = report["frozen_dataset_sha256"]
+    h = _hashlib.sha256()
+    for fn in sorted(_os.listdir(frozen_dir)):
+        h.update(open(_os.path.join(frozen_dir, fn), "rb").read())
+    got = h.hexdigest()
+    assert got == want, "frozen data != committed report identity"
+    for fn in FROZEN_FILES:
+        a = open(_os.path.join(raw_dir, fn), "rb").read()
+        b = open(_os.path.join(frozen_dir, fn), "rb").read()
+        assert a == b, "raw != frozen copy: %s" % fn
+    return {"frozen_dataset_sha256": got}
+
+
+def digest_bars(bars):
+    """Canonical digest of the LOADED Bar objects actually consumed.
+
+    File verification binds bytes on disk; this binds the parsed
+    objects (symbol, ts, OHLC, volume, spread via D6 canon_num),
+    so an in-memory bar mutation after load still fails. Sorted
+    symbols, ts-ordered bars."""
+    parts = []
+    for sym in sorted(bars):
+        for b in sorted(bars[sym], key=lambda x: x.ts_ns):
+            parts.append("%s|%d|%s|%s|%s|%s|%s|%s" %
+                         (sym, b.ts_ns, canon_num(b.o),
+                          canon_num(b.h), canon_num(b.l),
+                          canon_num(b.c), canon_num(b.dollar_volume),
+                          canon_num(b.spread_bps)))
+    assert parts, "empty bar panel"
+    return _hashlib.sha256("|".join(parts).encode()).hexdigest()
 
 
 def build_holdout_sessions(bars, token, data_id):
@@ -202,11 +312,27 @@ def build_holdout_sessions(bars, token, data_id):
     price population exists, so forged closes (AAPL=1M) are
     unrepresentable. Marks are the last bar at-or-before each 16:00 ET
     close (after-hours never marks); end_ts == close_ns always (no
-    seam). Missing marks fail closed. Returns (sessions, session_proof)
-    with session_hash over (day, close_ns, sorted symbol=px) + slice.
+    seam). Missing marks fail closed.
+
+    CAL7 calendar: sessions cover EVERY frozen-data session day from
+    the first through the last holdout date — not just candidate days.
+    A market session with no candidate record is still a session: it
+    enters the curve (0.0 when the book is flat) and stays in Sharpe.
+    Every candidate day must exist in the frozen bars, else fail.
+    Returns (sessions, session_proof) with session_hash over (day,
+    close_ns, sorted symbol=px, D6 canonical) + slice + full date
+    sequence.
     """
-    sessions = []
+    first, last = token["dates"][0], token["dates"][-1]
+    bar_dates = sorted({utc_day(b.ts_ns) for bs in bars.values()
+                        for b in bs})
     for d in token["dates"]:
+        assert d in bar_dates, "candidate day %s has no frozen bars" % d
+    cal = [d for d in bar_dates if first <= d <= last]
+    assert cal and cal[0] == first and cal[-1] == last, \
+        "calendar != holdout window"
+    sessions = []
+    for d in cal:
         close = et_close_ns(d)
         closes = {}
         for sym, bs in bars.items():
@@ -216,12 +342,13 @@ def build_holdout_sessions(bars, token, data_id):
         sessions.append({"day": d, "end_ts": close,
                          "close_ns": close, "closes": closes})
     body = ";".join("%s|%d|%s" % (s["day"], s["close_ns"], ",".join(
-        "%s=%r" % (sym, s["closes"][sym])
+        "%s=%s" % (sym, canon_num(s["closes"][sym]))
         for sym in sorted(s["closes"]))) for s in sessions)
     proof = {"session_hash": _hashlib.sha256(body.encode()
                                                ).hexdigest(),
              "data_slice": data_id["slice"],
              "dataset_sha": data_id["dataset_sha"],
+             "session_dates": [s["day"] for s in sessions],
              "n_sessions": len(sessions)}
     return sessions, proof
 
@@ -234,10 +361,21 @@ def _check_record_self(rec):
         "eval_hash mismatch (mutated record): %s" % rec.get("cid")
 
 
-def _validate_evidence(split, recs_1x, recs_stress):
+def _validate_evidence(split, recs_1x, recs_stress, full_streams,
+                       root_expected, data_id, bars, bars_proof):
     """Full evidence chain against the threaded split tuple.
 
     split = (folds, holdout, bound, split_token) from holdout_split.
+    0. complete-stream + experiment identity: every full-stream
+       variant validates against the pinned/test root (count, shared
+       CID hash, per-variant content digest, uniform answers triple,
+       data slice/sha); token stream hashes must equal the expected
+       root; the split-variant token root must equal that variant's
+       pinned digest (a foreign valid stream + own valid token fails
+       here). Bars authority: production roots (frozen hash present)
+       REQUIRE a matching bars_proof (frozen identity + object digest
+       recomputed from the supplied bars); fixture roots REQUIRE
+       bars_proof=None (fixture data never poses as production).
     1. token recomputed from holdout (record digest, CID hash, n,
        dates, bound, segmentation) — tampered tokens fail.
     2. fold/holdout partition re-checked (disjoint, union == stream_n,
@@ -247,11 +385,57 @@ def _validate_evidence(split, recs_1x, recs_stress):
     4. other-variant 1x twins match field-wise (VARIANT_MUTABLE only).
     5. every stress record matches its same-variant 1x twin field-wise
        (STRESS_MUTABLE only) with the exact bucket spread_mult.
+    6. holdout records ARE the split-variant full-stream records at
+       the holdout CIDs (content digest) — the split cannot drift
+       from the authoritative stream.
     Returns {cid: split-variant 1x record} (immutable reference map)."""
     folds, holdout, bound, token = split
     assert set(recs_1x) == set(VARIANTS)
     assert set(recs_stress) == set(REQUIRED_STRESS), \
         "stress must carry exactly %s" % (REQUIRED_STRESS,)
+    # 0. roots, streams, bars
+    for k in ("data_slice", "dataset_sha", "protocol", "stream_n",
+              "stream_cid_hash", "per_variant", "answers"):
+        assert k in root_expected, "root missing %s" % k
+    assert root_expected["data_slice"] == data_id["slice"]
+    assert root_expected["dataset_sha"] == data_id["dataset_sha"]
+    assert root_expected["protocol"] == EVAL_PROTOCOL
+    assert token["protocol"] == EVAL_PROTOCOL
+    assert token["stream_n"] == root_expected["stream_n"]
+    assert token["stream_cid_hash"] == \
+        root_expected["stream_cid_hash"]
+    sv = token["split_variant"]
+    assert sv in VARIANTS
+    assert token["stream_record_hash"] == \
+        root_expected["per_variant"][sv], "split stream != pinned root"
+    assert set(full_streams) == set(VARIANTS)
+    for variant, recs in full_streams.items():
+        assert len(recs) == root_expected["stream_n"], variant
+        fcids = sorted(r["cid"] for r in recs)
+        assert _hashlib.sha256("|".join(fcids).encode()
+                               ).hexdigest() == \
+            root_expected["stream_cid_hash"], variant
+        for r in recs:
+            _check_record_self(r)
+            assert r["data_slice"] == root_expected["data_slice"]
+            assert r["dataset_sha"] == root_expected["dataset_sha"]
+            assert (r["model"], r["revision"], r["provider"]) == \
+                (root_expected["answers"]["model"],
+                 root_expected["answers"]["revision"],
+                 root_expected["answers"]["provider"]), variant
+        assert _record_digest(recs) == \
+            root_expected["per_variant"][variant], variant
+    if "frozen_dataset_sha256" in root_expected:
+        assert bars_proof is not None, "production root needs bars proof"
+        assert bars_proof["frozen_dataset_sha256"] == \
+            root_expected["frozen_dataset_sha256"]
+        assert bars_proof["bars_digest"] == digest_bars(bars), \
+            "supplied bars != verified frozen bars"
+    elif root_expected.get("test_fixture"):
+        assert bars_proof is None, \
+            "fixture data must never carry production bars proof"
+    else:
+        raise AssertionError("ambiguous root: neither frozen nor fixture")
     # 1. token integrity from the threaded holdout
     assert token["holdout_start"] == bound
     assert token["n"] == len(holdout)
@@ -269,8 +453,12 @@ def _validate_evidence(split, recs_1x, recs_stress):
             assert r["time_exit_ns"] < bound
             assert r["cid"] not in set(cids)
     assert min(r["snapshot_ts_ns"] for r in holdout) >= bound
-    sv = token["split_variant"]
-    assert sv in VARIANTS
+    # 6. holdout IS the split-variant full stream at the holdout CIDs
+    hset = {r["cid"] for r in holdout}
+    counterparts = [r for r in full_streams[sv] if r["cid"] in hset]
+    assert len(counterparts) == len(holdout) == token["n"]
+    assert _record_digest(counterparts) == token["record_hash"], \
+        "split holdout != authoritative stream records"
     # 3. split-variant 1x evidence IS the split holdout (content digest)
     ref = recs_1x[sv]
     assert ref, "empty evidence set"
@@ -332,13 +520,14 @@ def baseline_gate(chall, baseline, proof, token):
     chall: {mult_label or '1x': filtered_sharpe, 'dd_1x': ..., } built
     from the holdout rep (same window, same sessions, same costs).
     baseline: frozen baseline_v1 holdout artifact {baseline_id,
-    data_slice, dataset_sha, dates, protocol, metrics: {mult: {sharpe_f,
-    max_dd_pct, n_closed}}}. Fail closed on absent/malformed/mismatched
-    artifact (S2 acceptance OPEN => no valid artifact exists yet, so the
-    gate reads ABSENT and promotion stays closed). Beats requires
-    challenger net Sharpe > baseline at ALL of 1x/1.5x/2x/3x with
-    1x drawdown not worse than baseline. Returns (verdict, failed,
-    detail)."""
+    data_slice, dataset_sha, dates, protocol, session_hash, metrics:
+    {mult: {sharpe_f, max_dd_pct, n_closed}}}. The artifact must carry
+    the EXACT session proof (session_hash equality with the challenger
+    proof + dates == full session calendar); the S2 report is NOT a
+    valid artifact (S2 acceptance OPEN => None => gate reads ABSENT,
+    promotion stays closed). Beats requires challenger net Sharpe >
+    baseline at ALL of 1x/1.5x/2x/3x with 1x drawdown not worse than
+    baseline. Returns (verdict, failed, detail)."""
     if baseline is None:
         return (False, ["baseline_absent"],
                 {"status": "absent (S2 acceptance OPEN)"})
@@ -348,13 +537,19 @@ def baseline_gate(chall, baseline, proof, token):
         assert baseline["protocol"] == EVAL_PROTOCOL
         assert baseline["data_slice"] == proof["data_slice"]
         assert baseline["dataset_sha"] == proof["dataset_sha"]
-        assert sorted(baseline["dates"]) == sorted(token["dates"])
+        assert baseline["session_hash"] == proof["session_hash"], \
+            "session proof mismatch"
+        assert sorted(baseline["dates"]) == \
+            sorted(proof["session_dates"]), "session dates mismatch"
         bm = baseline["metrics"]
         assert set(bm) == set(BASELINE_MULTS)
         for m in BASELINE_MULTS:
             for k in ("sharpe_f", "max_dd_pct", "n_closed"):
                 assert isinstance(bm[m][k], (int, float))
     except (KeyError, AssertionError, TypeError) as e:
+        if isinstance(e, AssertionError) and "session" in str(e):
+            return (False, ["baseline_session"],
+                    {"status": "session-mismatch", "error": str(e)})
         return (False, ["baseline_malformed"], {"status": "malformed",
                                                  "error": str(e)})
     for m in BASELINE_MULTS:
@@ -365,7 +560,8 @@ def baseline_gate(chall, baseline, proof, token):
     detail["challenger"] = chall
     return (not failed, failed, detail)
 def final_report(split, recs_1x, recs_stress, sessions, proof, bars,
-                 data_id, equity, baseline=None, selected_variant=None):
+                 data_id, equity, full_streams, root_expected,
+                 bars_proof=None, baseline=None, selected_variant=None):
     """Holdout verdict per variant + pooled Holm + baseline gate.
 
     split: the (folds, holdout, bound, split_token) tuple from
@@ -375,15 +571,24 @@ def final_report(split, recs_1x, recs_stress, sessions, proof, bars,
     bars + token dates + data_id; this function REBUILDS from bars and
     demands equality, so mutated closes (either side) fail closed.
     bars: {symbol: [Bar]} frozen slice panels. data_id: {slice,
-    dataset_sha} bound into the session proof. The bar is frozen_bar()
-    (no caller bar). Sharpe uses close-to-close daily returns with a
-    boundary-aware first interval (mid-session start excludes the
-    partial stub; exact-close start includes the first full daily
-    return). baseline: frozen baseline_v1 holdout artifact or None
-    (S2 OPEN => None => gate reads ABSENT, promotion stays closed).
-    R scope from frozen prereg."""
+    dataset_sha} bound into the session proof. full_streams: the
+    COMPLETE 1x evaluation streams per variant (pre-split universe);
+    root_expected: the pinned/test expected root (production: prereg
+    experiments pin incl. frozen_dataset_sha256; tests: stream_roots
+    fixture). bars_proof: {frozen_dataset_sha256, bars_digest} from
+    verify_frozen_files + digest_bars (production) or None (fixture).
+    The bar is frozen_bar() (no caller bar). Sharpe uses close-to-close
+    daily returns with a boundary-aware first interval (mid-session
+    start excludes the partial stub; exact-close start includes the
+    first full daily return). Sequential evidence is DERIVED HERE from
+    the selected variant's full stream (pre-holdout closed only) with
+    frozen knobs — no caller-computed sequential enters; holdout CIDs
+    are structurally excluded and asserted absent. baseline: frozen
+    baseline_v1 holdout artifact or None (S2 OPEN => None => gate
+    reads ABSENT, promotion stays closed). R scope from frozen prereg."""
     folds, holdout, bound, token = split
-    _validate_evidence(split, recs_1x, recs_stress)
+    _validate_evidence(split, recs_1x, recs_stress, full_streams,
+                       root_expected, data_id, bars, bars_proof)
     scope = frozen_scope()
     bar = frozen_bar()
     knobs = frozen_knobs()
@@ -393,6 +598,17 @@ def final_report(split, recs_1x, recs_stress, sessions, proof, bars,
     assert proof == rproof, "session proof != canonical rebuild"
     first_day = token["dates"][0]
     include_first = bound <= et_open_ns(first_day)
+    sel = selected_variant or token["split_variant"]
+    assert sel in VARIANTS, sel
+    sd, sy, sc = sequential_inputs(full_streams[sel], bound)
+    assert not (set(sc) & {r["cid"] for r in holdout}), \
+        "holdout CID in sequential input"
+    if sd:
+        seq_i, seq_f = seq_pair(sd, sy, reps=knobs["seq_reps"],
+                                seed=knobs["seq_seed"])
+    else:
+        seq_i, seq_f = ("no-evidence", 0.0, 1.0), \
+            ("not_run", None, None)
     if selected_variant is not None:
         assert selected_variant in VARIANTS
     pvals, rep = [], {"variants": {},
@@ -400,6 +616,10 @@ def final_report(split, recs_1x, recs_stress, sessions, proof, bars,
                       "split_token": token,
                       "session_proof": proof,
                       "first_interval_included": include_first,
+                      "sequential": {"variant": sel,
+                                     "n_closed": len(sd),
+                                     "interim": seq_i,
+                                     "final": seq_f},
                       "r_rules_checked": R_CHECKED,
                       "r_rules_unavailable": R_UNAVAILABLE,
                       "r_scope_note": R_SCOPE_NOTE}
@@ -431,6 +651,7 @@ def final_report(split, recs_1x, recs_stress, sessions, proof, bars,
         rep["variants"][variant] = {
             "paired_mean_R": mu, "ci95": [lo, hi], "null_p": p,
             "sharpe_f": sharpe_hac(srets_f)[0],
+            "n_sharpe_obs": len(srets_f),
             "max_dd_pct": dd_f, "n_closed": closed,
             "n_trades_taken": len(trades_f),
             "r_breach_attempted": breach_attempts,

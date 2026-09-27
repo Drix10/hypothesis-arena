@@ -30,20 +30,18 @@ def main():
                                     variant=v, day_fn=test_s5.DAY,
                                     data_id=test_s5.DATA_ID)
               for v in s5.VARIANTS}
-    recs = by_var[s5.VARIANTS[0]]
-    split = s5f.holdout_split(recs, n_splits=2)
-    folds, holdout, _bound, tok = split
     stats = {}
     for v in s5.VARIANTS:
         _, _b = s5.segment_bounds(by_var[v], n_splits=2)
         stats[v] = [sum(s5.paired_deltas(te)) for _, te in
                     s5.walk_folds(by_var[v], n_splits=2,
                                   holdout_start=_b)]
-    chosen = s5.select_variant(stats)
-    # sequential evidence on the SELECTED variant, closed deltas only;
-    # interim stop => final is NOT RUN (prereg sequential_rule).
-    sd, sy = s5.closed_stream(by_var[chosen])
-    seq_i, seq_f = s5.seq_pair(sd, sy)
+    chosen = s5.select_variant(stats)  # frozen BEFORE holdout use
+    # Split the SELECTED variant's stream: folds/holdout/sequential
+    # then share one segmentation (snapshots/exits are
+    # variant-independent, so pairing is unaffected).
+    split = s5f.holdout_split(by_var[chosen], n_splits=2)
+    folds, holdout, _bound, tok = split
     # power on the deduplicated pre-holdout training population, MDE
     # parsed from the prereg (no runner literal).
     seen, train_recs = set(), []
@@ -75,9 +73,15 @@ def main():
                                 l=px, c=px) for d, px in
                     sorted(_closes.items())]}
     sess, proof = s5f.build_holdout_sessions(bars, tok, test_s5.DATA_ID)
+    # sequential is DERIVED inside the final path from the selected
+    # variant's full stream (pre-holdout closed only); the rep carries
+    # the authoritative result (interim stop => final NOT RUN).
+    root = s5f.stream_roots(by_var, test_s5.DATA_ID)
     rep = s5f.final_report(split, h1x, stress, sess, proof, bars,
-                           test_s5.DATA_ID, 100000.0,
+                           test_s5.DATA_ID, 100000.0, by_var, root,
                            selected_variant=chosen)
+    seq_i, seq_f = rep["sequential"]["interim"], \
+        rep["sequential"]["final"]
     out = {"experiment_id": pre["experiment_id"], "protocol": "eval_v1",
            "prereg": "v2", "n_candidates": len(items),
            "answers": "stub-deterministic-v1 (MACHINERY PROOF ONLY)",
