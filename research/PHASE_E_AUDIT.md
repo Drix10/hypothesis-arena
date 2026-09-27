@@ -2989,3 +2989,98 @@ proven where relevant. Hosted CI pending at push time; stdlib
 collector step expected to remain the (pre-existing, frozen)
 failure — workflow must keep being reported as failed, never
 green. P3.5 still OPEN (human close); G0 NOT STARTED.
+
+## Addendum 126 - Re-audit follow-up: sixteen seams with regressions
+Plan acd393a, code 2f2a0a0/fe3c0e9/704a262/c9d4f99/99b9b7a/a3aa109/
+e5f8629/1e9fea3/d032b68/e541485/2c2a7b2/40a4397 (one theme each).
+Router core untouched (no router-contract defect demonstrated),
+null transport kept, no G0/live ordering. Local: router 209 +
+runner 886 + broker 125, normal + hardened + freeze PASS, zero
+litter, smoke bounded=0/unbounded=124; python test_emit 19 OK,
+test_plane 108 OK, DigestConflictTest 3 OK (test_seam_graph 4
+errors are a broken local langgraph install, pinned deps install
+fresh on hosted CI — unrelated to this pass, digest untouched by
+that path).
+1. Logical remainder identity: the 404 branch records the LOGICAL
+request and sends min(logical, need); existing tags reuse their
+request (exact-duplicate re-note only when nothing attributed).
+Regression LR (100-logical, 20-capped send, later 60-need closes
+the rest; old code conflicted the chain and froze).
+2. Adopt crash ordering: entries attribute BEFORE exit counters
+persist; exit-persist failure journals counters-unpersisted with
+entries durable and counters in memory. Saturating restart
+converges exactly (one attribution row, no duplicate).
+Regression XA (both halves). Residual, documented: a
+non-saturating crash between entry persist and exit persist
+replays against reduced opens (bounded by open, drift-loud,
+human-owned) — the single-fault loss the old order had on a
+bare crash is gone.
+3/4. HALT latch + unrecoverable refusal: HALT is a checked
+durable write; failure latches HARD in memory (entries blocked
+even with kill cleared), journals + alerts, no false completed
+stop. HALT-at-entry with missing/corrupt incident refuses (never
+fresh ids over a live HALT); clearing HALT ends the incident
+(HE test updated to the operator story). Regressions HL/HX.
+Residual: failed-HALT-write + process exit leaves no HALT file
+(operator must verify the file; alerted loud).
+5. Terminal-row rule: journal-terminal ids join the rebuild set;
+nonterminal snapshots rebuild + reconcile (old code orphaned
+them), terminal snapshots stay done, terminal + missing state
+refuses. Terminal EXIT closed qty re-attributes AFTER entries
+exist (capped, idempotent — the old pre-rebuild call ran against
+empty slots and was vacuous). Regression RT (both halves).
+6/15. Certified FLATTENED (AllFlat AND BrokerConfirmedFlat) with
+every FSM/cleanup transition checked (alert + retain + retry).
+ClearMediumFiles returns bool. Regressions FL (uncertified never
+flattens; tmp-dir injector proves the ACTIVE-write refusal +
+retry). Test 42 updated to the remainder contract.
+7. Windows AtomicWrite uses MoveFileEx REPLACE+WRITE_THROUGH
+(no remove-then-rename); functional overwrite proven by the
+suite on Windows + hosted Linux.
+8. Absent vs corrupt: StatPath tri-state; journal refuses corrupt
+(eb injector switched to read-only files — the disk-full shape;
+dir-journal is now a refusal case in PK), HALT counts corrupt as
+halted, freeze counts corrupt as frozen, chains/FSM/incidents
+refuse, Recover refuses corrupt snaps/intents/cursor/buffer.
+Regressions PK (5 shapes).
+9. SnapPositions validates rows (terminated/non-empty symbol, no
+dups, qty in range, LLONG_MIN out) or voids the snapshot.
+Regressions PV (5 corrupt modes + duplicate-retained).
+10. MEDIUM remainder from min(logical aq-landed, fresh exposure)
+with sign agreement (fail-safe under-close retries; never
+too-large). DEAD-with-fill attributes. Regression SR (lagged
+100 poll + 40 landed -> one 60-share remainder, never 100).
+11/12. SSE data: envelope 8192 (reject + resync + count);
+stream_read returns enforced 0 <= n <= buf (negative/overlong =
+loud feed fault). Regressions sse-envelope(-ok) + FT (both
+fault polarities, cycle continues).
+13. Intent permanence at both layers: mid-run deletion refuses
+from the journal row (CLOSED-imaged slot proves the no-memory-
+trace path); restart with deleted files refuses at Recover.
+Capacity clamps to 1..64 entries (2x exits); 65th refuses,
+LLONG_MAX configures safely. Regressions IP (both) + MC.
+14. Clock split: mono_ns seam (null = wall fallback, zero blast
+radius — wired only in the CK test); S2/force-query cadence on
+mono, timestamps/epochs/day-roll stay on wall; main wires
+steady_clock. Regression CK (wall jump quiet, mono advance
+runs).
+15. (Folded into 6 above: every FSM/cleanup write checked.)
+16. Directory lock: PID file, exclusive-create, same-PID
+re-entry (all existing multi-runner tests), dead-PID takeover,
+live-foreign refusal; PidAlive unit-tested. Regression LK.
+Garbage/zero pids never refuse. Phase-4 prerequisite, in place.
+Research: digest authority poisons on malformed rows
+(DigestCorrupt -> (False, "digest-corrupt"), even exact
+duplicates refuse from a subset); manifest readers
+deliberately keep skip-and-fallback (rows are SHA-verified
+downstream — skipping is safe by design, documented; budgets/
+attribution already raise; spans mirror self-heals by
+ledger-bound test). Regression in DigestConflictTest.
+Also reverted the leftover TEMP-TRIAGE CI scaffolding the
+earlier revert missed (ci.yml/build.sh now clean; verified zero
+TRIAGE refs in kernel/ and .github/).
+Status: all sixteen items fixed with restart/crash behavior
+proven where relevant. Hosted CI pending at push time; stdlib
+collector step expected to remain the (pre-existing, frozen)
+failure — workflow must keep being reported as failed, never
+green. P3.5 still OPEN (human close); G0 NOT STARTED.
