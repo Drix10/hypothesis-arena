@@ -103,6 +103,13 @@ jobs:
           g++ $FLAGS -o /tmp/triage_runner runner/test_runner.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp broker/adapter.cpp broker/alpaca_paper.cpp log/journal.cpp kill/switch.cpp
       - name: triage runner run
         run: /tmp/triage_runner
+      # TEMP-TRIAGE (revert): bracket the first failure.
+      - name: triage slice 140
+        run: G0_STOP_AFTER=140 /tmp/triage_runner
+      - name: triage slice 340
+        run: G0_STOP_AFTER=340 /tmp/triage_runner
+      - name: triage slice 540
+        run: G0_STOP_AFTER=540 /tmp/triage_runner
       - name: deterministic kernel gates
         run: bash kernel/build.sh
       - name: freeze pins

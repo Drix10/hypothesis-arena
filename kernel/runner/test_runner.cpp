@@ -10,6 +10,7 @@
 // a dead process leaves behind. Recovery from those files IS the
 // crash test — no timing tricks.
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -25,8 +26,14 @@
 static int g_fail = 0;
 static int g_count = 0;
 static int g_first_fail = -1;  // TEMP-TRIAGE (revert)
+static int g_stop_after = -1;    // TEMP-TRIAGE (revert)
 static void Check(bool ok, const char* name) {
     ++g_count;
+    // TEMP-TRIAGE (revert): prefix-run support.
+    if (g_stop_after > 0 && g_count > g_stop_after) {
+        std::printf("STOP-OK %d\n", g_count - 1);
+        std::exit(0);
+    }
     if (!ok) {
         ++g_fail;
         // TEMP-TRIAGE (revert): first failure index -> exit code.
@@ -479,6 +486,9 @@ static std::string EmgRow(std::uint64_t seq, long long ts,
 
 int main() {
     using jev::runner::G0Runner;
+    // TEMP-TRIAGE (revert): prefix-run support.
+    if (const char* se = std::getenv("G0_STOP_AFTER"))
+        g_stop_after = std::atoi(se);
     // 0. Event seam units: SSE framing + classification + shaping.
     {
         jev::runner::SseParser p;
