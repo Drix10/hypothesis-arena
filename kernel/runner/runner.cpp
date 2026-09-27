@@ -381,8 +381,14 @@ bool G0Runner::Recover(const char** reason) {
     // on the first cycle (the crash may have eaten the answer the
     // router was waiting for); sends always pre-flight by stable
     // id, so recovery can never double-send.
+    // Terminal-row rule (doc 06 sec. 6.1b): a journal terminal row
+    // NEVER overrides a durable snapshot. Snapshot nonterminal ->
+    // the slot rebuilds below and reconciles; snapshot terminal ->
+    // done; journal-terminal + missing snapshot/intent -> refuse
+    // for human recovery (the row alone cannot prove the books).
     slots_.clear();
     std::vector<std::string> ids;
+    std::vector<char> ids_term;
     for (std::size_t i = 0; i < rows.size(); ++i) {
         if (rows[i].kind != "intent") continue;
         bool term = false;
@@ -394,45 +400,13 @@ bool G0Runner::Recover(const char** reason) {
                 break;
             }
         }
-        if (term) {
-            // Terminal EXITs still owe their closed quantity to the
-            // parent entries when the done-hook never ran (crash
-            // between the close and the attribution): re-attribute
-            // from the surviving snapshot. Idempotent — capped by
-            // provable open, so a hook that already ran is a no-op.
-            IntentDesc xid;
-            if (LoadIntent(IntentPath(rows[i].intent_id.c_str()).c_str(),
-                           &xid) &&
-                xid.kind == 1 && xid.symbol[0] != '\0') {
-                char xrec[320];
-                exec::RouteMachine xm;
-                if (LoadSnapshot(
-                        SnapPath(rows[i].intent_id.c_str()).c_str(),
-                        xrec, sizeof(xrec)) &&
-                    exec::RestoreMachine(xrec, &xm) &&
-                    xm.state == exec::RouteState::CLOSED &&
-                    xm.exit_closed_qty > 0) {
-                    // Best-effort replay: a persist failure rolls
-                    // back in-memory (durable stays old) and the
-                    // next reconcile retries — journal the miss.
-                    if (!AttributeClosedQty(
-                            xm.symbol[0] != '\0' ? xm.symbol
-                                                 : xid.symbol,
-                            xm.exit_closed_qty,
-                            deps_.now_ns(deps_.clock_ctx)))
-                        OpsRow("reconcile",
-                               rows[i].intent_id.c_str(),
-                               "attribution-unpersisted",
-                               deps_.now_ns(deps_.clock_ctx));
-                }
-            }
-            continue;
-        }
         // Deduplicate (a duplicated intent row is itself a chain
-        // anomaly: first wins, alerted, never two slots).
+        // anomaly: first wins, alerted, never two slots). A
+        // terminal row anywhere marks the id terminal.
         bool seen = false;
         for (std::size_t k = 0; k < ids.size(); ++k) {
             if (ids[k] == rows[i].intent_id) {
+                if (term) ids_term[k] = 1;
                 seen = true;
                 break;
             }
@@ -444,6 +418,7 @@ bool G0Runner::Recover(const char** reason) {
             continue;
         }
         ids.push_back(rows[i].intent_id);
+        ids_term.push_back(term ? 1 : 0);
     }
     for (std::size_t i = 0; i < ids.size(); ++i) {
         char rec[320];
@@ -452,6 +427,22 @@ bool G0Runner::Recover(const char** reason) {
         IntentDesc id;
         bool has_intent = LoadIntent(
             IntentPath(ids[i].c_str()).c_str(), &id);
+        if (ids_term[i] && (!has_snap || !has_intent)) {
+            // Journal-terminal with missing durable state: the row
+            // alone cannot prove the books (crash between the
+            // journal write and the snapshot persist, or operator
+            // deletion) — refuse for human recovery, never invent
+            // a done slot from a row.
+            OpsRow("reconcile", ids[i].c_str(),
+                   "terminal-row-missing-snapshot",
+                   deps_.now_ns(deps_.clock_ctx));
+            Alert(P("alerts.jsonl").c_str(), "HARD",
+                  "terminal-row-missing-snapshot",
+                  ids[i].c_str(),
+                  deps_.now_ns(deps_.clock_ctx));
+            if (reason) *reason = kSnap;
+            return false;
+        }
         if (has_snap != has_intent) {
             // Half a registration cannot be driven: EITHER file
             // alone is S2/human territory (refuse loudly). The one
@@ -578,6 +569,35 @@ bool G0Runner::Recover(const char** reason) {
             }
         }
         slots_.push_back(s);
+    }
+    // Terminal EXIT closed quantity re-attributes AFTER entries
+    // exist (slots_ was empty during the id scan, so no earlier
+    // point can do it). Capped by provable open: a done-hook that
+    // already ran is a no-op (leftover drops); a hook that never
+    // ran folds exactly the surviving closed quantity. Misses
+    // journal and retry on the next reconcile.
+    for (std::size_t i = 0; i < ids.size(); ++i) {
+        if (!ids_term[i]) continue;
+        IntentDesc xid;
+        if (!LoadIntent(IntentPath(ids[i].c_str()).c_str(),
+                        &xid) ||
+            xid.kind != 1 || xid.symbol[0] == '\0')
+            continue;
+        char xrec[320];
+        exec::RouteMachine xm;
+        if (!LoadSnapshot(SnapPath(ids[i].c_str()).c_str(), xrec,
+                          sizeof(xrec)) ||
+            !exec::RestoreMachine(xrec, &xm) ||
+            xm.state != exec::RouteState::CLOSED ||
+            xm.exit_closed_qty <= 0)
+            continue;
+        if (!AttributeClosedQty(xm.symbol[0] != '\0' ? xm.symbol
+                                                 : xid.symbol,
+                                xm.exit_closed_qty,
+                                deps_.now_ns(deps_.clock_ctx)))
+            OpsRow("reconcile", ids[i].c_str(),
+                   "attribution-unpersisted",
+                   deps_.now_ns(deps_.clock_ctx));
     }
     return true;
 }

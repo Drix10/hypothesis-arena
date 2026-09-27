@@ -340,6 +340,42 @@ static std::string DeadReply(const char* fq) {
                   kUuid, fq);
     return b;
 }
+// Test-only journal append (chain-valid): mirrors CrashImage's row
+// math for non-intent kinds (e.g. a terminal "exit" row for a
+// slot whose snapshot stayed nonterminal — the crash seam in
+// which the journal ran ahead of the snapshot persist).
+static bool AppendRow(const std::string& dir, const char* kind,
+                      const char* iid) {
+    std::string jp = dir + "/journal.jsonl";
+    std::vector<jev::journal::Row> jr;
+    if (!jev::runner::JournalLoad(jp.c_str(), &jr) &&
+        Exists(jp.c_str()))
+        return false;
+    unsigned long long seq = 0;
+    std::string prev = jev::journal::GenesisPrev();
+    if (!jr.empty()) {
+        seq = jr.back().seq + 1;
+        prev = jr.back().row_hash;
+    }
+    jev::journal::Row r;
+    std::string body = std::string(kind) + " sym=AAPL";
+    if (!jev::journal::FormatRow(
+            seq, 1800000000000000000LL, kind, iid,
+            jev::Sha256Hex(body).c_str(), prev.c_str(), &r))
+        return false;
+    char ln[1024];
+    std::snprintf(ln, sizeof(ln), "%llu|%lld|%s|%s|%s|%s|%s",
+                  (unsigned long long)r.seq, (long long)r.ts_ns,
+                  r.kind.c_str(), r.intent_id.c_str(),
+                  r.payload_hash.c_str(), r.prev_hash.c_str(),
+                  r.row_hash.c_str());
+    FILE* jf = std::fopen(jp.c_str(), "ab");
+    if (!jf) return false;
+    std::string line = std::string(ln) + "\n";
+    std::size_t w = std::fwrite(line.data(), 1, line.size(), jf);
+    std::fclose(jf);
+    return w == line.size();
+}
 // Hand-written crash image: journal intent row + intent file + H1
 // snapshot — exactly what a dead process leaves behind. st: 2 =
 // SENT_UNACKED, 3 = QUERY_SENT, 9 = EXIT_SENT.
@@ -4146,6 +4182,73 @@ int main() {
                       .find("hard-positions-unknown") !=
                   std::string::npos,
               "pl-unavailable-alert");
+    }
+    // RT. Recovery terminal-row rule (doc 06 sec. 6.1b): a journal
+    // terminal row never overrides a durable snapshot. Snapshot
+    // nonterminal -> the slot rebuilds and reconciles (the old
+    // code skipped it, orphaning live exposure); journal-terminal
+    // + missing snapshot -> refuse for human recovery.
+    {
+        Rig r;
+        r.deps.list_positions = FakePositions;
+        std::string cid, xid;
+        Check(!CrashImage(r.dir, "intent-600", "AAPL", 0, 0,
+                          100, 2, 100, &cid)
+                   .empty(),
+              "rt-entry");
+        Check(!CrashImage(r.dir, "intent-601", "AAPL", 0, 1,
+                          100, 9, 0, &xid)
+                   .empty(),
+              "rt-exit");
+        // The journal ran ahead of the snapshot persist: terminal
+        // exit row on file, snapshot still EXIT_SENT.
+        Check(AppendRow(r.dir, "exit", "intent-601"),
+              "rt-row");
+        g_positions.push_back(MkPos("AAPL", 60));
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "rt-recover");
+        Check(g.Find("intent-601") != nullptr,
+              "rt-exit-rebuilt");
+        g_kill.drift_unresolvable = true;  // HARD
+        PushRule("GET", "by_client_order_id", 200,
+                 HeldReply("filled", "100").c_str());
+        PushRule("GET", "by_client_order_id", 200,
+                 DeadReply("40").c_str());
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 PlainReply("accepted", "0").c_str());
+        Check(!g.Cycle(g_now), "rt-terminates");
+        const auto* re = g.Find("intent-600");
+        Check(re && re->m.filled_qty - re->m.exit_closed_qty ==
+                         60,
+              "rt-entry-reconciled");
+        Check(CountMethod("POST", "/v2/orders") == 1,
+              "rt-one-replace");
+    }
+    {
+        // Terminal row + missing snapshot: refuse, never invent.
+        Rig r;
+        std::string cid, xid;
+        Check(!CrashImage(r.dir, "intent-602", "AAPL", 0, 0,
+                          100, 2, 100, &cid)
+                   .empty(),
+              "rt-entry2");
+        Check(!CrashImage(r.dir, "intent-603", "AAPL", 0, 1,
+                          100, 9, 0, &xid)
+                   .empty(),
+              "rt-exit2");
+        Check(AppendRow(r.dir, "exit", "intent-603"),
+              "rt-row2");
+        Check(std::remove(
+                  (r.dir + "/snap-intent-603.txt").c_str()) ==
+                  0,
+              "rt-snap-deleted");
+        G0Runner g(r.cfg, r.deps);
+        const char* rsn = nullptr;
+        Check(!g.Recover(&rsn), "rt-refused");
+        Check(rsn && std::string(rsn).find("snapshot") !=
+                         std::string::npos,
+              "rt-reason");
     }
     // HL. HALT durability (doc 06 sec. 6.1b): the stop is claimed
     // only once durably established. An unwritable HALT latches
