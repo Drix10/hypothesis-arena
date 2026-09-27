@@ -2318,8 +2318,10 @@ bool G0Runner::HardStop(long long now_ns, const char* why,
     // stop is claimed only once it is durably established. A
     // failed write latches HARD in memory (entries stay blocked
     // via HardHalted), journals + alerts, and returns false — the
-    // process stays latched and retries instead of reporting a
-    // completed stop it cannot prove across a restart.
+    // stop is reported as UNPROVEN, never as completed. The
+    // caller exits nonzero (main has no in-process retry loop);
+    // the supervisor/operator owns recovery, and a restart
+    // without the HALT file is operator territory by design.
     if (!AtomicWrite(P("HALT").c_str(), "HALT\n")) {
         hard_latched_ = true;
         OpsRow("drift-directive", "runner",

@@ -26,6 +26,12 @@ namespace runner {
 // ---- primitives ---------------------------------------------------
 // Append one line (with trailing '\n') + flush + OS-commit.
 bool AppendLine(const char* path, const char* line);
+// Checked decimal parse for the CLI cycles argument: digits
+// only (empty = 0, the legacy unbounded shape), with
+// reject-before-overflow — the digit that would overflow
+// signed long long refuses instead of wrapping. The caller's
+// 0..1000000 window applies after.
+bool ParseCycles(const char* text, long long* out);
 // tmp + flush + OS-commit + rename (single-process atomic).
 bool AtomicWrite(const char* path, const char* data);
 bool ReadLines(const char* path, std::vector<std::string>* out);

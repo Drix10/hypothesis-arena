@@ -4598,6 +4598,38 @@ int main() {
         Check(!jev::runner::FreezeHas(fp.c_str(), "AAPL"),
               "fz-readable-again");
     }
+    // CY. Startup cycles parsing (doc 06 sec. 6.1b): digits
+    // only, empty = 0 (legacy unbounded shape), and
+    // reject-before-overflow — a digit that would overflow
+    // signed long long refuses instead of wrapping.
+    {
+        long long v = -1;
+        Check(jev::runner::ParseCycles("0", &v) && v == 0,
+              "cy-zero");
+        Check(jev::runner::ParseCycles("42", &v) && v == 42,
+              "cy-small");
+        Check(jev::runner::ParseCycles("1000000", &v) &&
+                  v == 1000000,
+              "cy-cap");
+        Check(jev::runner::ParseCycles("", &v) && v == 0,
+              "cy-empty");
+        Check(jev::runner::ParseCycles("9223372036854775807",
+                                        &v) &&
+                  v == 9223372036854775807LL,
+              "cy-max-exact");
+        Check(!jev::runner::ParseCycles(
+                  "9223372036854775808", &v),
+              "cy-max-plus-one");
+        Check(!jev::runner::ParseCycles(
+                  "99999999999999999999999999", &v),
+              "cy-huge");
+        Check(!jev::runner::ParseCycles("12x", &v),
+              "cy-nondigit");
+        Check(!jev::runner::ParseCycles(nullptr, &v),
+              "cy-null");
+        Check(!jev::runner::ParseCycles("7", nullptr),
+              "cy-null-out");
+    }
     {
         // HALT-as-dir counts as halted: entries refused.
         Rig r;

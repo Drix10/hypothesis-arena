@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cerrno>
+#include <climits>
 
 #ifdef _WIN32
 #include <direct.h>
@@ -239,6 +240,20 @@ bool FileExists(const char* path) {
     // Callers that need the absent/corrupt distinction use
     // StatPath directly; FileExists stays the regular-file probe.
     return StatPath(path) == PathKind::REGULAR;
+}
+bool ParseCycles(const char* text, long long* out) {
+    if (out) *out = 0;
+    if (!text || !out) return false;
+    if (!*text) return true;  // empty = 0 (unbounded), legacy shape
+    long long v = 0;
+    for (; *text; ++text) {
+        if (*text < '0' || *text > '9') return false;
+        int d = *text - '0';
+        if (v > (LLONG_MAX - d) / 10) return false;  // overflow
+        v = v * 10 + d;
+    }
+    *out = v;
+    return true;
 }
 
 bool JournalAppend(const char* path, const journal::Row& r) {

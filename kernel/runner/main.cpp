@@ -64,11 +64,9 @@ int main(int argc, char** argv) {
             return 2;
         }
         if (cycles != 1) return 2;  // one count at most
-        cycles = 0;
-        for (; *p; ++p) {
-            if (*p < '0' || *p > '9') return 2;
-            cycles = cycles * 10 + (*p - '0');
-        }
+        long long parsed = 0;
+        if (!jev::runner::ParseCycles(p, &parsed)) return 2;
+        cycles = parsed;
         // 0 = unbounded (supervisor-owned window); 1..1000000
         // bounded. Unbounded still stops on HARD/refused.
         if (cycles < 0 || cycles > 1000000) return 2;
