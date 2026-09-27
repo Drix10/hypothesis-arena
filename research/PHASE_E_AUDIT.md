@@ -2934,3 +2934,58 @@ close; Phase-4 wiring (live WS adapter, position/account
 endpoints, runtime credentials, real G0 STAGE, out-of-band
 alerts) is the remaining gate. H2 stays downstream per
 sec. 13.5. P3.5 OPEN (human close); G0 NOT STARTED.
+
+## Addendum 125 - Audit follow-up: six seam findings with regressions
+Plan c887dde, code 8bbbf78. Router core untouched (no router-contract
+defect demonstrated), null transport kept, no G0/live ordering.
+Local: router 209 + runner 725 + broker 125, normal + hardened +
+freeze PASS, zero litter, smoke bounded=0/unbounded=124.
+1. Overflow-safe parsing: stream filled_qty accumulates with a
+reject-before-overflow bound (19-digit input refuses before signed
+arithmetic can overflow; 10-digit over-cap refuses; cap boundary
+999999999 still fills). ParseEpoch uses the same checked
+conversion (LLONG_MAX parses exactly; oversized refuses).
+ScanChain no longer uses sscanf on persisted numeric text: strict
+single-space <tag> <requested> <attributed> rows with bounded
+decimal conversion (the writer emits exactly this shape).
+Regressions map-fill-overflow-refused / over-cap-refused / max-cap.
+2. Fill-regression floor: HardCloseOnce floors remainder derivation
+at the chain-attributed quantity and journals + alerts
+hard-close-fill-regressed (drift owns the anomaly). Regression R5:
+chain (100,40) + broker terminal 30 -> one 60-share remainder,
+never 70 (slotless R3 shape; an early version with a CrashImage
+slot proved the slot path steals the first GET rule — the exit
+path, not HardCloseOnce, owns that shape).
+3. Position-count contract: SnapPositions (single enforcement
+point, seven call sites: BrokerQty, MediumHasExposure,
+BrokerConfirmedFlat, HARD position loop, S2 drift, AllFlat,
+MEDIUM sweep) requires 0 <= n <= cap; violations take each
+caller's existing unknown/failure branch. Regressions with a
+lying adapter (reports 65): FLATTENED retained, S2 alerts
+positions-unavailable with no drift row, HARD falls back to
+documented local sizing (one journaled 100-share close), and
+double-blind (500 entry sighting + unknown broker) orders
+nothing while HALT still terminates.
+4. Cursor fail-closed: failed cursor.txt write journals + alerts
+cursor-unpersisted, keeps the dirty bit, fails the cycle under
+the day-roll contract. Regression CU: foreign stream event
+dirties, unwritable file refuses, restored file persists the
+same ULID next cycle (same runner — the dirty bit is memory,
+the file state is the restart contract).
+5. Durable-or-nothing epochs: mint failure returns 0 (never a
+valid epoch); MEDIUM reverts the FSM (enter -> empty, re-enter
+-> FLATTENED) so the next cycle retries; HardStop returns false
+(HALT already blocks entries). old+1 refuses at LLONG_MAX.
+Regressions ME (refuse + file-state retry converges), HE
+(refuse with zero POSTs, restart converges to reprotect +
+flatten), LL (LLONG_MAX + stuck clock refuses).
+6. Chain envelope: ReadLinesCapped (64 KiB) serves HardChainOk +
+HardChainState; oversized input refuses before rows materialize
+(freeze + refuse, zero POSTs). Regression CB (72 KiB of valid
+duplicates). The live journal is untouched (own lifecycle;
+tracked scaling item, see TODO).
+Status: the six seams are closed with restart/crash behavior
+proven where relevant. Hosted CI pending at push time; stdlib
+collector step expected to remain the (pre-existing, frozen)
+failure — workflow must keep being reported as failed, never
+green. P3.5 still OPEN (human close); G0 NOT STARTED.
