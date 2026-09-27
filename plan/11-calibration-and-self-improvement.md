@@ -271,3 +271,9 @@ adds the bounded loop on top:
 - Promotion requires forward-only, cost-inclusive, search-budget-declared evidence,
   a beaten non-LLM baseline, and a human signature. No exceptions, no automation.
 - The AI layer must beat the statistical baseline or be removed rather than tuned.
+- Calibration ("do the probabilities mean what they claim": Brier/log-loss/
+  reliability) is a SEPARATE question from strategy efficacy ("does JEV
+  filtering improve candidate outcomes": paired candidate-level always-take
+  vs filtered-policy delta) and from portfolio performance (daily net
+  returns/Sharpe/drawdown). "Beats baseline" alone is not edge proof:
+  promotion also needs a pre-registered absolute economic bar.

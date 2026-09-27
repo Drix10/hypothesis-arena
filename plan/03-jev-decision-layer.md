@@ -383,3 +383,9 @@ weight, ever.
   prose in JEV state; prose lives in the research digest (doc 08).
 - Thresholds changed only between test windows, never live.
 - JEV never sizes directly; it scores, the table gates, the risk engine sizes.
+- JEV v3 is HISTORICAL once v4 lands: v3 semantics are frozen, v3 fixtures stay
+  replay-only, v3 is never mutated in place. The live contract becomes
+  question_set_version = v4, candidate-bound: the side/family/entry/stop/TP/
+  time-exit are INPUTS JEV evaluates, never OUTPUTS it invents. The v4 label
+  must match the actual candidate economics (entry/stop/TP/time-exit/costs/
+  horizon as one event), not a detached ±R race.

@@ -139,3 +139,8 @@ effective dates, never rewrites. Code speaks to `FXBrokerAdapter` /
   promoted to TRIGGER only on measured hit-rate + human sign-off (doc 09).
 - The statistical baseline (no JEV, no research plane) is a permanent fixture and
   the bar the AI layer must beat net of cost (doc 11 §11.3).
+- Candidate pipeline (canonical): deterministic strategy/candidate generator
+  originates BUY/SELL + family + entry/stop/TP/time-exit; JEV filters that
+  candidate (PASS/HOLD + probabilities) and NEVER originates trade direction;
+  the C++ risk engine authorizes size; the runner executes. No model output
+  invents direction at the execution boundary.

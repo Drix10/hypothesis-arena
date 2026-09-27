@@ -206,6 +206,34 @@ an actual contract defect.
       self-consistency; human sign-off recorded below.
 - [ ] Exit: doc 13 exit criteria all checked.
 
+## Strategy Validation Track (parallel with P3.5, research/shadow-only, no orders)
+
+Authorized by practitioner-review pivot; runs WITHOUT waiting for P3.5 and
+never retro-blocks it. G0 requires BOTH tracks converged (P3.5 correctness
++ this track), per §28 sequencing: P1 fixes → strategy track + P3.5/H1 →
+G0 integration → paper evidence.
+
+- [ ] S1 baseline_v1 reference engine (`research/strategy/`: baseline, candidate,
+      backtest, data, costs) reproducing doc 12 exactly + hostile no-lookahead
+      fixtures + PIT universe artifact (CI: synthetic fixtures only, datasets by
+      manifest/hash).
+- [ ] S2 baseline economics report (trades/R-expectancy/Sharpe/DD/turnover,
+      1×/1.5×/2×/3× cost stress, per-symbol/regime/FX-vs-stock, R2-binding rate
+      + effective-risk telemetry). Record the result honestly; do not mutate v1.
+- [ ] S3 candidate contract c1 (deterministic ID, side/family/entry/stop/TP/
+      time-exit bound pre-JEV, replay tests, cross-candidate cache isolation).
+- [ ] S4 JEV v4 candidate-bound contract (v3 frozen replay-only; v4 state carries
+      candidate economics; label == trading payoff; family_fit critiques family,
+      never emits BUY/SELL) + validator/table/vectors.
+- [ ] S5 paired evaluation (always-take vs filtered-policy delta per candidate;
+      pre-registered cluster-aware bootstrap + sequential rule + power study from
+      the real candidate stream; absolute economic bar alongside baseline-beats).
+- [ ] S6 first deterministic directional resolver (event_direction_v1, unknown on
+      ambiguity, CONTEXT until measured) + doc 09 status.
+- [ ] S7 ops: Linux ASan/UBSan CI job, model-retirement runbook (doc 03/10),
+      capital-aware spend caps, G1 venue-selection amendment (doc 10).
+- [ ] Exit: §33 strategy-track-complete boxes checked; §34 paper-ready boxes gate G0.
+
 ## Phase 4 — Paper loop at G0_PAPER (everything together)
 
 - [ ] Full loop paper-trading on broker paper/sandbox accounts (stocks only:

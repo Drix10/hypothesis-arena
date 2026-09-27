@@ -67,3 +67,8 @@ never filled. Nothing else. No research plane, no JEV, no text.
   edited in place and never retired without a human-signed doc edit.
 - The AI layer (JEV + research + all challengers) is scored against this file,
   same window, same costs. Losing net of cost = removal, not tuning.
+- `baseline_v1` trading rules are never edited in place; the deterministic
+  reference implementation lives at `research/strategy/baseline_v1.py`
+  (authorized path; implementation + leakage-hostile backtester + PIT
+  universe artifact + cost-stress report are the Strategy Validation Track).
+  The implementation must reproduce this file exactly — never silently improve it.

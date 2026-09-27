@@ -502,3 +502,14 @@ system fails toward paper.**
   `simulated`, no partials in paper. Without
   this, paper PnL is fiction; G1→G2 compares live slippage against exactly
   this model (doc 10 §10.2).
+- AUDIT STOP RULE (frozen engineering-process rule): after the round-5 P1
+  recovery closures, no new general-purpose audit rounds for stylistic,
+  theoretical, or P2 findings. Reopening audit is allowed only for: (1)
+  P0/P1 decision-outcome changes, (2) corruption/loss of durable trading
+  state, (3) duplicate-order / wrong-side / wrong-quantity risk, (4)
+  security boundary violations, (5) reproducibility / lookahead /
+  statistical-validity failures, (6) a failing correctness/drill gate.
+  P2 cleanup collects into one bounded backlog, never another cascade.
+  Process: implementation → deterministic tests → targeted adversarial
+  review → gate → move on. Grep observations are STATIC TRIPWIRES, not
+  proofs (compiler-enforced authority probes excepted — those are proof).
