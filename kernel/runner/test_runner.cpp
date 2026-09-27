@@ -11,6 +11,7 @@
 // crash test — no timing tricks.
 #include <cstdio>
 #include <cstdlib>
+#include <csignal>
 #include <cstring>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -486,9 +487,14 @@ static std::string EmgRow(std::uint64_t seq, long long ts,
 
 int main() {
     using jev::runner::G0Runner;
-    // TEMP-TRIAGE (revert): prefix-run support.
+    // TEMP-TRIAGE (revert): prefix-run support + SIGPIPE probe.
     if (const char* se = std::getenv("G0_STOP_AFTER"))
         g_stop_after = std::atoi(se);
+#ifdef SIGPIPE
+    std::signal(SIGPIPE, SIG_IGN);  // TEMP-TRIAGE: EPIPE, not death
+#else
+    (void)0;  // TEMP-TRIAGE: no SIGPIPE on this platform
+#endif
     // 0. Event seam units: SSE framing + classification + shaping.
     {
         jev::runner::SseParser p;

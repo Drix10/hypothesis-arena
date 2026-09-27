@@ -113,6 +113,22 @@ jobs:
       - name: triage slice 540
         if: always()
         run: G0_STOP_AFTER=540 /tmp/triage_runner
+      # TEMP-TRIAGE (revert): finer brackets for 541+.
+      - name: triage slice 560
+        if: always()
+        run: G0_STOP_AFTER=560 /tmp/triage_runner
+      - name: triage slice 580
+        if: always()
+        run: G0_STOP_AFTER=580 /tmp/triage_runner
+      - name: triage slice 600
+        if: always()
+        run: G0_STOP_AFTER=600 /tmp/triage_runner
+      - name: triage slice 620
+        if: always()
+        run: G0_STOP_AFTER=620 /tmp/triage_runner
+      - name: triage slice 640
+        if: always()
+        run: G0_STOP_AFTER=640 /tmp/triage_runner
       - name: deterministic kernel gates
         run: bash kernel/build.sh
       - name: freeze pins
