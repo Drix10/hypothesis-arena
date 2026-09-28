@@ -69,9 +69,9 @@ A box is checked only with evidence (commit + test output / report path).
   - [x] A0.7 (`portfolio.py` + `benchmarks.py`, 6 tests; baseline_v1 reproduction + no-AI pairing are per-run ledgered runs, done in A1/A8) Benchmark set (cash, vol-matched passive, 60/40, no-AI
         variant, baseline_v1 reproduction) — doc 12 §12.6.
   - [x] A0.8 (`research/strategy/gates.py`, 5 tests; fail-closed, missing evidence fails) A-gate / B-gate report generators — doc 11 §11.3a.
-- [ ] A1 S2 closure: `baseline_v1` rerun on SIP bars + quotes; primary
+- [ ] A1 [BLOCKED: no Alpaca keys in this container, same as A2] S2 closure: `baseline_v1` rerun on SIP bars + quotes; primary
       ledger populated; negative result + diagnosis recorded; FX leg dropped.
-- [ ] A2 T1 `trend_etf_v1`: pre-registration committed → A-gate report.
+- [ ] A2 T1 `trend_etf_v1` (DONE: signal `sleeves/trend.py` + prereg `research/prereg/t1_trend_etf_v1.json`, 5 tests; OPEN: A-gate run [BLOCKED] on SIP keys -- the cloud container has no `.env`/Alpaca env vars; [HUMAN] add ALPACA_KEY_ID/ALPACA_SECRET as environment secrets, then `sip_fetch` + run): pre-registration committed → A-gate report.
 - [ ] A3 I1 `intraday_mom_v1`: pre-registration → A-gate (2× cost decisive).
 - [ ] A4 E1 `insider_buy_v1`: Form 4 parser (codes, roles, 10b5-1 flag,
       routine-trader filter) + pre-registration → A-gate.

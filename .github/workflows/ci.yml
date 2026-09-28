@@ -88,6 +88,7 @@ jobs:
           PYTHONWARNINGS=error python3 research/tests/test_portfolio.py
           PYTHONWARNINGS=error python3 research/tests/test_gates.py
           PYTHONWARNINGS=error python3 research/tests/test_sip_fetch.py
+          PYTHONWARNINGS=error python3 research/tests/test_trend.py
       - name: strategy baseline (stdlib only)
         run: PYTHONWARNINGS=error python3 research/tests/test_baseline.py
       - name: strategy JEV v4 interop (stdlib only)
