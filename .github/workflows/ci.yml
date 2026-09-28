@@ -87,6 +87,7 @@ jobs:
           PYTHONWARNINGS=error python3 research/tests/test_hardening.py
           PYTHONWARNINGS=error python3 research/tests/test_emit.py
           PYTHONWARNINGS=error python3 research/tests/test_seam_graph.py
+          PYTHONWARNINGS=error python3 research/tests/test_event_direction.py
 
   kernel:
     runs-on: ubuntu-latest
