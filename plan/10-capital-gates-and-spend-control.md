@@ -422,8 +422,10 @@ must equal `provider_cfg["model_id"]` before any reservation (frozen
 pricing entry can never open an unpriced-call path — unpriced models
 never run, construction blocks. A pricing/config change alters the
 pricing fingerprint and forces immediate fresh tier evaluation, never
-reuse of stale tier state (frozen §10.4.2). A retired identity's
-pricing row is retained for audit, marked retired, and never selected
-for new reservations; its historical spend stays in the trailing-30d
-ledger (history is not rewritten on retirement). No caps change here:
-the stage table above is untouched.
+reuse of stale tier state (frozen §10.4.2). The runtime governor
+pricing table carries no retired flag: the human-owned
+deployment/audit record (§3.5b) preserves the retired identity's
+historical pricing metadata for audit, while the live governor
+selects only currently authorized pricing entries. Historical spend
+stays in the trailing-30d ledger (history is never rewritten on
+retirement). No caps change here: the stage table above is untouched.

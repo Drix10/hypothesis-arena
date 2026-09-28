@@ -338,14 +338,28 @@ operations; nothing here retires, switches, or promotes automatically.
 Lifecycle (who moves what, and what may still call):
 - `active`: the pinned identity serves new provider calls.
 - `retirement-declared` (human declares): the identity is drained —
-  cache/replay serving continues, NO new provider calls are issued
-  for it. Declaring retirement never redirects traffic to another
-  model; a different model is a different identity, not a fallback.
+  an ALREADY-VALID cache artifact may still be served under the
+existing cache contract, but NO new provider calls are issued for
+  it. Expired, malformed, wrong-revision, wrong-provider, or
+  otherwise wrong-binding cache is a MISS → HOLD, never a call and
+  never a fallback model. Declaring retirement never redirects
+  traffic to another model; a different model is a different
+  identity, not a fallback.
 - `retired`: the identity is never selected for new calls, period.
 - `quarantined` (emergency path, human declares): immediate stop for
   that identity — no new calls, no fabricated fallback answer, while
   the deterministic engine (veto, exits, reconcile) stays live. The
   net effect is HOLD/fail-closed, never a silent switch.
+
+The authoritative retirement record is human-owned and auditable:
+the exact identity tuple, the state entered, the effective time,
+the human signer/actor, and the reason/action. This record is
+governance and deployment authority — it is not LangGraph state and
+not model output. The mechanical cutover for any retirement or
+replacement is: stop the provider process → write the retirement
+record → verify the old identity cannot be selected → install and
+verify the new identity → run freeze-check → restart. No in-process
+swap, no automatic fallback.
 
 Replacement is a NEW challenger under doc 11, never an inheritance:
 own model/revision/provider metadata, own experiment identity, own

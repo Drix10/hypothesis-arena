@@ -18,6 +18,17 @@ import sqlite3  # noqa: E402
 from classify import init_db, ingest_signal, classify, DB, \
     temporal_violation, run, ClassifyAbort  # noqa: E402
 
+import classify as _CLOCK  # noqa: E402
+_PINNED_NOW = "2026-09-18T18:05:00+00:00"
+# Deterministic wall clock: every fixture in this file is stamped
+# 2026-09-18, so "now" is pinned just after the fixture window.
+# Without this the frozen 7-day archaeology boundary drifts under
+# the fixtures as the calendar moves (test 9's 17:50 publication
+# ages into STALE) and the suite rots with the date. run() calls
+# below set their own explicit as_of; test 19 re-pins temporarily
+# and restores this value; the file end releases the pin.
+_CLOCK.REF["t"] = _PINNED_NOW
+
 N = 0
 
 
@@ -133,13 +144,12 @@ print("ALL P1.3 CHECKS PASS")
 
 # 9. aged candidate: hot items but first seen beyond TTL -> CONTEXT + aged flag
 from classify import is_fresh, validate_record, ITEM_HEADER_RE  # noqa: E402
-from datetime import datetime, timezone  # noqa: E402
 con = fresh()
 old_seen = rec(source_id="aged1", text="<br>Item 2.02: blowout quarter",
                published_at="2026-09-18T17:50:00+00:00")
 v, _, fs, _ = ingest_signal(con, old_seen, "2026-09-18T17:51:00+00:00")
 assert is_fresh("2000-01-01T00:00:00+00:00", "edgar_8k") is False
-assert is_fresh(datetime.now(timezone.utc).isoformat(), "edgar_8k") is True
+assert is_fresh("2026-09-18T18:04:00+00:00", "edgar_8k") is True
 e, eff, conf, reason, _ = classify("edgar_8k", old_seen, v,
                                 "2026-09-18T17:51:00+00:00", False, fresh=False)
 assert e == "CONTEXT" and (eff or {}).get("aged") is True and reason == "candidate-expired", (e, eff, reason)
@@ -268,7 +278,7 @@ assert C.is_archaeology("2026-09-10T00:00:00+00:00") is True
 assert C.is_archaeology("2026-09-19T12:00:00+00:00") is False
 assert C.is_fresh("2026-09-19T23:50:00+00:00", "edgar_8k") is True
 assert C.is_fresh("2026-09-19T23:00:00+00:00", "edgar_8k") is False
-C.REF["t"] = None
+C.REF["t"] = _PINNED_NOW
 print("ok pinned-reference-time")
 
 print("ALL CORRECTIVE CHECKS PASS")
@@ -419,3 +429,6 @@ _ids1 = [(_r["source_id"], _r["provenance"]["raw_hash"]) for _r in _rows1]
 assert _ids3[:3] == _ids1, "earlier rows survive later cycles unchanged"
 assert _ids3[3][0] == "projC", _ids3
 print("ok projection-accumulates")
+
+# release the pinned clock; production run()/audit() set REF per call.
+_CLOCK.REF["t"] = None
