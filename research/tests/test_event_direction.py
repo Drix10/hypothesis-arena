@@ -5,7 +5,8 @@
 10 replay-determinism 11 unknown-never-directional 12 context-only
 13 no-lookahead 14 boundary-ts 15 no-foreign-capability 16 table-pin
 17 unmapped-source-kind 18 same-sig-contradiction 19 origin-evidence-gate
-20 symbol-scope 21 unknown-aggregation 22 directional-neutral-mix.
+20 symbol-scope 21 unknown-aggregation 22 directional-neutral-mix
+23 carried-unknown-stays-unknown 24 same-identity-agreement.
 """
 import os
 import sys
@@ -341,6 +342,7 @@ def test_24_same_identity_agreement():
         return ed.resolve([a, b], ASOF, SYM)
     # any differing interpretation of ONE fact voids it.
     for pe_a, pe_b in (("bullish", "neutral"),
+                        ("bullish", "unknown"),
                         ("bullish", None),
                         ("neutral", None),
                         ("risk_up", "neutral"),

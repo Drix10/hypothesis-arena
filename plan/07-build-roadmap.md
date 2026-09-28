@@ -232,8 +232,11 @@ G0 integration → paper evidence.
 - [ ] S5 paired evaluation (always-take vs filtered-policy delta per candidate;
       pre-registered cluster-aware bootstrap + sequential rule + power study from
       the real candidate stream; absolute economic bar alongside baseline-beats).
-- [ ] S6 first deterministic directional resolver (event_direction_v1, unknown on
-      ambiguity, CONTEXT until measured) + doc 09 status.
+- [x] S6 first deterministic directional resolver (event_direction_v1, unknown on
+      ambiguity, CONTEXT until measured) + doc 09 status. RELEASED: implementation
+      frozen at `1288e63` (24-test authority/scope/identity suite green; rows empty
+      by design; isolated library, no production feature-flow integration yet).
+      Production use requires the doc 11 promotion path, never a silent swap.
 - [ ] S7 ops: Linux ASan/UBSan CI job, model-retirement runbook (doc 03/10),
       capital-aware spend caps, G1 venue-selection amendment (doc 10).
 - [ ] Exit: §33 strategy-track-complete boxes checked; §34 paper-ready boxes gate G0.

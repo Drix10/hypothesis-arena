@@ -47,6 +47,11 @@ Consequences, baked into this plan rather than noted and ignored:
 `NULL` = carried as a declared null hypothesis, measured, never used in a decision
 until promoted.
 
+**S6 status (RELEASED):** the `event_direction_v1` resolver is a deterministic
+interpretation/carry layer only: CONTEXT-only, unknown on ambiguity or unmapped
+input, never a TRIGGER promotion. It classifies no alpha; production
+feature-flow integration is future work through the doc 11 promotion path.
+
 ### Tier A — real, usable, TRIGGER-eligible
 
 | Source | Gives | Latency / cadence | Cost | Class | Edge | Noise | Failure default |
