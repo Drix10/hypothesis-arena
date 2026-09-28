@@ -1055,6 +1055,34 @@ class TierStateTest(unittest.TestCase):
         self.assertEqual(gov_a.evaluate(now)[0], 1)
         self.assertEqual(gov_a._load_state(now)["tier_rev"], 1)
 
+    def test_partial_journal_tail_heals_on_next_transition(self):
+        # Crash mid-append leaves an unterminated trailing line:
+        # loads tolerate it (skipped, never parsed), and the next
+        # locked transition heals the tail before appending. Buried
+        # partials can never accumulate.
+        import json as _json
+        from plane import spend as spend_mod
+        d = tempfile.mkdtemp()
+        gov, now = self._tier2_gov(d)  # 0 -> 2, journal rev 1
+        jpath = os.path.join(d, "spend", "tier_journal.jsonl")
+        with open(jpath, "ab") as fh:
+            fh.write(b'{"ts": 123, "par')
+        st = gov._load_state(now + 60)  # tolerated, tier stands
+        self.assertEqual(st["tier"], 2)
+        attribution.append_span(
+            os.path.join(d, "spans.jsonl"), 1, "seed", "m",
+            cycle_id="c", symbol="AAPL", prompt_tokens=10,
+            completion_tokens=5, usd=10.0, span_id="push3",
+            ts=now + 60)
+        self.assertEqual(gov.evaluate(now + 3600)[0], 3)
+        rows = []
+        with open(jpath, encoding="utf-8") as fh:
+            for line in fh:
+                if line.strip():
+                    rows.append(_json.loads(line))
+        self.assertEqual([r["rev"] for r in rows], [1, 2])
+        self.assertEqual(rows[-1]["to"], 3)
+
     def test_tier_journal_malformed_denies(self):
         # Finding 7: a damaged tier journal must deny, never resolve
         # to the older weaker tier on disk.
@@ -1276,6 +1304,34 @@ class RatioDaysTest(unittest.TestCase):
         # One counted evaluation per UTC day, however many hourly
         # evaluations ran.
         self.assertEqual(len(rows), 1)
+
+    def test_ratio_crash_between_append_and_state_counts_once(self):
+        # Crash window: the ratio row is journaled but the state's
+        # ratio_day never advances (process dies between the append
+        # and the state persist). Restart must count the day exactly
+        # once — never double-append, never drop it from the streak.
+        import json as _json
+        d = tempfile.mkdtemp()
+        gov, log = self._gov(d, [1.0])
+        now = int(time.time())
+        self._seed(log, 300.0, now - 10 * 86400)
+        day = now - (now % 86400)
+        gov.evaluate(now)
+        jp = os.path.join(d, "spend",
+                           T.spend_mod.RATIO_JOURNAL_NAME)
+        rows = [l for l in open(jp, encoding="utf-8").read()
+                .split("\n") if l.strip()]
+        self.assertEqual(len(rows), 1)
+        # simulate the crash: row on disk, ratio_day stale in state
+        st = gov._load_state(now)
+        st["ratio_day"] = 0
+        gov._save_state(st)
+        gov.evaluate(now + 60)
+        rows2 = [l for l in open(jp, encoding="utf-8").read()
+                 .split("\n") if l.strip()]
+        self.assertEqual(len(rows2), 1)
+        self.assertEqual(
+            gov._ratio_day_state(day, 0, now + 60), "failed")
 
     def test_three_distinct_days_force_tier3(self):
         d = tempfile.mkdtemp()
