@@ -64,7 +64,7 @@ A box is checked only with evidence (commit + test output / report path).
   - [x] A0.5 (`research/strategy/stats.py`, 16 tests; CPCV/PBO/DSR/MinTRL/HAC/bootstrap/Holm) Statistics: purged/embargoed walk-forward, CPCV, PBO, DSR
         (N from ledger), MinTRL, stationary bootstrap, HAC Sharpe, pooled
         Holm — fixture-tested — doc 11 §11.0b.
-  - [ ] A0.6 Pre-registration template + validator; contamination guard
+  - [x] A0.6 (`research/strategy/prereg.py`, 5 tests; cutoff+30d guard, fail-closed schema, canonical hash) Pre-registration template + validator; contamination guard
         (LLM windows must start after cutoff + 30 d) — doc 11 §11.0c.
   - [ ] A0.7 Benchmark set (cash, vol-matched passive, 60/40, no-AI
         variant, baseline_v1 reproduction) — doc 12 §12.6.
