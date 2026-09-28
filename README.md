@@ -133,7 +133,7 @@ Details: [`plan/05`](./plan/05-risk-and-determinism.md), [`plan/10`](./plan/10-c
 
 ```
 00-INDEX  map, global locked decisions
-01 vision + scope + jurisdiction + latency tiers / 02 strategy book (legacy filename)
+01 vision + scope + jurisdiction + latency tiers / 02 strategy book
 03 JEV (optional filter) / 04 C++ core / 05 risk R1-R19 / 06 execution + costs + ops
 07 roadmap (the to-do list) / 08 research plane + factory / 09 free data
 10 capital + jurisdiction gate + kills + spend / 11 validation + promotion

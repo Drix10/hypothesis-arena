@@ -43,10 +43,10 @@ A box is checked only with evidence (commit + test output / report path).
       locked decision, freeze v3).
 - [x] O2 (`.gitleaks.toml`, `scripts/pre-commit-secrets.sh`, CI job `secrets`; full history clean, 55 commits) Secret scanning: gitleaks pinned by SHA-256 as a CI job + a
       pre-commit hook (pattern from `anthropics/financial-services`).
-- [ ] O3 freeze-check v3 alignment: rename `plan/02-twitter-alpha-system.md`
+- [x] O3 (freeze-check PASS 189 checks as non-root; kernel gate PASS) freeze-check v3 alignment: rename `plan/02-twitter-alpha-system.md`
       → `plan/02-strategy-book.md`; verify manifest v3 keys
       (`plan_freeze`, `strategy_book_version`, `live_constraints`, …);
-      `xxd` fallback; kernel chmod-000 checks skip-with-notice when euid 0.
+      `xxd` fallback; `kernel/build.sh` refuses to run as root (chmod-000 checks would be false green).
 - [ ] O5 S7 closure: G1 venue amendment = freeze v3 (Alpaca, one liquid
       ETF, cash/long-only); capital-aware caps unchanged → close S7 after O4.
 

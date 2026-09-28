@@ -78,7 +78,7 @@ doc 12 demotes `baseline_v1` to a negative control.
 - `01-vision-and-scope.md` — fund scope; locks venues: OANDA v20
   practice (forex) + Alpaca paper (stocks); broker WS + 15-min REST
   reconcile; no FIX in v1.
-- `02-twitter-alpha-system.md` — alpha system contract; X-lists tail
+- `02-strategy-book.md` — alpha system contract; X-lists tail
   DISABLED in v1 (§2.6).
 - `03-jev-decision-layer.md` — JEV contract: question set v3, 4
   questions, exit profile v1, case 29.

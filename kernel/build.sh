@@ -8,6 +8,12 @@
 set -e
 cd "$(dirname "$0")"
 MODE="${1:-normal}"
+# Freeze v3 O3: permission-denied tests (chmod 000) cannot fail closed as
+# root, so a root run would be a false green. Refuse rather than skip.
+if [ "$(id -u)" = "0" ]; then
+    echo "GATE FAIL: run kernel/build.sh as a non-root user (chmod-000 fail-closed tests are meaningless as root)" >&2
+    exit 2
+fi
 if [ "$MODE" = "sanitize" ]; then
     # S7-A: real ASan+UBSan runtimes on a Linux toolchain (hosted CI).
     # Same gates, same contracts; no production behavior change.

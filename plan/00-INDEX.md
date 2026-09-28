@@ -13,8 +13,8 @@ that motivated every change is `reviews/2026-09-28-v3-rebaseline-critique.md`.
 
 1. `01-vision-and-scope.md` — what we build, what we do not, operator
    jurisdiction, venue, latency tiers (why this is not HFT and what is).
-2. `02-twitter-alpha-system.md` — **Strategy book: alpha sleeves** (legacy
-   filename; the X-lists archive moved to `appendix/02-x-lists-archive.md`).
+2. `02-strategy-book.md` — **Strategy book: alpha sleeves** (renamed
+   from `02-twitter-alpha-system.md`; the X-lists archive moved to `appendix/02-x-lists-archive.md`).
 3. `03-jev-decision-layer.md` — JEV v3 (frozen, historical) + v4
    candidate-bound contract; JEV is an optional challenger-grade filter.
 4. `04-cpp-deterministic-core.md` — the C++ kernel: processes, modules,
