@@ -41,7 +41,7 @@ A box is checked only with evidence (commit + test output / report path).
       `test_candidate` (pin pytest in a strategy requirements file),
       `test_jev_v4`, and `kernel/tests/test_v4.cpp` (plan amendment = doc 03
       locked decision, freeze v3).
-- [x] O2 (`.gitleaks.toml`, `scripts/pre-commit-secrets.sh`, CI job `secrets`; full history clean, 55 commits) Secret scanning: gitleaks pinned by SHA-256 as a CI job + a
+- [x] O2 (`.gitleaks.toml`, `scripts/pre-commit-secrets.sh`, CI job `secrets`; full history clean over all 558 commits after unshallow; the hosted run found 1 false positive in the pre-rename sandbox compose path, now allowlisted) Secret scanning: gitleaks pinned by SHA-256 as a CI job + a
       pre-commit hook (pattern from `anthropics/financial-services`).
 - [x] O3 (freeze-check PASS 189 checks as non-root; kernel gate PASS) freeze-check v3 alignment: rename `plan/02-twitter-alpha-system.md`
       → `plan/02-strategy-book.md`; verify manifest v3 keys

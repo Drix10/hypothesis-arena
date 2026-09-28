@@ -7,5 +7,5 @@ useDefault = true
 description = "committed test vectors (SHA-256 digests) and the local evidence-only sandbox"
 paths = [
   '''^kernel/(p33|v4|fixtures|vectors)/''',            # digests / signed test vectors
-  '''^research/sandbox/langfuse/docker-compose\.yml$''', # throwaway local Langfuse, never networked
+  '''^research(-plane)?/sandbox/langfuse/docker-compose\.yml$''', # throwaway local Langfuse (also its pre-rename path in history), never networked
 ]
