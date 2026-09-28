@@ -119,6 +119,32 @@ def check_knobs(prereg=None):
     return [name for name, want, got in rows if want != got]
 
 
+def frozen_n_splits():
+    """The authoritative segmentation contract, from prereg ONLY.
+
+    The final path re-derives the canonical split with this n_splits
+    and rejects any token/split built under another segmentation."""
+    return _prereg()["holdout"]["n_splits"]
+
+
+def _canonical_split_ids(full_stream, n_splits):
+    """Canonical terminal segmentation derived from authority.
+
+    Same construction as holdout_split (segment_bounds + walk_folds +
+    terminal slice), reduced to identities: (edges, bound,
+    [(train_cids, test_cids)...], holdout_cids). The caller-threaded
+    split must match this structurally; content is bound separately
+    by record digests."""
+    edges, bound = segment_bounds(full_stream, n_splits)
+    folds = walk_folds(full_stream, n_splits, holdout_start=bound)
+    recs = sorted(full_stream, key=lambda r: r["snapshot_ts_ns"])
+    hs = [r["cid"] for r in recs[edges[n_splits + 1]:]]
+    assert hs, "empty canonical holdout"
+    fc = [([r["cid"] for r in tr], [r["cid"] for r in te])
+          for tr, te in folds]
+    return edges, bound, fc, hs
+
+
 def frozen_scope():
     """The frozen amendment_b out-of-scope declaration, read from the
     committed prereg file. The final path trusts NO caller-supplied list."""
@@ -183,7 +209,9 @@ def assert_exact_holdout(candidate_recs, holdout):
 def holdout_split(records, n_splits=3):
     """FINAL path only: (folds, holdout, holdout_start, split_token).
 
-    SOLE mint point of the authoritative split token. Folds are
+    Runner-side constructor of the threaded split echo. AUTHORITY is
+    the final path's canonical re-derivation (_canonical_split_ids +
+    step 0d): a caller split must match it structurally. Folds are
     label-purged at the holdout boundary: every selection record
     resolves strictly before holdout_start. Asserts the preferred
     invariant plus segment disjointness. Thread the returned tuple
@@ -532,6 +560,35 @@ def _validate_evidence(split, recs_1x, recs_stress, full_streams,
                        n_splits=token["n_splits"], holdout_start=_b)]
     assert select_variant(fold_stats) == token["split_variant"], \
         "token selection != mechanical fold selection"
+    # 0d. canonical terminal split: bound, edges, fold CID structure,
+    # and the EXACT holdout CID population are DERIVED HERE from the
+    # authoritative selected full stream under the frozen segmentation
+    # contract. The caller-threaded split is an echo only: a
+    # self-consistent favorable-subset token, altered edges, another
+    # n_splits, or a truncated holdout all fail here even when every
+    # supplied record is authentic. Fold records are content-checked
+    # (self-hash + CID membership in the authoritative stream).
+    frozen_n = frozen_n_splits()
+    assert token["n_splits"] == frozen_n, \
+        "split segmentation != frozen n_splits"
+    c_edges, c_bound, c_folds, c_holdout = _canonical_split_ids(
+        full_streams[sv], frozen_n)
+    assert bound == c_bound, "split bound != canonical bound"
+    assert list(token["edges"]) == list(c_edges), \
+        "split edges != canonical edges"
+    assert sorted(r["cid"] for r in holdout) == sorted(c_holdout), \
+        "split holdout != canonical holdout population"
+    stream_cids = {r["cid"] for r in full_streams[sv]}
+    assert len(folds) == len(c_folds), "fold count != canonical"
+    for (tr, te), (ctr, cte) in zip(folds, c_folds):
+        assert [r["cid"] for r in tr] == list(ctr), \
+            "fold train != canonical structure"
+        assert [r["cid"] for r in te] == list(cte), \
+            "fold test != canonical structure"
+        for r in tr + te:
+            _check_record_self(r)
+            assert r["cid"] in stream_cids, \
+                "fold record outside authoritative stream"
     # 1. token integrity from the threaded holdout
     assert token["holdout_start"] == bound
     assert token["n"] == len(holdout)
@@ -715,9 +772,12 @@ def final_report(split, recs_1x, recs_stress, sessions, proof, bars,
     """Holdout verdict per variant + pooled Holm + baseline gate.
 
     split: the (folds, holdout, bound, split_token) tuple from
-    holdout_split, threaded from selection — the final path validates
-    evidence against THIS split (subset evidence + real split =
-    rejection). sessions/proof: built by build_holdout_sessions from
+    holdout_split, threaded from selection - an echo ONLY. The final
+    path re-derives the canonical split (bound, edges, fold CID
+    structure, exact holdout population) from the authoritative
+    selected full stream under the frozen n_splits contract and
+    demands structural equality (subset evidence + real split =
+    rejection; self-consistent subset splits = rejection). sessions/proof: built by build_holdout_sessions from
     bars + token dates + data_id; this function REBUILDS from bars and
     demands equality, so mutated closes (either side) fail closed.
     bars: {symbol: [Bar]} frozen slice panels. data_id: {slice,
@@ -737,8 +797,11 @@ def final_report(split, recs_1x, recs_stress, sessions, proof, bars,
     baseline_v1 holdout artifact (artifact_sha256 self-identity +
     pinned expected identity under production) or None (S2 OPEN =>
     None => gate reads ABSENT, promotion stays closed). A caller
-    selected_variant may only echo the token-bound selection. R scope
-    from frozen prereg."""
+    selected_variant may only echo the token-bound selection.
+    s5_gate_ready is ONLY (absolute S5 bar AND baseline gate) - NOT
+    the full Plan-11 promotion gate (decision counts, calibration,
+    AI-cost, search-budget, non-LLM baseline, human sign-off live
+    outside S5). R scope from frozen prereg."""
     folds, holdout, bound, token = split
     _validate_evidence(split, recs_1x, recs_stress, full_streams,
                        root_expected, data_id, bars, bars_proof)
@@ -791,7 +854,10 @@ def final_report(split, recs_1x, recs_stress, sessions, proof, bars,
         day_of = {r["cid"]: r["day"] for r in recs}
         trades_f, curve_f, rets_f, dd_f = portfolio_curve(recs, "filtered",
                                                         equity, sessions)
-        srets_f = daily_returns(rets_f, include_first)
+        # 1x primary vector retained BEFORE the stress loop (the loop
+        # must never shadow it: sharpe_f/challenger-1x are frozen 1x).
+        srets_1x = daily_returns(rets_f, include_first)
+        sharpe_1x = sharpe_hac(srets_1x)[0]
         closed = sum(1 for t in trades_f
                      if labels.get(t["cid"]) in ("win", "loss"))
         breach_attempts = sum(1 for r in recs if r["r_breach_attempted"])
@@ -803,13 +869,14 @@ def final_report(split, recs_1x, recs_stress, sessions, proof, bars,
                                                 equity, sessions)
             _, _, srets_a0, _ = portfolio_curve(srecs, "always", equity,
                                                 sessions)
-            srets_f = daily_returns(srets_f0, include_first)
-            srets_a = daily_returns(srets_a0, include_first)
-            stress[mult] = (sharpe_hac(srets_f)[0], sharpe_hac(srets_a)[0])
+            srets_sf = daily_returns(srets_f0, include_first)
+            srets_sa = daily_returns(srets_a0, include_first)
+            stress[mult] = (sharpe_hac(srets_sf)[0],
+                            sharpe_hac(srets_sa)[0])
         rep["variants"][variant] = {
             "paired_mean_R": mu, "ci95": [lo, hi], "null_p": p,
-            "sharpe_f": sharpe_hac(srets_f)[0],
-            "n_sharpe_obs": len(srets_f),
+            "sharpe_f": sharpe_1x,
+            "n_sharpe_obs": len(srets_1x),
             "max_dd_pct": dd_f, "n_closed": closed,
             "n_trades_taken": len(trades_f),
             "r_breach_attempted": breach_attempts,
@@ -838,5 +905,5 @@ def final_report(split, recs_1x, recs_stress, sessions, proof, bars,
                                    BASELINE_EXPECTED)
         v["baseline_gate"] = {"verdict": bv, "failed": bf,
                               "detail": bd}
-        v["promotion_ready"] = bool(verdict and bv)
+        v["s5_gate_ready"] = bool(verdict and bv)
     return rep

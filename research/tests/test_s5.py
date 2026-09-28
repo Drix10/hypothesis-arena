@@ -828,7 +828,7 @@ def test_22_final_report_no_hardcode():
     rep = _frep(split, h1x, stress, sess, proof, bars, by_var)
     for v, x in rep["variants"].items():
         assert x["bar_verdict"] is False and x["bar_failed"], v
-        assert x["promotion_ready"] is False  # no baseline artifact yet
+        assert x["s5_gate_ready"] is False  # no baseline artifact yet
     sq = rep["sequential"]
     assert sq["variant"] == tok["split_variant"]
     assert sq["n_closed"] > 0 and len(sq["interim"]) == 3
@@ -1252,7 +1252,7 @@ def test_34_baseline_gate():
     rep = _frep(split, h1x, stress, sess, proof, bars, by_var)
     for vname, x in rep["variants"].items():
         assert x["baseline_gate"]["failed"] == ["baseline_absent"]
-        assert x["promotion_ready"] is False
+        assert x["s5_gate_ready"] is False
     rep2 = _frep(split, h1x, stress, sess, proof, bars, by_var,
                  baseline=win)
     # stub challenger Sharpe is 0.0, so even the 'winning' baseline
@@ -1586,7 +1586,7 @@ def test_42_baseline_session_wiring():
     rep = _frep(split, h1x, stress, sess, proof, bars, by_var,
                 baseline=win)
     for vname, x in rep["variants"].items():
-        assert x["promotion_ready"] is False  # stub Sharpe loses
+        assert x["s5_gate_ready"] is False  # stub Sharpe loses
         assert "baseline_session" not in x["baseline_gate"]["failed"]
     badwin = dict(win, session_hash="1" * 64)
     badwin["artifact_sha256"] = s5f.baseline_artifact_hash(badwin)
@@ -1895,6 +1895,143 @@ def test_48_pin_interpreter_bound():
         pass
     print("48 OK")
 
+def test_49_canonical_holdout_enforced():
+    import hashlib as _hl
+    from collections import Counter as _C
+    split, h1x, stress, sess, proof, bars, by_var, root = _small_split(48)
+    folds, holdout, bound, tok = split
+    sv = tok["split_variant"]
+    assert tok["n_splits"] == s5f.frozen_n_splits() == 2
+    assert len(holdout) == 12 and len(tok["dates"]) == 2
+    # two droppable records sharing a day (dates stay canonical, so
+    # only the population gate can fire on subset/truncation).
+    dayn = _C(r["day"] for r in holdout)
+    dropday = next(d for d, c in dayn.items() if c >= 3)
+    daycids = [r["cid"] for r in holdout if r["day"] == dropday]
+    todrop = set(daycids[:2])
+    # hostile (a): favorable SUBSET - correct variant, authentic
+    # records, honestly re-minted token over the subset + matching
+    # evidence/stress. Content is real; MEMBERSHIP is not canonical.
+    sub = [r for r in holdout if r["cid"] not in todrop]
+    assert sorted({r["day"] for r in sub}) == tok["dates"]
+    subc = sorted(r["cid"] for r in sub)
+    subtok = dict(tok, n=len(sub),
+                  cid_hash=_hl.sha256("|".join(subc).encode()
+                                      ).hexdigest(),
+                  record_hash=s5f._record_digest(sub))
+    subcset = set(subc)
+    subev = {v: [r for r in recs if r["cid"] in subcset]
+             for v, recs in h1x.items()}
+    subst = {k: {v: [r for r in recs if r["cid"] in subcset]
+                 for v, recs in byv.items()}
+             for k, byv in stress.items()}
+    try:
+        _frep((folds, sub, bound, subtok), subev, subst, sess, proof,
+              bars, by_var)
+        raise SystemExit("favorable-subset holdout must fail")
+    except AssertionError:
+        pass
+    # hostile (b): altered edges, everything else canonical.
+    e2 = list(tok["edges"])
+    e2[1] += 1
+    try:
+        _frep((folds, holdout, bound, dict(tok, edges=e2)), h1x,
+              stress, sess, proof, bars, by_var)
+        raise SystemExit("altered edges must fail")
+    except AssertionError:
+        pass
+    # hostile (c): altered n_splits - an honest n_splits=3 rig (own
+    # winner, evidence, sessions) still fails the frozen contract.
+    items3 = synth_stream(48)
+    by3 = run_all(items3)
+    split3 = _winner_split(by3, n_splits=3)
+    f3, h3, b3, t3 = split3
+    assert t3["n_splits"] == 3
+    hset3 = {r["cid"] for r in h3}
+    h1x3 = {v: [r for r in by3[v] if r["cid"] in hset3]
+            for v in s5.VARIANTS}
+    stress3 = {}
+    for mult, lab in ((1.5, "1.5x"), (2.0, "2x"), (3.0, "3x")):
+        sv3 = run_all(items3, spread_mult=mult)
+        stress3[lab] = {v: [r for r in sv3[v] if r["cid"] in hset3]
+                        for v in s5.VARIANTS}
+    bars3 = bars_for(items3)
+    sess3, proof3 = s5f.build_holdout_sessions(bars3, t3, DATA_ID)
+    try:
+        _frep(split3, h1x3, stress3, sess3, proof3, bars3, by3)
+        raise SystemExit("n_splits=3 must fail the frozen contract")
+    except AssertionError:
+        pass
+    # hostile (d): single-record truncation from the OTHER day
+    # (dates preserved, so only the population gate can fire).
+    otherday = next(d for d in dayn if d != dropday)
+    cut = next(r["cid"] for r in holdout if r["day"] == otherday)
+    trunc = [r for r in holdout if r["cid"] != cut]
+    assert sorted({r["day"] for r in trunc}) == tok["dates"]
+    truncc = sorted(r["cid"] for r in trunc)
+    trunck = dict(tok, n=len(trunc),
+                  cid_hash=_hl.sha256("|".join(truncc).encode()
+                                      ).hexdigest(),
+                  record_hash=s5f._record_digest(trunc))
+    tset = set(truncc)
+    trunev = {v: [r for r in recs if r["cid"] in tset]
+              for v, recs in h1x.items()}
+    trunst = {k: {v: [r for r in recs if r["cid"] in tset]
+                  for v, recs in byv.items()}
+              for k, byv in stress.items()}
+    try:
+        _frep((folds, trunc, bound, trunck), trunev, trunst, sess,
+              proof, bars, by_var)
+        raise SystemExit("truncated holdout must fail")
+    except AssertionError:
+        pass
+    # control still passes on the canonical population.
+    rep = _frep(split, h1x, stress, sess, proof, bars, by_var)
+    assert rep["split_token"] == tok
+    print("49 OK")
+
+
+def test_50_sharpe_f_is_1x():
+    items = synth_stream(120)
+    by_var = run_all(items)
+    split = _winner_split(by_var, n_splits=2)
+    folds, holdout, bound, tok = split
+    hset = {r["cid"] for r in holdout}
+    h1x = {v: [r for r in by_var[v] if r["cid"] in hset]
+           for v in s5.VARIANTS}
+    stress = {}
+    for mult, lab in ((1.5, "1.5x"), (2.0, "2x"), (3.0, "3x")):
+        sv = run_all(items, spread_mult=mult)
+        stress[lab] = {v: [r for r in sv[v] if r["cid"] in hset]
+                       for v in s5.VARIANTS}
+    # hostile economics: flatten every 3x take (filtered_taken is a
+    # stress-mutable field) -> 3x Sharpe exactly 0.0 while 1x keeps
+    # its own (nonzero for at least one variant) value.
+    stress["3x"] = {v: [_rehash(dict(r, filtered_taken=False))
+                        for r in stress["3x"][v]]
+                    for v in s5.VARIANTS}
+    bars = bars_for(items)
+    sess, proof = s5f.build_holdout_sessions(bars, tok, DATA_ID)
+    rep = _frep(split, h1x, stress, sess, proof, bars, by_var)
+    inc = rep["first_interval_included"]
+    assert any(s5.sharpe_hac(s5.daily_returns(
+        s5.portfolio_curve(h1x[v], "filtered", 100000.0, sess)[2],
+        inc))[0] != 0.0 for v in s5.VARIANTS), "vacuous rig"
+    for v in s5.VARIANTS:
+        _, _, rets1, _ = s5.portfolio_curve(h1x[v], "filtered",
+                                            100000.0, sess)
+        exp1 = s5.sharpe_hac(s5.daily_returns(rets1, inc))[0]
+        _, _, rets3, _ = s5.portfolio_curve(stress["3x"][v],
+                                            "filtered", 100000.0, sess)
+        exp3 = s5.sharpe_hac(s5.daily_returns(rets3, inc))[0]
+        assert exp3 == 0.0, (v, exp3)
+        got = rep["variants"][v]
+        assert got["sharpe_f"] == exp1, (v, got["sharpe_f"], exp1)
+        assert got["stress"]["3x"][0] == exp3, (v,)
+        assert got["n_sharpe_obs"] == len(s5.daily_returns(rets1,
+                                                           inc))
+    print("50 OK")
+
 if __name__ == "__main__":
     test_1_2_same_stream_same_economics()
     test_3_4_5_hold_pass_paired()
@@ -1941,4 +2078,6 @@ if __name__ == "__main__":
     test_46_selection_binding()
     test_47_baseline_artifact_authority()
     test_48_pin_interpreter_bound()
+    test_49_canonical_holdout_enforced()
+    test_50_sharpe_f_is_1x()
     print("ALL S5 TESTS GREEN")

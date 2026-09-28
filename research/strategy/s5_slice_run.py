@@ -131,7 +131,9 @@ def main():
     for v, s in rep["variants"].items():
         print(f"{v}: n_ho={len(h1x[v])} meanR={s['paired_mean_R']:.4f} "
               f"CI=[{s['ci95'][0]:.4f},{s['ci95'][1]:.4f}] p={s['null_p']:.4f} "
-              f"sharpe={s['sharpe_f']:.3f} dd={s['max_dd_pct']:.2f}% "
+              f"sharpe_1x={s['sharpe_f']:.3f} "
+              f"stress_sharpe={ {m: round(p[0], 3) for m, p in sorted(s['stress'].items())} } "
+              f"dd={s['max_dd_pct']:.2f}% "
               f"closed_taken={s['n_closed']}/{s['n_trades_taken']} "
               f"breach={s['r_breach_count']} mon={s['r_monitor_breaches']} "
               f"bar={s['bar_verdict']} failed={s['bar_failed']}")
