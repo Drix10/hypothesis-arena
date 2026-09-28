@@ -323,6 +323,43 @@ the logged AnswerSet re-enter C++ and must reproduce the decision bit-for-bit.
 Same inputs + same AnswerSet → identical decision, even if the provider
 disappears tomorrow.
 
+## 3.5b Model retirement runbook (S7-B, governance — no JEV semantic change)
+
+A deployed JEV configuration is identified EXACTLY by the tuple
+`model | revision | provider | question_set_version`, matching the
+frozen names in `collector/jev.py` (`MODEL`, `REVISION`, `PROVIDER`,
+`QVERSION`), the AnswerSet payload keys (`model`, `revision`,
+`provider`, `question_set_version`), and `plan/system-manifest.yaml`
+(`jev_model`, `jev_revision`, `jev_provider_name`). The tuple is
+immutable per deployment: changing any element retires one identity
+and introduces a different one. Retirement and replacement are human
+operations; nothing here retires, switches, or promotes automatically.
+
+Lifecycle (who moves what, and what may still call):
+- `active`: the pinned identity serves new provider calls.
+- `retirement-declared` (human declares): the identity is drained —
+  cache/replay serving continues, NO new provider calls are issued
+  for it. Declaring retirement never redirects traffic to another
+  model; a different model is a different identity, not a fallback.
+- `retired`: the identity is never selected for new calls, period.
+- `quarantined` (emergency path, human declares): immediate stop for
+  that identity — no new calls, no fabricated fallback answer, while
+  the deterministic engine (veto, exits, reconcile) stays live. The
+  net effect is HOLD/fail-closed, never a silent switch.
+
+Replacement is a NEW challenger under doc 11, never an inheritance:
+own model/revision/provider metadata, own experiment identity, own
+cost/pricing entry, own registry record, fresh paper window, and human
+promotion. It does not inherit the retired identity's calibration,
+ promotion status, or stage.
+
+Replay preservation: retired identities' AnswerSets, response/state
+hashes, signatures, cost records, and experiment artifacts are
+retained for replay and audit. Replay stays local and must never
+require the retired provider to be reachable. Identity and pricing
+history are not deleted merely because the model retired (spend-side
+handling: doc 10 §10.4.3).
+
 ## 3.6 What "done" means
 
 - [x] `jev.py` sidecar: stdin state → 1 batched call → stdout answers + log row.

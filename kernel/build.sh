@@ -16,7 +16,7 @@ if [ "$MODE" = "sanitize" ]; then
     # libstdc++), so link-time malloc wrapping cannot observe them.
     # Zero-heap discipline stays proven by the normal-mode gate.
     FLAGS="-std=c++17 -Wall -Wextra -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all"
-    echo "--- sanitizer build (Linux ASan+UBSan, no halt on recovery) ---"
+    echo "--- sanitizer build (Linux ASan+UBSan, failures halt, no recovery) ---"
     SANITIZE=1
 elif [ "$MODE" = "hardened" ]; then
     FLAGS="-std=c++17 -Wall -Wextra -O1 -g -D_GLIBCXX_DEBUG -D_GLIBCXX_DEBUG_PEDANTIC -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fanalyzer"

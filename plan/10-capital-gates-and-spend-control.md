@@ -413,3 +413,17 @@ the graph → worker → budget → attribution/spend → publish path):
   reader-throwing generations; digest keys detect text conflicts with
   bounded per-path memory. All money/control numerics are type-exact
   and finite (bool is never a number here).
+
+### 10.4.3 Model retirement and spend identity (S7-B, governance)
+
+Spend identity follows model identity (§3.5b): the priced `model_id`
+must equal `provider_cfg["model_id"]` before any reservation (frozen
+§10.4.2), so retiring, removing, or changing an active model's
+pricing entry can never open an unpriced-call path — unpriced models
+never run, construction blocks. A pricing/config change alters the
+pricing fingerprint and forces immediate fresh tier evaluation, never
+reuse of stale tier state (frozen §10.4.2). A retired identity's
+pricing row is retained for audit, marked retired, and never selected
+for new reservations; its historical spend stays in the trailing-30d
+ledger (history is not rewritten on retirement). No caps change here:
+the stage table above is untouched.
