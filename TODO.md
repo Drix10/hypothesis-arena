@@ -34,7 +34,7 @@ A box is checked only with evidence (commit + test output / report path).
 
 - [ ] O6 [HUMAN] Rotate every credential shared in chat on 2026-09-28
       (OpenRouter, FRED, BEA, Alpaca paper); re-seed local `.env` only.
-- [ ] O4 S7-C closure: hosted 5/5 (kernel, kernel-sanitizer, evidence,
+- [x] O4 (hosted run 36470824852 on e833976, all 6 jobs green: kernel, kernel-sanitizer, evidence, plane, stdlib, secrets) S7-C closure: hosted 5/5 (kernel, kernel-sanitizer, evidence,
       plane, stdlib) on the head carrying `f0815e7` (open a PR or push to
       `main` — CI does not run on feature-branch pushes; see O1).
 - [x] O1 (local: test_baseline, test_jev_v4, test_v4 32/32 green; hosted run pending O4) CI: run on every push + `workflow_dispatch`; add `test_baseline`,
@@ -47,7 +47,7 @@ A box is checked only with evidence (commit + test output / report path).
       → `plan/02-strategy-book.md`; verify manifest v3 keys
       (`plan_freeze`, `strategy_book_version`, `live_constraints`, …);
       `xxd` fallback; `kernel/build.sh` refuses to run as root (chmod-000 checks would be false green).
-- [ ] O5 S7 closure: G1 venue amendment = freeze v3 (Alpaca, one liquid
+- [x] O5 (freeze v3 is the venue amendment; S7 closed on O4) S7 closure: G1 venue amendment = freeze v3 (Alpaca, one liquid
       ETF, cash/long-only); capital-aware caps unchanged → close S7 after O4.
 
 ## Track A — alpha (critical path)
