@@ -5663,12 +5663,20 @@ int main() {
         WriteFile(r.dir + "/runner.lock", "2147483647");
         bool ok1 = false, ok2 = false;
         std::atomic<int> arrived{0};
+        std::atomic<int> attempted{0};
         auto race = [&](bool* ok) {
             G0Runner g(r.cfg, r.deps);
             ++arrived;
             while (arrived.load() < 2) {
             }
             *ok = g.Recover(nullptr);
+            // Hold the winner's lock until BOTH takers have attempted:
+            // a slow loser (sanitizer scheduling) would otherwise run
+            // after the winner's destructor released it and legitimately
+            // take over, making the XOR flaky by test design.
+            ++attempted;
+            while (attempted.load() < 2) {
+            }
         };
         std::thread t1([&] { race(&ok1); });
         std::thread t2([&] { race(&ok2); });
@@ -5694,12 +5702,20 @@ int main() {
               "jx-image");
         bool ok1 = false, ok2 = false;
         std::atomic<int> arrived{0};
+        std::atomic<int> attempted{0};
         auto race = [&](bool* ok) {
             G0Runner g(r.cfg, r.deps);
             ++arrived;
             while (arrived.load() < 2) {
             }
             *ok = g.Recover(nullptr);
+            // Hold the winner's lock until BOTH takers have attempted:
+            // a slow loser (sanitizer scheduling) would otherwise run
+            // after the winner's destructor released it and legitimately
+            // take over, making the XOR flaky by test design.
+            ++attempted;
+            while (attempted.load() < 2) {
+            }
         };
         std::thread t1([&] { race(&ok1); });
         std::thread t2([&] { race(&ok2); });
