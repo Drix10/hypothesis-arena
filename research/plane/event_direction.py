@@ -2,23 +2,38 @@
 
 Contract (no invention):
 - doc 03 state rules: `effect` comes from a deterministic
-  interpretation table per kind, never from model invention.
+  interpretation table per kind, never from model invention; R14
+  disagreement is defined ON ONE SYMBOL.
 - doc 08 sec. 8.5: table frozen with the schema; parser-assigned
-  effects are CARRIED when present, else unknown; LLM output can
-  never declare evidence (here: never declare direction).
+  effects may be CARRIED when present, else unknown; LLM output can
+  never declare direction; evidence levels gate what reaches entries.
 - roadmap S6: unknown on ambiguity; output CONTEXT until measured
-  (no promotion has been earned or executed: classification is a
-  frozen constant, never TRIGGER).
+  (no promotion earned or executed: classification is constant).
 - doc 09: non-price sources inform regime only, never trigger entry.
 
-v1 rows are transcription-only (the value literally names the
-state) plus one kind-level mechanical default. ANY new row needs
-measured justification + promotion gate + table version bump;
-per-record judgment is unrepresentable.
+Authority rules (frozen here):
+- direction is carried ONLY for parser-owned observations
+  (origin == "parser" AND evidence == "source": the D4-contracted
+  markers of pipeline-owned deterministic-parser output, stamped by
+  the graph, never by candidates). origin == "llm", or evidence !=
+  "source", means the parser_effect field is IGNORED: advisory
+  content can never promote itself to direction. S6 trusts these
+  markers; ONLY the graph may stamp origin="parser" (integration
+  duty, future wiring: the resolver is not yet in the feature flow).
+- one call resolves ONE symbol (R14 scope): every observation must
+  carry symbols == [symbol] exactly; mixed scope voids to unknown.
+  Callers partition multi-symbol features per symbol.
+- fail-closed aggregation: any relevant unresolved observation
+  alongside directional evidence voids the set to unknown
+  (absent != neutral; unknown never becomes evidence).
+- v1 ROWS is EMPTY (nothing has measured justification). Adding a
+  row needs measured justification + promotion gate + table version
+  bump + test_16 update. Uncarried, unmapped observations resolve
+  unknown: there is deliberately no kind-wide default.
 
 No LLM, no network, no clock reads (asof_ns is an argument), no
-floats in or out. Same inputs (in any order) -> byte-identical
-output: observations are canonically sorted before evaluation.
+floats, no file IO. Same inputs (in any order) -> identical output:
+observations are canonically sorted before evaluation.
 """
 from . import schema
 
@@ -29,18 +44,12 @@ CLASSIFICATION = "CONTEXT"  # frozen until measured (never TRIGGER here)
 
 DIRECTIONAL = ("bullish", "bearish", "risk_up", "risk_down")
 
-# Kind-level mechanical default: a scheduled future event has no
-# realized direction yet.
-KIND_DEFAULT = {"calendar_ahead": "neutral"}
-
-# Exact-match transcription rows: (kind, value.type, value.v) ->
-# effect. EMPTY in v1: no value transcription has measured
-# justification yet, and per-record judgment is unrepresentable.
-# Adding a row needs measured justification + promotion gate +
-# table version bump + test_16 update (friction by design).
+# Exact-match value rows: (kind, value.type, value.v) -> effect.
+# EMPTY in v1 (see contract above).
 ROWS = {}
 
-_FORBIDDEN_NOTE = "checked by test_13_no_foreign_capability"
+TOP_FIELDS = ("kind", "value", "observed_at_ns", "source_id",
+              "symbols", "origin", "evidence", "parser_effect")
 
 
 def _obs_key(o):
@@ -49,42 +58,50 @@ def _obs_key(o):
     v = o.get("value") if isinstance(o, dict) else None
     if not isinstance(v, dict):
         v = {}
-    ts = o.get("observed_at_ns") if isinstance(o, dict) else None
     return (str(o.get("kind")), str(v.get("type")), str(v.get("v")),
-            str(ts), str(o.get("source_id")),
-            str(o.get("parser_effect") or ""))
+            str(o.get("observed_at_ns")), str(o.get("source_id")),
+            str(o.get("symbols")), str(o.get("origin")),
+            str(o.get("evidence")), str(o.get("parser_effect") or ""))
 
 
 def _defect(o):
     """Data defect code, or None when the observation is well-formed.
 
-    Well-formed: known kind, known value type with a correctly typed
-    v (enum/bucket: str; bool: bool; count: int >= 0), integer
-    observed_at_ns >= 0, source_id registered for the kind in the
-    frozen EMITTERS mirror, parser_effect absent or a contracted
-    effect. Anything else is ambiguity, not a crash: the SET resolves
-    unknown."""
+    Exact shape: no unknown top-level or value fields (silent ignored
+    fields are unrepresentable). kind/value/source held to the frozen
+    schema registries. origin/evidence held to the contracted marker
+    vocabularies. Anything defective voids its SET to unknown, never
+    an exception."""
+    if set(o) - set(TOP_FIELDS):
+        return "extra-fields"
     if o.get("kind") not in schema.KINDS:
         return "unmapped-kind"
     v = o.get("value")
-    if not isinstance(v, dict):
+    if not isinstance(v, dict) or set(v) != {"type", "v"}:
         return "malformed-value"
     vt, vv = v.get("type"), v.get("v")
     if vt not in schema.VTYPES:
         return "malformed-vtype"
-    if vt in ("enum", "bucket") and not isinstance(vv, str):
+    if vt in ("enum", "bucket") and type(vv) is not str:
         return "malformed-v"
-    if vt == "bool" and not isinstance(vv, bool):
+    if vt == "bool" and type(vv) is not bool:
         return "malformed-v"
-    if vt == "count" and (not isinstance(vv, int)
-                          or isinstance(vv, bool) or vv < 0):
+    if vt == "count" and (type(vv) is not int or vv < 0):
         return "malformed-v"
     ts = o.get("observed_at_ns")
-    if not isinstance(ts, int) or isinstance(ts, bool) or ts < 0:
+    if type(ts) is not int or ts < 0:
         return "malformed-ts"
+    syms = o.get("symbols")
+    if type(syms) is not list or not syms or \
+            any(type(s) is not str for s in syms):
+        return "malformed-symbols"
     sid = o.get("source_id")
     if sid not in schema.EMITTERS or o["kind"] not in schema.EMITTERS[sid]:
         return "unmapped-source-kind"
+    if o.get("origin") not in ("parser", "llm"):
+        return "malformed-origin"
+    if o.get("evidence") not in schema.EVIDENCE:
+        return "malformed-evidence"
     pe = o.get("parser_effect")
     if pe is not None and pe not in schema.EFFECTS:
         return "malformed-parser-effect"
@@ -92,35 +109,39 @@ def _defect(o):
 
 
 def _direct(o):
-    """Single-observation direction: (effect, row-or-rule)."""
+    """Single-observation direction: (effect, row-or-rule).
+
+    Carrying requires the full parser-owned marker set; otherwise the
+    parser_effect field is not authoritative and is ignored (an
+    llm-origin bullish claim resolves exactly like an unmapped
+    observation: unknown)."""
+    owned = o.get("origin") == "parser" and o.get("evidence") == "source"
     pe = o.get("parser_effect")
     key = (o["kind"], o["value"]["type"], o["value"]["v"])
-    table = KIND_DEFAULT.get(o["kind"], ROWS.get(key))
-    if pe is not None:
-        if table is not None and table != pe:
+    if owned and pe is not None:
+        if key in ROWS and ROWS[key] != pe:
             return "unknown", None  # parser/table contradiction
         return pe, "carried"
-    if table is not None:
-        rule = ("kind-default:" + o["kind"]
-                if o["kind"] in KIND_DEFAULT
-                else "row:%s/%s/%s" % key)
-        return table, rule
+    if key in ROWS:
+        return ROWS[key], "row:%s/%s/%s" % key
     return "unknown", None
 
 
-def resolve(observations, asof_ns):
-    """Resolve a set of canonical observations to one effect.
+def resolve(observations, asof_ns, symbol):
+    """Resolve one symbol's observations to a single effect.
 
-    observations: non-empty list of dicts {kind, value:{type,v},
-      observed_at_ns, source_id, parser_effect?}. asof_ns: required
-    integer bound; any observation newer than asof is future data
-    (no lookahead) and voids the set to unknown. Returns
-    {effect, classification, table, rows, reasons} with no floats.
+    observations: non-empty list of exact-shape dicts. asof_ns:
+    required integer bound; anything newer is future data (no
+    lookahead). symbol: required non-empty string scope; every
+    observation must carry symbols == [symbol]. Returns {effect,
+    classification, table, rows, reasons}; no floats, ever.
     """
-    assert isinstance(asof_ns, int) and not isinstance(asof_ns, bool) \
-        and asof_ns >= 0, "asof_ns is a required non-negative integer"
+    assert type(asof_ns) is int and asof_ns >= 0, \
+        "asof_ns is a required non-negative integer"
     assert isinstance(observations, list) and observations, \
         "observations is a required non-empty list"
+    assert type(symbol) is str and symbol, \
+        "symbol is a required non-empty scope string"
     for o in observations:
         assert isinstance(o, dict), "observation must be a dict"
     obs = sorted(observations, key=_obs_key)  # input order is nothing
@@ -134,6 +155,10 @@ def resolve(observations, asof_ns):
             return {"effect": "unknown", "classification": CLASSIFICATION,
                     "table": TABLE, "rows": [],
                     "reasons": ["future-data"]}
+        if list(o["symbols"]) != [symbol]:
+            return {"effect": "unknown", "classification": CLASSIFICATION,
+                    "table": TABLE, "rows": [],
+                    "reasons": ["scope-mismatch"]}
     seen = {}
     for o in obs:
         sig = (o["kind"], o["value"]["type"], o["value"]["v"],
@@ -147,28 +172,34 @@ def resolve(observations, asof_ns):
     for o in obs:
         if not uniq or _obs_key(o) != _obs_key(uniq[-1]):
             uniq.append(o)
-    reasons = ["duplicate-collapsed"] if len(uniq) < len(obs) else []
+    codes = set()
+    if len(uniq) < len(obs):
+        codes.add("duplicate-collapsed")
     effs, rows = [], []
     for o in uniq:
         e, r = _direct(o)
         effs.append(e)
         if r is not None:
             rows.append(r)
-        elif e == "unknown":
-            reasons.append("unmapped")
+        else:
+            codes.add("unresolved")
+    reasons = sorted(codes)
     sharp = sorted({e for e in effs if e in DIRECTIONAL})
     if len(sharp) > 1:
+        reasons = reasons + ["conflict"]
+    if "unresolved" in codes and (sharp or "neutral" in effs):
+        reasons = reasons + ["unresolved-present"]
+    if len(sharp) > 1 or "unresolved" in codes:
+        # fail closed: distinct directional claims clash, and any
+        # relevant unresolved observation voids directional (or
+        # neutral) evidence with it. Absent != neutral.
         return {"effect": "unknown", "classification": CLASSIFICATION,
                 "table": TABLE, "rows": [],
-                "reasons": reasons + ["conflict"]}
+                "reasons": reasons}
     if sharp:
         return {"effect": sharp[0], "classification": CLASSIFICATION,
                 "table": TABLE, "rows": sorted(rows),
                 "reasons": reasons + ["resolved"]}
-    if "neutral" in effs:
-        return {"effect": "neutral", "classification": CLASSIFICATION,
-                "table": TABLE, "rows": sorted(rows),
-                "reasons": reasons + ["resolved"]}
-    return {"effect": "unknown", "classification": CLASSIFICATION,
-            "table": TABLE, "rows": [],
-            "reasons": reasons + ["all-unknown"]}
+    return {"effect": "neutral", "classification": CLASSIFICATION,
+            "table": TABLE, "rows": sorted(rows),
+            "reasons": reasons}
