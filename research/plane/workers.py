@@ -785,11 +785,14 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
     """THE invocation gate (parent process). Every provider touch in
     production passes through here, in this order:
 
-    0. entry-tier Tier-3 stop (clean refusal),
+    0. snapshot Tier-3 pre-filter (clean refusal),
     1. validate identities + task shape (clean failures),
     2. price lookup (missing pricing blocks clean),
     3. R15 reservation of the TRUE token bound (clean refusal),
-    4. worst-case dollar HOLD against the stage cap (clean refusal),
+    4. DURABLE tier check + worst-case dollar HOLD against the stage
+       cap in one tier-lock section (reserve_research_call: Tier 3,
+       a tier raised above entry_tier, or unverifiable tier state
+       refuse clean),
     5. mark invoked, spawn the worker child, await with hard kill,
     6. settle actuals + exactly one span + hold release (any failure
        HERE is AbortCycle — accounting after a real call never
@@ -808,11 +811,11 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
     _check_ident("node", node)
     _check_ident("symbol", symbol)
     _check_ident("cycle", cycle_id)
-    # Tier-3 research stop at the provider gate: a snapshot tier the
-    # graph already decided is stopped never becomes a provider call
-    # because some other part of the graph saw an older verdict.
-    # governor-owned (SpendRefused lives in spend; workers must not
-    # import it — circular). Clean refusal BEFORE any reservation.
+    # Snapshot Tier-3 pre-filter (cheap, before any reservation).
+    # NOT the authority: a stale snapshot passes here, and step 4
+    # (reserve_research_call) re-reads the DURABLE tier atomically
+    # with the hold. governor-owned (SpendRefused lives in spend;
+    # workers must not import it — circular).
     governor.check_research_tier(entry_tier)
     if type(epoch) is not int or not 0 <= epoch <= 2 ** 31 - 1:
         raise r15.AbortCycle("gate", {"bad-identity": "epoch"})
@@ -891,7 +894,8 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
     lease_id = "spend:%s" % lease["lease_id"]
     try:
         worst = governor.worst_usd(model_id, need)
-        governor.reserve_usd(worst, lease_id)
+        governor.reserve_research_call(worst, lease_id,
+                                       entry_tier=entry_tier)
     except Exception as orig:
         cleanup = _release_pre_provider(
             budget, governor, lease, lease_id, release_hold=False)

@@ -276,6 +276,98 @@ class IdentityTest(unittest.TestCase):
                 "fake", log, 30.0, entry_tier=tier)
         self.assertTrue(os.path.exists(touch))
 
+    def _durable_raise(self, d, usd):
+        # A REAL concurrent raise: the snapshot is taken first, then a
+        # second governor instance durably persists the higher tier
+        # (same state_dir, real files) before the call reaches the
+        # gate.
+        led, log, gov, budget, _p = T._gate(d)
+        now = int(time.time())
+        snap = gov.verdict_snapshot(now - 3700)
+        attribution.append_span(log, 1, "seed", "m", cycle_id="c",
+                                symbol="AAPL", prompt_tokens=10,
+                                completion_tokens=5, usd=usd,
+                                span_id="raise", ts=now - 60)
+        gov2 = T.spend_mod.SpendGovernor(
+            log, dict(T.PRICING), "G0",
+            state_dir=os.path.join(d, "spend"))
+        return gov, gov2.evaluate(now)[0], snap, budget, log
+
+    def _touch_call(self, d, gov, budget, log, entry_tier, tag):
+        touch = os.path.join(d, "touched-%s" % tag)
+        cfg = {"model_id": "fake",
+               "egress_proxy": "http://proxy.invalid:8080",
+               "fake_behavior": "touch-file", "touch_path": touch}
+        workers.run_gated(
+            "generate", "hypothesize", "AAPL", "t1", 1,
+            {"messages": [{"role": "user", "content": "hi"}]},
+            cfg, T.fake_provider_factory, None, budget, gov,
+            "fake", log, 30.0, entry_tier=entry_tier)
+        return touch
+
+    def test_stale_snapshot_never_reaches_provider_after_tier3(self):
+        # S7-C re-audit P1: the node snapshot read Tier 0, then a
+        # concurrent evaluator durably raised Tier 3 ($40 in 7d ->
+        # projection $171 >= cap) while 30d committed spend ($40 +
+        # worst case) stays far under the $150 dollar cap — so the
+        # dollar hold alone ADMITS. At 74a6e6f the gate trusted the
+        # stale snapshot (and entry_tier=None skipped it entirely):
+        # the provider ran. Now the durable tier is re-read atomically
+        # with the hold: refused, provider untouched, no hold row.
+        d = tempfile.mkdtemp()
+        gov, durable, snap, budget, log = self._durable_raise(d, 40.0)
+        self.assertEqual(snap[:2], ("allow", 0))
+        self.assertEqual(durable, 3)
+        for et in (snap[1], None):
+            touch = os.path.join(d, "touched-%s" % et)
+            with self.assertRaises(T.spend_mod.SpendRefused) as cm:
+                self._touch_call(d, gov, budget, log, et, et)
+            self.assertIn("research-llm-stopped:tier-3",
+                          str(cm.exception))
+            self.assertFalse(os.path.exists(touch))
+        self.assertAlmostEqual(attribution.outstanding_holds(log), 0.0)
+
+    def test_stale_snapshot_refused_when_tier_raised_below_3(self):
+        # A call PLANNED under Tier 0 (default model) must not run
+        # once the durable tier is 2 (cheapest-model rule): the
+        # durable tier above the snapshot refuses. A call planned at
+        # the durable tier proceeds (control).
+        d = tempfile.mkdtemp()
+        gov, durable, snap, budget, log = self._durable_raise(d, 30.0)
+        self.assertEqual((snap[1], durable), (0, 2))
+        with self.assertRaises(T.spend_mod.SpendRefused) as cm:
+            self._touch_call(d, gov, budget, log, 0, "stale")
+        self.assertIn("tier-raised-since-snapshot:2>0",
+                      str(cm.exception))
+        self.assertFalse(os.path.exists(os.path.join(d,
+                                                     "touched-stale")))
+        touch = self._touch_call(d, gov, budget, log, 2, "fresh")
+        self.assertTrue(os.path.exists(touch))
+
+    def test_gate_refuses_malformed_entry_tier(self):
+        d = tempfile.mkdtemp()
+        led, log, gov, budget, _p = T._gate(d)
+        for bad in (True, "0", 4, -1, 1.0):
+            with self.assertRaises(T.spend_mod.SpendRefused) as cm:
+                self._touch_call(d, gov, budget, log, bad, "bad")
+            self.assertIn("bad-entry-tier", str(cm.exception))
+        self.assertFalse(os.path.exists(os.path.join(d, "touched-bad")))
+
+    def test_gate_refuses_unverifiable_tier_state(self):
+        # Corrupt durable tier state at the gate: refuse clean, never
+        # fall back to the snapshot or Tier 0.
+        d = tempfile.mkdtemp()
+        led, log, gov, budget, _p = T._gate(d)
+        gov.evaluate()
+        with open(os.path.join(d, "spend",
+                               T.spend_mod.TIER_STATE_NAME), "w") as fh:
+            fh.write("{not json")
+        touch = os.path.join(d, "touched-corrupt")
+        with self.assertRaises(T.spend_mod.SpendRefused) as cm:
+            self._touch_call(d, gov, budget, log, 0, "corrupt")
+        self.assertIn("tier-state-unavailable", str(cm.exception))
+        self.assertFalse(os.path.exists(touch))
+
     def test_non_dict_provider_cfg_refuses(self):
         d = tempfile.mkdtemp()
         led, log, gov, budget, _p = T._gate(d)
@@ -945,6 +1037,46 @@ class GraphGovernanceTest(unittest.TestCase):
         blocked = " ".join(out.get("blocked") or [])
         self.assertIn("spend-deny:tier-3", blocked)
 
+    def test_graph_stale_snapshot_no_model_call_at_durable_tier3(self):
+        # S7-C re-audit P1 through a REAL cycle: the node's snapshot
+        # is stale (read before a concurrent Tier-3 persist), so the
+        # graph plans hypothesize/critique calls — none may reach a
+        # provider. The ledger proves it (zero model spans).
+        d = tempfile.mkdtemp()
+        T._fixtures(d)
+        gt = T.GraphTest()
+        deps, _c, log, _led, _g = gt._deps(d, script="t",
+                                          spend_usd=40.0)
+        gov = deps["spend_governor"]
+        self.assertEqual(gov.evaluate()[0], 3)
+        gov.verdict_snapshot = lambda now=None: ("allow", 0, "tier-0")
+        gov.tier = lambda now=None: 0
+        app = T._graph().build_graph(deps)
+        out = T._graph().run_cycle(app, ["AAPL"], 1, "stale3")
+        self.assertEqual(attribution.day_summary(log)["calls"], 0)
+        blocked = " ".join(out.get("blocked") or [])
+        self.assertIn("research-llm-stopped:tier-3", blocked)
+
+    @unittest.skipUnless(T._HAS_SMOL, "smolagents missing")
+    def test_graph_extract_llm_stops_at_durable_tier3(self):
+        # S7-C re-audit P1: the graph-owned LLM extract path passed
+        # no entry tier, so the 74a6e6f provider gate never applied
+        # and extraction kept calling the model at durable Tier 3.
+        # Now it refuses clean as blocked evidence (no node crash,
+        # zero model spans).
+        d = tempfile.mkdtemp()
+        T._fixtures(d)
+        gt = T.GraphTest()
+        deps, _c, log, _led, _g = gt._deps(d, script="t",
+                                          spend_usd=40.0,
+                                          extract_stub=False)
+        app = T._graph().build_graph(deps)
+        out = T._graph().run_cycle(app, ["AAPL"], 1, "ext3")
+        self.assertEqual(attribution.day_summary(log)["calls"], 0)
+        blocked = " ".join(out.get("blocked") or [])
+        self.assertIn("extract:spend-refused:research-llm-stopped",
+                      blocked)
+
     def test_hook_failure_visible_not_breaking(self):
         d = tempfile.mkdtemp()
         T._fixtures(d)
@@ -1108,6 +1240,51 @@ class TierStateTest(unittest.TestCase):
         self.assertFalse(verdict == "allow" and tier == 3)
         self.assertTrue((verdict == "allow") == (tier == 0) or
                         verdict == "deny")
+
+    def test_tier_journal_past_tail_window_still_reads(self):
+        # Pre-existing date bomb (same class as the ratio one): after
+        # ~174 real transitions the tier journal exceeds the 64 KiB
+        # tail window, the first VISIBLE row no longer starts at Tier
+        # 0, and every load raised tier-journal-chain (permanent
+        # deny). Real writer, fresh instances. A forged transition
+        # inside the window still denies.
+        import json as _json
+        from plane import spend as spend_mod
+        d = tempfile.mkdtemp()
+        log = os.path.join(d, "spans.jsonl")
+
+        def mk():
+            return spend_mod.SpendGovernor(
+                log, dict(T.PRICING), "G0",
+                state_dir=os.path.join(d, "spend"))
+
+        jp = os.path.join(d, "spend", spend_mod.TIER_JOURNAL_NAME)
+        t = int(time.time()) - 2000 * 86400
+        n = 0
+        while not os.path.exists(jp) or \
+                os.path.getsize(jp) < spend_mod.JOURNAL_TAIL_BYTES + 4096:
+            attribution.append_span(log, 1, "s", "s", cycle_id="c",
+                                    symbol="AAPL", prompt_tokens=1,
+                                    completion_tokens=1, usd=40.0,
+                                    span_id="s%d" % n, ts=t)
+            self.assertEqual(mk().evaluate(t)[0], 3)
+            t += 8 * 86400
+            for h in range(6):
+                mk().evaluate(t + h * 3600)
+            t += 7 * 3600
+            n += 1
+        self.assertEqual(mk().evaluate(t)[0], 0)
+        with open(jp, encoding="utf-8") as fh:
+            lines = [l for l in fh.read().split("\n") if l.strip()]
+        row = _json.loads(lines[-3])
+        row["to"] = 0 if row["to"] == 3 else 3
+        row["state"]["tier"] = row["to"]
+        lines[-3] = _json.dumps(row, sort_keys=True)
+        with open(jp, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
+        with self.assertRaises(spend_mod.StateUnavailable) as cm:
+            mk().evaluate(t + 3600)
+        self.assertIn("tier-journal-chain", str(cm.exception))
 
     def test_cross_instance_durable_raise_wins_same_second(self):
         # S7-C P1: the DURABLE tier always wins, even when a second
@@ -1408,8 +1585,8 @@ class RatioDaysTest(unittest.TestCase):
         gov.evaluate(now)
         jp = os.path.join(d, "spend",
                            T.spend_mod.RATIO_JOURNAL_NAME)
-        rows = [l for l in open(jp, encoding="utf-8").read()
-                .split("\n") if l.strip()]
+        with open(jp, encoding="utf-8") as fh:
+            rows = [l for l in fh.read().split("\n") if l.strip()]
         self.assertEqual(len(rows), 1)
         head = _json.loads(rows[0])["digest"]
         st = gov._load_state(now)
@@ -1422,8 +1599,8 @@ class RatioDaysTest(unittest.TestCase):
         # RESTART 1: a fresh instance repairs without duplicating
         gov2, _log2 = self._gov(d, [1.0])
         gov2.evaluate(now + 3600)
-        rows2 = [l for l in open(jp, encoding="utf-8").read()
-                 .split("\n") if l.strip()]
+        with open(jp, encoding="utf-8") as fh:
+            rows2 = [l for l in fh.read().split("\n") if l.strip()]
         self.assertEqual(len(rows2), 1)
         st2 = gov2._load_state(now + 3600)
         self.assertEqual((st2["ratio_day"], st2["ratio_head"]),
@@ -1542,6 +1719,199 @@ class RatioDaysTest(unittest.TestCase):
         with self.assertRaises(spend_mod.StateUnavailable) as cm:
             gov2.evaluate(now + 2 * 86400 + 3600)
         self.assertIn("ratio-journal-forged", str(cm.exception))
+
+    def _rows(self, d):
+        return self._ratio_journal(d)[1]
+
+    def _state_bytes(self, d):
+        p = os.path.join(d, "spend", T.spend_mod.TIER_STATE_NAME)
+        with open(p, "rb") as fh:
+            return p, fh.read()
+
+    def _crash_after_append(self, d, gov_or_none, when):
+        # Real crash point at the persistence boundary: the process
+        # dies the instant the ratio append returns (fsynced row on
+        # disk, no state persist after it, nothing else runs).
+        import unittest.mock as _mock
+        from plane import spend as spend_mod
+
+        class _Crash(BaseException):
+            pass
+
+        real = spend_mod.SpendGovernor._journal_locked
+
+        def _append_then_die(self_, name, row):
+            real(self_, name, row)
+            if name == spend_mod.RATIO_JOURNAL_NAME:
+                raise _Crash()
+
+        g = gov_or_none or self._gov(d, [1.0])[0]
+        with _mock.patch.object(spend_mod.SpendGovernor,
+                                "_journal_locked", _append_then_die):
+            with self.assertRaises(_Crash):
+                g.evaluate(when)
+
+    def _base(self, d):
+        gov, log = self._gov(d, [1.0])
+        dia = int(time.time())
+        dia = dia - (dia % 86400)
+        now = dia + 7200 - 10 * 86400
+        # spend old enough to leave the 7d projection (tier from the
+        # ratio alone) but inside the 30d ratio window
+        self._seed(log, 300.0, now - 8 * 86400)
+        return gov, log, now
+
+    def test_ratio_crash_then_next_day_restart_links_chain(self):
+        # S7-C re-audit P1: crash on day D (row appended, state not),
+        # restart on D+1 in a FRESH instance. At 74a6e6f the new row
+        # linked to the stale state anchor instead of the chain tail
+        # -> permanent ratio-journal-forged (every later evaluation
+        # denied). Now: one row per day, continuous chain, the 3-day
+        # streak still forces Tier 3, and deletion still denies.
+        from plane import spend as spend_mod
+        d = tempfile.mkdtemp()
+        gov, log, now = self._base(d)
+        self.assertEqual(gov.evaluate(now)[0], 0)
+        self._crash_after_append(d, None, now + 86400)
+        g2, _ = self._gov(d, [1.0])
+        self.assertEqual(g2.evaluate(now + 2 * 86400)[0], 3)
+        rows = self._rows(d)
+        self.assertEqual([r["day"] for r in rows],
+                         [now - now % 86400 + i * 86400
+                          for i in range(3)])
+        self.assertEqual(rows[2]["prev"], rows[1]["digest"])
+        g3, _ = self._gov(d, [1.0])
+        st = g3._load_state(now + 2 * 86400)
+        self.assertEqual((st["ratio_day"], st["ratio_head"]),
+                         (rows[2]["day"], rows[2]["digest"]))
+        os.remove(self._ratio_journal(d)[0])
+        g4, _ = self._gov(d, [1.0])
+        with self.assertRaises(spend_mod.StateUnavailable):
+            g4.evaluate(now + 3 * 86400)
+
+    def test_ratio_double_crash_consecutive_days(self):
+        # Crash on D, crash again on D+1 (each a fresh instance):
+        # the pre-append adoption persists D before D+1 is appended,
+        # so at most ONE unadopted row ever exists and D+2 reads.
+        d = tempfile.mkdtemp()
+        gov, log, now = self._base(d)
+        gov.evaluate(now)
+        self._crash_after_append(d, None, now + 86400)
+        self._crash_after_append(d, None, now + 2 * 86400)
+        g, _ = self._gov(d, [1.0])
+        self.assertEqual(g.evaluate(now + 2 * 86400 + 3600)[0], 3)
+        self.assertEqual(len(self._rows(d)), 3)
+
+    def test_ratio_long_history_past_tail_window(self):
+        # S7-C re-audit P1 (date bomb): chained rows are ~3x legacy
+        # size, so ~321 daily rows exceed the 64 KiB tail window and
+        # the genesis row leaves it. At 74a6e6f every evaluation
+        # from then on raised ratio-journal-forged (permanent deny).
+        # Now the visible chain links from its first visible row and
+        # the anchor still pins it: long history reads, and a flip
+        # INSIDE the window (digests recomputed forward) still denies.
+        import json as _json
+        from plane import spend as spend_mod
+        d = tempfile.mkdtemp()
+        gov, log = self._gov(d, [1e12])  # every day ok
+        dia = int(time.time())
+        dia = dia - (dia % 86400)
+        start = dia - 360 * 86400 + 7200
+        self._seed(log, 1.0, start - 86400)
+        for i in range(345):
+            gov.evaluate(start + i * 86400)
+        jp, rows = self._ratio_journal(d)
+        self.assertGreater(os.path.getsize(jp),
+                           spend_mod.JOURNAL_TAIL_BYTES)
+        g2, _ = self._gov(d, [1e12])
+        g2.evaluate(start + 345 * 86400)  # must not raise
+        self.assertEqual(g2.decision(start + 345 * 86400)[0], "allow")
+        jp, rows = self._ratio_journal(d)
+        k = len(rows) - 5
+        rows[k]["state"] = "failed"
+        for j in range(k, len(rows)):
+            if j > k:
+                rows[j]["prev"] = rows[j - 1]["digest"]
+            rows[j]["digest"] = spend_mod.SpendGovernor._ratio_digest(
+                rows[j]["day"], rows[j]["state"], rows[j]["stage"],
+                rows[j]["prev"])
+        with open(jp, "w", encoding="utf-8") as fh:
+            for r in rows:
+                fh.write(_json.dumps(r, sort_keys=True) + "\n")
+        g3, _ = self._gov(d, [1e12])
+        with self.assertRaises(spend_mod.StateUnavailable) as cm:
+            g3.evaluate(start + 345 * 86400 + 3600)
+        self.assertIn("ratio-anchor-unknown", str(cm.exception))
+
+    def test_ratio_forged_rows_beyond_anchor_deny(self):
+        # Only ONE unadopted row can legitimately follow the proven
+        # head; two validly-chained forged rows (yesterday failed,
+        # today ok) are fabricated history, not a crash window.
+        import json as _json
+        from plane import spend as spend_mod
+        d = tempfile.mkdtemp()
+        gov, log, now = self._base(d)
+        gov.evaluate(now)
+        jp, rows = self._ratio_journal(d)
+        head = rows[-1]["digest"]
+        day = now - now % 86400
+        with open(jp, "a", encoding="utf-8") as fh:
+            for dd, stt in ((day + 86400, "failed"),
+                            (day + 2 * 86400, "ok")):
+                dg = spend_mod.SpendGovernor._ratio_digest(
+                    dd, stt, "G2", head)
+                fh.write(_json.dumps(
+                    {"day": dd, "state": stt, "stage": "G2",
+                     "prev": head, "digest": dg},
+                    sort_keys=True) + "\n")
+                head = dg
+        g2, _ = self._gov(d, [1.0])
+        with self.assertRaises(spend_mod.StateUnavailable) as cm:
+            g2.evaluate(now + 2 * 86400)
+        self.assertIn("ratio-journal-unadopted", str(cm.exception))
+
+    def test_ratio_impossible_head_day_and_dropped_head_deny(self):
+        import json as _json
+        from plane import spend as spend_mod
+        d = tempfile.mkdtemp()
+        gov, log, now = self._base(d)
+        for i in range(3):
+            gov.evaluate(now + i * 86400)
+        rows = self._rows(d)
+        p, raw = self._state_bytes(d)
+        st = _json.loads(raw)
+        # head proves day 0 while the tripwire says day 2
+        st["ratio_head"] = rows[0]["digest"]
+        with open(p, "w", encoding="utf-8") as fh:
+            _json.dump(st, fh)
+        g2, _ = self._gov(d, [1.0])
+        with self.assertRaises(spend_mod.StateUnavailable) as cm:
+            g2.evaluate(now + 2 * 86400 + 3600)
+        self.assertIn("ratio-anchor-mismatch", str(cm.exception))
+        # head dropped from state with a multi-row chain on disk
+        # (an anchor-stripping downgrade)
+        st["ratio_head"] = None
+        with open(p, "w", encoding="utf-8") as fh:
+            _json.dump(st, fh)
+        g3, _ = self._gov(d, [1.0])
+        with self.assertRaises(spend_mod.StateUnavailable) as cm:
+            g3.evaluate(now + 2 * 86400 + 3600)
+        self.assertIn("ratio-anchor-missing", str(cm.exception))
+
+    def test_ratio_malformed_digest_shape_denies(self):
+        import json as _json
+        from plane import spend as spend_mod
+        d = tempfile.mkdtemp()
+        gov, log, now = self._base(d)
+        gov.evaluate(now)
+        jp, rows = self._ratio_journal(d)
+        rows[0]["digest"] = "x"
+        with open(jp, "w", encoding="utf-8") as fh:
+            fh.write(_json.dumps(rows[0], sort_keys=True) + "\n")
+        g2, _ = self._gov(d, [1.0])
+        with self.assertRaises(spend_mod.StateUnavailable) as cm:
+            g2.evaluate(now + 3600)
+        self.assertIn("ratio-journal-corrupt", str(cm.exception))
 
     def test_three_distinct_days_force_tier3(self):
         d = tempfile.mkdtemp()

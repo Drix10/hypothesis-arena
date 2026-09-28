@@ -233,7 +233,8 @@ def _require_governor(gov):
     for meth in ("tier", "decision", "verdict_snapshot",
                  "check_research_tier", "price_for",
                  "cheapest_model",
-                 "worst_usd", "reserve_usd", "mark_invoked",
+                 "worst_usd", "reserve_usd",
+                 "reserve_research_call", "mark_invoked",
                  "settle_usd", "evaluate", "thesis_cap"):
         if not callable(getattr(gov, meth, None)):
             raise _workers.ConfigBlocked(
@@ -457,7 +458,8 @@ def build_graph(deps):
             deps["spend_governor"],
             model_id, log_path,
             _extract_timeout(), tool_factory=deps.get("tool_factory"),
-            executor_factory=deps.get("executor_factory"))
+            executor_factory=deps.get("executor_factory"),
+            entry_tier=tier)
         if isinstance(out, dict) and "blocked" in out:
             raise _workers.ConfigBlocked("extract-result:%s" %
                                          out["blocked"])
@@ -582,6 +584,14 @@ def build_graph(deps):
                 if len(blocked) < BLOCKED_MAX:
                     blocked.append(_bound_str("extract:%s" % e,
                                               BLOCKED_CHARS))
+            except spend_mod.SpendRefused as e:
+                # Clean pre-spawn refusal (durable Tier 3, a tier
+                # raised since this node's read, or the dollar cap):
+                # nothing ran — blocked evidence, never a node crash.
+                if len(blocked) < BLOCKED_MAX:
+                    blocked.append(_bound_str(
+                        "extract:spend-refused:%s" % e,
+                        BLOCKED_CHARS))
         out = {"candidates": cands, "dropped_candidates": dropped,
                "dropped_null_class": null_dropped,
                "cycle_aborted": aborted, "extract_aborts": aborts,
@@ -623,10 +633,10 @@ def build_graph(deps):
         touched ONLY inside run_gated's spawned child — build/parse
         callables never see it. SpendRefused (pre-spawn clean refusal)
         degrades to blocked evidence, never an abort. entry_tier is
-        the node decision's snapshot tier: a Tier-3 snapshot never
-        reaches the provider gate (the tier is threaded through, not
-        re-read, so no concurrent raise can split the verdict from
-        the tier between the node check and the spawn)."""
+        the node decision's snapshot tier (the PLAN: model choice,
+        prose cap). A Tier-3 snapshot stops here; a stale lower one
+        is refused by run_gated's durable re-read, which is atomic
+        with the dollar hold (reserve_research_call)."""
         cyc = state.get("cycle_id", "local")
         epoch = state.get("epoch", 0)
         try:
