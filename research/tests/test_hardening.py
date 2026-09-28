@@ -957,6 +957,38 @@ class TierStateTest(unittest.TestCase):
         self.assertEqual(tA, 2)
         return gov, now
 
+    def test_cross_instance_durable_raise_wins_same_second(self):
+        # S7-C P1: the DURABLE tier always wins, even when a second
+        # writer lands a raise in the SAME second another instance
+        # evaluated. A evaluates Tier 0 at T (old code cached the
+        # result keyed by evaluated_at=T); B then durably persists
+        # Tier 1 with evaluated_at=T (same-second second writer:
+        # spike observed between the two evaluations). A's next
+        # evaluation at T must read the durable Tier 1, never
+        # resurrect its Tier 0 from cache.
+        from plane import spend as spend_mod
+        d = tempfile.mkdtemp()
+        log = os.path.join(d, "spans.jsonl")
+        sdir = os.path.join(d, "spend")
+        now = int(time.time())
+        gov_a = spend_mod.SpendGovernor(
+            log, dict(T.PRICING), "G0", state_dir=sdir)
+        self.assertEqual(gov_a.evaluate(now)[0], 0)
+        gov_b = spend_mod.SpendGovernor(
+            log, dict(T.PRICING), "G0", state_dir=sdir)
+        st = gov_b._load_state(now)
+        proj = 25.0 / 7.0 * 30.0  # $107 on the $150 G0 cap
+        st.update(tier=1, projection=proj, evaluated_at=now,
+                  below_count=0, tier_rev=1)
+        row = {"ts": now, "from": 0, "to": 1,
+               "projection_30d": proj,
+               "cap": spend_mod.STAGE_CAPS_USD["G0"],
+               "stage": "G0", "rev": 1}
+        gov_b._save_state_and_journal_locked(
+            st, spend_mod.TIER_JOURNAL_NAME, row)
+        self.assertEqual(gov_a.evaluate(now)[0], 1)
+        self.assertEqual(gov_a._load_state(now)["tier_rev"], 1)
+
     def test_tier_journal_malformed_denies(self):
         # Finding 7: a damaged tier journal must deny, never resolve
         # to the older weaker tier on disk.

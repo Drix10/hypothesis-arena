@@ -148,7 +148,13 @@ class SpendGovernor:
         self.stage = stage
         self.state_dir = state_dir
         self.profit_since = profit_since  # (since_ts)->profit or None
-        self._tier_cache = None  # (tier, projection, evaluated_at)
+        # NOTE (S7-C P1): no in-memory tier-result cache exists here
+        # by design. A (tier, projection, evaluated_at) cache is
+        # unsafe across governor instances: two processes evaluating
+        # in the same second collide on evaluated_at, and the first
+        # instance's cache resurrects a weaker tier after the second
+        # durably raised it. The durable state already enforces the
+        # hourly cadence, so every evaluation reloads it.
 
     # -- pricing ----------------------------------------------------
     def price_for(self, model_id):
@@ -582,12 +588,9 @@ class SpendGovernor:
         """One evaluation ASSUMING the caller holds the tier lock
         when locked=True (see evaluate)."""
         st = self._load_state(now)
-        if now - st["evaluated_at"] < TIER_EVAL_S and self._tier_cache \
-                and self._tier_cache[2] == st["evaluated_at"]:
-            return self._tier_cache[0], self._tier_cache[1]
         if now - st["evaluated_at"] < TIER_EVAL_S:
-            self._tier_cache = (st["tier"], st["projection"],
-                                st["evaluated_at"])
+            # Within the hour the DURABLE reading wins, always
+            # reloaded: no in-memory shortcut (see __init__).
             return st["tier"], st["projection"]
         cap = STAGE_CAPS_USD[self.stage]
         try:
@@ -624,7 +627,6 @@ class SpendGovernor:
             self._save_state_locked(st)
         else:
             self._save_state(st)
-        self._tier_cache = (st["tier"], proj, now)
         try:
             attribution.prune_spans(self.log_path, now)
         except attribution.LedgerUnavailable:
