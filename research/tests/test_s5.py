@@ -29,9 +29,9 @@ DAY = lambda ts: (datetime.date(2024, 1, 2) +
 DATA_ID = {"slice": "synth-test-v1", "dataset_sha": "test-sha"}
 BAR = {"filtered_net_sharpe_gt": 1.0, "holm_adjusted_p_lt": 0.05,
        "max_drawdown_pct_lte": 15.0, "min_closed_trades": 100}
-SCOPE = json.load(open(os.path.join(os.path.dirname(__file__), "..",
-                                    "strategy",
-                                    "s5_prereg.json")))["amendment_b"]["r_out_of_scope"]
+with open(os.path.join(os.path.dirname(__file__), "..",
+                  "strategy", "s5_prereg.json")) as _pf:
+    SCOPE = json.load(_pf)["amendment_b"]["r_out_of_scope"]
 GOODM = {"sharpe_f": 1.5, "holm_p": 0.01, "max_dd_pct": 5.0, "n_closed": 200,
          "stress": {"1.5x": (1.2, 0.5), "2x": (1.1, 0.4), "3x": (1.0, 0.3)},
          "r_breach_count": 0, "r_unavailable": list(s5.R_UNAVAILABLE),
@@ -235,8 +235,9 @@ def test_12_cost_stress_reflected():
 def test_13_variant_family():
     assert set(s5.VARIANTS) == {"filtered-conv-any",
                                 "filtered-enter-gte-80-strong-plus"}
-    pre = json.load(open(os.path.join(os.path.dirname(__file__), "..",
-                                      "strategy", "s5_prereg.json")))
+    with open(os.path.join(os.path.dirname(__file__), "..",
+                      "strategy", "s5_prereg.json")) as _pf:
+        pre = json.load(_pf)
     assert pre["search_budget"]["declared_variants"] == list(s5.VARIANTS)
     assert set(pre["variants"]) == set(s5.VARIANTS)
     recs = run_all(synth_stream(40))
@@ -918,8 +919,9 @@ def test_25_embargo_ignores_holdout():
 
 def test_26_prereg_seeds_pinned():
     import inspect as _insp
-    pre = json.load(open(os.path.join(os.path.dirname(__file__), "..",
-                                      "strategy", "s5_prereg.json")))
+    with open(os.path.join(os.path.dirname(__file__), "..",
+                      "strategy", "s5_prereg.json")) as _pf:
+        pre = json.load(_pf)
     assert "24269" in pre["resampling"]["ci"], pre["resampling"]["ci"]
     assert "24270" in pre["resampling"]["null_test"]
     assert s5.BOOT_SEED == 24269, hex(s5.BOOT_SEED)
@@ -1266,8 +1268,9 @@ def test_34_baseline_gate():
 def test_35_knobs_parsed_not_duplicated():
     import copy
     assert s5f.check_knobs() == []
-    pre = json.load(open(os.path.join(os.path.dirname(__file__), "..",
-                                      "strategy", "s5_prereg.json")))
+    with open(os.path.join(os.path.dirname(__file__), "..",
+                      "strategy", "s5_prereg.json")) as _pf:
+        pre = json.load(_pf)
     assert s5f.frozen_knobs(pre)["boot_seed"] == 24269
     stale = copy.deepcopy(pre)
     stale["inference_knobs"]["boot_seed"] = 99999
@@ -1320,12 +1323,15 @@ def test_37_frozen_bars_authority():
     blobs = {fn: ("%s-bytes-%d" % (fn, i)).encode()
              for i, fn in enumerate(s5f.FROZEN_FILES)}
     for fn, b in blobs.items():
-        open(os.path.join(raw, fn), "wb").write(b)
-        open(os.path.join(frz, fn), "wb").write(b)
+        with open(os.path.join(raw, fn), "wb") as fh:
+            fh.write(b)
+        with open(os.path.join(frz, fn), "wb") as fh:
+            fh.write(b)
     import hashlib as _hl
     h = _hl.sha256()
     for fn in sorted(os.listdir(frz)):
-        h.update(open(os.path.join(frz, fn), "rb").read())
+        with open(os.path.join(frz, fn), "rb") as fh:
+            h.update(fh.read())
     rep_path = os.path.join(tmp, "report.json")
     json.dump({"frozen_dataset_sha256": h.hexdigest()},
               open(rep_path, "w"))
@@ -1895,6 +1901,20 @@ def test_48_pin_interpreter_bound():
         pass
     print("48 OK")
 
+def _must_fail_with(needle, fn):
+    """Authority-regression gate: fn must raise AssertionError naming the INTENDED guard.
+
+    A bare try/except AssertionError would let an unrelated failure
+    at a different seam masquerade as the hostile being caught."""
+
+    try:
+        fn()
+    except AssertionError as e:
+        assert needle in str(e),             "wrong seam: %s (want %s)" % (e, needle)
+        return
+    raise SystemExit("must fail at seam: " + needle)
+
+
 def test_49_canonical_holdout_enforced():
     import hashlib as _hl
     from collections import Counter as _C
@@ -1925,27 +1945,38 @@ def test_49_canonical_holdout_enforced():
     subst = {k: {v: [r for r in recs if r["cid"] in subcset]
                  for v, recs in byv.items()}
              for k, byv in stress.items()}
-    try:
-        _frep((folds, sub, bound, subtok), subev, subst, sess, proof,
-              bars, by_var)
-        raise SystemExit("favorable-subset holdout must fail")
-    except AssertionError:
-        pass
+    _must_fail_with("split holdout != canonical holdout population",
+                     lambda: _frep((folds, sub, bound, subtok), subev,
+                                   subst, sess, proof, bars, by_var))
     # hostile (b): altered edges, everything else canonical.
     e2 = list(tok["edges"])
     e2[1] += 1
-    try:
-        _frep((folds, holdout, bound, dict(tok, edges=e2)), h1x,
-              stress, sess, proof, bars, by_var)
-        raise SystemExit("altered edges must fail")
-    except AssertionError:
-        pass
+    _must_fail_with("split edges != canonical edges",
+                     lambda: _frep((folds, holdout, bound,
+                                    dict(tok, edges=e2)), h1x, stress,
+                                   sess, proof, bars, by_var))
     # hostile (c): altered n_splits - an honest n_splits=3 rig (own
     # winner, evidence, sessions) still fails the frozen contract.
+    # Built BELOW the public constructor (which now enforces frozen
+    # n_splits at mint time), so this proves final_report ITSELF
+    # cannot be bypassed with a foreign segmentation.
     items3 = synth_stream(48)
     by3 = run_all(items3)
-    split3 = _winner_split(by3, n_splits=3)
-    f3, h3, b3, t3 = split3
+    w3 = _mechanical_winner(by3, n_splits=3)
+    e3, b3 = s5.segment_bounds(by3[w3], 3)
+    f3 = s5.walk_folds(by3[w3], 3, holdout_start=b3)
+    r3 = sorted(by3[w3], key=lambda r: r["snapshot_ts_ns"])
+    h3 = r3[e3[3 + 1]:]
+    assert h3, "empty hostile holdout"
+    for tr, te in f3:
+        for r in tr + te:
+            assert r["time_exit_ns"] < b3
+    sc3 = sorted(r["cid"] for r in r3)
+    t3 = s5f._mint_split_token(
+        h3, b3, 3, len(r3), e3,
+        _hl.sha256("|".join(sc3).encode()).hexdigest(),
+        s5f._record_digest(r3))
+    split3 = (f3, h3, b3, t3)
     assert t3["n_splits"] == 3
     hset3 = {r["cid"] for r in h3}
     h1x3 = {v: [r for r in by3[v] if r["cid"] in hset3]
@@ -1957,11 +1988,9 @@ def test_49_canonical_holdout_enforced():
                         for v in s5.VARIANTS}
     bars3 = bars_for(items3)
     sess3, proof3 = s5f.build_holdout_sessions(bars3, t3, DATA_ID)
-    try:
-        _frep(split3, h1x3, stress3, sess3, proof3, bars3, by3)
-        raise SystemExit("n_splits=3 must fail the frozen contract")
-    except AssertionError:
-        pass
+    _must_fail_with("split segmentation != frozen n_splits",
+                     lambda: _frep(split3, h1x3, stress3, sess3,
+                                   proof3, bars3, by3))
     # hostile (d): single-record truncation from the OTHER day
     # (dates preserved, so only the population gate can fire).
     otherday = next(d for d in dayn if d != dropday)
@@ -1979,12 +2008,24 @@ def test_49_canonical_holdout_enforced():
     trunst = {k: {v: [r for r in recs if r["cid"] in tset]
                   for v, recs in byv.items()}
               for k, byv in stress.items()}
-    try:
-        _frep((folds, trunc, bound, trunck), trunev, trunst, sess,
-              proof, bars, by_var)
-        raise SystemExit("truncated holdout must fail")
-    except AssertionError:
-        pass
+    _must_fail_with("split holdout != canonical holdout population",
+                     lambda: _frep((folds, trunc, bound, trunck),
+                                   trunev, trunst, sess, proof, bars,
+                                   by_var))
+    # hostile (e): rehashed in-place field edit inside a threaded
+    # TRAIN-leg fold record. CIDs, token, evidence, and test legs are
+    # untouched (selection recomputes from test legs), so only the
+    # authoritative field-equality gate can fire.
+    f0tr, f0te = folds[0]
+    assert f0tr, "empty train leg"
+    victim = _rehash(dict(f0tr[0],
+                           filtered_taken=not f0tr[0]["filtered_taken"]))
+    assert victim != f0tr[0], "vacuous hostile"
+    efolds = tuple(([victim] + list(tr[1:]), te) if i == 0 else (tr, te)
+                   for i, (tr, te) in enumerate(folds))
+    _must_fail_with("fold record != authoritative stream record",
+                     lambda: _frep((efolds, holdout, bound, tok), h1x,
+                                   stress, sess, proof, bars, by_var))
     # control still passes on the canonical population.
     rep = _frep(split, h1x, stress, sess, proof, bars, by_var)
     assert rep["split_token"] == tok
@@ -2031,6 +2072,18 @@ def test_50_sharpe_f_is_1x():
         assert got["n_sharpe_obs"] == len(s5.daily_returns(rets1,
                                                            inc))
     print("50 OK")
+
+def test_51_constructor_enforces_frozen_segmentation():
+    items = synth_stream(48)
+    by_var = run_all(items)
+    recs = by_var[_mechanical_winner(by_var, n_splits=2)]
+    # omitted n_splits resolves to the frozen contract (no stale default).
+    _, _, _, tok = s5f.holdout_split(recs)
+    assert tok["n_splits"] == s5f.frozen_n_splits() == 2
+    # an explicit foreign segmentation fails closed AT THE MINT.
+    _must_fail_with("split segmentation != frozen n_splits",
+                    lambda: s5f.holdout_split(recs, n_splits=3))
+    print("51 OK")
 
 if __name__ == "__main__":
     test_1_2_same_stream_same_economics()
@@ -2080,4 +2133,5 @@ if __name__ == "__main__":
     test_48_pin_interpreter_bound()
     test_49_canonical_holdout_enforced()
     test_50_sharpe_f_is_1x()
+    test_51_constructor_enforces_frozen_segmentation()
     print("ALL S5 TESTS GREEN")

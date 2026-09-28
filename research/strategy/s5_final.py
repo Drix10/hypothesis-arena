@@ -51,7 +51,8 @@ VARIANT_MUTABLE = frozenset(("variant", "filtered_pass",
 
 def _prereg():
     here = _os.path.join(_os.path.dirname(__file__), "s5_prereg.json")
-    return _json.load(open(here))
+    with open(here) as fh:
+        return _json.load(fh)
 
 
 def frozen_bar():
@@ -149,7 +150,8 @@ def frozen_scope():
     """The frozen amendment_b out-of-scope declaration, read from the
     committed prereg file. The final path trusts NO caller-supplied list."""
     here = _os.path.join(_os.path.dirname(__file__), "s5_prereg.json")
-    return sorted(_json.load(open(here))["amendment_b"]["r_out_of_scope"])
+    with open(here) as fh:
+        return sorted(_json.load(fh)["amendment_b"]["r_out_of_scope"])
 
 
 def _record_digest(recs):
@@ -206,16 +208,24 @@ def assert_exact_holdout(candidate_recs, holdout):
     return hset
 
 
-def holdout_split(records, n_splits=3):
-    """FINAL path only: (folds, holdout, holdout_start, split_token).
+def holdout_split(records, n_splits=None):
+    """Runner-side constructor of the threaded split echo: (folds,
+    holdout, holdout_start, split_token).
 
-    Runner-side constructor of the threaded split echo. AUTHORITY is
+    The segmentation is the FROZEN contract, not a caller choice: an
+    omitted n_splits resolves to frozen_n_splits() and any other
+    value fails closed HERE (the old default 3 was a misuse footgun).
+    AUTHORITY stays with the final path's canonical re-derivation
     the final path's canonical re-derivation (_canonical_split_ids +
     step 0d): a caller split must match it structurally. Folds are
     label-purged at the holdout boundary: every selection record
     resolves strictly before holdout_start. Asserts the preferred
     invariant plus segment disjointness. Thread the returned tuple
     into final_report; never re-mint, never substitute a subset."""
+    if n_splits is None:
+        n_splits = frozen_n_splits()
+    assert n_splits == frozen_n_splits(), \
+        "split segmentation != frozen n_splits"
     edges, bound = segment_bounds(records, n_splits)
     folds = walk_folds(records, n_splits, holdout_start=bound)
     recs = sorted(records, key=lambda r: r["snapshot_ts_ns"])
@@ -339,16 +349,20 @@ def verify_frozen_files(raw_dir, frozen_dir, report_path):
     so raw==frozen binds the loaded bytes to the frozen identity).
     Returns {"frozen_dataset_sha256": h}. Missing data fails closed
     (never a vacuous pass). Reads S2 files only; edits nothing."""
-    report = _json.load(open(report_path))
+    with open(report_path) as fh:
+        report = _json.load(fh)
     want = report["frozen_dataset_sha256"]
     h = _hashlib.sha256()
     for fn in sorted(_os.listdir(frozen_dir)):
-        h.update(open(_os.path.join(frozen_dir, fn), "rb").read())
+        with open(_os.path.join(frozen_dir, fn), "rb") as fh:
+            h.update(fh.read())
     got = h.hexdigest()
     assert got == want, "frozen data != committed report identity"
     for fn in FROZEN_FILES:
-        a = open(_os.path.join(raw_dir, fn), "rb").read()
-        b = open(_os.path.join(frozen_dir, fn), "rb").read()
+        with open(_os.path.join(raw_dir, fn), "rb") as fh:
+            a = fh.read()
+        with open(_os.path.join(frozen_dir, fn), "rb") as fh:
+            b = fh.read()
         assert a == b, "raw != frozen copy: %s" % fn
     return {"frozen_dataset_sha256": got}
 
@@ -566,8 +580,10 @@ def _validate_evidence(split, recs_1x, recs_stress, full_streams,
     # contract. The caller-threaded split is an echo only: a
     # self-consistent favorable-subset token, altered edges, another
     # n_splits, or a truncated holdout all fail here even when every
-    # supplied record is authentic. Fold records are content-checked
-    # (self-hash + CID membership in the authoritative stream).
+    # supplied record is authentic. Fold records are content-checked:
+    # self-hash PLUS full field-equality against the authoritative
+    # full-stream record at that CID (a rehashed in-place field edit
+    # inside a threaded fold fails here).
     frozen_n = frozen_n_splits()
     assert token["n_splits"] == frozen_n, \
         "split segmentation != frozen n_splits"
@@ -578,7 +594,7 @@ def _validate_evidence(split, recs_1x, recs_stress, full_streams,
         "split edges != canonical edges"
     assert sorted(r["cid"] for r in holdout) == sorted(c_holdout), \
         "split holdout != canonical holdout population"
-    stream_cids = {r["cid"] for r in full_streams[sv]}
+    stream_recs = {r["cid"]: r for r in full_streams[sv]}
     assert len(folds) == len(c_folds), "fold count != canonical"
     for (tr, te), (ctr, cte) in zip(folds, c_folds):
         assert [r["cid"] for r in tr] == list(ctr), \
@@ -587,8 +603,10 @@ def _validate_evidence(split, recs_1x, recs_stress, full_streams,
             "fold test != canonical structure"
         for r in tr + te:
             _check_record_self(r)
-            assert r["cid"] in stream_cids, \
+            assert r["cid"] in stream_recs, \
                 "fold record outside authoritative stream"
+            assert r == stream_recs[r["cid"]], \
+                "fold record != authoritative stream record"
     # 1. token integrity from the threaded holdout
     assert token["holdout_start"] == bound
     assert token["n"] == len(holdout)

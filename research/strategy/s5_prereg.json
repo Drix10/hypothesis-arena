@@ -25,10 +25,10 @@
   "evaluation_protocol_version": "eval_v1",
   "experiment_id": "s5-paired-v1",
   "holdout": {
-    "access": "holdout_split() is FINAL-path only, called after select_variant() freezes on folds; select_variant takes metrics only (signature-guarded); regression test proves no records/holdout parameter",
-    "definition": "final time segment from holdout_split (walk_folds segments + 1)",
+    "access": "holdout_split() is a runner-side constructor of the threaded split echo, called after select_variant() freezes on folds; AUTHORITY is the final path's canonical re-derivation (bound, edges, fold CID structure, exact holdout population from the authoritative selected full stream under frozen n_splits); select_variant takes metrics only (signature-guarded); regression test proves no records/holdout parameter",
+    "definition": "terminal time segment of the authoritative selected full stream: records at/after the walk-forward bound (segment_bounds edge n_splits+1 under frozen n_splits=2)",
     "n_splits": 2,
-    "segmentation": "authoritative walk-forward segmentation: n_splits=2 (3 fold splits + terminal holdout segment). final_report re-derives the canonical bound, edges, folds, and holdout population from the authoritative selected full stream inside the final path and requires structural equality with the caller-threaded split; any other n_splits, altered edges, or truncated/substituted holdout fails closed."
+    "segmentation": "authoritative walk-forward segmentation: n_splits=2 (2 walk-forward folds + terminal holdout segment). final_report re-derives the canonical bound, edges, folds, and holdout population from the authoritative selected full stream inside the final path and requires structural equality with the caller-threaded split; any other n_splits, altered edges, or truncated/substituted holdout fails closed."
   },
   "holm": {
     "alpha": 0.05,
