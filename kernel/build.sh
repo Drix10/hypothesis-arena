@@ -104,6 +104,8 @@ fi
 # boundaries + retention + rate window).
 g++ $FLAGS -o test_features ingest/test_features.cpp ingest/features.cpp
 ./test_features
+g++ $FLAGS -o test_candidates ingest/test_candidates.cpp ingest/candidates.cpp
+./test_candidates
 # Slice C zero-malloc contract: validation + retention allocate nothing
 # (comments stripped: the discipline note names the forbidden tokens).
 # U8()/JVal::find are forbidden in the ingest path: both build key
