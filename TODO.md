@@ -103,6 +103,7 @@ A box is checked only with evidence (commit + test output / report path).
 - [ ] K9 Slice F 24 h soak on the real transport [BLOCKED on K1].
 - [ ] K10 H1 drills on the real transport, every doc 06 §6.2a row
       [BLOCKED on K1].
+- [ ] K11 Found in K7: `runner/store.cpp Alert()` does not JSON-escape `code`/`detail` (a quote or backslash yields an invalid alerts.jsonl line; the relay skips and counts such lines, so nothing crashes, but the alert is lost). Add an escape helper + test.
 - [ ] K-exit P3.5 CLOSED (K1–K7 + K10 green).
 
 ## Track P — research plane (parallel)
