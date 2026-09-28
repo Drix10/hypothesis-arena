@@ -55,7 +55,7 @@ A box is checked only with evidence (commit + test output / report path).
 - [ ] A0 Research harness v2 (`research/strategy/`):
   - [x] A0.1 (`research/strategy/ledger.py`, 9 tests) Trial ledger (append-only, hash-chained, off-host checkpoint;
         every run writes a row incl. failures) — doc 11 §11.0a.
-  - [ ] A0.2 SIP data fetcher (daily + minute bars, quotes, `feed=sip`,
+  - [x] A0.2 (`sip_fetch.py`, 7 tests; mocked transport, 15-min delay refused, manifest w/o credentials; live fetch needs a run with keys) SIP data fetcher (daily + minute bars, quotes, `feed=sip`,
         ≥15-min-delayed end) with dataset manifests — doc 09 §9.1a.
   - [x] A0.3 (`costs_v2.py`, 7 tests) `cost_v2` (paper_fill_v1 + SIP NBBO + SEC/TAF fees +
         participation caps + dividends) — doc 06 §6.0a.
