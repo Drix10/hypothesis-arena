@@ -96,7 +96,7 @@ A box is checked only with evidence (commit + test output / report path).
       approved sleeves from the stage manifest; Slice-B verdicts unchanged.
 - [ ] K5 OTO stop-only protection + MOC sequencing (stop-fills-first and
       MOC-reject drills).
-- [ ] K6 `ingest/candidates.cpp`: CID recompute, sleeve approval,
+- [x] K6 (`ingest/candidates.{hpp,cpp}`, 17 checks, wire record frozen in doc 04 2b; tailer/stage-manifest feed is runner wiring in K1/G0) `ingest/candidates.cpp`: CID recompute, sleeve approval,
       allowlist, freshness, long-only side policy, adversarial vectors.
 - [ ] K7 Outbound-only alert adapter (no inbound, no commands, redacted).
 - [ ] K8 Live journal growth bound (bounded load, chain continuity kept).
