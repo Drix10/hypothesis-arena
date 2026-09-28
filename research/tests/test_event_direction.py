@@ -249,7 +249,7 @@ def test_18_same_sig_contradiction():
     r2 = ed.resolve([_obs(**dict(base, pe="bullish")),
                      _obs(**dict(base, pe="bearish"))], ASOF, SYM)
     assert r2["effect"] == "unknown", r2
-    assert "conflict" in r2["reasons"], r2
+    assert "identity-conflict" in r2["reasons"], r2
     print("18 OK")
 
 
@@ -315,6 +315,52 @@ def test_22_directional_neutral_mix():
     print("22 OK")
 
 
+def test_23_carried_unknown_stays_unknown():
+    alone = ed.resolve([_obs(pe="unknown")], ASOF, SYM)
+    assert alone["effect"] == "unknown", alone
+    assert alone["rows"] == [], alone
+    base = [("neutral", None), ("bullish", "unresolved-present"),
+            ("bearish", "unresolved-present"),
+            ("risk_up", "unresolved-present"),
+            ("risk_down", "unresolved-present")]
+    for pe, extra in base:
+        r = ed.resolve([_obs(v="k", pe="unknown"),
+                        _obs(v="m", pe=pe)], ASOF, SYM)
+        assert r["effect"] == "unknown", (pe, r)
+        assert r["rows"] == [], (pe, r)
+        if extra is not None:
+            assert extra in r["reasons"], (pe, r)
+    print("23 OK")
+
+
+def test_24_same_identity_agreement():
+    def pair(pe_a, pe_b):
+        kw = dict(v="same", ts=ASOF - 3)
+        a = _obs(**dict(kw, **({} if pe_a is None else {"pe": pe_a})))
+        b = _obs(**dict(kw, **({} if pe_b is None else {"pe": pe_b})))
+        return ed.resolve([a, b], ASOF, SYM)
+    # any differing interpretation of ONE fact voids it.
+    for pe_a, pe_b in (("bullish", "neutral"),
+                        ("bullish", None),
+                        ("neutral", None),
+                        ("risk_up", "neutral"),
+                        ("risk_up", "risk_down")):
+        r = pair(pe_a, pe_b)
+        assert r["effect"] == "unknown", (pe_a, pe_b, r)
+        assert r["rows"] == [], (pe_a, pe_b, r)
+        assert "identity-conflict" in r["reasons"], (pe_a, pe_b, r)
+    # exact identical duplicate still collapses and resolves.
+    d = ed.resolve([_obs(v="same", ts=ASOF - 3, pe="bullish"),
+                    _obs(v="same", ts=ASOF - 3, pe="bullish")],
+                   ASOF, SYM)
+    assert d["effect"] == "bullish", d
+    # control: bullish + neutral across DIFFERENT facts resolves.
+    c = ed.resolve([_obs(v="f1", pe="bullish"),
+                    _obs(v="f2", pe="neutral")], ASOF, SYM)
+    assert c["effect"] == "bullish", c
+    print("24 OK")
+
+
 if __name__ == "__main__":
     test_1_carried_positive()
     test_2_carried_negative()
@@ -338,4 +384,6 @@ if __name__ == "__main__":
     test_20_symbol_scope()
     test_21_unknown_aggregation()
     test_22_directional_neutral_mix()
+    test_23_carried_unknown_stays_unknown()
+    test_24_same_identity_agreement()
     print("ALL S6 TESTS GREEN")

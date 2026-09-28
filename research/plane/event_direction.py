@@ -26,6 +26,11 @@ Authority rules (frozen here):
 - fail-closed aggregation: any relevant unresolved observation
   alongside directional evidence voids the set to unknown
   (absent != neutral; unknown never becomes evidence).
+- same-identity agreement: contradictory interpretations of one
+  underlying observation void it, even bullish-vs-neutral (which
+  stays resolvable across DIFFERENT observations).
+- an explicit carried unknown stays unresolved: unknown is never
+  transformed into neutral.
 - v1 ROWS is EMPTY (nothing has measured justification). Adding a
   row needs measured justification + promotion gate + table version
   bump + test_16 update. Uncarried, unmapped observations resolve
@@ -119,6 +124,10 @@ def _direct(o):
     pe = o.get("parser_effect")
     key = (o["kind"], o["value"]["type"], o["value"]["v"])
     if owned and pe is not None:
+        if pe == "unknown":
+            # An explicit unknown carries nothing: it must stay
+            # unresolved (unknown/absent != neutral), never a row.
+            return "unknown", None
         if key in ROWS and ROWS[key] != pe:
             return "unknown", None  # parser/table contradiction
         return pe, "carried"
@@ -183,6 +192,20 @@ def resolve(observations, asof_ns, symbol):
             rows.append(r)
         else:
             codes.add("unresolved")
+    # Same observation identity (kind, value, source, timestamp,
+    # scope symbol) must speak with one interpretation: absent,
+    # unknown, neutral, and directional claims about the SAME fact
+    # void it. Different identities keep the looser aggregation
+    # below (directional + neutral may still resolve).
+    ident = {}
+    for o, e in zip(uniq, effs):
+        gid = (o["kind"], o["value"]["type"], o["value"]["v"],
+               o["source_id"], o["observed_at_ns"], symbol)
+        ident.setdefault(gid, set()).add(e)
+    if any(len(s) > 1 for s in ident.values()):
+        return {"effect": "unknown", "classification": CLASSIFICATION,
+                "table": TABLE, "rows": [],
+                "reasons": sorted(codes) + ["identity-conflict"]}
     reasons = sorted(codes)
     sharp = sorted({e for e in effs if e in DIRECTIONAL})
     if len(sharp) > 1:
