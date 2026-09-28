@@ -805,6 +805,10 @@ int main() {
         }
         // Ambiguous close (response lost): not executed, no UUID —
         // the caller reconciles by client ID, never re-sends blind.
+        // (g_reply must not dangle at the dead gb buffer above:
+        // the reply body is unread on a 500, but the Fake still
+        // copies it, so point at live storage. ASan caught this.)
+        g_reply = "";
         g_status = 500;
         auto mc2 = ad.MarketClose("AAPL", 10, OrderSide::SELL, xid);
         Check(!mc2.executed && !mc2.transport_ok &&
