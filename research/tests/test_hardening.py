@@ -108,6 +108,72 @@ class AtomicReserveTest(unittest.TestCase):
                     p.terminate()
             self.assertEqual(multiprocessing.active_children(), [])
 
+    def test_exact_cap_admits_epsilon_refuses(self):
+        # Boundary is exact: spent + holds + usd > cap refuses, so
+        # landing EXACTLY on the cap admits and one cent over does
+        # not. Pinned through the real transaction, not arithmetic.
+        from plane import attribution
+        d = tempfile.mkdtemp()
+        log = os.path.join(d, "spans.jsonl")
+        now = int(time.time())
+        attribution.reserve_spend_hold(log, "a", 0.60, 1.00, now)
+        attribution.reserve_spend_hold(log, "b", 0.40, 1.00, now)
+        with self.assertRaises(attribution.SpendBlocked):
+            attribution.reserve_spend_hold(log, "c", 0.01, 1.00,
+                                           now)
+
+    def test_duplicate_lease_refused(self):
+        # The same lease twice is a clean refusal, never a double
+        # hold: the hold row is keyed, the second insert dies.
+        from plane import attribution
+        d = tempfile.mkdtemp()
+        log = os.path.join(d, "spans.jsonl")
+        now = int(time.time())
+        attribution.reserve_spend_hold(log, "L", 0.10, 1.00, now)
+        with self.assertRaises(attribution.SpendBlocked) as cm:
+            attribution.reserve_spend_hold(log, "L", 0.10, 1.00,
+                                           now)
+        self.assertIn("duplicate-hold", str(cm.exception))
+        dbp = attribution._db_for(log)
+        con = sqlite3.connect(dbp)
+        n = con.execute(
+            "SELECT COUNT(*) FROM spend_holds").fetchone()[0]
+        con.close()
+        self.assertEqual(n, 1)
+
+    def test_reserved_expires_invoked_persists(self):
+        # A pre-spawn crash releases (reserved reaps after TTL);
+        # post-spawn stays (invoked never reaps and blocks).
+        from plane import spend as spend_mod
+        from plane import attribution
+        d = tempfile.mkdtemp()
+        log = os.path.join(d, "spans.jsonl")
+        gov = spend_mod.SpendGovernor(
+            log, {"m": 1.0}, "G0",
+            state_dir=os.path.join(d, "spend"))
+        now = int(time.time())
+        gov.reserve_usd(0.10, "E", now)
+        gov.reserve_usd(0.10, "E2", now + 601)  # E reaped
+        gov.reserve_usd(0.10, "I", now + 601)
+        gov.mark_invoked("I")
+        with self.assertRaises(spend_mod.SpendRefused):
+            gov.reserve_usd(0.10, "I2", now + 1200)
+
+    def test_missing_price_never_prices(self):
+        # No price row means no dollar figure, ever — not zero, not
+        # estimated. Unpriced models never reach authorization.
+        from plane import spend as spend_mod
+        from plane import workers
+        d = tempfile.mkdtemp()
+        log = os.path.join(d, "spans.jsonl")
+        gov = spend_mod.SpendGovernor(
+            log, {"m": 1.0}, "G0",
+            state_dir=os.path.join(d, "spend"))
+        with self.assertRaises(workers.ConfigBlocked):
+            gov.price_for("unpriced-model")
+        with self.assertRaises(workers.ConfigBlocked):
+            gov.worst_usd("unpriced-model", 100)
+
     def test_concurrent_reserves_atomic(self):
         # Cap $1.00, four concurrent $0.60 requests: exactly one wins
         # and committed + holds never exceeds the cap. The old
