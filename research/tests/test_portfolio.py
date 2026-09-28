@@ -1,4 +1,8 @@
+import os
+import sys
 import unittest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from research.strategy import benchmarks as B
 from research.strategy import portfolio as P
