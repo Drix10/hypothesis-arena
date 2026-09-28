@@ -78,6 +78,8 @@ jobs:
         run: PYTHONWARNINGS=error python3 research/tests/test_s5.py
       - name: strategy trial ledger (stdlib only)
         run: PYTHONWARNINGS=error python3 research/tests/test_ledger.py
+      - name: strategy statistics standard (stdlib only)
+        run: PYTHONWARNINGS=error python3 research/tests/test_stats.py
       - name: strategy baseline (stdlib only)
         run: PYTHONWARNINGS=error python3 research/tests/test_baseline.py
       - name: strategy JEV v4 interop (stdlib only)

@@ -61,7 +61,7 @@ A box is checked only with evidence (commit + test output / report path).
         participation caps + dividends) — doc 06 §6.0a.
   - [ ] A0.4 Settlement simulation (T+1, GFV/free-riding) + long-only
         cash constraint set in the backtester — doc 11 §11.0d.
-  - [ ] A0.5 Statistics: purged/embargoed walk-forward, CPCV, PBO, DSR
+  - [x] A0.5 (`research/strategy/stats.py`, 16 tests; CPCV/PBO/DSR/MinTRL/HAC/bootstrap/Holm) Statistics: purged/embargoed walk-forward, CPCV, PBO, DSR
         (N from ledger), MinTRL, stationary bootstrap, HAC Sharpe, pooled
         Holm — fixture-tested — doc 11 §11.0b.
   - [ ] A0.6 Pre-registration template + validator; contamination guard
