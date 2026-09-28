@@ -83,6 +83,21 @@ jurisdiction allowlist (doc 10 §10.1a, v3) ───┤     │
    jurisdiction allowlist (R19), freshness (created within the sleeve's
    declared window of the snapshot), and live side policy (BUY-to-open or
    SELL-to-close only). Same zero-allocation discipline.
+   **c1 wire record (K6, frozen with the code):** one JSON object per line,
+   keys exactly `schema` (`"c1"`), `created_ns` (decimal string), and
+   `candidate` — an object whose 12 CID-recipe fields (doc 12 / `candidate.py`
+   `_ID_FIELDS`, in that order) plus `cid` are ALL JSON strings holding the
+   exact Python `str()` bytes the CID was hashed over (same convention as
+   the JEV v4 request, so one recompute rule serves both). The sleeve is
+   `candidate.strategy_version`; it must appear in the stage manifest's
+   approved-sleeve list with its freshness window `window_s`. Checks, first
+   failure wins: shape/unknown-key → schema → CID (`sha256("|".join(12))`
+   equals `cid`) → sleeve approved → symbol on the R19 allowlist →
+   `snapshot_ts_ns` ≤ now and now − snapshot_ts_ns ≤ `window_s` (a future
+   stamp is rejected) → side policy (`BUY` = open; `SELL` only when the
+   symbol is currently held; anything else rejected). `created_ns` is
+   informational and must parse as a non-negative int64. Every reject is
+   counted per reason and never partially applied.
 3. `ctx/context.cpp` — builds the frozen `Snapshot`: marks, spread,
    session, indicators, regime, VaR/correlation flags (doc 05 §5.1a),
    portfolio view (equity, **settled cash, unsettled proceeds**, exposure,
