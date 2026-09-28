@@ -155,6 +155,13 @@ struct RiskSnapshot {
     KillLevel kill = KillLevel::NONE;
     Stage stage = Stage::G0_PAPER;
     int64_t risk_fraction_bp = 25;  // K6 reserved_risk fraction (25bp base)
+    // v3 live constraint set (doc 05 R18/R19). OPT-IN so every pre-v3
+    // verdict stays bit-identical; the stage manifest sets it true for any
+    // stage that trades (G0b onward). When true, fail-closed defaults hold.
+    bool v3_constraints = false;
+    int64_t settled_cash_cents = 0;    // R18: settled cash BEFORE pending buys
+    bool r18_unsettled_dependency = false;  // ledger: good-faith/free-riding
+    bool instrument_allowed = false;   // R19: on the signed allowlist
 };
 
 // Verdict: PROCEED or HOLD with a FROZEN reason code (countable paper

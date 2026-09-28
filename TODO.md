@@ -92,7 +92,7 @@ A box is checked only with evidence (commit + test output / report path).
       filter passes; cannot read an AnswerSet (compile/grep gate).
 - [ ] K3 Snapshot v2 + settlement ledger + committed vectors (v1 vectors
       still verified).
-- [ ] K4 R18 settled-cash + R19 allowlist in `risk/veto.cpp`; allowlist +
+- [ ] K4 (DONE: veto R18/R19 arms, opt-in `v3_constraints`, 171/171 veto checks, full gate PASS, old verdicts identical; OPEN: stage-manifest allowlist/sleeve loading + settlement-ledger feed = K3/K6) R18 settled-cash + R19 allowlist in `risk/veto.cpp`; allowlist +
       approved sleeves from the stage manifest; Slice-B verdicts unchanged.
 - [ ] K5 OTO stop-only protection + MOC sequencing (stop-fills-first and
       MOC-reject drills).

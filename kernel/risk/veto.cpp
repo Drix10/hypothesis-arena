@@ -284,7 +284,8 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
                s.equity_cents <= 0 || s.margin_used_cents < 0 ||
                s.daily_close_hwm_cents < 0 || s.intraday_hwm_cents < 0 ||
                s.risk_fraction_bp < 0 || s.day_count < 0 ||
-               s.hour_count < 0 || s.realized_outcomes < 0;
+               s.hour_count < 0 || s.realized_outcomes < 0 ||
+               s.settled_cash_cents < 0;
     int64_t peak =
         s.daily_close_hwm_cents > s.intraday_hwm_cents
             ? s.daily_close_hwm_cents
@@ -380,6 +381,22 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
         !s.short_ok)
         arm("short-block");
     if (s.corp_block) arm("corp-action-block");
+    if (s.v3_constraints) {
+        // R19: allowlisted instruments only, long only, cash account.
+        if (!s.instrument_allowed || s.intent.side != Side::LONG ||
+            s.intent.account != AccountType::CASH ||
+            s.intent.asset != AssetClass::STOCK)
+            arm("r19-allowlist");
+        // R18: buy funded by settled cash net of pending buys; a buy that
+        // depends on selling the same security (free-riding) is refused.
+        int64_t pend = 0;
+        for (auto& p : s.pending)
+            if (p.side == Side::LONG) pend += p.notional_cents;
+        if ((__int128)s.intent.notional_cents + pend >
+            (__int128)s.settled_cash_cents)
+            arm("r18-settled-cash");
+        if (s.r18_unsettled_dependency) arm("r18-free-riding");
+    }
     if (EventMediumActive(s.impact, s.phase))
         arm("event-medium");
     if (!s.r6_available) arm("r6-unavailable");

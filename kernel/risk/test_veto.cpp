@@ -203,6 +203,61 @@ int main(int argc, char** argv) {
         CHECK("lev-cash-over",
               !v.proceed && std::string(v.reasons_all[0]) == "leverage-cap");
     }
+    // ---- R18/R19 (v3, opt-in) ----
+    {
+        RiskSnapshot s = Clean();
+        s.intent.asset = AssetClass::STOCK;
+        s.intent.account = AccountType::CASH;
+        s.intent.notional_cents = 1000000LL;
+        VetoVerdict base = EvaluateVeto(s);
+        s.v3_constraints = false;
+        VetoVerdict off = EvaluateVeto(s);
+        CHECK("v3-off-identical", off.proceed == base.proceed &&
+                                      off.n_reasons == base.n_reasons);
+        s.v3_constraints = true;
+        s.settled_cash_cents = 1000000LL;
+        s.instrument_allowed = true;
+        VetoVerdict v = EvaluateVeto(s);
+        CHECK("v3-clean-proceeds", v.proceed);
+        s.settled_cash_cents = 999999LL;
+        v = EvaluateVeto(s);
+        CHECK("r18-short-cash", !v.proceed &&
+                                    std::string(v.reason) == "r18-settled-cash");
+        s.settled_cash_cents = 1500000LL;
+        AddPending(s, "SPY", Side::LONG, 600000LL);
+        v = EvaluateVeto(s);
+        CHECK("r18-pending-counts", !v.proceed);
+        s.pending.clear();
+        s.r18_unsettled_dependency = true;
+        v = EvaluateVeto(s);
+        CHECK("r18-free-riding", !v.proceed &&
+                                     std::string(v.reason) == "r18-free-riding");
+        s.r18_unsettled_dependency = false;
+        s.instrument_allowed = false;
+        v = EvaluateVeto(s);
+        CHECK("r19-not-allowlisted", !v.proceed &&
+                                         std::string(v.reason) == "r19-allowlist");
+        s.instrument_allowed = true;
+        s.intent.side = Side::SHORT;
+        v = EvaluateVeto(s);
+        CHECK("r19-short", !v.proceed);
+        s = Clean();
+        s.intent.asset = AssetClass::STOCK;
+        s.intent.account = AccountType::MARGIN;
+        s.v3_constraints = true;
+        s.instrument_allowed = true;
+        s.settled_cash_cents = 99999999LL;
+        v = EvaluateVeto(s);
+        CHECK("r19-margin-account", !v.proceed);
+        s.settled_cash_cents = -1;
+        s.intent.account = AccountType::CASH;
+        v = EvaluateVeto(s);
+        CHECK("r18-negative-cash-bad", !v.proceed &&
+                                           std::string(v.reason) == "bad-inputs");
+        s.intent.kind = IntentKind::EXIT;
+        v = EvaluateVeto(s);
+        CHECK("v3-exit-bypass", v.proceed);
+    }
     // ---- R9 session / short / corp ----
     {
         RiskSnapshot s = Clean();
