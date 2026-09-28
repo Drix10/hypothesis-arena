@@ -68,7 +68,7 @@ A box is checked only with evidence (commit + test output / report path).
         (LLM windows must start after cutoff + 30 d) — doc 11 §11.0c.
   - [x] A0.7 (`portfolio.py` + `benchmarks.py`, 6 tests; baseline_v1 reproduction + no-AI pairing are per-run ledgered runs, done in A1/A8) Benchmark set (cash, vol-matched passive, 60/40, no-AI
         variant, baseline_v1 reproduction) — doc 12 §12.6.
-  - [ ] A0.8 A-gate / B-gate report generators — doc 11 §11.3a.
+  - [x] A0.8 (`research/strategy/gates.py`, 5 tests; fail-closed, missing evidence fails) A-gate / B-gate report generators — doc 11 §11.3a.
 - [ ] A1 S2 closure: `baseline_v1` rerun on SIP bars + quotes; primary
       ledger populated; negative result + diagnosis recorded; FX leg dropped.
 - [ ] A2 T1 `trend_etf_v1`: pre-registration committed → A-gate report.
