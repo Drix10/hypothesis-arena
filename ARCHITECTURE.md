@@ -1,23 +1,27 @@
 # ARCHITECTURE — hypothesis-arena, exhaustive codebase guide
 
-AI-assisted paper-trading fund (forex majors + US equities, no crypto).
-Status: `Round 9: CLOSED · Deployment: ACCEPTED + hardened ·
-Phase D: OPEN · Slice D: NOT AUTHORIZED · G0_PAPER only`.
+AI-assisted systematic fund: US-listed equities/ETFs, cash account, long
+only (freeze v3, 2026-09-28; forex is research-only — OANDA BLOCKED,
+RBI LRS prohibits forex/margin trading abroad). No crypto.
+Status: `plan freeze v3 (alpha-first rebaseline) · P3.1–P3.3 FROZEN ·
+P3.5 H1 BUILT, transport not wired · no sleeve past an economic gate ·
+G0 NOT STARTED · paper only`.
 `plan/` is source of truth; this file describes the tree as it exists
-(389 tracked files). Labels: FROZEN (no changes without a human
+(544 tracked files at 2026-09-28; the per-family lists below predate the
+H1/strategy additions and are being refreshed — `git ls-files` wins). Labels: FROZEN (no changes without a human
 contract-defect ruling; `kernel/` impl and collector production
 code are byte-identical to the Round-9 baseline; the sole exception
 is the additive `RESEARCH_MODEL_ID` key in `collector/config.py`,
 disclosed in Addendum 32) · ACTIVE (current work surface) · FUTURE (not
 implemented) · HISTORICAL (audit trail, read-only).
 
-Verify this document: `git ls-files | wc -l` (= 389) and the per-family
-counts in §3. Family file lists follow exact name patterns; every
+Verify this document: `git ls-files | wc -l` and the per-family counts
+in §3 (counts marked historical where the tree has grown). Family file lists follow exact name patterns; every
 non-family file is named explicitly.
 
 ## 1. Root files (7 tracked + 1 ignored companion)
 
-Tracked (the "389" count includes these 7): `.env.example`,
+Tracked (root files): `.env.example`,
 `.gitattributes`, `.gitignore`, `AGENTS.md`, `ARCHITECTURE.md`,
 `README.md`, `TODO.md`. Ignored companion, NOT counted: `.env`
 (real values; full flow under "Configuration / environment flow").
@@ -49,13 +53,26 @@ Tracked (the "389" count includes these 7): `.env.example`,
 - `scripts/freeze-check.sh` — ACTIVE read-only gate: repo must match
   `plan/system-manifest.yaml` (versions, pins, risk rules, component
   presence incl. `kernel/tests/test_p33.cpp`). Exit 0 = PASS.
-- `.github/workflows/ci.yml` — ACTIVE. Four independent jobs: `stdlib`
-  (collector suites from `collector/tests/`, mocked IO), `evidence`
-  (isolation + sources), `plane` (250-test battery, no external net),
-  `kernel` (build.sh + freeze pins). Known state: plane/kernel/evidence
-  SUCCESS; stdlib FAILURE = pre-existing frozen-collector failure.
+- `.github/workflows/ci.yml` — ACTIVE. Five independent jobs: `stdlib`
+  (collector suites), `evidence` (isolation, sources, five adapters,
+  source seam, S5), `plane` (plane/hardening/emit/seam-graph/S6),
+  `kernel` (build.sh + freeze pins), `kernel-sanitizer` (ASan+UBSan).
+  All five green since S7-B (`30c81a3`). Gaps tracked in doc 07 O1/O2:
+  triggers only on `main` pushes and PRs; strategy tests (S1/S3/S4) and
+  `kernel/tests/test_v4.cpp` not yet in CI; no secret scanning.
 
-## 2. plan/ (15 files, FROZEN history + ACTIVE source of truth)
+## 2. plan/ (freeze v3: 13 docs + manifest + appendix/ + reviews/)
+
+Freeze v3 (2026-09-28) rewrote the plan around a legal live scope, a
+strategy book, a validation standard, and the shortest path to paper.
+The per-doc notes below are the freeze-v2 descriptions; where they
+conflict with the docs, the docs win. Key v3 changes: doc 02 is now the
+strategy book (legacy filename; X archive in `appendix/02-x-lists-archive.md`),
+doc 03 JEV is an optional filter, doc 05 adds R18/R19, doc 06 §6.1b and
+doc 08 §8.4 internals moved verbatim to `appendix/`, doc 10 adds the
+jurisdiction gate, doc 11 adds the trial ledger and contamination control,
+doc 12 demotes `baseline_v1` to a negative control.
+
 
 - `00-INDEX.md` — reading order + doc authority map. Read first.
 - `01-vision-and-scope.md` — fund scope; locks venues: OANDA v20
@@ -371,7 +388,9 @@ mirror (missing ledger raises, never $0).
 
 ## 9. Status ledger (current)
 
-- FROZEN: `kernel/` impl, collector production code (`config.py`
+- (freeze v3) Plan: docs 00–13 rewritten 2026-09-28; human signature of
+  the final text pending (doc 07 sign-off log).
+- FROZEN: `kernel/` impl (P3.1–P3.3 contracts), collector production code (`config.py`
   carries the additive `RESEARCH_MODEL_ID` loader key per Addendum 32
   — the only exception), `plan/`, JEV
   contracts, `research/` memos, round addenda, evidence JSON artifacts.
@@ -386,6 +405,7 @@ mirror (missing ledger raises, never $0).
   (The five-adapter poller→feature seam — EDGAR/FRED/Treasury/BLS/
   BEA harvest→parser→resolve→bundle→ctx — is SHIPPED, pending audit
   acceptance; live soak/p50-p99 per source stays OPEN by design.)
-- Current Phase-D credentials (ONLY): OpenRouter, FRED/ALFRED, BEA,
-  Alpaca paper. OANDA practice BLOCKED (India ineligible, Addendum
-  39) — alt-FX venue research only, no signup. No other keys exist.
+- Current credentials (ONLY): OpenRouter, FRED/ALFRED, BEA, Alpaca
+  paper — all to be rotated after the 2026-09-28 chat exposure (doc 07
+  O6). OANDA practice BLOCKED (India ineligible, Addendum 39); forex is
+  research-only under freeze v3 (no FX venue search). No other keys exist.
