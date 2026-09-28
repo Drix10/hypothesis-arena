@@ -37,11 +37,11 @@ A box is checked only with evidence (commit + test output / report path).
 - [ ] O4 S7-C closure: hosted 5/5 (kernel, kernel-sanitizer, evidence,
       plane, stdlib) on the head carrying `f0815e7` (open a PR or push to
       `main` — CI does not run on feature-branch pushes; see O1).
-- [ ] O1 CI: run on every push + `workflow_dispatch`; add `test_baseline`,
+- [x] O1 (local: test_baseline, test_jev_v4, test_v4 32/32 green; hosted run pending O4) CI: run on every push + `workflow_dispatch`; add `test_baseline`,
       `test_candidate` (pin pytest in a strategy requirements file),
       `test_jev_v4`, and `kernel/tests/test_v4.cpp` (plan amendment = doc 03
       locked decision, freeze v3).
-- [ ] O2 Secret scanning: gitleaks pinned by SHA-256 as a CI job + a
+- [x] O2 (`.gitleaks.toml`, `scripts/pre-commit-secrets.sh`, CI job `secrets`; full history clean, 55 commits) Secret scanning: gitleaks pinned by SHA-256 as a CI job + a
       pre-commit hook (pattern from `anthropics/financial-services`).
 - [ ] O3 freeze-check v3 alignment: rename `plan/02-twitter-alpha-system.md`
       → `plan/02-strategy-book.md`; verify manifest v3 keys

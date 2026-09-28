@@ -1,5 +1,6 @@
 # Repository-level execution evidence (Phase-D audit finding: claimed
-# green counts were local-only). Four jobs on every push/PR:
+# green counts were local-only). Jobs run on every push, PR and manual
+# dispatch (freeze v3 O1: feature-branch pushes were previously unverified):
 #  1. stdlib — collector suites only (mocked IO, no network),
 #     no third-party deps.
 #  2. evidence — plane isolation + sources suites, stdlib only, in
@@ -20,8 +21,8 @@ name: ci
 
 on:
   push:
-    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -75,6 +76,14 @@ jobs:
         run: PYTHONWARNINGS=error python3 research/tests/test_source_seam.py
       - name: strategy S5 paired evaluation (stdlib only)
         run: PYTHONWARNINGS=error python3 research/tests/test_s5.py
+      - name: strategy baseline (stdlib only)
+        run: PYTHONWARNINGS=error python3 research/tests/test_baseline.py
+      - name: strategy JEV v4 interop (stdlib only)
+        run: python3 research/tests/test_jev_v4.py
+      - name: strategy candidate contract (pinned pytest)
+        run: |
+          python3 -m pip install -r research/strategy/requirements.txt
+          python3 -m pytest -q research/tests/test_candidate.py
 
   plane:
     runs-on: ubuntu-latest
@@ -103,6 +112,10 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y g++
       - name: deterministic kernel gates
         run: bash kernel/build.sh
+      - name: C++ v4 interop vectors
+        run: |
+          g++ -std=c++17 -Wall -Wextra -O2 -o /tmp/test_v4 kernel/tests/test_v4.cpp
+          /tmp/test_v4 kernel/v4
       - name: freeze pins
         run: bash scripts/freeze-check.sh
 
@@ -115,3 +128,18 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y g++
       - name: deterministic kernel gates under ASan+UBSan
         run: bash kernel/build.sh sanitize
+
+  secrets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks (pinned release, SHA-256 verified, full history)
+        run: |
+          V=8.21.2
+          curl -sSfL -o gl.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${V}/gitleaks_${V}_linux_x64.tar.gz"
+          echo "5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba  gl.tgz" | sha256sum -c -
+          tar xzf gl.tgz gitleaks
+          ./gitleaks detect --no-banner --redact -c .gitleaks.toml

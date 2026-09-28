@@ -1,0 +1,11 @@
+# Freeze v3 O2. Default ruleset + narrow path allowlist. Nothing here may
+# ever cover a real credential; each entry is a reviewed false positive.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "committed test vectors (SHA-256 digests) and the local evidence-only sandbox"
+paths = [
+  '''^kernel/(p33|v4|fixtures|vectors)/''',            # digests / signed test vectors
+  '''^research/sandbox/langfuse/docker-compose\.yml$''', # throwaway local Langfuse, never networked
+]
