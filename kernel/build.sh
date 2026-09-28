@@ -1,6 +1,6 @@
 #!/bin/bash
 # P3.1 gate: build + full validator suite + fuzz + API-surface check.
-# Usage: ./build.sh [normal|hardened]
+# Usage: ./build.sh [normal|hardened|sanitize]
 # Sanitizers: GCC ASan/UBSan runtimes do NOT ship for this MinGW target
 # (link fails: collect2 ld error, no libasan/libubsan). The hardened mode
 # below is the available substitute: libstdc++ debug containers, stack
@@ -8,7 +8,17 @@
 set -e
 cd "$(dirname "$0")"
 MODE="${1:-normal}"
-if [ "$MODE" = "hardened" ]; then
+if [ "$MODE" = "sanitize" ]; then
+    # S7-A: real ASan+UBSan runtimes on a Linux toolchain (hosted CI).
+    # Same gates, same contracts; no production behavior change.
+    # The --wrap,malloc allocation proofs are skipped here BY DESIGN:
+    # sanitizer runtimes replace the allocator (and need the shared
+    # libstdc++), so link-time malloc wrapping cannot observe them.
+    # Zero-heap discipline stays proven by the normal-mode gate.
+    FLAGS="-std=c++17 -Wall -Wextra -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all"
+    echo "--- sanitizer build (Linux ASan+UBSan, no halt on recovery) ---"
+    SANITIZE=1
+elif [ "$MODE" = "hardened" ]; then
     FLAGS="-std=c++17 -Wall -Wextra -O1 -g -D_GLIBCXX_DEBUG -D_GLIBCXX_DEBUG_PEDANTIC -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fanalyzer"
     echo "--- hardened build (no sanitizer runtimes on this toolchain) ---"
     # The compiler targets UCRT64; run its binaries with the matching runtime.
@@ -100,8 +110,10 @@ fi
 # Slice C runtime proof (not only grep): wrapped-malloc counter around
 # the validation path must stay zero. Static libstdc++ so operator new
 # resolves to the wrapped malloc.
+if [ -z "${SANITIZE:-}" ]; then
 g++ $FLAGS -static-libstdc++ -static-libgcc -Wl,--wrap,malloc -Wl,--wrap,calloc -Wl,--wrap,realloc -o test_noalloc ingest/test_noalloc.cpp ingest/features.cpp
 ./test_noalloc
+fi
 # Slice D gate [correctness + drill]: kill evaluation, entry gate,
 # MEDIUM flatten FSM, HARD ordered sequence, persistence round-trip
 # (doc 10 sec. 10.3, R16; evaluation/actuation boundary per packet v2).
@@ -109,8 +121,10 @@ g++ $FLAGS -o test_kill kill/test_kill.cpp kill/switch.cpp
 ./test_kill
 # Slice D zero-malloc contract: evaluation + FSM + persistence allocate
 # nothing (comments stripped: the discipline note names the tokens).
+if [ -z "${SANITIZE:-}" ]; then
 g++ $FLAGS -static-libstdc++ -static-libgcc -Wl,--wrap,malloc -Wl,--wrap,calloc -Wl,--wrap,realloc -o test_noalloc_kill kill/test_noalloc_kill.cpp kill/switch.cpp
 ./test_noalloc_kill
+fi
 # H1 gate [correctness + drill]: router lifecycle, journal chain,
 # broker recipe + Alpaca protected-entry semantics (doc 06 sec. 6.1,
 # packet v3: lifecycle-only router, journal-before-order, E1).
@@ -136,8 +150,10 @@ g++ $FLAGS -o g0_runner runner/main.cpp runner/runner.cpp runner/store.cpp runne
 # (identity minting at IDLE is documented cycle-path and excluded
 # here; the loop covers the IDLE-reject path + every post-identity
 # state x observation shape).
+if [ -z "${SANITIZE:-}" ]; then
 g++ $FLAGS -static-libstdc++ -static-libgcc -Wl,--wrap,malloc -Wl,--wrap,calloc -Wl,--wrap,realloc -o test_noalloc_exec exec/test_noalloc_exec.cpp exec/router.cpp broker/adapter.cpp
 ./test_noalloc_exec
+fi
 if sed 's|//.*||' exec/router.hpp exec/router.cpp | grep -nE "std::string|std::vector|malloc|calloc|realloc|strdup|operator new"; then
     echo "GATE FAIL: heap use in router step core"
     exit 1
@@ -179,8 +195,10 @@ g++ $FLAGS -o test_stage stage/test_stage.cpp stage/stage.cpp
 # sec. 4.2.2, Alpaca paper poll path; machinery only, never authority).
 g++ $FLAGS -o test_feed feed/test_feed.cpp feed/feed.cpp
 ./test_feed
+if [ -z "${SANITIZE:-}" ]; then
 g++ $FLAGS -static-libstdc++ -static-libgcc -Wl,--wrap,malloc -Wl,--wrap,calloc -Wl,--wrap,realloc -o test_noalloc_feed feed/test_noalloc_feed.cpp feed/feed.cpp
 ./test_noalloc_feed
+fi
 # Slice F allocation contract: heap-once lives in the TickRing
 # constructor (a 64k member array would blow the thread stack); the
 # tick path itself allocates nothing.

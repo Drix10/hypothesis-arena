@@ -11,6 +11,11 @@
 #     process boundary, publisher/manifest/reader/digest).
 #  4. kernel — deterministic C++ gates (normal mode; MinGW-only
 #     hardened flags stay local to the Windows build host).
+#  5. kernel-sanitizer — S7-A: same deterministic C++ gates rebuilt
+#     with real Linux ASan+UBSan runtimes (ubuntu toolchain has them;
+#     MinGW does not). --wrap,malloc allocation proofs stay in the
+#     normal-mode gate by design (sanitizer runtimes own the
+#     allocator); zero-heap discipline is unchanged.
 name: ci
 
 on:
@@ -100,3 +105,13 @@ jobs:
         run: bash kernel/build.sh
       - name: freeze pins
         run: bash scripts/freeze-check.sh
+
+  kernel-sanitizer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: install toolchain
+        run: sudo apt-get update && sudo apt-get install -y g++
+      - name: deterministic kernel gates under ASan+UBSan
+        run: bash kernel/build.sh sanitize
