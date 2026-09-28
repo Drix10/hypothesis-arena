@@ -244,6 +244,38 @@ class IdentityTest(unittest.TestCase):
         self.assertFalse(os.path.exists(touch))
         self.assertFalse(os.path.exists(attribution._db_for(log)))
 
+    def test_run_gated_tier3_snapshot_refuses_pre_spawn(self):
+        # S7-C P1: the provider gate enforces the threaded snapshot
+        # tier — a Tier-3 snapshot refuses pre-spawn (no touch, no
+        # hold) even though the dollar hold alone would admit it.
+        d = tempfile.mkdtemp()
+        led, log, gov, budget, _p = T._gate(d)
+        touch = os.path.join(d, "touched")
+        cfg = {"model_id": "fake",
+               "egress_proxy": "http://proxy.invalid:8080",
+               "fake_behavior": "touch-file",
+               "touch_path": touch}
+        with self.assertRaises(T.spend_mod.SpendRefused):
+            workers.run_gated(
+                "generate", "hypothesize", "AAPL", "t1", 1,
+                {"messages": [{"role": "user",
+                                "content": "hi"}]},
+                cfg, T.fake_provider_factory, None, budget, gov,
+                "fake", log, 30.0, entry_tier=3)
+        self.assertFalse(os.path.exists(touch))
+        # Refused before any dollar machinery: not even a ledger
+        # DB exists (the hold insert is the first ledger writer).
+        self.assertFalse(os.path.exists(attribution._db_for(log)))
+        # Control: unstopped snapshots proceed to the provider.
+        for tier in (None, 0):
+            workers.run_gated(
+                "generate", "hypothesize", "AAPL", "t1", 1,
+                {"messages": [{"role": "user",
+                                "content": "hi"}]},
+                cfg, T.fake_provider_factory, None, budget, gov,
+                "fake", log, 30.0, entry_tier=tier)
+        self.assertTrue(os.path.exists(touch))
+
     def test_non_dict_provider_cfg_refuses(self):
         d = tempfile.mkdtemp()
         led, log, gov, budget, _p = T._gate(d)
@@ -888,6 +920,31 @@ class GraphGovernanceTest(unittest.TestCase):
                              T._graph().CAND_MAX)
         self.assertGreater(out.get("dropped_candidates", 0), 0)
 
+    def test_spend_snapshot_never_manufactures_mixed_pair(self):
+        # S7-C P1: with durable Tier 3, even stale legacy reads
+        # cannot manufacture (allow, 3). decision() is patched to a
+        # stale allow and tier() to a stale 0 around the cycle; the
+        # graph must still deny from the single snapshot triple.
+        # (Under the old decision()+tier() composition this exact
+        # patching produced (allow, 3) and skipped the research
+        # stop.)
+        d = tempfile.mkdtemp()
+        T._fixtures(d)
+        gt = T.GraphTest()
+        deps, _c, _l, _led, _g = gt._deps(d, script="t",
+                                          spend_usd=40.0)
+        gov = deps["spend_governor"]
+        self.assertEqual(gov.verdict_snapshot(),
+                         ("deny", 3, "tier-3"))
+        gov.decision = lambda now=None: ("allow", "tier-0-stale")
+        gov.tier = lambda now=None: 0
+        app = T._graph().build_graph(deps)
+        out = T._graph().run_cycle(app, ["AAPL"], 1, "mixedpair")
+        self.assertTrue(out.get("aborted"))
+        self.assertIsNone(out.get("emitted"))
+        blocked = " ".join(out.get("blocked") or [])
+        self.assertIn("spend-deny:tier-3", blocked)
+
     def test_hook_failure_visible_not_breaking(self):
         d = tempfile.mkdtemp()
         T._fixtures(d)
@@ -1022,6 +1079,35 @@ class TierStateTest(unittest.TestCase):
         tA, _p = gov.evaluate(now)
         self.assertEqual(tA, 2)
         return gov, now
+
+    def test_verdict_snapshot_coherent_across_raise(self):
+        # S7-C P1: the snapshot triple comes from ONE durable pass,
+        # so (allow, 3) is unproducible: allow means the pass read
+        # tier 0, and a durably raised tier reads deny with tier 3.
+        from plane import spend as spend_mod
+        d = tempfile.mkdtemp()
+        log = os.path.join(d, "spans.jsonl")
+        gov = spend_mod.SpendGovernor(
+            log, dict(T.PRICING), "G0",
+            state_dir=os.path.join(d, "spend"))
+        now = int(time.time())
+        self.assertEqual(gov.verdict_snapshot(now),
+                         ("allow", 0, "tier-0"))
+        attribution.append_span(log, 1, "seed", "m",
+                                cycle_id="c", symbol="AAPL",
+                                prompt_tokens=10,
+                                completion_tokens=5, usd=40.0,
+                                span_id="raise", ts=now)
+        gov2 = spend_mod.SpendGovernor(
+            log, dict(T.PRICING), "G0",
+            state_dir=os.path.join(d, "spend"))
+        self.assertEqual(gov2.evaluate(now + 3600)[0], 3)
+        snap = gov.verdict_snapshot(now + 3600)
+        self.assertEqual(snap, ("deny", 3, "tier-3"))
+        verdict, tier, _reason = snap
+        self.assertFalse(verdict == "allow" and tier == 3)
+        self.assertTrue((verdict == "allow") == (tier == 0) or
+                        verdict == "deny")
 
     def test_cross_instance_durable_raise_wins_same_second(self):
         # S7-C P1: the DURABLE tier always wins, even when a second
@@ -1306,32 +1392,156 @@ class RatioDaysTest(unittest.TestCase):
         self.assertEqual(len(rows), 1)
 
     def test_ratio_crash_between_append_and_state_counts_once(self):
-        # Crash window: the ratio row is journaled but the state's
-        # ratio_day never advances (process dies between the append
-        # and the state persist). Restart must count the day exactly
-        # once — never double-append, never drop it from the streak.
+        # S7-C P1 (re-audit): an append-before-state crash must
+        # repair BOTH the deletion tripwire and the chain anchor,
+        # without duplicating the row — through FRESH governor
+        # instances (the real restart path). After recovery, journal
+        # deletion must fail closed, never read as a fresh streak.
         import json as _json
+        from plane import spend as spend_mod
         d = tempfile.mkdtemp()
         gov, log = self._gov(d, [1.0])
-        now = int(time.time())
+        dia = int(time.time())
+        dia = dia - (dia % 86400)
+        now = dia + 7200
         self._seed(log, 300.0, now - 10 * 86400)
-        day = now - (now % 86400)
         gov.evaluate(now)
         jp = os.path.join(d, "spend",
                            T.spend_mod.RATIO_JOURNAL_NAME)
         rows = [l for l in open(jp, encoding="utf-8").read()
                 .split("\n") if l.strip()]
         self.assertEqual(len(rows), 1)
-        # simulate the crash: row on disk, ratio_day stale in state
+        head = _json.loads(rows[0])["digest"]
         st = gov._load_state(now)
+        self.assertEqual((st["ratio_day"], st["ratio_head"]),
+                         (dia, head))
+        # simulate the crash: row on disk, state fully stale
         st["ratio_day"] = 0
+        st["ratio_head"] = None
         gov._save_state(st)
-        gov.evaluate(now + 60)
+        # RESTART 1: a fresh instance repairs without duplicating
+        gov2, _log2 = self._gov(d, [1.0])
+        gov2.evaluate(now + 3600)
         rows2 = [l for l in open(jp, encoding="utf-8").read()
                  .split("\n") if l.strip()]
         self.assertEqual(len(rows2), 1)
+        st2 = gov2._load_state(now + 3600)
+        self.assertEqual((st2["ratio_day"], st2["ratio_head"]),
+                         (dia, head))
+        # journal deleted after recovery: deletion-detectable,
+        # never a fresh streak
+        os.remove(jp)
+        gov3, _log3 = self._gov(d, [1.0])
+        with self.assertRaises(spend_mod.StateUnavailable):
+            gov3.evaluate(now + 7200)
+        self.assertEqual(gov3.decision(now + 7200)[0], "deny")
+
+    def _failed_3day(self, d):
+        # Three real consecutive failed days: chained ratio journal
+        # plus an anchored tier-state head (the rig the tamper
+        # tests attack).
+        gov, log = self._gov(d, [1.0])
+        dia = int(time.time())
+        dia = dia - (dia % 86400)
+        now = dia + 7200
+        self._seed(log, 300.0, now - 10 * 86400)
+        for i in range(3):
+            gov.evaluate(now + i * 86400)
+        return gov, log, now
+
+    def _ratio_journal(self, d):
+        import json as _json
+        jp = os.path.join(d, "spend",
+                           T.spend_mod.RATIO_JOURNAL_NAME)
+        with open(jp, encoding="utf-8") as fh:
+            rows = [_json.loads(l) for l in fh.read().split("\n")
+                    if l.strip()]
+        return jp, rows
+
+    def test_ratio_untouched_chain_forces_tier3(self):
+        # Control: the rig is decision-capable — untouched chained
+        # history forces Tier 3 on a fresh instance.
+        from plane import spend as spend_mod
+        d = tempfile.mkdtemp()
+        _gov, _log, now = self._failed_3day(d)
+        gov2, _log2 = self._gov(d, [1.0])
+        self.assertEqual(gov2.evaluate(now + 2 * 86400 + 3600)[0],
+                         3)
         self.assertEqual(
-            gov._ratio_day_state(day, 0, now + 60), "failed")
+            gov2.verdict_snapshot(now + 2 * 86400 + 3600)[0],
+            "deny")
+
+    def test_ratio_rewrite_without_refix_denies(self):
+        # S7-C P1: flipping a decided failed day to ok (digests
+        # untouched) breaks the chain — denies, never suppresses
+        # the breaker.
+        import json as _json
+        from plane import spend as spend_mod
+        d = tempfile.mkdtemp()
+        _gov, _log, now = self._failed_3day(d)
+        jp, rows = self._ratio_journal(d)
+        rows[1]["state"] = "ok"
+        with open(jp, "w", encoding="utf-8") as fh:
+            for r in rows:
+                fh.write(_json.dumps(r, sort_keys=True) + "\n")
+        gov2, _log2 = self._gov(d, [1.0])
+        with self.assertRaises(spend_mod.StateUnavailable) as cm:
+            gov2.evaluate(now + 2 * 86400 + 3600)
+        self.assertIn("ratio-journal-forged", str(cm.exception))
+        self.assertEqual(
+            gov2.decision(now + 2 * 86400 + 3600)[0], "deny")
+
+    def test_ratio_rewrite_with_refix_denies(self):
+        # S7-C P1: flipping plus recomputing the forward digests
+        # keeps the chain internally valid, but the proven head no
+        # longer matches — denies on the anchor, never reads ok.
+        import json as _json
+        from plane import spend as spend_mod
+        d = tempfile.mkdtemp()
+        _gov, _log, now = self._failed_3day(d)
+        jp, rows = self._ratio_journal(d)
+        rows[1]["state"] = "ok"
+        rows[1]["digest"] = spend_mod.SpendGovernor._ratio_digest(
+            rows[1]["day"], "ok", rows[1]["stage"],
+            rows[1]["prev"])
+        rows[2]["prev"] = rows[1]["digest"]
+        rows[2]["digest"] = spend_mod.SpendGovernor._ratio_digest(
+            rows[2]["day"], rows[2]["state"], rows[2]["stage"],
+            rows[2]["prev"])
+        with open(jp, "w", encoding="utf-8") as fh:
+            for r in rows:
+                fh.write(_json.dumps(r, sort_keys=True) + "\n")
+        gov2, _log2 = self._gov(d, [1.0])
+        with self.assertRaises(spend_mod.StateUnavailable) as cm:
+            gov2.evaluate(now + 2 * 86400 + 3600)
+        self.assertIn("ratio-anchor-unknown", str(cm.exception))
+        self.assertEqual(
+            gov2.decision(now + 2 * 86400 + 3600)[0], "deny")
+
+    def test_ratio_legacy_after_chain_denies(self):
+        # S7-C P1: a legacy-shaped row inside the chain era is a
+        # forged format downgrade even when the day order is valid.
+        import json as _json
+        from plane import spend as spend_mod
+        d = tempfile.mkdtemp()
+        _gov, _log, now = self._failed_3day(d)
+        jp, rows = self._ratio_journal(d)
+        mid = {"day": rows[1]["day"], "state": "failed",
+               "stage": "G2"}
+        # Re-link the chain over the gap so the ONLY violation is
+        # the legacy row's era (order valid, chain valid).
+        rows[2]["prev"] = rows[0]["digest"]
+        rows[2]["digest"] = spend_mod.SpendGovernor._ratio_digest(
+            rows[2]["day"], rows[2]["state"], rows[2]["stage"],
+            rows[2]["prev"])
+        with open(jp, "w", encoding="utf-8") as fh:
+            fh.write(_json.dumps(rows[0], sort_keys=True) + "\n")
+            fh.write(_json.dumps(mid, sort_keys=True) + "\n")
+            fh.write(_json.dumps(rows[2], sort_keys=True) + "\n")
+        gov2, _log2 = self._gov(d, [1.0])
+        with self.assertRaises(spend_mod.StateUnavailable) as cm:
+            gov2.evaluate(now + 2 * 86400 + 3600)
+        self.assertIn("ratio-journal-forged", str(cm.exception))
 
     def test_three_distinct_days_force_tier3(self):
         d = tempfile.mkdtemp()
@@ -3095,12 +3305,28 @@ class ReauditFixTest(unittest.TestCase):
                 fh.write(bad)
             with self.assertRaises(spend_mod.StateUnavailable):
                 gov.evaluate(t0 + 3700)
-        # Control: a structurally valid history still reads.
+        # Control turned P1-3 regression (S7-C): rewriting decided
+        # history into a legacy-shaped row no longer reads — the
+        # state's proven chain head matches no chained row, so the
+        # rewrite denies instead of silently changing the streak.
         day = t0 - (t0 % 86400)
         with open(jpath, "w", encoding="utf-8") as fh:
             fh.write('{"day": %d, "state": "failed", '
                      '"stage": "G2"}\n' % day)
-        gov.evaluate(t0 + 3700)  # must not raise
+        with self.assertRaises(spend_mod.StateUnavailable) as cm:
+            gov.evaluate(t0 + 3700)
+        self.assertIn("ratio-anchor-unknown", str(cm.exception))
+        # Genuinely fresh (anchor-less) legacy history still reads:
+        # pre-chain residue with no proven head is not a rewrite.
+        d2 = tempfile.mkdtemp()
+        gov2 = self._ratio_gov(d2, "G2")
+        jpath2 = os.path.join(d2, "spend",
+                              spend_mod.RATIO_JOURNAL_NAME)
+        os.makedirs(os.path.dirname(jpath2), exist_ok=True)
+        with open(jpath2, "w", encoding="utf-8") as fh:
+            fh.write('{"day": %d, "state": "failed", '
+                     '"stage": "G2"}\n' % day)
+        gov2.evaluate(t0 + 3700)  # must not raise
 
     def test_ratio_first_run_without_journal_is_fresh(self):
         # Upgrade path: tier history (G0, suspended, never journaled)

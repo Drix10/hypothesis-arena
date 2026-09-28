@@ -781,10 +781,11 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
               provider_factory, sandbox_cfg, budget, governor,
               model_id, log_path, timeout_s, max_tokens_asked=None,
               tool_factory=None, executor_factory=None, steps=None,
-              container_name=None):
+              container_name=None, entry_tier=None):
     """THE invocation gate (parent process). Every provider touch in
     production passes through here, in this order:
 
+    0. entry-tier Tier-3 stop (clean refusal),
     1. validate identities + task shape (clean failures),
     2. price lookup (missing pricing blocks clean),
     3. R15 reservation of the TRUE token bound (clean refusal),
@@ -807,6 +808,12 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
     _check_ident("node", node)
     _check_ident("symbol", symbol)
     _check_ident("cycle", cycle_id)
+    # Tier-3 research stop at the provider gate: a snapshot tier the
+    # graph already decided is stopped never becomes a provider call
+    # because some other part of the graph saw an older verdict.
+    # governor-owned (SpendRefused lives in spend; workers must not
+    # import it — circular). Clean refusal BEFORE any reservation.
+    governor.check_research_tier(entry_tier)
     if type(epoch) is not int or not 0 <= epoch <= 2 ** 31 - 1:
         raise r15.AbortCycle("gate", {"bad-identity": "epoch"})
     if kind not in ("generate", "extract"):

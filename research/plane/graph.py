@@ -230,7 +230,9 @@ def _require_governor(gov):
         raise _workers.ConfigBlocked(
             "spend_governor without state_dir: tier state would "
             "not be durable")
-    for meth in ("tier", "decision", "price_for", "cheapest_model",
+    for meth in ("tier", "decision", "verdict_snapshot",
+                 "check_research_tier", "price_for",
+                 "cheapest_model",
                  "worst_usd", "reserve_usd", "mark_invoked",
                  "settle_usd", "evaluate", "thesis_cap"):
         if not callable(getattr(gov, meth, None)):
@@ -614,12 +616,17 @@ def build_graph(deps):
         return {"fused": fused, "dropped_fused": dropped,
                 "producer_overrun": overrun}
 
-    def _llm_attempt(state, blocked, node, sym, build, parse):
+    def _llm_attempt(state, blocked, node, sym, build, parse,
+                     entry_tier=None):
         """One FORCED-boundary model attempt via run_gated. Returns
         (value_or_None, blocked, aborted, model_ran). The provider is
         touched ONLY inside run_gated's spawned child — build/parse
         callables never see it. SpendRefused (pre-spawn clean refusal)
-        degrades to blocked evidence, never an abort."""
+        degrades to blocked evidence, never an abort. entry_tier is
+        the node decision's snapshot tier: a Tier-3 snapshot never
+        reaches the provider gate (the tier is threaded through, not
+        re-read, so no concurrent raise can split the verdict from
+        the tier between the node check and the spawn)."""
         cyc = state.get("cycle_id", "local")
         epoch = state.get("epoch", 0)
         try:
@@ -631,17 +638,21 @@ def build_graph(deps):
         if not log_path:
             return None, _blocked(state, "%s:no-attribution-log" % node), \
                 False, False
+        if entry_tier is not None and entry_tier >= 3:
+            return None, _blocked(
+                state, "%s:research-llm-stopped" % node), False, False
         try:
             budget = deps["budget_factory"](cyc, sym)
             budget.check()
-            tier = _tier(state)
+            tier = entry_tier if entry_tier is not None else \
+                _tier(state)
             model_id, cfg = _select_model(tier)
             out = _workers.run_gated(
                 "generate", node, sym or "?", cyc, epoch,
                 {"messages": messages}, cfg, deps["provider_factory"],
                 None, budget, deps["spend_governor"],
                 model_id, log_path,
-                _model_timeout())
+                _model_timeout(), entry_tier=entry_tier)
         except _workers.ConfigBlocked as e:
             return None, _blocked(state, "%s:%s" % (node, e)), False, False
         except spend_mod.SpendRefused as e:
@@ -666,10 +677,14 @@ def build_graph(deps):
         return value, blocked, False, True
 
     def _spend_verdict(state):
+        # ONE coherent snapshot per node decision: verdict, tier,
+        # and reason come from a single durable pass, never from
+        # independently-read decision()+tier() values a concurrent
+        # evaluator could split across a tier raise (e.g. a stale
+        # (allow, 3) that would skip the Tier-3 research stop).
         gov = deps["spend_governor"]
         try:
-            verdict, reason = gov.decision()
-            return verdict, gov.tier(), reason
+            return gov.verdict_snapshot()
         except Exception:
             return "deny", 3, "governor-error"
 
@@ -714,7 +729,7 @@ def build_graph(deps):
             value, blocked, hit, _ran = _llm_attempt(
                 dict(state, blocked=blocked), blocked, "hypothesize",
                 sym, deps["hypothesize_build"],
-                deps["hypothesize_parse"])
+                deps["hypothesize_parse"], entry_tier=tier)
             if hit:
                 aborted = True
                 out[sym] = ""
@@ -788,7 +803,8 @@ def build_graph(deps):
                 dict(state, blocked=blocked), blocked, "critique",
                 sym,
                 lambda s, st, _t=text: deps["critique_build"](s, _t, st),
-                lambda s, t, st: deps["critique_parse"](s, t, st))
+                lambda s, t, st: deps["critique_parse"](s, t, st),
+                entry_tier=tier)
             if hit:
                 aborted = True
                 out[sym] = {"text": "", "disagreement": True}

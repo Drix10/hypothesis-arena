@@ -92,6 +92,13 @@ RATIO_FAIL_DAYS = 3
 TIER_STATE_NAME = "tier_state.json"
 TIER_JOURNAL_NAME = "tier_journal.jsonl"
 RATIO_JOURNAL_NAME = "ratio_journal.jsonl"
+# Ratio-row integrity chain (S7-C P1): every ratio row commits to
+# the previous row's digest, and the tier state anchors the newest
+# row it has proven (ratio_head). A silent rewrite of a decided
+# day (failed -> ok) breaks the chain or the anchor, so valid-JSON
+# tampering with Tier-3 history denies instead of flipping the
+# circuit breaker. No new formula: the streak rule is untouched.
+RATIO_GENESIS_PREV = "ratio-genesis-v1"
 STATE_MAX_BYTES = 4096
 JOURNAL_TAIL_BYTES = 65536  # bounded crash-recovery scan
 TIER_LOCK_NAME = "tier.lock"  # ONE lock file for state + journals
@@ -250,7 +257,8 @@ class SpendGovernor:
 
     def _initial_state(self):
         st = {"tier": 0, "projection": 0.0, "evaluated_at": 0,
-              "below_count": 0, "ratio_day": 0, "tier_rev": 0}
+              "below_count": 0, "ratio_day": 0, "tier_rev": 0,
+              "ratio_head": None}
         st["binding"] = self._binding()
         return st
 
@@ -277,9 +285,14 @@ class SpendGovernor:
             tier_rev = data.get("tier_rev", 0)
             if type(tier_rev) is not int or tier_rev < 0:
                 return None
+            ratio_head = data.get("ratio_head", None)
+            if ratio_head is not None and \
+                    type(ratio_head) is not str:
+                return None
             st = {"tier": tier, "projection": float(proj),
                   "evaluated_at": eva, "below_count": below,
                   "ratio_day": ratio_day, "tier_rev": tier_rev,
+                  "ratio_head": ratio_head,
                   "binding": data.get("binding")}
         except (TypeError, ValueError):
             return None
@@ -321,6 +334,7 @@ class SpendGovernor:
             # goes stale).
             init = self._initial_state()
             init["ratio_day"] = st["ratio_day"]
+            init["ratio_head"] = st["ratio_head"]
             init["tier_rev"] = st["tier_rev"]
             return init
         if now is not None and st["evaluated_at"] > now + \
@@ -736,21 +750,42 @@ class SpendGovernor:
                 raise StateUnavailable("%s-journal-unreadable" % tag)
 
     @staticmethod
+    def _ratio_digest(day, state, stage, prev):
+        """Chain digest for one ratio row: canonical, no floats."""
+        import hashlib
+        body = json.dumps({"day": day, "state": state,
+                           "stage": stage, "prev": prev},
+                          sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+    @staticmethod
     def _valid_ratio_row(row):
-        """Exact ratio-row schema: a syntactically valid but
-        structurally wrong line (a list, a string, a dict with
-        wrong keys/types) is corruption, not a skippable line —
-        ratio history controls the Tier-3 rule. Stage need only be
+        """Exact ratio-row schema, two eras: legacy 3-key rows
+        (pre-chain history) or chained 5-key rows. A syntactically
+        valid but structurally wrong line (a list, a string, a dict
+        with wrong keys/types) is corruption, not a skippable line
+        — ratio history controls the Tier-3 rule. Stage need only be
         a KNOWN stage, not the current one: history survives
         binding resets by design (the tripwire, not the streak,
         is what a reset preserves)."""
-        return (isinstance(row, dict)
-                and set(row) == {"day", "state", "stage"}
-                and type(row["day"]) is int and row["day"] >= 0
+        if not isinstance(row, dict):
+            return False
+        if set(row) == {"day", "state", "stage"}:
+            return (type(row["day"]) is int and row["day"] >= 0
+                    and row["state"] in ("ok", "failed",
+                                            "suspended")
+                    and row["stage"] in STAGE_CAPS_USD)
+        if set(row) != {"day", "state", "stage", "prev",
+                         "digest"}:
+            return False
+        return (type(row["day"]) is int and row["day"] >= 0
                 and row["state"] in ("ok", "failed", "suspended")
-                and row["stage"] in STAGE_CAPS_USD)
+                and row["stage"] in STAGE_CAPS_USD
+                and type(row["prev"]) is str and row["prev"]
+                and type(row["digest"]) is str and row["digest"])
 
-    def _ratio_rows_strict(self, journaled_day, now=None):
+    def _ratio_rows_strict(self, journaled_day, now=None,
+                             anchor=None):
         """Newest-first ratio-journal rows with fail-closed anomaly
         handling. journaled_day is the last day the tier state proves
         was journaled (the deletion tripwire): a missing/empty journal
@@ -763,13 +798,24 @@ class SpendGovernor:
         UTC day in time order, so anything else is edited history —
         and a duplicate/out-of-order day could flip the newest row
         for a day and break the three-distinct-failed-days rule
-        without any malformed JSON. Any of those raises
-        StateUnavailable — lost ratio history denies, never resets
-        the 3-day streak. A missing journal with journaled_day == 0
-        is a fresh path (first counted evaluation ever, or a reset
-        before any ratio row existed). One trailing line without its
-        terminating newline is tolerated (crash mid-append; the next
-        append heals it by truncating the partial tail first)."""
+        without any malformed JSON. Chained (5-key) rows must form
+        one valid digest chain from genesis; legacy (3-key) rows
+        survive only for days older than the first chained row — a
+        legacy row at or after the chain era is a forged downgrade
+        of the integrity format. anchor is the tier state's proven
+        chain head: when set it must match a chained row's digest,
+        so a silent rewrite of decided history (failed -> ok, with
+        or without recomputed digests) denies instead of flipping
+        the breaker. Rows journaled after the anchor are the crash
+        window (append landed, state persist did not): still fully
+        schema/order/future-checked, adopted by the next evaluation.
+        Any of those raises StateUnavailable — lost ratio history
+        denies, never resets the 3-day streak. A missing journal with
+        journaled_day == 0 is a fresh path (first counted evaluation
+        ever, or a reset before any ratio row existed). One trailing
+        line without its terminating newline is tolerated (crash
+        mid-append; the next append heals it by truncating the
+        partial tail first)."""
         rows, had = self._journal_rows_raw(RATIO_JOURNAL_NAME,
                                             "ratio")
         if not had:
@@ -792,6 +838,25 @@ class SpendGovernor:
             if today is not None and day > today:
                 raise StateUnavailable("ratio-journal-order")
             prev = day
+        chained = [r for r in rows if "digest" in r]
+        if chained:
+            first_day = chained[0]["day"]
+            for r in rows:
+                if "digest" not in r and r["day"] >= first_day:
+                    raise StateUnavailable("ratio-journal-forged")
+            expect = RATIO_GENESIS_PREV
+            for r in chained:
+                if r["prev"] != expect or r["digest"] != \
+                        self._ratio_digest(r["day"], r["state"],
+                                         r["stage"], r["prev"]):
+                    raise StateUnavailable("ratio-journal-forged")
+                expect = r["digest"]
+        if anchor is not None and anchor not in \
+                [r["digest"] for r in chained]:
+            # Rewritten history: the proven head matches no
+            # chained row (a legacy-only journal with an anchor
+            # is a format downgrade, never pre-chain residue).
+            raise StateUnavailable("ratio-anchor-unknown")
         rows.reverse()  # newest first (single-writer append order)
         if journaled_day > 0:
             newest = rows[0]["day"]
@@ -801,17 +866,29 @@ class SpendGovernor:
                 raise StateUnavailable("ratio-journal-truncated")
         return rows
 
-    def _ratio_day_state(self, day, journaled_day=0, now=None):
+    def _ratio_day_state(self, day, journaled_day=0, now=None,
+                           anchor=None):
         """Recorded ratio state for one UTC day (newest row wins),
         or None when the day was never evaluated (suspended days
         never journal — they return before the day-record block —
         but never count as failed). journaled_day is the tier
-        state's deletion tripwire (see _ratio_rows_strict)."""
-        for row in self._ratio_rows_strict(journaled_day, now):
+        state's deletion tripwire (see _ratio_rows_strict); anchor
+        is its proven chain head."""
+        for row in self._ratio_rows_strict(journaled_day, now,
+                                           anchor):
             if (type(row.get("day")) is int and row["day"] == day
                     and row.get("state") in ("ok", "failed",
                                                "suspended")):
                 return row["state"]
+        return None
+
+    def _ratio_row_for(self, day, journaled_day=0, now=None,
+                       anchor=None):
+        """Newest validated journal row for one UTC day, or None."""
+        for row in self._ratio_rows_strict(journaled_day, now,
+                                           anchor):
+            if type(row.get("day")) is int and row["day"] == day:
+                return row
         return None
 
     def _ratio_forces_stop(self, now, st=None, locked=False):
@@ -834,35 +911,64 @@ class SpendGovernor:
             # always carry state_dir — enforced at graph build).
             return False
         journaled_day = st["ratio_day"] if st is not None else 0
-        if self._ratio_day_state(day, journaled_day, now) is None:
-            # At most ONE counted evaluation per UTC day: repeated
-            # hourly failures on the same day are one failed day.
-            def _record():
-                if self._ratio_day_state(day, journaled_day,
-                                          now) is None:
-                    self._heal_journal_tail_locked(RATIO_JOURNAL_NAME,
-                                                   "ratio")
-                    self._journal_locked(RATIO_JOURNAL_NAME,
-                                         {"day": day, "state": state,
-                                          "stage": self.stage})
-                    if st is not None:
-                        st["ratio_day"] = day
-            if locked:
-                # Outer tier lock already held (see evaluate).
+        anchor = st.get("ratio_head") if st is not None else None
+        # At most ONE counted evaluation per UTC day: repeated
+        # hourly failures on the same day are one failed day. The
+        # record block runs unconditionally (under the tier lock):
+        # when the row already exists but the state never adopted
+        # it — crash between journal append and state persist — the
+        # validated row is adopted (day AND chain head, no
+        # duplicate) so the deletion tripwire and the anchor stay
+        # proven. The adoption persists with this evaluation's
+        # state save.
+        def _record():
+            if self._ratio_day_state(day, journaled_day, now,
+                                     anchor) is None:
+                self._heal_journal_tail_locked(RATIO_JOURNAL_NAME,
+                                               "ratio")
+                prev = anchor if anchor is not None else \
+                    RATIO_GENESIS_PREV
+                digest = self._ratio_digest(day, state,
+                                            self.stage, prev)
+                self._journal_locked(RATIO_JOURNAL_NAME,
+                                     {"day": day, "state": state,
+                                      "stage": self.stage,
+                                      "prev": prev,
+                                      "digest": digest})
+                if st is not None:
+                    st["ratio_day"] = day
+                    st["ratio_head"] = digest
+            elif st is not None:
+                # S7-C P1: the row exists but the state never
+                # adopted it (crash between journal append and
+                # state persist). Adopt the validated row's day
+                # AND chain head now — without duplicating the
+                # row — so the deletion tripwire and the anchor
+                # stay proven. The adoption persists with this
+                # evaluation's state save.
+                row = self._ratio_row_for(day, journaled_day,
+                                          now, anchor)
+                if row is not None:
+                    st["ratio_day"] = day
+                    if "digest" in row:
+                        st["ratio_head"] = row["digest"]
+        if locked:
+            # Outer tier lock already held (see evaluate).
+            _record()
+        else:
+            lock = self._tier_lock_path()
+            with locks.FileLock(lock, purpose="tier"):
                 _record()
-            else:
-                lock = self._tier_lock_path()
-                with locks.FileLock(lock, purpose="tier"):
-                    _record()
         # Distinct consecutive FAILED days ending today; an ok day or
         # a missing/suspended day breaks the streak. Only the first
         # RATIO_FAIL_DAYS days matter (bounded journal scans). The
         # tripwire follows a just-journaled advance above.
         trip = st["ratio_day"] if st is not None else journaled_day
+        head = st.get("ratio_head") if st is not None else anchor
         streak = 0
         d = day
         while streak < RATIO_FAIL_DAYS:
-            if self._ratio_day_state(d, trip, now) != "failed":
+            if self._ratio_day_state(d, trip, now, head) != "failed":
                 break
             streak += 1
             d -= 86400
@@ -872,13 +978,25 @@ class SpendGovernor:
     def tier(self, now=None):
         return self.evaluate(now)[0]
 
-    def decision(self, now=None):
-        """(verdict, reason). Unknown-spend outstanding, unmeasurable
-        spend, and unverifiable tier state all deny — an uncertain
-        plane does not spend."""
+    def verdict_snapshot(self, now=None):
+        """Coherent (verdict, tier, reason) from ONE durable pass:
+        the unknowns/measurability checks plus a SINGLE tier
+        evaluation. The graph consumes this triple as the authority
+        for one node decision — never composes decision() and tier()
+        reads taken at different instants (a concurrent evaluator
+        can raise the durable tier between two reads, manufacturing
+        e.g. (allow, 3), which skips the Tier-3 research stop).
+        Deny-dominant: unknowns, unmeasurable spend, and
+        unverifiable tier state all deny with the most restrictive
+        tier, so the triple can never authorize what the durable
+        state forbids. Residual micro-window (unknowns arriving
+        after the check) is closed by run_gated's atomic pre-spawn
+        hold, which re-refuses on pending unknowns."""
         try:
             if attribution.has_unreconciled(self.log_path):
-                return "deny", "unknown-spend-pending"
+                pending = True
+            else:
+                pending = False
         except attribution.LedgerUnavailable:
             # Genuinely new path: no unknowns possible. A deleted
             # authority raises here too — and must deny. Distinguish
@@ -886,17 +1004,38 @@ class SpendGovernor:
             try:
                 fresh = self._fresh()
             except attribution.LedgerUnavailable:
-                return "deny", "spend-unmeasurable"
+                return "deny", 3, "spend-unmeasurable"
             if not fresh:
-                return "deny", "spend-unmeasurable"
+                return "deny", 3, "spend-unmeasurable"
+            pending = False
         try:
-            tier = self.evaluate(now)
+            tier = self.evaluate(now)[0]
         except attribution.LedgerUnavailable:
-            return "deny", "spend-unmeasurable"
+            return "deny", 3, "spend-unmeasurable"
         except StateUnavailable:
-            return "deny", "tier-state-unavailable"
-        t = tier[0] if isinstance(tier, tuple) else tier
-        return TIERS[t]["verdict"], "tier-%d" % t
+            return "deny", 3, "tier-state-unavailable"
+        if pending:
+            return "deny", tier, "unknown-spend-pending"
+        return TIERS[tier]["verdict"], tier, "tier-%d" % tier
+
+    def decision(self, now=None):
+        """(verdict, reason). Unknown-spend outstanding, unmeasurable
+        spend, and unverifiable tier state all deny — an uncertain
+        plane does not spend."""
+        verdict, _tier, reason = self.verdict_snapshot(now)
+        return verdict, reason
+
+    def check_research_tier(self, entry_tier):
+        """Provider-gate Tier-3 enforcement: the graph threads its
+        node decision's snapshot tier through _llm_attempt into
+        run_gated, and the gate refuses a Tier-3 snapshot pre-spawn
+        (clean SpendRefused, provider untouched). The tier is
+        threaded, never re-read, so no concurrent raise can split
+        the verdict from the tier between the node check and the
+        spawn. entry_tier None (callers without a snapshot) leaves
+        the dollar hold as the backstop."""
+        if entry_tier is not None and entry_tier >= 3:
+            raise SpendRefused("research-llm-stopped:tier-3")
 
     def thesis_cap(self, now=None):
         t = self.tier(now)
