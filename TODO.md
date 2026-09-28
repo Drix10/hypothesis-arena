@@ -53,7 +53,7 @@ A box is checked only with evidence (commit + test output / report path).
 ## Track A — alpha (critical path)
 
 - [ ] A0 Research harness v2 (`research/strategy/`):
-  - [ ] A0.1 Trial ledger (append-only, hash-chained, off-host checkpoint;
+  - [x] A0.1 (`research/strategy/ledger.py`, 9 tests) Trial ledger (append-only, hash-chained, off-host checkpoint;
         every run writes a row incl. failures) — doc 11 §11.0a.
   - [ ] A0.2 SIP data fetcher (daily + minute bars, quotes, `feed=sip`,
         ≥15-min-delayed end) with dataset manifests — doc 09 §9.1a.
