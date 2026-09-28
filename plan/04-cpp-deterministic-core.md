@@ -82,7 +82,9 @@ jurisdiction allowlist (doc 10 §10.1a, v3) ───┤     │
    id against the stage manifest's approved-sleeve list, symbol against the
    jurisdiction allowlist (R19), freshness (created within the sleeve's
    declared window of the snapshot), and live side policy (BUY-to-open or
-   SELL-to-close only). Same zero-allocation discipline.
+   SELL-to-close only). Candidates are low-rate and validated off the tick path, so this gate may
+   allocate (std::string/vector); the caller bounds each line to 4 KiB and
+   the tick-path zero-allocation gate is unchanged.
    **c1 wire record (K6, frozen with the code):** one JSON object per line,
    keys exactly `schema` (`"c1"`), `created_ns` (decimal string), and
    `candidate` — an object whose 12 CID-recipe fields (doc 12 / `candidate.py`
