@@ -98,7 +98,7 @@ A box is checked only with evidence (commit + test output / report path).
       MOC-reject drills).
 - [x] K6 (`ingest/candidates.{hpp,cpp}`, 17 checks, wire record frozen in doc 04 2b; tailer/stage-manifest feed is runner wiring in K1/G0) `ingest/candidates.cpp`: CID recompute, sleeve approval,
       allowlist, freshness, long-only side policy, adversarial vectors.
-- [ ] K7 Outbound-only alert adapter (no inbound, no commands, redacted).
+- [x] K7 (`ops/alert_relay.py`, 6 tests; tail+redact+HTTPS POST, no listener, at-least-once; needs ALERT_WEBHOOK_URL at deploy [HUMAN]) Outbound-only alert adapter (no inbound, no commands, redacted).
 - [ ] K8 Live journal growth bound (bounded load, chain continuity kept).
 - [ ] K9 Slice F 24 h soak on the real transport [BLOCKED on K1].
 - [ ] K10 H1 drills on the real transport, every doc 06 §6.2a row
