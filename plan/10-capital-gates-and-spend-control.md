@@ -222,7 +222,8 @@ extrapolated), so the brake is applied before the wall, not at it.
   fall back only after 6 consecutive hours below the lower threshold (anti-flap).
   The tier journal is a semantic chain, not just syntax: non-legacy rows
   must carry consecutive revs, from/to matching the governor's emission
-  rule (first from Tier 0), snapshot tier equal to its row, and max rev
+  rule (first from Tier 0 when the chain start lies inside the bounded
+  tail window), snapshot tier equal to its row, and max rev
   exactly equal to the state rev — a forged newer row denies, and rows
   newer than state are never adopted (state-first persist means the
   state always leads). Legacy (rev-less) rows recover only in an
@@ -232,11 +233,23 @@ extrapolated), so the brake is applied before the wall, not at it.
   embedded evaluated_at values beyond the 300 s skew allowance deny.
   The ratio journal must be a strictly increasing day sequence (no
   duplicates, no reordering, no future days): an edited day order
-  denies rather than weakening the 3-day rule. Ordering is verified
-  over the bounded 64 KiB journal tail (≈3.5 years at one row/day);
-  streak soundness does not depend on ancient order (a gap outside
-  the tail reads as unevaluated and breaks the streak toward the
-  conservative side).
+  denies rather than weakening the 3-day rule. Ratio rows are
+  hash-chained (each commits to the previous row's digest) and the tier
+  state anchors the newest proven row (`ratio_head`, written together
+  with the `ratio_day` tripwire): a valid-JSON rewrite of decided
+  history (failed -> ok, with or without recomputed digests), a
+  head/day mismatch, a stripped head, a legacy-format row inside the
+  chain era, or more than ONE row beyond the head (the only legitimate
+  crash residue: append landed, state persist did not — adopted and
+  persisted before any new append) all deny. The chain and the anchor
+  live in the same state directory, so they detect edits and
+  inconsistent crash residue, not a writer able to rewrite both
+  consistently (host compromise, outside this control). Ordering and the
+  chain are verified over the bounded 64 KiB journal tail (≈11 months
+  of chained rows at one row/day; a cut tail links from its first
+  visible row, still pinned forward to the anchor); streak soundness
+  does not depend on ancient order (a gap outside the tail reads as
+  unevaluated and breaks the streak toward the conservative side).
 - A provider price change that lifts projected spend past a tier acts exactly like
   usage growth. No exception path exists.
 
@@ -377,6 +390,15 @@ the graph → worker → budget → attribution/spend → publish path):
   non-atomic cap check exists anywhere; concurrent processes
   serialize on the transaction (proven: four $0.60 racers vs a $1.00
   cap admit exactly one).
+- Research-call admission re-reads the DURABLE tier in the same
+  tier-lock section that inserts the dollar hold (tier lock first,
+  ledger second — the order every tier evaluation uses). The graph's
+  per-node tier snapshot is only the plan (model, prose cap,
+  watchlist): Tier 3, a durable tier above the snapshot, or
+  unverifiable tier state refuses pre-spawn, so a Tier-3 persist
+  either precedes an admission (refused) or follows its hold (an
+  in-flight call admitted before the stop). Every provider-reaching
+  path (hypothesize, critique, LLM extract) passes this gate.
 - Model identity: the priced `model_id` and
   `provider_cfg["model_id"]` must be the same string before any
   reservation (a mismatch is a clean pre-reserve refusal).
