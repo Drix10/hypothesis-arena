@@ -57,9 +57,9 @@ A box is checked only with evidence (commit + test output / report path).
         every run writes a row incl. failures) — doc 11 §11.0a.
   - [ ] A0.2 SIP data fetcher (daily + minute bars, quotes, `feed=sip`,
         ≥15-min-delayed end) with dataset manifests — doc 09 §9.1a.
-  - [ ] A0.3 `cost_v2` (paper_fill_v1 + SIP NBBO + SEC/TAF fees +
+  - [x] A0.3 (`costs_v2.py`, 7 tests) `cost_v2` (paper_fill_v1 + SIP NBBO + SEC/TAF fees +
         participation caps + dividends) — doc 06 §6.0a.
-  - [ ] A0.4 Settlement simulation (T+1, GFV/free-riding) + long-only
+  - [x] A0.4 (`settlement.py`, 4 tests; wired into the portfolio engine in A0.7) Settlement simulation (T+1, GFV/free-riding) + long-only
         cash constraint set in the backtester — doc 11 §11.0d.
   - [x] A0.5 (`research/strategy/stats.py`, 16 tests; CPCV/PBO/DSR/MinTRL/HAC/bootstrap/Holm) Statistics: purged/embargoed walk-forward, CPCV, PBO, DSR
         (N from ledger), MinTRL, stationary bootstrap, HAC Sharpe, pooled

@@ -51,6 +51,7 @@ class SettlementTest(unittest.TestCase):
         L2.advance("d2")
         with self.assertRaises(E):
             L2.sell("A", 1, 10)  # would settle past the calendar: refuse
+        self.assertEqual(L2.shares, {"A": 1})  # refusal is atomic
 
     def test_total_cash_conserved_and_dividend(self):
         L = CashLedger(D, 500)

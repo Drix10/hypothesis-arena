@@ -62,11 +62,11 @@ class CashLedger:
             raise SettlementError("bad-sell")
         if qty > held:
             raise SettlementError("short-sale-refused")
+        if self.today + 1 >= len(self.sessions):
+            raise SettlementError("no-settlement-session")
         self.shares[sym] = held - qty
         if self.shares[sym] == 0:
             del self.shares[sym]
-        if self.today + 1 >= len(self.sessions):
-            raise SettlementError("no-settlement-session")
         self.pending.append((self.today + 1, proceeds))
 
     def credit(self, amount):
