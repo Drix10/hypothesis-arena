@@ -1,4 +1,75 @@
-# 06 — Execution and Ops
+# 06 — Execution and Ops (freeze v3)
+
+Freeze v3 keeps the H1 order lifecycle exactly as accepted and adds what
+the v2 doc never had: execution rules per sleeve, a cost model that is
+the evaluation authority, cash-account settlement operations, and
+outbound-only alerting. The ~340-line close-ownership / incident-identity /
+recovery contract formerly in §6.1b moved VERBATIM to
+`appendix/06b-close-ownership-and-recovery-record.md` and remains binding.
+
+## 6.0 Execution by sleeve (v3)
+
+| Sleeve | Signal time | Entry order | Protection | Normal exit |
+|---|---|---|---|---|
+| T1/T2 trend/sector | month-end official close (SIP) | next session: sells-to-close first (MOC), buys the following session with settled proceeds (MOC) | OTO stop-only, GTC catastrophe stop (`exit_trend_v1`) | MOC at the next rebalance when the signal flips |
+| I1 intraday | 10:00 ET (SIP, delayed) | 15:30 ET marketable limit (limit = ask + 1 tick cap, IEX quote) | OTO stop-only, day (`exit_intraday_v1`) | MOC the same day |
+| E1/E2 events | EDGAR acceptance time (R12) | next session 10:00 ET marketable limit | OTO stop-only, GTC (`exit_event_v1`) | MOC on the holding-period day |
+| B0 baseline (shadow only) | per doc 12 | per doc 12 | bracket (`exit_profile_v1`) | stop / TP / time_exit |
+
+Ordering rules that every sleeve obeys:
+- Marketable limits, never naked market orders, for entries; the limit cap
+  is the pre-registered slippage bound (a fill worse than the cap does not
+  happen; an unfilled entry is cancelled at the sleeve's window end —
+  no chasing).
+- MOC exits go in before the broker-declared MOC cutoff (adapter data).
+  MOC vs protective stop: the stop is cancelled only after the MOC is
+  acknowledged; if the stop fills first, the MOC becomes an over-sell that
+  a cash account rejects — the router treats that reject as the expected
+  terminal for the MOC (journaled, reconciled), never as an error loop.
+  If the MOC is rejected or missed, the position stays protected and the
+  exit is retried at the next session open (journaled incident).
+- Whole shares for protected orders (adapter constraint); rounding is the
+  last step of the sizing hierarchy and never rounds up past a cap.
+- No extended-hours orders in v1. No order in the first 5 minutes after
+  the open except the E-sleeve window, which starts at 10:00 ET.
+
+## 6.0a Cost model and TCA (v3 — the evaluation authority)
+
+Alpaca paper is a plumbing test, not a cost oracle: per Alpaca's own
+documentation it does not check order size against NBBO quantity,
+partial-fills a random 10% of eligible orders, ignores market impact,
+queue position, price improvement, latency slippage, and regulatory fees,
+and does not simulate dividends. Therefore:
+
+- `paper_fill_v1` (frozen, unchanged — see Locked decisions) stays the
+  conservative per-leg fill rule used by `baseline_v1` and S2/S5
+  reproductions.
+- `cost_v2` (v3, for every sleeve pre-registration) = `paper_fill_v1`
+  priced from **SIP NBBO at the decision time** (delayed history in
+  research; the live quote in G0b shadow accounting) + SEC Section 31 fee
+  and FINRA TAF on sells + a participation cap (order ≤ 1% of the
+  symbol's 20-day median volume and ≤ displayed size at the touch; larger
+  orders are split across sessions or not placed) + dividends credited
+  from the corporate-action layer (paper does not simulate them).
+  Stress legs 1×/1.5×/2×/3× on the spread + fee component.
+- TCA per fill: implementation shortfall vs arrival mid (decision time)
+  and vs the modeled cost; daily and per-sleeve aggregates in the summary.
+  Live (G1+) realized shortfall > 1.5× modeled over 30 fills → S3 pause.
+
+## 6.0b Cash-account settlement operations (v3)
+
+- The settlement ledger (doc 04 §4.2 5c) is rebuilt at startup from the
+  journal + broker account and reconciled every cycle (S2).
+- Intraday sleeves use **two alternating capital tranches** so that each
+  day's buys are funded by cash that settled; the ledger enforces it (R18).
+- Monthly sleeves sell first and buy the next session with settled
+  proceeds (the rebalance is two sessions by design).
+- A T-bill ETF used as the cash leg is itself subject to T+1: moving from
+  it into risk assets is a two-session operation; the cash buffer implied
+  by R2's 75% cap absorbs same-day needs.
+- Any broker-reported good-faith or free-riding flag is a HARD-class
+  compliance incident: entries stop, human review, root cause in the
+  journal before resuming.
 
 ## 6.1 Order lifecycle (locked, v2: broker-native protection)
 
@@ -66,450 +137,137 @@ intent (risk PASS) → re-check HALT file → journal row → send entry +
   conviction table and before the R2 check. An order that is legal at G3 and
   illegal at G1 is rejected at G1, with the stage named in the HOLD reason.
 
-## 6.1b Close ownership + incident identity (frozen)
+## 6.1b Close ownership + incident identity (frozen; moved)
 
-One position, one close. Per (symbol, side) and per incident, exactly one
-close identity may be live. Every kill-path close is pre-flighted (GET by
-the stable id first — found adopts, 404 sends once, failure waits), and
-the pre-flight is the mutual-exclusion mechanism between close owners:
-
-- MEDIUM: the local flatten EXIT owns the close when one is active, armed,
-  or landed; otherwise the broker sweep owns it. The sweep reconciles
-always (fills attribute back) but SENDS only for uncovered symbols — a
-covered symbol waits on its local close. A local flatten never submits
-against a live sweep close: it arms and waits, and attribution zeroes
-the entry when the sweep lands. A flatten that resolves non-closed hands
-ownership back to the sweep (re-arm is forbidden — the intent id is
-single-use, so only the incident sweep id can carry the next close).
-- HARD: an in-flight EXIT is adopted when live (no cancel to make room)
-or replaced when dead/absent — never bypassed with a second identity.
-An ENTRY with exit coverage closes only its uncovered remainder. All
-hard closes for one (symbol, side) share the incident hard id, so the
-slot path, the exit path, and the slotless-position path pre-flight
-each other instead of stacking closes.
-
-Kill-path close ids are incident-scoped (Alpaca `client_order_id` is
-unique per order — a historical filled id reused for a later incident
-would adopt-away a live position's close):
-
-- `medium-<epoch>-<SYM>` (sweep) and `medium-<epoch>-<SYM>-<qty>`
-  (remainder), hashed through the §6.1 recipe. The epoch is minted once
-per MEDIUM incident at medium-enter (`medium-incident.txt`) and
-  overwritten only by a new enter — which BY DEFINITION is a new
-incident (a crash mid-incident keeps the FSM file, so it reuses).
-- `hard-<epoch>-<SYM>` for every HARD close of that (symbol, side).
-The epoch lives in `hard-incident.txt` as `<epoch>` + kill reason. A
-crash mid-HARD keeps HALT, so the next HardStop reuses the epoch
-(minting new would double the in-flight closes). Clearing HALT ends
-the incident (a human owns the interim — the journal shows what flew);
-a re-firing HARD is a new incident with a new epoch, and the supersede
-is journaled + alerted. A clean non-HARD cycle with no HALT truncates
-the file (the incident is over; tidy for forensics).
-- Intent-bound ids (`<intent>-repair`, `<intent>-flatten`, exit
-sub-identities) need no epoch: intent ids are permanently bound and
-single-use (§6.1), so they cannot collide across incidents.
-- MEDIUM FSM auto-clear: `medium.txt` is cleared (with the epoch
-file) on any non-MEDIUM cycle once the incident is closed (file ==
-FLATTENED) or stale (no local open AND no broker position) — a
-later automatic MEDIUM trigger re-enters fresh with a NEW epoch;
-no operator file edit is ever required. Crash-mid-incident reuses
-the files (in-progress state + epoch survive). A FLATTENED file
-seen WITH live exposure is stale (clear + fresh enter), never
-suppression.
-- HARD quantity authority: the SIGNED BROKER POSITION (the position
-endpoint is the account's current open-position source) sizes every
-HARD close when the seam answers — the slot path closes only the
-broker quantity uncovered by reconciled exits, in the broker
-direction; local/broker disagreement journals drift but never
-changes the qty. Local-open sizing is the fallback ONLY when the
-seam is absent/failing (journaled). Position-loop symbols with
-ENTRY slots are slot-path-owned; exit-only symbols reconcile ALL
-covering exits (every one queried, none assumed) and close only
-the remainder. A found-short terminal hard order mints a
-deterministic incident-scoped remainder `hard-<epoch>-<SYM>-<qty>`
-(pure, pre-flighted, strictly-decreasing chain, never colliding
-with the primary id; primary-absent still posts the primary).
-- Order-identity determinism: the frozen id recipe reads
-length-bounded field inputs (broker 32 / account 32 / context
-64 / symbol 16 / intent 64). A full-width unterminated field
-truncates instead of hashing stack garbage — nondeterministic
-ids across restarts would break pre-flight dedupe and risk
-re-sends under forked identities.
-- HARD chain truth vs broker gate: the remainder derives from the
-ORIGINAL hard-order chain (`hard-chain.txt`: `<tag> <requested>`
-`<attributed>`, write-ahead before every POST), never by subtracting
-a burned order's historical fill from a CURRENT broker number (settled
-fills are gone from the broker — re-subtracting them under-closes).
-The broker position independently caps the send (`min(chain-remainder,
-broker-need)`; zero need sends nothing). Per-id attribution is exact
-(only the not-yet-attributed portion folds, crash-safe via the chain).
-EXIT adoption attributes only beyond the slot's own
-`exit_counted_qty` (the router's per-current-order memory) and
-bumps it — an already-counted cumulative fill never folds twice.
-A broker `filled_qty` REGRESSION below chain-attributed quantity
-is classified (journal + alert, drift owns the anomaly) and the
-remainder floors at the chain (`req - already`, never `req -
-regressed-filled`): a regressing observation can never
-manufacture a larger replacement remainder.
-- HARD chain write-ahead enforcement: `NoteHardChain` returns
-success/failure and a failed chain write PREVENTS the POST (freeze
-+ alert + refuse — chain truth must exist before the close flies).
-A missing/corrupt/unreadable chain for a broker-known hard id is an
-integrity failure (freeze + alert + refuse) — NEVER `orig = need`,
-never reconstructed from current broker quantity. Crash between
-note and POST restarts into a 404 and safely sends the same
-identity once; crash after POST restarts into adoption of the
-same identity (pre-flight dedupe, never a second identity).
-- HARD chain integrity validation: the reader validates the whole
-file, not "last row wins" — requested quantity per tag is immutable,
-attributed is monotonically nondecreasing, 0 <= attributed <=
-requested, no malformed records, no conflicting requested values,
-no silent skipping of bad rows (exact-duplicate rows are idempotent
-crash-retry evidence, not conflicts). Chain rows parse as strict
-single-space `<tag> <requested> <attributed>` with overflow-safe
-bounded decimal conversion (never scanf-family conversion on
-persisted numeric text). Existence checks mean
-regular-file on every platform (stat-converged: a directory in
-place of a state file reads as missing/genesis, never as
-valid-empty content, on Windows and POSIX alike). `hard-chain.txt`
-additionally carries a hard byte envelope (64 KiB): oversized input
-refuses before materializing rows, so millions of duplicate rows
-can never drive unbounded memory (the live journal keeps its own
-lifecycle contract and is tracked separately as an operational
-scaling item, never silently rotated). Any violation fails the HARD
-path closed (freeze + alert + refuse), never a broker-derived
-substitute quantity.
-- HARD attribution durability: slot accounting persists BEFORE the
-durable chain attribution advances — `AttributeClosedQty` is
-two-phase (compute takes, then mutate+persist per slot; any persist
-failure rolls back in-memory AND re-persists already-written slots
-to their old values, best-effort, then reports failure) and returns
-success/failure. The HARD path advances the chain note only when
-all slot persists succeeded (and rolls every slot back to old
-values when the chain note itself fails); otherwise it journals +
-alerts + refuses with books exactly as before the attempt, so the
-next pre-flight reconstructs the same portion exactly once. The
-un-advanced chain plus the old snapshots ARE the fail-closed
-recovery state — no second source, no broker-derived fill-in.
-- Seam numeric parsing is overflow-safe everywhere broker or
-file text becomes a quantity: stream `filled_qty` accumulates with
-a reject-before-overflow bound (inputs above the share cap refuse
-before arithmetic can overflow); epoch files parse with the same
-checked conversion (oversized/overflowed epoch text refuses).
-- Position snapshots are contract-checked: every
-`list_positions(..., cap)` return must satisfy `0 <= n <= cap`;
-any other count is an unavailable snapshot (unknown/failure down
-the caller's existing fail-closed branch), never an index past
-the fixed buffer — a bad Phase-4 adapter cannot drive an
-over-read.
-- Cursor durability fails closed: a failed `cursor.txt` write
-journals + alerts, keeps the dirty bit, and fails the cycle
-under the same contract as a failed day-roll (never a silent
-clear that reports success while losing the replay position).
-- Incident epochs are durable-or-nothing: `MintMediumEpoch` and
-`HardEpochFor` mint no identity unless the epoch file write
-succeeds (failure returns no-epoch; callers stop the incident
-path and, for MEDIUM, revert the FSM so the next cycle retries
-the mint). The clock-stuck `old + 1` fallback refuses at
-`LLONG_MAX` instead of overflowing.
-- HARD logical remainder identity: the chain requested quantity
-is the LOGICAL remainder, never the broker-capped send (`send =
-min(logical, broker_need)`; the chain records `logical`). A 404 on
-an existing tag reuses its recorded request/attribution and
-appends at most an exact-duplicate row — never a conflicting
-request. Stranded partial sends converge by re-pre-flight under
-the same identity (never a second identity for one remainder).
-- HARD cumulative EXIT crash ordering: durable parent-entry
-attribution lands BEFORE the EXIT `exit_counted_qty`/`exit_closed_qty`
-persist. A crash between the two replays safely: entries already
-authoritative, the leftover drops, counters advance, no double-fold,
-no permanently lost attribution.
-- HARD incident recovery: durable HALT + missing/corrupt/unreadable
-`hard-incident.txt` refuses (never mints a new epoch over a live
-HALT). Same-process mint retry is allowed only before any close
-flies under that epoch.
-- HALT durability: HALT is a durable state write (checked), backed
-by a sticky in-memory HARD latch consulted by entry gating — a
-failed HALT persist cannot yield entry operation or a false
-completed-stop. The stop is claimed only once durably established;
-otherwise the process stays latched and retries.
-- Recovery terminal-row rule: a journal terminal row never overrides
-a nonterminal durable snapshot (rebuild + reconcile), and journal-
-terminal + missing snapshot/intent refuses for human recovery.
-Terminal EXIT closed quantity re-attributes AFTER entries rebuild
-(capped, idempotent).
-- MEDIUM flatten certification: `FLATTENED` writes only on
-`AllFlat() && BrokerConfirmedFlat()`; missing/failing seam retains
-the in-progress FSM. Every FSM/cleanup transition is checked:
-persist-fail keeps the previous safe file state + alerts + retries.
-- State-file integrity: absent vs corrupt/non-regular are distinct.
-A directory/unreadable node never reads as missing (journal: refuse;
-HALT: present; freeze: frozen; chains/incidents/FSM: invalid/refuse).
-A present-but-unreadable regular freeze file is frozen (ABSENT
-reads as the empty set; REGULAR-but-unreadable fails closed).
-A present regular MEDIUM FSM whose content is non-empty and
-outside the four legal states is corruption: refuse + alert,
-never mint a fresh incident over it (absent-or-empty still
-takes the fresh/mint-retry path). FSM validation is
-centralized and runs at EVERY cycle boundary regardless of
-kill level: the non-MEDIUM finalize/clear path validates
-before any transition, so a malformed file can never be
-rewritten into a legitimate-looking FLATTENED or
-PROTECTION_ONLY (corruption is never erased, only refused).
-- Broker position values: snapshots validate count AND rows —
-NUL-terminated non-empty symbols, no duplicates, qty within
-+/-999999999, `LLONG_MIN` refused. Any violation invalidates the
-whole snapshot (unknown).
-- MEDIUM sweep remainder: never from the stale snapshot after a
-terminal-short sweep — re-read authoritative broker position and
-send `min(logical_remainder, |fresh|)` (sign agreement required;
-unavailable fresh refuses to next cycle). Sweep remainder tags
-carry the derived remainder.
-- SSE/transport bounds: accumulated SSE `data:` payload is capped
-before materializing (oversize rejects + resyncs + counts); the
-runner enforces `0 <= stream_read <= buf` with negative/overlong
-returns treated as feed faults, never silent no-data.
-- Intent-ID permanence: journal history wins — a verified
-historical `intent` row for an ID refuses re-registration even when
-the intent file is gone (deleted-file re-submit refused).
-- Capacity is validated once: `max_slots` clamps to the fixed
-architecture limit (1..64; exits 2x) so `*2` arithmetic cannot
-overflow and fixed scratch tables cannot be over-indexed.
-- Windows durability: `AtomicWrite` uses true replacement semantics
-(`MoveFileEx` REPLACE+WRITE_THROUGH) — never remove-then-rename.
-- Recovery rebuilds live PROTECTED entries: CANCELLED /
-UNKNOWN_FROZEN / CLOSED skip rebuild (recovery-terminal), but
-PROTECTED rebuilds as an active slot with its journaled
-economics intact — the runner treats PROTECTED as a live
-position everywhere else (reclamation guard, flatness,
-netting, HARD management), so restart must not demote it to
-slotless.
-- Recovery never orphans durable books: intents rebuild from
-journal rows, so durable books that claim LIVE risk with no
-covering journal intent row are torn state — recovery refuses
-for human recovery, never success-with-zero-slots. Live risk
-means a snapshot past the pre-send states (anything but
-IDLE / JOURNAL_PENDING / recovery-terminal) or a snapshot
-with no matching intent file. Intent-only pre-send leftovers
-(the submit-before-first-cycle crash window) and terminal
-books keep their established ignore/resume paths, and a
-virgin directory (no journal AND no slot books) still
-initializes as genesis.
-- FSM/epoch files are exact one-line shapes: trailing
-non-empty lines are corruption (refuse, never rewrite).
-`FileExists` stays the regular-file probe; `StatPath` maps
-ENOENT/ENOTDIR to ABSENT and every other stat failure to
-CORRUPT (fail closed, absent-vs-corrupt preserved).
-- Daily rhythm honesty: the ops-day clock advances only after
-the 00:00 chain verification succeeds (a failed verification
-retries the next cycle, never skips a day). The clean-cycle
-HARD truncations report failed writes instead of ignoring
-them.
-- Startup parsing is reject-before-overflow: CLI `cycles`
-accumulates decimal digits with a checked bound (oversized input
-refuses before any signed overflow), then the 0..1000000 window
-applies as before.
-- HALT lifecycle honesty: a failed HALT write latches HARD
-in-memory (entries blocked) and reports the stop as UNPROVEN —
-the caller exits nonzero and the supervisor/operator owns
-recovery. No comment or log may claim an in-process retry that
-the entry point does not perform.
-- Clock split: wall clock owns audit timestamps/epochs/day
-accounting; a monotonic clock owns S2 cadence/elapsed timeouts.
-- Single-process ownership: one live runner per state directory
-— Phase-4 prerequisite. The mutual-exclusion mechanism is an OS
-process-lifetime ownership primitive held open for the whole
-process life (`flock(LOCK_EX|LOCK_NB)` on POSIX, an exclusive
-no-share open handle on Windows): a dead holder releases it in
-the kernel, so stale takeover has no check-then-act window and
-two concurrent takers serialize into exactly one owner. The PID
-file is diagnostic only (owner identity for alerts), never the
-arbiter. The runner object is non-copyable and non-movable
-(mutable journal/slot state cannot be shared), and at most ONE
-live mutable runner object may hold a directory: repeated
-Recover on the SAME object stays idempotent, but a SECOND live
-object for the same directory is refused — two independent
-state machines must never share one ownership token (their
-separate next_seq_/prev_hash_/slots_ would fork the journal).
-A different thread of the same process contends like a foreign
-process and loses. The lock-REFUSAL path mutates no shared state: no
-journal row, no alert write, no file touch before ownership —
-diagnostics go to stderr only (a refusing contender with a
-fresh sequence/genesis must never append to a journal it does
-not own). Once ownership is established, normal journal/alert
-writes are allowed.
-- Recovery-before-mutation lifecycle: the constructor alone
-confers no mutation authority. `SubmitIntent()` and `Cycle()`
-refuse unless a successful `Recover()` established ownership
-(recovered AND lock held). Observers (`Find`, `slots`,
-`Summarize`) stay unguarded.
-- MEDIUM teardown certification: clearing an incident requires
-BROKER-CONFIRMED flat (seam present + query ok + all zero) AND
-a terminal FSM state successfully persisted AND revalidated
-from disk in the same cycle AND a successful `ClearMediumFiles()`.
-The `medium-incident-cleared` row is emitted ONLY when the
-cleanup actually succeeded — never on a failed transition or a
-failed clear. Missing/failing seam =
-UNKNOWN/exposure-present: FLATTENED is retained, never cleared;
-`AllFlat()` alone never certifies an incident over. The MEDIUM
-re-entry path is unchanged (FLATTENED + live exposure clears +
-fresh enter — the seam-present case).
-- MEDIUM mint atomicity: a failed epoch mint can NEVER leave
-`medium.txt = MEDIUM_ACTIVE` with no durable epoch. The mint
-failure reverts the FSM so the next cycle retries; the
-rollback write itself is checked — if it fails, the cycle
-fails HARD and loud (never a successful return from a
-stranded ACTIVE+no-epoch state). An ACTIVE file
-with epoch 0 on ANY cycle (failed mint, lost incident file) is
-never treated as healthy: the cycle fails loud until an
-operator removes `medium.txt` for a fresh re-mint (safe: nothing
-was ever sent under an unminted epoch). A failed single write
-with the FSM still absent-or-empty retries next cycle (no
-strand, no sweep: the sweep stays gated on epoch > 0).
-- HARD slot-failure fallback: the position loop skips an ENTRY
-symbol only when the slot path demonstrably owned it this cycle
-(reconciled, not blind, not frozen-waiting); a blind/failed slot
-falls through to broker-sized management under the SAME incident
-id (the pre-flight keeps one close — the skip is an optimization,
-not the mutual-exclusion mechanism). Frozen symbols are never
-position-loop-closed (freeze = wait, exits stay alive via slots).
-- Per-book orphan coverage (round-5): orphan coverage is PER
-DURABLE BOOK, never global. Every snap book that claims live
-risk needs its OWN covering journal intent row; a live book
-with no covering row refuses recovery
-(`recover-orphaned-state`) even when the journal holds
-legitimate rows for OTHER books (a mixed journal must not
-launder an orphan into success). Journaled books keep their
-existing refusal rules (corrupt/half/missing durable state),
-and the intent-only pre-first-cycle window, terminal-book
-paths, and virgin-genesis initialization are unchanged.
-- Recovery revokes authority on entry (round-5): `Recover()`
-clears mutation authority FIRST, before any path can fail —
-any failed recovery leaves the object with NO mutation
-authority, even after an earlier success. Only a FULL success
-(validation + rebuild + attribution) sets it. Same-object
-repeated Recover stays idempotent, success-after-fix restores
-authority, and the held lock alone never implies recovery
-authority.
-- Terminal attribution is never dropped (round-5): a
-terminal EXIT whose closed quantity cannot be durably
-attributed keeps its accounting obligation. Recovery
-re-attribution failure refuses recovery (no `recovered_`);
-the in-cycle path retains the EXIT (never done, never
-reclaimable) so the next cycle retries deterministically
-(two-phase rollback inside the attribution makes the retry
-exact). No replacement close is submitted for an attribution
-persistence failure, and no broker-derived local accounting
-is manufactured.
+One position, one close: per (symbol, side) and per incident exactly one
+close identity may be live, every kill-path close is pre-flighted by its
+stable id, incident epochs are durable-or-nothing, HARD quantities come
+from the signed broker position with a write-ahead chain, recovery refuses
+torn or orphaned durable state, and one OS-lifetime lock owns a state
+directory. The full frozen rule set — MEDIUM/HARD ownership, incident ids,
+HARD chain integrity and attribution durability, overflow-safe parsing,
+state-file integrity (absent vs corrupt), single-process ownership,
+recovery-before-mutation, per-book orphan coverage, and the rest — is in
+`appendix/06b-close-ownership-and-recovery-record.md`, unchanged and
+binding. Long-only note (v3): every live close is a SELL of a long
+position; a close that would exceed the held quantity is refused before
+the POST (a cash account would reject it anyway; the kernel never relies
+on the venue to catch it).
 
 ## 6.2 Reflection (after every closed trade)
 
-Row appended: entry context_hash, exit context_hash, PnL, slippage vs intent,
-regime, edge_family pick, conviction, what JEV got right/wrong (auto fields only —
-no LLM prose in v1). Weekly human review aggregates: per-family hit rate,
-per-regime PnL, threshold sensitivity. Threshold changes come from this review,
-never from gut feel.
+Row appended: sleeve id, candidate CID, entry/exit context_hash, PnL,
+implementation shortfall vs modeled cost, regime, filter answers (if any),
+exit reason — auto fields only, no LLM prose. Weekly review aggregates per
+sleeve: hit rate, per-regime PnL, cost drift, tracking vs backtest. Rule
+changes come only through a new pre-registration (doc 11), never from
+the review directly.
 
 ## 6.2a Outage playbook (the unattended cases)
 
-The system runs with nobody watching, so every outage needs a default that is safe
-without a human. In all of them: **exits, stops, TP, and reconcile keep working.**
+In all of them: **exits, broker-native stops, and reconcile keep working.**
 
 | Failure | Detection | Automatic response | Human needed? |
 |---|---|---|---|
 | Feed gap / WS down | sequence gap, stale > 30 s | Entries vetoed; exits via REST; reconnect with backoff (S1) | Only if > 5 min |
-| Broker outage | auth/API failure | Entries stop; exit attempts via REST; unresolvable drift → HARD kill (S9) | Yes, at HARD |
-| JEV / LLM provider outage | timeout, 5xx, malformed | 1 retry → HOLD; S5 streak → SOFT kill | At S5 alert |
-| Research plane down or stale | no fresh `features.jsonl` past TTL | Features **absent**; entries needing a TRIGGER feature HOLD (S6) | If > 6 h |
-| Runaway research loop | R15 state-machine response (doc 08 §8.4 — per-symbol pause, systemic plane pause only on majority-in-window) | At pause |
-| Conflicting agent conclusions | `disagreement=true` | HOLD (R14). Never averaged, never resolved by a tiebreak toward action | No |
+| Broker outage | auth/API failure, 5xx storm | Entries stop; exit attempts via REST; unresolvable drift → HARD (S9) | Yes, at HARD |
+| Broker rate limit | 429 | Back off per adapter budget; entries for the cycle dropped, exits prioritized | No |
+| Transport/TLS failure | handshake/cert/HTTP error | Fail closed: no order leaves; broker-native stops protect positions | If > 5 min |
+| Settlement mismatch | ledger vs broker | Entries HOLD; reconcile (R18) | If unresolved in 1 session |
+| JEV / LLM provider outage | timeout, 5xx, malformed | `jev_v4` sleeves: 1 retry → HOLD; S5 streak → SOFT; always-take sleeves unaffected | At S5 alert |
+| Research plane down or stale | features past TTL | Features absent; research-dependent entries HOLD (S6) | If > 6 h |
+| Sleeve engine down | no candidates past window | No new entries for that sleeve; exits unaffected | If > 1 session |
+| Runaway research loop | R15 | per-symbol pause; plane pause on majority-in-window | At pause |
+| Conflicting evidence | `disagreement=true` | HOLD (R14) | No |
 | Spend spike | hourly projection | Tier 1 → 2 → 3 (R10), ending in MEDIUM kill + demote | At tier 3 |
-| Calibration decay | trailing-200 Brier vs baseline | Entries halt, demote (R13) | Yes |
+| Calibration decay (`jev_v4` sleeves) | trailing-200 Brier | Sleeve entries halt, demote (R13) | Yes |
 | Journal chain break | daily verify | HARD kill, forensics before restart | Yes |
-| `STAGE` chain unverifiable | startup / cycle boundary | Fall back to G0_PAPER, alert | Yes |
+| Stage chain unverifiable | startup / cycle boundary | Fall back to G0_PAPER, alert | Yes |
 
-The pattern behind every row: **new risk stops, old risk stays managed, and the
-system fails toward paper.**
+The pattern behind every row: **new risk stops, old risk stays managed,
+and the system fails toward paper.**
 
 ## 6.3 Daily ops rhythm (paper phase)
 
-| Time (UTC) | Action |
+| Time | Action |
 |---|---|
-| 00:00 | Roll journal files, verify hash chain, snapshot equity |
-| Continuous | Feed + cycles; alerts on R5/S3/S5 |
-| Every 15 min | Position reconcile (S2) |
-| Hourly | AI spend projection + tier evaluation (R10); spend counter journaled |
-| 08:00 | Human-readable daily summary (script-generated, no LLM): trades, PnL, holds by reason, JEV error count, **AI spend + 30-day projection + tier, cost per closed trade, spend/profit ratio (G2+), trailing-200 Brier vs baseline, features ingested/rejected, research cycles aborted, current stage** |
-| Weekly | Calibration curves by regime; challenger scoreboard; `lessons.jsonl` review; ≤3 research proposals triaged (doc 11) |
-| 23:55 | Replay sample (D1 check), back up journal + signals DB |
+| 00:00 UTC | Roll journal files, verify hash chain (the ops-day clock advances only after verification succeeds), snapshot equity |
+| Continuous (session) | Feed + sleeve schedules; alerts on R5/S3/S5/R18 |
+| Every 15 min | Position + settlement reconcile (S2) |
+| Hourly | AI spend projection + tier evaluation (R10) |
+| 16:30 ET | Sleeve signals from SIP daily bars; next-session order plan journaled |
+| 08:00 UTC | Daily summary (script, no LLM): trades, PnL per sleeve, holds by reason, TCA vs model, settlement state, AI spend + projection + tier + cost per closed trade, feature/candidate rejects, research aborts, stage |
+| Weekly | Per-sleeve tracking vs backtest; trial-ledger review; ≤3 research-factory proposals triaged (doc 11) |
+| 23:55 UTC | Replay sample (D1), back up journal + ledgers |
 
-## 6.4 Monitoring (minimum viable, no dashboard v1)
+## 6.4 Monitoring and alerting
 
-- Liveness: heartbeat file touched every cycle in session; stale > 120 s in session
-  → alert. Off-session silence is expected.
-- Alerts (stdout + log + optional webhook): HALT triggers, reconcile drift,
-  JEV error streak, feed gap > 5 min, any R-rule trip.
-- Kill switch: `HALT` file in working dir → entries stop within 1 cycle.
-  Deleting it does NOT resume (requires restart + flag). Deliberate friction.
-  This is the SOFT level; MEDIUM and HARD are defined in doc 10 §10.3 and are
+- Liveness: heartbeat file touched every cycle in session; stale > 120 s
+  in session → alert. Off-session silence is expected.
+- Kill switch: `HALT` file → entries stop within 1 cycle. Deleting it does
+  NOT resume (restart + flag required). MEDIUM and HARD per doc 10 §10.3,
   drilled monthly.
-- Because nobody is watching, alerts must reach a human out of band (webhook /
-  push). An alert written only to a log file is not an alert in an unattended
-  system. At minimum: HARD kill, stage demotion, R13, and spend tier 3.
-- Autonomy metric: every human intervention is logged with its cause. The list of
-  causes is the roadmap for what to automate next.
+- (v3) **Outbound-only alert adapter** — required before unattended
+  operation of G0b: a one-way push (e.g. authenticated HTTPS POST to a
+  push-notification endpoint, or SMTP send-only) carrying bounded,
+  redacted alert records. It accepts no inbound messages, runs no
+  commands, holds no broker credential, and is not a chat agent (the
+  doc 01 chat-gateway ban stands). At minimum it carries HARD kill, stage
+  demotion, R13, R18 compliance incidents, and spend tier 3. An alert
+  written only to a log file is not an alert in an unattended system.
+- Autonomy metric: every human intervention logged with its cause.
 
 ## 6.5 What "done" means
 
-- [ ] Kill-switch drill passes (HALT → no entries in ≤1 cycle, exits unaffected).
-- [ ] Reconcile drill passes (forced drift detected + synced + logged).
-- [ ] Daily summary script runs from journal alone (no live system needed).
-- [ ] Paper fill model frozen: BUY at mid + one full spread adverse, SELL at
-  mid − one full spread adverse (min 1bp adverse move), full size,
-  flagged `simulated` with exact side semantics (no partials in paper — without this, paper PnL is fiction).
-- [ ] Journal retention 90 days local + daily backup; redaction verified by grep
-  (no keys/tokens, signal texts ≤280 chars).
-- [ ] 30 clean paper days with zero R-rule violations.
-- [ ] Every row of the §6.2a outage table drilled at least once, with exits proven
-      alive in each.
-- [ ] Out-of-band alerting proven (a real notification arrives on a HARD kill).
+- [ ] Kill-switch drill (HALT → no entries in ≤1 cycle, exits unaffected).
+- [ ] Reconcile drill (forced drift detected + synced + logged), including
+      a settlement-ledger mismatch.
+- [ ] Daily summary runs from the journal alone.
+- [ ] `cost_v2` implemented in the research harness and in G0b shadow
+      accounting; TCA per fill in the summary.
+- [ ] Transport wired and drilled on Alpaca paper (doc 04 5b).
+- [ ] OTO stop-only protection + MOC exit sequencing drilled, including
+      stop-fills-before-MOC and MOC-reject paths.
+- [ ] Journal retention 90 days local + daily backup; redaction by grep.
+- [ ] Outbound-only alert adapter delivers a real notification on a
+      forced HARD kill.
+- [ ] 30 clean G0b paper days with zero R-rule violations.
+- [ ] Every §6.2a row drilled at least once, exits proven alive.
 
 ## Locked decisions
 
-- Journal-before-order for normal entries (emergency-exit exception above).
-  No row = no send for entries, no exceptions beyond that paragraph.
-- Exits never depend on JEV freshness, thesis freshness, or WS health
-  (hard stop/TP local; REST fallback). Only entries may wait on data.
-- Resume-from-HALT is manual. Always. So is every stage promotion (doc 10).
-- Broker-status quarantine (frozen, per current Alpaca order-lifecycle docs):
-  `done_for_day` and `calculated` (done for today — no further updates until
-  the next session; the order MAY resume) and `replaced` (a replacement order
-  under an unknown id may be live) are NEVER routed as generic DEAD. The id
-  is burned — never re-sent under the same `client_order_id` — and the filled
-  qty is authoritative-for-today but never folded (tomorrow's resumption would
-  double-count). First sighting freezes the symbol + journals + alerts; the
-  machine waits (UNKNOWN: reconcile, never mint, never terminal). Any
-  next-session exposure is a NEW intent under a NEW id, operator-authorized,
-  never automatic. (`canceled`/`expired`/`rejected` stay safe-DEAD: nothing
-  live can duplicate them, so the normal burned-id remainder path applies.)
-- Live-hold statuses (frozen): `held`, `stopped` (trade guaranteed, not yet
-  occurred), and `accepted_for_bidding` are PENDING — live working orders.
-  The runner waits (the pre-flight finds them under the stable id); it never
-  re-issues blind and never terminals on them.
+- Journal-before-order for normal entries (emergency-exit exception in
+  §6.1). No row = no send for entries.
+- Exits never depend on JEV, research freshness, or WS health (broker-
+  native stops; REST fallback). Only entries may wait on data.
+- Resume-from-HALT is manual. Always. So is every stage promotion.
+- Broker-status quarantine (frozen, per Alpaca order-lifecycle docs):
+  `done_for_day`, `calculated`, and `replaced` are NEVER routed as generic
+  DEAD; the id is burned, filled qty authoritative-for-today but never
+  folded; first sighting freezes the symbol + journals + alerts; any
+  next-session exposure is a NEW intent under a NEW id. `canceled`/
+  `expired`/`rejected` stay safe-DEAD.
+- Live-hold statuses (frozen): `held`, `stopped`, `accepted_for_bidding`
+  are PENDING; the runner waits, never re-issues blind.
 - Every outage default stops new risk and keeps old risk managed.
-- Paper fill rule (LOCKED 2026-09-18): BUY at mid + one full spread adverse,
-  SELL at mid − one full spread adverse (min 1bp), full size, flagged
-  `simulated`, no partials in paper. Without
-  this, paper PnL is fiction; G1→G2 compares live slippage against exactly
-  this model (doc 10 §10.2).
-- AUDIT STOP RULE (frozen engineering-process rule): after the round-5 P1
-  recovery closures, no new general-purpose audit rounds for stylistic,
-  theoretical, or P2 findings. Reopening audit is allowed only for: (1)
-  P0/P1 decision-outcome changes, (2) corruption/loss of durable trading
-  state, (3) duplicate-order / wrong-side / wrong-quantity risk, (4)
-  security boundary violations, (5) reproducibility / lookahead /
-  statistical-validity failures, (6) a failing correctness/drill gate.
-  P2 cleanup collects into one bounded backlog, never another cascade.
-  Process: implementation → deterministic tests → targeted adversarial
-  review → gate → move on. Grep observations are STATIC TRIPWIRES, not
-  proofs (compiler-enforced authority probes excepted — those are proof).
+- Paper fill rule (LOCKED 2026-09-18, `paper_fill_v1`): BUY at mid + one
+  full spread adverse, SELL at mid − one full spread adverse (min 1bp),
+  full size, flagged `simulated`, no partials in paper. `cost_v2` (§6.0a)
+  wraps it for all v3 sleeves; neither is ever loosened without a doc
+  edit + fresh paper window.
+- Alpaca paper results are plumbing evidence; the harness cost model is
+  the economic evidence (§6.0a).
+- Alerts are outbound-only; nothing on a capital host accepts inbound
+  commands.
+- AUDIT STOP RULE (frozen engineering-process rule, v3-strengthened):
+  reopening audit is allowed only for (1) P0/P1 decision-outcome changes,
+  (2) corruption/loss of durable trading state, (3) duplicate-order /
+  wrong-side / wrong-quantity risk, (4) security boundary violations,
+  (5) reproducibility / lookahead / statistical-validity failures, (6) a
+  failing correctness/drill gate. P2 cleanup collects into one bounded
+  backlog, never another cascade. (v3) **Alpha-first:** no hardening
+  round may start on a component whose stage does not yet need it while a
+  strategy gate on the critical path is open; the question "does this
+  change the probability that the fund makes money or loses it?" decides
+  priority. Grep observations are static tripwires, not proofs
+  (compiler-enforced authority probes excepted).

@@ -1,210 +1,260 @@
-# 02 — Knowledge / Signal Ingestion
+# 02 — Strategy Book: Alpha Sleeves (freeze v3, `strategy_book_version: sb1`)
 
-> STATUS (freeze v2, locked 2026-09-18): this file has TWO parts. Production v1
-> is the **non-X collector** (§2.7 + doc 09: EDGAR/FRED/official
-> feeds/calendars). Sections 2.1–2.5 are **NON-PRODUCTION / HISTORICAL** — the
-> archived X-system design and verified list universe, kept for reference only.
-> Nothing in §§2.1–2.5 authorizes a build; Phase 1 builds §2.7.
+> Legacy filename. Until freeze v3 this doc held the X-lists signal system.
+> That material is **NON-PRODUCTION / HISTORICAL** and now lives verbatim in
+> `appendix/02-x-lists-archive.md` (X stays out of production: its §2.6).
+> The code-phase freeze-check update renames this file; until then the
+> path is kept so the frozen gate keeps verifying the archive banner.
+> Status label for everything in the archive: HISTORICAL / NON-PRODUCTION.
 
-Ported from `Twitter-Gemini-GitHub-MVP`. This doc is the full spec so the old
-repo is never re-read during the build.
+This is the missing center of the freeze-v2 plan: **what the fund actually
+trades, why it might work, and how we will know if it does not.** Every
+sleeve below is a hypothesis with an evidence grade, a pre-registration
+draft, and kill criteria. None is authorized to trade until it passes the
+doc 11 gates. Parameters are literature defaults frozen at
+pre-registration; variants count against the trial ledger (doc 11 §11.0).
 
-## 2.1 What the old system did (HISTORICAL — archived design, not built)
+## 2.0 The funnel (every sleeve walks it, no shortcuts)
 
 ```
-cron (schedule)
- → twitter.js (Selenium → X List page → scrape article[data-testid=tweet])
- → filters (spam keywords, NON_TECH_PATTERNS, min-words, dedupe .processed-tweet-ids.json)
- → llm.js (Ollama/NVIDIA → markdown article + LinkedIn post + quality gates)
- → agentEngine (ideate → draft → critique → refine, diversity vs history)
- → agentContext (git pulse, builder profile, post-type rotation)
- → github.js (upload markdown to ai-resources) + syndication + linkedin.js
+idea (research factory or human) → pre-registration (frozen spec + variant
+count + data window + holdout) → A-gate: historical backtest on SIP data,
+trial-ledgered, net of cost_v2 → B-gate: G0a shadow on live data for its
+minimum window → champion candidate → G0b paper orders through the kernel
+→ G0→G1 human gate → G1 live (one liquid ETF) …
 ```
 
-Config: `config/index.js` `folders[]` ≈ 25 named X Lists (list IDs) mapped to
-domain names (e.g. "AI Developer Tools", "Tech Infrastructure", "VC Firms").
+A sleeve that fails any gate is recorded with its numbers and archived.
+It is never "improved" into passing: a new idea is a new pre-registration.
 
-## 2.2 What we keep / kill
+## 2.1 Evidence grades (used below)
 
-KEEP (port as spec, not code):
-- `folders[]` list IDs + domain names → this becomes the signal universe (§2.4).
-- `NON_TECH_PATTERNS` + spam keyword list → noise filter for any text feed.
-- Min-substance rule: ≥30 words, or ≥15 words with external link.
-- Dedupe by tweet ID, persistent JSON, cap 10k IDs, keep newest half on overflow.
-- `DOMAIN_PROMPTS` focus strings → per-domain lens labels attached to signals.
-- The generator→validator→critic loop shape (reused in JEV layer design).
+- **A** — multiple peer-reviewed studies + documented post-publication
+  out-of-sample persistence.
+- **B** — peer-reviewed, but out-of-sample evidence limited, contested, or
+  concentrated in segments we can only partly trade.
+- **C** — contested or failed replications; worth testing only because the
+  test itself answers a question the fund needs answered.
+- **D** — speculative. Research factory only.
 
-KILL (do not port):
-- Selenium + Chrome-debug attachment. Replaced by API/RSS sidecar (§2.5).
-- All markdown/blog/LinkedIn/syndication output. Not part of the fund.
-- BANNED_WORDS / slop filters / STRUCTURE_REGISTRY. Content-policy only.
-- Builder-profile personalization (Drishtant persona). Trading signals carry
-  no persona.
+A published effect is haircut before it is believed: average
+post-publication decay is ≈58% (McLean–Pontiff), and new factors need
+t ≥ 3 (Harvey–Liu–Zhu). Expected-return statements in this doc are
+ranges for planning, never promises.
 
-## 2.3 Signal record (the only output of this system)
+## 2.2 Sleeve spec template (every sleeve fills every field)
 
-Every accepted item emits exactly one JSON record:
+`id / version` · hypothesis · evidence grade + sources · mechanism (why it
+should persist) · universe · data (dataset + manifest hash) · signal
+(exact) · schedule (signal time, order time, order type) · exit profile ·
+sizing · turnover/capacity · cash-account mechanics · AI involvement ·
+known failure modes · kill criteria · minimum evaluation windows · status.
 
-```json
-{
-  "id": "x_list_id:tweet_id",
-  "tweet_id": "123...",
-  "url": "https://x.com/...",
-  "timestamp": "ISO8601",
-  "list": "AI Developer Tools",
-  "domain_lens": "Inference engines, quantization, latency...",
-  "text": "raw text, truncated at 2000 chars",
-  "links": ["https://..."],
-  "word_count": 42,
-  "has_external_link": true
-}
-```
+## 2.3 Sleeves
 
-No scores here. Scoring happens in the JEV layer (doc 03), which reads the raw
-texts inline. No polarity field on the record — deliberate (see doc 03 §3.4).
-This system only collects, filters, dedupes, and stores.
+### T1 `trend_etf_v1` — ETF time-series trend (first champion candidate)
 
-## 2.4 Universe (HISTORICAL — verified 2026-09-18, kept as research history; not polled in v1)
+- **Hypothesis:** asset-class returns show time-series momentum; holding an
+  asset only while its price is above its long moving average captures
+  most of its return with far smaller drawdowns.
+- **Grade B+.** Time-series momentum is documented across asset classes
+  (Moskowitz–Ooi–Pedersen 2012; century-long studies); post-2008 Sharpe
+  broadly comparable to pre-2008, but with long flat spells (2009–2013)
+  and alpha partly attributable to volatility scaling. Long-only ETF
+  implementations (moving-average timing) are widely replicated.
+- **Mechanism:** under-reaction then slow adjustment; hedging demand;
+  crisis-alpha from exiting risk assets in trends down.
+- **Universe (5 = kernel cap):** VTI (US equity), VEU (ex-US equity), VNQ
+  (US REITs), IEF (7–10y Treasuries), DBC (commodities). Cash leg: BIL
+  (T-bills). Common history from 2007.
+- **Signal (primary):** on the last trading day of the month, asset held
+  for the next month iff its month-end close > the mean of its last 10
+  month-end closes; else its slot is cash.
+  **Registered variant (counts as 2 trials):** 12-month total return minus
+  T-bill return > 0.
+- **Schedule:** signal from the official close (SIP daily bar); orders the
+  next session: sells-to-close first via market-on-close; buys the session
+  after (settled proceeds, R18). One rebalance per month.
+- **Exit profile `exit_trend_v1`:** signal exit at rebalance; broker-native
+  catastrophe stop at entry × (1 − 3 × 20-day ATR%) (GTC, re-placed each
+  rebalance). Requires the OTO stop-only protection shape (doc 13 P3.5).
+- **Sizing:** equal weight 1/5 of sleeve capital per slot (fewest free
+  parameters); whole shares; the kernel's risk-budget hierarchy still
+  caps each position (doc 03 §3.3 steps 3–6).
+- **Turnover/capacity:** ~2–4 trades/month; capacity irrelevant at our
+  scale.
+- **AI involvement:** none in the signal. The research factory may
+  propose variants; each is a new trial.
+- **Failure modes:** whipsaw in range-bound years; correlated drawdown
+  when all assets fall together before signals flip; month-end timing
+  luck.
+- **Kill:** A-gate fail; or G0a/G0b drawdown > 1.5× the backtest's worst
+  12-month drawdown; or Sharpe lower bound < 0 after the minimum window.
+- **Minimum windows:** A-gate full history with an untouched final 3-year
+  holdout; B-gate 3 months shadow (few trades — judged on tracking error
+  vs its backtest, not on Sharpe).
 
-Finance-first. All IDs below were opened logged-in and resolve; all showed
-posts within ~24h. Full per-list record (name, owner, members, followers,
-recency) is Phase-0 evidence, kept with the sign-off log.
+### T2 `sector_mom_v1` — sector relative + absolute momentum
 
-> HISTORICAL / NON-PRODUCTION (§2.6 locks this): the A/B/C split below is
-> the archived Phase-0 research universe. "TRIGGER-eligible" here MEANT
-> eligible-in-principle under a transport that no longer exists in v1 —
-> no X list, record, or mirror feed is TRIGGER-eligible in v1 production,
-> and no v1 code path polls X. Do not read §2.4 as an active source table;
-> the active v1 source table is doc 09 §9.1 (X listed there as
-> HISTORICAL / NON-PRODUCTION, NULL, no promotion path).
+- **Hypothesis:** industries with the strongest 12-month returns (skipping
+  the last month) keep outperforming over the next month; an absolute
+  filter avoids holding equities in downtrends.
+- **Grade B.** Industry momentum (Moskowitz–Grinblatt 1999) persists
+  but decays and suffers momentum crashes.
+- **Universe:** 9 original SPDR sector ETFs (XLB, XLE, XLF, XLI, XLK, XLP,
+  XLU, XLV, XLY; from 1998). Cash leg BIL.
+- **Signal:** rank on 12-1-month total return; hold the top 3 equally,
+  each only if its 12-month return exceeds the T-bill return, else cash.
+- **Schedule:** monthly; sell day D (MOC), buy day D+1 with settled
+  proceeds (keeps ≤ 3 symbols per kernel epoch).
+- **Exit `exit_trend_v1`**, sizing 1/3 per slot. **AI:** none.
+- **Failure modes:** momentum crash at trend reversals; sector
+  concentration. **Kill** as T1.
 
-**A. Finance TRIGGER-eligible (macro/FX/stocks native, 9 lists).** Found via
-X Lists-tab search from the user's own page (curator profiles publish almost
-no public lists, so search beats curation):
+### I1 `intraday_mom_v1` — market intraday momentum (the T2-tier sleeve)
 
-- `1723341818878644456` Macro, @dampedspring (Andy Constan), 40 members —
-  highest-quality macro voice in the set.
-- `1470525121328726018` Investing-Macro, 23 members / 1.8K followers.
-- `1628861381368766464` Forex Traders, 30 members.
-- `1541896891553693697` FOREX TRADING, 31 members / 2.3K followers.
-- `1515014054028349447` Macro, 23 members.
-- `1309044074394128384` Macro Finance, 31 members.
-- `1268950103206891521` Stocks, 30 members / 1.3K followers.
-- `1249584239068110849` Stocks market, 21 members / 4.7K followers.
-- `1309396858633158658` Stocks, 60 members.
+- **Hypothesis:** the market's first half-hour return (previous close →
+  10:00 ET) predicts its last half-hour return, more so on high-volatility
+  and macro-release days.
+- **Grade B−.** Gao–Han–Li–Zhou (JFE 2018), SPY 1993–2013 with
+  out-of-sample R² ≈ 1.6%, present in 10 other liquid ETFs. Persistence
+  after 2013 is unverified here and must be re-tested on SIP minute bars.
+- **Mechanism:** late-day informed trading and rebalancing flows that
+  follow early information.
+- **Universe:** SPY (primary); QQQ, IWM as separate pre-registered tests.
+- **Signal:** r1 = log(price at 10:00 ET / previous official close). If
+  r1 > 0 → BUY at 15:30 ET; else flat (long only).
+  **Registered variant:** trade only on days whose r1 magnitude is above
+  its trailing-60-day median.
+- **Schedule/orders:** marketable limit at 15:30 (limit = ask + 1 tick
+  cap); exit at the close via market-on-close before the broker's MOC
+  cutoff; protective stop leg attached at entry (OTO stop-only) at
+  entry − 3 × 30-min ATR. The MOC must reconcile with the live stop
+  (doc 06 §6.0: stop cancelled only after MOC ack; a stop fill makes the
+  MOC an over-sell that the cash account rejects — both paths journaled).
+- **Exit profile `exit_intraday_v1`**; sizing: full sleeve tranche.
+- **Cash-account mechanics:** buy with settled cash, sell the same day is
+  permitted; the proceeds settle T+1, so two alternating capital tranches
+  are required (effective utilization ≈ 50%). R18 enforces it.
+- **Turnover:** ≤ 1 round trip/day; edge per trade is a few bp, so it
+  lives or dies on cost — 2× cost stress is decisive.
+- **AI:** none in the signal. **Kill:** A-gate fail at 2× cost; or live
+  implementation shortfall > 2× modeled.
 
-Plus the fixed account roster (all 6 verified live 2026-09-18): `@DeItaone`,
-`@Fxhedgers`, `@FirstSquawk`, `@LiveSquawk`, `@elerianm`, `@MacroAlf` —
-polled as user-timeline feeds through the same transport.
+### E1 `insider_buy_v1` — EDGAR Form 4 opportunistic insider purchases
 
-**B. Market-moving AI/tech CONTEXT (13 lists, regime + Mag7/semiconductor
-sentiment — kept because this news moves our symbols, not for tech curiosity):**
-AI Companies #1+#2 (`1696336383231525354`, `1811755253970112761`), AI
-Leaders/Founders #1+#2 (`1744564719309279599`, `1828820239175590166`),
-Tech Companies & News (`1272237719733796866`), Tech Journalists & VIPs
-(`1272593321181851648`), AI Policy (`1805777808330781114`, regulation moves
-markets), AI Orgs & Events (`1741902685669113995`), OpenAI folks
-(`1676646159539130369`, 148 members), World News (`1297881495701397504`),
-U.S. News (`1325322395335315457`), VC Firms (`1219428908283514881`), Investors
-#2 (`1751865298263932998`).
+- **Hypothesis:** open-market purchases by officers/directors who do not
+  trade on a routine calendar pattern predict positive abnormal returns
+  over the following month.
+- **Grade B.** Cohen–Malloy–Pomorski (JF 2012) "opportunistic" vs
+  "routine"; effect stronger in small/illiquid names we partly exclude.
+- **Universe:** US common stocks with price ≥ $5 and 60-day median dollar
+  volume ≥ $20M at the filing date (point-in-time from SIP daily bars).
+- **Signal (deterministic, no LLM):** Form 4 XML, transaction code `P`,
+  officer or director reporter, not flagged as a Rule 10b5-1 plan trade,
+  reporter not "routine" (traded in the same calendar month in each of
+  the prior 3 years). Aggregate per issuer per filing day.
+- **Schedule:** signal time = EDGAR acceptance datetime (R12); BUY at the
+  next session open + 30 min (marketable limit); hold 21 trading days;
+  at most 5 concurrent names (kernel cap), oldest signal wins ties.
+- **Exit `exit_event_v1`:** time exit at day 21 (MOC) + catastrophe stop
+  at entry − 3 × 20-day ATR. Sizing: equal slots of sleeve capital / 5.
+- **Data risk:** delisted names' price history may be incomplete from the
+  free feed → survivorship bias; the exclusion count is reported with
+  every run and a run with > 5% excluded events is void.
+- **Kill** as T1; plus decay monitor (rolling 12-month event alpha).
 
-**C. Dropped from the universe.** The remaining ~40 old IDs (dev tools, music,
-art, film, real estate, education, health, AR/VR, quantum, climate, cyber,
-crypto/Web3, etc.) stay on record in git history but are NOT polled — they
-cannot move forex majors or US stocks and only cost tokens. The 2 crypto
-lists are additionally excluded by the no-crypto rule (doc 01).
+### E2 `earnings_reader_v1` — AI-assisted earnings press-release reader
 
-TRIGGER vs CONTEXT reminder: a TRIGGER-classified list is only *eligible* to
-influence entries; each record must still pass the R12 timestamp gate (most
-mirror records land CONTEXT regardless — §2.5). Polling weight starts equal;
-reweight only with 2 weeks of measured hit-rate data.
+- **Hypothesis:** a reader-tier LLM extracts guidance changes from 8-K
+  item 2.02 press releases (EX-99.1) that predict post-announcement drift
+  *beyond* what a deterministic XBRL-based surprise measure predicts.
+- **Grade C.** PEAD disappeared for large caps around 2006 (Martineau)
+  but is contested by 2025 studies; press-release text is as informative
+  as the surprise for the *announcement-day* return (arXiv 2509.24254),
+  which we cannot trade competitively (T1 tier). Our window starts the
+  next session. The honest prior is weak; this sleeve exists because it
+  answers the fund's central question: **does AI reading add incremental
+  edge?**
+- **Design:** paired test, same events, same entry/exit:
+  E2-det (deterministic features only: XBRL actuals vs prior-year, filing
+  timing) vs E2-ai (E2-det + reader-tier extracted guidance direction
+  per metric: raised / maintained / lowered / withdrawn / none).
+  Candidate: BUY next session open + 30 min iff guidance raised on ≥1
+  metric and lowered on none; hold 10 trading days; `exit_event_v1`.
+- **Contamination rule:** only events after the reader model's pinned
+  knowledge cutoff + 30-day embargo count (doc 11 §11.0c). Evidence is
+  therefore mostly forward shadow; the A-gate uses E2-det history only.
+- **AI involvement:** reader tier only (no tools, no network, schema-capped
+  JSON), deterministic resolver verifies every extracted number against
+  the document text and XBRL where present (doc 08 §8.3).
+- **Kill:** paired delta (E2-ai − E2-det) CI includes 0 after the minimum
+  event count → the AI component is removed (the E2-det sleeve may
+  continue on its own merits).
 
-Macro relevance overlay (locked): lists about AI/infra/dev are REGIME context
-(risk-on, tech sentiment); they never directly trigger a symbol entry. Only
-macro/FX/earnings-native lists + calendar events (Fed/ECB, CPI, NFP, earnings for
-covered names) + price feeds can trigger entries. This prevents
-"AI hype tweet → long EURUSD" nonsense.
+### M1 `vol_target_overlay_v1` — portfolio volatility targeting
 
-## 2.5 Collector design (HISTORICAL — the archived X-sidecar shape; production collector is §2.7 + doc 09)
+- **Hypothesis:** scaling exposure inversely to recent realized volatility
+  improves risk-adjusted returns and keeps drawdowns inside R5.
+- **Grade B−.** Moreira–Muir (2017) find gains; Cederburg et al. (2020)
+  find weak out-of-sample benefit across many portfolios. Primary role
+  here is **risk control** (keep the book's drawdown inside R5), judged
+  on drawdown/Sharpe of the sleeve it overlays.
+- **Rule:** exposure multiplier = min(1, 8% / annualized 20-day realized
+  vol of the sleeve's return stream); applied at rebalance only. Never
+  above 1 (no leverage).
+- **Macro context (M2, research only):** FRED curve slopes (T10Y2Y,
+  T10Y3M), real yield (DFII10), breakeven (T10YIE), credit spread
+  (BAA10Y), NFCI, VIXCLS — logged as CONTEXT features with zero live
+  effect until a pre-registered overlay rule passes doc 11.
 
-- **Transport (locked, corrected from an earlier draft of this doc): there is
-  no free X API tier to build on.** As of 2026, X eliminated the free and
-  legacy Basic/Pro tiers for new developers; the default is metered pay-per-use
-  (charged per read and per post), with unmetered access granted only
-  case-by-case to approved "public good" applications. Paying per call is a
-  paid data subscription in substance even if billed as usage, and doc 01
-  forbids that for core operation — so the API is **not used**, full stop, not
-  "used carefully."
-  - Transport is therefore **self-hosted mirror feeds, best-effort**: Phase-0
-    research selected `twikit-rss` (MIT, `GET /list/{id}/rss` + `/user/{name}/rss`,
-    cookie-persisted session, no X API key). It authenticates as a normal logged-in
-    session, so X-credential placement on the sidecar host is a Phase-1 design
-    item (never in git, never on the trading host). No 15-min SLA can be assumed
-    against X's frontend; this is a real reduction in freshness and coverage
-    from the original scrape-based pipeline, accepted deliberately in exchange
-    for zero cost and zero fragility to a scraper breaking.
-  - **CONTEXT-capped permanently by transport, independent of the doc §2.4
-    TRIGGER/CONTEXT list classification.** §2.4's TRIGGER/CONTEXT split is about
-    which *lists* are logically eligible to influence entries; this rule is
-    about whether any *given record* has a trustworthy timestamp. A record from
-    a TRIGGER-classified list still cannot enter JEV's TRIGGER-eligible feature
-    set unless its `observed_at_ns` comes from the source's own publication
-    field — mirror content generally does not carry one reliably, so in
-    practice most records land as CONTEXT via the R12 rule (doc 09 §9.2)
-    regardless of which list they came from. The two gates are independent and
-    both must pass.
-  - **No browser automation against X.** Not Selenium (already banned), not
-    Playwright, not CDP, and no paid API as a substitute for automation. If the
-    mirrors are unavailable, the sentiment tail is **absent**, and absent is not
-    neutral (§2.5 failure default). The fund does not depend on this feed and
-    must trade without it.
-- Polling: each list every 15 min, staggered; obey rate limits; jittered backoff
-  (port `withJsonRetry` semantics: 3 retries, ~15 s base, jitter ±20%).
-- Storage: append-only JSONL per day + SQLite index by (list, tweet_id), pruned
-  beyond 90 days. Dedupe check before write. Sidecar writes via temp-file +
-  atomic rename; the C++ tailer tracks inodes so midnight rotation can't drop
-  or double-read a row.
-- Delivery: sidecar writes `signals.jsonl`; the research plane's `harvest` node tails
-  it as one input among many (doc 08 §8.3). `ctx/` never consumes raw signals — only
-  validated features. No sockets, no shared memory for this path.
-- Failure default: stale signals expire after 6 h; context builder marks
-  sentiment `stale=true` and sets `signal_count_6h=0`. **Stale/absent sentiment is
-  reported as absent, never as a neutral score** — a missing input and a
-  balanced input are different states and JEV sees which one it is (doc 09 §9.3).
-- In practice this feed runs CONTEXT-only for the foreseeable future: not
-  because §2.4's TRIGGER list classification is revoked, but because the
-  free-only mirror transport rarely carries a timestamp good enough to clear
-  the R12 gate (doc 09 §9.2). A TRIGGER-classified list whose mirror feed does
-  start carrying reliable timestamps is free to clear that gate on its own
-  merits — nothing here lowers the §2.4 classification itself. Per doc 09 §9.1
-  this is an unproven source carried cheaply either way, and doc 11's promotion
-  gate is the only way it becomes more than that.
+### X1 `fx_carry_mom_research_v1` — FX research (never executed)
 
-## 2.6 v1 status: X disabled as a production input (locked 2026-09-18)
+- G10 FX carry (3-month interbank-rate differentials) and 12-1 momentum
+  from FRED daily exchange rates and OECD short rates, simulated
+  dollar-neutral long-short. **Research only**: forex spot is not a legal
+  live target (doc 01 §1.2). A future long-only currency-ETF expression
+  would be a different sleeve and needs the jurisdiction gate first.
 
-Automated X collection — including the self-hosted session-mirror transport —
-is out of v1. It conflicts with X's terms (no scraping without permission),
-and the pay-per-use API is a paid subscription in substance, excluded by
-doc 01. No replacement with hand-pasted X context either: manual inputs are
-non-reproducible, timing-ambiguous, and another raw-text path into decisions.
-Production Phase 1 collects broker market data, SEC/EDGAR, FRED/ALFRED,
-Treasury/BLS/BEA, Fed/ECB official feeds, and earnings/calendar data only.
-The verified list universe (§2.4) and this doc's filter design stay in the
-repo as research history; X returns only through an explicitly authorized and
-reproducible interface, as a new doc version.
+### B0 `baseline_v1` — frozen negative control
 
-## 2.7 What "done" means for this part (non-X Phase 1 collector, PRODUCTION)
+Doc 12. Kept, never edited, never promoted: it measured negative in S2
+and the failure is diagnosed there (exit/horizon mismatch). It remains
+the regression control for the harness itself.
 
-- [ ] Source-coverage table verified (every §9 poller resolves: EDGAR, FRED/
-      ALFRED, Treasury/BLS/BEA, Fed/ECB, earnings/calendar).
-- [x] 7-day soak: CLOSED as ~33h/133-cycle evidence gate (collector/SOAK_REPORT.md): dedupe holds, zero dupes emitted, noise 0% pre-graded (<10% gate). Original 7d criterion shortened explicitly on evidence, never silently.
-- [ ] `signals.jsonl` schema frozen and consumed by a stub context reader.
-- [ ] Rotation + prune proven: no lost/duped rows across a midnight rollover.
+## 2.4 Portfolio construction
+
+- **G0b runs exactly ONE champion sleeve through the kernel at a time**
+  (`EXEC_UNIVERSE_MAX = 5`); every other sleeve runs in G0a shadow with
+  harness fills on live data. Multi-sleeve live allocation is a G2+
+  design that first needs a versioned universe-cap change (doc 13).
+- Shadow portfolio (research, for planning G2): sleeve risk budgets by
+  equal risk contribution on trailing 12-month shadow returns, no sleeve
+  above 50% of risk, rebalanced monthly; book gross ≤ 100% of settled
+  cash (cash account), M1 applied at the book level.
+- Order of testing (not a promise of promotion): T1 → I1 → E1 → T2 →
+  E2 (forward) → M1 on the survivors. T1 is the first champion candidate
+  because it is simple, robust, low-turnover, long-only by nature, and
+  fits the kernel cap.
+
+## 2.5 What "done" means (strategy book)
+
+- [ ] Each sleeve has a frozen pre-registration file (spec + variants +
+      windows + holdout + cost model + kill criteria) committed before its
+      first backtest run.
+- [ ] Every sleeve run writes to the global trial ledger (doc 11 §11.0a).
+- [ ] T1 and I1 A-gate reports produced on SIP data with manifests.
+- [ ] At least one sleeve passes A-gate and B-gate → G0b champion.
+- [ ] E2 paired test running in forward shadow with contamination control.
 
 ## Locked decisions
 
-- Output = filtered signal JSONL. No scores, no trades, no posts.
-- No Selenium anywhere in the fund. No automated X collection in v1 (§2.6).
-- Macro/FX/earnings sources trigger; tech context informs. Never the reverse.
-- Production transport = APIs first per doc 09 §9.2. The RSS/mirror design in
-  §§2.4–2.5 is historical record, not a production transport.
+- The fund trades sleeves, not opinions. Each sleeve is a deterministic
+  rule set with a pre-registration, an evidence grade, and kill criteria.
+- Parameters come from the cited literature and are frozen at
+  pre-registration; no tuning on data already seen. Variants are trials.
+- Live sleeves are long-only, cash-account, 1×, allowlisted instruments.
+- AI enters a sleeve only through reader-tier features that are verified
+  deterministically, and only if a paired test proves incremental value.
+- One champion sleeve in G0b at a time; everything else in shadow.
+- X material is HISTORICAL / NON-PRODUCTION (appendix); no X input in v1.

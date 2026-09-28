@@ -1,329 +1,210 @@
-# 07 — Build Roadmap (the only to-do list)
+# 07 — Build Roadmap (the only to-do list, freeze v3)
 
-Phases run in order. No phase starts until the previous one's exit criteria are
-met and checked off here. Paper capital only until phase 5 sign-off.
-Exception (human ruling): doc 13 §13.5 gate-classes sequencing rule governs P3.5
-sequencing — Phase 2.5 poller slices (EDGAR/FRED/Treasury/BLS/BEA), the F
-24h soak, and live-source operational evidence run IN PARALLEL with
-P3.5/D/H1 work and never retro-block it. TODO.md encodes the tracks.
+Tracks run in parallel where marked; gates never get skipped. Paper only
+until Phase 5 sign-off. `TODO.md` is the itemized ledger of this doc; the
+freeze-v2 ledger is archived verbatim in `TODO-ARCHIVE-2026-09-28.md`.
 
-## Phase 0 — Freeze the spec (this folder)
+## 7.0 Where we are (2026-09-28, verified against the repo)
 
-Nothing downstream builds on a moving number. Every box below is a decision that
-must exist on paper before a line of code.
+| Area | State |
+|---|---|
+| Phase 0 spec | Freeze v2 signed 2026-09-18. **Freeze v3 rebaseline** written 2026-09-28 under operator instruction; human signature of the final text pending (sign-off log). |
+| Phase 1 collector | Built and soaked (133 cycles); §2.7-equivalent boxes in doc 09 §9.4 open. |
+| Phase 2 JEV sidecar | ACCEPTED/FROZEN `50ea369`; question_set_version = v3 frozen; v4 released `da61daa`. |
+| Phase 2.5 research plane | Six-node graph + five Tier-A adapters + seam built and hosted-green; doc 08 §8.6 exit open. |
+| Phase 3 kernel | P3.1/P3.2/P3.3 frozen; P3.5 slices A–G done; **H1 router/runner/broker/journal built and audited (router 209, runner ~1045, broker 126, drills 120) but `transport = nullptr` — no order has ever left the host.** |
+| Strategy track | S1 landed (PIT single-stock universe item open); S2 measured NEGATIVE, acceptance open; S3/S4 released; S5 implementation closed, economics open (stub FAIL); S6 released (isolated library); S7-A/B closed; S7-C re-audit #2 fixes at `f0815e7`, closure needs hosted 5/5. |
+| G0 | NOT STARTED. No sleeve has passed any economic gate. |
 
-**Signal feed (doc 02)**
-- [x] Verify every X list ID in doc 02 §2.4 resolves. Mark dead ones.
-      (2026-09-18: 55/55 live + 10 finance/AI lists found via Lists search,
-      finance-first universe locked, no swaps.)
-- [x] Every X list classified TRIGGER vs CONTEXT (doc 02 §2.4 complete).
-- [x] RSS/mirror coverage confirmed: self-hosted twikit-rss (MIT, no X API);
-      X-credential placement is a Phase-1 item.
+Critical path to paper trading (why the order below):
+`A0 harness v2 → A2 T1 A-gate → G0a shadow starts` runs in parallel with
+`K1 transport → K2 always-take → K3/K4 settlement + R18/R19 → K5 OTO/MOC
+→ K6 candidate ingest → K7 alerts`. G0b starts when both meet: a sleeve
+passed its B-gate AND P3.5 closed.
 
-**Decision layer (doc 03)**
-- [x] 20 hand-worked cases in §3.7 (all HOLD rows + boundaries).
-- [x] `OPENROUTER_API_KEY` in local `.env` (2026-09-20); Decisions endpoint
-      verified reachable + auth ok + exact revision `typesafe/jev-1.13-20260917`
-      + provider `TypeSafe` pinned (doc 03 intro, manifest, freeze-check).
-      Key material never enters the repo.
-- [x] `question_set_version = v3` pinned (freeze v2: enter / edge_family /
-      conviction / latent_risk); slow-key fields (incl. `disagreement`,
-      feature-count bucket) frozen (doc 03 §3.5).
-- [x] JEV state schema frozen: feature caps (16 payload / 64 snapshot) +
-      absent-vs-neutral (doc 03 §3.4).
+## 7.1 Phase R — Rebaseline (docs only; this change)
 
-**Research plane (doc 08)**
-- [x] Stack pinned (human-accepted 2026-09-18): langgraph==1.1.6,
-      smolagents==1.26.0, self-hosted Langfuse 4.15.4; installability at build.
-- [x] Checkpoint store per stage: SQLite (G0/G1), Postgres (G2+).
-- [x] Topology frozen: six nodes, outputs, failure defaults (§8.3).
-- [x] R15 caps frozen (§8.4).
-- [x] Sandbox (Docker, §8.2 container spec) + exact import allowlist locked.
-- [x] OS isolation designed: mirotrade / miroresearch / mirohuman (§8.2).
-- [x] `features.jsonl` schema f2 frozen (§8.5).
+- [x] Full critique recorded (`reviews/2026-09-28-v3-rebaseline-critique.md`).
+- [x] Docs 00–13 + manifest rewritten for freeze v3; implementation
+      records moved verbatim to `appendix/`.
+- [ ] [HUMAN] Operator signs the freeze-v3 text (sign-off log below).
 
-**Data sources (doc 09)**
-- [x] Every source classified TRIGGER / CONTEXT / NULL. No blanks.
-- [ ] Free keys obtained (FRED, FIRMS — human, when convenient; no
-      AISStream/TomTom in v1).
-- [x] EDGAR UA + 10 req/s ceiling recorded (§9.2).
-- [x] Per-source TTL, cadence, heartbeat (>3× = stale), failure default (§§9.1–9.3).
-- [x] ALFRED vintages for anything replayed (locked in doc 01).
-- [x] Tier D evidence bar + `lessons.jsonl` (§9.1, §9.4).
+## 7.2 Track A — Alpha (critical path)
 
-**Capital, kill switches, spend (doc 10)**
-- [x] `STAGE` format + attestation chain frozen (pipe-delimited hash, GENESIS,
-      G0 capital 0, alerts = alerts.jsonl); G0 file creation + signature is
-      human at build (§10.5 steps).
-- [x] Stage table numbers frozen (capital, symbols, R-multiplier, daily loss caps).
-- [x] Promotion criteria (necessary, never sufficient) + automatic demotion
-      triggers written in (§10.2).
-- [x] Kill-switch levels (SOFT/MEDIUM/HARD) and triggers frozen (§10.3).
-- [x] Spend caps frozen: absolute per stage, 20% ratio test from G2, tier
-      thresholds (60/80/100%), anti-flap window (§10.4).
-- [x] Alert channel: `alerts.jsonl` + exit status; no messaging integrations
-      in v1 (locked in doc 10 §10.1).
+- [ ] A0 Research harness v2 (`research/strategy/`): global trial ledger
+      (doc 11 §11.0a); `cost_v2` (doc 06 §6.0a); SIP bars+quotes fetcher
+      with dataset manifests; pre-registration template + validator;
+      statistics module (walk-forward with purge/embargo, CPCV, PBO, DSR,
+      MinTRL, stationary-bootstrap CIs, pooled Holm); contamination guard
+      (doc 11 §11.0c); benchmark set (doc 12 §12.6); report generator.
+- [ ] A1 S2 closure: rerun `baseline_v1` on SIP bars + quotes so the
+      primary (spread-eligible) ledger exists; record the result as the
+      negative control with the exit/horizon diagnosis (doc 12 §12.7).
+      The FX leg is dropped (forex is research-only, doc 01 §1.2).
+- [ ] A2 T1 `trend_etf_v1`: pre-registration committed → A-gate report.
+- [ ] A3 I1 `intraday_mom_v1`: pre-registration → A-gate (2× cost decisive).
+- [ ] A4 E1 `insider_buy_v1`: Form 4 parser + pre-registration → A-gate.
+- [ ] A5 T2 `sector_mom_v1`: pre-registration → A-gate.
+- [ ] A6 E2 `earnings_reader_v1`: E2-det A-gate on history; E2-ai paired
+      forward shadow design (needs P2 reader tier).
+- [ ] A7 M1 overlay tested on every sleeve that passed A-gate.
+- [ ] A8 S5 re-scoped: the paired always-take vs `jev_v4` test runs on
+      the candidate streams of sleeves that passed A-gate, with real JEV
+      v4 answers generated only for post-cutoff events. S5 is the gate for
+      `filter = jev_v4`, not a G0 blocker.
+- [ ] A9 S1 closure: the PIT single-stock S&P-500 universe artifact is not
+      freely available; S1 closes with ETF and EDGAR-derived universes and
+      the limitation recorded (doc 12 §12.1).
 
-**Calibration and promotion (doc 11)**
-- [x] Resolution rules per question frozen (horizons, counterfactual HOLD scoring).
-- [x] Base-rate baseline definition + R13 threshold frozen.
-- [x] Non-LLM baseline specified: indicators + regime + risk table, no JEV,
-      no research plane (doc 11 §11.3).
-- [x] Promotion gate criteria written into the sign-off log template below.
+## 7.3 Track K — Kernel P3.5 remainder (parallel with A)
 
-**Risk and venue (docs 01, 05)**
-- [x] Frozen: sizing % + VaR/corr/vol methods (doc 05 §5.1a), paper fill model
-      (doc 06 Locked decisions).
-- [x] R10–R17 reviewed as code constants; owners = module table in
-      ARCHITECTURE.md §2/§7.
-- [x] Venue + data locked in doc 01 (human-accepted 2026-09-18): OANDA v20
-      practice + Alpaca paper, WS + 15-min REST reconcile, free calendars.
-- [x] Exit: Phase 0 closed at freeze v2 (signed `2dc8cbd`, reconciled
-      `50d88a7`); this box was the Phase-0 meta-checklist and is superseded
-      by the sign-off log below. Deliberately retained unchecked Phase-1/
-      2.5 items: §2.7 exit (research-plane bundle writer pending),
-      doc 08 §8.6 + doc 09 §9.4 boxes (plane unbuilt), G-gate exits
-      (paper loop not started). No TBDs outside those deferred scopes.
+- [ ] K1 P3.5-T transport: decision record (libcurl+TLS in-kernel vs
+      `mirotrade` broker gateway) + implementation behind the existing
+      seam + fail-closed tests + Alpaca paper smoke (doc 04 5b).
+- [ ] K2 Always-take path (doc 04 4b) with equivalence + no-AnswerSet gates.
+- [ ] K3 Settlement ledger + Snapshot v2 contract + committed vectors.
+- [ ] K4 R18/R19 in `risk/veto.cpp`; allowlist from the stage manifest;
+      existing Slice-B verdicts bit-identical.
+- [ ] K5 OTO stop-only protection shape + MOC exit sequencing (doc 06 §6.0).
+- [ ] K6 `ingest/candidates.cpp` (CID recompute, sleeve approval,
+      allowlist, freshness, long-only side policy).
+- [ ] K7 Outbound-only alert adapter (doc 06 §6.4).
+- [ ] K8 Live journal growth bound (tracked non-blocker becomes a G0b
+      box: bounded load, chain continuity preserved).
+- [ ] K9 Slice F 24 h feed soak on the real transport.
+- [ ] K10 H1 drills re-run against Alpaca paper through the real
+      transport (every doc 06 §6.2a row, exits alive).
+- [ ] Exit: K1–K7 + K10 green → P3.5 CLOSED (doc 13).
 
-## Phase 1 — Signal sidecar, non-X sources (docs 02/09, freeze v2)
+## 7.4 Track P — Research plane (parallel)
 
-X is out of the production path (doc 02 §2.6). The collector covers broker
-market data, SEC/EDGAR, FRED/ALFRED, Treasury/BLS/BEA, Fed/ECB
-official feeds, and earnings/calendar data — each with its §9 poller, TTL,
-heartbeat, and failure default.
+- [ ] P1 Reader-tier refactor: `extract` no longer runs a CodeAgent on
+      untrusted text; reader tier (no tools/network, capped JSON) +
+      deterministic resolver/verifier (doc 08 §8.3).
+- [ ] P2 E2 reader skill + schema + verifier, pinned (model, revision,
+      cutoff, skill hash).
+- [ ] P3 Research factory v1 (doc 08 §8.7): offline, trusted data only,
+      trial-ledgered, human-triaged proposals.
+- [ ] P4 Remaining doc 08 §8.6 + doc 09 §9.4 boxes (7-day unattended run,
+      Langfuse attribution day, p50/p99 per Tier-A source, ALFRED replay).
+- [ ] P5 S6 `event_direction_v1` production integration only via the
+      doc 11 promotion path (unchanged; not on the critical path).
 
-- [x] P1.1 `scripts/freeze-check.sh` FIRST — verified the repo against
-      `plan/system-manifest.yaml` (historical; P1.1 passed 39/39, now extended
-      with code↔manifest↔vector enforcement).
-      `plan/system-manifest.yaml` as the single source of truth (no version
-      literals duplicated in the script; it reads the manifest and the docs):
-      KNOWN-BY-FREEZE must match exactly — `question_set_version = v3`,
-      `feature_schema_version = f2`, `risk_version`, strategy/exit/research
-      versions, R1–R17 presence, 4 questions, stage names, venues.
-      BUILD-TIME-REQUIRED allowed as explicit placeholders until their phase —
-      `jev_provider` (until Phase 2 key), `research_models` (until research-plane
-      build), G0 bootstrap file (human, at build). INTENTIONALLY-DEFERRED
-      stays literal — `plan_hash` (generated by the freeze procedure itself),
-      live-venue fields (until their G-manifests). Any other TBD/placeholder
-      anywhere in plan/ or the script = P1.1 fails.
-- [x] P1.2 Collector: EDGAR + FRED/ALFRED + official macro feeds + calendars
-      → `signals.jsonl` + SQLite index + dedupe (historical; 105 records live).
-- [x] P1.3 TRIGGER/CONTEXT tagging at classify step (deterministic rules_v1,
-      historical; 19/19 + pre-P3.3 hardening: full lineage hash, strict schema).
-- [x] P1.4 CLOSED 2026-09-20 at observed ~33h / 133 cycles (shortened from 7d on evidence; see collector/SOAK_REPORT.md + SOAK_MANIFEST.json). 0x403, 7/7 acceptance, 0% pre-grade noise.
-- [x] P1.5 DONE (stub superseded by `collector/ctx_read.py`, 69 checks,
-      P1.5 FROZEN): bundle-schema reader validates the boundary law (§2.7:
-      prose rows quarantined, never consumed).
-- [ ] Exit: §2.7 boxes checked.
+## 7.5 Track O — Ops, CI, hygiene (parallel, small)
 
-## Phase 2 — JEV sidecar (doc 03) — ACCEPTED/FROZEN `50ea369` (historical)
+- [ ] O1 CI runs on every push + `workflow_dispatch`; strategy tests
+      (`test_baseline`, `test_candidate` with pinned pytest, `test_jev_v4`)
+      and `kernel/tests/test_v4.cpp` join CI (S4 governance amendment).
+- [ ] O2 Secret scanning: pinned gitleaks job + pre-commit hook.
+- [ ] O3 freeze-check v3 alignment: rename doc 02 file to
+      `02-strategy-book.md`, manifest v3 keys verified, root/xxd guards.
+- [ ] O4 S7-C closure: hosted 5/5 on the head carrying `f0815e7`.
+- [ ] O5 S7 closure: G1 venue amendment is this rebaseline (Alpaca,
+      one liquid ETF, cash/long-only); capital-aware caps unchanged.
+- [ ] O6 [HUMAN] Rotate every credential shared in chat on 2026-09-28
+      (OpenRouter, FRED, BEA, Alpaca paper) and re-seed `.env` locally.
 
-- [x] `jev.py`: stdin state → batched call → stdout answers + log row.
-- [x] Cache + failure paths (timeout/500/malformed → HOLD).
-- [x] 49 checks incl. hand-worked cases, spend controls, retry/HOLD, replay,
-      signing; 300-state decision-key cross-check vs C++ later green.
-- [x] Exit: accepted/frozen at `50ea369`; explicit confidence-null REJECTED
-      (matches C++ checkconf; absence means unknown). Do not modify the
-      sidecar beyond the authorized hardening scope unless integration
-      exposes an actual contract defect.
+## 7.6 Phase 4 — Paper at G0_PAPER
 
-## Phase 2.5 — Research plane (docs 08, 09)
-
-Built before the C++ core needs it, proven standalone, and never on the critical
-path for a trade.
-
-- [ ] LangGraph graph with the six nodes; SQLite checkpointing; resume-after-kill
-      proven at a random node with no duplicate features.
-- [ ] smolagents extraction workers inside Docker with a pinned import allowlist.
-- [ ] Tier A pollers live (EDGAR, FRED/ALFRED, Treasury/BLS, calendars) with TTLs,
-      heartbeats, and measured p50/p99 latency recorded in doc 09.
-- [ ] Tier B/C sources ingested as CONTEXT/NULL, measured, and used by nothing.
-- [ ] R15 runaway test passes (a stubbed looping tool is caught and aborted).
-- [ ] Isolation test passes: research user cannot write journal/`HALT`/`STAGE` and
-      cannot read broker credentials.
-- [ ] R12 test passes: a future-timestamped feature is dropped.
-- [ ] Langfuse shows per-node token and dollar attribution for a full day.
-- [ ] `lessons.jsonl` seeded with ≥10 graded entries.
-- [ ] Exit: doc 08 §8.6 and doc 09 §9.4 boxes checked.
-
-## Phase 3 — C++ deterministic kernel (doc 13; order is load-bearing)
-
-Phase 2 accepted/frozen (`50ea369`) plus authorized pre-P3.3 hardening
-(second pass, current: status/records separation, OS-native spend lock,
-fail-closed charge, strict confidence/state admission, strict ctx envelope
-+ kind registry, canonical allowlists; P3.1/P3.2 protocol untouched).
-Do not modify the sidecar beyond that scope unless integration exposes
-an actual contract defect.
-
-- [x] P3.1 boundary validator DONE and ACCEPTED/FROZEN at `dcd44d4`,
-      AMENDED at `52ccedb` and RE-SIGNED (human review): ScalarLessL
-      LE L-table was wrong from byte 5 on (false-reject ~6% of valid
-      signatures, never false-accept); fix = the 32-byte constant only,
-      full gates re-run green, no fixture changed. 21-check AnswerSet
-      gate (schema, pins, response_hash, Ed25519, key trust, state
-      binding, LIVE expiry vs REPLAY mode) + per-check adversarial
-      vectors. FINAL GATE: 102/102 checks, 20,000 fuzz iterations,
-      normal + hardened builds, sidecar byte-identical.
-      NO further P3.1 changes.
-- [x] P3.2 canonical serialization contract + committed cross-language test
-      vector ACCEPTED/FROZEN (37/37 normal+hardened; contract in §13.2).
-- [x] P3.3 typed `JEVAnswerSetV3` + deterministic decision table ACCEPTED
-      (human review at `41f3b66`, correction `7d83974`): full frozen §3.4
-      state (17 keys, full feature records — NOT feature IDs), closed
-      nested schemas, checked integers, int64-micros freshness,
-      expected-symbol binding, non-copyable/mutex KernelState with
-      try_accept() sole gate, universe cap 5, frozen VetoReason codes.
-      78/78 + 200-replay SHA-256 proof + §3.7 21–28 verbatim. Locked
-      rulings: v2 cases 1–20 stay HISTORICAL (no v2->v3 mapping invented);
-      feature_revision stays frozen count-only (content-aware revision
-      needs plan amendment + version bump + new vectors).
-- [x] §13.4 resolved: (b) QUARANTINED (human review) — confidence is
-      structurally validated for artifact compatibility but never stored
-      in, readable from, or acted on by any decision object; enforced by
-      build.sh gates.
-- [ ] P3.5 risk/sizing/execution in docs 04–06 order: veto, features, kills,
-      STAGE chain, feed soak, ctx hash-stability, exec/journal/reconcile
-      (slices A–H1 in doc 13 §13.5; H1 implementation/drill gates close
-      P3.5, H2 30-day operational evidence belongs to Phase 4).
-      Prereq (human hardening note): make the authority boundary
-      mechanically enforceable — ValidationRequest must be constructible
-      ONLY via KernelState::request_for() (compiler-enforced), not merely
-      by convention; close during P3.5 integration, not as P3.3 rework.
-      Chosen design (human ruling): private immutable construction +
-      KernelState friendship — constructor inaccessible to ordinary
-      callers, fields private, no public mutation after construction,
-      KernelState as construction authority, validator given read access;
-      copying an authorized request allowed, manufacturing one from
-      arbitrary universe/epoch values impossible. Do NOT move validation
-      into KernelState; no opaque handle. Refinement (human ruling):
-      "copying allowed" must NOT mean "copy then mutate" — state is
-      immutable after construction (const fields, no setters, no mutable
-      accessors), so a legitimately obtained request cannot be altered
-      into another universe/epoch/symbol. Compiler-enforcement is only
-      satisfied if manufacturing AND mutation are both impossible.
-- [x] Freeze-check extended to code pins (jev.py MODEL/REVISION/PROVIDER/
-      QVERSION/ceilings/caps/questions), kernel pins, and P3.2 vector
-      self-consistency; human sign-off recorded below.
-- [ ] Exit: doc 13 exit criteria all checked.
-
-## Strategy Validation Track (parallel with P3.5, research/shadow-only, no orders)
-
-Authorized by practitioner-review pivot; runs WITHOUT waiting for P3.5 and
-never retro-blocks it. G0 requires BOTH tracks converged (P3.5 correctness
-+ this track), per §28 sequencing: P1 fixes → strategy track + P3.5/H1 →
-G0 integration → paper evidence.
-
-- [ ] S1 baseline_v1 reference engine (`research/strategy/`: baseline, candidate,
-      backtest, data, costs) reproducing doc 12 exactly + hostile no-lookahead
-      fixtures + PIT universe artifact (CI: synthetic fixtures only, datasets by
-      manifest/hash).
-- [ ] S2 baseline economics report (trades/R-expectancy/Sharpe/DD/turnover,
-      1×/1.5×/2×/3× cost stress, per-symbol/regime/FX-vs-stock, R2-binding rate
-      + effective-risk telemetry). Record the result honestly; do not mutate v1.
-- [x] S3 candidate contract c1 (deterministic ID, side/family/entry/stop/TP/
-      time-exit bound pre-JEV, replay tests, cross-candidate cache isolation).
-      RELEASED at `1d22f01` (cid unforgable: init=False, 12-field recipe unchanged).
-- [ ] S4 JEV v4 candidate-bound contract (v3 frozen replay-only; v4 state carries
-      candidate economics; label == trading payoff; family_fit critiques family,
-      never emits BUY/SELL) + validator/table/vectors. RELEASED at `da61daa`
-      (32 vectors agree Python<->C++; wire/integer/expiry parity; v3 frozen).
-      Follow-ons: v4 CI build-gate amendment; model/revision/provider metadata
-      before production.
-- [ ] S5 paired evaluation (always-take vs filtered-policy delta per candidate;
-      pre-registered cluster-aware bootstrap + sequential rule + power study from
-      the real candidate stream; absolute economic bar alongside baseline-beats).
-- [x] S6 first deterministic directional resolver (event_direction_v1, unknown on
-      ambiguity, CONTEXT until measured) + doc 09 status. RELEASED: implementation
-      frozen at `1288e63` (24-test authority/scope/identity suite green; rows empty
-      by design; isolated library, no production feature-flow integration yet).
-      Production use requires the doc 11 promotion path, never a silent swap.
-- [ ] S7 ops: Linux ASan/UBSan CI job, model-retirement runbook (doc 03/10),
-      capital-aware spend caps, G1 venue-selection amendment (doc 10).
-- [ ] Exit: §33 strategy-track-complete boxes checked; §34 paper-ready boxes gate G0.
-
-## Phase 4 — Paper loop at G0_PAPER (everything together)
-
-- [ ] Full loop paper-trading on broker paper/sandbox accounts (stocks only:
-      OANDA practice path BLOCKED for India setup, so G0 is Alpaca-paper
-      stocks; forex rejoins only via an explicitly authorized venue),
-      research plane attached, spend metering live.
+- [ ] G0a shadow: every sleeve that passed A-gate runs on live data with
+      harness fills (`cost_v2`), no broker orders, from the day it passes.
+      B-gate per sleeve per doc 11 §11.3a.
+- [ ] G0b broker paper: exactly one champion sleeve through the kernel on
+      Alpaca paper (P3.5 closed + sleeve passed B-gate + G0 STAGE file
+      signed per doc 10 §10.5).
 - [ ] Daily summaries + weekly replay checks running.
-- [ ] Baseline stats frozen for S3 (win rate, per-regime PnL over the paper window).
-- [ ] Non-LLM baseline strategy running alongside for comparison (doc 11 §11.3).
-- [ ] Calibration harness scoring ≥200 decisions incl. counterfactual HOLDs;
-      `enter` and `veto` at or better than base rate.
-- [ ] Every §6.2a outage row drilled; exits alive in all of them.
+- [ ] Every §6.2a outage row drilled on the live paper loop.
 - [ ] AI spend within the G0 absolute cap; cost per closed trade reported.
-- [ ] 30 clean days, zero R-rule violations, no unplanned human intervention.
-- [ ] Exit: G0 → G1 criteria in doc 10 §10.2 met **and** human sign-off recorded
-      below (name + date + `STAGE` attest hash).
+- [ ] 30 clean G0b days, zero R-rule violations, no unplanned human
+      intervention; champion tracking within its pre-registered band.
+- [ ] Exit: G0 → G1 criteria in doc 10 §10.2 met **and** human sign-off
+      recorded below (name + date + manifest hash).
 
-## Phase 5 — G1_TINY (explicit decision, not automatic)
+## 7.7 Phase 5 — G1_TINY (explicit decision, not automatic)
 
-- [ ] Human signs `STAGE` into G1_TINY with the process stopped. No code path can
-      do this (R17).
-- [ ] 1 symbol, R-multiplier 0.25, 1× leverage, daily human review.
-- [ ] Realized slippage tracked against the paper fill model.
+- [ ] LIVE JURISDICTION GATE evidence complete (doc 10 §10.1a).
+- [ ] Port-on-promotion: champion signal in C++ with cross-language
+      vectors (doc 04).
+- [ ] Human signs the G1 PROMOTION_MANIFEST with the process stopped.
+- [ ] 1 liquid US ETF, R-multiplier 0.25, 1×, cash, daily human review.
+- [ ] Realized shortfall tracked against `cost_v2`.
 - [ ] Any R-trip → automatic demotion to G0. No negotiation.
-- [ ] Exit: doc 10 §10.2 G1 → G2 criteria met + human signature.
+- [ ] Exit: doc 10 §10.2 G1 → G2 criteria + human signature.
 
-## Phase 6 — G2_SCALED
+## 7.8 Phase 6 — G2_SCALED
 
-- [ ] Checkpoint store moved to Postgres; challengers running in shadow (doc 11).
+- [ ] Universe-cap versioned change if multi-sleeve live is justified.
+- [ ] Checkpoint store moved to Postgres; challengers in shadow.
 - [ ] The 20% AI-spend ratio test active and passing for 30 days.
-- [ ] ≤3 symbols, R-multiplier 0.5, weekly review.
-- [ ] Exit: doc 10 §10.2 G2 → G3 criteria met (60 days, ≥100 closed trades,
+- [ ] ≤ 3 symbols, R-multiplier 0.5, weekly review.
+- [ ] Exit: doc 10 §10.2 G2 → G3 criteria (60 days, ≥ 100 closed trades,
       max DD < 5%) + human signature.
 
-## Phase 7 — G3_FULL
+## 7.9 Phase 7 — G3_FULL
 
-- [ ] Full stage limits per doc 05 §5.1 and doc 05 §5.2.
-- [ ] Deposit-and-walk-away verified: 30 consecutive days with zero *required*
-      human intervention (weekly review continues as post-hoc inspection — the
-      system must not depend on it; REQUIRED-LIVE vs POST-HOC per §10.3-linked
-      rule: only hard kill, capital escalation, and strategy promotion may
-      ever require a human).
-      intervention, every intervention that did occur logged with its cause.
-- [ ] Ongoing: weekly calibration review, promotion gate for any change.
+- [ ] Full stage limits per doc 05.
+- [ ] 30 consecutive days with zero *required* human intervention (weekly
+      review continues as post-hoc inspection); every intervention that
+      did occur logged with its cause.
+- [ ] Ongoing: weekly sleeve review, promotion gate for any change.
+
+## 7.10 History (closed phases, kept for the record)
+
+- Phase 0 — spec frozen at freeze v2 (signed `2dc8cbd`, reconciled
+  `50d88a7`); X removed from production v1; JEV v3 semantics frozen
+  (question_set_version = v3, 4 questions).
+- Phase 1 — P1.1 freeze-check, P1.2 collector, P1.3 TRIGGER/CONTEXT
+  tagging, P1.4 soak (133 cycles, shortened on evidence), P1.5 ctx reader.
+- Phase 2 — JEV sidecar accepted/frozen `50ea369`.
+- Phase 3 — P3.1 (re-signed `52ccedb`), P3.2, P3.3 (`41f3b66` +
+  `7d83974`), P3.4 = quarantine; P3.5 slices A–G; H1 built (doc 13).
+- Strategy Validation Track S1–S7 — see §7.0 and the archive ledger.
 
 ## Distraction firewall (read when tempted)
 
-- New exchange? → Phase 5 done first. Then one paragraph in doc 01.
-- New indicator? → Must displace an old one (one in, one out) + backtest note.
-- Fine-tuning models? → Phase 5. Shadow only. Never with live capital in v1.
-- UI/dashboard? → Logs suffice until phase 5 exit.
-- New JEV question? → version bump + 20 fresh hand-worked cases first (doc 03).
+- HFT / sub-second news trading? → Doc 01 §1.4. Needs a legal entity, DMA,
+  paid feeds, colocation. Not this fund.
+- Forex, shorting, margin, options, leveraged ETFs live? → Illegal or
+  out of scope for the operator (doc 01 §1.2). Research shadow only.
+- New venue? → After Phase 5, one paragraph in doc 01, jurisdiction gate.
+- Paid data? → Core stays free. A paid source is a doc 09 amendment with a
+  measured incremental-edge case, funded from G2+ profit only.
+- New indicator / sleeve tweak? → New pre-registration, counted in the
+  trial ledger. One in, one out.
+- Fine-tuning models? → Shadow only, never with live capital in v1.
+- New JEV question? → Version bump + fresh hand-worked cases.
 - "Just one manual trade"? → No. The journal is the trader now.
-- New agent framework? → Doc 08 §8.2 ranking is the decision. Re-open it only with
-  a measured reason, never a release announcement.
-- New data source? → Doc 09 table first, as CONTEXT or NULL. Promotion to TRIGGER
-  needs measured hit-rate + sign-off (doc 11).
-- Agent wants a new tool? → It is a doc edit and a fresh paper window, not a
-  runtime capability. Self-modification is banned (D3).
-- "The bot is doing well, let's raise the stage early"? → No. The criteria are
-  necessary, never sufficient, and the file is signed with the process stopped.
-- "Let's skip the non-LLM baseline, it's obviously worse"? → Then it costs nothing
-  to run, and it is the only thing that can tell you the AI layer is subtracting
+- "One more hardening round"? → Doc 06 AUDIT STOP RULE + alpha-first.
+- New agent framework? → Doc 08 §8.2 ranking; reopen only with a
+  measured reason.
+- "The bot is doing well, raise the stage early"? → Criteria are
+  necessary, never sufficient; the manifest is signed with the process
+  stopped.
+- "Skip the controls, they're obviously worse"? → Then they cost nothing
+  to run, and they are the only thing that can prove the AI is adding
   value.
 
-Sign-off log:
+## Sign-off log
 
-Each entry: phase or stage, name, date, `STAGE` attest hash, and the window judged.
+Each entry: phase or stage, name, date, manifest/attest hash, window judged.
 
 Promotion sign-off template (copy per promotion; all lines required):
 
 ```
-PROMOTION: <G0→G1 | G1→G2 | G2→G3 | challenger <id> to live>
+PROMOTION: <G0→G1 | G1→G2 | G2→G3 | sleeve <id> to champion | filter jev_v4 on <sleeve>>
 DECIDED BY: <human name>   DATE: <ISO8601>   WINDOW JUDGED: <dates>
-CRITERIA (doc 10 §10.2 or doc 11 §11.3 — every box true, evidence linked):
+CRITERIA (doc 10 §10.2 / doc 11 §11.3 — every box true, evidence linked):
+  [ ] sleeve gate passed (A-gate + B-gate reports, trial-ledger ids)
   [ ] clean-day count  [ ] zero R-violations  [ ] determinism green
-  [ ] calibration ≥ baseline (Brier, n≥200)  [ ] spend in cap (+ ratio if G2+)
-  [ ] drills passed (kill / reconcile / isolation)  [ ] non-LLM baseline beaten
-PROCESS: stopped before signing, swapped after; question_set_version bumped;
-  fresh paper window opened (no inherited stage).
-STAGE ATTEST HASH: <sha256>
+  [ ] beats cash + vol-matched passive + no-AI variant, net, 2× stress
+  [ ] transferability: evidence produced under the live constraint set
+  [ ] spend in cap (+ ratio if G2+)  [ ] drills (kill/reconcile/isolation)
+  [ ] jurisdiction gate evidence attached (G1+)
+PROCESS: stopped before signing, swapped after; versions bumped; fresh
+  paper window opened (no inherited stage).
+MANIFEST HASH: <sha256>
 ```
 
-- (empty — first entry closes phase 0)
 - Phase 0 freeze | Drix10 | 2026-09-18 | plan frozen; G0 STAGE + keys at build; Phase 1 unblocked
 - Phase 0 freeze v2 signed off. Bucket 1 complete; JEV v3 semantics frozen; X removed from production v1; Phase 1 unblocked. | Drix10 | 2026-09-18
+- Freeze v3 rebaseline authorized by operator instruction ("full permission to rewrite plans and code; plan first") | 2026-09-28 | text committed; [HUMAN] signature of the final text pending

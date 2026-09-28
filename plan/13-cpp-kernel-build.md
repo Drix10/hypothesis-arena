@@ -306,8 +306,9 @@ Soak/operational evidence tracked per gate class, never retro-blocking.
 - No JEV sidecar changes (frozen at `50ea369`).
 - No research-plane work (Phase 2.5 runs in parallel, feeds `features.jsonl`
   only through the frozen f2 schema).
-- No live capital, no stage above G0_PAPER, no venue beyond OANDA practice +
-  Alpaca paper.
+- No live capital, no stage above G0_PAPER, no venue beyond Alpaca paper
+  (v3: OANDA practice BLOCKED — India ineligible; forex is not a live
+  target, doc 01 §1.2).
 - No confidence-driven decisions without closing §13.4(a).
 
 ## 13.7 Battle-testing ladder (gap-analysis mapping, frozen ownership)
@@ -336,6 +337,45 @@ No overlapping tests proving the same thing twice: a lesson with an
 existing gate is cited, not rebuilt. New gates attach to the listed slice
 and must be green before that slice closes (soak/operational per the §13.5
 sequencing rule).
+
+## 13.8 P3.5 remaining scope after freeze v3 (Track K, doc 07 §7.3)
+
+Status verified 2026-09-28: slices A–G done; H1 router/journal/broker/
+runner built and audited through the Round-5 follow-ups (router 209,
+runner ~1045 Linux, broker 126, drills 120, normal + hardened +
+sanitizer); `kernel/runner/main.cpp` wires `deps.transport = nullptr`, so
+nothing has been sent. Remaining boxes, in order:
+
+- **P3.5-T transport** (first; the hard blocker). Decision record comparing
+  (a) libcurl + system TLS linked behind the transport seam and (b) a
+  minimal `mirotrade` broker-gateway process speaking the shaped
+  observation protocol over a local pipe. Criteria: audited surface,
+  fail-closed on every TLS/HTTP/WS error, bounded buffers, no credential
+  exposure to other identities, 200 req/min budget with 429 back-off, WS
+  reconnect = re-subscribe + REST reconcile. TLS from scratch forbidden.
+  Gate [correctness + drill]: fault-injection suite + Alpaca paper smoke
+  (submit/protect/query/cancel/reconcile/MOC).
+- **Always-take path** (doc 04 4b): versioned filter-policy input to
+  `BuildEngineInputs`; bit-identical verdicts to the filtered path where
+  the filter passes; compile/grep gate that `none` cannot read an
+  AnswerSet. P3.3 table untouched.
+- **Snapshot v2 + settlement ledger + R18** (doc 04 5c, doc 05): new
+  committed vectors; v1 vectors unchanged and still verified.
+- **R19 allowlist + approved sleeves** from the stage manifest (doc 10).
+- **OTO stop-only protection + MOC sequencing** (doc 06 §6.0): adapter
+  shape extension, legs proof for the 1-leg OTO case, stop-before-MOC and
+  MOC-reject drills.
+- **Candidate ingest** (doc 04 2b): CID recompute, sleeve approval,
+  allowlist, freshness, long-only side policy — adversarial vectors.
+- **Outbound-only alert adapter** (doc 06 §6.4).
+- **Live journal growth bound** (tracked item from H1 becomes a box).
+- **H1 drills on the real transport** (every doc 06 §6.2a row).
+- **Port-on-promotion** (before G1, not P3.5): champion signal in C++ with
+  committed cross-language vectors (doc 04).
+
+P3.5 closes when the first seven boxes and the real-transport drills are
+green. The S4 governance follow-on (`kernel/tests/test_v4.cpp` into
+`build.sh` + CI) lands through doc 07 O1.
 
 ## Exit criteria (Phase 3 -> Phase 4)
 

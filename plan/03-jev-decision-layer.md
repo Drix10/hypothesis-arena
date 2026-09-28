@@ -8,6 +8,37 @@ replay (D3) and invalidates every calibration curve in doc 11.
 JEV writes no text. It answers typed questions about a `state` with calibrated
 probabilities. Our code owns the workflow and acts on the answers.
 
+## 3.0 JEV's role after freeze v3 (read first)
+
+Freeze v2 made JEV a mandatory gate on every entry. Freeze v3 makes it an
+**optional, challenger-grade filter**, for three measured reasons:
+
+1. The only JEV evidence in the repo (S5 real-stream pipeline proof with
+   stub answers) failed its economic bar; no live JEV value is measured.
+2. JEV is a single pinned model at a single provider behind an **alpha**
+   endpoint (`/api/alpha/decisions`). A champion path that cannot trade
+   without it inherits that dependency for no proven benefit.
+3. Single instruction-tuned models are measurably overconfident; LLM
+   ensembles can reach crowd-level forecasting accuracy. Calibration is a
+   question to test, not an assumption to build on.
+
+Therefore:
+- The kernel carries a deterministic **always-take path** (doc 04 §4.2 4b):
+  candidate c1 → veto (row 0 + R1–R19) → size → exec, no AnswerSet.
+  The S5 paired design already measures always-take vs filtered.
+- A sleeve's champion configuration names its filter policy explicitly:
+  `filter = none | jev_v4`. `jev_v4` is admitted only after the doc 11
+  paired-delta gate (filtered minus always-take, same candidates, net of
+  JEV cost) passes with a pre-registered minimum effect.
+- Challenger research may test `jev_v4_ensemble` (N pinned models,
+  aggregated deterministically) as a new question_set/version with its
+  own cost tag; it never replaces v4 by edit.
+- Everything below (v3 semantics, the table, the AnswerSet boundary
+  artifact, caching, spend safety, the retirement runbook) is unchanged
+  and frozen. v3 stays replay-only history; v4 (`research/strategy/
+  jev_v4.py`, `kernel/jev_v4.hpp`, 32 cross-language vectors, released at
+  `da61daa`) is the live contract whenever a filter is used.
+
 ## 3.1 The single call shape (locked, v3)
 
 One Decisions call per trading cycle, 4 questions batched, state = frozen
@@ -440,3 +471,12 @@ weight, ever.
   time-exit are INPUTS JEV evaluates, never OUTPUTS it invents. The v4 label
   must match the actual candidate economics (entry/stop/TP/time-exit/costs/
   horizon as one event), not a detached ±R race.
+- (freeze v3) JEV is optional. The champion path is always-take unless a
+  sleeve's pre-registered paired-delta gate admits `filter = jev_v4`
+  (§3.0, doc 11). No kernel path may require an AnswerSet to exit, and no
+  champion may require one to enter unless that gate passed.
+- (freeze v3) Live candidates are long-only: v4 `side` is BUY-to-open or
+  SELL-to-close; SELL-to-open candidates exist only in shadow research.
+- (freeze v3) v4 artifacts must carry model/revision/provider metadata
+  before any production use (S4 follow-on), and the v4 C++ gate enters
+  `kernel/build.sh` + CI through a plan amendment (S4 governance note).

@@ -1,48 +1,95 @@
-# AI Hedge Fund — Master Plan Index
+# AI Hedge Fund — Master Plan Index (freeze v3, 2026-09-28)
 
-One folder. Everything lives here. No code until the plan is complete.
+One folder. Everything lives here. If it is not in here, we do not build it.
+
+**Freeze v3 = the "alpha-first rebaseline".** Freeze v2 built a rigorous
+safety machine around an unproven edge. Freeze v3 keeps every safety
+contract and re-points the work at three things the v2 plan lacked:
+a legally tradable scope for the actual operator, a measurable alpha
+pipeline, and the shortest honest path into the paper loop. The review
+that motivated every change is `reviews/2026-09-28-v3-rebaseline-critique.md`.
 
 ## Files (read in order)
 
-1. `01-vision-and-scope.md` — what we are building, what we are NOT building. Locked scope.
-2. `02-twitter-alpha-system.md` — signal-sidecar spec + X-list research history (X disabled in v1 production, §2.6).
-3. `03-jev-decision-layer.md` — JEV Decisions API v3 (enter / edge_family / conviction / latent_risk), table, risk-budget sizing, cache fingerprints.
-4. `04-cpp-deterministic-core.md` — the C++ system: processes, modules, data flow, latency budget.
-5. `05-risk-and-determinism.md` — risk limits, vetoes, determinism, self-correction. Hard rules.
-6. `06-execution-and-ops.md` — execution, journaling, ops rhythm, monitoring.
-7. `07-build-roadmap.md` — phased build order with exit criteria per phase.
-8. `08-agentic-research-plane.md` — the autonomous research plane: framework choice, agent topology, isolation boundary, runaway limits.
-9. `09-osint-and-free-data.md` — every free information source, ranked by edge/latency/noise, with TRIGGER/CONTEXT/NULL classes.
-10. `10-capital-gates-and-spend-control.md` — capital stages, kill-switch hierarchy, AI spend circuit breakers.
-11. `11-calibration-and-self-improvement.md` — calibration scoring, shadow challengers, the promotion gate.
-12. `12-statistical-baseline.md` — the frozen permanent champion the AI layer must beat.
-13. `13-cpp-kernel-build.md` — Phase 3 build sequence: validator first, then canonical bytes, table, risk.
-13. `system-manifest.yaml` — canonical build fingerprint code verifies against.
+1. `01-vision-and-scope.md` — what we build, what we do not, operator
+   jurisdiction, venue, latency tiers (why this is not HFT and what is).
+2. `02-twitter-alpha-system.md` — **Strategy book: alpha sleeves** (legacy
+   filename; the X-lists archive moved to `appendix/02-x-lists-archive.md`).
+3. `03-jev-decision-layer.md` — JEV v3 (frozen, historical) + v4
+   candidate-bound contract; JEV is an optional challenger-grade filter.
+4. `04-cpp-deterministic-core.md` — the C++ kernel: processes, modules,
+   data flow, latency budget, always-take path, cash-account ledger.
+5. `05-risk-and-determinism.md` — R1–R19 hard rules, measurement
+   definitions, determinism contract, self-correction.
+6. `06-execution-and-ops.md` — order lifecycle, execution by sleeve, TCA,
+   cash settlement, ops rhythm, monitoring.
+7. `07-build-roadmap.md` — the only document that says what to do when.
+8. `08-agentic-research-plane.md` — live research plane (reader tier) +
+   offline research factory; isolation; runaway limits; feature contract.
+9. `09-osint-and-free-data.md` — every free source, ranked, licensed,
+   with failure defaults; research datasets (SIP history, FRED, EDGAR).
+10. `10-capital-gates-and-spend-control.md` — stages, jurisdiction gate,
+    kill switches, AI spend control.
+11. `11-calibration-and-self-improvement.md` — validation standard,
+    trial ledger, contamination control, calibration, promotion gate.
+12. `12-statistical-baseline.md` — controls and benchmarks: frozen
+    `baseline_v1` (negative control), cash, passive vol-matched.
+13. `13-cpp-kernel-build.md` — Phase-3 build record + P3.5 remaining scope.
+
+Also: `system-manifest.yaml` (fingerprint code verifies against),
+`appendix/` (implementation records moved verbatim, still frozen),
+`reviews/` (historical review records; never authority).
 
 ## Rules of this folder
 
-- If it's not in here, we don't build it. New idea → add a doc section first, then build.
-- Scope changes require editing `01-vision-and-scope.md` explicitly. No silent expansion.
-- Each doc ends with "Locked decisions" — those are final unless revisited deliberately.
-- `07-build-roadmap.md` is the only file that says what to do when. Everything else says what things are.
-- Docs 01–07 describe the trading system. Docs 08–11 describe the autonomy around
-  it: what researches, what may spend, what may escalate capital, and what may
-  change the system. Nothing in 08–11 may weaken a rule in 01–07.
-- One-way rule: the research plane (08) feeds the hot path (04) typed features and
+- If it is not in here, we do not build it. New idea → doc section first.
+- Scope changes require editing doc 01 explicitly. No silent expansion.
+- Each doc ends with "Locked decisions". They are final unless revisited
+  deliberately, with the reason written down.
+- Doc 07 is the only file that says what to do when. Everything else says
+  what things are.
+- Docs 01–07 describe the trading system. Docs 08–11 describe the autonomy
+  around it. Nothing in 08–11 may weaken a rule in 01–07.
+- One-way rule: the research plane feeds the kernel typed features and
   nothing else. It never sizes, orders, vetoes, resumes, or promotes.
+- Appendices are frozen records of accepted implementation contracts.
+  They are binding where a doc points to them; they are not reading-order
+  material.
 
 ## Global locked decisions (one page, no exceptions)
 
-- C++ owns every decision that can lose money. Agents produce evidence, never orders.
-- JEV (`typesafe/jev-1.13`, pinned, never floating) is the sole calibrator: 4
-  questions, banded table, raw probability never acts alone.
-- R1–R17 are code constants. Any change = doc edit + version bump + fresh paper window.
-- Research writes `features.jsonl` only (R11, OS-enforced). No broker keys, no
-  journal/`HALT`/`STAGE` access. `LocalPythonExecutor` forbidden near capital.
+- **Deterministic code owns every decision that can lose money.** Agents
+  produce evidence, research, and code proposals — never orders.
+- **Alpha-first.** No engineering beyond what the current stage needs
+  until a strategy sleeve has passed its gate (doc 11). Audit reopening
+  follows the doc 06 AUDIT STOP RULE classes only.
+- **Legality first.** Live scope is what the operator may lawfully trade:
+  US-listed equities and ETFs, cash account, long only, 1× (doc 01,
+  R18/R19, doc 10 jurisdiction gate). Paper evidence counts toward
+  promotion only if produced under that same constraint set.
+- **LLMs earn their place where evidence says they can:** the offline
+  research factory, typed extraction from primary documents, and
+  (optionally) a calibrated filter that must prove a paired delta. No LLM
+  output originates direction at the execution boundary.
+- **LLM evidence is time-honest:** any evaluation involving a model's
+  output uses only data after that model's pinned knowledge cutoff plus
+  an embargo (doc 11). Data timestamps are guarded by R12; model memory is
+  guarded by this rule.
+- JEV (`typesafe/jev-1.13`, pinned, never floating) v3 is frozen history;
+  v4 is candidate-bound. JEV is not required on the champion path.
+- R1–R19 are code constants. Any change = doc edit + version bump +
+  fresh paper window.
+- Research writes `features.jsonl` only (R11, OS-enforced). No broker keys,
+  no journal/`HALT`/`STAGE` access. Untrusted text is read only by a
+  reader tier with no code execution and no network (doc 08).
 - No code path promotes a stage (R17). Demotion is automatic and unvetoable.
-- Free data only. Every non-price source starts CONTEXT/NULL; TRIGGER needs
-  measured hit-rate + human sign-off. Absent data is never neutral data.
-- The statistical baseline is permanent. The AI layer beats it net of cost or is
-  removed, not tuned.
-- Exits survive everything: kills, outages, stale feeds, dead JEV, paused research.
-  New risk stops; old risk stays managed; the system fails toward paper.
+- Free data only for core operation. Every non-price source starts
+  CONTEXT/NULL. Absent data is never neutral data.
+- Controls are permanent: every sleeve is scored against cash, a
+  vol-matched passive benchmark, and the same sleeve without AI, net of
+  all costs (doc 12). A losing AI layer is removed, not tuned.
+- Exits survive everything: kills, outages, stale feeds, dead JEV,
+  paused research. New risk stops; old risk stays managed; the system
+  fails toward paper.
+- Secrets never enter the repo, a log, a prompt, or a chat. A secret that
+  was exposed anywhere is rotated, not reasoned about.
