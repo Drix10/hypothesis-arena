@@ -72,21 +72,21 @@ Three principles:
 | Spec (`plan/`, 13 docs + manifest) | Freeze v3 written 2026-09-28 (critique: `plan/reviews/`); human signature pending |
 | Collector + Tier-A adapters (EDGAR/FRED/Treasury/BLS/BEA) | Built, tested, hosted-green; live p50/p99 evidence open |
 | JEV sidecar | v3 accepted/frozen; v4 candidate-bound released; now an optional filter |
-| C++ kernel | P3.1/P3.2/P3.3 frozen; P3.5 A–G done; H1 router/runner/broker/journal built; R18/R19 veto rules, candidate validator and escaped alert log added; **broker transport not wired** |
+| C++ kernel | P3.1/P3.2/P3.3 frozen; P3.5 A–G done; H1 router/runner/broker/journal built; R18/R19 veto rules, candidate validator, libcurl paper transport, decision loop, OTO/MOC adapter shapes, journal size bound; fault-injection and loop drills pass against a loopback mock |
 | Research harness | Trial ledger, `cost_v2`, T+1 settlement, portfolio engine, statistics standard, A/B gates, pre-registration validator, SIP fetcher with manifests: built, tested, on hosted CI |
 | Strategy track | `baseline_v1`, T1 trend, E1 insider purchases and E2-det earnings drift all measured negative on SIP/SEC data (ledger N=15); sector momentum, intraday momentum and the AI earnings reader are not run |
 | Paper loop | NOT STARTED. G0a shadow starts when a sleeve passes its backtest gate; G0b broker paper when P3.5 closes |
 
 ### Progress
 
-Roadmap checklist (`TODO.md`): 23 of 57 boxes done. Several open kernel boxes (K1, K2, K3) are largely built; `TODO.md` lists what remains.
+Roadmap checklist (`TODO.md`): 24 of 57 boxes done. Several open kernel boxes (K1, K2, K3) are largely built; `TODO.md` lists what remains.
 
 | Track | Done | Open |
 |---|---|---|
 | Rebaseline (docs) | 3 | 1 (human signature) |
 | Ops, CI, hygiene | 5 | 2 (credential rotation; frozen-collector fixes) |
 | Alpha (harness + sleeves) | 10 | 8 (sleeves that failed are recorded, the rest untested) |
-| Kernel P3.5 remainder | 5 | 9 (Snapshot v2, OTO/MOC, journal bound, soak, drills on the real transport, loop remainder) |
+| Kernel P3.5 remainder | 6 | 8 (Snapshot v2, OTO/MOC wiring, live-venue soak and drills, exit gate) |
 | Research plane | 0 | 5 |
 | Paper trading (G0) | 0 | 5 |
 | Live stages (not authorized) | 0 | 4 |
