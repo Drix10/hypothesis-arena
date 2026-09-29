@@ -105,7 +105,7 @@ fi
 g++ $FLAGS -o test_features ingest/test_features.cpp ingest/features.cpp
 ./test_features
 g++ $FLAGS -o test_candidates ingest/test_candidates.cpp ingest/candidates.cpp
-./test_candidates
+./test_candidates vectors
 g++ $FLAGS -o test_sizing risk/test_sizing.cpp risk/sizing.cpp
 ./test_sizing
 g++ $FLAGS -o test_measure risk/test_measure.cpp risk/measure.cpp

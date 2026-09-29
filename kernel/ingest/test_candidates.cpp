@@ -64,7 +64,7 @@ static CandOutcome Run(const std::string& line, const CandidateTables& t,
     return ValidateCandidate(v, t, now);
 }
 
-int main() {
+int main(int argc, char** argv) {
     CandidateTables t;
     t.sleeves.push_back({"trend_etf_v1", 3600});
     t.allowlist = {"VTI", "VEU", "SPY"};
@@ -118,6 +118,37 @@ int main() {
     CandidateTables z = t;
     z.sleeves[0].window_s = 0;
     CHECK("zero-window", Run(Rec(fresh), z).code == CandReject::SLEEVE);
+    if (argc == 2) {
+        // Lines written by research/strategy/candidate_wire.py must be
+        // judged exactly as intended (cross-language CID and price grammar).
+        FILE* f = fopen((std::string(argv[1]) + "/c1_wire.jsonl").c_str(), "rb");
+        std::string all;
+        char buf[4096];
+        size_t n;
+        while (f && (n = fread(buf, 1, sizeof buf, f)) > 0) all.append(buf, n);
+        if (f) fclose(f);
+        CandidateTables vt;
+        vt.sleeves.push_back({"trend_etf_v1", 3600});
+        vt.allowlist = {"VTI"};
+        CandReject want[5] = {CandReject::OK, CandReject::CID,
+                              CandReject::FRESHNESS, CandReject::SLEEVE,
+                              CandReject::ALLOWLIST};
+        size_t at = 0;
+        int k = 0;
+        for (; k < 5; ++k) {
+            size_t nl = all.find('\n', at);
+            if (nl == std::string::npos) break;
+            CandOutcome o = Run(all.substr(at, nl - at), vt, NOW);
+            at = nl + 1;
+            CHECK("python-vector", o.code == want[k]);
+            if (k == 0)
+                CHECK("python-vector-prices", o.accepted &&
+                                                  o.entry_cents == 25050 &&
+                                                  o.stop_cents == 23000 &&
+                                                  o.tp_cents == 99900);
+        }
+        CHECK("python-vector-count", k == 5);
+    }
     printf("CHECKS: %d/%d PASS\n", count - fails, count);
     return fails ? 1 : 0;
 }
