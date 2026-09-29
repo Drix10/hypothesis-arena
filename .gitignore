@@ -59,3 +59,4 @@ data/*
 data/s2_out/*
 !data/s2_out/baseline_v1_report.json
 !data/s2_out/baseline_v1_report.md
+*.lock

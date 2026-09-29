@@ -417,11 +417,11 @@ int main() {
              SNAP);
         RateAdd(w2, g2, SNAP);
         RateAdd(w2, b2, SNAP);
-        // exactly 5% (1/20) does NOT alert: strictly above only.
+        // exactly 5% (1/20) does not alert: strictly above only.
         CHECK("rate-exact5", !ShouldAlert(w2));
         RateWindow w3;
         CHECK("rate-empty", !ShouldAlert(w3));
-        // One over-count drop is exactly ONE bad event (rejected and
+        // One over-count drop is exactly one bad event (rejected and
         // dropped are disjoint). Full arena (64a, 0r) + 1 drop + 2
         // validation rejects: 3/67 = 4.48% -> no alert. (The old
         // double-count made this 4/68 = 5.9% -> alert.)

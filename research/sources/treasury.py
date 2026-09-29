@@ -1,24 +1,11 @@
-"""Production Treasury FiscalData source adapter (doc 09 Tier A).
+"""Treasury FiscalData source adapter (doc 09 Tier A): auction results
+(auctions_query, latest-first). No key; UA carries MIRO_CONTACT when set.
 
-Locked scope: api.fiscaldata.treasury.gov auction results
-(auctions_query, latest-first) only. No key, no crawl, no mirror.
-UA carries MIRO_CONTACT when configured (polite, SEC-style); the
-source does not require it, so absence warns instead of blocking.
-
-Timestamps: record_date is the PUBLICATION date and the sole source
-of observed_at_ns (midnight, explicitly estimated: day-granularity,
-never an authoritative instant). auction_date is EVENT metadata and
-may be future (announced auctions) while record_date is current;
-a future auction_date is never a future observation. cusip+record_date
-is the PK dedupe key.
-
-Rate: conservative 1 req/s operating pace. 3 retries, jittered
-backoff, 429 halves once per episode with deterministic recovery.
-Raw records only (harvest envelope); frozen f2 downstream.
-Transport/clock/sleep/jitter injected; stdlib urllib, proxy via env.
-
-Implementation-complete is NOT production-proven: live evidence
-(soak, measured p50/p99) stays open.
+record_date is the publication date and the sole source of observed_at_ns
+(midnight, flagged estimated). auction_date is event metadata and may be in
+the future. cusip+record_date is the dedupe key. Pace 1 req/s, 3 retries with
+jittered backoff, a 429 halves the rate once per episode. Emits raw records;
+transport, clock, sleep and jitter are injected.
 """
 import calendar
 import json
@@ -247,8 +234,7 @@ class Adapter:
             info["completed_at"] = self.clock()
             return [], info
         if not data:
-            # Empty provider payload is NOT healthy: freshness must
-            # never reset on zero usable source content.
+            # an empty payload is unhealthy and must not reset freshness
             info["errors"].append("empty-data")
             self.failures += 1
             self.last_error = "empty-data"

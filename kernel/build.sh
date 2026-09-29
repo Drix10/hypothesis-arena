@@ -1,17 +1,23 @@
 #!/bin/bash
 # P3.1 gate: build + full validator suite + fuzz + API-surface check.
 # Usage: ./build.sh [normal|hardened|sanitize]
-# Sanitizers: GCC ASan/UBSan runtimes do NOT ship for this MinGW target
+# Sanitizers: GCC ASan/UBSan runtimes do not ship for this MinGW target
 # (link fails: collect2 ld error, no libasan/libubsan). The hardened mode
 # below is the available substitute: libstdc++ debug containers, stack
 # protector, fortify, static analyzer. Revisit on a Linux toolchain.
 set -e
 cd "$(dirname "$0")"
 MODE="${1:-normal}"
+# Freeze v3 O3: permission-denied tests (chmod 000) cannot fail closed as
+# root, so a root run would be a false green. Refuse rather than skip.
+if [ "$(id -u)" = "0" ]; then
+    echo "GATE FAIL: run kernel/build.sh as a non-root user (chmod-000 fail-closed tests are meaningless as root)" >&2
+    exit 2
+fi
 if [ "$MODE" = "sanitize" ]; then
     # S7-A: real ASan+UBSan runtimes on a Linux toolchain (hosted CI).
     # Same gates, same contracts; no production behavior change.
-    # The --wrap,malloc allocation proofs are skipped here BY DESIGN:
+    # The --wrap,malloc allocation proofs are skipped here by design:
     # sanitizer runtimes replace the allocator (and need the shared
     # libstdc++), so link-time malloc wrapping cannot observe them.
     # Zero-heap discipline stays proven by the normal-mode gate.
@@ -33,7 +39,7 @@ g++ $FLAGS -o tests/test_p32 tests/test_p32.cpp
 g++ $FLAGS -o tests/test_p33 tests/test_p33.cpp
 ./tests/test_p33 p33 fixtures
 # Slice A authority proof: the boundary is compiler-enforced, not merely
-# grep-policed. Each neg_* probe must FAIL compilation for its documented
+# grep-policed. Each neg_* probe must fail compilation for its documented
 # reason; the positive control must compile, run, and exit 0 (it proves
 # the toolchain is healthy, so the failures are real rejections).
 for neg in auth/neg_*.cpp; do
@@ -55,9 +61,9 @@ for neg in auth/neg_*.cpp; do
 done
 g++ $FLAGS -o /tmp/auth_pos auth/pos_authorized.cpp
 /tmp/auth_pos || { echo "GATE FAIL: authorized path broken"; exit 1; }
-# Friend list pinned tight INSIDE ValidationRequest: exactly the
+# Friend list pinned tight inside ValidationRequest: exactly the
 # construction authority plus the read-only validator. Counts are
-# OCCURRENCES, not lines (a smuggled second declaration on one line must
+# occurrences, not lines (a smuggled second declaration on one line must
 # still trip the gate), taken over the comment-stripped region (a matching
 # comment must never satisfy a positive check). Any third friend in that
 # region is a second authority. The neg_friendleak probe covers access
@@ -77,7 +83,7 @@ g++ $FLAGS -o test_veto risk/test_veto.cpp risk/veto.cpp
 ./test_veto p33 fixtures
 # Slice B JEV isolation: veto.cpp must never read bounded model answers
 # (method calls or the validated type) , the frozen sec.3.2 table is the
-# ONLY path from answers to size. This gate fails the build if any such
+# only path from answers to size. This gate fails the build if any such
 # path is introduced, including via comments naming call syntax.
 for tok in '\.enter\(\)' 'latent_risk\(\)' 'conviction\(\)' 'family\(\)' \
            'ValidatedJEVAnswerSetV3'; do
@@ -98,6 +104,31 @@ fi
 # boundaries + retention + rate window).
 g++ $FLAGS -o test_features ingest/test_features.cpp ingest/features.cpp
 ./test_features
+g++ $FLAGS -o test_candidates ingest/test_candidates.cpp ingest/candidates.cpp
+./test_candidates vectors
+g++ $FLAGS -o test_sizing risk/test_sizing.cpp risk/sizing.cpp
+./test_sizing
+g++ $FLAGS -o test_measure risk/test_measure.cpp risk/measure.cpp
+./test_measure
+g++ $FLAGS -o test_decide exec/test_decide.cpp exec/decide.cpp risk/veto.cpp risk/sizing.cpp ingest/candidates.cpp
+./test_decide
+g++ $FLAGS -o test_moc_plan exec/test_moc_plan.cpp exec/moc_plan.cpp
+./test_moc_plan
+g++ $FLAGS -o test_account runner/test_account.cpp runner/account.cpp
+./test_account fixtures
+g++ $FLAGS -o test_settle runner/test_settle.cpp runner/settle.cpp runner/calendar.cpp
+./test_settle
+g++ $FLAGS -o test_calendar runner/test_calendar.cpp runner/calendar.cpp
+./test_calendar
+g++ $FLAGS -o test_bars runner/test_bars.cpp runner/bars.cpp runner/calendar.cpp
+./test_bars fixtures
+g++ $FLAGS -o test_approved runner/test_approved.cpp runner/approved.cpp runner/calendar.cpp
+./test_approved ..
+# The no-filter decision path must never reach a JEV AnswerSet.
+if grep -nE "AnswerSet|jev_v4|jev_state|validate_jev" exec/decide.cpp exec/decide.hpp risk/sizing.cpp risk/sizing.hpp; then
+    echo "GATE FAIL: no-filter path touches the AnswerSet surface"
+    exit 1
+fi
 # Slice C zero-malloc contract: validation + retention allocate nothing
 # (comments stripped: the discipline note names the forbidden tokens).
 # U8()/JVal::find are forbidden in the ingest path: both build key
@@ -134,6 +165,8 @@ g++ $FLAGS -o test_journal log/test_journal.cpp log/journal.cpp
 ./test_journal
 g++ $FLAGS -o test_broker broker/test_broker.cpp broker/adapter.cpp broker/alpaca_paper.cpp
 ./test_broker
+g++ $FLAGS -o test_shapes broker/test_shapes.cpp broker/adapter.cpp broker/alpaca_paper.cpp
+./test_shapes fixtures
 g++ $FLAGS -o test_drills exec/test_drills.cpp exec/router.cpp broker/adapter.cpp broker/alpaca_paper.cpp log/journal.cpp kill/switch.cpp
 ./test_drills
 # H1 integration gate [correctness + drill]: G0 runner — durable
@@ -145,8 +178,25 @@ g++ $FLAGS -o test_drills exec/test_drills.cpp exec/router.cpp broker/adapter.cp
 # compiles as the production entry (transport null = fail closed).
 g++ $FLAGS -o test_runner runner/test_runner.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp broker/adapter.cpp broker/alpaca_paper.cpp log/journal.cpp kill/switch.cpp
 ./test_runner
+g++ $FLAGS -o test_paper_loop runner/test_paper_loop.cpp runner/paper_loop.cpp runner/bars.cpp runner/calendar.cpp runner/account.cpp runner/settle.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp exec/decide.cpp risk/veto.cpp risk/sizing.cpp risk/measure.cpp ingest/candidates.cpp broker/adapter.cpp broker/alpaca_paper.cpp log/journal.cpp kill/switch.cpp
+./test_paper_loop fixtures
 g++ $FLAGS -o g0_runner runner/main.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp broker/adapter.cpp broker/alpaca_paper.cpp log/journal.cpp kill/switch.cpp
-# H1 zero-malloc contract: the router STEP CORE allocates nothing
+# Live paper transport (libcurl): compiled and linked only when WITH_CURL=1;
+# the smoke tool needs ALPACA_KEY_ID/ALPACA_SECRET and is run by hand.
+if [ -n "${WITH_CURL:-}" ]; then
+g++ $FLAGS -DG0_WITH_CURL -o g0_runner_paper runner/main.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp broker/adapter.cpp broker/alpaca_paper.cpp broker/http_curl.cpp broker/ws_stream.cpp log/journal.cpp kill/switch.cpp -lcurl
+g++ $FLAGS -DG0_WITH_CURL -o g0_paper_loop runner/paper_loop_main.cpp runner/paper_loop.cpp runner/bars.cpp runner/calendar.cpp runner/account.cpp runner/settle.cpp runner/approved.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp exec/decide.cpp risk/veto.cpp risk/sizing.cpp risk/measure.cpp ingest/candidates.cpp broker/adapter.cpp broker/alpaca_paper.cpp broker/http_curl.cpp broker/ws_stream.cpp log/journal.cpp kill/switch.cpp -lcurl
+g++ $FLAGS -o smoke_paper broker/smoke_paper.cpp broker/http_curl.cpp broker/alpaca_paper.cpp broker/adapter.cpp broker/ws_stream.cpp -lcurl
+g++ $FLAGS -o live_drill broker/live_drill.cpp broker/http_curl.cpp broker/alpaca_paper.cpp broker/adapter.cpp broker/ws_stream.cpp -lcurl
+g++ $FLAGS -DG0_TEST_BASE -o test_ws_stream broker/test_ws_stream.cpp broker/ws_stream.cpp -lcurl
+./test_ws_stream unit
+python3 tests/ws_faults.py ./test_ws_stream
+g++ $FLAGS -DG0_TEST_BASE -o test_transport_faults broker/test_transport_faults.cpp broker/http_curl.cpp broker/alpaca_paper.cpp broker/adapter.cpp -lcurl
+python3 tests/transport_faults.py ./test_transport_faults
+g++ $FLAGS -DG0_WITH_CURL -DG0_TEST_BASE -o g0_paper_loop_mock runner/paper_loop_main.cpp runner/paper_loop.cpp runner/bars.cpp runner/calendar.cpp runner/account.cpp runner/settle.cpp runner/approved.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp exec/decide.cpp risk/veto.cpp risk/sizing.cpp risk/measure.cpp ingest/candidates.cpp broker/adapter.cpp broker/alpaca_paper.cpp broker/http_curl.cpp broker/ws_stream.cpp log/journal.cpp kill/switch.cpp -lcurl
+python3 tests/e2e_mock_venue.py ./g0_paper_loop_mock
+fi
+# H1 zero-malloc contract: the router step core allocates nothing
 # (identity minting at IDLE is documented cycle-path and excluded
 # here; the loop covers the IDLE-reject path + every post-identity
 # state x observation shape).
@@ -211,9 +261,9 @@ fi
 # determinism (10k -> 1 hash), mutation sensitivity, golden bytes
 # (doc 04 sec. 4.2.3; context_hash != state_hash, frozen).
 g++ $FLAGS -o test_context ctx/test_context.cpp ctx/context.cpp
-./test_context
+./test_context vectors
 # Slice G vocabulary: regime/calib/source/session/stage sets are
-# frozen mirrors — the gate enforces each EXACT definition line once
+# frozen mirrors — the gate enforces each exact definition line once
 # (a second spelling anywhere trips the count) and forbids parallel
 # stage literals (stage vocabulary lives in Slice E only).
 [ "$(grep -c 's == "trend" || s == "range" || s == "volatile"' ctx/snapshot.hpp)" = "1" ] || {
@@ -262,7 +312,7 @@ if grep -nE "confidence\s*\(\s*\)" jev_validate.hpp jev_state.hpp kernel_state.h
     echo "GATE FAIL: confidence accessor present"
     exit 1
 fi
-# Confidence must never be READ on any kernel path (comments may name it).
+# Confidence must never be read on any kernel path (comments may name it).
 if grep -nE "\.confidence|->confidence" jev_state.hpp kernel_state.hpp decision_table.hpp; then
     echo "GATE FAIL: confidence read on kernel path"
     exit 1

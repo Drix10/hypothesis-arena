@@ -319,7 +319,7 @@ class TestEdgar(unittest.TestCase):
                 fh.write("{broken")
             self.assertEqual(a.read_heartbeat(p)["state"], "invalid")
 
-    # ---- audit-round-2 regressions ----
+    # ---- regressions ----
 
     def test_real_httperror_boundary(self):
         import io
@@ -563,7 +563,7 @@ class TestEdgar(unittest.TestCase):
         self.assertEqual(err, "")
         self.assertEqual(got["cik"], 320193)
 
-    # ---- audit-round-4: timestamp / heartbeat / issuer authority ----
+    # ---- timestamp / heartbeat / issuer authority ----
 
     def test_acceptance_time_is_observed(self):
         import calendar as _cal
@@ -750,7 +750,7 @@ class TestEdgar(unittest.TestCase):
         got, err = a.fetch_facts_for("ZZZZ")
         self.assertIsNone(got)
         self.assertTrue(err.startswith("unknown-symbol"))
-        # standalone (no map) keeps old behavior: request attempted
+        # standalone (no map): request is attempted
         b = adapter(routes)
         before_b = len(b.transport.calls)
         b.fetch_facts(789019)

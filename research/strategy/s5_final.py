@@ -1,16 +1,11 @@
 """S5 FINAL path: holdout materialization + holdout verdict.
 
-Separate module from s5_eval (selection machinery) by construction:
-selection code imports s5_eval only, which has NO holdout API
-(asserted: no attribute containing 'holdout' exists there). The holdout
-is materialized here, in the final path, only after selection freezes.
-
-Terminal evidence step: holdout results are NEVER fed back into
-select_variant(). The split token's claimed variant is mechanically
-re-verified from the authoritative full streams (_validate_evidence
-0c); a caller-supplied selected_variant may only ECHO the
-token-bound selection, never override it. Sequential evidence follows
-only the verified selection. Research/shadow-only.
+Kept apart from s5_eval so selection code has no holdout API (asserted: no
+attribute containing 'holdout' there). The holdout is materialized here only
+after selection freezes, and its results never feed back into
+select_variant(). The split token's variant is re-verified from the full
+streams (_validate_evidence 0c); a caller-supplied selected_variant may only
+echo the token-bound selection. Research/shadow-only.
 """
 
 import hashlib as _hashlib
@@ -31,18 +26,16 @@ from .s5_eval import (BOOT_REPS, BOOT_SEED, EVAL_PROTOCOL, HOLM_ALPHA,
                       verify_r_monitor, walk_folds)
 
 STRESS_MULT = {"1x": 1.0, "1.5x": 1.5, "2x": 2.0, "3x": 3.0}
-# Fields allowed to differ between a 1x record and its re-resolved stress
-# twin (same CID + variant): resolution/economics-derived ONLY. Every
-# other field (candidate, JEV verdict, day, labels' inputs, fills' inputs)
-# must be byte-identical, else the stress set is not the same population.
+# Fields that may differ between a 1x record and its stress twin (same CID +
+# variant): resolution/economics only; everything else must be identical.
 STRESS_MUTABLE = frozenset(("spread_mult", "exit_spread_bps",
                              "entry_fill", "exit_fill", "exit_ts_ns",
                              "resolved_r", "always_r", "always_label",
                              "always_realized", "filtered_r",
                              "filtered_taken", "r_breach_attempted",
                              "eval_hash"))
-# Fields allowed to differ between the split variant's 1x record and
-# another variant's 1x twin (same CID + spread): decision-derived ONLY.
+# Fields that may differ between the split variant's 1x record and another
+# variant's 1x twin (same CID + spread): decision-derived only.
 VARIANT_MUTABLE = frozenset(("variant", "filtered_pass",
                               "filtered_action", "filtered_reason",
                               "filtered_r", "filtered_taken",
@@ -252,11 +245,10 @@ def holdout_split(records, n_splits=None):
 def pinned_slice_root():
     """Production expected root: the prereg-pinned S2 slice pin.
 
-    Measured once over the frozen slice + frozen code, then frozen in
-    s5_prereg.json experiments. Any data/code drift fails closed in
-    final_report. Test fixtures NEVER use this (stream_roots marks
-    fixture roots explicitly). Carries the authoritative production
-    bars_digest: the bars actually consumed MUST hash to it."""
+    Measured once over the frozen slice and code, pinned in s5_prereg.json
+    experiments; drift fails closed in final_report. Carries the production
+    bars_digest, which the bars consumed must hash to. Test fixtures use
+    stream_roots instead."""
     return dict(_prereg()["experiments"]["s2_slice_stream_root"])
 
 
@@ -298,12 +290,10 @@ def _is_production_identity(data_id):
 def stream_roots(full_streams, data_id):
     """Expected-root shape for final_report (TEST-FIXTURE mint).
 
-    Derives the pinned-root structure from the given complete streams
-    and marks it test_fixture=True. Production NEVER calls this: the
-    production root is pinned in s5_prereg.json experiments (measured
-    once over the frozen slice, then frozen). final_report REQUIRES
-    bars_proof=None under a fixture root, so fixture data can never
-    be presented as production S2 evidence."""
+    Derives the root structure from the given streams and marks it
+    test_fixture=True; production uses the root pinned in s5_prereg.json.
+    final_report requires bars_proof=None under a fixture root, so fixture
+    data cannot pass as production S2 evidence."""
     assert set(full_streams) == set(VARIANTS)
     triples, slices, shas, pers, n = set(), set(), set(), {}, None
     for v, recs in full_streams.items():
@@ -512,19 +502,13 @@ def _validate_evidence(split, recs_1x, recs_stress, full_streams,
                  root_expected["answers"]["provider"]), variant
         assert _record_digest(recs) == \
             root_expected["per_variant"][variant], variant
-    # 0b. root-kind authority: the DATA IDENTITY determines which root
-    # is acceptable. Production identity (pinned slice + dataset sha)
-    # MUST present the pinned production root EXACTLY (dict equality,
-    # incl. stream hashes, answers triple, frozen hash, bars_digest) -
-    # a caller-minted root under the production identity fails even
-    # when self-consistent, and the consumed bars MUST hash to the
-    # PINNED bars_digest (mutate-bars + regenerate-proof fails: the
-    # proof agrees with the bars but the pin does not). Non-production
-    # identities MUST present an explicit test_fixture root. A
-    # frozen-flavored fixture (test_fixture + frozen hash + bars
-    # digest, NON-production identity) exercises the IDENTICAL
-    # triple-equality bars logic against its OWN root digest; a plain
-    # fixture carries no bars proof at all.
+    # 0b. root-kind authority: the data identity decides which root is
+    # acceptable. The production identity must present the pinned root
+    # exactly (dict equality), and the consumed bars must hash to the pinned
+    # bars_digest, so regenerating a proof over mutated bars still fails.
+    # Other identities must present a test_fixture root; a frozen-flavored
+    # fixture runs the same bars checks against its own root digest, a plain
+    # fixture carries no bars proof.
     pin = _production_pin()
     assert "bars_digest" in pin and "frozen_dataset_sha256" in pin, \
         "pinned root must carry the authoritative bars digest"
@@ -556,13 +540,9 @@ def _validate_evidence(split, recs_1x, recs_stress, full_streams,
     else:
         raise AssertionError(
             "ambiguous root: neither pinned production nor fixture")
-    # 0c. selection binding: the token's claimed variant MUST equal
-    # the mechanical fold selection recomputed from the AUTHORITATIVE
-    # full streams with the frozen holdout boundary (same
-    # segment/walk/select machinery as the selection path). A caller
-    # cannot smuggle selected_variant=B past a token for A, nor forge
-    # a token claiming B when the folds select A: sequential evidence
-    # follows ONLY the verified selection.
+    # 0c. selection binding: the token's variant must equal the fold
+    # selection recomputed from the full streams with the frozen holdout
+    # boundary. Sequential evidence follows only the verified selection.
     fold_stats = {}
     for variant in VARIANTS:
         _, _b = segment_bounds(full_streams[variant],
@@ -574,16 +554,12 @@ def _validate_evidence(split, recs_1x, recs_stress, full_streams,
                        n_splits=token["n_splits"], holdout_start=_b)]
     assert select_variant(fold_stats) == token["split_variant"], \
         "token selection != mechanical fold selection"
-    # 0d. canonical terminal split: bound, edges, fold CID structure,
-    # and the EXACT holdout CID population are DERIVED HERE from the
-    # authoritative selected full stream under the frozen segmentation
-    # contract. The caller-threaded split is an echo only: a
-    # self-consistent favorable-subset token, altered edges, another
-    # n_splits, or a truncated holdout all fail here even when every
-    # supplied record is authentic. Fold records are content-checked:
-    # self-hash PLUS full field-equality against the authoritative
-    # full-stream record at that CID (a rehashed in-place field edit
-    # inside a threaded fold fails here).
+    # 0d. canonical terminal split: bound, edges, fold CID structure and the
+    # holdout CID population are derived here from the selected full stream
+    # under the frozen segmentation. The threaded split is only an echo, so a
+    # favorable-subset token, altered edges, other n_splits or a truncated
+    # holdout fail even with authentic records. Fold records are checked by
+    # self-hash and by field equality against the full-stream record.
     frozen_n = frozen_n_splits()
     assert token["n_splits"] == frozen_n, \
         "split segmentation != frozen n_splits"
@@ -684,13 +660,10 @@ def _validate_evidence(split, recs_1x, recs_stress, full_streams,
 
 BASELINE_MULTS = ("1x", "1.5x", "2x", "3x")
 
-# Authoritative baseline artifact identity. None while S2 acceptance
-# is OPEN: NO production baseline artifact exists, so any non-None
-# baseline under the production identity fails closed (baseline_gate
-# reads ABSENT only for baseline=None). When S2 is accepted, pin the
-# canonical baseline artifact hash here; metrics are trusted ONLY
-# under a pinned identity. Fixture identities exercise the gate
-# mechanics under self-hash only (never promotion evidence)."
+# Baseline artifact identity. None until S2 is accepted: any non-None baseline
+# under the production identity fails closed (baseline_gate reads ABSENT only
+# for baseline=None). Pin the baseline artifact hash here on acceptance.
+# Fixture identities exercise the gate under self-hash only.
 BASELINE_EXPECTED = None
 
 
@@ -832,9 +805,8 @@ def final_report(split, recs_1x, recs_stress, sessions, proof, bars,
     assert proof == rproof, "session proof != canonical rebuild"
     first_day = token["dates"][0]
     include_first = bound <= et_open_ns(first_day)
-    # Selection is token-bound AND mechanically verified (0c above):
-    # the caller may echo it, never override it. Sequential evidence
-    # follows ONLY the verified selection.
+    # Selection is token-bound and verified (0c): the caller may echo it,
+    # never override it.
     if selected_variant is not None:
         assert selected_variant == token["split_variant"], \
             "caller selection != token-bound selection"
@@ -872,8 +844,8 @@ def final_report(split, recs_1x, recs_stress, sessions, proof, bars,
         day_of = {r["cid"]: r["day"] for r in recs}
         trades_f, curve_f, rets_f, dd_f = portfolio_curve(recs, "filtered",
                                                         equity, sessions)
-        # 1x primary vector retained BEFORE the stress loop (the loop
-        # must never shadow it: sharpe_f/challenger-1x are frozen 1x).
+        # keep the 1x primary vector before the stress loop, which must not
+        # shadow it (sharpe_f/challenger-1x are 1x)
         srets_1x = daily_returns(rets_f, include_first)
         sharpe_1x = sharpe_hac(srets_1x)[0]
         closed = sum(1 for t in trades_f

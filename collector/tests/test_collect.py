@@ -51,7 +51,7 @@ st, recs, _v, _sk = run_with(payload([{"uid": "u1", "title": "T",
 check("json-200", st == "ok" and isinstance(recs, list) and len(recs) == 1
       and isinstance(recs[0], dict) and recs[0]["source_id"] == "u1")
 
-# 2-6. every failure mode -> (status, []) and NEVER a bare string
+# 2-6. every failure mode -> (status, []) and never a bare string
 for status, name in [("not-modified", "json-304"),
                      ("auth-failure", "json-401"),
                      ("rate-limited", "json-429"),
@@ -93,7 +93,7 @@ check("record-full-identity",
       collect.to_record("s", {"uid": "abc", "link": "http://l"})["source_id"]
       == "abc")
 
-# 11. fetch(): 401/403/400 return on the FIRST attempt (no retry burn)
+# 11. fetch(): 401/403/400 return on the first attempt (no retry burn)
 calls = []
 
 
@@ -306,7 +306,7 @@ check("singleton-reacquire", _p2.returncode == 0)
 collect.STATE = _saved_state
 
 # 19. durable-first commit point: parse-failure banks nothing; success
-# banks validators/schedule ONLY after the sink; sink failure aborts with
+# banks validators/schedule only after the sink; sink failure aborts with
 # neither banked (re-fetchable, no 304 masking).
 from datetime import datetime as _dt, timezone as _tz
 _NOW = _dt(2026, 9, 18, 12, 0, tzinfo=_tz.utc)

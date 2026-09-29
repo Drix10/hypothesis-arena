@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""P1.4 soak runner: observation/validation ONLY. Changes no rules.
+"""P1.4 soak runner: observation and validation only; changes no rules.
 
 One cycle: collect -> classify today's signals -> snapshot heartbeats ->
 daily audit. Loop mode aligns to 15-min boundaries for the 7-day window.
-rules_v1 is FROZEN during the soak; this script cannot change it.
+rules_v1 is frozen during the soak.
 
 Usage:
   python3 collector/soak.py --once    # single cycle (validation)
@@ -83,15 +83,11 @@ class _SingletonLock:
             pass
         self.fh = None
 
-# Missed-cycle semantics (explicit and honest): a hard kill during the
-# 15-min sleep writes NOTHING — a dead process cannot append rows. The
-# absence is detectable, but it is absence, not a recorded MISSED row.
-# On (re)start, the supervisor derives the dead interval from the
-# persisted window + last poll row and appends ONE explicit MISSED_RANGE
-# row {from, through, count}. Late wakeups (sleep returned over a cycle
-# late but the process lived) derive the same way. Gaps are data, never
-# backfilled: catch-up polls would double-collect and corrupt the
-# record-balance evidence.
+# Missed cycles: a hard kill during the sleep writes nothing, so on (re)start
+# the supervisor derives the dead interval from the persisted window and the
+# last poll row and appends one MISSED_RANGE row {from, through, count}. Late
+# wakeups derive the same way. Gaps are never backfilled: catch-up polls
+# would double-collect and corrupt the record-balance evidence.
 
 
 def load_window(hours):
@@ -262,14 +258,10 @@ def valid_audit_doc(obj):
 
 
 def cycle():
-    # Timestamp discipline (explicit): `started_at` marks cycle start for
-    # lag forensics. The EVIDENCE DAY and the snapshot freshness anchor
-    # (`at`) are captured AFTER collection, at snapshot creation: a cycle
-    # starting 23:59:59 whose collector finishes 00:00:10 classifies the
-    # NEW day's file (whatever the collector just wrote is picked up next
-    # cycle — PK-dedupe makes the boundary lossless, never duplicated).
-    # Classifying the previous day's file after a midnight rollover would
-    # silently drop the just-written records from this snapshot's view.
+    # `started_at` marks cycle start for lag forensics. The evidence day and
+    # the snapshot freshness anchor (`at`) are taken after collection: a cycle
+    # starting 23:59:59 whose collector finishes 00:00:10 classifies the new
+    # day's file, and PK-dedupe makes the boundary lossless.
     started_at = ts_now()
     exits = {}
     r1 = run_step([sys.executable, os.path.join(HERE, "collect.py")], 600)
@@ -316,10 +308,8 @@ def cycle():
             tail = (r4.stdout.strip().splitlines() or [""])[-3:]
             print(f"[{tool} exit={r4.returncode}]")
             print("\n".join(tail))
-    # Snapshot LAST so the persisted row carries every subprocess exit code
-    # of this cycle (a collector/classify failure must be visible to the
-    # acceptance checker, not printed and forgotten). Timestamped at
-    # creation (`at`), not at cycle start.
+    # Snapshot last so the row carries every subprocess exit code of the cycle;
+    # timestamped at creation (`at`), not at cycle start.
     hb = snapshot_heartbeats(at, exits, started_at)
     bad = {k: v["status"] for k, v in hb["sources"].items()
            if v.get("status") not in ("ok", "EMPTY_SUCCESS", "SKIPPED_CONFIG")}
@@ -368,9 +358,8 @@ def _loop():
         if a == "--window-hours" and i + 1 < len(sys.argv):
             hours = float(sys.argv[i + 1])
     w = load_window(hours)
-    # A previous incarnation may have died mid-window: derive and
-    # record the dead interval BEFORE the first cycle, so the gap is
-    # explicit evidence rather than silent absence.
+    # A previous run may have died mid-window: record the dead interval
+    # before the first cycle.
     record_missed_range(ts_now())
     end = datetime.fromisoformat(w["end"]).timestamp()
     while time.time() < end:

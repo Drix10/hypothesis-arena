@@ -6,14 +6,12 @@ Free tier, no key. Derives earnings event windows from EDGAR:
      8-K with Item 2.02 (Results of Operations) plus 10-Q/10-K
      filings count as earnings event dates.
 
-Frozen contract: TRIGGER veto-side, used only to SUPPRESS entries into
-known events, never to predict. Unknown -> treat as event-present ->
-no entry. So has_event() returns True (suppress) whenever anything is
-unresolvable: unknown symbol, fetch failure, empty filing data.
+Veto side only: it suppresses entries into known events and never predicts.
+has_event() returns True whenever anything is unresolvable (unknown symbol,
+fetch failure, empty filing data).
 
-Stdlib only. Network access is injectable (fetcher) so the fail-closed
-posture is unit-testable offline; the __main__ probe exercises the
-live path and records p50/p99 per doc 09 sec. 9.4.
+Stdlib only. The fetcher is injectable for offline tests; the __main__ probe
+exercises the live path and records p50/p99 per doc 09 sec. 9.4.
 """
 import json
 import math
@@ -28,18 +26,14 @@ TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK%010d.json"
 WINDOW_DAYS = 3
 
-# Operational wiring (doc 09 sec. 9.3/9.4): EDGAR table row says source
-# `stale` after 15 min. Poll cadence 5 min; missed heartbeat > 3x
-# cadence == TTL, so one constant governs both. Heartbeats persist to
-# a JSON file for cross-process JEV reads: FileNotFoundError =
-# absent/fresh (never stale on first boot); unreadable = invalid ->
-# stale (fail closed). Stale/missing is ABSENT, never neutral: the
-# gate suppresses whenever the source is not provably fresh+event-free.
+# doc 09 sec. 9.3/9.4: source is stale after 15 min; cadence 5 min, TTL = 3x
+# cadence. Heartbeats persist to JSON for cross-process reads: a missing file
+# is absent (not stale on first boot), an unreadable one is invalid -> stale.
+# The gate suppresses unless the source is provably fresh and event-free.
 CADENCE_S = 300
 TTL_S = 3 * CADENCE_S
 HEARTBEAT_VERSION = 1
-# Reader/writer bounds (fail-closed hardening): a heartbeat that
-# violates any of these is invalid, never fresh.
+# A heartbeat violating any of these bounds is invalid.
 HEARTBEAT_MAX_BYTES = 65536  # read cap: no unbounded json.load()
 CLOCK_SKEW_ALLOW_S = 300  # future ts beyond this is corrupt, not fresh
 LATENCY_MAX_MS = 600000.0

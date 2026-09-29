@@ -1,9 +1,9 @@
 """S5 real-stream pipeline proof: S2 validation slice + stub answers.
 
-PIPELINE EVIDENCE ONLY — proves the corrected harness runs end-to-end on
+Pipeline evidence only: the harness runs end-to-end on
 the real deterministic candidate stream (2272 AAPL/MSFT candidates):
 pairing, cluster bootstrap, sequential, walk-forward + holdout, marked
-curves, mechanical bar. STUB ANSWERS: zero JEV-value claim.
+curves, mechanical bar. Stub answers: no JEV-value claim.
 Results: data/s5_out/ (gitignored runtime evidence).
 """
 import datetime

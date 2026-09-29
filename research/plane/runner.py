@@ -1,43 +1,34 @@
 """Phase-2.5 production cycle composition (Track A wiring, no D/H1).
 
-DEPENDENCY COMPOSITION (explicit — no hidden wiring):
-- CALLER supplies every unrelated graph dependency: LLM providers
+Dependency composition:
+- The caller supplies the other graph dependencies: LLM providers
   (provider_factory/cfgs), fuse, hypothesize/critique build+parse,
   extract_workers, budgets, spend governor, cadence, checkpointer,
-  tools/executors, model timeouts, signal/digest dirs. The caller must
-  NOT supply "harvest", "parser_extract", or "resolve_emit": all
-  three are seam-owned and the composition refuses them (ConfigError
-  — no silent override of production publisher wiring by a fake).
-- build_production_runner OWNS: heartbeat sink (required), lineage
-  DB path (MIRO_CANONICAL_DB-honoring default), bundle outdir, the
-  pinned map path, the Seam (one adapter per source), and the graph
-  app with ALL THREE seam callbacks bound.
-- SEAM owns: adapter singletons + pacing, harvest envelope (with the
-  authority hash stamped on each kept record), the deterministic
-  parser extract (adapter rec -> lineage-bound candidate), canonical
-  lineage (CanonicalStore over the shared records table), the
-  publisher canonical lookup (store.canonical_for, restart-safe via
-  the durable projection), the publisher watermark callback
-  (Seam.watermarks from latest healthy stamps), and history tails
-  (+ bundle recovery across restart).
-- publish.resolve_emit receives: {outdir, map_path,
+  tools/executors, model timeouts, signal/digest dirs. It must not
+  supply "harvest", "parser_extract" or "resolve_emit"; those are
+  seam-owned and supplying them raises ConfigError.
+- build_production_runner owns the heartbeat sink (required), lineage DB
+  path (MIRO_CANONICAL_DB-honoring default), bundle outdir, pinned map
+  path, the Seam (one adapter per source), and the graph app with the
+  three seam callbacks bound.
+- The Seam owns adapter singletons + pacing, the harvest envelope (with
+  the authority hash stamped on each kept record), the deterministic
+  parser extract, canonical lineage (CanonicalStore over the shared
+  records table), the publisher canonical lookup (store.canonical_for),
+  the watermark callback (Seam.watermarks) and history tails (with
+  bundle recovery across restart).
+- publish.resolve_emit receives {outdir, map_path,
   canonical_for=seam.store.canonical_for,
-  source_watermarks=seam.watermarks} + graph state {epoch, fused,
-  history}. The graph's own emit node is the ONLY publisher caller
-  in production — no manual second invocation.
+  source_watermarks=seam.watermarks} plus graph state {epoch, fused,
+  history}. The graph's emit node is the only publisher caller.
 
-Ownership lifetime: ONE Runner per process owns ONE Seam (hence one
-adapter instance per source) plus ONE graph app for their joint
-lifetime. Cycles never reconstruct the seam or adapters. Restart
-across processes resumes over the same lineage DB + bundle dir
-(canonical cache table + accepted-bundle history).
+One Runner per process owns one Seam and one graph app; cycles never
+rebuild them. A restart resumes over the same lineage DB + bundle dir.
 
-Nothing here trades, sizes, routes orders, or touches kill-switch
-state (D/H1 remain unauthorized and absent).
+Nothing here trades, sizes, routes orders, or touches kill-switch state.
 
-Stdlib-safe: graph (langgraph) imports lazily inside the functions
-that need it, so importing this module never requires third-party
-deps.
+graph (langgraph) is imported lazily, so importing this module needs no
+third-party deps.
 """
 
 
@@ -69,14 +60,12 @@ class Runner:
 
 
 def build_runner(graph_deps, seam_kwargs=None, publish_paths=None):
-    """Bind the owned seam into a graph app, INCLUDING the seam-owned
-    harvest/extract/publisher callbacks. graph_deps: complete
-    caller-side deps WITHOUT harvest/parser_extract/resolve_emit
-    (supplying any is a ConfigError). A production runner without a
-    heartbeat sink is refused. Returns the Runner; the graph's emit
-    node publishes through the real publish.resolve_emit into outdir
-    (bundle path surfaces on the cycle output — no manual publisher
-    invocation exists)."""
+    """Bind the owned seam into a graph app, including the seam-owned
+    harvest/extract/publisher callbacks. graph_deps must not contain
+    harvest/parser_extract/resolve_emit (ConfigError). A runner without
+    a heartbeat sink is refused. Returns the Runner; the emit node
+    publishes through publish.resolve_emit into outdir and the bundle
+    path appears on the cycle output."""
     from plane import graph as _graph
     from plane import publish as _publish
     from plane import source_seam as _seam_mod
@@ -113,10 +102,9 @@ def build_runner(graph_deps, seam_kwargs=None, publish_paths=None):
 
 def build_production_runner(graph_deps, env=None, paths=None,
                             seam_extra=None):
-    """The tracked production composition: establishes heartbeat sink
-    + lineage DB + bundle outdir + pinned map defaults, restores
-    durable history into the fresh seam, then delegates to
-    build_runner."""
+    """Production composition: sets up the heartbeat sink, lineage DB,
+    bundle outdir and pinned map defaults, restores durable history into
+    the seam, then calls build_runner."""
     import os
     paths = dict(paths or default_paths(env))
     hb = paths.get("heartbeat_dir")

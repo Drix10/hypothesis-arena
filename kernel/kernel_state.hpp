@@ -1,24 +1,20 @@
-// P3.3 (corrected) — KernelState: kernel-owned universe + per-symbol epochs.
+// KernelState: kernel-owned universe and per-symbol epochs (P3.3).
 //
-// P3.1 left allowed_symbols/previous_epoch as caller-supplied request
-// fields (frozen). This NEW layer closes the hole: production code never
-// fills a ValidationRequest by hand. It asks the KernelState, which owns
-// the immutable execution universe and the last-accepted epoch per
-// symbol, and advances epochs only through try_accept() AFTER a
-// successful validation. Additive validator fields used (never changed):
-// expected_symbol binding (#6), universe membership (P3.1).
+// Production code never fills a ValidationRequest by hand: it asks the
+// KernelState, which owns the immutable execution universe and the
+// last-accepted epoch per symbol, and advances epochs only through
+// try_accept() after a successful validation. Uses the validator's
+// expected_symbol binding (#6) and universe membership (P3.1).
 //
 // Hardening (#5, #7):
-//   non-copyable (two epoch stores would fork the "single" state machine);
+//   non-copyable (two epoch stores would fork the state machine);
 //   mutex-guarded epochs (concurrent per-symbol paths linearize);
-//   try_accept() is the SOLE compare-and-advance gate: it succeeds only
-//     when the caller presents the previous epoch it was admitted with,
-//     so two racing validations on one symbol admit exactly one —
-//     downstream execution must be impossible unless it returns true.
-//   universe capped at EXEC_UNIVERSE_MAX = 5 (manifest universe.
-//     execution_max), duplicates rejected, symbols strictly validated
-//     (non-empty, <= 1024, valid UTF-8). Invalid construction fails
-//     closed via the out-param factory (no exceptions, no half objects).
+//   try_accept() is the sole compare-and-advance gate: it succeeds only when
+//     the caller presents the previous epoch it was admitted with, so two
+//     racing validations on one symbol admit exactly one;
+//   universe capped at EXEC_UNIVERSE_MAX = 5 (manifest universe.execution_max),
+//     duplicates rejected, symbols validated (non-empty, <= 1024, valid
+//     UTF-8). Invalid construction fails closed via the out-param factory.
 #pragma once
 #include <cstdint>
 #include <mutex>
@@ -29,8 +25,8 @@
 
 namespace jev {
 
-// Manifest universe.execution_max (plan/system-manifest.yaml): the
-// executable universe is capped at five. Larger = construction failure.
+// Manifest universe.execution_max (plan/system-manifest.yaml): larger is a
+// construction failure.
 static const size_t EXEC_UNIVERSE_MAX = 5;
 
 class KernelState {
@@ -39,12 +35,12 @@ class KernelState {
     KernelState& operator=(const KernelState&) = delete;
     KernelState(KernelState&&) = delete;
     KernelState& operator=(KernelState&&) = delete;
-    // Default-constructed states are explicitly not-ok (ok() == false):
-    // an empty universe admits nothing until Create() succeeds into them.
+    // Default-constructed states are not-ok and admit nothing until Create()
+    // succeeds into them.
     KernelState() = default;
 
-    // Closed factory: true + why=="ok" on success; false + reason with
-    // `out` left in its default (not-ok) state otherwise.
+    // Closed factory: true + why=="ok" on success; false + reason with `out`
+    // left not-ok otherwise.
     static bool Create(const std::vector<std::string>& symbols,
                        std::string& why, KernelState& out) {
         if (symbols.empty()) {
@@ -90,13 +86,12 @@ class KernelState {
         auto it = epochs_.find(symbol);
         return it == epochs_.end() ? -1 : it->second;
     }
-    // Build the validator request SOLELY from kernel-owned state: the
-    // caller supplies bytes (artifact, state canon, key, clock, mode) but
-    // NEVER universe, symbol binding, or epoch values. Non-executable
-    // symbols still produce a request — the frozen validator reports the
-    // HOLD itself. The request binds expected_symbol (#6) so the artifact
-    // cannot borrow another symbol's epoch state. This is the ONLY
-    // construction path for ValidationRequest (private ctor + friendship).
+    // Build the validator request solely from kernel-owned state: the caller
+    // supplies bytes (artifact, state canon, key, clock, mode) but never
+    // universe, symbol binding or epoch values. Non-executable symbols still
+    // produce a request; the validator reports the HOLD. The request binds
+    // expected_symbol (#6) so the artifact cannot borrow another symbol's
+    // epoch. The only construction path for ValidationRequest.
     ValidationRequest request_for(
         const std::string& raw_json, const std::array<uint8_t, 32>& key,
         const std::string& state_canon_json, const std::string& symbol,
@@ -112,13 +107,12 @@ class KernelState {
                                  std::move(syms), has_prev, prev, now_unix,
                                  mode, symbol);
     }
-    // SOLE admission gate (#5): compare-and-advance under the epoch lock.
-    // expected_prev is the previous epoch the request was admitted with
-    // (-1 for a first artifact: has_previous_epoch == false). Returns true
-    // and advances to `next` on exactly one winner; every other outcome
-    // (wrong prev, non-monotonic next, non-executable symbol) returns
-    // false with state unchanged. Never advance on a HOLD: call this ONLY
-    // with a validated (epoch, symbol) pair.
+    // Admission gate (#5): compare-and-advance under the epoch lock.
+    // expected_prev is the epoch the request was admitted with (-1 for a first
+    // artifact). Returns true and advances to `next` for exactly one winner;
+    // any other outcome (wrong prev, non-monotonic next, non-executable
+    // symbol) returns false with state unchanged. Call only with a validated
+    // (epoch, symbol) pair, never on a HOLD.
     bool try_accept(const std::string& symbol, int64_t expected_prev,
                     int64_t next) {
         if (!is_executable(symbol) || next < 0) return false;

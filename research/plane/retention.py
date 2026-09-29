@@ -6,19 +6,16 @@ delete_thread(). Retention runs under the supervisor (or the emit
 node's post-cycle hook); what it deleted is returned for the audit
 trail.
 
-Deserialization hardening: build_graph() builds the saver through
-retention.make_saver(), which constructs the checkpointer over an
-explicit strict msgpack/json module allowlist
-(CHECKPOINT_ALLOWLIST) with no pickle fallback — verified on the
-effective serializer at construction, failing closed otherwise.
+build_graph() builds the saver through make_saver(), which uses the
+strict msgpack/json module allowlist (CHECKPOINT_ALLOWLIST), no pickle
+fallback, and verifies it on the effective serializer at construction.
 """
 import time
 
 RETAIN_DAYS = 30
 
-# Strict msgpack allowlist for checkpoint payloads: plain containers +
-# the scalar types the plane stores. Anything else fails closed at
-# deserialization instead of materializing.
+# msgpack allowlist for checkpoint payloads: plain containers and the
+# scalar types the plane stores; anything else fails at deserialization
 CHECKPOINT_ALLOWLIST = (
     ("builtins", "dict"), ("builtins", "list"),
     ("builtins", "tuple"), ("builtins", "str"),
@@ -28,16 +25,13 @@ CHECKPOINT_ALLOWLIST = (
 
 
 def make_saver(conn):
-    """Build a SqliteSaver whose deserialization is STRICT: explicit
-    msgpack module allowlist (containers + scalars only), no pickle
-    fallback. FAILS CLOSED: if the strict configuration cannot be
-    established AND verified on the effective serializer, raise
-    instead of compiling a graph over a permissive checkpointer (a
-    security control that fails open is not a control).
+    """Build a SqliteSaver with an explicit msgpack module allowlist
+    (containers + scalars only) and no pickle fallback. Raises if the
+    strict configuration cannot be established and verified on the
+    effective serializer.
 
-    NOTE: this intentionally bypasses with_allowlist(), which is a
-    no-op derivation when the requested types are already inside the
-    default SAFE set — it cannot prove strictness. Construction with
+    Bypasses with_allowlist(), which is a no-op when the requested types
+    are already in the default SAFE set and so cannot prove strictness;
     explicit allowed_msgpack_modules can."""
     try:
         from langgraph.checkpoint.sqlite import SqliteSaver
@@ -67,19 +61,15 @@ def make_saver(conn):
 
 
 def harden_saver(saver):
-    """Legacy entry: the saver object alone cannot prove strictness
-    (see make_saver). Refuse rather than bless an unverifiable saver."""
+    """Refuses: a saver object alone cannot prove strictness (see make_saver)."""
     raise RuntimeError("use retention.make_saver(conn): hardening must "
                        "be constructed, not derived")
 
 
 def _thread_latest(saver):
-    """thread_id -> newest checkpoint ts (seconds). A failed LIST
-    is not an empty checkpoint set: it raises, so retention can
-    never mistake "could not verify" for "nothing old exists"
-    (which would silently grow retained checkpoints). Individually
-    malformed entries are still skipped — one bad row must not veto
-    pruning every other thread."""
+    """thread_id -> newest checkpoint ts (seconds). A failed list raises
+    rather than reading as "nothing old"; individually malformed entries
+    are skipped so one bad row does not block pruning."""
     latest = {}
     try:
         tuples = saver.list(None)

@@ -1,20 +1,16 @@
-// P3.5 Slice D — kill switch (doc 10 sec. 10.3, R16).
+// Kill switch (doc 10 10.3, R16). Two paths:
+//   evaluation: pure deterministic C++ (no network, LLM, research plane,
+//     features.jsonl or clock). Owning modules produce trigger booleans; this
+//     file combines them with fixed precedence. Same inputs -> same level.
+//     Network is never needed to decide that a level is active.
+//   actuation: may invoke the H1-owned broker adapter (protection
+//     verification, re-establish, flatten/cancel, confirmation) and the
+//     journal-append interface; Slice D tests drive the machines directly.
 //
-// Two explicit paths (packet v2 sec. 2A):
-//   evaluation/predicate path: pure deterministic C++, no network, no
-//     LLM, no research plane, no features.jsonl, no clock reads. The
-//     owning modules produce trigger booleans; this file only combines
-//     them with frozen precedence. Same inputs -> same level.
-//   actuation path: MAY invoke the frozen broker adapter (H1-owned) for
-//     protection verification / re-establish / flatten-cancel /
-//     confirmation, plus the journal-append interface. Until H1 exists,
-//     Slice D tests drive the machines directly (stub-sink contract).
-// Network is NEVER required to decide that a kill level is active.
-//
-// File I/O is the caller's job (same rule as Slice E): persistence is
-// string-in/string-out through a caller-owned buffer. No allocation on
-// the evaluation path (grep-gated in build.sh, runtime-proven by
-// test_noalloc_kill); Serialize uses only a caller buffer + snprintf.
+// File I/O is the caller's job: persistence is string-in/string-out through a
+// caller-owned buffer. No allocation on the evaluation path (grep-gated in
+// build.sh, runtime-proven by test_noalloc_kill); Serialize uses only a
+// caller buffer + snprintf.
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -25,11 +21,10 @@
 namespace jev {
 namespace kill {
 
-// Frozen trigger bundle. Each field is produced by its owning module
-// (spend governor, feed, JEV streak counter, calibration, journal
-// verifier, reconciler, broker adapter, determinism monitor,
-// sandbox supervisor, operator HALT file watch). Kill evaluation reads
-// these booleans/levels only — never raw feeds, answers, or features.
+// Trigger bundle. Each field is produced by its owning module (spend
+// governor, feed, JEV streak counter, calibration, journal verifier,
+// reconciler, broker adapter, determinism monitor, sandbox supervisor,
+// operator HALT file watch). Kill evaluation reads these only.
 struct KillInputs {
     bool halt_file = false;
     bool jev_streak_s5 = false;
@@ -52,23 +47,19 @@ struct LevelResult {
     const char* reason = "none";  // frozen code, static storage
 };
 
-// Frozen precedence: HARD > MEDIUM > SOFT. First armed tier wins the
-// logged reason; behavior is identical either way (every road out of
-// here except NONE stops entries).
+// Precedence: HARD > MEDIUM > SOFT. The first armed tier wins the logged
+// reason; every road out except NONE stops entries.
 LevelResult EvaluateLevel(const KillInputs& in);
 
-// Entry gate with deliberate resume friction (doc 06 sec. 6.4): a
-// removed HALT file alone never resumes. Entries are allowed only at
-// level NONE, with no HALT file present, AND a deliberate restart flag
-// (the operator restarts with the flag; normal deployment starts carry
-// it). Any kill level, any present HALT file, or a flagless (re)start
-// after a kill state -> false.
+// Entry gate with resume friction (doc 06 6.4): a removed HALT file alone
+// never resumes. Entries are allowed only at level NONE, with no HALT file,
+// and a deliberate restart flag. Any kill level, present HALT file, or
+// flagless (re)start after a kill state -> false.
 bool EntriesAllowed(risk::KillLevel level, bool halt_present,
                     bool restarted_with_flag);
 
-// MEDIUM flatten FSM (frozen doc 10 sec. 10.3). Exactly one state is
-// persisted per cycle; restart reloads it and reconciles with the
-// broker BEFORE acting (never re-sends the dead process's sends).
+// MEDIUM flatten FSM (doc 10 10.3). One state is persisted per cycle; restart
+// reloads it and reconciles with the broker before acting.
 enum class FlattenState : std::uint8_t {
     MEDIUM_ACTIVE = 0,   // entries stopped, flatten not yet achieved
     FLATTEN_PENDING = 1,  // flatten ordered, awaiting broker ack
@@ -83,38 +74,34 @@ enum class Closer : std::uint8_t {
 };
 
 struct FlattenStep {
-    bool conditions_allow = false;     // venue open + normal spread +
-                                       // no in-flight flatten
+    bool conditions_allow = false;     // venue open + normal spread + no
+                                       // in-flight flatten
     bool broker_confirms_flat = false;
     bool closed_externally = false;    // stop/TP closed the position
     bool venue_closed_terminal = false;  // no flatten possible anymore
-    // Broker-confirmed terminal failure of the outstanding flatten
-    // attempt (rejected / cancelled / definitively not in flight)
-    // with the position still open. The ONLY input that permits a
-    // re-attempt from FLATTEN_PENDING: one new issuance per observed
-    // terminal failure (the caller clears it once the fresh order is
-    // in flight, so issuance is deterministic and bounded — never a
-    // per-cycle retry loop). False means in-flight-or-unknown.
+    // Broker-confirmed terminal failure of the outstanding flatten attempt
+    // (rejected / cancelled / not in flight) with the position still open.
+    // The only input that permits a re-attempt from FLATTEN_PENDING: one new
+    // issuance per observed failure (the caller clears it once the fresh order
+    // is in flight), never a per-cycle retry. False = in-flight or unknown.
     bool prior_attempt_failed = false;
 };
 
 struct FlattenOut {
     FlattenState state = FlattenState::MEDIUM_ACTIVE;
-    bool issue_flatten = false;  // exactly one issuance per observed
-                                 // order state: entry into PENDING from
-                                 // ACTIVE, or one re-attempt per observed
-                                 // terminal failure while PENDING. Never
-                                 // a per-cycle re-issue.
+    bool issue_flatten = false;  // one issuance per observed order state: entry
+                                 // into PENDING from ACTIVE, or one re-attempt
+                                 // per observed terminal failure while PENDING
     Closer closer = Closer::NONE;
     const char* reason = "none";
 };
 
 FlattenOut StepFlatten(FlattenState s, const FlattenStep& in);
 
-// HARD ordered sequence (frozen sec. 10.3). The machine returns the
-// NEXT action; the caller performs the broker/journal operation and
-// feeds the observation back. Phase order is the safety property:
-// nothing revokes credentials before protection is verified+confirmed.
+// HARD ordered sequence (doc 10 10.3). The machine returns the next action;
+// the caller performs the broker/journal operation and feeds the observation
+// back. Phase order is the safety property: nothing revokes credentials
+// before protection is verified and confirmed.
 enum class HardPhase : std::uint8_t {
     IDLE = 0,
     VERIFY_PROTECTION = 1,
@@ -137,11 +124,9 @@ enum class HardAction : std::uint8_t {
 
 struct HardStep {
     bool protection_present = false;
-    bool reestablished = false;  // recorded, never gates progress:
-                                 // an impossible re-establish must not
-                                 // stall the sequence (flatten is still
-                                 // attempted; protection stays missing
-                                 // and visible)
+    bool reestablished = false;  // recorded, never gates progress: an
+                                 // impossible re-establish must not stall the
+                                 // sequence (flatten is still attempted)
     bool flatten_acked = false;  // recorded, same non-gating rule
     bool protection_confirmed = false;
 };
@@ -154,7 +139,7 @@ struct HardOut {
 
 HardOut StepHard(HardPhase p, const HardStep& in);
 
-// Durable state (exactly one record per cycle; caller owns the file).
+// Durable state: one record per cycle; the caller owns the file.
 struct Persisted {
     FlattenState flatten = FlattenState::MEDIUM_ACTIVE;
     Closer closer = Closer::NONE;
@@ -164,8 +149,8 @@ struct Persisted {
 // Fixed format "D1:<flatten>:<closer>:<hard>" (single digits). Returns
 // false (buffer untouched) when out is null or n is too small.
 bool SerializeKill(const Persisted& p, char* out, std::size_t n);
-// Strict parse: exact shape, single digits, in-range values, NUL
-// terminated within the buffer. Anything else -> false, *p untouched.
+// Strict parse: exact shape, single digits, in-range values, NUL-terminated
+// within the buffer. Anything else -> false, *p untouched.
 bool ParseKill(const char* s, Persisted* p);
 
 }  // namespace kill

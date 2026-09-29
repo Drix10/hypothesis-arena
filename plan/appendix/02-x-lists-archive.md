@@ -1,13 +1,11 @@
-# 02 — Knowledge / Signal Ingestion
+# Appendix 02 — X-Lists signal system archive (NON-PRODUCTION / HISTORICAL)
 
-> STATUS (freeze v2, locked 2026-09-18): this file has TWO parts. Production v1
-> is the **non-X collector** (§2.7 + doc 09: EDGAR/FRED/official
-> feeds/calendars). Sections 2.1–2.5 are **NON-PRODUCTION / HISTORICAL** — the
-> archived X-system design and verified list universe, kept for reference only.
-> Nothing in §§2.1–2.5 authorizes a build; Phase 1 builds §2.7.
+Moved VERBATIM from doc 02 §§2.1–2.6 in the freeze-v3 rebaseline
+(2026-09-28). X is out of the production path (§2.6 below, unchanged).
+Nothing in this file authorizes a build. Doc 02 now carries the strategy
+book; its filename is legacy until the code-phase freeze-check update.
 
-Ported from `Twitter-Gemini-GitHub-MVP`. This doc is the full spec so the old
-repo is never re-read during the build.
+Original doc 02 header (freeze v2): Ported from `Twitter-Gemini-GitHub-MVP`.
 
 ## 2.1 What the old system did (HISTORICAL — archived design, not built)
 
@@ -192,19 +190,3 @@ Treasury/BLS/BEA, Fed/ECB official feeds, and earnings/calendar data only.
 The verified list universe (§2.4) and this doc's filter design stay in the
 repo as research history; X returns only through an explicitly authorized and
 reproducible interface, as a new doc version.
-
-## 2.7 What "done" means for this part (non-X Phase 1 collector, PRODUCTION)
-
-- [ ] Source-coverage table verified (every §9 poller resolves: EDGAR, FRED/
-      ALFRED, Treasury/BLS/BEA, Fed/ECB, earnings/calendar).
-- [x] 7-day soak: CLOSED as ~33h/133-cycle evidence gate (collector/SOAK_REPORT.md): dedupe holds, zero dupes emitted, noise 0% pre-graded (<10% gate). Original 7d criterion shortened explicitly on evidence, never silently.
-- [ ] `signals.jsonl` schema frozen and consumed by a stub context reader.
-- [ ] Rotation + prune proven: no lost/duped rows across a midnight rollover.
-
-## Locked decisions
-
-- Output = filtered signal JSONL. No scores, no trades, no posts.
-- No Selenium anywhere in the fund. No automated X collection in v1 (§2.6).
-- Macro/FX/earnings sources trigger; tech context informs. Never the reverse.
-- Production transport = APIs first per doc 09 §9.2. The RSS/mirror design in
-  §§2.4–2.5 is historical record, not a production transport.

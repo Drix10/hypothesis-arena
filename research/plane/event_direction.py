@@ -1,40 +1,31 @@
 """S6 deterministic directional resolver, table event_direction_v1.
 
-Contract (no invention):
-- doc 03 state rules: `effect` comes from a deterministic
-  interpretation table per kind, never from model invention; R14
-  disagreement is defined ON ONE SYMBOL.
+Contract:
+- doc 03 state rules: `effect` comes from a deterministic table per
+  kind, never from model output; R14 disagreement is per symbol.
 - doc 08 sec. 8.5: table frozen with the schema; parser-assigned
-  effects may be CARRIED when present, else unknown; LLM output can
-  never declare direction; evidence levels gate what reaches entries.
-- roadmap S6: unknown on ambiguity; output CONTEXT until measured
-  (no promotion earned or executed: classification is constant).
+  effects are carried when present, else unknown; LLM output never
+  declares direction.
+- roadmap S6: unknown on ambiguity; output is CONTEXT until measured.
 - doc 09: non-price sources inform regime only, never trigger entry.
 
-Authority rules (frozen here):
-- direction is carried ONLY for parser-owned observations
-  (origin == "parser" AND evidence == "source": the D4-contracted
-  markers of pipeline-owned deterministic-parser output, stamped by
-  the graph, never by candidates). origin == "llm", or evidence !=
-  "source", means the parser_effect field is IGNORED: advisory
-  content can never promote itself to direction. S6 trusts these
-  markers; ONLY the graph may stamp origin="parser" (integration
-  duty, future wiring: the resolver is not yet in the feature flow).
-- one call resolves ONE symbol (R14 scope): every observation must
-  carry symbols == [symbol] exactly; mixed scope voids to unknown.
-  Callers partition multi-symbol features per symbol.
-- fail-closed aggregation: any relevant unresolved observation
-  alongside directional evidence voids the set to unknown
-  (absent != neutral; unknown never becomes evidence).
-- same-identity agreement: contradictory interpretations of one
-  underlying observation void it, even bullish-vs-neutral (which
-  stays resolvable across DIFFERENT observations).
-- an explicit carried unknown stays unresolved: unknown is never
-  transformed into neutral.
-- v1 ROWS is EMPTY (nothing has measured justification). Adding a
-  row needs measured justification + promotion gate + table version
-  bump + test_16 update. Uncarried, unmapped observations resolve
-  unknown: there is deliberately no kind-wide default.
+Authority rules:
+- Direction is carried only for parser-owned observations (origin ==
+  "parser" and evidence == "source", stamped by the graph, never by
+  candidates). Otherwise parser_effect is ignored. Only the graph may
+  stamp origin="parser"; the resolver is not yet in the feature flow.
+- One call resolves one symbol: every observation must carry
+  symbols == [symbol]; mixed scope voids to unknown. Callers partition
+  multi-symbol features.
+- Any relevant unresolved observation alongside directional evidence
+  voids the set to unknown (absent != neutral).
+- Contradictory interpretations of one observation void it, even
+  bullish-vs-neutral (which stays resolvable across different
+  observations).
+- An explicit carried unknown stays unresolved, never neutral.
+- v1 ROWS is empty. Adding a row needs measured justification, the
+  promotion gate, a table version bump and a test_16 update. Unmapped
+  observations resolve unknown; there is no kind-wide default.
 
 No LLM, no network, no clock reads (asof_ns is an argument), no
 floats, no file IO. Same inputs (in any order) -> identical output:
@@ -58,8 +49,7 @@ TOP_FIELDS = ("kind", "value", "observed_at_ns", "source_id",
 
 
 def _obs_key(o):
-    # Total and tolerant: sorting precedes validation, so a defective
-    # observation must still sort (it resolves unknown right after).
+    # must not raise on defective observations: sorting precedes validation
     v = o.get("value") if isinstance(o, dict) else None
     if not isinstance(v, dict):
         v = {}
@@ -70,13 +60,10 @@ def _obs_key(o):
 
 
 def _defect(o):
-    """Data defect code, or None when the observation is well-formed.
-
-    Exact shape: no unknown top-level or value fields (silent ignored
-    fields are unrepresentable). kind/value/source held to the frozen
-    schema registries. origin/evidence held to the contracted marker
-    vocabularies. Anything defective voids its SET to unknown, never
-    an exception."""
+    """Defect code, or None when well-formed: exact shape (no unknown
+    top-level or value fields), kind/value/source in the schema
+    registries, origin/evidence in the marker vocabularies. A defect
+    voids the whole set to unknown."""
     if set(o) - set(TOP_FIELDS):
         return "extra-fields"
     if o.get("kind") not in schema.KINDS:
@@ -116,17 +103,14 @@ def _defect(o):
 def _direct(o):
     """Single-observation direction: (effect, row-or-rule).
 
-    Carrying requires the full parser-owned marker set; otherwise the
-    parser_effect field is not authoritative and is ignored (an
-    llm-origin bullish claim resolves exactly like an unmapped
-    observation: unknown)."""
+    Carrying requires the full parser-owned marker set; otherwise
+    parser_effect is ignored (an llm-origin claim resolves unknown)."""
     owned = o.get("origin") == "parser" and o.get("evidence") == "source"
     pe = o.get("parser_effect")
     key = (o["kind"], o["value"]["type"], o["value"]["v"])
     if owned and pe is not None:
         if pe == "unknown":
-            # An explicit unknown carries nothing: it must stay
-            # unresolved (unknown/absent != neutral), never a row.
+            # explicit unknown stays unresolved, never a row
             return "unknown", None
         if key in ROWS and ROWS[key] != pe:
             return "unknown", None  # parser/table contradiction
@@ -192,11 +176,8 @@ def resolve(observations, asof_ns, symbol):
             rows.append(r)
         else:
             codes.add("unresolved")
-    # Same observation identity (kind, value, source, timestamp,
-    # scope symbol) must speak with one interpretation: absent,
-    # unknown, neutral, and directional claims about the SAME fact
-    # void it. Different identities keep the looser aggregation
-    # below (directional + neutral may still resolve).
+    # one identity (kind, value, source, timestamp, symbol) must have one
+    # interpretation; different identities use the looser aggregation below
     ident = {}
     for o, e in zip(uniq, effs):
         gid = (o["kind"], o["value"]["type"], o["value"]["v"],
@@ -213,9 +194,8 @@ def resolve(observations, asof_ns, symbol):
     if "unresolved" in codes and (sharp or "neutral" in effs):
         reasons = reasons + ["unresolved-present"]
     if len(sharp) > 1 or "unresolved" in codes:
-        # fail closed: distinct directional claims clash, and any
-        # relevant unresolved observation voids directional (or
-        # neutral) evidence with it. Absent != neutral.
+        # distinct directional claims clash; an unresolved observation voids
+        # directional or neutral evidence (absent != neutral)
         return {"effect": "unknown", "classification": CLASSIFICATION,
                 "table": TABLE, "rows": [],
                 "reasons": reasons}

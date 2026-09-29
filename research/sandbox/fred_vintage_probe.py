@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 """fred-vintage-probe.py — Phase-D FRED/ALFRED evidence (operator key).
 
-Proves, with N=3 timed samples per call and zero secret leakage:
-  1. authenticated real OBSERVATION retrieval
+Checks, with N=3 timed samples per call and no secret leakage:
+  1. authenticated real observation retrieval
      (fred/series/observations GDP -> latest value + date);
-  2. real VINTAGE replay via realtime periods (observations with
-     realtime_start=realtime_end=2020-01-01 -> values AS KNOWN on
-     that date; dedicated /alfred/* paths answer 404 for this key,
-     recorded honestly — the realtime-parameter mechanism on the
-     FRED endpoint is the proven replay path);
-  3. DETERMINISTIC historical replay: same realtime params fetched
-     twice -> byte-identical values;
-  4. bad-key FAIL-CLOSED (FRED answers 400 + error JSON -> BLOCKED,
-     never promoted, never retried as success).
+  2. vintage replay via realtime periods (observations with
+     realtime_start=realtime_end=2020-01-01 -> values as known on that
+     date; dedicated /alfred/* paths answer 404 for this key, and the
+     realtime-parameter mechanism on the FRED endpoint is the replay path);
+  3. deterministic replay: the same realtime params fetched twice give
+     byte-identical values;
+  4. bad key fails closed (FRED answers 400 + error JSON -> blocked, never
+     promoted, never retried as success).
 Key comes from root .env via collector.config.load (never argv, never
 printed; URLs are redacted in all output). Exit 0 only if 1-4 hold.
 Usage: python3 research/sandbox/fred-vintage-probe.py [--out PATH]
@@ -67,9 +66,8 @@ def pct(lats, q):
 
 
 def rows_identical(a, b):
-    """Deterministic-replay predicate: two non-empty row lists,
-    byte-identical. Empty/None on either side is NOT identical
-    (fail closed: missing data never counts as a replay proof)."""
+    """Replay predicate: two non-empty row lists, byte-identical. Empty or
+    None on either side is not identical."""
     return (a is not None and b is not None
             and len(a) > 0 and a == b)
 
@@ -106,8 +104,8 @@ def main():
         print("FAIL: no observation retrieved")
         ok = False
 
-    # 2+3. vintage replay via realtime periods: values AS KNOWN on
-    # 2020-01-01 (pre-revision Q1-Q3 2019), fetched twice.
+    # 2+3. vintage replay via realtime periods: values as known on 2020-01-01
+    # (pre-revision Q1-Q3 2019), fetched twice
     rt = {"series_id": SERIES, "api_key": key, "file_type": "json",
           "realtime_start": "2020-01-01", "realtime_end": "2020-01-01",
           "observation_start": "2019-01-01",

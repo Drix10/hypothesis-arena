@@ -1,14 +1,11 @@
-// H1 integration — G0 runner tests (doc 06 sec. 6.1/6.2a/6.5,
-// doc 10, doc 13 sec. 13.5). Fake transport/stream/clock/kill,
-// real files in a temp dir.
+// G0 runner tests (doc 06 6.1/6.2a/6.5, doc 10, doc 13 13.5): fake
+// transport/stream/clock/kill, real files in a temp dir.
 //
-// Determinism note: the runner answers every dispatch immediately,
-// so a live machine never parks mid-cycle in-process. Cross-cycle
-// parking (the case stream/S2/crash logic serves) is constructed
-// exactly as production creates it: hand-written crash images
-// (journal row + intent file + H1 snapshot), i.e. the durable state
-// a dead process leaves behind. Recovery from those files IS the
-// crash test — no timing tricks.
+// The runner answers every dispatch immediately, so a live machine never
+// parks mid-cycle in-process. Cross-cycle parking (what stream/S2/crash logic
+// serves) is built as production creates it: hand-written crash images
+// (journal row + intent file + H1 snapshot). Recovery from those files is
+// the crash test; no timing tricks.
 #include <cstdio>
 #include <cstring>
 #include <sys/stat.h>
@@ -442,7 +439,7 @@ static bool AppendRow(const std::string& dir, const char* kind,
 // Hand-written crash image: journal intent row + intent file + H1
 // snapshot — exactly what a dead process leaves behind. st: 2 =
 // SENT_UNACKED, 3 = QUERY_SENT, 9 = EXIT_SENT.
-// Durable book files WITHOUT a journal row: the orphan-image
+// Durable book files without a journal row: the orphan-image
 // half of CrashImage (a live book with no covering intent row
 // is torn state — used by mixed-journal orphan regressions).
 static std::string WriteBookFiles(const std::string& dir,
@@ -476,7 +473,7 @@ static std::string CrashImage(const std::string& dir, const char* iid,
                               long long qty, int st, long long filled,
                               std::string* cid_out,
                               const char* bid = "", int pok = 0) {
-    // Chained append (multi-image tests rebuild EVERY image:
+    // Chained append (multi-image tests rebuild every image:
     // overwrite would silently leave only the last slot alive
     // and multi-slot regressions would prove nothing).
     std::string jp = dir + "/journal.jsonl";
@@ -602,6 +599,33 @@ static std::string EmgRow(std::uint64_t seq, long long ts,
 
 int main() {
     using jev::runner::G0Runner;
+    // K8: the live journal is size-bounded and fails closed past the cap.
+    {
+        const char* path = "jcap_tmp.jsonl";
+        std::remove(path);
+        std::string prev = jev::journal::GenesisPrev();
+        for (int i = 0; i < 20; ++i) {
+            jev::journal::Row r;
+            std::string pay(64, 'a');
+            Check(jev::journal::FormatRow(i, 1000 + i, "intent", "x1",
+                                          pay.c_str(), prev.c_str(), &r),
+                  "jcap-format");
+            Check(jev::runner::JournalAppend(path, r), "jcap-append");
+            prev = r.row_hash;
+        }
+        std::vector<jev::journal::Row> rows;
+        Check(jev::runner::JournalLoad(path, &rows) && rows.size() == 20,
+              "jcap-loads-under-cap");
+        std::size_t was = jev::runner::JournalCap();
+        jev::runner::SetJournalCap(1024);
+        Check(!jev::runner::JournalLoad(path, &rows) && rows.empty(),
+              "jcap-refuses-over-cap");
+        jev::runner::SetJournalCap(was);
+        Check(jev::runner::FileSizeBytes(path) > 1024 &&
+                  jev::runner::FileSizeBytes("no_such_file") < 0,
+              "jcap-size");
+        std::remove(path);
+    }
     // 0. Event seam units: SSE framing + classification + shaping.
     {
         jev::runner::SseParser p;
@@ -660,7 +684,7 @@ int main() {
         // Classification: fill/life/bust/unknown/untagged.
         // Payloads use the real trade-event shape: per-event qty
         // beside the nested order object carrying the CUMULATIVE
-        // filled_qty (the ONLY quantity the seam may use).
+        // filled_qty (the only quantity the seam may use).
         jev::runner::SseEvent f;
         f.id = "01J000000000000000000000009";
         f.type = "partial_fill";
@@ -695,7 +719,7 @@ int main() {
                   jev::runner::StreamKind::NONE,
               "map-no-cumulative");
         // Overflow seam: 19 nines exceed LLONG_MAX — a naive
-        // accumulate-then-bound overflows BEFORE the cap test
+        // accumulate-then-bound overflows before the cap test
         // (UB). Must refuse, never wrap into a small qty.
         f.type = "partial_fill";
         f.data =
@@ -981,7 +1005,7 @@ int main() {
                       "01J000000000000000000000003",
               "st-cursor-reloads");
     }
-    // 4c. Two fills, one cycle, cumulative (40 then 70 — NOT 30):
+    // 4c. Two fills, one cycle, cumulative (40 then 70 — not 30):
     // both arrival orders converge identically (newest ULID wins
     // position; the queue fully drains; no POST). The shaped
     // PARTIAL is unconfirmed by definition, so with dead transport
@@ -1011,8 +1035,7 @@ int main() {
             "client_order_id\":\"" +
             cid +
             "\",\"filled_qty\":\"70\"},\"qty\":\"30\"}\n\n";
-        // NOTE: B's per-event qty is 30 while cumulative is 70 —
-        // the old seam shaped 30 here (last-write-wins).
+        // B's per-event qty is 30 while cumulative is 70; shaping must use 70.
         g_stream = (ord == 0) ? (ea + eb) : (eb + ea);
         Check(g.Cycle(g_now), "cc-cycle");
         const auto* s = g.Find("intent-022");
@@ -1480,7 +1503,7 @@ int main() {
         Check(!g.Cycle(g_now), "hd-terminates");
         Check(CountMethod("POST", "/v2/orders") == 2,
               "hd-reprotect-plus-flatten");
-        // The repair OCO rides its OWN sub-identity (never the
+        // The repair OCO rides its own sub-identity (never the
         // entry id the venue would reject as a duplicate).
         std::string repair_coid;
         for (std::size_t i = 0; i < g_log.size(); ++i) {
@@ -1735,7 +1758,7 @@ int main() {
               "pm-forces-reloukup");
     }
     // 24. MEDIUM single close (doc 06 sec. 6.1b): one 100-share
-    // position with local ENTRY coverage gets EXACTLY one close —
+    // position with local ENTRY coverage gets exactly one close —
     // the local flatten EXIT. The broker sweep reconciles (pre-
     // flights) but never sends for the covered symbol; the
     // flatten's drive closes and attributes the entry to zero.
@@ -1919,7 +1942,7 @@ int main() {
     // 27b. In-flight flatten across restart: crafted adopted
     // close (EXIT_SENT, no terminal row) reloads, parks on dead
     // transport, and MEDIUM never orders a second flatten — the
-    // journal keeps exactly ONE fid intent row, zero POSTs.
+    // journal keeps exactly one fid intent row, zero POSTs.
     {
         Rig r;
         std::string cid;
@@ -2056,7 +2079,7 @@ int main() {
     }
     // 31. Crash between the journaled intent row and the first
     // snapshot: recovery attests the row (IDLE skips WRITE —
-    // exactly ONE intent row ever) and the lifecycle completes.
+    // exactly one intent row ever) and the lifecycle completes.
     // (The row is hand-placed: a live cycle would drive past the
     // torn state instead of parking in it.)
     {
@@ -2170,7 +2193,7 @@ int main() {
               "dd-alerted");
     }
     // 34. Long-run capacity with position records: live PROTECTED
-    // slots are NOT reclaimed (they are the local position) — so
+    // slots are not reclaimed (they are the local position) — so
     // the entry cap binds open risk (5th entry refused at
     // max_slots=4), exits bypass the entry cap (refusing an exit
     // strands risk), and closed lifecycles reclaim (20 closes,
@@ -2402,7 +2425,7 @@ int main() {
         g_kill.drift_unresolvable = true;  // HARD
         g_positions.push_back(MkPos("AAPL", 100));
         g_now += 901LL * 1000000000LL;
-        // Entry order found WITH protection: no reprotect POST —
+        // Entry order found with protection: no reprotect POST —
         // straight to the pre-flighted hard flatten.
         PushRule("GET", "by_client_order_id", 200,
                  HeldReply("filled", "100").c_str());
@@ -2529,7 +2552,7 @@ int main() {
         Check(CountMethod("DELETE", "/v2/orders/") == 1,
               "hr-cancel-stray");
     }
-    // 40. P0 repair rides its OWN sub-identity (never the entry
+    // 40. P0 repair rides its own sub-identity (never the entry
     // id): naked fill -> pre-flight 404 -> one OCO POST carrying
     // the repair coid; a REPAIR_SENT restart re-derives the id and
     // adopts without resending.
@@ -2919,7 +2942,7 @@ int main() {
         G0Runner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "hx2-recover");
         g_kill.drift_unresolvable = true;  // HARD
-        // Entry order found WITH protection (skip reprotect) +
+        // Entry order found with protection (skip reprotect) +
         // exit live in both visit orders (slot loop order is
         // journal order, but either order converges).
         PushRule("GET", "by_client_order_id", 200,
@@ -2973,7 +2996,7 @@ int main() {
         Check(Exists(r.dir + "/HALT"), "hx3-halt");
     }
     // T3c. HARD on a dead EXIT (never landed): the remainder
-    // replaces under the ONE incident hard id — exactly one POST
+    // replaces under the one incident hard id — exactly one POST
     // carrying the incident coid.
     {
         Rig r;
@@ -3011,7 +3034,7 @@ int main() {
         Check(Exists(r.dir + "/HALT"), "hx4-halt");
     }
     // T4/R1. Incident identity + AUTOMATIC re-entry (doc 06 sec.
-    // 6.1b): two MEDIUM incidents on one symbol send two REAL
+    // 6.1b): two MEDIUM incidents on one symbol send two real
     // closes under two distinct incident ids — the second never
     // adopts the first's historical fill, and NO operator file
     // deletion happens between them (the runner auto-clears the
@@ -3179,7 +3202,7 @@ int main() {
         Check(g.Recover(nullptr), "bq-recover");
         g_kill.drift_unresolvable = true;  // HARD
         if (rc < 3) {
-            // Entry order found WITH protection (reprotect
+            // Entry order found with protection (reprotect
             // skipped — this case is about close qty, not
             // protection).
             PushRule("GET", "by_client_order_id", 200,
@@ -3215,7 +3238,7 @@ int main() {
         Check(Exists(r.dir + "/HALT"), "bq-halt");
     }
     // R3. HARD remainder identity (doc 06 sec. 6.1b): primary 100
-    // fills 40 then dies -> restart under the SAME incident
+    // fills 40 then dies -> restart under the same incident
     // (HALT present, epoch reused) sends exactly one 60-share
     // remainder under hard-<epoch>-<SYM>-60 (never reusing the
     // burned primary id); a further restart sends nothing.
@@ -3245,10 +3268,9 @@ int main() {
         // Restart, same incident (HALT kept) with the broker
         // REALISTICALLY settled (40 of the 100 closed -> +60):
         // the primary pre-flights FILLED-40 terminal, and the
-        // chain (original 100 - landed 40), capped by the live
-        // broker need (60), sends exactly one 60-share remainder
-        // under the new deterministic identity (60 - 40 = 20
-        // would leave 40 exposed — the old domain bug).
+        // chain (original 100 - landed 40), capped by the live broker need (60),
+        // sends exactly one 60-share remainder under the new deterministic
+        // identity (60 - 40 = 20 would leave 40 exposed).
         }
         {
         G0Runner g2(r.cfg, r.deps);
@@ -3304,7 +3326,7 @@ int main() {
     }
     // R4. Multiple EXIT coherence (doc 06 sec. 6.1b): ENTRY +100
     // with EXIT A 50 DEAD + EXIT B 50 LIVE under HARD reconciles
-    // BOTH exits — A's 50 replaces (one legitimate POST), B's 50
+    // both exits — A's 50 replaces (one legitimate POST), B's 50
     // adopts, and NO second 100-share close fires while B lives.
     {
         Rig r;
@@ -3500,7 +3522,7 @@ int main() {
     // HB. HARD slot-blind fallback (doc 06 sec. 6.1b): the entry
     // query transport-fails, so the slot path owns nothing — the
     // position loop still flattens the authoritative broker
-    // position under the SAME incident id (the pre-flight, not
+    // position under the same incident id (the pre-flight, not
     // the skip, keeps one close). Exactly one POST.
     {
         Rig r;
@@ -3534,7 +3556,7 @@ int main() {
     // EC. Cumulative-fill crash seam (router contract:
     // exit_closed is cumulative, exit_counted is per-current-
     // order): EXIT 50 with 40 already counted pre-crash dies
-    // DEAD-40 -> HARD must NOT fold another share (entry open
+    // DEAD-40 -> HARD must not fold another share (entry open
     // stays exactly 10) and must replace exactly the 10 genuinely
     // unaccounted shares. One 10-share POST, exact books.
     {
@@ -3661,11 +3683,9 @@ int main() {
     // LR. Logical remainder identity (doc 06 sec. 6.1b): the chain
     // records the LOGICAL request, never the broker-capped send.
     // Primary 100, first send capped to broker need 20 (404 ->
-    // reuse, send 20, chain still says 100); later need 60 with
-    // 20 landed terminal -> the same incident closes the rest
-    // (remainder 80, send 60). A capped send must never rewrite
-    // the recorded request (old code conflicted the chain here
-    // and froze instead of converging).
+    // reuse, send 20, chain still says 100); later need 60 with 20 landed
+    // terminal -> the same incident closes the rest (remainder 80, send 60). A
+    // capped send must never rewrite the recorded request.
     {
         Rig r;
         r.deps.list_positions = FakePositions;
@@ -3748,7 +3768,7 @@ int main() {
     }
     // BI. Burned hard identity (doc 06 sec. 6.1b): a 404 on an
     // id whose chain row already carries attributed fills must
-    // NEVER POST that tag again (single-use). Restart shape:
+    // never POST that tag again (single-use). Restart shape:
     // primary requested=100, attributed=40, broker primary=404
     // -> zero POSTs under the primary; the close continues
     // under hard-<epoch>-AAPL-60 (send capped to 60).
@@ -3815,7 +3835,7 @@ int main() {
               "bi-remainder-noted");
     }
     // XA. Adopt crash ordering (doc 06 sec. 6.1b): durable entry
-    // attribution lands BEFORE the EXIT counters persist. An exit
+    // attribution lands before the EXIT counters persist. An exit
     // persist failure therefore leaves entries durably attributed
     // with counters in memory (never the reverse: durable counters
     // with lost attribution). A saturating restart then converges
@@ -3966,7 +3986,7 @@ int main() {
     // CX. Missing chain on a broker-known hard id is an
     // integrity failure (doc 06 sec. 6.1b): sent in cycle 1,
     // chain deleted, restart pre-flights terminal-short ->
-    // refuse (freeze, zero new POSTs), NEVER orig = need.
+    // refuse (freeze, zero new POSTs), never orig = need.
     {
         Rig r;
         r.deps.list_positions = FakePositions;
@@ -4010,7 +4030,7 @@ int main() {
     }
     // CY. Crash between chain note and broker POST: cycle 1
     // notes durably but the POST transport-fails; restart
-    // pre-flights 404 and sends the SAME identity once (the
+    // pre-flights 404 and sends the same identity once (the
     // duplicate chain row is idempotent evidence, not a
     // conflict — the validator accepts it).
     {
@@ -4068,7 +4088,7 @@ int main() {
               "cy-idempotent-rows");
     }
     // CZ. Crash after POST with chain present: restart
-    // pre-flights the sufficient fill and adopts the SAME
+    // pre-flights the sufficient fill and adopts the same
     // identity (zero new POSTs) — the write-ahead row is what
     // makes adoption legitimate.
     {
@@ -4151,7 +4171,7 @@ int main() {
               "cv-frozen");
     }
     // CD. Attribution durability (doc 06 sec. 6.1b): entry +100,
-    // hard close fills 40, the entry snapshot persist FAILS
+    // hard close fills 40, the entry snapshot persist fails
     // during attribution -> books stay exactly as before (chain
     // still (hid,100,0), entry open still 100, zero POSTs); after
     // the fault clears, restart converges to exactly 60 remaining
@@ -4885,7 +4905,7 @@ int main() {
     }
     // OM. Mixed-journal orphan (doc 06 sec. 6.1b): coverage is
     // PER BOOK. A journal with a legitimate intent-A row plus
-    // valid A books must NOT launder a live PROTECTED orphan B
+    // valid A books must not launder a live PROTECTED orphan B
     // (valid books, no intent-B row) into success — Recover
     // refuses with recover-orphaned-state and zero slots, the
     // chain stays valid, and deleting the orphan lets the same
@@ -5010,7 +5030,7 @@ int main() {
     }
     // AT-B. In-cycle terminal attribution failure retains the
     // EXIT (doc 06 sec. 6.1b): with ENTRY open=100, a closing
-    // EXIT whose attribution persist faults must NOT go done —
+    // EXIT whose attribution persist faults must not go done —
     // the slot stays CLOSED-but-active with no duplicate broker
     // close, and the next cycle retries deterministically
     // (entry open zero, EXIT done, chain valid).
@@ -5266,7 +5286,7 @@ int main() {
     }
     // CU. Cursor durability fails closed (doc 06 sec. 6.1b): a
     // foreign stream event dirties the cursor; an unwritable
-    // cursor file fails the cycle (alert + journal) WITHOUT
+    // cursor file fails the cycle (alert + journal) without
     // clearing the dirty bit; writability restored, the next
     // cycle persists the same cursor and succeeds.
     {
@@ -5478,11 +5498,10 @@ int main() {
         Check(!qty100again, "sr-never-stale-100");
     }
     // IP. Intent-ID permanence (doc 06 sec. 6.1b): journal history
-    // wins at both layers. A CLOSED-imaged slot is never rebuilt
-    // (terminal), so mid-run file deletion leaves no memory trace
-    // — yet re-submit is refused from the journal row alone (the
-    // old code recreated the file, forking one identity). Restart
-    // with a deleted file refuses at Recover (never invent).
+    // wins at both layers. A CLOSED-imaged slot is never rebuilt (terminal), so
+    // mid-run file deletion leaves no memory trace, yet re-submit is refused
+    // from the journal row alone (recreating the file would fork one identity).
+    // Restart with a deleted file refuses at Recover (never invent).
     {
         Rig r;
         std::string cid;
@@ -5647,7 +5666,7 @@ int main() {
     }
     // LK2. Concurrent stale takeover (doc 06 sec. 6.1b): two
     // takers racing on one stale lock serialize in the kernel
-    // into EXACTLY one owner. The hold is tracked per thread
+    // into exactly one owner. The hold is tracked per thread
     // with no shared arbiter, so this race genuinely contends
     // on the OS primitive (a PID-file check-then-act would let
     // both through). Which taker wins varies; the XOR does not.
@@ -5663,12 +5682,18 @@ int main() {
         WriteFile(r.dir + "/runner.lock", "2147483647");
         bool ok1 = false, ok2 = false;
         std::atomic<int> arrived{0};
+        std::atomic<int> attempted{0};
         auto race = [&](bool* ok) {
             G0Runner g(r.cfg, r.deps);
             ++arrived;
-            while (arrived.load() < 2) {
-            }
+            while (arrived.load() < 2) std::this_thread::yield();
             *ok = g.Recover(nullptr);
+            // Hold the winner's lock until both takers have attempted:
+            // a slow loser (sanitizer scheduling) would otherwise run
+            // after the winner's destructor released it and legitimately
+            // take over, making the XOR flaky by test design.
+            ++attempted;
+            while (attempted.load() < 2) std::this_thread::yield();
         };
         std::thread t1([&] { race(&ok1); });
         std::thread t2([&] { race(&ok2); });
@@ -5694,12 +5719,15 @@ int main() {
               "jx-image");
         bool ok1 = false, ok2 = false;
         std::atomic<int> arrived{0};
+        std::atomic<int> attempted{0};
         auto race = [&](bool* ok) {
             G0Runner g(r.cfg, r.deps);
             ++arrived;
-            while (arrived.load() < 2) {
-            }
+            while (arrived.load() < 2) std::this_thread::yield();
             *ok = g.Recover(nullptr);
+            // Hold the winner until both have attempted (see LK2).
+            ++attempted;
+            while (attempted.load() < 2) std::this_thread::yield();
         };
         std::thread t1([&] { race(&ok1); });
         std::thread t2([&] { race(&ok2); });
@@ -5718,6 +5746,28 @@ int main() {
         Check(ReadWhole(r.dir + "/alerts.jsonl").find(
                   "runner-lock-held") == std::string::npos,
               "jx-no-shared-alert");
+    }
+    // AL. Alert lines stay one valid JSON record whatever the detail holds.
+    {
+        Rig r;
+        std::string path = r.dir + "/alerts-escape.jsonl";
+        Check(jev::runner::Alert(path.c_str(), "HARD", "c\"ode",
+                                 "a\"b\\c\n{\"ts_ns\":9}\x01\xc3\xa9", 5),
+              "al-append");
+        std::string got = ReadWhole(path);
+        std::size_t nl = 0;
+        for (char c : got) {
+            if (c == '\n') ++nl;
+        }
+        Check(nl == 1, "al-single-line");
+        jev::JVal v;
+        std::string err;
+        Check(jev::ParseJson(got, v, err), "al-valid-json");
+        Check(v.t == jev::JVal::T::OBJ && v.o.size() == 4, "al-four-keys");
+        std::string longd(400, 'x');
+        Check(jev::runner::Alert(path.c_str(), "MEDIUM", "long", longd.c_str(),
+                                 6),
+              "al-long-detail");
     }
     // LR2. One live mutable runner per directory (doc 06 sec.
     // 6.1b): the runner is non-copyable/non-movable, and a

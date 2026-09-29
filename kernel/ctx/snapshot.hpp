@@ -1,21 +1,17 @@
-// Slice G — frozen Snapshot + context_hash (doc 04 sec. 4.2.3).
-// Pure data + canonical serialization. This slice DEFINES the shape
-// and the digest; provider sections (marks/session from F, portfolio
-// from H1, indicators/regime from future providers) fill it through
-// checked setters. Unset sections are explicit via present_mask —
-// never silent, never defaulted into authority. context_hash is
-// SHA-256 over the canonical bytes of ALL of it, presence bits
-// included: a partial snapshot hashes differently from a complete
-// one, so replay with a different completeness can never collide.
-// context_hash != state_hash (frozen distinction, doc 03 sec. 3.5a).
+// Snapshot + context_hash (Slice G, doc 04 4.2.3). Pure data + canonical
+// serialization. Provider sections (marks/session from F, portfolio from H1,
+// indicators/regime from future providers) fill it through checked setters.
+// Unset sections are explicit via present_mask, never defaulted into
+// authority. context_hash is SHA-256 over the canonical bytes of all of it,
+// presence bits included, so a partial snapshot never collides with a
+// complete one. context_hash != state_hash (doc 03 3.5a).
 //
-// RESOURCE BOUNDARY (doc 04 sec. 4.3): Snapshot assembly, canonical
-// serialization, and hashing are CYCLE path (once per decision cycle,
-// bounded output <= 4KiB asserted in test). They are NOT tick-hot and
-// never claimed zero-alloc. The zero-alloc path is the tick path:
-// feed TickRing::Push + gap Notes + session marking, proven by
-// feed/test_noalloc_feed (wrapped-malloc counter reads zero). H1 must
-// not place ContextHash on the per-tick path without its own proof.
+// Resource boundary (doc 04 4.3): assembly, canonical serialization and
+// hashing are cycle path (once per decision cycle, output <= 4KiB asserted in
+// test), not tick-hot and not zero-alloc. The zero-alloc tick path (feed
+// TickRing::Push, gap Notes, session marking) is proven by
+// feed/test_noalloc_feed. H1 must not put ContextHash on the tick path
+// without its own proof.
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -24,7 +20,7 @@
 
 namespace ctx {
 
-// Frozen vocabularies (mirror P3.3/jev_state + doc 09 sec. 9.3).
+// Vocabularies (mirror P3.3/jev_state + doc 09 9.3).
 inline bool IsRegime(const std::string& s) {
     return s == "trend" || s == "range" || s == "volatile";
 }
@@ -32,17 +28,18 @@ inline bool IsCalib(const std::string& s) {
     return s == "pass" || s == "insufficient" || s == "breach";
 }
 inline bool IsSourceState(const std::string& s) {
-    // Frozen JEV vocabulary (doc 03 sec. 3.5). No G-local second
-    // ontology; no lossy mapping at H1.
+    // JEV vocabulary (doc 03 3.5); no G-local second ontology, no lossy
+    // mapping at H1.
     return s == "healthy" || s == "stale" || s == "failed" ||
            s == "not_scheduled" || s == "unavailable" || s == "na";
 }
 
-// Presence bits: which provider sections are actually filled.
-// v1: 11 sections. DEFERRED (no bit, no field, no zero placeholder):
-// `change` (no frozen representation) and sentiment/signal buckets
-// (doc 03 forbids numeric sentiment; discrete signal_buckets schema
-// not yet frozen). Absence is not zero: H1 must not infer either.
+// Presence bits: which provider sections are filled. v1: 11 sections; v2
+// adds the settlement section. With kSettlement clear the canonical bytes
+// are exactly v1's, so v1 vectors keep verifying.
+// Deferred (no bit, no field, no placeholder): `change` (no frozen
+// representation) and sentiment/signal buckets (doc 03 forbids numeric
+// sentiment; the discrete schema is not frozen). Absence is not zero.
 enum Present : uint32_t {
     kMarks = 1u << 0,
     kSession = 1u << 1,
@@ -55,6 +52,7 @@ enum Present : uint32_t {
     kStage = 1u << 8,
     kResearch = 1u << 9,
     kCalib = 1u << 10,
+    kSettlement = 1u << 11,  // Snapshot v2: settled-cash section (R18)
 };
 
 struct Mark {
@@ -87,13 +85,16 @@ struct Snapshot {
     int64_t exposure_ud = 0;
     int64_t buying_power_ud = 0;
     uint32_t pending_count = 0;
-    uint64_t feature_bundle_id = 0;   // kFeatures (last COMPLETE bundle)
+    uint64_t feature_bundle_id = 0;   // kFeatures (last complete bundle)
     std::string feature_bundle_hash;  // 64 hex
     std::vector<SourceStatus> sources;  // <= 8, kSources
     std::string stage;                // Slice E vocabulary, kStage
     uint64_t research_revision = 0;   // kResearch (0 IS absent)
     std::string calib;                // IsCalib, kCalib
     int64_t brier_d6 = 0;             // trailing-200 Brier, D6
+    int64_t settled_cash_ud = 0;      // kSettlement (v2): buyable cash
+    int64_t unsettled_ud = 0;         // sale proceeds not yet settled
+    int64_t next_settle_day = 0;      // days since 1970-01-01, 0 if none due
     uint32_t present_mask = 0;
 };
 
@@ -103,20 +104,20 @@ inline bool IsSession(const std::string& s) {
            s == "early_close";
 }
 
-// Structural validation: vocabulary, bounds, charset, mask coherence
-// (a set section bit with empty content is malformed). Returns "" on
-// valid, else a frozen reason code. Never throws.
+// Structural validation: vocabulary, bounds, charset, mask coherence (a set
+// section bit with empty content is malformed). Returns "" on valid, else a
+// frozen reason code. Never throws.
 std::string ValidateSnapshot(const Snapshot& s);
 
-// Canonical bytes (FROZEN recipe): JSON object, top-level keys sorted
-// ASCII-betically, separators "," and ":" with no whitespace, strings
-// JSON-escaped (quote/backslash/C0 as \u00XX), integers plain decimal,
-// arrays in listed order. Field order is fixed by this recipe; any
-// change is a PROTOCOL change requiring a version bump.
+// Canonical bytes: JSON object, top-level keys sorted ASCII-betically,
+// separators "," and ":" with no whitespace, strings JSON-escaped
+// (quote/backslash/C0 as \u00XX), integers plain decimal, arrays in listed
+// order. Any change to this recipe is a protocol change needing a version
+// bump.
 std::string CanonicalSnapshot(const Snapshot& s);
 
-// context_hash = sha256_hex(canonical bytes). Mismatched recomputation
-// downstream is HOLD (done by the consumer, not here).
+// context_hash = sha256_hex(canonical bytes). A mismatched recomputation
+// downstream is HOLD (the consumer checks).
 std::string ContextHash(const Snapshot& s);
 
 }  // namespace ctx

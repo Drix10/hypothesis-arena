@@ -1,38 +1,21 @@
-"""Production BEA NIPA source adapter (doc 09 Tier A).
+"""BEA NIPA source adapter (doc 09 Tier A): one GetData call per poll
+(NIPA, T10101 headline GDP, Frequency=A).
 
-Locked scope: ONE GetData call (datasetname=NIPA, TableName=T10101
-headline GDP, Frequency=A) per poll. No dataset discovery, no crawl,
-no table walk. Keyed source: BEA_USER_ID from env, fail-closed when
-absent (build() raises); the key travels ONLY in the query string —
-never in errors, records, heartbeats, headers, or logs (FRED lesson).
+BEA_USER_ID comes from the environment; build() raises when absent. The key
+travels only in the query string and never appears in errors, records,
+heartbeats or logs. Call errors nest inside BEAAPI.Error / Results.Error with
+HTTP 200; any non-200 or exception is transport, never a credential denial.
 
-Envelope (probe-proven): HTTP 200 with BEAAPI.Results.Data on
-success; call errors nest inside BEAAPI.Error / Results.Error with
-HTTP still 200 (any non-200/exception is transport, never denial —
-a network failure can never masquerade as auth proof).
+Rows need a 4-digit non-future TimePeriod and a series identity (SeriesCode,
+else LineNumber). DataValue must be numeric (commas allowed); markers such as
+(NA) drop the row. observed_at_ns is Jan-1 midnight of the period year,
+flagged estimated. Dedupe key: (TableName, series, TimePeriod).
 
-Rows: TimePeriod must be a strict 4-digit year not in the future;
-a series identity (SeriesCode else LineNumber) is required — never
-synthesized. DataValue must parse numeric (commas allowed);
-non-numeric markers like (NA) drop the row. observed_at_ns is the
-period-year Jan-1 midnight, explicitly estimated (period reference,
-not an authoritative instant — same contract class as Treasury).
-PK dedupe key: (TableName, series, TimePeriod).
-
-Symbols ["EURUSD","USDJPY","SPY"] are an operating default for
-headline GDP (no pinned GDP map exists); change only deliberately.
-
-Health (Treasury/BLS lessons built in): empty Data list or zero
-usable rows => ok=False with explicit bounded reasons (empty-data /
-no-usable-records), last_ok_ts frozen; duplicate-only steady-state
-polls stay healthy via a usable-row count.
-Rate: conservative 1 req/s operating pace. 3 retries, jittered
-backoff, 429 halves once per episode with deterministic recovery.
-Raw records only (harvest envelope); frozen f2 downstream.
-Transport/clock/sleep/jitter injected; stdlib urllib, proxy via env.
-
-Implementation-complete is NOT production-proven: live evidence
-(soak, measured p50/p99) stays open.
+Symbols ["EURUSD","USDJPY","SPY"] are an operating default; no pinned GDP map
+exists. An empty Data list or zero usable rows gives ok=False with reason
+empty-data / no-usable-records and last_ok_ts frozen; duplicate-only polls
+stay healthy. Pace 1 req/s, 3 retries with jittered backoff, a 429 halves the
+rate once per episode. Emits raw records.
 """
 import calendar
 import json
@@ -244,9 +227,8 @@ class Adapter:
             self.throttle_until = now + THROTTLE_S
 
     def _get(self, query):
-        # NOTE: the key lives in the query string only. Every error
-        # path below returns fixed-shape reasons that never echo the
-        # URL, params, or body.
+        # The key is in the query string; error paths return fixed-shape
+        # reasons and never echo the URL, params or body.
         err = ""
         url = BASE + "?" + urllib.parse.urlencode(query)
         headers = {"User-Agent": self.ua, "Accept": "application/json"}

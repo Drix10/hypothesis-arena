@@ -1,0 +1,35 @@
+{
+  "cost_model_version": "cost_v2",
+  "created": "2026-09-29",
+  "decision": {
+    "max_drawdown_pct": 15.0,
+    "min_cost_multiple": 2.0,
+    "min_days": 700,
+    "min_net_sharpe": 0.5,
+    "new_signal_tstat_min": 3.0
+  },
+  "experiment_id": "i1_intraday_mom_v1_a_gate",
+  "family": "intraday_momentum",
+  "holdout": {
+    "end": "2026-09-01",
+    "rule": "last 3 years (longer than 25% of the 2016-01-04..2026-08-31 sample, doc 11 0b); untouched until the single final evaluation; one look only",
+    "start": "2023-09-01"
+  },
+  "hypothesis": "Buying SPY at the 15:30 ET bar open and selling at the 16:00 close on sessions whose first half hour (previous close to 10:00) was up beats the vol-matched 60/40 (VTI/IEF) and T-bill cash net of cost_v2 at 2x cost. Cash earns BIL when not in the trade.",
+  "schema": "prereg_v1",
+  "signal": "research.strategy.sleeves.intraday_mom: r1 = close of the 09:30 bar / previous regular-session close - 1. pos: buy when r1 > 0. top_tercile: buy when r1 exceeds the 66.7th percentile of the last 250 sessions' r1 (at least 60 sessions of history, earlier sessions only). One trade per session in SPY: buy at the open of the 15:30 bar, sell at the close of the 16:00 bar, whole shares, full settled cash, 2 bps spread plus Section 31 and TAF fees (cost_v2). Sessions without 13 regular-session bars, and the session after them, are skipped. Prices are split+dividend adjusted SIP 30-minute bars.",
+  "sleeve": "I1",
+  "split": {
+    "embargo_days": 5,
+    "label_horizon_days": 1,
+    "n_splits": 5,
+    "scheme": "purged_walk_forward"
+  },
+  "universe": [
+    "SPY"
+  ],
+  "variants": [
+    "pos",
+    "top_tercile"
+  ]
+}

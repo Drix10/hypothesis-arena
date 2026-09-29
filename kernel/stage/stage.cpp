@@ -75,9 +75,8 @@ bool ValidIso8601(const std::string& s) {
     if (d < 1 || d > dim) return false;
     std::string rest = s.substr(19);
     if (rest.empty() || rest == "Z") return true;
-    // Numeric offset: sign REQUIRED, then HH[:]MM with range-checked
-    // fields. Bare digit tails (no sign) and out-of-range fields are
-    // rejected — the old digit-counting form accepted +99:99.
+    // Numeric offset: sign required, then HH[:]MM with range-checked fields.
+    // Bare digit tails and out-of-range fields are rejected.
     if (rest.size() < 3 || (rest[0] != '+' && rest[0] != '-'))
         return false;
     std::string body = rest.substr(1);

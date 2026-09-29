@@ -495,7 +495,7 @@ row, _ = jev.decide(state(symbol="XC"), now=5601.0, key="k",
 check("future-cache-miss",
       row["action"] == "ANSWER" and len(calls_c) == 1)
 
-# 20. spend_charge() failure FAILS CLOSED: no sign, no cache, no ANSWER
+# 20. spend_charge() failure fails closed: no sign, no cache, no ANSWER
 jev.SPEND_DIR = os.path.join(TMP, "spendCharge")
 os.makedirs(jev.SPEND_DIR, exist_ok=True)
 _real_charge = jev.spend_charge
@@ -611,7 +611,7 @@ check("malformed-charge-fail",
       and art is None)
 jev.SPEND_DIR = os.path.join(TMP, "spend")
 
-# 27. cache wrapper hardening: NaN at, extra keys, incoherent expiry
+# 27. cache wrapper: NaN at, extra keys, incoherent expiry
 row, art = jev.decide(state(symbol="XW"), now=6000.0, key="k",
                       post_fn=mkpost(good_resp()))
 import glob as _glob2

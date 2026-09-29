@@ -77,7 +77,7 @@ check("heartbeat-freshness", r["heartbeat-freshness"] == "PASS")
 check("heartbeat-coverage", r["heartbeat-coverage"] == "PASS")
 check("subprocess-health", r["subprocess-health"] == "PASS")
 
-# 2. UNREADABLE heartbeat always FAILs
+# 2. UNREADABLE heartbeat always fails
 bad = {"at": AT, "exits": {"collect": 0},
        "sources": {n: hb("ok") for n in NAMES}}
 bad["sources"][NAMES[0]] = {"status": "UNREADABLE", "heartbeat_at": None}

@@ -1,71 +1,74 @@
-# 09 — OSINT, Free Data, and Source Ranking
+# 09 — OSINT, Free Data, and Source Ranking (freeze v3)
 
-Every source here is free at the tier we use it. Some require a free signup key
-(marked 🔑). None require a paid subscription for core operation. If a source
-starts charging, the system loses that feature and keeps trading — no source is
-load-bearing except the broker feed and the session calendar.
+Every source here is free at the tier we use it. Some require a free signup
+key (marked 🔑). None require a paid subscription for core operation. If a
+source starts charging, the system loses that feature and keeps trading —
+no source is load-bearing except the broker feed and the session calendar.
 
 ## 9.0 The honest prior (read before adding a source)
 
-Published evidence on LLM-driven trading is bad, and the plan is built to assume
-it is bad:
+Published evidence on LLM-driven trading is poor, and freeze v3 adds the
+2025–2026 literature that explains why:
 
 - A leakage-safe, search-aware evaluation rejected **every** LLM-discovered
-  strategy tested — two frontier models, search budgets up to 100 candidates,
-  five repeated runs, 453 stocks and 39 ETFs, realistic costs. A contrived oracle
-  with Sharpe 35 passed conventional Deflated-Sharpe and PBO tests, so those tests
-  do not protect you.
-- An evidence map of 77 studies found that of 19 primary empirical LLM-trading
-  studies, 2 reported time-consistent splits, 1 specified transaction costs, and
-  **0** were reproducible.
-- Foreknowledge of news is not edge: participants given next-day *WSJ* headlines
-  achieved a 51.5% hit rate and 45% of them lost money.
-- Instruction-tuned LLMs are measurably overconfident, and post-training makes
-  calibration worse (ECE +13.1%, Brier +6.5% vs base models). Overconfidence does
-  not go away with scale.
+  strategy tested (two frontier models, up to 100 candidates, 453 stocks +
+  39 ETFs, realistic costs); a contrived oracle with Sharpe 35 passed
+  conventional DSR and PBO tests — those tests do not protect you alone.
+- An evidence map of 77 studies: of 19 primary empirical LLM-trading
+  studies, 2 had time-consistent splits, 1 specified costs, 0 reproducible.
+- (v3) Apparent LLM-agent alpha largely dissolves once look-ahead from the
+  model's training data is controlled (Profit Mirage 2025; Look-Ahead-Bench
+  2026; Detecting Lookahead Bias in LLM Forecasts 2025; HindsightBench
+  2026). Live benchmarks (LiveTradeBench, 50 days, 21 LLMs) find general
+  model rankings do not predict trading results; the 2026 agentic-trading
+  survey finds evidence gets less favorable moving from backtests to live.
+- Foreknowledge of news is not edge: participants given next-day *WSJ*
+  headlines hit 51.5% and 45% lost money.
+- Instruction-tuned LLMs are overconfident; post-training worsens
+  calibration (ECE +13.1%, Brier +6.5% vs base models).
+- (v3) Published anomalies decay ≈58% after publication (McLean–Pontiff);
+  new factors need t ≥ 3 (Harvey–Liu–Zhu).
+- (v3) Where AI demonstrably helps real funds is research throughput
+  (agentic signal proposal + coding + backtesting, then human committee),
+  not per-trade discretion.
 
-Consequences, baked into this plan rather than noted and ignored:
-1. **No source is assumed to have edge.** Every non-price source enters as CONTEXT
-   and can only be promoted to TRIGGER by *incremental* edge over the frozen
-   baseline (doc 12) with everything else already known — Δ expectancy and Δ
-   Sharpe/utility net of cost, information coefficient, coverage, false-positive
-   rate, latency-adjusted edge — over a full paper window, human-reviewed
-   (doc 11). Standalone hit-rate is not evidence: a source that predicts what
-   price momentum already predicts adds nothing.
-2. **The statistical layer is the primary edge**, not the LLM. Indicators, regime
-   detection, and the risk table do the work; JEV supplies a calibrated gate; the
-   research plane supplies context and disconfirmation.
-3. **Costs are modeled before edge is claimed.** A 10 bp execution drag turns a
-   113%/yr gross path into 65%. Any source-derived signal is evaluated net of the
-   paper fill model (doc 06 §6.5), never gross.
+Consequences, baked into this plan:
+1. **No source is assumed to have edge.** Every non-price source enters as
+   CONTEXT/NULL and is promoted only by *incremental* edge over what the
+   sleeves already know, net of cost, over a full paper window,
+   human-reviewed (doc 11). Standalone hit-rate is not evidence.
+2. **Sleeves carry the edge hypothesis** (doc 02), each with its own data
+   contract; sources serve sleeves, not the other way round.
+3. **Costs are modeled before edge is claimed** (`cost_v2`, doc 06 §6.0a).
+   A 10 bp drag turns a 113%/yr gross path into 65%.
+4. **LLM-derived evidence is time-honest** (doc 11 §11.0c).
 
 ## 9.1 Ranking (locked classes; weights tuned only per doc 11)
 
-**Class** is the doc 02 §2.4 contract, extended to all sources:
-`TRIGGER` = may place a feature that can lead to an entry ·
-`CONTEXT` = informs regime only, can never trigger an entry ·
-`NULL` = carried as a declared null hypothesis, measured, never used in a decision
-until promoted.
+`TRIGGER` = may place a feature that can lead to an entry · `CONTEXT` =
+informs only, never triggers · `NULL` = declared null hypothesis, measured,
+never used until promoted.
 
-**S6 status (RELEASED):** the `event_direction_v1` resolver is a deterministic
-interpretation/carry layer only: CONTEXT-only, unknown on ambiguity or unmapped
-input, never a TRIGGER promotion. It classifies no alpha; production
-feature-flow integration is future work through the doc 11 promotion path.
+**S6 status (RELEASED):** `event_direction_v1` is a deterministic
+interpretation/carry layer: CONTEXT-only, unknown on ambiguity or unmapped
+input, never a TRIGGER promotion; production integration only via doc 11.
 
-### Tier A — real, usable, TRIGGER-eligible
+### Tier A — real, usable, TRIGGER-eligible (or veto-side)
 
-| Source | Gives | Latency / cadence | Cost | Class | Edge | Noise | Failure default |
-|---|---|---|---|---|---|---|---|
-| Broker feed (forex + US equities) | Quotes, trades, account state | ms–s, streaming | free w/ account | TRIGGER | The edge. Everything else decorates it. | low | doc 04 §4.2; stale >30 s → entries vetoed |
-| **SEC EDGAR** submissions + XBRL `companyfacts`/`frames` + full-text search | 8-K/10-Q/10-K/Form 4 events, fundamentals | submissions <1 s processing delay; XBRL <1 min | free, UA header required | TRIGGER (equities) | Genuine, event-shaped, timestamped by the regulator — the cleanest free event source that exists | low | Source `stale` after 15 min → features expire |
-| **FRED / ALFRED** | Rates, CPI, unemployment, release calendar, **vintages** | per release | free 🔑 | TRIGGER (macro) | Real macro state; ALFRED vintages give point-in-time correctness, which kills a whole leakage class | low | Last known vintage, marked stale |
-| US Treasury *FiscalData*, BLS, BEA | Auctions, yields, CPI/NFP detail | per release | free | TRIGGER (macro) | Direct release data, no vendor interpretation | low | as above |
-| Exchange + venue session/holiday calendars | `session`, PDT counting, early closes | static + updates | free | TRIGGER (veto side) | Not alpha — a hard veto input (R9). Load-bearing. | none | **Missing calendar = no entries.** Fail closed. |
-| Earnings calendar (free tier / EDGAR-derived) | Scheduled event risk | daily | free | TRIGGER (veto side) | Used to *suppress* entries into known events, not to predict them | low | Unknown → treat as event-present → no entry |
+| Source | Gives | Latency / cadence | Cost | Class | Role | Failure default |
+|---|---|---|---|---|---|---|
+| Alpaca market data — real-time IEX | Quotes/trades/bars (IEX venue only; quotes can be wider than NBBO) | streaming | free w/ account | TRIGGER (order pricing + staleness/spread vetoes) | Order pricing, liveness | stale > 30 s → entries vetoed |
+| Alpaca market data — SIP history (v3) | Consolidated bars/trades/quotes, ≥ 15 min delayed | on request | free (Basic plan) | TRIGGER (sleeve signals) | Every sleeve signal + backtest + `cost_v2` spreads | Missing bar → signal UNAVAILABLE → HOLD |
+| Alpaca account/positions/orders | Account state, settled cash, fills | streaming + REST | free | authority for execution state | Reconcile, settlement ledger | outage → entries stop (S9) |
+| **SEC EDGAR** submissions + XBRL `companyfacts`/`frames` + filing index | 8-K (incl. item 2.02 + EX-99.1), 10-Q/10-K, **Form 4** (XML), fundamentals | submissions < 1 s; XBRL < 1 min | free, UA required | TRIGGER (equities) | E1/E2 sleeves; corporate events; earnings calendar | Source `stale` after 15 min → features expire |
+| **FRED / ALFRED** 🔑 | Rates, curve, real yields, breakevens, credit spreads, NFCI, VIX close, FX rates, release calendar, **vintages** | per release | free | TRIGGER (macro) / CONTEXT (overlay research) | M1/M2 context, X1 research, calendars | Last known vintage, marked stale |
+| US Treasury FiscalData, BLS, BEA 🔑(BEA) | Auctions, yields, CPI/NFP detail, GDP | per release | free | TRIGGER (macro) | Macro context, event calendar | as above |
+| Exchange + venue session/holiday calendars | `session`, early closes, settlement days | static + updates | free | TRIGGER (veto side) | R9/R18 veto input. Load-bearing. | **Missing calendar = no entries.** |
+| Earnings calendar (EDGAR-derived) | Scheduled event risk | daily | free | TRIGGER (veto side) | Suppress entries into known events | Unknown → event-present → no entry |
 
 **HISTORICAL / NON-PRODUCTION (not Tier A, never TRIGGER-eligible in v1):**
 
-| X-Lists tail (doc 02 history only) | DISABLED in v1 (§2.6: terms conflict, no authorized interface). History kept in repo; returns only via authorized reproducible interface. | n/a | n/a | NULL in v1, no promotion path without a doc-01 scope change | Removed from production, not fought for. The fund is complete without it. |
+| X-Lists tail (doc 02 history only; archive in `appendix/02-x-lists-archive.md`) | DISABLED in v1 (terms conflict, no authorized interface). | n/a | n/a | NULL in v1, no promotion path without a doc-01 scope change | Removed from production, not fought for. |
 
 ### Tier B — situational, event-driven, CONTEXT by default
 
@@ -126,16 +129,59 @@ a human. A lesson can only ever become a
   code or threshold change through doc 11's promotion gate. **Lessons never reach
   the live decision path automatically.**
 
-### Data license matrix (locked 2026-09-18 — "free" is not a license)
+### Data license matrix (locked 2026-09-18, extended v3 — "free" is not a license)
 
 | Source | Access | Commercial/auto use | Redistribution | Storage/derived |
 |---|---|---|---|---|
-| SEC EDGAR | free, no key, provider-published 10 req/s fair-access max | public filings, automated collection allowed within fair access | no bulk resale; derived features ours | 90-day prune (§9.2) |
-| FRED/ALFRED | free, key required | allowed with attribution | no redistribution of bulk downloads | vintages kept for replay |
-| Treasury/BLS/BEA/Fed/ECB | free, no key | US/EU public data, automated use allowed | link, don't mirror | same prune |
-| Broker paper data (OANDA/Alpaca) | account required | per broker account terms; re-verify at G1 | never | journal keeps fills, not full depth |
-| USGS/FIRMS/Open-Meteo | free (FIRMS email token) | allowed | attribution | same prune |
+| SEC EDGAR | free, no key, 10 req/s fair-access max | public filings; automated collection within fair access | no bulk resale; derived features ours | 90-day prune of raw; derived kept |
+| FRED/ALFRED | free, key required | allowed with attribution; some series carry third-party copyright (e.g. ICE BofA indices) — check per series before use | no bulk redistribution | vintages kept for replay |
+| Treasury/BLS/BEA/Fed/ECB | free | public data, automated use allowed | link, don't mirror | same prune |
+| Alpaca market data (v3) | free with account (Basic) | per Alpaca data terms for account holders; re-verify before G1 | never | research datasets stay local, manifest-hashed; never committed |
+| Broker account data | account required | per broker terms | never | journal keeps fills, not depth |
+| USGS/FIRMS/Open-Meteo | free (FIRMS token) | allowed | attribution | same prune |
 | X | EXCLUDED v1 | n/a | n/a | history only |
+
+## 9.1a Research datasets (v3)
+
+Every dataset used by a pre-registration is a manifest: source, endpoint,
+query, time range, feed (`sip`), adjustment mode, row count, content hash,
+fetch time. Runs name their manifest hashes; a run that cannot is void.
+
+- **History limit:** the free Alpaca feed serves bars from 2016-01-04 only
+  (about 10.6 years). Evidence on it covers one full cycle at most; a
+  longer sample needs a second, manifested source before any sleeve is
+  called robust.
+- **SIP daily bars** for the doc 02 ETF universes (VTI, VEU, VNQ, IEF, DBC,
+  BIL, SPY, QQQ, IWM, 9 SPDR sectors) — split-adjusted for signals,
+  raw + dividends for total-return accounting.
+- **SIP minute bars + quotes** for SPY/QQQ/IWM (I1) and for `cost_v2`
+  spreads on every traded symbol.
+- **Single-stock SIP daily bars** for E1/E2 event universes, filtered point
+  in time from the bars themselves (price, dollar volume).
+- **EDGAR Form 4 XML** (all filers, including since-delisted issuers) and
+  **8-K item 2.02 + EX-99.1** with acceptance datetimes.
+- **FRED series (initial set, research/context):** DGS3MO, DGS2, DGS10,
+  T10Y2Y, T10Y3M, DFII10, T10YIE, BAA10Y, NFCI, VIXCLS, DTWEXBGS,
+  FEDFUNDS; FX research (X1): DEXUSEU, DEXJPUS, DEXUSUK, DEXSZUS, DEXUSAL,
+  DEXCAUS, DEXUSNZ, DEXSDUS, DEXNOUS plus OECD 3-month interbank rates.
+  ALFRED vintages whenever a series is revised.
+- **Corporate actions and dividends** from the broker's corporate-actions
+  data where available, cross-checked against EDGAR 8-K; a symbol with an
+  unresolved action is excluded for the affected window.
+
+Data-quality rules (v3):
+- **Survivorship:** the free feed may lack history for delisted symbols.
+  Every run reports excluded-event counts; > 5% excluded voids an event
+  sleeve run. ETF sleeves are chosen partly because this bias is minimal.
+- **Point-in-time S&P-500 membership is not freely available**; no sleeve
+  may depend on it (doc 12 §12.1). Universes come from ETFs, EDGAR filer
+  lists, and point-in-time price/volume filters.
+- **Signal vs execution data:** signals from SIP; IEX only for order
+  pricing (doc 04 §4.1). A backtest never uses a price the live sleeve
+  could not have had at its signal time.
+- **Timestamps:** the timestamp a sleeve acts on is the source's
+  availability time (EDGAR acceptance, FRED release time, bar close + 15
+  min delay), never the period the data describes.
 
 ## 9.2 Ingestion rules (all sources)
 
@@ -158,7 +204,7 @@ a human. A lesson can only ever become a
   per source before G1/G2, not once at freeze.
 - **Polite by construction (measured, not assumed):** declared User-Agent with contact, per-source rate
   limiter, jittered backoff (3 retries, ~15 s base, ±20% jitter — same semantics
-  as doc 02 §2.5), and an on-disk cache keyed by source ETag/Last-Modified. A 429
+  as the archived doc 02 §2.5 — `appendix/02-x-lists-archive.md`), and an on-disk cache keyed by source ETag/Last-Modified. A 429
   halves that source's poll rate for an hour.
 - **EDGAR specifics (LOCKED 2026-09-18):** UA `MiroHedge/phase0 contact=<human fills
   at build>`, hard ceiling 10 req/s (SEC limit), submissions JSON + companyfacts
@@ -170,7 +216,7 @@ a human. A lesson can only ever become a
   and is CONTEXT-capped forever. Publication-time-vs-availability-time mismatch is
   a documented lookahead vector; an estimated timestamp never triggers a trade.
 - **Storage:** append-only JSONL per source per day + SQLite index, pruned at 90
-  days, atomic temp-file rename (doc 02 §2.5 semantics apply to every source).
+  days, atomic temp-file rename (the archived doc 02 §2.5 semantics — `appendix/02-x-lists-archive.md` — apply to every source).
   DURABLE-FIRST commit ordering (frozen, pass-5): the signals file is the
   commit point — fetch → parse → append+fsync → THEN persist ETag/
   Last-Modified validators → THEN advance schedule. A failed sink banks
@@ -186,33 +232,39 @@ a human. A lesson can only ever become a
 
 ## 9.3 Source health and failure defaults
 
-- Each source has a declared TTL and a heartbeat. Missed heartbeat > 3× cadence →
-  `stale=true` → features expire → JEV state shows the source as absent, not as
-  neutral-valued. **Absent and neutral are different and are never conflated.**
-- A source failing > 50% of polls for 24 h is auto-disabled and alerted. Re-enable
-  is manual (same friction as the HALT file, doc 06 §6.4).
-- **No source outage may block an exit.** Ever. Exits are local (doc 06, locked).
-- Session/holiday calendar is the one fail-closed source: unavailable → no entries.
+- Each source has a declared TTL and heartbeat. Missed heartbeat > 3×
+  cadence → `stale=true` → features expire → reported absent, never
+  neutral. **Absent and neutral are never conflated.**
+- A source failing > 50% of polls for 24 h is auto-disabled and alerted;
+  re-enable is manual.
+- **No source outage may block an exit.** Ever.
+- The session/holiday calendar is the one fail-closed source.
 
 ## 9.4 What "done" means
 
-- [ ] Every Tier A source has a working poller, a TTL, a heartbeat, and a measured
-      p50/p99 latency recorded in this doc.
-- [ ] EDGAR poller honors the UA requirement and rate limit; observed soak window (133 cycles, zero 403s — see collector/SOAK_REPORT.md; the 7-day target was shortened on evidence, not redefined).
-- [ ] ALFRED vintage path proven: a revised series replays with the *original*
-      vintage for any historical decision.
-- [ ] Every source classified TRIGGER / CONTEXT / NULL in the table above, with no
-      blanks. (Phase-0 exit item.)
-- [ ] `lessons.jsonl` has ≥ 10 entries, each with a pattern and a failure mode, and
-      each graded accept/hype against §9.1 Tier D's bar.
-- [ ] Fail-closed calendar test: remove the calendar → zero entries, exits normal.
+- [ ] Every Tier A source has a working poller or fetcher, a TTL, a
+      heartbeat, and a measured p50/p99 latency recorded here.
+- [ ] EDGAR poller honors the UA requirement and rate limit (observed
+      133-cycle soak, zero 403s — `collector/SOAK_REPORT.md`).
+- [ ] ALFRED vintage path proven: a revised series replays with the
+      original vintage for any historical decision.
+- [ ] (v3) SIP bars + quotes fetcher with manifests; the S2 rerun uses it.
+- [ ] (v3) Form 4 parser (transaction codes, reporter roles, 10b5-1 flag)
+      with fixture tests; 8-K 2.02 + EX-99.1 locator with acceptance times.
+- [ ] Every source classified TRIGGER / CONTEXT / NULL, no blanks.
+- [ ] `lessons.jsonl` ≥ 10 graded entries, each with pattern + failure mode.
+- [ ] Fail-closed calendar test: remove the calendar → zero entries, exits
+      normal.
 
 ## Locked decisions
 
-- Free tiers only. No source is load-bearing except the broker feed and the
-  session calendar.
-- Every non-price source starts CONTEXT or NULL. Promotion to TRIGGER requires
-  measured hit-rate + human sign-off (doc 11). Never automatic.
-- No God's-Eye-View layer is TRIGGER-class in v1. Visualization layers excluded.
-- Primary sources only; estimated timestamps are permanently CONTEXT-capped.
-- Public-system "lessons" are review input, never a live signal.
+- Free tiers only for core operation. Load-bearing: broker feed + session
+  calendar.
+- Every non-price source starts CONTEXT or NULL; TRIGGER needs measured
+  incremental edge + human sign-off (doc 11). Never automatic.
+- Research datasets are manifest-hashed and never committed; SIP history
+  for signals and costs; IEX real-time for order pricing only.
+- No sleeve depends on data that is not freely available point in time.
+- No God's-Eye-View layer is TRIGGER-class. Visualization layers excluded.
+- Primary sources only; estimated timestamps permanently CONTEXT-capped.
+- Public-system "lessons" are research-factory input, never a live signal.

@@ -1,131 +1,147 @@
-# 10 — Capital Gates, Kill Switches, and Spend Control
+# 10 — Capital Gates, Kill Switches, and Spend Control (freeze v3)
 
-Full autonomy is granted *inside a box*. This doc defines the box: which stage the
-system is in, what that stage permits, who may change it (a human, always), how it
-is shut down, and how much it may spend on AI to earn what it earns.
+Full autonomy is granted *inside a box*. This doc defines the box: which
+stage the system is in, what that stage permits, what the operator may
+legally trade, who may change any of it (a human, always), how it is shut
+down, and how much it may spend on AI to earn what it earns.
 
-The system is autonomous in **research, decision, and execution**. It is never
-autonomous in **capital escalation**.
+The system is autonomous in **research, decision, and execution**. It is
+never autonomous in **capital escalation**. Freeze v3 changes are marked.
 
-## 10.1 The stage file (the box), v2: signed manifests (locked 2026-09-18)
+## 10.1 The stage chain (the box): signed manifests (locked 2026-09-18, text repaired v3)
 
-A hash is not a signature — anyone holding the file can recompute it. v2
-separates the human act from the runtime state:
+A hash is not a signature — anyone holding a file can recompute it. The
+human act and the runtime state are therefore separate objects:
 
-- `PROMOTION_MANIFEST` (human-owned, human-written, process stopped):
-  immutable once signed. The runtime NEVER modifies promotion material.
-- `STAGE_STATE` (process-owned, append-only): runtime `DEMOTION_EVENT`
-  records. Demotion appends, journals, alerts; it never
-  from_stage, to_stage, intended_capital_usd, allocated_capital_usd,
-  policy_version, plan_hash, approved_at, evidence_hash, signer_id, plus an
-  Ed25519 `signature` over all of it. The process verifies (valid signature,
-  known signer key, correct plan version, correct prior stage, sane capital)
-  and then — and only then — advances.
+- **`PROMOTION_MANIFEST`** (human-owned, written with the process stopped,
+  immutable once signed). Fields: `from_stage`, `to_stage`,
+  `intended_capital_usd`, `allocated_capital_usd`, `policy_version`,
+  `plan_hash`, `approved_at`, `evidence_hash`, `signer_id`, (v3)
+  `approved_sleeves` (sleeve id + version + filter policy),
+  (v3) `instrument_allowlist` (R19), (v3) `jurisdiction_evidence_hash`
+  (§10.1a, G1+), plus an Ed25519 `signature` over all of it. The process
+  verifies (valid signature, known signer key, correct plan version,
+  correct prior stage, sane capital) and only then advances. The runtime
+  NEVER modifies promotion material.
+- **`STAGE_STATE`** (process-owned, append-only): runtime
+  `DEMOTION_EVENT` records. A demotion appends, journals, and alerts; it
+  never edits a manifest.
 - `effective_stage` = last verified promotion − automatic `STAGE_STATE`
-  demotion events`. No shared
-  ownership, no direct human edits to runtime files, no process writes to
-  manifests.
-- Legacy `STAGE` single-file format (§10.1 as frozen in Phase 0 v1) remains the
-  G0 bootstrap only: `capital_usd: 0`, GENESIS chain, alerts.jsonl. First
-  promotion out of G0 moves to manifests.
-
-G1 capital semantics (locked): `intended_capital_usd` (the full size this
-operation targets), `allocated_capital_usd` (actually deposited at the stage),
-`current_equity_usd` (live, from the adapter). "≤2% of intended capital" is
-computed from the manifest's intended number — mechanically enforceable, no
-interpretation.
-
-Risk-capital basis (G2, locked): every percentage cap (R1/R2 exposure,
-drawdown, VaR) is computed against `risk_capital = min(intended_capital_usd,
-allocated_capital_usd, current_equity_usd)` at snapshot time. A live account
-holding less than intended capital gets proportionally less risk — the
-conservative minimum, frozen, no discretion.
-
-LIVE JURISDICTION GATE (before any G1 promotion, locked): operator
-jurisdiction, broker authorization in that jurisdiction, instrument legality
-(forex venue vs local law), funding route, tax/reporting treatment — all
-checked, logged, and attached to the manifest as `evidence_hash`. "Broker has
-an API" is not "this deployment is legal."
-
-One file, `STAGE`, read at startup and re-read at every cycle boundary:
+  demotions. No shared ownership, no human edits to runtime files, no
+  process writes to manifests.
+- **G0 bootstrap** (legacy single-file `STAGE`, freeze v1 format) is used
+  only to start G0; the first promotion out of G0 moves to manifests:
 
 ```
-stage:        G0_PAPER | G1_TINY | G2_SCALED | G3_FULL
+stage:        G0_PAPER
 approved_by:  <human name>
 approved_at:  <ISO8601>
-capital_usd:  <number>
+capital_usd:  0
 attest_hash:  <sha256 of "stage|approved_by|approved_at|capital_usd|prev_attest"
               (pipe-delimited, exact field order; genesis prev_attest = "GENESIS")>
 ```
 
-- `attest_hash` chains to the previous attestation and into the journal. A `STAGE`
-  file whose chain does not verify → the system starts in **G0_PAPER**, alerts,
-  and refuses live orders. Corruption fails toward paper, never toward capital.
-- The trading process may **read** `STAGE`. It may **write** only demotions.
-  Promotions are written by a human, out of band, with the process stopped.
-- `capital_usd` is 0 at G0 (paper — no real capital exists). At G1+ the human
-  writes the real stage capital at signing; "2% of intended capital" is defined
-  by that number, not by anything the system infers.
-- Alerts (every "alert" in this doc and in §§10.2–10.4) mean: append to
-  `alerts.jsonl` + non-zero exit status where the process stops. No messaging
-  integrations (Telegram/Discord/email) in v1 — those are chat-gateway paths
-  and doc 08 bans them from the trading host. Consequence (S1): unattended
-  LIVE operation is BLOCKED until an approved external alert adapter exists;
-  until then, stdout/log alerts are monitoring aids only, never the
-  unattended path. Logging to a file is not an unattended alert.
-- The research plane cannot read or write `STAGE` (doc 08 §8.1, R11).
-- **R17 (new):** no code path exists that raises a stage. Promotion is a human
-  editing a file while the system is down. This is deliberate friction, exactly
-  like resume-from-HALT (doc 06 §6.4, locked).
+- A chain that does not verify → the system starts in **G0_PAPER**,
+  alerts, and refuses live orders. Corruption fails toward paper.
+- Capital semantics (locked): `intended_capital_usd` (full target size),
+  `allocated_capital_usd` (actually deposited), `current_equity_usd`
+  (live). "≤ 2% of intended capital" is computed from the manifest.
+  Risk-capital basis (G2+): every percentage cap uses
+  `risk_capital = min(intended, allocated, current_equity)` at snapshot.
+- Alerts mean: append to `alerts.jsonl` + non-zero exit where the process
+  stops + (v3) the outbound-only alert adapter (doc 06 §6.4). Unattended
+  operation (G0b included) is BLOCKED until that adapter exists; chat
+  gateways remain banned (doc 01).
+- The research plane, factory, and sleeve engine cannot read or write the
+  stage chain (R11).
+- **R17:** no code path raises a stage. Promotion is a human signing a
+  manifest while the system is down.
 
-## 10.2 Stage table (locked)
+## 10.1a LIVE JURISDICTION GATE (v3 expansion; required before G1)
 
-`R-multiplier` scales ONLY stage exposure/position/sizing/trade-count limits
-(positions, exposure %, trades/day, sizes). It never scales safety thresholds:
-correlation > .9, drawdown > 10%, vol > 3x, the 2-hour flip lock, R15 call
-limits, freshness windows, and security bounds are FIXED at every stage unless
-explicitly versioned. It never scales the *rules* — R1–R9 always apply.
+"Broker has an API" is not "this deployment is legal." Before any G1
+promotion the operator attaches, as `jurisdiction_evidence_hash`, a signed
+evidence bundle containing at least:
+
+1. Operator residency and the funding route (RBI LRS, USD 250,000 per
+   financial year), with bank confirmation that the remittance purpose
+   code is overseas portfolio investment.
+2. Written confirmation from a qualified professional (Indian chartered
+   accountant or FEMA counsel) that the instrument allowlist is
+   permissible: US-listed common stock and ETFs, long only, **cash
+   account, no margin, no short selling**, no forex spot/CFD/margin FX, no
+   options/futures, no leveraged or inverse products (LRS prohibits
+   remitting for margin trading and for trading foreign exchange abroad).
+   Currency ETFs and any product beyond the default list need their own
+   explicit line in that confirmation before they may enter the allowlist.
+3. Broker account evidence: Alpaca international account opened for the
+   operator's country, **cash** account type confirmed, USD funding route.
+4. Tax/reporting treatment recorded: US dividend withholding (W-8BEN on
+   file), Indian TCS on LRS remittances and its credit, foreign-asset and
+   foreign-income reporting in the Indian return, record-keeping for
+   capital gains in INR.
+5. The `broker_compliance_policy` table rows for the account (settlement,
+   good-faith/free-riding, day-trade rules at their effective dates,
+   including the 2026 PDT repeal) reviewed and signed.
+
+The gate is re-checked before every promotion and whenever a rule's
+effective date passes. This plan summarizes public sources; it is not
+legal advice.
+
+## 10.2 Stage table (locked, v3)
+
+`R-multiplier` scales only stage exposure/position/sizing/trade-count
+limits; it never scales safety thresholds (correlation > .9, drawdown >
+10%, vol > 3×, flip lock, R15 limits, freshness windows, security bounds)
+and never scales the rules — R1–R19 always apply.
 
 | | G0_PAPER | G1_TINY | G2_SCALED | G3_FULL |
 |---|---|---|---|---|
 | Capital | paper only | ≤ 2% of intended capital | ≤ 25% | 100% |
-| Symbols | ≤ 5 | **1** | ≤ 3 | ≤ 5 |
+| Sleeves in kernel | 1 champion (+ all others in G0a shadow) | 1 promoted sleeve | ≤ 2 (after universe-cap change) | per G3 manifest |
+| Symbols | ≤ 5 (kernel cap) | **1 liquid US ETF** | ≤ 3 | ≤ 5 |
 | R-multiplier | 1.0 | **0.25** | 0.5 | 1.0 |
 | Max daily loss | n/a | 1% of stage capital | 1.5% | 2% |
 | Max position | per R2 | R2 × 0.25 | R2 × 0.5 | R2 |
-| Leverage | doc 05 §5.2 | forex ≤ 1× (single symbol is forex, see below) | forex ≤ 2×, stocks ≤ 1× | doc 05 §5.2 |
+| Leverage / account | cash-account constraint set, 1× (v3) | 1×, cash, long only | 1×, cash, long only | 1×, cash, long only |
 | Human review | weekly | **daily** | weekly | weekly |
 | Research plane | full | full | full | full |
 
-Day-boundary rule (locked): every "daily" limit and every "session" count in
-this doc and in doc 05 uses the UTC calendar day. No venue-local accounting.
+Day-boundary rule (locked): every "daily" limit uses the UTC calendar day;
+settlement dates use the exchange calendar (R18).
 
-**G1_TINY symbol choice (locked):** the single G1 symbol must be a forex major,
-never a US equity. A live account at 2% of intended capital will almost always
-sit under the $25k PDT threshold, and R9 caps a sub-$25k margin account at 3
-day-trades per 5 sessions — which would throttle the sample size the G1 → G2
-promotion criteria need, not the risk (forex has none of this: R9's PDT clause
-is equities-only, and forex runs 24/5). Equities re-enter at G2, where ≤3
-symbols and a larger likely capital base make the PDT constraint bind less.
+**G1 symbol choice (v3, replaces the freeze-v2 forex rule):** the single
+G1 symbol is a highly liquid US ETF (SPY/QQQ/IWM-class spreads and
+volume) traded by the promoted sleeve. The freeze-v2 rule required a
+forex major because of the $25k pattern-day-trader constraint; both
+premises are gone — forex is not a legal live target for the operator
+(§10.1a), and the PDT framework was eliminated (SEC approval 2026-04-14;
+cash accounts were never governed by it). A sleeve whose champion
+universe has several symbols goes live at G1 on its single most liquid
+symbol, with the promotion evidence recomputed for that restriction.
 
 ### Promotion criteria (necessary, never sufficient)
 
-Every box must be true **and** a human must then sign the file. Meeting the
+Every box must be true **and** a human must then sign. Meeting the
 criteria grants the *right to ask*, nothing more.
 
-**G0 → G1** — 30 consecutive clean paper days; zero R-rule violations; replay
-determinism green every week (D1); JEV calibration at or better than the
-base-rate baseline over ≥ 200 decisions (doc 11); AI spend within the G0 absolute
-cap; kill-switch, reconcile, and isolation drills all passed.
+**G0 → G1** — the champion sleeve passed A-gate and B-gate (doc 11
+§11.3a) and its evidence is transferable (produced under the live
+constraint set); 30 consecutive clean G0b days; zero R-rule violations;
+replay determinism green every week (D1); tracking within the sleeve's
+pre-registered band; AI spend within the G0 cap; kill-switch, reconcile,
+settlement, and isolation drills passed; port-on-promotion vectors green
+(doc 04); jurisdiction gate complete (§10.1a); if the sleeve uses
+`filter = jev_v4`, JEV calibration ≥ base rate over ≥ 200 decisions.
 
-**G1 → G2** — 30 consecutive live days at G1; zero R-rule violations; realized
-slippage within 1.5× the paper fill model; live-vs-paper divergence < 30% (S3);
-AI-spend ratio computed daily at G1 in SHADOW (readiness display only — G1 has
-no ratio cap to enforce); promotion requires 30 days of computed-passing
-readings (§10.4); calibration still ≥ baseline.
+**G1 → G2** — 30 consecutive live days at G1; zero R-rule violations;
+realized implementation shortfall within 1.5× `cost_v2`; live-vs-shadow
+divergence within the S3 band; AI-spend ratio computed daily in SHADOW
+(G1 has no ratio cap to enforce) with 30 days of computed-passing
+readings; calibration still ≥ baseline where applicable.
 
-**G2 → G3** — 60 consecutive live days at G2; the above sustained; max drawdown
-< 5% over the window; ≥ 100 closed trades so the statistics mean something.
+**G2 → G3** — 60 consecutive live days at G2; the above sustained; max
+drawdown < 5% over the window; ≥ 100 closed trades.
 
 ### Automatic demotion (no human needed, and no human can veto it)
 
@@ -134,13 +150,15 @@ readings (§10.4); calibration still ≥ baseline.
 | Any R-rule violation | Demote one stage + HALT entries + alert |
 | Drawdown > 10% from peak (R5) | Demote to G0_PAPER + flatten via stops + alert |
 | Daily loss limit breached | Entries halted for the session; second breach in 5 sessions → demote |
-| Calibration below baseline by >0.02 Brier, ≥20-outcome minimum met (R13) | Entries halted, demote one stage |
+| Calibration below baseline by > 0.02 Brier, ≥ 20-outcome minimum (R13, `jev_v4` sleeves) | Entries halted, demote one stage |
 | Determinism/replay failure (D1) | Demote to G0_PAPER immediately |
 | Journal hash-chain break | Demote to G0_PAPER, HARD kill, forensics before restart |
 | Spend circuit breaker at tier 3 (§10.4) | Entries halted, demote one stage |
+| (v3) Broker-reported good-faith / free-riding violation (R18) | HARD-class compliance incident, demote to G0_PAPER, human review |
+| (v3) Live order outside the instrument allowlist reaching the broker (R19) | HARD kill, demote to G0_PAPER, forensics |
 
-Demotion is written to `STAGE` by the process, chained, journaled, and alerted.
-Re-promotion is the full human gate again. There is no "temporary" demotion.
+Demotion is written to `STAGE_STATE` by the process, chained, journaled,
+and alerted. Re-promotion is the full human gate again.
 
 ## 10.3 Kill-switch hierarchy (R16, locked)
 
@@ -222,7 +240,8 @@ extrapolated), so the brake is applied before the wall, not at it.
   fall back only after 6 consecutive hours below the lower threshold (anti-flap).
   The tier journal is a semantic chain, not just syntax: non-legacy rows
   must carry consecutive revs, from/to matching the governor's emission
-  rule (first from Tier 0), snapshot tier equal to its row, and max rev
+  rule (first from Tier 0 when the chain start lies inside the bounded
+  tail window), snapshot tier equal to its row, and max rev
   exactly equal to the state rev — a forged newer row denies, and rows
   newer than state are never adopted (state-first persist means the
   state always leads). Legacy (rev-less) rows recover only in an
@@ -232,11 +251,23 @@ extrapolated), so the brake is applied before the wall, not at it.
   embedded evaluated_at values beyond the 300 s skew allowance deny.
   The ratio journal must be a strictly increasing day sequence (no
   duplicates, no reordering, no future days): an edited day order
-  denies rather than weakening the 3-day rule. Ordering is verified
-  over the bounded 64 KiB journal tail (≈3.5 years at one row/day);
-  streak soundness does not depend on ancient order (a gap outside
-  the tail reads as unevaluated and breaks the streak toward the
-  conservative side).
+  denies rather than weakening the 3-day rule. Ratio rows are
+  hash-chained (each commits to the previous row's digest) and the tier
+  state anchors the newest proven row (`ratio_head`, written together
+  with the `ratio_day` tripwire): a valid-JSON rewrite of decided
+  history (failed -> ok, with or without recomputed digests), a
+  head/day mismatch, a stripped head, a legacy-format row inside the
+  chain era, or more than ONE row beyond the head (the only legitimate
+  crash residue: append landed, state persist did not — adopted and
+  persisted before any new append) all deny. The chain and the anchor
+  live in the same state directory, so they detect edits and
+  inconsistent crash residue, not a writer able to rewrite both
+  consistently (host compromise, outside this control). Ordering and the
+  chain are verified over the bounded 64 KiB journal tail (≈11 months
+  of chained rows at one row/day; a cut tail links from its first
+  visible row, still pinned forward to the anchor); streak soundness
+  does not depend on ancient order (a gap outside the tail reads as
+  unevaluated and breaks the streak toward the conservative side).
 - A provider price change that lifts projected spend past a tier acts exactly like
   usage growth. No exception path exists.
 
@@ -256,41 +287,6 @@ extrapolated), so the brake is applied before the wall, not at it.
   strategy that is profitable gross of AI cost and unprofitable net of it is a
   losing strategy, and the daily summary is written to make that impossible to
   miss.
-
-## 10.5 What "done" means
-
-G0 file creation (human, at build — the one piece of §10.1 no doc edit can do
-for you): copy the §10.1 template, set `stage: G0_PAPER`, `capital_usd: 0`,
-fill `approved_by`/`approved_at`, compute `attest_hash` with
-`printf '%s' "G0_PAPER|<name>|<iso8601>|0|GENESIS" | sha256sum`, place the file
-where the process reads it, and log the signing in doc 07. Until that file
-exists and verifies, nothing starts — there is no default STAGE.
-
-- [ ] `STAGE` chain verification tested, including a deliberately corrupted file
-      (must land in G0_PAPER, not in live).
-- [ ] Promotion requires a stopped process + human edit; proven by attempting a
-      programmatic promotion and observing it fail.
-- [ ] Demotion drill: force an R-rule violation in paper → automatic demotion,
-      journaled, alerted.
-- [ ] SOFT / MEDIUM / HARD drills each pass, including "exits still work" under
-      all three.
-- [ ] Spend counter survives process restart; tier transitions journaled.
-- [ ] A forced spend spike walks tier 0 → 1 → 2 → 3 with the documented effects.
-- [ ] Daily summary shows spend, projection, tier, and cost per closed trade.
-
-## Locked decisions
-
-- Four stages, human-signed, chained. No code path promotes. Demotion is automatic
-  and cannot be vetoed.
-- Corruption, doubt, and failure all resolve toward paper.
-- Three kill levels; none reachable by an agent; exits never blocked by any of them.
-- AI spend: absolute cap always; ratio cap from G2. Both apply. Throttling reduces
-  research, never decision calibration. Absolute MEANS absolute (frozen,
-  pass-5): the stage cap is enforced PRE-CALL via a frozen per-call
-  reservation (doc 03), so one call cannot overshoot it by learning its
-  cost late; an unknowable bill (unknown-cost) or an ambiguous transport
-  outcome (may-have-been-billed) is UNKNOWN_SPEND → HOLD with no answer
-  admitted — an unbounded charge is never blessed by a bounded reservation.
 
 ### 10.4.1 Reservation mechanism (frozen — change = doc edit + fresh paper window)
 
@@ -377,6 +373,15 @@ the graph → worker → budget → attribution/spend → publish path):
   non-atomic cap check exists anywhere; concurrent processes
   serialize on the transaction (proven: four $0.60 racers vs a $1.00
   cap admit exactly one).
+- Research-call admission re-reads the DURABLE tier in the same
+  tier-lock section that inserts the dollar hold (tier lock first,
+  ledger second — the order every tier evaluation uses). The graph's
+  per-node tier snapshot is only the plan (model, prose cap,
+  watchlist): Tier 3, a durable tier above the snapshot, or
+  unverifiable tier state refuses pre-spawn, so a Tier-3 persist
+  either precedes an admission (refused) or follows its hold (an
+  in-flight call admitted before the stop). Every provider-reaching
+  path (hypothesize, critique, LLM extract) passes this gate.
 - Model identity: the priced `model_id` and
   `provider_cfg["model_id"]` must be the same string before any
   reservation (a mismatch is a clean pre-reserve refusal).
@@ -429,3 +434,59 @@ historical pricing metadata for audit, while the live governor
 selects only currently authorized pricing entries. Historical spend
 stays in the trailing-30d ledger (history is never rewritten on
 retirement). No caps change here: the stage table above is untouched.
+
+### 10.4.4 Research-factory and reader spend (v3, within the same caps)
+
+No new money. The factory's model calls are category `experiment`, the
+reader tier's are category `research`; both pass through the same
+governor, reservation, and tier logic as every other research call, and
+both stop at Tier 3. The factory additionally carries a per-card budget
+declared in its pre-registration; a card that exhausts it stops, and the
+exhaustion is recorded in the trial ledger (a failure is evidence too).
+JEV (`decision`) spend exists only for sleeves configured with
+`filter = jev_v4` and is attributed to that sleeve's cost per trade.
+
+## 10.5 What "done" means
+
+G0 bootstrap (human, at build): copy the §10.1 template, set
+`stage: G0_PAPER`, `capital_usd: 0`, fill `approved_by`/`approved_at`,
+compute `attest_hash` with
+`printf '%s' "G0_PAPER|<name>|<iso8601>|0|GENESIS" | sha256sum`, place the
+file where the kernel reads it, and log the signing in doc 07. Until that
+file exists and verifies, nothing starts — there is no default stage.
+
+- [ ] Stage-chain verification tested, including a deliberately corrupted
+      file (must land in G0_PAPER, not live).
+- [ ] Promotion requires a stopped process + human signature; a
+      programmatic promotion attempt is proven to fail.
+- [ ] Demotion drill: forced R-rule violation in paper → automatic
+      demotion, journaled, alerted (outbound adapter).
+- [ ] SOFT / MEDIUM / HARD drills pass, exits alive under all three;
+      long-only MEDIUM flatten = SELL-to-close only.
+- [ ] Spend counter survives restart; tier transitions journaled.
+- [ ] A forced spend spike walks tier 0 → 1 → 2 → 3 with the documented
+      effects.
+- [ ] Daily summary shows spend, projection, tier, cost per closed trade.
+- [ ] (v3) Manifest carries approved sleeves + allowlist; a candidate from
+      an unapproved sleeve or for a non-allowlisted symbol is refused.
+- [ ] (v3) Jurisdiction evidence bundle template exists and is signed
+      before G1.
+
+## Locked decisions
+
+- Four stages, human-signed manifests, chained. No code path promotes.
+  Demotion is automatic and cannot be vetoed.
+- Corruption, doubt, and failure all resolve toward paper.
+- Three kill levels; none reachable by an agent; exits never blocked.
+- (v3) Live = 1×, cash account, long only, allowlisted instruments, one
+  liquid ETF at G1; jurisdiction evidence signed before G1.
+- (v3) Only manifest-approved sleeves may reach the kernel.
+- AI spend: absolute cap always; ratio cap from G2. Both apply. Throttling
+  reduces research, never exits or reconcile. Absolute MEANS absolute
+  (frozen, pass-5): the cap is enforced PRE-CALL via a frozen per-call
+  reservation, so one call cannot overshoot it by learning its cost late;
+  an unknowable bill (unknown-cost) or an ambiguous transport outcome
+  (may-have-been-billed) is UNKNOWN_SPEND → HOLD with no answer admitted.
+- Spend caps, tier thresholds (60/80/100%), hourly cadence, 6-hour
+  anti-flap, the three-distinct-failed-days ratio rule, and R2 are
+  unchanged by freeze v3.

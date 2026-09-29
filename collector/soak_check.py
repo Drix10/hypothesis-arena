@@ -24,7 +24,7 @@ SOAK = os.path.join(ROOT, "data", "soak")
 DATA = os.path.join(ROOT, "data")
 ALLOWED_HB = {"ok", "EMPTY_SUCCESS", "SKIPPED_CONFIG", "SOURCE_DOWN",
               "AUTH_FAILURE", "RATE_LIMITED", "PARSE_FAILURE", "STALE"}
-# Freshness is proven per CYCLE, not per calendar day: a heartbeat may be
+# Freshness is per cycle, not per calendar day: a heartbeat may be
 # at most max(2x that source's poll_min, 15 min) older than the snapshot
 # row that cites it, and never more than 60 s newer (clock skew allowance).
 FRESH_FUTURE_SKEW = 60
@@ -88,7 +88,7 @@ def main():
         datetime.now(timezone.utc).strftime("%Y-%m-%d")
     out = {"day": day, "rules_version": "rules_v1", "checks": []}
     C = out["checks"]
-    # Configured universe FIRST: freshness bounds and coverage both key on it.
+    # Configured universe first: freshness bounds and coverage key on it.
     try:
         with open(os.path.join(HERE, "sources.json"),
                    encoding="utf-8") as fh:
@@ -127,10 +127,9 @@ def main():
 
     # 2. heartbeat vocabulary (day-filtered) + coverage: every configured
     # source must have at least one heartbeat stamped for `day`. Freshness
-    # is judged per CYCLE: heartbeat_at must fall inside the bounded
-    # freshness window of the snapshot row citing it (same-day-date alone
-    # is not freshness — a 00:01 heartbeat copied into 18:00 rows FAILs).
-    # UNREADABLE always FAILs: broken observability is evidence of failure.
+    # is judged per cycle: heartbeat_at must fall inside the freshness window
+    # of the snapshot row citing it (a 00:01 heartbeat copied into 18:00 rows
+    # fails). UNREADABLE always fails.
     unknown, statuses = [], {}
     seen_sources = set()
     stale_hb = []
@@ -358,8 +357,7 @@ def main():
                      f"contact_in_env={contact_ok}"))
     audits = sorted(glob.glob(os.path.join(SOAK, "audit-*.json")))
     day_audits = [a for a in audits if day in os.path.basename(a)]
-    # Absence is absence: NEVER fall back to another day's audit. A stale
-    # audit presented as today's evidence is a verification lie.
+    # No fallback to another day's audit: a stale audit is not today's evidence.
     C.append(verdict("audit-present", bool(day_audits),
                      f"audits_for_day={len(day_audits)}"))
     if day_audits:

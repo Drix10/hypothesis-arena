@@ -1,4 +1,4 @@
-// Slice G implementation. Canonical recipe frozen in snapshot.hpp.
+// Slice G implementation. Canonical recipe: see snapshot.hpp.
 #include "snapshot.hpp"
 
 #include <cstdio>
@@ -28,8 +28,7 @@ bool NameOk(const std::string& s) {
 }
 
 bool Hex64(const std::string& s) {
-    // Lowercase 64-hex ONLY: matches the frozen Slice C ingest
-    // contract (which rejects uppercase). One representation.
+    // Lowercase 64-hex only, matching Slice C ingest (which rejects uppercase).
     if (s.size() != 64) return false;
     for (char c : s) {
         if ((c < '0' || c > '9') && (c < 'a' || c > 'f')) return false;
@@ -71,9 +70,8 @@ std::string ValidateSnapshot(const Snapshot& s) {
         for (size_t j = i + 1; j < s.marks.size(); ++j)
             if (s.marks[i].symbol == s.marks[j].symbol)
                 return "mark-duplicate";
-    // Bidirectional mask coherence: set => populated+valid, clear =>
-    // canonical empty. Ghost data (populated but declared absent) is
-    // malformed — downstream must never read it.
+    // Bidirectional mask coherence: set => populated and valid, clear =>
+    // canonical empty. Ghost data (populated but declared absent) is malformed.
     bool has_marks = !s.marks.empty();
     if ((s.present_mask & kMarks) && !has_marks) return "marks-incoherent";
     if (!(s.present_mask & kMarks) && has_marks) return "marks-ghost";
@@ -107,8 +105,8 @@ std::string ValidateSnapshot(const Snapshot& s) {
     if (s.var_corr_flags & ~0x3u) return "varcorr-reserved";
     bool has_vc = s.var_corr_flags != 0;
     if (!(s.present_mask & kVarCorr) && has_vc) return "varcorr-ghost";
-    // Portfolio: explicitly present zero is legitimate (flat book);
-    // ghost = nonzero while clear.
+    // Portfolio: an explicitly present zero is legitimate (flat book); ghost
+    // = nonzero while clear.
     if ((s.present_mask & kPortfolio) &&
         (s.equity_ud < 0 || s.exposure_ud < 0 || s.buying_power_ud < 0))
         return "portfolio-negative";
@@ -155,7 +153,19 @@ std::string ValidateSnapshot(const Snapshot& s) {
         return "calib-incoherent";  // verdict is the section core;
     if (!(s.present_mask & kCalib) && has_calib)
         return "calib-ghost";
-    if (s.present_mask & ~0x7FFu) return "mask-reserved";
+    bool has_settle = s.settled_cash_ud != 0 || s.unsettled_ud != 0 ||
+                      s.next_settle_day != 0;
+    if (!(s.present_mask & kSettlement) && has_settle)
+        return "settlement-ghost";
+    if (s.present_mask & kSettlement) {
+        if (s.settled_cash_ud < 0 || s.unsettled_ud < 0 ||
+            s.next_settle_day < 0)
+            return "settlement-negative";
+        // Proceeds pending need a settle day; none pending must not name one.
+        if ((s.unsettled_ud > 0) != (s.next_settle_day > 0))
+            return "settlement-incoherent";
+    }
+    if (s.present_mask & ~0xFFFu) return "mask-reserved";
     return "";
 }
 
@@ -197,6 +207,13 @@ std::string CanonicalSnapshot(const Snapshot& s) {
     o += ",\"regime\":" + Esc(s.regime);
     o += ",\"research_revision\":" + std::to_string(s.research_revision);
     o += ",\"session\":" + Esc(s.session);
+    if (s.present_mask & kSettlement) {
+        o += ",\"settlement\":{\"next_settle_day\":" +
+             std::to_string(s.next_settle_day) + ",\"settled_cash_ud\":" +
+             std::to_string(s.settled_cash_ud) + ",\"unsettled_ud\":" +
+             std::to_string(s.unsettled_ud) + "}";
+        o += ",\"snapshot_version\":2";
+    }
     o += ",\"sources\":[";
     for (size_t i = 0; i < s.sources.size(); ++i) {
         const auto& src = s.sources[i];

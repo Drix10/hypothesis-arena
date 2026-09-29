@@ -1,22 +1,22 @@
 #!/bin/bash
 # egress-probe.sh — Phase-D deployment box 2 (doc 08 §8.6 egress).
 #
-# Proves sandbox egress enforcement at the network layer (not the prompt):
-#  1. allowlisted destination (www.sec.gov) transits the proxy
+# Checks sandbox egress enforcement at the network layer (not the prompt):
+#  1. an allowlisted destination (www.sec.gov) transits the proxy
 #     (TCP_TUNNEL in the proxy access log; any origin verdict is the
 #     origin's own policy, not our boundary);
-#  2. non-allowlisted destination (example.com, data.sec.gov) dies AT
-#     THE PROXY with 403 (TCP_DENIED, counted in the access log);
+#  2. a non-allowlisted destination (example.com, data.sec.gov) is denied at
+#     the proxy with 403 (TCP_DENIED, counted in the access log);
 #  3. direct egress with no proxy fails (internal-only network: no route).
 #
 # Topology: worker container on an --internal docker network (no external
-# route possible) + squid forward proxy with an exact dstdomain allowlist
+# route) + squid forward proxy with an exact dstdomain allowlist
 # (egress-proxy/squid.conf) attached to both the internal net and bridge.
 # The worker runs with the doc-08 container spec flags.
 # Idempotent; exits 0 only if all three properties hold.
-# Under Git-Bash/MSYS, exempt all args from automatic path conversion:
-# without this, the -v Windows host path is mangled and the proxy
-# boots with the default deny-all config (observed 2026-09-23).
+# Under Git-Bash/MSYS, exempt all args from automatic path conversion;
+# otherwise the -v Windows host path is mangled and the proxy boots with the
+# default deny-all config.
 export MSYS2_ARG_CONV_EXCL="*"
 set -u
 PASS=0
@@ -29,11 +29,11 @@ ok() { echo "PASS: $1"; PASS=$((PASS + 1)); }
 no() { echo "FAIL: $1"; FAIL=$((FAIL + 1)); }
 
 docker network inspect "$NET" > /dev/null 2>&1 || docker network create --internal "$NET" > /dev/null
-# Idempotent proxy ensure (reproducible bring-up; config is the committed
-# squid.conf beside this script). Windows daemon path via pwd -W.
-# Loopback publish lets the supervisor drive the shipped provider code
-# through the SAME squid + allowlist from the host (workers on the
-# internal net are unaffected: still no route except via the proxy).
+# Idempotent proxy bring-up (config is the committed squid.conf beside this
+# script; Windows daemon path via pwd -W). The loopback publish lets the
+# supervisor drive the shipped provider code through the same squid +
+# allowlist from the host; workers on the internal net still have no route
+# except via the proxy.
 ensure_proxy() {
   HERE_WIN=$(cd "$(dirname "$0")" && pwd -W)
   docker run -d --name "$PROXY" --network "$NET" \
@@ -80,8 +80,8 @@ echo "$OUT" | grep -q "^denied-host -> PROXY-DENY-403" && ok "non-allowlisted ho
 echo "$OUT" | grep -q "^denied-subdomain -> PROXY-DENY-403" && ok "non-allowlisted subdomain dies at proxy 403 (exact allowlist)" || no "subdomain leaked"
 echo "$OUT" | grep -q "^direct -> CONN-FAIL" && ok "direct egress fails (no route on internal net)" || no "direct egress succeeded"
 
-# NOTE: log path uses // to suppress Git-Bash/MSYS path conversion; counts
-# span rotated logs so long-running proxies still report.
+# log path uses // to suppress Git-Bash/MSYS path conversion; counts span
+# rotated logs so long-running proxies still report
 LOGHITS=$(docker exec "$PROXY" sh -c 'cat //var/log/squid/access.log* 2>/dev/null' 2>/dev/null || true)
 DENIED=$(echo "$LOGHITS" | grep -c "TCP_DENIED/403" || true)
 TUNNEL=$(echo "$LOGHITS" | grep -c "TCP_TUNNEL/200" || true)

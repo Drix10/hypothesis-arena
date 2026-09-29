@@ -359,7 +359,7 @@ static bool SameTrace(const Drive& a, const Drive& b) {
 
 int main() {
     using jev::exec::RouteStep;
-    // 1. randomized duplicate/redundant delivery: ONE broker reality
+    // 1. randomized duplicate/redundant delivery: one broker reality
     // expressed as full consistent observations, delivered in rotated
     // orders with duplicates. Every seed must converge to the same
     // terminal + trace + client ID (duplicates/reorderings of a
@@ -544,7 +544,7 @@ int main() {
                   d.m.filled_qty == 40 && sink.verify(),
               "drill-partial-converge");
     }
-    // 2. crash mid-cycle: snapshot after EVERY step; reload from each
+    // 2. crash mid-cycle: snapshot after every step; reload from each
     // and complete. Same terminal, same ID, exactly one intent row.
     {
         Ctx c = GoodCtx("intent-002", "AAPL");
@@ -651,7 +651,7 @@ int main() {
         auto e3b = RouteStep(e2.next, c.in, c.venue, o2b);
         Check(e3b.action == RouteAction::QUERY_ONCE,
               "outage-broker-ambiguity-reconciles");
-        // JEV down -> SOFT via the REAL Slice D evaluator (no D change:
+        // JEV down -> SOFT via the real Slice D evaluator (no D change:
         // H1 consumes the level as a frozen input).
         jev::kill::KillInputs ki;
         ki.jev_streak_s5 = true;
@@ -828,7 +828,7 @@ int main() {
     // 7. P0-2 exit sub-identity E2E (fake transport): first close
     // uses ID X; broker reports DEAD; NO second POST carries X;
     // recovery mints deterministic Y attributable to the intent.
-    // P1-2 cancel seam: cancel_confirmed comes ONLY from a
+    // P1-2 cancel seam: cancel_confirmed comes only from a
     // found+cancelled query mapped with its authoritative qty —
     // bare 204s never terminal (proven by repetition).
     {

@@ -273,7 +273,7 @@ int main() {
               "exit-closed");
     }
     // 6. emergency exception: EXIT journal fails -> act first, then
-    // the SAME exit machinery (ordering differs, row still lands).
+    // the same exit machinery (ordering differs, row still lands).
     {
         OrderIntent ex = in;
         ex.kind = IntentKind::EXIT;
@@ -287,7 +287,7 @@ int main() {
                   r2.next.state == RouteState::EXIT_EMERGENCY &&
                   r2.next.emergency,
               "emergency-exec-first");
-        // Executed flag WITHOUT ack detail: reconcile by ID under
+        // Executed flag without ack detail: reconcile by ID under
         // budget — never blind CLOSED without an authoritative qty.
         o.executed = true;
         auto r2b = Step(r2.next, ex, venue, o);
@@ -500,14 +500,14 @@ int main() {
         Check(r3.action == RouteAction::CANCEL_REMAINDER &&
                   r3.next.state == RouteState::CANCEL_SENT,
               "naked-cancels");
-        // P0-3: the POST UUID was persisted BEFORE the cancel path.
+        // P0-3: the POST UUID was persisted before the cancel path.
         bool id_kept = true;
         for (int i = 0; i < 37; ++i)
             if (r3.next.broker_id[i] != o.ack.broker_order_id[i])
                 id_kept = false;
         Check(id_kept, "naked-uuid-persisted");
         // P0-1 E2E: accepted/naked POST that already filled routes to
-        // protection repair (filled qty from the real ack), NEVER to
+        // protection repair (filled qty from the real ack), never to
         // the zero-fill cancel path.
         RouteObs of = o;
         of.ack.filled_qty = 30;
@@ -682,8 +682,8 @@ int main() {
         auto n1 = Step(mn, in, venue, o);
         Check(n1.action == RouteAction::WRITE_JOURNAL, "entry-after-exit");
     }
-    // 16. P0: filled-without-protection is NEVER a cancel of a
-    // nonexistent remainder and NEVER silently PROTECTED. Repair now.
+    // 16. P0: filled-without-protection is never a cancel of a
+    // nonexistent remainder and never silently PROTECTED. Repair now.
     {
         RouteMachine m;
         RouteObs o = OpenMarket();
@@ -768,7 +768,7 @@ int main() {
         Check(rc2.next.state == RouteState::PROTECTED &&
                   rc2.next.filled_qty == 50,
               "cancel-sent-protected-rests");
-        // Same machine, final observation WITHOUT authoritative
+        // Same machine, final observation without authoritative
         // quantity: coverage unproven -> repair, never assume.
         RouteObs oc2 = OpenMarket();
         oc2.cancel_confirmed = true;
@@ -939,7 +939,7 @@ int main() {
                   RouteAction::QUERY_ONCE,
               "bind-restart-applies");
         // P0-3: every mismatch flavor returns the machine
-        // BYTE-IDENTICAL (snapshot bytes equal before/after).
+        // byte-identical (snapshot bytes equal before/after).
         {
             char before[320], after[320];
             Check(SnapshotMachine(r2.next, before, sizeof(before)),
@@ -1094,7 +1094,7 @@ int main() {
         char bef[65];
         for (int i = 0; i < 65; ++i) bef[i] = r2.next.client_id[i];
         auto rd = Step(r2.next, ex, venue, od);
-        // P0-2: DEFINITIVE death burns the ID — re-issue mints the
+        // P0-2: definitive death burns the ID — re-issue mints the
         // next deterministic sub-identity (never the same POST
         // twice), attributable via the unchanged bound intent.
         bool neon = false;
@@ -1211,7 +1211,7 @@ int main() {
                   "xauth-ulid-over-rest");
         }
         // P0 cross-family LIFECYCLE authority: a no-event REST
-        // snapshot may add monotonic fill knowledge but can NEVER
+        // snapshot may add monotonic fill knowledge but can never
         // originate a terminal transition against ULID-established
         // live stream state. Adversarial case: stream shows X live
         // (partial 40, ULID high-water); later REST with no event
@@ -1274,7 +1274,7 @@ int main() {
                       rr.next.exit_attempt == 0 &&
                       rr.next.exit_closed_qty == 40,
                   "xrest-restart-reconciles");
-            // Reverse: a NEWER event-carrying ULID cancel (broker
+            // Reverse: a newer event-carrying ULID cancel (broker
             // time after the stream high-water) IS definitive —
             // ULID-vs-ULID orders it, and the mint proceeds.
             RouteObs nc = OpenMarket();
@@ -1292,7 +1292,7 @@ int main() {
                       rn.exit_qty == 60,
                   "xrest-newer-ulid-mints");
             // Stale REST protection-state: a snapshot with no legs
-            // must NOT unset positively confirmed protection.
+            // must not unset positively confirmed protection.
             RouteMachine mp;
             mp.state = RouteState::QUERY_SENT;
             for (int i = 0; i < 64; ++i) mp.client_id[i] = 'd';
@@ -1373,7 +1373,7 @@ int main() {
             Check(rcx.action == RouteAction::QUERY_ONCE &&
                       rcx.next.state == RouteState::QUERY_SENT,
                   "xrest-cancel-reconciles");
-            // No-event canceled + POSITIVE fill: same rule (the
+            // No-event canceled + positive fill: same rule (the
             // terminal claim carries no ordering authority at any
             // qty — reconcile, never PARTIAL/terminal on it).
             RouteObs scp = OpenMarket();
@@ -1482,7 +1482,7 @@ int main() {
         Check(rx.action == RouteAction::EXECUTE_EXIT &&
                   rx.next.exit_attempt == 1 && neonx,
               "exit-cancelled-new-identity");
-        // Cancelled WITH partial fills folds first: closed=40
+        // Cancelled with partial fills folds first: closed=40
         // persists, Y targets the remaining 60 (never re-query a
         // dead order, never resubmit for 100).
         RouteObs ocp = OpenMarket();
@@ -1560,7 +1560,7 @@ int main() {
     }
     // 19g. P0-3/P0-4 ULID broker-time authority (real Alpaca-shaped
     // stream ids, verbatim preserved): older-ULID-after-newer is
-    // stale even though it ARRIVED later; duplicates collapse;
+    // stale even though it arrived later; duplicates collapse;
     // same-ms ties break by full-string order; the winner persists
     // in the snapshot bytes.
     {
@@ -1669,7 +1669,7 @@ int main() {
         Check(a3.action == RouteAction::QUERY_ONCE &&
                   a3.next.query_attempts == 2,
               "ev-distinct-applies");
-        // P0-4 adversarial order: stale fill arriving AFTER the
+        // P0-4 adversarial order: stale fill arriving after the
         // fresh fill is ignored (naive receipt-order would regress
         // filled 100 -> 40); early-or-late, the final is identical.
         {

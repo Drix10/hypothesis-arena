@@ -1,9 +1,12 @@
-# 12 — Statistical Baseline (the permanent champion)
+# 12 — Controls and Benchmarks (freeze v3; `baseline_v1` frozen as negative control)
 
-The AI layer must beat *this*, net of its own cost, or be removed (doc 11 §11.3).
-The baseline is frozen, versioned (`baseline_v1`), and fully reproducible — a
-vague "indicators + regime" is not a thing you can beat. Any challenger is
-scored against this exact specification on the same window.
+Freeze v2 called `baseline_v1` "the permanent champion" and made "beat
+it" the AI layer's bar. S2 then measured it: it loses money, for a reason
+that is structural (§12.7). Beating a losing control proves nothing, so
+freeze v3 keeps `baseline_v1` exactly as specified — frozen, reproducible,
+never edited — but demotes it to a **negative control** and adds the
+benchmark set every sleeve must beat (§12.6). The frozen specification
+below (§§12.1–12.5) is unchanged.
 
 ## 12.1 Universe
 
@@ -61,14 +64,54 @@ never filled. Nothing else. No research plane, no JEV, no text.
 - Sessions America/New_York for stocks; forex needs open venue feed. Halts and
   missing data → excluded, never interpolated.
 
+## 12.6 Benchmark set (v3) — what every sleeve is scored against
+
+Computed on the same window, same calendar, same `cost_v2`, daily returns:
+
+1. **Cash:** the T-bill leg (BIL total return). A sleeve that cannot beat
+   cash net of cost is not a sleeve.
+2. **Vol-matched passive:** buy-and-hold of the sleeve's natural passive
+   counterpart (SPY for equity sleeves; the equal-weight buy-and-hold of
+   the sleeve's own universe for T1/T2), scaled to the sleeve's realized
+   volatility with cash (no leverage: scale ≤ 1, so the sleeve is instead
+   compared at matched volatility by de-risking whichever is riskier).
+3. **60/40** (SPY/IEF monthly rebalanced) as a sanity reference.
+4. **The same sleeve without its AI component** (paired; doc 11 §11.3b).
+5. **`baseline_v1`** — negative control and harness regression check: its
+   frozen S2 numbers must reproduce bit-for-bit from the same manifests.
+
+## 12.7 S2 result and diagnosis (recorded 2026-09-28)
+
+S2 (Alpaca IEX 1 h bars, equities, validation slice): the primary
+spread-eligible ledger was EMPTY (no quotes fetched → every candidate
+spread-unknown); the diagnostic ledger (1bp-floor costs) realized 573
+trades: 8 wins, 464 time exits (81%), average −0.049R, Sharpe −1.09 at 1×
+and −2.10 at 3× cost, drawdown 6.3%.
+
+Diagnosis (structural, not luck): `exit_profile_v1` places the stop at
+1.5×ATR(14) of **hourly** bars and the take-profit at 2R ≈ 3 hourly ATRs,
+while equities must exit by the session close. A 3-hourly-ATR move inside
+at most 6.5 hours is rare, so most trades become time exits that pay
+costs on a near-random walk. Any successor to `baseline_v1` needs a
+horizon-consistent exit profile — which is a new versioned strategy (a
+doc 02 sleeve), never an edit of v1.
+
+S2 closure (doc 07 A1): rerun on SIP bars + SIP quotes so the primary
+ledger exists; record the numbers; the FX leg is dropped (forex is
+research-only). A negative result, honestly recorded, closes S2.
+
 ## Locked decisions
 
-- `baseline_v1` is permanent. It can gain versioned successors; it is never
-  edited in place and never retired without a human-signed doc edit.
-- The AI layer (JEV + research + all challengers) is scored against this file,
-  same window, same costs. Losing net of cost = removal, not tuning.
-- `baseline_v1` trading rules are never edited in place; the deterministic
-  reference implementation lives at `research/strategy/baseline_v1.py`
-  (authorized path; implementation + leakage-hostile backtester + PIT
-  universe artifact + cost-stress report are the Strategy Validation Track).
-  The implementation must reproduce this file exactly — never silently improve it.
+- `baseline_v1` is frozen and permanent as a negative control and harness
+  regression check. It is never edited in place, never promoted, and
+  never retired without a human-signed doc edit. The deterministic
+  reference implementation is `research/strategy/baseline_v1.py` and must
+  reproduce this file exactly.
+- Every sleeve and every AI component is scored against the §12.6
+  benchmark set on the same window with the same costs. Losing net of
+  cost to cash or to the vol-matched passive benchmark = not promotable.
+  An AI layer that loses to its own no-AI variant is removed, not tuned.
+- No control or sleeve may depend on data that is not freely available
+  point in time (the point-in-time S&P-500 constituent artifact required
+  by §12.1 is not free; `baseline_v1` equity runs therefore state their
+  universe hash and its survivorship limitation explicitly).

@@ -1,0 +1,4 @@
+{
+  "sleeves": [{"id": "core_passive_v1", "window_s": 86400}],
+  "allowlist": ["VTI", "IEF", "BIL", "SPY", "QQQ", "IWM", "VEU", "VNQ", "DBC"]
+}

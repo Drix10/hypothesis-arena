@@ -1,4 +1,4 @@
-// H1 integration — event seam implementation. See events.hpp.
+// Event seam implementation. See events.hpp.
 #include "events.hpp"
 
 #include <cstring>
@@ -7,8 +7,8 @@ namespace jev {
 namespace runner {
 
 namespace {
-// Bounded needle extract: first "key":"value" (charset + max len
-// enforced). False = absent/malformed/overlong.
+// Bounded needle extract: first "key":"value" (charset and max len enforced).
+// False = absent/malformed/overlong.
 bool NeedleStrAt(const char* from, const char* key, char* out,
                  std::size_t n, bool digits_only) {
     if (!from || !key || !out || n == 0) return false;
@@ -56,10 +56,9 @@ bool NeedleStr(const char* body, const char* key, char* out,
     if (!body) return false;
     return NeedleStrAt(body, key, out, n, digits_only);
 }
-// Anchored extract: the FIRST key occurrence at/after the anchor
-// substring (for nested objects — e.g. inside "order"). False
-// when the anchor is absent (strict: never fall back to an outer
-// scope that could carry a same-named field).
+// Anchored extract: the first key occurrence at/after the anchor substring
+// (for nested objects, e.g. inside "order"). False when the anchor is absent,
+// never falling back to an outer scope with a same-named field.
 bool NeedleStrAfter(const char* body, const char* anchor,
                     const char* key, char* out, std::size_t n,
                     bool digits_only) {
@@ -81,10 +80,9 @@ bool IsFillWord(const char* t) {
            std::strcmp(t, "partial_fill") == 0;
 }
 bool IsLifeWord(const char* t) {
-    // Identity-only lifecycle words (doc 06 locked): force REST,
-    // never a direct router verdict. held (venue-held) + stopped
-    // (trade guaranteed, not yet occurred) are live working states
-    // per the current trade_updates contract — same treatment.
+    // Identity-only lifecycle words (doc 06): force REST, never a direct
+    // router verdict. held and stopped are live working states per the
+    // trade_updates contract.
     const char* const ws[] = {"new",
                               "pending_new",
                               "accepted",
@@ -149,11 +147,10 @@ void SseParser::Feed(const char* bytes, std::size_t n) {
 
 void SseParser::CommitLine(const std::string& ln) {
     if (ln.empty()) {
-        // Blank line dispatches the pending triple (when it carries
-        // an event); overlong/malformed triples count an error and
-        // arm nothing. Either way the accumulator resets. Ready
-        // events QUEUE (a chunk routinely holds many); overflow
-        // drops the newest and counts (bounded memory, fail closed).
+        // A blank line dispatches the pending triple (when it carries an
+        // event); overlong/malformed triples count an error. The accumulator
+        // resets either way. Ready events queue (a chunk holds many); overflow
+        // drops the newest and counts.
         if (dropped_) {
             ++errors_;
         } else if (have_data_ || !type_.empty()) {
@@ -189,12 +186,10 @@ void SseParser::CommitLine(const std::string& ln) {
     } else if (ln.compare(0, 5, "data:") == 0) {
         std::string v = ln.substr(5);
         if (!v.empty() && v[0] == ' ') v = v.substr(1);
-        // Event-level envelope: lines are individually capped by
-        // the 4096 line resync, but data: lines accumulate across
-        // the event — thousands of them would materialize
-        // unbounded memory before the terminating blank line (and
-        // before MapTradeEvent's 2048 application cap). Reject +
-        // resync through the existing overlong machinery.
+        // Event-level envelope: lines are capped by the 4096 resync, but data:
+        // lines accumulate across the event and would materialize unbounded
+        // memory before the blank line. Reject and resync through the overlong
+        // machinery.
         if (data_.size() + v.size() + 1 > 8192) {
             dropped_ = true;
         } else {
@@ -222,7 +217,7 @@ StreamObs MapTradeEvent(const SseEvent& ev) {
     bool bust = IsBustWord(t);
     if (!fill && !life && !bust) return so;  // unknown: ignored
     // Identity first: without the client order id the event is
-    // unattributable (the router would ignore it untagged anyway).
+    // unattributable.
     char cid[65] = {0};
     if (!NeedleStr(d, "client_order_id", cid, sizeof(cid), false))
         return so;
@@ -230,35 +225,28 @@ StreamObs MapTradeEvent(const SseEvent& ev) {
     if (!ev.id.empty() && ev.id.size() <= 32)
         CopyEv33(so.event_id, ev.id.c_str());
     if (bust) {
-        // Busted/corrected fills must not linger as monotonic
-        // truth: authoritative REST reconciliation. The ULID still
-        // rides along (stream position advances on apply).
+        // Busted/corrected fills must not linger as monotonic truth: force
+        // REST. The ULID rides along (stream position advances on apply).
         so.kind = StreamKind::BUST;
         return so;
     }
     if (life) {
-        // Lifecycle words carry NO router verdict here: identity +
-        // ULID only. The runner funnels actual state through forced
-        // REST (QueryOnce by the same stable id) — never invent a
+        // Lifecycle words carry identity + ULID only. The runner funnels
+        // state through forced REST (QueryOnce by the same id); never invent a
         // terminal from a stream word.
         so.kind = StreamKind::LIFE;
         return so;
     }
-    // Fill words carry the CUMULATIVE order quantity
-    // (order.filled_qty) — NEVER the per-event qty. Alpaca's
-    // partial_fill.qty is the shares filled by THAT event; only
-    // order.filled_qty is the order-level cumulative the router
-    // floors on. Absent/unparseable cumulative -> NONE (reconcile
-    // instead, never silent zero, never event-qty-as-cumulative).
+    // Fill words carry the cumulative order quantity (order.filled_qty), not
+    // the per-event qty (partial_fill.qty is only that event's shares).
+    // Absent/unparseable cumulative -> NONE (reconcile instead).
     char qbuf[20] = {0};
     if (!NeedleStrAfter(d, "\"order\"", "filled_qty", qbuf,
                         sizeof(qbuf), true))
         return so;
-    // Overflow-safe bounded conversion: qbuf holds digits only
-    // (digits_only extract) but up to 19 of them — a naive
-    // accumulate-then-bound overflows signed long long BEFORE the
-    // cap test (undefined behavior). Reject before the arithmetic
-    // can exceed the share cap instead.
+    // Overflow-safe conversion: qbuf holds digits only but up to 19 of them,
+    // so accumulate-then-bound would overflow signed long long. Reject before
+    // the arithmetic can exceed the share cap.
     long long q = 0;
     for (int i = 0; qbuf[i]; ++i) {
         int dgt = qbuf[i] - '0';
@@ -274,9 +262,8 @@ StreamObs MapTradeEvent(const SseEvent& ev) {
 broker::CloseResult QueryToClose(const broker::OrderQuery& q) {    broker::CloseResult c;
     if (!q.transport_ok) return c;  // lookup failed: ambiguous
     if (!q.found) {
-        // 404-absent: the close never landed. transport_ok marks
-        // the lookup itself authoritative; UNKNOWN state reconciles
-        // (never a blind second send, never terminal).
+        // 404-absent: the close never landed. transport_ok marks the lookup
+        // authoritative; UNKNOWN reconciles (never a second send or terminal).
         c.transport_ok = true;
         return c;
     }

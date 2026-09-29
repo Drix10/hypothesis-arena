@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """config-probe.py — Phase-D deployment box 4 (model credential + pricing).
 
-Proves fail-closed behavior for missing/invalid deployment config using
-the SHIPPED constructors (no mocks of the units under test):
+Checks fail-closed behavior for missing/invalid deployment config using
+the shipped constructors (no mocks of the units under test):
   1. SpendGovernor with empty/missing pricing -> ConfigBlocked.
   2. make_raw_provider with no egress proxy -> ConfigBlocked (never direct).
   3. make_raw_provider with no model_id -> ConfigBlocked.
-  4. make_raw_provider with a bogus key CONSTRUCTS (fail-closed happens at
-     call time with a real provider error, never silent free inference) —
-     construction alone must not touch the network.
+  4. make_raw_provider with a bogus key constructs (failure happens at call
+     time with a real provider error); construction must not touch the
+     network.
 Exits 0 only if all four hold. Run with the plane venv python.
 """
 import os
@@ -39,7 +39,7 @@ def check(desc, fn, want_exc):
         FAIL += 1
 
 
-# Resolve the real ConfigBlocked regardless of import path.
+# resolve the real ConfigBlocked regardless of import path
 try:
     RealBlocked = spend_mod.ConfigBlocked
 except AttributeError:
@@ -61,9 +61,9 @@ check("provider without model_id blocks",
       lambda: workers_mod.make_raw_provider(
           {"egress_proxy": "http://127.0.0.1:9"}), WBlocked)
 
-# Bogus-key construction must not touch the network: resolve proxy host
-# to a guaranteed-unroutable address and require construction to succeed
-# WITHOUT attempting any connection (proves no silent validation call).
+# bogus-key construction must not touch the network: resolve the proxy host
+# to an unroutable address and require construction to succeed without
+# attempting a connection
 made = workers_mod.make_raw_provider(
     {"model_id": "bogus-model", "egress_proxy": "http://127.0.0.1:9",
      "api_base": "http://127.0.0.1:9/v1", "api_key": "bogus-key"})

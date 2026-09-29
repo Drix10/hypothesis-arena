@@ -1,0 +1,225 @@
+{
+  "ma10": {
+    "cash_holdout_sharpe": 19.27514296168976,
+    "conditions": [
+      {
+        "name": "net_sharpe_ci_lower_gt_0",
+        "pass": false,
+        "value": [
+          -0.016930472542485142,
+          0.11020672928381861
+        ]
+      },
+      {
+        "name": "sharpe_at_2x_cost_gt_0",
+        "pass": true,
+        "value": 0.042788973521500906
+      },
+      {
+        "name": "excess_over_cash_ci_lower_gt_0",
+        "pass": false,
+        "value": [
+          -8.893420321280334e-05,
+          0.0004807786621540314
+        ]
+      },
+      {
+        "name": "vs_vol_matched_passive",
+        "pass": false,
+        "value": {
+          "max_dd": [
+            0.06756476928356692,
+            0.08290415978919163
+          ],
+          "sharpe": [
+            0.08269503003614626,
+            0.08486914385407839
+          ]
+        }
+      },
+      {
+        "name": "dsr_ge_0.95",
+        "pass": false,
+        "value": 0.4589159229240928
+      },
+      {
+        "name": "pbo_le_0.2",
+        "pass": true,
+        "value": 0.17142857142857143
+      },
+      {
+        "name": "net_sharpe_ge_prereg_min",
+        "pass": true,
+        "value": 0.6931392645488659
+      },
+      {
+        "name": "max_dd_le_prereg",
+        "pass": true,
+        "value": 6.756476928356692
+      },
+      {
+        "name": "cost_multiple_ge_prereg",
+        "pass": true,
+        "value": 2.0
+      },
+      {
+        "name": "history_ge_min_trl",
+        "pass": false,
+        "value": 1453.2181254131374
+      },
+      {
+        "name": "literature_haircut_met",
+        "pass": true,
+        "value": true
+      },
+      {
+        "name": "transferability",
+        "pass": true,
+        "value": true
+      },
+      {
+        "name": "participation_caps",
+        "pass": true,
+        "value": true
+      }
+    ],
+    "cost_usd_1x": 1083.7511078322525,
+    "equal_weight_bh_holdout_sharpe": 1.417109193263298,
+    "failed": [
+      "net_sharpe_ci_lower_gt_0",
+      "excess_over_cash_ci_lower_gt_0",
+      "vs_vol_matched_passive",
+      "dsr_ge_0.95",
+      "history_ge_min_trl"
+    ],
+    "full_sample_sharpe": 0.9603691030008544,
+    "gate": "A",
+    "holdout": [
+      "2023-09-01",
+      "2026-08-31"
+    ],
+    "holdout_max_dd": 0.06756476928356692,
+    "holdout_sharpe_excess": 0.6931392645488659,
+    "max_participation": 0.00414843410508019,
+    "n_trials": 6,
+    "passive_holdout_sharpe": 1.3472558917251434,
+    "prereg_hash": "2eaa5e22e04e1229036fb27c851cb441d8ebef57ff97efd715743e4cd199ccb0",
+    "prior_trials": 4,
+    "sessions": 751,
+    "trades": 394,
+    "trial_id": "t1_trend_etf_v1_a_gate:ma10:52cb625f2015",
+    "variant": "ma10",
+    "verdict": "FAIL"
+  },
+  "mom12_vs_tbill": {
+    "cash_holdout_sharpe": 19.27514296168976,
+    "conditions": [
+      {
+        "name": "net_sharpe_ci_lower_gt_0",
+        "pass": false,
+        "value": [
+          -0.003683095626226163,
+          0.13009475739999113
+        ]
+      },
+      {
+        "name": "sharpe_at_2x_cost_gt_0",
+        "pass": true,
+        "value": 0.05866526809997209
+      },
+      {
+        "name": "excess_over_cash_ci_lower_gt_0",
+        "pass": false,
+        "value": [
+          -2.353753586565605e-06,
+          0.0005650473225129435
+        ]
+      },
+      {
+        "name": "vs_vol_matched_passive",
+        "pass": true,
+        "value": {
+          "max_dd": [
+            0.08171716127597817,
+            0.0867606546425671
+          ],
+          "sharpe": [
+            0.09670662963336002,
+            0.08486914385407839
+          ]
+        }
+      },
+      {
+        "name": "dsr_ge_0.95",
+        "pass": false,
+        "value": 0.6271706771501244
+      },
+      {
+        "name": "pbo_le_0.2",
+        "pass": true,
+        "value": 0.17142857142857143
+      },
+      {
+        "name": "net_sharpe_ge_prereg_min",
+        "pass": true,
+        "value": 0.9426912741770198
+      },
+      {
+        "name": "max_dd_le_prereg",
+        "pass": true,
+        "value": 8.171716127597817
+      },
+      {
+        "name": "cost_multiple_ge_prereg",
+        "pass": true,
+        "value": 2.0
+      },
+      {
+        "name": "history_ge_min_trl",
+        "pass": false,
+        "value": 776.690437700135
+      },
+      {
+        "name": "literature_haircut_met",
+        "pass": true,
+        "value": true
+      },
+      {
+        "name": "transferability",
+        "pass": true,
+        "value": true
+      },
+      {
+        "name": "participation_caps",
+        "pass": true,
+        "value": true
+      }
+    ],
+    "cost_usd_1x": 759.6166877971107,
+    "equal_weight_bh_holdout_sharpe": 1.417109193263298,
+    "failed": [
+      "net_sharpe_ci_lower_gt_0",
+      "excess_over_cash_ci_lower_gt_0",
+      "dsr_ge_0.95",
+      "history_ge_min_trl"
+    ],
+    "full_sample_sharpe": 0.7621092475739197,
+    "gate": "A",
+    "holdout": [
+      "2023-09-01",
+      "2026-08-31"
+    ],
+    "holdout_max_dd": 0.08171716127597817,
+    "holdout_sharpe_excess": 0.9426912741770198,
+    "max_participation": 0.0036103225551192396,
+    "n_trials": 6,
+    "passive_holdout_sharpe": 1.3472558917251434,
+    "prereg_hash": "2eaa5e22e04e1229036fb27c851cb441d8ebef57ff97efd715743e4cd199ccb0",
+    "prior_trials": 4,
+    "sessions": 751,
+    "trades": 347,
+    "trial_id": "t1_trend_etf_v1_a_gate:mom12_vs_tbill:52cb625f2015",
+    "variant": "mom12_vs_tbill",
+    "verdict": "FAIL"
+  }
+}

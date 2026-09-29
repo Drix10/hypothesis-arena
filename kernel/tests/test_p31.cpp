@@ -1,6 +1,6 @@
-// P3.1 acceptance suite (correction pass). Every frozen semantic requirement
-// gets a dedicated adversarial test. The validated object is reachable only
-// via get() (null on HOLD); no confidence accessor exists by construction.
+// P3.1 acceptance suite. Every frozen semantic requirement gets a dedicated
+// adversarial test. The validated object is reachable only via get() (null on
+// HOLD); no confidence accessor exists by construction.
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -48,8 +48,8 @@ int main(int argc, char** argv) {
 
     // All requests route through KernelState (Slice A): it is the sole
     // construction authority for ValidationRequest. Kernels below encode
-    // exactly the universes/epochs the old hand-filled fields carried;
-    // every vector, reason string, and check count is unchanged.
+    // exactly the universes/epochs the hand-filled fields carried; every
+    // vector, reason string, and check count is unchanged.
     jev::KernelState kern, kernG, kernX;
     std::string kwhy;
     if (!jev::KernelState::Create({"EURUSD"}, kwhy, kern) ||

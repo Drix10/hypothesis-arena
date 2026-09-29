@@ -532,7 +532,7 @@ check("ingested-before-observed",
       r["stats"]["reasons"].get("ingested-before-observed") == 1
       and r["stats"]["accepted"] == 0)
 
-# 39. BEA NIPA GDP namespace admission (registration proof)
+# 39. BEA NIPA GDP namespace admission (registration)
 bea_hist = {"history": {"bea_nipa_gdp": [dated(H1, NOW - 3000),
                                              dated(H1, NOW - 1500),
                                              dated(H1, NOW - 100)]}}

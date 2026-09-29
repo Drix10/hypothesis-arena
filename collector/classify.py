@@ -1,18 +1,14 @@
 #!/usr/bin/env python3
 """P1.3 canonical layer: signals.jsonl (event log) -> SQLite (truth) -> classified.jsonl.
 
-Authority: the SQLite DB is the canonical truth. classified.jsonl is a
-DERIVED, rebuildable projection: project_day() materializes it as a pure
-function of (DB rows first-seen that day, processing clock) — rerunning
-run() over the same signals file AND the same DB reproduces it
-byte-for-byte, and repeated cycles accumulate rather than shrink to the
-delta. A crash between DB commit and file publish loses nothing
-authoritative.
+The SQLite DB is canonical. classified.jsonl is a rebuildable projection:
+project_day() materializes it as a pure function of (DB rows first seen that
+day, processing clock), so rerunning over the same signals and DB reproduces
+it byte-for-byte and repeated cycles accumulate.
 
-Deterministic only. No LLM anywhere: TRIGGER eligibility comes from
-source + record type + rule table, never from interpretation. Records that
-need economic interpretation stay CONTEXT with effect_pending until the
-interpretation table exists (research plane, Phase 2.5).
+Deterministic, no LLM: TRIGGER eligibility comes from source, record type and
+the rule table. Records needing economic interpretation stay CONTEXT with
+effect_pending until the interpretation table exists (research plane, Phase 2.5).
 
 Verdicts per record: new | duplicate | revision | correction | malformed | stale.
 Eligibility: TRIGGER_CANDIDATE | CONTEXT | REJECTED | STALE.
@@ -205,13 +201,11 @@ def init_db(con):
 
 
 def ingest_signal(con, rec, retrieved_at):
-    """Revision-aware dedupe. Caller MUST run validate_record() first.
+    """Revision-aware dedupe. Caller runs validate_record() first.
     Returns (verdict, content_hash, first_seen_at, revision_of)."""
     ch = content_hash(rec)
-    # Deterministic revision lineage: ties on first_seen_at are broken by
-    # rowid (insertion order), never by SQLite's unspecified order. An
-    # entire run shares one retrieved_at, so same-batch revisions of one
-    # source_id ALWAYS tie — without the tie-break prior[-1] is undefined.
+    # A run shares one retrieved_at, so same-batch revisions of a source_id tie
+    # on first_seen_at; rowid (insertion order) breaks the tie deterministically.
     cur = con.execute(
         "SELECT content_hash, verdict FROM records WHERE source=? AND source_id=? "
         "ORDER BY first_seen_at, rowid",
@@ -299,8 +293,8 @@ def is_fresh(first_seen_at, source):
 
 def classify(source, rec, verdict, published_at, estimated, fresh=True, retrieved_at=None):
     """Deterministic eligibility. Returns (eligibility, effect, confidence, reason)."""
-    # Timestamp validity FIRST: no branch below may bypass it. effective_at is
-    # derived here, once, as the single canonical calculation.
+    # Timestamp validity is checked before any other branch; effective_at is
+    # derived once, here.
     effective_at = published_at or retrieved_at
     if retrieved_at and effective_at and effective_at > retrieved_at:
         return "REJECTED", None, 1.0, "future-timestamp", effective_at
@@ -357,31 +351,25 @@ def _base_classify(source, rec, estimated):
 
 class ClassifyAbort(Exception):
     """Infrastructure failure mid-run (DB/I-O, corrupt signals stream).
-    Carries partial stats. The caller must NOT publish output and must
-    exit nonzero: a projection built over failing infrastructure is not
-    evidence. Recovery is audited human repair, never silent skip."""
+    Carries partial stats. The caller must not publish output and must exit
+    nonzero. Recovery is audited human repair, never a silent skip."""
     def __init__(self, reason, stats):
         super().__init__(reason)
         self.stats = stats
 
 
 def project_day(con, day, now):
-    """Rebuild the day's classified projection from CANONICAL DB STATE
-    (not from this run's intake verdicts). Returns (emitted-rows, skipped).
-    For every content row first seen on `day`, ordered by
-    (first_seen_at, rowid): revalidate schema, recompute eligibility with
-    the STORED standing verdict and the run's processing clock, emit iff
-    eligible. Consequences (all load-bearing):
-    - Rerun with the same as_of over the same DB reproduces the file
-      byte-for-byte (duplicates re-derive their stored outcome; nothing
-      depends on whether THIS run saw the content as new).
-    - Repeated cycles ACCUMULATE (A+B, then A+B+C): each cycle rewrites
-      the day file with every eligible row, never just the delta.
-    - Time-dependent standing (fresh/TTL aging) is re-evaluated per run:
-      same now -> same file; later now may demote (never silently drop).
-    - revision_of is re-derived as the predecessor in (first_seen,rowid)
-      order: identical to ingest-time prior[-1] on first write, stable
-      across reruns (rowid breaks every tie)."""
+    """Rebuild the day's classified projection from canonical DB state, not
+    from this run's intake verdicts. Returns (emitted-rows, skipped).
+    For every row first seen on `day`, in (first_seen_at, rowid) order:
+    revalidate schema, recompute eligibility from the stored standing verdict
+    and the run's processing clock, emit iff eligible.
+    - Same as_of over the same DB reproduces the file byte-for-byte.
+    - Each cycle rewrites the day file with every eligible row, not the delta.
+    - Time-dependent standing (fresh/TTL) is re-evaluated per run: a later
+      now may demote a row, never silently drop it.
+    - revision_of is re-derived as the predecessor in (first_seen, rowid)
+      order, matching ingest time."""
     emitted, skipped = [], 0
     try:
         rows = con.execute(
@@ -526,32 +514,25 @@ def run(signals_path, as_of=None):
                 s[verdict] = s.get(verdict, 0) + 1
                 s[elig] = s.get(elig, 0) + 1
                 s[f"reason:{reason}"] = s.get(f"reason:{reason}", 0) + 1
-                # NOTE: intake stats only. Emission comes from project_day()
-                # below (canonical DB state), never from this run's
-                # verdicts — otherwise reruns would shrink the file to
-                # just the delta (duplicates are REJECTED here, but their
-                # stored outcome still belongs in the projection).
-        # Malformed signals rows are EVIDENCE failure, not skippable dirt:
-        # append_records() is append-only, so a collector crash can leave a
-        # partial final line. Classifying "everything parseable" and
-        # exiting 0 would certify a broken stream as intact. Abort instead;
-        # recovery is audited repair (inspect the tail, truncate the
-        # partial line, re-run) — and soak_check's signals-integrity
-        # verdict independently fails the day.
+                # Intake stats only. Emission comes from project_day(), not
+                # these verdicts: duplicates are REJECTED here but their
+                # stored outcome still belongs in the projection.
+        # Malformed rows abort the run: append_records() is append-only, so a
+        # collector crash can leave a partial final line, and classifying only
+        # the parseable rows would certify a broken stream. Recovery is audited
+        # repair (truncate the partial line, re-run); soak_check's
+        # signals-integrity verdict also fails the day.
         if stats.get("malformed_lines"):
             raise ClassifyAbort(
                 f"signals-integrity:{stats['malformed_lines']}-malformed-lines",
                 stats)
-        # Projection from canonical state (see project_day): the file is a
-        # deterministic materialization of the DB, published only after a
-        # successful commit below (C6).
+        # Published only after the commit below (C6).
         emitted, projected_skipped = project_day(con, day, now)
         stats["projected"] = len(emitted)
         if projected_skipped:
             stats["projected_skipped"] = projected_skipped
-        # Crash-consistent publication: commit the canonical truth FIRST, then
-        # write the output to temp + fsync + atomic rename. A crash before the
-        # commit leaves neither DB rows nor output; a crash during the file
+        # Commit the DB first, then temp file + fsync + atomic rename. A crash
+        # before the commit leaves neither rows nor output; a crash during the
         # write leaves the previous artifact intact; reruns are PK-idempotent.
         try:
             con.commit()

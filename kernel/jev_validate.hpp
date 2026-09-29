@@ -1,6 +1,6 @@
-// P3.1 JEVAnswerSetV3 boundary validator. Self-contained, C++17, no deps.
+// JEVAnswerSetV3 boundary validator. Self-contained, C++17, no deps.
 // Pipeline: parse -> schema/type -> crypto -> state/freshness -> typed object.
-// Construction of ValidatedJEVAnswerSetV3 is possible ONLY via validate().
+// A ValidatedJEVAnswerSetV3 can be constructed only via validate().
 #pragma once
 #include <algorithm>
 #include <array>
@@ -318,16 +318,14 @@ inline bool ParseJson(const std::string& s, JVal& out, std::string& err) {
     if (j.p != j.end) { err = "trailing"; return false; }
     return true;
 }
-// ---- canonical JSON (P3.1-INTERNAL, NOT the frozen P3.2 contract) ----
-// Used for response_hash recompute + signature message. Byte-equality with
-// the sidecar is demonstrated per-fixture (valid passes, tampered fails),
-// NOT proven in general: float formatting edge cases are P3.2's job.
-// Do not cite this serializer as cross-language canonical until P3.2.
-// Python repr()-compatible double formatting (needed NOW: response_hash and
-// decision_key must reproduce sidecar bytes for ordinary magnitudes; the
-// full cross-language contract + committed vector is still P3.2's job).
-// Rule: shortest digits (to_chars), scientific iff decimal exponent < -4
-// or >= 16, else positional; integral values carry ".0".
+// ---- canonical JSON (internal to P3.1; not the frozen P3.2 contract) ----
+// Used for the response_hash recompute and signature message. Byte-equality
+// with the sidecar is shown per fixture (valid passes, tampered fails), not
+// proven in general; float edge cases belong to P3.2, so do not cite this as
+// the cross-language canonical form.
+// Python repr()-compatible double formatting: shortest digits (to_chars),
+// scientific iff decimal exponent < -4 or >= 16, else positional; integral
+// values carry ".0".
 inline std::string PyFloatRepr(double d) {
     char b[32];
     auto r = std::to_chars(b, b + sizeof(b), d);
@@ -775,7 +773,7 @@ inline bool PtDecode(const uint8_t enc[32], Pt& out) {
             if (bit) s = Fmul(s, two);
         }
         e = Fmul(e, s);
-        // RFC 8032: if x^2 still != target after adjustment, decoding FAILS.
+        // RFC 8032: if x^2 still != target after adjustment, decoding fails.
         F x2b = Fmul(e, e);
         F diffb = Fsub(x2b, x);
         for (int i = 0; i < 8; i++)
@@ -805,12 +803,10 @@ inline void PtEncode(const Pt& p, uint8_t enc[32]) {
     enc[31] |= uint8_t((x.l[0] & 1) << 7);
 }
 // order L = 2^252 + 27742317777372353535851937790883648493
-// AMENDMENT (P3.3 integration found it): the LE table below was wrong from
-// byte 5 on (top bytes read 0x10/0x0F instead of 0x00/0x10), false-rejecting
-// ~6% of VALID signatures (S[31]==0x0F, S[30]>=0x10) as S>=L. Never
-// false-accepted (direction was fail-closed: the wrong table is STRICTER).
-// Corrected bytes cross-checked against Python integers AND Reduce512's LB
-// limbs; full P3.1/P3.2/fuzz gates re-run green. Pending human re-sign.
+// The LE table below was corrected in P3.3 (the old top bytes read 0x10/0x0F
+// instead of 0x00/0x10 and false-rejected ~6% of valid signatures as S>=L,
+// always fail-closed). Checked against Python integers and the Reduce512 LB
+// limbs. Pending human re-sign.
 inline bool ScalarLessL(const uint8_t s[32]) {
     static const uint8_t L[32] = {0xED, 0xD3, 0xF5, 0x5C, 0x1A, 0x63, 0x12, 0x58,
                                   0xD6, 0x9C, 0xF7, 0xA2, 0xDE, 0xF9, 0xDE, 0x14,
@@ -964,13 +960,12 @@ inline bool ParseIso8601(const std::u32string& in, double& out) {
     return true;
 }
 
-// Epoch-microseconds conversion for every timestamp crossing into the
-// kernel (blocker #4): wire doubles become validated int64 micros, and
-// ALL internal freshness arithmetic uses the integers. Bounds match the
-// ISO parser's contractual year range (1970..2100). Truncation (not
-// rounding): sub-microsecond wire precision is contract-excluded, and
-// truncation keeps created <= true instant (fail-closed direction for
-// not-yet-valid, conservative for expiry by < 1 us — inside tolerance).
+// Epoch-microsecond conversion for every timestamp crossing into the kernel:
+// wire doubles become validated int64 micros and all freshness arithmetic
+// uses the integers. Bounds match the ISO parser's year range (1970..2100).
+// Truncation, not rounding: sub-microsecond precision is contract-excluded,
+// and truncation keeps created <= true instant (fail-closed for
+// not-yet-valid, conservative for expiry by < 1 us).
 inline bool UnixMicros(double seconds, int64_t& out) {
     if (!std::isfinite(seconds) || seconds < -62135596800.0 ||
         seconds > 4102444800.0) {
@@ -980,7 +975,7 @@ inline bool UnixMicros(double seconds, int64_t& out) {
     return true;
 }
 
-// ---- ValidatedJEVAnswerSetV3: constructible ONLY via validate() ----
+// ---- ValidatedJEVAnswerSetV3: constructible only via validate() ----
 struct ValidationResult;
 class ValidationRequest;
 class KernelState;  // sole construction authority (kernel_state.hpp)
@@ -993,9 +988,8 @@ class ValidatedJEVAnswerSetV3 {
     const std::string& decision_key() const { return decision_key_; }
     double created_at() const { return created_; }
     double expires_at() const { return expires_; }
-    // Integer-microsecond internals (blocker #4): all freshness
-    // arithmetic uses these. The double accessors above preserve the
-    // frozen wire view (exact for realistic micros < 2^53).
+    // Integer-microsecond internals: all freshness arithmetic uses these; the
+    // double accessors above keep the wire view (exact below 2^53 micros).
     int64_t created_us() const { return created_us_; }
     int64_t expires_us() const { return expires_us_; }
     double enter() const { return enter_; }
@@ -1003,9 +997,9 @@ class ValidatedJEVAnswerSetV3 {
     EdgeFamily family() const { return family_; }
     Conviction conviction() const { return conviction_; }
     const std::string& response_hash() const { return response_hash_; }
-    // NOTE: no confidence accessor. P3.4 default is (b) quarantine: confidence
-    // is structurally validated for artifact compatibility but never stored
-    // in, and never readable from, the decision-facing object.
+    // No confidence accessor (P3.4 default (b) quarantine): confidence is
+    // validated structurally but never stored in or readable from the
+    // decision-facing object.
 
    private:
     ValidatedJEVAnswerSetV3() = default;
@@ -1021,23 +1015,19 @@ class ValidatedJEVAnswerSetV3 {
 
 // ---- ValidationRequest: privately constructible, immutable (Slice A)
 //
-// The authority boundary is compiler-enforced, not conventional:
-//   - the ONLY construction path is KernelState::request_for() (friend);
-//   - all state is const: copying an authorized request is allowed, but
-//     "copy then mutate" is unrepresentable (no setters, no mutable
-//     accessors, const members — mutation would be UB, not API);
+// The authority boundary is compiler-enforced:
+//   - the only construction path is KernelState::request_for() (friend);
+//   - all state is const, so copy-then-mutate is unrepresentable;
 //   - validate_jev() is the only other friend, read-only by signature.
-// There is deliberately no default constructor, no aggregate form, no
-// delegating constructor, no helper factory: grep-gates plus the
-// auth/compile-fail harness prove every one of those paths is absent.
+// There is no default constructor, aggregate form, delegating constructor or
+// factory; grep gates and the auth/compile-fail harness prove it.
 class ValidationRequest {
    public:
     ValidationRequest(const ValidationRequest&) = default;
     ValidationRequest(ValidationRequest&&) = default;
     ValidationRequest& operator=(const ValidationRequest&) = delete;
     ValidationRequest& operator=(ValidationRequest&&) = delete;
-    // Read-only views into immutable storage. Const refs / values only:
-    // no mutable accessor exists anywhere on this type.
+    // Read-only views into immutable storage; no mutable accessor exists.
     const std::string& raw_json() const { return raw_json_; }
     const std::array<uint8_t, 32>& trusted_key() const {
         return trusted_key_;
@@ -1082,7 +1072,7 @@ class ValidationRequest {
     const std::string expected_symbol_;  // kernel-bound symbol (#6)
 };
 struct ValidationResult {
-    // The validated object exists ONLY on success: get() is null on HOLD.
+    // The validated object exists only on success; get() is null on HOLD.
     bool ok() const { return ok_; }
     const std::string& reason() const { return reason_; }  // "ok" or HOLD
     const ValidatedJEVAnswerSetV3* get() const {
@@ -1118,11 +1108,11 @@ inline std::string U32ToUtf8(const std::u32string& s) {
     return out;
 }
 
-// Python str() mirror for decision-key parts (frozen sidecar semantics):
-// str->itself, int->decimal, float->shortest repr, bool->True/False,
-// null->None, missing->"?". Composites use canonical JSON (documented
-// deviation: the sidecar never emits composite parts, so any divergence
-// fails closed at the decision-binding comparison).
+// Python str() mirror for decision-key parts (sidecar semantics): str ->
+// itself, int -> decimal, float -> shortest repr, bool -> True/False, null ->
+// None, missing -> "?". Composites use canonical JSON (the sidecar never
+// emits composite parts, so any divergence fails closed at the
+// decision-binding comparison).
 inline std::string PyStr(const JVal& v) {
     switch (v.t) {
         case JVal::T::STR:
@@ -1274,9 +1264,9 @@ inline ValidationResult validate_jev(const ValidationRequest& q) {
         if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' ||
               c == '/'))
             return fail("symbol");
-    // expected-symbol binding (#6): the kernel names the symbol whose
-    // epoch state admitted this request; the artifact must name the same
-    // one BEFORE monotonicity can be trusted. Empty = legacy (P3.1).
+    // expected-symbol binding (#6): the kernel names the symbol whose epoch
+    // state admitted this request; the artifact must name the same one before
+    // monotonicity can be trusted. Empty = legacy (P3.1).
     if (!q.expected_symbol().empty() && symbol != q.expected_symbol())
         return fail("symbol-mismatch");
     // exec-universe membership: kernel-owned set, syntax alone never suffices
@@ -1340,8 +1330,7 @@ inline ValidationResult validate_jev(const ValidationRequest& q) {
     int64_t expires_us = 0;
     if (!UnixMicros(expires, expires_us)) return fail("expires-at");
     // 60 s window in integer micros (same +-1 ms tolerance the double
-    // comparison allowed; float rounding can shift each endpoint < 1 ms).
-    // Inputs are range-checked above, so the subtraction cannot overflow.
+    // comparison allowed). Inputs are range-checked, so no overflow.
     int64_t win_us = expires_us - created_us;
     if (win_us < 60000000 - 1000 || win_us > 60000000 + 1000)
         return fail("expires-window");
@@ -1383,8 +1372,8 @@ inline ValidationResult validate_jev(const ValidationRequest& q) {
     if (!getnoul(e, enter)) return fail("enter-shape");
     if (!getnoul(l, latent)) return fail("latent-shape");
     EdgeFamily fam;
-    // confidence (P3.4/b quarantine): validated for structural integrity only
-    // (must be a JSON number if present), never stored, never exposed.
+    // confidence (P3.4/b quarantine): structural check only (JSON number if
+    // present), never stored or exposed.
     auto checkconf = [&](const JVal* cf) -> bool {
         if (!cf) return true;
         return cf->t == JVal::T::NUM && cf->num_double;
@@ -1411,8 +1400,8 @@ inline ValidationResult validate_jev(const ValidationRequest& q) {
         else return fail("family-shape");
         const JVal* pr = f->find(U8("probabilities"));
         if (pr) {
-            // Bounded map: at most the four edge families, values in [0,1].
-            // Never used for authorization (P3.1); bounded to deny DoS surface.
+            // Bounded map: at most the four edge families, values in [0,1];
+            // never used for authorization.
             if (pr->t != JVal::T::OBJ || pr->o.size() > 4) return fail("family-shape");
             for (auto& kv : pr->o) {
                 std::string k = U32ToUtf8(kv.first);
@@ -1467,8 +1456,8 @@ inline ValidationResult validate_jev(const ValidationRequest& q) {
                       sigraw))
             return fail("signature-invalid");
     }
-    // 20. freshness (LIVE only), in integer micros (blocker #4). now is
-    // kernel clock input: unrepresentable values HOLD, never wrap.
+    // 20. freshness (LIVE only), in integer micros; unrepresentable values
+    // HOLD, never wrap.
     if (q.mode() == Mode::LIVE) {
         int64_t now_us = 0;
         if (!UnixMicros(q.now_unix(), now_us))
@@ -1476,10 +1465,9 @@ inline ValidationResult validate_jev(const ValidationRequest& q) {
         if (!(now_us <= expires_us)) return fail("expired");
         if (!(created_us <= now_us + 300000000LL)) return fail("not-yet-valid");
     }
-    // 21. state binding: BOTH keys recomputed from kernel-owned bytes.
-    // state_hash = sha256(canonical snapshot); decision_key recomputed
-    // field-for-field from the parsed snapshot (frozen sidecar recipe).
-    // No trusted-string comparison anywhere on this path.
+    // 21. state binding: both keys recomputed from kernel-owned bytes
+    // (state_hash = sha256(canonical snapshot); decision_key field-for-field
+    // from the parsed snapshot). No trusted-string comparison.
     if (q.state_canon_json().size() > JParse::MAX_RAW) return fail("too-large");
     JVal snap;
     std::string serr;
@@ -1504,7 +1492,5 @@ inline ValidationResult validate_jev(const ValidationRequest& q) {
     r.value_.response_hash_ = rhs;
     return r;
 }
-
-// __APPEND__
 
 }  // namespace jev

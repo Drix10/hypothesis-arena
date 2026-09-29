@@ -115,6 +115,51 @@ int main(int argc, char** argv) {
                               BuyingPower(e) == 10000000LL);
     }
 
+    // ---- Filter policy: none never reads the JEV-derived inputs ----
+    {
+        RiskSnapshot s = Clean();
+        s.disagreement = true;
+        s.brier_delta = 0.05;
+        s.realized_outcomes = 50;
+        s.calib = CalibState::BREACH;
+        VetoVerdict f = EvaluateVeto(s);
+        CHECK("filter-v4-holds-on-jev-inputs",
+              !f.proceed && std::string(f.reason) == "disagreement");
+        s.filter = FilterPolicy::NONE;
+        VetoVerdict n = EvaluateVeto(s);
+        CHECK("filter-none-ignores-jev-inputs",
+              n.proceed && std::string(n.reason) == "proceed");
+        EngineInputs in = BuildEngineInputs(s, n);
+        CHECK("filter-none-engine-inputs",
+              !in.disagreement &&
+                  in.calibration_gate == CalibrationGate::PASS);
+        // Where the filter passes, both policies are bit-identical.
+        RiskSnapshot c = Clean();
+        VetoVerdict a = EvaluateVeto(c);
+        c.filter = FilterPolicy::NONE;
+        VetoVerdict b = EvaluateVeto(c);
+        CHECK("filter-policies-identical-when-filter-passes",
+              a.proceed == b.proceed &&
+                  std::strcmp(a.reason, b.reason) == 0 &&
+                  a.n_reasons == b.n_reasons && a.size_scale == b.size_scale &&
+                  a.stage_num == b.stage_num && a.stage_den == b.stage_den &&
+                  a.drift_idx == b.drift_idx && a.escalate == b.escalate);
+        RiskSnapshot c2 = Clean();
+        c2.calib = CalibState::PASS;  // the filter passes
+        EngineInputs e1 = BuildEngineInputs(c2, EvaluateVeto(c2));
+        c2.filter = FilterPolicy::NONE;
+        EngineInputs e2 = BuildEngineInputs(c2, EvaluateVeto(c2));
+        CHECK("filter-engine-inputs-identical-when-filter-passes",
+              e1.disagreement == e2.disagreement &&
+                  e1.event_blackout == e2.event_blackout &&
+                  e1.calibration_gate == e2.calibration_gate &&
+                  e1.r6_vol_trip == e2.r6_vol_trip &&
+                  e1.exposure_headroom_r2 == e2.exposure_headroom_r2 &&
+                  e1.pending_risk_breach == e2.pending_risk_breach &&
+                  e1.deterministic_veto == e2.deterministic_veto &&
+                  e1.veto_reason == e2.veto_reason);
+    }
+
     // ---- Clean proceeds ----
     {
         VetoVerdict v = EvaluateVeto(Clean());
@@ -176,7 +221,7 @@ int main(int argc, char** argv) {
         CHECK("no-stop", !v.proceed && std::string(v.reason) == "no-stop");
         // Leverage can only arm past R2 (R2's 25% always binds first at
         // these scales): the boundary proof is that exact-cap leverage
-        // does NOT add a hold, and over-cap DOES arm (before r2 in order).
+        // does not add a hold, and over-cap DOES arm (before r2 in order).
         s = Clean();
         s.intent.notional_cents = 50000000LL;  // exactly 5x forex
         v = EvaluateVeto(s);
@@ -202,6 +247,75 @@ int main(int argc, char** argv) {
         v = EvaluateVeto(s);
         CHECK("lev-cash-over",
               !v.proceed && std::string(v.reasons_all[0]) == "leverage-cap");
+    }
+    // ---- R18/R19 (v3, opt-in) ----
+    {
+        RiskSnapshot s = Clean();
+        s.intent.asset = AssetClass::STOCK;
+        s.intent.account = AccountType::CASH;
+        s.intent.notional_cents = 1000000LL;
+        VetoVerdict base = EvaluateVeto(s);
+        s.settled_cash_cents = -1;  // v3 fields are inert while the flag is off
+        s.instrument_allowed = false;
+        s.r18_unsettled_dependency = true;
+        VetoVerdict off = EvaluateVeto(s);
+        CHECK("v3-off-identical", off.proceed == base.proceed &&
+                                      off.n_reasons == base.n_reasons &&
+                                      std::string(off.reason) == base.reason);
+        s.r18_unsettled_dependency = false;
+        s.v3_constraints = true;
+        s.settled_cash_cents = 1000000LL;
+        s.instrument_allowed = true;
+        VetoVerdict v = EvaluateVeto(s);
+        CHECK("v3-clean-proceeds", v.proceed);
+        s.settled_cash_cents = 999999LL;
+        v = EvaluateVeto(s);
+        CHECK("r18-short-cash", !v.proceed &&
+                                    std::string(v.reason) == "r18-settled-cash");
+        s.settled_cash_cents = 1500000LL;
+        AddPending(s, "SPY", Side::LONG, 600000LL);
+        v = EvaluateVeto(s);
+        CHECK("r18-pending-counts", !v.proceed);
+        s.pending.clear();
+        s.r18_unsettled_dependency = true;
+        v = EvaluateVeto(s);
+        CHECK("r18-free-riding", !v.proceed &&
+                                     std::string(v.reason) == "r18-free-riding");
+        s.r18_unsettled_dependency = false;
+        s.instrument_allowed = false;
+        v = EvaluateVeto(s);
+        CHECK("r19-not-allowlisted", !v.proceed &&
+                                         std::string(v.reason) == "r19-allowlist");
+        s.instrument_allowed = true;
+        s.intent.side = Side::SHORT;
+        v = EvaluateVeto(s);
+        CHECK("r19-short", !v.proceed);
+        s = Clean();
+        s.intent.asset = AssetClass::STOCK;
+        s.intent.account = AccountType::CASH;
+        s.v3_constraints = true;
+        s.instrument_allowed = true;
+        s.settled_cash_cents = INT64_MAX;
+        AddPending(s, "SPY", Side::LONG, INT64_MAX);
+        AddPending(s, "VTI", Side::LONG, INT64_MAX);
+        v = EvaluateVeto(s);
+        CHECK("r18-no-overflow", !v.proceed);
+        s = Clean();
+        s.intent.asset = AssetClass::STOCK;
+        s.intent.account = AccountType::MARGIN;
+        s.v3_constraints = true;
+        s.instrument_allowed = true;
+        s.settled_cash_cents = 99999999LL;
+        v = EvaluateVeto(s);
+        CHECK("r19-margin-account", !v.proceed);
+        s.settled_cash_cents = -1;
+        s.intent.account = AccountType::CASH;
+        v = EvaluateVeto(s);
+        CHECK("r18-negative-cash-bad", !v.proceed &&
+                                           std::string(v.reason) == "bad-inputs");
+        s.intent.kind = IntentKind::EXIT;
+        v = EvaluateVeto(s);
+        CHECK("v3-exit-bypass", v.proceed);
     }
     // ---- R9 session / short / corp ----
     {
@@ -604,7 +718,7 @@ int main(int argc, char** argv) {
     // ---- invalid enums fail closed (correction: no exit-bypass) ----
     {
         RiskSnapshot s = Clean();
-        s.intent.kind = (IntentKind)99;  // corrupted kind is NOT an exit
+        s.intent.kind = (IntentKind)99;  // corrupted kind is not an exit
         VetoVerdict v = EvaluateVeto(s);
         CHECK("bad-kind", !v.proceed && std::string(v.reason) == "bad-inputs");
         s = Clean();
@@ -633,7 +747,7 @@ int main(int argc, char** argv) {
         v = EvaluateVeto(s);
         CHECK("bad-calib", !v.proceed && std::string(v.reason) == "bad-inputs");
         s = Clean();
-        s.kill = (KillLevel)99;  // corrupted kill is NOT kill-soft
+        s.kill = (KillLevel)99;  // corrupted kill is not kill-soft
         v = EvaluateVeto(s);
         CHECK("bad-kill", !v.proceed && std::string(v.reason) == "bad-inputs");
         s = Clean();
@@ -664,10 +778,8 @@ int main(int argc, char** argv) {
         v = EvaluateVeto(s);
         CHECK("exit-bad-asset",
               !v.proceed && std::string(v.reason) == "bad-inputs");
-        // Risk STATE never blocks a structurally valid exit: kill,
-        // equity, clock, and flip history are entry-risk concerns.
-        // (These three encoded the old wrong policy; they now prove
-        // the corrected liveness boundary.)
+        // Risk state never blocks a structurally valid exit: kill, equity,
+        // clock and flip history are entry-risk concerns.
         s = Clean();
         s.intent.kind = IntentKind::EXIT;
         s.kill = (KillLevel)99;
@@ -716,7 +828,7 @@ int main(int argc, char** argv) {
     }
     // ---- realized_outcomes sign (correction: the fail-open edge) ----
     {
-        // Reviewer's exact edge: positive delta with -1 outcomes must NOT
+        // Reviewer's exact edge: positive delta with -1 outcomes must not
         // leave the gate at PASS for the max-gate to use.
         RiskSnapshot s = Clean();
         s.calib = CalibState::PASS;
@@ -760,7 +872,7 @@ int main(int argc, char** argv) {
         v = EvaluateVeto(s);
         CHECK("flip-future",
               !v.proceed && std::string(v.reason) == "bad-inputs");
-        // Lock expires EXACTLY at +2h: now - t2 == 2h is free.
+        // Lock expires exactly at +2h: now - t2 == 2h is free.
         s.flip_t1_us = NOW - 150 * 60 * 1000000LL;
         s.flip_t2_us = NOW - 120 * 60 * 1000000LL;
         v = EvaluateVeto(s);
@@ -941,7 +1053,7 @@ int main(int argc, char** argv) {
                       std::string(v3.reason) == "event-medium");
             // Case 29 (doc 03 §3.7): joint JEV error, end to end.
             // t_max_elevated is the adversarial optimistic answer proxy
-            // (E .93 / macro / max / L .1, calib pass — NOT a claim that
+            // (E .93 / macro / max / L .1, calib pass — not a claim that
             // the recorded answer was empirically wrong). The independent
             // RiskSnapshot supplies a real R2 pending-risk breach: intent
             // 10% + pending 66% on another symbol = 76% > 75% cap, with

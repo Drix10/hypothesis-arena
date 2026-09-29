@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# P1.1 — freeze-check: verify the repo EXACTLY against plan/system-manifest.yaml.
-# Read-only. A mismatch is a FAILURE, never an invitation to edit the manifest.
-# Usage: bash scripts/freeze-check.sh   (exit 0 = PASS, exit 1 = FAIL)
+# freeze-check: verifies the repo against plan/system-manifest.yaml (read-only).
+# A mismatch is a failure; fix the repo, not the manifest.
+# Usage: bash scripts/freeze-check.sh   (exit 0 = PASS, 1 = FAIL)
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 M="$ROOT/plan/system-manifest.yaml"
@@ -9,6 +9,11 @@ FAIL=0
 
 ok()   { echo "PASS: $1"; }
 bad()  { echo "FAIL: $1"; FAIL=1; }
+# xxd is not installed everywhere (v3 O3): fall back to python3.
+hex2bin() {
+  if command -v xxd >/dev/null 2>&1; then xxd -r -p "$1"
+  else python3 -c 'import sys;sys.stdout.buffer.write(bytes.fromhex("".join(open(sys.argv[1]).read().split())))' "$1"; fi
+}
 
 # Manifest value extractor: `key: value` (strips quotes/comments).
 mval() { sed -n "s/^$1:[[:space:]]*[\"']\{0,1\}\([^\"'#]*\)[\"']\{0,1\}.*/\1/p" "$M" | head -n1 | tr -d ' '; }
@@ -98,6 +103,15 @@ grep -q "execution_max: 5" "$M" && grep -q "research_candidates: 50" "$M" \
   && ok "manifest universe limits 5/50" \
   || bad "manifest universe limits wrong"
 
+# freeze v3 additive keys (doc 07 O3)
+for kv in "plan_freeze: v3-alpha-first-rebaseline-2026-09-28" "strategy_book_version: sb1" \
+          "candidate_schema_version: c1" "validation_standard_version: val_v1" \
+          "cost_model_version: cost_v2" "jev_role: optional-filter" \
+          "account_type: cash" "direction: long_only" "leverage: 1" \
+          "g0_subphases: [G0a_shadow, G0b_broker_paper]"; do
+  grep -qF "$kv" "$M" && ok "manifest v3 key ${kv%%:*}" || bad "manifest v3 key missing/changed: ${kv%%:*}"
+done
+
 for pin in "langgraph==1.1.6" "smolagents==1.26.0" "langfuse_client==4.15.4"; do
   grep -q "${pin%%==*}: ${pin##*==}" "$M" \
     && ok "manifest pin $pin" || bad "manifest missing pin $pin"
@@ -139,7 +153,7 @@ grep -q "ONLY research artifact" "$ROOT/plan/04-cpp-deterministic-core.md" \
   && ok "04 boundary law" || bad "04 boundary law missing"
 grep -q "Boundary law" "$ROOT/plan/09-osint-and-free-data.md" \
   && ok "09 boundary law" || bad "09 boundary law missing"
-grep -q "NON-PRODUCTION / HISTORICAL" "$ROOT/plan/02-twitter-alpha-system.md" \
+grep -q "NON-PRODUCTION / HISTORICAL" "$ROOT/plan/02-strategy-book.md" \
   && ok "02 archive/production split" || bad "02 split banner missing"
 
 # ---- code pins must equal the manifest (the fingerprint is enforced) ----
@@ -193,7 +207,7 @@ grep -q 'class JEVStateV3' "$ROOT/kernel/jev_state.hpp" \
 _hex="$ROOT/kernel/p33/state_vector_canon.hex"
 _hash="$ROOT/kernel/p33/state_vector_hash.txt"
 if [ -f "$_hex" ] && [ -f "$_hash" ]; then
-  _recomputed="$(xxd -r -p "$_hex" | sha256sum | cut -d' ' -f1)"
+  _recomputed="$(hex2bin "$_hex" | sha256sum | cut -d' ' -f1)"
   [ "$_recomputed" = "$(cat "$_hash")" ] \
     && ok "p33 state: sha256(canon) == hash" \
     || bad "p33 state: hash mismatch"
@@ -247,7 +261,7 @@ for _v in v1 v2; do
   _hash="$ROOT/kernel/vectors/${_v}_response_hash.txt"
   _sig="$ROOT/kernel/vectors/${_v}_signature.txt"
   if [ -f "$_hex" ] && [ -f "$_hash" ] && [ -f "$_sig" ]; then
-    _recomputed="$(xxd -r -p "$_hex" | sha256sum | cut -d' ' -f1)"
+    _recomputed="$(hex2bin "$_hex" | sha256sum | cut -d' ' -f1)"
     [ "$_recomputed" = "$(cat "$_hash")" ] \
       && ok "vectors ${_v}: sha256(canonical) == response_hash" \
       || bad "vectors ${_v}: hash mismatch"
@@ -391,7 +405,7 @@ grep -q 'HISTORICAL / NON-PRODUCTION' "$ROOT/plan/09-osint-and-free-data.md" \
   && ok "09 X historical" || bad "09 X table back"
 ! grep -q '| X-Lists tail (doc 02) |' "$ROOT/plan/09-osint-and-free-data.md" \
   && ok "09 X row moved" || bad "09 X row still in tier table"
-grep -q 'HISTORICAL / NON-PRODUCTION' "$ROOT/plan/02-twitter-alpha-system.md" \
+grep -q 'HISTORICAL / NON-PRODUCTION' "$ROOT/plan/02-strategy-book.md" \
   && ok "02 X banner" || bad "02 banner moved"
 grep -q 'broker ‖ account ‖ context_hash' "$ROOT/plan/04-cpp-deterministic-core.md" \
   && ok "04 intent recipe" || bad "04 intent stale"

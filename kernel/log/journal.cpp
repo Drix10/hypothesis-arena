@@ -1,5 +1,5 @@
-// H1 — journal implementation. All hashing through the frozen P3.2
-// Sha256Hex (cycle path; the tick path never journals).
+// Journal implementation. Hashing uses Sha256Hex (cycle path; the tick path
+// never journals).
 #include "journal.hpp"
 
 #include "../jev_validate.hpp"  // Sha256Hex

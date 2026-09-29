@@ -53,8 +53,9 @@ static ctx::Snapshot Full() {
 
 static ctx::Snapshot Bare() { return ctx::Snapshot(); }
 
-int main() {
+int main(int argc, char** argv) {
     using namespace ctx;
+    const char* vec_dir = argc > 1 ? argv[1] : nullptr;
     // 1. full snapshot validates
     Check(ValidateSnapshot(Full()) == "", "valid-full");
     // 2. empty snapshot validates (nothing claimed, nothing incoherent)
@@ -146,8 +147,8 @@ int main() {
         s.regime = "trend";
         Check(ValidateSnapshot(s) == "regime-ghost", "ghost-regime");
     }
-    // source vocabulary is the frozen JEV set; the old G-local
-    // spellings are rejected, never mapped.
+    // source vocabulary is the frozen JEV set; other spellings are rejected,
+    // never mapped.
     {
         Snapshot s = Full();
         s.sources[0].state = "fresh";
@@ -282,7 +283,7 @@ int main() {
         Check(ValidateSnapshot(s) == "calib-incoherent",
               "set-empty-calib");
     }
-    // The 2 pure-integer sections: all-zero is BOTH the empty state
+    // The 2 pure-integer sections: all-zero is both the empty state
     // and a legitimate present value, so set+zero is VALID (solo-bit
     // masks prove no ghost trip either).
     {
@@ -387,6 +388,71 @@ int main() {
                   "\"edgar\",\"state\":\"healthy\"}],\"stage\":\"G0_PAPER\","
                   "\"var_corr_flags\":0}",
               "golden-canonical");
+    }
+    // 7. Snapshot v2: settlement section.
+    {
+        Snapshot v1 = Full();
+        Snapshot v2 = Full();
+        v2.present_mask |= kSettlement;
+        v2.settled_cash_ud = 25000000000LL;
+        v2.unsettled_ud = 75000000000LL;
+        v2.next_settle_day = 20726;
+        Check(ValidateSnapshot(v2) == "", "v2-valid");
+        Check(CanonicalSnapshot(v1) == canon0, "v1-bytes-unchanged");
+        Check(ContextHash(v1) != ContextHash(v2), "v2-differs-from-v1");
+        std::string h = ContextHash(v2);
+        bool stable = true;
+        for (int i = 0; i < 10000 && stable; ++i) stable = ContextHash(v2) == h;
+        Check(stable, "v2-hash-stable-10k");
+        Snapshot m = v2;
+        m.settled_cash_ud += 1;
+        Check(ContextHash(m) != h, "v2-mut-settled");
+        m = v2;
+        m.unsettled_ud += 1;
+        Check(ContextHash(m) != h, "v2-mut-unsettled");
+        m = v2;
+        m.next_settle_day += 1;
+        Check(ContextHash(m) != h, "v2-mut-day");
+        Check(CanonicalSnapshot(v2).size() <= 4096, "v2-bounded");
+        m = v1;
+        m.settled_cash_ud = 5;
+        Check(ValidateSnapshot(m) == "settlement-ghost", "v2-ghost");
+        m = v2;
+        m.settled_cash_ud = -1;
+        Check(ValidateSnapshot(m) == "settlement-negative", "v2-negative");
+        m = v2;
+        m.next_settle_day = 0;
+        Check(ValidateSnapshot(m) == "settlement-incoherent", "v2-pending-needs-day");
+        m = v2;
+        m.unsettled_ud = 0;
+        Check(ValidateSnapshot(m) == "settlement-incoherent", "v2-day-needs-pending");
+        m = v2;
+        m.unsettled_ud = 0;
+        m.next_settle_day = 0;
+        Check(ValidateSnapshot(m) == "", "v2-all-settled-ok");
+        Check(CanonicalSnapshot(v2).find(",\"settlement\":{\"next_settle_day\":"
+                                         "20726,\"settled_cash_ud\":25000000000,"
+                                         "\"unsettled_ud\":75000000000},"
+                                         "\"snapshot_version\":2,\"sources\"") !=
+                  std::string::npos,
+              "v2-golden-fragment");
+        if (vec_dir) {
+            auto slurp = [&](const char* name) {
+                std::string txt;
+                std::FILE* f = std::fopen((std::string(vec_dir) + "/" + name).c_str(), "rb");
+                char b[8192];
+                size_t n;
+                while (f && (n = std::fread(b, 1, sizeof(b), f)) > 0) txt.append(b, n);
+                if (f) std::fclose(f);
+                while (!txt.empty() && (txt.back() == '\n' || txt.back() == '\r')) txt.pop_back();
+                return txt;
+            };
+            std::string hex = slurp("snapshot_v2_canonical.hex"), bytes;
+            for (size_t i = 0; i + 1 < hex.size(); i += 2)
+                bytes.push_back((char)std::stoi(hex.substr(i, 2), nullptr, 16));
+            Check(!bytes.empty() && bytes == CanonicalSnapshot(v2), "v2-vector-canonical");
+            Check(slurp("snapshot_v2_context_hash.txt") == h, "v2-vector-hash");
+        }
     }
     if (g_fail == 0) std::printf("CONTEXT SUITE: ALL PASS\n");
     return g_fail ? 1 : 0;

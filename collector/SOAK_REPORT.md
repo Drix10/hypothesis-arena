@@ -1,14 +1,14 @@
-# P1.4 SOAK REPORT — CLOSED
+# P1.4 soak report (closed)
 
-Rules version: rules_v1 (FROZEN for the whole window — zero classifier changes)
+Rules version: `rules_v1`, unchanged for the whole window.
 
-## Window (shortened explicitly: ~33h observed, NOT 7d)
+## Window (about 33 h observed, not 7 d)
 
 - Start: 2026-09-18T18:54:26Z
 - End: 2026-09-20T03:30:00Z (loop stopped, last recorded cycle)
 - Elapsed: ~32.6h, 133 cycles at 15-min cadence
-- Criterion: 30h evidence gate (originally 7d; shortened on observed evidence,
-  documented here, never silently). Evidence hashes: `collector/SOAK_MANIFEST.json`.
+- Criterion: 30 h evidence gate (originally 7 d, shortened on observed evidence).
+  Evidence hashes: `collector/SOAK_MANIFEST.json`.
 
 ## EDGAR
 
@@ -30,9 +30,8 @@ Rules version: rules_v1 (FROZEN for the whole window — zero classifier changes
 ## Integrity
 
 - malformed: 0
-- ingest crashes: No ingest crashes were observed during the monitored run;
-  cycle-level crash/error counters were not persistently recorded.
-  Record-balance checks showed no unexplained drops
+- ingest crashes: none observed; cycle-level crash/error counters were not persisted.
+  Record-balance checks show no unexplained drops
   (225=105+120 day 1; 60=60+0 day 2; 60=60+0 day 3).
 - duplicates: absorbed (120 day 1, replay-stable after)
 - revisions: 0
@@ -54,7 +53,7 @@ Rules version: rules_v1 (FROZEN for the whole window — zero classifier changes
 - human-queue rows: 0 → no manual reviews required
 - noise percentage: 0% (pre-grade; independent statistical noise study not done)
 - threshold: <10%
-- PASS
+- result: PASS
 
 ## Boundary
 
@@ -68,12 +67,13 @@ Rules version: rules_v1 (FROZEN for the whole window — zero classifier changes
 
 ## Scope (exact)
 
-P1.4 validates operational/data-pipeline reliability over the observed ~33h
-window. It does not validate trading alpha, profitability, or the statistical
-validity of the eventual strategy.
+P1.4 validates operational and data-pipeline reliability over the observed ~33 h
+window. It says nothing about alpha, profitability or strategy validity.
 
-## Observed defects (post-soak work, never during)
+## Defects found
 
-1. Cycle-level crash/error counters not persisted (folded into lifecycle hardening).
-2. Soak deadline was process-local (`end = now + 7d` per launch) — restarts would
-   silently extend the formal window (folded into lifecycle hardening).
+Fixed after the soak, not during it:
+
+1. Cycle-level crash/error counters were not persisted.
+2. The soak deadline was process-local (`end = now + 7d` per launch), so a restart
+   would extend the window.

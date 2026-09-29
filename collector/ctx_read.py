@@ -6,12 +6,10 @@ counted with reasons. Prose is quarantined, never consumed.
 
 Usage: python3 collector/ctx_read.py <bundle.json> [--db PATH] [--map PATH]
 
-Atomicity note (DESIGN FROZEN, IMPLEMENTATION DEFERRED to Phase 2.5): the
-`commit is True` flag checked here is the bundle-INTERNAL completeness flag.
-The writer-side generation manifest (a separate manifest proving a complete
-committed publish, consumed by the reader) does not exist yet and is NOT
-enforced: do not describe this reader as manifest-backed until Phase 2.5
-implements the manifest mechanism.
+Atomicity: the `commit is True` flag checked here is the bundle-internal
+completeness flag. The writer-side generation manifest (design frozen,
+implementation deferred to Phase 2.5, doc 08) is not enforced, so this reader
+is not manifest-backed.
 '''
 import hashlib
 import json
@@ -44,9 +42,8 @@ SOURCE_COVER_MIN = {"edgar_8k": 45, "fed_monetary": 180, "ecb_mid": 180,
                       "fred_macro": 1080, "bea_nipa_gdp": 1080}
 SOURCE_IDS = frozenset(SOURCE_COVER_MIN)  # frozen source namespace (X11)
 # Frozen source->kind emission registry: which kinds each source may emit.
-# Directional/osint/sentiment/regime kinds have NO frozen emitter: they need
-# the Phase 2.5 deterministic source->feature resolver, so they are rejected
-# here (kind-no-emitter), never admitted on structural validity alone.
+# Directional/osint/sentiment/regime kinds have no emitter until the Phase 2.5
+# source->feature resolver exists; they are rejected (kind-no-emitter).
 SOURCE_KINDS = {
     "edgar_8k": {"filing_event"},
     "fed_monetary": {"macro_release", "calendar_ahead"},
@@ -54,9 +51,8 @@ SOURCE_KINDS = {
     "bls_empsit": {"macro_release", "calendar_ahead"},
     "ecb_mid": {"macro_release", "calendar_ahead"},
     "fred_macro": {"macro_release", "calendar_ahead"},
-    # BEA NIPA GDP emits macro_release ONLY (annual headline values;
-    # no calendar-ahead concept in this adapter). calendar_ahead for
-    # this source is kind-no-emitter by design, not an omission.
+    # BEA NIPA GDP: annual headline values only; calendar_ahead is
+    # kind-no-emitter by design.
     "bea_nipa_gdp": {"macro_release"},
 }
 BUNDLE_REQUIRED = {"schema_version", "research_epoch", "bundle_id",
@@ -412,11 +408,9 @@ def read_bundle(path, db_path, map_path, now_ts=None):
                     return {"bundle_id": b["bundle_id"], "accepted": [],
                             "stats": stats}
                 # Strictly increasing per source: the frozen-feed span
-                # tail[-1].ts - tail[0].ts is meaningless on reordered or
-                # duplicated timestamps. Equal timestamps are rejected
-                # (duplicates), not deduplicated (rewriting evidence).
-                # Bounded by now + skew like every other provenance
-                # instant: future history cannot freeze a feed.
+                # tail[-1].ts - tail[0].ts is meaningless otherwise. Equal
+                # timestamps are rejected, not deduplicated. Bounded by
+                # now + skew like every provenance instant.
                 if _e["ts"] > now_ts + HISTORY_SKEW_S:
                     stats["reasons"]["history-future"] = 1
                     return {"bundle_id": b["bundle_id"], "accepted": [],

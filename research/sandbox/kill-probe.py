@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 """kill-probe.py — Phase-D deployment box 5 (supervisor WALL_S kill/reap).
 
-Proves the shipped kill ladder (plane/timeout.py::run_in_process, the
-primitive the production supervisor drives with timeout_s=WALL_S=480s)
-with SHORT deadlines (the ladder is deadline-parameterized; the
-mechanism is identical at any value):
-  1. SIGTERM-ignoring runaway -> CallTimeout in bounded time (a child
-     that ignores TERM can only die by KILL: bounded return PROVES
-     the SIGKILL escalation fired, no exit-code access needed).
+Checks the shipped kill ladder (plane/timeout.py::run_in_process, which
+the production supervisor drives with timeout_s=WALL_S=480s) with short
+deadlines (the mechanism is the same at any value):
+  1. SIGTERM-ignoring runaway -> CallTimeout in bounded time (a child that
+     ignores TERM can only die by KILL, so a bounded return shows the
+     SIGKILL escalation fired).
   2. Cooperative sleeper -> prompt CallTimeout (TERM path).
   3. Fast child -> result returned, no kill.
   4. Every path leaves no live child (reaped: is_alive False).
-Exits 0 only if all hold. LINUX ONLY (POSIX signals are vacuous on
-Windows) — run on the deployment host with system python3.
+Exits 0 only if all hold. Linux only (POSIX signals); run on the
+deployment host with system python3.
 """
 import os
 import signal
@@ -73,7 +72,7 @@ def main():
     except Exception as e:  # noqa: BLE001
         no("trapper wrong exc: %r" % e)
 
-    # 2. Cooperative sleeper dies on TERM.
+    # 2. cooperative sleeper dies on TERM
     t0 = time.monotonic()
     try:
         timeout_mod.run_in_process(sleep_300, 3)
@@ -87,7 +86,7 @@ def main():
     except Exception as e:  # noqa: BLE001
         no("sleeper wrong exc: %r" % e)
 
-    # 3. Fast child unaffected.
+    # 3. fast child unaffected
     try:
         out = timeout_mod.run_in_process(fast, 30)
         if out == "done-42":
@@ -97,7 +96,7 @@ def main():
     except Exception as e:  # noqa: BLE001
         no("fast child raised: %r" % e)
 
-    # 4. No live worker children remain (reaped on every path).
+    # 4. no live worker children remain (reaped on every path)
     import multiprocessing
     live = multiprocessing.active_children()
     if not live:

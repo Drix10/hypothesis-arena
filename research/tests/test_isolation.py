@@ -18,6 +18,7 @@ What remains a LINUX DEPLOYMENT box (explicit, not assumed):
 Run: python3 tests/test_isolation.py --tree <dir>
 """
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -58,12 +59,14 @@ class ConfinementTest(unittest.TestCase):
         d = tempfile.mkdtemp()
         outdir = os.path.join(d, "o")
         os.makedirs(outdir)
-        # A manifest row pointing outside (tampered/crashed state) is
-        # never followed: latest_complete only resolves basenames inside.
+        payload = b"{}"
+        with open(os.path.join(d, "outside.json"), "wb") as fh:
+            fh.write(payload)
         with open(os.path.join(outdir, "manifest.jsonl"), "w") as fh:
             fh.write(json.dumps(
                 {"bundle_id": "evil", "commit": True,
-                 "path": "../outside.json", "sha256": "0" * 64}) + "\n")
+                 "path": "../outside.json",
+                 "sha256": hashlib.sha256(payload).hexdigest()}) + "\n")
         self.assertIsNone(emit_mod.latest_complete(outdir))
 
     def test_missing_file_falls_back(self):

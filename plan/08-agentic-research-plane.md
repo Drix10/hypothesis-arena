@@ -1,22 +1,27 @@
-# 08 — Agentic Research Plane
+# 08 — Agentic Research Plane (freeze v3)
 
-The research plane is the slow, rich half of the system. It reads the world and
-writes **typed, bounded features** into the context the hot path freezes. It has
-no other output. It cannot size, send, amend, or cancel an order, and no agent
-output can ever relax a risk rule.
+Two planes, one boundary:
 
-This doc defines the framework choice, the agent topology, the contract with the
-hot path, the isolation boundary, and the failure defaults.
+- **Live research plane** — reads the world on a schedule and writes
+  **typed, bounded features** into the context the kernel freezes. It has
+  no other output into the trading tree.
+- **Research factory** (v3, §8.7) — offline. Agents propose hypotheses,
+  write pre-registrations, write and run backtest code on trusted local
+  datasets, and draft reports for human triage. It never touches live
+  state, credentials, or the trading tree.
+
+Neither can size, send, amend, or cancel an order, and no agent output can
+ever relax a risk rule. Freeze v3 changes are marked (v3).
 
 ## 8.1 The one-way boundary (locked, read this first)
 
 ```
-   OSINT + market + filings + X-lists   (doc 09)
+   EDGAR + FRED/ALFRED + official releases + market data   (doc 09)
                   │
                   ▼
         ┌───────────────────────┐
-        │  RESEARCH PLANE       │   LangGraph orchestrator + smolagents workers
-        │  (Python, sandboxed)  │   unprivileged user, no broker credentials
+        │  LIVE RESEARCH PLANE  │   LangGraph orchestrator; reader tier for
+        │  (Python, sandboxed)  │   untrusted text; unprivileged user
         └──────────┬────────────┘
                    │  writes ONLY: features.jsonl (typed, schema-checked)
                    ▼
@@ -24,63 +29,61 @@ hot path, the isolation boundary, and the failure defaults.
         │  ctx/ (C++)           │   validates, bounds, stamps, freezes
         └──────────┬────────────┘
                    ▼
-            Snapshot → JEV → risk/ → exec/
+   Snapshot + candidate (sleeve engine) → risk/ → exec/
 ```
 
-- **R11 (new, doc 05):** the research plane writes exactly one artifact class —
-  `features.jsonl` — and nothing else in the trading tree. It has no broker keys,
-  no write access to the journal, no write access to `HALT`, no write access to
-  the stage file (doc 10), and runs as a separate OS user. Enforced by filesystem
-  permissions, not by convention.
-- Agents never see account equity, position sizes, or PnL. They receive a
-  *masked* portfolio view (`exposure_bucket`, `positions_open_count`) so their
-  reasoning cannot be anchored on capital. Removing the anchor also removes a
-  whole class of "we're down, size up" pathology.
-- Every feature carries `observed_at_ns` (when the source published) and
-  `ingested_at_ns` (when we saw it). `ctx/` drops any feature whose
-  `observed_at_ns` is in the future relative to the snapshot, or whose
-  `ingested_at_ns` is older than the feature's declared TTL. This is the
-  anti-lookahead rule (R12) and it is structural, not a review step.
+- **R11:** the research plane writes exactly one artifact class —
+  `features.jsonl` — and nothing else in the trading tree: no broker keys,
+  no journal, no `HALT`, no stage chain, no `candidates.jsonl`. Separate OS
+  user, enforced by filesystem permissions.
+- Agents never see account equity, position sizes, or PnL; at most a
+  masked view (`exposure_bucket`, `positions_open_count`).
+- Every feature carries `observed_at_ns` and `ingested_at_ns`; `ctx/` drops
+  future-observed or TTL-expired features (R12). Model-memory lookahead is
+  controlled separately (doc 11 §11.0c).
 
-## 8.2 Framework choice (locked): LangGraph orchestrator + smolagents workers
+## 8.2 Framework choice (locked) + the v3 security pattern
 
-**Chosen stack**
+**Chosen stack (unchanged pins):** LangGraph orchestrates (durable
+checkpoints, resume-after-crash, `interrupt()` for human gates); smolagents
+`CodeAgent` is confined to the research factory (v3); SQLite checkpoints in
+paper, Postgres from G2; OpenTelemetry → self-hosted Langfuse for per-run
+token/cost attribution; Pydantic validation at every boundary.
 
-| Layer | Choice | Why |
-|---|---|---|
-| Orchestration, state, resume | **LangGraph** (MIT, OSS, no LangChain/LangSmith required) | Durable execution with checkpointers; thread-scoped state snapshots; resume-after-crash; `interrupt()` for human gates; time-travel replay of a run. This is the only candidate whose core abstraction is *durable state*, which is what a 24/7 unattended research loop actually needs. |
-| Leaf research workers | **smolagents** (Apache-2.0) `CodeAgent` | Actions are Python, not JSON tool-call chains: multiple lookups collapse into one step, which is the single biggest token lever available for free. Runs under a sandbox (Docker) with a pinned import allowlist. |
-| Checkpoint store | **SQLite** (`SqliteSaver`) in paper, **Postgres** (`PostgresSaver`) from tiny-live onward | Paper needs zero ops; live needs async + concurrent writers. Checkpoints pruned at 30 days. |
-| Observability | **OpenTelemetry → self-hosted Langfuse** (OSS) | Full traces, per-run token and cost attribution, no vendor lock, no LangSmith subscription. Cost attribution is load-bearing for doc 10. |
-| Structured output | Pydantic models, validated at the plane boundary | A feature that fails validation is dropped and counted, never coerced. |
+**Ranking (selection judgment, not benchmarks; freeze v2, unchanged):**
+LangGraph CHOSEN (orchestrator: durability 5, observability 4); smolagents
+CHOSEN for code-writing work under a Docker sandbox (token efficiency 5,
+durability 2); AG2 v1.0 rejected (breaking redesign churn); CrewAI rejected
+(observability behind a paid tier, no documented durable resume); Hermes
+Agent and OpenClaw **rejected on principle** — self-modifying assistants
+reachable from chat apps are a remote-code-execution path into a capital
+host and violate D3.
 
-**Ranking (evaluated against the six criteria in the brief, plus two the brief implies)**
+**v3 security pattern for untrusted text (adopted from the
+`anthropics/financial-services` managed-agent cookbooks — earnings-reviewer,
+kyc-screener, gl-reconciler):**
 
-Scores are 1–5, higher is better. "Sec" = security posture for a process sitting
-next to trading capital.
+| Tier | Touches untrusted docs? | Capabilities | Output |
+|---|---|---|---|
+| **Reader** | **Yes** (filings, press releases) | model call only: **no tools, no code execution, no network, no file write** | length-capped, schema-validated JSON (enums, bounded strings, numbers with source spans); any instruction inside a document is data |
+| **Resolver/Verifier** | No | deterministic Python: re-derives every claimed number from the canonical record text/XBRL by span; rejects anything unverifiable | `inference`-level candidates with verified provenance |
+| **Orchestrator** | No | graph control, trusted local stores (read-only) | node routing, budgets |
+| **Emitter** (only writer) | No | writes `features.jsonl` via the frozen emit path | complete bundles |
 
-| Framework | State durability | Tool reliability | Observability | Token eff. | Multi-agent | Prod. stability | Sec | License | Verdict |
-|---|---|---|---|---|---|---|---|---|---|
-| **LangGraph** | **5** — checkpointers (InMemory/SQLite/Postgres), durable execution, resume from exact pre-failure state, time travel | 4 — explicit graph edges; retries are yours to define | 4 — OTel + Langfuse/LangSmith; graph structure is inspectable | 3 — JSON tool-calling overhead unless paired with code agents | 4 — supervisor/subgraph patterns, deterministic edges | 4 — widest production deployment of the candidates | 4 | MIT | **CHOSEN — orchestrator** |
-| **smolagents** | 2 — `agent.memory` is in-process; no durable checkpoint | 4 — code execution is expressive; sandbox required | 3 — OTel instrumentation available | **5** — code actions, ~30% fewer steps than JSON tool-calling per HF's own claim | 3 — managed-agent hierarchies, simple | 4 — small, stable, Apache-2.0 | 3 (needs Docker sandbox; `LocalPythonExecutor` is explicitly best-effort only) | Apache-2.0 | **CHOSEN — leaf workers, under LangGraph** |
-| **AG2 (v1.0)** | 3 — `KnowledgeStore` (Memory/Disk) persists facts, not execution state | 4 — typed channels, Hub audit trail | 3 | 3 | **5** — richest coordination model (conversation/consulting/discussion/workflow channels) | 2 — v1.0 is an explicit breaking redesign, "not a drop-in upgrade from Classic"; classic moved to a separate repo | 4 | Apache-2.0 | Rejected v1 — coordination richness we don't need, churn we can't absorb |
-| **CrewAI** | 2 — Flows manage state; checkpointing is mentioned but under-specified; no documented durable resume or determinism story | 3 | 2 — real tracing lives in the commercial AMP tier | 3 | 4 — role-based crews are ergonomic | 3 | 4 | MIT (core) | Rejected — observability behind a paid tier violates the free-only constraint; no documented durable resume |
-| **Hermes Agent** | 3 — session store + FTS5 history | 3 | 2 | 2 | 2 | 3 | **1** — chat-gateway agent (Telegram/Discord/Slack/WhatsApp/email) with broad execution backends; **writes and self-improves its own skills at runtime** | MIT | **Rejected on principle** — a self-modifying agent reachable from a messaging app is a remote-code-execution path into the trading host, and runtime self-modification is a direct violation of D3 (pinned versions) and the human-promote-only rule |
-| **OpenClaw** | 3 — persistent memory across sessions | 3 | 2 | 2 | 2 | 3 | **1** — personal assistant running on your machine with full system access by default, driven from 30+ chat channels | MIT | **Rejected on principle** — same reason; it is an assistant, not an embeddable research library |
+Handoffs between agents are typed tool calls or schema-validated records
+with allowlisted targets — never parsed out of model text that sits
+downstream of a reader (the financial-services orchestrator documents that
+exact injection path). Harness-side schema validation runs on every reader
+output before anything else sees it.
 
-**Why not "the best multi-agent framework"**: coordination richness is not the
-binding constraint. The binding constraints are (a) surviving a crash mid-research
-without corrupting state, (b) knowing exactly what every token was spent on, and
-(c) never letting a research process touch capital. LangGraph wins (a) and,
-with Langfuse, (b); the isolation boundary in §8.1 handles (c) regardless of
-framework. smolagents is bolted on purely for (d) token efficiency, and is
-sandboxed because code-writing agents are a security surface.
+**Why this replaces the freeze-v2 `extract` CodeAgent:** model-written
+Python with network egress, running over attacker-influenceable filings,
+is a larger surface than the job needs. The deterministic parser is the
+authority and the LLM output is advisory, so the reader needs to read,
+not to act.
 
-**Rejected on principle, restated in one line:** Hermes Agent and OpenClaw are
-autonomous assistants with host access and inbound chat control. Neither belongs
-on a machine that can move money.
-
-**Container spec (locked — "runs in Docker" is not a spec):** smolagents
+**Container spec (locked — "runs in Docker" is not a spec; v3: applies to
+the research factory and to any sandboxed harvest worker):** smolagents
 `CodeAgent` runs with `executor_type="docker"` only: non-root user, read-only
 rootfs, dropped capabilities, explicit CPU/RAM limits, and network egress limited
 to the Phase-0 allow-listed endpoints (source APIs + the model provider, nothing
@@ -95,236 +98,96 @@ itertools, hashlib, base64` + `requests` + `bs4` (BeautifulSoup) + `lxml`
 (RSS). No `subprocess`, no `os.system`, no `socket` raw, no `pickle`, no
 `yaml.load` (safe_load only if yaml ever added — it is not on the list).
 
-OS isolation design (LOCKED 2026-09-18, enforced at build, proven by the §8.6
-isolation test): four identities, no shared groups. `mirotrade` runs the C++ core
-and owns journal/HALT/STAGE/broker keys (mode 600, group `mirotrade`).
-`miroresearch` runs the plane + sidecars and owns `features.jsonl` +
-`signals.jsonl` only; no read on `mirotrade` home, no sudo, no docker group
-(the container runtime is driven by the supervisor, not by the agent user).
-`mirojev` runs the JEV sidecar only: read-only snapshot in, Ed25519-signed
-artifact out, and owns the JEV credential + signing key (mode 600, group
-`mirojev`).
-answers out (doc 03 §3.5); no research tools, no network except the provider.
-`mirohuman` (you) writes `PROMOTION_MANIFEST` files; the process never runs as
-you. Credentials live in the owning identity's home (`mirotrade` for broker
-keys, `mirojev` for the JEV credential + signing key, `miroresearch` for
-source keys) — never in git, never world-readable, inventoried in the
-Phase-1 credential-placement note. (No X session exists anywhere in v1: X is
-out of the production path, doc 02.)
-`LocalPythonExecutor` is **forbidden** on any host or container that can reach
-trading credentials, the journal, `HALT`, or `STAGE` — upstream documents it as
-best-effort sandboxing with known escapes, which is not sandboxing.
+OS isolation design (LOCKED 2026-09-18, extended v3), no shared groups:
+`mirotrade` runs the C++ kernel and transport and owns journal/`HALT`/stage
+chain/broker keys (mode 600). `mirostrat` (v3) runs the deterministic
+sleeve engine and owns `candidates.jsonl` only; no credentials, no
+network except the market-data read path. `miroresearch` runs the live
+plane and owns `features.jsonl` + `signals.jsonl` only; no read on other
+homes, no sudo, no docker group (the supervisor drives containers).
+`mirojev` runs the optional JEV sidecar: read-only snapshot in,
+Ed25519-signed artifact out, owns the JEV credential + signing key.
+`mirofactory` (v3) runs the research factory on a copy of research
+datasets; no credentials of any kind except the research model key via
+the spend-governed gate, no path into `/srv/mirohedge` trading dirs.
+`mirohuman` (you) signs manifests; no process runs as you. Credentials
+live in the owning identity's home, never in git, never world-readable.
+`LocalPythonExecutor` is **forbidden** on any host or container that can
+reach trading credentials, the journal, `HALT`, or the stage chain.
 
-## 8.3 Agent topology (locked)
+## 8.3 Agent topology — live plane (`research_graph_version: g1` → g2)
 
-`research_graph_version: g1` (matches `plan/system-manifest.yaml`).
-One LangGraph graph, run as a supervised loop. Six nodes, all off the hot path.
+`research_graph_version: g1` is the running graph (matches
+`plan/system-manifest.yaml`). The v3 node semantics below are g2; the
+manifest bumps to g2 in the same commit that lands them (doc 07 P1).
 
 | Node | Job | Output | Default on failure |
 |---|---|---|---|
-| `harvest` | Pull the doc-09 sources on their cadences (EDGAR, FRED/ALFRED, official macro feeds, calendars; NO X in v1). Pure I/O, no LLM. | raw records + `observed_at_ns` | Source marked `stale`; never blocks |
-| `extract` | smolagents `CodeAgent`: parse filings/calendars/OSINT into ADVISORY typed candidate features (never evidence-bearing) | advisory candidates | Drop + count |
-| `fuse` | Deterministic Python (no LLM): join candidates to symbols, dedupe, bucket | joined features | Drop + count |
-| `hypothesize` | LLM: write ≤500-char thesis per watchlist symbol into the research digest (never into JEV state) | digest entry | Empty thesis — never a crash |
-| `critique` | LLM: adversarial pass. Names the strongest disconfirming evidence and a regime-change check | `critique_text`, `critique_disagreement` advisory flag | `critique_disagreement=true` (the safe value) |
+| `harvest` | Pull doc-09 sources on their cadences. Pure I/O, no LLM. | raw records + `observed_at_ns` | Source `stale`; never blocks |
+| `extract` (v3: reader tier) | Deterministic parser first (authoritative); for kinds with a registered reader skill (e.g. 8-K EX-99.1 guidance, doc 02 E2), the reader tier produces capped JSON, then the resolver verifies every field by source span | verified `inference` candidates + parser `source` candidates | Drop + count |
+| `fuse` | Deterministic: join to symbols, dedupe, bucket | joined features | Drop + count |
+| `hypothesize` | LLM: falsifiable thesis per watchlist symbol into the digest (never into kernel state): claim, 3–5 pillars, explicit invalidation triggers, catalyst dates (thesis-tracker structure) | digest entry | Empty thesis — never a crash |
+| `critique` (v3: verifier) | Re-verifies each pillar's factual claims against canonical records (gl-reconciler critic pattern); names the strongest disconfirming evidence; flags pillars whose facts do not verify | `critique_text`, `critique_disagreement` advisory flag | `critique_disagreement=true` |
 | `emit` | Schema-validate, bound, write `features.jsonl` atomically | `features.jsonl` | Nothing written; last file ages out via TTL |
 
-- The graph is **checkpointed after every node**. A crash resumes at the last
-  completed node, not at the start of the cycle. This is the whole reason
-  LangGraph was chosen.
-- Checkpoints alone are not recovery. Durability = checkpoint + an **external
-  process supervisor** (systemd unit or equivalent watchdog) that detects the
-  crash and restarts the plane with the same thread_id. No supervisor, no
-  durability claim — an unobserved crash is just a silent halt.
-- Nodes with external side effects must be **idempotent** (idempotency keys on
-  every write; re-executed nodes converge, never duplicate). Side-effecting
-  nodes are enumerated in Phase 0; any new one needs its key design reviewed.
-- Checkpoint retention is 30 days, mandatory, then pruned. Replay older than
-  retention is unsupported and must fail loudly, not silently.
-- `critique` disagreeing with `hypothesize` sets `state.critique_disagreement=true`
-  (advisory research metadata, visible to researchers only). It is NEVER
-  `state.disagreement`: only the deterministic R14 computation (opposite
-  TRIGGER effects, doc 03 §3.4) may set `disagreement`, and only that field
-  can invoke R14. Conflicting agent conclusions still never produce a larger
-  position; they produce HOLD or nothing via the deterministic path.
-- Agents never vote on entry. They produce evidence; JEV scores it; the table in
-  doc 03 §3.2 sizes it; doc 05 vetoes it.
+- Checkpointed after every node; a crash resumes at the last completed
+  node. Durability = checkpoint + external supervisor + idempotent nodes.
+- Checkpoint retention 30 days; older replay fails loudly.
+- `critique_disagreement` is advisory research metadata. It is NEVER
+  `state.disagreement`: only the deterministic R14 computation may set
+  that field.
+- Agents never vote on entry. Sleeves (doc 02) originate candidates;
+  features only inform sleeves that pre-registered them.
 
-## 8.3a Cadence and cost-gating (locked — closes the gap between §8.3 and doc 10)
+## 8.3a Cadence and cost-gating (locked)
 
-The topology in §8.3 says what each node does; this says how often it runs and
-why that does not blow the spend caps in doc 10 §10.4.
+Base cadence 5 minutes for harvest/extract/fuse (I/O + deterministic
+code). `hypothesize`/`critique` re-run per symbol only on a new
+TRIGGER-eligible feature or a 30-minute staleness TTL. Tier-1 throttle
+doubles both (TTL 60 min, harvest 10 min). R15 counters are per symbol;
+the plane pauses only on majority-of-watchlist aborts. Reader-tier calls
+are counted per filing, not per cycle, and are capped per day by the
+spend governor's research category (doc 10 §10.4).
 
-- **Base cadence: 5 minutes**, matching the thesis-refresh cadence doc 04 §4.1
-  already assumes. `harvest` / `extract` / `fuse` run every cycle for the whole
-  watchlist — they are pure I/O plus deterministic code, not LLM calls, so
-  running them often is nearly free.
-- **`hypothesize` and `critique` are gated, not unconditional.** Per symbol,
-  they re-run only when: (a) a new TRIGGER-eligible feature has landed for that
-  symbol since the last thesis, or (b) the existing thesis is older than a
-  30-minute staleness TTL, whichever comes first. A quiet symbol gets a thesis
-  refresh roughly twice an hour; a symbol with active TRIGGER features gets one
-  every time something changes, capped by R15 below.
-- **Why this matters for cost:** the R15 ceiling (40 LLM calls/cycle/symbol) is
-  a safety ceiling for a burst — e.g. an NFP print firing every macro symbol at
-  once — not the steady-state rate. Steady state, worst case 5 watchlist
-  symbols: 5 × 2 refreshes/hour × 2 calls (hypothesize + critique) = 20 LLM
-  calls/hour minimum, rising with feature activity but bounded well below the
-  R15 ceiling except during genuine bursts. This is the number doc 10 §10.4's
-  spend caps were sized against, and it is why JEV (4 calls/cycle, cached 60 s)
-  is cheap relative to research even before any throttling.
-- **Tier-1 throttle (doc 10 §10.4) now has a concrete meaning:** "research
-  cycle interval doubled" means the 30-minute staleness TTL becomes 60 minutes
-  and the 5-minute harvest cadence becomes 10 minutes. It is a parameter change,
-  not a vague slowdown.
-- **"Consecutive aborted cycles" (R15) is counted per symbol, not pooled across
-  the plane.** Three consecutive aborts *for one symbol* pause research for
-  that symbol only — its features age out on their normal TTL and it trades on
-  whatever was last valid, same as any other stale-source case (§9.3). The
-  whole plane pauses only if a majority of watchlist symbols are aborting
-  simultaneously, which is treated as a systemic failure (e.g. the sandbox or
-  the LLM provider is down) rather than a per-symbol data problem.
+## 8.3b Known residual risks (named so they can be watched)
 
-## 8.3b Known residual risks (named so they can be watched, not solved by prose)
-
-1. **Prompt injection via harvested content.** Filings, web pages, and posts are
-   attacker-influenced text fed to `hypothesize`/`critique`. Mitigations, in
-   order: schema validation drops anything that is not typed data (injection
-   cannot become a number because numbers only come from enums/buckets/counts);
-   the `critique` node is explicitly tasked to distrust single-source claims;
-   prose never sizes (doc 03 §3.3); R15 bounds a compromised loop's spend. What
-   is *not* claimed: that any of this stops a clever injection from biasing a
-   thesis. Thesis bias that survives must still pass JEV bands, consensus, and
-   R1–R9 — that defense in depth is the actual control.
-2. **Correlated model failure.** One bad JEV regime read can hit every symbol at
-   once (same model, same macro weather). Blast-radius controls: per-symbol
-   slow keys (a shared thesis does not force shared answers), R2 exposure caps
-   bound total loss, R13 sliced by regime catches the regime where it breaks,
-   and the `veto` question is scored independently of `enter`. No averaging
-   across symbols is ever used to dilute a veto.
-3. **Feature schema evolution.** `schema_version` (`f1`, `f2`…) is bumped on any
-   change; `ctx/` rejects unknown versions loudly. Journal rows keep the raw
-   feature bytes so old rows stay readable; replay pins the schema version it
-   was recorded with. A version bump forces the same fresh-paper-window rule as
-   any limit change.
-4. **Human sign-off fatigue.** G1's daily review is the highest-fatigue gate in
-   the system and fatigue approves things. Control: the review is a fixed
-   ≤15-minute checklist (drill states, R-trips, spend tier, calibration delta),
-   not an open-ended read-through — checklist frozen in Phase 0. Skipped or
-   rubber-stamped reviews are a promotion blocker, verified from the sign-off
-   log, not trusted on assertion.
+1. **Prompt injection via harvested content.** Mitigations in order: the
+   reader tier has no capabilities to abuse; outputs are schema-capped;
+   every number is span-verified deterministically; numbers only become
+   features through enums/buckets/counts; prose never sizes; R15 bounds
+   spend. Not claimed: that a clever injection cannot bias a *thesis*.
+2. **Correlated model failure.** One model misreading a regime hits every
+   symbol. Controls: per-symbol evidence, R2 caps, per-regime calibration
+   slices, and `latent_risk` scored independently of `enter` (sleeves
+   with `filter = jev_v4` only). No cross-symbol averaging dilutes a HOLD.
+3. **Temporal contamination of LLM outputs (v3).** A model that has seen
+   the future in training can "predict" it. Controls: pinned knowledge
+   cutoff per model, post-cutoff-only evaluation, forward shadow as the
+   primary evidence (doc 11 §11.0c).
+4. **Feature schema evolution.** `schema_version` bumps on any change;
+   `ctx/` rejects unknown versions loudly; replay pins recorded versions.
+5. **Human sign-off fatigue.** Fixed ≤ 15-minute checklist reviews;
+   rubber-stamped reviews are a promotion blocker.
 
 ## 8.4 Runaway-loop limits (R15, hard)
 
-Per research cycle, per symbol, enforced by the orchestrator and by the process
-supervisor independently:
+Per research cycle, per symbol, enforced by the orchestrator and by the
+process supervisor independently:
 
 | Limit | Value | On breach |
 |---|---|---|
-| LLM calls per cycle | 40 | Cycle aborted, `research_abort` logged. Partial in-memory/checkpoint state may exist for debugging, but NO partial feature bundle is ever published — the last complete bundle stands (see §8.5). |
+| LLM calls per cycle | 40 | Cycle aborted, `research_abort` logged; NO partial bundle is ever published — the last complete bundle stands (§8.5). |
 | Tool calls per cycle | 120 | Same |
 | Wall clock per cycle | 8 min | Same |
 | Tokens per cycle | 250k | Same |
-| Consecutive aborted cycles | 3 same-symbol → symbol paused; majority-of-watchlist in-window → plane degraded | Alert; last complete bundle stands (never partials); entries needing fresh research HOLD |
+| Consecutive aborted cycles | 3 same-symbol → symbol paused; majority-of-watchlist in-window → plane degraded | Alert; last complete bundle stands; entries needing fresh research HOLD |
 | Recursion / graph depth | 25 | Hard stop (LangGraph `recursion_limit`) |
 
-A cycle that aborts is not retried within the same interval. There is no
-exponential-retry path that can spend money without bound — that is the failure
-mode that kills unattended agent systems, and it is capped in three places.
-
-Budget-ledger durability (frozen): the per-(cycle,symbol) counters live in
-SQLite with a cycle registry alongside. A missing counters row for a cycle
-seen within the 7-day retention window is a deleted authority → the next
-reservation aborts, never fresh counters over live state. Only prune-aged
-cycles (registry memory past 30 days) may start over. The same rule covers
-every reader: snapshot/check/settle/invalidate abort on a deleted recent
-row instead of minting zeros. Old ledgers backfill the registry from
-surviving counters rows inside the migration itself, so upgraded
-deployments are protected immediately. The migration is crash-safe
-(CREATE + backfill in one transaction; a present-but-empty registry
-over live counters is registry-only deletion, never healed — it
-aborts, because healing would resurrect cover for deleted
-authority).
-Historical row integrity (beyond table presence): every money
-table carries a same-transaction content digest (XOR of canonical
-row hashes plus exact counts/cents, maintained explicitly in each
-mutation's own SQLite transaction — SQLite atomicity means a crash
-leaves rows and digest both old or both new, never split, which
-closes the commit/bump crash seam by construction). Out-of-band SQL
-skips digest maintenance and denies as digest-mismatch at the next
-open — this covers UPDATE-usd/content edits that preserve every
-aggregate, which pure max/count roots cannot see. The digest table
-itself is mandatory at schema v3 on both ledgers: a missing digest
-is NEVER rebuilt, because rebuilding would silently re-baseline
-authority over possibly modified rows. The one-time v2→v3 migration
-(CREATE + recompute + version stamp in a single transaction) runs
-only for provably pre-digest ledgers — BOTH a pre-digest version
-AND a pre-digest marker shape — so a version reset alone cannot
-reach it; only a full marker forgery plus version reset could,
-which is the documented coherent-forgery residual (keyless roots
-detect corruption and non-coherent tamper; filesystem trust roots
-bound the rest). The marker mirrors the digest (re-baselined from
-in-DB truth post-commit; verify adopts the mirror when rows and
-digest agree, so crash lag self-heals and marker tamper is erased
-rather than honored). Malformed marker slots (missing keys,
-NaN/inf, non-int numerics) deny. The R15 side keeps an out-of-band
-cycle registry (sidecar file, 30-day window) whose marker adoption
-flag publishes BEFORE the sidecar file, so every crash direction is
-conservative (witness-without-sidecar safely re-adopts; the reverse
-order would leave a reusable sidecar-without-witness). Sole sidecar
-loss re-adopts from the verified registry.
-
-Trust model & boundary (Round-9, verified by throwaway PoC against
-`bb4733a`): the ledger proves MUTUAL CONSISTENCY (rows ↔ in-DB
-digest), deletion of any single object (table, digest, marker,
-sidecar, version), crash atomicity, and version/shape-gated
-migration — against crashes, partial writes, operator error, and
-non-coherent tamper. It does NOT prove history against a
-format-aware adversary with arbitrary SQLite write access who
-coherently rewrites rows AND digest together: that pair is
-self-consistent by construction (verified: a 15-line PoC using only
-the public hash algorithm re-baselined $149 to $0 with no marker
-touch and no version reset), and the marker mirror adopts FROM db
-truth — lag-tolerant by requirement, so it cannot cross-check. No
-deterministic check on (DB, marker) can distinguish legitimate crash
-lag (auto-recovery required: 116 hardening tests pin it) from
-coherent forgery; they are observationally identical. Closing that
-would need a non-readable secret or external anchor (HSM, TPM,
-remote transparency log, OS-mediated key) — none exists in Phase-D
-scope, and a same-disk key file or SQLite triggers would be theater
-against a disk-write actor (readable secrets don't bind; triggers
-don't authenticate the writer). That actor is host-compromise class
-(it can equally patch the plane source itself), so coherent
-multi-object forgery bottoms out at host/filesystem integrity — the
-same root frozen-code integrity rests on. Marker digest/count/cents
-fields are therefore a lag-tolerant recovery mirror and shape
-tripwire (telemetry + baseline), NOT an authority root; the
-authority is rows+digest mutual consistency under the gates above.
-Thread identity cannot resurrect a budget: run_cycle refuses a thread_id
-whose checkpoint is older than the 7-day R15 window (same cycle_id never
-mints a second budget). A checkpoint whose age cannot be established —
-lookup failure, unreadable timestamp, or a checkpoint id with no
-timestamp — is refused, not treated as absent. A checkpoint dated
-beyond the 300 s skew allowance, or with a timezone-less timestamp
-(host-local interpretation), is likewise refused. A fail-closed reader error during cadence
-accounting is blocked evidence (r15-budget-unreadable), never a silent
-under-count. Established database files never regrow tables: a missing
-table on a verified schema (spans, holds, counters, leases, meta —
-and cycles at schema version 2) denies instead of recreating empty,
-so deleted spend history can never reset to $0 under a surviving
-marker; creation runs only on provable first init, pristine files,
-or the explicit v1→v2 cycles migration (all inside one transaction).
-Every counters/lease row is semantically validated on read
-(non-negative counters, 0/1 dead/settled flags, finite walls) and by
-CHECK constraints on write — corruption aborts, never normalizes.
-
-Trusted-config boundary (explicit, not mechanically enforced): the
-graph takes `extract_workers`, `tool_factory`, and
-`executor_factory` as deployment-provided callables. The
-"only provider path is run_gated()" property holds by frozen
-deployment discipline (test doubles stay in tests); the code does
-not and cannot prove a substituted worker is provider-free. Do not
-present it as a runtime guarantee.
+A cycle that aborts is not retried within the same interval. The budget
+ledger's durability, digest, migration, trust-model, and trusted-config
+rules moved verbatim to `appendix/08-ledger-integrity-and-trust-record.md`
+and remain binding (coherent multi-object forgery bottoms out at host
+integrity — named, not solved by prose).
 
 ## 8.5 Feature contract v2 (locked — the only thing that crosses the boundary)
 
@@ -447,61 +310,107 @@ Hard rules on this record:
   not_scheduled/unavailable/na — doc 03 §3.4), not a single absent-list.
   `not_scheduled` (nothing expected) is never a negative signal.
 
-## 8.6 What "done" means
+## 8.6 What "done" means (live plane)
 
-- [ ] Graph runs 7 days unattended with SQLite checkpointing; kill -9 at a random
-      node resumes correctly and produces no duplicate features.
-- [ ] R15 limits proven by a forced runaway test (a tool stubbed to loop).
-- [ ] Isolation proven: the research-plane user cannot write the journal, the
-      `HALT` file, the stage file, or read broker credentials. Tested, not assumed.
-- [ ] R12 proven: a feature with a future `observed_at_ns` is dropped by `ctx/`.
-- [ ] Egress proven: a worker attempting a non-allowlisted destination fails
-      at the sandbox network layer (proxy/firewall deny, counted) — the
-      prompt is not the boundary.
-- [ ] Bundle atomicity proven: kill -9 mid-`emit` never exposes a partial
-      bundle; the reader accepts only manifest-committed generations.
+- [ ] Graph runs 7 days unattended with SQLite checkpointing; kill -9 at a
+      random node resumes correctly with no duplicate features.
+- [ ] R15 limits proven by a forced runaway test.
+- [ ] Isolation proven: the research user cannot write the journal,
+      `HALT`, the stage chain, or `candidates.jsonl`, and cannot read
+      broker credentials. Tested, not assumed.
+- [ ] R12 proven: a future-`observed_at_ns` feature is dropped by `ctx/`.
+- [ ] Egress proven at the network layer for sandboxed workers.
+- [ ] Bundle atomicity proven under kill -9 mid-`emit`.
 - [ ] Langfuse shows per-node token + dollar attribution for a full day.
-- [ ] `features.jsonl` schema frozen and consumed by a stub `ctx/` reader.
-- [ ] Cadence gating proven: a quiet symbol refreshes on the 30-min TTL, not
-      every 5-min cycle; a symbol with a fresh TRIGGER feature refreshes
-      immediately; measured steady-state LLM-call rate matches the §8.3a estimate
-      within 2×.
+- [ ] (v3) Reader tier proven capability-free: a document containing tool
+      calls, code, URLs, and instructions produces only schema-valid JSON
+      or a rejection — never an action; the verifier rejects any number
+      without a matching source span.
+- [ ] Cadence gating proven against the §8.3a estimate within 2×.
+
+## 8.7 Research factory (v3)
+
+The factory is how AI earns its keep in this fund: the same loop real
+quant shops now run (agents propose signals, write the code, and backtest
+before a human sees them; outputs pass the same thresholds as human
+research), bounded by our governance.
+
+Loop (every step logged to the trial ledger, doc 11 §11.0a):
+1. **Intake** — hypothesis cards from the weekly reflection (≤ 3 per
+   week, doc 11 §11.4), from `lessons.jsonl` (doc 09 Tier D), or from a
+   human. Each card: claim, mechanism, citations, data needed, expected
+   sign and magnitude range, how it could be wrong.
+2. **Pre-registration** — the agent drafts a pre-registration from the
+   doc 02 template; a deterministic validator checks completeness (spec,
+   variants, windows, holdout, cost model, kill criteria); a human
+   approves before any data is touched.
+3. **Implementation** — a sandboxed CodeAgent writes the sleeve code
+   against the harness API only (no network, trusted local datasets,
+   read-only mounts, import allowlist below). The harness — not the agent —
+   loads data, applies costs, splits windows, and computes statistics, so
+   generated code cannot leak the holdout or choose its own costs.
+4. **Gate** — the harness runs the A-gate (doc 11 §11.3a) and writes the
+   report + trial-ledger rows. The agent cannot rerun a failed
+   pre-registration with different parameters; that is a new card.
+5. **Triage** — humans see only gate-passing reports plus a weekly count
+   of failures (the failure count is part of the evidence).
+
+Factory rules:
+- Runs as `mirofactory`, on dataset copies, with no credentials except the
+  research-model key behind the spend gate (category `experiment`).
+- Import allowlist (LOCKED 2026-09-18, exact): stdlib `json, re, datetime,
+  urllib, xml, html, math, statistics, collections, itertools, hashlib,
+  base64` + `requests` + `bs4` + `lxml` (parser only) + `pydantic` +
+  `pandas` (no eval) + `feedparser`; v3 adds `numpy` for the factory only.
+  No `subprocess`, no `os.system`, no raw `socket`, no `pickle`, no
+  `yaml.load`. Factory code has no network at all (the fetch tools live in
+  the harness, not in generated code).
+- LLM-derived signals are evaluated only on post-cutoff data (doc 11).
+- The factory cannot write anywhere near the trading tree; promotion of
+  a factory sleeve is the doc 11 path like any other.
+
+## 8.8 Model selection and pinning (v3)
+
+- Roles and pins: `reader` (extraction), `thesis` (hypothesize),
+  `verifier` (critique), `factory` (code/pre-registration drafting), and
+  optional `jev_v4`. Each role pins `model_id`, provider, revision,
+  **knowledge cutoff date**, temperature, reasoning mode, skill-file hash,
+  tool-schema hash, container image digest, dependency lock hash (D3).
+  An unpinned call is a build failure.
+- Selection is a measured bake-off per role on a fixed, post-cutoff
+  evaluation set: accuracy (reader: span-verified field accuracy; verifier:
+  catch rate on seeded false claims), cost per task under the governor's
+  pricing table, and latency. Candidates include the currently authorized
+  research model and other provider-available models (e.g. Anthropic
+  Claude Haiku/Sonnet-class for reader/verifier roles). No model is chosen
+  by reputation or leaderboard rank.
+- **Skills as pinned method files (v3):** each LLM role's method (e.g.
+  earnings guidance extraction, falsifiable-thesis structure, macro-rates
+  context, catalyst calendar) is a versioned skill file adapted from the
+  `financial-services` skill structure, hashed into the role pin, and
+  drift-checked in CI. Paid-data steps in the source skills are replaced
+  by free-data equivalents (FRED/Treasury/EDGAR) or removed.
 
 ## Locked decisions
 
-- LangGraph orchestrates; smolagents does leaf extraction inside a Docker sandbox.
-- Observability is self-hosted Langfuse + OpenTelemetry. No paid tier, ever, for
+- LangGraph orchestrates the live plane; smolagents CodeAgent runs only in
+  the research factory, in a Docker sandbox with no network.
+- Untrusted text is read only by a capability-free reader tier whose
+  output is schema-capped and deterministically verified (v3).
+- Observability is self-hosted Langfuse + OpenTelemetry. No paid tier for
   core operation.
-- Agents produce validated feature bundles (`features.jsonl`) plus the human-only
-  digest (`research_digest.jsonl`). Only the former may cross into C++; the
-  latter never enters the trading boundary. Nothing else.
-- Agents cannot size, order, veto, resume, or promote. One-way boundary, enforced
-  by OS permissions.
-- Self-modifying / self-improving agent frameworks are banned from the trading
-  host (D3, and the human-promote-only rule in doc 11).
-- `LocalPythonExecutor` is forbidden wherever trading credentials, journal, `HALT`,
-  or `STAGE` are reachable. Recovery requires checkpoint + external supervisor +
-  idempotent nodes — checkpoints alone are not durability.
-- Version pins (LOCKED 2026-09-18, human-accepted):
-  `langgraph==1.1.6`, `smolagents==1.26.0`, self-hosted Langfuse (`langfuse==4.15.4`
-  client). Rationale recorded (not hype): 1.1.6 is the tested pin, not a
-  best-version claim — upgrades re-pin with measured regression results,
-  never release announcements. Any upgrade is a D3 version bump
-  with a fresh paper window, never a silent pip update.
-- Research models are pinned per node at build (no provider is chosen until the
-  key exists): `research_model_id`, provider, revision, temperature, reasoning
-  mode, tool-schema hash, system-prompt hash, container image digest,
-  dependency lock hash. An unpinned research call is a build failure (D3).
-- Deterministic-first topology: harvest/parse/normalize/fuse are deterministic
-  code; LLM nodes are hypothesize/critique only. The LLM never parses, joins,
-  maps symbols, validates timestamps, or classifies — code does that.
-- The §8.2 framework scores are selection judgment, not benchmarks. §8.6 proves
-  the workload (crash recovery, duplicates, tokens, wall time, sandbox escape
-  tests) with measurements.
-- Sandbox build requirements (Phase 2.5 implements, listed so the image is not
-  improvised): immutable digest + SBOM + vuln scan, seccomp + AppArmor,
-  no Docker socket, no writable host mounts (explicitly allowlisted read-only
-  bind mounts only), PID/fd/process
-  limits, CPU/RAM/disk quotas, DNS/egress via a fetch proxy — generated code
-gets tool functions (SEC/FRED/RSS fetchers, parser, validator), not general
-  HTTP.
+- Agents produce validated feature bundles (`features.jsonl`) plus the
+  human-only digest (`research_digest.jsonl`). Only the former may cross
+  into C++. The factory produces reports and pre-registrations only.
+- Agents cannot size, order, veto, resume, or promote.
+- Self-modifying / self-improving agent frameworks are banned from any
+  capital host (D3, doc 11).
+- Version pins (LOCKED 2026-09-18, human-accepted): `langgraph==1.1.6`,
+  `smolagents==1.26.0`, self-hosted Langfuse (`langfuse==4.15.4` client).
+  Upgrades re-pin with measured regression results, never release
+  announcements; any upgrade is a D3 version bump with a fresh paper
+  window.
+- Research models are pinned per role with their knowledge cutoff (§8.8).
+- Deterministic-first: harvest/parse/normalize/fuse/verify are code; LLMs
+  read, hypothesize, draft, and write factory code — never parse
+  authoritatively, join, map symbols, validate timestamps, or classify.

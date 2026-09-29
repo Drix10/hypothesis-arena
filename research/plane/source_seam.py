@@ -1,58 +1,44 @@
 """Phase-2.5 production source→graph seam (doc 08 §8.3 harvest).
 
-ARCHITECTURE BOUNDARY (explicit, not silent):
 - plan/08 §8.3 assigns the graph harvest node to pull the doc-09
-  sources. The five accepted adapters (EDGAR/FRED/Treasury/BLS/BEA)
-  ARE that harvest implementation: pure I/O, no LLM, harvest-envelope
-  shaped. This seam is the single orchestration point around them.
-- ARCHITECTURE.md §5 ("collector is the poller, sources/ are probes")
-  describes the FROZEN P1 pipeline (collect.py → data/signals), which
-  is untouched and keeps running. Within Phase 2.5 there is exactly
-  ONE poll path per source: the adapter singletons owned here, one
-  instance per source for the seam's lifetime (plane/runner.py owns
-  the seam for the process; no per-cycle reconstruction, no globals).
+  sources. The five adapters (EDGAR/FRED/Treasury/BLS/BEA) are that
+  implementation (pure I/O, no LLM, harvest-envelope shaped); this seam
+  is the single orchestration point around them.
+- ARCHITECTURE.md §5 describes the frozen P1 pipeline (collect.py ->
+  data/signals), which keeps running. In Phase 2.5 there is one poll
+  path per source: adapter singletons owned here for the seam's
+  lifetime (plane/runner.py owns the seam per process).
 - Credentials live only in seam construction (env). Outage evidence
-  travels via stamps + heartbeat files. Nothing here trades: this is
-  not the hot path, and exits never depend on it.
-- Pacing is production-real: the seam wires the real sleeper and a
-  monotonic clock into every adapter (their accepted 1 req/s pacing,
-  backoff, and 429 throttle actually wait). Tests inject fakes via
-  explicit build_seam params — never by patching adapters after
-  construction.
-- CANONICAL AUTHORITY: there is exactly one canonicalization — the
-  frozen collector/classify.py (validate_record + temporal_violation
-  + ingest_signal + content_hash over source/source_id/title/text/
-  url/links/published_at, volatile timing excluded). The seam adapts
-  each adapter record into that canonical-record shape, validates
-  with the frozen validator, ingests with the frozen ingester into
-  the SHARED records table, and uses the RETURNED hash as the
-  resolver/ctx_read canonical_hash. No parallel hash namespace, no
-  seam-v1 hashing, no invented verdicts (ingest assigns them).
-- Lineage DB honors MIRO_CANONICAL_DB exactly like the frozen
-  collector/reader; a lineage persistence/validation failure is
-  fail-closed BEFORE publish (the record never enters recs_all, the
-  drop is counted visibly per source).
+  travels via stamps + heartbeat files. Nothing here trades or sits on
+  the exit path.
+- The seam wires the real sleeper and a monotonic clock into every
+  adapter, so their 1 req/s pacing, backoff and 429 throttle wait.
+  Tests inject fakes through build_seam params.
+- Canonical authority is the frozen collector/classify.py
+  (validate_record + temporal_violation + ingest_signal + content_hash
+  over source/source_id/title/text/url/links/published_at, volatile
+  timing excluded). Each adapter record is adapted to that shape,
+  validated, ingested into the shared records table, and the returned
+  hash is the resolver/ctx_read canonical_hash. There is no separate
+  hash namespace.
+- The lineage DB honors MIRO_CANONICAL_DB like the collector/reader. A
+  lineage persistence or validation failure drops the record before
+  publish and is counted per source.
 - History: harvest returns (recs, stamps, history) with bounded
-  per-source {h, ts} observations using ONLY actual poll timestamps;
-  a same-timestamp repeat appends nothing (no fabricated +1s, no
-  manufactured coverage). The graph/state→publish path carries it to
-  the bundle, preserving frozen-feed detection.
-- RESTART/RESUME: process memory (_by_hash, _hist, last_stamps)
-  is a cache, never the authority. Canonical lookup falls back to
-  a seam-owned projection TABLE in the same lineage DB (written
-  atomically with the authority ingest, tamper-evident via canon +
-  raw checksums, cross-checked against the frozen records row and
-  classify.content_hash(raw_json) on EVERY miss; absent/corrupt/
-  mismatched → fail closed). History recovers ONLY from
+  per-source {h, ts} observations at actual poll timestamps. A repeat
+  of the same timestamp appends nothing, so frozen-feed detection is
+  not fooled.
+- Restart: process memory (_by_hash, _hist, last_stamps) is a cache.
+  Canonical lookup falls back to a seam-owned projection table in the
+  lineage DB (written atomically with the authority ingest, protected by
+  canon + raw checksums, and cross-checked against the records row and
+  classify.content_hash(raw_json) on every miss; absent, corrupt or
+  mismatched fails closed). History recovers only from
   manifest-committed verified generations (plane.emit.
-  committed_histories — orphans/corrupt/mismatched files
-  contribute nothing), each hash bound to real records lineage per
-  source. Watermarks derive from the checkpointed cycle harvest
-  state (not memory), so a resumed emit reuses the original
-  cycle's coverage. No durable state → warming tail (no
-  frozen-feed coverage claimed, never fabricated). A resumed
-  Runner over the same DB + bundle dir + checkpointer therefore
-  resolves the same hashes and carries the same tail.
+  committed_histories), each hash bound to records lineage per source.
+  Watermarks come from the checkpointed cycle harvest state, so a resumed
+  emit reuses the original coverage. With no durable state the tail is
+  empty (warming) and no frozen-feed coverage is claimed.
 """
 import collections
 import hashlib
@@ -127,11 +113,9 @@ def _load_sym_to_cik(path=None):
 
 
 def _pk_of(rec):
-    """Adapter-record primary key for the lineage source_id column.
-
-    Uses each adapter's own dedupe identity (never synthesized: a
-    record missing its identity cannot be lineage-addressed).
-    """
+    """Adapter-record primary key for the lineage source_id column: the
+    adapter's own dedupe identity (a record without one cannot be
+    addressed)."""
     src = rec.get("source_id")
     try:
         if src == "edgar_8k":
@@ -172,10 +156,9 @@ def _iso(ns):
 def _collector_record(rec, estimated, retrieved_iso):
     """Adapter record -> frozen collector canonical-record shape.
 
-    Only fields the collector authority owns (its KNOWN_FIELDS):
-    identity, human labels, provenance URL, publication/observation
-    instants. Labels are deterministic mechanical renderings, never
-    interpretations (no direction, no scores, no prose).
+    Only fields in the collector's KNOWN_FIELDS: identity, labels,
+    provenance URL, publication/observation instants. Labels are
+    mechanical renderings (no direction, scores or prose).
     """
     src = rec.get("source_id")
     pk = _pk_of(rec)
@@ -216,15 +199,12 @@ def _collector_record(rec, estimated, retrieved_iso):
 def to_canonical(rec, ingested_ns):
     """Adapter record -> frozen resolver canonical shape (or None).
 
-    The canonical_hash is produced by the FROZEN collector authority
-    (validate + temporal check + ingest into the shared records
-    table), never by seam-local hashing. Returns None on any defect
-    (missing keys, wrong types, unregistered source/kind, non-bool
-    estimated flag, frozen-validation failure, temporal violation,
-    lineage persistence failure): the caller counts, never emits.
-    observed_at_estimated MUST be a real bool when present (missing
-    stays conservative/estimated); truthy strings/ints must never
-    decide timestamp authority.
+    The canonical_hash comes from the frozen collector (validate +
+    temporal check + ingest into the shared records table). Returns None
+    on any defect (missing keys, wrong types, unregistered source/kind,
+    non-bool estimated flag, validation failure, temporal violation,
+    persistence failure); the caller counts it. observed_at_estimated
+    must be a real bool when present (missing is treated as estimated).
     """
     if not isinstance(rec, dict):
         return None
@@ -257,8 +237,7 @@ def to_canonical(rec, ingested_ns):
     ref = rec.get("entity_ref")
     if ref is not None and not isinstance(ref, dict):
         return None
-    # Timestamp authority: estimated instants NEVER become
-    # published_ns (resolver would treat them as source truth).
+    # estimated instants must not become published_ns (the resolver treats it as source truth)
     pub_ns = None if flag else obs_ns
     return {
         "source_id": src,
@@ -267,10 +246,8 @@ def to_canonical(rec, ingested_ns):
         "published_ns": pub_ns,
         "ingested_ns": ingested_ns,
         "symbols": list(syms),
-        # value is presence-count (one validated source row exists),
-        # never a measure and never directional: the resolver requires
-        # a value dict, and count-1 states exactly what this layer
-        # knows.
+        # value is a presence count (one validated row), not a measure or a
+        # direction; the resolver requires a value dict
         "value": {"type": "count", "v": 1},
         "effect": None,
         "parser_confidence": "high",
@@ -285,10 +262,9 @@ def to_canonical(rec, ingested_ns):
 class CanonicalStore:
     """hash -> canonical registry over the shared lineage table.
 
-    note() converts via to_canonical() and persists through the
-    FROZEN collector ingester. Validation, temporal, or persistence
-    failure returns None (fail-closed BEFORE publish); successes are
-    counted per outcome for ops visibility.
+    note() converts via to_canonical() and persists through the frozen
+    collector ingester; any failure returns None before publish.
+    Outcomes are counted.
     """
 
     def __init__(self, db_path=None, env=None):
@@ -304,13 +280,10 @@ class CanonicalStore:
             os.makedirs(parent, exist_ok=True)
         con = sqlite3.connect(self.db_path)
         _classify.init_db(con)
-        # Seam-owned projection cache (NOT a second authority: the
-        # sole writer is note() from authority-returned data, keyed
-        # by the authority hash; the reader falls back to it on
-        # memory miss after restart, cross-checked against the frozen
-        # authority row every time). Older two-column tables gain the
-        # checksum columns (unverifiable old rows fail closed by
-        # construction until re-noted).
+        # projection cache, not a second authority: note() is the only writer,
+        # keyed by the authority hash, and reads are cross-checked against the
+        # frozen row. Older two-column tables gain the checksum columns; their
+        # old rows fail verification until re-noted.
         con.execute(CANON_CACHE_DDL)
         have = {r[1] for r in con.execute(
             "PRAGMA table_info(seam_canonical)").fetchall()}
@@ -365,9 +338,8 @@ class CanonicalStore:
         hit = self._by_hash.get(h)
         if hit is not None:
             return hit
-        # Restart path: the projection is cache-only, cross-checked
-        # against the frozen authority on EVERY miss. Tampered JSON,
-        # wrong source, missing/corrupt authority row -> None.
+        # restart path: tampered JSON, wrong source or a missing/corrupt
+        # authority row -> None
         if not isinstance(h, str) or not h:
             return None
         try:
@@ -415,7 +387,7 @@ class CanonicalStore:
         return canon
 
     def items(self):
-        """Public read access: (content_hash, canonical) pairs."""
+        """(content_hash, canonical) pairs."""
         return list(self._by_hash.items())
 
 
@@ -447,10 +419,9 @@ class Seam:
         self.last_epoch = None
 
     def parser_extract(self, rec, budget):
-        """Seam-owned deterministic extract (deps[\"parser_extract\"]):
-        adapter record -> parser candidate carrying ONLY
-        authority-resolved lineage. Unknown/missing lineage yields no
-        candidate (dropped + counted downstream, never emitted)."""
+        """Deterministic extract (deps["parser_extract"]): adapter record ->
+        parser candidate carrying only authority-resolved lineage. Unknown
+        lineage yields no candidate (counted downstream)."""
         try:
             budget.charge_tool()
         except Exception:
@@ -474,12 +445,10 @@ class Seam:
         return [cand]
 
     def watermarks(self, state=None):
-        """Seam-owned publisher callback: per-source
-        {last_observation_at, cursor}. Checkpoint-resume safe: the
-        stamps come from the CURRENT cycle's harvest state (which the
-        graph checkpoints — a resumed emit reuses the original
-        cycle's coverage), falling back to process memory only when
-        the caller passes no state. Only healthy polls vouch."""
+        """Publisher callback: per-source {last_observation_at, cursor}.
+        Stamps come from the current cycle's checkpointed harvest state, so
+        a resumed emit reuses the original coverage; process memory is used
+        only when no state is passed. Only healthy polls vouch."""
         stamps = None
         epoch = self.last_epoch
         if isinstance(state, dict):
@@ -510,8 +479,8 @@ class Seam:
             and type(e.get("ts")) is int and e["ts"] > 0
 
     def _merge_hist(self, sid, entries):
-        """Merge persisted observations: shape-checked, sorted,
-        strictly increasing only, bounded. Returns count kept."""
+        """Merge persisted observations (shape-checked, sorted, strictly
+        increasing, bounded). Returns the count kept."""
         dq = self._hist.get(sid)
         if dq is None:
             return 0
@@ -526,8 +495,7 @@ class Seam:
         return kept
 
     def _history_lineage_ok(self, con, sid, h):
-        """A recovered history hash is vouched ONLY if the frozen
-        authority holds that exact hash under that exact source."""
+        """True only if the frozen authority holds this hash under this source."""
         try:
             row = con.execute(
                 "SELECT 1 FROM records WHERE content_hash=? AND "
@@ -537,16 +505,12 @@ class Seam:
         return row is not None
 
     def restore_from_bundles(self, outdir):
-        """Restart recovery: rebuild bounded history tails from
-        manifest-committed VERIFIED generations only (see
-        plane.emit.committed_histories — orphans, corrupt bytes, and
-        manifest-mismatched envelopes contribute nothing). Each
-        recovered hash must additionally be bound to real canonical
-        lineage for its source, else that entry is dropped fail-
-        closed. Only persisted observations, never synthesized.
-        Returns {source: kept}. No committed generations → empty
-        tails = explicit warming (no frozen-feed coverage claimed
-        until real polls rebuild depth)."""
+        """Rebuild bounded history tails from verified manifest-committed
+        generations (plane.emit.committed_histories). Each recovered hash
+        must also be bound to canonical lineage for its source, else the
+        entry is dropped. Returns {source: kept}. With no committed
+        generations the tails stay empty (warming) until real polls
+        rebuild depth."""
         from . import emit as _emit_mod
         recovered = {}
         pooled = {}
@@ -571,8 +535,7 @@ class Seam:
                 bound = [e for e in entries
                          if self._valid_hist_entry(e) and
                          self._history_lineage_ok(con, sid, e["h"])]
-                # Single merge: an honest bounded suffix of everything
-                # durable (sorted, strictly increasing).
+                # single merge: bounded suffix of all durable observations
                 if bound:
                     recovered[sid] = self._merge_hist(sid, bound)
         finally:
@@ -605,11 +568,9 @@ class Seam:
             dropped_lineage = 0
             last_h = None
             for r in recs:
-                # Fail-closed BEFORE publish: without authoritative
-                # lineage persistence the record is not harvestable.
-                # The authority hash rides ON the record downstream so
-                # the graph's parser path can only ever emit
-                # authority-resolved lineage (never prose alone).
+                # without persisted lineage the record is not harvestable; the
+                # authority hash rides on the record so the parser path only
+                # emits authority-resolved lineage
                 h = self.store.note(r, ingested_ns)
                 if h is None:
                     dropped_lineage += 1
@@ -628,9 +589,7 @@ class Seam:
             stamps[src.source_id] = stamp
             dq = self._hist[src.source_id]
             if kept:
-                # Honest history only: append strictly on a newer
-                # ACTUAL poll timestamp. A same-timestamp repeat keeps
-                # the existing tail (never a fabricated +1).
+                # append only on a newer actual poll timestamp
                 if not dq or ingested_s > dq[-1]["ts"]:
                     dq.append({"h": last_h, "ts": ingested_s})
             if dq:
@@ -642,9 +601,7 @@ class Seam:
                         os.path.join(self.heartbeat_dir,
                                      src.source_id + ".json"), hb)
                 except Exception as e:
-                    # Heartbeat failure is operational evidence: mark
-                    # the stamp visibly, never erase it. Source health
-                    # (ok/stale) still describes the poll itself.
+                    # mark the stamp on heartbeat failure; health still describes the poll
                     stamps[src.source_id]["heartbeat_error"] = \
                         "%s" % type(e).__name__
         self.last_stamps = stamps
@@ -664,14 +621,12 @@ def build_seam(env=None, heartbeat_dir=None, clock=None, sleeper=None,
                mono=None, transports=None, entity_map_path=None,
                contact=None, fred_key=None, bea_id=None,
                lineage_db_path=None):
-    """Construct + own the five adapters once. Never raises for a
-    misconfigured source: the failure becomes its stamp, fail-closed.
-    Production wiring is real: sleeper defaults to time.sleep and
-    pacing runs on time.monotonic unless tests inject fakes.
-    lineage_db_path defaults to the MIRO_CANONICAL_DB-honoring shared
-    canonical DB (same authority ctx_read checks); tests inject a
-    scratch path. Explicit key/contact overrides exist for tests;
-    default is env.
+    """Construct and own the five adapters once. A misconfigured source
+    does not raise; the failure becomes its stamp. sleeper defaults to
+    time.sleep and pacing to time.monotonic unless tests inject fakes.
+    lineage_db_path defaults to the MIRO_CANONICAL_DB-honoring shared DB
+    (the one ctx_read checks). Key/contact overrides are for tests;
+    the default is env.
     """
     src_env = os.environ if env is None else env
     clock = clock or time.time
@@ -729,6 +684,6 @@ def build_seam(env=None, heartbeat_dir=None, clock=None, sleeper=None,
     except Exception as e:
         sources.append(_Source("bea_nipa_gdp",
                                config_error="%s" % type(e).__name__))
-    # Deterministic source order (registration order above).
+    # source order follows registration order above
     return Seam(sources, heartbeat_dir=heartbeat_dir, clock=clock,
                 db_path=lineage_db_path, env=src_env)

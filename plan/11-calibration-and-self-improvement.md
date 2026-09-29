@@ -1,9 +1,72 @@
-# 11 — Calibration, Shadow Evaluation, and Promotion
+# 11 — Validation, Calibration, Shadow Evaluation, and Promotion (freeze v3)
 
-Two jobs: know whether JEV's probabilities mean anything, and change the system
-only when the evidence clears a bar that published LLM-trading work does not.
+Three jobs: prove that a sleeve has edge net of everything, know whether
+any probabilistic AI component means what it claims, and change the system
+only when the evidence clears a bar that published LLM-trading work does
+not. Nothing in this doc promotes anything by itself. Every arrow ends at
+a human. Freeze v3 adds §11.0 and §11.3a–b; §§11.1–11.3 are the freeze-v2
+contract, unchanged, and apply wherever a sleeve uses `filter = jev_v4`.
 
-Nothing in this doc can promote anything by itself. Every arrow ends at a human.
+## 11.0 The validation standard (v3)
+
+### 11.0a Global trial ledger
+
+Every backtest, variant, parameter set, or evaluation run by anyone —
+human, harness, or research factory — appends one row to a single
+append-only, hash-chained trial ledger **before** results are shown:
+trial id, hypothesis card id, pre-registration hash, family, variant,
+dataset manifest hashes, code hash, cost model version, window, split
+scheme, metrics, verdict, runner identity, timestamp. Failed, crashed, and
+abandoned runs are rows too. The ledger is the only source of the search
+count N used by every multiple-testing correction; declared counts that
+disagree with it void the run. Head checkpoints are signed off-host like
+the journal (doc 05 §5.5). Rows are never edited or deleted.
+
+### 11.0b Statistics standard (necessary, never sufficient)
+
+- Splits: walk-forward with purging and embargo where labels overlap;
+  combinatorial purged cross-validation (CPCV) when choosing among
+  registered variants; one final untouched holdout never used for any
+  choice (default: the last 3 years or last 25% of the sample, whichever
+  is longer, fixed in the pre-registration).
+- Sharpe-based statistics (bootstrap CI, 2x-cost test, DSR, MinTRL, PBO) use
+  returns in excess of the cash leg; a sleeve parked in T-bills must not
+  score on the T-bill yield. DSR's cross-trial variance is floored at the
+  sampling variance of one Sharpe estimate, because a handful of variants
+  cannot estimate it.
+- Metrics: DAILY portfolio returns (as §11.3), net of `cost_v2`, with
+  stationary-bootstrap confidence intervals; Sharpe inference with HAC
+  standard errors; max drawdown; turnover; exposure.
+- Overfitting diagnostics: Deflated Sharpe Ratio with N from the ledger;
+  Probability of Backtest Overfitting when ≥ 2 variants; minimum
+  track-record length (MinTRL) for the observed Sharpe. These are
+  **necessary**: a contrived oracle has passed DSR and PBO in published
+  testing, so passing them proves little and failing them is decisive.
+- New, non-literature signals (e.g. from the research factory): holdout
+  t-statistic ≥ 3.0 (multiple-testing standard).
+- Literature-derived sleeves: planning estimates apply a 50% haircut to
+  published effect sizes (post-publication decay ≈ 58% on average); the
+  haircut estimate must still clear 2× cost.
+
+### 11.0c Temporal-contamination control for LLM evidence
+
+A language model trained on data through date C "knows" outcomes before
+C. Any evaluation in which an LLM output influences a feature, a filter,
+or a candidate uses **only data timestamped after C + 30 days**, where C
+is the role pin's recorded knowledge cutoff (doc 08 §8.8); an undisclosed
+cutoff is taken as the model's public release date. Consequences: LLM
+components are judged mostly on forward shadow; pre-cutoff backtests of
+LLM components are labeled contaminated and carry zero promotion weight;
+a model upgrade restarts the clock. Deterministic sleeves are unaffected.
+
+### 11.0d Transferability
+
+Promotion evidence counts only if produced under the live constraint set
+of the target stage: long only, cash account with the settlement ledger
+simulated, 1×, allowlisted instruments, `cost_v2`, the signal/data timing
+the live sleeve will have (SIP availability delays included). Evidence
+from shadow books that short, lever, or trade non-allowlisted instruments
+is research, never promotion evidence.
 
 ## 11.1 Calibration tracking (online, automatic)
 
@@ -157,7 +220,8 @@ Everything not live runs in shadow, permanently:
 - **Champion** — the live configuration. One only.
 - **Challengers** — up to 3 concurrent variants (threshold set, feature set, model,
   prompt/question version). Each consumes the same frozen snapshots, produces
-  decisions, and is scored on simulated fills using the doc 06 §6.5 paper model.
+  decisions, and is scored on simulated fills using the doc 06 paper fill model (`paper_fill_v1`,
+  wrapped by `cost_v2` for v3 sleeves, doc 06 §6.0a).
   Challengers place no orders and hold no capital.
 - Challengers get their own `question_set_version` and their own cost tag, so
   their AI spend is visible and counts against the caps in doc 10 §10.4.
@@ -237,43 +301,90 @@ stage gates in doc 10. A promoted change does not inherit its predecessor's stag
 online/continual learning on the live path, agent self-modification of prompts,
 tools, or skills, and any change to R1–R17 by anything other than a doc edit.
 
-## 11.4 Reflection → hypothesis loop (bounded)
+## 11.3a Sleeve gates (v3) — how a sleeve becomes a champion candidate
 
-Doc 06 §6.2 already writes an auto-field reflection row per closed trade. This doc
-adds the bounded loop on top:
+**A-gate (historical, harness):** all of the following on the frozen
+pre-registration, recorded in the trial ledger:
+1. Holdout net Sharpe (daily, `cost_v2` 1×) with 95% stationary-bootstrap
+   CI lower bound > 0; point estimate > 0 at 2× cost.
+2. Excess return over cash (T-bill leg) CI lower bound > 0.
+3. Versus the vol-matched passive benchmark (doc 12 §12.6): net Sharpe not
+   lower (point estimate) AND max drawdown not larger. A sleeve that
+   neither beats passive risk-adjusted nor reduces its drawdown adds
+   nothing a buy-and-hold account would not.
+4. DSR ≥ 0.95 with ledger N; PBO ≤ 0.2 when variants exist; history
+   length ≥ MinTRL; t ≥ 3 for non-literature signals; haircut rule met.
+5. Transferability (§11.0d); participation caps respected; excluded-event
+   count ≤ 5% (event sleeves).
+6. For AI-assisted sleeves: the paired no-AI variant exists and the AI
+   component is judged separately under §11.3b.
 
-- Weekly, the research plane reads reflection rows + calibration curves + the
-  `lessons.jsonl` file (doc 09 Tier D) and produces at most **3 written proposals**.
-  A proposal is prose plus a precise diff-sized description of what would change.
-- Proposals are queued for human review. They are **not** implemented, not
-  shadowed, and not costed until a human converts one into a challenger.
-- Cap of 3 exists so the loop cannot generate work faster than a human can judge
-  it. An unbounded self-improvement loop is a spend bug and a governance bug at
-  the same time.
+**B-gate (G0a shadow on live data):** the sleeve runs forward with harness
+fills from the day it passes A-gate. Minimum window: 60 sessions and
+30 trades for daily-frequency sleeves; 3 rebalances for monthly sleeves
+(judged on tracking, not Sharpe). Passing: realized shadow results inside
+the pre-registered tracking band (default: between the 5th and 95th
+percentiles of block-bootstrapped backtest paths of equal length),
+modeled costs within 1.5× of live-quote cost estimates, zero operational
+anomalies unexplained in the journal.
+
+**Champion selection:** among B-gate passers, the human picks the G0b
+champion using the pre-registered primary metric; ties break toward the
+simpler sleeve (fewer parameters, lower turnover).
+
+## 11.3b Filter / AI-component gate (v3) — paired delta
+
+A filter (JEV v4, an ensemble, a reader-tier feature) enters a champion
+only if, on identical post-cutoff candidates (§11.0c), the filtered policy
+beats always-take net of the filter's own AI cost: one-sided p < 0.05 by
+day-block stationary bootstrap, pre-registered minimum effect met, ≥ 100
+resolved candidates, and (for probabilistic answers) calibration ≥ base
+rate per §11.1. S5's harness is the implementation; its economic
+acceptance is this gate.
+
+## 11.4 Reflection → research-factory loop (bounded)
+
+Doc 06 §6.2 writes an auto-field reflection row per closed trade. On top:
+
+- Weekly, the research factory (doc 08 §8.7) reads reflection rows,
+  sleeve tracking reports, calibration curves (where applicable), and
+  `lessons.jsonl`, and produces at most **3 hypothesis cards**.
+- Cards are queued for human review. They are not implemented, shadowed,
+  or costed until a human approves a pre-registration.
+- The cap of 3 exists so the loop cannot generate work faster than a human
+  can judge it. An unbounded self-improvement loop is a spend bug and a
+  governance bug at the same time.
 
 ## 11.5 What "done" means
 
-- [ ] Calibration harness scores `enter` and `latent_risk` including counterfactual HOLDs.
-- [ ] Reliability curves render weekly, sliced by regime.
-- [ ] Base-rate baseline computed on the same window; R13 breach drill demotes.
-- [ ] Champion + 3 challengers run on identical snapshots for 7 days; cost per
-      challenger attributed and counted against doc 10 caps.
+- [ ] (v3) Trial ledger implemented; every harness run writes it,
+      including failures; DSR/Holm read N from it.
+- [ ] (v3) Statistics module: walk-forward purge/embargo, CPCV, PBO, DSR,
+      MinTRL, stationary bootstrap, HAC Sharpe — each with fixture tests.
+- [ ] (v3) Contamination guard: an LLM-involved evaluation window that
+      starts before cutoff + 30 d is rejected by the harness.
+- [ ] (v3) A-gate and B-gate report generators; first reports for T1/I1.
+- [ ] Calibration harness scores `enter` and `latent_risk` including
+      counterfactual HOLDs (needed only once a `jev_v4` sleeve exists).
+- [ ] Reliability curves weekly, sliced by regime (same condition).
+- [ ] Controls computed on every window (doc 12).
 - [ ] A challenger that breaches an R-rule is auto-disqualified in test.
-- [ ] Non-LLM baseline strategy implemented and scored — it is a permanent fixture,
-      not a one-off.
-- [ ] Promotion dry run produces a complete sign-off record and forces a fresh
-      paper window.
+- [ ] Promotion dry run produces a complete sign-off record and forces a
+      fresh paper window.
 
 ## Locked decisions
 
-- Every JEV answer is scored, HOLDs included, against a base-rate baseline.
-- Calibration worse than base rate halts entries and demotes (R13).
-- Promotion requires forward-only, cost-inclusive, search-budget-declared evidence,
-  a beaten non-LLM baseline, and a human signature. No exceptions, no automation.
-- The AI layer must beat the statistical baseline or be removed rather than tuned.
-- Calibration ("do the probabilities mean what they claim": Brier/log-loss/
-  reliability) is a SEPARATE question from strategy efficacy ("does JEV
-  filtering improve candidate outcomes": paired candidate-level always-take
-  vs filtered-policy delta) and from portfolio performance (daily net
-  returns/Sharpe/drawdown). "Beats baseline" alone is not edge proof:
-  promotion also needs a pre-registered absolute economic bar.
+- Every trial is ledgered; the ledger decides N. No ledger row, no result.
+- Promotion requires forward-only, cost-inclusive, transferable,
+  search-adjusted evidence, beaten controls, and a human signature. No
+  exceptions, no automation.
+- LLM evidence counts only after the model's knowledge cutoff + embargo.
+- DSR/PBO/MinTRL are necessary, never sufficient.
+- An AI component must beat the same sleeve without it (paired delta) or
+  be removed rather than tuned.
+- Calibration ("do the probabilities mean what they claim") is a SEPARATE
+  question from filter efficacy (paired delta) and from sleeve performance
+  (daily net returns/Sharpe/drawdown). "Beats a control" alone is not
+  edge proof: promotion also needs the pre-registered absolute bar.
+- Every JEV answer on a `jev_v4` sleeve is scored, HOLDs included, against
+  a base-rate baseline; worse than base rate halts that sleeve (R13).

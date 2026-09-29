@@ -118,7 +118,7 @@ def _num(s):
 
 
 def evaluate_v4(candidate, artifact, now_unix, pubkey, engine):
-    """-> (action, reason). FAIL-CLOSED; never emits side/family/size.
+    """-> (action, reason). Fails closed; never emits side/family/size.
 
     engine: {deterministic_veto, disagreement, blackout, calib_gate}.
     calib_gate in {pass, insufficient, breach}."""

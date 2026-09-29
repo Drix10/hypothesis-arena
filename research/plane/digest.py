@@ -1,18 +1,15 @@
 """Durable research-digest writer (doc 08 topology, stdlib only).
 
-hypothesize writes a ≤500-character thesis and critique writes its
-advisory metadata into research_digest.jsonl — a durable research
-artifact SEPARATE from features.jsonl (prose never enters the trading
-boundary; the digest stays in the research plane for audit/debug).
+hypothesize writes a <=500-character thesis and critique writes its
+advisory metadata into research_digest.jsonl, separate from
+features.jsonl (prose never enters the trading boundary).
 
-- Append-only JSONL under the inter-process lock; idempotency key =
-  (research_epoch, symbol, node): a retried node converges to one row.
-- Over-limit thesis text is REJECTED (digest-too-long), never silently
-  truncated: the frozen topology says hypothesize writes ≤500 chars,
-  so a longer thesis is a producer defect to count, not to rewrite.
-- Rows carry disagreement + evidence=prose markers so no consumer can
-  mistake digest text for evidence (defense in depth alongside the
-  ctx prose-key scan).
+- Append-only JSONL under the inter-process lock; idempotency key is
+  (research_epoch, symbol, node), so a retried node yields one row.
+- Over-limit thesis text is rejected (digest-too-long), not truncated:
+  it is a producer defect to count.
+- Rows carry disagreement + evidence=prose markers so digest text is
+  never mistaken for evidence.
 """
 import json
 import os
@@ -30,31 +27,23 @@ def _digest_path(outdir):
 
 
 # Per-process seen-key cache: path -> ((size, mtime_ns), {key: sha}).
-# The lock serializes writers, so the cache is always validated
-# against the live file before use — a changed file rescans, an
-# unchanged one answers O(1). Without this every append re-scans the
-# whole JSONL (O(n^2) over a 24/7 runtime). Per-path entries are
-# BOUNDED (oldest evicted first): many epochs must not grow memory
-# without limit. Values are text SHAs: the same (epoch, symbol, node)
-# with CHANGED text is a CONFLICT (first write wins, reported loud),
-# never a silent duplicate.
+# Validated against the live file before use (changed file rescans), so
+# appends are O(1) instead of rescanning the JSONL. Per-path entries are
+# bounded, oldest evicted first. Values are text SHAs: the same key with
+# changed text is a conflict (first write wins), not a duplicate.
 _SEEN = {}
 _SEEN_PATHS_MAX = 64
 _SEEN_KEYS_MAX = 4096
 
 
 class DigestCorrupt(Exception):
-    """The digest authority file holds a malformed row. The digest
-    file IS the first-write-wins authority — answering
-    duplicate/conflict/append from a subset would fork it — so a
-    malformed row poisons instead of skipping (fail closed, never
-    a reader subset)."""
+    """The digest file holds a malformed row. It is the first-write-wins
+    authority, so a malformed row poisons instead of being skipped."""
 
 
 def _seen_keys(path):
-    """path -> {key: text_sha}. Bounded per path (oldest evicted).
-    A changed file rescans; the registry itself holds at most
-    _SEEN_PATHS_MAX paths. Raises DigestCorrupt on any malformed
+    """path -> {key: text_sha}, bounded per path and by _SEEN_PATHS_MAX
+    paths. A changed file rescans. Raises DigestCorrupt on any malformed
     non-empty row."""
     import hashlib
     try:
@@ -96,11 +85,8 @@ def _seen_keys(path):
 
 
 def _scan_key(path, key):
-    """Targeted file scan for one digest key (streaming, nothing
-    materialized): returns the text sha when the key is on file, else
-    None. Used ONLY on cache miss (evicted ancient keys): normal
-    appends answer O(1) from the cache; a miss costs one file pass
-    instead of ever duplicating or conflicting blindly."""
+    """Streaming scan for one digest key: the text sha if on file, else
+    None. Used only on a cache miss (evicted key)."""
     import hashlib
     try:
         with open(path, encoding="utf-8") as fh:
@@ -123,8 +109,7 @@ def _scan_key(path, key):
 
 
 def _remember(path, epoch, symbol, node, text_sha):
-    # Called right after our own append (still under the lock): the
-    # file stat is new, so refresh the key AND the set together.
+    # called right after our own append, under the lock: refresh key and set together
     try:
         st = os.stat(path)
     except OSError:
@@ -139,11 +124,9 @@ def _remember(path, epoch, symbol, node, text_sha):
 
 
 def append_digest(outdir, epoch, symbol, node, text, extra=None):
-    """Append one digest row. Returns (ok, reason). Idempotent: a row
-    with the same (epoch, symbol, node) AND the same text is never
-    duplicated. The same key with DIFFERENT text is a conflict
-    (digest-conflict, first write wins): two producers disagreeing
-    about one slot is evidence of a defect, not a duplicate."""
+    """Append one digest row. Returns (ok, reason). Idempotent on the same
+    (epoch, symbol, node) and text; the same key with different text is
+    a digest-conflict (first write wins)."""
     import hashlib
     if node not in NODES:
         return False, "digest-node"
@@ -162,16 +145,14 @@ def append_digest(outdir, epoch, symbol, node, text, extra=None):
     os.makedirs(outdir, exist_ok=True)
     path = _digest_path(outdir)
     with locks.FileLock(path + ".lock", purpose="digest"):
-        # A corrupt authority file refuses the whole append (never
-        # answer duplicate/conflict/append from a subset).
+        # a corrupt file refuses the whole append
         try:
             prior = _seen_keys(path).get((epoch, symbol, node),
                                          "absent")
         except DigestCorrupt:
             return False, "digest-corrupt"
         if prior == "absent":
-            # Evicted from the bounded cache (ancient key): consult
-            # the file before deciding duplicate/conflict/append.
+            # evicted from the bounded cache: consult the file
             try:
                 scanned = _scan_key(path, (epoch, symbol, node))
             except DigestCorrupt:

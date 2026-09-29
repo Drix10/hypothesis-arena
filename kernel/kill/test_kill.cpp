@@ -398,7 +398,7 @@ int main() {
                   last == HardAction::EXIT_NONZERO,
               "hard-order-missing");
     }
-    // 12. HARD unconfirmed: NEVER advances to revocation (the ordering
+    // 12. HARD unconfirmed: never advances to revocation (the ordering
     // property). 50 cycles of unconfirmed stays put, re-querying.
     {
         using jev::kill::HardStep;

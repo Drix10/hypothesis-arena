@@ -1,5 +1,5 @@
-// P3.5 Slice B — pure risk veto implementation. See veto.hpp for the
-// frozen precedence, scaling rule, and JEV-isolation boundary.
+// Risk veto implementation. See veto.hpp for the precedence, scaling rule and
+// JEV-isolation boundary.
 #include "veto.hpp"
 
 #include <cmath>
@@ -9,7 +9,7 @@ namespace jev {
 namespace risk {
 namespace {
 
-// Window constants (microseconds; flip lock is doc-10 fixed, unscaled).
+// Window constants (microseconds; the flip lock is fixed by doc 10, unscaled).
 constexpr int64_t kHourUs = 3600LL * 1000000LL;
 constexpr int64_t kDayUs = 24LL * 3600LL * 1000000LL;
 constexpr int64_t kFlipWindowUs = kHourUs;      // completion within 1 h
@@ -79,11 +79,10 @@ bool R1CountBreaches(const RiskSnapshot& s, int cap, bool include_pending) {
 bool R1DirBreaches(const RiskSnapshot& s, int cap, bool include_pending) {
     return SameSideOpen(s, s.intent.side, include_pending) + 1 > cap;
 }
-// Stage-aware leverage cap (doc 10 stage table + doc 05 §5.2):
-//   G1: forex 1x (the single G1 symbol is forex; non-forex capped at 1x
-//       too — a stage-violating symbol never gets MORE leverage).
-//   G2: forex 2x, stocks 1x.  G0/G3: §5.2 (forex 5x, stock margin 2x,
-//       stock cash 1x).
+// Stage-aware leverage cap (doc 10 stage table + doc 05 5.2):
+//   G1: forex 1x (non-forex is capped at 1x too);
+//   G2: forex 2x, stocks 1x;
+//   G0/G3: 5.2 (forex 5x, stock margin 2x, stock cash 1x).
 int MaxLeverage(Stage stage, AssetClass asset, AccountType account) {
     if (stage == Stage::G1_TINY) return 1;
     if (stage == Stage::G2_SCALED)
@@ -92,9 +91,9 @@ int MaxLeverage(Stage stage, AssetClass asset, AccountType account) {
         return (account == AccountType::CASH) ? 1 : 2;
     return 5;
 }
-// Enum boundary validation: every enum field in the snapshot must hold a
-// defined value. A corrupted/underlying-out-of-range field is malformed
-// input (bad-inputs), never silently neutral — and never an exit bypass.
+// Enum boundary validation: every enum field must hold a defined value. An
+// out-of-range field is malformed input (bad-inputs), never neutral and never
+// an exit bypass.
 bool ValidStage(Stage s) {
     return s == Stage::G0_PAPER || s == Stage::G1_TINY ||
            s == Stage::G2_SCALED || s == Stage::G3_FULL;
@@ -102,12 +101,10 @@ bool ValidStage(Stage s) {
 bool ValidSide(Side side) {
     return side == Side::LONG || side == Side::SHORT;
 }
-// EXIT/ENTRY intent structure: what H1 needs to CONSTRUCT an order
-// (identity + direction + market + non-negative size). Checked for BOTH
-// kinds before anything else. Risk-state fields (equity, stage,
-// counters, HWM, calibration, flip history, kill) are NOT intent
-// structure — they never block a valid EXIT (entries may halt, exits
-// remain alive, doc 10 §10.3).
+// Intent structure: what H1 needs to construct an order (identity, direction,
+// market, non-negative size), checked for both kinds first. Risk-state fields
+// (equity, stage, counters, HWM, calibration, flip history, kill) are not
+// intent structure and never block a valid EXIT (doc 10 10.3).
 bool ValidIntentStructure(const Intent& in) {
     if (in.kind != IntentKind::ENTRY && in.kind != IntentKind::EXIT)
         return false;
@@ -254,9 +251,8 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
     v.stage_num = sc.mult_num;
     v.stage_den = sc.mult_den;
     v.size_scale = s.r6_trip ? 0.5 : 1.0;
-    // LAYER 1 — intent structure (BOTH kinds): H1 needs identity +
-    // direction + market + non-negative size to construct ANY order.
-    // Corrupt intent metadata is never executable, exit or entry.
+    // Layer 1, intent structure (both kinds): corrupt intent metadata is never
+    // executable, exit or entry.
     if (!ValidIntentStructure(s.intent)) {
         v.reasons_all[0] = "bad-inputs";
         v.n_reasons = 1;
@@ -264,38 +260,35 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
         v.reason = "bad-inputs";
         return v;
     }
-    // Valid EXIT bypasses risk LIMITS (doc 10 §10.3: entries may halt,
-    // exits remain alive). Corrupt risk STATE — equity, stage, counters,
-    // HWM, calibration, flip history, kill — never blocks a
-    // structurally valid exit; reconcile owns bookkeeping truth.
+    // A valid EXIT bypasses risk limits (doc 10 10.3). Corrupt risk state
+    // (equity, stage, counters, HWM, calibration, flip history, kill) never
+    // blocks a structurally valid exit; reconcile owns bookkeeping truth.
     if (s.intent.kind == IntentKind::EXIT) {
         v.proceed = true;
         v.reason = "exit-bypass";
         return v;
     }
-    // LAYER 2 — ENTRY risk-state validation: the full snapshot must be
-    // evaluable before any R-rule runs. Includes the margin account
-    // (negative used-margin makes BuyingPower exceed equity — nonsense
-    // K6 state), non-empty bookkeeping symbols (empty identity would
-    // silently bypass symbol logic), and drift-candidate integrity when
-    // a breach is claimed (every candidate must name a real open
-    // position — a removal directive for thin air is corrupt input).
+    // Layer 2, ENTRY risk-state validation: the full snapshot must be evaluable
+    // before any R-rule runs. Includes the margin account (negative
+    // used-margin makes BuyingPower exceed equity), non-empty bookkeeping
+    // symbols, and drift-candidate integrity when a breach is claimed (every
+    // candidate must name a real open position).
     bool bad = !ValidEnums(s) || s.now_us < 0 ||
                s.equity_cents <= 0 || s.margin_used_cents < 0 ||
                s.daily_close_hwm_cents < 0 || s.intraday_hwm_cents < 0 ||
                s.risk_fraction_bp < 0 || s.day_count < 0 ||
-               s.hour_count < 0 || s.realized_outcomes < 0;
+               s.hour_count < 0 || s.realized_outcomes < 0 ||
+               (s.v3_constraints && s.settled_cash_cents < 0);
     int64_t peak =
         s.daily_close_hwm_cents > s.intraday_hwm_cents
             ? s.daily_close_hwm_cents
             : s.intraday_hwm_cents;
     if (peak <= 0) bad = true;
-    // Corrupt SIDES/SYMBOLS in bookkeeping must not read as neutral (an
-    // invalid side would otherwise be silently ignored by the ==
-    // comparisons; an empty symbol would silently bypass symbol logic).
-    // Corrupt FLIP RECORDS join bad-inputs too when armed (empty symbol,
-    // negative stamps, inverted pair, future fill): a malformed history
-    // is malformed input, not an expired lock.
+    // Corrupt sides/symbols in bookkeeping must not read as neutral (an invalid
+    // side would be ignored by the == comparisons; an empty symbol would
+    // bypass symbol logic). Corrupt flip records (empty symbol, negative
+    // stamps, inverted pair, future fill) are bad-inputs when armed, not an
+    // expired lock.
     if (!bad) {
         for (auto& p : s.open)
             if (p.notional_cents < 0 || !ValidSide(p.side) ||
@@ -315,11 +308,9 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
              s.flip_t2_us < 0 || s.flip_t2_us < s.flip_t1_us ||
              s.now_us < s.flip_t2_us))
             bad = true;
-        // Claimed drift breach with phantom candidates is corrupt input:
-        // a removal directive must name a real open position, or H1
+        // A claimed drift breach with phantom candidates is corrupt input: H1
         // would "resolve" the breach against thin air and let the entry
-        // proceed. (H1 ordering contract on drift_idx is pinned in
-        // veto.hpp: journal, remove, reconcile, re-check, then enter.)
+        // proceed (the drift_idx ordering contract is in veto.hpp).
         if (!bad && s.r7_drift_breach)
             for (auto& c : s.drift) {
                 if (c.symbol.empty()) {
@@ -338,27 +329,26 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
                 }
             }
     }
-    // Collect EVERY armed condition in frozen precedence order; the first
-    // one wins the logged reason, none are dropped from reasons_all.
-    // Fixed array (fixed-storage contract): 22 arm sites < 32 slots, the
-    // guard below is unreachable-by-construction defense in depth.
+    // Collect every armed condition in precedence order; the first wins the
+    // logged reason and none are dropped from reasons_all. Fixed array: 25
+    // arm sites < 32 slots, so the guard below is defense in depth.
     const char* armed[VetoVerdict::kMaxArmed];
     int n_armed = 0;
     auto arm = [&](const char* code) {
         if (n_armed < VetoVerdict::kMaxArmed) armed[n_armed++] = code;
     };
     if (bad) {
-        // Corrupt snapshots hold on bad-inputs alone: co-causes computed
-        // from garbage are noise, and an EXIT built on garbage is not
-        // executable. Valid EXITs bypass below; ENTRY evaluates the battery.
+        // Corrupt snapshots hold on bad-inputs alone: co-causes computed from
+        // garbage are noise. Valid EXITs bypass below; ENTRY evaluates the
+        // battery.
         v.reasons_all[0] = "bad-inputs";
         v.n_reasons = 1;
         v.proceed = false;
         v.reason = "bad-inputs";
         return v;
     }
-    // Valid EXIT bypasses risk limits (doc 10 §10.3); structural
-    // integrity was proven above.
+    // A valid EXIT bypasses risk limits (doc 10 10.3); structure was proven
+    // above.
     if (s.intent.kind == IntentKind::EXIT) {
         v.proceed = true;
         v.reason = "exit-bypass";
@@ -367,8 +357,8 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
     if (R5Trips(s.equity_cents, peak)) arm("r5-loss-cap");
     if (!s.intent.has_stop) arm("no-stop");
     {
-        // Stage-aware cap (MaxLeverage): G1 FX 1x, G2 FX 2x / stock 1x,
-        // G0/G3 §5.2. R2 usually binds first; this is the hard ceiling.
+        // Stage-aware cap (MaxLeverage): G1 FX 1x, G2 FX 2x / stock 1x, G0/G3
+        // 5.2. R2 usually binds first; this is the hard ceiling.
         int maxlev =
             MaxLeverage(s.stage, s.intent.asset, s.intent.account);
         if ((__int128)s.intent.notional_cents >
@@ -380,13 +370,26 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
         !s.short_ok)
         arm("short-block");
     if (s.corp_block) arm("corp-action-block");
+    if (s.v3_constraints) {
+        if (!s.instrument_allowed || s.intent.side != Side::LONG ||
+            s.intent.account != AccountType::CASH ||
+            s.intent.asset != AssetClass::STOCK)
+            arm("r19-allowlist");
+        __int128 pend = 0;
+        for (auto& p : s.pending)
+            if (p.side == Side::LONG) pend += p.notional_cents;
+        if ((__int128)s.intent.notional_cents + pend >
+            (__int128)s.settled_cash_cents)
+            arm("r18-settled-cash");
+        if (s.r18_unsettled_dependency) arm("r18-free-riding");
+    }
     if (EventMediumActive(s.impact, s.phase))
         arm("event-medium");
     if (!s.r6_available) arm("r6-unavailable");
     if (!s.r7_available) arm("r7-unavailable");
     Caps caps = BuildCaps(sc);
-    // R1 with pending-risk attribution (count + direction only; a pure
-    // same-symbol collision is a collision, not an exposure breach).
+    // R1 with pending-risk attribution (count + direction only; a same-symbol
+    // collision is a collision, not an exposure breach).
     if (R1CountBreaches(s, caps.pos_cap, true)) {
         arm(R1CountBreaches(s, caps.pos_cap, false)
                             ? "r1-count"
@@ -408,8 +411,8 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
     {
         int64_t day = s.day_count;
         if (s.day_number != s.now_us / kDayUs) day = 0;  // stale => reset
-        // Overflow-free: day >= cap asks whether the NEXT trade exceeds
-        // it (day + 1 > cap) without ever computing day + 1.
+        // Overflow-free: day >= cap asks whether the next trade exceeds it
+        // without computing day + 1.
         if (day >= caps.day_cap) arm("r3-day");
         int64_t hour = s.hour_count;
         if (s.hour_bucket != s.now_us / kHourUs) hour = 0;
@@ -417,8 +420,8 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
     }
     if (s.flip_armed) {
         bool locked = true;
-        // Corrupt records cannot reach here (rejected as bad-inputs
-        // above); the locked=true default stays as defense in depth.
+        // Corrupt records are rejected as bad-inputs above; locked=true stays
+        // as defense in depth.
         if (s.flip_t2_us < s.flip_t1_us || s.now_us < s.flip_t2_us)
             locked = true;
         else if (s.flip_symbol != s.intent.symbol)
@@ -429,9 +432,9 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
         if (locked) arm("r4-flip-lock");
     }
     if (s.r7_entry_breach) arm("r7-correlation");
-    // R7 drift: a found removal is a management directive, not a hold —
-    // attach it and keep evaluating (later holds still fire). No removal
-    // that reduces VaR => HOLD new entries + escalate.
+    // R7 drift: a found removal is a management directive, not a hold; attach
+    // it and keep evaluating. No VaR-reducing removal => HOLD new entries +
+    // escalate.
     if (s.r7_drift_breach) {
         int idx = DriftSelection(s);
         if (idx < 0) {
@@ -441,9 +444,11 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
             v.drift_idx = idx;  // index, never a copied string
         }
     }
-    if (s.disagreement) arm("disagreement");
-    if (R13FloorTrips(s.brier_delta, s.realized_outcomes))
-        arm("r13-calibration");
+    if (s.filter == FilterPolicy::JEV_V4) {
+        if (s.disagreement) arm("disagreement");
+        if (R13FloorTrips(s.brier_delta, s.realized_outcomes))
+            arm("r13-calibration");
+    }
     if (s.entry_halt) arm("entry-halt");
     if (s.kill != KillLevel::NONE) {
         arm(s.kill == KillLevel::HARD    ? "kill-hard"
@@ -464,9 +469,12 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
 
 EngineInputs BuildEngineInputs(const RiskSnapshot& s, const VetoVerdict& v) {
     EngineInputs in;
-    in.disagreement = s.disagreement;
+    const bool filtered = s.filter == FilterPolicy::JEV_V4;
+    in.disagreement = filtered && s.disagreement;
     in.event_blackout = EventBlackout(s.impact, s.phase);
-    if (R13FloorTrips(s.brier_delta, s.realized_outcomes))
+    if (!filtered)
+        in.calibration_gate = CalibrationGate::PASS;  // no filter to calibrate
+    else if (R13FloorTrips(s.brier_delta, s.realized_outcomes))
         in.calibration_gate = CalibrationGate::BREACH;
     else if (s.calib == CalibState::PASS)
         in.calibration_gate = CalibrationGate::PASS;
