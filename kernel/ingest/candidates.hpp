@@ -51,6 +51,7 @@ struct CandOutcome {
     int64_t entry_cents = 0;  // parsed from the exact price strings
     int64_t stop_cents = 0;
     int64_t tp_cents = 0;
+    std::string exit_profile;  // exit_profile_version, as sent
 };
 
 CandOutcome ValidateCandidate(const JVal& rec, const CandidateTables& t,

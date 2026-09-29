@@ -2141,6 +2141,8 @@ void G0Runner::HardManageSlot(Slot& s, long long epoch,
                                         : s.intent.qty_shares;
                     po.stop_cents = s.intent.stop_cents;
                     po.tp_cents = s.intent.tp_cents;
+                    po.protection = s.intent.protection;
+                    po.gtc = s.intent.gtc;
                     CopyStr(po.client_order_id,
                             sizeof(po.client_order_id), rcoid);
                     CopyStr(po.intent_id, sizeof(po.intent_id),
@@ -3153,6 +3155,8 @@ bool G0Runner::Dispatch(Slot& s, const exec::RouteOut& o,
             po.qty_shares = s.intent.qty_shares;
             po.stop_cents = s.intent.stop_cents;
             po.tp_cents = s.intent.tp_cents;
+            po.protection = s.intent.protection;
+            po.gtc = s.intent.gtc;
             CopyStr(po.client_order_id, sizeof(po.client_order_id), o.next.client_id);
             CopyStr(po.intent_id, sizeof(po.intent_id), s.intent.intent_id);
             // Crash-window dedupe (doc 06 6.1): a pre-crash POST may have landed
@@ -3296,6 +3300,8 @@ bool G0Runner::Dispatch(Slot& s, const exec::RouteOut& o,
                                                : s.intent.qty_shares;
             po.stop_cents = s.intent.stop_cents;
             po.tp_cents = s.intent.tp_cents;
+            po.protection = s.intent.protection;
+            po.gtc = s.intent.gtc;
             // Own sub-identity (the venue rejects a duplicate client_order_id).
             // Same dedupe as sends: found = adopt (an existing repair proves
             // protection only when its legs do); 404 = POST once; failure =

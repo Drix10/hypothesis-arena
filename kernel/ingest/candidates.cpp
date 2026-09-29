@@ -135,6 +135,7 @@ CandOutcome ValidateCandidate(const JVal& rec, const CandidateTables& t,
     o.cid = cid;
     o.symbol = symbol;
     o.side = side;
+    o.exit_profile = f[9];
     o.entry_cents = entry;
     o.stop_cents = stop;
     o.tp_cents = tp;

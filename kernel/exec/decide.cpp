@@ -22,6 +22,26 @@ void Copy(char* dst, size_t cap, const std::string& s) {
     dst[cap - 1] = '\0';
 }
 
+// Exit profile -> protection shape (doc 06 6.0 table). Trend and the plain
+// profile keep the bracket until the live drill settles how a resting stop and
+// a sell interact; intraday and event profiles are stop-only. Unknown
+// profiles are refused.
+bool ProtectionFor(const std::string& profile, broker::Protection* p,
+                   bool* gtc) {
+    *gtc = false;
+    if (profile == "exit_profile_v1" || profile == "exit_trend_v1") {
+        *p = broker::Protection::BRACKET;
+    } else if (profile == "exit_intraday_v1") {
+        *p = broker::Protection::OTO_STOP;
+    } else if (profile == "exit_event_v1") {
+        *p = broker::Protection::OTO_STOP;
+        *gtc = true;
+    } else {
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 EntryDecision Decide(const DecideInput& in) {
@@ -98,6 +118,11 @@ EntryDecision Decide(const DecideInput& in) {
     // new entry (veto.hpp H1 contract); until that path exists, hold.
     if (v.drift_idx >= 0) return Hold("r7-drift-directive-pending", c.cid, c.symbol);
 
+    broker::Protection prot = broker::Protection::BRACKET;
+    bool gtc = false;
+    if (!ProtectionFor(c.exit_profile, &prot, &gtc))
+        return Hold("cand-exit-profile", c.cid, c.symbol);
+
     EntryDecision d;
     d.proceed = true;
     d.reason = "proceed";
@@ -111,6 +136,8 @@ EntryDecision Decide(const DecideInput& in) {
     d.intent.stop_cents = c.stop_cents;
     d.intent.tp_cents = c.tp_cents;
     d.intent.kind = risk::IntentKind::ENTRY;
+    d.intent.protection = prot;
+    d.intent.gtc = gtc;
     d.intent.scale_num = 1;
     d.intent.scale_den = v.size_scale < 1.0 ? 2 : 1;
     d.intent.stage_num = v.stage_num;

@@ -70,6 +70,7 @@ class Venue:
         self.fail_posts = 0    # next N order POSTs are refused
         self.fail_code = 429
         self.hits = []
+        self.bodies = []       # accepted order POST bodies
 
 
 V = Venue()
@@ -131,7 +132,11 @@ class H(http.server.BaseHTTPRequestHandler):
                           "client_order_id": cid, "symbol": body["symbol"],
                           "qty": body["qty"], "filled_qty": "0",
                           "side": body["side"], "status": "accepted"})
-                if body.get("order_class") != "bracket":
+                V.bodies.append(body)
+                if body.get("order_class") == "oto":
+                    o["order_class"] = "oto"
+                    o["legs"] = [l for l in o["legs"] if l.get("type") == "stop"]
+                elif body.get("order_class") != "bracket":
                     for k in ("legs", "order_class"):
                         o.pop(k, None)
                 V.orders[cid] = o
@@ -165,11 +170,11 @@ def make_dir(sleeve="core_passive_v1"):
     return d
 
 
-def candidate(sym="VTI", side="BUY", tag=0):
+def candidate(sym="VTI", side="BUY", tag=0, profile="exit_trend_v1"):
     now = int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1e9) + tag
     entry, stop, tp = (100.0, 90.0, 150.0) if side == "BUY" else (100.0, 150.0, 90.0)
     return W.wire_line("core_passive_v1", sym, now, entry, stop, tp,
-                       family="core", side=side)
+                       family="core", side=side, exit_profile=profile)
 
 
 def loop_env(port, key=KEY):
@@ -289,6 +294,22 @@ def main():
     rc, out = run_loop(binary, port, d, ticks=2, key="WRONGKEY0001")
     check("bad-creds-no-orders", V.posts == 0 and "account_ok=0" in out, out)
     shutil.rmtree(d)
+
+    # 7. Stop-only (OTO) entries: the intraday and event profiles place one
+    # OTO order, its single stop leg proves protection, nothing is flattened.
+    for prof, gtc in (("exit_intraday_v1", "day"), ("exit_event_v1", "gtc")):
+        V.reset()
+        d = make_dir()
+        open(d + "/candidates.jsonl", "w").write(candidate("SPY", "BUY", 5, prof))
+        rc, out = run_loop(binary, port, d, ticks=4)
+        b = V.bodies[0] if V.bodies else {}
+        check("oto-%s-one-order" % prof, V.posts == 1, "posts=%d %s" % (V.posts, out))
+        check("oto-%s-shape" % prof, b.get("order_class") == "oto" and
+              "take_profit" not in b and "stop_loss" in b and
+              b.get("time_in_force") == gtc, b)
+        check("oto-%s-protected-not-flattened" % prof,
+              rc == 0 and V.posts == 1 and V.positions.get("SPY", 0) > 0, out)
+        shutil.rmtree(d)
 
     print("CHECKS: %d/%d PASS" % (sum(res), len(res)))
     sys.exit(0 if all(res) else 1)

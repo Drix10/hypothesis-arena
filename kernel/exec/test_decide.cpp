@@ -28,12 +28,13 @@ static const char* K[12] = {"strategy_version", "symbol", "snapshot_ts_ns",
 static std::string Rec(const std::string& side = "BUY",
                        const std::string& sym = "VTI",
                        const std::string& sleeve = "trend_etf_v1",
-                       int64_t age_s = 60) {
+                       int64_t age_s = 60,
+                       const std::string& profile = "exit_trend_v1") {
     std::string f[12] = {sleeve, sym, std::to_string(NOW - age_s * 1000000000LL),
                          side, "trend", "250.50",
                          side == "SELL" ? "999.00" : "230.00",
                          side == "SELL" ? "100.00" : "999.00", "0",
-                         "exit_trend_v1", "cost_v2", "f1"};
+                         profile, "cost_v2", "f1"};
     std::string joined, cand;
     for (int i = 0; i < 12; i++) {
         if (i) joined += "|";
@@ -74,7 +75,27 @@ static EntryDecision Go(const std::string& rec, const risk::RiskSnapshot& st,
     return Decide(in);
 }
 
+static void ProtectionChecks() {
+    using jev::broker::Protection;
+    risk::RiskSnapshot st = Clean();
+    EntryDecision t = Go(Rec(), st);
+    CHECK("trend-profile-bracket", t.proceed &&
+              t.intent.protection == Protection::BRACKET && !t.intent.gtc);
+    EntryDecision p = Go(Rec("BUY", "VTI", "trend_etf_v1", 60, "exit_profile_v1"), st);
+    CHECK("plain-profile-bracket", p.proceed &&
+              p.intent.protection == Protection::BRACKET);
+    EntryDecision i = Go(Rec("BUY", "VTI", "trend_etf_v1", 60, "exit_intraday_v1"), st);
+    CHECK("intraday-profile-oto-day", i.proceed &&
+              i.intent.protection == Protection::OTO_STOP && !i.intent.gtc);
+    EntryDecision e = Go(Rec("BUY", "VTI", "trend_etf_v1", 60, "exit_event_v1"), st);
+    CHECK("event-profile-oto-gtc", e.proceed &&
+              e.intent.protection == Protection::OTO_STOP && e.intent.gtc);
+    EntryDecision u = Go(Rec("BUY", "VTI", "trend_etf_v1", 60, "exit_mystery_v9"), st);
+    CHECK("unknown-profile-held", !u.proceed && u.reason == "cand-exit-profile");
+}
+
 int main() {
+    ProtectionChecks();
     EntryDecision d = Go(Rec(), Clean());
     // $250 risk budget / $20.50 stop distance = 12 shares
     CHECK("proceeds", d.proceed && d.reason == "proceed");

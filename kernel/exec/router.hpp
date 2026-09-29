@@ -37,6 +37,10 @@ struct OrderIntent {
     std::int64_t stop_cents = 0;  // verified > 0 (doc 05 sec. 5.2)
     std::int64_t tp_cents = 0;    // verified > 0
     risk::IntentKind kind = risk::IntentKind::ENTRY;
+    // Protection shape of the entry: bracket (stop + take-profit) or OTO
+    // stop-only (tp_cents is then unused). Set from the exit profile.
+    broker::Protection protection = broker::Protection::BRACKET;
+    bool gtc = false;  // entry and stop good-till-cancelled
     // Risk-path scalars: scale is (1,1) or (1,2); stage mult is (1,1), (1,4)
     // or (1,2).
     int scale_num = 1;
