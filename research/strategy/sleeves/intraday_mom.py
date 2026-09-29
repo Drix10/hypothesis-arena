@@ -3,10 +3,9 @@ of the session (previous close to 10:00) was up. Cash account, long only,
 whole shares, funded from settled cash: the sale of day t settles by the buy
 of day t+1, so the full book is tradable every session.
 
-`simulate` takes regular-session 30-minute bars per day and returns the daily
-return in excess of nothing (the caller adds the cash leg): `pnl[i]` is the
-trade profit net of cost as a fraction of start-of-day equity. No bar after the
-decision time is read by the signal."""
+`simulate` takes regular-session 30-minute bars per day. `pnl[i]` is the trade
+profit net of cost as a fraction of start-of-day equity; the caller adds the
+cash leg. The signal reads no bar after the decision time."""
 import math
 
 from research.strategy import costs_v2 as C

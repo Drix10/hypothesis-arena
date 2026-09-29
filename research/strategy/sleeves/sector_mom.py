@@ -27,7 +27,7 @@ def make_target_fn(sessions, universe, variant="mom12_1", top_k=TOP_K):
     tb = []
     w = 1.0 / top_k
 
-    def ret(h, i=None):
+    def ret(h):
         # trailing return over `look` months ending `skip` months ago
         end = -1 - skip
         return h[end] / h[end - look] - 1.0

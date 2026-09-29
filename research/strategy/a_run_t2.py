@@ -2,12 +2,10 @@
 
     python3 -m research.strategy.a_run_t2 [--dry]
 
-Same protocol as a_run (T1): one ledger trial per pre-registered variant is
-opened before anything is computed, each variant runs through the settled-cash
-engine at 1x and 2x cost, is gated on the holdout, and every trial is closed.
---dry checks plumbing only (sessions, data holes, trade counts) without the
-ledger and without printing any performance figure: the holdout is looked at
-once."""
+Same protocol as a_run (T1): one ledger trial per variant is opened first,
+each runs through the settled-cash engine at 1x and 2x cost, and every trial is
+closed. --dry checks plumbing only (sessions, holes, trade counts): no ledger,
+no performance figures, since the holdout is looked at once."""
 import hashlib
 import json
 import os

@@ -116,18 +116,18 @@ class Server:
                 time.sleep(0.2)
                 c.close()
                 return
-            c.sendall(frame(9, b"ping"))                       # ping
-            c.sendall(frame(1, b"garbage not json"))            # garbage
+            c.sendall(frame(9, b"ping"))
+            c.sendall(frame(1, b"garbage not json"))
             c.sendall(frame(1, json.dumps({"stream": "other"}).encode()))
             c.sendall(frame(2, trade("new", "cid-1", "0")))
-            m = trade("partial_fill", "cid-1", "2")             # fragmented
+            m = trade("partial_fill", "cid-1", "2")  # sent fragmented
             c.sendall(frame(2, m[:20], fin=False) + frame(0, m[20:40], fin=False)
                       + frame(0, m[40:]))
             c.sendall(frame(1, b" " * 70000 + trade("fill", "huge", "1")))
             c.sendall(frame(2, trade("fill", "cid-1", "5")))
             c.sendall(frame(2, trade("fill", 'bad"cid', "5")))
             time.sleep(1.5)
-            c.sendall(frame(8, b""))                            # close
+            c.sendall(frame(8, b""))
             time.sleep(0.2)
         except (EOFError, OSError):
             pass
