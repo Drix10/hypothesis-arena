@@ -32,6 +32,7 @@ static std::string g_fix;                 // fixtures dir
 static std::string g_account, g_bracket;  // fixture bodies
 static bool g_account_up = true;
 static bool g_data_up = true;
+static std::string g_positions = "[]";
 static int g_orders_posted = 0;
 static int64_t NOW_S = 0;
 
@@ -78,10 +79,13 @@ static const char* K[12] = {"strategy_version", "symbol", "snapshot_ts_ns",
     "proposed_side", "proposed_family", "entry_px", "stop_px", "tp_px",
     "time_exit_ns", "exit_profile_version", "cost_model_version",
     "feature_revision"};
-static std::string Cand(const std::string& sleeve, int64_t age_s = 60) {
+static std::string Cand(const std::string& sleeve, int64_t age_s = 60,
+                        const std::string& side = "BUY") {
+    bool sell = side == "SELL";
     std::string f[12] = {sleeve, "VTI",
                          std::to_string(NOW_S * 1000000000LL - age_s * 1000000000LL),
-                         "BUY", "trend", "250.50", "230.00", "999.00", "0",
+                         side, "trend", "250.50", sell ? "999.00" : "230.00",
+                         sell ? "100.00" : "999.00", "0",
                          "exit_trend_v1", "cost_v2", "f1"};
     std::string joined, c;
     for (int i = 0; i < 12; ++i) {
@@ -147,7 +151,7 @@ int main(int argc, char** argv) {
         else if (path == "/v2/account") {
             if (!g_account_up) return false;
             *body = g_account;
-        } else if (path == "/v2/positions") *body = "[]";
+        } else if (path == "/v2/positions") *body = g_positions;
         else return false;
         return true;
     };
@@ -226,6 +230,30 @@ int main(int argc, char** argv) {
     Append(env.dir + "/candidates.jsonl", "not json\n");
     loop.Tick(NOW_S * 1000000000LL);
     CHECK("garbage-held", loop.stats().held == 1);
+    // 7. HALT file: entries hold with the frozen reason.
+    Write(env.dir + "/HALT", "halt");
+    Append(env.dir + "/candidates.jsonl", Cand("trend_etf_v1", 20));
+    loop.Tick(NOW_S * 1000000000LL);
+    dec = Slurp(env.dir + "/decisions.jsonl");
+    CHECK("halt-holds-entries", dec.find("entry-halt") != std::string::npos);
+    std::remove((env.dir + "/HALT").c_str());
+
+    // 8. exit: closes the held position and books unsettled proceeds.
+    g_positions = "[{\"symbol\":\"VTI\",\"qty\":\"40\",\"side\":\"long\","
+                  "\"market_value\":\"10020.00\"}]";
+    Append(env.dir + "/candidates.jsonl", Cand("trend_etf_v1", 10, "SELL"));
+    loop.Tick(NOW_S * 1000000000LL);
+    dec = Slurp(env.dir + "/decisions.jsonl");
+    if (loop.stats().proceeded != 1) std::printf("EXIT: %s\n", dec.substr(dec.size() > 400 ? dec.size() - 400 : 0).c_str());
+    CHECK("exit-submitted", loop.stats().proceeded == 1);
+    std::string sl = Slurp(env.dir + "/settle.log");
+    CHECK("exit-books-proceeds", sl.find("1002000") != std::string::npos);
+    CHECK("proceeds-settle-next-session", sl.find("20725 ") == 0);
+
+    // 9. a restart reloads the book from settle.log.
+    PaperLoop again(runner, io, lc);
+    CHECK("book-reloads", again.stats().seen == 0);
+
     CHECK("offset-persisted", Slurp(env.dir + "/candidates.offset").size() > 0);
     CHECK("hwm-persisted", Slurp(env.dir + "/hwm.txt") == "10000000");
     std::printf("CHECKS: %d/%d PASS\n", count - fails, count);

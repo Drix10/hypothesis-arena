@@ -1,0 +1,9 @@
+[Unit]
+Description=Emit candidates after the US close
+
+[Timer]
+OnCalendar=Mon..Fri 21:30 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

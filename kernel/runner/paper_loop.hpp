@@ -9,6 +9,7 @@
 
 #include "../ingest/candidates.hpp"
 #include "runner.hpp"
+#include "settle.hpp"
 
 namespace jev {
 namespace runner {
@@ -37,8 +38,7 @@ struct LoopStats {
 
 class PaperLoop {
    public:
-    PaperLoop(G0Runner& runner, LoopIO io, LoopConfig cfg)
-        : runner_(runner), io_(io), cfg_(cfg) {}
+    PaperLoop(G0Runner& runner, LoopIO io, LoopConfig cfg);
     // One pass: read the account, process new candidate lines, cycle the
     // runner. Returns the runner's Cycle result (false = HARD stop).
     bool Tick(int64_t now_ns);
@@ -49,6 +49,7 @@ class PaperLoop {
     LoopIO io_;
     LoopConfig cfg_;
     LoopStats stats_;
+    SettleBook book_;  // proceeds of exits this loop submitted (R18)
 };
 
 }  // namespace runner

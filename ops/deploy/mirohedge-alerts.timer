@@ -1,0 +1,8 @@
+[Unit]
+Description=Relay kernel alerts every minute
+
+[Timer]
+OnCalendar=minutely
+
+[Install]
+WantedBy=timers.target

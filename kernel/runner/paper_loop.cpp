@@ -134,6 +134,35 @@ void MeasureRisk(const LoopIO& io, const LoopConfig& cfg,
     s->r7_available = ok;
 }
 
+// Submitted decisions in the current UTC day and hour, from our own log.
+void CountSubmitted(const std::string& dir, int64_t now_ns, int64_t* day,
+                    int64_t* hour) {
+    *day = *hour = 0;
+    std::string log = ReadFrom(dir + "/decisions.jsonl", 0);
+    const int64_t d_ns = 86400LL * 1000000000LL, h_ns = 3600LL * 1000000000LL;
+    size_t at = 0;
+    while (at < log.size()) {
+        size_t nl = log.find('\n', at);
+        if (nl == std::string::npos) break;
+        std::string line = log.substr(at, nl - at);
+        at = nl + 1;
+        if (line.find("\"submit\":\"submitted\"") == std::string::npos)
+            continue;
+        size_t k = line.find("\"ts_ns\":");
+        if (k == std::string::npos) continue;
+        int64_t ts = std::strtoll(line.c_str() + k + 8, nullptr, 10);
+        if (ts / d_ns == now_ns / d_ns) ++*day;
+        if (ts / h_ns == now_ns / h_ns) ++*hour;
+    }
+}
+
+bool FileExists(const std::string& path) {
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) return false;
+    std::fclose(f);
+    return true;
+}
+
 void LogDecision(const std::string& dir, int64_t now_ns,
                  const exec::EntryDecision& d, const char* submit) {
     char ln[512];
@@ -149,6 +178,21 @@ void LogDecision(const std::string& dir, int64_t now_ns,
 }
 
 }  // namespace
+
+PaperLoop::PaperLoop(G0Runner& runner, LoopIO io, LoopConfig cfg)
+    : runner_(runner), io_(io), cfg_(cfg) {
+    // settle.log: "<settle_day> <proceeds_cents>" per line, append-only.
+    std::string log = ReadFrom(cfg_.dir + "/settle.log", 0);
+    size_t at = 0;
+    while (at < log.size()) {
+        size_t nl = log.find('\n', at);
+        if (nl == std::string::npos) break;
+        long long day = 0, cents = 0;
+        if (std::sscanf(log.c_str() + at, "%lld %lld", &day, &cents) == 2)
+            book_.Add(day, cents);
+        at = nl + 1;
+    }
+}
 
 bool PaperLoop::Tick(int64_t now_ns) {
     stats_ = LoopStats();
@@ -188,6 +232,9 @@ bool PaperLoop::Tick(int64_t now_ns) {
             exec::DecideInput in;
             in.record = &rec;
             in.tables = cfg_.tables;
+            in.tables.held.clear();
+            for (const auto& p : held)
+                if (p.is_long && p.qty > 0) in.tables.held.push_back(p.symbol);
             in.now_ns = now_ns;
             in.risk_bp = cfg_.risk_bp;
             for (const auto& p : held)
@@ -200,7 +247,11 @@ bool PaperLoop::Tick(int64_t now_ns) {
                 WriteInt(cfg_.dir + "/hwm.txt", hwm);
             }
             s.daily_close_hwm_cents = s.intraday_hwm_cents = hwm;
-            s.settled_cash_cents = av.settled_cash_cents;
+            int64_t today = (now_s + EtOffsetSeconds(now_s)) / 86400;
+            s.settled_cash_cents =
+                book_.SettledCents(av.settled_cash_cents, today);
+            CountSubmitted(cfg_.dir, now_ns, &s.day_count, &s.hour_count);
+            s.entry_halt = FileExists(cfg_.dir + "/HALT");
             for (const auto& p : held) {
                 risk::Position rp;
                 rp.symbol = p.symbol;
@@ -215,7 +266,7 @@ bool PaperLoop::Tick(int64_t now_ns) {
             s.hour_bucket = now_ns / 1000 / (3600LL * 1000000LL);
             s.stage = risk::Stage::G0_PAPER;
             ingest::CandOutcome pre =
-                ingest::ValidateCandidate(rec, cfg_.tables, now_ns);
+                ingest::ValidateCandidate(rec, in.tables, now_ns);
             if (pre.accepted)
                 MeasureRisk(io_, cfg_, pre.symbol, held, now_s, &s);
             d = exec::Decide(in);
@@ -223,6 +274,16 @@ bool PaperLoop::Tick(int64_t now_ns) {
                 const char* why = nullptr;
                 if (runner_.SubmitIntent(d.intent, &why)) {
                     submit = "submitted";
+                    if (d.intent.kind == risk::IntentKind::EXIT) {
+                        int64_t proceeds = pre.entry_cents * d.intent.qty_shares;
+                        int64_t today = (now_s + EtOffsetSeconds(now_s)) / 86400;
+                        book_.Record(today, proceeds, cfg_.holidays);
+                        char rec[64];
+                        std::snprintf(rec, sizeof(rec), "%lld %lld",
+                                      (long long)NextSessionDay(today, cfg_.holidays),
+                                      (long long)proceeds);
+                        AppendLine((cfg_.dir + "/settle.log").c_str(), rec);
+                    }
                 } else {
                     submit = why ? why : "refused";
                     d.proceed = false;
