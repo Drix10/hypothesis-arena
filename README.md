@@ -12,7 +12,7 @@
   [![Plan](https://img.shields.io/badge/plan-freeze_v3-7B2CBF)](./plan/00-INDEX.md)
   [![Stage](https://img.shields.io/badge/Capital-G0_PAPER_only-00D4AA)](./plan/10-capital-gates-and-spend-control.md)
 
-  **Status (2026-09-28): plan freeze v3 "alpha-first rebaseline" · kernel P3.1–P3.3 frozen · P3.5 H1 built, transport not wired · no sleeve has passed an economic gate yet · G0 NOT STARTED · paper only.**
+  **Status (2026-09-29): plan freeze v3 · kernel P3.1–P3.3 frozen · P3.5 H1 built, broker transport not wired · two sleeves measured, none passed an economic gate · G0 not started · paper only.**
 
 </div>
 
@@ -72,9 +72,39 @@ Three principles:
 | Spec (`plan/`, 13 docs + manifest) | Freeze v3 written 2026-09-28 (critique: `plan/reviews/`); human signature pending |
 | Collector + Tier-A adapters (EDGAR/FRED/Treasury/BLS/BEA) | Built, tested, hosted-green; live p50/p99 evidence open |
 | JEV sidecar | v3 accepted/frozen; v4 candidate-bound released; now an optional filter |
-| C++ kernel | P3.1/P3.2/P3.3 frozen; P3.5 A–G done; H1 router/runner/broker/journal built — **transport not wired** |
-| Strategy track | `baseline_v1` measured negative (S2, diagnosed); new sleeve book (trend, sector momentum, intraday momentum, insider purchases, earnings reader) awaiting pre-registration |
+| C++ kernel | P3.1/P3.2/P3.3 frozen; P3.5 A–G done; H1 router/runner/broker/journal built; R18/R19 veto rules, candidate validator and escaped alert log added; **broker transport not wired** |
+| Research harness | Trial ledger, `cost_v2`, T+1 settlement, portfolio engine, statistics standard, A/B gates, pre-registration validator, SIP fetcher with manifests: built, tested, on hosted CI |
+| Strategy track | `baseline_v1` and T1 `trend_etf_v1` measured negative on SIP data (T1: fails its holdout gate, ledger N=6); sector momentum, intraday momentum, insider purchases and the earnings reader are not yet run |
 | Paper loop | NOT STARTED. G0a shadow starts when a sleeve passes its backtest gate; G0b broker paper when P3.5 closes |
+
+### Progress
+
+Roadmap checklist (`TODO.md`): 20 of 55 boxes done.
+
+| Track | Done | Open |
+|---|---|---|
+| Rebaseline (docs) | 3 | 1 (human signature) |
+| Ops, CI, hygiene | 5 | 1 (credential rotation, human) |
+| Alpha (harness + sleeves) | 9 | 9 (five sleeves, overlay, S5 re-scope, S1) |
+| Kernel P3.5 remainder | 3 | 10 (transport, always-take, snapshot v2, OTO/MOC, soak, drills) |
+| Research plane | 0 | 5 |
+| Paper trading (G0) | 0 | 5 |
+
+Critical path to paper trading: a sleeve that passes its A-gate on more
+than one history source, broker transport with a paper smoke test, then
+60 shadow sessions, 30 clean broker-paper days and two human signatures.
+
+### Quality snapshot
+
+- Hosted CI runs six jobs on every push: C++ gates, sanitizer build, plane
+  suite, evidence suites, collector suites, secret scan over full history.
+- Independent review rounds (two this week) reproduced and fixed real
+  defects: a rotation bug that left portfolios in cash, a fail-open
+  Sharpe gate that scored T-bill yield as skill, a non-atomic ledger
+  check, unescaped alert lines, an overflow in the R18 sum.
+- Known gaps: one free data source with ten years of history; R18/R19 are
+  off until the stage loader enables them (K12); the runner is 4.4k lines
+  in one file; nothing has been exercised against the broker.
 
 Paper only until a sleeve passes its gates, 30 clean broker-paper days,
 and a human signature. Promotion of anything (sleeve, filter, stage) needs

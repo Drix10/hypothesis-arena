@@ -29,6 +29,11 @@ the journal (doc 05 §5.5). Rows are never edited or deleted.
   registered variants; one final untouched holdout never used for any
   choice (default: the last 3 years or last 25% of the sample, whichever
   is longer, fixed in the pre-registration).
+- Sharpe-based statistics (bootstrap CI, 2x-cost test, DSR, MinTRL, PBO) use
+  returns in excess of the cash leg; a sleeve parked in T-bills must not
+  score on the T-bill yield. DSR's cross-trial variance is floored at the
+  sampling variance of one Sharpe estimate, because a handful of variants
+  cannot estimate it.
 - Metrics: DAILY portfolio returns (as §11.3), net of `cost_v2`, with
   stationary-bootstrap confidence intervals; Sharpe inference with HAC
   standard errors; max drawdown; turnover; exposure.

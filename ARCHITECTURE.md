@@ -4,7 +4,7 @@ AI-assisted systematic fund: US-listed equities/ETFs, cash account, long
 only (freeze v3, 2026-09-28; forex is research-only — OANDA BLOCKED,
 RBI LRS prohibits forex/margin trading abroad). No crypto.
 Status: `plan freeze v3 (alpha-first rebaseline) · P3.1–P3.3 FROZEN ·
-P3.5 H1 BUILT, transport not wired · no sleeve past an economic gate ·
+P3.5 H1 BUILT, transport not wired · two sleeves measured, none past an economic gate ·
 G0 NOT STARTED · paper only`.
 `plan/` is source of truth; this file describes the tree as it exists
 (544 tracked files at 2026-09-28; the per-family lists below predate the
@@ -390,6 +390,11 @@ mirror (missing ledger raises, never $0).
 
 - (freeze v3) Plan: docs 00–13 rewritten 2026-09-28; human signature of
   the final text pending (doc 07 sign-off log).
+- Harness (`research/strategy/`): ledger, `cost_v2`, settlement, portfolio,
+  benchmarks, statistics, gates, prereg, `sip_fetch`, `a_run`, sleeve
+  modules under `sleeves/`; pre-registrations in `research/prereg/`,
+  ledger in `research/ledger/`, gate reports in `research/reports/`;
+  `ops/` holds the alert relay.
 - FROZEN: `kernel/` impl (P3.1–P3.3 contracts), collector production code (`config.py`
   carries the additive `RESEARCH_MODEL_ID` loader key per Addendum 32
   — the only exception), `plan/`, JEV

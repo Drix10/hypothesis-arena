@@ -8,18 +8,13 @@ Legend: `[HUMAN]` needs the operator · `[BLOCKED]` waits on another box ·
 each box names its doc 07 id. One box = one commit theme (AGENTS.md rule 7).
 A box is checked only with evidence (commit + test output / report path).
 
-## Current state (verified 2026-09-28)
+## Current state (verified 2026-09-29)
 
 - Plan: freeze v3 written (docs 00–13, manifest, `plan/appendix/`,
   critique in `plan/reviews/`); freeze-check PASS.
-- Kernel: P3.1/P3.2/P3.3 FROZEN; P3.5 A–G done; H1 built (router 209,
-  runner ~1045, broker 126, drills 120) — `transport = nullptr`, no order
-  ever sent. P3.5 OPEN.
-- Strategy: `baseline_v1` negative (S2 diagnostic Sharpe −1.09; diagnosed
-  in doc 12 §12.7); S3/S4/S6 released; S5 economics open (stub FAIL).
-- S7-C: re-audit #2 fixes landed at `f0815e7` (durable provider gate,
-  ratio-chain liveness, tier-journal window) + bookkeeping `bd253fd`;
-  full local battery green; **hosted 5/5 on that head still required**.
+- Kernel: P3.1/P3.2/P3.3 FROZEN; P3.5 A-G done; H1 built; R18/R19 veto arms, candidate validator and escaped alerts landed (K4/K6/K7/K11). `transport = nullptr`: no order is ever sent. P3.5 OPEN.
+- Strategy: `baseline_v1` negative (S2, doc 12 12.7). T1 `trend_etf_v1` ran through the harness on SIP daily bars 2016-2026: FAIL on the 2023-09..2026-08 holdout (A2). S3/S4/S6 released; S5 economics open.
+- S7-C: CLOSED (hosted CI green on the PR head, all six jobs).
 - G0: NOT STARTED. Live ordering: NOT AUTHORIZED.
 
 ## Phase R — rebaseline (docs)
@@ -103,7 +98,8 @@ A box is checked only with evidence (commit + test output / report path).
 - [ ] K9 Slice F 24 h soak on the real transport [BLOCKED on K1].
 - [ ] K10 H1 drills on the real transport, every doc 06 §6.2a row
       [BLOCKED on K1].
-- [ ] K11 Found in K7: `runner/store.cpp Alert()` does not JSON-escape `code`/`detail` (a quote or backslash yields an invalid alerts.jsonl line; the relay skips and counts such lines, so nothing crashes, but the alert is lost). Add an escape helper + test.
+- [x] K11 (Alert() now escapes and bounds code/detail, ASCII-only, tested in test_runner) Found in K7: `runner/store.cpp Alert()` does not JSON-escape `code`/`detail` (a quote or backslash yields an invalid alerts.jsonl line; the relay skips and counts such lines, so nothing crashes, but the alert is lost). Add an escape helper + test.
+- [ ] K12 Wire `v3_constraints` (R18/R19) from the stage manifest: it defaults off so pre-v3 verdicts stay bit-identical, which means R18/R19 are inert until the stage loader sets it; required before G0b.
 - [ ] K-exit P3.5 CLOSED (K1–K7 + K10 green).
 
 ## Track P — research plane (parallel)

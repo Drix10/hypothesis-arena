@@ -147,6 +147,10 @@ Every dataset used by a pre-registration is a manifest: source, endpoint,
 query, time range, feed (`sip`), adjustment mode, row count, content hash,
 fetch time. Runs name their manifest hashes; a run that cannot is void.
 
+- **History limit:** the free Alpaca feed serves bars from 2016-01-04 only
+  (about 10.6 years). Evidence on it covers one full cycle at most; a
+  longer sample needs a second, manifested source before any sleeve is
+  called robust.
 - **SIP daily bars** for the doc 02 ETF universes (VTI, VEU, VNQ, IEF, DBC,
   BIL, SPY, QQQ, IWM, 9 SPDR sectors) — split-adjusted for signals,
   raw + dividends for total-return accounting.

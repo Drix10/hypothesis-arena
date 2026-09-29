@@ -66,7 +66,7 @@ known failure modes · kill criteria · minimum evaluation windows · status.
   crisis-alpha from exiting risk assets in trends down.
 - **Universe (5 = kernel cap):** VTI (US equity), VEU (ex-US equity), VNQ
   (US REITs), IEF (7–10y Treasuries), DBC (commodities). Cash leg: BIL
-  (T-bills). Common history from 2007.
+  (T-bills). Common history starts 2007 in the literature; the free SIP feed only reaches back to 2016-01-04 (see doc 09 9.1a).
 - **Signal (primary):** on the last trading day of the month, asset held
   for the next month iff its month-end close > the mean of its last 10
   month-end closes; else its slot is cash.
