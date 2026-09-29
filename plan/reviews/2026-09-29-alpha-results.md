@@ -47,3 +47,8 @@ spread is a fraction of that) costs about $30 per round trip on a $100k book,
 which exceeds the daily edge. A re-test at measured quote spreads would be a
 new pre-registration and needs stored NBBO quotes; the result above stands as
 run.
+
+Ledger code hashes: the T2 and I1 trials were opened at commits `0c662f0` and
+`09873f7`. Later edits to those runners and sleeves are comments and one
+unused parameter; `git show <commit>:research/strategy/...` reproduces the code
+each hash names.
