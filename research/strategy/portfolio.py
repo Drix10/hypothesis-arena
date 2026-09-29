@@ -33,9 +33,13 @@ def run(sessions, prices, target_fn, cash0=100000.0, spread_bps=2.0,
         if i > 0:
             led.advance(d)
         if pending is not None and i < len(sessions) - 1:
-            cost_total += _rebalance(led, prices, d, pending, spread_bps,
-                                     cost_mult, median_volume, min_trade_usd,
-                                     trades)
+            cost, unfinished = _rebalance(led, prices, d, pending,
+                                          spread_bps, cost_mult,
+                                          median_volume, min_trade_usd,
+                                          trades)
+            cost_total += cost
+            if not unfinished:
+                pending = None
         for s in prices:
             if d in prices[s]:
                 hist[s].append(prices[s][d][1])
@@ -45,8 +49,7 @@ def run(sessions, prices, target_fn, cash0=100000.0, spread_bps=2.0,
         rets.append(eq / prev_eq - 1.0)
         prev_eq = eq
         w = target_fn(d, {s: list(v) for s, v in hist.items()})
-        if w is None:  # hold: no trading at the next open
-            pending = None
+        if w is None:  # hold; an unfinished earlier target stays pending
             continue
         _check_weights(w, prices)
         pending = w
@@ -77,7 +80,12 @@ def _check_weights(w, prices):
 
 
 def _rebalance(led, prices, d, target, spread_bps, mult, vol, min_usd, trades):
+    """Execute one session of `target`; returns (cost, unfinished).
+
+    `unfinished` is True when a leg was cut short by unsettled cash or the
+    participation cap, so the target is retried next session."""
     total = 0.0
+    unfinished = False
     px_open = {s: prices[s][d][0] for s in prices if d in prices[s]}
     eq = led.total_cash() + sum(q * px_open.get(s, 0.0)
                                 for s, q in led.shares.items())
@@ -101,6 +109,7 @@ def _rebalance(led, prices, d, target, spread_bps, mult, vol, min_usd, trades):
             bid, ask = quote(s)
             f = C.fill_v2("SELL", bid, ask, qty, mult,
                           (vol or {}).get(s))
+            unfinished |= f["filled"] < qty
             if f["filled"] > 0:
                 led.sell(s, f["filled"], f["px"] * f["filled"] - f["fee_usd"])
                 total += f["cost_usd"]
@@ -113,11 +122,15 @@ def _rebalance(led, prices, d, target, spread_bps, mult, vol, min_usd, trades):
             continue
         bid, ask = quote(s)
         est = ask * (1 + max(spread_bps * mult, 1.0) / 1e4)
+        desired = int(diff / est)
         qty = int(min(diff, led.settled) / est)
+        unfinished |= qty < desired
         while qty > 0:
             f = C.fill_v2("BUY", bid, ask, qty, mult, (vol or {}).get(s))
             if f["filled"] == 0:
+                unfinished = True
                 break
+            unfinished |= f["filled"] < desired
             cost = f["px"] * f["filled"] + f["fee_usd"]
             if led.can_buy(cost):
                 led.buy(s, f["filled"], cost)
@@ -125,4 +138,4 @@ def _rebalance(led, prices, d, target, spread_bps, mult, vol, min_usd, trades):
                 trades.append((d, s, "BUY", f["filled"], f["px"]))
                 break
             qty -= max(1, qty // 100)
-    return total
+    return total, unfinished

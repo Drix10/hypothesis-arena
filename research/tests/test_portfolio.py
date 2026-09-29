@@ -89,6 +89,30 @@ class T(unittest.TestCase):
         out = B.compare(bh["returns"], {"cash": c, "sf": sf["returns"]})
         self.assertIn("cash", out)
 
+    def test_rotation_completes_after_settlement(self):
+        sess, px = mkdata()
+
+        def fn(d, h):
+            if d == sess[0]:
+                return {"AAA": 1.0}
+            if d == sess[10]:
+                return {"BBB": 1.0}
+            return None
+        r = P.run(sess, px, fn)
+        log = [(t[1], t[2]) for t in r["trades"]]
+        self.assertEqual(log, [("AAA", "BUY"), ("AAA", "SELL"),
+                               ("BBB", "BUY")])
+        buy_day = [t[0] for t in r["trades"] if t[1] == "BBB"][0]
+        sell_day = [t[0] for t in r["trades"] if t[2] == "SELL"][0]
+        self.assertGreater(buy_day, sell_day)  # T+1: never same session
+        self.assertEqual(len([t for t in r["trades"]]), 3)  # no daily churn
+
+    def test_hold_does_not_drift_rebalance(self):
+        sess, px = mkdata()
+        r = P.run(sess, px, lambda d, h: {"AAA": 0.5, "BBB": 0.5}
+                  if d == sess[0] else None)
+        self.assertEqual(len(r["trades"]), 2)
+
 
 if __name__ == "__main__":
     unittest.main()
