@@ -56,6 +56,7 @@ VERIFIED (acceptance green).
 ## Run it
 
 Paper run (WSL, Ubuntu 24.04): [`ops/deploy/README.md`](./ops/deploy/README.md).
+Live view of a running loop: `python3 ops/monitor.py ~/g0` from the repo root.
 
 Checks:
 
