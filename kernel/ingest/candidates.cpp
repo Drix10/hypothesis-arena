@@ -58,17 +58,21 @@ CandOutcome ValidateCandidate(const JVal& rec, const CandidateTables& t,
     const JVal* sch = Get(rec, "schema");
     const JVal* cr = Get(rec, "created_ns");
     const JVal* c = Get(rec, "candidate");
-    if (!sch || !cr || !c) return Rej(CandReject::SHAPE);  // unknown key => size/missing
+    if (!sch || !cr || !c) return Rej(CandReject::SHAPE);
     if (sch->t != JVal::T::STR || cr->t != JVal::T::STR ||
         c->t != JVal::T::OBJ || c->o.size() != 13)
         return Rej(CandReject::SHAPE);
-    int64_t created = 0;
-    if (!ParseNonNegI64(U32ToUtf8(cr->s), created)) return Rej(CandReject::SHAPE);
     if (!U32IsAscii(sch->s, "c1")) return Rej(CandReject::SCHEMA);
+    int64_t created = 0;
+    if (!ParseNonNegI64(U32ToUtf8(cr->s), created))
+        return Rej(CandReject::SHAPE);
 
     std::string f[12], joined;
     for (int i = 0; i < 12; i++) {
-        if (!Str(*c, kIdFields[i], f[i])) return Rej(CandReject::SHAPE);
+        // '|' is the join separator: a field containing it makes the CID
+        // preimage ambiguous, so it is refused outright.
+        if (!Str(*c, kIdFields[i], f[i]) || f[i].find('|') != std::string::npos)
+            return Rej(CandReject::SHAPE);
         if (i) joined += "|";
         joined += f[i];
     }

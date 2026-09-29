@@ -2,6 +2,7 @@
 #include "store.hpp"
 
 #include <cstdio>
+#include <string>
 #include <cstring>
 #include <cerrno>
 #include <climits>
@@ -566,16 +567,40 @@ bool StageGateG0(const char* path, const char** reason) {
     return true;
 }
 
+namespace {
+// JSON string body, ASCII only: quotes, backslashes, control and non-ASCII
+// bytes can never break the line or forge a second record.
+void AppendJsonBody(std::string& out, const char* s, size_t max_bytes) {
+    static const char* hex = "0123456789abcdef";
+    for (size_t i = 0; s[i] && i < max_bytes; ++i) {
+        unsigned char c = static_cast<unsigned char>(s[i]);
+        if (c == '"' || c == '\\') {
+            out += '\\';
+            out += static_cast<char>(c);
+        } else if (c < 0x20 || c == 0x7f) {
+            out += "\\u00";
+            out += hex[c >> 4];
+            out += hex[c & 15];
+        } else if (c >= 0x80) {
+            out += '?';
+        } else {
+            out += static_cast<char>(c);
+        }
+    }
+}
+}  // namespace
+
 bool Alert(const char* path, const char* level, const char* code,
            const char* detail, long long ts_ns) {
     if (!level || !code || ts_ns <= 0) return false;
-    char ln[512];
-    int w = std::snprintf(
-        ln, sizeof(ln), "{\"ts_ns\":%lld,\"level\":\"%.15s\","
-        "\"code\":\"%.63s\",\"detail\":\"%.280s\"}",
-        ts_ns, level, code, detail ? detail : "");
-    if (w <= 0 || w >= static_cast<int>(sizeof(ln))) return false;
-    return AppendLine(path, ln);
+    std::string ln = "{\"ts_ns\":" + std::to_string(ts_ns) + ",\"level\":\"";
+    AppendJsonBody(ln, level, 15);
+    ln += "\",\"code\":\"";
+    AppendJsonBody(ln, code, 63);
+    ln += "\",\"detail\":\"";
+    AppendJsonBody(ln, detail ? detail : "", 280);
+    ln += "\"}";
+    return AppendLine(path, ln.c_str());
 }
 
 // Journal filename dates: journal-YYYYMMDD.jsonl. Day count is

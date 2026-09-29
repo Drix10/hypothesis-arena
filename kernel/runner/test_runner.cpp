@@ -5667,16 +5667,14 @@ int main() {
         auto race = [&](bool* ok) {
             G0Runner g(r.cfg, r.deps);
             ++arrived;
-            while (arrived.load() < 2) {
-            }
+            while (arrived.load() < 2) std::this_thread::yield();
             *ok = g.Recover(nullptr);
             // Hold the winner's lock until BOTH takers have attempted:
             // a slow loser (sanitizer scheduling) would otherwise run
             // after the winner's destructor released it and legitimately
             // take over, making the XOR flaky by test design.
             ++attempted;
-            while (attempted.load() < 2) {
-            }
+            while (attempted.load() < 2) std::this_thread::yield();
         };
         std::thread t1([&] { race(&ok1); });
         std::thread t2([&] { race(&ok2); });
@@ -5706,16 +5704,11 @@ int main() {
         auto race = [&](bool* ok) {
             G0Runner g(r.cfg, r.deps);
             ++arrived;
-            while (arrived.load() < 2) {
-            }
+            while (arrived.load() < 2) std::this_thread::yield();
             *ok = g.Recover(nullptr);
-            // Hold the winner's lock until BOTH takers have attempted:
-            // a slow loser (sanitizer scheduling) would otherwise run
-            // after the winner's destructor released it and legitimately
-            // take over, making the XOR flaky by test design.
+            // Hold the winner until both have attempted (see LK2).
             ++attempted;
-            while (attempted.load() < 2) {
-            }
+            while (attempted.load() < 2) std::this_thread::yield();
         };
         std::thread t1([&] { race(&ok1); });
         std::thread t2([&] { race(&ok2); });
@@ -5734,6 +5727,28 @@ int main() {
         Check(ReadWhole(r.dir + "/alerts.jsonl").find(
                   "runner-lock-held") == std::string::npos,
               "jx-no-shared-alert");
+    }
+    // AL. Alert lines stay one valid JSON record whatever the detail holds.
+    {
+        Rig r;
+        std::string path = r.dir + "/alerts-escape.jsonl";
+        Check(jev::runner::Alert(path.c_str(), "HARD", "c\"ode",
+                                 "a\"b\\c\n{\"ts_ns\":9}\x01\xc3\xa9", 5),
+              "al-append");
+        std::string got = ReadWhole(path);
+        std::size_t nl = 0;
+        for (char c : got) {
+            if (c == '\n') ++nl;
+        }
+        Check(nl == 1, "al-single-line");
+        jev::JVal v;
+        std::string err;
+        Check(jev::ParseJson(got, v, err), "al-valid-json");
+        Check(v.t == jev::JVal::T::OBJ && v.o.size() == 4, "al-four-keys");
+        std::string longd(400, 'x');
+        Check(jev::runner::Alert(path.c_str(), "MEDIUM", "long", longd.c_str(),
+                                 6),
+              "al-long-detail");
     }
     // LR2. One live mutable runner per directory (doc 06 sec.
     // 6.1b): the runner is non-copyable/non-movable, and a

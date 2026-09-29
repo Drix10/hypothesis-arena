@@ -1,7 +1,5 @@
-// K6 — candidates.jsonl per-record gate (doc 04 §2b, c1 wire record).
-// Pure validation: the caller parses with the frozen ParseJson and passes
-// the manifest-derived approved-sleeve and allowlist tables plus a held-
-// symbol predicate. No I/O, no clock reads (now_ns is an input), no state.
+// candidates.jsonl per-record gate (doc 04 2b). Pure: the caller supplies the
+// parsed record, the approved-sleeve/allowlist/held tables and the clock.
 #pragma once
 #include <cstdint>
 #include <string>

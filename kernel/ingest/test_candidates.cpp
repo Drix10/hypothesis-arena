@@ -92,6 +92,8 @@ int main() {
     CHECK("extra-key", Run(Rec(fresh, "BUY", "trend_etf_v1", "VTI", "c1",
                                false, ",\"x\":\"1\""), t).code ==
                            CandReject::SHAPE);
+    CHECK("pipe-in-field", Run(Rec(fresh, "BUY", "trend|etf_v1"), t).code ==
+                               CandReject::SHAPE);
     CHECK("bad-ts", Run(Rec("-5"), t).code == CandReject::SHAPE);
     CHECK("ts-leading-zero", Run(Rec("0123"), t).code == CandReject::SHAPE);
     CHECK("not-object", Run("[1]", t).code == CandReject::SHAPE);
