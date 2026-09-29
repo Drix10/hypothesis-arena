@@ -69,8 +69,7 @@ A box is checked only with evidence (commit + test output / report path).
       ledger populated; negative result + diagnosis recorded; FX leg dropped.
 - [x] A2 T1 `trend_etf_v1`: A-gate run on SIP daily bars 2016-01-04..2026-08-31 (free-feed history limit), holdout 2023-09-01..2026-08-31. Result: **FAIL** for both variants (excess-over-cash CI lower bound <= 0; ma10 also below the vol-matched 60/40). Ledger N=4 (two engine versions, both disclosed), reports in `research/reports/`. T1 is not a champion candidate; the statistical power of a 3-year holdout on one sleeve is the binding limit.
 - [ ] A3 I1 `intraday_mom_v1`: pre-registration → A-gate (2× cost decisive).
-- [ ] A4 E1 `insider_buy_v1`: Form 4 parser (codes, roles, 10b5-1 flag,
-      routine-trader filter) + pre-registration → A-gate.
+- [x] A4 E1 `insider_buy_v1`: Form 4 pipeline (SEC bulk sets 2013-2026Q1, opportunistic filter, 5-slot 21-session sleeve, tiered spreads) and A-gate run: **FAIL** for all three variants (tierA/tierB/cluster). Best holdout excess Sharpe 0.83 (tierA) vs passive 1.35, max drawdown 27%, modeled cost $146k over the sample; participation cap breached at tierA; 7.9% of events had no price data (delisted / ticker changes) which alone voids the run under the 5% rule. Ledger N=12 (incl. 3 crashed trials from a cash-accrual bug, disclosed). Report `research/reports/e1_insider_buy_v1_a_gate.json`. Follow-up if revisited: ticker-history mapping to recover the 8% and a lower-turnover exit.
 - [ ] A5 T2 `sector_mom_v1`: pre-registration → A-gate.
 - [ ] A6 E2 `earnings_reader_v1`: E2-det A-gate; E2-ai paired forward
       design [BLOCKED on P2].
