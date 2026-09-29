@@ -1,0 +1,228 @@
+{
+  "mom12_1": {
+    "cash_holdout_sharpe": 19.27514296168976,
+    "conditions": [
+      {
+        "name": "net_sharpe_ci_lower_gt_0",
+        "pass": false,
+        "value": [
+          -0.015103038046833847,
+          0.10585755616663686
+        ]
+      },
+      {
+        "name": "sharpe_at_2x_cost_gt_0",
+        "pass": true,
+        "value": 0.04234021329433148
+      },
+      {
+        "name": "excess_over_cash_ci_lower_gt_0",
+        "pass": false,
+        "value": [
+          -0.00015678153380689776,
+          0.0009283698136313688
+        ]
+      },
+      {
+        "name": "vs_vol_matched_passive",
+        "pass": false,
+        "value": {
+          "max_dd": [
+            0.1145829677484339,
+            0.11232420399730192
+          ],
+          "sharpe": [
+            0.062018384995194104,
+            0.08486914385407839
+          ]
+        }
+      },
+      {
+        "name": "dsr_ge_0.95",
+        "pass": false,
+        "value": 0.25877342584115104
+      },
+      {
+        "name": "pbo_le_0.2",
+        "pass": true,
+        "value": 0.11428571428571428
+      },
+      {
+        "name": "net_sharpe_ge_prereg_min",
+        "pass": true,
+        "value": 0.6842332880218911
+      },
+      {
+        "name": "max_dd_le_prereg",
+        "pass": true,
+        "value": 16.947086831403535
+      },
+      {
+        "name": "cost_multiple_ge_prereg",
+        "pass": true,
+        "value": 2.0
+      },
+      {
+        "name": "history_ge_min_trl",
+        "pass": false,
+        "value": 1459.7520756647702
+      },
+      {
+        "name": "literature_haircut_met",
+        "pass": true,
+        "value": true
+      },
+      {
+        "name": "transferability",
+        "pass": true,
+        "value": true
+      },
+      {
+        "name": "participation_caps",
+        "pass": true,
+        "value": true
+      }
+    ],
+    "cost_usd_1x": 2186.3615029726593,
+    "equal_weight_bh_holdout_sharpe": 1.2529255659976997,
+    "failed": [
+      "net_sharpe_ci_lower_gt_0",
+      "excess_over_cash_ci_lower_gt_0",
+      "vs_vol_matched_passive",
+      "dsr_ge_0.95",
+      "history_ge_min_trl"
+    ],
+    "full_sample_sharpe": 0.7089559338587519,
+    "gate": "A",
+    "holdout": [
+      "2023-09-01",
+      "2026-08-31"
+    ],
+    "holdout_max_dd": 0.16947086831403535,
+    "holdout_sharpe_excess": 0.6842332880218911,
+    "max_participation": 0.0005688693868381531,
+    "n_trials": 17,
+    "passive_holdout_sharpe": 1.3472558917251434,
+    "prereg_hash": "6278137bdd432cf04e6550fe90c66ecf6509918492c709bd30090c2150b71803",
+    "prior_trials": 15,
+    "sessions": 751,
+    "trades": 470,
+    "trial_id": "t2_sector_mom_v1_a_gate:mom12_1:55eea0445daf",
+    "variant": "mom12_1",
+    "verdict": "FAIL"
+  },
+  "mom6_0": {
+    "cash_holdout_sharpe": 19.27514296168976,
+    "conditions": [
+      {
+        "name": "net_sharpe_ci_lower_gt_0",
+        "pass": false,
+        "value": [
+          -0.04194865899869291,
+          0.08532949772600942
+        ]
+      },
+      {
+        "name": "sharpe_at_2x_cost_gt_0",
+        "pass": true,
+        "value": 0.015921668745788802
+      },
+      {
+        "name": "excess_over_cash_ci_lower_gt_0",
+        "pass": false,
+        "value": [
+          -0.00036718896917638195,
+          0.0006685306932548524
+        ]
+      },
+      {
+        "name": "vs_vol_matched_passive",
+        "pass": false,
+        "value": {
+          "max_dd": [
+            0.12355009519479443,
+            0.11232420399730192
+          ],
+          "sharpe": [
+            0.03798650626644508,
+            0.08486914385407839
+          ]
+        }
+      },
+      {
+        "name": "dsr_ge_0.95",
+        "pass": false,
+        "value": 0.08748964657918656
+      },
+      {
+        "name": "pbo_le_0.2",
+        "pass": true,
+        "value": 0.11428571428571428
+      },
+      {
+        "name": "net_sharpe_ge_prereg_min",
+        "pass": false,
+        "value": 0.26876192426737017
+      },
+      {
+        "name": "max_dd_le_prereg",
+        "pass": true,
+        "value": 16.482919049702204
+      },
+      {
+        "name": "cost_multiple_ge_prereg",
+        "pass": true,
+        "value": 2.0
+      },
+      {
+        "name": "history_ge_min_trl",
+        "pass": false,
+        "value": 9552.350405366671
+      },
+      {
+        "name": "literature_haircut_met",
+        "pass": true,
+        "value": true
+      },
+      {
+        "name": "transferability",
+        "pass": true,
+        "value": true
+      },
+      {
+        "name": "participation_caps",
+        "pass": false,
+        "value": false
+      }
+    ],
+    "cost_usd_1x": 2523.277439207069,
+    "equal_weight_bh_holdout_sharpe": 1.2529255659976997,
+    "failed": [
+      "net_sharpe_ci_lower_gt_0",
+      "excess_over_cash_ci_lower_gt_0",
+      "vs_vol_matched_passive",
+      "dsr_ge_0.95",
+      "net_sharpe_ge_prereg_min",
+      "history_ge_min_trl",
+      "participation_caps"
+    ],
+    "full_sample_sharpe": 0.3955579330835864,
+    "gate": "A",
+    "holdout": [
+      "2023-09-01",
+      "2026-08-31"
+    ],
+    "holdout_max_dd": 0.16482919049702205,
+    "holdout_sharpe_excess": 0.26876192426737017,
+    "max_participation": 0.15491355777979982,
+    "n_trials": 17,
+    "passive_holdout_sharpe": 1.3472558917251434,
+    "prereg_hash": "6278137bdd432cf04e6550fe90c66ecf6509918492c709bd30090c2150b71803",
+    "prior_trials": 15,
+    "sessions": 751,
+    "trades": 542,
+    "trial_id": "t2_sector_mom_v1_a_gate:mom6_0:55eea0445daf",
+    "variant": "mom6_0",
+    "verdict": "FAIL"
+  }
+}
