@@ -257,7 +257,7 @@ fi
 # determinism (10k -> 1 hash), mutation sensitivity, golden bytes
 # (doc 04 sec. 4.2.3; context_hash != state_hash, frozen).
 g++ $FLAGS -o test_context ctx/test_context.cpp ctx/context.cpp
-./test_context
+./test_context vectors
 # Slice G vocabulary: regime/calib/source/session/stage sets are
 # frozen mirrors — the gate enforces each exact definition line once
 # (a second spelling anywhere trips the count) and forbids parallel

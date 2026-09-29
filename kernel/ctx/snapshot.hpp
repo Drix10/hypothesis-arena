@@ -34,7 +34,9 @@ inline bool IsSourceState(const std::string& s) {
            s == "not_scheduled" || s == "unavailable" || s == "na";
 }
 
-// Presence bits: which provider sections are filled. v1: 11 sections.
+// Presence bits: which provider sections are filled. v1: 11 sections; v2
+// adds the settlement section. With kSettlement clear the canonical bytes
+// are exactly v1's, so v1 vectors keep verifying.
 // Deferred (no bit, no field, no placeholder): `change` (no frozen
 // representation) and sentiment/signal buckets (doc 03 forbids numeric
 // sentiment; the discrete schema is not frozen). Absence is not zero.
@@ -50,6 +52,7 @@ enum Present : uint32_t {
     kStage = 1u << 8,
     kResearch = 1u << 9,
     kCalib = 1u << 10,
+    kSettlement = 1u << 11,  // Snapshot v2: settled-cash section (R18)
 };
 
 struct Mark {
@@ -89,6 +92,9 @@ struct Snapshot {
     uint64_t research_revision = 0;   // kResearch (0 IS absent)
     std::string calib;                // IsCalib, kCalib
     int64_t brier_d6 = 0;             // trailing-200 Brier, D6
+    int64_t settled_cash_ud = 0;      // kSettlement (v2): buyable cash
+    int64_t unsettled_ud = 0;         // sale proceeds not yet settled
+    int64_t next_settle_day = 0;      // days since 1970-01-01, 0 if none due
     uint32_t present_mask = 0;
 };
 

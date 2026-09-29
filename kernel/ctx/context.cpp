@@ -153,7 +153,19 @@ std::string ValidateSnapshot(const Snapshot& s) {
         return "calib-incoherent";  // verdict is the section core;
     if (!(s.present_mask & kCalib) && has_calib)
         return "calib-ghost";
-    if (s.present_mask & ~0x7FFu) return "mask-reserved";
+    bool has_settle = s.settled_cash_ud != 0 || s.unsettled_ud != 0 ||
+                      s.next_settle_day != 0;
+    if (!(s.present_mask & kSettlement) && has_settle)
+        return "settlement-ghost";
+    if (s.present_mask & kSettlement) {
+        if (s.settled_cash_ud < 0 || s.unsettled_ud < 0 ||
+            s.next_settle_day < 0)
+            return "settlement-negative";
+        // Proceeds pending need a settle day; none pending must not name one.
+        if ((s.unsettled_ud > 0) != (s.next_settle_day > 0))
+            return "settlement-incoherent";
+    }
+    if (s.present_mask & ~0xFFFu) return "mask-reserved";
     return "";
 }
 
@@ -195,6 +207,13 @@ std::string CanonicalSnapshot(const Snapshot& s) {
     o += ",\"regime\":" + Esc(s.regime);
     o += ",\"research_revision\":" + std::to_string(s.research_revision);
     o += ",\"session\":" + Esc(s.session);
+    if (s.present_mask & kSettlement) {
+        o += ",\"settlement\":{\"next_settle_day\":" +
+             std::to_string(s.next_settle_day) + ",\"settled_cash_ud\":" +
+             std::to_string(s.settled_cash_ud) + ",\"unsettled_ud\":" +
+             std::to_string(s.unsettled_ud) + "}";
+        o += ",\"snapshot_version\":2";
+    }
     o += ",\"sources\":[";
     for (size_t i = 0; i < s.sources.size(); ++i) {
         const auto& src = s.sources[i];

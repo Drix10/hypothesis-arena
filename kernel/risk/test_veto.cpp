@@ -115,6 +115,51 @@ int main(int argc, char** argv) {
                               BuyingPower(e) == 10000000LL);
     }
 
+    // ---- Filter policy: none never reads the JEV-derived inputs ----
+    {
+        RiskSnapshot s = Clean();
+        s.disagreement = true;
+        s.brier_delta = 0.05;
+        s.realized_outcomes = 50;
+        s.calib = CalibState::BREACH;
+        VetoVerdict f = EvaluateVeto(s);
+        CHECK("filter-v4-holds-on-jev-inputs",
+              !f.proceed && std::string(f.reason) == "disagreement");
+        s.filter = FilterPolicy::NONE;
+        VetoVerdict n = EvaluateVeto(s);
+        CHECK("filter-none-ignores-jev-inputs",
+              n.proceed && std::string(n.reason) == "proceed");
+        EngineInputs in = BuildEngineInputs(s, n);
+        CHECK("filter-none-engine-inputs",
+              !in.disagreement &&
+                  in.calibration_gate == CalibrationGate::PASS);
+        // Where the filter passes, both policies are bit-identical.
+        RiskSnapshot c = Clean();
+        VetoVerdict a = EvaluateVeto(c);
+        c.filter = FilterPolicy::NONE;
+        VetoVerdict b = EvaluateVeto(c);
+        CHECK("filter-policies-identical-when-filter-passes",
+              a.proceed == b.proceed &&
+                  std::strcmp(a.reason, b.reason) == 0 &&
+                  a.n_reasons == b.n_reasons && a.size_scale == b.size_scale &&
+                  a.stage_num == b.stage_num && a.stage_den == b.stage_den &&
+                  a.drift_idx == b.drift_idx && a.escalate == b.escalate);
+        RiskSnapshot c2 = Clean();
+        c2.calib = CalibState::PASS;  // the filter passes
+        EngineInputs e1 = BuildEngineInputs(c2, EvaluateVeto(c2));
+        c2.filter = FilterPolicy::NONE;
+        EngineInputs e2 = BuildEngineInputs(c2, EvaluateVeto(c2));
+        CHECK("filter-engine-inputs-identical-when-filter-passes",
+              e1.disagreement == e2.disagreement &&
+                  e1.event_blackout == e2.event_blackout &&
+                  e1.calibration_gate == e2.calibration_gate &&
+                  e1.r6_vol_trip == e2.r6_vol_trip &&
+                  e1.exposure_headroom_r2 == e2.exposure_headroom_r2 &&
+                  e1.pending_risk_breach == e2.pending_risk_breach &&
+                  e1.deterministic_veto == e2.deterministic_veto &&
+                  e1.veto_reason == e2.veto_reason);
+    }
+
     // ---- Clean proceeds ----
     {
         VetoVerdict v = EvaluateVeto(Clean());

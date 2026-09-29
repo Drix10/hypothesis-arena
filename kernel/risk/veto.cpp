@@ -444,9 +444,11 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
             v.drift_idx = idx;  // index, never a copied string
         }
     }
-    if (s.disagreement) arm("disagreement");
-    if (R13FloorTrips(s.brier_delta, s.realized_outcomes))
-        arm("r13-calibration");
+    if (s.filter == FilterPolicy::JEV_V4) {
+        if (s.disagreement) arm("disagreement");
+        if (R13FloorTrips(s.brier_delta, s.realized_outcomes))
+            arm("r13-calibration");
+    }
     if (s.entry_halt) arm("entry-halt");
     if (s.kill != KillLevel::NONE) {
         arm(s.kill == KillLevel::HARD    ? "kill-hard"
@@ -467,9 +469,12 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
 
 EngineInputs BuildEngineInputs(const RiskSnapshot& s, const VetoVerdict& v) {
     EngineInputs in;
-    in.disagreement = s.disagreement;
+    const bool filtered = s.filter == FilterPolicy::JEV_V4;
+    in.disagreement = filtered && s.disagreement;
     in.event_blackout = EventBlackout(s.impact, s.phase);
-    if (R13FloorTrips(s.brier_delta, s.realized_outcomes))
+    if (!filtered)
+        in.calibration_gate = CalibrationGate::PASS;  // no filter to calibrate
+    else if (R13FloorTrips(s.brier_delta, s.realized_outcomes))
         in.calibration_gate = CalibrationGate::BREACH;
     else if (s.calib == CalibState::PASS)
         in.calibration_gate = CalibrationGate::PASS;

@@ -34,6 +34,7 @@ EntryDecision Decide(const DecideInput& in) {
         if (it == in.held_qty.end() || it->second <= 0)
             return Hold("exit-no-position", c.cid, c.symbol);
         risk::RiskSnapshot x = in.state;
+        x.filter = risk::FilterPolicy::NONE;
         x.intent.kind = risk::IntentKind::EXIT;
         x.intent.symbol = c.symbol;
         x.intent.side = risk::Side::SHORT;  // a sell against a long
@@ -61,6 +62,7 @@ EntryDecision Decide(const DecideInput& in) {
     }
 
     risk::RiskSnapshot s = in.state;
+    s.filter = risk::FilterPolicy::NONE;
     risk::StageScale st = risk::ScaleFor(s.stage);
     risk::SizingInput si;
     si.equity_cents = s.equity_cents;

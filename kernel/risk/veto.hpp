@@ -39,6 +39,7 @@ enum class IntentKind { ENTRY, EXIT };  // exits bypass the veto (doc 10 §10.3)
 enum class AssetClass { FOREX, STOCK };
 enum class AccountType { MARGIN, CASH };
 enum class CalibState { PASS, INSUFFICIENT, BREACH };
+enum class FilterPolicy { JEV_V4, NONE };
 enum class Impact { NONE, LOW, MEDIUM, HIGH, BINARY };
 enum class Phase { NONE, PRE, BLACKOUT, POST };
 enum class Side { LONG, SHORT };
@@ -157,6 +158,10 @@ struct RiskSnapshot {
     int64_t settled_cash_cents = 0;    // R18: settled cash before pending buys
     bool r18_unsettled_dependency = false;  // ledger: good-faith/free-riding
     bool instrument_allowed = false;   // R19: on the signed allowlist
+    // Sleeve filter policy (doc 03): jev_v4 consults the AnswerSet-derived
+    // disagreement and calibration inputs; none never does, whatever the
+    // snapshot carries. Default keeps every pre-v3 verdict bit-identical.
+    FilterPolicy filter = FilterPolicy::JEV_V4;
 };
 
 // Verdict: PROCEED or HOLD with a frozen reason code. reasons_all keeps every
