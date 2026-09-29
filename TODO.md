@@ -100,6 +100,8 @@ A box is checked only with evidence (commit and test output, or a report path).
 
 ## Track P — research plane (parallel)
 
+Deferred by decision (2026-09-29): no sleeve has passed an A-gate, so there is nothing for a reader tier or a research factory to feed, and P1/P2/P4 need Docker workers and a paid LLM budget to verify. Alpha-first rule (AGENTS 9): revisit when a sleeve reaches B-gate or a new data source justifies it.
+
 - [ ] P1 Reader-tier `extract` (no CodeAgent on untrusted text; capped
       JSON; span verifier); graph g1 → g2 with manifest bump.
 - [ ] P2 E2 reader skill + schema + verifier; role pins incl. knowledge
