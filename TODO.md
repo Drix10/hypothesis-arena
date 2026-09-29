@@ -40,7 +40,10 @@ A box is checked only with evidence (commit and test output, or a report path).
       `xxd` fallback; `kernel/build.sh` refuses to run as root (chmod-000 checks would be false green).
 - [x] O5 (freeze v3 is the venue amendment; S7 closed on O4) S7 closure: G1 venue amendment = freeze v3 (Alpaca, one liquid
       ETF, cash/long-only); capital-aware caps unchanged → close S7 after O4.
-- [x] O7 Frozen collector findings, fixed under the exception record `plan/appendix/09-collector-o7-exception.md`: exported `OPENROUTER_API_KEY` now wins over `.env` (a rotated key takes effect), `config.py` handles `export KEY=` and unquoted inline comments, `HTTPError` responses are closed (`collector/tests/test_o7.py`, in CI); the 8 MiB call-log rotation loses no spend evidence because spend accounting reads the per-day ledgers.
+- [x] O7 Frozen collector findings, fixed under the exception record `plan/appendix/09-collector-o7-exception.md`.
+  - Done: exported `OPENROUTER_API_KEY` now wins over `.env` (a rotated key takes effect).
+  - Done: `config.py` handles `export KEY=` and unquoted inline comments; `HTTPError` responses are closed (`collector/tests/test_o7.py`, in CI).
+  - Decision: the 8 MiB call-log rotation loses no spend evidence, because spend accounting reads the per-day ledgers.
 
 ## Track A — alpha (critical path)
 
@@ -64,9 +67,13 @@ A box is checked only with evidence (commit and test output, or a report path).
 - [ ] A1 S2 closure: `baseline_v1` rerun on SIP bars + quotes; primary
       ledger populated; negative result + diagnosis recorded; FX leg dropped.
 - [x] A2 T1 `trend_etf_v1`: A-gate run on SIP daily bars 2016-01-04..2026-08-31 (free-feed history limit), holdout 2023-09-01..2026-08-31. Result: FAIL for both variants (excess-over-cash CI lower bound <= 0; ma10 also below the vol-matched 60/40). Ledger N=4 (two engine versions, both disclosed), reports in `research/reports/`. T1 is not a champion candidate; the statistical power of a 3-year holdout on one sleeve is the binding limit.
-- [x] A3 I1 `intraday_mom_v1` (SPY, buy the 15:30 bar open and sell the 16:00 close after an up first half hour; pos and top_tercile, pre-registered 2026-09-29): A-gate FAIL for both variants (holdout excess Sharpe -2.49 / -2.73 against 1.35 for the passive 60/40; modeled cost $43.5k / $29.5k at 2 bps spread); half-day sessions are dropped by a volume rule; ledger N=19. A re-test at measured NBBO spreads would be a new pre-registration.
+- [x] A3 I1 `intraday_mom_v1` (SPY; buy the 15:30 bar open, sell the 16:00 close after an up first half hour; pos and top_tercile; pre-registered 2026-09-29).
+  - Result: A-gate FAIL for both variants. Holdout excess Sharpe -2.49 / -2.73 against 1.35 for the passive 60/40; modeled cost $43.5k / $29.5k at 2 bps spread.
+  - Method: half-day sessions are dropped by a volume rule. Ledger N=19.
+  - Decision: a re-test at measured NBBO spreads would be a new pre-registration.
 - [x] A4 E1 `insider_buy_v1`: Form 4 pipeline (SEC bulk sets 2013-2026Q1, opportunistic filter, 5-slot 21-session sleeve, tiered spreads) and A-gate run: FAIL for all three variants (tierA/tierB/cluster). Best holdout excess Sharpe 0.83 (tierA) vs passive 1.35, max drawdown 27%, modeled cost $146k over the sample; participation cap breached at tierA; 7.9% of events had no price data (delisted / ticker changes) which alone voids the run under the 5% rule. Ledger N=12 (incl. 3 crashed trials from a cash-accrual bug, disclosed). Report `research/reports/e1_insider_buy_v1_a_gate.json`. Follow-up if revisited: ticker-history mapping to recover the 8% and a lower-turnover exit.
-- [x] A5 T2 `sector_mom_v1` (top 3 of 10 SPDR sectors, mom12_1 and mom6_0, pre-registered 2026-09-29): A-gate FAIL for both variants (holdout excess Sharpe 0.68 / 0.27 against 1.35 for the passive 60/40; CI lower bound <= 0, DSR and MinTRL fail); ledger N=17.
+- [x] A5 T2 `sector_mom_v1` (top 3 of 10 SPDR sectors; mom12_1 and mom6_0; pre-registered 2026-09-29).
+  - Result: A-gate FAIL for both variants. Holdout excess Sharpe 0.68 / 0.27 against 1.35 for the passive 60/40; CI lower bound <= 0, DSR and MinTRL fail. Ledger N=17.
 - [ ] A6 E2 `earnings_reader_v1`: E2-det (deterministic SUE drift, SEC financial-statement sets, 3 variants) A-gate run: FAIL for all variants (holdout excess Sharpe -0.34 / +0.28 / -0.20 vs passive 1.33; costs $71k-$137k over the sample; 6.3% of events lack prices). Ledger N=15. Report `research/reports/e2det_pead_v1_a_gate.json`. E2-ai paired forward design [BLOCKED on P2]; no reason to build it while the deterministic baseline is negative.
 - [ ] A7 M1 vol-target overlay tested on every A-gate survivor.
 - [ ] A8 S5 re-scoped as the `jev_v4` filter gate on surviving sleeves'
@@ -75,27 +82,56 @@ A box is checked only with evidence (commit and test output, or a report path).
 
 ## Track K — kernel P3.5 remainder (parallel with A)
 
-- [ ] K1 (DONE 2026-09-29: libcurl decision, `broker/http_curl.cpp`, `--paper` flag, live smoke PASS on Alpaca paper, real-reply fixture test, adapter body cap 8 KiB and legs rule fixed against the live shape; fault-injection suite over the real transport against a loopback mock (31 checks: 429/401/403/422/5xx, reset, hang, redirect, oversize, truncated, trickle, header hygiene); WebSocket trade_updates client (libcurl transport, own RFC 6455 framing because the system libcurl has no ws support; verified against the real paper stream and 11 loopback fault checks) feeds the runner's SSE seam; OPEN: MOC fill/reconcile smoke with a held position, run by `kernel/broker/live_drill.cpp` once the session is open) P3.5-T transport: decision record (libcurl+TLS vs `mirotrade`
+- [ ] K1 P3.5-T transport: decision record (libcurl+TLS vs `mirotrade`
       gateway) → implementation behind the seam → fault-injection suite →
       Alpaca paper smoke (submit/protect/query/cancel/reconcile/MOC, 429).
-- [x] K2 (`exec/decide.cpp` = the no-filter path, candidate gate + sizing (doc 03 3.3, `risk/sizing.cpp`) + veto -> OrderIntent, grep gate against AnswerSet; `FilterPolicy` on the risk snapshot: `none` ignores the disagreement and calibration inputs, `jev_v4` keeps them, and the two are field-identical where the filter passes, 5 veto checks; `Decide` always runs `none`) Always-take path (filter policy `none`), bit-identical where the
+  - Done (2026-09-29): libcurl decision, `broker/http_curl.cpp`, `--paper` flag; live smoke PASS on Alpaca paper; real-reply fixture test; adapter body cap 8 KiB and legs rule fixed against the live shape.
+  - Done: fault-injection suite over the real transport against a loopback mock (31 checks: 429/401/403/422/5xx, reset, hang, redirect, oversize, truncated, trickle, header hygiene).
+  - Done: WebSocket trade_updates client (libcurl transport, own RFC 6455 framing because the system libcurl has no ws support; verified against the real paper stream and 11 loopback fault checks) feeds the runner's SSE seam.
+  - Open: MOC fill/reconcile smoke with a held position, run by `kernel/broker/live_drill.cpp` once the session is open.
+- [x] K2 Always-take path (filter policy `none`), bit-identical where the
       filter passes; cannot read an AnswerSet (compile/grep gate).
-- [x] K3 (`runner/settle.cpp` T+1 unsettled-proceeds book, `runner/account.cpp` strict broker account/positions parser with a real-reply fixture; Snapshot v2 settlement section: canonical bytes identical to v1 when the section is clear, vectors `snapshot_v2_*` cross-checked against an independent Python encoding, 10k-stable hash; the loop keeps the book in `settle.log` with estimated proceeds (see K13); exchange holidays in `ops/deploy/session_calendar.json`) Snapshot v2 + settlement ledger + committed vectors (v1 vectors
+  - Done: `exec/decide.cpp` = the no-filter path; candidate gate + sizing (doc 03 3.3, `risk/sizing.cpp`) + veto -> OrderIntent; grep gate against AnswerSet.
+  - Done: `FilterPolicy` on the risk snapshot: `none` ignores the disagreement and calibration inputs, `jev_v4` keeps them, and the two are field-identical where the filter passes; 5 veto checks.
+  - Decision: `Decide` always runs `none`.
+- [x] K3 Snapshot v2 + settlement ledger + committed vectors (v1 vectors
       still verified).
-- [x] K4 (veto R18/R19 arms, opt-in `v3_constraints`, veto checks 177/177, full gate PASS, old verdicts identical; the approved.json loader (K12) and the settle book feed (K13) supply the manifest and ledger inputs) R18 settled-cash + R19 allowlist in `risk/veto.cpp`; allowlist +
+  - Done: `runner/settle.cpp` T+1 unsettled-proceeds book; `runner/account.cpp` strict broker account/positions parser with a real-reply fixture.
+  - Done: Snapshot v2 settlement section: canonical bytes identical to v1 when the section is clear; vectors `snapshot_v2_*` cross-checked against an independent Python encoding; 10k-stable hash.
+  - Done: the loop keeps the book in `settle.log` with estimated proceeds (see K13); exchange holidays in `ops/deploy/session_calendar.json`.
+- [x] K4 R18 settled-cash + R19 allowlist in `risk/veto.cpp`; allowlist +
       approved sleeves from the stage manifest; Slice-B verdicts unchanged.
-- [ ] K5 (DONE: `ProtectedOrder.protection = OTO_STOP` + `gtc`, strict one-leg stop proof, stop-only repair order, `CloseAtClose` (time_in_force cls), `exec/moc_plan` sequencing with the stop-fills-first, MOC-reject, cutoff-missed and unknown-state drills (14 checks); live paper smoke accepts the OTO order with its stop leg and a cls order; wiring: `exit_intraday_v1` and `exit_event_v1` candidates become OTO stop-only orders (event is GTC), `exit_trend_v1` and `exit_profile_v1` stay bracket, unknown profiles are held; 5 decide checks and 6 loop checks over the real transport; OPEN: whether Alpaca accepts a sell or MOC while the stop leg reserves the share, decided by `kernel/broker/live_drill.cpp` in an open session, and the trend-profile switch that depends on it)
-      OTO stop-only protection + MOC sequencing (stop-fills-first and
+  - Done: veto R18/R19 arms, opt-in `v3_constraints`; veto checks 177/177, full gate PASS, old verdicts identical.
+  - Done: the approved.json loader (K12) and the settle book feed (K13) supply the manifest and ledger inputs.
+- [ ] K5 OTO stop-only protection + MOC sequencing (stop-fills-first and
       MOC-reject drills).
+  - Done: `ProtectedOrder.protection = OTO_STOP` + `gtc`, strict one-leg stop proof, stop-only repair order, `CloseAtClose` (time_in_force cls).
+  - Done: `exec/moc_plan` sequencing with the stop-fills-first, MOC-reject, cutoff-missed and unknown-state drills (14 checks); live paper smoke accepts the OTO order with its stop leg and a cls order.
+  - Done: wiring: `exit_intraday_v1` and `exit_event_v1` candidates become OTO stop-only orders (event is GTC); `exit_trend_v1` and `exit_profile_v1` stay bracket; unknown profiles are held; 5 decide checks and 6 loop checks over the real transport.
+  - Open: whether Alpaca accepts a sell or MOC while the stop leg reserves the share, decided by `kernel/broker/live_drill.cpp` in an open session, and the trend-profile switch that depends on it.
 - [x] K6 (`ingest/candidates.{hpp,cpp}`, 17 checks, wire record frozen in doc 04 2b; tailer/stage-manifest feed is runner wiring in K1/G0) `ingest/candidates.cpp`: CID recompute, sleeve approval,
       allowlist, freshness, long-only side policy, adversarial vectors.
 - [x] K7 (`ops/alert_relay.py`, 6 tests; tail+redact+HTTPS POST, no listener, at-least-once; needs ALERT_WEBHOOK_URL at deploy [HUMAN]) Outbound-only alert adapter (no inbound, no commands, redacted).
-- [x] K8 (`JournalLoad` refuses past `JournalCap()` = 64 MiB and the runner halts as for a corrupt file; the daily roll alerts at half the cap; rows are ~250 bytes so a year of G3 order rates is far below it; rotation with a chain anchor stays a follow-up if the cap ever binds) Live journal growth bound.
-- [ ] K9 Slice F 24 h soak on the real transport. Compressed mock soak (`kernel/tests/soak_mock.py`, 150 ticks, random venue faults and candidates): PASS, RSS flat at 13.7 MB, 4 descriptors, 78 decisions, 16 orders, journal chain intact. OPEN: the 24 h run on a persistent host against paper [HUMAN host].
-- [ ] K10 H1 drills on the real transport, every doc 06 §6.2a row. DONE against the loopback mock through `g0_paper_loop` (18 checks, `kernel/tests/e2e_mock_venue.py`): broker outage, rate limit (entry dropped and journaled, next candidate placed), order endpoint down, recovery places once, restart and replayed line never duplicate an order, HALT keeps exits alive and holds entries, bad credentials. OPEN: the same rows on live paper, and the rows that need other planes (feed gap, settlement mismatch, journal chain break, stage chain).
-- [x] K11 (Alert() now escapes and bounds code/detail, ASCII-only, tested in test_runner) Found in K7: `runner/store.cpp Alert()` did not JSON-escape `code`/`detail`, so a quote or backslash produced an invalid alerts.jsonl line that the relay skipped and counted (the alert was lost). Add an escape helper and test.
-- [x] K12 (`Decide` always sets `v3_constraints`; `approved.json` loader carries the sleeve windows and allowlist; the loop refuses to start without both and without a human STAGE) Wire R18/R19 from the stage manifest
-- [x] K13 Loop glue for G0b. `PaperLoop` (account, positions, working orders -> candidates -> Decide -> SubmitIntent -> Cycle) with R6/R7 from live hourly bars, ET calendar, offsets and a decisions.jsonl audit; churn counters from `submitted.log`; oversize-line and file-rotation recovery; working buy orders count as exposure and reserved cash (`inflight.log` supplies the reference price; an order the loop did not place halts entries); a working sell blocks a second exit; fractional positions are held as dust and never traded; exit proceeds are booked before the order is sent, keyed by cid and estimated from the live mark +1% (broker cash reconciles the rest next session). Decisions: no MOC or timed exits for the passive core (its exits are explicit SELL candidates during the session); early-close days are not modeled (the data-age gate only gets stricter); `ops/deploy/session_calendar.json` covers 2026-2028. [HUMAN] STAGE signature and approved.json (G0-STAGE) remain.
+- [x] K8 Live journal growth bound.
+  - Done: `JournalLoad` refuses past `JournalCap()` = 64 MiB and the runner halts as for a corrupt file; the daily roll alerts at half the cap.
+  - Decision: rows are ~250 bytes, so a year of G3 order rates is far below the cap; rotation with a chain anchor stays a follow-up if the cap ever binds.
+- [ ] K9 Slice F 24 h soak on the real transport.
+  - Done: compressed mock soak (`kernel/tests/soak_mock.py`, 150 ticks, random venue faults and candidates) PASS; RSS flat at 13.7 MB, 4 descriptors, 78 decisions, 16 orders, journal chain intact.
+  - Open: the 24 h run on a persistent host against paper [HUMAN host].
+- [ ] K10 H1 drills on the real transport, every doc 06 §6.2a row.
+  - Done: against the loopback mock through `g0_paper_loop` (18 checks, `kernel/tests/e2e_mock_venue.py`): broker outage, rate limit (entry dropped and journaled, next candidate placed), order endpoint down, recovery places once, restart and replayed line never duplicate an order, HALT keeps exits alive and holds entries, bad credentials.
+  - Open: the same rows on live paper, and the rows that need other planes (feed gap, settlement mismatch, journal chain break, stage chain).
+- [x] K11 Found in K7: `runner/store.cpp Alert()` did not JSON-escape `code`/`detail`, so a quote or backslash produced an invalid alerts.jsonl line that the relay skipped and counted (the alert was lost). Add an escape helper and test.
+  - Done: `Alert()` escapes and bounds code/detail, ASCII-only; tested in test_runner.
+- [x] K12 Wire R18/R19 from the stage manifest.
+  - Done: `Decide` always sets `v3_constraints`; the `approved.json` loader carries the sleeve windows and allowlist.
+  - Done: the loop refuses to start without both and without a human STAGE.
+- [x] K13 Loop glue for G0b: `PaperLoop` (account, positions, working orders -> candidates -> Decide -> SubmitIntent -> Cycle).
+  - Done: R6/R7 from live hourly bars, ET calendar, offsets and a decisions.jsonl audit; churn counters from `submitted.log`; oversize-line and file-rotation recovery.
+  - Done: working buy orders count as exposure and reserved cash (`inflight.log` supplies the reference price; an order the loop did not place halts entries); a working sell blocks a second exit; fractional positions are held as dust and never traded.
+  - Done: exit proceeds are booked before the order is sent, keyed by cid and estimated from the live mark +1% (broker cash reconciles the rest next session).
+  - Decision: no MOC or timed exits for the passive core (its exits are explicit SELL candidates during the session); early-close days are not modeled (the data-age gate only gets stricter); `ops/deploy/session_calendar.json` covers 2026-2028.
+  - Open: [HUMAN] STAGE signature and approved.json (G0-STAGE) remain.
 - [ ] K-exit P3.5 CLOSED (K1–K7 + K10 green).
 
 ## Track P — research plane (parallel)

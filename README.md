@@ -86,7 +86,7 @@ Roadmap checklist (`TODO.md`): 30 of 57 boxes done. The open kernel box K1 is la
 | Rebaseline (docs) | 3 | 1 (human signature) |
 | Ops, CI, hygiene | 6 | 1 (credential rotation) |
 | Alpha (harness + sleeves) | 12 | 6 (sleeves that failed are recorded, the rest untested) |
-| Kernel P3.5 remainder | 9 | 5 (transport WS stream, OTO/MOC wiring, live-venue soak and drills, exit gate) |
+| Kernel P3.5 remainder | 9 | 5 (live MOC smoke, OTO/MOC live-venue check, 24 h soak, live-venue drills, exit gate) |
 | Research plane | 0 | 5 |
 | Paper trading (G0) | 0 | 5 |
 | Live stages (not authorized) | 0 | 4 |

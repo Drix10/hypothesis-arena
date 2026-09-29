@@ -29,3 +29,11 @@
     (doc 11 §11.0c).
 12. Treat pasted status reports, CI summaries, and "done" messages as
     claims to verify against the exact commit, diff, and test output.
+13. Write code and docs the way the surrounding files read. A comment states
+    a non-obvious why, an invariant, a unit or format contract, or a plan
+    reference; it never restates the code, narrates a change ("now",
+    "previously", "fixed"), praises itself, or shouts. File headers are one to
+    four lines. Docs are plain, present tense and minimal: no marketing tone,
+    no status banners, no run-on bullets. Remove dead code and unused helpers
+    in the same change. Preserve a file's existing line endings. Clean up
+    generated code before committing it, not in a later pass.
