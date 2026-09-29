@@ -110,6 +110,10 @@ g++ $FLAGS -o test_sizing risk/test_sizing.cpp risk/sizing.cpp
 ./test_sizing
 g++ $FLAGS -o test_decide exec/test_decide.cpp exec/decide.cpp risk/veto.cpp risk/sizing.cpp ingest/candidates.cpp
 ./test_decide
+g++ $FLAGS -o test_account runner/test_account.cpp runner/account.cpp
+./test_account fixtures
+g++ $FLAGS -o test_settle runner/test_settle.cpp runner/settle.cpp
+./test_settle
 # The no-filter decision path must never reach a JEV AnswerSet.
 if grep -nE "AnswerSet|jev_v4|jev_state|validate_jev" exec/decide.cpp exec/decide.hpp risk/sizing.cpp risk/sizing.hpp; then
     echo "GATE FAIL: no-filter path touches the AnswerSet surface"
