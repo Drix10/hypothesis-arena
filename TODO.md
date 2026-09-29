@@ -71,8 +71,7 @@ A box is checked only with evidence (commit + test output / report path).
 - [ ] A3 I1 `intraday_mom_v1`: pre-registration → A-gate (2× cost decisive).
 - [x] A4 E1 `insider_buy_v1`: Form 4 pipeline (SEC bulk sets 2013-2026Q1, opportunistic filter, 5-slot 21-session sleeve, tiered spreads) and A-gate run: **FAIL** for all three variants (tierA/tierB/cluster). Best holdout excess Sharpe 0.83 (tierA) vs passive 1.35, max drawdown 27%, modeled cost $146k over the sample; participation cap breached at tierA; 7.9% of events had no price data (delisted / ticker changes) which alone voids the run under the 5% rule. Ledger N=12 (incl. 3 crashed trials from a cash-accrual bug, disclosed). Report `research/reports/e1_insider_buy_v1_a_gate.json`. Follow-up if revisited: ticker-history mapping to recover the 8% and a lower-turnover exit.
 - [ ] A5 T2 `sector_mom_v1`: pre-registration → A-gate.
-- [ ] A6 E2 `earnings_reader_v1`: E2-det A-gate; E2-ai paired forward
-      design [BLOCKED on P2].
+- [ ] A6 E2 `earnings_reader_v1`: E2-det (deterministic SUE drift, SEC financial-statement sets, 3 variants) A-gate run: **FAIL** all variants (holdout excess Sharpe -0.34 / +0.28 / -0.20 vs passive 1.33; costs $71k-$137k over the sample; 6.3% of events lack prices). Ledger N=15. Report `research/reports/e2det_pead_v1_a_gate.json`. E2-ai paired forward design [BLOCKED on P2]; no reason to build it while the deterministic baseline is negative.
 - [ ] A7 M1 vol-target overlay tested on every A-gate survivor.
 - [ ] A8 S5 re-scoped as the `jev_v4` filter gate on surviving sleeves'
       candidate streams, post-cutoff answers only (not a G0 blocker).

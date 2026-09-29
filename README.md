@@ -74,7 +74,7 @@ Three principles:
 | JEV sidecar | v3 accepted/frozen; v4 candidate-bound released; now an optional filter |
 | C++ kernel | P3.1/P3.2/P3.3 frozen; P3.5 A–G done; H1 router/runner/broker/journal built; R18/R19 veto rules, candidate validator and escaped alert log added; **broker transport not wired** |
 | Research harness | Trial ledger, `cost_v2`, T+1 settlement, portfolio engine, statistics standard, A/B gates, pre-registration validator, SIP fetcher with manifests: built, tested, on hosted CI |
-| Strategy track | `baseline_v1`, T1 `trend_etf_v1` and E1 `insider_buy_v1` measured negative on SIP/SEC data (ledger N=12); sector momentum, intraday momentum, deterministic earnings drift and the earnings reader are not yet run |
+| Strategy track | `baseline_v1`, T1 trend, E1 insider purchases and E2-det earnings drift all measured negative on SIP/SEC data (ledger N=15); sector momentum, intraday momentum and the AI earnings reader are not run |
 | Paper loop | NOT STARTED. G0a shadow starts when a sleeve passes its backtest gate; G0b broker paper when P3.5 closes |
 
 ### Progress
