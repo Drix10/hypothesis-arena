@@ -1,15 +1,14 @@
 """D4 deterministic evidence resolver (doc 08 sec. 8.5, stdlib only).
 
-LLM outputs are advisory candidates, never evidence. This resolver
-recomputes every load-bearing field from the canonical source record
-before emission. No LLM, no network, no clock reads (timestamps in).
+LLM outputs are advisory candidates, never evidence. The resolver
+recomputes every load-bearing field from the canonical source record.
+No LLM, no network, no clock reads (timestamps are inputs).
 
 Inputs:
   candidate: advisory dict (kind, value, symbols?, effect?,
              evidence?, entity_ref?, provenance_url?). feature_id, when
-             present on a candidate, is IGNORED: feature identity is
-             assigned downstream from trusted canonical lineage, never
-             from model output (duplicate/invented IDs cannot survive).
+             present on a candidate, is ignored: identity is assigned
+             downstream from canonical lineage.
   canonical: the deterministic source record the candidate claims to
              derive from: {source_id, kind (parser-assigned), content_hash,
              published_ns (or None), ingested_ns, symbols, effect
@@ -19,45 +18,38 @@ Inputs:
   map_version, map_sha: pinned map identity for the bundle watermarks.
 
 Output: (ok, feature_dict_or_reject_reason). Reject reasons mirror the
-f2 vocabulary where the defect is shape-like; resolver-native rejects
-use the "unverifiable-*" / "contradiction" codes (counted, never emitted).
+f2 vocabulary for shape defects; resolver-native rejects use the
+"unverifiable-*" / "contradiction" codes (counted, never emitted).
 
-Rules (frozen):
-- kind/source must be in the frozen registry; unknown kind or a kind the
-  source cannot emit -> reject (never admitted on structure alone).
+Rules:
+- kind/source must be in the registry; an unknown kind, or a kind the
+  source cannot emit, is rejected.
 - symbols must resolve through the pinned map (EDGAR CIK or macro
-  release table) and number at most 16 (frozen ctx MAX_SYMBOLS — the
-  producer enforces the downstream limit, never ships past it).
-  Unresolvable -> reject. entity_ref cik contradicting
-  the claimed symbol -> reject ("contradiction").
-- evidence = "source" ONLY for a pipeline-owned deterministic-parser
-  origin (origin="parser", stamped by the graph — never by candidate
-  output) with kind, value, symbols, and observed_at_ns mechanically
-  identical to the canonical record AND the effect equal to the
-  parser-assigned canonical effect. LLM-origin output (origin="llm")
-  is ALWAYS "inference", even when its content happens to match:
-  advisory content can never promote itself to evidence. The legacy
-  candidate llm_touched field is IGNORED entirely.
+  release table) and number at most 16 (ctx MAX_SYMBOLS). Unresolvable
+  symbols are rejected; an entity_ref cik contradicting the claimed
+  symbol is a "contradiction".
+- evidence = "source" only for parser origin (origin="parser", stamped
+  by the graph, never by candidate output) with kind, value, symbols
+  and observed_at_ns identical to the canonical record and effect equal
+  to the canonical effect. origin="llm" is always "inference", even on
+  a full match. The legacy candidate llm_touched field is ignored.
 - effect is never invented: carried from the canonical record when
-  present, else "unknown". The resolver owns no directional mapping;
-  per-source directional tables are parser config added only with
-  measured justification (promotion gate), never per-record judgment.
+  present, else "unknown". Per-source directional tables are parser
+  config added only with measured justification (promotion gate).
 - observed_at_ns comes from the canonical published timestamp. Missing
   published ts -> observed = ingested AND context_cap = True
   (R12: permanently CONTEXT-capped, still emittable for research).
-- canonical_hash = the canonical content_hash (single-source lineage).
+- canonical_hash = the canonical content_hash.
 - confidence_bucket is computed, never self-reported:
   base = source tier (high->high, medium->medium); drop one level if the
   published timestamp was missing; drop one level if uncorroborated and
   the candidate was LLM-touched (llm_touched=True); drop per
-  parser_confidence (high: 0, medium: 1, low: 2 — a low-confidence
-  parser result can never ride a high tier to high confidence).
+  parser_confidence (high: 0, medium: 1, low: 2).
   Floor is "low".
-- the canonical record itself is validated FIRST: missing keys, wrong
-  types, non-hex content_hash, unknown parser_confidence, or an
-  entity_ref CIK unknown to the pinned map are deterministic REJECTS
-  (canonical-shape / entity-unmapped), never exceptions and never
-  knowingly-invalid emitted features.
+- the canonical record is validated first: missing keys, wrong types,
+  non-hex content_hash, unknown parser_confidence, or an entity_ref CIK
+  unknown to the pinned map are rejected (canonical-shape /
+  entity-unmapped), never raised.
 """
 from . import schema
 
@@ -68,12 +60,10 @@ def _drop(level):
 
 def resolve(candidate, canonical, entity_map, origin="llm",
             llm_touched=True):
-    # origin is pipeline-stamped (graph overwrites worker output to
-    # "llm"); llm_touched is accepted for backward compatibility but
-    # IGNORED — a candidate-controlled trust bit can never earn source
-    # evidence. Only origin="parser" may.
-    # Canonical record validation FIRST: malformed trusted input is a
-    # counted reject, never a KeyError/TypeError and never a feature.
+    # origin is pipeline-stamped (graph overwrites worker output to "llm");
+    # llm_touched is accepted but ignored, so a candidate-controlled bit
+    # cannot earn source evidence.
+    # validate the canonical record first: malformed input is a counted reject
     if not isinstance(canonical, dict):
         return False, "canonical-shape"
     src = canonical.get("source_id")
@@ -131,8 +121,7 @@ def resolve(candidate, canonical, entity_map, origin="llm",
                 not isinstance(ref.get("cik"), str)):
             return False, "entity-ref-shape"
         actual = tickers.get(ref["cik"])
-        # Unknown CIK rejects HERE (resolver), not downstream: an
-        # unmapped reference must never become an emitted feature.
+        # an unmapped CIK is rejected here, not downstream
         if actual is None:
             return False, "entity-unmapped:%s" % ref["cik"]
         if actual not in bound:
@@ -153,10 +142,9 @@ def resolve(candidate, canonical, entity_map, origin="llm",
         return False, "value-shape"
     if value["type"] == "count" and value["v"] < 0:
         return False, "value-shape"
-    # Mechanical identity with the canonical record, INCLUDING the
-    # parser-assigned kind: a candidate must not relabel canonical
-    # semantics (e.g. macro_release -> calendar_ahead) while keeping the
-    # checked fields identical and still earn evidence=source.
+    # identity with the canonical record includes the parser-assigned kind, so
+    # a candidate cannot relabel it (macro_release -> calendar_ahead) and still
+    # earn evidence=source
     identical = (origin == "parser" and canon_kind == kind and
                  canon_value == value and
                  list(canon_symbols) == list(bound) and
@@ -175,12 +163,9 @@ def resolve(candidate, canonical, entity_map, origin="llm",
         evidence = "inference"
         effect = (canon_effect if canon_effect in schema.EFFECTS
                   else "unknown")
-    # Confidence: computed from tier x timestamp quality x corroboration
-    # x PARSER confidence. A low-confidence parse never reaches high,
-    # even on a high-tier source with corroboration. LLM-origin output
-    # additionally drops one level (advisory content, never parser
-    # output) unless corroborated by an independent deterministic
-    # record.
+    # confidence = tier x timestamp quality x corroboration x parser confidence;
+    # a low-confidence parse never reaches high. LLM-origin output drops one
+    # more level unless corroborated by a deterministic record.
     conf = {"high": "high", "medium": "medium"}.get(
         schema.SOURCE_TIER.get(src, "medium"), "medium")
     if pub_ns is None:

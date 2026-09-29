@@ -1,15 +1,15 @@
 """Live production-seam pass (Track A operational evidence).
 
-Runs ONE harvest through the real production seam (build_seam with
-live transports, real pacing, real credentials from root .env via
-collector.config) for ["AAPL", "SPY"], persists canonical lineage
-into a scratch DB, resolves via the frozen resolver path, emits one
-bundle, and reads it with frozen ctx_read. Proves on live data:
-outage-is-absence (BLS contributes nothing, nothing blocks), and
-live records flow end-to-end through the ACCEPTED path.
+Runs one harvest through the production seam (build_seam with live
+transports, real pacing, real credentials from root .env via
+collector.config) for ["AAPL", "SPY"], persists canonical lineage into a
+scratch DB, resolves via the frozen resolver path, emits one bundle and
+reads it with the frozen ctx_read. Shows on live data that an outage is
+absence (BLS contributes nothing, nothing blocks) and that live records
+flow end to end through the accepted path.
 
 Usage: python3 research/sandbox/seam_live_pass.py [--out PATH]
-Exit 0 always (evidence, not a gate). Secrets never printed.
+Exit 0 always (evidence, not a gate). Secrets are never printed.
 """
 import json
 import os
@@ -49,9 +49,8 @@ def main(argv):
     harvest_ms = round((time.monotonic() - t0) * 1000.0, 1)
     with open(MAP_PATH, encoding="utf-8") as fh:
         emap = json.load(fh)
-    # Production publisher path (same binding the Runner uses):
-    # fused parser candidates -> real resolve_emit (64-feature cap,
-    # watermark coverage) -> emitted bundle -> frozen reader.
+    # production publisher path (same binding the Runner uses): fused parser
+    # candidates -> resolve_emit (64-feature cap, watermark coverage) -> bundle -> frozen reader
     fused = []
     for r in recs:
         h = r.get("canonical_hash")
@@ -93,8 +92,7 @@ def main(argv):
                                         st.get("errors", [])][:3]}
                       for s, st in stamps.items()},
           "ctx_stats": res["stats"]}
-    # Accounting invariants asserted in-script (exit 1 on any
-    # violation): the evidence script checks, not just dumps.
+    # accounting invariants asserted in-script (exit 1 on any violation)
     import sqlite3 as _sq
     ok = True
 
@@ -114,7 +112,7 @@ def main(argv):
         with open(bpath, encoding="utf-8") as fh:
             env = json.load(fh)
         feats = env.get("features", [])
-        # Committed: manifest row present for the emitted id.
+        # committed: manifest row present for the emitted id
         man_path = os.path.join(outdir, "manifest.jsonl")
         try:
             with open(man_path, encoding="utf-8") as fh:
@@ -125,27 +123,26 @@ def main(argv):
         except (OSError, ValueError):
             committed = False
         check(committed, "emitted bundle not manifest-committed")
-        # Contractual 64-feature cap.
+        # 64-feature cap
         check(len(feats) <= 64,
               "bundle over 64-feature cap: %d" % len(feats))
         if len(fused) > 64:
             check(len(feats) == 64,
                   "cap not applied: fused=%d feats=%d"
                   % (len(fused), len(feats)))
-        # accepted + rejected reconciles with bundle features.
+        # accepted + rejected reconciles with bundle features
         st = res["stats"]
         check(st["accepted"] + st["rejected"] == len(feats),
               "ctx accounting: %d+%d != %d feats"
               % (st["accepted"], st["rejected"], len(feats)))
-        # BLS outage contributes zero accepted features while other
-        # sources remain usable.
+        # a BLS outage contributes no accepted features while other sources stay usable
         check(all(f.get("source_id") != "bls_empsit"
                   for f in feats),
               "outage source contributed features")
         check(any(f.get("source_id") != "bls_empsit"
                   for f in feats),
               "no usable-source features")
-        # Every emitted hash resolves against the frozen authority.
+        # every emitted hash resolves against the frozen authority
         con = _sq.connect(lineage_db)
         try:
             for f in feats:

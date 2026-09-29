@@ -859,12 +859,9 @@ class SpendTest(unittest.TestCase):
         self._seed(log, 30.0, t0 - 86400)
         self.assertEqual(gov.evaluate(t0)[0], 2)
         attribution.reconcile_unknown  # exists (API surface)
-        # Drop spend to zero via a fresh ledger in the same dir? No:
-        # spend is durable. Reconcile the conservative charge down by
-        # direct supervisor action on the seeded span is impossible
-        # (it was not unknown). Instead fast-forward past the 7d
-        # window: projection decays naturally, tier must STILL hold
-        # for 6 hourly evals before falling back.
+        # Spend is durable, so fast-forward past the 7d window instead: the
+                # projection decays, but the tier must still hold for 6 hourly evals
+                # before falling back.
         for h in range(1, 6):
             tier, _p = gov.evaluate(t0 + 8 * 86400 + h * 3600)
             self.assertEqual(tier, 2, "hour %d fell early" % h)
@@ -1201,8 +1198,8 @@ class GateTest(unittest.TestCase):
     def test_token_need_formula(self):
         n1 = workers._token_need("generate", 2000, 1500, 1)
         self.assertEqual(n1, 3500)
-        # Corrected bound: EVERY tool slot per prior step counts
-        # (TOOLS_PER_STEP_MAX x TOOL_OUT_MAX_BYTES), not one output.
+        # every tool slot per prior step counts (TOOLS_PER_STEP_MAX x
+                # TOOL_OUT_MAX_BYTES), not one output
         growth = 1500 + workers.TOOLS_PER_STEP_MAX * 1500
         n5 = workers._token_need("extract", 2000, 1500, 5)
         self.assertEqual(n5, 5 * 2000 + growth * 5 * 4 // 2 + 5 * 1500)
@@ -1731,12 +1728,10 @@ class GraphTest(unittest.TestCase):
 
     @unittest.skipUnless(_HAS_SMOL, "smolagents missing")
     def test_extract_cleanup_failure_reaps_and_blocks(self):
-        # Child-side cleanup failure rides the envelope; the parent
-        # performs the authoritative reclaim, and its failure is
-        # blocked evidence. The reclaim itself is hermetically
-        # failed (no dependence on whether a docker daemon exists):
-        # a hosted run once showed a real-daemon environment can
-        # otherwise resolve the reclaim cleanly and hide the path.
+        # Child-side cleanup failure rides the envelope; the parent performs the
+                # authoritative reclaim, and its failure is blocked evidence. The reclaim
+                # is failed hermetically so the result does not depend on whether a docker
+                # daemon exists.
         import unittest.mock as _mock
         d = tempfile.mkdtemp()
         _fixtures(d)

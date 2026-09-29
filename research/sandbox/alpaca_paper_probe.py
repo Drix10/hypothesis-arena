@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
 """alpaca-paper-probe.py — Phase-D Alpaca paper evidence (operator key).
 
-Scope: API/account/data READINESS only (NOT execution readiness — no
-order lifecycle exists yet; H1 remains OPEN per plan/13). Proves,
-with N=3 timed samples per call and zero secret leakage:
-  1. authenticated PAPER account read (paper-api /v2/account ->
-     paper account, buying_power present, live orders untouched);
+Scope: API/account/data readiness only, not execution readiness (no order
+lifecycle exists yet; H1 remains open per plan/13). Checks, with N=3 timed
+samples per call and no secret leakage:
+  1. authenticated paper account read (paper-api /v2/account -> paper
+     account, buying_power present, live orders untouched);
   2. authenticated asset read (/v2/assets/AAPL -> tradable symbol);
-  3. market-data read (data.alpaca /v2/stocks/AAPL/quotes/latest ->
-     quote present; free plan = IEX feed, recorded honestly);
-  4. bad-key FAIL-CLOSED (requires actual HTTP 401/403; transport
-     failures are transport, never denial).
+  3. market-data read (data.alpaca /v2/stocks/AAPL/quotes/latest -> quote
+     present; the free plan is the IEX feed and is recorded as such);
+  4. bad key fails closed (requires an actual HTTP 401/403; transport
+     failures are not denial).
 Keys come from root .env via collector.config.load (never argv, never
-printed; secret never in URLs). PAPER base only — the base URL is
-pinned in code, not configurable. READ-ONLY: no order endpoints are
-called anywhere in this file. Exit 0 only if 1-4 hold.
+printed, never in URLs). The base URL is pinned to paper. No order
+endpoints are called. Exit 0 only if 1-4 hold.
 Usage: python3 research/sandbox/alpaca_paper_probe.py [--out PATH]
 """
 import json
@@ -133,8 +132,7 @@ def main():
           "orders_called": False}
     ok = True
 
-    # 1. paper account (read-only). Evidence keeps readiness only:
-    # status/currency/buying-power — no account id/number persisted.
+    # 1. paper account (read-only); evidence keeps status/currency/buying-power, no account id
     a_lats, acct = [], None
     for _ in range(N):
         body, err, ms = get(PAPER, "/v2/account", kid, secret)
@@ -171,7 +169,7 @@ def main():
         print("FAIL: no asset read")
         ok = False
 
-    # 3. market-data quote (free plan = IEX; recorded, not disguised)
+    # 3. market-data quote (free plan = IEX, recorded as such)
     q_lats, quote = [], None
     for _ in range(N):
         body, err, ms = get(DATA, "/v2/stocks/AAPL/quotes/latest?feed=iex",
@@ -188,9 +186,8 @@ def main():
         print("FAIL: no market-data quote")
         ok = False
 
-    # 4. bad key fails closed: requires an actual HTTP 401/403.
-    # Transport failures (timeout/DNS/TLS) are transport, never
-    # denial — a network outage must not become a 401 proof.
+    # 4. bad key fails closed: requires an actual HTTP 401/403. Transport
+    # failures (timeout/DNS/TLS) are not denial; an outage must not pass as a 401.
     b4, e4, _ = get(PAPER, "/v2/account", "PKBAD", "bad")
     http4 = (e4 or {}).get("http")
     denied = (b4 is None and http4 in (401, 403))

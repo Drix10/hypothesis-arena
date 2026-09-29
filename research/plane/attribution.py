@@ -1,63 +1,52 @@
 """D9 spend/token attribution ledger (doc 08 sec. 8.2 + doc 10 sec. 10.4).
 
-Exactly one durable row per ACTUAL model invocation — written by the
-parent-side gate (workers.run_gated) that also reserves R15 budget,
-never by graph-level counting.
+One durable row per actual model invocation, written by the parent-side
+gate (workers.run_gated) that also reserves R15 budget.
 
-Durability: SQLite is AUTHORITATIVE (UNIQUE(span_id) gives atomic
-exactly-once under concurrent processes — no check-then-act race).
-The JSONL mirror beside it is a best-effort Langfuse tail: it is
-appended ONLY when the ledger actually inserts (rowcount == 1), so
-retries never duplicate the mirror; sync_mirror() regenerates it
-atomically (temp + replace) from the ledger.
+Durability: SQLite is authoritative (UNIQUE(span_id) gives atomic
+exactly-once across processes). The JSONL mirror beside it is a
+best-effort Langfuse tail, appended only when the ledger actually inserts
+(rowcount == 1); sync_mirror() regenerates it atomically from the ledger.
 
-Row schema (frozen doc-10 spend taxonomy + outcome + unknown flag):
+Row schema (doc-10 spend taxonomy + outcome + unknown flag):
   ts, research_epoch, cycle_id, stage, symbol, node, model,
   prompt_tokens, completion_tokens, usd, category, outcome,
   is_unknown, span_id.
-category is the FROZEN doc-10 set {decision, research, experiment,
+category is the doc-10 set {decision, research, experiment,
 observability}; error/timeout/blocked live in `outcome`
-{success, error, timeout, blocked} — a separate dimension, never a
-category replacement. is_unknown=1 marks an AMBIGUOUS attempt (may
-have been billed): its usd is the full pre-call reservation (never
-$0 — an ambiguous billed attempt recorded as $0 would bless an
-unbounded charge), and it blocks future spend until a supervisor
-reconciles it (reconcile_unknown). usd is caller-supplied from the
-deployment pricing table; 0.0 on a success row means a zero-price
-model, never "unpriced" — unpriced models never run.
+{success, error, timeout, blocked}. is_unknown=1 marks an ambiguous
+attempt (may have been billed): its usd is the full pre-call reservation,
+never $0, and it blocks future spend until a supervisor reconciles it
+(reconcile_unknown). usd is supplied by the caller from the deployment
+pricing table; 0.0 on a success row means a zero-price model (unpriced
+models never run).
 
-Spend authorization is ONE atomic transaction (reserve_spend_hold):
-reap-expired + unknown/invoked block check + committed measurement +
-cap compare + hold insert happen under the same lock inside a single
-BEGIN IMMEDIATE. There is no second non-atomic cap check anywhere.
+Spend authorization is one atomic transaction (reserve_spend_hold):
+reap expired holds, unknown/invoked block check, committed measurement,
+cap compare and hold insert under one lock in a single BEGIN IMMEDIATE.
 Any positive-dollar spend_holds row in state='invoked' counts as
-unresolved unknown spend (crash backstop: an invoked hold without
-its unknown rows still blocks). Ambiguous attempts are recorded by
-record_unknown() in ONE transaction (span + unknown row + invoked
-mark); reconcile_unknown() recovers from a crash at any point of
+unresolved unknown spend (crash backstop). Ambiguous attempts are
+recorded by record_unknown() in one transaction (span + unknown row +
+invoked mark); reconcile_unknown() recovers from a crash at any point of
 that path.
 
-Duplicate span identity is STRICT: same span_id + identical payload
-is an idempotent no-op; same span_id + different payload is a hard
-conflict (never silently INSERT OR IGNORE'd away).
+Duplicate span identity is strict: same span_id + identical payload is an
+idempotent no-op; same span_id + different payload is a hard conflict.
 
-Authoritative-row hardening: every numeric/string field is validated
-in Python AND constrained in DDL (CHECK(usd=usd) rejects NaN,
-usd >= 0 rejects negatives, token bounds, string length bounds,
-category/outcome enums). PRAGMA user_version is pinned and
-PRAGMA integrity_check is READ (a non-"ok" result aborts, not
-ignored). Missing/corrupt ledger is LedgerUnavailable, NEVER zero
-spend — except a GENUINELY NEW path (no DB and no init marker),
-which mints fresh. Marker-without-DB aborts (authority-deleted).
-Storage (main+wal+shm) is bounded with checkpoint/vacuum reclaim.
+Row validation: every numeric/string field is validated in Python and
+constrained in DDL (CHECK(usd=usd) rejects NaN, usd >= 0, token bounds,
+string length bounds, category/outcome enums). PRAGMA user_version is
+pinned and PRAGMA integrity_check is read (non-"ok" aborts). A
+missing/corrupt ledger is LedgerUnavailable, never zero spend, except a
+genuinely new path (no DB and no init marker), which mints fresh.
+Marker-without-DB aborts (authority-deleted). Storage (main+wal+shm) is
+bounded with checkpoint/vacuum reclaim.
 
-Retained low-level primitives (audited, live-tested, no undead
-code): hold_spend/mark_invoked/settle_hold/reap_holds are the
-crash-state constructors the recovery tests build ambiguous states
-from (production authorization goes ONLY through the atomic
-reserve_spend_hold above); day_summary/sync_mirror/committed_spend
-are the read-only supervisor/audit surfaces. Each is covered by a
-live regression, not kept for convenience.
+hold_spend/mark_invoked/settle_hold/reap_holds are the crash-state
+constructors the recovery tests build ambiguous states from (production
+authorization goes only through reserve_spend_hold);
+day_summary/sync_mirror/committed_spend are read-only supervisor/audit
+surfaces.
 """
 import hashlib
 import json
@@ -134,11 +123,10 @@ _EXPECTED_COLUMNS = {
     "content_digest": ["table", "digest", "n", "a", "b"],
 }
 
-# Tables whose presence the missing-table gate enforces. The digest
-# table is excluded: its absence on an established ledger is a
-# versioned backfill case (recompute from truth once), not a
-# deletion — while a present-but-emptied digest table over live
-# rows is tamper and denies.
+# Tables whose presence the missing-table gate enforces. The digest table
+# is excluded: its absence on an established ledger is a versioned backfill
+# (recompute from truth once), while an emptied digest table over live rows
+# is tamper and denies.
 _GATED_TABLES = ("spans", "unknown_holds", "reconciliations",
                  "spend_holds", "meta")
 
@@ -147,11 +135,9 @@ _DIGEST_DDL = (
     "\"table\" TEXT PRIMARY KEY, digest TEXT NOT NULL, "
     "n INTEGER NOT NULL, a INTEGER NOT NULL, b INTEGER NOT NULL)")
 
-# Canonical column order per digest slot (schema order — the SELECT
-# order must match exactly or the fingerprint silently changes).
-# aux (a, b) meaning per slot: spans a = exact usd cents; holds
-# a = created, b = closed (exact, same-transaction — no lag); other
-# slots keep a = b = 0.
+# Canonical column order per digest slot; the SELECT order must match or the
+# fingerprint changes. aux (a, b) per slot: spans a = exact usd cents; holds
+# a = created, b = closed (same transaction, no lag); other slots a = b = 0.
 _DIGEST_COLS = {
     "spans": _EXPECTED_COLUMNS["spans"],
     "recon": _EXPECTED_COLUMNS["reconciliations"],
@@ -163,9 +149,8 @@ _ZERO_DIGEST = "0" * 64
 
 
 def _hrow(values):
-    """Canonical row hash: JSON of the value list (floats via
-    repr-shortest — deterministic per value; None/ints/strs exact).
-    Column order is the schema order (see _DIGEST_COLS)."""
+    """Canonical row hash: JSON of the value list (floats via shortest
+    repr). Column order is the schema order (see _DIGEST_COLS)."""
     return hashlib.sha256(
         json.dumps(list(values), separators=(",", ":")).encode(
             "utf-8")).hexdigest()
@@ -176,17 +161,16 @@ def _dxor(a, b):
 
 
 def _cents(usd):
-    """Exact usd-cents fingerprint (truncation, matching the SQL
-    CAST used at recompute — same IEEE754 value, same double
-    multiply, same truncation, so incremental and recomputed sums
-    agree exactly regardless of row order)."""
+    """Exact usd-cents fingerprint by truncation, matching the SQL CAST used
+    at recompute (same double multiply), so incremental and recomputed sums
+    agree regardless of row order."""
     return int(usd * 100)
 
 
 def _recompute_table(con, slot, sql_table):
-    """Full re-fingerprint of one table from live rows: (digest,
-    count, cents-or-0). Order-independent (XOR) so VACUUMs,
-    rowid reuse, and plan changes never false-deny."""
+    """Re-fingerprint one table from live rows: (digest, count,
+    cents-or-0). XOR-based, so VACUUM, rowid reuse and plan changes cannot
+    cause a false deny."""
     cols = _DIGEST_COLS[slot]
     cur = con.execute("SELECT %s FROM %s" % (",".join(cols),
                                                sql_table))
@@ -204,15 +188,12 @@ def _recompute_table(con, slot, sql_table):
 
 def _dig_apply(con, slot, sql_table, outs=(), ins=(), dn=0, da=0,
                db=0):
-    """Incremental digest maintenance INSIDE the mutation's own
-    SQLite transaction (same BEGIN/COMMIT): outs/ins are canonical
-    value-lists of removed/added rows, dn/da/db counter deltas.
-    Same-transaction atomicity is what closes the commit/bump crash
-    seam — a crash leaves rows AND digest both old or both new,
-    never split. Out-of-band SQL (attacker, corruption, torn
-    pages) does not maintain this table, so any such edit shows
-    as digest-mismatch at verify. A missing digest row denies
-    (deleted digest evidence), never recreates."""
+    """Incremental digest maintenance inside the mutation's own SQLite
+    transaction: outs/ins are canonical value-lists of removed/added rows,
+    dn/da/db counter deltas. Rows and digest are therefore both old or both
+    new after a crash. Out-of-band SQL (attacker, corruption, torn pages)
+    does not update the digest and shows as digest-mismatch at verify. A
+    missing digest row denies, never recreates."""
     row = con.execute(
         "SELECT digest, n, a, b FROM content_digest WHERE \"table\"=?",
         (slot,)).fetchone()
@@ -234,9 +215,9 @@ class LedgerUnavailable(Exception):
 
 
 class SpendBlocked(Exception):
-    """Authoritative spend refusal from inside the ledger
-    transaction (cap crossed, unknowns pending, unmeasurable). The
-    governor converts this to SpendRefused; it is never a crash."""
+    """Spend refusal from inside the ledger transaction (cap crossed,
+    unknowns pending, unmeasurable). The governor converts it to
+    SpendRefused."""
     pass
 
 
@@ -260,10 +241,8 @@ _ZERO_ROOTS = {"spans": {"digest": _ZERO_DIGEST, "count": 0,
 
 
 def _req_int(slot, key, tag):
-    """One required root integer: exact int (bool excluded),
-    non-negative. Missing slots, floats (including NaN/inf),
-    and negatives deny — a malformed root weakens nothing, it
-    fails closed."""
+    """One required root integer: exact int (bool excluded), non-negative.
+    Missing slots, floats (including NaN/inf) and negatives deny."""
     try:
         val = slot.get(key)
     except AttributeError:
@@ -274,7 +253,7 @@ def _req_int(slot, key, tag):
 
 
 def _req_digest(slot, tag):
-    """One required 64-hex content digest. Anything else denies."""
+    """One required 64-hex content digest; anything else denies."""
     try:
         val = slot.get("digest")
     except AttributeError:
@@ -289,18 +268,14 @@ def _req_digest(slot, tag):
 
 
 def _verify_history_locked(db_path, con, roots):
-    """Row-content integrity verify (every open of an established
-    ledger). For each money table: re-fingerprint live rows and
-    compare against the same-transaction in-DB digest (exact — a
-    crash can never split rows from their digest, so any mismatch
-    is an out-of-band edit: UPDATE usd/content, DELETE, torn page
-    — and denies as digest-mismatch). Holds additionally prove
-    active + closed == created exactly (in-DB counters, no lag).
-    The marker mirror is then strict-validated (malformed slots
-    deny) and re-baselined from in-DB truth when stale (adopt —
-    the marker is refreshed FROM truth, never trusted OVER it, so
-    marker tamper is erased rather than honored, and crash lag
-    self-heals instead of false-denying)."""
+    """Row-content integrity check on every open of an established ledger.
+    For each money table, re-fingerprint live rows and compare with the
+    same-transaction in-DB digest; any mismatch is an out-of-band edit
+    (UPDATE, DELETE, torn page) and denies as digest-mismatch. Holds must
+    also satisfy active + closed == created. The marker mirror is then
+    strictly validated (malformed slots deny) and re-baselined from in-DB
+    truth when stale: the marker is refreshed from truth, never trusted over
+    it, so marker tampering is erased and crash lag self-heals."""
     expect = (("spans", "spans", True),
               ("recon", "reconciliations", False),
               ("unknown", "unknown_holds", False),
@@ -340,12 +315,10 @@ def _verify_history_locked(db_path, con, roots):
 
 
 def _mirror_roots_locked(db_path, con, live=None):
-    """Re-baseline the marker mirror from in-DB truth (post-commit,
-    same file lock held): digest/count/cents/created/closed copied
-    from the digest table. Truth flows DB → marker only.
-    Raises LedgerUnavailable on failure (the committed mutation
-    stays valid; the next open retries the mirror — and verify
-    adopts it then, so a crash here lags but never wedges)."""
+    """Re-baseline the marker mirror from in-DB truth (post-commit, file
+    lock held): digest/count/cents/created/closed copied from the digest
+    table. Raises LedgerUnavailable on failure; the committed mutation stays
+    valid and the next open retries the mirror."""
     try:
         if live is None:
             live = {t: con.execute(
@@ -369,10 +342,9 @@ def _mirror_roots_locked(db_path, con, live=None):
 
 
 def _pristine_locked(con, have):
-    """No init token and every present money table empty: init
-    never completed, so a single-transaction re-init cannot destroy
-    established state. (Absent tables count as empty — a
-    crash-interrupted first init.)"""
+    """No init token and every present money table empty: init never
+    completed, so a single-transaction re-init cannot destroy established
+    state. Absent tables count as empty (crash-interrupted first init)."""
     try:
         if "meta" in have:
             cur = con.execute(
@@ -402,20 +374,17 @@ def _pristine_locked(con, have):
 
 
 def _connect(db_path, create=False):
-    # First-creation is check-then-mint: serialize it across
-    # processes on a dedicated lock file. Lock order is always
-    # data-lock -> create-lock (this function never acquires a data
-    # lock), so concurrent creators converge instead of double-
-    # minting, and no lock cycle exists.
+    # First creation is check-then-mint: serialize it across processes on a
+    # dedicated lock file. Lock order is always data-lock -> create-lock (this
+    # function never takes a data lock), so creators cannot double-mint or cycle.
     with locks.FileLock(db_path + ".create.lock", purpose="create"):
         return _connect_locked(db_path, create)
 
 
 def _marker_digest_era(db_path):
-    """Marker shape as digest-era proof: True when any history
-    slot carries a digest (round-7+ marker), False for pre-digest
-    or pre-roots markers, None when the marker is unparseable
-    (the caller denies — an unreadable witness proves nothing)."""
+    """Marker shape as digest-era proof: True when any history slot carries
+    a digest, False for pre-digest or pre-roots markers, None when the marker
+    is unparseable (the caller denies)."""
     try:
         roots = locks.marker_roots(db_path)
     except ValueError:
@@ -434,12 +403,10 @@ def _connect_locked(db_path, create=False):
     mstate, marker = locks.marker_state(db_path)
     if not exists:
         if mstate == "valid":
-            # The spend authority was deleted. A missing ledger must
-            # block, never report $0 — recreating fresh would too.
+            # the spend authority was deleted: block, never report $0
             raise LedgerUnavailable("attribution authority deleted")
         if mstate == "invalid":
-            # A damaged marker with no DB is indistinguishable from a
-            # deleted authority: fail closed, never mint fresh.
+            # a damaged marker with no DB looks like a deleted authority: never mint fresh
             raise LedgerUnavailable("attribution marker invalid")
         if not create:
             raise LedgerUnavailable("attribution ledger missing: %s"
@@ -460,32 +427,25 @@ def _connect_locked(db_path, create=False):
             have = {r[0] for r in con.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'")}
         except (sqlite3.Error, ValueError) as e:
-            # Unreadable catalog (torn page, bad text): the schema
-            # is unverifiable, so the authority is too — deny.
+            # unreadable catalog (torn page, bad text): schema unverifiable, deny
             raise LedgerUnavailable("catalog-unreadable:%r" % (e,))
         missing = [t for t in _GATED_TABLES if t not in have]
         if missing and not (
                 locks.may_create_tables(have, exists, mstate)
                 or (exists and mstate == "absent"
                     and _pristine_locked(con, have))):
-            # An established file never regrows tables: a deleted
-            # spans/unknown/hold table with a surviving marker or
-            # token would otherwise recreate EMPTY and reset spend
-            # history to $0 (the marker cannot catch it — the DB
-            # itself still verifies). Recreate-only on provable
-            # first init or a pristine file (see locks
-            # .may_create_tables).
+            # An established file never regrows tables: a deleted spans/unknown/hold
+            # table with a surviving marker or token would recreate empty and reset
+            # spend history (the DB itself still verifies). Recreate only on a
+            # provable first init or a pristine file (see locks.may_create_tables).
             raise LedgerUnavailable("table-missing:%s" % missing[0])
         if not exists or (mstate == "absent"
                            and _pristine_locked(con, have)):
-            # Genuine first init (no file, no marker — create=False
-            # already raised above) or a crash-interrupted one (no
-            # marker, no token, no rows): the WHOLE init — schema
-            # + version + token — commits in ONE transaction, so a
-            # crash can only leave an absent/pristine file that
-            # re-inits cleanly, never a half-built authority. No
-            # DDL runs outside this transaction. The sidecar marker
-            # (with zeroed roots) publishes after.
+            # Genuine first init (no file, no marker) or a crash-interrupted one (no
+            # marker, no token, no rows): the whole init (schema + version + token)
+            # commits in one transaction, so a crash leaves an absent or pristine
+            # file, never a half-built authority. The sidecar marker (zeroed
+            # roots) publishes after.
             token = locks.fresh_token()
             try:
                 con.execute("BEGIN IMMEDIATE")
@@ -521,26 +481,17 @@ def _connect_locked(db_path, create=False):
             except (OSError, ValueError) as e:
                 raise LedgerUnavailable("marker-write:%s" % (e,))
         else:
-            # Established authority: every table is present (the
-            # gate above denied otherwise) and NO DDL runs here —
-            # a CREATE could mask a deletion the gate missed.
-            # Exception: the content-digest table on a PROVABLY
-            # pre-digest ledger — one versioned migration (CREATE +
-            # full recompute from truth + version stamp in a single
-            # transaction, idempotent and retry-clean), never on a
-            # present table (a present-but-emptied digest over live
-            # rows is tamper and denies at verify). "Provably"
-            # means BOTH a pre-digest version AND a pre-digest
-            # marker shape: a digest-era marker (or a digest-bearing
-            # version, or an unreadable marker) with a missing
-            # digest table is deletion, and the digest is NEVER
-            # rebuilt over it — rebuilding would silently re-baseline
-            # authority over possibly modified rows. A version reset
-            # alone cannot reach migration (the marker shape still
-            # denies); only a coherent rows+digest rewrite could (no
-            # marker touch needed — the mirror adopts FROM db truth),
-            # which is the documented host-scope residual, not a
-            # silent path.
+            # Established authority: every table is present (the gate above denied
+            # otherwise) and no DDL runs here, since a CREATE could mask a deletion.
+            # Exception: the digest table on a provably pre-digest ledger, one
+            # versioned migration (CREATE + full recompute from truth + version
+            # stamp in one idempotent transaction). "Provably" means a pre-digest
+            # version and a pre-digest marker shape; a digest-era marker, a
+            # digest-bearing version or an unreadable marker with a missing digest
+            # table is deletion, and the digest is never rebuilt over it (that
+            # would re-baseline authority over possibly modified rows). A version
+            # reset alone cannot reach migration; only a coherent rows+digest
+            # rewrite could, which is the documented host-scope residual.
             ver0 = con.execute("PRAGMA user_version"
                                ).fetchone()[0]
             if "content_digest" not in have:
@@ -586,14 +537,12 @@ def _connect_locked(db_path, create=False):
                 except LedgerUnavailable:
                     raise
             elif ver0 < SCHEMA_VERSION:
-                # Digest present, version lags: adopt v3 WITHOUT
-                # recomputing (recompute would bless out-of-band
-                # edits the intact digest still detects). A
-                # pre-digest marker shape means a crash between the
-                # backfill commit and the mirror — resume the mirror
-                # too (it adopts FROM in-DB truth, which verify
-                # still guards below). An unreadable marker leaves
-                # everything untouched for the strict checks below.
+                # Digest present, version lags: adopt v3 without recomputing (a recompute
+                # would bless edits the intact digest still detects). A pre-digest
+                # marker shape means a crash between the backfill commit and the
+                # mirror, so resume the mirror (it adopts from in-DB truth, which
+                # verify still guards). An unreadable marker leaves everything
+                # untouched for the strict checks below.
                 era = _marker_digest_era(db_path)
                 if era is None:
                     pass
@@ -625,10 +574,8 @@ def _connect_locked(db_path, create=False):
             if mstate == "invalid":
                 raise LedgerUnavailable("marker-invalid")
             if mstate == "absent":
-                # A missing trust root over live money denies: the
-                # marker cannot re-baseline spent history it never
-                # saw. The only heal is a token-bearing but EMPTY
-                # DB (crashed init between commit and marker).
+                # a missing trust root over live money denies; the only heal is a
+                # token-bearing but empty DB (crash between init commit and marker)
                 live = False
                 for table in ("spans", "unknown_holds",
                               "reconciliations", "spend_holds"):
@@ -650,18 +597,16 @@ def _connect_locked(db_path, create=False):
             if roots:
                 _verify_history_locked(db_path, con, roots)
             else:
-                # Pre-roots marker: trust-on-first-use adoption —
-                # the live DB verifies (schema + integrity +
-                # token above), so baseline its truth once; every
-                # later open verifies strictly. Deletions that
-                # predate this upgrade are unprovable (documented).
+                # Pre-roots marker: trust-on-first-use adoption. The live DB verifies
+                # (schema + integrity + token above), so baseline its truth once;
+                # later opens verify strictly. Deletions before this upgrade are
+                # unprovable (documented).
                 _mirror_roots_locked(db_path, con)
     except LedgerUnavailable:
         con.close()
         raise
     except (sqlite3.Error, ValueError) as e:
-        # ValueError covers undecodable text from torn pages
-        # (integrity/table reads), which is corruption too.
+        # ValueError covers undecodable text from torn pages, which is corruption too
         con.close()
         raise LedgerUnavailable(str(e))
     return con
@@ -683,8 +628,7 @@ def _check_int(name, value, lo, hi):
 
 
 def _check_usd(value):
-    # Type-exact (bool is NOT a number here) and finite: neither a
-    # True==1 discount nor an infinite reservation may move money.
+    # type-exact (bool is not a number here) and finite: True==1 or an infinite reservation must not move money
     if (type(value) not in (int, float) or
             not math.isfinite(value) or not 0 <= value <= USD_MAX):
         raise ValueError("bad usd: %r" % (value,))
@@ -694,12 +638,9 @@ def _span_identity(epoch, cycle_id, stage, symbol, node, model,
                    prompt_tokens, completion_tokens, usd, category,
                    outcome, is_unknown):
     """Canonical span-identity tuple (spans-table column order minus
-    span_id/ts). ts is INTENTIONALLY excluded: it is wall-clock
-    metadata, not identity — an identical retry one second later is
-    the same attempt, not a conflict. Both append_span() and
-    record_unknown() compare through here, so normal and unknown
-    spans share one identity rule (re-audit: equivalent semantics
-    on both paths)."""
+    span_id/ts). ts is excluded: it is wall-clock metadata, so an identical
+    retry one second later is the same attempt. append_span() and
+    record_unknown() both compare through here."""
     return (epoch, cycle_id, stage, symbol, node, model,
             prompt_tokens, completion_tokens, usd, category,
             outcome, 1 if is_unknown else 0)
@@ -712,8 +653,7 @@ _IDENTITY_COLS = ("research_epoch, cycle_id, stage, symbol, node, "
 
 def _span_verdict(con, span_id, identity):
     """One span_id under one payload comparison: absent / identical /
-    conflict. Centralized so the unknown path cannot drift weaker
-    than the normal path."""
+    conflict."""
     got = con.execute("SELECT " + _IDENTITY_COLS + " FROM spans "
                       "WHERE span_id=?", (span_id,)).fetchone()
     if got is None:
@@ -726,23 +666,17 @@ def append_span(log_path, epoch, node, model_id, calls=1, tokens=0,
                 symbol="?", prompt_tokens=0, completion_tokens=0,
                 usd=None, category="research", outcome="success",
                 ts=None, is_unknown=False):
-    """Append one span. Duplicate span identity is STRICT: the same
-    span_id with an IDENTICAL payload is an idempotent no-op (ledger
-    and mirror both converge); the same span_id with a DIFFERENT
-    payload is a hard ValueError conflict — conflicting spend data is
-    never silently INSERT OR IGNORE'd away. The JSONL mirror is
-    appended ONLY when the insert actually lands, so retries never
-    duplicate the mirror; sync_mirror() regenerates it from the
-    ledger.
+    """Append one span. The same span_id with an identical payload is an
+    idempotent no-op (ledger and mirror converge); the same span_id with a
+    different payload raises ValueError. The JSONL mirror is appended only
+    when the insert lands; sync_mirror() regenerates it from the ledger.
 
-    Authoritative validation: negative/NaN/infinite usd, negative or
-    non-integer token counts, over-long identities, and off-enum
-    category/outcome are ValueErrors BEFORE the ledger — a direct
-    caller cannot reduce spend or poison arithmetic. Ambiguous
-    attempts MUST pass is_unknown=True with usd set to the full
-    pre-call reservation (never 0.0).
+    Negative/NaN/infinite usd, negative or non-integer token counts,
+    over-long identities and off-enum category/outcome raise ValueError
+    before touching the ledger. Ambiguous attempts must pass is_unknown=True
+    with usd set to the full pre-call reservation (never 0.0).
 
-    Compatibility: tokens= prompt+completion combined; dollars= usd.
+    Compatibility: tokens= is prompt+completion combined; dollars= is usd.
     Explicit prompt/completion/usd win when given.
     """
     if category not in CATEGORIES:
@@ -768,9 +702,8 @@ def append_span(log_path, epoch, node, model_id, calls=1, tokens=0,
         span_id = "adhoc-%d-%s-%s-%d" % (epoch, node, model_id, ts)
     _check_str("span_id", span_id, SPAN_ID_MAX)
     if is_unknown and not usd > 0:
-        # An ambiguous attempt recorded as $0 would bless a possibly-
-        # billed call as free. The gate always passes the full
-        # reservation here.
+        # an ambiguous attempt at $0 would bless a possibly-billed call as free;
+        # the gate always passes the full reservation
         raise ValueError("unknown spend without reserved usd")
     row = {"ts": ts, "research_epoch": epoch, "cycle_id": cycle_id,
            "stage": stage, "symbol": symbol, "node": node,
@@ -782,9 +715,8 @@ def append_span(log_path, epoch, node, model_id, calls=1, tokens=0,
            "dollars": usd, "model_id": model_id}
     db_path = _db_for(log_path)
     with locks.FileLock(db_path + ".lock", purpose="spans"):
-        # create=True mints the ledger ONLY for a genuinely new path
-        # (no DB and no marker); a deleted authority raises above and
-        # blocks instead of resetting spend to zero.
+        # create=True mints the ledger only for a new path (no DB, no marker); a
+        # deleted authority raises above and blocks
         con = _connect(db_path, create=True)
         try:
             identity = _span_identity(
@@ -797,9 +729,7 @@ def append_span(log_path, epoch, node, model_id, calls=1, tokens=0,
             if verdict == "identical":
                 inserted = False
             else:
-                # Row + digest commit atomically (see _dig_apply):
-                # a crash can never leave the row without its
-                # fingerprint.
+                # row + digest commit atomically (see _dig_apply)
                 con.execute("BEGIN IMMEDIATE")
                 try:
                     try:
@@ -813,9 +743,7 @@ def append_span(log_path, epoch, node, model_id, calls=1, tokens=0,
                             (span_id, ts) + identity)
                         inserted = True
                     except sqlite3.IntegrityError:
-                        # Lost a same-id race: re-read and decide
-                        # (never blind-ignore — the winner may
-                        # disagree).
+                        # lost a same-id race: re-read and decide, the winner may disagree
                         verdict = _span_verdict(con, span_id,
                                               identity)
                         if verdict == "conflict":
@@ -834,7 +762,7 @@ def append_span(log_path, epoch, node, model_id, calls=1, tokens=0,
                     except sqlite3.Error:
                         pass
                     raise
-            # Marker mirror from in-DB truth (same lock).
+            # marker mirror from in-DB truth (same lock)
             _mirror_roots_locked(db_path, con)
         finally:
             con.close()
@@ -852,15 +780,14 @@ def append_span(log_path, epoch, node, model_id, calls=1, tokens=0,
 
 def record_unknown(log_path, lease_id, span_id, usd, outcome, epoch,
                    node, model_id, cycle_id, symbol, ts=None):
-    """ONE atomic ambiguity record: the unknown span (full reserved
-    usd, is_unknown=1) + the unknown_holds row + the spend hold moved
-    to invoked with its span_id — all in a single transaction. A crash
-    can therefore leave either NOTHING (hold still reserved: reaped
-    only if pre-spawn) or EVERYTHING (recoverable via the normal
-    reconcile path); never a partial ambiguity. The spend hold must
-    already exist (reserved pre-spawn); a missing hold is a loud
-    ordering defect, not a silent mint. Raises SpendBlocked on any
-    accounting defect (the caller keeps the hold and aborts)."""
+    """One atomic ambiguity record: the unknown span (full reserved usd,
+    is_unknown=1) + the unknown_holds row + the spend hold moved to invoked
+    with its span_id, in one transaction. A crash leaves nothing (hold still
+    reserved, reaped only if pre-spawn) or everything (recoverable via
+    reconcile); never a partial ambiguity. The spend hold must already exist
+    (reserved pre-spawn); a missing hold is an ordering defect. Raises
+    SpendBlocked on any accounting defect (the caller keeps the hold and
+    aborts)."""
     _check_str("lease_id", lease_id, SPAN_ID_MAX)
     _check_str("span_id", span_id, SPAN_ID_MAX)
     _check_usd(usd)
@@ -891,8 +818,7 @@ def record_unknown(log_path, lease_id, span_id, usd, outcome, epoch,
                     raise SpendBlocked("unknown-lease-no-hold:%s" %
                                        lease_id)
                 if have[0] != usd:
-                    # The hold is the reservation: converting a
-                    # different amount would mint or erase dollars.
+                    # the hold is the reservation: converting a different amount would mint or erase dollars
                     raise SpendBlocked("unknown-hold-usd-mismatch:%s"
                                        % lease_id)
                 if have[1] not in ("reserved", "invoked"):
@@ -905,10 +831,7 @@ def record_unknown(log_path, lease_id, span_id, usd, outcome, epoch,
                 if verdict == "conflict":
                     raise SpendBlocked("span-conflict:%s" % span_id)
                 if verdict == "absent":
-                    # Column order is load-bearing: stage='r' belongs
-                    # to the STAGE column, the symbol to SYMBOL (a
-                    # prior revision had them swapped — caught by the
-                    # strict identity check above).
+                    # column order is load-bearing: stage='r' belongs to STAGE, the symbol to SYMBOL
                     cur = con.execute(
                         "INSERT INTO spans (span_id, ts, "
                         "research_epoch, cycle_id, stage, symbol, "
@@ -930,9 +853,7 @@ def record_unknown(log_path, lease_id, span_id, usd, outcome, epoch,
                     "SELECT span_id, usd FROM unknown_holds WHERE "
                     "lease_id=?", (lease_id,)).fetchone()
                 if uh is not None:
-                    # Same strictness as spans: an identical retry is
-                    # idempotent; a conflicting payload is a hard
-                    # failure, never a silent OR IGNORE.
+                    # as for spans: an identical retry is idempotent, a conflicting payload fails
                     if uh != (span_id, usd):
                         raise SpendBlocked(
                             "unknown-hold-conflict:%s" % lease_id)
@@ -974,11 +895,9 @@ def record_unknown(log_path, lease_id, span_id, usd, outcome, epoch,
 
 
 def has_unreconciled(log_path):
-    """True when an ambiguous charge is still outstanding: an
-    unreconciled unknown row, OR any positive-dollar spend hold in
-    state='invoked' (crash backstop — an invoked hold whose unknown
-    rows were never written still blocks). Zero-dollar invoked holds
-    never block (nothing uncertain). A missing ledger raises
+    """True when an ambiguous charge is outstanding: an unreconciled unknown
+    row, or any positive-dollar spend hold in state='invoked' (crash
+    backstop). Zero-dollar invoked holds never block. A missing ledger raises
     (unmeasurable blocks); only a genuine fresh path reports False."""
     db_path = _db_for(log_path)
     con = _connect(db_path)
@@ -994,14 +913,13 @@ def has_unreconciled(log_path):
 
 
 def reserve_spend_hold(log_path, lease_id, usd, cap_usd, now=None):
-    """THE pre-call USD authorization: ONE transaction under the
-    spend lock — reap expired reserved holds, refuse when unknowns are
-    pending, measure (30d committed + all outstanding holds), compare
-    against the cap, insert the hold, commit. Only after this returns
-    may the provider be spawned. Raises SpendBlocked (refusal, never a
-    crash) or LedgerUnavailable (unmeasurable). There is no second
-    non-atomic cap check: callers must not re-implement read/compare/
-    insert outside this function."""
+    """Pre-call USD authorization: one transaction under the spend lock that
+    reaps expired reserved holds, refuses when unknowns are pending, measures
+    (30d committed + outstanding holds), compares against the cap, inserts
+    the hold and commits. The provider may be spawned only after this
+    returns. Raises SpendBlocked (refusal) or LedgerUnavailable
+    (unmeasurable). Callers must not repeat the read/compare/insert
+    elsewhere."""
     _check_str("lease_id", lease_id, SPAN_ID_MAX)
     _check_usd(usd)
     if (type(cap_usd) not in (int, float) or
@@ -1071,20 +989,15 @@ def reserve_spend_hold(log_path, lease_id, usd, cap_usd, now=None):
 
 def reconcile_unknown(log_path, lease_id, actual_usd, note=""):
     """Supervisor reconciliation of an ambiguous charge: replace the
-    conservative reservation with the attested actual, clear the
-    block, and journal the adjustment. actual_usd must be finite and
-    non-negative AND may never exceed the reservation (an attested
-    bill above the worst case is a defect, never a number to store);
-    note is recorded verbatim (bounded).
+    conservative reservation with the attested actual, clear the block and
+    journal the adjustment. actual_usd must be finite, non-negative and not
+    above the reservation; note is recorded verbatim (bounded).
 
-    Crash recovery: reconciles from EVERY point of the ambiguity
-    path — complete unknown rows (normal), an invoked hold with no
-    unknown rows (a synthetic unknown span is CREATED from the hold
-    first, so the authoritative spend ledger carries the reconciled
-    dollars; then the unknown row, the span settlement, and the hold
-    deletion — all rowcount-verified), or a loud error when nothing
-    was ever recorded (supervisor typo safety), never a silent
-    no-op."""
+    Recovers from every point of the ambiguity path: complete unknown rows
+    (normal); an invoked hold with no unknown rows (a synthetic unknown span
+    is created from the hold first, then the unknown row, the span settlement
+    and the hold deletion, all rowcount-verified); an error when nothing was
+    ever recorded (typo safety), never a silent no-op."""
     _check_str("lease_id", lease_id, SPAN_ID_MAX)
     _check_usd(actual_usd)
     if not isinstance(note, str) or len(note) > 256:
@@ -1107,37 +1020,28 @@ def reconcile_unknown(log_path, lease_id, actual_usd, note=""):
                     span_id, old_usd = hold[0], hold[1]
                     tag = note
                 else:
-                    # Crash between the invoked mark and the atomic
-                    # unknown record (or a partially written legacy
-                    # path): recover FROM THE HOLD, which conservatively
-                    # counted the dollars the whole time.
+                    # crash between the invoked mark and the atomic unknown record (or a
+                    # partial legacy path): recover from the hold, which counted the dollars
                     inv = con.execute(
                         "SELECT usd, span_id FROM spend_holds WHERE "
                         "lease_id=? AND state='invoked'",
                         (lease_id,)).fetchone()
                     if inv is None:
-                        # An orphan unknown span with no rows at all
-                        # cannot be attributed to a lease (spans carry
-                        # no lease link): a loud error, never a silent
-                        # ok. (Orphan spans do not block: only
-                        # unknown rows and invoked holds do.)
+                        # an orphan unknown span with no rows cannot be attributed to a lease
+                        # (spans carry no lease link): error. Orphan spans do not block; only
+                        # unknown rows and invoked holds do.
                         raise LedgerUnavailable("unknown lease: %s"
                                                 % lease_id)
                     old_usd = inv[0]
                     if actual_usd > old_usd:
-                        # The reservation is the worst case by
-                        # construction: an attested bill above it is
-                        # a defect. Reject BEFORE mutating (rollback
-                        # keeps the hold blocking).
+                        # the reservation is the worst case, so a bill above it is a defect;
+                        # reject before mutating (rollback keeps the hold blocking)
                         raise LedgerUnavailable(
                             "reconcile-over-reservation:%s" % lease_id)
                     span_id = inv[1]
                     if span_id is None:
-                        # Hold-only recovery: no span was ever written
-                        # for this attempt. Mint a clearly-marked
-                        # synthetic unknown span from the reservation
-                        # FIRST, so the authoritative ledger carries
-                        # the reconciled dollars below.
+                        # hold-only recovery: no span was written for this attempt, so mint a
+                        # marked synthetic unknown span from the reservation first
                         span_id = ("recovered-%s" %
                                    hashlib.sha256(
                                        lease_id.encode("utf-8"),
@@ -1189,9 +1093,7 @@ def reconcile_unknown(log_path, lease_id, actual_usd, note=""):
                                       "research", "error", 1]],
                                 dn=1, da=_cents(old_usd))
                         elif got[0] != 1:
-                            # A settled span re-entering reconcile is
-                            # an ordering defect, never a second
-                            # settlement.
+                            # a settled span re-entering reconcile is an ordering defect
                             raise LedgerUnavailable(
                                 "reconcile-span-not-unknown:%s"
                                 % lease_id)
@@ -1226,9 +1128,8 @@ def reconcile_unknown(log_path, lease_id, actual_usd, note=""):
                         "WHERE span_id=? AND is_unknown=1",
                         (actual_usd, span_id))
                     if cur.rowcount != 1:
-                        # Complete path with no unknown span, or a
-                        # span that is not unknown: the evidence does
-                        # not match the claim — abort loud, hold kept.
+                        # complete path with no unknown span, or a span that is not unknown: the
+                        # evidence does not match the claim; abort, hold kept
                         raise LedgerUnavailable(
                             "reconcile-span-missing:%s" % lease_id)
                     new_span = list(old_span)
@@ -1279,15 +1180,15 @@ def reconcile_unknown(log_path, lease_id, actual_usd, note=""):
             con.close()
 
 
-# -- pre-call spend holds (the absolute-cap enforcement side) --------
+# pre-call spend holds (absolute-cap enforcement)
 
 HOLD_TTL_S = 600  # a pre-spawn crash releases; post-spawn stays
 
 
 def hold_spend(log_path, lease_id, usd, now=None):
-    """Reserve worst-case dollars BEFORE the provider may be touched.
-    state=reserved: releasable by reap_holds() after HOLD_TTL_S (a
-    crash before spawn never billed, safe to release)."""
+    """Reserve worst-case dollars before the provider may be touched.
+    state=reserved: reap_holds() may release it after HOLD_TTL_S (a crash
+    before spawn never billed)."""
     _check_str("lease_id", lease_id, SPAN_ID_MAX)
     _check_usd(usd)
     now = int(time.time()) if now is None else now
@@ -1317,15 +1218,14 @@ def hold_spend(log_path, lease_id, usd, now=None):
 
 
 def mark_invoked(log_path, lease_id):
-    """The child process started: this hold may have been billed and
-    must NEVER auto-release. Only settle_hold()/reconcile_unknown()
-    clear it."""
+    """The child process started: this hold may have been billed and never
+    auto-releases. Only settle_hold()/reconcile_unknown() clear it."""
     _check_str("lease_id", lease_id, SPAN_ID_MAX)
     db_path = _db_for(log_path)
     with locks.FileLock(db_path + ".lock", purpose="spans"):
         con = _connect(db_path)
         try:
-            # Row + digest commit atomically (see _dig_apply).
+            # row + digest commit atomically (see _dig_apply)
             con.execute("BEGIN IMMEDIATE")
             try:
                 old_hold = con.execute(
@@ -1338,10 +1238,8 @@ def mark_invoked(log_path, lease_id):
                     " WHERE lease_id=? AND state='reserved'",
                     (lease_id,))
                 if cur.rowcount != 1:
-                    # No reserved hold: a missing or already-invoked
-                    # hold is an ordering defect, never a silent
-                    # no-op (an unmarked post-spawn hold could
-                    # auto-release).
+                    # no reserved hold: a missing or already-invoked hold is an ordering
+                    # defect (an unmarked post-spawn hold could auto-release)
                     raise LedgerUnavailable("mark-invoked-no-hold:%s"
                                             % lease_id)
                 _dig_apply(con, "holds", "spend_holds",
@@ -1361,15 +1259,14 @@ def mark_invoked(log_path, lease_id):
 
 
 def settle_hold(log_path, lease_id):
-    """A cleanly accounted call releases its hold (the span carries
-    the actual). Missing hold: nothing to do (already settled or a
-    pre-hold failure — both safe)."""
+    """A cleanly accounted call releases its hold (the span carries the
+    actual). A missing hold is a no-op (already settled or pre-hold failure)."""
     _check_str("lease_id", lease_id, SPAN_ID_MAX)
     db_path = _db_for(log_path)
     with locks.FileLock(db_path + ".lock", purpose="spans"):
         con = _connect(db_path)
         try:
-            # Row + digest commit atomically (see _dig_apply).
+            # row + digest commit atomically (see _dig_apply)
             con.execute("BEGIN IMMEDIATE")
             try:
                 old_hold = con.execute(
@@ -1396,9 +1293,9 @@ def settle_hold(log_path, lease_id):
 
 
 def reap_holds(log_path, now=None):
-    """Release pre-spawn-crash holds (state=reserved, older than
-    HOLD_TTL_S). Invoked holds are NEVER reaped: a timed-out or
-    crashed post-spawn attempt may have been billed."""
+    """Release pre-spawn-crash holds (state=reserved, older than HOLD_TTL_S).
+    Invoked holds are never reaped: a timed-out or crashed post-spawn attempt
+    may have been billed."""
     now = int(time.time()) if now is None else now
     db_path = _db_for(log_path)
     mstate, _tok = locks.marker_state(db_path)
@@ -1407,7 +1304,7 @@ def reap_holds(log_path, now=None):
     with locks.FileLock(db_path + ".lock", purpose="spans"):
         con = _connect(db_path)
         try:
-            # Rows + digest commit atomically (see _dig_apply).
+            # rows + digest commit atomically (see _dig_apply)
             con.execute("BEGIN IMMEDIATE")
             try:
                 reaped_rows = con.execute(
@@ -1447,17 +1344,16 @@ def outstanding_holds(log_path):
 
 def prune_spans(log_path, now=None):
     """Bounded storage: drop spans (and settled holds) older than
-    SPAN_RETAIN_DAYS, then checkpoint/vacuum when over bound. Also
-    self-heals the best-effort JSONL mirror from the ledger
-    (best-effort: mirror failure never fails the prune — the ledger
-    is authoritative). Runs hourly through the tier evaluator."""
+    SPAN_RETAIN_DAYS, then checkpoint/vacuum when over bound. Also heals the
+    JSONL mirror from the ledger (best-effort; a mirror failure never fails
+    the prune). Runs hourly through the tier evaluator."""
     now = int(time.time()) if now is None else now
     cutoff = now - SPAN_RETAIN_DAYS * 86400
     db_path = _db_for(log_path)
     with locks.FileLock(db_path + ".lock", purpose="spans"):
         con = _connect(db_path)
         try:
-            # Rows + digest commit atomically (see _dig_apply).
+            # rows + digest commit atomically (see _dig_apply)
             con.execute("BEGIN IMMEDIATE")
             try:
                 gone_spans = con.execute(
@@ -1513,12 +1409,10 @@ def prune_spans(log_path, now=None):
 
 
 def sync_mirror(log_path):
-    """Regenerate the JSONL mirror from the authoritative ledger,
-    atomically (temp + replace — readers never see a half file).
-    Bounded by construction: the ledger itself is capped at
-    LEDGER_MAX_BYTES with 120-day retention, so the materialized
-    rows are deployment-bounded, not unbounded. Runs hourly via
-    prune_spans (mirror self-heal); best-effort throughout."""
+    """Regenerate the JSONL mirror from the ledger atomically (temp +
+    replace). The ledger is capped at LEDGER_MAX_BYTES with 120-day
+    retention, so the materialized rows are bounded. Runs hourly via
+    prune_spans; best-effort."""
     db_path = _db_for(log_path)
     with locks.FileLock(db_path + ".lock", purpose="spans"):
         try:
@@ -1553,9 +1447,8 @@ def sync_mirror(log_path):
 
 
 def day_summary(log_path, day_ts=None):
-    """Aggregate the LEDGER for the UTC day containing day_ts. A
-    missing/corrupt ledger raises LedgerUnavailable — it is never
-    reported as zero spend."""
+    """Aggregate the ledger for the UTC day containing day_ts. A
+    missing/corrupt ledger raises LedgerUnavailable, never zero spend."""
     if day_ts is None:
         day_ts = int(time.time())
     day = day_ts - (day_ts % 86400)
@@ -1585,9 +1478,8 @@ def day_summary(log_path, day_ts=None):
 
 
 def spend_since(log_path, since_ts):
-    """Total usd recorded at/after since_ts. Ledger-unavailable
-    raises (never zero). Unknown (ambiguous) spans count at their
-    full reserved usd — conservative by construction."""
+    """Total usd recorded at/after since_ts. Raises when the ledger is
+    unavailable. Unknown spans count at their full reserved usd."""
     db_path = _db_for(log_path)
     con = _connect(db_path)
     try:

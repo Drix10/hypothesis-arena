@@ -1,36 +1,26 @@
 """Production resolve+emit step (doc 08 sec. 8.5, stdlib only).
 
 The graph's emit node calls this (injected as deps["resolve_emit"]).
-For each fused advisory candidate: resolve deterministically against
-its canonical record (deps supply the canonical lookup); collect
-resolved features; emit ONE committed bundle when at least one
-feature resolved, otherwise publish NOTHING (empty=True — an aborted
-or fully-dropped cycle leaves the last complete bundle standing,
-exactly like an R15 abort).
+Each fused advisory candidate is resolved against its canonical record
+(deps["canonical_for"](candidate) -> record dict or None; no record
+drops and counts the candidate). One committed bundle is emitted when
+at least one feature resolved; otherwise nothing is published
+(empty=True) and the last complete bundle stands, as after an R15 abort.
+state["history"] (bounded dated per-source tails) passes to the bundle.
 
-Map-identity binding (finding 22): deps supply map_PATH, not a map
-object. Publish reads the map file bytes (bounded), hashes them for
-the watermark, parses them (duplicate-key rejecting), and passes THAT
-parsed map to the resolver. The resolver and the watermark can never
-disagree about which map version was used; a corrupt/unparseable map
-file fails the whole emit closed (nothing publishes).
+Map identity (finding 22): deps supply map_path. The file bytes are read
+(bounded), hashed for the watermark, parsed (duplicate keys rejected) and
+that parsed map goes to the resolver, so watermark and resolver always
+use the same map. A corrupt map fails the whole emit closed.
 
-Producer/consumer contract (finding 19): the frozen reader accepts at
-most 64 features. Resolved features are ordered deterministically by
-(source_id, kind, canonical_hash) and the first 64 are emitted; the
-rest are counted as dropped_over_cap (never silently spilled into a
-reader-rejected bundle).
+Reader cap (finding 19): the frozen reader accepts at most 64 features.
+Features are ordered by (source_id, kind, canonical_hash); the first 64
+are emitted and the rest counted as dropped_over_cap.
 
-Feature identity (finding 20): feature_id is assigned HERE from
-trusted canonical lineage (sha256 of kind+symbols+value+effect+
-canonical_hash+observed_ns), never from candidate output. Identical
-lineage collapses to one feature (first wins, duplicates counted), so
-a model cannot invalidate a bundle with duplicate IDs.
-
-Canonical lookup: deps["canonical_for"](candidate) -> canonical record
-dict or None (no record -> candidate dropped + counted, never emitted
-on prose alone). History: state["history"] (bounded dated per-source
-tails from harvest) passes straight to the bundle.
+Feature identity (finding 20): feature_id is assigned here from trusted
+lineage (sha256 of kind+symbols+value+effect+canonical_hash+observed_ns),
+never from candidate output. Identical lineage collapses to one feature
+(first wins, duplicates counted).
 """
 import hashlib
 import json
@@ -43,17 +33,14 @@ from . import schema
 EMIT_MAX_FEATURES = 64  # frozen reader cap, enforced at the producer
 EMIT_MAX_SYMBOLS = 16  # frozen ctx MAX_SYMBOLS, enforced at producer
 CURSOR_MAX_LEN = 256
-# Independent producer-side input bounds (resolve_emit validates its
-# OWN inputs: graph upstream validation is defense-in-depth, never
-# the only check on a direct call).
+# producer-side input bounds; resolve_emit validates its own inputs
 WM_SOURCES_MAX = 64
 WM_KEY_MAX = 256
 HISTORY_SOURCES_MAX = 16
 HISTORY_SOURCE_KEY_MAX = 128
 HISTORY_ENTRIES_MAX = 256
 CANDIDATE_BYTES_MAX = 16384
-# Strict map bounds: the pinned map is small and exact; anything
-# larger or misshapen is hostile input, not a map.
+# the pinned map is small and exact; larger or misshapen input is rejected
 MAP_MAX_CIK = 20000
 MAP_MAX_MACRO_KEYS = 20000
 MAP_MAX_MACRO_SYMS = 512
@@ -65,9 +52,8 @@ MAP_ALLOWED_KEYS = {"map_version", "cik_to_ticker",
 
 
 def _load_map(map_path):
-    """Read map file bytes; return (sha256, parsed) or (None, reason).
-    Bounded (1MB) + duplicate-key rejecting: a hostile map file fails
-    closed before it can bind anything."""
+    """Read map file bytes (max 1MB, duplicate keys rejected). Returns
+    (sha256, parsed) or (None, reason)."""
     try:
         with open(map_path, "rb") as fh:
             raw = fh.read((1 << 20) + 1)
@@ -125,10 +111,9 @@ def _no_dupes(pairs):
 
 
 def _validate_watermarks(sources, feature_srcs, history_srcs):
-    """Strict producer-side watermark check. Returns (ok, clean,
-    uncovered): ok=False fails the whole emit closed (structurally
-    invalid envelope); uncovered is the set of participating sources
-    with no valid watermark entry, whose features are dropped."""
+    """Returns (ok, clean, uncovered). ok=False fails the emit (invalid
+    envelope); uncovered is the participating sources with no valid
+    watermark, whose features are dropped."""
     if not isinstance(sources, dict):
         return False, {}, "watermark-shape"
     if len(sources) > WM_SOURCES_MAX:
@@ -152,11 +137,9 @@ def _validate_watermarks(sources, feature_srcs, history_srcs):
 
 
 def _validate_history(history):
-    """Producer-side history shape check. Returns (clean_or_None,
-    dropped, ok): malformed TOP-level history (not a dict, too many
-    sources) fails closed (ok=False — the emit publishes nothing);
-    malformed tails inside a well-formed mapping are dropped+counted
-    so the reader never sees them."""
+    """Returns (clean_or_None, dropped, ok). Malformed top-level history
+    (not a dict, too many sources) gives ok=False and nothing publishes;
+    malformed tails in a well-formed mapping are dropped and counted."""
     if history is None:
         return None, 0, True
     if not isinstance(history, dict):
@@ -193,14 +176,13 @@ def _feature_lineage_id(feat):
                "value": feat["value"], "effect": feat["effect"],
                "canonical_hash": feat["canonical_hash"],
                "observed_at_ns": feat["observed_at_ns"]}
-    # Full digest identity (see schema.make_bundle_id): 64-bit
-    # truncation is unfit for security-sensitive dedupe.
+    # full digest, not truncated (see schema.make_bundle_id)
     return "f-" + hashlib.sha256(
         schema.canon(lineage)).hexdigest()
 
 
 def _closed(reason, **extra):
-    """Fail-closed resolve outcome: nothing publishes."""
+    """Resolve outcome where nothing publishes."""
     out = {"emitted": None, "empty": True, "aborted": False,
            "resolve_error": reason, "dropped_resolve": 0,
            "dropped_over_cap": 0}
@@ -242,8 +224,7 @@ def resolve_emit(deps, state):
         if not isinstance(cand, dict):
             dropped += 1
             continue
-        # Direct-call candidate bound (no unbounded candidate may
-        # reach the resolver/bundle on this path).
+        # bound candidates on direct calls
         ok_c, _why = schema.json_safe(cand)
         if not ok_c:
             dropped += 1
@@ -263,9 +244,8 @@ def resolve_emit(deps, state):
         if canon is None:
             dropped += 1
             continue
-        # Origin is graph-stamped (worker output is overwritten to
-        # "llm" at production time); the candidate's own llm_touched
-        # field, if any, is IGNORED here and inside the resolver.
+        # origin is graph-stamped (worker output is overwritten to "llm");
+        # a candidate's llm_touched field is ignored here and in the resolver
         origin = cand.get("origin", "llm")
         if origin not in ("parser", "llm"):
             dropped += 1
@@ -276,17 +256,14 @@ def resolve_emit(deps, state):
             dropped += 1
             continue
         feat, _capped = out
-        # No side-channel: R12 capping is already encoded as
-        # evidence=inference by the resolver (no published ts can never
-        # be mechanically identical). Nothing extra enters the bundle.
-        # Frozen downstream symbol cap, enforced at the producer: a
-        # 17-symbol valid feature must never ship to a 16-symbol reader.
+        # R12 capping is already encoded as evidence=inference by the resolver.
+        # Enforce the reader's symbol cap here: 17 symbols must not ship.
         if len(feat["symbols"]) > EMIT_MAX_SYMBOLS:
             dropped += 1
             continue
         feat["feature_id"] = _feature_lineage_id(feat)
         resolved.append(feat)
-    # Deterministic order + dedupe + the frozen 64-feature boundary.
+    # deterministic order, dedupe, 64-feature cap
     resolved.sort(key=lambda f: (f["source_id"], f["kind"],
                                  f["canonical_hash"],
                                  f["feature_id"]))
@@ -317,9 +294,7 @@ def resolve_emit(deps, state):
         return _closed("watermark", watermark_error=uncovered,
                         dropped_resolve=dropped)
     if uncovered:
-        # Drop features/history of uncovered sources, count them, emit
-        # the covered rest (graceful + safe; coverage failure never
-        # ships).
+        # drop and count features/history of uncovered sources, emit the rest
         before = len(clean)
         clean = [f for f in clean if f["source_id"] not in uncovered]
         dropped += before - len(clean)

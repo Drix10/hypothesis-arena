@@ -1,14 +1,13 @@
 """Live source soak (Track A operational evidence, doc 09 sec. 9.4).
 
-Polls the five ACCEPTED production adapters against live hosts with
-their real pacing/backoff, N cycles each, and records per-poll
-latency/ok/records/errors + heartbeat files. Evidence JSON only;
-exit 0 always (evidence, not a gate). Secrets never printed.
+Polls the five production adapters against live hosts with their real
+pacing/backoff, N cycles each, and records per-poll
+latency/ok/records/errors plus heartbeat files. Evidence JSON only; exit 0
+always (evidence, not a gate). Secrets are never printed.
 
-Usage: python3 research/sandbox/source_soak.py [--cycles N]
-  [--out PATH]
+Usage: python3 research/sandbox/source_soak.py [--cycles N] [--out PATH]
 Env (root .env via collector.config, the sole loader):
-  MIRO_CONTACT (EDGAR fail-closed), FRED_API_KEY, BEA_USER_ID.
+  MIRO_CONTACT (EDGAR fails closed without it), FRED_API_KEY, BEA_USER_ID.
 """
 import json
 import os
@@ -29,9 +28,8 @@ from sources import treasury as treasury_mod
 
 
 def pct(vals, q):
-    """Linear-interpolation percentile (numpy 'linear' method):
-    rank = q*(n-1) on the sorted samples, interpolating between
-    adjacent ranks. Documented once, used for p50 and p99 alike.
+    """Linear-interpolation percentile (numpy 'linear'): rank = q*(n-1) on the
+    sorted samples, interpolating between adjacent ranks. Used for p50 and p99.
     Empty -> None (no evidence, never 0)."""
     if not vals:
         return None
@@ -46,8 +44,8 @@ def pct(vals, q):
 
 
 def selftest():
-    """Regression coverage for pct(): empty/singleton/pair/odd/
-    even/large, exact ranks and interpolation. Run with --selftest."""
+    """Checks pct(): empty/singleton/pair/odd/even/large, exact ranks and
+    interpolation. Run with --selftest."""
     cases = [
         ([], 0.5, None),
         ([5.0], 0.5, 5.0),
@@ -56,13 +54,11 @@ def selftest():
         ([1.0, 3.0], 0.0, 1.0),
         ([1.0, 3.0], 1.0, 3.0),
         ([1.0, 2.0, 3.0], 0.5, 2.0),
-        # Even-count median interpolates (the round-1 bug: nearest-
-        # rank picked the upper middle instead).
+        # the even-count median interpolates (nearest-rank would pick the upper middle)
         ([5609.0, 5640.0, 5953.0, 6016.0, 6094.0, 6453.0], 0.5,
          5984.5),
         ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], 0.5, 3.5),
-        # (0.1ms display rounding applies after interpolation:
-        # 5.95 -> 6.0 and 99.01 -> 99.0 in binary float.)
+        # (0.1ms display rounding applies after interpolation: 5.95 -> 6.0, 99.01 -> 99.0 in binary float)
         ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], 0.99, 6.0),
         ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], 0.0, 1.0),
         ([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], 1.0, 6.0),
@@ -76,7 +72,7 @@ def selftest():
             print("pct FAIL: n=%d q=%s got=%r want=%r"
                   % (len(vals), q, got, want))
             bad += 1
-    # Unsorted input must not matter.
+    # unsorted input must not matter
     if pct([3.0, 1.0, 2.0], 0.5) != 2.0:
         print("pct FAIL: unsorted")
         bad += 1

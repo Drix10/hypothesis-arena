@@ -3,14 +3,14 @@
 
 Builds the real 6-node graph with the repo's fake models/executors (no
 model key needed) and runs run_cycle for epochs [START..END] on one
-thread, fsync-appending each completed epoch to a progress file.
-Same thread resumes after a kill -9: LangGraph SQLite checkpoints
-continue at the last completed node; span_id UNIQUE + idempotent
-appends guarantee no duplicate features.
+thread, fsync-appending each completed epoch to a progress file. The
+same thread resumes after a kill -9: LangGraph SQLite checkpoints continue
+at the last completed node, and span_id UNIQUE + idempotent appends
+prevent duplicate features.
 
 Usage: kill9_worker.py <dir> <start_epoch> <end_epoch> <progress_file>
-Prints READY once the app is built (driver starts its kill timer then).
-Exit nonzero with the failing epoch on stdout if a cycle aborts.
+Prints READY once the app is built (the driver starts its kill timer then).
+Exits nonzero with the failing epoch on stdout if a cycle aborts.
 """
 import os
 import sys
@@ -28,9 +28,9 @@ from plane import graph as G  # noqa: E402
 def main():
     d, start, end, prog = (sys.argv[1], int(sys.argv[2]),
                            int(sys.argv[3]), sys.argv[4])
-    # FRESH_EPOCH: run this epoch under a fresh thread (post-reconcile
-    # fresh cycle for the killed epoch; the poisoned-abort checkpoint
-    # is terminal by design — fail-closed is never auto-cleared).
+    # FRESH_EPOCH: run this epoch under a fresh thread (the post-reconcile
+    # cycle for the killed epoch; the poisoned-abort checkpoint is terminal
+    # and never auto-cleared)
     fresh = int(os.environ.get("FRESH_EPOCH", "-1"))
     prefix = os.environ.get("THREAD_PREFIX", "k9")
     t = T.GraphTest()
@@ -39,10 +39,9 @@ def main():
     app, deps, calls, log, gov = t._app(d, script="thesis-AAPL")
     print("READY", flush=True)
     for e in range(start, end + 1):
-        # One thread per epoch (production: cycle_id per run). A single
-        # thread across epochs would exhaust its LLM_CALLS budget by
-        # design (fail-closed); resume reuses the interrupted epoch's
-        # own thread, which is exactly the §8.6 resume property.
+        # one thread per epoch (production: cycle_id per run); a single thread
+        # across epochs would exhaust its LLM_CALLS budget, while resume reuses
+        # the interrupted epoch's own thread (the §8.6 resume property)
         tag = "k9r" if e == fresh else prefix
         out = G.run_cycle(app, ["AAPL"], e, "%s-%d" % (tag, e))
         if out.get("aborted") or not out.get("emitted"):

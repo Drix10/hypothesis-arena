@@ -1,9 +1,8 @@
 """Frozen f2 bundle/feature constants + builders (doc 08 sec. 8.5).
 
-Single source of truth for SHAPE. Validity is owned exclusively by the
-frozen reader (collector/ctx_read.py); this module never re-validates —
-the acceptance tests round-trip every emitted bundle through
-read_bundle(). Builders produce canonical-JSON-ready dicts only.
+Single source of truth for shape. Validity belongs to the frozen reader
+(collector/ctx_read.py); tests round-trip every emitted bundle through
+read_bundle(). Builders produce canonical-JSON-ready dicts.
 """
 import json
 
@@ -71,9 +70,7 @@ def canon(obj):
 
 
 def make_bundle_id(epoch, content_sha):
-    # Full digest identity (>= 128-bit rule: the whole 256-bit sha).
-    # Truncated 64-bit IDs collide under birthday search and are
-    # unfit for security-sensitive dedupe/identity.
+    # full 256-bit sha; truncated 64-bit IDs collide under birthday search
     return "rp-%d-%s" % (epoch, content_sha)
 
 
@@ -107,12 +104,9 @@ def build_bundle(epoch, bundle_id, features, watermarks, history=None):
     return b
 
 
-# Strict JSON-safe validation (producer/state inputs): only plain
-# containers and finite scalars pass. Anything else (arbitrary
-# objects, non-finite floats, over-long strings, over-deep nesting)
-# is REJECTED — never admitted via a lossy str() coercion that
-# would pass the size test while leaving unserializable or
-# unexpectedly expensive objects in checkpoint state.
+# JSON-safe validation for producer/state inputs: only plain containers and
+# finite scalars pass. Other objects, non-finite floats, over-long strings
+# and deep nesting are rejected, not coerced with str().
 JSON_SAFE_MAX_NODES = 100000
 JSON_SAFE_MAX_STR = 65536
 JSON_SAFE_MAX_DEPTH = 32

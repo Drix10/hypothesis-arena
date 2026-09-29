@@ -1,38 +1,34 @@
 """Crash-durable R15 budget ledger (stdlib + sqlite3, doc 08 sec. 8.4).
 
-Budgets stay OUT of LangGraph checkpoint state (checkpoints are
-resumable data, not spending authority), but in-memory-only budgets
-lose accounting on crash-resume. This ledger is the supervisor-owned
-spending record: SQLite with one counters row per (cycle_id, symbol)
-plus one row per reservation LEASE. A restarted process reconstructs
-exact counters instead of minting fresh ones.
+Budgets stay out of LangGraph checkpoint state (checkpoints are resumable
+data, not spending authority), but in-memory budgets lose accounting on
+crash-resume. This supervisor-owned ledger is SQLite with one counters row
+per (cycle_id, symbol) plus one row per reservation lease, so a restarted
+process reconstructs exact counters instead of minting fresh ones.
 
-Fail-closed rules (frozen):
-- An EXISTING but corrupt/oversized/unreadable ledger NEVER becomes a
-  fresh budget — every operation raises AbortCycle.
-- Deletion of the authority fails closed: the DB is created together
-  with a sidecar init marker holding the same random token that is
-  stored inside the DB. Marker-without-DB aborts ("authority-deleted"),
-  never recreates. Supervisor fresh-start = delete BOTH (documented).
-- PRAGMA integrity_check is READ (== "ok" single row), the table
-  schemas are verified column-exact, and PRAGMA user_version is pinned.
-  A non-ok integrity result aborts — executing the pragma without
-  reading it is not a check.
-- Storage is bounded INCLUDING wal/shm sidecars: main+wal+shm over
-  LEDGER_MAX_BYTES aborts; post-prune reclaim runs
-  wal_checkpoint(TRUNCATE) and VACUUMs when over bound, and a still-
-  over-bound store aborts on the next open.
+Fail-closed rules:
+- An existing but corrupt, oversized or unreadable ledger never becomes a
+  fresh budget; every operation raises AbortCycle.
+- The DB is created together with a sidecar init marker holding the same
+  random token stored inside the DB. Marker-without-DB aborts
+  ("authority-deleted"), never recreates. A supervisor fresh start deletes
+  both files.
+- PRAGMA integrity_check is read (a single "ok" row), the table schemas are
+  verified column-exact, and PRAGMA user_version is pinned.
+- Storage is bounded including wal/shm sidecars: main+wal+shm over
+  LEDGER_MAX_BYTES aborts; post-prune reclaim runs wal_checkpoint(TRUNCATE)
+  and VACUUMs when over bound, and a still-over-bound store aborts on the
+  next open.
 
-Reservation model (the pre-call gate): reserve_call(token_need,
-tool_need) validates BOTH needs as exact ints in range (non-int,
-negative, or absurd values are "tokens-unaccountable" aborts, never
-clamped into validity) and persists llm+1/depth+1/tokens+=need/
-tools+=tool_need BEFORE the provider may be touched. settle_call()
-reconciles to measured actuals; unknown lease / double-settle /
-missing counters abort. An unsettled reservation stands charged
-(an ambiguous attempt counts as spent) AND the lease stays open as
-evidence. Tool-only counting (deterministic in-parent parser work,
-no provider) keeps the small reserve_tool path.
+Reservation model (the pre-call gate): reserve_call(token_need, tool_need)
+validates both needs as exact ints in range (non-int, negative or absurd
+values abort as "tokens-unaccountable", never clamped) and persists
+llm+1/depth+1/tokens+=need/tools+=tool_need before the provider may be
+touched. settle_call() reconciles to measured actuals; an unknown lease,
+double settle or missing counters abort. An unsettled reservation stays
+charged (an ambiguous attempt counts as spent) and the lease stays open as
+evidence. Deterministic in-parent parser work, with no provider, uses the
+small reserve_tool path.
 """
 import math
 import os
@@ -66,13 +62,11 @@ _LEASES_DDL = (
     "CHECK (reserved >= 0 AND actual >= 0 AND settled IN (0, 1)))")
 _META_DDL = ("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, "
              "v TEXT NOT NULL)")
-# Registry of every (cycle, symbol) that ever reserved: the ONLY
-# legitimate deleter of a counters row is _prune (older than
-# LEDGER_RETAIN_DAYS). A missing counters row for a RECENTLY seen
-# cycle is an illegitimate deletion → fail closed, never mint fresh
-# counters over a live cycle. Registry memory past CYCLES_RETAIN_DAYS
-# is pruned: no live cycle can be that old (WALL_S bounds a cycle to
-# minutes), so re-creation there is genuinely new, not resurrected.
+# Registry of every (cycle, symbol) that ever reserved. Only _prune may delete
+# a counters row (older than LEDGER_RETAIN_DAYS); a missing row for a recently
+# seen cycle is an illegitimate deletion and fails closed. Registry entries
+# past CYCLES_RETAIN_DAYS are pruned: no live cycle is that old (WALL_S bounds
+# a cycle to minutes), so re-creation there is genuinely new.
 _CYCLES_DDL = (
     "CREATE TABLE IF NOT EXISTS cycles (cycle TEXT, symbol TEXT, "
     "first_wall REAL NOT NULL, PRIMARY KEY (cycle, symbol))")
@@ -92,7 +86,7 @@ _BDIGEST_DDL = (
     "\"table\" TEXT PRIMARY KEY, digest TEXT NOT NULL, "
     "n INTEGER NOT NULL, a INTEGER NOT NULL, b INTEGER NOT NULL)")
 
-# Canonical column order per digest slot (schema order).
+# canonical column order per digest slot (schema order)
 _BDIGEST_COLS = {
     "counters": _EXPECTED_COLUMNS["counters"],
     "cycles": _EXPECTED_COLUMNS["cycles"],
@@ -125,10 +119,9 @@ def _brecompute_table(con, slot, sql_table):
 
 
 def _bdig_apply(con, slot, outs=(), ins=(), dn=0):
-    """Same-transaction digest maintenance (see the attribution
-    twin _dig_apply for the protocol): outs/ins are canonical
-    value-lists, dn the row-count delta. Missing digest row
-    denies, never recreates."""
+    """Same-transaction digest maintenance (protocol as attribution._dig_apply):
+    outs/ins are canonical value-lists, dn the row-count delta. A missing
+    digest row denies, never recreates."""
     row = con.execute(
         "SELECT digest, n FROM content_digest WHERE \"table\"=?",
         (slot,)).fetchone()
@@ -170,11 +163,10 @@ def _breq_digest(slot, tag):
 
 def _bverify_history_locked(db_path, con, roots):
     """Budgets twin of the attribution content verify: re-fingerprint
-    counters/cycles/leases and compare against the same-transaction
-    in-DB digest (an UPDATE counters SET llm=0 reset denies here as
-    digest-mismatch, although every numeric check passes). Marker
-    slots are strict-validated then re-baselined from in-DB truth
-    (adopt — same direction rule as attribution)."""
+    counters/cycles/leases and compare with the same-transaction in-DB digest
+    (an UPDATE counters SET llm=0 reset denies as digest-mismatch even though
+    every numeric check passes). Marker slots are strictly validated, then
+    re-baselined from in-DB truth (same direction rule as attribution)."""
     expect = (("counters", "counters"), ("cycles", "cycles"),
               ("leases", "leases"))
     try:
@@ -204,10 +196,9 @@ def _bverify_history_locked(db_path, con, roots):
 
 
 def _bmarker_digest_era(db_path):
-    """Marker shape as digest-era proof: True when any content
-    slot is present (round-7+ marker), False for pre-digest or
-    pre-roots markers, None when unparseable (the caller denies —
-    an unreadable witness proves nothing)."""
+    """Marker shape as digest-era proof: True when any content slot is
+    present, False for pre-digest or pre-roots markers, None when unparseable
+    (the caller denies)."""
     try:
         roots = locks.marker_roots(db_path)
     except ValueError:
@@ -240,8 +231,8 @@ def _bmirror_roots_locked(db_path, con, live=None):
 
 
 class LedgerCorrupt(AssertionError):
-    """Internal: an existing ledger failed validation. Callers convert
-    to AbortCycle (fail closed, never fresh counters)."""
+    """Internal: an existing ledger failed validation. Callers convert it
+    to AbortCycle (never fresh counters)."""
 
 
 def _abort(symbol, reason):
@@ -259,7 +250,7 @@ def _storage_size(path):
 
 
 class BudgetLedger:
-    """Atomic SQLite ledger. Cross-process safe via SQLite locking +
+    """Atomic SQLite ledger, safe across processes via SQLite locking and
     BEGIN IMMEDIATE."""
 
     def __init__(self, path):
@@ -269,15 +260,13 @@ class BudgetLedger:
         return self.path + ".seen"
 
     def _read_seen(self):
-        """Out-of-band cycle registry root: {(cycle, symbol):
-        first_wall} for every reservation ever made (pruned past
-        the 30-day cycles window on write). Returns None when
-        absent (trust-on-first-use adoption by the caller). Raises
-        LedgerCorrupt on malformed/oversized/unreadable content —
-        an unverifiable root denies, never verifies vacuously.
-        Separate from the 1 KiB marker: a row set cannot live in
-        the marker, and it shares the marker's directory and
-        permissions (no new trust assumption)."""
+        """Out-of-band cycle registry root: {(cycle, symbol): first_wall} for
+        every reservation ever made (pruned past the 30-day cycles window on
+        write). Returns None when absent (trust-on-first-use adoption by the
+        caller). Raises LedgerCorrupt on malformed/oversized/unreadable content;
+        an unverifiable root denies. Kept apart from the 1 KiB marker because a
+        row set cannot live there; it shares the marker's directory and
+        permissions."""
         try:
             data = locks.load_json_bounded(self._seen_path(),
                                            max_bytes=1 << 20)
@@ -298,16 +287,13 @@ class BudgetLedger:
         return clean
 
     def _write_seen(self, seen, now_wall):
-        """Merge-add into the sidecar registry (pruning entries
-        past the cycles window). Additive merge converges across
-        processes; every reserve re-adds its key from DB truth, so
-        a lost update self-heals on next touch (graceful to the
-        in-DB registry rule, never to silent creation). The marker
-        adoption flag publishes FIRST and the sidecar file second:
-        a crash between them leaves witness-without-sidecar, which
-        safely re-adopts (the reverse order would leave
-        sidecar-without-witness, reusable as an adoption bypass).
-        Raises LedgerCorrupt on write failure."""
+        """Merge-add into the sidecar registry, pruning entries past the cycles
+        window. The additive merge converges across processes, and every reserve
+        re-adds its key from DB truth, so a lost update self-heals. The marker
+        adoption flag publishes first and the sidecar file second: a crash between
+        them leaves a witness without a sidecar, which safely re-adopts (the
+        reverse would leave a sidecar without a witness, usable as an adoption
+        bypass). Raises LedgerCorrupt on write failure."""
         cutoff = now_wall - CYCLES_RETAIN_DAYS * 86400
         try:
             cur = self._read_seen() or {}
@@ -335,11 +321,10 @@ class BudgetLedger:
         return "%s\x00%s" % (cycle_id, symbol)
 
     def _pristine(self, con, have):
-        """No init token and every present ledger table empty:
-        init never completed, so a single-transaction re-init
-        cannot destroy established state. A present digest table
-        with nonzero rows blocks pristine (inconsistent with empty
-        money tables — that denies at verify instead)."""
+        """No init token and every present ledger table empty: init never
+        completed, so a single-transaction re-init cannot destroy established
+        state. A digest table with nonzero rows blocks pristine (that denies at
+        verify instead)."""
         try:
             if "meta" in have:
                 cur = con.execute(
@@ -362,9 +347,8 @@ class BudgetLedger:
         return True
 
     def _connect(self, fresh_ok, abort_symbol):
-        # See attribution._connect: first-creation check-then-mint
-        # serializes on a dedicated lock file (data-lock ->
-        # create-lock order, never the reverse).
+        # as attribution._connect: first creation serializes on a dedicated lock
+        # file (data-lock -> create-lock order)
         with locks.FileLock(self.path + ".create.lock",
                             purpose="create"):
             return self._connect_locked(fresh_ok, abort_symbol)
@@ -374,11 +358,10 @@ class BudgetLedger:
         mstate, marker = locks.marker_state(self.path)
         if not exists:
             if mstate == "valid":
-                # The authority was deleted mid-deployment. Recreate-
-                # as-fresh would zero live counters: abort instead.
+                # the authority was deleted mid-deployment: recreating fresh would zero live counters
                 raise LedgerCorrupt("authority-deleted")
             if mstate == "invalid":
-                # Damaged marker, no DB: cannot prove first install.
+                # damaged marker, no DB: cannot prove first install
                 raise LedgerCorrupt("marker-invalid")
             if not fresh_ok:
                 _abort(abort_symbol, "ledger-missing")
@@ -401,9 +384,7 @@ class BudgetLedger:
                     "SELECT name FROM sqlite_master WHERE "
                     "type='table'")}
             except (sqlite3.Error, ValueError) as e:
-                # Unreadable catalog (torn page, bad text): the
-                # schema is unverifiable, so the authority is
-                # too — deny.
+                # unreadable catalog (torn page, bad text): schema unverifiable, deny
                 raise LedgerCorrupt("catalog-unreadable:%r" % (e,))
             missing = [t for t in ("counters", "leases", "meta")
                        if t not in have]
@@ -411,21 +392,18 @@ class BudgetLedger:
                     locks.may_create_tables(have, exists, mstate)
                     or (exists and mstate == "absent"
                         and self._pristine(con, have))):
-                # Established file, table gone: deletion or
-                # corruption, never a creation case (a recreated
-                # empty counters table would reset live budgets).
-                # First init and pristine files create below.
+                # established file, table gone: deletion or corruption, never a creation
+                # case (a recreated empty counters table would reset live budgets);
+                # first init and pristine files create below
                 raise LedgerCorrupt("table-missing:%s" % missing[0])
             inited = False
             if locks.may_create_tables(have, exists, mstate) or \
                     (exists and mstate == "absent"
                      and self._pristine(con, have)):
-                # First init (or a crash-interrupted one: no
-                # marker, no token, no rows) — schema + version +
-                # token in ONE transaction, marker + empty seen
-                # registry after. A crash can only leave an
-                # absent/pristine file that re-inits cleanly. No
-                # DDL runs outside this transaction.
+                # first init (or a crash-interrupted one: no marker, no token, no rows):
+                # schema + version + token in one transaction, marker + empty seen
+                # registry after; a crash leaves an absent or pristine file that
+                # re-inits cleanly. No DDL runs outside this transaction.
                 token = locks.fresh_token()
                 try:
                     con.execute("BEGIN IMMEDIATE")
@@ -465,27 +443,19 @@ class BudgetLedger:
                 cycles_present = "cycles" in have
             if not inited and "cycles" not in have:
                 if exists and ver0 == SCHEMA_VERSION:
-                    # Versioned schema says the registry exists:
-                    # its absence is deletion, not an upgrade.
+                    # versioned schema says the registry exists: its absence is deletion, not an upgrade
                     raise LedgerCorrupt("table-missing:cycles")
                 if exists and ver0 not in (0, 1):
-                    # Unknown version: the version gate below owns
-                    # this case (never migrate blindly into it).
+                    # unknown version: the version gate below owns this case
                     pass
                 else:
-                    # Old ledger (or fresh file): explicit versioned
-                    # migration — CREATE + backfill + digest +
-                    # version bump in ONE transaction, so a crash can
-                    # only leave the table ABSENT (migration retries
-                    # cleanly), never present-but-empty over live
-                    # counters. No CREATE runs outside this
-                    # transaction. The content digest rides the same
-                    # transaction (old ledgers have no digest table:
-                    # CREATE + full recompute from backfilled truth).
-                    # "Old" is proven by a pre-digest marker shape:
-                    # a digest-era marker with a missing cycles table
-                    # is deletion (a version reset alone cannot reach
-                    # migration).
+                    # Old ledger (or fresh file): versioned migration (CREATE + backfill +
+                    # digest + version bump in one transaction), so a crash leaves the
+                    # table absent and the migration retries, never present-but-empty
+                    # over live counters. Old ledgers have no digest table (CREATE +
+                    # full recompute from backfilled truth). "Old" is proven by a
+                    # pre-digest marker shape: a digest-era marker with a missing cycles
+                    # table is deletion (a version reset alone cannot reach migration).
                     try:
                         _eroots = locks.marker_roots(self.path)
                     except ValueError:
@@ -528,46 +498,35 @@ class BudgetLedger:
             elif not inited:
                 if "content_digest" in have and \
                         ver0 < SCHEMA_VERSION:
-                    # Digest present, version lags: adopt v3 WITHOUT
-                    # recomputing (recompute would bless out-of-band
-                    # edits the intact digest still detects). A
-                    # pre-digest marker shape means a crash between
-                    # the backfill commit and the mirror — resume the
-                    # mirror too (it adopts FROM in-DB truth, which
-                    # verify still guards below). An unreadable marker
-                    # leaves everything untouched for the strict
-                    # checks below.
+                    # Digest present, version lags: adopt v3 without recomputing (a recompute
+                    # would bless edits the intact digest still detects). A pre-digest
+                    # marker shape means a crash between the backfill commit and the
+                    # mirror, so resume the mirror (it adopts from in-DB truth, which
+                    # verify still guards). An unreadable marker leaves everything
+                    # untouched for the strict checks below.
                     _era = _bmarker_digest_era(self.path)
                     if _era is False:
                         _bmirror_roots_locked(self.path, con)
                     if _era is not None:
                         con.execute("PRAGMA user_version=%d" %
                                     SCHEMA_VERSION)
-                # NOTE: no present-but-empty backfill here. An empty
-                # cycles table over live counters is cycles-only
-                # deletion (pruning forgets a cycle only after its
-                # counters aged out, and the versioned migration
-                # above is single-transaction) — healing it would
-                # resurrect registry cover for deleted authority.
-                # The reuse readers (_reserve_row/_live_row_or_abort)
-                # and the sidecar verify below deny it instead.
+                # No present-but-empty backfill here. An empty cycles table over live
+                # counters is cycles-only deletion (pruning forgets a cycle only after
+                # its counters aged out, and the migration above is single-
+                # transaction); healing it would resurrect registry cover for deleted
+                # authority. The reuse readers (_reserve_row/_live_row_or_abort) and
+                # the sidecar verify below deny it.
             have = {r[0] for r in con.execute(
                 "SELECT name FROM sqlite_master WHERE "
                 "type='table'")}
             if "content_digest" not in have:
-                # The digest table is mandatory at v3: a missing
-                # table on a digest-era ledger is deletion, never a
-                # creation case — rebuilding it would silently
-                # re-baseline authority over possibly modified rows.
-                # Only a provably pre-digest ledger migrates: BOTH
-                # a pre-digest marker shape AND a pre-digest version
-                # (one-time TOFU, documented; the version stamp
-                # rides the same transaction). A version reset alone
-                # cannot reach migration (the marker shape still
-                # denies); only a coherent rows+digest rewrite could
-                # (no marker touch needed — the mirror adopts FROM db
-                # truth), which is the documented host-scope residual,
-                # not a silent path.
+                # The digest table is mandatory at v3: a missing one on a digest-era ledger
+                # is deletion, and rebuilding it would re-baseline authority over
+                # possibly modified rows. Only a provably pre-digest ledger migrates:
+                # a pre-digest marker shape and a pre-digest version (one-time TOFU;
+                # the version stamp rides the same transaction). A version reset alone
+                # cannot reach migration; only a coherent rows+digest rewrite could,
+                # which is the documented host-scope residual.
                 ver_now = con.execute("PRAGMA user_version"
                                       ).fetchone()[0]
                 if _bmarker_digest_era(self.path) is not False \
@@ -613,8 +572,7 @@ class BudgetLedger:
                     "SELECT v FROM meta WHERE k='init_token'"
                 ).fetchone()
             if not inited:
-                # Established ledger (init published above and
-                # skips this: its ver/token/marker were just set).
+                # established ledger (a fresh init skips this: ver/token/marker were just set)
                 if ver != SCHEMA_VERSION:
                     raise LedgerCorrupt("version:%r" % (ver,))
                 if cur is None:
@@ -622,9 +580,8 @@ class BudgetLedger:
                 if mstate == "invalid":
                     raise LedgerCorrupt("marker-invalid")
                 if mstate == "absent":
-                    # A missing trust root over live rows denies;
-                    # over an empty token-bearing DB (crashed init
-                    # between commit and marker) it heals.
+                    # a missing trust root over live rows denies; over an empty token-bearing
+                    # DB (crash between commit and marker) it heals
                     live = con.execute(
                         "SELECT COUNT(*) FROM counters"
                     ).fetchone()[0] + con.execute(
@@ -647,11 +604,9 @@ class BudgetLedger:
                    for k in ("counters", "cycles", "leases")):
                 _bverify_history_locked(self.path, con, roots)
             else:
-                # No content slots yet (fresh init or pre-roots
-                # marker): trust-on-first-use adoption of in-DB
-                # truth (documented); every later open verifies
-                # strictly. The _seen flag, if present, is
-                # preserved by the merge.
+                # no content slots yet (fresh init or pre-roots marker): trust-on-first-use
+                # adoption of in-DB truth (documented); later opens verify strictly. The
+                # _seen flag, if present, is preserved by the merge.
                 _bmirror_roots_locked(self.path, con)
             try:
                 seen = self._read_seen()
@@ -665,20 +620,14 @@ class BudgetLedger:
                 except ValueError:
                     raise LedgerCorrupt("marker-roots-corrupt")
                 if adopted_before:
-                    # Only the sidecar file is lost: the content
-                    # digest verified intact above, so no rows were
-                    # deleted and re-adoption from the live registry
-                    # is safe (self-healing availability; the flag
-                    # is re-recorded by the write). A missing digest
-                    # table can no longer reach a backfill on a
-                    # flagged ledger (digest-deleted denies first),
-                    # so no reconstructed truth can hide a wiped
-                    # registry here.
+                    # Only the sidecar file is lost: the content digest verified intact above,
+                    # so no rows were deleted and re-adoption from the live registry is safe
+                    # (the flag is re-recorded by the write). A missing digest table cannot
+                    # reach a backfill on a flagged ledger (digest-deleted denies first), so
+                    # reconstructed truth cannot hide a wiped registry here.
                     pass
-                # Genuinely pre-sidecar ledger: one-time adoption
-                # from the cycles registry (verified above); the
-                # write records the adoption flag in the marker, so
-                # this path never runs twice for one ledger.
+                # genuinely pre-sidecar ledger: one-time adoption from the verified cycles
+                # registry; the write records the adoption flag in the marker
                 adopt = {}
                 if cycles_present:
                     for cyc, sym, fw in con.execute(
@@ -700,16 +649,14 @@ class BudgetLedger:
                         "SELECT 1 FROM cycles WHERE cycle=? AND "
                         "symbol=?", (cyc, sym)).fetchone()
                     if hit is None:
-                        # A young registry row cannot prune away:
-                        # joint deletion of counters + registry.
+                        # a young registry row cannot prune away: joint deletion of counters + registry
                         raise LedgerCorrupt(
                             "registry-deleted:%s" % cyc)
         except LedgerCorrupt:
             con.close()
             raise
         except (sqlite3.Error, ValueError) as e:
-            # ValueError covers undecodable text from torn pages
-            # (integrity/table reads), which is corruption too.
+            # ValueError covers undecodable text from torn pages, which is corruption too
             con.close()
             raise LedgerCorrupt(str(e))
         return con
@@ -750,9 +697,9 @@ class BudgetLedger:
                         dn=-len(gone_cycles))
 
     def _reclaim(self):
-        """Bounded-storage policy: checkpoint the WAL away and vacuum
-        when over bound. Runs outside any transaction; failure to
-        reclaim leaves the next open to abort (fail closed)."""
+        """Bounded-storage policy: checkpoint the WAL away and vacuum when over
+        bound. Runs outside any transaction; a failed reclaim makes the next open
+        abort."""
         try:
             con = sqlite3.connect(self.path, timeout=60.0,
                                   check_same_thread=False,
@@ -769,14 +716,11 @@ class BudgetLedger:
             con.close()
 
     def _note_seen(self, cycle_id, symbol, first_wall, now_wall):
-        """Post-commit sidecar registry maintenance: re-add this
-        cycle's key from DB truth (creation and every reuse). Runs
-        AFTER the SQLite commit — a crash before it leaves the DB
-        row present, so the next reserve re-adds the key
-        (self-healing); a crash after it is a normal committed
-        reservation. Publish failure aborts (fail-closed; the
-        counters already moved, which is the safe direction —
-        over-counted, never under — and the next reserve
+        """Post-commit sidecar registry maintenance: re-add this cycle's key
+        from DB truth (creation and every reuse). A crash before it leaves the DB
+        row present, so the next reserve re-adds the key; a crash after it is a
+        normal committed reservation. A publish failure aborts (the counters
+        already moved, which over-counts, never under-counts; the next reserve
         retries the note)."""
         try:
             self._write_seen(
@@ -786,15 +730,12 @@ class BudgetLedger:
             _abort(symbol, "seen-publish:%s" % (e,))
 
     def _reserve_row(self, con, cycle_id, symbol, now_wall):
-        """Counters row for a new reservation: existing rows resume;
-        a missing row for a cycle seen within LEDGER_RETAIN_DAYS is
-        an illegitimate deletion (only _prune may delete, and only
-        older rows) → abort, never fresh counters over live state.
-        A missing row with old or no registry memory is genuinely
-        new (or prune-aged) → create + (re)register. A PRESENT row
-        whose registry entry is gone is registry-only deletion
-        (pruning forgets cycles only after their counters aged
-        out) → abort. Returns (row, registry_first_wall)."""
+        """Counters row for a new reservation: existing rows resume; a missing
+        row for a cycle seen within LEDGER_RETAIN_DAYS is an illegitimate deletion
+        (only _prune deletes, and only older rows) and aborts. A missing row with
+        old or no registry memory is new (or prune-aged) and is created and
+        re-registered. A present row whose registry entry is gone is a registry-only
+        deletion and aborts. Returns (row, registry_first_wall)."""
         e = self._row(con, cycle_id, symbol, now_wall, False)
         if e is not None:
             reg = con.execute(
@@ -810,10 +751,8 @@ class BudgetLedger:
                 now_wall - LEDGER_RETAIN_DAYS * 86400):
             _abort(symbol, "counters-deleted")
         if now_wall > time.time() + r15.CLOCK_SKEW_S:
-            # The inserted start_wall derives from now_wall (a
-            # test/control parameter): a future value would mint a
-            # future-dated authority — refuse at write, not just
-            # at read.
+            # start_wall derives from now_wall (a test/control parameter): a future
+            # value would mint a future-dated authority, so refuse at write
             _abort(symbol, "future-start-wall")
         old_reg = con.execute(
             "SELECT cycle, symbol, first_wall FROM cycles WHERE "
@@ -835,14 +774,11 @@ class BudgetLedger:
         return [0, 0, 0, 0, now_wall, 0], now_wall
 
     def _live_row_or_abort(self, con, cycle_id, symbol, now_wall):
-        """Read-only twin of _reserve_row: an existing row resumes;
-        a missing row for a cycle seen within LEDGER_RETAIN_DAYS is
-        a deleted authority → abort (a reader that mints zeros over
-        a live cycle corrupts every downstream estimate). Missing
-        with old or no registry memory → None (genuinely new). A
-        present row with no registry entry is registry-only
-        deletion (pruning forgets a cycle only after its counters
-        aged out, so a live row always has its entry) → abort."""
+        """Read-only twin of _reserve_row: an existing row resumes; a missing row
+        for a cycle seen within LEDGER_RETAIN_DAYS is a deleted authority and
+        aborts (a reader minting zeros over a live cycle corrupts downstream
+        estimates); missing with old or no registry memory returns None; a present
+        row with no registry entry is a registry-only deletion and aborts."""
         e = self._row(con, cycle_id, symbol, now_wall, False)
         if e is not None:
             reg = con.execute(
@@ -860,8 +796,7 @@ class BudgetLedger:
         return None
 
     def _row(self, con, cycle_id, symbol, now_wall, create):
-        # NOTE: create=True is legacy; reserve paths use _reserve_row
-        # (deletion-detecting). No other caller passes True.
+        # create=True is legacy; reserve paths use _reserve_row (deletion-detecting)
         cur = con.execute(
             "SELECT llm, tools, tokens, depth, start_wall, dead "
             "FROM counters WHERE cycle = ? AND symbol = ?",
@@ -877,11 +812,10 @@ class BudgetLedger:
                 (cycle_id, symbol, 0, 0, 0, 0, now_wall))
             return [0, 0, 0, 0, now_wall, 0]
         e = list(r)
-        # Semantic validation on EVERY read (old DBs predate the DDL
-        # CHECKs, and corruption/fraud can edit any file): negative
-        # counters would authorize beyond R15, a bad dead flag would
-        # misroute, a non-finite wall would break retention math. An
-        # invalid row aborts — never normalized, never clamped.
+        # semantic validation on every read (old DBs predate the DDL CHECKs and any
+        # file can be edited): negative counters would authorize beyond R15, a bad
+        # dead flag would misroute, a non-finite wall would break retention math.
+        # An invalid row aborts, never normalized or clamped.
         if (not all(type(v) is int and v >= 0 for v in e[:4])
                 or type(e[4]) not in (int, float)
                 or isinstance(e[4], bool)
@@ -889,10 +823,8 @@ class BudgetLedger:
                 or type(e[5]) is not int or e[5] not in (0, 1)):
             _abort(symbol, "counters-corrupt")
         if e[4] > now_wall + r15.CLOCK_SKEW_S:
-            # A start in the future extends the wall-clock budget:
-            # now - start stays negative, so wall-exhausted can
-            # never fire. Fail closed (small skew allowance for
-            # honest clock drift), never extend the authority.
+            # a start in the future extends the wall-clock budget (now - start stays
+            # negative, so wall-exhausted never fires): fail closed with a small skew allowance
             _abort(symbol, "future-start-wall")
         return e
 
@@ -939,23 +871,21 @@ class BudgetLedger:
             return {"llm": e[0], "tools": e[1], "tokens": e[2],
                     "depth": e[3], "start_wall": e[4],
                     "dead": bool(e[5])}
-        # No reason-masking: _op already raises specific ledger-* aborts
-        # (corrupt/deleted/integrity), which must reach the caller.
+        # _op already raises specific ledger-* aborts, which must reach the caller
         return self._op(True, _get, symbol)
 
     @staticmethod
     def _valid_need(value, maximum, name, symbol):
-        # Exact ints in range. bool is not an int here; floats,
-        # strings, negatives, and over-cap values are accounting
-        # defects, never clamped into validity.
+        # exact ints in range: bool is not an int here, and floats, strings,
+        # negatives and over-cap values are accounting defects, never clamped
         if type(value) is not int or not 0 <= value <= maximum:
             _abort(symbol, "%s-unaccountable" % name)
 
     def reserve_call(self, cycle_id, symbol, token_need, tool_need,
                      now_wall=None):
-        """One atomic pre-call reservation: llm+1, depth+1,
-        tokens+=token_need, tools+=tool_need. Returns the lease; the
-        provider may be touched ONLY after this returns."""
+        """One atomic pre-call reservation: llm+1, depth+1, tokens+=token_need,
+        tools+=tool_need. Returns the lease; the provider may be touched only
+        after this returns."""
         self._valid_need(token_need, TOKENS_ABSOLUTE_MAX, "tokens",
                          symbol)
         self._valid_need(tool_need, TOOLS_ABSOLUTE_MAX, "tools",
@@ -1008,8 +938,7 @@ class BudgetLedger:
     def settle_call(self, cycle_id, symbol, lease, actual_tokens):
         self._valid_need(actual_tokens, 10 ** 12, "tokens", symbol)
         if actual_tokens > r15.TOKENS:
-            # Actual usage outside the legal cycle bound is an
-            # accounting defect, never a number to store.
+            # actual usage outside the legal cycle bound is an accounting defect
             _abort(symbol, "actual-exceeds-cycle-bound")
 
         def _set(con):
@@ -1022,14 +951,12 @@ class BudgetLedger:
                 _abort(symbol, "unknown-lease")
             if (type(r[3]) is not int or r[3] < 0
                     or type(r[5]) is not int or r[5] not in (0, 1)):
-                # Corrupt lease terms would mis-settle another row's
-                # counters: abort, never normalize.
+                # corrupt lease terms would mis-settle another row's counters: abort
                 _abort(symbol, "lease-corrupt")
             if r[5]:
                 _abort(symbol, "double-settle")
             if r[0] != cycle_id or r[1] != symbol or r[2] != "call":
-                # Cross-cycle / cross-symbol / cross-kind settlement
-                # would corrupt another row's counters: refuse loudly.
+                # cross-cycle/symbol/kind settlement would corrupt another row's counters
                 _abort(symbol, "cross-lease-settle")
             reserved = r[3]
             con.execute(
@@ -1045,7 +972,7 @@ class BudgetLedger:
                 _abort(symbol, "counters-missing-at-settle")
             new_tokens = e[2] - reserved + actual_tokens
             if new_tokens < 0:
-                # Counter corruption: clamping to zero would hide it.
+                # counter corruption: clamping to zero would hide it
                 _abort(symbol, "token-underflow")
             con.execute("UPDATE counters SET tokens=? WHERE cycle=? "
                         "AND symbol=?", (new_tokens, cycle_id, symbol))
@@ -1059,9 +986,8 @@ class BudgetLedger:
         return self._op(False, _set, symbol)
 
     def reserve_tool(self, cycle_id, symbol, now_wall=None):
-        """In-parent deterministic tool counting (parser work, no
-        provider). Provider tool consumption reserves through
-        reserve_call's tool_need instead."""
+        """In-parent deterministic tool counting (parser work, no provider).
+        Provider tool use reserves through reserve_call's tool_need."""
         now_wall = time.time() if now_wall is None else now_wall
 
         def _res(con):
@@ -1095,10 +1021,9 @@ class BudgetLedger:
         self._op(True, _chk, symbol)
 
     def invalidate(self, cycle_id, symbol):
-        """Poison a (cycle, symbol) after a timeout/ambiguous failure:
-        no further reservation succeeds. A missing row is a loud
-        defect (invalidating a cycle that never reserved hides
-        ordering bugs), not a silent no-op."""
+        """Poison a (cycle, symbol) after a timeout or ambiguous failure so no
+        further reservation succeeds. A missing row is an error (invalidating a
+        cycle that never reserved hides ordering bugs)."""
 
         def _inv(con):
             if self._live_row_or_abort(con, cycle_id, symbol,
@@ -1121,9 +1046,9 @@ class BudgetLedger:
 
 
 class DurableBudget:
-    """Supervisor-owned per-(cycle, symbol) budget handle. Duck-typed
-    to the surface the graph needs (check/reserve/settle/snapshot)
-    plus counter properties for the cadence recorder."""
+    """Supervisor-owned per-(cycle, symbol) budget handle. Duck-typed to the
+    surface the graph needs (check/reserve/settle/snapshot) plus counter
+    properties for the cadence recorder."""
 
     def __init__(self, ledger, cycle_id, symbol):
         self.ledger = ledger

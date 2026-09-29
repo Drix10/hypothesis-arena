@@ -6,21 +6,19 @@
   thesis is older than the 30-min staleness TTL.
 - Tier-1 throttle (doc 10 §10.4 "research cycle interval doubled"):
   TTL 30 -> 60 min, harvest cadence 5 -> 10 min. Parameter change only.
-- Steady-state estimate recorder: compares measured LLM-call rate vs the
-  §8.3a estimate (20/hour for 5 quiet symbols) for the D10 proof. The
-  graph feeds record_cycle() with the per-cycle budget totals in the
-  emit node (durable attribution rows are the audit source; the counter
-  here is the cheap estimate input).
+- Steady-state estimate recorder: compares the measured LLM-call rate
+  with the 8.3a estimate (20/hour for 5 quiet symbols). The emit node
+  feeds record_cycle() with per-cycle budget totals; durable attribution
+  rows remain the audit source.
 
-Freshness rule (frozen): ONLY a successful thesis run advances
-last_thesis_epoch. AbortCycle/ConfigBlocked attempts never reset
-freshness — a failed plane must look stale, not fresh.
+Freshness rule: only a successful thesis run advances last_thesis_epoch.
+AbortCycle/ConfigBlocked attempts never reset it, so a failed plane
+looks stale.
 
-Persistence: unique temp + file fsync + POSIX dir fsync + writer
-serialization under the inter-process lock (same atomic-file pattern
-as the bundle writer). Load is size-capped and shape-validated BEFORE
-use: oversized/corrupt state = start empty (fail-safe: extra refresh
-is bounded by R15).
+Persistence: unique temp + fsync + dir fsync, writers serialized under
+the inter-process lock. Load is size-capped and shape-validated;
+oversized or corrupt state starts empty (an extra refresh is bounded
+by R15).
 """
 import os
 
@@ -73,8 +71,7 @@ class CadenceState:
         os.makedirs(d, exist_ok=True)
         import json
         with locks.FileLock(self.persist_path + ".lock", purpose="cadence"):
-            # Merge under the SAME lock (read-modify-write): concurrent
-            # writers converge instead of clobbering each other.
+            # read-modify-write under the same lock so concurrent writers merge
             try:
                 current = locks.load_json_bounded(
                     self.persist_path, max_bytes=STATE_MAX_BYTES)
@@ -107,10 +104,9 @@ class CadenceState:
         return (epoch - last) >= self.thesis_ttl_epochs
 
     def mark_run(self, epoch, symbols):
-        """Record SUCCESSFUL thesis runs only. Callers must filter to
-        symbols whose thesis actually completed; failures never land
-        here. Raises OSError on persist failure (the graph records it
-        as blocked evidence instead of crashing the cycle)."""
+        """Record successful thesis runs only; callers filter out failures.
+        Raises OSError on persist failure (the graph records it as
+        blocked evidence)."""
         for s in symbols:
             self.last_thesis_epoch[s] = epoch
         self._save()

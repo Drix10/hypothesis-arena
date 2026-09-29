@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 """bea-probe.py — Phase-D BEA evidence (operator UserID).
 
-Proves, with N=3 timed samples per call and zero secret leakage:
+Checks, with N=3 timed samples per call and no secret leakage:
   1. authenticated dataset listing (GETDATASETLIST -> datasets present);
-  2. real DATA retrieval (NIPA T10101 headline GDP -> rows present);
-  3. DETERMINISTIC row replay: same GetData fetched twice -> parsed
-     row tuples equal AND row-shaped (semantic replay, not raw-byte
-     comparison; two malformed identical responses are not proof);
-  4. bad-UserID FAIL-CLOSED (BEA structured denial with invalid-
-     UserID semantics; transport failures are transport, never
-     denial).
-UserID comes from root .env via collector.config.load (never argv,
-never printed; URLs are redacted in all output). Exit 0 only if 1-4
-hold. Usage: python3 research/sandbox/bea_probe.py [--out PATH]
+  2. real data retrieval (NIPA T10101 headline GDP -> rows present);
+  3. deterministic replay: the same GetData fetched twice yields equal,
+     row-shaped parsed tuples (semantic, not raw-byte comparison; two
+     identical malformed responses are not proof);
+  4. bad UserID fails closed (BEA structured denial with invalid-UserID
+     semantics; transport failures are not denial).
+UserID comes from root .env via collector.config.load (never argv, never
+printed; URLs are redacted in all output). Exit 0 only if 1-4 hold.
+Usage: python3 research/sandbox/bea_probe.py [--out PATH]
 """
 import json
 import sys
@@ -34,11 +33,9 @@ UA = "MiroHedge/phase0 contact=research-plane-bea"
 
 
 def get(params, timeout=30):
-    """(res-or-None, err-or-None, latency_ms, kind). kind in
-    {data, denied, transport}. BEA auth errors arrive as HTTP 200 +
-    Results.Error, so ANY non-200/exception is transport (never
-    denial): a network failure can never masquerade as a 401 proof.
-    Key stays in memory."""
+    """(res-or-None, err-or-None, latency_ms, kind), kind in {data, denied,
+    transport}. BEA auth errors arrive as HTTP 200 + Results.Error, so any
+    non-200 or exception is transport, never denial. Key stays in memory."""
     qs = urllib.parse.urlencode(params)
     req = urllib.request.Request(BASE + "?" + qs,
                                  headers={"User-Agent": UA})
@@ -75,10 +72,8 @@ def pct(lats, q):
 
 
 def _valid_rows(rows):
-    """Replay rows must be shaped like real BEA data, not just
-    mutually equal: non-empty list of (TimePeriod, DataValue) with
-    bounded non-empty strings. Two malformed identical responses are
-    NOT a replay proof."""
+    """Replay rows must look like real BEA data: a non-empty list of
+    (TimePeriod, DataValue) with bounded non-empty strings."""
     if not isinstance(rows, list) or not rows:
         return False
     for r in rows:
@@ -93,9 +88,8 @@ def _valid_rows(rows):
 
 
 def rows_identical(a, b):
-    """Semantic deterministic-row replay (parsed tuples, NOT raw
-    response bytes): two non-empty VALID row lists, equal. Empty/
-    None/malformed on either side is NOT identical (fail closed)."""
+    """Semantic replay check on parsed tuples: two non-empty valid row lists,
+    equal. Empty, None or malformed on either side is not identical."""
     return (_valid_rows(a) and _valid_rows(b) and a == b)
 
 
@@ -156,9 +150,8 @@ def main():
         print("FAIL: BEA data not deterministic across replays")
         ok = False
 
-    # 4. bad UserID fails closed: requires a BEA structured denial
-    # (kind == denied with invalid-UserID semantics). Transport
-    # failures are transport, never denial.
+    # 4. bad UserID fails closed: requires a BEA structured denial (kind ==
+    # denied with invalid-UserID semantics); transport failures are not denial
     res4, err4, _, kind4 = get({"UserID": "0" * 8 + "-" + "0" * 4 + "-"
                                 + "0" * 4 + "-" + "0" * 4 + "-"
                                 + "0" * 12,

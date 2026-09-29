@@ -16,14 +16,14 @@ chmod 700 "$TREE"/journal "$TREE"/stage "$TREE"/creds/broker "$TREE"/creds/jev "
 chmod 755 "$TREE"/features "$TREE"/signals
 echo "identities ready under $TREE"
 
-# --- Phase-D deployment box 1 evidence probes (appended 2026-09-22) ---
-# Fixture secrets (placeholders; production values are placed by the human
-# at build, never in git) + deny/allow probes. Fails the run unless every
+# --- Phase-D deployment box 1 evidence probes ---
+# Fixture secrets (placeholders; production values are placed by the human at
+# build, never in git) + deny/allow probes. The run fails unless every
 # deny-probe denies and every allow-probe succeeds.
 [ "$(id -u)" -eq 0 ] || { echo "FATAL: run as root"; exit 2; }
 umask 077
-# Fixture only when no real key is deployed: NEVER clobber a production
-# credential by re-running this script on a live host.
+# fixture only when no real key is deployed: never clobber a production
+# credential by re-running this script on a live host
 if [ ! -e "$TREE/creds/broker/broker.key" ]; then
   echo "BROKER_KEY_PLACEHOLDER_DEPLOYMENT_FIXTURE" > "$TREE/creds/broker/broker.key"
   chmod 600 "$TREE/creds/broker/broker.key"

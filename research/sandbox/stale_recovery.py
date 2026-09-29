@@ -1,24 +1,22 @@
 """Healthy -> stale -> healthy transition evidence (Track A ops).
 
-Fault injection lives ONLY at the transport layer: a switchable
-transport delegates to the real Treasury urllib transport when
-healthy and raises TimeoutError when faulted. Adapters, seam,
-pacing, lineage, publisher, and reader are all real. No synthetic
-records, no fixture data, no clock games.
+Fault injection is only at the transport layer: a switchable transport
+delegates to the real Treasury urllib transport when healthy and raises
+TimeoutError when faulted. Adapters, seam, pacing, lineage, publisher and
+reader are real; there are no synthetic records or fixtures.
 
-Phases (fresh seam per phase = fresh process equivalent; shared
+Phases (a fresh seam per phase stands in for a fresh process; shared
 lineage DB + bundle outdir; real pacing):
   A healthy:     harvest -> treasury ok, features accepted.
   B faulted x2:  harvest x2 -> treasury stale/absent, zero treasury
-                 features, unrelated sources continue, uncovered
-                 treasury history dropped from the bundle, heartbeat
-                 bad.
-  C recovered:   harvest -> treasury ok + accepted again, heartbeat
-                 good (already-seen rows would dedupe, but fresh
-                 adapters see the live rows anew).
+                 features, unrelated sources continue, uncovered treasury
+                 history dropped from the bundle, heartbeat bad.
+  C recovered:   harvest -> treasury ok and accepted again, heartbeat
+                 good (fresh adapters see the live rows anew, so nothing
+                 is deduped away).
 
-Invariants are asserted in-script (exit 1 on violation): this
-script is evidence AND check. Exit 0 + evidence JSON on success.
+Invariants are asserted in-script (exit 1 on violation), so the script is
+both evidence and check. Exit 0 + evidence JSON on success.
 """
 import json
 import os
@@ -164,10 +162,9 @@ def main(argv):
     switch = SwitchTransport()
 
     def fresh_seam(epoch_note):
-        # Fresh process equivalent: new adapters + empty memory over
-        # the same durable lineage + bundles (production restores
-        # history the same way). Returns (seam, note) where note
-        # records adapter-identity freshness for the evidence.
+        # fresh-process equivalent: new adapters + empty memory over the same durable
+        # lineage + bundles (production restores history the same way). Returns
+        # (seam, note); note records adapter-identity freshness for the evidence.
         seam = source_seam.build_seam(
             env=cfg["values"], heartbeat_dir=hbdir,
             lineage_db_path=lineage_db,
@@ -177,7 +174,7 @@ def main(argv):
 
     ev = {"ts": int(time.time()), "phases": {}}
 
-    # Phase A: healthy baseline.
+    # Phase A: healthy baseline
     a = emit_and_read(fresh_seam("A"), outdir, hbdir, 10, lineage_db)
     ev["phases"]["A_healthy"] = a
     ok = True
@@ -197,7 +194,7 @@ def main(argv):
                 .get("last_observation_at", 0) > 0,
                 "A: no treasury watermark", ev)
 
-    # Phase B: injected egress fault, two cycles.
+    # Phase B: injected egress fault, two cycles
     switch.failing = True
     for epoch, key in ((11, "B_fault_1"), (12, "B_fault_2")):
         b = emit_and_read(fresh_seam(key), outdir, hbdir, epoch,
@@ -213,8 +210,8 @@ def main(argv):
         ok &= check("treasury_auctions" not in b["bundle_sources"],
                     "%s: stale treasury contributed features" % key,
                     ev)
-        # Actual bundle/history behavior, not inference: the stale
-        # source is absent from BOTH features and history.
+        # actual bundle/history behavior: the stale source is absent from both
+        # features and history
         ok &= check("treasury_auctions" not in
                     b["bundle_feat_sources"],
                     "%s: stale treasury in bundle features" % key,
@@ -239,8 +236,8 @@ def main(argv):
                         if k != "treasury_auctions") > 0,
                     "%s: no unrelated features accepted" % key, ev)
 
-    # Phase C: fault cleared — eligibility restored, no re-emission
-    # of already-seen rows (dedupe), no resurrection of stale rows.
+    # Phase C: fault cleared; eligibility restored, no re-emission of seen
+    # rows (dedupe), no resurrection of stale rows
     switch.failing = False
     c = emit_and_read(fresh_seam("C"), outdir, hbdir, 13, lineage_db)
     ev["phases"]["C_recovered"] = c
@@ -255,8 +252,7 @@ def main(argv):
     ok &= check(c["bundle_feat_sources"].get("treasury_auctions",
                                                  0) > 0,
                 "C: no treasury contribution after recovery", ev)
-    # Semantic-level recovery: per-source bundle composition matches
-    # the healthy baseline exactly.
+    # semantic-level recovery: per-source bundle composition matches the healthy baseline
     ok &= check(c["bundle_feat_sources"] ==
                 a["bundle_feat_sources"],
                 "C: bundle composition != baseline: %r vs %r"

@@ -13,7 +13,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
-# read_latest pulls the canonical ctx reader from collector/.
+# read_latest pulls the canonical ctx reader from collector/
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 if REPO not in sys.path:

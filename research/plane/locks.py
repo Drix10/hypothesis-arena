@@ -1,27 +1,21 @@
 """Cross-process file primitives (stdlib only).
 
-Single home for the patterns every writer needs:
-- FileLock: blocking OS-native exclusive lock (fcntl/msvcrt) layered
-  over a per-PURPOSE in-process RLock. Purposes are a FROZEN allowlist:
-  subsystem writers must never serialize through one global lock (that
-  trades a leak for global contention), and a per-path table would grow
-  without bound in a long-lived process. Unknown purpose = ValueError
-  at acquisition time (fail fast, nothing to grow).
-- atomic_write_bytes: unique temp + file fsync + atomic replace +
-  POSIX directory fsync (fail-closed).
-- load_json_bounded: size-capped JSON load (fail-closed on oversize).
-- Authority markers: init_marker_path/marker_state/write_marker. A
+- FileLock: blocking OS-native exclusive lock (fcntl/msvcrt) over a
+  per-purpose in-process RLock. Purposes are a fixed allowlist, so
+  writers do not share one global lock and no per-path table grows in a
+  long-lived process. An unknown purpose raises ValueError.
+- atomic_write_bytes: unique temp + fsync + atomic replace + dir fsync.
+- load_json_bounded: size-capped JSON load.
+- Authority markers (init_marker_path/marker_state/write_marker): a
   durable SQLite authority (budget, attribution) is created together
-  with a sidecar marker holding the same random init token that is
-  also stored inside the DB. Marker states are TRI-STATE — absent /
-  invalid (a missing file is absent; corrupt, oversized, or malformed
-  content is INVALID, never silently absent): DB-absent + marker-
-  absent is the only genuine first init; every other combination
-  involving an invalid marker aborts. Marker healing is allowed only
-  when the DB itself verifies AND carries a valid token.
-  Supervisor fresh-start procedure: delete BOTH files (documented in
-  PHASE_E_AUDIT.md). Total wipe of the directory is indistinguishable
-  from a new deployment (accepted, documented).
+  with a sidecar marker holding the same random init token stored in
+  the DB. Marker state is absent (file missing), invalid (corrupt,
+  oversized, malformed or unreadable) or valid. DB-absent + marker-absent
+  is the only genuine first init; any other combination involving an
+  invalid marker aborts. The marker is healed only when the DB verifies
+  and carries a valid token.
+  Supervisor fresh start: delete both files (see PHASE_E_AUDIT.md). A
+  wipe of the whole directory looks like a new deployment (accepted).
 """
 import json
 import os
@@ -29,12 +23,9 @@ import secrets
 import tempfile
 import threading
 
-# Frozen purpose allowlist. One RLock each; no per-path state.
-# "create" serializes ledger first-creation across processes (a
-# dedicated lock file per DB: creation check-then-mint must be
-# atomic, and it must never nest inside the spans/budget locks on
-# the SAME file — lock ORDER is always data-lock -> create-lock,
-# never the reverse, so no hold-and-wait cycle exists).
+# Purpose allowlist, one RLock each. "create" serializes ledger
+# first-creation across processes (check-then-mint must be atomic). Lock
+# order is always data-lock -> create-lock, never the reverse.
 _PURPOSES = ("spans", "manifest", "cadence", "digest", "tier",
              "budget", "attribution", "signal", "create",
              "general")
@@ -51,11 +42,9 @@ def _guard(purpose):
 class FileLock:
     """Blocking mutual exclusion on a lock FILE.
 
-    fcntl.flock on POSIX, msvcrt.locking on Windows. Blocking (with a
-    generous timeout) because writer serialization must WAIT, not fail:
-    check-then-act races (manifest append, span dedupe, cadence save)
-    close only when the check and the act hold the same lock. A
-    per-purpose threading lock is layered inside because two threads
+    fcntl.flock on POSIX, msvcrt.locking on Windows. Blocks (with a generous timeout) because writers must wait, not
+    fail: check-then-act races close only when both hold the same lock.
+    A per-purpose threading lock is layered inside because two threads
     may share an OS lock description on some platforms.
     """
 
@@ -136,7 +125,7 @@ class FileLock:
 
 
 def fsync_dir(dirpath):
-    """POSIX directory fsync (fail-closed). Windows: documented skip."""
+    """POSIX directory fsync. Skipped on Windows."""
     if os.name == "nt":
         return
     fd = os.open(dirpath, os.O_RDONLY)
@@ -147,9 +136,8 @@ def fsync_dir(dirpath):
 
 
 def atomic_write_bytes(dirpath, final_name, data):
-    """Write data to dirpath/final_name atomically. Unique temp per
-    invocation (no pid-collision between threads/processes). Returns
-    the final path."""
+    """Write data to dirpath/final_name atomically via a unique temp
+    file. Returns the final path."""
     os.makedirs(dirpath, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=dirpath, prefix=final_name + ".",
                                suffix=".tmp")
@@ -170,8 +158,8 @@ def atomic_write_bytes(dirpath, final_name, data):
 
 
 def load_json_bounded(path, max_bytes=65536):
-    """Read + parse JSON, refusing oversized files BEFORE parsing
-    (resource-exhaustion guard). Raises ValueError/OSError."""
+    """Read + parse JSON, refusing files over max_bytes before parsing.
+    Raises ValueError/OSError."""
     size = os.path.getsize(path)
     if size > max_bytes:
         raise ValueError("state file too large: %d > %d"
@@ -186,22 +174,17 @@ def init_marker_path(db_path):
 
 def write_marker(db_path, token, roots=None):
     """Durably record the authority-init token beside the DB.
-    roots (optional) replaces the historical-integrity roots
-    carried by the marker; None preserves whatever roots the
-    current marker holds (token-heal rewrites must not drop the
-    deletion-detection baseline). The 1 KiB cap stands: roots are
-    fixed-schema aggregates, never row sets (row sets live in
-    dedicated sidecars, not the marker)."""
+    roots replaces the marker's historical-integrity roots; None keeps
+    the current ones (a token-heal must not drop the deletion-detection
+    baseline). The marker stays under 1 KiB: roots are fixed-schema
+    aggregates, not row sets."""
     import time
     if roots is None:
         try:
             roots = marker_roots(db_path)
         except (FileNotFoundError, ValueError):
-            # Absent or corrupt body: nothing preservable. (An
-            # explicit re-publish carries a new token; stale roots
-            # must not survive it. Heal paths only reach here with
-            # a valid or absent marker — corrupt markers deny
-            # before any heal.)
+            # nothing preservable; stale roots must not survive a new token.
+            # Heal paths reach here only with a valid or absent marker.
             roots = {}
     body = {"init_token": token,
             "created_ts": int(time.time()),
@@ -216,10 +199,8 @@ def write_marker(db_path, token, roots=None):
 
 
 def marker_body(db_path):
-    """Parsed marker dict, or {} when provably absent. Raises
-    ValueError on corrupt/oversized/unreadable content
-    (fail-closed: callers deny — an unreadable trust root is not
-    an absent one)."""
+    """Parsed marker dict, or {} when provably absent. Raises ValueError
+    on corrupt, oversized or unreadable content (callers deny)."""
     try:
         data = load_json_bounded(init_marker_path(db_path),
                                  max_bytes=1024)
@@ -231,11 +212,9 @@ def marker_body(db_path):
 
 
 def marker_roots(db_path):
-    """Historical-integrity roots carried by the marker ({} when
-    the marker predates roots — trust-on-first-use adoption by the
-    caller verifies the live DB first; {} also when absent). Roots
-    present but malformed raise ValueError: edited roots are never
-    adopted, never verified against."""
+    """Historical-integrity roots in the marker ({} when absent or
+    predating roots; the caller then verifies the live DB before
+    adopting). Malformed roots raise ValueError."""
     roots = marker_body(db_path).get("roots", {})
     if not isinstance(roots, dict):
         raise ValueError("marker roots not a dict")
@@ -243,18 +222,13 @@ def marker_roots(db_path):
 
 
 def merge_marker_roots(db_path, update, exact=()):
-    """Max-accumulate numeric root stats into the marker (atomic
-    rewrite; token and sibling fields preserved). Every stat is
-    monotonic by construction (maxima, counts, high-waters), so
-    concurrent mergers converge instead of losing updates, and a
-    crash between the DB commit and this bump only lags the
-    baseline (the next verify adopts it from in-DB truth — never a
-    false deny). Keys listed in exact are overwritten instead of
-    max-accumulated (mirror copies of in-DB truth: count, cents,
-    created, closed — a tampered-high marker value must be
-    replaced by truth, not kept by max). Requires a token-bearing
-    marker (bumping a tokenless file would mint a trust root over
-    an unproven authority): ValueError otherwise."""
+    """Max-accumulate numeric root stats into the marker (atomic rewrite;
+    token and other fields kept). Stats are monotonic, so concurrent
+    mergers converge, and a crash between the DB commit and this bump
+    only lags the baseline (the next verify re-adopts from the DB).
+    Keys in `exact` are overwritten instead (mirrors of in-DB truth, so
+    a tampered-high value is replaced). Requires a token-bearing marker;
+    ValueError otherwise."""
     body = marker_body(db_path)
     if not isinstance(body.get("init_token"), str) or \
             not body["init_token"]:
@@ -269,10 +243,8 @@ def merge_marker_roots(db_path, update, exact=()):
             roots[table] = slot
         for key, val in stats.items():
             if type(val) is str:
-                # Content digests: set-semantics (no ordering).
-                # Concurrent mirrors compute from the same DB
-                # truth, so last-wins converges in practice; any
-                # divergence is re-mirrored on the next mutation.
+                # content digests are order-free; last write wins and any
+                # divergence is re-mirrored on the next mutation
                 slot[key] = val
                 continue
             if type(val) not in (int, float):
@@ -293,15 +265,10 @@ def merge_marker_roots(db_path, update, exact=()):
 
 
 def may_create_tables(have, exists, mstate):
-    """True only when (re)creating missing SQLite tables cannot
-    reset an established money authority: a provable first init
-    (the file did not exist and no marker claims it), or a pristine
-    file (present but holding NONE of the required tables with no
-    marker — a crash-interrupted first init or total annihilation,
-    both correctly a fresh authority). Anything else — a marker or
-    token survivor, or surviving sibling tables — means the schema
-    is established and a missing table is deletion or corruption,
-    never a creation case."""
+    """True only when creating missing tables cannot reset an established
+    authority: a first init (no file, no marker) or a pristine file (none
+    of the required tables, no marker). With a surviving marker, token or
+    sibling tables, a missing table is deletion or corruption."""
     if not exists and mstate == "absent":
         return True
     if exists and mstate == "absent" and not have:
@@ -310,19 +277,13 @@ def may_create_tables(have, exists, mstate):
 
 
 def marker_state(db_path):
-    """Tri-state authority marker: (state, token_or_None).
+    """Authority marker state: (state, token_or_None).
 
-    - ("absent", None): no marker file at all.
-    - ("invalid", None): a marker file exists but is corrupt,
-      oversized, malformed, carries no usable token, OR cannot be
-      read at all (permissions, I/O failure). Only a PROVABLY
-      missing file (FileNotFoundError) is absent: an unreadable
-      marker with a missing DB must not look like a fresh
-      deployment (that is the spend-reset the marker exists to
-      prevent). DB-absent + marker-invalid aborts
-      (a deleted authority with a damaged marker must not look like
-      a fresh deployment), and DB-present + marker-invalid aborts
-      (an unverifiable authority is not healed blindly).
+    - ("absent", None): the file is missing (FileNotFoundError only).
+    - ("invalid", None): corrupt, oversized, malformed, no usable token,
+      or unreadable. An unreadable marker with a missing DB must not
+      look like a fresh deployment (that would reset spend), so
+      DB-absent + invalid aborts, as does DB-present + invalid.
     - ("valid", token): well-formed marker with a non-empty token.
     """
     try:
@@ -331,8 +292,7 @@ def marker_state(db_path):
     except FileNotFoundError:
         return "absent", None
     except OSError:
-        # Unreadable (permissions, I/O error, directory in the
-        # way): NOT absent — fail closed as invalid.
+        # unreadable (permissions, I/O, directory in the way) is invalid, not absent
         return "invalid", None
     except ValueError:
         return "invalid", None

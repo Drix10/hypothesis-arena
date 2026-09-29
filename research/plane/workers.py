@@ -1,68 +1,57 @@
 """D2 sandboxed execution gate (doc 08 sec. 8.2 + doc 10 sec. 10.4).
 
-Frozen worker model: a smolagents CodeAgent over a prebuilt immutable
-Docker image, non-root, read-only rootfs, dropped capabilities, CPU/
-RAM/pids caps, seccomp/AppArmor, NO docker socket, NO writable trading-
-tree mounts, and container egress ONLY on the deployment proxy network
-that allowlists source APIs + the model provider (nothing else). The
-prompt is NEVER the network boundary: enforcement lives in the sandbox
-firewall/proxy, proven by the unauthorized-destination probe.
+Worker model: a smolagents CodeAgent over a prebuilt immutable Docker
+image, non-root, read-only rootfs, dropped capabilities, CPU/RAM/pids
+caps, seccomp/AppArmor, no docker socket, no writable trading-tree
+mounts, and container egress only on the deployment proxy network, which
+allowlists source APIs and the model provider. The prompt is not the
+network boundary: enforcement lives in the sandbox firewall/proxy, checked
+by the unauthorized-destination probe.
 
-INVOCATION ARCHITECTURE (the gate owns everything; the child owns
-nothing authoritative):
-- The graph NEVER holds a model object. deps["provider_factory"] is a
-  module-level callable (picklable by reference) that BUILDS a raw
-  provider inside the worker child. No provider object exists in the
-  parent process, so no code path can touch the provider without
-  passing run_gated() first. A refused reservation means the child is
-  never spawned and the factory never runs (proven, not documented).
-- run_gated() (parent) performs, IN ORDER: input validation, worst-
-  leg pricing lookup, TRUE pre-call token reservation (measured
-  prompt-byte upper bound + completion bound; agentic runs add the
-  closed-form multi-step growth bound), worst-case dollar HOLD against
-  the stage cap, then spawn. The provider may be touched ONLY after
-  all three succeed.
-- The child (spawn context, hard-killed on timeout, reaped on every
-  path) builds provider/agent/executor from configs, executes, and
-  returns JSON-safe results + usage. It receives NO ledger paths and
-  performs NO accounting — a timed-out child cannot write late
-  accounting because it never could. Executor cleanup runs in the
-  child on the normal path; on the kill path the parent reaps the
-  named container best-effort AFTER the child is dead (never while a
-  live worker may use it).
-- Parent settlement is a HARD protocol: any accounting failure after
-  the child was spawned is AbortCycle, never a downgraded blocked
-  result. Ambiguous outcomes (timeout, child crash, provider error,
-  unaccountable usage) settle the FULL reservation as UNKNOWN_SPEND
-  (never $0) and block future spend until a supervisor reconciles.
+Invocation:
+- The graph never holds a model object. deps["provider_factory"] is a
+  module-level callable (picklable by reference) that builds a raw
+  provider inside the worker child, so no code path reaches the provider
+  without passing run_gated(). A refused reservation means the child is
+  never spawned and the factory never runs.
+- run_gated() (parent) does, in order: input validation, worst-leg
+  pricing lookup, pre-call token reservation (measured prompt-byte upper
+  bound + completion bound; agentic runs add the closed-form multi-step
+  growth bound), worst-case dollar hold against the stage cap, then spawn.
+- The child (spawn context, hard-killed on timeout, reaped on every path)
+  builds provider/agent/executor from configs, executes, and returns
+  JSON-safe results + usage. It gets no ledger paths and does no
+  accounting, so a timed-out child cannot write late accounting. Executor
+  cleanup runs in the child on the normal path; on the kill path the
+  parent reaps the named container best-effort after the child is dead.
+- Parent settlement is strict: an accounting failure after the child was
+  spawned is AbortCycle, not a blocked result. Ambiguous outcomes
+  (timeout, child crash, provider error, unaccountable usage) settle the
+  full reservation as UNKNOWN_SPEND (never $0) and block future spend
+  until a supervisor reconciles.
 
-Token bounds (frozen mechanism constants):
-- Prompt upper bound = utf-8 bytes of the exact outbound prompt. True
-  upper bound for byte-level-BPE providers (every token spans >= 1
-  byte); documented assumption, tripwire-verified post-call.
-- COMPLETION_MAX = 1500 tokens per provider step (clamped downward
-  into every generate call; callers can only shrink).
+Token bounds (recorded in plan/10 §10.4.1):
+- Prompt upper bound = utf-8 bytes of the exact outbound prompt. This is
+  a true upper bound for byte-level-BPE providers (every token spans >= 1
+  byte); it is an assumption, checked by a post-call tripwire.
+- COMPLETION_MAX = 1500 tokens per provider step, clamped downward into
+  every generate call.
 - Agentic need = steps*P + (comp+TOOLS_PER_STEP_MAX*tool)*steps*
-  (steps-1)/2 + steps*comp with AGENT_MAX_STEPS=5,
-  TOOL_OUT_MAX_BYTES=1500 (tool outputs are byte-truncated in the
-  child, so tool context is truly bounded) and TOOLS_PER_STEP_MAX=4
-  tool slots per step (every slot counts — four large tool outputs
-  on one step grow context by four outputs).
-- The reserved budget travels into the child UsageTape, which
-  refuses BEFORE every provider call whose actual prompt bytes +
-  requested completion cannot fit the remaining budget. The
-  post-call reconciliation is a tripwire (breach aborts), never the
-  primary cap.
-- The child validates the complete task/configuration BEFORE
-  constructing the provider (kind, messages, brief, defaults,
-  limits, sandbox, container name, steps, budget shape); only then
-  does the factory run.
+  (steps-1)/2 + steps*comp with AGENT_MAX_STEPS=5, TOOL_OUT_MAX_BYTES=1500
+  (tool outputs are byte-truncated in the child) and TOOLS_PER_STEP_MAX=4
+  tool slots per step (each slot can hold a large output).
+- The reserved budget travels into the child UsageTape, which refuses
+  before every provider call whose actual prompt bytes + requested
+  completion exceed the remaining budget. The post-call reconciliation is
+  a tripwire (a breach aborts), not the primary cap.
+- The child validates the whole task/configuration (kind, messages, brief,
+  defaults, limits, sandbox, container name, steps, budget shape) before
+  constructing the provider.
 
-Provider factories are deployment configuration (like pricing): the
-gate guarantees every execution is reserved + accounted; a factory
-that billed during BUILD would be a compromised deployment, outside
-the accounting boundary (documented, same class as a lying price
-table — both are supervisor-owned config, both fail closed when
+Provider factories are deployment configuration, like pricing: the gate
+guarantees every execution is reserved and accounted, but a factory that
+bills during build is outside the accounting boundary (same class as a
+wrong price table; both are supervisor-owned config and fail closed when
 absent).
 """
 import subprocess
@@ -72,8 +61,7 @@ from . import r15
 from . import schema as schema_mod
 from . import timeout as timeout_mod
 
-# Frozen mechanism constants (see module docstring; recorded in
-# plan/10 §10.4.1 — change = doc edit + fresh paper window).
+# mechanism constants (see module docstring; plan/10 §10.4.1: a change needs a doc edit and a fresh paper window)
 COMPLETION_MAX = 1500
 AGENT_MAX_STEPS = 5
 TOOL_OUT_MAX_BYTES = 1500
@@ -82,7 +70,7 @@ PROMPT_BYTES_MAX = 32768
 BRIEF_CHARS_MAX = 8192
 IDENT_MAX = 64
 
-# Locked import allowlist (doc 08 §8.2, exact — nothing else imports).
+# import allowlist (doc 08 §8.2, exact)
 ALLOWLIST = {"json", "re", "datetime", "urllib", "xml", "html", "math",
              "statistics", "collections", "itertools", "hashlib",
              "base64", "requests", "bs4", "lxml", "pydantic", "pandas",
@@ -96,14 +84,14 @@ class ConfigBlocked(Exception):
 
 
 def scan_imports(code):
-    """Pre-execution static scan: literal imports AND dynamic loading
+    """Pre-execution static scan: literal imports and dynamic loading
     (__import__, importlib.import_module) must resolve to allowlisted
-    top-level modules; anything else (including unparseable code, which
-    fails closed) is rejected.
+    top-level modules; anything else, including unparseable code, is
+    rejected.
 
-    Honest scope: AST catches every statically visible load. Deliberately
-    obfuscated loads (eval-built strings) are NOT statically decidable —
-    the Docker sandbox firewall/proxy is the real boundary for those.
+    AST catches every statically visible load. Deliberately obfuscated loads
+    (eval-built strings) are not statically decidable; the Docker sandbox
+    firewall/proxy is the boundary for those.
     Returns (ok, offending_name_or_None)."""
     import ast
     try:
@@ -152,10 +140,8 @@ def _truncate_bytes(text, limit):
 
 
 def _bounded_repr(exc, limit=256):
-    """Exception text WITHOUT ever materializing a hostile message:
-    reprlib bounds containers/strings/levels before the final
-    truncate (a 100MB exception message from a tool/provider must
-    not allocate 100MB just to be recorded)."""
+    """Exception text without materializing a hostile message: reprlib
+    bounds containers/strings/levels before the final truncate."""
     import reprlib
     fmt = reprlib.Repr()
     fmt.maxstring = limit
@@ -167,7 +153,7 @@ def _bounded_repr(exc, limit=256):
     return _truncate_bytes(text, limit)
 
 
-# Bounds for bounded tool-output shaping (never materialize more).
+# bounds for tool-output shaping
 _TOOL_STR_SLICE = TOOL_OUT_MAX_BYTES * 4  # chars (pre-truncate slice)
 _TOOL_INT_BITS_MAX = 65536
 _TOOL_JSON_NODES_MAX = 4096
@@ -175,26 +161,22 @@ _TOOL_JSON_STR_MAX = 8192
 
 
 def _bounded_tool_text(out):
-    """Shape a tool return into bounded text WITHOUT ever building
-    an unbounded representation: no repr() of arbitrary objects, no
-    full encode of huge strings, no unbounded JSON dumps."""
+    """Shape a tool return into bounded text: no repr() of arbitrary
+    objects, no full encode of huge strings, no unbounded JSON dumps."""
     if isinstance(out, str):
-        # Slice first (bounded copy), then byte-truncate: the full
-        # string is never encoded.
+        # slice first, then byte-truncate; the full string is never encoded
         if len(out) > _TOOL_STR_SLICE:
             out = out[:_TOOL_STR_SLICE]
         return _truncate_bytes(out, TOOL_OUT_MAX_BYTES)
     if isinstance(out, bytes):
-        # Bounded decode: only the prefix that can survive truncation
-        # (+4 bytes so a split multibyte char degrades gracefully).
+        # decode only the prefix that can survive truncation (+4 bytes for a split multibyte char)
         return _truncate_bytes(
             out[:TOOL_OUT_MAX_BYTES + 4].decode("utf-8", "replace"),
             TOOL_OUT_MAX_BYTES)
     if out is None or isinstance(out, (bool, float)):
         return _truncate_bytes(repr(out), TOOL_OUT_MAX_BYTES)
     if isinstance(out, int):
-        # A huge int's repr is ~1 char per 3.3 bits: gate by bit
-        # length instead of materializing it.
+        # a huge int's repr is ~1 char per 3.3 bits: gate by bit length
         try:
             bits = out.bit_length()
         except (AttributeError, OverflowError):
@@ -218,9 +200,9 @@ def _bounded_tool_text(out):
 
 
 def _usage_of(msg):
-    """(prompt_tokens, completion_tokens) from a provider message, or
-    None when unaccountable (missing, non-integer, negative). The
-    caller settles the FULL reservation on None — never fiction."""
+    """(prompt_tokens, completion_tokens) from a provider message, or None
+    when unaccountable (missing, non-integer, negative); the caller then
+    settles the full reservation."""
     usage = getattr(msg, "token_usage", None)
     if usage is None:
         return None
@@ -235,20 +217,17 @@ def _usage_of(msg):
 
 
 class UsageTape:
-    """Child-side usage accumulator: wraps a raw provider, clamps
-    per-call max_tokens DOWNWARD to the completion bound, enforces
-    the parent's reserved token budget BEFORE every provider call
-    (prompt bytes + requested completion must fit the remaining
-    budget — refusal happens pre-provider, never post-call), and sums
-    usage across multi-step agent runs. No authority, pure counting —
-    unaccountable usage poisons the tape (totals() -> None) and the
-    parent settles the full reservation."""
+    """Child-side usage accumulator: wraps a raw provider, clamps per-call
+    max_tokens downward to the completion bound, refuses before every
+    provider call whose prompt bytes + requested completion exceed the
+    remaining reserved budget, and sums usage across multi-step agent runs.
+    Unaccountable usage poisons the tape (totals() -> None) and the parent
+    settles the full reservation."""
 
     def __init__(self, provider, completion_max, token_budget=None):
         self._provider = provider
         self._completion_max = completion_max
-        # Reserved budget from the parent (the pre-call R15/token
-        # reservation). None = legacy unit-test path with no budget.
+        # reserved token budget from the parent; None is the unit-test path with no budget
         self._remaining = token_budget
         self._pt = 0
         self._ct = 0
@@ -262,15 +241,13 @@ class UsageTape:
             raw = None
         if raw is not None:
             return len(raw)
-        # Provider message OBJECTS (e.g. smolagents ChatMessage
-        # dataclasses in the agent loop): project the known text
-        # fields instead of serializing arbitrary objects.
+        # provider message objects (e.g. smolagents ChatMessage): project the
+        # known text fields instead of serializing arbitrary objects
         try:
             proj = []
             for m in messages:
                 role = getattr(m, "role", None)
-                # smolagents passes a MessageRole enum: project its
-                # value (any deterministic text works for sizing).
+                # smolagents passes a MessageRole enum: project its value
                 role = getattr(role, "value", role)
                 content = getattr(m, "content", None)
                 if not isinstance(role, str):
@@ -278,8 +255,7 @@ class UsageTape:
                 if isinstance(content, str):
                     proj.append({"role": role, "content": content})
                 elif isinstance(content, list):
-                    # canon() returns BYTES: decode (ASCII-safe via
-                    # ensure_ascii) before embedding in the projection.
+                    # canon() returns bytes: decode (ASCII-safe via ensure_ascii) before embedding
                     proj.append({"role": role,
                                  "content": schema_mod.canon(
                                      content).decode("ascii")})
@@ -298,8 +274,7 @@ class UsageTape:
         if self._remaining is not None:
             prompt_bytes = self._prompt_bytes(messages)
             if prompt_bytes + comp > self._remaining:
-                # The actual outbound prompt does not fit the reserved
-                # budget: refuse BEFORE the provider is touched.
+                # the outbound prompt does not fit the reserved budget: refuse before the provider is touched
                 raise ConfigBlocked(
                     "prompt-exceeds-reservation:%d+%d>%d" %
                     (prompt_bytes, comp, self._remaining))
@@ -326,14 +301,11 @@ class UsageTape:
 
 
 class _ChildTool:
-    """Child-side tool wrapper: counts calls, byte-truncates outputs
-    (bounded context growth — the parent's token bound relies on it),
-    records per-tool evidence for the parent to span.
-
-    Bounded-output discipline: NEVER build an unbounded repr() just
-    to truncate it. Strings slice-then-truncate, bytes decode bounded,
-    small primitives repr directly, huge ints/arbitrary objects become
-    bounded placeholders without invoking their __repr__."""
+    """Child-side tool wrapper: counts calls, byte-truncates outputs (the
+    parent's token bound relies on it) and records per-tool evidence for the
+    parent to span. Never builds an unbounded repr() just to truncate it:
+    strings slice then truncate, bytes decode bounded, small primitives repr
+    directly, huge ints and arbitrary objects become placeholders."""
 
     def __init__(self, tool):
         self._tool = tool
@@ -357,9 +329,8 @@ class _ChildTool:
 
 
 class _ChildExec:
-    """Child-side executor wrapper: AST scan BEFORE execution (gate,
-    not forensics), call counting, output truncation. No budget
-    authority in the child — the parent reserved up front."""
+    """Child-side executor wrapper: AST scan before execution, call
+    counting, output truncation. The parent reserved the budget up front."""
 
     def __init__(self, delegate):
         self._delegate = delegate
@@ -372,9 +343,8 @@ class _ChildExec:
                 "generated code failed import scan: %s" % bad)
         self.calls += 1
         out = self._delegate(code)
-        # Pass executor protocol objects through (truncating only
-        # their text payloads): stringifying a CodeOutput would
-        # destroy is_final_answer and break the agent loop.
+        # pass executor protocol objects through, truncating only their text
+        # (stringifying a CodeOutput would lose is_final_answer)
         if isinstance(out, str):
             return _truncate_bytes(out, TOOL_OUT_MAX_BYTES)
         try:
@@ -395,8 +365,8 @@ SANDBOX_REQUIRED = ("image_digest", "proxy_network", "seccomp_profile",
 
 
 def _sandbox_kwargs(sandbox_cfg):
-    """Locked runtime spec -> docker container kwargs. Missing proxy
-    network = ConfigBlocked (no usable egress without it)."""
+    """Locked runtime spec -> docker container kwargs. A missing proxy
+    network is ConfigBlocked."""
     missing = [k for k in SANDBOX_REQUIRED if not sandbox_cfg.get(k)]
     if missing:
         raise ConfigBlocked("sandbox incomplete, missing: %s" %
@@ -416,10 +386,10 @@ def _sandbox_kwargs(sandbox_cfg):
 
 
 def make_raw_provider(provider_cfg):
-    """Module-level provider factory (picklable by reference): build
-    the raw provider with host egress FORCED through the deployment
-    allowlist proxy. provider_cfg needs model_id + egress_proxy
-    (+ api_base/api_key). No proxy -> ConfigBlocked, never direct."""
+    """Module-level provider factory (picklable by reference): build the
+    raw provider with host egress forced through the deployment allowlist
+    proxy. provider_cfg needs model_id + egress_proxy (+ api_base/api_key).
+    No proxy -> ConfigBlocked, never direct."""
     proxy = (provider_cfg or {}).get("egress_proxy")
     if not proxy:
         raise ConfigBlocked("provider egress proxy not configured")
@@ -434,9 +404,8 @@ def make_raw_provider(provider_cfg):
         import httpx
     except ImportError as e:
         raise ConfigBlocked("httpx unavailable: %s" % e)
-    # NOTE: httpx.Client(proxy=...) is IGNORED by some httpx versions
-    # (silently direct!). The proxy is pinned on an explicit
-    # HTTPTransport, which is the version-stable enforcement point.
+    # httpx.Client(proxy=...) is ignored by some httpx versions (silently
+    # direct), so the proxy is pinned on an explicit HTTPTransport
     transport = httpx.HTTPTransport(proxy=proxy)
     return OpenAIServerModel(
         model_id=model_id,
@@ -452,40 +421,33 @@ def _record_brief(rec):
                 if k in rec})[:2000]
 
 
-# Child-result bounds (enforced in the child BEFORE IPC so a huge
-# provider result never crosses the process boundary unbounded).
+# child-result bounds, enforced in the child before IPC
 RESULT_TEXT_MAX_BYTES = 1 << 20
 CHILD_CANDIDATES_MAX = 256
 CHILD_CANDIDATE_BYTES_MAX = 16384
 CHILD_TOOL_RECORDS_MAX = 64
-# Reservation bound for the agent's first outbound prompt BEYOND
-# the task brief: measured 9330 bytes of CodeAgent system/framing
-# for a 4-byte brief with zero tools (see the overhead regression).
-# 32 KiB covers that framing plus tool-description headroom for
-# small tool sets. The UsageTape measures the ACTUAL per-call
-# prompt against the reservation and refuses cleanly pre-provider
-# when a tool-heavy config exceeds it — the reservation is the
-# ceiling, the tape is the backstop, the post-call tripwire the
-# audit. Never shrink this below a fresh measurement.
+# Reservation bound for the agent's first outbound prompt beyond the task
+# brief: CodeAgent framing measured 9330 bytes for a 4-byte brief with no
+# tools; 32 KiB adds headroom for small tool sets. The UsageTape checks the
+# actual per-call prompt and refuses pre-provider if a tool-heavy config
+# exceeds it. Do not shrink below a fresh measurement.
 EXTRACT_PROMPT_OVERHEAD_BYTES = 32768
 
 
 def _to_candidates(result, rec_defaults):
-    """Shape agent output into advisory candidate dicts. Accepts
-    native lists/dicts directly; a JSON TEXT result is parsed (text
-    over RESULT_TEXT_MAX_BYTES is rejected BEFORE json.loads), and
-    anything else yields [] (the graph counts the empty extract).
-    At most CHILD_CANDIDATES_MAX dicts are shaped, each validated
-    JSON-safe and canonically small (oversize/hostile items skipped) —
-    shaping is never evidence (the resolver decides)."""
+    """Shape agent output into advisory candidate dicts. Native lists/dicts
+    are accepted; JSON text is parsed (text over RESULT_TEXT_MAX_BYTES is
+    rejected before json.loads); anything else yields [] (the graph counts
+    the empty extract). At most CHILD_CANDIDATES_MAX dicts are shaped, each
+    JSON-safe and canonically small. Shaping is not evidence; the resolver
+    decides."""
     import json
     if isinstance(result, dict):
         data = [result]
     elif isinstance(result, list):
         data = result
     elif isinstance(result, str):
-        # Byte cap BEFORE json.loads: the char-count fast path avoids
-        # encoding huge text at all (utf-8 bytes >= char count).
+        # byte cap before json.loads; the char count avoids encoding huge text (utf-8 bytes >= chars)
         if len(result) > RESULT_TEXT_MAX_BYTES or \
                 len(result.encode("utf-8", "replace")) > \
                 RESULT_TEXT_MAX_BYTES:
@@ -519,7 +481,7 @@ def _to_candidates(result, rec_defaults):
                                                               []))),
             "value": c.get("value",
                            {"type": "enum", "v": "unspecified"}),
-            "effect": "unknown",  # resolver decides; never the model
+            "effect": "unknown",  # the resolver decides, never the model
             "provenance_url": c.get("provenance_url",
                                     rec_defaults.get("provenance_url"))})
     return out
@@ -528,12 +490,10 @@ def _to_candidates(result, rec_defaults):
 def _token_need(kind, prompt_bytes, completion_max, steps):
     if kind == "generate":
         return prompt_bytes + completion_max
-    # Closed-form multi-step bound: each step's context holds the
-    # initial prompt plus all prior completions and tool outputs.
-    # Tool growth per prior step is TOOLS_PER_STEP_MAX tool slots
-    # each holding up to TOOL_OUT_MAX_BYTES (byte-truncated outputs),
-    # NOT one output per step — four large tool outputs on one step
-    # grow context by four outputs, and the bound counts all four.
+    # Closed-form multi-step bound: each step's context holds the initial
+    # prompt plus all prior completions and tool outputs. Tool growth per
+    # prior step is TOOLS_PER_STEP_MAX slots of up to TOOL_OUT_MAX_BYTES each,
+    # not one output per step.
     per_step_growth = (completion_max +
                        TOOLS_PER_STEP_MAX * TOOL_OUT_MAX_BYTES)
     return (steps * prompt_bytes +
@@ -541,7 +501,7 @@ def _token_need(kind, prompt_bytes, completion_max, steps):
             steps * completion_max)
 
 
-CONTAINER_NAME_RE = None  # compiled lazily below (stdlib re)
+CONTAINER_NAME_RE = None  # compiled lazily below
 
 
 def _valid_container_name(name):
@@ -554,19 +514,17 @@ def _valid_container_name(name):
 
 
 def _llm_child_main(payload):
-    """Worker-child entry (spawn context). Builds everything from
-    configs, executes, returns a JSON-safe envelope. NEVER touches
-    ledgers (it is not given their paths). Envelope statuses:
+    """Worker-child entry (spawn context). Builds everything from configs,
+    executes, returns a JSON-safe envelope. Never touches ledgers. Statuses:
       ok: {"result", "usage" ([pt,ct] or None), "tool_calls"}
-      config-error: build-time failure, provider untouched by OUR
-        build path (the factory itself is trusted config)
-      provider-error: anything after the provider may have been
-        touched (ambiguous by construction).
+      config-error: build-time failure; provider untouched by our build path
+        (the factory itself is trusted config)
+      provider-error: anything after the provider may have been touched
+        (ambiguous by construction).
 
-    Ordering (P0): the COMPLETE task/configuration validates FIRST;
-    the provider factory runs ONLY after every check passes. An
-    invalid sandbox/task/config returns config-error with the factory
-    provably untouched."""
+    The whole task/configuration validates first and the provider factory runs
+    only after every check passes, so an invalid sandbox/task/config returns
+    config-error with the factory untouched."""
     if not isinstance(payload, dict):
         return {"status": "config-error", "reason": "bad-payload"}
     kind = payload.get("kind")
@@ -635,7 +593,7 @@ def _llm_child_main(payload):
         if type(steps) is not int or \
                 not 1 <= steps <= AGENT_MAX_STEPS:
             return {"status": "config-error", "reason": "bad-steps"}
-    # Validation complete: ONLY now may the provider be constructed.
+    # validation complete: only now may the provider be constructed
     try:
         provider = factory(provider_cfg)
     except Exception as e:
@@ -648,8 +606,7 @@ def _llm_child_main(payload):
         try:
             msg = tape.generate(messages, max_tokens=max_tokens)
         except ConfigBlocked as e:
-            # Pre-provider refusal (budget fit): the provider was not
-            # touched — clean config-error, never ambiguous.
+            # pre-provider refusal (budget fit): provider untouched, clean config-error
             return {"status": "config-error",
                     "reason": _truncate_bytes(str(e), 256)}
         except Exception as e:
@@ -658,11 +615,9 @@ def _llm_child_main(payload):
         text = getattr(msg, "content", None)
         if isinstance(text, str) and \
                 len(text.encode("utf-8")) > RESULT_TEXT_MAX_BYTES:
-            # Oversize provider text never crosses the IPC boundary:
-            # drop it HERE (the parent accounts the spend and records
-            # result-too-large, same as its own post-IPC check).
-            # Measuring costs one transient encode in the disposable
-            # child; the pipe never sees the bytes.
+            # oversize provider text is dropped here, before IPC (the parent accounts
+            # the spend and records result-too-large, as for its own post-IPC check);
+            # measuring costs one transient encode in the disposable child
             text = None
         return {"status": "ok",
                 "text": text if isinstance(text, str) else None,
@@ -673,8 +628,7 @@ def _llm_child_main(payload):
         except ImportError as e:
             return {"status": "config-error",
                     "reason": "smolagents:%r" % (e,)}
-        # Task/config already validated above (pre-provider); only
-        # construction that cannot touch the provider remains here.
+        # task/config validated above; only construction that cannot touch the provider remains
         container_kwargs = _sandbox_kwargs(sandbox_cfg)
         container_kwargs["name"] = container_name
         try:
@@ -716,19 +670,15 @@ def _llm_child_main(payload):
                 "Extract advisory feature candidates as JSON from: %s"
                 % brief)
         except ConfigBlocked as e:
-            # Pre-provider refusal inside the agent loop (tape budget
-            # fit or code import scan): clean, provider untouched by
-            # the refused call.
+            # pre-provider refusal inside the agent loop (tape budget or import scan): provider untouched
             return {"status": "config-error",
                     "reason": _truncate_bytes(str(e), 256)}
         except Exception as e:
             return {"status": "provider-error",
                     "reason": _bounded_repr(e)}
         finally:
-            # Child-side cleanup outcome rides the envelope: the
-            # parent performs authoritative post-child reclaim when
-            # this failed (a successful result must not silently
-            # leak its container).
+            # child-side cleanup outcome rides the envelope; on failure the parent
+            # reclaims the container after the child (a successful result must not leak it)
             for meth in ("cleanup", "delete"):
                 try:
                     getattr(executor, meth, lambda: None)()
@@ -751,19 +701,17 @@ def _clamp_completion(asked):
         asked = int(asked)
     except (TypeError, ValueError):
         asked = COMPLETION_MAX
-    # Downward only: callers shrink the bound, never widen it.
+    # downward only: callers shrink the bound, never widen it
     return max(1, min(asked, COMPLETION_MAX))
 
 
 def _release_pre_provider(budget, governor, lease, lease_id,
                           release_hold=True):
-    """Unwind a pre-provider reservation (the provider was provably
-    untouched): settle the R15 lease at zero, release the dollar
-    hold. Returns None when both unwind cleanly, else a diagnostic
-    dict — the caller aborts with it (the conservative reservation
-    stays in place) instead of silently keeping only the original
-    error. Re-audit rule: pre-provider cleanup failure → cycle abort
-    + preserved reservation + diagnostic snapshot."""
+    """Unwind a pre-provider reservation (provider untouched): settle the R15
+    lease at zero and release the dollar hold. Returns None when both unwind
+    cleanly, else a diagnostic dict; the caller aborts with it and the
+    conservative reservation stays in place. Rule: pre-provider cleanup
+    failure -> cycle abort + preserved reservation + diagnostic snapshot."""
     cleanup = {}
     try:
         budget.settle_call(lease, 0)
@@ -782,40 +730,36 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
               model_id, log_path, timeout_s, max_tokens_asked=None,
               tool_factory=None, executor_factory=None, steps=None,
               container_name=None, entry_tier=None):
-    """THE invocation gate (parent process). Every provider touch in
-    production passes through here, in this order:
+    """Invocation gate (parent process). Every provider touch in production
+    passes through here, in this order:
 
     0. snapshot Tier-3 pre-filter (clean refusal),
     1. validate identities + task shape (clean failures),
     2. price lookup (missing pricing blocks clean),
-    3. R15 reservation of the TRUE token bound (clean refusal),
-    4. DURABLE tier check + worst-case dollar HOLD against the stage
-       cap in one tier-lock section (reserve_research_call: Tier 3,
-       a tier raised above entry_tier, or unverifiable tier state
-       refuse clean),
+    3. R15 reservation of the true token bound (clean refusal),
+    4. durable tier check + worst-case dollar hold against the stage cap in
+       one tier-lock section (reserve_research_call: Tier 3, a tier raised
+       above entry_tier, or unverifiable tier state refuse clean),
     5. mark invoked, spawn the worker child, await with hard kill,
-    6. settle actuals + exactly one span + hold release (any failure
-       HERE is AbortCycle — accounting after a real call never
-       downgrades to a blocked result),
-    7. ambiguous outcomes (timeout/crash/provider-error/unaccountable
-       usage) settle the FULL reservation as UNKNOWN_SPEND, keep the
-       hold, poison the R15 row, and AbortCycle (future spend blocks
-       until reconcile_unknown).
+    6. settle actuals + exactly one span + hold release (any failure here is
+       AbortCycle),
+    7. ambiguous outcomes (timeout/crash/provider-error/unaccountable usage)
+       settle the full reservation as UNKNOWN_SPEND, keep the hold, poison the
+       R15 row and AbortCycle (future spend blocks until reconcile_unknown).
 
     kind: "generate" (task={messages, max_tokens_asked?}) or "extract"
-    (task={brief, rec_defaults}). Returns the child result payload on
-    accounted success: {"text"...} or {"candidates"...}. A malformed
-    provider RESULT (not accounting) returns {"blocked": reason} with
-    accounting settled — the graph records drop+count, no abort.
+    (task={brief, rec_defaults}). Returns the child result payload on accounted
+    success: {"text"...} or {"candidates"...}. A malformed provider result
+    (not accounting) returns {"blocked": reason} with accounting settled; the
+    graph records drop+count, no abort.
     """
     _check_ident("node", node)
     _check_ident("symbol", symbol)
     _check_ident("cycle", cycle_id)
-    # Snapshot Tier-3 pre-filter (cheap, before any reservation).
-    # NOT the authority: a stale snapshot passes here, and step 4
-    # (reserve_research_call) re-reads the DURABLE tier atomically
-    # with the hold. governor-owned (SpendRefused lives in spend;
-    # workers must not import it — circular).
+    # snapshot Tier-3 pre-filter, before any reservation. Not the authority: a
+    # stale snapshot passes and step 4 (reserve_research_call) re-reads the
+    # durable tier atomically with the hold. SpendRefused lives in spend;
+    # importing it here would be circular.
     governor.check_research_tier(entry_tier)
     if type(epoch) is not int or not 0 <= epoch <= 2 ** 31 - 1:
         raise r15.AbortCycle("gate", {"bad-identity": "epoch"})
@@ -823,16 +767,13 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
         raise r15.AbortCycle("gate", {"bad-kind": kind})
     if not callable(provider_factory):
         raise ConfigBlocked("provider_factory not callable")
-    # Timeout is control-plane input: invalid values block the attempt
-    # (never run, never silently become a default).
+    # timeout is control-plane input: an invalid value blocks the attempt
     if (type(timeout_s) not in (int, float) or
             not timeout_s == timeout_s or
             not 0 < timeout_s <= 3600):
         raise ConfigBlocked("bad-timeout:%r" % (timeout_s,))
-    # Model/pricing identity (P0): the priced model_id and the model
-    # the provider config names must be the SAME string. A config
-    # naming a different model than the reservation prices is a
-    # clean refusal BEFORE any reservation — never a billed surprise.
+    # the priced model_id and the model the provider config names must be the
+    # same string; a mismatch is a clean refusal before any reservation
     if not isinstance(provider_cfg, dict):
         raise ConfigBlocked("provider-cfg-shape")
     ok, why = schema_mod.json_safe(provider_cfg)
@@ -841,9 +782,8 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
     if provider_cfg.get("model_id") != model_id:
         raise ConfigBlocked("model-identity-mismatch:%r" %
                             (provider_cfg.get("model_id"),))
-    # Single pricing authority: the governor's deployment table. A
-    # second table here could diverge from the cap enforcement below
-    # (proven by test: $149 spent + $93 worst-case must refuse).
+    # single pricing authority: the governor's deployment table (a second
+    # table could diverge from cap enforcement)
     price = governor.price_for(model_id)
 
     steps = AGENT_MAX_STEPS if steps is None else steps
@@ -875,21 +815,18 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
         if not ok:
             raise ConfigBlocked("extract-defaults:%s" % why)
         prompt_bytes = len(brief.encode("utf-8"))
-        # True outbound bound: the brief PLUS the agent framing the
-        # provider actually receives (system instructions, task
-        # framing, tool descriptions) — reserving brief-only would
-        # understate the first call and trip the tape refusal.
+        # true outbound bound: the brief plus the agent framing the provider
+        # receives (system instructions, task framing, tool descriptions);
+        # brief-only would understate the first call and trip the tape refusal
         prompt_bytes += EXTRACT_PROMPT_OVERHEAD_BYTES
         need = _token_need("extract", prompt_bytes, comp, steps)
         tools_needed = steps * TOOLS_PER_STEP_MAX
         messages = None
     if need > r15.TOKENS:
-        # A true bound that cannot fit the cycle: refuse BEFORE any
-        # spend (fail closed, counted upstream as blocked evidence).
+        # a bound that cannot fit the cycle is refused before any spend (counted upstream as blocked evidence)
         raise ConfigBlocked("call-bound-exceeds-cycle")
 
-    # Pre-call gates: R15 tokens first, then absolute dollars. Either
-    # refusal is CLEAN — the provider has not been touched.
+    # pre-call gates: R15 tokens first, then absolute dollars; a refusal is clean (provider untouched)
     lease = budget.reserve_call(need, tools_needed)
     lease_id = "spend:%s" % lease["lease_id"]
     try:
@@ -939,8 +876,7 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
         payload["steps"] = steps
         payload["tool_factory"] = tool_factory
         payload["executor_factory"] = executor_factory
-    # Spawn pickles the payload: unpicklable task content must fail
-    # HERE (clean, pre-spawn), never as an ambiguous child crash.
+    # spawn pickles the payload: unpicklable task content must fail here (clean), not as a child crash
     import pickle
     try:
         pickle.dumps(payload)
@@ -964,9 +900,8 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
                                       "unknown-spend": worst,
                                       "reap": note})
     except Exception as e:
-        # run_in_process transport failure (not a child envelope):
-        # the child may or may not have run — ambiguous by
-        # construction, same path as a timeout.
+        # run_in_process transport failure (not a child envelope): the child may
+        # or may not have run, so ambiguous like a timeout
         note = _unknown(budget, governor, log_path, epoch, node,
                         model_id, cycle_id, symbol, lease, lease_id,
                         worst, need, "transport:%r" % (e,),
@@ -977,9 +912,8 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
 
     status = child.get("status") if isinstance(child, dict) else None
     if status == "config-error":
-        # Build-time failure through OUR build path: provider untouched.
-        # Settle the reservation at zero, release the hold, no span
-        # (nothing was attempted), graph records blocked evidence.
+        # build-time failure through our build path: provider untouched. Settle the
+        # reservation at zero, release the hold, no span; the graph records blocked evidence
         cleanup = _release_pre_provider(budget, governor, lease,
                                         lease_id)
         if cleanup is not None:
@@ -1007,8 +941,7 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
     if (not isinstance(usage, list) or len(usage) != 2 or
             type(usage[0]) is not int or type(usage[1]) is not int or
             usage[0] < 0 or usage[1] < 0):
-        # The call happened but its cost is unknowable: keep the FULL
-        # reservation as UNKNOWN_SPEND (never settle fiction).
+        # the call happened but its cost is unknowable: keep the full reservation as UNKNOWN_SPEND
         note = _unknown(budget, governor, log_path, epoch, node,
                         model_id, cycle_id, symbol, lease, lease_id,
                         worst, need, "unaccountable-usage",
@@ -1021,10 +954,8 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
     if type(tool_calls) is not int or tool_calls < 0:
         tool_calls = tools_needed + 1  # force the breach path below
     if actual > need or tool_calls > tools_needed:
-        # Post-call tripwire: the bound was violated. Record truth,
-        # then abort — reconciliation is audit, never the cap. Every
-        # accounting step reports into the abort snapshot: NOTHING
-        # here may disappear into a bare pass.
+        # post-call tripwire: the bound was violated. Record truth, then abort;
+        # every accounting step reports into the abort snapshot
         breach = {"bound-breach": actual}
         try:
             budget.settle_call(lease, actual)
@@ -1042,8 +973,8 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
         except r15.AbortCycle as e:
             breach["invalidate-failed"] = str(e.snapshot)
         raise r15.AbortCycle(symbol, breach)
-    # Accounted success: settle actuals, exactly one span, hold out.
-    # ANY failure from here is AbortCycle (P0-9): the call was real.
+    # accounted success: settle actuals, exactly one span, release the hold.
+    # Any failure from here is AbortCycle: the call was real.
     try:
         budget.settle_call(lease, actual)
         _span(log_path, epoch, node, model_id, cycle_id, symbol,
@@ -1064,32 +995,25 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
 
 def _shape_success_result(kind, child, usage, tool_calls,
                           container_name):
-    """Shape an accounted ok-envelope into a run_gated result.
-    Pure shaping (plus the authoritative container reclaim): the
-    spend is already settled and spanned above, so every outcome
-    here is a result or blocked evidence, never an abort. Split
-    out so the cleanup-before-shape ordering is directly
-    unit-testable without spawning."""
+    """Shape an accounted ok-envelope into a run_gated result. Pure shaping
+    plus the container reclaim: spend is already settled and spanned, so every
+    outcome here is a result or blocked evidence, never an abort. Split out so
+    the cleanup-before-shape ordering is unit-testable without spawning."""
     if kind == "generate":
         text = child.get("text")
         if text is None or not isinstance(text, str):
-            # Result failure WITH good accounting: blocked evidence,
-            # not an abort (the spend is settled and spanned above).
+            # result failure with good accounting: blocked evidence, not an abort
             return {"blocked": "non-string-output"}
         if len(text.encode("utf-8")) > RESULT_TEXT_MAX_BYTES:
-            # Second net behind the child-side drop (same byte
-            # semantics): the spend is accounted; the RESULT is
-            # dropped + counted, never crossed into state.
+            # second net behind the child-side drop: the spend is accounted, the
+            # result is dropped and counted
             return {"blocked": "result-too-large"}
         return {"text": text, "usage": usage}
     cleanup_evidence = None
     if child.get("cleanup"):
-        # Child-side cleanup failed: authoritative post-child
-        # reclaim HERE (the child is dead; docker rm -f cannot race
-        # it). This runs BEFORE candidate-shape validation so a
-        # malformed result cannot skip the leak surfacing: the
-        # extraction is accounted, but a leak is counted, never
-        # silent.
+        # child-side cleanup failed: reclaim the container here (the child is dead,
+        # so docker rm -f cannot race it). Runs before candidate-shape
+        # validation so a malformed result cannot skip surfacing the leak.
         try:
             _reap_container(container_name)
             cleanup_evidence = "container-reaped-by-parent"
@@ -1111,10 +1035,8 @@ def _shape_success_result(kind, child, usage, tool_calls,
 
 def _span(log_path, epoch, node, model_id, cycle_id, symbol, pt, ct,
           usd, outcome, lease):
-    """Exactly one span for an accounted call. usd is explicit:
-    ambiguous spans are written by _unknown with the FULL reservation
-    (this helper never writes an unknown row, so no $0-unknown trap
-    can hide here)."""
+    """Exactly one span for an accounted call. usd is explicit; ambiguous
+    spans are written by _unknown with the full reservation."""
     attribution.append_span(
         log_path, epoch, node, model_id, cycle_id=cycle_id, stage="r",
         symbol=symbol, prompt_tokens=pt, completion_tokens=ct,
@@ -1127,23 +1049,19 @@ def _span(log_path, epoch, node, model_id, cycle_id, symbol, pt, ct,
 def _unknown(budget, governor, log_path, epoch, node, model_id,
              cycle_id, symbol, lease, lease_id, worst, need, outcome,
              container_name):
-    """Ambiguous attempt. The spend hold (marked invoked pre-spawn)
-    is NEVER released on this path, so the dollars stay conservatively
-    counted and future spend stays blocked even if every write below
-    fails. Recording is ONE atomic ledger operation
-    (record_unknown: span + unknown row + invoked mark); ANY failure
-    there raises AbortCycle with an unresolved-spend snapshot — never
-    a downgraded blocked result, never a silent pass.
+    """Ambiguous attempt. The spend hold (marked invoked pre-spawn) is never
+    released on this path, so the dollars stay counted and future spend stays
+    blocked even if every write below fails. Recording is one atomic ledger
+    operation (record_unknown: span + unknown row + invoked mark); any failure
+    there raises AbortCycle with an unresolved-spend snapshot.
 
-    Zero-price note: when worst == 0.0 (a genuinely free model) there
-    are no uncertain dollars: the R15 reservation still settles at the
-    full bound and the row is still poisoned, but no unknown rows are
-    written (an unknown $0 row is meaningless and rejected) and the
-    hold is released — no unreconcilable block, the next fresh cycle
-    proceeds.
+    When worst == 0.0 (a free model) there are no uncertain dollars: the R15
+    reservation still settles at the full bound and the row is poisoned, but
+    no unknown rows are written (an unknown $0 row is rejected) and the hold
+    is released, so nothing needs reconciling.
 
-    Returns the container-reap note (None when reaped cleanly): reap
-    failure folds into the abort snapshot, never replaces it."""
+    Returns the container-reap note (None when reaped cleanly); a reap failure
+    folds into the abort snapshot."""
     try:
         budget.settle_call(lease, need)
     except r15.AbortCycle:
@@ -1156,9 +1074,8 @@ def _unknown(budget, governor, log_path, epoch, node, model_id,
                 "timeout" if outcome == "timeout" else "error",
                 epoch, node, model_id, cycle_id, symbol)
         except Exception as e:
-            # The hold is still invoked (never released here) so the
-            # money is counted and has_unreconciled() blocks on the
-            # invoked-hold backstop even without the unknown rows.
+            # the hold stays invoked so the money is counted and has_unreconciled()
+            # blocks on the invoked-hold backstop even without unknown rows
             try:
                 budget.invalidate()
             except r15.AbortCycle:
@@ -1167,10 +1084,8 @@ def _unknown(budget, governor, log_path, epoch, node, model_id,
                 symbol, {"unresolved-spend": _bounded_repr(e),
                          "unknown-spend": worst})
     else:
-        # Zero-price ambiguity: no dollars uncertain, nothing to
-        # block on — release the hold, keep the R15 poison. The hold
-        # release is best-effort: a $0 hold that survives can neither
-        # block (has_unreconciled ignores $0) nor move money.
+        # zero-price ambiguity: no dollars uncertain, so release the hold and keep
+        # the R15 poison; a surviving $0 hold can neither block nor move money
         try:
             governor.settle_usd(lease_id)
         except Exception:
@@ -1187,11 +1102,10 @@ def _unknown(budget, governor, log_path, epoch, node, model_id,
 
 
 def _reap_container(container_name):
-    """Post-kill container reclaim, best-effort: the child is already
-    dead here, so no live worker can be using the executor. Failure
-    is reported via exception message (the caller folds it into the
-    abort snapshot) — a leaked container wastes sandbox CPU, it does
-    not move money."""
+    """Post-kill container reclaim, best-effort: the child is dead, so no
+    live worker uses the executor. Failure is reported via the exception
+    message (folded into the abort snapshot); a leaked container wastes
+    sandbox CPU, it does not move money."""
     if not container_name:
         return
     try:

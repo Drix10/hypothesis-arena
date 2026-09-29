@@ -1,30 +1,26 @@
 """D5 R15 runaway caps (doc 08 sec. 8.4, stdlib only).
 
-Enforced by the orchestrator AND the supervisor independently. Pure
-counters: the graph checks before every LLM/tool call; a stubbed looping
-tool is caught by the tool-call cap in the acceptance test.
+Enforced by the orchestrator and the supervisor independently. The graph
+checks the counters before every LLM/tool call.
 
-Frozen caps (per research cycle, per symbol):
+Caps (per research cycle, per symbol):
   LLM calls 40 | tool calls 120 | wall clock 8 min | tokens 250k |
   graph depth 25.
 Consecutive aborts: 3 same-symbol -> that symbol pauses; majority of the
 watchlist aborting in-window -> plane degrades. An aborted cycle is never
 retried in-interval and publishes nothing (last complete bundle stands).
 
-CycleBudget below is the IN-MEMORY reference implementation of these
-semantics. Production attempts go through the crash-durable
-budgets.DurableBudget; CycleBudget is explicitly retained as the
-semantic oracle (a live equivalence regression proves both agree),
-not as a second authority.
+CycleBudget is the in-memory reference implementation. Production goes
+through the crash-durable budgets.DurableBudget; CycleBudget stays as the
+semantic oracle (an equivalence test checks they agree).
 """
 import time
 
 LLM_CALLS = 40
 TOOL_CALLS = 120
 WALL_S = 8 * 60
-# Clock-skew allowance for start-wall comparisons. A counters row
-# starting more than this in the future is a defect or tampering,
-# never a longer budget: fail closed, never extend the wall.
+# Clock-skew allowance for start-wall comparisons. A start further in the
+# future is a defect or tampering and never extends the wall.
 CLOCK_SKEW_S = 300
 TOKENS = 250000
 DEPTH = 25
@@ -60,14 +56,13 @@ class CycleBudget:
         self._enforce()
 
     def invalidate(self):
-        """Poison after a timeout/ambiguous failure: no further
+        """Poison after a timeout or ambiguous failure: no further
         reservation succeeds (mirrors the durable ledger)."""
         self._dead = True
 
     def check(self):
-        """Pre-call guard WITHOUT incrementing: raises AbortCycle when
-        the cycle is already exhausted. Node boundaries call this;
-        actual attempts go through charge_*/reserve_* (workers.py)."""
+        """Raise AbortCycle if the cycle is exhausted, without incrementing.
+        Attempts themselves go through charge_*/reserve_* (workers.py)."""
         if self._dead:
             raise AbortCycle(self.symbol, {"dead": True})
         if (self.llm >= LLM_CALLS or self.tools >= TOOL_CALLS or
@@ -100,14 +95,13 @@ class AbortCycle(Exception):
 class PlaneHealth:
     """Consecutive-abort tracking across symbols (supervisor side).
 
-    Two distinct rules (doc 08 sec. 8.3a/8.4):
-    - 3 consecutive aborts on one symbol -> that symbol pauses (count-
-      based; a success clears the count and unpauses).
+    Two rules (doc 08 sec. 8.3a/8.4):
+    - 3 consecutive aborts on one symbol pause that symbol; a success
+      clears the count and unpauses.
     - a majority of watchlist symbols aborting within the trailing
-      HEALTH_WINDOW_S (default 1h, monotonic clock) -> plane degraded.
-      Degraded is RECOMPUTED on every record from current window state:
-      healthy operation ages out and clears it automatically (never
-      sticky). now_s is injectable for deterministic tests.
+      HEALTH_WINDOW_S (default 1h, monotonic clock) degrades the plane.
+      Degraded is recomputed on every record, so it clears as aborts age
+      out. now_s is injectable for tests.
     """
 
     HEALTH_WINDOW_S = 3600

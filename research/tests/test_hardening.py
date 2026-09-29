@@ -245,7 +245,7 @@ class IdentityTest(unittest.TestCase):
         self.assertFalse(os.path.exists(attribution._db_for(log)))
 
     def test_run_gated_tier3_snapshot_refuses_pre_spawn(self):
-        # S7-C P1: the provider gate enforces the threaded snapshot
+        # The provider gate enforces the threaded snapshot
         # tier — a Tier-3 snapshot refuses pre-spawn (no touch, no
         # hold) even though the dollar hold alone would admit it.
         d = tempfile.mkdtemp()
@@ -306,14 +306,11 @@ class IdentityTest(unittest.TestCase):
         return touch
 
     def test_stale_snapshot_never_reaches_provider_after_tier3(self):
-        # S7-C re-audit P1: the node snapshot read Tier 0, then a
-        # concurrent evaluator durably raised Tier 3 ($40 in 7d ->
-        # projection $171 >= cap) while 30d committed spend ($40 +
-        # worst case) stays far under the $150 dollar cap — so the
-        # dollar hold alone ADMITS. At 74a6e6f the gate trusted the
-        # stale snapshot (and entry_tier=None skipped it entirely):
-        # the provider ran. Now the durable tier is re-read atomically
-        # with the hold: refused, provider untouched, no hold row.
+        # The node snapshot read Tier 0, then a concurrent evaluator durably
+        # raised Tier 3 ($40 in 7d -> projection $171 >= cap) while 30d committed
+        # spend ($40 + worst case) stays far under the $150 dollar cap, so the
+        # dollar hold alone admits. The durable tier is re-read atomically with the
+        # hold: refused, provider untouched, no hold row.
         d = tempfile.mkdtemp()
         gov, durable, snap, budget, log = self._durable_raise(d, 40.0)
         self.assertEqual(snap[:2], ("allow", 0))
@@ -747,7 +744,7 @@ class ChildValidationTest(unittest.TestCase):
 
     @unittest.skipUnless(T._HAS_SMOL, "smolagents missing")
     def test_extract_prompt_overhead_bound(self):
-        # Finding 4: the reservation must cover the ACTUAL first
+        # The reservation must cover the ACTUAL first
         # agent prompt (system + framing + tools), not just the
         # brief. A recording provider captures the exact generated
         # messages; every call's measured prompt must fit
@@ -1013,13 +1010,9 @@ class GraphGovernanceTest(unittest.TestCase):
         self.assertGreater(out.get("dropped_candidates", 0), 0)
 
     def test_spend_snapshot_never_manufactures_mixed_pair(self):
-        # S7-C P1: with durable Tier 3, even stale legacy reads
-        # cannot manufacture (allow, 3). decision() is patched to a
-        # stale allow and tier() to a stale 0 around the cycle; the
-        # graph must still deny from the single snapshot triple.
-        # (Under the old decision()+tier() composition this exact
-        # patching produced (allow, 3) and skipped the research
-        # stop.)
+        # With durable Tier 3, stale legacy reads cannot produce (allow, 3).
+        # decision() is patched to a stale allow and tier() to a stale 0 around the
+        # cycle; the graph must still deny from the single snapshot triple.
         d = tempfile.mkdtemp()
         T._fixtures(d)
         gt = T.GraphTest()
@@ -1038,7 +1031,7 @@ class GraphGovernanceTest(unittest.TestCase):
         self.assertIn("spend-deny:tier-3", blocked)
 
     def test_graph_stale_snapshot_no_model_call_at_durable_tier3(self):
-        # S7-C re-audit P1 through a REAL cycle: the node's snapshot
+        # Through a REAL cycle: the node's snapshot
         # is stale (read before a concurrent Tier-3 persist), so the
         # graph plans hypothesize/critique calls — none may reach a
         # provider. The ledger proves it (zero model spans).
@@ -1059,11 +1052,9 @@ class GraphGovernanceTest(unittest.TestCase):
 
     @unittest.skipUnless(T._HAS_SMOL, "smolagents missing")
     def test_graph_extract_llm_stops_at_durable_tier3(self):
-        # S7-C re-audit P1: the graph-owned LLM extract path passed
-        # no entry tier, so the 74a6e6f provider gate never applied
-        # and extraction kept calling the model at durable Tier 3.
-        # Now it refuses clean as blocked evidence (no node crash,
-        # zero model spans).
+        # The graph-owned LLM extract path passes an entry tier to the provider
+        # gate, so at durable Tier 3 extraction refuses clean as blocked evidence
+        # (no node crash, zero model spans).
         d = tempfile.mkdtemp()
         T._fixtures(d)
         gt = T.GraphTest()
@@ -1213,7 +1204,7 @@ class TierStateTest(unittest.TestCase):
         return gov, now
 
     def test_verdict_snapshot_coherent_across_raise(self):
-        # S7-C P1: the snapshot triple comes from ONE durable pass,
+        # The snapshot triple comes from ONE durable pass,
         # so (allow, 3) is unproducible: allow means the pass read
         # tier 0, and a durably raised tier reads deny with tier 3.
         from plane import spend as spend_mod
@@ -1242,12 +1233,10 @@ class TierStateTest(unittest.TestCase):
                         verdict == "deny")
 
     def test_tier_journal_past_tail_window_still_reads(self):
-        # Pre-existing date bomb (same class as the ratio one): after
-        # ~174 real transitions the tier journal exceeds the 64 KiB
-        # tail window, the first VISIBLE row no longer starts at Tier
-        # 0, and every load raised tier-journal-chain (permanent
-        # deny). Real writer, fresh instances. A forged transition
-        # inside the window still denies.
+        # After ~174 real transitions the tier journal exceeds the 64 KiB tail
+        # window and the first visible row no longer starts at Tier 0; loads must
+        # still succeed. Real writer, fresh instances. A forged transition inside
+        # the window still denies.
         import json as _json
         from plane import spend as spend_mod
         d = tempfile.mkdtemp()
@@ -1287,14 +1276,10 @@ class TierStateTest(unittest.TestCase):
         self.assertIn("tier-journal-chain", str(cm.exception))
 
     def test_cross_instance_durable_raise_wins_same_second(self):
-        # S7-C P1: the DURABLE tier always wins, even when a second
-        # writer lands a raise in the SAME second another instance
-        # evaluated. A evaluates Tier 0 at T (old code cached the
-        # result keyed by evaluated_at=T); B then durably persists
-        # Tier 1 with evaluated_at=T (same-second second writer:
-        # spike observed between the two evaluations). A's next
-        # evaluation at T must read the durable Tier 1, never
-        # resurrect its Tier 0 from cache.
+        # The durable tier always wins, even when a second writer lands a raise in
+        # the same second another instance evaluated. A evaluates Tier 0 at T; B
+        # then persists Tier 1 with evaluated_at=T. A's next evaluation at T must
+        # read the durable Tier 1, not a cached Tier 0.
         from plane import spend as spend_mod
         d = tempfile.mkdtemp()
         log = os.path.join(d, "spans.jsonl")
@@ -1347,7 +1332,7 @@ class TierStateTest(unittest.TestCase):
         self.assertEqual(rows[-1]["to"], 3)
 
     def test_tier_journal_malformed_denies(self):
-        # Finding 7: a damaged tier journal must deny, never resolve
+        # A damaged tier journal must deny, never resolve
         # to the older weaker tier on disk.
         from plane import spend as spend_mod
         d = tempfile.mkdtemp()
@@ -1397,7 +1382,7 @@ class TierStateTest(unittest.TestCase):
             gov._load_state(now + 7200)
 
     def test_tier_chain_forgery_denies(self):
-        # Finding 3: a syntactically valid row attempting T2 -> T0
+        # A syntactically valid row attempting T2 -> T0
         # through recovery (valid binding, newer timestamp, rev
         # continuing the chain) must deny — the chain plus the
         # state-mirror rule proves it was not governor-written.
@@ -1437,7 +1422,7 @@ class TierStateTest(unittest.TestCase):
             gov._load_state(now + 7200)
 
     def test_tier_legacy_forgery_denies(self):
-        # Finding 3: a rev-less row with current binding, a valid
+        # A rev-less row with current binding, a valid
         # weaker-tier state, and a newer timestamp cannot bypass
         # the revision chain through legacy recovery — once
         # revisioned history exists, rev-less rows are corruption.
@@ -1458,7 +1443,7 @@ class TierStateTest(unittest.TestCase):
         self.assertEqual(gov.decision(now + 7200)[0], "deny")
 
     def test_tier_future_timestamp_denies(self):
-        # Finding 4: a chained-valid row carrying a future timestamp
+        # A chained-valid row carrying a future timestamp
         # (or a snapshot from the future) denies — same defect
         # class as future start_wall.
         import json as _json
@@ -1569,7 +1554,7 @@ class RatioDaysTest(unittest.TestCase):
         self.assertEqual(len(rows), 1)
 
     def test_ratio_crash_between_append_and_state_counts_once(self):
-        # S7-C P1 (re-audit): an append-before-state crash must
+        # An append-before-state crash must
         # repair BOTH the deletion tripwire and the chain anchor,
         # without duplicating the row — through FRESH governor
         # instances (the real restart path). After recovery, journal
@@ -1649,7 +1634,7 @@ class RatioDaysTest(unittest.TestCase):
             "deny")
 
     def test_ratio_rewrite_without_refix_denies(self):
-        # S7-C P1: flipping a decided failed day to ok (digests
+        # Flipping a decided failed day to ok (digests
         # untouched) breaks the chain — denies, never suppresses
         # the breaker.
         import json as _json
@@ -1669,7 +1654,7 @@ class RatioDaysTest(unittest.TestCase):
             gov2.decision(now + 2 * 86400 + 3600)[0], "deny")
 
     def test_ratio_rewrite_with_refix_denies(self):
-        # S7-C P1: flipping plus recomputing the forward digests
+        # Flipping plus recomputing the forward digests
         # keeps the chain internally valid, but the proven head no
         # longer matches — denies on the anchor, never reads ok.
         import json as _json
@@ -1696,7 +1681,7 @@ class RatioDaysTest(unittest.TestCase):
             gov2.decision(now + 2 * 86400 + 3600)[0], "deny")
 
     def test_ratio_legacy_after_chain_denies(self):
-        # S7-C P1: a legacy-shaped row inside the chain era is a
+        # A legacy-shaped row inside the chain era is a
         # forged format downgrade even when the day order is valid.
         import json as _json
         from plane import spend as spend_mod
@@ -1762,12 +1747,10 @@ class RatioDaysTest(unittest.TestCase):
         return gov, log, now
 
     def test_ratio_crash_then_next_day_restart_links_chain(self):
-        # S7-C re-audit P1: crash on day D (row appended, state not),
-        # restart on D+1 in a FRESH instance. At 74a6e6f the new row
-        # linked to the stale state anchor instead of the chain tail
-        # -> permanent ratio-journal-forged (every later evaluation
-        # denied). Now: one row per day, continuous chain, the 3-day
-        # streak still forces Tier 3, and deletion still denies.
+        # Crash on day D (row appended, state not), restart on D+1 in a fresh
+        # instance: the new row links to the chain tail, not the stale state
+        # anchor. One row per day, continuous chain, the 3-day streak still forces
+        # Tier 3, and deletion still denies.
         from plane import spend as spend_mod
         d = tempfile.mkdtemp()
         gov, log, now = self._base(d)
@@ -1803,13 +1786,10 @@ class RatioDaysTest(unittest.TestCase):
         self.assertEqual(len(self._rows(d)), 3)
 
     def test_ratio_long_history_past_tail_window(self):
-        # S7-C re-audit P1 (date bomb): chained rows are ~3x legacy
-        # size, so ~321 daily rows exceed the 64 KiB tail window and
-        # the genesis row leaves it. At 74a6e6f every evaluation
-        # from then on raised ratio-journal-forged (permanent deny).
-        # Now the visible chain links from its first visible row and
-        # the anchor still pins it: long history reads, and a flip
-        # INSIDE the window (digests recomputed forward) still denies.
+        # Chained rows are ~3x legacy size, so ~321 daily rows exceed the 64 KiB
+        # tail window and the genesis row leaves it. The visible chain links from
+        # its first visible row and the anchor still pins it: long history reads,
+        # and a flip inside the window (digests recomputed forward) still denies.
         import json as _json
         from plane import spend as spend_mod
         d = tempfile.mkdtemp()
@@ -2602,7 +2582,7 @@ class ReauditFixTest(unittest.TestCase):
     def test_pipe_large_result_streams_while_child_runs(self):
         # ~1 MB result >> 64 KiB OS pipe buffer: the parent drains
         # concurrently, so the child's send() never blocks against a
-        # parent that only reads after death (the old deadlock).
+        # parent that only reads after death
         from plane import timeout as timeout_mod
         t0 = time.monotonic()
         out = timeout_mod.run_in_process(_big_result, 60, 1 << 20)
@@ -2659,7 +2639,7 @@ class ReauditFixTest(unittest.TestCase):
         self.assertTrue(all(r["to"] == 2 for r in rows))
 
     def test_deleted_spans_table_denies(self):
-        # Finding 1: an established ledger that loses its spans
+        # An established ledger that loses its spans
         # table must deny, never recreate empty ($149 of history
         # must not become $0 with a still-valid marker).
         d = tempfile.mkdtemp()
@@ -2722,7 +2702,7 @@ class ReauditFixTest(unittest.TestCase):
                       str(cm.exception.snapshot))
 
     def test_cycles_schema_version_gating(self):
-        # Finding 2: cycles absence is a versioned migration ONLY
+        # Cycles absence is a versioned migration ONLY
         # for old ledgers. A current-version ledger missing cycles
         # denies (deletion); a v1 ledger without it migrates and
         # adopts version 2; a v1 ledger WITH it adopts silently.
@@ -2817,7 +2797,7 @@ class ReauditFixTest(unittest.TestCase):
         con.close()
 
     def test_budget_numeric_corruption_aborts(self):
-        # Finding 5: out-of-band edits trip the content digest
+        # Out-of-band edits trip the content digest
         # first (digest-mismatch); the numeric read-validation
         # behind it still aborts (never normalizes) for
         # digest-coherent paths.
@@ -2876,7 +2856,7 @@ class ReauditFixTest(unittest.TestCase):
                           str(cm.exception.snapshot))
 
     def test_ratio_journal_order_denies(self):
-        # Finding 4: duplicate, out-of-order, or future days can
+        # Duplicate, out-of-order, or future days can
         # flip the newest row for a day and break the
         # three-distinct-failed-days rule without any malformed
         # JSON. The journal must be a strictly increasing sequence.
@@ -2913,7 +2893,7 @@ class ReauditFixTest(unittest.TestCase):
         self.assertEqual(len(gov._ratio_rows_strict(0, now)), 3)
 
     def test_checkpoint_future_and_naive_reject(self):
-        # Finding 5: a future checkpoint extends the budget window
+        # A future checkpoint extends the budget window
         # like a future start_wall; a naive timestamp has no
         # provable age (host-local interpretation). Both reject.
         from plane import graph as graph_mod
@@ -2949,7 +2929,7 @@ class ReauditFixTest(unittest.TestCase):
         self.assertIn("timezone-less", str(cm.exception))
 
     def test_cleanup_before_shape_rejection(self):
-        # Finding 8: a failed cleanup plus malformed candidates
+        # A failed cleanup plus malformed candidates
         # still surfaces the leak — the shape rejection cannot
         # skip the reclaim. Direct unit test on the extracted
         # shaper (no spawn).
@@ -2973,7 +2953,7 @@ class ReauditFixTest(unittest.TestCase):
         rm2.assert_called_once_with("miro-c-1")
 
     def test_retention_list_failure_raises(self):
-        # Finding 10: a failed checkpoint LIST is not an empty set
+        # A failed checkpoint LIST is not an empty set
         # (which would silently grow retention); individually bad
         # entries are still skipped.
         from plane import retention as retention_mod
@@ -3001,7 +2981,7 @@ class ReauditFixTest(unittest.TestCase):
         self.assertEqual(sorted(latest), ["t1"])
 
     def test_row_deletion_denies_attribution(self):
-        # Finding 1: wholesale row deletion — and same-schema
+        # Wholesale row deletion — and same-schema
         # DROP+CREATE, which the column check accepts — resets
         # $149 to $0 under a green schema/marker/token/integrity.
         # The marker-carried history roots must deny.
@@ -3123,7 +3103,7 @@ class ReauditFixTest(unittest.TestCase):
                       str(cm.exception.snapshot))
 
     def test_crashed_init_reinits(self):
-        # Finding 5: a crash-interrupted first init (tables
+        # A crash-interrupted first init (tables
         # without a token, no marker) re-inits in one transaction
         # instead of wedging on version/token.
         import sqlite3 as _sq2
@@ -3150,7 +3130,7 @@ class ReauditFixTest(unittest.TestCase):
         self.assertTrue(os.path.exists(dbp + ".init"))
 
     def test_row_deletion_denies_budgets(self):
-        # Finding 1 (R15 side): joint counters+registry deletion
+        # Joint counters+registry deletion
         # recreates a zeroed row; cycles-only deletion drops the
         # registry under a live row. Both deny; the pre-existing
         # counters-only case still denies via the in-DB rule.
@@ -3200,7 +3180,7 @@ class ReauditFixTest(unittest.TestCase):
                           str(cm.exception.snapshot))
 
     def test_future_start_wall_denies(self):
-        # Finding 2: a start 24h in the future keeps
+        # A start 24h in the future keeps
         # now - start negative, so wall-exhausted can never fire.
         # Deny on every reader, plus at write for the now_wall
         # control parameter.
@@ -3243,7 +3223,7 @@ class ReauditFixTest(unittest.TestCase):
                           now_wall=now - 100)
 
     def test_update_spend_content_denies(self):
-        # Finding 1: UPDATEs that preserve MAX(ts), row counts,
+        # UPDATEs that preserve MAX(ts), row counts,
         # schema, token, version, and integrity must still deny —
         # the fingerprint covers canonical row CONTENT.
         now = int(time.time())
@@ -3286,7 +3266,7 @@ class ReauditFixTest(unittest.TestCase):
         _probe(log, "digest-mismatch:spans")
 
     def test_crash_before_mirror_then_delete_denies(self):
-        # Finding 1 crash seam: a row committed but never mirrored
+        # A row committed but never mirrored
         # (crashed before the marker bump), then deleted before
         # restart, must deny — the same-transaction in-DB digest
         # remembers the row the marker never saw.
@@ -3317,7 +3297,7 @@ class ReauditFixTest(unittest.TestCase):
         self.assertIn("digest-mismatch:spans", str(cm.exception))
 
     def test_malformed_roots_deny(self):
-        # Finding 1 strictness: missing slots, NaN numerics, and
+        # Missing slots, NaN numerics, and
         # non-dict slots deny — never default, never weaken.
         import json as _json
         now = int(time.time())
@@ -3379,7 +3359,7 @@ class ReauditFixTest(unittest.TestCase):
                       str(cm.exception.snapshot))
 
     def test_registry_sidecar_deletion_denies(self):
-        # Finding 2: counters + cycles + .seen deletion denies
+        # Counters + cycles + .seen deletion denies
         # (digest fires); dropping the digest table too denies at
         # the versioned gate (digest-deleted — a missing digest on
         # a digest-era marker is never rebuilt); losing ONLY the
@@ -3419,7 +3399,7 @@ class ReauditFixTest(unittest.TestCase):
         led.reserve_call("c", "AAPL", 10, 0)  # re-adopts
 
     def test_digest_deletion_denies_budgets(self):
-        # P1 #1: DROP digest + modify rows + keep cycles + .seen
+        # DROP digest + modify rows + keep cycles + .seen
         # must deny at the versioned gate — the digest is mandatory
         # at v3 and is never rebuilt over a digest-era marker. The
         # version-reset variant and the same-schema DROP+CREATE
@@ -3480,7 +3460,7 @@ class ReauditFixTest(unittest.TestCase):
                       str(cm.exception.snapshot))
 
     def test_digest_deletion_denies_attribution(self):
-        # P1 #1 attribution twin: DROP digest + UPDATE spans denies
+        # Attribution twin: DROP digest + UPDATE spans denies
         # (digest-deleted); same-schema DROP+CREATE + mutation
         # denies on content.
         now = int(time.time())
@@ -3527,7 +3507,7 @@ class ReauditFixTest(unittest.TestCase):
         self.assertIn("digest-missing:spans", str(cm.exception))
 
     def test_seen_witness_first_crash_safe(self):
-        # P1 #2: the marker witness publishes BEFORE the sidecar
+        # The marker witness publishes BEFORE the sidecar
         # file, so every crash direction is conservative. A crash
         # between them (witness present, file absent) safely
         # re-adopts; the call order itself is asserted (witness
@@ -3653,7 +3633,7 @@ class ReauditFixTest(unittest.TestCase):
             gov.evaluate(t0 + 7400)
 
     def test_ratio_structural_rows_rejected(self):
-        # Finding 6: syntactically valid but structurally wrong
+        # Syntactically valid but structurally wrong
         # journal lines (a list, a string, a dict with wrong
         # keys/types) are corruption — history controlling Tier 3
         # must not silently lose records.
@@ -3675,10 +3655,9 @@ class ReauditFixTest(unittest.TestCase):
                 fh.write(bad)
             with self.assertRaises(spend_mod.StateUnavailable):
                 gov.evaluate(t0 + 3700)
-        # Control turned P1-3 regression (S7-C): rewriting decided
-        # history into a legacy-shaped row no longer reads — the
-        # state's proven chain head matches no chained row, so the
-        # rewrite denies instead of silently changing the streak.
+        # Rewriting decided history into a legacy-shaped row denies: the state's
+                # proven chain head matches no chained row, so the streak cannot change
+                # silently.
         day = t0 - (t0 % 86400)
         with open(jpath, "w", encoding="utf-8") as fh:
             fh.write('{"day": %d, "state": "failed", '
@@ -3715,7 +3694,7 @@ class ReauditFixTest(unittest.TestCase):
 
     def _strip_marker_slots(self, path):
         # Genuine pre-digest marker shape: token preserved, roots
-        # blanked (what a real pre-Round-7 ledger carries).
+        # blanked (what a real pre-digest ledger carries).
         import json as _json
         mp = path + ".init"
         with open(mp, encoding="utf-8") as fh:
@@ -3780,7 +3759,7 @@ class ReauditFixTest(unittest.TestCase):
             graph_mod._reject_stale_thread(_App(old), "t")
         graph_mod._reject_stale_thread(_App(new), "t")
         graph_mod._reject_stale_thread(_App(None), "t")
-        # Finding 3 (round 5): a failed lookup with a checkpointer
+        # A failed lookup with a checkpointer
         # present rejects (an old checkpoint plus a storage error
         # is the bypass); only a checkpointer-less app proceeds
         # blind.
@@ -3789,7 +3768,7 @@ class ReauditFixTest(unittest.TestCase):
                                            "t")
         graph_mod._reject_stale_thread(
             _App(old, boom=True, checkpointer=False), "t")
-        # Finding 6 (round 6): a timestamp-less snapshot is not a
+        # A timestamp-less snapshot is not a
         # nonexistent one — checkpoint identity decides. A real
         # checkpoint id with no readable age rejects; neither id
         # nor timestamp proceeds.

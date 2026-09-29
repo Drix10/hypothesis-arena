@@ -1,16 +1,16 @@
 #!/bin/bash
 # kill9-resume.sh — Phase-D deployment box 8 (§8.6 kill + resume).
 #
-# Real kill -9 DURING a graph run, then resume on the same thread:
+# kill -9 during a graph run, then resume on the same thread:
 #  1. worker runs epochs 1..40 (real 6-node graph, fake models, SQLite
 #     checkpoints) in the background;
 #  2. driver kills -9 mid-run;
-#  3. a fresh worker resumes the SAME thread for the remaining epochs;
+#  3. a fresh worker resumes the same thread for the remaining epochs;
 #  4. kill9_verify.py asserts: every epoch completed exactly once,
 #     span_ids unique (no duplicate features), manifest holds one
 #     committed bundle per epoch, reader resolves latest.
-# The 7-day duration is NOT reproduced here (time-blocked, recorded);
-# the kill/resume/no-dupe mechanism is identical at any run length.
+# The 7-day duration is not reproduced here (time-blocked, recorded); the
+# kill/resume/no-dupe mechanism is the same at any run length.
 # Exits 0 only if all asserts hold.
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -41,10 +41,10 @@ echo "resume attempt 1 exit: $RC"
 if [ $RC -eq 0 ]; then
   echo "PASS: killed run resumed to completion on the same thread"
 else
-  # The kill landed mid-attempt: the resume records the ambiguity as
-  # unknown-spend and aborts (fail-closed). Supervisor reconciles,
-  # then a FRESH cycle covers the killed epoch (poisoned-abort
-  # checkpoints are terminal by design — never auto-cleared).
+  # the kill landed mid-attempt: the resume records the ambiguity as
+  # unknown-spend and aborts. The supervisor reconciles, then a fresh
+  # cycle covers the killed epoch (poisoned-abort checkpoints are terminal
+  # and never auto-cleared).
   if grep -q "unknown-spend-pending" "$D/run2.log"; then
     echo "PASS: killed epoch's ambiguous spend blocks resume (fail-closed)"
   else
@@ -58,9 +58,9 @@ else
 fi
 "$VENV" "$HERE/kill9_verify.py" "$D" $N
 RC=$?
-# Hygiene: no stray worker processes may survive the demo (orphaned
-# extract children self-exit via their own timeouts; verify it with ps
-# rather than pgrep for Git-Bash portability).
+# no stray worker processes may survive the demo (orphaned extract children
+# self-exit via their own timeouts; checked with ps rather than pgrep for
+# Git-Bash portability)
 if ps aux 2>/dev/null | grep "[k]ill9_worker" > /dev/null; then
   echo "FAIL: stray kill9_worker processes remain"
   ps aux | grep "[k]ill9_worker" | head -3

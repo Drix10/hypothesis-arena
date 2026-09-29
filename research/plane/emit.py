@@ -2,27 +2,20 @@
 
 One emit writes one complete bundle: unique temp + fsync + atomic
 rename, plus a manifest row appended under the inter-process manifest
-lock. Crash-safe guarantees:
-- A partial emit + crash + restart can never expose half a bundle: the
-  final filename appears only after os.replace() of a fully-synced
-  UNIQUE temp file in the same directory (no pid-collision between
-  threads/processes).
-- Exactly-once manifest insertion: the check (bundle_id present?) and
-  the append hold the SAME manifest lock, so concurrent processes can
-  never both insert. Concurrent same-bundle emits converge to one row.
-- latest_complete() resolves the NEWEST independently VERIFIED
-  generation, scanning manifest order newest-first: one corrupt/missing
-  generation falls back to the prior good one instead of blacking out
-  research. "Latest" = highest (research_epoch, manifest sequence).
-- TOCTOU: verification reads file bytes and hashes them; read_latest()
-  stages those EXACT bytes into a private unique snapshot and consumes
-  the snapshot, so a filesystem swap between verify and read cannot
-  change what the frozen reader consumes. (Deployment still restricts
-  publication-dir writes to the writer identity; the snapshot makes
-  the primitive atomic regardless.)
-- Idempotent re-emit: bundle_id derives from (epoch, content sha); an
-  identical re-emit rewrites the same filename and skips the manifest
-  row if the bundle_id is already present (resume never duplicates).
+lock.
+- The final filename appears only after os.replace() of a fully synced
+  unique temp file in the same directory, so a crash never exposes half
+  a bundle.
+- The bundle_id check and the manifest append hold the same lock, so
+  concurrent same-bundle emits converge to one row.
+- latest_complete() returns the newest verified generation, scanning
+  manifest order newest-first ("latest" = highest (research_epoch,
+  manifest sequence)); a corrupt generation falls back to the prior one.
+- read_latest() stages the exact verified bytes into a private snapshot
+  and consumes that, so a filesystem swap after verification cannot
+  change what the reader sees.
+- bundle_id derives from (epoch, content sha); an identical re-emit
+  rewrites the same file and skips the manifest row.
 """
 import hashlib
 import json
@@ -34,9 +27,8 @@ from . import locks
 from . import schema
 
 MANIFEST_NAME = "manifest.jsonl"
-# Manifest resource bounds: readers never materialize more than the
-# tail (newest generations win anyway); the writer rotates the file
-# past MANIFEST_MAX_BYTES, keeping the newest half (line-aligned).
+# Readers materialize only the tail (newest generations win); the writer
+# rotates past MANIFEST_MAX_BYTES, keeping the newest half line-aligned.
 MANIFEST_TAIL_BYTES = 1 << 20
 MANIFEST_TAIL_ROWS = 4096
 MANIFEST_MAX_BYTES = 1 << 20
@@ -46,10 +38,8 @@ _SHA_RE = re.compile(r"[0-9a-f]{64}")
 
 def emit_bundle(outdir, epoch, features, watermarks, history=None):
     """Write one complete committed bundle. Returns (bundle_id, path).
-    Generator/oversize-hostile input fails closed: at most
-    schema.MAX_FEATURES+1 items are drawn (an infinite iterable cannot
-    hang the writer), and more than schema.MAX_FEATURES raises
-    instead of silently truncating identity."""
+    At most schema.MAX_FEATURES+1 items are drawn from `features`; more
+    than MAX_FEATURES raises rather than truncating."""
     import itertools
     os.makedirs(outdir, exist_ok=True)
     if isinstance(features, (list, tuple)):
@@ -59,11 +49,9 @@ def emit_bundle(outdir, epoch, features, watermarks, history=None):
                                       schema.MAX_FEATURES + 1))
     if len(feats) > schema.MAX_FEATURES:
         raise ValueError("emit_bundle over cap: %d" % len(feats))
-    # Bundle identity covers EVERYTHING published: epoch, features,
-    # watermarks, and history. Same features with different watermarks
-    # (new cursor, new observation) are a DIFFERENT bundle — otherwise a
-    # re-emit would overwrite the file while the manifest keeps the old
-    # SHA and latest_complete() would verify-fail into None.
+    # identity covers epoch, features, watermarks and history: a re-emit with
+    # new watermarks must be a different bundle, else the manifest keeps the
+    # old SHA and latest_complete() fails verification
     identity = {"epoch": epoch, "features": feats,
                 "watermarks": dict(watermarks),
                 "history": dict(history) if history is not None else None}
@@ -81,9 +69,7 @@ def emit_bundle(outdir, epoch, features, watermarks, history=None):
            "entity_map_sha256": watermarks.get("entity_map_sha256"),
            "commit": True, "path": os.path.basename(final),
            "sha256": hashlib.sha256(raw).hexdigest()}
-    # Check + append + rotate under ONE inter-process lock:
-    # exactly-once even for concurrent same-bundle emits across
-    # processes, and the manifest itself stays bounded.
+    # check + append + rotate under one inter-process lock
     with locks.FileLock(manifest + ".lock", purpose="manifest"):
         if not _manifest_has_locked(manifest, bundle_id):
             with open(manifest, "a", encoding="utf-8") as fh:
@@ -110,13 +96,10 @@ def _manifest_has_locked(manifest, bundle_id):
 
 
 def _valid_row(row):
-    """Strict manifest-row completeness: exact bundle-ID format
-    (with the epoch embedded matching the row epoch), exact SHA-256
-    formats, exact-int epoch/feature-count, pinned entity-map hash,
-    and the EXACT canonical filename linkage
-    features-{epoch}-{bundle_id}.json. Anything else is skipped
-    per-row (a correct file hash with a semantically wrong envelope
-    is ignored here; _verify_semantics confirms the envelope)."""
+    """Strict manifest-row check: bundle-ID format (epoch matching the
+    row), SHA-256 formats, int epoch/feature-count, pinned entity-map
+    hash, and the filename features-{epoch}-{bundle_id}.json. Failing
+    rows are skipped; _verify_semantics checks the envelope."""
     if not isinstance(row, dict):
         return False
     if row.get("commit") is not True:
@@ -147,10 +130,8 @@ def _valid_row(row):
 
 
 def _rotate_manifest_locked(manifest):
-    """Bounded manifest retention (call with the manifest lock
-    held): past MANIFEST_MAX_BYTES the file is rewritten keeping the
-    newest half, line-aligned. Readers prefer newest generations, so
-    dropping the oldest rows changes nothing observable."""
+    """Rewrite the manifest keeping the newest half, line-aligned, once it
+    exceeds MANIFEST_MAX_BYTES. Call with the manifest lock held."""
     try:
         size = os.path.getsize(manifest)
     except OSError:
@@ -184,12 +165,8 @@ def _rotate_manifest_locked(manifest):
 
 
 def _manifest_rows(outdir):
-    """Newest-relevant manifest rows with relative sequence numbers.
-    Reads at most the bounded TAIL (newest generations are what
-    latest_complete/read_latest resolve); rows beyond the tail or row
-    cap are older generations and would lose the newest-first scan
-    anyway. Malformed/incomplete rows are skipped per-row (never a
-    reader crash)."""
+    """Newest manifest rows with relative sequence numbers, read from the
+    bounded tail only. Malformed rows are skipped."""
     manifest = os.path.join(outdir, MANIFEST_NAME)
     try:
         size = os.path.getsize(manifest)
@@ -221,9 +198,8 @@ def _manifest_rows(outdir):
 
 
 def _verify_row(root, base, expected_sha):
-    """Containment + hash verification. Returns file BYTES on success,
-    None otherwise. Reading the bytes IS the verification: callers
-    consume exactly these bytes, never a re-opened pathname."""
+    """Containment + hash verification. Returns the file bytes on success,
+    else None; callers consume these bytes, not a re-opened path."""
     if not base or base.startswith(".") or "/" in base or "\\" in base:
         return None
     cand = os.path.join(root, os.path.basename(base))
@@ -247,24 +223,17 @@ def _verify_row(root, base, expected_sha):
 def latest_complete(outdir):
     """Path of the newest VERIFIED manifest-committed bundle.
 
-    Scans newest-first by (research_epoch, manifest sequence) and
-    returns the first generation whose file exists with matching
-    sha256 AND a corresponding envelope (bundle_id/epoch/schema/
-    commit). A corrupt/missing/semantically-void newest generation
-    falls back to the prior good one; None only when NO verifiable
-    bundle exists.
+    Scans newest-first by (research_epoch, manifest sequence) and returns
+    the first generation whose file matches its sha256 and whose envelope
+    (bundle_id/epoch/schema/commit) matches the row; None if none verifies.
 
-    NOTE: the returned pathname is for inspection/legacy callers. For
-    consumption use read_latest(), which stages verified bytes into a
-    private snapshot (TOCTOU-closed). The pathname may change under a
-    hostile filesystem between this return and a later open.
+    The path is for inspection only. Consume bundles through
+    read_latest(), since the file can change after this returns.
     """
     root = os.path.realpath(outdir)
     rows = _manifest_rows(outdir)
-    # Newest-first: highest epoch, then latest manifest sequence.
-    # Duplicate bundle_ids are NOT pre-filtered: a corrupt first row
-    # must not poison a valid duplicate (seen marks only VERIFIED
-    # generations).
+    # newest first: highest epoch, then latest manifest sequence. Duplicate
+    # bundle_ids are not pre-filtered so a corrupt row cannot shadow a valid one.
     rows.sort(key=lambda sr: (sr[1].get("research_epoch", -1), sr[0]),
               reverse=True)
     seen = set()
@@ -280,12 +249,9 @@ def latest_complete(outdir):
 
 
 def committed_histories(outdir):
-    """(bundle_id, history) of manifest-committed VERIFIED generations,
-    newest-first. Directory presence is never an acceptance signal:
-    each generation must have a manifest row AND pass the same file
-    SHA + envelope-semantics verification as latest_complete. Orphan
-    files (crash between bundle rename and manifest append), corrupt
-    bytes, and manifest-mismatched envelopes contribute nothing."""
+    """(bundle_id, history) of verified manifest-committed generations,
+    newest first. Each needs a manifest row and the same SHA + envelope
+    checks as latest_complete; orphan or mismatched files are ignored."""
     root = os.path.realpath(outdir)
     rows = _manifest_rows(outdir)
     rows.sort(key=lambda sr: (sr[1].get("research_epoch", -1), sr[0]),
@@ -316,10 +282,8 @@ BUNDLE_SEMANTIC_MAX_BYTES = 4 << 20
 
 
 def _verify_semantics(data, row):
-    """Bundle semantics, not just file SHA: the envelope must parse
-    (bounded) and its bundle_id / research_epoch / schema_version /
-    commit must correspond to the manifest row. A row pointing at
-    well-hashed garbage is NOT a complete generation."""
+    """Check the envelope parses (bounded) and its bundle_id, research_epoch,
+    schema_version and commit match the manifest row."""
     if len(data) > BUNDLE_SEMANTIC_MAX_BYTES:
         return False
     try:
@@ -336,8 +300,8 @@ def _verify_semantics(data, row):
 
 
 def _stage_snapshot(data):
-    """Private unique snapshot of already-verified bytes. Mode 0600
-    temp file; the caller consumes then unlinks it."""
+    """Write verified bytes to a private 0600 temp file; the caller
+    consumes then unlinks it."""
     fd, path = tempfile.mkstemp(prefix="bundle-snap-", suffix=".json")
     try:
         with os.fdopen(fd, "wb") as fh:
@@ -354,9 +318,8 @@ def _stage_snapshot(data):
 
 
 def read_latest(outdir, db_path, map_path, now_ts):
-    """Load-bearing publication path: manifest -> newest verified
-    generation -> frozen ctx reader, consuming a private snapshot of
-    the verified bytes (TOCTOU-closed). Returns the read_bundle()
+    """Manifest -> newest verified generation -> frozen ctx reader, over a
+    private snapshot of the verified bytes. Returns the read_bundle()
     result dict, or None when no complete bundle exists."""
     # Local import: collector/ lives at repo root, not beside the plane.
     from collector import ctx_read
@@ -379,9 +342,7 @@ def read_latest(outdir, db_path, map_path, now_ts):
                 return ctx_read.read_bundle(snap, db_path, map_path,
                                             now_ts)
             except Exception:
-                # One malformed/reader-throwing generation must not
-                # take down the reader: fall back to the older
-                # verified generation.
+                # a bad generation falls back to the older verified one
                 continue
         finally:
             try:
