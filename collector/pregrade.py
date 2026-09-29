@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""P1.4 pre-grader: triages TRIGGER_CANDIDATEs so humans review ONLY the
-ambiguous ones. Deterministic stdlib heuristics, read-only. NOT classification:
-rules_v1 verdicts are never changed here; this only sorts the review queue.
+"""P1.4 pre-grader: triages TRIGGER_CANDIDATEs so humans review only the
+ambiguous ones. Deterministic stdlib heuristics, read-only. rules_v1 verdicts
+are never changed here; this only sorts the review queue.
 
   auto_genuine  header-parsed items (or FOMC policy text), source timestamp,
                 fresh           -> almost certainly on-topic

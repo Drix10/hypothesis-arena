@@ -106,8 +106,8 @@ def load_sources():
 def validate_schedule(sched):
     """Full schedule schema, not just top-level type. Every entry is a
     dict with exactly the known keys, each a parseable tz-aware instant.
-    A valid-JSON-but-malformed entry used to degrade to {} and silently
-    reset that source's cadence (fail-open); now it refuses to poll."""
+    A malformed entry raises rather than degrading to {} and resetting
+    that source's cadence."""
     if not isinstance(sched, dict):
         raise ConfigError("schedule-top")
     for name, entry in sched.items():
@@ -125,8 +125,8 @@ def validate_schedule(sched):
 
 def load_schedule():
     """Returns (schedule, ok). A MISSING file is a normal first run.
-    A PRESENT-BUT-CORRUPT file is SOURCE_SCHEDULING_UNKNOWN: callers must
-    refuse to poll (fail closed), never silently reset every cadence."""
+    A present-but-corrupt file is SOURCE_SCHEDULING_UNKNOWN: callers refuse
+    to poll (fails closed) rather than reset every cadence."""
     try:
         with open(SCHEDULE_PATH, encoding="utf-8") as fh:
             raw = fh.read()
@@ -149,8 +149,8 @@ def load_schedule():
 
 def validate_cache(cache):
     """Full cache schema: every entry a dict with exactly etag/modified,
-    each None or str. A malformed entry used to degrade to {} and silently
-    drop ETag/Last-Modified protection; now it refuses to poll."""
+    each None or str. A malformed entry raises rather than dropping
+    ETag/Last-Modified protection."""
     if not isinstance(cache, dict):
         raise ConfigError("cache-top")
     for k, v in cache.items():
@@ -263,9 +263,8 @@ def fetch(url, cache_key, extra_headers=None):
 
 
 def commit_validators(cache_key, validators):
-    """Persist ETag/Last-Modified AFTER the caller accepted the body.
-    Raises ConfigError on mid-run cache corruption (same fail-closed
-    policy fetch() used to enforce inline)."""
+    """Persist ETag/Last-Modified after the caller accepted the body.
+    Raises ConfigError on mid-run cache corruption."""
     os.makedirs(STATE, exist_ok=True)
     cpath = CACHE_PATH
     try:
@@ -604,8 +603,7 @@ def _run():
         for src in sources:
             name = src["name"]
             recs = []  # fresh per source: a 304/failure must never re-emit
-            # a previous source's records (unassigned `recs` used to fall
-            # through to `if recs: append_records(recs)` with stale content).
+            # a previous source's records.
             total += _poll_source(src, sched, now, recs)
     except ConfigError as e:
         print(f"STATE_CORRUPT_MID_RUN: {e} -- aborting poll",
@@ -688,8 +686,8 @@ def _poll_source(src, sched, now, recs):
     else:
         heartbeat(name, "PARSE_FAILURE", f"unknown kind {src['kind']}")
         return 0
-    # COMMIT POINT: durable signals first. A failed sink raises (exit 2)
-    # with validators/schedule untouched — the loss is re-fetchable.
+    # Commit point: signals are written first. A failed sink raises (exit 2)
+    # with validators/schedule untouched, so the fetch is repeatable.
     if recs:
         try:
             path = append_records(recs)
@@ -703,12 +701,8 @@ def _poll_source(src, sched, now, recs):
         heartbeat(name, "EMPTY_SUCCESS", success_detail, count=0)
     if validators is not None:
         commit_validators(name, validators)
-    # Operational scheduling from the run's reference instant: next_due
-    # and backoff windows derive from the same `now` main() captured, not
-    # from per-source wall-clock reads mid-run (deterministic tests,
-    # stable cadence within one run). Observation timestamps
-    # (heartbeat `at`, observed_at) remain wall-clock: they record when
-    # the world was seen, not when the schedule was computed.
+    # next_due and backoff derive from the `now` main() captured; observation
+    # timestamps (heartbeat `at`, observed_at) stay wall-clock.
     entry["next_due"] = (now +
                          timedelta(minutes=src.get("poll_min", 15))).isoformat()
     bu = parse_instant(entry.get("backoff_until"))

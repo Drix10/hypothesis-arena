@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 '''Phase 2 JEV sidecar: stdin state -> batched v3 call -> signed AnswerSet.
-Optimized for correctness -> provenance -> failure containment ->
-replayability -> cost -> latency. Latency is explicitly last: the fast path
-begins AFTER this artifact crosses the boundary into C++.
+Priority order: correctness, provenance, failure containment, replayability,
+cost, latency (the fast path starts after the artifact crosses into C++).
 
-Authority: this adapter reports what the frozen dependency said. It cannot
-size, authorize risk, or gate budgets. Every failure mode returns HOLD rows;
-defaults are never fabricated. Replay performs ZERO remote calls.
-Stdlib only (Ed25519 implemented from RFC 8032 over hashlib, no new deps).
+This adapter reports what the frozen dependency said; it does not size,
+authorize risk, or gate budgets. Every failure returns HOLD rows and defaults
+are never fabricated. Replay makes no remote calls.
+Stdlib only (Ed25519 per RFC 8032 over hashlib).
 '''
 import hashlib
 import json
@@ -38,15 +37,12 @@ DAILY_CALL_ALERT = 2500
 STAGES = frozenset({"G0_PAPER", "G1_TINY", "G2_SCALED", "G3_FULL"})
 STAGE_30D_CAPS_USD = {"G0_PAPER": 150.0, "G1_TINY": 150.0,
                       "G2_SCALED": 400.0, "G3_FULL": 1000.0}
-# Frozen maximum authorized charge for ONE provider call. The money gate
-# reserves this amount BEFORE sending the request and reconciles the actual
-# cost after: a call is only authorized when total_30d + this reservation
-# fits inside the stage cap, so one call can never overshoot an absolute
-# cap merely because usage is learned afterward. Covers the worst-case
-# pinned-model 4-question call with headroom; raising it is a doc edit +
-# version bump (it weakens the pre-call bound), never a silent constant
-# tweak. Actual overruns (provider reprices above this) are charged in
-# full AND trip unknown_charges: the governor holds until a human audits.
+# Frozen maximum authorized charge for one provider call. The money gate
+# reserves it before sending and reconciles actual cost after, so a call is
+# authorized only when total_30d + this fits inside the stage cap. Covers the
+# worst-case pinned-model 4-question call; raising it is a doc edit + version
+# bump. An actual overrun is charged in full and trips unknown_charges: the
+# governor holds until a human audits.
 MAX_AUTHORIZED_CALL_USD = 2.00
 # Clock-skew allowance for artifact admission: a signed created_at up to
 # this far in the future is tolerated (signer/verifier clock offset),
@@ -226,8 +222,8 @@ def ed_verify(pub, msg, sig):
 
 
 def keypair():
-    """Explicit bootstrap ONLY: creates a fresh signing identity iff none
-    exists. Refuses to overwrite. Runtime paths never call this."""
+    """Explicit bootstrap: creates a signing identity if none exists, never
+    overwrites. Runtime paths do not call this."""
     os.makedirs(os.path.dirname(KEY_PATH), exist_ok=True)
     if os.path.exists(KEY_PATH):
         raise FileExistsError("key already exists; refusing to overwrite " +
@@ -516,9 +512,8 @@ def _validate_answerset_artifact(art, live_now=None):
                        "snapshot_epoch", "state_hash", "decision_key",
                        "created_at", "expires_at", "answers"}:
             return None, "replay-shape"
-        # Signature BEFORE pins: never interpret an unauthenticated
-        # payload (a foreign key with a rewritten revision field must
-        # fail HERE as signature-failure, not as a pin mismatch).
+        # Verify the signature before checking pins, so a foreign key with a
+        # rewritten revision fails as signature-failure, not a pin mismatch.
         if not verify_answerset(art):
             return None, "signature-failure"
         if p.get("schema_version") != "answerset_v1":
@@ -854,7 +849,7 @@ def validate_usage(usage):
 
 
 def _charge_now(cost, prompt_t=0, completion_t=0, known=True, now=None):
-    """Charge money/tokens. Caller MUST hold _spend_lock; the public
+    """Charge money/tokens. Caller holds _spend_lock; the public
     spend_charge() takes it for standalone use."""
     s, p = spend_today(now if now is not None else time.time())
     if s is None:
@@ -952,7 +947,7 @@ def _refund_now(now):
 
 
 def spend_charge(cost, prompt_t=0, completion_t=0, known=True, now=None):
-    """Record a completed call's money/tokens. NEVER increments calls:
+    """Record a completed call's money/tokens. Does not increment calls:
     attempts are counted once, at reservation (B2). Unknown cost sets the
     unknown_charges flag that trips the money governor (B8)."""
     with _spend_lock():
@@ -1047,7 +1042,7 @@ TRANSIENT_HTTP = {408, 429, 500, 502, 503, 504}
 
 
 def transient_error(err):
-    """Retry exactly once ONLY for transient failures (B9). Auth, bad
+    """Retry once, only for transient failures (B9). Auth, bad
     request, schema rejections, and unknown models never retry."""
     if err is None:
         return False
@@ -1111,9 +1106,8 @@ def log_row(row):
                     with open(CALL_LOG, "rb") as fh:
                         fh.seek(-CALL_LOG_MAX_BYTES // 2, os.SEEK_END)
                         tail = fh.read().split(b"\n", 1)[-1]
-                    # Crash-consistent rotation: temp + fsync + atomic rename.
-                    # An in-place "wb" rewrite could crash mid-write and leave
-                    # a partial call log; the log is spend/replay evidence.
+                    # Temp + fsync + atomic rename: an in-place rewrite could
+                    # leave a partial call log (spend/replay evidence).
                     tmp = CALL_LOG + f".tmp-{os.getpid()}"
                     with open(tmp, "wb") as fh:
                         fh.write(tail)
@@ -1140,10 +1134,9 @@ def _money_gate(state, key, post_fn, now):
     the stage USD cap is a PRE-CALL bound. Ambiguous POSTs (timeout/reset
     with no response) never retry and never refund: the provider may have
     billed us, so the reservation stands and the governor trips."""
-    # Single-flight recheck INSIDE the lock: another process may have
-    # answered this exact state between our lock-free cache_get and our
-    # acquisition. Same decision_key must never buy two provider calls or
-    # leave two different remote answers fighting over one cache file.
+    # Single-flight recheck under the lock: another process may have answered
+    # this state since our lock-free cache_get. One decision_key must not buy
+    # two provider calls.
     hit = cache_get(state, now)
     if hit is not None:
         row = {"action": "CACHED", "answers": hit["payload"]["answers"],
@@ -1196,10 +1189,10 @@ def _money_gate(state, key, post_fn, now):
         if err is None or not transient_error(err):
             break  # success, or non-retryable: exactly one attempt
         if ambiguous_error(err):
-            # The provider may have executed and billed this POST before
-            # the transport died. Retrying could double-spend; refunding
-            # would understate the bill. NEITHER: reservation stands,
-            # governor trips, human reconciles. No second attempt.
+            # The provider may have billed this POST before the transport died.
+            # Retrying could double-spend and refunding could understate the
+            # bill: the reservation stands, the governor trips, a human
+            # reconciles.
             _flag_unknown_now(now)
             row = hold_row(state, "ambiguous-transport", now=now)
             row["cost"] = cost_tag(state, None)
@@ -1208,10 +1201,8 @@ def _money_gate(state, key, post_fn, now):
             return "hold", row
         if attempt == 0:
             _refund_now(now)  # retrying: release this attempt's money
-        # reservation before re-reserving; the attempt stays counted.
-        # (On the final attempt there is no re-reserve: the error path
-        # below releases it exactly once. Refunding here unconditionally
-        # would double-refund the last attempt.)
+        # reservation before re-reserving; the attempt stays counted. The
+        # final attempt does not refund here; the error path below does, once.
     if err is not None:
         _refund_now(now)  # failed call spent nothing: release reservation.
         row = hold_row(state, "jev_error:" + err, now=now)
@@ -1247,7 +1238,7 @@ def _money_gate(state, key, post_fn, now):
     if flag == "pricing-violation":
         # Valid answers, but the provider repriced above the frozen maximum:
         # actual cost charged in full, governor tripped for human audit.
-        # The answer must NOT become a reusable artifact on this path.
+        # The answer must not become a reusable artifact on this path.
         row = hold_row(state, "pricing-violation", now=now)
         row["cost"] = cost_tag(state, usage)
         log_row(row)
@@ -1287,17 +1278,13 @@ def decide(state, now=None, key=None, post_fn=None):
         log_row(row)
         return row, None
     post_fn = post_fn or post
-    # MONEY GATE (serialized): the 30-day USD authorization, the attempt
-    # reservation, the provider call, the charge, the SIGNING, and the cache
-    # write all happen inside ONE OS-lock hold. Checking the cap outside the
-    # lock lets two processes both observe headroom and jointly overshoot;
-    # and releasing before sign+cache lets a loser's in-lock recheck miss
-    # between the winner's release and its (slow, pure-Python) cache write,
-    # buying a duplicate call. Single-flight must be atomic end to end.
-    # Lock ordering is spend -> call-log everywhere (log_row's lock is a
-    # different file, always taken inside, never outside, the spend lock).
-    # The final ANSWER row + spend_30d reads happen after release: reporting
-    # needs no money lock.
+    # Money gate: the 30-day USD authorization, attempt reservation, provider
+    # call, charge, signing and cache write happen in one lock hold. A check
+    # outside the lock lets two processes both see headroom and overshoot, and
+    # releasing before the cache write lets a second process miss the cache
+    # and buy a duplicate call.
+    # Lock order is spend -> call-log everywhere. The final ANSWER row and
+    # spend_30d reads happen after release.
     try:
         with _spend_lock(timeout=MONEY_GATE_TIMEOUT):
             gate = _money_gate(state, key, post_fn, now)
@@ -1330,12 +1317,9 @@ def decide(state, now=None, key=None, post_fn=None):
             try:
                 cache_put(state, artifact, now)
             except OSError as e:
-                # Paid, settled, signed — but NOT durably cached. Fail
-                # loudly: HOLD, no artifact, stderr. The next cycle will
-                # miss cache and may buy another call (bounded by the spend
-                # governor); a dead disk needs a human, and pretending
-                # otherwise would be worse. Spend stays settled: the money
-                # was spent, whatever the disk did.
+                # Paid, settled and signed but not durably cached: HOLD with no
+                # artifact. The next cycle may buy another call (bounded by the
+                # spend governor); spend stays settled.
                 row = hold_row(state, f"evidence-persist-failed:{type(e).__name__}",
                                now=now)
                 row["cost"] = cost_tag(state, usage)
