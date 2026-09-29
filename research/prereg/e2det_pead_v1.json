@@ -1,0 +1,37 @@
+{
+  "cost_model_version": "cost_v2",
+  "created": "2026-09-29",
+  "decision": {
+    "max_drawdown_pct": 30.0,
+    "min_cost_multiple": 2.0,
+    "min_days": 700,
+    "min_net_sharpe": 0.5,
+    "new_signal_tstat_min": 3.0
+  },
+  "experiment_id": "e2det_pead_v1_a_gate",
+  "family": "pead",
+  "holdout": {
+    "end": "2026-07-01",
+    "rule": "last 3 years ending at the latest complete quarter of filing data (SEC Financial Statement Data Sets through 2026q2, last acceptance 2026-06-30; longer than 25% of the 2016-01-04..2026-06 sample, doc 11 0b); end exclusive; untouched until the single final evaluation; one look only",
+    "start": "2023-07-01"
+  },
+  "hypothesis": "Firms whose quarterly diluted EPS beats the same quarter a year earlier by a large multiple of their own recent change dispersion (standardized unexpected earnings, SUE) keep drifting up over the following sessions, and the drift is large enough in names liquid for our size to earn positive net excess return over VTI/IEF 60/40 and T-bills at 2x cost. Variants test the SUE rank cut (top decile against top quintile) and the holding period (20 against 60 sessions). Deterministic sleeve E2-det: the A-gate baseline for the paired AI test (plan/02 E2, doc 11 11.3b).",
+  "schema": "prereg_v1",
+  "signal": "SEC XBRL Financial Statement Data Sets, 10-Q and 10-K filings (not superseded), unsegmented per-share EPS in USD, diluted with basic as fallback, quarterly (qtrs=1) with the same-filing prior-year comparative; Q4 = annual minus Q1-Q3 (current and comparative) when all three 10-Q quarters exist on the same EPS tag, else skipped. SUE = (EPS_q - EPS_{q-4}) / sample stdev of the previous 8 quarterly changes (EPS - EPS_{-4}, at most about 3 years back, at least 6 required, else no signal). Event date = date of the SEC acceptance timestamp of the filing (lags the earnings press release for large firms; conservative). Signal: SUE >= 1.0 and SUE at or above the 90th percentile (top_quintile_h20: 80th) of all SUEs of filings accepted in the 90 calendar days up to and including the event date (pooled by day, at least 300 filings; no future information). Symbol from the nearest-in-time Form 4 issuer symbol for the CIK, else the current SEC ticker. Eligibility: raw price >= 2 and 60-session median dollar volume >= 2,000,000 at the decision close. Decided at the close of the acceptance session (next session if accepted on a non-session day), entered at the next open, held 20 sessions (top_decile_h60: 60) with exit at the open of the following session or after a close below entry - 3 x ATR20; at most 5 equal slots, larger SUE first when over-subscribed, no re-entry while held; idle cash earns BIL. Spread 50 bp, paper_fill_v1 full-spread rule; 2x stress doubles spread and fees.",
+  "sleeve": "E2-det",
+  "split": {
+    "embargo_days": 5,
+    "label_horizon_days": 60,
+    "n_splits": 5,
+    "scheme": "purged_walk_forward"
+  },
+  "universe": [
+    "US-listed firms filing 10-Q/10-K with XBRL EPS, mapped to a ticker",
+    "raw price >= 2 and 60-session median dollar volume >= 2,000,000 (market cap not applied)"
+  ],
+  "variants": [
+    "top_decile_h20",
+    "top_decile_h60",
+    "top_quintile_h20"
+  ]
+}

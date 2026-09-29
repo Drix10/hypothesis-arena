@@ -94,6 +94,8 @@ jobs:
           PYTHONWARNINGS=error python3 research/tests/test_insider_data.py
           PYTHONWARNINGS=error python3 research/tests/test_insider_sleeve.py
           PYTHONWARNINGS=error python3 research/tests/test_candidate_wire.py
+          PYTHONWARNINGS=error python3 research/tests/test_pead_data.py
+          PYTHONWARNINGS=error python3 research/tests/test_pead_sleeve.py
           PYTHONWARNINGS=error python3 research/tests/test_alert_relay.py
       - name: strategy baseline (stdlib only)
         run: PYTHONWARNINGS=error python3 research/tests/test_baseline.py
