@@ -23,11 +23,14 @@ def wire_record(sleeve, symbol, snapshot_ts_ns, entry, stop, tp,
                 time_exit_ns=0, side="BUY", family="trend",
                 exit_profile="exit_trend_v1", cost_model="cost_v2",
                 feature_revision="f1", created_ns=None):
-    if side != "BUY":
-        raise WireError("only BUY entries are written")
+    if side not in ("BUY", "SELL"):
+        raise WireError("side")
     e, s, t = _px(entry), _px(stop), _px(tp)
-    if not float(s) < float(e) < float(t):
-        raise WireError("stop < entry < tp required")
+    fe, fs, ft = float(e), float(s), float(t)
+    if side == "BUY" and not fs < fe < ft:
+        raise WireError("BUY needs stop < entry < tp")
+    if side == "SELL" and not ft < fe < fs:
+        raise WireError("SELL needs tp < entry < stop")
     if snapshot_ts_ns < 0 or time_exit_ns < 0:
         raise WireError("timestamps")
     f = {"strategy_version": sleeve, "symbol": symbol,

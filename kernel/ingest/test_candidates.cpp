@@ -33,6 +33,7 @@ static std::string Rec(std::string ts, std::string side = "BUY",
     std::string f[12];
     for (int i = 0; i < 12; i++) f[i] = BASE[i];
     f[0] = sleeve; f[1] = sym; f[2] = ts; f[3] = side;
+    if (side == "SELL") { f[6] = "999.0"; f[7] = "100.0"; }
     for (int k = 0; k < 3; k++)
         if (PX[k]) f[5 + k] = PX[k];
     std::string joined;
@@ -109,6 +110,11 @@ int main(int argc, char** argv) {
         PX[0] = b[0]; PX[1] = b[1]; PX[2] = b[2];
         CHECK("bad-price", Run(Rec(fresh), t).code == CandReject::SHAPE);
     }
+    PX[0] = PX[1] = PX[2] = nullptr;
+    PX[1] = "999.0"; PX[2] = "100.0";   // SELL ordering: tp < entry < stop
+    CHECK("sell-ordering-ok", Run(Rec(fresh, "SELL", "trend_etf_v1", "VEU"), t).accepted);
+    PX[1] = "230.0"; PX[2] = "999.0";
+    CHECK("sell-wrong-ordering", Run(Rec(fresh, "SELL", "trend_etf_v1", "VEU"), t).code == CandReject::SHAPE);
     PX[0] = PX[1] = PX[2] = nullptr;
     CHECK("bad-ts", Run(Rec("-5"), t).code == CandReject::SHAPE);
     CHECK("ts-leading-zero", Run(Rec("0123"), t).code == CandReject::SHAPE);

@@ -116,6 +116,8 @@ CandOutcome ValidateCandidate(const JVal& rec, const CandidateTables& t,
         return Rej(CandReject::SHAPE);
     if (side == "BUY" && !(stop < entry && entry < tp))
         return Rej(CandReject::SHAPE);
+    if (side == "SELL" && !(tp < entry && entry < stop))
+        return Rej(CandReject::SHAPE);
     if (snap > now_ns) return Rej(CandReject::FRESHNESS);
     __int128 age = (__int128)now_ns - snap;
     if (age > (__int128)sl->window_s * 1000000000LL)

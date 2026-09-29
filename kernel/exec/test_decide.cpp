@@ -30,7 +30,9 @@ static std::string Rec(const std::string& side = "BUY",
                        const std::string& sleeve = "trend_etf_v1",
                        int64_t age_s = 60) {
     std::string f[12] = {sleeve, sym, std::to_string(NOW - age_s * 1000000000LL),
-                         side, "trend", "250.50", "230.00", "999.00", "0",
+                         side, "trend", "250.50",
+                         side == "SELL" ? "999.00" : "230.00",
+                         side == "SELL" ? "100.00" : "999.00", "0",
                          "exit_trend_v1", "cost_v2", "f1"};
     std::string joined, cand;
     for (int i = 0; i < 12; i++) {
@@ -55,6 +57,7 @@ static risk::RiskSnapshot Clean() {
     return s;
 }
 
+static std::map<std::string, int64_t> g_held;
 static EntryDecision Go(const std::string& rec, const risk::RiskSnapshot& st,
                    ingest::CandidateTables t = ingest::CandidateTables()) {
     JVal v;
@@ -67,6 +70,7 @@ static EntryDecision Go(const std::string& rec, const risk::RiskSnapshot& st,
     in.tables = t;
     in.now_ns = NOW;
     in.state = st;
+    in.held_qty = g_held;
     return Decide(in);
 }
 
@@ -93,8 +97,21 @@ int main() {
                        "cand-stale-or-future");
     ingest::CandidateTables held;
     held.held = {"VTI"};
-    CHECK("sell-is-not-sized", Go(Rec("SELL"), Clean(), held).reason ==
-                                   "exit-path-not-sized");
+    CHECK("sell-without-position-holds", Go(Rec("SELL"), Clean(), held).reason ==
+                                             "exit-no-position");
+
+    g_held["VTI"] = 40;
+    EntryDecision ex = Go(Rec("SELL"), Clean(), held);
+    CHECK("exit-closes-whole-position",
+          ex.proceed && ex.intent.kind == risk::IntentKind::EXIT &&
+              ex.intent.qty_shares == 40 &&
+              ex.intent.side == broker::OrderSide::SELL);
+    risk::RiskSnapshot dead = Clean();
+    dead.kill = risk::KillLevel::HARD;
+    dead.session_open = false;
+    dead.equity_cents = 8000000;  // deep drawdown: exits still go
+    CHECK("exit-bypasses-risk-limits", Go(Rec("SELL"), dead, held).proceed);
+    g_held.clear();
 
     risk::RiskSnapshot s = Clean();
     s.session_open = false;

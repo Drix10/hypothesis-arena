@@ -32,11 +32,16 @@ class Wire(unittest.TestCase):
         self.assertEqual((c["entry_px"], c["stop_px"]), ("250.12", "231.00"))
 
     def test_refusals(self):
-        for bad in (dict(side="SELL"), dict(stop=260.0), dict(tp=200.0),
+        for bad in (dict(side="HOLD"), dict(side="SELL"), dict(stop=260.0), dict(tp=200.0),
                     dict(entry=0), dict(stop=-1), dict(symbol="A|B"),
                     dict(snapshot_ts_ns=-1), dict(entry=True)):
             with self.assertRaises(W.WireError):
                 self.rec(**bad)
+
+    def test_sell_to_close_ordering(self):
+        c = self.rec(side="SELL", stop=260.0, tp=100.0)["candidate"]
+        self.assertEqual((c["proposed_side"], c["stop_px"], c["tp_px"]),
+                         ("SELL", "260.00", "100.00"))
 
     def test_line_is_single_compact_json(self):
         line = W.wire_line("trend_etf_v1", "VTI", TS, 250.5, 230.0, 999.0)

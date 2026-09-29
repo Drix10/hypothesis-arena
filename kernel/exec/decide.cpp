@@ -29,7 +29,36 @@ EntryDecision Decide(const DecideInput& in) {
     ingest::CandOutcome c =
         ingest::ValidateCandidate(*in.record, in.tables, in.now_ns);
     if (!c.accepted) return Hold(ingest::CandRejectStr(c.code));
-    if (c.side != "BUY") return Hold("exit-path-not-sized", c.cid, c.symbol);
+    if (c.side == "SELL") {
+        auto it = in.held_qty.find(c.symbol);
+        if (it == in.held_qty.end() || it->second <= 0)
+            return Hold("exit-no-position", c.cid, c.symbol);
+        risk::RiskSnapshot x = in.state;
+        x.intent.kind = risk::IntentKind::EXIT;
+        x.intent.symbol = c.symbol;
+        x.intent.side = risk::Side::SHORT;  // a sell against a long
+        x.intent.notional_cents = (int64_t)((__int128)it->second * c.entry_cents);
+        x.intent.has_stop = true;
+        x.intent.asset = risk::AssetClass::STOCK;
+        x.intent.account = risk::AccountType::CASH;
+        x.now_us = in.now_ns / 1000;
+        risk::VetoVerdict xv = risk::EvaluateVeto(x);
+        if (!xv.proceed) return Hold(xv.reason, c.cid, c.symbol);
+        EntryDecision d;
+        d.proceed = true;
+        d.reason = "proceed";
+        d.limiter = "full-position";
+        d.cid = c.cid;
+        d.symbol = c.symbol;
+        Copy(d.intent.intent_id, sizeof(d.intent.intent_id), c.cid);
+        Copy(d.intent.symbol, sizeof(d.intent.symbol), c.symbol);
+        d.intent.side = broker::OrderSide::SELL;
+        d.intent.qty_shares = it->second;
+        d.intent.stop_cents = c.stop_cents;
+        d.intent.tp_cents = c.tp_cents;
+        d.intent.kind = risk::IntentKind::EXIT;
+        return d;
+    }
 
     risk::RiskSnapshot s = in.state;
     risk::StageScale st = risk::ScaleFor(s.stage);

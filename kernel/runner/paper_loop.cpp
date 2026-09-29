@@ -190,6 +190,8 @@ bool PaperLoop::Tick(int64_t now_ns) {
             in.tables = cfg_.tables;
             in.now_ns = now_ns;
             in.risk_bp = cfg_.risk_bp;
+            for (const auto& p : held)
+                if (p.is_long && p.qty > 0) in.held_qty[p.symbol] = p.qty;
             risk::RiskSnapshot& s = in.state;
             s.equity_cents = av.equity_cents;
             int64_t hwm = ReadInt(cfg_.dir + "/hwm.txt");

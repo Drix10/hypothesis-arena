@@ -3,6 +3,7 @@
 // arrive as inputs; nothing here touches a file, a socket or a model.
 #pragma once
 #include <cstdint>
+#include <map>
 #include <string>
 
 #include "../ingest/candidates.hpp"
@@ -20,6 +21,7 @@ struct DecideInput {
     risk::RiskSnapshot state;            // account + halt/kill/stage state
     int64_t risk_bp = 25;                // base risk budget (R)
     int64_t liquidity_cap_shares = 0;    // <= 0: none declared
+    std::map<std::string, int64_t> held_qty;  // long shares by symbol
 };
 
 struct EntryDecision {
@@ -31,7 +33,8 @@ struct EntryDecision {
     OrderIntent intent{};                // valid only when proceed
 };
 
-// BUY candidates only; SELL-to-close is the exit path and is not sized here.
+// BUY candidates are sized as entries; a SELL candidate for a held symbol
+// closes the whole position as an EXIT intent.
 EntryDecision Decide(const DecideInput& in);
 
 }  // namespace exec
