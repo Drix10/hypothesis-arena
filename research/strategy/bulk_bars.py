@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from research.strategy import a_run, sip_fetch
 
 MIN_INTERVAL_S = 0.33
-WORKERS = 6
+WORKERS = 20
 
 
 class _Throttle:
