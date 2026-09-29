@@ -107,6 +107,15 @@ class T(unittest.TestCase):
         self.assertGreater(buy_day, sell_day)  # T+1: never same session
         self.assertEqual(len([t for t in r["trades"]]), 3)  # no daily churn
 
+    def test_idle_cash_earns_the_cash_return(self):
+        sess, px = mkdata()
+        n = len(sess)
+        r = P.run(sess, px, lambda d, h: None, cash_returns=[0.001] * n)
+        self.assertAlmostEqual(r["equity"][-1], 100000.0 * 1.001 ** (n - 1),
+                               places=4)
+        with self.assertRaises(P.PortfolioError):
+            P.run(sess, px, lambda d, h: None, cash_returns=[0.0])
+
     def test_hold_does_not_drift_rebalance(self):
         sess, px = mkdata()
         r = P.run(sess, px, lambda d, h: {"AAA": 0.5, "BBB": 0.5}

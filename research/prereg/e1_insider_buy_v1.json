@@ -1,0 +1,37 @@
+{
+  "created": "2026-09-29",
+  "cost_model_version": "cost_v2",
+  "decision": {
+    "max_drawdown_pct": 30.0,
+    "min_cost_multiple": 2.0,
+    "min_days": 700,
+    "min_net_sharpe": 0.5,
+    "new_signal_tstat_min": 3.0
+  },
+  "experiment_id": "e1_insider_buy_v1_a_gate",
+  "family": "insider",
+  "holdout": {
+    "end": "2026-05-01",
+    "rule": "last 3 years (longer than 25% of the 2016-01-04..2026-05 sample, doc 11 0b); untouched until the single final evaluation; one look only",
+    "start": "2023-05-01"
+  },
+  "hypothesis": "Open-market purchases by officers and directors who are not routine traders (Cohen-Malloy-Pomorski) earn positive net excess return over the next 21 sessions in names liquid enough for our size, beating the vol-matched 60/40 (VTI/IEF) and T-bills at 2x cost. Variants test the liquidity tier (the plan's $20M/day cut against a $2M/day cut) and a two-insider cluster.",
+  "signal": "SEC Form 4 code P, officer or director reporter, common stock, opportunistic (no purchase or sale in the same calendar month in each of the prior 3 years), aggregate purchase value >= $25,000 per issuer per filing date. Decided at the close of the filing session, entered at the next open, held 21 sessions (exit at the open of the 22nd) or until a close below entry - 3 x ATR20; at most 5 equal slots, larger purchase first when over-subscribed; idle cash earns BIL. Spread modeled per tier (tierA 50 bp, tierB 10 bp, paper_fill_v1 full-spread rule); 2x stress doubles spread and fees.",
+  "sleeve": "E1",
+  "split": {
+    "embargo_days": 5,
+    "label_horizon_days": 21,
+    "n_splits": 5,
+    "scheme": "purged_walk_forward"
+  },
+  "universe": [
+    "US common stocks with qualifying Form 4 purchases",
+    "tierA: raw price >= 2 and 60-session median dollar volume >= 2,000,000",
+    "tierB: raw price >= 5 and 60-session median dollar volume >= 20,000,000"
+  ],
+  "variants": [
+    "tierA_opp",
+    "tierB_opp",
+    "tierA_cluster"
+  ]
+}

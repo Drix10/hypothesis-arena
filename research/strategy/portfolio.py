@@ -14,12 +14,15 @@ class PortfolioError(ValueError):
 
 def run(sessions, prices, target_fn, cash0=100000.0, spread_bps=2.0,
         cost_mult=1.0, median_volume=None, min_trade_usd=50.0,
-        min_trade_pct=0.005):
+        min_trade_pct=0.005, cash_returns=None):
     """prices[sym][date] = (open, close). target_fn(date, closes) returns
     {sym: weight} (weights >= 0, sum <= 1) or None to hold, where
     closes[sym] lists closes through `date`. An unfinished target is retried
-    on later sessions. Returns dict(returns, equity, trades, cost_usd,
+    on later sessions. `cash_returns[i]` (optional) is the daily yield idle
+    cash earns in session i. Returns dict(returns, equity, trades, cost_usd,
     weights)."""
+    if cash_returns is not None and len(cash_returns) != len(sessions):
+        raise PortfolioError("cash-returns-length")
     led = CashLedger(sessions, cash0)
     hist = {s: [] for s in prices}
     equity, rets, trades, cost_total, wlog = [], [], [], 0.0, []
@@ -28,6 +31,8 @@ def run(sessions, prices, target_fn, cash0=100000.0, spread_bps=2.0,
     for i, d in enumerate(sessions):
         if i > 0:
             led.advance(d)
+            if cash_returns is not None:
+                led.credit(led.total_cash() * cash_returns[i])
         if pending is not None and i < len(sessions) - 1:
             cost, unfinished = _rebalance(led, prices, d, pending,
                                           spread_bps, cost_mult,
