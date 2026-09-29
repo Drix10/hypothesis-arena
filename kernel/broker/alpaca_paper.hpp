@@ -39,7 +39,7 @@ namespace broker {
 // bounded JSON assembled by the adapter (cycle path).
 struct HttpResult {
     int status = 0;
-    char body[2048];
+    char body[8192];  // a bracket order reply is ~2.6 KB on the live venue
 };
 struct HttpRequest {
     const char* method;  // "GET", "POST", "DELETE"

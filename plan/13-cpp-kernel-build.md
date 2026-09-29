@@ -355,6 +355,22 @@ nothing has been sent. Remaining boxes, in order:
   reconnect = re-subscribe + REST reconcile. TLS from scratch forbidden.
   Gate [correctness + drill]: fault-injection suite + Alpaca paper smoke
   (submit/protect/query/cancel/reconcile/MOC).
+  **Decision (2026-09-29): (a) libcurl.** The seam is a plain function
+  pointer, so (a) is one translation unit (`broker/http_curl.cpp`, ~150
+  lines) behind it; (b) adds a second process, a pipe protocol and an
+  identity to audit for no gain at this request rate. The transport
+  talks only to the paper host over verified TLS (https-only, no
+  redirects, 5 s connect / 10 s total), reads credentials from the
+  process environment and never logs them, validates path and header
+  bytes, and returns status 0 on any error or oversize body. The adapter
+  body cap is 8 KiB because a live bracket reply is ~2.6 KB. Built only
+  with `WITH_CURL=1`; the default gate needs no network library. Smoke
+  (`broker/smoke_paper.cpp`) passed against Alpaca paper on 2026-09-29:
+  account, protected bracket, query, cancel, cancel observed, 401 class.
+  The live reply carries no order-level take_profit/stop_loss objects; the
+  two typed legs are the protection proof (fixture in `kernel/fixtures`).
+  Open: 429 back-off drill, WS `trade_updates` stream, MOC and reconcile
+  smoke, fault-injection suite.
 - **Always-take path** (doc 04 4b): versioned filter-policy input to
   `BuildEngineInputs`; bit-identical verdicts to the filtered path where
   the filter passes; compile/grep gate that `none` cannot read an

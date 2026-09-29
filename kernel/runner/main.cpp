@@ -30,6 +30,9 @@
 #endif
 
 #include "runner.hpp"
+#ifdef G0_WITH_CURL
+#include "../broker/http_curl.hpp"
+#endif
 
 namespace {
 long long WallNs(void*) {
@@ -48,17 +51,22 @@ long long MonoNs(void*) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    if (argc < 2 || argc > 4) {
-        std::printf("usage: g0_runner <dir> [cycles] [--resume]\n");
+    if (argc < 2 || argc > 5) {
+        std::printf("usage: g0_runner <dir> [cycles] [--resume] [--paper]\n");
         return 2;
     }
     long long cycles = 1;
     bool resume = false;
+    bool paper = false;
     for (int a = 2; a < argc; ++a) {
         const char* p = argv[a];
         if (p[0] == '-' && p[1] == '-' && p[2] != '\0') {
             if (std::strcmp(p, "--resume") == 0) {
                 resume = true;
+                continue;
+            }
+            if (std::strcmp(p, "--paper") == 0) {
+                paper = true;
                 continue;
             }
             return 2;
@@ -79,7 +87,15 @@ int main(int argc, char** argv) {
                  "GENESIS-NO-SNAPSHOT-CONTEXT", 64);
     cfg.venue.context_hash[64] = '\0';
     jev::runner::RunnerDeps deps;
-    deps.transport = nullptr;  // Phase 4 wires live HTTPS (fail closed)
+    deps.transport = nullptr;  // fail closed unless --paper on a curl build
+    if (paper) {
+#ifdef G0_WITH_CURL
+        deps.transport = jev::broker::CurlTransport;
+#else
+        std::printf("g0_runner: --paper needs a G0_WITH_CURL build\n");
+        return 2;
+#endif
+    }
     deps.now_ns = WallNs;
     deps.mono_ns = MonoNs;
     deps.restart_flag = resume;  // sec. 6.4 friction: flagless

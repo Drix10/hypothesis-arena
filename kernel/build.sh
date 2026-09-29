@@ -142,6 +142,8 @@ g++ $FLAGS -o test_journal log/test_journal.cpp log/journal.cpp
 ./test_journal
 g++ $FLAGS -o test_broker broker/test_broker.cpp broker/adapter.cpp broker/alpaca_paper.cpp
 ./test_broker
+g++ $FLAGS -o test_shapes broker/test_shapes.cpp broker/adapter.cpp broker/alpaca_paper.cpp
+./test_shapes fixtures
 g++ $FLAGS -o test_drills exec/test_drills.cpp exec/router.cpp broker/adapter.cpp broker/alpaca_paper.cpp log/journal.cpp kill/switch.cpp
 ./test_drills
 # H1 integration gate [correctness + drill]: G0 runner — durable
@@ -154,6 +156,12 @@ g++ $FLAGS -o test_drills exec/test_drills.cpp exec/router.cpp broker/adapter.cp
 g++ $FLAGS -o test_runner runner/test_runner.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp broker/adapter.cpp broker/alpaca_paper.cpp log/journal.cpp kill/switch.cpp
 ./test_runner
 g++ $FLAGS -o g0_runner runner/main.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp broker/adapter.cpp broker/alpaca_paper.cpp log/journal.cpp kill/switch.cpp
+# Live paper transport (libcurl): compiled and linked only when WITH_CURL=1;
+# the smoke tool needs ALPACA_KEY_ID/ALPACA_SECRET and is run by hand.
+if [ -n "${WITH_CURL:-}" ]; then
+g++ $FLAGS -DG0_WITH_CURL -o g0_runner_paper runner/main.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp broker/adapter.cpp broker/alpaca_paper.cpp broker/http_curl.cpp log/journal.cpp kill/switch.cpp -lcurl
+g++ $FLAGS -o smoke_paper broker/smoke_paper.cpp broker/http_curl.cpp broker/alpaca_paper.cpp broker/adapter.cpp -lcurl
+fi
 # H1 zero-malloc contract: the router STEP CORE allocates nothing
 # (identity minting at IDLE is documented cycle-path and excluded
 # here; the loop covers the IDLE-reject path + every post-identity

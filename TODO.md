@@ -81,7 +81,7 @@ A box is checked only with evidence (commit + test output / report path).
 
 ## Track K — kernel P3.5 remainder (parallel with A)
 
-- [ ] K1 P3.5-T transport: decision record (libcurl+TLS vs `mirotrade`
+- [ ] K1 (DONE 2026-09-29: libcurl decision, `broker/http_curl.cpp`, `--paper` flag, live smoke PASS on Alpaca paper, real-reply fixture test, adapter body cap 8 KiB and legs rule fixed against the live shape; OPEN: 429 drill, WS trade_updates, MOC/reconcile smoke, fault-injection suite) P3.5-T transport: decision record (libcurl+TLS vs `mirotrade`
       gateway) → implementation behind the seam → fault-injection suite →
       Alpaca paper smoke (submit/protect/query/cancel/reconcile/MOC, 429).
 - [ ] K2 Always-take path (filter policy `none`), bit-identical where the

@@ -387,15 +387,13 @@ bool LegsProtected(const char* body) {
     for (int i = 0; id0[i] || id1[i]; ++i)
         if (id0[i] != id1[i]) same = false;
     if (same) return false;  // duplicate leg ids
-    // Exactly one TP leg and one SL leg, plus the order-level
-    // declared protections as real FIELDS (order_class bracket/oco +
-    // take_profit/stop_loss objects — never bare substrings).
+    // Exactly one TP leg and one SL leg under a bracket/oco order
+    // class. The venue reply carries no order-level take_profit /
+    // stop_loss objects (verified against the live paper API); the two
+    // typed legs are the proof.
     if (roles != (1 | 8) && roles != (2 | 4)) return false;
-    bool bracket =
-        Contains(body, "\"order_class\":\"bracket\"") ||
-        Contains(body, "\"order_class\":\"oco\"");
-    return bracket && Contains(body, "\"take_profit\":{") &&
-           Contains(body, "\"stop_loss\":{");
+    return Contains(body, "\"order_class\":\"bracket\"") ||
+           Contains(body, "\"order_class\":\"oco\"");
 }
 }  // namespace
 

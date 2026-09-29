@@ -125,9 +125,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: install toolchain
-        run: sudo apt-get update && sudo apt-get install -y g++
-      - name: deterministic kernel gates
-        run: bash kernel/build.sh
+        run: sudo apt-get update && sudo apt-get install -y g++ libcurl4-openssl-dev
+      - name: deterministic kernel gates (incl. live-transport build)
+        run: WITH_CURL=1 bash kernel/build.sh
       - name: C++ v4 interop vectors
         run: |
           g++ -std=c++17 -Wall -Wextra -O2 -o /tmp/test_v4 kernel/tests/test_v4.cpp
