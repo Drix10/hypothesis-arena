@@ -13,6 +13,7 @@
 #include "../jev_validate.hpp"
 #include "alpaca_paper.hpp"
 #include "http_curl.hpp"
+#include "ws_stream.hpp"
 
 using namespace jev::broker;
 
@@ -22,12 +23,34 @@ static void Step(const char* name, bool ok) {
     if (!ok) ++fails;
 }
 
+// Reads the stream until `needle` shows up in what was received, or `secs`.
+static bool StreamHas(TradeStream& ts, std::string& seen, const std::string& needle,
+                      int secs) {
+    for (int i = 0; i < secs * 20; ++i) {
+        char b[4096];
+        int n = ts.Read(b, sizeof(b));
+        if (n > 0) seen.append(b, (size_t)n);
+        if (seen.find(needle) != std::string::npos) return true;
+        usleep(50000);
+    }
+    return false;
+}
+
 int main() {
     HttpRequest acct{"GET", "/v2/account", ""};
     HttpResult a = CurlTransport(acct);
     Step("account-200-active",
          a.status == 200 && std::strstr(a.body, "\"ACTIVE\"") != nullptr);
     if (a.status != 200) return 1;
+
+    TradeStream ts;
+    std::string seen;
+    for (int i = 0; i < 100 && !ts.live(); ++i) {
+        char b[256];
+        ts.Read(b, sizeof(b));
+        usleep(100000);
+    }
+    Step("stream-authorized-and-listening", ts.live());
 
     AlpacaPaperAdapter ad(CurlTransport);
     std::string seed = "smoke|" + std::to_string(std::time(nullptr)) + "|" +
@@ -48,8 +71,12 @@ int main() {
          ack.transport_ok && ack.accepted && ack.protection_accepted);
     OrderQuery q = ad.QueryOnce(o.client_order_id);
     Step("query-finds-order", q.found && q.protection_active);
+    Step("stream-delivers-order-event",
+         StreamHas(ts, seen, "\"client_order_id\":\"" + cid + "\"", 10));
     CancelResult c = ad.Cancel(ack.broker_order_id);
     Step("cancel-request-accepted", c.accepted && !c.failed);
+    Step("stream-delivers-canceled",
+         StreamHas(ts, seen, "event: canceled\ndata: {\"order\":{\"client_order_id\":\"" + cid + "\"", 10));
     bool cancelled = false;
     for (int i = 0; i < 10 && !cancelled; ++i) {
         sleep(1);

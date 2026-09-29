@@ -184,12 +184,15 @@ g++ $FLAGS -o g0_runner runner/main.cpp runner/runner.cpp runner/store.cpp runne
 # Live paper transport (libcurl): compiled and linked only when WITH_CURL=1;
 # the smoke tool needs ALPACA_KEY_ID/ALPACA_SECRET and is run by hand.
 if [ -n "${WITH_CURL:-}" ]; then
-g++ $FLAGS -DG0_WITH_CURL -o g0_runner_paper runner/main.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp broker/adapter.cpp broker/alpaca_paper.cpp broker/http_curl.cpp log/journal.cpp kill/switch.cpp -lcurl
-g++ $FLAGS -DG0_WITH_CURL -o g0_paper_loop runner/paper_loop_main.cpp runner/paper_loop.cpp runner/bars.cpp runner/calendar.cpp runner/account.cpp runner/settle.cpp runner/approved.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp exec/decide.cpp risk/veto.cpp risk/sizing.cpp risk/measure.cpp ingest/candidates.cpp broker/adapter.cpp broker/alpaca_paper.cpp broker/http_curl.cpp log/journal.cpp kill/switch.cpp -lcurl
-g++ $FLAGS -o smoke_paper broker/smoke_paper.cpp broker/http_curl.cpp broker/alpaca_paper.cpp broker/adapter.cpp -lcurl
+g++ $FLAGS -DG0_WITH_CURL -o g0_runner_paper runner/main.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp broker/adapter.cpp broker/alpaca_paper.cpp broker/http_curl.cpp broker/ws_stream.cpp log/journal.cpp kill/switch.cpp -lcurl
+g++ $FLAGS -DG0_WITH_CURL -o g0_paper_loop runner/paper_loop_main.cpp runner/paper_loop.cpp runner/bars.cpp runner/calendar.cpp runner/account.cpp runner/settle.cpp runner/approved.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp exec/decide.cpp risk/veto.cpp risk/sizing.cpp risk/measure.cpp ingest/candidates.cpp broker/adapter.cpp broker/alpaca_paper.cpp broker/http_curl.cpp broker/ws_stream.cpp log/journal.cpp kill/switch.cpp -lcurl
+g++ $FLAGS -o smoke_paper broker/smoke_paper.cpp broker/http_curl.cpp broker/alpaca_paper.cpp broker/adapter.cpp broker/ws_stream.cpp -lcurl
+g++ $FLAGS -DG0_TEST_BASE -o test_ws_stream broker/test_ws_stream.cpp broker/ws_stream.cpp -lcurl
+./test_ws_stream unit
+python3 tests/ws_faults.py ./test_ws_stream
 g++ $FLAGS -DG0_TEST_BASE -o test_transport_faults broker/test_transport_faults.cpp broker/http_curl.cpp broker/alpaca_paper.cpp broker/adapter.cpp -lcurl
 python3 tests/transport_faults.py ./test_transport_faults
-g++ $FLAGS -DG0_WITH_CURL -DG0_TEST_BASE -o g0_paper_loop_mock runner/paper_loop_main.cpp runner/paper_loop.cpp runner/bars.cpp runner/calendar.cpp runner/account.cpp runner/settle.cpp runner/approved.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp exec/decide.cpp risk/veto.cpp risk/sizing.cpp risk/measure.cpp ingest/candidates.cpp broker/adapter.cpp broker/alpaca_paper.cpp broker/http_curl.cpp log/journal.cpp kill/switch.cpp -lcurl
+g++ $FLAGS -DG0_WITH_CURL -DG0_TEST_BASE -o g0_paper_loop_mock runner/paper_loop_main.cpp runner/paper_loop.cpp runner/bars.cpp runner/calendar.cpp runner/account.cpp runner/settle.cpp runner/approved.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp exec/decide.cpp risk/veto.cpp risk/sizing.cpp risk/measure.cpp ingest/candidates.cpp broker/adapter.cpp broker/alpaca_paper.cpp broker/http_curl.cpp broker/ws_stream.cpp log/journal.cpp kill/switch.cpp -lcurl
 python3 tests/e2e_mock_venue.py ./g0_paper_loop_mock
 fi
 # H1 zero-malloc contract: the router step core allocates nothing

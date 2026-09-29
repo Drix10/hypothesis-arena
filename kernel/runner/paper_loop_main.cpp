@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #include "../broker/http_curl.hpp"
+#include "../broker/ws_stream.hpp"
 #include "approved.hpp"
 #include "paper_loop.hpp"
 
@@ -72,6 +73,10 @@ int main(int argc, char** argv) {
     deps.now_ns = WallNs;
     deps.mono_ns = MonoNs;
     deps.restart_flag = true;
+    jev::broker::TradeStream stream;
+    deps.stream_read = jev::broker::TradeStream::Thunk;
+    deps.stream_ctx = &stream;
+    deps.stream_endpoint = "alpaca-paper-trade-updates";
     jev::runner::G0Runner runner(cfg, deps);
     const char* why = nullptr;
     if (!runner.Recover(&why)) {
