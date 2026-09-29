@@ -1,72 +1,80 @@
-# Paper deployment (G0)
+# Paper run (local, WSL)
 
-One host, one runner, Alpaca paper only. Nothing here can touch a live account:
-the transport is hard-wired to `paper-api.alpaca.markets`.
+One runner, Alpaca paper only. The transport is hard-wired to
+`paper-api.alpaca.markets`, so nothing here can touch a live account.
 
-## Host
+## Requirements
 
-Ubuntu 22.04+, `g++`, `libcurl4-openssl-dev`, Python 3.11. A dedicated user:
-
-```bash
-sudo useradd --system --create-home --shell /usr/sbin/nologin mirotrade
-sudo git clone https://github.com/Drix10/hypothesis-arena /opt/mirohedge
-cd /opt/mirohedge/kernel && sudo -u mirotrade WITH_CURL=1 bash build.sh
-```
-
-The build runs the full gate; it must print `P3.1 GATE (normal): PASS`.
-
-## Secrets and state
+Ubuntu 24.04 in WSL (g++ 13, libcurl 7.85 or newer). Ubuntu 22.04 does not
+build: its g++ 11 and libcurl 7.81 fail on `settle.hpp` and the transport.
 
 ```bash
-sudo install -d -m 700 -o mirotrade /etc/mirohedge /var/lib/mirohedge/g0
-sudo tee /etc/mirohedge/env >/dev/null <<'ENV'
-ALPACA_KEY_ID=...
-ALPACA_SECRET=...
-ALERT_WEBHOOK_URL=https://...
-ENV
-sudo chmod 600 /etc/mirohedge/env
-sudo cp ops/deploy/approved.json.example /var/lib/mirohedge/g0/approved.json
+sudo apt install -y g++ libcurl4-openssl-dev python3
 ```
 
-Rotate the paper keys before use. The env file is the only place they live.
+## Build
 
-## Human sign-off
-
-`approved.json` lists the approved sleeves (with their freshness window) and the
-instrument allowlist. Review it, then sign the stage yourself:
+Run as a normal user; `build.sh` refuses root.
 
 ```bash
-sudo -u mirotrade scripts/sign-stage.sh /var/lib/mirohedge/g0
+cd /mnt/c/Users/ggdri/Downloads/hypothesis-arena/kernel
+WITH_CURL=1 bash build.sh
 ```
 
-The runner refuses to start without a valid `STAGE`.
+It must print `P3.1 GATE (normal): PASS`.
+
+## Keys and loop directory
+
+The loop reads `ALPACA_KEY_ID` and `ALPACA_SECRET` from the environment only.
+Keep the loop directory on the Linux filesystem, not under `/mnt/c`: the runner
+takes a directory lock that Windows-mounted folders handle unreliably.
+
+```bash
+cd /mnt/c/Users/ggdri/Downloads/hypothesis-arena
+export ALPACA_KEY_ID=$(grep -m1 '^ALPACA_KEY_ID=' .env | cut -d= -f2- | tr -d '\r"')
+export ALPACA_SECRET=$(grep -m1 '^ALPACA_SECRET=' .env | cut -d= -f2- | tr -d '\r"')
+mkdir -p ~/g0
+cp ops/deploy/approved.json.example ~/g0/approved.json
+```
+
+`approved.json` lists the approved sleeves (with their freshness window) and
+the instrument allowlist. The runner refuses to start without a valid `STAGE`
+in the loop directory: copy the signed file there, or write one with
+`bash scripts/sign-stage.sh ~/g0`.
 
 ## Run
 
+Terminal 1, the loop:
+
 ```bash
-sudo cp ops/deploy/mirohedge-* /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now mirohedge-paper-loop mirohedge-emit.timer mirohedge-alerts.timer
+kernel/g0_paper_loop ~/g0 ops/deploy/session_calendar.json --ticks 0 --interval-s 60
 ```
 
-- `mirohedge-emit.timer` runs at 15:00 UTC, inside the session in both DST
-  regimes, and writes one candidate per symbol per month. The loop consumes a
-  line on its next tick and holds it if the market is closed, so it must not be
-  emitted outside the session.
+Terminal 2, once per session day (US session 19:00-01:30 IST):
+
+```bash
+python3 ops/emit_candidates.py ~/g0
+```
+
+It writes at most one candidate per symbol per month. The loop consumes a line
+on its next tick and holds it if the market is closed, so emit during the
+session only.
+
+Optional JEV shadow (needs `OPENROUTER_API_KEY`; logs only, blocks nothing):
+
+```bash
+python3 ops/jev_shadow.py ~/g0
+```
+
+One pass over new candidates; writes `~/g0/jev_shadow.jsonl` with what JEV
+answered and a hypothetical `would_block`. It never touches the journal,
+candidates or STAGE. Spend caps still apply. With only the passive sleeve
+this shows the plumbing works, not whether JEV helps.
+
 - Holidays come from `ops/deploy/session_calendar.json` (2026-2028). Extend it
   before the last listed year ends; the loop refuses to trade in a year with no
   listed holiday.
-- `mirohedge-paper-loop` exits 2 (refused) or 3 (HARD stop) and is then **not**
-  restarted; investigate the journal before starting it again.
-- Stop everything with `touch /var/lib/mirohedge/g0/HALT`. Entries hold, exits
-  and reconciliation continue.
-
-## What to watch
-
-- `decisions.jsonl`: one line per candidate, with the reason for every hold.
-- `journal-*.jsonl`: written before every order; `alerts.jsonl`: relayed outbound.
-- Daily: account equity vs the modeled book; any non-`proceed` reason you do not
-  recognize.
-
-The core passive sleeve is plumbing, not an alpha claim, and paper results from
-it do not count toward the G0 to G1 criteria (doc 10 10.2).
+- Stop with Ctrl-C. Exit 2 (refused) or 3 (HARD stop) means: read
+  `~/g0/journal.jsonl` and `~/g0/alerts.jsonl` before starting again.
+- `ops/alert_relay.py` forwards `alerts.jsonl` to `ALERT_WEBHOOK_URL`. It is
+  optional.

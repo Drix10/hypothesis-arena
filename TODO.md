@@ -3,7 +3,7 @@
 This ledger itemizes `plan/07-build-roadmap.md`. The freeze-v2 ledger is in
 `TODO-ARCHIVE-2026-09-28.md`; read it for history, never append to it.
 
-Legend: `[HUMAN]` needs the operator · `[BLOCKED]` waits on another box.
+Legend: `[BLOCKED]` waits on another box.
 Each box names its doc 07 id; one box is one commit theme (AGENTS.md rule 7).
 A box is checked only with evidence (commit and test output, or a report path).
 
@@ -22,11 +22,11 @@ A box is checked only with evidence (commit and test output, or a report path).
 - [x] R2 Docs 00–13 + manifest rewritten; §6.1b, §8.4 internals, X archive
       moved verbatim to `plan/appendix/`; freeze-check PASS.
 - [x] R3 TODO archived + rebuilt; AGENTS/README/ARCHITECTURE aligned.
-- [ ] R4 [HUMAN] Sign the freeze-v3 text (doc 07 sign-off log).
+- [x] R4 (approved in chat 2026-09-29, recorded in doc 07 sign-off log) Operator approval of the freeze-v3 text.
 
 ## Track O — ops, CI, hygiene (small, do first)
 
-- [ ] O6 [HUMAN] Rotate every credential shared in chat on 2026-09-28
+- [ ] O6 Rotate every credential shared in chat on 2026-09-28
       (OpenRouter, FRED, BEA, Alpaca paper); re-seed local `.env` only.
 - [x] O4 (hosted run 36470824852 on e833976, all 6 jobs green: kernel, kernel-sanitizer, evidence, plane, stdlib, secrets) S7-C closure: hosted CI green on the head carrying `f0815e7`.
 - [x] O1 (local: test_baseline, test_jev_v4, test_v4 32/32 green; hosted run pending O4) CI: run on every push + `workflow_dispatch`; add `test_baseline`,
@@ -78,6 +78,8 @@ A box is checked only with evidence (commit and test output, or a report path).
 - [ ] A7 M1 vol-target overlay tested on every A-gate survivor.
 - [ ] A8 S5 re-scoped as the `jev_v4` filter gate on surviving sleeves'
       candidate streams, post-cutoff answers only (not a G0 blocker).
+      Shadow logger built 2026-09-29 (`ops/jev_shadow.py`, `test_jev_shadow`,
+      v3 provider, log-only); v4 provider path and enough candidates still open.
 - [ ] A9 S1 closure with ETF/EDGAR universes; PIT S&P-500 limitation recorded.
 
 ## Track K — kernel P3.5 remainder (parallel with A)
@@ -111,7 +113,7 @@ A box is checked only with evidence (commit and test output, or a report path).
   - Open: whether Alpaca accepts a sell or MOC while the stop leg reserves the share, decided by `kernel/broker/live_drill.cpp` in an open session, and the trend-profile switch that depends on it.
 - [x] K6 (`ingest/candidates.{hpp,cpp}`, 17 checks, wire record frozen in doc 04 2b; tailer/stage-manifest feed is runner wiring in K1/G0) `ingest/candidates.cpp`: CID recompute, sleeve approval,
       allowlist, freshness, long-only side policy, adversarial vectors.
-- [x] K7 (`ops/alert_relay.py`, 6 tests; tail+redact+HTTPS POST, no listener, at-least-once; needs ALERT_WEBHOOK_URL at deploy [HUMAN]) Outbound-only alert adapter (no inbound, no commands, redacted).
+- [x] K7 (`ops/alert_relay.py`, 6 tests; tail+redact+HTTPS POST, no listener, at-least-once; needs ALERT_WEBHOOK_URL at deploy  Outbound-only alert adapter (no inbound, no commands, redacted).
 - [x] K8 Live journal growth bound.
   - Done: `JournalLoad` refuses past `JournalCap()` = 64 MiB and the runner halts as for a corrupt file; the daily roll alerts at half the cap.
   - Decision: rows are ~250 bytes, so a year of G3 order rates is far below the cap; rotation with a chain anchor stays a follow-up if the cap ever binds.
@@ -131,12 +133,14 @@ A box is checked only with evidence (commit and test output, or a report path).
   - Done: working buy orders count as exposure and reserved cash (`inflight.log` supplies the reference price; an order the loop did not place halts entries); a working sell blocks a second exit; fractional positions are held as dust and never traded.
   - Done: exit proceeds are booked before the order is sent, keyed by cid and estimated from the live mark +1% (broker cash reconciles the rest next session).
   - Decision: no MOC or timed exits for the passive core (its exits are explicit SELL candidates during the session); early-close days are not modeled (the data-age gate only gets stricter); `ops/deploy/session_calendar.json` covers 2026-2028.
-  - Open: [HUMAN] STAGE signature and approved.json (G0-STAGE) remain.
+  - Open: STAGE signature and approved.json (G0-STAGE) remain.
 - [ ] K-exit P3.5 CLOSED (K1–K7 + K10 green).
 
 ## Track P — research plane (parallel)
 
 Deferred by decision (2026-09-29): no sleeve has passed an A-gate, so there is nothing for a reader tier or a research factory to feed, and P1/P2/P4 need Docker workers and a paid LLM budget to verify. Alpha-first rule (AGENTS 9): revisit when a sleeve reaches B-gate or a new data source justifies it.
+Order (2026-09-29): the paper run and its results choose which strategies
+to keep; this track is then connected to feed those strategies.
 
 - [ ] P1 Reader-tier `extract` (no CodeAgent on untrusted text; capped
       JSON; span verifier); graph g1 → g2 with manifest bump.
@@ -153,18 +157,17 @@ Deferred by decision (2026-09-29): no sleeve has passed an A-gate, so there is n
 
 - [ ] G0a Shadow on live data for every A-gate passer (harness fills,
       `cost_v2`, no broker orders); B-gate per sleeve.
-- [ ] G0-STAGE [HUMAN] Sign the G0 bootstrap STAGE file (doc 10 §10.5).
+- [ ] G0-STAGE Sign the G0 bootstrap STAGE file (doc 10 §10.5).
 - [ ] G0b Broker paper: one champion sleeve through the kernel on Alpaca
       paper [BLOCKED on K-exit + a B-gate pass + G0-STAGE].
 - [ ] G0-ops Daily summary, weekly replay, §6.2a drills on the live loop.
-- [ ] G0-exit 30 clean G0b days + doc 10 §10.2 G0→G1 criteria + [HUMAN]
-      sign-off.
+- [ ] G0-exit 30 clean G0b days + doc 10 §10.2 G0→G1 criteria +       sign-off.
 
 ## Phase 5+ — live stages (not authorized)
 
-- [ ] G1-J [HUMAN] Jurisdiction evidence bundle (doc 10 §10.1a) incl.
+- [ ] G1-J Jurisdiction evidence bundle (doc 10 §10.1a) incl.
       professional written confirmation of the instrument allowlist.
 - [ ] G1-P Port-on-promotion: champion signal in C++ + cross-language
       vectors (doc 04).
-- [ ] G1 [HUMAN] G1_TINY manifest: 1 liquid US ETF, R×0.25, cash, long only.
+- [ ] G1 G1_TINY manifest: 1 liquid US ETF, R×0.25, cash, long only.
 - [ ] G2 / G3 per doc 07 §7.8–7.9.

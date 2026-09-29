@@ -37,3 +37,7 @@
     no status banners, no run-on bullets. Remove dead code and unused helpers
     in the same change. Preserve a file's existing line endings. Clean up
     generated code before committing it, not in a later pass.
+14. Operator approvals are given in chat. Record each one in the doc 07 sign-off
+    log (what, date, "approved in chat"); never ask the operator to edit or sign
+    a document. The STAGE file is the one exception: only
+    `scripts/sign-stage.sh` writes it (rule 4, doc 10 §10.1).

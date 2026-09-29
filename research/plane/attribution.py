@@ -156,10 +156,6 @@ def _hrow(values):
             "utf-8")).hexdigest()
 
 
-def _dxor(a, b):
-    return "%064x" % (int(a, 16) ^ int(b, 16))
-
-
 def _cents(usd):
     """Exact usd-cents fingerprint by truncation, matching the SQL CAST used
     at recompute (same double multiply), so incremental and recomputed sums

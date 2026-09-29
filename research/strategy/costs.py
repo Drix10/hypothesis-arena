@@ -14,8 +14,3 @@ def fill_px(side: str, mid: float, spread_bps: float, mult: float = 1.0) -> floa
     if side == "SELL":
         return mid * (1.0 - bps / 10000.0)
     raise ValueError("side must be BUY/SELL")
-
-
-def roundtrip_cost_bps(spread_bps: float, mult: float = 1.0) -> float:
-    # entry adverse leg + symmetric exit adverse leg (conservative bound)
-    return 2.0 * max(spread_bps * mult, MIN_COST_BPS)

@@ -1,9 +1,0 @@
-[Unit]
-Description=MiroHedge candidate emitter (core passive sleeve)
-
-[Service]
-Type=oneshot
-User=mirotrade
-EnvironmentFile=/etc/mirohedge/env
-WorkingDirectory=/opt/mirohedge
-ExecStart=/usr/bin/python3 ops/emit_candidates.py /var/lib/mirohedge/g0

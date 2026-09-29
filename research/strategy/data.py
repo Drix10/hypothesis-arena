@@ -17,13 +17,3 @@ class Bar:
     c: float
     dollar_volume: float = 0.0   # equities liquidity filter; 0 = unknown
     spread_bps: float = 0.0      # entry spread filter; 0 = unknown
-
-
-@dataclass(frozen=True)
-class DatasetManifest:
-    source: str
-    time_range: str
-    schema: str
-    retrieval_date: str
-    content_hash: str
-    universe_artifact_hash: str

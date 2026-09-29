@@ -102,6 +102,8 @@ jobs:
         run: PYTHONWARNINGS=error python3 research/tests/test_baseline.py
       - name: strategy JEV v4 interop (stdlib only)
         run: python3 research/tests/test_jev_v4.py
+      - name: JEV shadow sidecar (stdlib only)
+        run: python3 research/tests/test_jev_shadow.py
       - name: strategy candidate contract (pinned pytest)
         run: |
           python3 -m pip install -r research/strategy/requirements.txt

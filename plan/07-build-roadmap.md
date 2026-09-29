@@ -8,7 +8,7 @@ freeze-v2 ledger is archived verbatim in `TODO-ARCHIVE-2026-09-28.md`.
 
 | Area | State |
 |---|---|
-| Phase 0 spec | Freeze v2 signed 2026-09-18. **Freeze v3 rebaseline** written 2026-09-28 under operator instruction; human signature of the final text pending (sign-off log). |
+| Phase 0 spec | Freeze v2 signed 2026-09-18. **Freeze v3 rebaseline** written 2026-09-28 under operator instruction; approved by the operator in chat 2026-09-29 (sign-off log). |
 | Phase 1 collector | Built and soaked (133 cycles); §2.7-equivalent boxes in doc 09 §9.4 open. |
 | Phase 2 JEV sidecar | ACCEPTED/FROZEN `50ea369`; question_set_version = v3 frozen; v4 released `da61daa`. |
 | Phase 2.5 research plane | Six-node graph + five Tier-A adapters + seam built and hosted-green; doc 08 §8.6 exit open. |
@@ -27,7 +27,7 @@ passed its B-gate AND P3.5 closed.
 - [x] Full critique recorded (`reviews/2026-09-28-v3-rebaseline-critique.md`).
 - [x] Docs 00–13 + manifest rewritten for freeze v3; implementation
       records moved verbatim to `appendix/`.
-- [ ] [HUMAN] Operator signs the freeze-v3 text (sign-off log below).
+- [x] Operator approved the freeze-v3 text in chat, 2026-09-29 (sign-off log below).
 
 ## 7.2 Track A — Alpha (critical path)
 
@@ -188,11 +188,16 @@ passed its B-gate AND P3.5 closed.
 
 Each entry: phase or stage, name, date, manifest/attest hash, window judged.
 
+Approvals are given by the operator in chat. The agent records each one here
+(what, date, "approved in chat") and never asks the operator to edit or sign a
+document. The STAGE file is separate: only `scripts/sign-stage.sh` writes it
+(doc 10 §10.1).
+
 Promotion sign-off template (copy per promotion; all lines required):
 
 ```
 PROMOTION: <G0→G1 | G1→G2 | G2→G3 | sleeve <id> to champion | filter jev_v4 on <sleeve>>
-DECIDED BY: <human name>   DATE: <ISO8601>   WINDOW JUDGED: <dates>
+DECIDED BY: <operator, approved in chat>   DATE: <ISO8601>   WINDOW JUDGED: <dates>
 CRITERIA (doc 10 §10.2 / doc 11 §11.3 — every box true, evidence linked):
   [ ] sleeve gate passed (A-gate + B-gate reports, trial-ledger ids)
   [ ] clean-day count  [ ] zero R-violations  [ ] determinism green
@@ -207,4 +212,5 @@ MANIFEST HASH: <sha256>
 
 - Phase 0 freeze | Drix10 | 2026-09-18 | plan frozen; G0 STAGE + keys at build; Phase 1 unblocked
 - Phase 0 freeze v2 signed off. Bucket 1 complete; JEV v3 semantics frozen; X removed from production v1; Phase 1 unblocked. | Drix10 | 2026-09-18
-- Freeze v3 rebaseline authorized by operator instruction ("full permission to rewrite plans and code; plan first") | 2026-09-28 | text committed; [HUMAN] signature of the final text pending
+- Freeze v3 rebaseline authorized by operator instruction ("full permission to rewrite plans and code; plan first") | 2026-09-28 | text committed
+- Freeze v3 text approved | operator, in chat | 2026-09-29
