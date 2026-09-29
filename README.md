@@ -79,20 +79,21 @@ Three principles:
 
 ### Progress
 
-Roadmap checklist (`TODO.md`): 20 of 55 boxes done.
+Roadmap checklist (`TODO.md`): 22 of 57 boxes done; several open kernel boxes (K1, K2, K3, K13) are largely built and listed with what remains.
 
 | Track | Done | Open |
 |---|---|---|
 | Rebaseline (docs) | 3 | 1 (human signature) |
-| Ops, CI, hygiene | 5 | 1 (credential rotation, human) |
-| Alpha (harness + sleeves) | 9 | 9 (five sleeves, overlay, S5 re-scope, S1) |
-| Kernel P3.5 remainder | 3 | 10 (transport, always-take, snapshot v2, OTO/MOC, soak, drills) |
+| Ops, CI, hygiene | 5 | 2 (credential rotation; frozen-collector fixes) |
+| Alpha (harness + sleeves) | 10 | 8 (sleeves that failed are recorded, the rest untested) |
+| Kernel P3.5 remainder | 4 | 10 (Snapshot v2, OTO/MOC, journal bound, soak, drills on the real transport, loop remainder) |
 | Research plane | 0 | 5 |
 | Paper trading (G0) | 0 | 5 |
 
-Critical path to paper trading: a sleeve that passes its A-gate on more
-than one history source, broker transport with a paper smoke test, then
-60 shadow sessions, 30 clean broker-paper days and two human signatures.
+Critical path to paper trading: the loop and transport exist and are
+verified read-only against the paper account; what remains is the human
+STAGE sign-off and a sleeve that passes its A-gate (none has). The loop can
+run the non-alpha core sleeve for operations validation (`ops/deploy/`).
 
 ### Quality snapshot
 
@@ -102,9 +103,10 @@ than one history source, broker transport with a paper smoke test, then
   defects: a rotation bug that left portfolios in cash, a fail-open
   Sharpe gate that scored T-bill yield as skill, a non-atomic ledger
   check, unescaped alert lines, an overflow in the R18 sum.
-- Known gaps: one free data source with ten years of history; R18/R19 are
-  off until the stage loader enables them (K12); the runner is 4.4k lines
-  in one file; nothing has been exercised against the broker.
+- Known gaps: no sleeve passes its gate (`plan/reviews/2026-09-29-alpha-results.md`);
+  one free price source with ten years of history; the runner is 4.4k lines
+  in one file; order flow has been exercised against the paper venue by a
+  smoke test, not yet by the loop (needs the human STAGE).
 
 Paper only until a sleeve passes its gates, 30 clean broker-paper days,
 and a human signature. Promotion of anything (sleeve, filter, stage) needs

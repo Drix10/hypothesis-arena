@@ -98,7 +98,7 @@ A box is checked only with evidence (commit + test output / report path).
 - [ ] K10 H1 drills on the real transport, every doc 06 §6.2a row
       [BLOCKED on K1].
 - [x] K11 (Alert() now escapes and bounds code/detail, ASCII-only, tested in test_runner) Found in K7: `runner/store.cpp Alert()` does not JSON-escape `code`/`detail` (a quote or backslash yields an invalid alerts.jsonl line; the relay skips and counts such lines, so nothing crashes, but the alert is lost). Add an escape helper + test.
-- [ ] K12 Wire `v3_constraints` (R18/R19) from the stage manifest: it defaults off so pre-v3 verdicts stay bit-identical, which means R18/R19 are inert until the stage loader sets it; required before G0b.
+- [x] K12 (`Decide` always sets `v3_constraints`; `approved.json` loader carries the sleeve windows and allowlist; the loop refuses to start without both and without a human STAGE) Wire R18/R19 from the stage manifest
 - [ ] K13 Loop glue for G0b. DONE: R6/R7 measurement, ET calendar + expected-bar count, bounded bars scanner with paging, calendar/approved-sleeve loaders, `PaperLoop` (account -> candidates -> Decide -> SubmitIntent -> Cycle, offsets + decisions.jsonl audit), `g0_paper_loop` driver; verified live read-only (account, positions, clock, 581 VTI bars over 4 pages, R6/R7 available). Exit path: SELL-to-close candidate for a held symbol -> full-position EXIT intent through the veto's exit bypass (DONE); OPEN: MOC / time exit sequencing, fills -> settlement book persistence, R3 churn counters from the journal, early-close days, plumbing sleeve emitting c1 candidates, kill/HALT inputs into the snapshot, [HUMAN] STAGE signature + approved.json (G0-STAGE).
 - [ ] K-exit P3.5 CLOSED (K1–K7 + K10 green).
 
