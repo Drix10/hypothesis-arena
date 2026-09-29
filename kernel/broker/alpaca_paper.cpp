@@ -6,6 +6,8 @@
 // JSON library in the kernel).
 #include "alpaca_paper.hpp"
 
+#include <cstring>
+
 namespace jev {
 namespace broker {
 
@@ -364,6 +366,67 @@ bool LegsProtected(const char* body) {
     return Contains(body, "\"order_class\":\"bracket\"") ||
            Contains(body, "\"order_class\":\"oco\"");
 }
+
+// OTO stop-only proof: order_class oto and a legs array holding exactly one
+// leg object, stop-shaped ("stop" or "stop_limit", never a limit leg) with
+// its own id. String-aware, bounded.
+bool OtoStopProtected(const char* body) {
+    if (!body || !Contains(body, "\"order_class\":\"oto\"")) return false;
+    const char* key = "\"legs\":";
+    const char* arr = nullptr;
+    for (const char* p = body; *p && !arr; ++p) {
+        const char* a = p;
+        const char* b = key;
+        while (*a && *b && *a == *b) {
+            ++a;
+            ++b;
+        }
+        if (!*b) arr = a;
+    }
+    if (!arr) return false;
+    while (*arr == ' ' || *arr == '\t' || *arr == '\n' || *arr == '\r') ++arr;
+    if (*arr != '[') return false;
+    int depth = 0, legs = 0;
+    bool in_str = false;
+    const char* leg = nullptr;
+    const char* end = nullptr;
+    for (const char* p = arr; *p; ++p) {
+        if (in_str) {
+            if (*p == '\\' && p[1]) ++p;
+            else if (*p == '"') in_str = false;
+            continue;
+        }
+        if (*p == '"') in_str = true;
+        else if (*p == '[' || *p == '{') {
+            if (*p == '{' && depth == 1) {
+                if (++legs > 1) return false;
+                leg = p;
+            }
+            ++depth;
+        } else if (*p == ']' || *p == '}') {
+            --depth;
+            if (depth == 0) {
+                end = p;
+                break;
+            }
+        }
+    }
+    if (!end || legs != 1 || !leg) return false;
+    bool has_id = false, stop = false, lim = false;
+    for (const char* p = leg; p < end; ++p) {
+        if (p[0] != '"') continue;
+        if (!std::strncmp(p, "\"id\":\"", 6) && p[6] != '"') has_id = true;
+        if (!std::strncmp(p, "\"type\":\"stop\"", 13) ||
+            !std::strncmp(p, "\"type\":\"stop_limit\"", 19))
+            stop = true;
+        if (!std::strncmp(p, "\"type\":\"limit\"", 14)) lim = true;
+    }
+    return has_id && stop && !lim;
+}
+
+bool ShapeProtected(const char* body) {
+    return LegsProtected(body) || OtoStopProtected(body);
+}
 }  // namespace
 
 OrderAck AlpacaPaperAdapter::SubmitProtected(
@@ -372,8 +435,9 @@ OrderAck AlpacaPaperAdapter::SubmitProtected(
     ack.reason[0] = '\0';
     // Adapter-side refusal precedes any transport touch: non-positive
     // size/stop/tp never reaches the broker (behind the veto and router).
-    if (o.qty_shares <= 0 || o.stop_cents <= 0 || o.tp_cents <= 0 ||
-        !transport_) {
+    bool oto = o.protection == Protection::OTO_STOP;
+    if (o.qty_shares <= 0 || o.stop_cents <= 0 ||
+        (!oto && o.tp_cents <= 0) || !transport_) {
         const char* r =
             !transport_ ? "transport-unwired" : "bad-spec";
         CopyField(r, ack.reason, sizeof(ack.reason));
@@ -383,18 +447,28 @@ OrderAck AlpacaPaperAdapter::SubmitProtected(
     FormatCents(tp, sizeof(tp), o.tp_cents);
     FormatCents(sl, sizeof(sl), o.stop_cents);
     char body[1024];
-    // One bracket order: entry + TP leg + SL leg. The ack must confirm all
-    // legs or protection is missing.
-    int w = std::snprintf(
-        body, sizeof(body),
-        "{\"symbol\":\"%.15s\",\"qty\":\"%lld\",\"side\":\"%s\","
-        "\"type\":\"market\",\"time_in_force\":\"day\","
-        "\"client_order_id\":\"%.64s\",\"order_class\":\"bracket\","
-        "\"take_profit\":{\"limit_price\":\"%s\"},"
-        "\"stop_loss\":{\"stop_price\":\"%s\"}}",
-        o.symbol, (long long)o.qty_shares,
-        o.side == OrderSide::BUY ? "buy" : "sell", o.client_order_id,
-        tp, sl);
+    // One bracket order (entry + TP leg + SL leg) or one OTO order (entry +
+    // stop leg). The ack must prove every leg or protection is missing.
+    int w = oto
+        ? std::snprintf(
+              body, sizeof(body),
+              "{\"symbol\":\"%.15s\",\"qty\":\"%lld\",\"side\":\"%s\","
+              "\"type\":\"market\",\"time_in_force\":\"%s\","
+              "\"client_order_id\":\"%.64s\",\"order_class\":\"oto\","
+              "\"stop_loss\":{\"stop_price\":\"%s\"}}",
+              o.symbol, (long long)o.qty_shares,
+              o.side == OrderSide::BUY ? "buy" : "sell",
+              o.gtc ? "gtc" : "day", o.client_order_id, sl)
+        : std::snprintf(
+              body, sizeof(body),
+              "{\"symbol\":\"%.15s\",\"qty\":\"%lld\",\"side\":\"%s\","
+              "\"type\":\"market\",\"time_in_force\":\"%s\","
+              "\"client_order_id\":\"%.64s\",\"order_class\":\"bracket\","
+              "\"take_profit\":{\"limit_price\":\"%s\"},"
+              "\"stop_loss\":{\"stop_price\":\"%s\"}}",
+              o.symbol, (long long)o.qty_shares,
+              o.side == OrderSide::BUY ? "buy" : "sell",
+              o.gtc ? "gtc" : "day", o.client_order_id, tp, sl);
     if (w <= 0 || w >= static_cast<int>(sizeof(body))) {
         CopyField("body-overflow", ack.reason, sizeof(ack.reason));
         return ack;
@@ -464,7 +538,7 @@ OrderAck AlpacaPaperAdapter::SubmitProtected(
     ack.filled_qty = pfq;
     // Protection is accepted only when the reply proves every leg via the
     // strict legs rule (P0-3).
-    ack.protection_accepted = ack.accepted && LegsProtected(r.body);
+    ack.protection_accepted = ack.accepted && ShapeProtected(r.body);
     if (ack.accepted && !ack.protection_accepted)
         CopyField("protection-missing", ack.reason,
                   sizeof(ack.reason));
@@ -534,7 +608,7 @@ OrderQuery AlpacaPaperAdapter::QueryOnce(
         CopyField(qs, q.status_raw, sizeof(q.status_raw));
         q.close_state = ClassifyStatus(qs);
     }
-    q.protection_active = LegsProtected(r.body);
+    q.protection_active = ShapeProtected(r.body);
     q.bracket_class = BracketHeld(r.body);
     return q;
 }
@@ -578,6 +652,21 @@ CloseResult AlpacaPaperAdapter::MarketClose(const char* symbol,
                                             std::int64_t qty_shares,
                                             OrderSide side,
                                             const char client_order_id[65]) {
+    return PostClose(symbol, qty_shares, side, client_order_id, "day");
+}
+
+CloseResult AlpacaPaperAdapter::CloseAtClose(const char* symbol,
+                                             std::int64_t qty_shares,
+                                             OrderSide side,
+                                             const char client_order_id[65]) {
+    return PostClose(symbol, qty_shares, side, client_order_id, "cls");
+}
+
+CloseResult AlpacaPaperAdapter::PostClose(const char* symbol,
+                                          std::int64_t qty_shares,
+                                          OrderSide side,
+                                          const char client_order_id[65],
+                                          const char* tif) {
     CloseResult c;
     if (!transport_ || !symbol || !symbol[0] || qty_shares <= 0 ||
         !client_order_id || !client_order_id[0])
@@ -588,10 +677,10 @@ CloseResult AlpacaPaperAdapter::MarketClose(const char* symbol,
     int w = std::snprintf(
         body, sizeof(body),
         "{\"symbol\":\"%.15s\",\"qty\":\"%lld\",\"side\":\"%s\","
-        "\"type\":\"market\",\"time_in_force\":\"day\","
+        "\"type\":\"market\",\"time_in_force\":\"%s\","
         "\"client_order_id\":\"%.64s\"}",
         symbol, (long long)qty_shares,
-        side == OrderSide::BUY ? "buy" : "sell", client_order_id);
+        side == OrderSide::BUY ? "buy" : "sell", tif, client_order_id);
     if (w <= 0 || w >= static_cast<int>(sizeof(body))) return c;
     HttpRequest req;
     req.method = "POST";
@@ -682,10 +771,31 @@ bool AlpacaPaperAdapter::EstablishProtection(
     // invalid): TP limit at tp, stop leg as stop-limit with limit == stop
     // (integer cents, no slippage allowance). A long's protection sells with
     // tp > stop; a short's buys with stop > tp. True = both legs acked.
-    if (!transport_ || o.qty_shares <= 0 || o.stop_cents <= 0 ||
-        o.tp_cents <= 0)
-        return false;
+    if (!transport_ || o.qty_shares <= 0 || o.stop_cents <= 0) return false;
     bool is_long = (o.side == OrderSide::BUY);
+    if (o.protection == Protection::OTO_STOP) {
+        // Stop-only shape: a plain stop order opposing the position.
+        char sl1[32];
+        FormatCents(sl1, sizeof(sl1), o.stop_cents);
+        char b1[512];
+        int w1 = std::snprintf(
+            b1, sizeof(b1),
+            "{\"symbol\":\"%.15s\",\"qty\":\"%lld\",\"side\":\"%s\","
+            "\"type\":\"stop\",\"time_in_force\":\"%s\","
+            "\"client_order_id\":\"%.64s\",\"stop_price\":\"%s\"}",
+            o.symbol, (long long)o.qty_shares, is_long ? "sell" : "buy",
+            o.gtc ? "gtc" : "day", o.client_order_id, sl1);
+        if (w1 <= 0 || w1 >= static_cast<int>(sizeof(b1))) return false;
+        HttpRequest rq;
+        rq.method = "POST";
+        rq.path = "/v2/orders";
+        rq.body = b1;
+        HttpResult rr = transport_(rq);
+        return rr.status >= 200 && rr.status < 300 &&
+               Contains(rr.body, "\"type\":\"stop\"") &&
+               Contains(rr.body, "\"id\"");
+    }
+    if (o.tp_cents <= 0) return false;
     if (is_long && !(o.tp_cents > o.stop_cents)) return false;
     if (!is_long && !(o.stop_cents > o.tp_cents)) return false;
     char tp[32], sl[32];

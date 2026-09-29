@@ -599,6 +599,33 @@ static std::string EmgRow(std::uint64_t seq, long long ts,
 
 int main() {
     using jev::runner::G0Runner;
+    // K8: the live journal is size-bounded and fails closed past the cap.
+    {
+        const char* path = "jcap_tmp.jsonl";
+        std::remove(path);
+        std::string prev = jev::journal::GenesisPrev();
+        for (int i = 0; i < 20; ++i) {
+            jev::journal::Row r;
+            std::string pay(64, 'a');
+            Check(jev::journal::FormatRow(i, 1000 + i, "intent", "x1",
+                                          pay.c_str(), prev.c_str(), &r),
+                  "jcap-format");
+            Check(jev::runner::JournalAppend(path, r), "jcap-append");
+            prev = r.row_hash;
+        }
+        std::vector<jev::journal::Row> rows;
+        Check(jev::runner::JournalLoad(path, &rows) && rows.size() == 20,
+              "jcap-loads-under-cap");
+        std::size_t was = jev::runner::JournalCap();
+        jev::runner::SetJournalCap(1024);
+        Check(!jev::runner::JournalLoad(path, &rows) && rows.empty(),
+              "jcap-refuses-over-cap");
+        jev::runner::SetJournalCap(was);
+        Check(jev::runner::FileSizeBytes(path) > 1024 &&
+                  jev::runner::FileSizeBytes("no_such_file") < 0,
+              "jcap-size");
+        std::remove(path);
+    }
     // 0. Event seam units: SSE framing + classification + shaping.
     {
         jev::runner::SseParser p;

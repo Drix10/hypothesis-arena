@@ -42,10 +42,12 @@ enum class PathKind { ABSENT, REGULAR, CORRUPT };
 PathKind StatPath(const char* path);
 // Bounded variant: refuses (false, out cleared) when the file exceeds
 // max_bytes, for incident-scoped state files that are tiny by construction
-// (hard-chain.txt). The live journal keeps unbounded reads.
+// (hard-chain.txt). The live journal is bounded separately (JournalCap).
 bool ReadLinesCapped(const char* path, std::vector<std::string>* out,
                      std::size_t max_bytes);
 bool FileExists(const char* path);
+// Size in bytes; -1 when unreadable.
+long long FileSizeBytes(const char* path);
 
 // ---- journal file ----
 // One canonical row per line:
@@ -53,6 +55,14 @@ bool FileExists(const char* path);
 // Fields carry no pipes (intent ids [A-Za-z0-9_.-], lowercase hex hashes,
 // frozen kinds).
 bool JournalAppend(const char* path, const journal::Row& r);
+// A journal larger than JournalCap() bytes refuses to load, which the runner
+// treats like a corrupt file (halt). Rows are ~250 bytes and a trade writes a
+// handful, so the default 64 MiB covers decades at G3 order rates; the daily
+// roll alerts at half the cap. Rotation with a chain anchor is the follow-up
+// if that ever tightens. SetJournalCap exists for tests.
+constexpr std::size_t kJournalDefaultCap = 64u << 20;
+std::size_t JournalCap();
+void SetJournalCap(std::size_t bytes);
 bool JournalLoad(const char* path, std::vector<journal::Row>* out);
 // Strict re-parse of one canonical journal line; malformed numbers fail.
 bool ParseRowLine(const std::string& ln, journal::Row* out);

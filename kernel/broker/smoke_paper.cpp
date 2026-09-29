@@ -1,5 +1,5 @@
 // Paper-venue smoke: account, protected bracket submit, query, cancel,
-// cancel confirmation, bad-credential class. Needs ALPACA_KEY_ID/ALPACA_SECRET.
+// cancel confirmation, OTO stop-only, MOC order, bad-credential class. Needs ALPACA_KEY_ID/ALPACA_SECRET.
 // Places one 1-share SPY bracket and cancels it; never run against a live
 // account (the transport only ever talks to the paper host).
 #include <cstdio>
@@ -56,6 +56,36 @@ int main() {
         cancelled = ad.QueryOnce(o.client_order_id).cancelled;
     }
     Step("cancel-observed", cancelled);
+
+    // OTO stop-only entry: one stop leg proves protection.
+    std::string cid2 = jev::Sha256Hex(seed + "|oto");
+    ProtectedOrder t = o;
+    t.protection = Protection::OTO_STOP;
+    t.tp_cents = 0;
+    t.gtc = false;
+    std::strcpy(t.client_order_id, cid2.c_str());
+    OrderAck oa = ad.SubmitProtected(t);
+    Step("oto-accepted-with-stop-leg",
+         oa.transport_ok && oa.accepted && oa.protection_accepted);
+    Step("oto-query-protected", ad.QueryOnce(t.client_order_id).protection_active);
+    CancelResult oc = ad.Cancel(oa.broker_order_id);
+    Step("oto-cancel-accepted", oc.accepted && !oc.failed);
+    bool ocancelled = false;
+    for (int i = 0; i < 10 && !ocancelled; ++i) {
+        sleep(1);
+        ocancelled = ad.QueryOnce(t.client_order_id).cancelled;
+    }
+    Step("oto-cancel-observed", ocancelled);
+
+    // MOC order shape (a buy: nothing is held to sell), then cancelled.
+    std::string cid3 = jev::Sha256Hex(seed + "|moc");
+    CloseResult mc = ad.CloseAtClose("SPY", 1, OrderSide::BUY, cid3.c_str());
+    Step("moc-accepted-pending",
+         mc.transport_ok && mc.state == CloseState::PENDING && mc.broker_order_id[0]);
+    if (mc.broker_order_id[0]) {
+        CancelResult mcc = ad.Cancel(mc.broker_order_id);
+        Step("moc-cancel-accepted", mcc.accepted && !mcc.failed);
+    }
 
     setenv("ALPACA_SECRET", "not-a-real-secret", 1);
     HttpResult bad = CurlTransport(acct);

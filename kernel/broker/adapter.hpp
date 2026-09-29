@@ -21,6 +21,11 @@ enum class Venue : std::uint8_t {
 
 enum class OrderSide : std::uint8_t { BUY = 0, SELL = 1 };
 
+// Protection attached to an entry: a bracket (TP + stop, exit_profile_v1) or
+// a stop only (OTO, exit_intraday_v1 / exit_event_v1 / trend sleeves whose
+// take-profit is a timed or signal exit).
+enum class Protection : std::uint8_t { BRACKET = 0, OTO_STOP = 1 };
+
 // Protected-entry specification. Stop and TP are mandatory (doc 05 5.2: the
 // veto rejects an intent without a stop upstream; the adapter also refuses
 // non-positive stop/tp). Fixed-size: the order core is allocation-free.
@@ -32,6 +37,8 @@ struct ProtectedOrder {
     std::int64_t tp_cents = 0;    // <= 0 refused
     char client_order_id[65];     // hex64, doc 06 6.1 recipe
     char intent_id[65];
+    Protection protection = Protection::BRACKET;  // OTO_STOP ignores tp_cents
+    bool gtc = false;  // entry (and so its legs) good-till-cancelled
 };
 
 // Close-order lifecycle (Alpaca order states); a 2xx + UUID only proves the

@@ -112,6 +112,8 @@ g++ $FLAGS -o test_measure risk/test_measure.cpp risk/measure.cpp
 ./test_measure
 g++ $FLAGS -o test_decide exec/test_decide.cpp exec/decide.cpp risk/veto.cpp risk/sizing.cpp ingest/candidates.cpp
 ./test_decide
+g++ $FLAGS -o test_moc_plan exec/test_moc_plan.cpp exec/moc_plan.cpp
+./test_moc_plan
 g++ $FLAGS -o test_account runner/test_account.cpp runner/account.cpp
 ./test_account fixtures
 g++ $FLAGS -o test_settle runner/test_settle.cpp runner/settle.cpp runner/calendar.cpp
@@ -185,6 +187,10 @@ if [ -n "${WITH_CURL:-}" ]; then
 g++ $FLAGS -DG0_WITH_CURL -o g0_runner_paper runner/main.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp broker/adapter.cpp broker/alpaca_paper.cpp broker/http_curl.cpp log/journal.cpp kill/switch.cpp -lcurl
 g++ $FLAGS -DG0_WITH_CURL -o g0_paper_loop runner/paper_loop_main.cpp runner/paper_loop.cpp runner/bars.cpp runner/calendar.cpp runner/account.cpp runner/settle.cpp runner/approved.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp exec/decide.cpp risk/veto.cpp risk/sizing.cpp risk/measure.cpp ingest/candidates.cpp broker/adapter.cpp broker/alpaca_paper.cpp broker/http_curl.cpp log/journal.cpp kill/switch.cpp -lcurl
 g++ $FLAGS -o smoke_paper broker/smoke_paper.cpp broker/http_curl.cpp broker/alpaca_paper.cpp broker/adapter.cpp -lcurl
+g++ $FLAGS -DG0_TEST_BASE -o test_transport_faults broker/test_transport_faults.cpp broker/http_curl.cpp broker/alpaca_paper.cpp broker/adapter.cpp -lcurl
+python3 tests/transport_faults.py ./test_transport_faults
+g++ $FLAGS -DG0_WITH_CURL -DG0_TEST_BASE -o g0_paper_loop_mock runner/paper_loop_main.cpp runner/paper_loop.cpp runner/bars.cpp runner/calendar.cpp runner/account.cpp runner/settle.cpp runner/approved.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp exec/decide.cpp risk/veto.cpp risk/sizing.cpp risk/measure.cpp ingest/candidates.cpp broker/adapter.cpp broker/alpaca_paper.cpp broker/http_curl.cpp log/journal.cpp kill/switch.cpp -lcurl
+python3 tests/e2e_mock_venue.py ./g0_paper_loop_mock
 fi
 # H1 zero-malloc contract: the router step core allocates nothing
 # (identity minting at IDLE is documented cycle-path and excluded

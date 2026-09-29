@@ -275,6 +275,13 @@ PathKind StatPath(const char* path) {
                                : PathKind::CORRUPT;
 #endif
 }
+long long FileSizeBytes(const char* path) {
+    FILE* f = std::fopen(path, "rb");
+    if (!f) return -1;
+    long long n = std::fseek(f, 0, SEEK_END) == 0 ? std::ftell(f) : -1;
+    std::fclose(f);
+    return n;
+}
 bool FileExists(const char* path) {
     // Regular file only: a directory in place of a state file is corruption,
     // not "exists" (POSIX opens directories; stat converges the platforms).
@@ -308,6 +315,10 @@ bool JournalAppend(const char* path, const journal::Row& r) {
     return AppendLine(path, ln);
 }
 
+static std::size_t g_journal_cap = kJournalDefaultCap;
+std::size_t JournalCap() { return g_journal_cap; }
+void SetJournalCap(std::size_t bytes) { g_journal_cap = bytes; }
+
 bool JournalLoad(const char* path, std::vector<journal::Row>* out) {
     std::vector<std::string> lns;
     if (!out) return false;
@@ -316,7 +327,7 @@ bool JournalLoad(const char* path, std::vector<journal::Row>* out) {
     if (k == PathKind::ABSENT) return true;  // no file = clean genesis
     if (k != PathKind::REGULAR)
         return false;  // corrupt node: never valid-empty
-    if (!ReadLines(path, &lns)) return false;
+    if (!ReadLinesCapped(path, &lns, g_journal_cap)) return false;
     for (std::size_t i = 0; i < lns.size(); ++i) {
         if (lns[i].empty()) continue;
         journal::Row r;

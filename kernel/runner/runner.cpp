@@ -2595,6 +2595,12 @@ bool G0Runner::DailyOps(long long now_ns) {
     // retention unit.
     CopyFileBytes(P("journal.jsonl").c_str(),
              (cfg_.dir + "/journal-" + stamp + ".jsonl").c_str());
+    if (StatPath(P("journal.jsonl").c_str()) == PathKind::REGULAR) {
+        long long sz = FileSizeBytes(P("journal.jsonl").c_str());
+        if (sz > 0 && (unsigned long long)sz > JournalCap() / 2)
+            Alert(P("alerts.jsonl").c_str(), "OPS", "journal-half-cap", stamp,
+                  now_ns);
+    }
     int kept = 0, pruned = 0;
     if (!RetainJournals(cfg_.dir.c_str(), day, &kept, &pruned))
         Alert(P("alerts.jsonl").c_str(), "OPS", "retention-failed",

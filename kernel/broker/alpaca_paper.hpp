@@ -51,8 +51,15 @@ class AlpacaPaperAdapter : public IAdapter {
                             OrderSide side,
                             const char client_order_id[65]) override;
     bool EstablishProtection(const ProtectedOrder& o) override;
+    // Market-on-close order (time_in_force cls); same lifecycle result as
+    // MarketClose. Submitted before the venue's MOC cutoff by the caller.
+    CloseResult CloseAtClose(const char* symbol, std::int64_t qty_shares,
+                             OrderSide side, const char client_order_id[65]);
 
    private:
+    CloseResult PostClose(const char* symbol, std::int64_t qty_shares,
+                          OrderSide side, const char client_order_id[65],
+                          const char* tif);
     HttpTransport transport_;
 };
 

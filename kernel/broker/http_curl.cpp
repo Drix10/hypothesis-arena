@@ -75,6 +75,13 @@ bool Perform(const char* base, const char* prefix, const char* method,
     CURL* h = curl_easy_init();
     if (!h) return false;
 
+    long total_ms = kTotalMs;
+#ifdef G0_TEST_BASE
+    // Fault-injection build only: point at a local mock and shorten timeouts.
+    if (const char* tb = std::getenv("G0_TEST_BASE")) base = tb;
+    if (const char* tt = std::getenv("G0_TEST_TIMEOUT_MS"))
+        total_ms = std::atol(tt);
+#endif
     std::string url = std::string(base) + path;
     std::string k = std::string("APCA-API-KEY-ID: ") + key;
     std::string s = std::string("APCA-API-SECRET-KEY: ") + sec;
@@ -95,9 +102,13 @@ bool Perform(const char* base, const char* prefix, const char* method,
     curl_easy_setopt(h, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(h, CURLOPT_SSL_VERIFYHOST, 2L);
     curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT_MS, kConnectMs);
-    curl_easy_setopt(h, CURLOPT_TIMEOUT_MS, kTotalMs);
+    curl_easy_setopt(h, CURLOPT_TIMEOUT_MS, total_ms);
     curl_easy_setopt(h, CURLOPT_NOSIGNAL, 1L);
+#ifdef G0_TEST_BASE
+    curl_easy_setopt(h, CURLOPT_PROTOCOLS_STR, "http,https");
+#else
     curl_easy_setopt(h, CURLOPT_PROTOCOLS_STR, "https");
+#endif
 
     CURLcode rc = curl_easy_perform(h);
     long code = 0;
