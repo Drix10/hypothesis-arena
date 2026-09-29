@@ -22,8 +22,12 @@ MocAction PlanMoc(const MocInput& in) {
         case MocState::REJECTED:
             return MocAction::KEEP_PROTECTED;
         case MocState::NOT_SENT:
-            return in.now_s < in.moc_cutoff_s ? MocAction::SUBMIT_MOC
-                                              : MocAction::KEEP_PROTECTED;
+            // Check cutoff first: if missed, stay protected (don't try MOC).
+            if (in.now_s >= in.moc_cutoff_s) return MocAction::KEEP_PROTECTED;
+            // Alpaca rejects MOC while stop is live (K5 live finding 2026-09-29).
+            // Cancel stop first, then try MOC in next cycle.
+            if (in.stop == StopState::LIVE) return MocAction::CANCEL_STOP;
+            return MocAction::SUBMIT_MOC;
         default:
             return MocAction::RECONCILE;
     }
