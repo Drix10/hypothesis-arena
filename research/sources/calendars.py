@@ -1,14 +1,9 @@
 """Fail-closed session calendar gate (doc 09 sec. 9.4, stdlib only).
 
-Missing or corrupt calendar -> CalendarMissing -> harvest yields ZERO
-session-gated records and marks the source stale. This is the R9
-fail-closed rule; "no calendar" is never "assume open".
-
-Explicit scope: this is a configuration-PRESENCE gate only. It does not
-evaluate whether a session is open/closed for a timestamp (holidays,
-early closes, overnight windows) — that evaluation lives in the ctx
-session logic downstream, which consumes this calendar. Do not describe
-this module as a complete session implementation.
+A missing or corrupt calendar raises CalendarMissing: harvest yields no
+session-gated records and marks the source stale (R9). This only checks that
+the calendar is present; session open/closed evaluation lives in the ctx
+session logic downstream.
 """
 
 

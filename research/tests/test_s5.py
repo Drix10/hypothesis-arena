@@ -1627,7 +1627,7 @@ def test_43_missing_mark_fails_closed():
 
 
 def _ns_shift(items, base_ns):
-    """Shift a synth stream to ns-scale around base_ns (finding-8 rig).
+    """Shift a synth stream to ns-scale around base_ns.
 
     All timestamps (snapshot, horizon, bars_after, market epoch) move
     by the same offset; relative structure (and hence economics) is
@@ -1701,11 +1701,9 @@ def test_44_ns_boundary_branches():
         _t, curve, rets, _dd = s5.portfolio_curve(
             ev[s5.VARIANTS[0]], "filtered", 100000.0, sess)
         assert len(curve) == 2 and len(rets) == 1
-    # NOTE: takes legitimately differ across branches (CIDs bind wall
-    # time, stub answers derive from CIDs) -- economics are branch-local.
-    # The proven invariant is structural: the partial stub stays in
-    # the curve (one return observation) in BOTH branches while Sharpe
-    # drops it only in the mid-session branch.
+    # Takes differ across branches (CIDs bind wall time, stub answers derive
+    # from CIDs). The invariant is structural: the partial stub stays in the
+    # curve in both branches and Sharpe drops it only in the mid-session one.
     assert mid["session_proof"]["session_dates"] ==         pre["session_proof"]["session_dates"]
     for v in s5.VARIANTS:
         mv, pv = mid["variants"][v], pre["variants"][v]

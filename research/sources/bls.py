@@ -1,37 +1,17 @@
-"""Production BLS Employment Situation source adapter (doc 09 Tier A).
+"""BLS Employment Situation source adapter (doc 09 Tier A): the single RSS
+feed www.bls.gov/feed/empsit.rss. No key; UA carries MIRO_CONTACT when set.
 
-Locked scope: www.bls.gov/feed/empsit.rss (single bounded RSS feed)
-only. No key, no crawl, no mirror. Headline+link records only: values
-unresolved at ingestion (values_pending downstream), no direction.
-UA carries MIRO_CONTACT when configured; the source does not require
-it, so absence warns instead of blocking.
+Headline+link records only (values_pending downstream). pubDate is
+regex-gated to the full 'Day, DD Mon YYYY HH:MM:SS TZ' shape because
+parsedate_to_datetime is lenient; observed_at_ns is the publication day's
+midnight, flagged estimated, and future days are dropped. guid is the dedupe
+key and is never synthesized. Bodies containing DOCTYPE are rejected.
 
-Timestamps: RSS pubDate is parsed strictly but observed_at_ns is the
-publication DAY midnight, explicitly estimated (no authoritative
-pollers instants — same contract as Treasury). The full
-'Day, DD Mon YYYY HH:MM:SS TZ' shape is regex-gated because
-parsedate_to_datetime is lenient. Future publication days are
-dropped. guid is the PK dedupe key, never synthesized (fallback to
-link is fabrication: a missing/empty guid drops the row). Title and
-link are both required (headline+link contract); bodies containing
-DOCTYPE are rejected as malformed (stdlib ET expands entities).
-
-Symbols ["EURUSD","USDJPY","SPY"] mirror pinned
-collector/entity_map.json macro_release_to_symbols[NFP] (Employment
-Situation = NFP release); operating config, change only with the map.
-
-Health (Treasury lessons built in from the start): empty item list or
-zero usable rows => ok=False with explicit bounded reasons
-(empty-data / no-usable-records), last_ok_ts frozen; duplicate-only
-steady-state polls stay healthy via a usable-row count.
-Rate: conservative 1 req/s operating pace. 3 retries, jittered
-backoff, 429 halves once per episode with deterministic recovery.
-Raw records only (harvest envelope); frozen f2 downstream.
-Transport/clock/sleep/jitter injected; stdlib urllib + xml, proxy via
-env. No network in tests.
-
-Implementation-complete is NOT production-proven: live evidence
-(soak, measured p50/p99) stays open.
+Symbols ["EURUSD","USDJPY","SPY"] mirror collector/entity_map.json
+macro_release_to_symbols[NFP]. An empty item list or zero usable rows gives
+ok=False with reason empty-data / no-usable-records and last_ok_ts frozen;
+duplicate-only polls stay healthy. Pace 1 req/s, 3 retries with jittered
+backoff, a 429 halves the rate once per episode. Emits raw records.
 """
 import calendar
 import json

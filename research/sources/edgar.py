@@ -1,37 +1,14 @@
-"""Production EDGAR source adapter (doc 09 Tier A, first vertical slice).
+"""EDGAR source adapter (doc 09 Tier A): submissions JSON + companyfacts only.
 
-Locked scope: submissions JSON + companyfacts only — no full-text crawl
-beyond the filing index. Contact-bearing frozen UA, hard 10 req/s
-ceiling, explicit per-request timeout, bounded bodies, 3 retries with
-jittered backoff, 429 halves the poll rate for an hour, on-disk
-CIK-map cache with ETag/Last-Modified validators.
+Emits raw records (dicts with a `symbols` list, JSON-safe, size-capped);
+classification into f2 happens downstream. observed_at_ns is the SEC
+acceptanceDateTime when it parses strictly; otherwise filing-date midnight,
+flagged observed_at_estimated (context-only downstream). Future acceptance
+is dropped. Outage means stale, never fabricated data.
 
-This module is the harvest-callable raw-record producer. It emits RAW
-records only (dicts with a `symbols` list, JSON-safe, size-capped —
-the graph harvest-node contract); classification into frozen f2
-happens downstream in extract/emit, never here. No f2 fields are
-invented or reinterpreted.
-
-Timestamps: observed_at_ns comes from the source's own
-acceptanceDateTime when it parses strictly; that value is the SEC
-acceptance time BY CONTRACT, not a measured first-availability stamp
-(availability lags acceptance by minutes the source never timestamps).
-Rows without a usable acceptance carry filing-date midnight EXPLICITLY
-flagged observed_at_estimated (context-only downstream, never TRIGGER).
-Future acceptance is dropped as not-yet-available; local observation
-time is never substituted. Outage/empty means stale/expired downstream,
-never fabricated neutral data. Exits are unaffected (this adapter cannot
-reach broker state, journals, HALT, or STAGE).
-
-Side effects: none by default except the optional heartbeat file and
-the bounded CIK-map cache (atomic rename, same-file replacement).
-Transport, clock, sleep, and jitter are injected: unit tests run with
-a fake transport; the default transport is stdlib urllib honoring the
-process proxy environment (deployment chooses DIRECT vs Squid via
-env — this module hardcodes neither).
-
-Implementation-complete is NOT production-proven: live deployment
-evidence (soak, zero-403 record, measured p50/p99) is still open.
+Transport, clock, sleep and jitter are injected; the default transport is
+stdlib urllib honoring the process proxy environment. Limits: 10 req/s,
+3 retries with jittered backoff, a 429 halves the rate for an hour.
 """
 import calendar
 import json
@@ -95,16 +72,12 @@ def _utc_today():
 
 def _acceptance_to_ns(val, now_s):
     """Authoritative SEC acceptance datetime -> ns, or None.
-    Strict shape YYYY-MM-DDTHH:MM:SS[.ffffff]Z only, with explicit
-    calendar ranges plus epoch round-trip validation. The timestamp
-    must not exceed now+skew (a filing whose acceptance lies in the
-    future is not yet available — admitting it would be lookahead).
-    NO filing-date comparison: the SEC assigns next-business-day
-    filing dates to after-hours acceptances, so a legitimate
-    acceptance routinely predates filing-date midnight. Old events
-    are handled by the lookback cutoff, not here.
-    Returns (ns, future) where future=True means present-but-
-    not-yet-available (drop the row)."""
+    Strict shape YYYY-MM-DDTHH:MM:SS[.ffffff]Z, calendar ranges, and an
+    epoch round-trip check. Acceptance beyond now+skew is not yet
+    available (lookahead). No filing-date comparison: after-hours
+    acceptances get next-business-day filing dates, so acceptance can
+    predate filing-date midnight.
+    Returns (ns, future); future=True means drop the row."""
     if val is None:
         return None, False
     if not isinstance(val, str):
@@ -117,9 +90,8 @@ def _acceptance_to_ns(val, now_s):
         y, mo, d, hh, mm, ss = (int(m.group(i)) for i in range(1, 7))
     except ValueError:
         return None, False
-    # Genuinely strict fields: strptime accepts second=60 and timegm
-    # normalizes it into a DIFFERENT instant. An authoritative boundary
-    # must never be a normalized smuggle.
+    # strptime accepts second=60 and timegm normalizes it to a different
+    # instant, so ranges are checked by hand.
     if not (1990 <= y <= 2100 and 1 <= mo <= 12):
         return None, False
     leap = (y % 4 == 0 and (y % 100 != 0 or y % 400 == 0))
@@ -185,13 +157,10 @@ def _read_capped(r):
 
 
 def _default_transport(url, headers, timeout_s):
-    """Stdlib urllib. Honors HTTP(S)_PROXY from the environment when set;
-    deployment chooses DIRECT vs proxy via env, not code.
+    """Stdlib urllib; honors HTTP(S)_PROXY from the environment.
 
-    Boundary law: urlopen RAISES urllib.error.HTTPError for non-2xx
-    responses — the status path in _get() is unreachable unless this
-    function normalizes HTTPError back into (status, headers, body).
-    Only genuine transport failures (timeout/DNS/refused) raise."""
+    urlopen raises HTTPError for non-2xx, so it is normalized back into
+    (status, headers, body). Only transport failures raise."""
     req = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout_s) as r:
@@ -214,9 +183,7 @@ def _default_transport(url, headers, timeout_s):
                 raise OSError("bad HTTP status: %r" % (e.code,))
             return status, h, body
         finally:
-            # Deterministic closure: HTTPError is a file-like response
-            # and CPython does not reliably finalize its fp (notably
-            # on Windows). 429/5xx are NORMAL retry paths here.
+            # HTTPError is a file-like response; close it explicitly.
             try:
                 e.close()
             except Exception:
@@ -239,8 +206,7 @@ class Adapter:
         self.ua = "%s contact=%s" % (UA_BASE, self.contact)
         self.transport = transport or _default_transport
         self.clock = clock or time.time
-        # Pacing/throttle run on a monotonic clock; wall clock stays
-        # for source timestamps. Injected fake clocks serve both.
+        # Pacing uses a monotonic clock; wall clock is for source timestamps.
         self.mono = mono or (clock if clock is not None
                              else time.monotonic)
         self.sleep = sleeper or time.sleep
@@ -248,14 +214,10 @@ class Adapter:
         self.backoff_base = backoff_base_s
         self.timeout_s = timeout_s
         self.cache_dir = cache_dir
-        # Pinned issuer binding {SYMBOL: cik}: when supplied, CIK comes
-        # ONLY from this map (the SEC ticker file is never consulted).
-        # Production wiring must derive this reverse lookup MECHANICALLY
-        # from the single pinned collector/entity_map.json (CIK->ticker),
-        # never from a second independent map. When absent
-        # (standalone/tests), the SEC file resolves and the
-        # resolved CIK is carried visibly in every record for downstream
-        # binding against the pinned map (resolver rejects unmapped).
+        # Pinned {SYMBOL: cik}: when supplied it is the only CIK source
+        # (the SEC ticker file is not consulted); derive it from
+        # collector/entity_map.json. When absent, the SEC file resolves and
+        # the CIK travels in each record for downstream binding.
         self.entity_map = None
         if entity_map is not None:
             self.entity_map = {}
@@ -268,8 +230,7 @@ class Adapter:
         self.interval = MIN_INTERVAL_S
         self.throttle_until = 0.0
         self._next_ok = 0.0
-        self._seen = {}  # accession -> 1 (cycle-local PK dedupe; the
-        # durable PK-dedupe lives in classify per doc 09)
+        self._seen = {}  # accession -> 1; cycle-local dedupe (durable dedupe is in classify)
         self.last_ok_ts = 0.0
         self.last_error = ""
         self.polls = 0
@@ -607,38 +568,30 @@ class Adapter:
                     "primary_document": pdoc,
                     "observed_at_ns": obs_ns,
                     "observed_at_estimated": estimated,
-                    # INTEGRATION GATE (frozen resolver contract):
-                    # estimated MUST map to published_ns=None +
-                    # permanent context cap at canonical-wiring time.
-                    # Copying an estimated instant into published_ns
-                    # would wrongly earn source trust. Do not invent a
-                    # parser here; do not touch the frozen resolver.
+                    # Resolver contract: estimated maps to published_ns=None
+                    # with a permanent context cap.
                     "entity_ref": {"cik": "%010d" % cik},
                     "provenance_url":
                         "https://www.sec.gov/Archives/edgar/data/%d/%s/"
                         % (cik, acc_nodash),
                 })
-                # Seen ONLY on emit: truncated rows stay eligible.
+                # marked seen only on emit, so truncated rows stay eligible
                 self._seen[acc] = 1
                 if len(self._seen) > 4096:
-                    # bounded cycle-local memory: drop oldest keys
+                    # bound memory: drop oldest keys
                     for k in list(self._seen)[:1024]:
                         del self._seen[k]
         info["records"] = len(recs)
-        # Freshness is measured at COMPLETION: a slow poll/retry
-        # episode must not publish fresh health from a stale start.
+        # freshness is measured at completion, not start
         done = self.clock()
         info["completed_at"] = done
-        # Health is source-level: ANY requested-symbol failure keeps the
-        # poll unhealthy. Successful records are preserved; missing ones
-        # are never fabricated. last_ok advances only on a fully clean
-        # poll, so partial failure cannot erase staleness.
+        # Any symbol failure keeps the poll unhealthy; last_ok advances
+        # only on a fully clean poll.
         if not info["errors"]:
             info["ok"] = True
             self.last_ok_ts = done
             self.last_error = ""
-            # A poll that itself outlasts the TTL cannot publish
-            # fresh health from a stale-duration operation.
+            # a poll that outlasts the TTL is stale
             info["stale"] = (done - now) > TTL_S
         else:
             self.failures += 1
@@ -657,12 +610,10 @@ class Adapter:
             "epoch": epoch}}
         return recs, stamps
 
-    # -- heartbeat (ops side; mirrors earnings.py hardened pattern) --
+    # -- heartbeat --
     def heartbeat(self, info):
-        # Freshness derives from the completed poll, never from the
-        # moment heartbeat() is called: a delayed write must not
-        # refresh an old poll. Fallback to now only for hand-made info
-        # that carries no completion stamp.
+        # Freshness comes from the completed poll, not from call time;
+        # falls back to now only when info has no completion stamp.
         ts = info.get("completed_at") or 0.0
         try:
             ts = float(ts)
@@ -698,8 +649,7 @@ class Adapter:
 
     @staticmethod
     def _valid_heartbeat(hb):
-        """Strict schema gate (mirrors earnings hardened pattern).
-        Never raises: any anomaly -> False."""
+        """Strict schema gate; never raises, any anomaly -> False."""
         try:
             if not isinstance(hb, dict) or set(hb.keys()) != _HB_KEYS:
                 return False

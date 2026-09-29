@@ -50,17 +50,11 @@ VARIANT_RULE = {
 }
 
 
-# D6 fixed-point contract (plan 05: scaled integers / fixed-point
-# decimal WITH EXPLICIT PRECISION). Authority-hashed numerics
-# quantize to exactly D6_SCALE_PLACES decimal places
-# (ROUND_HALF_EVEN, the deterministic banker's rule). Scale rationale:
-# 1e-6 resolves sub-basis-point R/bps differences and sub-cent prices
-# below $1M - finer than any S5 economic threshold - while distinct
-# economic values never collide. Two values differing ONLY below the
-# scale share a serialization BY DESIGN (fixed-point, not a bug).
-# Economic calculations are untouched - floats stay floats; ONLY hash
-# serialization quantizes. The scale is embedded in the tag ("f6:")
-# so a future scale change cannot silently collide with old digests.
+# D6 fixed-point contract (plan 05): hashed numerics quantize to
+# D6_SCALE_PLACES decimal places, ROUND_HALF_EVEN. 1e-6 is finer than any S5
+# economic threshold. Values differing only below the scale share a
+# serialization. Only hash serialization quantizes; the scale is embedded in
+# the tag ("f6:") so a scale change cannot collide with old digests.
 D6_SCALE_PLACES = 6
 D6_QUANT = "0.000001"
 
@@ -68,14 +62,10 @@ D6_QUANT = "0.000001"
 def canon_num(x):
     """D6 canonical number (plan 05): fixed-point, explicit scale.
 
-    Every hashed numerical field serializes through here. Floats
-    quantize their exact binary value (Decimal(float) is exact and
-    platform-independent for IEEE doubles) to D6_SCALE_PLACES decimal
-    places, ROUND_HALF_EVEN; ints serialize as decimal integers.
-    Type tags keep 100 (int) and 100.0 (float) distinct, and the
-    scale rides in the float tag ("f6:"). Non-finite floats fail
-    closed: NaN/inf must never enter an authority hash. Economic
-    calculations are untouched - only hash serialization."""
+    Every hashed number serializes through here. Floats quantize their
+    exact Decimal value to D6_SCALE_PLACES places, ROUND_HALF_EVEN; ints
+    serialize as integers. Type tags keep 100 and 100.0 distinct.
+    Non-finite floats fail closed."""
     from decimal import Decimal, ROUND_HALF_EVEN  # noqa: F811
     assert isinstance(x, (int, float)) and not isinstance(x, bool), \
         "non-numeric hashed field: %r" % type(x)
@@ -252,7 +242,7 @@ def paired_deltas(records):
     return [r["filtered_r"] - r["always_r"] for r in records]
 
 
-# ---- day-cluster bootstrap (cluster-aware dependence procedure) ----
+# day-cluster bootstrap
 
 def _day_clusters(days):
     order, groups = [], {}
@@ -314,7 +304,7 @@ def cluster_null_p(values, days, reps=BOOT_REPS, seed=BOOT_SEED):
     return sum(1 for b in boots if b >= mu) / len(boots)
 
 
-# ---- pre-registered sequential rule (prereg v2 §seq) ----
+# pre-registered sequential rule (prereg v2 §seq)
 
 def closed_stream(records):
     """Prereg 'closed deltas': win/loss labels ONLY, snapshot-ordered.
@@ -444,7 +434,7 @@ def last_close_at_or_before(bars, close_ns):
     return last
 
 
-# ---- power study (pre-declared MDE, real-stream dependence) ----
+# power study (pre-declared MDE)
 
 def _null_reject(sample, days, alpha, seed, inner=POWER_INNER):
     """Single null-test decision (shared by seq/final/power paths)."""
@@ -503,7 +493,7 @@ def power_study(train_records, mde, alpha=SEQ_ALPHA_FINAL,
     return out
 
 
-# ---- portfolio: daily curve with mark-to-close ----
+# portfolio: daily curve with mark-to-close
 
 def portfolio_curve(records, policy, equity, sessions):
     """Single chronological sweep: admission + marking in ts order.
@@ -670,11 +660,10 @@ def brier(pairs):
     return (sum((p - y) ** 2 for p, y in closed) / len(closed), len(closed))
 
 
-# ---- R1-R17 classification for the S5 research environment ----
-# CHECKED = evaluated on S5 inputs (enforced and/or post-hoc verified).
-# NOT_APPLICABLE = no agent/spend/stage/calibration object exists in S5.
-# UNAVAILABLE = needs live/online authoritative inputs absent in research;
-#   must be prereg-declared out-of-scope or the bar fails closed.
+# R1-R17 classification for S5.
+# CHECKED: evaluated on S5 inputs. NOT_APPLICABLE: no agent/spend/stage/
+# calibration object exists in S5. UNAVAILABLE: needs live inputs; must be
+# prereg-declared out of scope or the bar fails closed.
 R_S5_STATUS = {
     "R1-positions": ("CHECKED", "sweep enforces max-3 + 1-per-symbol"),
     "R1-same-direction": ("CHECKED", "post-hoc: never >2 concurrent"),

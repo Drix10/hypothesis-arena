@@ -1,8 +1,8 @@
 """S5 demonstration: prereg v2 protocol on a synthetic stream (machinery proof).
 
-STUB ANSWERS ONLY — proves harness correctness (pairing, cluster bootstrap
+Stub answers only. Proves harness correctness (pairing, cluster bootstrap
 CI + null test, sequential rule, power, walk-forward + holdout, curve,
-mechanical bar), never a JEV-value claim. The bar is COMPUTED from the
+mechanical bar), never a JEV-value claim. The bar is computed from the
 metrics; on stub answers it FAILS, with failed conditions listed.
 Results: data/s5_out/ (gitignored runtime evidence).
 """

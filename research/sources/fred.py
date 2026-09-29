@@ -1,34 +1,16 @@
-"""Production FRED/ALFRED source adapter (doc 09 Tier A, second slice).
+"""FRED/ALFRED source adapter (doc 09 Tier A): series observations plus ALFRED
+realtime windows (realtime_start/end) for point-in-time vintages. No bulk
+download or mirroring (doc 09 license matrix).
 
-Locked scope: api.stlouisfed.org series observations only
-(series_id + file_type=json), plus ALFRED realtime windows
-(realtime_start/end) for point-in-time vintage correctness. No
-bulk download, no mirroring (license matrix, doc 09).
+FRED_API_KEY comes from the environment; missing raises ConfigError before
+any request. The key travels only in the query and never appears in errors,
+records, heartbeats or logs.
 
-Key: FRED_API_KEY from the environment; missing -> ConfigError
-before any request (SKIPPED_CONFIG heartbeat semantics, never a
-failure, never a default). The key travels only in the request
-query; it never appears in errors, records, heartbeats, or logs
-(asserted by test with a sentinel key).
-
-Timestamps: FRED observations carry a day-granularity `date`, not an
-acceptance instant — so observed_at_ns is filing-date-midnight
-EXPLICITLY flagged observed_at_estimated (context-only downstream
-per doc 09 R12, never TRIGGER). ALFRED realtime_start/end ride in
-the record for vintage replay. Missing "." values are dropped and
-counted, never fabricated.
-
-Rate: conservative 1 req/s operating pace (well under any plausible
-provider ceiling; the ceiling is never assumed). 3 retries, jittered
-backoff, 429 halves once per episode with deterministic recovery.
-
-This module emits RAW records only (graph harvest envelope); frozen
-f2 classification happens downstream. Transport/clock/sleep/jitter
-are injected; default transport is stdlib urllib honoring proxy env.
-
-Implementation-complete is NOT production-proven: live evidence
-(soak, measured p50/p99, ALFRED replay against the live API) stays
-open.
+Observations are day-granularity, so observed_at_ns is date midnight flagged
+observed_at_estimated (context-only, doc 09 R12). Missing "." values are
+dropped and counted. Emits raw records; f2 classification is downstream.
+Pace 1 req/s, 3 retries with jittered backoff, a 429 halves the rate once
+per episode. Transport, clock, sleep and jitter are injected.
 """
 import calendar
 import json
@@ -304,8 +286,8 @@ class Adapter:
             rs, re_ = o.get("realtime_start"), o.get("realtime_end")
             if not isinstance(d, str) or not isinstance(v, str):
                 return None, "vintage-row-shape"
-            # Provenance is NEVER synthesized from request parameters:
-            # each row must carry its own valid realtime window.
+            # each row must carry its own realtime window; never taken from
+            # the request parameters
             if not _valid_ymd(rs) or not _valid_ymd(re_):
                 return None, "vintage-realtime-malformed"
             rows.append((d, v, rs, re_))
