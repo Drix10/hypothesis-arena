@@ -140,6 +140,7 @@ scripts/        # freeze-check.sh (repo fingerprint), pre-commit-secrets.sh, sig
 ops/            # alert relay, paper-loop deployment (ops/deploy/README.md)
 data/           # local only, gitignored
 TODO.md         # the live checklist (freeze v3); TODO-ARCHIVE-2026-09-28.md = full history
+HANDOFF.md      # local setup, what is left, starter prompt for a Claude Code session
 ARCHITECTURE.md # codebase guide
 AGENTS.md       # session rules
 ```
