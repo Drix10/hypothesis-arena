@@ -78,3 +78,5 @@ this shows the plumbing works, not whether JEV helps.
   `~/g0/journal.jsonl` and `~/g0/alerts.jsonl` before starting again.
 - `ops/alert_relay.py` forwards `alerts.jsonl` to `ALERT_WEBHOOK_URL`. It is
   optional.
+
+**Quick start:** `bash ops/deploy/start.sh` (builds, signs STAGE on first run, starts loop, emitter and shadow; `bash ops/deploy/start.sh stop` to stop).
