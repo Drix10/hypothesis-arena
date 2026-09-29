@@ -18,6 +18,7 @@ import json
 import os
 import sys
 import time
+import urllib.parse
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -44,7 +45,7 @@ def measure(url, timeout=30):
     except Exception as e:
         ms = (time.monotonic() - t0) * 1000.0
         return {"status": "DOWN", "latency_ms": round(ms, 1),
-                "error": "%s: %s" % (type(e).__name__, e)}
+                "error": type(e).__name__}
 
 
 def pct(vals, q):
@@ -73,8 +74,9 @@ def run():
         # A present key is UNVERIFIED until a real authenticated request
         # succeeds: never promote to READY on key existence alone.
         probe = measure(
-            "https://api.stlouisfed.org/fred/series?series_id=GDP"
-            "&api_key=" + fred_key + "&file_type=json")
+            "https://api.stlouisfed.org/fred/series?" + urllib.parse.urlencode(
+                {"series_id": "GDP", "api_key": fred_key,
+                 "file_type": "json"}))
         if probe.get("status") == 200:
             ev["gates"]["fred_macro"] = "READY (key verified live)"
             ev["gates"]["alfred_vintage"] = \

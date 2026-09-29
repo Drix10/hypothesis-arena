@@ -44,6 +44,7 @@ A box is checked only with evidence (commit + test output / report path).
       `xxd` fallback; `kernel/build.sh` refuses to run as root (chmod-000 checks would be false green).
 - [x] O5 (freeze v3 is the venue amendment; S7 closed on O4) S7 closure: G1 venue amendment = freeze v3 (Alpaca, one liquid
       ETF, cash/long-only); capital-aware caps unchanged → close S7 after O4.
+- [ ] O7 Findings in FROZEN collector code (edit needs a doc-backed exception, AGENTS rule 8; fixes are small): `collector/jev.py api_key()` reads `.env` before the exported variable while `config.py` documents the opposite (a rotated exported key is ignored); `config.py` keeps inline `# comments` in values and ignores `export KEY=` lines; `jev.py:1078` and `collect.py:246` do not close `HTTPError`; confirm the 8 MB call-log rotation in `jev.py:1124` loses no spend evidence.
 
 ## Track A — alpha (critical path)
 
