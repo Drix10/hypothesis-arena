@@ -19,7 +19,8 @@ class PortfolioError(ValueError):
 
 
 def run(sessions, prices, target_fn, cash0=100000.0, spread_bps=2.0,
-        cost_mult=1.0, median_volume=None, min_trade_usd=50.0):
+        cost_mult=1.0, median_volume=None, min_trade_usd=50.0,
+        min_trade_pct=0.005):
     """prices[sym][date] = (open, close). target_fn(date, closes_by_sym) ->
     {sym: weight}, or None to hold; weights >= 0, sum <= 1. `closes_by_sym[sym]` is the
     list of closes through `date` inclusive. Returns dict(returns, equity,
@@ -36,7 +37,7 @@ def run(sessions, prices, target_fn, cash0=100000.0, spread_bps=2.0,
             cost, unfinished = _rebalance(led, prices, d, pending,
                                           spread_bps, cost_mult,
                                           median_volume, min_trade_usd,
-                                          trades)
+                                          min_trade_pct, trades)
             cost_total += cost
             if not unfinished:
                 pending = None
@@ -52,7 +53,7 @@ def run(sessions, prices, target_fn, cash0=100000.0, spread_bps=2.0,
         if w is None:  # hold; an unfinished earlier target stays pending
             continue
         _check_weights(w, prices)
-        pending = w
+        pending = {"w": w, "want": None}
         wlog.append((d, dict(w)))
     return {"returns": rets, "equity": equity, "trades": trades,
             "cost_usd": cost_total, "weights": wlog}
@@ -79,7 +80,8 @@ def _check_weights(w, prices):
         raise PortfolioError("leverage-violation")
 
 
-def _rebalance(led, prices, d, target, spread_bps, mult, vol, min_usd, trades):
+def _rebalance(led, prices, d, pending, spread_bps, mult, vol, min_usd,
+               min_pct, trades):
     """Execute one session of `target`; returns (cost, unfinished).
 
     `unfinished` is True when a leg was cut short by unsettled cash or the
@@ -95,7 +97,11 @@ def _rebalance(led, prices, d, target, spread_bps, mult, vol, min_usd, trades):
         o = px_open[s]
         return o * (1 - half), o * (1 + half)
 
-    want = {s: target.get(s, 0.0) * eq for s in prices}
+    target = pending["w"]
+    if pending["want"] is None:  # dollar targets fixed at first execution
+        pending["want"] = {s: target.get(s, 0.0) * eq for s in prices}
+    want = pending["want"]
+    min_usd = max(min_usd, min_pct * eq)
     for s in sorted(set(led.shares) | set(target)):
         if s not in px_open:
             continue

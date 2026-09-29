@@ -1,0 +1,187 @@
+{
+  "ma10": {
+    "cash_holdout_sharpe": 19.27514296168976,
+    "conditions": [
+      {
+        "name": "net_sharpe_ci_lower_gt_0",
+        "pass": true,
+        "value": [
+          0.02129062435574039,
+          0.149800781842319
+        ]
+      },
+      {
+        "name": "sharpe_at_2x_cost_gt_0",
+        "pass": true,
+        "value": 0.0818528105174255
+      },
+      {
+        "name": "excess_over_cash_ci_lower_gt_0",
+        "pass": false,
+        "value": [
+          -8.714047446386609e-05,
+          0.00048582210476271495
+        ]
+      },
+      {
+        "name": "vs_vol_matched_passive",
+        "pass": false,
+        "value": {
+          "max_dd": [
+            0.06755280578025391,
+            0.08249576110528001
+          ],
+          "sharpe": [
+            0.08303059414657624,
+            0.08507329521468415
+          ]
+        }
+      },
+      {
+        "name": "dsr_ge_0.95",
+        "pass": true,
+        "value": 0.98175803483523
+      },
+      {
+        "name": "pbo_le_0.2",
+        "pass": true,
+        "value": 0.17142857142857143
+      },
+      {
+        "name": "history_ge_min_trl",
+        "pass": true,
+        "value": 411.432539416495
+      },
+      {
+        "name": "literature_haircut_met",
+        "pass": true,
+        "value": true
+      },
+      {
+        "name": "transferability",
+        "pass": true,
+        "value": true
+      },
+      {
+        "name": "participation_caps",
+        "pass": true,
+        "value": true
+      }
+    ],
+    "cost_usd_1x": 1129.656397279402,
+    "equal_weight_bh_holdout_sharpe": 1.417109193263298,
+    "failed": [
+      "excess_over_cash_ci_lower_gt_0",
+      "vs_vol_matched_passive"
+    ],
+    "full_sample_sharpe": 0.9639247694943752,
+    "gate": "A",
+    "holdout": [
+      "2023-09-01",
+      "2026-08-31"
+    ],
+    "holdout_max_dd": 0.06755280578025391,
+    "holdout_sharpe": 1.318069819930656,
+    "max_participation": 0.00414843410508019,
+    "n_trials": 2,
+    "passive_holdout_sharpe": 1.3504966941050145,
+    "prereg_hash": "2eaa5e22e04e1229036fb27c851cb441d8ebef57ff97efd715743e4cd199ccb0",
+    "sessions": 751,
+    "trades": 1566,
+    "trial_id": "t1_trend_etf_v1_a_gate:ma10:0daa734570b2",
+    "variant": "ma10",
+    "verdict": "FAIL"
+  },
+  "mom12_vs_tbill": {
+    "cash_holdout_sharpe": 19.27514296168976,
+    "conditions": [
+      {
+        "name": "net_sharpe_ci_lower_gt_0",
+        "pass": true,
+        "value": [
+          0.030851890379148355,
+          0.17140097279062624
+        ]
+      },
+      {
+        "name": "sharpe_at_2x_cost_gt_0",
+        "pass": true,
+        "value": 0.0957397588904643
+      },
+      {
+        "name": "excess_over_cash_ci_lower_gt_0",
+        "pass": false,
+        "value": [
+          -3.373710882211912e-06,
+          0.0005666104380038211
+        ]
+      },
+      {
+        "name": "vs_vol_matched_passive",
+        "pass": true,
+        "value": {
+          "max_dd": [
+            0.08213617129942474,
+            0.08631319750105126
+          ],
+          "sharpe": [
+            0.09644320079793636,
+            0.08507329521468414
+          ]
+        }
+      },
+      {
+        "name": "dsr_ge_0.95",
+        "pass": true,
+        "value": 0.9931890440057826
+      },
+      {
+        "name": "pbo_le_0.2",
+        "pass": true,
+        "value": 0.17142857142857143
+      },
+      {
+        "name": "history_ge_min_trl",
+        "pass": true,
+        "value": 301.1775393358306
+      },
+      {
+        "name": "literature_haircut_met",
+        "pass": true,
+        "value": true
+      },
+      {
+        "name": "transferability",
+        "pass": true,
+        "value": true
+      },
+      {
+        "name": "participation_caps",
+        "pass": true,
+        "value": true
+      }
+    ],
+    "cost_usd_1x": 801.8668593906906,
+    "equal_weight_bh_holdout_sharpe": 1.417109193263298,
+    "failed": [
+      "excess_over_cash_ci_lower_gt_0"
+    ],
+    "full_sample_sharpe": 0.7596720640628958,
+    "gate": "A",
+    "holdout": [
+      "2023-09-01",
+      "2026-08-31"
+    ],
+    "holdout_max_dd": 0.08213617129942474,
+    "holdout_sharpe": 1.5309883497264343,
+    "max_participation": 0.0036103225551192396,
+    "n_trials": 2,
+    "passive_holdout_sharpe": 1.3504966941050145,
+    "prereg_hash": "2eaa5e22e04e1229036fb27c851cb441d8ebef57ff97efd715743e4cd199ccb0",
+    "sessions": 751,
+    "trades": 1464,
+    "trial_id": "t1_trend_etf_v1_a_gate:mom12_vs_tbill:0daa734570b2",
+    "variant": "mom12_vs_tbill",
+    "verdict": "FAIL"
+  }
+}
