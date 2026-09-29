@@ -1,17 +1,16 @@
 # MiroHedge TODO — freeze v3 ("alpha-first rebaseline", 2026-09-28)
 
-This ledger itemizes `plan/07-build-roadmap.md`. The freeze-v2 ledger
-(Phases 0–3, Rounds 1–9, S1–S7, every addendum) is preserved byte-for-byte
-in `TODO-ARCHIVE-2026-09-28.md` — read it for history, never append to it.
+This ledger itemizes `plan/07-build-roadmap.md`. The freeze-v2 ledger is in
+`TODO-ARCHIVE-2026-09-28.md`; read it for history, never append to it.
 
-Legend: `[HUMAN]` needs the operator · `[BLOCKED]` waits on another box ·
-each box names its doc 07 id. One box = one commit theme (AGENTS.md rule 7).
-A box is checked only with evidence (commit + test output / report path).
+Legend: `[HUMAN]` needs the operator · `[BLOCKED]` waits on another box.
+Each box names its doc 07 id; one box is one commit theme (AGENTS.md rule 7).
+A box is checked only with evidence (commit and test output, or a report path).
 
 ## Current state (verified 2026-09-29)
 
-- Plan: freeze v3 written (docs 00–13, manifest, `plan/appendix/`,
-  critique in `plan/reviews/`); freeze-check PASS.
+- Plan: freeze v3 written (docs 00–13, manifest, `plan/appendix/`, critique in
+  `plan/reviews/`); freeze-check PASS.
 - Kernel: P3.1/P3.2/P3.3 FROZEN; P3.5 A-G done; H1 built; R18/R19 veto arms, candidate validator and escaped alerts landed (K4/K6/K7/K11). `transport = nullptr`: no order is ever sent. P3.5 OPEN.
 - Strategy: `baseline_v1` negative (S2, doc 12 12.7). T1 `trend_etf_v1` ran through the harness on SIP daily bars 2016-2026: FAIL on the 2023-09..2026-08 holdout (A2). S3/S4/S6 released; S5 economics open.
 - S7-C: CLOSED (hosted CI green on the PR head, all six jobs).
@@ -29,14 +28,11 @@ A box is checked only with evidence (commit + test output / report path).
 
 - [ ] O6 [HUMAN] Rotate every credential shared in chat on 2026-09-28
       (OpenRouter, FRED, BEA, Alpaca paper); re-seed local `.env` only.
-- [x] O4 (hosted run 36470824852 on e833976, all 6 jobs green: kernel, kernel-sanitizer, evidence, plane, stdlib, secrets) S7-C closure: hosted 5/5 (kernel, kernel-sanitizer, evidence,
-      plane, stdlib) on the head carrying `f0815e7` (open a PR or push to
-      `main` — CI does not run on feature-branch pushes; see O1).
+- [x] O4 (hosted run 36470824852 on e833976, all 6 jobs green: kernel, kernel-sanitizer, evidence, plane, stdlib, secrets) S7-C closure: hosted CI green on the head carrying `f0815e7`.
 - [x] O1 (local: test_baseline, test_jev_v4, test_v4 32/32 green; hosted run pending O4) CI: run on every push + `workflow_dispatch`; add `test_baseline`,
-      `test_candidate` (pin pytest in a strategy requirements file),
-      `test_jev_v4`, and `kernel/tests/test_v4.cpp` (plan amendment = doc 03
-      locked decision, freeze v3).
-- [x] O2 (`.gitleaks.toml`, `scripts/pre-commit-secrets.sh`, CI job `secrets`; full history clean over all 558 commits after unshallow; the hosted run found 1 false positive in the pre-rename sandbox compose path, now allowlisted) Secret scanning: gitleaks pinned by SHA-256 as a CI job + a
+      `test_candidate` (pytest pinned in a strategy requirements file),
+      `test_jev_v4`, and `kernel/tests/test_v4.cpp` (doc 03 locked decision).
+- [x] O2 (`.gitleaks.toml`, `scripts/pre-commit-secrets.sh`, CI job `secrets`; full history clean over all 558 commits; one false positive in the pre-rename sandbox compose path, now allowlisted) Secret scanning: gitleaks pinned by SHA-256 as a CI job + a
       pre-commit hook (pattern from `anthropics/financial-services`).
 - [x] O3 (freeze-check PASS 189 checks as non-root; kernel gate PASS) freeze-check v3 alignment: rename `plan/02-twitter-alpha-system.md`
       → `plan/02-strategy-book.md`; verify manifest v3 keys
@@ -44,7 +40,7 @@ A box is checked only with evidence (commit + test output / report path).
       `xxd` fallback; `kernel/build.sh` refuses to run as root (chmod-000 checks would be false green).
 - [x] O5 (freeze v3 is the venue amendment; S7 closed on O4) S7 closure: G1 venue amendment = freeze v3 (Alpaca, one liquid
       ETF, cash/long-only); capital-aware caps unchanged → close S7 after O4.
-- [ ] O7 Findings in FROZEN collector code (edit needs a doc-backed exception, AGENTS rule 8; fixes are small): `collector/jev.py api_key()` reads `.env` before the exported variable while `config.py` documents the opposite (a rotated exported key is ignored); `config.py` keeps inline `# comments` in values and ignores `export KEY=` lines; `jev.py:1078` and `collect.py:246` do not close `HTTPError`; confirm the 8 MB call-log rotation in `jev.py:1124` loses no spend evidence.
+- [ ] O7 Findings in frozen collector code (an edit needs a doc-backed exception, AGENTS rule 8; fixes are small): `collector/jev.py api_key()` reads `.env` before the exported variable while `config.py` documents the opposite (a rotated exported key is ignored); `config.py` keeps inline `# comments` in values and ignores `export KEY=` lines; `jev.py:1078` and `collect.py:246` do not close `HTTPError`; confirm the 8 MB call-log rotation in `jev.py:1124` loses no spend evidence.
 
 ## Track A — alpha (critical path)
 
@@ -67,11 +63,11 @@ A box is checked only with evidence (commit + test output / report path).
   - [x] A0.8 (`research/strategy/gates.py`, 5 tests; fail-closed, missing evidence fails) A-gate / B-gate report generators — doc 11 §11.3a.
 - [ ] A1 S2 closure: `baseline_v1` rerun on SIP bars + quotes; primary
       ledger populated; negative result + diagnosis recorded; FX leg dropped.
-- [x] A2 T1 `trend_etf_v1`: A-gate run on SIP daily bars 2016-01-04..2026-08-31 (free-feed history limit), holdout 2023-09-01..2026-08-31. Result: **FAIL** for both variants (excess-over-cash CI lower bound <= 0; ma10 also below the vol-matched 60/40). Ledger N=4 (two engine versions, both disclosed), reports in `research/reports/`. T1 is not a champion candidate; the statistical power of a 3-year holdout on one sleeve is the binding limit.
+- [x] A2 T1 `trend_etf_v1`: A-gate run on SIP daily bars 2016-01-04..2026-08-31 (free-feed history limit), holdout 2023-09-01..2026-08-31. Result: FAIL for both variants (excess-over-cash CI lower bound <= 0; ma10 also below the vol-matched 60/40). Ledger N=4 (two engine versions, both disclosed), reports in `research/reports/`. T1 is not a champion candidate; the statistical power of a 3-year holdout on one sleeve is the binding limit.
 - [ ] A3 I1 `intraday_mom_v1`: pre-registration → A-gate (2× cost decisive).
-- [x] A4 E1 `insider_buy_v1`: Form 4 pipeline (SEC bulk sets 2013-2026Q1, opportunistic filter, 5-slot 21-session sleeve, tiered spreads) and A-gate run: **FAIL** for all three variants (tierA/tierB/cluster). Best holdout excess Sharpe 0.83 (tierA) vs passive 1.35, max drawdown 27%, modeled cost $146k over the sample; participation cap breached at tierA; 7.9% of events had no price data (delisted / ticker changes) which alone voids the run under the 5% rule. Ledger N=12 (incl. 3 crashed trials from a cash-accrual bug, disclosed). Report `research/reports/e1_insider_buy_v1_a_gate.json`. Follow-up if revisited: ticker-history mapping to recover the 8% and a lower-turnover exit.
+- [x] A4 E1 `insider_buy_v1`: Form 4 pipeline (SEC bulk sets 2013-2026Q1, opportunistic filter, 5-slot 21-session sleeve, tiered spreads) and A-gate run: FAIL for all three variants (tierA/tierB/cluster). Best holdout excess Sharpe 0.83 (tierA) vs passive 1.35, max drawdown 27%, modeled cost $146k over the sample; participation cap breached at tierA; 7.9% of events had no price data (delisted / ticker changes) which alone voids the run under the 5% rule. Ledger N=12 (incl. 3 crashed trials from a cash-accrual bug, disclosed). Report `research/reports/e1_insider_buy_v1_a_gate.json`. Follow-up if revisited: ticker-history mapping to recover the 8% and a lower-turnover exit.
 - [ ] A5 T2 `sector_mom_v1`: pre-registration → A-gate.
-- [ ] A6 E2 `earnings_reader_v1`: E2-det (deterministic SUE drift, SEC financial-statement sets, 3 variants) A-gate run: **FAIL** all variants (holdout excess Sharpe -0.34 / +0.28 / -0.20 vs passive 1.33; costs $71k-$137k over the sample; 6.3% of events lack prices). Ledger N=15. Report `research/reports/e2det_pead_v1_a_gate.json`. E2-ai paired forward design [BLOCKED on P2]; no reason to build it while the deterministic baseline is negative.
+- [ ] A6 E2 `earnings_reader_v1`: E2-det (deterministic SUE drift, SEC financial-statement sets, 3 variants) A-gate run: FAIL for all variants (holdout excess Sharpe -0.34 / +0.28 / -0.20 vs passive 1.33; costs $71k-$137k over the sample; 6.3% of events lack prices). Ledger N=15. Report `research/reports/e2det_pead_v1_a_gate.json`. E2-ai paired forward design [BLOCKED on P2]; no reason to build it while the deterministic baseline is negative.
 - [ ] A7 M1 vol-target overlay tested on every A-gate survivor.
 - [ ] A8 S5 re-scoped as the `jev_v4` filter gate on surviving sleeves'
       candidate streams, post-cutoff answers only (not a G0 blocker).
@@ -97,9 +93,9 @@ A box is checked only with evidence (commit + test output / report path).
 - [ ] K9 Slice F 24 h soak on the real transport [BLOCKED on K1].
 - [ ] K10 H1 drills on the real transport, every doc 06 §6.2a row
       [BLOCKED on K1].
-- [x] K11 (Alert() now escapes and bounds code/detail, ASCII-only, tested in test_runner) Found in K7: `runner/store.cpp Alert()` does not JSON-escape `code`/`detail` (a quote or backslash yields an invalid alerts.jsonl line; the relay skips and counts such lines, so nothing crashes, but the alert is lost). Add an escape helper + test.
+- [x] K11 (Alert() now escapes and bounds code/detail, ASCII-only, tested in test_runner) Found in K7: `runner/store.cpp Alert()` did not JSON-escape `code`/`detail`, so a quote or backslash produced an invalid alerts.jsonl line that the relay skipped and counted (the alert was lost). Add an escape helper and test.
 - [x] K12 (`Decide` always sets `v3_constraints`; `approved.json` loader carries the sleeve windows and allowlist; the loop refuses to start without both and without a human STAGE) Wire R18/R19 from the stage manifest
-- [x] K13 Loop glue for G0b. `PaperLoop` (account, positions, working orders -> candidates -> Decide -> SubmitIntent -> Cycle) with R6/R7 from live hourly bars, ET calendar, offsets and a decisions.jsonl audit; churn counters from `submitted.log`; oversize-line and file-rotation recovery; working buy orders count as exposure and reserved cash (`inflight.log` supplies the reference price; an order the loop did not place halts entries); a working sell blocks a second exit; fractional positions are held as dust and never traded; exit proceeds are booked before the order is sent, keyed by cid, estimated from the live mark +1% (broker cash reconciles the rest next session). Decisions: no MOC or timed exits for the passive core (its exits are explicit SELL candidates during the session); early-close days are not modeled (the data-age gate only gets stricter); the deploy calendar `ops/deploy/session_calendar.json` covers 2026-2028. [HUMAN] STAGE signature + approved.json (G0-STAGE) remain.
+- [x] K13 Loop glue for G0b. `PaperLoop` (account, positions, working orders -> candidates -> Decide -> SubmitIntent -> Cycle) with R6/R7 from live hourly bars, ET calendar, offsets and a decisions.jsonl audit; churn counters from `submitted.log`; oversize-line and file-rotation recovery; working buy orders count as exposure and reserved cash (`inflight.log` supplies the reference price; an order the loop did not place halts entries); a working sell blocks a second exit; fractional positions are held as dust and never traded; exit proceeds are booked before the order is sent, keyed by cid and estimated from the live mark +1% (broker cash reconciles the rest next session). Decisions: no MOC or timed exits for the passive core (its exits are explicit SELL candidates during the session); early-close days are not modeled (the data-age gate only gets stricter); `ops/deploy/session_calendar.json` covers 2026-2028. [HUMAN] STAGE signature and approved.json (G0-STAGE) remain.
 - [ ] K-exit P3.5 CLOSED (K1–K7 + K10 green).
 
 ## Track P — research plane (parallel)

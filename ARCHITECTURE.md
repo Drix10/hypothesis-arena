@@ -1,78 +1,66 @@
-# ARCHITECTURE — hypothesis-arena, exhaustive codebase guide
+# ARCHITECTURE: codebase guide
 
-AI-assisted systematic fund: US-listed equities/ETFs, cash account, long
-only (freeze v3, 2026-09-28; forex is research-only — OANDA BLOCKED,
-RBI LRS prohibits forex/margin trading abroad). No crypto.
-Status: `plan freeze v3 (alpha-first rebaseline) · P3.1–P3.3 FROZEN ·
-P3.5 H1 BUILT, transport not wired · two sleeves measured, none past an economic gate ·
-G0 NOT STARTED · paper only`.
-`plan/` is source of truth; this file describes the tree as it exists
-(544 tracked files at 2026-09-28; the per-family lists below predate the
-H1/strategy additions and are being refreshed — `git ls-files` wins). Labels: FROZEN (no changes without a human
-contract-defect ruling; `kernel/` impl and collector production
-code are byte-identical to the Round-9 baseline; the sole exception
-is the additive `RESEARCH_MODEL_ID` key in `collector/config.py`,
-disclosed in Addendum 32) · ACTIVE (current work surface) · FUTURE (not
-implemented) · HISTORICAL (audit trail, read-only).
+AI-assisted systematic fund: US-listed equities and ETFs, cash account, long
+only (freeze v3, 2026-09-28). Forex is research-only (OANDA blocked, RBI LRS
+prohibits forex and margin trading abroad). No crypto.
 
-Verify this document: `git ls-files | wc -l` and the per-family counts
-in §3 (counts marked historical where the tree has grown). Family file lists follow exact name patterns; every
-non-family file is named explicitly.
+Status: plan freeze v3 (alpha-first rebaseline), P3.1-P3.3 frozen, P3.5 H1
+built with the paper transport verified read-only, two sleeves measured and
+none past an economic gate, G0 not started, paper only.
+
+`plan/` is the source of truth; this file describes the tree. It had 544
+tracked files on 2026-09-28 and the per-family lists below predate the H1 and
+strategy additions, so `git ls-files` wins where they differ.
+
+Labels: FROZEN (no change without a human contract-defect ruling; `kernel/`
+implementation and collector production code are byte-identical to the Round 9
+baseline except the additive optional keys in `collector/config.py`, see
+`research/PHASE_E_AUDIT.md` section 4) · ACTIVE (current work surface) ·
+FUTURE (not implemented) · HISTORICAL (read-only audit trail).
 
 ## 1. Root files (7 tracked + 1 ignored companion)
 
-Tracked (root files): `.env.example`,
-`.gitattributes`, `.gitignore`, `AGENTS.md`, `ARCHITECTURE.md`,
-`README.md`, `TODO.md`. Ignored companion, NOT counted: `.env`
-(real values; full flow under "Configuration / environment flow").
+Tracked: `.env.example`, `.gitattributes`, `.gitignore`, `AGENTS.md`,
+`ARCHITECTURE.md`, `README.md`, `TODO.md`. Ignored, not counted: `.env`
+(real values).
 
-- `AGENTS.md` — ACTIVE session rules: read ARCHITECTURE + plan/00-INDEX
-  first; plan is source of truth; TODO updated per task; no secrets;
-  one-commit-one-theme; fail closed.
-- `ARCHITECTURE.md` — this file (ACTIVE).
-- `README.md` — ACTIVE operator quickstart + status table + repo map.
-- `TODO.md` — ACTIVE build ledger. Checked boxes = done. Contains
-  HISTORICAL entries (P1.x–P3.x, Rounds 1–9, deployment boxes) AND the
-  current Phase-D gate entry — read the dates/commits to tell them apart.
+- `AGENTS.md` — session rules: read ARCHITECTURE and plan/00-INDEX first; plan
+  is the source of truth; update TODO per task; no secrets; one commit, one
+  theme; fail closed.
+- `ARCHITECTURE.md` — this file.
+- `README.md` — status table, quick start, repo map.
+- `TODO.md` — the live build ledger (freeze v3). The freeze-v2 history is in
+  `TODO-ARCHIVE-2026-09-28.md`.
 - `.env` / `.env.example` — ACTIVE canonical config. `.env` is
   git-ignored real values; `.env.example` is the tracked template
-  (`MIRO_CONTACT` required; `FRED_API_KEY` / `OPENROUTER_API_KEY`
-  optional; broker/BEA keys stay out until a code path consumes them).
-  Sole loader: `collector/config.py::_load_dotenv` (root file,
-  allowlisted KEYS, exported environment wins). Designated consumer for
-  sandbox/research Python: `collector.config.load()`. HONEST
-  STATUS: the loader is implemented + tested
-  (`collector/tests/test_config.py`); today the only production
-  consumer is the collector itself (`collect.py` via config,
-  `jev.py` reading `OPENROUTER_API_KEY` from env). No sandbox probe
-  calls `config.load()` yet — the first live-provider probe will be
-  the first consumer. There is no second env file and no second loader
-  (`sandbox/provider.env` retired, `01b6e47`).
+  (`MIRO_CONTACT` required; provider, broker and BEA keys optional).
+  Sole loader: `collector/config.py::_load_dotenv` (root file, allowlisted
+  keys, exported environment wins); research Python reads it through
+  `collector.config.load()`. Tested in `collector/tests/test_config.py`.
+  There is no second env file or loader (`sandbox/provider.env` retired,
+  `01b6e47`).
 - `.gitignore` — ACTIVE. Ignores `.env`, data/, logs, build artifacts.
 - `.gitattributes` — ACTIVE. Pins `*.sh` to LF.
-- `scripts/freeze-check.sh` — ACTIVE read-only gate: repo must match
+- `scripts/freeze-check.sh` — read-only gate: the repo must match
   `plan/system-manifest.yaml` (versions, pins, risk rules, component
-  presence incl. `kernel/tests/test_p33.cpp`). Exit 0 = PASS.
-- `.github/workflows/ci.yml` — ACTIVE. Five independent jobs: `stdlib`
-  (collector suites), `evidence` (isolation, sources, five adapters,
-  source seam, S5), `plane` (plane/hardening/emit/seam-graph/S6),
-  `kernel` (build.sh + freeze pins), `kernel-sanitizer` (ASan+UBSan).
-  All five green since S7-B (`30c81a3`). Gaps tracked in doc 07 O1/O2:
-  triggers only on `main` pushes and PRs; strategy tests (S1/S3/S4) and
-  `kernel/tests/test_v4.cpp` not yet in CI; no secret scanning.
+  presence). Exit 0 = PASS. `pre-commit-secrets.sh` (gitleaks hook) and
+  `sign-stage.sh` (human STAGE sign-off) sit beside it.
+- `.github/workflows/ci.yml` — six jobs on every push, pull request and
+  manual dispatch: `stdlib` (collector suites), `evidence` (isolation,
+  sources, five adapters, seam, harness suites), `plane` (plane, hardening,
+  emit, seam-graph), `kernel` (`WITH_CURL=1 build.sh` + freeze-check),
+  `kernel-sanitizer` (ASan+UBSan), `secrets` (gitleaks over full history).
 
 ## 2. plan/ (freeze v3: 13 docs + manifest + appendix/ + reviews/)
 
-Freeze v3 (2026-09-28) rewrote the plan around a legal live scope, a
-strategy book, a validation standard, and the shortest path to paper.
-The per-doc notes below are the freeze-v2 descriptions; where they
-conflict with the docs, the docs win. Key v3 changes: doc 02 is now the
-strategy book (legacy filename; X archive in `appendix/02-x-lists-archive.md`),
-doc 03 JEV is an optional filter, doc 05 adds R18/R19, doc 06 §6.1b and
-doc 08 §8.4 internals moved verbatim to `appendix/`, doc 10 adds the
-jurisdiction gate, doc 11 adds the trial ledger and contamination control,
-doc 12 demotes `baseline_v1` to a negative control.
-
+Freeze v3 rewrote the plan around a legal live scope, a strategy book, a
+validation standard and the shortest path to paper. The per-doc notes below
+are the freeze-v2 descriptions; where they conflict with the docs, the docs
+win. Changes in v3: doc 02 is the strategy book (X archive in
+`appendix/02-x-lists-archive.md`), doc 03 JEV is an optional filter, doc 05
+adds R18/R19, doc 06 §6.1b and doc 08 §8.4 internals moved to `appendix/`,
+doc 10 adds the jurisdiction gate, doc 11 adds the trial ledger and
+contamination control, doc 12 demotes `baseline_v1` to a negative control.
 
 - `00-INDEX.md` — reading order + doc authority map. Read first.
 - `01-vision-and-scope.md` — fund scope; locks venues: OANDA v20
@@ -235,7 +223,7 @@ per source. Nothing in the seam trades.
   process, binds the three seam-owned callbacks
   (harvest/parser_extract/resolve_emit), requires the heartbeat
   sink, resolves the MIRO_CANONICAL_DB-honoring lineage DB +
-bundle outdir + pinned map, restores durable history. Caller
+  bundle outdir + pinned map, restores durable history. Caller
   supplies unrelated deps only; seam-owned overrides refused.
 - `source_seam.py` — Phase-2.5 harvest seam (plan/08 §8.3): five
   adapter singletons, real pacing (sleep/monotonic), stamps +
@@ -341,10 +329,9 @@ Direct children (13 tracked files):
 
 ### research root (4)
 
-- `DEPLOYMENT_EVIDENCE.md` — ACTIVE per-box proof log (current gate
-  statuses live here).
-- `PHASE_E_AUDIT.md` — HISTORICAL + ACTIVE audit trail (Round 1–9
-  addenda frozen as history; newest addendum = current record).
+- `DEPLOYMENT_EVIDENCE.md` — per-box deployment proof log.
+- `PHASE_E_AUDIT.md` — condensed audit trail (findings, fixes, evidence ids,
+  open items; full text in git history).
 - `lessons/lessons.jsonl` — ACTIVE Tier-D output (12/12 graded).
 - `requirements.txt` — ACTIVE pinned plane deps (`==` only).
 
@@ -386,10 +373,10 @@ lock; size = frozen §3.2 table via typed object only; exits = local
 spend ceilings = `jev.py` + doc 10 tiers; attribution = `attribution.py`
 mirror (missing ledger raises, never $0).
 
-## 9. Status ledger (current)
+## 9. Status ledger
 
-- (freeze v3) Plan: docs 00–13 rewritten 2026-09-28; human signature of
-  the final text pending (doc 07 sign-off log).
+- Plan: docs 00–13 rewritten 2026-09-28; human signature of the final text
+  pending (doc 07 sign-off log).
 - Harness (`research/strategy/`): ledger, `cost_v2`, settlement, portfolio,
   benchmarks, statistics, gates, prereg, `sip_fetch`, `a_run`, sleeve
   modules under `sleeves/`; pre-registrations in `research/prereg/`,

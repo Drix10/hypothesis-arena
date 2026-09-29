@@ -12,7 +12,7 @@
   [![Plan](https://img.shields.io/badge/plan-freeze_v3-7B2CBF)](./plan/00-INDEX.md)
   [![Stage](https://img.shields.io/badge/Capital-G0_PAPER_only-00D4AA)](./plan/10-capital-gates-and-spend-control.md)
 
-  **Status (2026-09-29): plan freeze v3 · kernel P3.1–P3.3 frozen · P3.5 H1 built, broker transport not wired · two sleeves measured, none passed an economic gate · G0 not started · paper only.**
+  **Status (2026-09-29): plan freeze v3 · paper loop and Alpaca paper transport built and read-only verified · three sleeves measured, none passed the economic gate · no STAGE signed, G0 not started · paper only.**
 
 </div>
 
@@ -79,16 +79,17 @@ Three principles:
 
 ### Progress
 
-Roadmap checklist (`TODO.md`): 23 of 57 boxes done; several open kernel boxes (K1, K2, K3) are largely built and listed with what remains.
+Roadmap checklist (`TODO.md`): 23 of 57 boxes done. Several open kernel boxes (K1, K2, K3) are largely built; `TODO.md` lists what remains.
 
 | Track | Done | Open |
 |---|---|---|
 | Rebaseline (docs) | 3 | 1 (human signature) |
 | Ops, CI, hygiene | 5 | 2 (credential rotation; frozen-collector fixes) |
 | Alpha (harness + sleeves) | 10 | 8 (sleeves that failed are recorded, the rest untested) |
-| Kernel P3.5 remainder | 4 | 10 (Snapshot v2, OTO/MOC, journal bound, soak, drills on the real transport, loop remainder) |
+| Kernel P3.5 remainder | 5 | 9 (Snapshot v2, OTO/MOC, journal bound, soak, drills on the real transport, loop remainder) |
 | Research plane | 0 | 5 |
 | Paper trading (G0) | 0 | 5 |
+| Live stages (not authorized) | 0 | 4 |
 
 Critical path to paper trading: the loop and transport exist and are
 verified read-only against the paper account; what remains is the human
@@ -99,10 +100,10 @@ run the non-alpha core sleeve for operations validation (`ops/deploy/`).
 
 - Hosted CI runs six jobs on every push: C++ gates, sanitizer build, plane
   suite, evidence suites, collector suites, secret scan over full history.
-- Independent review rounds (two this week) reproduced and fixed real
-  defects: a rotation bug that left portfolios in cash, a fail-open
-  Sharpe gate that scored T-bill yield as skill, a non-atomic ledger
-  check, unescaped alert lines, an overflow in the R18 sum.
+- Independent reviews reproduced and fixed real defects: a rotation bug
+  that left portfolios in cash, a fail-open Sharpe gate that scored T-bill
+  yield as skill, a non-atomic ledger check, unescaped alert lines, an
+  overflow in the R18 sum.
 - Known gaps: no sleeve passes its gate (`plan/reviews/2026-09-29-alpha-results.md`);
   one free price source with ten years of history; the runner is 4.4k lines
   in one file; order flow has been exercised against the paper venue by a
@@ -123,7 +124,7 @@ IMPLEMENTED (code exists) · VERIFIED (acceptance green).
 git clone https://github.com/Drix10/hypothesis-arena.git
 cd hypothesis-arena
 cp .env.example .env                  # fill locally; never commit, never paste keys anywhere
-bash scripts/freeze-check.sh          # must print FREEZE-CHECK: PASS (needs xxd)
+bash scripts/freeze-check.sh          # must print FREEZE-CHECK: PASS
 python3 collector/tests/test_pipeline.py
 cd kernel && bash build.sh            # C++ gates (run as a non-root user)
 ```
@@ -135,7 +136,8 @@ plan/           # the spec. 00-INDEX first; appendix/ = frozen implementation re
 collector/      # Python: signal collection, classification, ctx reader, JEV sidecar
 kernel/         # C++: validator, typed state, decision table, veto, ingest, kill, router, runner, broker
 research/       # plane/ (graph+spend), sources/ (adapters+gates), strategy/ (harness, sleeves), tests/
-scripts/        # freeze-check.sh (repo fingerprint)
+scripts/        # freeze-check.sh (repo fingerprint), pre-commit-secrets.sh, sign-stage.sh
+ops/            # alert relay, paper-loop deployment (ops/deploy/README.md)
 data/           # local only, gitignored
 TODO.md         # the live checklist (freeze v3); TODO-ARCHIVE-2026-09-28.md = full history
 ARCHITECTURE.md # codebase guide

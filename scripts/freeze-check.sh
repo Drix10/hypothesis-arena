@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# P1.1 — freeze-check: verify the repo EXACTLY against plan/system-manifest.yaml.
-# Read-only. A mismatch is a FAILURE, never an invitation to edit the manifest.
-# Usage: bash scripts/freeze-check.sh   (exit 0 = PASS, exit 1 = FAIL)
+# freeze-check: verifies the repo against plan/system-manifest.yaml (read-only).
+# A mismatch is a failure; fix the repo, not the manifest.
+# Usage: bash scripts/freeze-check.sh   (exit 0 = PASS, 1 = FAIL)
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 M="$ROOT/plan/system-manifest.yaml"
