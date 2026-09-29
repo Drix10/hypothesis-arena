@@ -79,7 +79,7 @@ Three principles:
 
 ### Progress
 
-Roadmap checklist (`TODO.md`): 22 of 57 boxes done; several open kernel boxes (K1, K2, K3, K13) are largely built and listed with what remains.
+Roadmap checklist (`TODO.md`): 23 of 57 boxes done; several open kernel boxes (K1, K2, K3) are largely built and listed with what remains.
 
 | Track | Done | Open |
 |---|---|---|

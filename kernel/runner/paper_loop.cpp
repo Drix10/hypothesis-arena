@@ -211,6 +211,39 @@ bool LogDecision(const std::string& dir, int64_t now_ns,
 
 }  // namespace
 
+// Sale proceeds stay unsettled until the next session. The estimate is the
+// larger of the candidate reference and the live mark, plus 1%, so it errs
+// toward holding cash back. The line lands before the order is sent and is
+// keyed by cid: a crash between the two cannot lose it, a replay cannot
+// double it.
+void PaperLoop::RecordProceeds(const exec::EntryDecision& d,
+                               int64_t entry_cents,
+                               const std::vector<PositionView>& held,
+                               int64_t now_s) {
+    if (booked_.count(d.cid)) return;
+    int64_t mark = 0;
+    for (const auto& p : held)
+        if (p.symbol == d.symbol) mark = p.market_value_cents;
+    int64_t ref = entry_cents * d.intent.qty_shares;
+    int64_t proceeds = (ref > mark ? ref : mark) * 101 / 100;
+    int64_t today = (now_s + EtOffsetSeconds(now_s)) / 86400;
+    book_.Record(today, proceeds, cfg_.holidays);
+    char rec[128];
+    std::snprintf(rec, sizeof(rec), "%lld %lld %.64s",
+                  (long long)NextSessionDay(today, cfg_.holidays),
+                  (long long)proceeds, d.cid.c_str());
+    if (AppendLine((cfg_.dir + "/settle.log").c_str(), rec))
+        booked_.insert(d.cid);
+}
+
+void PaperLoop::RecordInflight(const std::string& sym, int64_t entry_cents) {
+    inflight_[sym] = entry_cents;
+    char rec[64];
+    std::snprintf(rec, sizeof(rec), "%.15s %lld", sym.c_str(),
+                  (long long)entry_cents);
+    AppendLine((cfg_.dir + "/inflight.log").c_str(), rec);
+}
+
 PaperLoop::PaperLoop(G0Runner& runner, LoopIO io, LoopConfig cfg)
     : runner_(runner), io_(io), cfg_(cfg) {
     // settle.log: "<settle_day> <proceeds_cents>" per line, append-only.
@@ -220,8 +253,25 @@ PaperLoop::PaperLoop(G0Runner& runner, LoopIO io, LoopConfig cfg)
         size_t nl = log.find('\n', at);
         if (nl == std::string::npos) break;
         long long day = 0, cents = 0;
-        if (std::sscanf(log.c_str() + at, "%lld %lld", &day, &cents) == 2)
-            book_.Add(day, cents);
+        char cid[80] = {0};
+        int n = std::sscanf(log.c_str() + at, "%lld %lld %79s", &day, &cents,
+                            cid);
+        if (n >= 2) book_.Add(day, cents);
+        if (n == 3) booked_.insert(cid);
+        at = nl + 1;
+    }
+    // inflight.log: "<symbol> <entry_cents>", the reference price of the
+    // latest entry order per symbol.
+    std::string fl = ReadFrom(cfg_.dir + "/inflight.log", 0);
+    at = 0;
+    while (at < fl.size()) {
+        size_t nl = fl.find('\n', at);
+        if (nl == std::string::npos) break;
+        char sym[32] = {0};
+        long long cents = 0;
+        if (std::sscanf(fl.c_str() + at, "%31s %lld", sym, &cents) == 2 &&
+            cents > 0)
+            inflight_[sym] = cents;
         at = nl + 1;
     }
 }
@@ -231,10 +281,15 @@ bool PaperLoop::Tick(int64_t now_ns) {
     std::string clock, acct, pos;
     AccountView av;
     std::vector<PositionView> held;
+    std::vector<OrderView> orders;
+    std::string ord;
     bool have = Http(io_, "GET", "/v2/clock", &clock) &&
                 Http(io_, "GET", "/v2/account", &acct) &&
                 Http(io_, "GET", "/v2/positions", &pos) &&
-                ParseAccount(acct, &av) && ParsePositions(pos, &held);
+                Http(io_, "GET", "/v2/orders?status=open&nested=true&limit=500",
+                     &ord) &&
+                ParseAccount(acct, &av) && ParsePositions(pos, &held) &&
+                ParseOpenOrders(ord, &orders);
     int64_t now_s = now_ns / 1000000000LL;
     stats_.account_ok = have && !av.blocked &&
                         CalendarCovers(cfg_.holidays,
@@ -266,6 +321,28 @@ bool PaperLoop::Tick(int64_t now_ns) {
     // Orders already sent this tick are invisible to the account snapshot.
     std::vector<risk::Position> sent;
     int64_t spent_cents = 0;
+    // Working orders from earlier ticks. A buy is exposure that has not yet
+    // reached the position list; an unexplained order halts entries; a
+    // working sell means an exit is already on its way.
+    bool unexplained = false;
+    std::set<std::string> exiting;
+    for (const auto& o : orders) {
+        if (!o.is_buy) {
+            exiting.insert(o.symbol);
+            continue;
+        }
+        auto it = inflight_.find(o.symbol);
+        if (it == inflight_.end()) {
+            unexplained = true;
+            continue;
+        }
+        risk::Position rp;
+        rp.symbol = o.symbol;
+        rp.side = risk::Side::LONG;
+        rp.notional_cents = it->second * o.remaining_qty;
+        sent.push_back(rp);
+        spent_cents += rp.notional_cents;
+    }
     for (;;) {
         size_t nl = chunk.find('\n', at);
         if (nl == std::string::npos) break;
@@ -287,7 +364,8 @@ bool PaperLoop::Tick(int64_t now_ns) {
             in.tables = cfg_.tables;
             in.tables.held.clear();
             for (const auto& p : held)
-                if (p.is_long && p.qty > 0) in.tables.held.push_back(p.symbol);
+                if (p.is_long && (p.qty > 0 || p.fractional))
+                    in.tables.held.push_back(p.symbol);
             for (const auto& p : sent) in.tables.held.push_back(p.symbol);
             in.now_ns = now_ns;
             in.risk_bp = cfg_.risk_bp;
@@ -302,7 +380,7 @@ bool PaperLoop::Tick(int64_t now_ns) {
             s.settled_cash_cents =
                 book_.SettledCents(av.settled_cash_cents, today) - spent_cents;
             CountSubmitted(cfg_.dir, now_ns, &s.day_count, &s.hour_count);
-            s.entry_halt = FileExists(cfg_.dir + "/HALT");
+            s.entry_halt = unexplained || FileExists(cfg_.dir + "/HALT");
             for (const auto& p : held) {
                 risk::Position rp;
                 rp.symbol = p.symbol;
@@ -322,8 +400,15 @@ bool PaperLoop::Tick(int64_t now_ns) {
             if (pre.accepted)
                 MeasureRisk(io_, cfg_, pre.symbol, held, now_s, &s);
             d = exec::Decide(in);
+            if (d.proceed && d.intent.kind == risk::IntentKind::EXIT &&
+                exiting.count(d.symbol)) {
+                d.proceed = false;
+                d.reason = "exit-in-flight";
+            }
             if (d.proceed) {
                 const char* why = nullptr;
+                if (d.intent.kind == risk::IntentKind::EXIT)
+                    RecordProceeds(d, pre.entry_cents, held, now_s);
                 if (runner_.SubmitIntent(d.intent, &why)) {
                     submit = "submitted";
                     AppendSubmitted(cfg_.dir, now_ns);
@@ -334,16 +419,7 @@ bool PaperLoop::Tick(int64_t now_ns) {
                         rp.notional_cents = pre.entry_cents * d.intent.qty_shares;
                         sent.push_back(rp);
                         spent_cents += rp.notional_cents;
-                    }
-                    if (d.intent.kind == risk::IntentKind::EXIT) {
-                        int64_t proceeds = pre.entry_cents * d.intent.qty_shares;
-                        int64_t today = (now_s + EtOffsetSeconds(now_s)) / 86400;
-                        book_.Record(today, proceeds, cfg_.holidays);
-                        char rec[64];
-                        std::snprintf(rec, sizeof(rec), "%lld %lld",
-                                      (long long)NextSessionDay(today, cfg_.holidays),
-                                      (long long)proceeds);
-                        AppendLine((cfg_.dir + "/settle.log").c_str(), rec);
+                        RecordInflight(d.symbol, pre.entry_cents);
                     }
                 } else {
                     submit = why ? why : "refused";

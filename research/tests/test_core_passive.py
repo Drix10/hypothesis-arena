@@ -6,7 +6,6 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-from research.strategy import candidate_wire as W
 from research.strategy.sleeves import core_passive as C
 from ops import emit_candidates as E
 
@@ -30,10 +29,10 @@ class Core(unittest.TestCase):
         self.assertEqual(len(nxt), 1)
 
     def test_missing_history_is_skipped_not_guessed(self):
-        with self.assertRaises(W.WireError):
-            C.build({"VTI": bars(5)}, set(), "2026-09", set(), 5)
+        self.assertEqual(C.build({"VTI": bars(5), "IEF": []}, set(),
+                                 "2026-09", set(), 5), ([], []))
 
-    def test_wrapper_is_idempotent_and_writes_lines(self):
+    def test_wrapper_writes_once_per_month(self):
         pages = []
 
         def get(url, headers):

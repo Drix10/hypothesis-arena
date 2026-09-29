@@ -33,6 +33,7 @@ static std::string g_account, g_bracket;  // fixture bodies
 static bool g_account_up = true;
 static bool g_data_up = true;
 static std::string g_positions = "[]";
+static std::string g_orders = "[]";
 static int g_orders_posted = 0;
 static int64_t NOW_S = 0;
 
@@ -152,6 +153,7 @@ int main(int argc, char** argv) {
             if (!g_account_up) return false;
             *body = g_account;
         } else if (path == "/v2/positions") *body = g_positions;
+        else if (path.rfind("/v2/orders?status=open", 0) == 0) *body = g_orders;
         else return false;
         return true;
     };
@@ -248,12 +250,29 @@ int main(int argc, char** argv) {
     if (loop.stats().proceeded != 1) std::printf("EXIT: %s\n", dec.substr(dec.size() > 400 ? dec.size() - 400 : 0).c_str());
     CHECK("exit-submitted", loop.stats().proceeded == 1);
     std::string sl = Slurp(env.dir + "/settle.log");
-    CHECK("exit-books-proceeds", sl.find("1002000") != std::string::npos);
+    CHECK("exit-books-proceeds", sl.find("1012020") != std::string::npos);
     CHECK("proceeds-settle-next-session", sl.find("20725 ") == 0);
 
     // 9. a restart reloads the book from settle.log.
     PaperLoop again(runner, io, lc);
     CHECK("book-reloads", again.stats().seen == 0);
+
+    // 9b. working orders from earlier ticks are respected.
+    g_orders = "[{\"symbol\":\"ZZZ\",\"side\":\"buy\",\"qty\":\"5\","
+               "\"filled_qty\":\"0\"}]";
+    Append(env.dir + "/candidates.jsonl", Cand("trend_etf_v1", 30));
+    loop.Tick(NOW_S * 1000000000LL);
+    dec = Slurp(env.dir + "/decisions.jsonl");
+    CHECK("unexplained-order-halts-entries",
+          dec.rfind("entry-halt") > dec.rfind("exit-in-flight") ||
+              dec.find("entry-halt") != std::string::npos);
+    g_orders = "[{\"symbol\":\"VTI\",\"side\":\"sell\",\"qty\":\"40\","
+               "\"filled_qty\":\"0\"}]";
+    Append(env.dir + "/candidates.jsonl", Cand("trend_etf_v1", 40, "SELL"));
+    loop.Tick(NOW_S * 1000000000LL);
+    dec = Slurp(env.dir + "/decisions.jsonl");
+    CHECK("exit-in-flight-held", dec.find("exit-in-flight") != std::string::npos);
+    g_orders = "[]";
 
     // 10. an unterminated oversize line does not stall the queue.
     Append(env.dir + "/candidates.jsonl", std::string(1100000, 'x'));

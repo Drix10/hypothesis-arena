@@ -1,13 +1,16 @@
 // Paper decision loop: candidates.jsonl -> Decide -> SubmitIntent.
-// All I/O is injected. Every candidate leaves one line in decisions.jsonl,
-// proceed or hold, so the audit trail never depends on the order path.
+// All I/O is injected. Every candidate is logged to decisions.jsonl, proceed
+// or hold; a failed log write leaves the line unconsumed for the next tick.
 #pragma once
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <set>
 #include <string>
 
+#include "../exec/decide.hpp"
 #include "../ingest/candidates.hpp"
+#include "account.hpp"
 #include "runner.hpp"
 #include "settle.hpp"
 
@@ -45,6 +48,11 @@ class PaperLoop {
     const LoopStats& stats() const { return stats_; }
 
    private:
+    void RecordProceeds(const exec::EntryDecision& d, int64_t entry_cents,
+                        const std::vector<PositionView>& held, int64_t now_s);
+    void RecordInflight(const std::string& sym, int64_t entry_cents);
+    std::map<std::string, int64_t> inflight_;  // symbol -> entry ref cents
+    std::set<std::string> booked_;             // cids with proceeds booked
     G0Runner& runner_;
     LoopIO io_;
     LoopConfig cfg_;

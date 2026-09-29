@@ -1,5 +1,6 @@
 """Writes candidates.jsonl lines for the core passive sleeve from SIP daily
-bars. Run once per session after the close; at most one emission per symbol and month.
+bars: at most one candidate per symbol and month. Run during the session (the
+loop holds candidates that arrive while the market is closed).
 
     python3 ops/emit_candidates.py <loop_dir>
 
@@ -16,7 +17,6 @@ from research.strategy import sip_fetch
 from research.strategy.sleeves import core_passive
 
 HISTORY_DAYS = 60
-DELAY_MIN = 20
 
 
 def load_state(path):
@@ -37,8 +37,8 @@ def save_state(path, keys):
 
 
 def fetch_bars(now, http_get=sip_fetch.default_http_get, headers=None):
-    end = (now - datetime.timedelta(minutes=DELAY_MIN)).strftime(
-        "%Y-%m-%dT%H:%M:%SZ")
+    # Completed sessions only: today's daily bar is still forming.
+    end = now.strftime("%Y-%m-%dT00:00:00Z")
     start = (now - datetime.timedelta(days=HISTORY_DAYS)).strftime(
         "%Y-%m-%dT%H:%M:%SZ")
     out = {}

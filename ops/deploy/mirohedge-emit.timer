@@ -1,8 +1,8 @@
 [Unit]
-Description=Emit candidates after the US close
+Description=Emit candidates during the US session
 
 [Timer]
-OnCalendar=Mon..Fri 21:30 UTC
+OnCalendar=Mon..Fri 15:00 UTC
 Persistent=true
 
 [Install]

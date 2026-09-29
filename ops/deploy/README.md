@@ -49,8 +49,13 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now mirohedge-paper-loop mirohedge-emit.timer mirohedge-alerts.timer
 ```
 
-- `mirohedge-emit.timer` writes one candidate per unheld symbol per month after
-  the close; the loop picks it up during the next session.
+- `mirohedge-emit.timer` runs at 15:00 UTC, inside the session in both DST
+  regimes, and writes one candidate per symbol per month. The loop consumes a
+  line on its next tick and holds it if the market is closed, so it must not be
+  emitted outside the session.
+- Holidays come from `ops/deploy/session_calendar.json` (2026-2028). Extend it
+  before the last listed year ends; the loop refuses to trade in a year with no
+  listed holiday.
 - `mirohedge-paper-loop` exits 2 (refused) or 3 (HARD stop) and is then **not**
   restarted; investigate the journal before starting it again.
 - Stop everything with `touch /var/lib/mirohedge/g0/HALT`. Entries hold, exits

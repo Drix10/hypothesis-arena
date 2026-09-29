@@ -60,6 +60,22 @@ int main(int argc, char** argv) {
     CHECK("short-position-flagged", ParsePositions(
         "[{\"symbol\":\"X\",\"qty\":\"-3\",\"side\":\"short\","
         "\"market_value\":\"-90\"}]", &ps) && !ps[0].is_long);
+    CHECK("fractional-flagged", ParsePositions(
+        "[{\"symbol\":\"VTI\",\"qty\":\"0.000001\",\"side\":\"long\","
+        "\"market_value\":\"0.03\"}]", &ps) && ps.size() == 1 &&
+                                   ps[0].fractional && ps[0].qty == 0);
+    std::vector<OrderView> os;
+    CHECK("orders-parse", ParseOpenOrders(
+        "[{\"symbol\":\"VTI\",\"side\":\"buy\",\"qty\":\"12\","
+        "\"filled_qty\":\"5\"},{\"symbol\":\"IEF\",\"side\":\"sell\","
+        "\"qty\":\"3\",\"filled_qty\":\"3\"}]", &os) &&
+                              os.size() == 1 && os[0].remaining_qty == 7 &&
+                              os[0].is_buy);
+    CHECK("orders-bad", !ParseOpenOrders("[{\"symbol\":\"VTI\"}]", &os) &&
+                            !ParseOpenOrders("{}", &os) &&
+                            !ParseOpenOrders(
+        "[{\"symbol\":\"V\",\"side\":\"buy\",\"qty\":\"1\","
+        "\"filled_qty\":\"2\"}]", &os));
     CHECK("bad-position", !ParsePositions("[{\"symbol\":\"X\"}]", &ps));
     CHECK("bad-side", !ParsePositions(
         "[{\"symbol\":\"X\",\"qty\":\"1\",\"side\":\"flat\","

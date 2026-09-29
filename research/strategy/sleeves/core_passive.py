@@ -1,11 +1,12 @@
-"""core_passive_v1: a non-alpha 60/40 core (VTI, IEF) that exists to exercise
-the paper loop end to end. It is not a promotion candidate: it cannot beat the
-passive benchmark it is."""
+"""core_passive_v1: a passive 60/40 core (VTI, IEF) used to exercise the paper
+loop end to end. It is the passive benchmark itself, not a promotion
+candidate."""
 from research.strategy import candidate_wire as W
 
 SLEEVE = "core_passive_v1"
 SYMBOLS = ("VTI", "IEF")
 TP_MULT = 1.5
+MIN_BARS = 21  # ATR(20) needs 20 true ranges
 
 
 def build(bars, held, month, emitted, now_ns):
@@ -16,7 +17,8 @@ def build(bars, held, month, emitted, now_ns):
     lines, keys = [], []
     for sym in SYMBOLS:
         key = f"{SLEEVE}:{sym}:{month}"
-        if sym in held or key in emitted or sym not in bars:
+        if (sym in held or key in emitted
+                or len(bars.get(sym, ())) < MIN_BARS):
             continue
         hi, lo, cl = zip(*bars[sym])
         entry = cl[-1]

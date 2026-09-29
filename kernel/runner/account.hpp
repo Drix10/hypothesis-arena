@@ -27,10 +27,20 @@ struct PositionView {
     int64_t qty = 0;
     int64_t market_value_cents = 0;
     bool is_long = true;
+    bool fractional = false;  // holds a share fraction (dust; never traded)
+};
+
+// A working parent order (bracket legs are nested inside it, not listed).
+struct OrderView {
+    std::string symbol;
+    bool is_buy = true;
+    int64_t remaining_qty = 0;  // whole shares not yet filled
 };
 
 bool ParseAccount(const std::string& body, AccountView* out);
 bool ParsePositions(const std::string& body, std::vector<PositionView>* out);
+// GET /v2/orders?status=open&nested=true
+bool ParseOpenOrders(const std::string& body, std::vector<OrderView>* out);
 
 }  // namespace runner
 }  // namespace jev

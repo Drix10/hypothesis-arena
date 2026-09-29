@@ -107,11 +107,40 @@ bool ParsePositions(const std::string& body, std::vector<PositionView>* out) {
         int64_t q = 0;
         if (!ParseMoneyCents(qty, &q)) return false;  // qty may be fractional
         p.qty = q / 100;
+        size_t dot = qty.find('.');
+        if (dot != std::string::npos)
+            for (size_t k = dot + 1; k < qty.size(); ++k)
+                if (qty[k] != '0') p.fractional = true;
         p.is_long = side == "long";
         if (side != "long" && side != "short") return false;
         ps.push_back(p);
     }
     *out = ps;
+    return true;
+}
+
+bool ParseOpenOrders(const std::string& body, std::vector<OrderView>* out) {
+    JVal v;
+    std::string err;
+    if (!ParseJson(body, v, err) || v.t != JVal::T::ARR) return false;
+    std::vector<OrderView> os;
+    for (const JVal& e : v.a) {
+        if (e.t != JVal::T::OBJ) return false;
+        OrderView o;
+        std::string side, qty, filled;
+        if (!Str(e, "symbol", &o.symbol) || o.symbol.empty() ||
+            !Str(e, "side", &side) || (side != "buy" && side != "sell") ||
+            !Str(e, "qty", &qty) || !Str(e, "filled_qty", &filled))
+            return false;
+        int64_t q = 0, f = 0;
+        if (!ParseMoneyCents(qty, &q) || !ParseMoneyCents(filled, &f) ||
+            f > q)
+            return false;
+        o.is_buy = side == "buy";
+        o.remaining_qty = (q - f + 99) / 100;  // any remainder counts as a share
+        if (o.remaining_qty > 0) os.push_back(o);
+    }
+    *out = os;
     return true;
 }
 
