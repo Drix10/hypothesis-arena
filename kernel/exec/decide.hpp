@@ -1,6 +1,5 @@
-// Candidate -> order intent. Composes the candidate gate, position sizing
-// (doc 03 3.3) and the deterministic veto. Pure: account, market and clock
-// arrive as inputs; nothing here touches a file, a socket or a model.
+// Candidate -> order intent: candidate gate, sizing (doc 03 3.3) and veto.
+// Pure: account, market and clock arrive as inputs.
 #pragma once
 #include <cstdint>
 #include <map>
@@ -33,8 +32,8 @@ struct EntryDecision {
     OrderIntent intent{};                // valid only when proceed
 };
 
-// BUY candidates are sized as entries; a SELL candidate for a held symbol
-// closes the whole position as an EXIT intent.
+// BUY candidates are sized as entries; a SELL for a held symbol closes the
+// whole position as an EXIT intent.
 EntryDecision Decide(const DecideInput& in);
 
 }  // namespace exec

@@ -1,16 +1,14 @@
-// P3.5 Slice D — kill switch implementation. Evaluation is pure
-// predicate combination (no I/O, no clock, no allocation); actuation
-// machines return next-actions for the caller to perform. See header
-// for the evaluation/actuation boundary.
+// Kill switch implementation. Evaluation is pure predicate combination (no
+// I/O, clock or allocation); actuation machines return next-actions for the
+// caller to perform. See the header for the boundary.
 #include "switch.hpp"
 
 namespace jev {
 namespace kill {
 
 LevelResult EvaluateLevel(const KillInputs& in) {
-    // HARD tier (doc 10 sec. 10.3): integrity and resolvability
-    // failures. Each returns its frozen reason; order within the tier
-    // is documentation only (tier precedence is what matters).
+    // HARD tier (doc 10 10.3): integrity and resolvability failures. Order
+    // within the tier is documentation only.
     if (in.journal_chain_break)
         return {risk::KillLevel::HARD, "kill:journal-chain-break"};
     if (in.drift_unresolvable)
@@ -21,8 +19,8 @@ LevelResult EvaluateLevel(const KillInputs& in) {
         return {risk::KillLevel::HARD, "kill:determinism-fail"};
     if (in.sandbox_compromise)
         return {risk::KillLevel::HARD, "kill:sandbox-compromise"};
-    // MEDIUM tier: risk-limit and calibration breaches. Stage demotion
-    // is immediate on entry (actuation side); evaluation only names it.
+    // MEDIUM tier: risk-limit and calibration breaches. Stage demotion is
+    // immediate on entry (actuation side); evaluation only names it.
     if (in.drawdown_r5)
         return {risk::KillLevel::MEDIUM, "kill:drawdown-r5"};
     if (in.daily_loss_breach)
@@ -33,9 +31,8 @@ LevelResult EvaluateLevel(const KillInputs& in) {
         return {risk::KillLevel::MEDIUM, "kill:calib-breach"};
     if (in.spend_tier == 3)
         return {risk::KillLevel::MEDIUM, "kill:spend-tier-3"};
-    // SOFT tier: entries stop within 1 cycle, management continues.
-    // spend tiers 0-1 never kill (trim only); out-of-range tier values
-    // clamp to no-kill rather than escalating.
+    // SOFT tier: entries stop within 1 cycle, management continues. Spend
+    // tiers 0-1 never kill (trim only); out-of-range tiers clamp to no-kill.
     if (in.halt_file) return {risk::KillLevel::SOFT, "kill:halt-file"};
     if (in.jev_streak_s5)
         return {risk::KillLevel::SOFT, "kill:jev-streak-s5"};
@@ -59,13 +56,12 @@ bool EntriesAllowed(risk::KillLevel level, bool halt_present,
 FlattenOut StepFlatten(FlattenState s, const FlattenStep& in) {
     switch (s) {
         case FlattenState::MEDIUM_ACTIVE: {
-            // An externally closed position is recorded with its true
-            // closer (never "flattened by the switch").
+            // An externally closed position records its true closer.
             if (in.closed_externally)
                 return {FlattenState::FLATTENED, false, Closer::STOP_TP,
                         "flatten:stop-tp-closed"};
-            // Terminal venue close with the position still open: no
-            // flatten will ever be possible; stops/TP own the risk.
+            // Terminal venue close with the position still open: no flatten
+            // will be possible; stops/TP own the risk.
             if (in.venue_closed_terminal)
                 return {FlattenState::PROTECTION_ONLY, false,
                         Closer::NONE, "flatten:protection-only"};
@@ -76,11 +72,9 @@ FlattenOut StepFlatten(FlattenState s, const FlattenStep& in) {
                     "flatten:waiting-conditions"};
         }
         case FlattenState::FLATTEN_PENDING: {
-            // True-closer and confirmed-flat checks first: a flat
-            // position is FLATTENED regardless of failure flags (a
-            // stale failure observation never overrides observed flat).
-            // External close wins ties (broker-side reality over our
-            // ack; never claim switch credit falsely).
+            // True-closer and confirmed-flat checks first: a flat position is
+            // FLATTENED regardless of failure flags. External close wins ties
+            // (broker-side reality over our ack).
             if (in.closed_externally)
                 return {FlattenState::FLATTENED, false, Closer::STOP_TP,
                         "flatten:stop-tp-closed"};
@@ -90,17 +84,15 @@ FlattenOut StepFlatten(FlattenState s, const FlattenStep& in) {
             if (in.venue_closed_terminal)
                 return {FlattenState::PROTECTION_ONLY, false,
                         Closer::NONE, "flatten:protection-only"};
-            // Re-attempt (frozen sec. 10.3): the outstanding attempt
-            // is definitively terminal AND conditions allow AND the
-            // position is still open -> exactly one new issuance. The
-            // caller observes the fresh order in flight next cycle
-            // (prior_attempt_failed clears), so this cannot loop.
+            // Re-attempt (doc 10 10.3): the outstanding attempt is terminal,
+            // conditions allow and the position is open -> one new issuance.
+            // prior_attempt_failed clears once the fresh order is in flight, so
+            // this cannot loop.
             if (in.prior_attempt_failed && in.conditions_allow)
                 return {FlattenState::FLATTEN_PENDING, true,
                         Closer::NONE, "flatten:reattempt"};
-            // In-flight (or unknown) -> re-query/wait, NO resend.
-            // Terminal failure under bad conditions -> wait, NO
-            // forced exit. Both stay PENDING silently.
+            // In-flight or unknown -> wait, no resend. Terminal failure under
+            // bad conditions -> wait, no forced exit. Both stay PENDING.
             return {FlattenState::FLATTEN_PENDING, false, Closer::NONE,
                     "flatten:awaiting-ack"};
         }
@@ -111,7 +103,7 @@ FlattenOut StepFlatten(FlattenState s, const FlattenStep& in) {
             return {FlattenState::PROTECTION_ONLY, false, Closer::NONE,
                     "flatten:terminal"};
     }
-    // Unreachable (all enumerators covered); fail stationary, silent.
+    // Unreachable (all enumerators covered); stay put.
     return {FlattenState::MEDIUM_ACTIVE, false, Closer::NONE,
             "flatten:waiting-conditions"};
 }
@@ -128,9 +120,8 @@ HardOut StepHard(HardPhase p, const HardStep& in) {
             return {HardPhase::REESTABLISH,
                     HardAction::ESTABLISH_PROTECTION, "hard:missing"};
         case HardPhase::REESTABLISH:
-            // Non-gating: an impossible re-establish is recorded by the
-            // caller and stays visible; the sequence still attempts the
-            // flatten rather than stalling with risk unmanaged.
+            // Non-gating: an impossible re-establish is recorded by the caller;
+            // the sequence still attempts the flatten.
             return {HardPhase::ATTEMPT_FLATTEN,
                     HardAction::SEND_FLATTEN_CANCEL, "hard:flatten"};
         case HardPhase::ATTEMPT_FLATTEN:
@@ -140,10 +131,9 @@ HardOut StepHard(HardPhase p, const HardStep& in) {
             if (in.protection_confirmed)
                 return {HardPhase::REVOKE_AND_EXIT,
                         HardAction::REVOKE_CREDENTIALS, "hard:revoke"};
-            // Unconfirmed protection NEVER advances to revocation on
-            // its own: re-query (idempotent) and let the caller bound
-            // the attempts. Revocation without verification is the
-            // catastrophic ordering (frozen sec. 10.3).
+            // Unconfirmed protection never advances to revocation: re-query
+            // (idempotent) and let the caller bound the attempts. Revocation
+            // without verification is the catastrophic ordering (doc 10 10.3).
             return {HardPhase::CONFIRM_PROTECTION,
                     HardAction::CONFIRM_ACTIVE, "hard:unconfirmed"};
         case HardPhase::REVOKE_AND_EXIT:
@@ -167,8 +157,8 @@ bool SerializeKill(const Persisted& p, char* out, std::size_t n) {
 
 bool ParseKill(const char* s, Persisted* p) {
     if (s == nullptr || p == nullptr) return false;
-    // Exact shape "D1:d:d:d" + NUL: 8 chars, no more, no less
-    // (colons at 2/4/6, digits at 3/5/7, NUL at 8).
+    // Exact shape "D1:d:d:d" + NUL: 8 chars (colons at 2/4/6, digits at
+    // 3/5/7, NUL at 8).
     for (int i = 0; i < 8; ++i) {
         char ch = s[i];
         if (ch == '\0') return false;  // short

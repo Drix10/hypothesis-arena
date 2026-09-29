@@ -1,25 +1,18 @@
-// H1 integration — G0 runner production entry (doc 06, doc 10,
-// doc 13 sec. 13.5). Wires real dirs + wall clock; transport stays
-// INJECTED-null until Phase 4 wires live HTTPS, so this binary
-// CANNOT order by construction today (every adapter call refuses
-// transport-unwired; the machine reconciles, never sends).
+// G0 runner production entry (doc 06, doc 10, doc 13 13.5). Wires real dirs
+// and the wall clock; the transport stays null until Phase 4 wires live
+// HTTPS, so every adapter call refuses (transport-unwired) and the binary
+// reconciles but never sends.
 //
-// DEPLOYMENT CONTRACT (who owns what — the binary never supervises
-// itself): the operator starts exactly one instance per dir with a
-// human-created STAGE file; a SUPERVISOR owns the continuous window
-// (restarts, 30-day H2 coverage) and MUST NEVER auto-restart after
-// a HARD stop (exit 3 — forensics first, doc 10 sec. 10.3); resume
-// after a HALT-less restart needs the explicit --resume flag (doc 06
-// sec. 6.4 friction: without it the binary reconciles + manages
-// exits but submits nothing new). cycles=0 runs until HARD/refused
-// (the H2 unbounded mode); 1..1000000 runs bounded.
-//
-// The operator: creates <dir>/STAGE (human-signed G0_PAPER, capital
-// 0, chained attest per plan/10 sec. 10.5), starts exactly one
-// instance per dir. Intents arrive from the risk path (not yet
-// wired — this entry idles, reconciles, and guards until then).
-// HALT file or HARD kill stops the loop (exit status: 0 clean idle,
-// 2 refused, 3 HARD).
+// Deployment: the operator starts exactly one instance per dir with a
+// human-created STAGE file (human-signed G0_PAPER, capital 0, chained attest
+// per plan/10 10.5). A supervisor owns the continuous window (restarts, 30-day
+// H2 coverage) and must not auto-restart after a HARD stop (exit 3; forensics
+// first, doc 10 10.3). Resuming after a HALT-less restart needs --resume (doc
+// 06 6.4): without it the binary reconciles and manages exits but submits
+// nothing new. cycles=0 runs until HARD/refused (H2 unbounded mode);
+// 1..1000000 runs bounded. Intents arrive from the risk path (not yet wired),
+// so this entry idles, reconciles and guards. A HALT file or HARD kill stops
+// the loop (exit 0 clean idle, 2 refused, 3 HARD).
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -40,9 +33,9 @@ long long WallNs(void*) {
                std::chrono::system_clock::now().time_since_epoch())
         .count();
 }
-// Monotonic elapsed clock for S2 cadence/operational timeouts.
-// Wall jumps (NTP, operator) must not distort reconcile rhythm;
-// audit timestamps/epochs/day accounting stay on WallNs.
+// Monotonic clock for S2 cadence and timeouts, so wall jumps (NTP, operator)
+// do not distort the reconcile rhythm. Audit timestamps, epochs and day
+// accounting stay on WallNs.
 long long MonoNs(void*) {
     return (long long)std::chrono::duration_cast<std::chrono::nanoseconds>(
                std::chrono::steady_clock::now().time_since_epoch())

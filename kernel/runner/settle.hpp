@@ -20,7 +20,7 @@ class SettleBook {
     // Broker-reported settled cash less our own unsettled proceeds.
     int64_t SettledCents(int64_t broker_settled_cents, int64_t today) const;
     size_t size() const { return e_.size(); }
-    // Persistence: one "settle_day proceeds" pair per call to Save/Load.
+    // (settle_day, proceeds) pairs, for persistence.
     std::vector<std::pair<int64_t, int64_t>> entries() const { return e_; }
     void Add(int64_t settle_day, int64_t proceeds_cents);
 

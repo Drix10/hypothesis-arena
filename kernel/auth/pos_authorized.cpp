@@ -1,6 +1,6 @@
 // Slice A positive control: the authorized path compiles, links, runs.
 // Must compile AND exit 0: request_for() manufactures the request,
-// validate_jev() reads it, and a COPY of an authorized request validates
+// validate_jev() reads it, and a copy of an authorized request validates
 // identically (copying allowed, mutation impossible).
 #include <cstdio>
 #include "../kernel_state.hpp"

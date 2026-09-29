@@ -101,7 +101,7 @@ int main() {
         Check(p.Note(31000001LL + kMax + 1, kMax), "poll-max-plus-one");
         // backward latches and preserves the reference: last is now
         // 61000002; a rewind to 900000 gaps, and the following
-        // forward sample off the PRESERVED reference does not.
+        // forward sample off the preserved reference does not.
         Check(p.Note(900000LL, kMax), "poll-backward-latch");
         Check(!p.Note(61000002LL + 1000LL, kMax), "poll-after-backward");
         PollGap q;

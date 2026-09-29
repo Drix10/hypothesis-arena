@@ -1,42 +1,33 @@
-// H1 — Alpaca paper adapter (stocks-only G0 venue).
+// Alpaca paper adapter (stocks-only G0 venue).
 #pragma once
 //
-// Declared semantics (frozen interface proof surface): units are whole
-// shares; partial fills are reported with exact filled qty; price
-// precision is cents; the protected entry is a single bracket order
-// (entry + TP leg + SL leg) whose broker acknowledgement covers all
-// three legs — the adapter refuses to report protection_accepted unless
-// the transport confirms every leg. Transport is injected: unit tests
-// prove the request shape and ack mapping against a fake; the live
-// HTTPS wiring belongs to Phase 4 (no live credentials in H1).
+// Units are whole shares; partial fills report exact filled qty; prices are
+// cents. The protected entry is one bracket order (entry + TP + SL) whose
+// acknowledgement covers all three legs; protection_accepted is reported
+// only when the transport confirms every leg. Transport is injected; unit
+// tests prove the request shape and ack mapping against a fake.
 //
-// Authoritative response shapes (single query, no hidden lookup):
-//   submit ack = POST /v2/orders bracket response (created bracket
-//     with legs populated; the UUID + legs proof ride this reply);
+// Response shapes (single query, no hidden lookup):
+//   submit ack = POST /v2/orders bracket response (UUID + legs proof);
 //   reconcile  = GET /v2/orders:by_client_order_id?client_order_id=
-//     (Order entity; no nested param is documented there, so legs
-//     are trusted ONLY when strictly proven — absence routes to the
-//     repair path, never to assumed protection).
-// Outcome classes: 400/422 permanent refusal; 401 auth failure;
-// 403 forbidden order request (buying-power class: the ORDER is
-// dead, never an auth-outage classification); 429 throttled;
-// anything else non-2xx/ambiguous (reconcile first). DELETE 204 =
-// cancel REQUEST accepted (final cancel needs an explicit canceled
-// observation). MarketClose rides a stable client ID and reports the
-// full close lifecycle (FILLED/PARTIAL/PENDING/DEAD/UNKNOWN) with a
-// strict quantity — a 2xx + UUID alone never means executed. NOTE:
-// the venue order status is "filled" (bare "fill" is a trade-event
-// type, never an order status).
+//     (Order entity; no nested param is documented, so legs are trusted only
+//     when strictly proven and absence routes to repair).
+// Outcome classes: 400/422 permanent refusal; 401 auth failure; 403
+// forbidden order request (buying-power class: the order is dead, not an
+// auth outage); 429 throttled; anything else non-2xx/ambiguous reconciles
+// first. DELETE 204 = cancel request accepted (final cancel needs a
+// canceled observation). MarketClose rides a stable client ID and reports
+// the full close lifecycle (FILLED/PARTIAL/PENDING/DEAD/UNKNOWN) with a
+// strict quantity; a 2xx + UUID alone never means executed. The order status
+// is "filled"; bare "fill" is a trade-event type.
 #include "adapter.hpp"
 
 namespace jev {
 namespace broker {
 
-// Minimal transport surface: the FULL HTTP verb surface the venue
-// needs (lookup is GET, cancel is DELETE, submits are POST).
-// POST-only cannot express the real Trading API contract, so the
-// injected transport takes the method explicitly. Bodies are small
-// bounded JSON assembled by the adapter (cycle path).
+// Transport surface: GET for lookup, DELETE for cancel, POST for submits, so
+// the method is explicit. Bodies are small bounded JSON built by the
+// adapter.
 struct HttpResult {
     int status = 0;
     char body[8192];  // a bracket order reply is ~2.6 KB on the live venue

@@ -1,11 +1,10 @@
-// P3.5 Slice C — f2 validation + fixed-arena retention. See features.hpp
-// for scope, order, and the zero-malloc contract.
+// f2 validation + fixed-arena retention. See features.hpp for scope, order and
+// the zero-malloc contract.
 //
-// ALLOCATION DISCIPLINE: this file uses no heap vocabulary at all
-// (build-gated, comments stripped). All vocabulary compares run directly
-// on u32strings against ASCII literals; reason details encode straight
-// into the outcome buffer. The parser-owned numeric token is read via
-// pointer+length, never converted into an owned string.
+// This file uses no heap vocabulary (build-gated, comments stripped).
+// Vocabulary compares run directly on u32strings against ASCII literals;
+// reason details encode into the outcome buffer; the parser-owned numeric
+// token is read via pointer+length.
 #include "features.hpp"
 
 #include <cstring>
@@ -14,7 +13,7 @@ namespace jev {
 namespace ingest {
 namespace {
 
-// ---- frozen f2 vocabularies (doc 08 sec. 8.5; P1.5-identical) ----
+// ---- f2 vocabularies (doc 08 8.5; P1.5-identical) ----
 const char* kKinds[] = {"filing_event", "macro_release", "calendar_ahead",
                         "osint_event", "sentiment_tail", "regime_hint"};
 const char* kEffects[] = {"bullish", "bearish", "risk_up", "risk_down",
@@ -23,9 +22,8 @@ const char* kEvidence[] = {"source", "derived", "inference"};
 const char* kConf[] = {"low", "medium", "high"};
 const char* kSources[] = {"edgar_8k",   "fed_monetary", "ecb_mid",
                           "treasury_auctions", "bls_empsit",    "fred_macro"};
-// Frozen source->kind emission registry: kinds with no frozen emitter
-// (osint_event, sentiment_tail, regime_hint) are rejected here, never
-// admitted on structural validity alone.
+// Source->kind emission registry: kinds with no frozen emitter (osint_event,
+// sentiment_tail, regime_hint) are rejected, not admitted on structure alone.
 const char* kEdgarKinds[] = {"filing_event"};
 const char* kMacroKinds[] = {"macro_release", "calendar_ahead"};
 const char* kRequired[] = {"schema_version", "kind", "symbols", "value",
@@ -41,7 +39,6 @@ const char* kProseKeys[] = {"thesis_text", "critique_text", "narrative",
                             "commentary",  "analysis_text"};
 
 // ASCII-literal compare against a u32string: exact, allocation-free.
-// (Vocabularies and field names are pure ASCII by construction.)
 bool AsciiEq(const std::u32string& u, const char* a) {
     size_t i = 0;
     for (; a[i]; i++)
@@ -55,9 +52,8 @@ bool InAsciiList(const char* const* list, size_t n,
         if (AsciiEq(u, list[i])) return true;
     return false;
 }
-// Allocation-free member lookup (the zero-malloc contract forbids the
-// U8() key temporaries: each U8() builds a std::string + u32string
-// that may heap-allocate, invisible to any file-local grep gate).
+// Allocation-free member lookup (U8() key temporaries would heap-allocate,
+// invisible to file-local grep gates).
 const JVal* FindAscii(const JVal& obj, const char* key) {
     if (obj.t != JVal::T::OBJ) return nullptr;
     for (auto& kv : obj.o)
@@ -67,9 +63,8 @@ const JVal* FindAscii(const JVal& obj, const char* key) {
 #define NARR(a) (sizeof(a) / sizeof((a)[0]))
 
 // Strict int64 over a JSON numeric token (pointer+length into the
-// parser-owned token: read, never owned). Optional '-', 1+ digits,
-// overflow-checked. Mirrors exact-int semantics (JSON floats never
-// reach here: num_double tokens are rejected by callers first).
+// parser-owned token): optional '-', 1+ digits, overflow-checked. Float
+// tokens are rejected by callers first.
 bool ParseInt64(const char* tok, size_t len, int64_t& out) {
     if (len == 0) return false;
     size_t i = 0;
@@ -103,9 +98,8 @@ bool IsHex64U32(const std::u32string& u) {
         if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
     return true;
 }
-// Prose quarantine: any object key (at any depth) in the frozen prose
-// set. The field allowlist below is the real guard; this preserves the
-// P1.5 first-failure reason for smuggled prose keys.
+// Prose quarantine: any object key (at any depth) in the prose set. The field
+// allowlist is the real guard; this keeps the P1.5 first-failure reason.
 bool HasProse(const JVal& v) {
     if (v.t == JVal::T::OBJ) {
         for (auto& kv : v.o) {
@@ -121,8 +115,8 @@ bool HasProse(const JVal& v) {
     }
     return false;
 }
-// Bounded u32 -> UTF-8 append into the reason buffer (ASCII fast path
-// is exact; non-ASCII encodes standardly). Always NUL-terminates.
+// Bounded u32 -> UTF-8 append into the reason buffer (ASCII fast path).
+// Always NUL-terminates.
 void AppendU32(char* buf, size_t cap, size_t& at, const std::u32string& u) {
     for (char32_t c : u) {
         if (c < 0x80) {
@@ -168,7 +162,7 @@ void SetReason(IngestOutcome& o, bool accepted, bool context_only,
     }
     o.reason[at] = '\0';
 }
-// ASCII-detail variant (static field names): no u32 conversion at all.
+// ASCII-detail variant (static field names): no u32 conversion.
 void SetReasonA(IngestOutcome& o, bool accepted, bool context_only,
                 RejectCode code, const char* ascii) {
     o.accepted = accepted;
@@ -258,7 +252,7 @@ IngestOutcome IngestRecord(IngestState& st, const JVal& rec, const char* canon,
     const JVal* evidence = FindAscii(rec, "evidence");
     const JVal* conf = FindAscii(rec, "confidence_bucket");
     const JVal* source = FindAscii(rec, "source_id");
-    // 4. version (before primitive check: a non-string version fails HERE,
+    // 4. version (before the primitive check: a non-string version fails here,
     // P1.5-identical).
     if (!schema || schema->t != JVal::T::STR || !AsciiEq(schema->s, "f2"))
         return reject(RejectCode::VERSION, nullptr);
@@ -283,11 +277,10 @@ IngestOutcome IngestRecord(IngestState& st, const JVal& rec, const char* canon,
     if (is_edgar ? !InAsciiList(kEdgarKinds, NARR(kEdgarKinds), kind->s)
                  : !InAsciiList(kMacroKinds, NARR(kMacroKinds), kind->s))
         return reject(RejectCode::NO_EMITTER, nullptr);
-    // 9. value shape, P1.5 precedence exactly: object -> type is a
-    // string -> type is a known VTYPES member (schema-value) -> exact
-    // {type, v} key set -> exact v type -> count >= 0. Multi-defect
-    // records therefore report the same first failure as P1.5 (e.g.
-    // {type:"bogus", v:"x", extra:1} is schema-value, not value-shape).
+    // 9. value shape, P1.5 precedence: object -> type is a string -> type is a
+    // known VTYPES member (schema-value) -> exact {type, v} key set -> exact v
+    // type -> count >= 0. Multi-defect records report the same first failure as
+    // P1.5 (e.g. {type:"bogus", v:"x", extra:1} is schema-value).
     const JVal* value = FindAscii(rec, "value");
     if (!value || value->t != JVal::T::OBJ)
         return reject(RejectCode::SCHEMA_VALUE, nullptr);
@@ -315,8 +308,8 @@ IngestOutcome IngestRecord(IngestState& st, const JVal& rec, const char* canon,
         }
         if (!shape_ok) return reject(RejectCode::VALUE_SHAPE, nullptr);
     }
-    // 10. symbols: non-empty array (empty bypasses identity — reject),
-    // <= 16, every element a non-empty string.
+    // 10. symbols: non-empty array (empty bypasses identity), <= 16, every
+    // element a non-empty string.
     {
         const JVal* syms = FindAscii(rec, "symbols");
         if (!syms || syms->t != JVal::T::ARR || syms->a.empty())
@@ -403,20 +396,17 @@ IngestOutcome IngestRecord(IngestState& st, const JVal& rec, const char* canon,
     }
     // 14/15. R12: integer-exact, no float time math (D6 spirit).
     // Future first (P1.5 order): observed past the snapshot is dropped.
-    // Deliberate precision upgrade over P1.5 (verified by cross-run):
-    // P1.5 divides to float seconds, so a 1ns-future stamp and a
-    // 1ns-past-TTL expiry both vanish in float rounding near 1.8e9 s
-    // (future misreports as ingested-before-observed; the expiry is
-    // missed entirely and falls through to entity checks). The integer
-    // rule below is exact at both boundaries, fail-closed.
+    // Deliberate precision upgrade over P1.5, which divides to float seconds:
+    // a 1ns-future stamp and a 1ns-past-TTL expiry vanish in float rounding
+    // near 1.8e9 s. The integer rule below is exact at both boundaries.
     if (observed > snapshot_ns) return reject(RejectCode::FUTURE, nullptr);
     {
         __int128 age = (__int128)snapshot_ns - observed;
         __int128 budget = (__int128)ttl * 1000000000LL;
         if (age > budget) return reject(RejectCode::EXPIRED, nullptr);
     }
-    // 16. ingested (optional): exact int, ranged, never future, never
-    // before observed (time-travel lineage is rejected, not reasoned).
+    // 16. ingested (optional): exact int, ranged, never future, never before
+    // observed.
     {
         const JVal* ig = FindAscii(rec, "ingested_at_ns");
         if (ig) {
@@ -437,8 +427,8 @@ IngestOutcome IngestRecord(IngestState& st, const JVal& rec, const char* canon,
         if (pu && pu->t != JVal::T::STR)
             return reject(RejectCode::PROVENANCE_TYPE, nullptr);
     }
-    // 18. entity_ref shape (optional): exactly {"cik": str}. Resolution
-    // against the pinned map is Slice G (needs the map file).
+    // 18. entity_ref shape (optional): exactly {"cik": str}. Resolution against
+    // the pinned map is Slice G.
     {
         const JVal* er = FindAscii(rec, "entity_ref");
         if (er) {
@@ -459,16 +449,15 @@ IngestOutcome IngestRecord(IngestState& st, const JVal& rec, const char* canon,
     }
     // Accepted. inference evidence is CONTEXT-only (never TRIGGER).
     bool capped = AsciiEq(evidence->s, "inference");
-    // Retention slot bound (resource, counted): canonical bytes must fit.
+    // Retention slot bound (counted): canonical bytes must fit.
     if (canon_len > kSlotBytes || !canon)
         return reject(RejectCode::OVER_SIZE, nullptr);
-    // Retain newest-first (stable: ties keep arrival order). Full and no
-    // newer than the oldest retained => valid-but-dropped (over-count).
+    // Retain newest-first (ties keep arrival order). Full and no newer than the
+    // oldest retained => valid-but-dropped (over-count).
     if (st.n >= kRetainMax) {
         if (observed <= st.slots[st.n - 1].observed_ns) {
-            // Valid but too old: counts as DROPPED only. (rejected and
-            // dropped are disjoint sets; counting both would make one
-            // drop two bad events in the rate math.)
+            // Valid but too old: counts as dropped only (the sets are
+            // disjoint, so one drop is one bad event in the rate math).
             SetReason(o, false, false, RejectCode::OVER_COUNT, nullptr);
             st.dropped++;
             st.per_reason[(int)RejectCode::OVER_COUNT - 1]++;
@@ -493,8 +482,7 @@ IngestOutcome IngestRecord(IngestState& st, const JVal& rec, const char* canon,
 }
 
 namespace {
-// Saturating counter add: operationally unreachable, but keeps the
-// hourly window meaningful (monotone, ordered) past any wrap.
+// Saturating counter add: unreachable in practice, keeps the window monotone.
 void SatAdd(uint64_t& acc, uint64_t x) {
     if (acc > UINT64_MAX - x)
         acc = UINT64_MAX;
@@ -504,12 +492,10 @@ void SatAdd(uint64_t& acc, uint64_t x) {
 }  // namespace
 
 void RateAdd(RateWindow& w, const IngestState& st, int64_t now_ns) {
-    // Caller contract: once per bundle, now_ns a non-negative monotonic
-    // clock. Elapsed hour resets first, so the rate covers the current
-    // one-hour window (tumbling, anchored at first RateAdd).
-    // Clock rollback (now < start) keeps the current window rather than
-    // resetting: resetting would erase accumulated bad counts. The
-    // difference is __int128, so no signed overflow on any input.
+    // Once per bundle, now_ns a non-negative monotonic clock. An elapsed hour
+    // resets first (tumbling window anchored at the first RateAdd). Clock
+    // rollback (now < start) keeps the window, since resetting would erase bad
+    // counts. The difference is __int128, so no signed overflow.
     __int128 elapsed = (__int128)now_ns - (__int128)w.window_start_ns;
     if (!w.window_set || elapsed < 0) {
         if (!w.window_set) {
@@ -531,8 +517,8 @@ void RateAdd(RateWindow& w, const IngestState& st, int64_t now_ns) {
 }
 
 bool ShouldAlert(const RateWindow& w) {
-    // Strictly above 5%: 20*bad > total. Every addend is widened to
-    // __int128 BEFORE any addition, so no uint64 sum can overflow first.
+    // Strictly above 5%: 20*bad > total, every addend widened to __int128
+    // before any addition.
     __int128 total =
         (__int128)w.accepted + (__int128)w.rejected + (__int128)w.dropped;
     if (total == 0) return false;

@@ -1,6 +1,5 @@
-// H1 integration — G0 runner implementation. See runner.hpp for
-// the ownership boundary. Deterministic under injected seams;
-// single-writer (the operator starts one instance per dir).
+// G0 runner implementation; see runner.hpp for the ownership boundary.
+// Deterministic under injected seams; single writer per directory.
 #include "runner.hpp"
 
 #include <cerrno>
@@ -49,21 +48,13 @@ bool IsTerminalState(exec::RouteState st) {
            st == exec::RouteState::UNKNOWN_FROZEN ||
            st == exec::RouteState::CLOSED;
 }
-// Uncovered live books (doc 06 sec. 6.1b): true when the
-// directory holds a slot book that claims LIVE risk with no
-// covering journal intent row OF ITS OWN. Coverage is PER
-// BOOK: a mixed journal (legitimate rows for some books)
-// must never launder an orphan for another book into success.
-// Live risk = a snapshot past the pre-send states (anything
-// but IDLE / JOURNAL_PENDING / recovery-terminal — the send
-// comes steps after the first persist, so a post-send machine
-// without a row is torn), an unreadable/unrestorable snapshot
-// (cannot prove inert — fail closed), or a snapshot with no
-// matching intent file (submit writes the intent first, so the
-// counterpart cannot be crash debris). Intent-only leftovers
-// (submit-before-first-cycle) and terminal books are NOT live
-// claims — they keep their established ignore/resume paths.
-// Stale AtomicWrite debris (*.tmp) is never a book.
+// Uncovered live books (doc 06 6.1b): true when the directory holds a slot
+// book claiming live risk with no journal intent row of its own. Coverage is
+// per book, so legitimate rows for other books cannot cover an orphan.
+// Live risk = a snapshot past the pre-send states (anything but IDLE /
+// JOURNAL_PENDING / recovery-terminal), an unreadable snapshot (cannot prove
+// inert), or a snapshot with no intent file. Intent-only leftovers and
+// terminal books are not live claims. *.tmp debris is never a book.
 bool HasUncoveredLiveBook(const std::string& dir,
                           const std::vector<std::string>& intent_ids,
                           std::string* offender) {
@@ -100,8 +91,8 @@ bool HasUncoveredLiveBook(const std::string& dir,
             infix.erase(infix.size() - 4);
         if (!FileExists(
                 (dir + "/intent-" + infix + ".txt").c_str())) {
-            // Half-registration, unattested: a live claim with
-            // no economics file needs its own journal row.
+            // Half-registration: a live claim with no economics file needs its
+            // own journal row.
             bool covered = false;
             for (std::size_t k = 0; k < intent_ids.size();
                  ++k) {
@@ -122,13 +113,9 @@ bool HasUncoveredLiveBook(const std::string& dir,
                          sizeof(rec))) {
             exec::RouteMachine m;
             if (exec::RestoreMachine(rec, &m)) {
-                // Recovery-terminal (CANCELLED /
-                // UNKNOWN_FROZEN / CLOSED) books need nothing;
-                // IDLE / JOURNAL_PENDING books predate any send.
-                // Anything else claims live risk — note PROTECTED
-                // is live here even though the drive loop treats
-                // it as terminal (round-3 recovery rule: restart
-                // must not demote it to slotless).
+                // Recovery-terminal books need nothing; IDLE / JOURNAL_PENDING
+                // predate any send. Anything else is live, PROTECTED included
+                // (restart must not demote it to slotless).
                 live = (m.state != exec::RouteState::IDLE &&
                         m.state !=
                             exec::RouteState::JOURNAL_PENDING &&
@@ -155,14 +142,10 @@ bool HasUncoveredLiveBook(const std::string& dir,
     }
     return false;
 }
-// Centralized MEDIUM FSM read (doc 06 sec. 6.1b): EVERY cycle
-// boundary validates the persisted file before any transition,
-// at every kill level — a malformed file can never be
-// rewritten into a legitimate-looking state (corruption is
-// refused, never erased). ABSENT = missing-or-empty
-// (fresh/mint-retry path); OK = one of the four legal states;
-// CORRUPT = non-regular node; UNKNOWN = present-but-
-// unreadable or non-empty unknown content.
+// Centralized MEDIUM FSM read (doc 06 6.1b): every cycle boundary validates
+// the persisted file before any transition, so corruption is refused, never
+// rewritten. ABSENT = missing or empty; OK = one of the four legal states;
+// CORRUPT = non-regular node; UNKNOWN = unreadable or unknown content.
 enum class MediumFsmRead { ABSENT, OK, CORRUPT, UNKNOWN };
 MediumFsmRead ReadMediumFsm(const char* path, std::string* out) {
     if (out) out->clear();
@@ -174,9 +157,8 @@ MediumFsmRead ReadMediumFsm(const char* path, std::string* out) {
     std::vector<std::string> lns;
     if (!ReadLines(path, &lns)) return MediumFsmRead::UNKNOWN;
     if (lns.empty()) return MediumFsmRead::ABSENT;  // mint-retry
-    // Exact one-line shape: trailing non-empty lines are
-    // corruption (the writer emits exactly one line — anything
-    // else was appended or spliced, never attested).
+    // Exact one-line shape: trailing non-empty lines mean the file was
+    // appended or spliced.
     if (lns.size() != 1) return MediumFsmRead::UNKNOWN;
     const std::string& cur = lns[0];
     if (cur != "MEDIUM_ACTIVE" && cur != "FLATTEN_PENDING" &&
@@ -185,9 +167,8 @@ MediumFsmRead ReadMediumFsm(const char* path, std::string* out) {
     *out = cur;
     return MediumFsmRead::OK;
 }
-// Filesystem-safe intent id (also the intent-file name infix):
-// alnum + '-'/'_' only, 1..64 chars. Rejects path traversal
-// ("../") BEFORE any filesystem touch.
+// Filesystem-safe intent id (also the intent-file name infix): alnum plus
+// '-' and '_', 1..64 chars. Rejects path traversal before any file access.
 bool IsSafeId(const char* s) {
     if (!s || s[0] == '\0') return false;
     int n = 0;
@@ -201,17 +182,16 @@ bool IsSafeId(const char* s) {
     }
     return true;
 }
-// Pop the stamped/consumed queue head (bounded shift, max 8).
+// Pop the consumed queue head (bounded shift, max 8).
 void ShiftStreamQ(Slot& s) {
     if (s.sev_n_ <= 0) return;
     for (int i = 0; i + 1 < s.sev_n_; ++i) s.sev_[i] = s.sev_[i + 1];
     s.sev_[s.sev_n_ - 1] = StreamEvt();
     --s.sev_n_;
 }
-// Journal truth for an intent id: 0 = no intent row, 1 = intent
-// row only (in flight or crashed before terminal), 2 = terminal
-// row present (fill/cancel/unknown/exit). Crash seams consult this
-// instead of assuming (a completed flatten is never re-ordered).
+// Journal truth for an intent id: 0 = no intent row, 1 = intent row only,
+// 2 = terminal row present (fill/cancel/unknown/exit). Crash seams consult
+// this so a completed flatten is never re-ordered.
 int JournalIntentState(const std::string& dir, const char* intent_id) {
     if (!intent_id) return 0;
     std::vector<journal::Row> jr;
@@ -229,14 +209,11 @@ int JournalIntentState(const std::string& dir, const char* intent_id) {
     }
     return st;
 }
-// Repair sub-identity: "<intent>-repair" hashed through the frozen
-// client-ID recipe (own deterministic id, restart-stable, never the
-// entry id — the venue rejects duplicate client_order_id). Pure
-// function: recovery re-derives it with no snapshot field, so the
-// frozen router format never changes. Unrepresentable only when
-// fields are empty (the recipe's own rule); then the caller fails
-// the repair and the router takes the flatten fallback (doc 06
-// sec. 6.1: establish now OR flatten immediately).
+// Repair sub-identity: "<intent>-repair" hashed through the client-ID recipe
+// (restart-stable; the venue rejects a duplicate client_order_id). Pure, so
+// recovery re-derives it without a snapshot field. Unrepresentable only when
+// fields are empty; the caller then fails the repair and the router falls
+// back to flatten (doc 06 6.1).
 bool RepairClientId(const char* broker, const char* account,
                     const char* ctx_hex, const char* symbol,
                     broker::OrderSide protect_side,
@@ -248,18 +225,16 @@ bool RepairClientId(const char* broker, const char* account,
                                      symbol, protect_side,
                                      rid.c_str(), coid_out);
 }
-// REPAIR_SENT reconciles the REPAIR order, not the entry: the
-// lookup id follows the repair sub-identity while the machine
-// waits on it (everywhere else the stable entry id rules).
+// REPAIR_SENT reconciles the repair order: the lookup id follows the repair
+// sub-identity while the machine waits on it.
 const char* LookupIdFor(const Slot& s) {
     if (s.m.state == exec::RouteState::REPAIR_SENT &&
         s.has_repair_id && s.repair_coid[0] != '\0')
         return s.repair_coid;
     return s.m.client_id;
 }
-// Quarantine vocabulary (doc 06 locked): done_for_day / calculated
-// (done for today, may resume tomorrow) / replaced (an unknown
-// replacement id may be live). Exact match, bounded words.
+// Quarantine vocabulary (doc 06): done_for_day / calculated (may resume
+// tomorrow) / replaced (an unknown replacement id may be live). Exact match.
 bool IsQuarantineStatus(const char* st) {
     if (!st || !st[0]) return false;
     const char* const qw[] = {"done_for_day", "calculated",
@@ -275,20 +250,16 @@ bool IsQuarantineStatus(const char* st) {
     }
     return false;
 }
-// Strict epoch parse: all digits, fits int64, > 0, over exactly
-// max_lines file lines (medium-incident.txt is one line;
-// hard-incident.txt is epoch + one optional reason line).
-// Anything else (missing/corrupt file, trailing data) = no
-// incident. `123\njunk` on a one-line file is corruption,
-// never 123.
+// Strict epoch parse: all digits, fits int64, > 0, over exactly max_lines
+// lines (medium-incident.txt one line; hard-incident.txt epoch plus one
+// optional reason line). Anything else, e.g. "123\njunk", is no incident.
 long long ParseEpoch(const std::vector<std::string>& lns,
                      std::size_t max_lines) {
     if (lns.empty() || lns.size() > max_lines) return 0;
     const std::string& e = lns[0];
     if (e.empty() || e.size() > 19) return 0;
-    // Checked accumulation: a 19-digit file value can exceed
-    // LLONG_MAX, and signed overflow is UB regardless of any
-    // after-the-fact sign test — refuse before it can happen.
+    // Checked accumulation: a 19-digit value can exceed LLONG_MAX and signed
+    // overflow is UB.
     long long v = 0;
     for (std::size_t i = 0; i < e.size(); ++i) {
         if (e[i] < '0' || e[i] > '9') return 0;
@@ -298,10 +269,9 @@ long long ParseEpoch(const std::vector<std::string>& lns,
     }
     return v;
 }
-// Incident close-id tags (doc 06 sec. 6.1b): kind + epoch +
-// symbol (+ qty for remainders), hashed through the frozen
-// recipe by the caller. One (symbol, side) per incident = one
-// pre-flighted identity every kill path shares.
+// Incident close-id tags (doc 06 6.1b): kind + epoch + symbol (+ qty for
+// remainders), hashed through the client-ID recipe by the caller. One
+// (symbol, side) per incident gives one pre-flighted identity.
 std::string SweepTag(long long epoch, const char* symbol) {
     char t[64];
     std::snprintf(t, sizeof(t), "medium-%lld-%.15s", epoch,
@@ -335,13 +305,10 @@ bool BodyFor(const char* kind, const exec::OrderIntent& in,
 G0Runner::G0Runner(const RunnerConfig& cfg, const RunnerDeps& deps)
     : cfg_(cfg), deps_(deps), adapter_(deps.transport) {
     prev_hash_ = journal::GenesisPrev();
-    // Capacity is never exceeded: entries stop at max_slots, exits
-    // (which must never wedge behind entry capacity — refusing an
-    // exit strands risk) stop at twice that. Both bounds hold
-    // BEFORE any push, so Slot& refs never dangle on reallocation
-    // mid-cycle (MEDIUM-flatten appends while the drive loop holds
-    // refs). The 2x ceiling is the documented worst case: every
-    // live entry carrying one live exit at once.
+    // Entries stop at max_slots and exits at twice that (an exit must never
+    // wedge behind entry capacity). Both bounds hold before any push so Slot&
+    // refs never dangle when MEDIUM flatten appends mid-cycle. 2x is the
+    // worst case of every live entry carrying one live exit.
     slots_.reserve((std::size_t)ExitCap());
 }
 
@@ -384,19 +351,16 @@ bool G0Runner::EmergencyAppend(const journal::Row& r) {
 }
 
 bool G0Runner::DrainEmergency() {
-    // Crash-idempotent, one row per turn: append the head (unless
-    // the journal tail already IS the head — a pre-crash append),
-    // then remove the head from the buffer file. ANY crash
-    // restarts the turn; convergence = full chain + empty buffer,
-    // never a duplicate row, never a half-drain refusal.
+    // Crash-idempotent, one row per turn: append the head (unless the journal
+    // tail already is the head), then remove it from the buffer file. A crash
+    // restarts the turn; convergence = full chain and empty buffer.
     std::string jp = P("journal.jsonl");
     std::string ep = P("emergency.jsonl");
     std::vector<journal::Row> jr;
     if (!JournalLoad(jp.c_str(), &jr)) return false;
-    // Every applied line (live file first, then each appended head):
-    // a buffer head matching ANY of these was already drained by a
-    // dead process — drop it, never re-append. Anything else that
-    // does not chain to the tail is a genuine break (refuse).
+    // Every applied line: a buffer head matching any of these was already
+    // drained by a dead process. Anything else that does not chain to the
+    // tail is a genuine break (refuse).
     std::vector<std::string> jlines;
     ReadLines(jp.c_str(), &jlines);  // missing = empty (JournalLoad
                                      // above already gated readability)
@@ -432,9 +396,8 @@ bool G0Runner::DrainEmergency() {
             seen.push_back(lns[head]);
             tail = r.row_hash;
         } else {
-            // Not chained to the tail: already applied (the exact
-            // line sits in the chain — a pre-crash append) or a
-            // genuine chain break (refuse loudly, never skip).
+            // Not chained to the tail: already applied (pre-crash append) or a
+            // genuine break (refuse, never skip).
             bool applied = false;
             for (std::size_t i = 0; i < seen.size(); ++i) {
                 if (seen[i] == lns[head]) {
@@ -467,10 +430,9 @@ bool G0Runner::Recover(const char** reason) {
     static const char kSnap[] = "recover-snapshot-bad";
     static const char kOrphan[] = "recover-orphaned-state";
     static const char kAttr[] = "recover-attribution-unpersisted";
-    // Authority revocation first (doc 06 sec. 6.1b): ANY failed
-    // recovery leaves this object with NO mutation authority —
-    // even after an earlier success. Only the full success at
-    // the end re-arms it; the held lock alone never implies it.
+    // Authority revocation first (doc 06 6.1b): any failed recovery leaves no
+    // mutation authority, even after an earlier success. Only full success
+    // re-arms it.
     recovered_ = false;
     if (!deps_.now_ns) {
         if (reason) *reason = "recover-no-clock";
@@ -481,13 +443,12 @@ bool G0Runner::Recover(const char** reason) {
         return false;
     }
     stage_ok_ = true;
-    // Single-process ownership (Phase-4 prerequisite): a live
-    // foreign holder refuses the whole recovery, never co-owns.
+    // Single-process ownership: a live foreign holder refuses recovery.
     if (!TakeDirLock()) {
         if (reason) *reason = "recover-lock-held";
         return false;
     }
-    // Journal: break = HARD, alert, refuse (doc 10: forensics first).
+    // Journal: break = HARD, alert, refuse (doc 10).
     if (!JournalVerifyFile(P("journal.jsonl").c_str())) {
         Alert(P("alerts.jsonl").c_str(), "HARD", "journal-chain-break",
               "journal.jsonl fails VerifyChain", deps_.now_ns(deps_.clock_ctx));
@@ -507,9 +468,8 @@ bool G0Runner::Recover(const char** reason) {
         if (reason) *reason = kChain;
         return false;
     }
-    // Post-drain reload: recovery decides from the JOINED chain
-    // (drained emergency rows are journal rows now). Re-verify —
-    // the drain appended, so trust but verify.
+    // Post-drain reload: recovery decides from the joined chain, so re-verify
+    // after the drain appended.
     if (!JournalVerifyFile(P("journal.jsonl").c_str())) {
         Alert(P("alerts.jsonl").c_str(), "HARD", "journal-chain-break",
               "post-drain chain fails VerifyChain",
@@ -529,19 +489,11 @@ bool G0Runner::Recover(const char** reason) {
         next_seq_ = 0;
         prev_hash_ = journal::GenesisPrev();
     }
-    // Orphaned books (doc 06 sec. 6.1b): intents rebuild
-    // exclusively from journal intent rows, so a durable book
-    // that claims LIVE risk with NO intent row OF ITS OWN in
-    // the journal is torn state — refuse for human recovery,
-    // never success-with-zero-slots and never success with
-    // the orphan silently dropped (the position would leave
-    // local ownership). Coverage is PER BOOK: a mixed journal
-    // with legitimate rows for other books must not launder
-    // an orphan into success. The refusal row below must never
-    // launder the orphan into a genesis (it is not an intent
-    // row — the next retry re-scans the same uncovered book).
-    // A virgin directory (no books) still initializes as
-    // genesis.
+    // Orphaned books (doc 06 6.1b): intents rebuild only from journal intent
+    // rows, so a durable book claiming live risk with no row of its own is
+    // torn state: refuse for human recovery. Coverage is per book. The refusal
+    // row is not an intent row, so it cannot launder the orphan into a
+    // genesis. A virgin directory still initializes as genesis.
     std::vector<std::string> journal_intent_ids;
     for (std::size_t i = 0; i < rows.size(); ++i) {
         if (rows[i].kind == "intent")
@@ -561,10 +513,8 @@ bool G0Runner::Recover(const char** reason) {
         if (reason) *reason = kOrphan;
         return false;
     }
-    // Durable stream cursor (missing = first run, empty cursor).
-    // A corrupt cursor refuses: replay-from-zero would silently
-    // discard the durable replay position (human deletes it to
-    // re-anchor, never an automatic reset).
+    // Durable stream cursor (missing = first run). A corrupt cursor refuses:
+    // replay-from-zero would discard the durable replay position.
     if (StatPath(P("cursor.txt").c_str()) == PathKind::CORRUPT) {
         if (reason) *reason = kSnap;
         return false;
@@ -575,25 +525,19 @@ bool G0Runner::Recover(const char** reason) {
     else
         cursor_.clear();
     cursor_dirty_ = false;
-    // Active intents = journal "intent" rows without a terminal row
-    // (fill/cancel/unknown/exit). Each needs BOTH its crash image
-    // (machine) and its intent file (economics — qty/stop/tp are
-    // NOT in the crash image and are never inferred):
+    // Active intents = journal "intent" rows without a terminal row. Each needs
+    // both its crash image (machine) and its intent file (economics, never
+    // inferred):
     //   snapshot + intent file -> full slot, reconcile-first;
-    //   neither file, intent row only -> fresh IDLE slot (the send
-    //     never reached a persisted state; pre-flight dedupe in
-    //     Dispatch makes the re-drive safe);
-    //   snapshot but no intent file (or vice versa, or corrupt) ->
-    //     refuse: half a registration cannot be driven (S2/human).
-    // Reconcile-first: last_s2_ns = 0 forces a real broker lookup
-    // on the first cycle (the crash may have eaten the answer the
-    // router was waiting for); sends always pre-flight by stable
-    // id, so recovery can never double-send.
-    // Terminal-row rule (doc 06 sec. 6.1b): a journal terminal row
-    // NEVER overrides a durable snapshot. Snapshot nonterminal ->
-    // the slot rebuilds below and reconciles; snapshot terminal ->
-    // done; journal-terminal + missing snapshot/intent -> refuse
-    // for human recovery (the row alone cannot prove the books).
+    //   neither file, intent row only -> fresh IDLE slot (nothing was sent;
+    //     pre-flight dedupe in Dispatch makes the re-drive safe);
+    //   one file without the other, or corrupt -> refuse (human).
+    // last_s2_ns = 0 forces a broker lookup on the first cycle; sends
+    // pre-flight by stable id, so recovery cannot double-send.
+    // Terminal-row rule (doc 06 6.1b): a journal terminal row never overrides a
+    // durable snapshot. Nonterminal snapshot -> rebuild and reconcile;
+    // terminal snapshot -> done; terminal row with missing snapshot/intent ->
+    // refuse (the row alone cannot prove the books).
     slots_.clear();
     std::vector<std::string> ids;
     std::vector<char> ids_term;
@@ -608,9 +552,8 @@ bool G0Runner::Recover(const char** reason) {
                 break;
             }
         }
-        // Deduplicate (a duplicated intent row is itself a chain
-        // anomaly: first wins, alerted, never two slots). A
-        // terminal row anywhere marks the id terminal.
+        // Deduplicate (a duplicated intent row is a chain anomaly: first wins,
+        // alerted). A terminal row anywhere marks the id terminal.
         bool seen = false;
         for (std::size_t k = 0; k < ids.size(); ++k) {
             if (ids[k] == rows[i].intent_id) {
@@ -639,9 +582,7 @@ bool G0Runner::Recover(const char** reason) {
                 PathKind::CORRUPT ||
             StatPath(IntentPath(ids[i].c_str()).c_str()) ==
                 PathKind::CORRUPT) {
-            // Corrupt durable state is never rebuilt-over (the
-            // IDLE exception below is for never-written files
-            // only): human recovery.
+            // Corrupt durable state is never rebuilt over (human recovery).
             OpsRow("reconcile", ids[i].c_str(),
                    "snapshot-corrupt", deps_.now_ns(deps_.clock_ctx));
             Alert(P("alerts.jsonl").c_str(), "HARD",
@@ -651,11 +592,9 @@ bool G0Runner::Recover(const char** reason) {
             return false;
         }
         if (ids_term[i] && (!has_snap || !has_intent)) {
-            // Journal-terminal with missing durable state: the row
-            // alone cannot prove the books (crash between the
-            // journal write and the snapshot persist, or operator
-            // deletion) — refuse for human recovery, never invent
-            // a done slot from a row.
+            // Journal-terminal with missing durable state: the row alone cannot
+            // prove the books (crash between journal write and snapshot
+            // persist, or operator deletion). Refuse.
             OpsRow("reconcile", ids[i].c_str(),
                    "terminal-row-missing-snapshot",
                    deps_.now_ns(deps_.clock_ctx));
@@ -667,14 +606,10 @@ bool G0Runner::Recover(const char** reason) {
             return false;
         }
         if (has_snap != has_intent) {
-            // Half a registration cannot be driven: EITHER file
-            // alone is S2/human territory (refuse loudly). The one
-            // exception is the crash between the journaled intent
-            // row and the first snapshot WITH the intent file
-            // present — that rebuilds IDLE with the row attested
-            // (nothing was ever sent: the send comes steps after
-            // the first persist, so the fresh mint below is safe
-            // and pre-flight dedupes it).
+            // Either file alone is human territory (refuse). The exception is a
+            // crash between the journaled intent row and the first snapshot with
+            // the intent file present: rebuild IDLE with the row attested
+            // (nothing was sent; the fresh mint below pre-flights).
             if (!has_snap && has_intent) {
                 if (id.qty <= 0 || id.symbol[0] == '\0') {
                     if (reason) *reason = kSnap;
@@ -715,20 +650,14 @@ bool G0Runner::Recover(const char** reason) {
                 if (reason) *reason = kSnap;
                 return false;
             }
-            // Recovery-terminal: CANCELLED / UNKNOWN_FROZEN /
-            // CLOSED skip rebuild. PROTECTED is NOT
-            // recovery-terminal (doc 06 sec. 6.1b): the runner
-            // treats it as a live position everywhere else
-            // (reclamation guard, flatness, netting, HARD
-            // management), so a durable PROTECTED image rebuilds
-            // as an active slot with its economics intact —
-            // restart must not demote it to slotless.
+            // Recovery-terminal: CANCELLED / UNKNOWN_FROZEN / CLOSED skip
+            // rebuild. PROTECTED is not (doc 06 6.1b): it is a live position
+            // elsewhere, so it rebuilds as an active slot.
             if (m.state == exec::RouteState::CANCELLED ||
                 m.state == exec::RouteState::UNKNOWN_FROZEN ||
                 m.state == exec::RouteState::CLOSED)
                 continue;
-            // Binding coherence: the crash image and the intent
-            // file must describe the same order.
+            // The crash image and intent file must describe the same order.
             if (std::strcmp(m.intent_id, ids[i].c_str()) != 0 ||
                 std::strcmp(m.symbol, id.symbol) != 0 ||
                 ((m.side == broker::OrderSide::SELL) ? 1 : 0) !=
@@ -748,20 +677,16 @@ bool G0Runner::Recover(const char** reason) {
             s.intent.tp_cents = id.tp;
             s.m = m;
         } else {
-            // Neither crash image nor intent file under a journaled
-            // intent row: half a registration (operator deleted
-            // files, or disk lost them) — refuse loudly, S2/human
-            // owns it. Never invent economics.
+            // Neither crash image nor intent file under a journaled intent row:
+            // half a registration; refuse, never invent economics.
             if (reason) *reason = kSnap;
             return false;
         }
         if (s.m.state == exec::RouteState::REPAIR_SENT) {
-            // The dead process may have POSTed the repair under
-            // its sub-identity: re-derive it (pure function — no
-            // snapshot field needed) so reconcile-first queries
-            // the repair order, never the entry. Derivation
-            // failure falls back to the entry id (the repair was
-            // unrepresentable; the router flattens from there).
+            // The dead process may have POSTed the repair under its
+            // sub-identity: re-derive it so reconcile-first queries the repair
+            // order. Derivation failure falls back to the entry id (the router
+            // then flattens).
             broker::OrderSide pside =
                 (s.intent.side == broker::OrderSide::BUY)
                     ? broker::OrderSide::SELL
@@ -780,15 +705,13 @@ bool G0Runner::Recover(const char** reason) {
         s.active = true;
         s.last_s2_ns = 0;  // first cycle reconciles first
         if (s.m.state == exec::RouteState::SENT_UNACKED) {
-            // The ack the dead process was waiting for is gone:
-            // reconcile under the same id (never resend blind —
-            // Dispatch pre-flights every send by stable id).
+            // The awaited ack is gone: reconcile under the same id (Dispatch
+            // pre-flights every send).
             s.query_due = true;
         }
         if (s.m.state == exec::RouteState::PARTIAL_AWAIT) {
-            // The partial row may have landed before the crash:
-            // re-derive coverage from the journal instead of
-            // assuming (or double-writing) it.
+            // The partial row may have landed before the crash: re-derive
+            // coverage from the journal.
             for (std::size_t k = 0; k < rows.size(); ++k) {
                 if (rows[k].intent_id == ids[i] &&
                     (rows[k].kind == "partial" ||
@@ -804,12 +727,10 @@ bool G0Runner::Recover(const char** reason) {
         }
         slots_.push_back(s);
     }
-    // Terminal EXIT closed quantity re-attributes AFTER entries
-    // exist (slots_ was empty during the id scan, so no earlier
-    // point can do it). Capped by provable open: a done-hook that
-    // already ran is a no-op (leftover drops); a hook that never
-    // ran folds exactly the surviving closed quantity. Misses
-    // journal and retry on the next reconcile.
+    // Terminal EXIT closed quantity re-attributes after entries exist (slots_
+    // was empty during the id scan). Capped by provable open: a done-hook that
+    // already ran is a no-op; one that never ran folds the surviving closed
+    // quantity. Misses journal and retry on the next reconcile.
     for (std::size_t i = 0; i < ids.size(); ++i) {
         if (!ids_term[i]) continue;
         IntentDesc xid;
@@ -829,15 +750,10 @@ bool G0Runner::Recover(const char** reason) {
                                                  : xid.symbol,
                                 xm.exit_closed_qty,
                                 deps_.now_ns(deps_.clock_ctx))) {
-            // Terminal attribution is never dropped (doc 06 sec.
-            // 6.1b): a CLOSED EXIT whose quantity cannot land on
-            // the parent entries keeps its accounting obligation.
-            // Refuse recovery — the next attempt retries from
-            // the durable pre-attribution state (the attribution
-            // is self-rollbacking, so nothing is half-folded).
-            // Marking recovered_ here would strand the books: the
-            // entry keeps claiming open while no EXIT object
-            // remains to retry it.
+            // Terminal attribution is never dropped (doc 06 6.1b): a CLOSED EXIT
+            // whose quantity cannot land on the parent entries refuses recovery
+            // (attribution self-rolls back, so the retry starts clean). Marking
+            // recovered_ here would strand the books.
             OpsRow("reconcile", ids[i].c_str(),
                    "recover-attribution-unpersisted",
                    deps_.now_ns(deps_.clock_ctx));
@@ -866,8 +782,8 @@ bool G0Runner::SubmitIntent(const exec::OrderIntent& in,
     static const char kReg[] = "submit-already-registered";
     static const char kJournal[] = "submit-journal-broken";
     static const char kRec[] = "submit-not-recovered";
-    // Lifecycle first: the constructor alone confers no
-    // mutation authority (doc 06 sec. 6.1b).
+    // Lifecycle first: the constructor alone confers no mutation authority
+    // (doc 06 6.1b).
     if (!recovered_ || !lock_took_) {
         if (reason) *reason = kRec;
         return false;
@@ -882,9 +798,8 @@ bool G0Runner::SubmitIntent(const exec::OrderIntent& in,
         return false;
     }
     bool is_exit = (in.kind == jev::risk::IntentKind::EXIT);
-    // EXIT bypasses freeze + stage (old risk stays managed under
-    // demotion/freeze); entries need both. Identity first in all
-    // cases (no filesystem touch before the grammar passes).
+    // EXIT bypasses freeze and stage; entries need both. Identity is checked
+    // first, before any filesystem access.
     if (!is_exit) {
         if (FreezeHas(P("freeze.txt").c_str(), in.symbol)) {
             if (reason) *reason = kFrozen;
@@ -897,8 +812,7 @@ bool G0Runner::SubmitIntent(const exec::OrderIntent& in,
     }
     long long cap = is_exit ? ExitCap() : EntryCap();
     if ((long long)slots_.size() >= cap) {
-        // One deferred sweep before refusing: completed work frees
-        // capacity (long runs never wedge on history).
+        // One deferred sweep before refusing: completed work frees capacity.
         ReclaimDone();
     }
     if ((long long)slots_.size() >= cap) {
@@ -909,13 +823,10 @@ bool G0Runner::SubmitIntent(const exec::OrderIntent& in,
         if (reason) *reason = kGated;
         return false;
     }
-    // Intent-id permanence: an existing record is bound forever to
-    // exactly one immutable intent. Different economics under the
-    // same id is refused outright; identical economics with a
-    // journaled intent row is an already-registered order (refuse —
-    // the row, not a resubmission, owns the lifecycle); identical
-    // economics with NO journal row is a crash-retry between
-    // registration and the first cycle (idempotent resume).
+    // Intent-id permanence: an existing record is bound to one immutable
+    // intent. Different economics under the same id is refused; identical
+    // economics with a journaled intent row is already registered (refuse);
+    // identical economics with no row is a crash-retry (idempotent resume).
     std::string ipath = IntentPath(in.intent_id);
     if (StatPath(ipath.c_str()) == PathKind::CORRUPT) {
         if (reason) *reason = kReuse;
@@ -952,17 +863,12 @@ bool G0Runner::SubmitIntent(const exec::OrderIntent& in,
             if (reason) *reason = kReg;
             return false;
         }
-        // Crash-retry: the record already holds these economics —
-        // resume without rewriting it.
+        // Crash-retry: resume without rewriting the record.
     } else {
-        // Journal history wins: an intent file gone missing
-        // (operator deletion, disk loss) does not free the id. A
-        // verified historical intent row means permanently
-        // registered — refuse even though the file is absent
-        // (recreating it would fork one identity into two
-        // lifecycles). An unverifiable journal refuses too: the
-        // journal is the identity authority, and a broken chain
-        // cannot prove the id is fresh.
+        // Journal history wins: a missing intent file does not free the id. A
+        // verified intent row means permanently registered (recreating the
+        // file would fork one identity into two lifecycles); an unverifiable
+        // journal refuses too.
         std::vector<journal::Row> hjr;
         if (!JournalVerifyFile(P("journal.jsonl").c_str())) {
             if (reason) *reason = kJournal;
@@ -1023,15 +929,12 @@ bool G0Runner::EntriesAllowedNow() const {
 
 void G0Runner::MaybeForceQuery(Slot& s, long long now_ns) {
     if (!s.active || s.done || IsTerminalState(s.m.state)) return;
-    // Failed lookups refresh on the next due trigger (a stale
-    // failure must never block fresh reconciliation); a good held
-    // answer is never stacked.
+    // Failed lookups refresh on the next due trigger; a good held answer is
+    // never stacked.
     if (s.has_forced_q && s.forced_q.transport_ok) return;
-    // S2 cadence + reconcile-first (last_s2_ns = 0 at Recover):
-    // one real lookup now, held until the machine consumes it.
-    // Event/timer-driven only — never a polling loop (the router
-    // budget still bounds router-emitted QUERY_ONCE). Elapsed on
-    // the monotonic clock: wall jumps never force/skip lookups.
+    // S2 cadence + reconcile-first (last_s2_ns = 0 at Recover): one lookup
+    // now, held until the machine consumes it. Event/timer-driven, not a
+    // polling loop. Elapsed on the monotonic clock.
     long long mono = MonoNs(now_ns);
     bool due = (mono - s.last_s2_ns) >=
                deps_.s2_seconds * 1000000000LL;
@@ -1042,26 +945,19 @@ void G0Runner::MaybeForceQuery(Slot& s, long long now_ns) {
 }
 
 long long G0Runner::MediumEpoch() const {
-    // Current MEDIUM incident epoch, or 0 when no incident is on
-    // file ( >> mint at medium-enter). Crash-safe by construction:
-    // the file outlives the process, so a mid-incident restart
-    // reuses the epoch and every sweep id stays stable.
+    // Current MEDIUM incident epoch, or 0 when none is on file. The file
+    // outlives the process, so a restart reuses the epoch.
     std::vector<std::string> lns;
     if (!ReadLines(P("medium-incident.txt").c_str(), &lns))
         return 0;  // missing = no incident
     return ParseEpoch(lns, 1);
 }
 long long G0Runner::MintMediumEpoch(long long now_ns) {
-    // A medium-enter IS a new incident by definition (the FSM file
-    // was empty/corrupt — a crash mid-incident keeps it, so it
-    // never re-enters). Overwrite unconditionally; clock-stuck
-    // guard keeps epochs monotonic so ids never repeat.
-    // Durable-or-nothing: no persisted epoch file, no new
-    // incident identity (a crash before the write lands must
-    // restart into the same re-mint, never into ids minted from
-    // an epoch the restart cannot recover). Failure returns 0
-    // (never a valid epoch); the caller reverts the FSM so the
-    // next cycle retries the mint.
+    // A medium-enter is a new incident (a crash mid-incident keeps the FSM
+    // file and never re-enters). Overwrite unconditionally; the clock-stuck
+    // guard keeps epochs monotonic. Durable-or-nothing: without a persisted
+    // epoch file there is no new identity. Failure returns 0 and the caller
+    // reverts the FSM so the next cycle retries.
     long long old = MediumEpoch();
     long long e = 0;
     if (now_ns > old) {
@@ -1100,16 +996,12 @@ long long G0Runner::MintMediumEpoch(long long now_ns) {
 long long G0Runner::HardEpochFor(long long now_ns,
                                  const char* reason,
                                  bool halt_at_entry) {
-    // Crash-mid-HARD keeps HALT (written first in HardStop), so a
-    // restart with HALT present is the SAME incident: reuse, or the
-    // in-flight closes double under fresh ids. Clearing HALT ends
-    // the incident (a human owns the interim); a re-firing HARD is
-    // new by definition. Clock-stuck guard as above.
-    // Unrecoverable incident: HALT present at entry but the epoch
-    // file missing/corrupt/unreadable means the incident identity
-    // cannot be resumed — minting fresh ids would double the
-    // in-flight closes the HALT exists to protect. Refuse (0) so
-    // the stop path halts without sending under a new identity.
+    // Crash-mid-HARD keeps HALT (written first in HardStop), so a restart with
+    // HALT present is the same incident: reuse it or in-flight closes double
+    // under fresh ids. Clearing HALT ends the incident; a re-firing HARD is
+    // new. Clock-stuck guard as above. HALT present but the epoch file
+    // missing/corrupt means the identity cannot be resumed: return 0 so the
+    // stop path halts without sending.
     std::vector<std::string> lns;
     long long old = 0;
     bool have_incident = ReadLines(P("hard-incident.txt").c_str(),
@@ -1167,11 +1059,9 @@ long long G0Runner::HardEpochFor(long long now_ns,
     return e;
 }
 bool G0Runner::LocalCloseCovers(const char* symbol) const {
-    // A symbol is locally covered while an active non-terminal
-    // EXIT/flatten works it, or an ENTRY's flatten is armed (issued
-    // or waited-on) or landed (terminal close on file). Frozen
-    // symbols (incoherent local state — no EXIT can ever appear)
-    // are NOT covered: the incident sweep owns those.
+    // Covered while an active non-terminal EXIT/flatten works the symbol, or
+    // an ENTRY's flatten is armed or landed. Frozen symbols are not covered;
+    // the incident sweep owns them.
     if (!symbol || !symbol[0]) return false;
     for (std::size_t i = 0; i < slots_.size(); ++i) {
         const Slot& s = slots_[i];
@@ -1189,9 +1079,8 @@ bool G0Runner::LocalCloseCovers(const char* symbol) const {
             std::string(s.intent.intent_id) + "-flatten";
         if (Find(fid.c_str())) return true;
         if (JournalIntentState(cfg_.dir, fid.c_str()) == 2) {
-            // Terminal row on file: landed-closed (entry attributed)
-            // stays covered; an OPEN entry beside one means the
-            // flatten died non-closed — the sweep owns the rest.
+            // Landed-closed stays covered; an OPEN entry beside a terminal row
+            // means the flatten died non-closed and the sweep owns the rest.
             if (s.m.filled_qty - s.m.exit_closed_qty <= 0)
                 return true;
             continue;
@@ -1208,10 +1097,8 @@ bool G0Runner::FlattenResolvedNotClosed(const Slot& s) const {
 int G0Runner::CollectCoverExits(const char* symbol,
                                  std::vector<std::size_t>* idx,
                                  long long* total) {
-    // Every active non-terminal EXIT on the symbol (indices +
-    // summed intent-minus-closed, floored at 0). Callers
-    // reconcile EACH one — first-only sampling let a dead first
-    // exit mask a live second.
+    // Every active non-terminal EXIT on the symbol (indices + summed
+    // intent-minus-closed, floored at 0). Callers reconcile each one.
     long long tot = 0;
     int n = 0;
     if (idx) idx->clear();
@@ -1238,12 +1125,8 @@ int G0Runner::CollectCoverExits(const char* symbol,
     return n;
 }
 int G0Runner::EntryCap() const {
-    // One validated capacity: the fixed architecture limit is 64
-    // live entries (exits run at 2x so risk never wedges behind
-    // entry capacity). Larger configured values clamp — the *2
-    // arithmetic below cannot overflow and fixed scratch tables
-    // cannot be over-indexed. Non-positive falls back to 16 (the
-    // historic default), matching prior behavior exactly.
+    // Validated capacity: at most 64 live entries (exits run at 2x). Larger
+    // values clamp; non-positive falls back to 16.
     if (cfg_.max_slots < 1) return 16;
     if (cfg_.max_slots > 64) return 64;
     return (int)cfg_.max_slots;
@@ -1281,16 +1164,11 @@ bool PidAlive(long long pid) {
 #endif
 }
 namespace {
-// Per-thread directory holds: the OS handle (fd /
-// HANDLE-as-integer) plus the owning live instance. At most
-// ONE live object per directory per thread: the same object
-// re-acquiring is idempotent (tracked by its own lock_took_),
-// while a SECOND live object is refused — two independent
-// state machines must never share one ownership token (their
-// separate next_seq_/prev_hash_/slots_ would fork the
-// journal). Thread-local: no shared state, no mutex — the
-// kernel primitive stays the sole cross-thread arbiter, so a
-// concurrent two-taker race genuinely contends on it.
+// Per-thread directory holds: the OS handle plus the owning live instance.
+// One live object per directory per thread: the same object re-acquiring is
+// idempotent, a second is refused (separate next_seq_/prev_hash_/slots_ would
+// fork the journal). No shared state or mutex, so a two-taker race contends
+// in the kernel primitive.
 struct DirHold {
     std::string path;
     const void* owner;  // live G0Runner holding this path
@@ -1299,33 +1177,14 @@ struct DirHold {
 thread_local std::vector<DirHold> g_dir_holds;
 }  // namespace
 bool G0Runner::TakeDirLock() {
-    // One live runner per state directory (Phase-4 prerequisite).
-    // The mutual-exclusion mechanism is an OS process-lifetime
-    // ownership primitive (doc 06 sec. 6.1b) — flock(LOCK_EX|NB)
-    // on POSIX, an exclusive no-share open handle on Windows —
-    // acquired once per winning instance and held open while
-    // it lives (the open fd/handle IS the lock). Read sharing
-    // stays open (diagnostic PID reads always work); WRITE is
-    // never shared, so a second contender's exclusive open is
-    // denied while we live. A dead holder releases it in the
-    // kernel, so stale takeover has no
-    // check-then-act window: two concurrent takers serialize in
-    // the kernel into exactly one owner. The PID file is
-    // diagnostic only (owner identity for alerts, written through
-    // the held handle after winning) — never the arbiter.
-    // Same-object re-entry is idempotent (repeated Recover on
-    // the live owner); a SECOND live object on the same thread
-    // is refused below — one live mutable runner per directory.
-    // A different thread contends like a foreign process
-    // and loses. Holds are tracked per thread (no shared state,
-    // no mutex: the kernel primitive stays the sole arbiter, so
-    // a concurrent two-taker race genuinely contends on it).
-    // The winning INSTANCE owns the hold (members below): its
-    // destructor closes the handle and unregisters it, so holds
-    // never leak and a later instance re-acquires
-    // through the kernel. Live instances keep the OS primitive
-    // open — one writer per directory holds while any instance
-    // of this process is alive on it.
+    // One live runner per state directory (doc 06 6.1b): flock(LOCK_EX|NB) on
+    // POSIX, an exclusive no-share open on Windows, held open for the winning
+    // instance's lifetime (the open handle is the lock). Reads stay shared so
+    // PID diagnostics work; a dead holder releases in the kernel, so there is
+    // no check-then-act window. The PID file is diagnostic only. Same-object
+    // re-entry is idempotent; a second live object on the thread is refused;
+    // another thread contends like a foreign process. The destructor closes
+    // the handle and unregisters the hold.
     if (lock_took_) return true;  // same object: idempotent
     std::string lp = P("runner.lock");
     for (std::size_t i = 0; i < g_dir_holds.size(); ++i) {
@@ -1359,19 +1218,15 @@ bool G0Runner::TakeDirLock() {
         if (ReadLines(lp.c_str(), &lns) && !lns.empty() &&
             !lns[0].empty())
             holder = lns[0];
-        // Refusal mutates NO shared state (doc 06 sec. 6.1b):
-        // no journal row (a contender's fresh next_seq_/genesis
-        // would fork an owned chain), no alert write, no file
-        // touch. Diagnostics go to stderr only — the supervisor
-        // owns them. Once ownership is established, normal
-        // journal/alert writes are allowed.
+        // Refusal mutates no shared state (doc 06 6.1b): no journal row (a
+        // contender's fresh genesis would fork an owned chain), no alert write.
+        // Diagnostics go to stderr only.
         std::fprintf(stderr,
                        "g0_runner: lock refused dir=%s holder=%s\n",
                        lp.c_str(), holder.c_str());
         return false;
     }
-    // Won: stamp our PID through the held handle (diagnostic)
-    // and register one reference under this instance.
+    // Won: stamp our PID through the held handle and register the hold.
 #ifdef _WIN32
     SetFilePointer(h, 0, NULL, FILE_BEGIN);
     DWORD done = 0;
@@ -1415,17 +1270,12 @@ bool G0Runner::SnapPositions(Position* ps, int cap,
     if (!ps || cap <= 0 || !n) return false;
     if (!deps_.list_positions) return false;
     int got = deps_.list_positions(deps_.positions_ctx, ps, cap);
-    // Seam contract: 0 <= n <= cap. A violating adapter (65,
-    // 100, ...) must never drive an over-read of the fixed
-    // buffer — treat as unavailable, exactly like a lookup
-    // failure.
+    // Seam contract: 0 <= n <= cap; a violating adapter is treated as an
+    // unavailable snapshot, never over-read.
     if (got < 0 || got > cap) return false;
-    // Row contract: every row NUL-terminated within its fixed
-    // field, non-empty symbol, qty inside the share domain (this
-    // also excludes LLONG_MIN, whose negation overflows), no
-    // duplicate symbols (ambiguous — silently picking one side
-    // would invent economics). Any violation invalidates the
-    // WHOLE snapshot: unknown, never partial trust.
+    // Row contract: NUL-terminated symbol, non-empty, qty inside the share
+    // domain (excludes LLONG_MIN), no duplicate symbols. Any violation
+    // invalidates the whole snapshot.
     for (int i = 0; i < got; ++i) {
         bool term = false;
         for (std::size_t b = 0; b < sizeof(ps[i].symbol); ++b) {
@@ -1450,9 +1300,8 @@ bool G0Runner::SnapPositions(Position* ps, int cap,
     return true;
 }
 bool G0Runner::BrokerQty(const char* symbol, long long* out) {
-    // Signed broker position for one symbol. False = no seam or
-    // failing endpoint (callers fall back + journal; unknown is
-    // never flat).
+    // Signed broker position for one symbol. False = no seam or failing
+    // endpoint; unknown is never flat.
     if (out) *out = 0;
     if (!symbol || !symbol[0] || !out) return false;
     Position ps[64];
@@ -1476,9 +1325,8 @@ std::string G0Runner::HardRemainderTag(long long epoch,
     return std::string(tb);
 }
 bool G0Runner::MediumHasExposure() {
-    // Local ENTRY open, or any broker position. Missing or
-    // failing seam counts as exposure (fail closed: never clear
-    // an incident that cannot be seen — doc 06 sec. 6.1b).
+    // Local ENTRY open, or any broker position. A missing or failing seam
+    // counts as exposure (doc 06 6.1b).
     if (!LocalFlat()) return true;
     Position ps[64];
     int n = 0;
@@ -1505,9 +1353,8 @@ bool G0Runner::LocalFlat() {
     return true;
 }
 bool G0Runner::BrokerConfirmedFlat() {
-    // Teardown certification (doc 06 sec. 6.1b): seam present +
-    // query ok + every position zero. Anything else is UNKNOWN
-    // (false) — AllFlat() alone never certifies an incident over.
+    // Teardown certification (doc 06 6.1b): seam present, query ok, every
+    // position zero. Anything else is unknown; AllFlat() alone never certifies.
     Position ps[64];
     int n = 0;
     if (!SnapPositions(ps, 64, &n)) return false;
@@ -1518,20 +1365,17 @@ bool G0Runner::BrokerConfirmedFlat() {
     return true;
 }
 bool G0Runner::ClearMediumFiles() {
-    // Teardown cleanup is load-bearing: both clears must land for
-    // the incident to be over. False keeps the incident files for
-    // the next cycle (plus caller alert) — never a half-cleared
-    // incident that mints fresh over stale state.
+    // Both clears must land for the incident to be over; false keeps the
+    // incident files for the next cycle.
     bool a = AtomicWrite(P("medium.txt").c_str(), "");
     bool b = AtomicWrite(P("medium-incident.txt").c_str(), "");
     return a && b;
 }
 void G0Runner::NoteQuarantine(Slot& s, const broker::OrderQuery& q,
                               const char* scope, long long now_ns) {
-    // Doc-06-locked quarantine: the id is burned (never re-sent),
-    // the qty is authoritative-for-today but never folded, the
-    // machine waits on UNKNOWN. First sighting per slot per status
-    // freezes the symbol + journals + alerts; repeats stay silent.
+    // Quarantine (doc 06): the id is burned, the qty is not folded, the
+    // machine waits on UNKNOWN. The first sighting per slot per status freezes
+    // the symbol, journals and alerts; repeats stay silent.
     if (!IsQuarantineStatus(q.status_raw)) return;
     if (std::strcmp(s.quar_, q.status_raw) == 0) return;
     CopyStr(s.quar_, sizeof(s.quar_), q.status_raw);
@@ -1549,8 +1393,8 @@ void G0Runner::NoteQuarantineSym(const char* symbol,
                                  const char* status,
                                  const char* scope,
                                  long long now_ns) {
-    // Slotless paths (sweep/hard-position pre-flights) have no
-    // slot guard; incidents are rare, so every sighting rows.
+    // Slotless paths have no slot guard; incidents are rare, so every sighting
+    // rows.
     if (!IsQuarantineStatus(status)) return;
     if (symbol && symbol[0])
         FreezeAdd(P("freeze.txt").c_str(), symbol);
@@ -1565,13 +1409,10 @@ void G0Runner::NoteQuarantineSym(const char* symbol,
 bool G0Runner::SweepLiveBlocks(const char* symbol,
                                broker::OrderSide local_close_side,
                                long long epoch) {
-    // The incident sweep already owns this symbol when its close
-    // is live under either side-tag (books can disagree mid-drift;
-    // the local-implied side is checked first). Live = found +
-    // PENDING/PARTIAL/UNKNOWN (working or ambiguous — never a
-    // competing local close), or FILLED-short (still resolving).
-    // Transport failure = do NOT block (retry next cycle; a stale
-    // failure must never park the local path forever).
+    // The sweep owns this symbol when its close is live under either side-tag
+    // (books can disagree mid-drift; local-implied side first). Live = found
+    // and PENDING/PARTIAL/UNKNOWN, or FILLED-short. A transport failure does
+    // not block (retry next cycle).
     if (!symbol || !symbol[0] || epoch <= 0) return false;
     broker::OrderSide sides[2] = {
         local_close_side,
@@ -1606,18 +1447,16 @@ bool G0Runner::FlattenOnMedium(Slot& s, long long now_ns) {
     if (s.m.filled_qty <= 0) return true;  // nothing to flatten
     if (s.flatten_armed && !FlattenResolvedNotClosed(s))
         return true;
-    // A flatten that resolved NON-closed hands ownership back to
-    // the incident sweep (fall through UNarmed): re-arm is
-    // forbidden — the intent id is single-use, so only the sweep
-    // id can carry the next close. Quiet-closed stays armed above.
+    // A flatten that resolved non-closed hands ownership back to the sweep
+    // (falls through unarmed): the intent id is single-use, so only the sweep
+    // id can carry the next close.
     s.flatten_armed = false;
-    // Restart coherence: a flatten EXIT from the dead process may
-    // already exist (pre-flight dedupe makes its drive safe) —
-    // never order a second one.
+    // Restart coherence: a flatten EXIT from the dead process may already
+    // exist (pre-flight dedupe makes its drive safe); never order a second.
     std::string fid0 = std::string(s.intent.intent_id) + "-flatten";
     if (fid0.size() > 64) {
-        // No representable flatten id: freeze the symbol + alert
-        // (a human owns the position; never a blind submit).
+        // No representable flatten id: freeze the symbol and alert (human owns
+        // the position).
         FreezeAdd(P("freeze.txt").c_str(), s.intent.symbol);
         Alert(P("alerts.jsonl").c_str(), "MEDIUM", "flatten-id-long",
               s.intent.intent_id, now_ns);
@@ -1627,14 +1466,11 @@ bool G0Runner::FlattenOnMedium(Slot& s, long long now_ns) {
         s.flatten_armed = true;
         return true;
     }
-    // A terminally-closed flatten needs no resubmit even when its
-    // slot is gone (done slots will reclaim); an intent row with no
-    // terminal and no slot is incoherent -> freeze, never resubmit.
-    // Landed-closed (entry fully attributed) stays quiet; an OPEN
-    // entry beside a terminal row means the flatten died non-closed
-    // with its slot already reclaimed — return UNarmed so the
-    // incident sweep owns the rest (arming here would defer the
-    // sweep back to us forever).
+    // A terminally-closed flatten needs no resubmit even when its slot is
+    // gone; an intent row with no terminal and no slot is incoherent: freeze.
+    // Landed-closed stays quiet; an OPEN entry beside a terminal row means the
+    // flatten died non-closed, so return unarmed and let the sweep own the
+    // rest (arming would defer the sweep back to us forever).
     int js = JournalIntentState(cfg_.dir, fid0.c_str());
     if (js == 2) {
         if (s.m.filled_qty - s.m.exit_closed_qty <= 0) {
@@ -1648,12 +1484,9 @@ bool G0Runner::FlattenOnMedium(Slot& s, long long now_ns) {
               "flatten-orphan", s.intent.intent_id, now_ns);
         return true;
     }
-    // Single-owner gate (doc 06 sec. 6.1b): when the incident
-    // sweep already owns this symbol, arm and wait — submitting a
-    // local flatten now would stack a second close on the live
-    // sweep. Attribution zeroes the entry when the sweep lands.
-    // Transport failure does NOT block (a stale failure must never
-    // park the local path — retry next cycle).
+    // Single-owner gate (doc 06 6.1b): when the sweep already owns this symbol,
+    // arm and wait rather than stack a second close; attribution zeroes the
+    // entry when the sweep lands. A transport failure does not block.
     broker::OrderSide cside =
         (s.intent.side == broker::OrderSide::BUY)
             ? broker::OrderSide::SELL
@@ -1664,8 +1497,7 @@ bool G0Runner::FlattenOnMedium(Slot& s, long long now_ns) {
         s.flatten_armed = true;
         return true;
     }
-    // Recovery-only flatten: EXIT for the filled qty under the
-    // derived id (length + pre-existence already gated via fid0).
+    // Recovery-only flatten: EXIT for the filled qty under the derived id.
     exec::OrderIntent ex = s.intent;
     ex.kind = jev::risk::IntentKind::EXIT;
     ex.qty_shares = s.m.filled_qty;
@@ -1691,24 +1523,15 @@ bool G0Runner::OpsRow(const char* kind, const char* intent_id,
 }
 
 namespace {
-// Strict whole-file scan of hard-chain.txt: every row must be
-// `<tag> <requested> <attributed>` with requested > 0 and
-// 0 <= attributed <= requested; requested per tag is immutable;
-// attributed per tag is monotonically nondecreasing
-// (exact-duplicate rows are idempotent crash-retry evidence, not
-// conflicts). Blank/trailing-garbage/conflicting/regressed rows
-// all fail. When tag != nullptr, *req_out/*attr_out take that
-// tag's stable requested + last attributed (false when the tag
-// carries no row). The file is tiny (truncated at incident end)
-// so a capped linear table is exact, never allocating hot-path
-// memory beyond it.
-// Strict chain row: `<tag> <requested> <attributed>\0` with
-// single SPACE separators, tag 1..64 non-space chars, numbers
-// strict decimal with reject-before-overflow conversion (never
-// scanf-family conversion on persisted numeric text — its
-// overflow behavior is implementation-defined). The writer
-// (NoteHardChain) emits exactly this shape, so strictness costs
-// nothing and any foreign/hand-edited row fails validation.
+// Strict whole-file scan of hard-chain.txt: each row is
+// `<tag> <requested> <attributed>\0` with single-space separators, tag 1..64
+// non-space chars, strict decimals (reject-before-overflow; no scanf-family
+// conversion of persisted text), requested > 0 and 0 <= attributed <=
+// requested. Requested per tag is immutable and attributed nondecreasing
+// (exact-duplicate rows are crash-retry evidence). Blank, trailing-garbage,
+// conflicting or regressed rows fail. When tag != nullptr, *req_out/*attr_out
+// take that tag's requested and last attributed (false when it has no row).
+// The file is tiny, so a capped linear table is exact.
 bool ParseChainRow(const char* ln, char t[65], long long* r,
                    long long* a) {
     if (!ln || !t || !r || !a) return false;
@@ -1795,9 +1618,7 @@ bool ScanChain(const std::vector<std::string>& lns,
 bool G0Runner::HardChainOk() {
     std::vector<std::string> lns;
     std::string p = P("hard-chain.txt");
-    // 64 KiB envelope: the chain is incident-scoped and tiny by
-    // construction — oversized input refuses before rows
-    // materialize (fail closed downstream: invalid chain).
+    // 64 KiB envelope: oversized input refuses before rows materialize.
     PathKind ck = StatPath(p.c_str());
     if (ck == PathKind::ABSENT) return true;  // missing = valid-empty
     if (ck != PathKind::REGULAR) return false;  // corrupt: invalid
@@ -1810,8 +1631,7 @@ bool G0Runner::HardChainState(const char* tag, long long* req,
     std::vector<std::string> lns;
     std::string p = P("hard-chain.txt");
     if (!ReadLinesCapped(p.c_str(), &lns, 65536))
-        return false;  // missing/unreadable/oversized can never
-                       // vouch
+        return false;  // missing/unreadable/oversized cannot vouch
     return ScanChain(lns, tag, req, attr);
 }
 bool G0Runner::NoteHardChain(const char* tag, long long requested,
@@ -1829,34 +1649,24 @@ bool G0Runner::HardCloseOnce(const char* symbol, long long qty,
                            long long epoch,
                            const char* scope_intent,
                            long long now_ns) {
-    // Pre-flighted single close under a stable hard id, with a
-    // deterministic incident remainder chain (doc 06 sec. 6.1b):
-    // the remainder derives from the ORIGINAL chain request
-    // (hard-chain.txt, write-ahead) — never by subtracting a
-    // burned order's historical fill from a CURRENT broker number
-    // (settled fills are gone from the broker; re-subtracting
-    // them under-closes). The broker need caps each send
-    // (min(remainder, need); zero need sends nothing). Per-id
-    // attribution folds only the not-yet-attributed portion
-    // (chain-guarded, exact across restart). GET ->
-    // found-sufficient (filled >= need): adopt -> found-live:
-    // adopt, the working order owns the qty -> found-short-
-    // terminal: mint hard-<epoch>-<SYM>-<remaining> and
-    // pre-flight THAT -> 404: POST once -> failure: journal +
-    // alert, fail closed. Chain-satisfied yet broker-open alerts
-    // (drift owns it — no second incident identity). Capped:
-    // exhaustion freezes. Every hard path shares it, including
-    // EXIT replacement.
+    // Single close under a stable hard id with a deterministic remainder chain
+    // (doc 06 6.1b). The remainder derives from the original chain request
+    // (hard-chain.txt, write-ahead), not from a burned order's fill against the
+    // current broker number (settled fills are gone from the broker). The
+    // broker need caps each send (zero need sends nothing); attribution folds
+    // only the not-yet-attributed portion. GET: found-sufficient -> adopt;
+    // found-live -> adopt; found-short-terminal -> mint
+    // hard-<epoch>-<SYM>-<remaining> and pre-flight that; 404 -> POST once;
+    // failure -> journal + alert. Chain-satisfied but broker-open alerts (drift
+    // owns it). Capped: exhaustion freezes. Shared by every hard path.
     if (!symbol || !symbol[0] || qty <= 0 || epoch <= 0) {
         OpsRow("drift-directive",
                scope_intent ? scope_intent : "runner",
                "hard-close refused bad-args", now_ns);
         return false;
     }
-    // Integrity gate FIRST (before any broker interrogation): a
-    // present-but-invalid chain refuses every HARD send. Missing
-    // file is valid-empty (first incident); the per-id check
-    // below still vouches each broker-known id.
+    // Integrity gate first: a present-but-invalid chain refuses every HARD
+    // send. A missing file is valid-empty (first incident).
     if (!HardChainOk()) {
         OpsRow("drift-directive",
                scope_intent ? scope_intent : "runner",
@@ -1869,12 +1679,9 @@ bool G0Runner::HardCloseOnce(const char* symbol, long long qty,
     }
     std::string id = hid ? hid : "";
     long long need = qty;
-    // Logical remainder vs broker-capped send: the chain identity
-    // owns the LOGICAL quantity (what this incident must still
-    // close); each POST sends min(logical, current broker need).
-    // A stranded partial send converges by re-pre-flight under
-    // the SAME identity — never a second identity for one
-    // remainder, never a broker-capped request recorded as truth.
+    // The chain identity owns the logical quantity (what this incident must
+    // still close); each POST sends min(logical, broker need). A stranded
+    // partial send converges by re-pre-flight under the same identity.
     long long logical = qty;
     for (int round = 0; round < 4; ++round) {
         char hcoid[65] = {0};
@@ -1904,21 +1711,15 @@ bool G0Runner::HardCloseOnce(const char* symbol, long long qty,
         NoteQuarantineSym(symbol, pre.status_raw, "HARD",
                           now_ns);
         if (!pre.found) {
-            // Write-ahead ENFORCED: the chain owns this request
-            // before the POST flies. The recorded request is the
-            // LOGICAL remainder — never the broker-capped send.
-            // An existing tag reuses its recorded request (chain
-            // truth is immutable): at most an exact-duplicate row
-            // is appended as crash-retry evidence, never a
-            // conflicting request. A failed note freezes + refuses.
-            // BURNED identity (doc 06 sec. 6.1b): a 404 on an id
-            // whose chain row already carries attributed fills
-            // means the broker settled/purged it — the tag is
-            // single-use and must NEVER POST again. Transition to
-            // the remainder identity (rem = requested -
-            // attributed; rem <= 0 refuses with the
-            // chain-satisfied alert) and pre-flight THAT; the
-            // burned row keeps its immutable original request.
+            // Write-ahead: the chain owns this request before the POST flies,
+            // recorded as the logical remainder. An existing tag reuses its
+            // recorded request (at most an exact-duplicate row is appended). A
+            // failed note freezes and refuses.
+            // Burned identity (doc 06 6.1b): a 404 on an id whose chain row
+            // carries attributed fills means the broker settled or purged it;
+            // the tag is single-use. Move to the remainder identity
+            // (rem = requested - attributed; rem <= 0 refuses with the
+            // chain-satisfied alert) and pre-flight that.
             long long req = 0, attr = 0;
             bool have = HardChainState(id.c_str(), &req, &attr);
             if (have && attr > 0) {
@@ -1969,10 +1770,8 @@ bool G0Runner::HardCloseOnce(const char* symbol, long long qty,
                     return false;
                 }
             } else if (attr == 0 && req == logical) {
-                // Crash-retry evidence only: the exact row already
-                // on file is re-noted (idempotent duplicate), so a
-                // note-then-POST-fail restart leaves the same
-                // proof it would have left before.
+                // Crash-retry evidence: the exact row on file is re-noted
+                // (idempotent duplicate).
                 if (!NoteHardChain(id.c_str(), req, 0)) {
                     OpsRow("drift-directive",
                            scope_intent ? scope_intent : "runner",
@@ -2001,13 +1800,10 @@ bool G0Runner::HardCloseOnce(const char* symbol, long long qty,
         broker::CloseResult c = QueryToClose(pre);
         long long filled = c.filled_qty;
         if (filled < 0) filled = 0;
-        // Chain-validated exact attribution: the broker knows
-        // this id, so the chain MUST vouch for it (stable request
-        // + monotonic attributed). A missing/corrupt/foreign row
-        // is an integrity failure — freeze + refuse, NEVER mint
-        // from current broker need. Only the not-yet-attributed
-        // portion folds (a crash between fill and attribute
-        // re-derives the same portion exactly once).
+        // Chain-validated attribution: the broker knows this id, so the chain
+        // must vouch for it. A missing/corrupt/foreign row is an integrity
+        // failure: freeze and refuse, never mint from current broker need. Only
+        // the not-yet-attributed portion folds.
         long long req = 0, already = 0;
         if (!HardChainState(id.c_str(), &req, &already)) {
             OpsRow("drift-directive",
@@ -2020,12 +1816,10 @@ bool G0Runner::HardCloseOnce(const char* symbol, long long qty,
         }
         long long portion = filled - already;
         if (portion < 0) portion = 0;
-        // Monotonic authority: the chain's attributed quantity is
-        // the floor for remainder derivation. A broker observation
-        // that REGRESSES below already-attributed truth (poll lag,
-        // correction, identity confusion) is classified — drift
-        // owns the anomaly — and must never manufacture a larger
-        // replacement remainder (req - regressed > req - already).
+        // The chain's attributed quantity is the floor for remainder
+        // derivation. A broker observation that regresses below it (poll lag,
+        // correction) is classified (drift owns it) and never inflates the
+        // remainder.
         long long eff = filled;
         if (filled < already) {
             char gb[280];
@@ -2041,10 +1835,9 @@ bool G0Runner::HardCloseOnce(const char* symbol, long long qty,
             eff = already;
         }
         if (portion > 0) {
-            // Durable-first: slots persist BEFORE the chain note
-            // advances. Unpersisted slots (rolled back inside)
-            // refuse with books exactly as before — the next
-            // pre-flight reconstructs this same portion once.
+            // Durable-first: slots persist before the chain note advances.
+            // Unpersisted slots roll back and refuse; the next pre-flight
+            // reconstructs the same portion once.
             if (!AttributeClosedQty(symbol, portion, now_ns)) {
                 OpsRow("drift-directive",
                        scope_intent ? scope_intent : "runner",
@@ -2055,9 +1848,8 @@ bool G0Runner::HardCloseOnce(const char* symbol, long long qty,
                       scope_intent ? scope_intent : "", now_ns);
                 return false;
             }
-            // Slots durable, chain note failed: roll the slots
-            // back to old values (best-effort) so the books stay
-            // exactly as before, then freeze + refuse.
+            // Slots durable, chain note failed: roll the slots back
+            // (best-effort), then freeze and refuse.
             if (!NoteHardChain(id.c_str(), req,
                                already + portion)) {
                 UnattributeClosedQty(symbol, now_ns);
@@ -2083,22 +1875,15 @@ bool G0Runner::HardCloseOnce(const char* symbol, long long qty,
         if (c.state == broker::CloseState::PENDING ||
             c.state == broker::CloseState::PARTIAL ||
             c.state == broker::CloseState::UNKNOWN)
-            return true;  // working/ambiguous: adopted, never
-                          // re-sent (its fills attribute back)
-        // Terminal-short: the id is burned (Alpaca client ids are
-        // per-order unique — it can never carry another POST).
-        // Remainder = ORIGINAL chain request minus landed (chain
-        // truth, validated above — the current broker need only
-        // caps the send). Landed floors at the chain-attributed
-        // quantity: a regressing broker observation never inflates
-        // the remainder (classified above). No chain row is
-        // unreachable here: the found id passed validation, so
-        // req > 0 holds.
+            return true;  // working/ambiguous: adopted, never re-sent
+        // Terminal-short: the id is burned (Alpaca client ids are per-order
+        // unique). Remainder = original chain request minus landed, with
+        // landed floored at the chain-attributed quantity; the broker need
+        // only caps the send. The found id passed validation, so req > 0.
         long long rem = req - eff;
         if (rem <= 0) {
-            // Chain satisfied, yet the broker still shows need:
-            // poll lag or foreign exposure — drift owns it (no
-            // second incident identity, never a blind re-send).
+            // Chain satisfied but the broker still shows need: poll lag or
+            // foreign exposure. Drift owns it (no second incident identity).
             OpsRow("drift-directive",
                    scope_intent ? scope_intent : "runner",
                    "hard-chain-satisfied-broker-open", now_ns);
@@ -2127,8 +1912,7 @@ bool G0Runner::HardCloseOnce(const char* symbol, long long qty,
                now_ns);
         id = id2;
         need = send;
-        logical = rem;  // the new identity owns the full logical
-                        // remainder; the next POST caps it again
+        logical = rem;  // the new identity owns the full logical remainder
     }
     OpsRow("drift-directive", scope_intent ? scope_intent : "runner",
            "hard-close remainder-exhausted", now_ns);
@@ -2149,18 +1933,14 @@ bool G0Runner::CoveredBySlot(const char* symbol) const {
 
 long long G0Runner::HardAdoptExit(Slot& s, long long epoch,
                                 long long now_ns) {
-    // Doc-06-sec.-6.1b adopt-or-replace: the owned exit is
-    // reconciled, never canceled to make room, never bypassed.
-    // Live (or filled-full) -> adopt: journal, no orders. Dead /
-    // absent -> replace the unlanded remainder under the incident
-    // hard id (pre-flighted, shared with every hard path for the
-    // symbol — the pre-flight, not a cancel, is what prevents two
-    // closes). Landed qty attributes to entries oldest-first, so
-    // the replacement sizes off provable remainder, never intent.
-    // Returns the qty still exposed (0 when adopted, landed-full,
-    // or replaced-working; the unfixable remainder otherwise) so
-    // callers reconciling MANY exits sum exposure, never sample
-    // the first.
+    // Adopt-or-replace (doc 06 6.1b): the owned exit is reconciled, never
+    // canceled to make room. Live or filled-full -> adopt (journal, no
+    // orders). Dead or absent -> replace the unlanded remainder under the
+    // incident hard id (the pre-flight prevents two closes). Landed qty
+    // attributes to entries oldest-first, so the replacement sizes off the
+    // provable remainder. Returns the qty still exposed (0 when adopted,
+    // landed-full or replaced-working), so callers sum exposure over many
+    // exits.
     if (!s.active || s.done ||
         s.intent.kind != jev::risk::IntentKind::EXIT)
         return 0;
@@ -2171,9 +1951,8 @@ long long G0Runner::HardAdoptExit(Slot& s, long long epoch,
         s.intent.qty_shares - s.m.exit_closed_qty;
     if (rem < 0) rem = 0;
     if (!q.transport_ok) {
-        // Blind on the exit: HARD fails toward flatten (the
-        // pre-flight still guards the incident id). The whole
-        // remainder counts as exposed.
+        // Blind on the exit: HARD fails toward flatten (pre-flight still
+        // guards the id). The whole remainder counts as exposed.
         OpsRow("drift-directive", s.intent.intent_id,
                "hard-adopt-exit lookup-failed", now_ns);
         return rem;
@@ -2185,8 +1964,7 @@ long long G0Runner::HardAdoptExit(Slot& s, long long epoch,
     std::string hid = HardTag(epoch, s.intent.symbol);
     char tb[280];
     if (q.transport_ok && !q.found) {
-        // Absent: the exit never landed — the full remainder is
-        // provably uncovered. Replace under the incident id.
+        // Absent: the exit never landed; replace under the incident id.
         std::snprintf(tb, sizeof(tb),
                         "hard-adopt-exit id=%s absent replace=%lld",
                         s.intent.intent_id, rem);
@@ -2203,9 +1981,8 @@ long long G0Runner::HardAdoptExit(Slot& s, long long epoch,
     if (c.state == broker::CloseState::PENDING ||
         c.state == broker::CloseState::PARTIAL ||
         c.state == broker::CloseState::UNKNOWN) {
-        // Working or ambiguous: adopt. No cancel (canceling the
-        // owned close would strand the exposure), no second
-        // close — the working order owns the outstanding qty.
+        // Working or ambiguous: adopt. Canceling the owned close would strand
+        // the exposure; the working order owns the outstanding qty.
         std::snprintf(tb, sizeof(tb),
                         "hard-adopt-exit id=%s state=%d filled=%lld",
                         s.intent.intent_id, (int)c.state,
@@ -2214,29 +1991,21 @@ long long G0Runner::HardAdoptExit(Slot& s, long long epoch,
                now_ns);
         return 0;
     }
-    // Terminal (FILLED-full, FILLED-short, or DEAD): fold ONLY
-    // the fresh portion beyond this order's own counted memory
-    // (the router's per-current-order contract — an
-    // already-counted cumulative fill never folds twice, even
-    // across a crash before normal reconciliation), bump the
-    // slot's cumulative ledgers to match, then replace the
-    // genuinely unaccounted remainder (same incident id the
-    // entry path and the slotless path share).
+    // Terminal (FILLED-full, FILLED-short or DEAD): fold only the fresh
+    // portion beyond this order's own counted memory (an already-counted
+    // cumulative fill never folds twice, even across a crash), bump the
+    // slot's cumulative ledgers, then replace the unaccounted remainder under
+    // the shared incident id.
     long long fresh = c.filled_qty - s.m.exit_counted_qty;
     if (fresh < 0) fresh = 0;
     if (fresh > rem) fresh = rem;
     if (fresh > 0) {
-        // Crash-consistent order: durable parent-entry
-        // attribution lands BEFORE the EXIT counters persist. A
-        // crash between the two replays safely — the entries are
-        // already authoritative, the leftover drops against their
-        // reduced opens, the counters advance, and nothing folds
-        // twice. (The reverse order strands attribution forever:
-        // durable exit-counted with un-attributed entries replays
-        // to fresh = 0 and the quantity is permanently lost.)
-        // Entry attribution is self-rollbacking: any failure folds
-        // NOTHING (exit counters untouched) and the full remainder
-        // retries next cycle (doc 06 sec. 6.1b).
+        // Crash-consistent order: parent-entry attribution lands before the
+        // EXIT counters persist. A crash between the two replays safely; the
+        // reverse order would strand the quantity (exit counted, entries
+        // unattributed, fresh = 0 on replay). Attribution is self-rolling-back:
+        // on failure nothing folds and the remainder retries next cycle
+        // (doc 06 6.1b).
         if (!AttributeClosedQty(s.intent.symbol, fresh,
                                 now_ns)) {
             OpsRow("drift-directive", s.intent.intent_id,
@@ -2249,11 +2018,9 @@ long long G0Runner::HardAdoptExit(Slot& s, long long epoch,
         s.m.exit_counted_qty += fresh;
         s.m.exit_closed_qty += fresh;
         if (!PersistSlot(s)) {
-            // Entries durable, exit counters not: the in-memory
-            // bumps stand for this process, and a crash restarts
-            // from old counters — replay re-derives the same
-            // fresh, finds no remaining parent open (leftover
-            // drops), and converges the counters then.
+            // Entries durable, exit counters not: in-memory bumps stand for this
+            // process; after a crash replay finds no parent open (leftover
+            // drops) and converges the counters.
             OpsRow("drift-directive", s.intent.intent_id,
                    "hard-adopt-exit-counters-unpersisted",
                    now_ns);
@@ -2277,15 +2044,10 @@ long long G0Runner::HardAdoptExit(Slot& s, long long epoch,
 }
 void G0Runner::HardManagePosition(const char* symbol, long long qty,
                                   long long epoch, long long now_ns) {
-    // Slotless open position under HARD: no intent economics on
-    // file, so broker-side protection is UNVERIFIABLE (no stop/tp
-    // to re-establish with — inventing them would be a sizing
-    // decision, and sizing is risk-owned). Flatten once under the
-    // incident hard id (pre-flighted: a pre-crash close is
-    // adopted, never re-sent — and shared with the slot and exit
-    // paths, so one symbol never carries two hard closes) +
-    // journal + alert. The flatten attempt is the protection when
-    // none can be verified.
+    // Slotless open position under HARD: no intent economics on file, so
+    // protection is unverifiable (inventing stop/tp would be a sizing
+    // decision, which is risk-owned). Flatten once under the incident hard id
+    // (pre-flighted, shared with the slot and exit paths) + journal + alert.
     if (!symbol || !symbol[0] || qty == 0 || epoch <= 0) return;
     broker::OrderSide eside = (qty > 0) ? broker::OrderSide::SELL
                                         : broker::OrderSide::BUY;
@@ -2305,20 +2067,15 @@ void G0Runner::HardManagePosition(const char* symbol, long long qty,
 
 void G0Runner::HardManageSlot(Slot& s, long long epoch,
                             long long now_ns, bool* owned) {
-    // §10.3 per-position pass (best-effort transport, journaled):
-    // reconcile -> verify broker-native protection (re-establish
-    // if missing and possible) -> flatten/cancel attempt. NEVER
-    // destructive: failures leave protection active; the process
-    // terminates right after regardless. Done-PROTECTED slots are
-    // managed (they ARE live positions); only provably empty
-    // terminals (CANCELLED/UNKNOWN/CLOSED) are skipped. An EXIT
-    // already working the symbol is adopted-or-replaced, never
-    // canceled, never bypassed (doc 06 sec. 6.1b). *owned reports
-    // whether this path demonstrably owns the symbol (reconciled,
-    // not blind, not frozen-waiting) so the position loop can
-    // fall back to broker-sized management when it does not —
-    // under the SAME incident id, so the pre-flight (not the
-    // skip) keeps one close.
+    // Per-position pass (doc 10 10.3, best-effort transport, journaled):
+    // reconcile, verify broker-native protection (re-establish if missing and
+    // possible), then flatten/cancel. Never destructive: failures leave
+    // protection active. Done-PROTECTED slots are managed (live positions);
+    // only provably empty terminals are skipped. An EXIT already working the
+    // symbol is adopted-or-replaced (doc 06 6.1b). *owned reports whether this
+    // path demonstrably owns the symbol (reconciled, not blind, not
+    // frozen-waiting); otherwise the position loop falls back to
+    // broker-sized management under the same incident id.
     if (owned) *owned = true;
     if (!s.active) return;
     if (s.m.state == exec::RouteState::CANCELLED ||
@@ -2335,35 +2092,27 @@ void G0Runner::HardManageSlot(Slot& s, long long epoch,
     }
     broker::OrderQuery q = adapter_.QueryOnce(s.m.client_id);
     if (!q.transport_ok) {
-        // Blind on the entry: do NOT claim ownership — the
-        // position loop falls back to the authoritative broker
-        // qty (same incident id, pre-flight dedupes).
+        // Blind on the entry: do not claim ownership; the position loop falls
+        // back to the broker qty (same incident id).
         OpsRow("drift-directive", s.intent.intent_id,
                "hard-manage lookup-failed", now_ns);
         if (owned) *owned = false;
         return;
     }
     NoteQuarantine(s, q, "HARD", now_ns);
-    if (IsQuarantineStatus(q.status_raw)) return;  // frozen:
-                                                   // wait (owned-
-                                                   // skip — the
-                                                   // position
-                                                   // loop also
-                                                   // waits)
+    if (IsQuarantineStatus(q.status_raw)) return;  // frozen: wait
     {
-        // EXIT coverage first (doc 06 sec. 6.1b): an in-flight EXIT
-        // owns (part of) this exposure until reconciled. The check
-        // itself is transport-free; the reconcile below is one GET.
+        // EXIT coverage first (doc 06 6.1b): an in-flight EXIT owns part of
+        // this exposure until reconciled. The check is transport-free; the
+        // reconcile below is one GET.
         long long open =
             s.m.filled_qty - s.m.exit_closed_qty;
         bool prot = q.protection_active || q.bracket_class;
         if (!prot && q.found && open > 0) {
-            // Re-establish broker-native protection if possible —
-            // under the REPAIR sub-identity (never the entry id:
-            // the venue rejects duplicate client_order_id). The
-            // repair id is pre-flighted too: already-protected
-            // adoptions skip the POST; anything else attempts
-            // exactly one repair (flatten covers the rest).
+            // Re-establish protection under the REPAIR sub-identity (the venue
+            // rejects a duplicate client_order_id), pre-flighted: an
+            // already-protected adoption skips the POST; otherwise one repair
+            // attempt (flatten covers the rest).
             broker::OrderSide pside =
                 (s.intent.side == broker::OrderSide::BUY)
                     ? broker::OrderSide::SELL
@@ -2410,10 +2159,9 @@ void G0Runner::HardManageSlot(Slot& s, long long epoch,
                    now_ns);
         }
         if (open <= 0) {
-            // Nothing filled — but the order may exist unacked at
-            // the broker (POST landed, ack lost). Found + UUID ->
-            // attempt cancel; 404-absent -> journal it, no orders
-            // exist to cancel.
+            // Nothing filled, but the order may exist unacked at the broker
+            // (POST landed, ack lost). Found + UUID -> attempt cancel; 404 ->
+            // journal, nothing to cancel.
             if (q.found && q.broker_order_id[0] != '\0') {
                 broker::CancelResult c =
                     adapter_.Cancel(q.broker_order_id);
@@ -2434,17 +2182,12 @@ void G0Runner::HardManageSlot(Slot& s, long long epoch,
             return;
         }
         if (open > 0 && epoch > 0) {
-            // Attempt flatten under the INCIDENT hard id (shared
-            // with the exit path and the slotless path — the
-            // pre-flight dedupes them into one close per symbol).
-            // Exit coverage reconciles first: EVERY covering exit
-            // is adopted-or-replaced (never first-only — a dead
-            // first exit must not mask a live second), and only
-            // the uncovered remainder closes here (never a second
-            // full close, never a cancel). Quantity authority is
-            // the SIGNED BROKER POSITION when the seam answers
-            // (doc 06 sec. 6.1b): local open sizes only when the
-            // seam is absent/failing, journaled.
+            // Flatten under the incident hard id (shared with the exit and
+            // slotless paths). Exit coverage reconciles first: every covering
+            // exit is adopted-or-replaced, and only the uncovered remainder
+            // closes here. Quantity authority is the signed broker position
+            // when the seam answers (doc 06 6.1b); local open sizes only when
+            // it is absent or failing, journaled.
             std::string hid = HardTag(epoch, s.intent.symbol);
             std::vector<std::size_t> cidx;
             long long cover_tot = 0;
@@ -2465,10 +2208,9 @@ void G0Runner::HardManageSlot(Slot& s, long long epoch,
                     ? broker::OrderSide::SELL
                     : broker::OrderSide::BUY;
             if (have_bq) {
-                // Broker authority: close the broker qty the
-                // exits do not already own, in the broker
-                // direction. Local/broker disagreement is drift
-                // (journaled) — never a qty change.
+                // Close the broker qty the exits do not already own, in the
+                // broker direction. Local/broker disagreement is drift
+                // (journaled), not a qty change.
                 long long aq = bq > 0 ? bq : -bq;
                 eside = (bq > 0) ? broker::OrderSide::SELL
                                  : broker::OrderSide::BUY;
@@ -2518,9 +2260,8 @@ void G0Runner::HardManageSlot(Slot& s, long long epoch,
                 sent = HardCloseOnce(s.intent.symbol, uncovered,
                                       eside, hid.c_str(), epoch,
                                       s.intent.intent_id, now_ns);
-                // A failed close owns nothing: the position
-                // loop retries the same incident id (pre-flight
-                // dedupes — never two closes).
+                // A failed close owns nothing: the position loop retries the
+                // same incident id.
                 if (owned) *owned = sent;
             } else if (uncovered > 0) {
                 if (owned) *owned = false;
@@ -2539,31 +2280,25 @@ void G0Runner::HardManageSlot(Slot& s, long long epoch,
 }
 
 bool G0Runner::HardHalted() const {
-    // Fail-closed halted: a corrupt HALT node (directory in place
-    // of the file) halts like a present one — never "no HALT".
+    // A corrupt HALT node (directory in place of the file) halts like a
+    // present one.
     return hard_latched_ ||
            StatPath(P("HALT").c_str()) != PathKind::ABSENT;
 }
 bool G0Runner::HardStop(long long now_ns, const char* why,
                   bool halt_at_entry) {
-    // §10.3 HARD: entries already stop at the kill gate. Verify
-    // broker-native protection on every open position (re-establish
-    // if missing and possible), attempt flatten/cancel, leave
-    // broker-side protection ACTIVE, then terminate. Credential
-    // revocation is a Phase-4 transport step (the null transport
-    // cannot order by construction); the HALT file makes the stop
-    // survive restart (entries stay blocked, exits stay alive).
+    // HARD (doc 10 10.3): entries already stop at the kill gate. Verify
+    // protection on every open position (re-establish if missing), attempt
+    // flatten/cancel, leave broker-side protection active, then terminate.
+    // Credential revocation is a transport step; the HALT file makes the stop
+    // survive restart.
     Alert(P("alerts.jsonl").c_str(), "HARD", "kill-hard",
           why ? why : "", now_ns);
     OpsRow("drift-directive", "runner", "hard-stop", now_ns);
-    // HALT is a durable state write, not a best-effort touch: the
-    // stop is claimed only once it is durably established. A
-    // failed write latches HARD in memory (entries stay blocked
-    // via HardHalted), journals + alerts, and returns false — the
-    // stop is reported as UNPROVEN, never as completed. The
-    // caller exits nonzero (main has no in-process retry loop);
-    // the supervisor/operator owns recovery, and a restart
-    // without the HALT file is operator territory by design.
+    // HALT is a durable state write: the stop is claimed only once it is
+    // durably established. A failed write latches HARD in memory, journals,
+    // alerts and returns false (stop unproven). The caller exits nonzero and
+    // the supervisor owns recovery.
     if (!AtomicWrite(P("HALT").c_str(), "HALT\n")) {
         hard_latched_ = true;
         OpsRow("drift-directive", "runner",
@@ -2575,28 +2310,20 @@ bool G0Runner::HardStop(long long now_ns, const char* why,
     hard_latched_ = false;
     long long epoch =
         HardEpochFor(now_ns, why, halt_at_entry);
-    if (epoch <= 0) return false;  // no durable epoch: no new
-                                   // incident identity (HALT
-                                   // already blocks entries;
-                                   // the next cycle retries
-                                   // the mint)
+    if (epoch <= 0) return false;  // no durable epoch: HALT blocks entries,
+                                   // the next cycle retries the mint
     std::vector<char> slot_owned(slots_.size(), 0);
     for (std::size_t i = 0; i < slots_.size(); ++i) {
         bool ow = true;
         HardManageSlot(slots_[i], epoch, now_ns, &ow);
         slot_owned[i] = ow ? 1 : 0;
     }
-    // §10.3 operates on EVERY open position — including slotless
-    // holdings the position list reports. Per-symbol ownership:
-    // an ENTRY symbol the slot path demonstrably owned is
-    // skipped; a blind/failed slot falls through to broker-sized
-    // management under the SAME incident hard id (the pre-flight
-    // keeps one close — the skip is an optimization, not the
-    // mutual-exclusion mechanism). An exit-only symbol reconciles
-    // ALL covering exits and closes only the remainder; only
-    // truly uncovered symbols flatten. Frozen symbols are never
-    // position-loop-closed (freeze = wait; exits stay alive via
-    // their slots).
+    // Applies to every open position, including slotless holdings. An ENTRY
+    // symbol the slot path demonstrably owned is skipped; a blind slot falls
+    // through to broker-sized management under the same incident hard id (the
+    // pre-flight, not the skip, keeps one close). An exit-only symbol
+    // reconciles all covering exits and closes only the remainder. Frozen
+    // symbols are never closed here (freeze = wait).
     if (deps_.list_positions) {
         Position ps[64];
         int n = 0;
@@ -2611,13 +2338,11 @@ bool G0Runner::HardStop(long long now_ns, const char* why,
             if (ps[i].symbol[0] == '\0' || ps[i].qty == 0)
                 continue;
             if (FreezeHas(P("freeze.txt").c_str(), ps[i].symbol))
-                continue;  // frozen = wait (exits stay alive via
-                           // their slots — never a new close)
+                continue;  // frozen = wait
             if (CoveredBySlot(ps[i].symbol)) {
-                // Slot-path-owned only if EVERY open ENTRY for
-                // the symbol was demonstrably managed; a blind
-                // slot falls through to the same incident id
-                // (pre-flight dedupes — one close either way).
+                // Slot-owned only if every open ENTRY for the symbol was
+                // demonstrably managed; a blind slot falls through to the same
+                // incident id.
                 bool managed = true;
                 for (std::size_t k = 0; k < slots_.size();
                      ++k) {
@@ -2651,10 +2376,8 @@ bool G0Runner::HardStop(long long now_ns, const char* why,
             long long cover_tot = 0;
             CollectCoverExits(ps[i].symbol, &cidx, &cover_tot);
             if (!cidx.empty()) {
-                // Exit-owned symbol: reconcile EVERY covering
-                // exit, close only the genuinely uncovered
-                // remainder (a dead first exit never masks a
-                // live second).
+                // Exit-owned symbol: reconcile every covering exit, close only
+                // the uncovered remainder.
                 long long exposed = 0;
                 for (std::size_t k = 0; k < cidx.size(); ++k)
                     exposed += HardAdoptExit(slots_[cidx[k]],
@@ -2692,7 +2415,7 @@ bool G0Runner::HardStop(long long now_ns, const char* why,
         OpsRow("drift-directive", "runner",
                "hard-no-position-seam", now_ns);
     }
-    return false;  // terminate: supervisor must NOT restart
+    return false;  // terminate: supervisor must not restart
 }
 
 bool G0Runner::VenueOk(bool* open, bool* spread_ok) {
@@ -2705,12 +2428,9 @@ bool G0Runner::VenueOk(bool* open, bool* spread_ok) {
 }
 
 int G0Runner::LocalNet(const char* symbol) const {
-    // Signed local open per symbol over ENTRY slots with provable
-    // open (filled minus closed; exits are managers, not
-    // positions). PROTECTED is included: it IS the normal open
-    // position (terminal only because its lifecycle is complete —
-    // the shares are still live). CANCELLED/UNKNOWN_FROZEN/CLOSED
-    // carry no provable open and are excluded.
+    // Signed local open per symbol over ENTRY slots with provable open
+    // (filled minus closed; exits are managers). PROTECTED is included: its
+    // shares are still live. CANCELLED/UNKNOWN_FROZEN/CLOSED are excluded.
     long long net = 0;
     for (std::size_t i = 0; i < slots_.size(); ++i) {
         const Slot& s = slots_[i];
@@ -2732,14 +2452,12 @@ int G0Runner::LocalNet(const char* symbol) const {
 }
 
 void G0Runner::PositionCheck(long long now_ns) {
-    // Account-level S2: authoritative broker positions vs local
-    // expectation over the UNION of both symbol sets (broker-only
-    // = orphan; local-only = vanished; qty mismatch = drift).
-    // Drift journals + alerts + forces per-symbol re-lookup; it
-    // never orders (flattening is MEDIUM/HARD-owned).
+    // Account-level S2: broker positions vs local expectation over the union
+    // of both symbol sets (broker-only = orphan, local-only = vanished, qty
+    // mismatch = drift). Drift journals, alerts and forces a per-symbol
+    // re-lookup; it never orders.
     if (!deps_.list_positions) return;  // Phase-4 seam absent
-    // Elapsed on the monotonic clock (wall jumps must not
-    // trigger/skip the account reconciliation rhythm).
+    // Elapsed on the monotonic clock.
     long long mono = MonoNs(now_ns);
     bool due = (mono - last_pos_ns_) >=
                deps_.s2_seconds * 1000000000LL;
@@ -2752,8 +2470,7 @@ void G0Runner::PositionCheck(long long now_ns) {
               "positions-unavailable", "lookup failed", now_ns);
         return;
     }
-    // Local expectation per symbol (same provable-open rule as
-    // LocalNet: PROTECTED included, managers excluded).
+    // Local expectation per symbol (same rule as LocalNet).
     struct SymOpen {
         char sym[16];
         long long qty;
@@ -2838,12 +2555,10 @@ void G0Runner::PositionCheck(long long now_ns) {
 }
 
 void G0Runner::ReclaimDone() {
-    // Done slots leave — EXCEPT live ENTRY positions: a done
-    // PROTECTED slot with provable open is not history, it is the
-    // local position record (S2, MEDIUM/HARD coverage, and close
-    // attribution all read it). It becomes reclaimable once its
-    // open attributes to zero (flatten/sweep/exit closes) — until
-    // then capacity counts it as live risk.
+    // Done slots leave, except live ENTRY positions: a done PROTECTED slot with
+    // provable open is the local position record (S2, coverage and close
+    // attribution read it) and is reclaimable once its open attributes to
+    // zero.
     for (std::size_t i = 0; i < slots_.size();) {
         const Slot& s = slots_[i];
         bool live_position =
@@ -2862,10 +2577,8 @@ void G0Runner::ReclaimDone() {
 bool G0Runner::DailyOps(long long now_ns) {
     long long day = now_ns / 86400000000000LL;
     if (day == last_ops_day_) return true;
-    // 00:00 verify: a mid-run chain break is HARD (forensics
-    // first), exactly like a boot-time break. The day clock
-    // advances ONLY after the verification succeeds — a failed
-    // verification retries next cycle, never skips a day.
+    // 00:00 verify: a mid-run chain break is HARD, like a boot-time break. The
+    // day clock advances only after verification succeeds.
     if (!JournalVerifyFile(P("journal.jsonl").c_str())) {
         Alert(P("alerts.jsonl").c_str(), "HARD", "journal-chain-break",
               "mid-run chain fails VerifyChain",
@@ -2878,9 +2591,8 @@ bool G0Runner::DailyOps(long long now_ns) {
     CivilFromDays(day, &y, &mo, &dd);
     char stamp[16];
     std::snprintf(stamp, sizeof(stamp), "%04d%02u%02u", y, mo, dd);
-    // Dated journal copy (the live file keeps chaining — the copy
-    // is the retention unit, never a rotation that forks the
-    // chain).
+    // Dated journal copy: the live file keeps chaining; the copy is the
+    // retention unit.
     CopyFileBytes(P("journal.jsonl").c_str(),
              (cfg_.dir + "/journal-" + stamp + ".jsonl").c_str());
     int kept = 0, pruned = 0;
@@ -2912,9 +2624,8 @@ bool G0Runner::AllFlat() {
         const Slot& s = slots_[i];
         if (!s.active) continue;
         if (s.intent.kind != jev::risk::IntentKind::ENTRY) continue;
-        // PROTECTED counts: it is a live position until its open
-        // is attributed to zero (flatten/sweep closes attribute
-        // back — an unattributed PROTECTED is provably NOT flat).
+        // PROTECTED counts as a live position until its open attributes to
+        // zero.
         if (s.m.state == exec::RouteState::CANCELLED ||
             s.m.state == exec::RouteState::UNKNOWN_FROZEN ||
             s.m.state == exec::RouteState::CLOSED)
@@ -2935,18 +2646,14 @@ bool G0Runner::AllFlat() {
 
 bool G0Runner::AttributeClosedQty(const char* symbol, long long qty,
                                    long long now_ns) {
-    // An authoritative close quantity (flatten EXIT done-CLOSED,
-    // sweep-order FILLED/PARTIAL) belongs to same-symbol ENTRY
-    // slots, oldest first. Without this the entry machine keeps
-    // claiming provable open after its position closed and S2
-    // drifts on healthy flat forever. Leftover with no local
-    // expectation is dropped (broker truth already rules S2).
-    // Two-phase, durable-first: takes are computed read-only,
-    // then each slot is mutated+persisted. ANY persist failure
-    // rolls back in-memory takes everywhere AND re-persists
-    // already-written slots to old values (best-effort), then
-    // returns false — the caller must not advance dependent
-    // durable state, so the next pre-flight reconstructs exactly.
+    // An authoritative close quantity (flatten EXIT done-CLOSED, sweep-order
+    // FILLED/PARTIAL) belongs to same-symbol ENTRY slots, oldest first;
+    // without it the entry machine keeps claiming open after the position
+    // closed. Leftover with no local expectation is dropped. Two-phase,
+    // durable-first: takes are computed read-only, then each slot is mutated
+    // and persisted. On any persist failure the in-memory takes roll back,
+    // written slots are re-persisted best-effort, and false is returned; the
+    // caller must not advance dependent durable state.
     n_attr_takes_ = 0;  // any stale take list dies here
     if (!symbol || !symbol[0] || qty <= 0) return false;
     struct Take {
@@ -2987,9 +2694,8 @@ bool G0Runner::AttributeClosedQty(const char* symbol, long long qty,
             OpsRow("reconcile", s.intent.intent_id, tb, now_ns);
             continue;
         }
-        // Persist failed: roll back in-memory everywhere, and
-        // re-persist the already-written slots to old values
-        // (best-effort) so durable books are exactly as before.
+        // Persist failed: roll back in memory, and re-persist written slots to
+        // old values (best-effort).
         for (std::size_t j = 0; j < ntake; ++j)
             slots_[takes[j].idx].m.exit_closed_qty =
                 takes[j].old_closed;
@@ -3005,8 +2711,8 @@ bool G0Runner::AttributeClosedQty(const char* symbol, long long qty,
                         symbol, qty, rback ? 1 : 0);
         OpsRow("reconcile", symbol, fb, now_ns);
         if (!rback) {
-            // Durable rollback itself failed: books may diverge —
-            // freeze LOUD (forensic journal rows above own it).
+            // Durable rollback failed: books may diverge; freeze (forensic
+            // journal rows above own it).
             FreezeAdd(P("freeze.txt").c_str(), symbol);
             Alert(P("alerts.jsonl").c_str(), "HARD",
                   "attribution-rollback-failed", symbol,
@@ -3014,8 +2720,7 @@ bool G0Runner::AttributeClosedQty(const char* symbol, long long qty,
         }
         return false;
     }
-    // Exact take list for the immediate UnattributeClosedQty
-    // rollback (chain-note failure path only).
+    // Take list for the immediate UnattributeClosedQty rollback.
     n_attr_takes_ = 0;
     for (std::size_t k = 0;
          k < ntake && n_attr_takes_ < 64; ++k) {
@@ -3027,12 +2732,9 @@ bool G0Runner::AttributeClosedQty(const char* symbol, long long qty,
 }
 void G0Runner::UnattributeClosedQty(const char* symbol,
                                     long long now_ns) {
-    // Exact inverse of the last successful AttributeClosedQty
-    // (per-slot take amounts, NOT a blind oldest-first pass —
-    // slots may carry pre-existing closed from normal reconcile).
-    // Used ONLY when the chain note failed after slots went
-    // durable — restoring all-old books so the next pre-flight
-    // reconstructs exactly. Any persist failure freezes LOUD.
+    // Inverse of the last successful AttributeClosedQty, per-slot take amounts
+    // (slots may carry pre-existing closed). Used only when the chain note
+    // failed after slots went durable. Any persist failure freezes.
     if (!symbol || !symbol[0] || n_attr_takes_ == 0) {
         n_attr_takes_ = 0;
         return;
@@ -3063,14 +2765,12 @@ void G0Runner::UnattributeClosedQty(const char* symbol,
 }
 
 bool G0Runner::MediumPass(long long now_ns) {
-    // §10.3 MEDIUM + frozen FSM (medium.txt): MEDIUM_ACTIVE ->
-    // FLATTEN_PENDING -> FLATTENED | PROTECTION_ONLY. Entries stop
-    // at the kill gate; every open position flattens via market
-    // when the venue is open and the spread is normal, else stops/
-    // TP own the risk and the flatten re-attempts every cycle.
-    // Re-attempts fire ONLY from ordered-but-unacked flatten work
-    // (no blind re-issue); a restart reloads the file and
-    // reconciles first (pre-flight dedupe never resends).
+    // MEDIUM + frozen FSM (doc 10 10.3, medium.txt): MEDIUM_ACTIVE ->
+    // FLATTEN_PENDING -> FLATTENED | PROTECTION_ONLY. Entries stop at the kill
+    // gate; every open position flattens at market when the venue is open and
+    // the spread normal, else stops/TP own the risk and the flatten retries
+    // each cycle. Retries fire only from ordered-but-unacked flatten work; a
+    // restart reloads the file and reconciles first.
     std::string mp = P("medium.txt");
     std::string cur;
     MediumFsmRead fr = ReadMediumFsm(mp.c_str(), &cur);
@@ -3082,10 +2782,8 @@ bool G0Runner::MediumPass(long long now_ns) {
         return true;  // never default a corrupt FSM to a fresh enter
     }
     if (fr == MediumFsmRead::UNKNOWN) {
-        // Present regular file with unknown content — or
-        // present but unreadable: corruption, never a fresh
-        // incident minted over it (absent-or-empty still takes
-        // the fresh path below).
+        // Present with unknown content, or unreadable: corruption, never a
+        // fresh incident minted over it.
         OpsRow("reconcile", "runner", "medium-fsm-unknown",
                now_ns);
         Alert(P("alerts.jsonl").c_str(), "MEDIUM",
@@ -3101,19 +2799,13 @@ bool G0Runner::MediumPass(long long now_ns) {
             return true;  // no FSM, no mint: the next cycle retries
         }
         cur = "MEDIUM_ACTIVE";
-        // A medium-enter IS a new incident (doc 06 sec. 6.1b):
-        // mint the epoch BEFORE any sweep id derives (the crash
-        // window between mint and first sweep is safe — nothing
-        // was sent under the new epoch yet, so a re-mint is free).
-        // Mint failure reverts the FSM so the next cycle retries
-        // (an ACTIVE file with no durable epoch would strand the
-        // incident id-less).
+        // A medium-enter is a new incident (doc 06 6.1b): mint the epoch before
+        // any sweep id derives (nothing was sent under it yet, so a re-mint is
+        // free).
         if (MintMediumEpoch(now_ns) <= 0) {
-            // Mint failure reverts the FSM so the next cycle
-            // retries — but the revert itself is CHECKED: a
-            // failed rollback would strand an id-less ACTIVE
-            // incident, so it fails the cycle HARD and loud
-            // instead of returning success (doc 06 sec. 6.1b).
+            // Mint failure reverts the FSM so the next cycle retries. The
+            // revert is checked: a failed rollback would strand an id-less
+            // ACTIVE incident, so the cycle fails HARD (doc 06 6.1b).
             if (!AtomicWrite(mp.c_str(), "")) {
                 OpsRow("reconcile", "runner",
                        "medium-rollback-unpersisted", now_ns);
@@ -3127,10 +2819,9 @@ bool G0Runner::MediumPass(long long now_ns) {
               "entries stopped, flattening", now_ns);
     }
     if (cur == "FLATTENED") {
-        // Terminal — unless live exposure says the file is
-        // stale (a later incident with the FSM never cleared:
-        // clear + fresh enter mints a new epoch; suppression of
-        // a real later MEDIUM is the forbidden outcome).
+        // Terminal, unless live exposure says the file is stale (a later
+        // incident with the FSM never cleared): clear and re-enter with a new
+        // epoch; suppressing a real later MEDIUM is forbidden.
         if (!MediumHasExposure()) return true;
         if (!ClearMediumFiles()) {
             OpsRow("reconcile", "runner",
@@ -3147,11 +2838,8 @@ bool G0Runner::MediumPass(long long now_ns) {
         }
         cur = "MEDIUM_ACTIVE";
         if (MintMediumEpoch(now_ns) <= 0) {
-            // Exact revert: FLATTENED with no epoch re-runs the
-            // re-enter check (exposure gate + mint retry) next
-            // cycle instead of stranding an id-less ACTIVE —
-            // and the revert is checked like the fresh-enter
-            // one: a failed revert fails HARD, never healthy.
+            // Exact revert: FLATTENED with no epoch re-runs the re-enter check
+            // next cycle. Checked like the fresh-enter revert.
             if (!AtomicWrite(mp.c_str(), "FLATTENED")) {
                 OpsRow("reconcile", "runner",
                        "medium-rollback-unpersisted", now_ns);
@@ -3167,12 +2855,10 @@ bool G0Runner::MediumPass(long long now_ns) {
     }
     long long epoch = MediumEpoch();
     if (epoch <= 0) {
-        // ACTIVE on disk with no durable epoch (failed mint, or
-        // a lost incident file): this incident is id-less, so it
-        // is NEVER treated as healthy — the sweep below stays
-        // gated and the cycle fails loud every cycle until an
-        // operator removes medium.txt for a fresh re-mint (safe:
-        // nothing was ever sent under an unminted epoch).
+        // ACTIVE on disk with no durable epoch (failed mint or lost incident
+        // file): the incident is id-less and never healthy. The sweep stays
+        // gated and the cycle fails every time until an operator removes
+        // medium.txt for a fresh mint.
         OpsRow("reconcile", "runner", "medium-epoch-missing",
                now_ns);
         Alert(P("alerts.jsonl").c_str(), "HARD",
@@ -3180,8 +2866,8 @@ bool G0Runner::MediumPass(long long now_ns) {
         return false;
     }
     bool pending = false;  // flatten work ordered, awaiting ack
-    // Local ENTRY slots flatten through the EXIT machinery
-    // (EXIT submits bypass stage/freeze — old risk stays managed).
+    // Local ENTRY slots flatten through the EXIT machinery (EXIT submits
+    // bypass stage/freeze).
     std::size_t before = slots_.size();
     for (std::size_t i = 0; i < slots_.size(); ++i) {
         if (FlattenOnMedium(slots_[i], now_ns) &&
@@ -3198,30 +2884,21 @@ bool G0Runner::MediumPass(long long now_ns) {
             break;
         }
     }
-    // Broker-confirmed sweep: EVERY open position, venue-open +
-    // spread-normal only, incident-scoped ids (doc 06 sec. 6.1b).
-    // Unknown/closed venue (or absent seam, or no incident epoch)
-    // = no sweep — protection stays, retry next cycle. A found
-    // sweep order is reconciled, never assumed pending: its
-    // FILLED/PARTIAL quantity attributes back to local entries; a
-    // terminally DEAD sweep (or a FILLED sweep with the position
-    // still open) mints ONE incident remainder
-    // (medium-<epoch>-<SYM>-<qty> under the current broker qty —
-    // pre-flighted, so each distinct id sends at most once); an
-    // exhausted remainder (found-DEAD twice) journals + alerts for
-    // a human instead of spinning. Locally covered symbols
-    // reconcile but never send (the owned local close is the one
-    // close).
+    // Broker-confirmed sweep of every open position, venue-open and
+    // spread-normal only, with incident-scoped ids (doc 06 6.1b). Unknown or
+    // closed venue, absent seam or no epoch = no sweep; retry next cycle. A
+    // found sweep order is reconciled: FILLED/PARTIAL quantity attributes back
+    // to local entries; a DEAD sweep (or FILLED with the position still open)
+    // mints one remainder (medium-<epoch>-<SYM>-<qty> under the current broker
+    // qty, pre-flighted); an exhausted remainder (found-DEAD twice) journals
+    // and alerts. Locally covered symbols reconcile but never send.
     bool open = false, spread = false;
     if (epoch > 0 && VenueOk(&open, &spread) &&
         deps_.list_positions) {
         Position ps[64];
         int n = 0;
-        if (!SnapPositions(ps, 64, &n)) n = 0;  // unavailable:
-                                               // sweep sees
-                                               // nothing (local
-                                               // slots still
-                                               // reconcile below)
+        if (!SnapPositions(ps, 64, &n)) n = 0;  // unavailable: sweep sees
+                                               // nothing
         for (int i = 0; i < n; ++i) {
             if (ps[i].symbol[0] == '\0' || ps[i].qty == 0) continue;
             std::string sid = SweepTag(epoch, ps[i].symbol);
@@ -3235,9 +2912,8 @@ bool G0Runner::MediumPass(long long now_ns) {
                     cfg_.venue.context_hash, ps[i].symbol, eside,
                     sid.c_str(), hcoid))
                 continue;
-            // Single-owner gate (doc 06 sec. 6.1b): a locally
-            // covered symbol reconciles below but never SENDS —
-            // the owned local close is the one close.
+            // Single-owner gate (doc 06 6.1b): a covered symbol reconciles but
+            // never sends.
             bool covered = LocalCloseCovers(ps[i].symbol);
             broker::OrderQuery pre = adapter_.QueryOnce(hcoid);
             NoteQuarantineSym(ps[i].symbol, pre.status_raw,
@@ -3255,36 +2931,27 @@ bool G0Runner::MediumPass(long long now_ns) {
                            "attribution-unpersisted", now_ns);
                 if (c.state == broker::CloseState::FILLED &&
                     c.filled_qty >= aq) {
-                    // Fully swept by quantity — but the broker
-                    // position still polls open this cycle, so stay
-                    // PENDING until the poll confirms flat (a poll
-                    // that never confirms is S2 drift, loud, with
-                    // no spurious re-send from here).
+                    // Fully swept by quantity but the position still polls
+                    // open: stay PENDING until the poll confirms flat (a poll
+                    // that never confirms is S2 drift, without a re-send).
                     pending = true;
                     continue;
                 }
                 if (c.state == broker::CloseState::PENDING ||
                     c.state == broker::CloseState::UNKNOWN ||
                     c.state == broker::CloseState::PARTIAL) {
-                    // Live or ambiguous: await it (a PARTIAL still
-                    // working is NOT a remainder — a second full
-                    // order would over-close when it lands).
+                    // Live or ambiguous: await it (a working PARTIAL is not a
+                    // remainder; a second order would over-close).
                     pending = true;
                     continue;
                 }
-                // DEAD, or FILLED-short of the live position:
-                // the replacement derives from FRESH authoritative
-                // exposure re-read NOW — never from the stale
-                // snapshot aq that the terminal-short result
-                // already disproved. Size = min(logical remainder,
-                // |fresh|): flat sends nothing, drifted direction
-                // sends nothing (S2 owns the anomaly), unavailable
-                // fresh retries next cycle. The remainder tag
-                // carries the derived size (one identity per
-                // remainder, pre-flighted so each sends at most
-                // once). Covered symbols reconcile (above) but
-                // never mint: the owned local close carries
-                // the rest.
+                // DEAD, or FILLED-short of the live position: derive the
+                // replacement from fresh exposure read now, not the stale snapshot
+                // aq the result disproved. Size = min(logical remainder, |fresh|):
+                // flat or drifted direction sends nothing (S2 owns it),
+                // unavailable retries next cycle. The tag carries the derived
+                // size (one identity per remainder). Covered symbols reconcile
+                // but never mint.
                 if (covered) {
                     pending = true;
                     continue;
@@ -3382,8 +3049,7 @@ bool G0Runner::MediumPass(long long now_ns) {
             }
             if (pre.transport_ok && !pre.found) {
                 if (covered) {
-                    // Owned locally: wait for it (pending carries
-                    // the FSM) — never a competing sweep close.
+                    // Owned locally: wait (pending carries the FSM).
                     pending = true;
                     continue;
                 }
@@ -3405,12 +3071,9 @@ bool G0Runner::MediumPass(long long now_ns) {
         }
     }
     if (AllFlat() && BrokerConfirmedFlat()) {
-        // Certified flatten only: local flat AND broker-confirmed
-        // flat (a missing/failing seam retains the in-progress
-        // FSM — AllFlat alone never certifies, doc 06 sec. 6.1b).
-        // A failed FSM write keeps the previous file state +
-        // alerts (never a reported closure the files deny); the
-        // next cycle retries.
+        // Certified flatten only: local flat and broker-confirmed flat (a
+        // missing seam retains the in-progress FSM; doc 06 6.1b). A failed FSM
+        // write keeps the previous file state and alerts.
         if (!AtomicWrite(mp.c_str(), "FLATTENED")) {
             OpsRow("reconcile", "runner",
                    "medium-flatten-unpersisted", now_ns);
@@ -3423,12 +3086,9 @@ bool G0Runner::MediumPass(long long now_ns) {
               "all positions flat", now_ns);
         return true;
     }
-    // Not flat: PENDING while flatten work is outstanding OR an
-    // achieved flatten covers the remaining open (completed close
-    // whose entry machine still claims filled — S2/human
-    // attributes it; re-flattening would over-close). ACTIVE only
-    // while open risk has NO flatten coverage at all (venue
-    // blocked or nothing ordered yet — retry next cycle).
+    // Not flat: PENDING while flatten work is outstanding or an achieved
+    // flatten covers the remaining open (re-flattening would over-close).
+    // ACTIVE only while open risk has no flatten coverage at all.
     bool covered = pending;
     for (std::size_t i = 0; i < slots_.size() && !covered; ++i) {
         const Slot& s = slots_[i];
@@ -3443,9 +3103,8 @@ bool G0Runner::MediumPass(long long now_ns) {
         if (JournalIntentState(cfg_.dir, fid.c_str()) == 2)
             covered = true;  // terminal close on file
     }
-    // Control-state writes are load-bearing: a failed persist keeps
-    // the previous file state (the rename never happened) + alerts;
-    // the next cycle retries the transition from the file.
+    // Control-state writes are load-bearing: a failed persist keeps the
+    // previous file state and alerts; the next cycle retries.
     if (covered) {
         if (cur != "FLATTEN_PENDING" &&
             !AtomicWrite(mp.c_str(), "FLATTEN_PENDING")) {
@@ -3490,19 +3149,14 @@ bool G0Runner::Dispatch(Slot& s, const exec::RouteOut& o,
             po.tp_cents = s.intent.tp_cents;
             CopyStr(po.client_order_id, sizeof(po.client_order_id), o.next.client_id);
             CopyStr(po.intent_id, sizeof(po.intent_id), s.intent.intent_id);
-            // Crash-window dedupe (doc 06 sec. 6.1: never
-            // double-send): a pre-crash POST may have landed after
-            // the last persisted snapshot. Query by the SAME stable
-            // id first — found = adopt the ack (never re-POST);
-            // 404-absent = POST; lookup failure = ambiguous ack
-            // (the router reconciles under the same id, never
-            // sends blind).
+            // Crash-window dedupe (doc 06 6.1): a pre-crash POST may have landed
+            // after the last snapshot. Query by the same stable id first: found
+            // = adopt the ack; 404 = POST; lookup failure = ambiguous ack (the
+            // router reconciles under the same id).
             s.has_ack = true;
             s.query_due = false;
-            // True only when this dispatch POSTed (adopted acks and
-            // read-only pre-flights never count — the persist that
-            // follows is load-bearing exactly when the broker
-            // changed state).
+            // True only when this dispatch POSTed (adopted acks and read-only
+            // pre-flights do not count).
             bool posted = false;
             broker::OrderQuery pre =
                 adapter_.QueryOnce(po.client_order_id);
@@ -3538,9 +3192,8 @@ bool G0Runner::Dispatch(Slot& s, const exec::RouteOut& o,
                 (s.intent.side == broker::OrderSide::BUY)
                     ? broker::OrderSide::SELL
                     : broker::OrderSide::BUY;
-            // Same crash-window dedupe as SEND_PROTECTED: the
-            // close may already exist under this stable id —
-            // adopt it via QueryToClose instead of re-POSTing.
+            // Same crash-window dedupe as SEND_PROTECTED: adopt an existing
+            // close via QueryToClose instead of re-POSTing.
             s.has_exit = true;
             s.has_journal = false;
             bool closed_posted = false;
@@ -3575,9 +3228,8 @@ bool G0Runner::Dispatch(Slot& s, const exec::RouteOut& o,
             return false;
         }
         case RouteAction::CANCEL_REMAINDER: {
-            // No UUID (identity never established) -> reconcile by
-            // client ID first (404 = nothing to cancel; found =
-            // real UUID for DELETE). Never DELETE blind.
+            // No UUID: reconcile by client ID first (404 = nothing to cancel;
+            // found = real UUID for DELETE). Never DELETE blind.
             if (s.m.broker_id[0] == '\0') {
                 broker::OrderQuery q =
                     adapter_.QueryOnce(s.m.client_id);
@@ -3604,8 +3256,7 @@ bool G0Runner::Dispatch(Slot& s, const exec::RouteOut& o,
         }
         case RouteAction::CONFIRM_CANCELLED: {
             if (++s.confirm_tries > 6) {
-                // Confirmation never lands: explicit failure, never
-                // an infinite re-check loop (UNKNOWN + freeze).
+                // Confirmation never lands: explicit failure (UNKNOWN + freeze).
                 s.has_cancel_result = true;
                 s.absent_cancel = false;
                 s.cancel_accepted = false;
@@ -3639,12 +3290,10 @@ bool G0Runner::Dispatch(Slot& s, const exec::RouteOut& o,
                                                : s.intent.qty_shares;
             po.stop_cents = s.intent.stop_cents;
             po.tp_cents = s.intent.tp_cents;
-            // Own deterministic sub-identity (never the entry id:
-            // the venue rejects duplicate client_order_id). Same
-            // crash-window dedupe as sends: found = adopt (an
-            // existing repair proves protection only when its legs
-            // do); 404 = POST once under the repair id; failure =
-            // ambiguous (the router flattens — doc 06 sec. 6.1 OR).
+            // Own sub-identity (the venue rejects a duplicate client_order_id).
+            // Same dedupe as sends: found = adopt (an existing repair proves
+            // protection only when its legs do); 404 = POST once; failure =
+            // ambiguous (the router flattens, doc 06 6.1).
             broker::OrderSide pside =
                 (s.intent.side == broker::OrderSide::BUY)
                     ? broker::OrderSide::SELL
@@ -3717,13 +3366,10 @@ bool G0Runner::Dispatch(Slot& s, const exec::RouteOut& o,
 
 bool G0Runner::Cycle(long long now_ns) {
     if (now_ns <= 0 || !deps_.now_ns) return false;
-    // Lifecycle first, like SubmitIntent: no mutation without a
-    // successful Recover (doc 06 sec. 6.1b).
+    // Lifecycle first, like SubmitIntent (doc 06 6.1b).
     if (!recovered_ || !lock_took_) return false;
-    // Deferred reclamation: done slots leave now (history stays in
-    // journal + snapshots). Find-after-terminal within the SAME
-    // cycle still sees the slot — the sweep only runs here and at
-    // SubmitIntent, never mid-drive.
+    // Deferred reclamation: done slots leave now; Find-after-terminal within
+    // the same cycle still sees the slot.
     ReclaimDone();
     // 1. STAGE re-read every cycle (demotions apply immediately).
     const char* sr = nullptr;
@@ -3744,13 +3390,10 @@ bool G0Runner::Cycle(long long now_ns) {
     kill::LevelResult lr = kill::EvaluateLevel(ki);
     if (lr.level == jev::risk::KillLevel::HARD)
         return HardStop(now_ns, lr.reason, ki.halt_file);
-    // A clean non-HARD cycle with no HALT ends any HARD incident:
-    // truncate the epoch file (best-effort) so the next HARD mints
-    // fresh instead of reusing a stale incident's ids. Clearing
-    // HALT is what ends the incident — a human owns the interim.
+    // A clean non-HARD cycle with no HALT ends any HARD incident: truncate the
+    // epoch file (best-effort) so the next HARD mints fresh.
     if (!ki.halt_file) {
-        // Read-first: the common cycle pays one small read, and
-        // only the transition cycle pays the truncate.
+        // Read first, so only the transition cycle pays the truncate.
         std::vector<std::string> hlns;
         if (ReadLines(P("hard-incident.txt").c_str(), &hlns) &&
             !hlns.empty()) {
@@ -3761,8 +3404,7 @@ bool G0Runner::Cycle(long long now_ns) {
                       "hard-incident-untruncated", "", now_ns);
             }
         }
-        // The order chain belongs to the incident: it goes with
-        // it (a new incident re-derives every id by pre-flight).
+        // The order chain belongs to the incident and goes with it.
         std::vector<std::string> clns;
         if (ReadLines(P("hard-chain.txt").c_str(), &clns) &&
             !clns.empty()) {
@@ -3774,30 +3416,22 @@ bool G0Runner::Cycle(long long now_ns) {
             }
         }
     }
-    // Leaving MEDIUM with the FSM file present finalizes it once:
-    // flat + BROKER-CERTIFIED -> FLATTENED, else (provably not
-    // flat) PROTECTION_ONLY (stops/TP own the remainder — never a
-    // silent return to normal). Uncertified-flat (no seam to prove
-    // it) leaves the file in progress — AllFlat() alone never
-    // certifies an incident over (doc 06 sec. 6.1b).
-    // A closed incident is then AUTO-CLEARED with its epoch file
-    // — but ONLY when the broker confirms flat AND (the file says
-    // FLATTENED or local is flat too): never clear what cannot be
-    // seen. The next automatic MEDIUM trigger re-enters fresh
-    // (new epoch); no operator file edit is required.
-    // Crash-mid-incident keeps in-progress files (exposure
-    // present or seam blind), so its epoch is reused.
+    // Leaving MEDIUM with the FSM file present finalizes it once: flat and
+    // broker-certified -> FLATTENED, else PROTECTION_ONLY (stops/TP own the
+    // remainder). Uncertified flat leaves the file in progress (doc 06 6.1b).
+    // A closed incident is auto-cleared with its epoch file only when the
+    // broker confirms flat and (the file says FLATTENED or local is flat too).
+    // The next MEDIUM trigger re-enters with a new epoch. A crash mid-incident
+    // keeps the files, so its epoch is reused.
     if (lr.level != jev::risk::KillLevel::MEDIUM) {
-        // Leaving MEDIUM finalizes the persisted FSM — but only
-        // after the same centralized validation (a malformed
-        // file is refused here too, never rewritten into a
-        // legitimate-looking state).
+        // Finalizing passes the same centralized validation (a malformed
+        // file is refused, never rewritten).
         std::string mcur;
         MediumFsmRead mfr =
             ReadMediumFsm(P("medium.txt").c_str(), &mcur);
         if (mfr == MediumFsmRead::CORRUPT) {
-            // Corrupt incident FSM while leaving MEDIUM: finalize
-            // nothing, fail the cycle loud — human owns it.
+            // Corrupt incident FSM while leaving MEDIUM: finalize nothing,
+            // fail the cycle.
             OpsRow("reconcile", "runner", "medium-fsm-corrupt",
                    now_ns);
             Alert(P("alerts.jsonl").c_str(), "MEDIUM",
@@ -3811,12 +3445,10 @@ bool G0Runner::Cycle(long long now_ns) {
                   "medium-fsm-unknown", "", now_ns);
             return false;
         }
-        // Clear invariant (doc 06 sec. 6.1b): auto-clear runs
-        // ONLY after a terminal FSM state was successfully
-        // persisted AND revalidated from disk in this cycle. An
-        // entry-validated FLATTENED/PROTECTION_ONLY qualifies
-        // (ReadMediumFsm read it this cycle); anything else must
-        // be written now and read back before any clear.
+        // Clear invariant (doc 06 6.1b): auto-clear runs only after a terminal
+        // FSM state was persisted and revalidated from disk this cycle.
+        // An entry-validated FLATTENED/PROTECTION_ONLY qualifies; anything else
+        // is written and read back first.
         bool term_ok =
             (mcur == "FLATTENED" || mcur == "PROTECTION_ONLY");
         if (!mcur.empty() && !term_ok) {
@@ -3852,8 +3484,7 @@ bool G0Runner::Cycle(long long now_ns) {
         }
         if (StatPath(P("medium.txt").c_str()) ==
                 PathKind::CORRUPT) {
-            // Corrupt incident FSM at auto-clear: clear nothing,
-            // fail loud — human owns it.
+            // Corrupt incident FSM at auto-clear: clear nothing, fail.
             OpsRow("reconcile", "runner", "medium-fsm-corrupt",
                    now_ns);
             Alert(P("alerts.jsonl").c_str(), "MEDIUM",
@@ -3888,10 +3519,8 @@ bool G0Runner::Cycle(long long now_ns) {
         while (budget > 0) {
             int n = deps_.stream_read(deps_.stream_ctx, buf,
                                       (int)sizeof(buf));
-            // Transport contract: 0 <= n <= sizeof(buf). A
-            // negative or overlong return is a real feed fault
-            // (loud journal + alert, never silent no-data, never
-            // an over-read of the stack buffer).
+            // Transport contract: 0 <= n <= sizeof(buf). Anything else is a feed
+            // fault (journal + alert), never silent no-data or an over-read.
             if (n < 0 || n > (int)sizeof(buf)) {
                 OpsRow("drift-directive", "runner",
                        "stream-read-fault", now_ns);
@@ -3908,11 +3537,10 @@ bool G0Runner::Cycle(long long now_ns) {
         while (sse_.Next(&ev)) {
             StreamObs so = MapTradeEvent(ev);
             if (so.kind == StreamKind::NONE) continue;
-            // Account-level cursor: every successfully parsed venue
-            // event advances the durable replay position — matched
-            // to a live slot or not (unmatched events move only the
-            // cursor, never router state; stalling on foreign orders
-            // would replay forever under since_id).
+            // Account-level cursor: every parsed venue event advances the
+            // durable replay position, matched to a live slot or not (unmatched
+            // events move only the cursor; stalling on foreign orders would
+            // replay forever under since_id).
             if (so.event_id[0] != '\0') {
                 cursor_ = so.event_id;
                 cursor_dirty_ = true;
@@ -3921,17 +3549,14 @@ bool G0Runner::Cycle(long long now_ns) {
                 Slot& s = slots_[i];
                 if (!s.active || s.done || s.frozen) continue;
                 if (!SameId(s.m.client_id, so.client_id)) continue;
-                // Duplicate delivery drops at the seam: already
-                // applied (== machine ULID) or already queued.
-                // Overflow never silently loses position: flag +
-                // force REST + alert at the slot pass below.
+                // Duplicate delivery drops at the seam (already applied or
+                // queued). Overflow flags the slot: force REST + alert below.
                 if (so.event_id[0] != '\0' &&
                     std::strcmp(so.event_id, s.m.last_event_id) ==
                         0)
                     continue;
                 bool dup = false;
-                // ULID-less events are never deduped (no identity
-                // to compare — each one stamps/shapes in turn).
+                // ULID-less events are never deduped (no identity to compare).
                 if (so.event_id[0] != '\0') {
                     for (int qi = 0; qi < s.sev_n_; ++qi) {
                         if (std::strcmp(s.sev_[qi].id, so.event_id) ==
@@ -3954,10 +3579,8 @@ bool G0Runner::Cycle(long long now_ns) {
                 s.sev_[s.sev_n_++] = qe;
             }
         }
-        // Parser failures are control-flow, not just a counter:
-        // alert + reconcile journal row + nudge every live slot to
-        // a real lookup (a good held answer still suppresses the
-        // extra query — MaybeForce owns that call).
+        // Parser failures alert, journal a reconcile row and nudge every live
+        // slot to a real lookup (a good held answer still suppresses it).
         if (sse_.errors() != sse_seen_) {
             sse_seen_ = sse_.errors();
             Alert(P("alerts.jsonl").c_str(), "FEED", "sse-error",
@@ -3974,13 +3597,11 @@ bool G0Runner::Cycle(long long now_ns) {
             }
         }
     }
-    // 4. Drive every slot (bounded iterations; persist on change).
-    // S2/refresh runs FIRST so fresh answers feed this same cycle.
-    // Account position check rides the same cadence (drift journals
-    // + alerts + forces per-symbol re-lookup; never orders).
+    // 4. Drive every slot (bounded iterations; persist on change). S2/refresh
+    // runs first so fresh answers feed this cycle; the account position check
+    // rides the same cadence.
     PositionCheck(now_ns);
-    // Overflow (queue full dropped position) fails closed here:
-    // alert + force a real lookup on the next pass.
+    // Queue overflow fails closed: alert + force a lookup on the next pass.
     for (std::size_t i = 0; i < slots_.size(); ++i) {
         Slot& s = slots_[i];
         if (!s.active || s.done || s.frozen) continue;
@@ -4006,8 +3627,8 @@ bool G0Runner::Cycle(long long now_ns) {
             }
             obs.kill = lr.level;
             obs.feed_stale = ki.feed_stale_gt30s;
-            // Stage permission rides the per-cycle STAGE verdict:
-            // entries need a verified G0 file, exits never do.
+            // Stage permission comes from the per-cycle STAGE verdict: entries
+            // need a verified G0 file, exits never do.
             obs.stage_entry_ok = stage_ok_;
             obs.symbol_frozen =
                 FreezeHas(P("freeze.txt").c_str(), s.intent.symbol);
@@ -4027,8 +3648,7 @@ bool G0Runner::Cycle(long long now_ns) {
             if (s.has_query) {
                 if (!s.query.transport_ok && s.has_forced_q &&
                     s.forced_q.transport_ok) {
-                    // Stale transport noise loses to a good held
-                    // answer (authoritative beats failed, any age).
+                    // Stale transport noise loses to a good held answer.
                     s.has_query = false;
                 } else {
                     obs.adapter_responded = true;
@@ -4049,8 +3669,8 @@ bool G0Runner::Cycle(long long now_ns) {
             if (s.has_cancel_result) {
                 obs.adapter_responded = true;
                 if (s.absent_cancel) {
-                    // Client-ID lookup proved absent: definitive
-                    // final-cancel observation (no UUID, no DELETE).
+                    // Client-ID lookup proved absent: final-cancel observation
+                    // (no UUID, no DELETE).
                     obs.cancel_confirmed = true;
                     obs.cancel_filled_qty = 0;
                 } else {
@@ -4076,11 +3696,9 @@ bool G0Runner::Cycle(long long now_ns) {
                 obs.executed = true;
                 s.executed_flag = false;
             }
-            // Crash seam: IDLE machines rebuilt from a journaled
-            // row (snapshot lost pre-first-persist) skip the WRITE
-            // via obs.intent_rowed; the JOURNAL_PENDING step then
-            // consumes this recovery attestation (the row is IN the
-            // verified chain — attested, not synthetic).
+            // Crash seam: IDLE machines rebuilt from a journaled row skip the
+            // WRITE via obs.intent_rowed; JOURNAL_PENDING then consumes this
+            // attestation (the row is in the verified chain).
             if (s.m.state == exec::RouteState::IDLE)
                 obs.intent_rowed = s.intent_rowed;
             if (s.intent_rowed &&
@@ -4089,12 +3707,9 @@ bool G0Runner::Cycle(long long now_ns) {
                 obs.journal_ok = true;
                 s.intent_rowed = false;
             }
-            // Queue head stamps first (one event per iteration —
-            // the seam never collapses several events into one).
-            // ULID-less heads carry no stampable identity: a FILL
-            // shapes directly from cumulative, LIFE/BUST funnel to
-            // forced REST now (never parked behind a stamp that
-            // cannot happen).
+            // Queue head stamps first, one event per iteration. ULID-less heads
+            // carry no stampable identity: a FILL shapes from cumulative,
+            // LIFE/BUST go straight to a forced REST.
             while (s.sev_n_ > 0 && s.sev_[0].id[0] == '\0') {
                 if (s.sev_[0].kind == StreamKind::FILL) {
                     s.has_shaping = true;
@@ -4113,12 +3728,10 @@ bool G0Runner::Cycle(long long now_ns) {
                 CopyStr(obs.event_id, sizeof(obs.event_id),
                         s.sev_[0].id);
             }
-            // Forced REST answer: consumed where the machine reads
-            // it, else held. QUERY_SENT takes the query; EXIT states
-            // take the close mapping; CANCEL_SENT takes a cancelled
-            // verdict as its confirmation; REPAIR_SENT takes a
-            // positively proven protection verdict. Anything else
-            // (or a failed lookup) holds for S2/refresh.
+            // Forced REST answer: consumed where the machine reads it, else held.
+            // QUERY_SENT takes the query; EXIT states the close mapping;
+            // CANCEL_SENT a cancelled verdict; REPAIR_SENT a proven protection
+            // verdict. Anything else (or a failed lookup) holds for S2/refresh.
             bool fed_forced = false;
             if (s.has_forced_q && !fed_event) {
                 if (s.m.state == exec::RouteState::QUERY_SENT) {
@@ -4170,11 +3783,9 @@ bool G0Runner::Cycle(long long now_ns) {
                     have_answer = true;
                 }
             }
-            // A stamped FILL shapes here (CUMULATIVE order qty —
-            // never per-event qty). REST answers always win ties
-            // (authoritative snapshot over event): shaping applies
-            // only with no event stamped and no query answer pending
-            // this iteration.
+            // A stamped FILL shapes here from the cumulative order qty. REST
+            // answers win ties: shaping applies only with no event stamped and no
+            // query answer pending this iteration.
             if (s.has_shaping && !fed_event && !fed_forced &&
                 !have_answer) {
                 long long rem = s.intent.qty_shares -
@@ -4184,9 +3795,8 @@ bool G0Runner::Cycle(long long now_ns) {
                 if (f.feed_query) {
                     obs.adapter_responded = true;
                     obs.query = f.q;
-                    // The shaped event carries no UUID: never let
-                    // an empty id clobber the established broker
-                    // identity (cancel path needs it).
+                    // The shaped event carries no UUID; an empty id must not
+                    // clobber the established broker identity.
                     if (s.m.broker_id[0] != '\0') {
                         for (int bi = 0; bi < 64; ++bi)
                             obs.query.broker_order_id[bi] =
@@ -4201,10 +3811,9 @@ bool G0Runner::Cycle(long long now_ns) {
             }
             exec::RouteOut o =
                 exec::RouteStep(s.m, s.intent, cfg_.venue, obs);
-            // Stamp accounting on the fed head: stamped -> shape
-            // (FILL cumulative) / force (LIFE/BUST) + advance the
-            // durable cursor; stale/duplicate verdict -> drop.
-            // Bounded compare (both fields <= 32 + NUL).
+            // Stamp accounting on the fed head: stamped -> shape (FILL) or
+            // force (LIFE/BUST) and advance the durable cursor; stale or
+            // duplicate -> drop. Bounded compare (fields <= 32 + NUL).
             if (fed_event && s.sev_n_ > 0) {
                 bool stamped = false;
                 const char* hid = s.sev_[0].id;
@@ -4221,12 +3830,9 @@ bool G0Runner::Cycle(long long now_ns) {
                         s.has_shaping = true;
                         s.shaping_qty = s.sev_[0].cumulative;
                     }
-                    // A stamped LIFE/BUST event triggers its forced
-                    // REST now (one lookup, held for consumption;
-                    // S2 clock restarts so this never doubles). A
-                    // held FAILED answer refreshes (stale failure
-                    // never blocks fresh reconciliation); a good held
-                    // answer is never stacked.
+                    // A stamped LIFE/BUST forces one REST lookup, held for
+                    // consumption; the S2 clock restarts. A held failed answer
+                    // refreshes; a good one is never stacked.
                     if (s.sev_[0].force &&
                         (!s.has_forced_q ||
                          !s.forced_q.transport_ok)) {
@@ -4257,13 +3863,10 @@ bool G0Runner::Cycle(long long now_ns) {
             bool mutated = Dispatch(s, o, now_ns);
             if (!PersistSlot(s)) {
                 if (mutated) {
-                    // Broker-mutating transport crossed a
-                    // non-durable boundary (ack/close state could
-                    // not be persisted): freeze LOUDLY and stop
-                    // driving this slot. Continuing blind risks a
-                    // post-crash double-send (identity + ack state
-                    // both live only in the lost snapshot); a crash
-                    // now refuses recovery instead — visible, human.
+                    // Broker-mutating transport crossed a non-durable boundary:
+                    // freeze and stop driving this slot. Continuing blind risks a
+                    // post-crash double-send (identity and ack live only in the
+                    // lost snapshot); a crash now refuses recovery instead.
                     s.frozen = true;
                     Alert(P("alerts.jsonl").c_str(), "HARD",
                           "persist-failed", s.intent.intent_id,
@@ -4272,24 +3875,16 @@ bool G0Runner::Cycle(long long now_ns) {
                            "persist-failed", now_ns);
                     break;
                 }
-                // Non-mutating persist failure: any journal row
-                // still attests the step (crash rebuilds via the
-                // rowed path or refuses) — keep driving.
+                // Non-mutating persist failure: a journal row still attests the
+                // step (crash rebuilds via the rowed path or refuses); keep driving.
             }
             if (IsTerminalState(s.m.state)) {
-                // A closed EXIT proves its quantity shut: attribute
-                // it to same-symbol entries (oldest first) so the
-                // entry machine stops claiming provable open.
-                // Attribution failure RETAINS the EXIT (doc 06 sec.
-                // 6.1b): marking it done would strand the books —
-                // the entry keeps claiming open while no EXIT
-                // object remains to retry it. The next cycle
-                // re-drives this quiescent CLOSED slot and retries
-                // deterministically (the attribution recomputes
-                // takes from current books and is self-rollbacking,
-                // so the retry folds exactly once). No replacement
-                // close is submitted for a persistence failure, and
-                // no broker-derived accounting is manufactured.
+                // A closed EXIT proves its quantity shut: attribute it to
+                // same-symbol entries. Attribution failure retains the EXIT (doc
+                // 06 6.1b): marking it done would strand the books. The next cycle
+                // re-drives the quiescent CLOSED slot; the attribution is
+                // self-rollbacking, so the retry folds exactly once. No
+                // replacement close is submitted for a persistence failure.
                 if (s.intent.kind ==
                         jev::risk::IntentKind::EXIT &&
                     s.m.state == exec::RouteState::CLOSED &&
@@ -4307,10 +3902,8 @@ bool G0Runner::Cycle(long long now_ns) {
                 s.done = true;
                 break;
             }
-            // Quiescence: nothing pending that this state can
-            // consume (a held-unfeedable forced answer waits for
-            // S2/refresh, not for spinning — same for held stream
-            // fills in non-consuming states).
+            // Quiescence: nothing pending that this state can consume (a held
+            // unfeedable forced answer waits for S2/refresh, not for spinning).
             bool forced_live = false;
             if (s.has_forced_q) {
                 if (s.m.state == exec::RouteState::QUERY_SENT) {
@@ -4341,8 +3934,7 @@ bool G0Runner::Cycle(long long now_ns) {
                                     exec::RouteState::EXIT_SENT ||
                                 s.m.state ==
                                     exec::RouteState::EXIT_EMERGENCY);
-            // Queued stamps feed every non-terminal state (position
-            // advances even while waiting), so they always count.
+            // Queued stamps feed every non-terminal state, so they count.
             if (s.sev_n_ > 0) stream_live = true;
             if (o.action == exec::RouteAction::NONE && !changed &&
                 !s.has_journal && !s.has_ack && !s.has_query &&
@@ -4356,12 +3948,9 @@ bool G0Runner::Cycle(long long now_ns) {
     last_cycle_ns_ = now_ns;
     // §6.3 rhythm on day roll (verify/copy/retain/backup/summary).
     if (!DailyOps(now_ns)) return false;
-    // Durable cursor: a failed write journals + alerts, KEEPS the
-    // dirty bit, and fails the cycle under the same contract as a
-    // failed day-roll — loss would silently replay from a stale
-    // position while reporting success. (A persisted cursor only
-    // skips already-seen events; duplicates still drop at the
-    // seam — never less.)
+    // Durable cursor: a failed write journals, alerts, keeps the dirty bit
+    // and fails the cycle like a failed day-roll (loss would replay from a
+    // stale position while reporting success).
     if (cursor_dirty_) {
         if (!AtomicWrite(P("cursor.txt").c_str(),
                          cursor_.c_str())) {

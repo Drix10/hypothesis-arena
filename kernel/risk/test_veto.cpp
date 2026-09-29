@@ -176,7 +176,7 @@ int main(int argc, char** argv) {
         CHECK("no-stop", !v.proceed && std::string(v.reason) == "no-stop");
         // Leverage can only arm past R2 (R2's 25% always binds first at
         // these scales): the boundary proof is that exact-cap leverage
-        // does NOT add a hold, and over-cap DOES arm (before r2 in order).
+        // does not add a hold, and over-cap DOES arm (before r2 in order).
         s = Clean();
         s.intent.notional_cents = 50000000LL;  // exactly 5x forex
         v = EvaluateVeto(s);
@@ -673,7 +673,7 @@ int main(int argc, char** argv) {
     // ---- invalid enums fail closed (correction: no exit-bypass) ----
     {
         RiskSnapshot s = Clean();
-        s.intent.kind = (IntentKind)99;  // corrupted kind is NOT an exit
+        s.intent.kind = (IntentKind)99;  // corrupted kind is not an exit
         VetoVerdict v = EvaluateVeto(s);
         CHECK("bad-kind", !v.proceed && std::string(v.reason) == "bad-inputs");
         s = Clean();
@@ -702,7 +702,7 @@ int main(int argc, char** argv) {
         v = EvaluateVeto(s);
         CHECK("bad-calib", !v.proceed && std::string(v.reason) == "bad-inputs");
         s = Clean();
-        s.kill = (KillLevel)99;  // corrupted kill is NOT kill-soft
+        s.kill = (KillLevel)99;  // corrupted kill is not kill-soft
         v = EvaluateVeto(s);
         CHECK("bad-kill", !v.proceed && std::string(v.reason) == "bad-inputs");
         s = Clean();
@@ -733,10 +733,8 @@ int main(int argc, char** argv) {
         v = EvaluateVeto(s);
         CHECK("exit-bad-asset",
               !v.proceed && std::string(v.reason) == "bad-inputs");
-        // Risk STATE never blocks a structurally valid exit: kill,
-        // equity, clock, and flip history are entry-risk concerns.
-        // (These three encoded the old wrong policy; they now prove
-        // the corrected liveness boundary.)
+        // Risk state never blocks a structurally valid exit: kill, equity,
+        // clock and flip history are entry-risk concerns.
         s = Clean();
         s.intent.kind = IntentKind::EXIT;
         s.kill = (KillLevel)99;
@@ -785,7 +783,7 @@ int main(int argc, char** argv) {
     }
     // ---- realized_outcomes sign (correction: the fail-open edge) ----
     {
-        // Reviewer's exact edge: positive delta with -1 outcomes must NOT
+        // Reviewer's exact edge: positive delta with -1 outcomes must not
         // leave the gate at PASS for the max-gate to use.
         RiskSnapshot s = Clean();
         s.calib = CalibState::PASS;
@@ -829,7 +827,7 @@ int main(int argc, char** argv) {
         v = EvaluateVeto(s);
         CHECK("flip-future",
               !v.proceed && std::string(v.reason) == "bad-inputs");
-        // Lock expires EXACTLY at +2h: now - t2 == 2h is free.
+        // Lock expires exactly at +2h: now - t2 == 2h is free.
         s.flip_t1_us = NOW - 150 * 60 * 1000000LL;
         s.flip_t2_us = NOW - 120 * 60 * 1000000LL;
         v = EvaluateVeto(s);
@@ -1010,7 +1008,7 @@ int main(int argc, char** argv) {
                       std::string(v3.reason) == "event-medium");
             // Case 29 (doc 03 §3.7): joint JEV error, end to end.
             // t_max_elevated is the adversarial optimistic answer proxy
-            // (E .93 / macro / max / L .1, calib pass — NOT a claim that
+            // (E .93 / macro / max / L .1, calib pass — not a claim that
             // the recorded answer was empirically wrong). The independent
             // RiskSnapshot supplies a real R2 pending-risk breach: intent
             // 10% + pending 66% on another symbol = 76% > 75% cap, with

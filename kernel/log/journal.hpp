@@ -1,19 +1,15 @@
-// H1 — journal row formatter/verifier (doc 05 sec. 5.5, doc 06 sec.
-// 6.1/6.5). Pure kernel contract: format, hash-chain, verify — NO
-// file I/O here. Durable persistence is a caller-owned seam: the G0
-// runner owns append + fsync/atomic durability + restart load +
-// 90-day retention + daily backup + summary-from-journal. A drill
-// Sink proves row-shape/chain logic only, never on-disk durability.
+// Journal row formatter/verifier (doc 05 5.5, doc 06 6.1/6.5). Pure kernel
+// contract: format, hash-chain, verify, with no file I/O. Durable persistence
+// (append, fsync/atomic, restart load, 90-day retention, daily backup,
+// summary) is the G0 runner's seam; a drill Sink proves row shape and chain
+// logic only.
 //
-// Append-only decision/order rows chained by prev_hash; nothing trades
-// without a row (journal-before-order), except the frozen emergency-exit
-// exception (execute first, then append through the durable emergency
-// buffer — a delayed exit is worse than a delayed row, and the row
-// still lands). Hash chains detect accidents, not attackers (checkpoint
-// signing + off-host storage is Phase-4 ops). Timestamps arrive as
-// inputs (no clock reads in here); file I/O and retention/rotation are
-// the caller's job. Cycle path: std::string is allowed (same class as
-// Slice E), but every function is pure and bounded.
+// Append-only rows chained by prev_hash; nothing trades without a row
+// (journal-before-order), except the emergency-exit exception (execute first,
+// then append through the durable emergency buffer). Hash chains detect
+// accidents, not attackers (checkpoint signing + off-host storage is Phase-4
+// ops). Timestamps arrive as inputs. Cycle path: std::string is allowed, but
+// every function is pure and bounded.
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -22,7 +18,7 @@
 namespace jev {
 namespace journal {
 
-// Frozen row kinds (append-only vocabulary; unknown kinds never verify).
+// Row kinds (append-only vocabulary; unknown kinds never verify).
 inline bool IsKnownKind(const char* k) {
     if (!k) return false;
     const char* known[] = {"intent",        "fill",      "partial",
@@ -67,10 +63,9 @@ bool VerifyRow(const Row& r);
 // row verifies. False = broken (caller HARD-kills per doc 10).
 bool VerifyChain(const Row* rows, std::size_t n);
 
-// Redaction gate (doc 06 sec. 6.5: grep-clean retention). Payload
-// bodies must already be redacted upstream (texts <= 280 chars); this
-// gate refuses bodies carrying credential-shaped tokens or overlong
-// text so a violation fails at write time, not at audit time.
+// Redaction gate (doc 06 6.5): payload bodies must already be redacted
+// upstream (texts <= 280 chars); this refuses credential-shaped tokens and
+// overlong text so a violation fails at write time.
 bool RedactionOk(const char* body);
 
 }  // namespace journal

@@ -1,4 +1,4 @@
-// H1 integration — durability seam implementation. See store.hpp.
+// Durability seam implementation. See store.hpp.
 #include "store.hpp"
 
 #include <cstdio>
@@ -40,11 +40,8 @@ std::string Trim(const std::string& s) {
         --b;
     return s.substr(a, b - a);
 }
-// Write-fault injection slots (see store.hpp): matched by
-// path suffix, countdown decrements only on matching writes,
-// fire-once then disarm. Plain statics: fault tests are
-// single-threaded and faults are always cleared right after,
-// so no concurrent access can occur.
+// Write-fault injection slots (see store.hpp), matched by path suffix and
+// fire-once. Plain statics: fault tests are single-threaded.
 struct WriteFault {
     std::string suffix;
     long skip = -1;  // <0 = disarmed
@@ -130,9 +127,8 @@ bool ParseRowLine(const std::string& ln, journal::Row* out) {
     return true;
 }
 
-// Serialize one journal row to its canonical line (JournalAppend
-// formats inline; the drain path needs the same bytes to compare
-// buffer lines against the live tail).
+// Serialize one journal row to its canonical line (the drain path needs the
+// same bytes JournalAppend formats inline).
 bool RowLine(const journal::Row& r, char* out, std::size_t n) {
     int w = std::snprintf(out, n, "%llu|%lld|%s|%s|%s|%s|%s",
                           (unsigned long long)r.seq,
@@ -168,9 +164,8 @@ bool AtomicWrite(const char* path, const char* data) {
         return false;
     }
 #ifdef _WIN32
-    // True replacement semantics: remove-then-rename leaves NO
-    // state file on a crash between the two. MoveFileEx with
-    // REPLACE + WRITE_THROUGH is the crash-atomic primitive.
+    // True replacement: remove-then-rename would leave no state file on a
+    // crash between the two; MoveFileEx REPLACE + WRITE_THROUGH is crash-atomic.
     if (!MoveFileExA(tmp.c_str(), path,
                       MOVEFILE_REPLACE_EXISTING |
                       MOVEFILE_WRITE_THROUGH)) {
@@ -211,10 +206,8 @@ bool ReadLines(const char* path, std::vector<std::string>* out) {
         }
     }
     if (!cur.empty()) out->push_back(cur);
-    // A directory (or any unreadable node) opens but never
-    // yields bytes: report the read error instead of an empty
-    // success — callers treat "expected file, got nothing" as
-    // integrity failure, never as valid-empty.
+    // A directory (or unreadable node) opens but yields no bytes: report the
+    // error, since "expected file, got nothing" is an integrity failure.
     bool ok = std::ferror(f) == 0;
     std::fclose(f);
     return ok;
@@ -235,8 +228,7 @@ bool ReadLinesCapped(const char* path, std::vector<std::string>* out,
         if (total > max_bytes) {
             std::fclose(f);
             out->clear();
-            return false;  // oversized: refuse before
-                           // materializing rows
+            return false;  // oversized: refuse before materializing rows
         }
         for (std::size_t i = 0; i < n; ++i) {
             if (buf[i] == '\n') {
@@ -262,11 +254,8 @@ bool ReadLinesCapped(const char* path, std::vector<std::string>* out,
 }
 
 PathKind StatPath(const char* path) {
-    // Absent vs corrupt stay DISTINCT (callers fail closed on
-    // CORRUPT, never genesis/empty/missing). Only genuinely-
-    // missing names read ABSENT (ENOENT/ENOTDIR); every other
-    // stat failure (EACCES/EIO/...) is CORRUPT — a permission
-    // or I/O fault must never collapse into "missing".
+    // Absent vs corrupt stay distinct: only ENOENT/ENOTDIR read ABSENT;
+    // every other stat failure (EACCES/EIO/...) is CORRUPT.
     if (!path) return PathKind::ABSENT;
 #ifdef _WIN32
     struct _stat st;
@@ -287,12 +276,9 @@ PathKind StatPath(const char* path) {
 #endif
 }
 bool FileExists(const char* path) {
-    // Regular file ONLY (a directory in place of a state file is
-    // not "exists" — it is corruption/misplacement, and must
-    // read as missing everywhere (Windows fopen already refuses
-    // directories; POSIX opens them — stat converges the two).
-    // Callers that need the absent/corrupt distinction use
-    // StatPath directly; FileExists stays the regular-file probe.
+    // Regular file only: a directory in place of a state file is corruption,
+    // not "exists" (POSIX opens directories; stat converges the platforms).
+    // Callers needing absent/corrupt use StatPath.
     return StatPath(path) == PathKind::REGULAR;
 }
 bool ParseCycles(const char* text, long long* out) {
@@ -383,12 +369,10 @@ bool FreezeAdd(const char* path, const char* symbol) {
 
 bool FreezeHas(const char* path, const char* symbol) {
     if (!symbol) return false;
-    // Fail-closed frozen: a corrupt freeze node freezes everything
-    // (freeze = wait) rather than reading as an empty set.
+    // A corrupt freeze node freezes everything (freeze = wait).
     if (StatPath(path) == PathKind::CORRUPT) return true;
-    // ABSENT reads as the empty set; a present-but-unreadable
-    // regular file fails closed (frozen) — an unknowable freeze
-    // state must never read as "not frozen" (doc 06 sec. 6.1b).
+    // ABSENT reads as the empty set; a present-but-unreadable file is frozen
+    // (doc 06 6.1b).
     if (StatPath(path) == PathKind::ABSENT) return false;
     std::vector<std::string> lns;
     if (!ReadLines(path, &lns)) return true;
@@ -737,9 +721,8 @@ bool BackupFile(const char* src, const char* dst) {
 }
 
 bool CopyFileBytes(const char* src, const char* dst) {
-    // Same contract as BackupFile (byte-copy + OS-commit + atomic
-    // rename); the dated journal copy IS a backup with a rhythm
-    // name, so one implementation serves both.
+    // Same contract as BackupFile; the dated journal copy is a backup with a
+    // rhythm name.
     return BackupFile(src, dst);
 }
 

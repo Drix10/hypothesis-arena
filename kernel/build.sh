@@ -1,7 +1,7 @@
 #!/bin/bash
 # P3.1 gate: build + full validator suite + fuzz + API-surface check.
 # Usage: ./build.sh [normal|hardened|sanitize]
-# Sanitizers: GCC ASan/UBSan runtimes do NOT ship for this MinGW target
+# Sanitizers: GCC ASan/UBSan runtimes do not ship for this MinGW target
 # (link fails: collect2 ld error, no libasan/libubsan). The hardened mode
 # below is the available substitute: libstdc++ debug containers, stack
 # protector, fortify, static analyzer. Revisit on a Linux toolchain.
@@ -17,7 +17,7 @@ fi
 if [ "$MODE" = "sanitize" ]; then
     # S7-A: real ASan+UBSan runtimes on a Linux toolchain (hosted CI).
     # Same gates, same contracts; no production behavior change.
-    # The --wrap,malloc allocation proofs are skipped here BY DESIGN:
+    # The --wrap,malloc allocation proofs are skipped here by design:
     # sanitizer runtimes replace the allocator (and need the shared
     # libstdc++), so link-time malloc wrapping cannot observe them.
     # Zero-heap discipline stays proven by the normal-mode gate.
@@ -39,7 +39,7 @@ g++ $FLAGS -o tests/test_p32 tests/test_p32.cpp
 g++ $FLAGS -o tests/test_p33 tests/test_p33.cpp
 ./tests/test_p33 p33 fixtures
 # Slice A authority proof: the boundary is compiler-enforced, not merely
-# grep-policed. Each neg_* probe must FAIL compilation for its documented
+# grep-policed. Each neg_* probe must fail compilation for its documented
 # reason; the positive control must compile, run, and exit 0 (it proves
 # the toolchain is healthy, so the failures are real rejections).
 for neg in auth/neg_*.cpp; do
@@ -61,9 +61,9 @@ for neg in auth/neg_*.cpp; do
 done
 g++ $FLAGS -o /tmp/auth_pos auth/pos_authorized.cpp
 /tmp/auth_pos || { echo "GATE FAIL: authorized path broken"; exit 1; }
-# Friend list pinned tight INSIDE ValidationRequest: exactly the
+# Friend list pinned tight inside ValidationRequest: exactly the
 # construction authority plus the read-only validator. Counts are
-# OCCURRENCES, not lines (a smuggled second declaration on one line must
+# occurrences, not lines (a smuggled second declaration on one line must
 # still trip the gate), taken over the comment-stripped region (a matching
 # comment must never satisfy a positive check). Any third friend in that
 # region is a second authority. The neg_friendleak probe covers access
@@ -83,7 +83,7 @@ g++ $FLAGS -o test_veto risk/test_veto.cpp risk/veto.cpp
 ./test_veto p33 fixtures
 # Slice B JEV isolation: veto.cpp must never read bounded model answers
 # (method calls or the validated type) , the frozen sec.3.2 table is the
-# ONLY path from answers to size. This gate fails the build if any such
+# only path from answers to size. This gate fails the build if any such
 # path is introduced, including via comments naming call syntax.
 for tok in '\.enter\(\)' 'latent_risk\(\)' 'conviction\(\)' 'family\(\)' \
            'ValidatedJEVAnswerSetV3'; do
@@ -114,7 +114,7 @@ g++ $FLAGS -o test_decide exec/test_decide.cpp exec/decide.cpp risk/veto.cpp ris
 ./test_decide
 g++ $FLAGS -o test_account runner/test_account.cpp runner/account.cpp
 ./test_account fixtures
-g++ $FLAGS -o test_settle runner/test_settle.cpp runner/settle.cpp
+g++ $FLAGS -o test_settle runner/test_settle.cpp runner/settle.cpp runner/calendar.cpp
 ./test_settle
 g++ $FLAGS -o test_calendar runner/test_calendar.cpp runner/calendar.cpp
 ./test_calendar
@@ -186,7 +186,7 @@ g++ $FLAGS -DG0_WITH_CURL -o g0_runner_paper runner/main.cpp runner/runner.cpp r
 g++ $FLAGS -DG0_WITH_CURL -o g0_paper_loop runner/paper_loop_main.cpp runner/paper_loop.cpp runner/bars.cpp runner/calendar.cpp runner/account.cpp runner/settle.cpp runner/approved.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp exec/decide.cpp risk/veto.cpp risk/sizing.cpp risk/measure.cpp ingest/candidates.cpp broker/adapter.cpp broker/alpaca_paper.cpp broker/http_curl.cpp log/journal.cpp kill/switch.cpp -lcurl
 g++ $FLAGS -o smoke_paper broker/smoke_paper.cpp broker/http_curl.cpp broker/alpaca_paper.cpp broker/adapter.cpp -lcurl
 fi
-# H1 zero-malloc contract: the router STEP CORE allocates nothing
+# H1 zero-malloc contract: the router step core allocates nothing
 # (identity minting at IDLE is documented cycle-path and excluded
 # here; the loop covers the IDLE-reject path + every post-identity
 # state x observation shape).
@@ -253,7 +253,7 @@ fi
 g++ $FLAGS -o test_context ctx/test_context.cpp ctx/context.cpp
 ./test_context
 # Slice G vocabulary: regime/calib/source/session/stage sets are
-# frozen mirrors — the gate enforces each EXACT definition line once
+# frozen mirrors — the gate enforces each exact definition line once
 # (a second spelling anywhere trips the count) and forbids parallel
 # stage literals (stage vocabulary lives in Slice E only).
 [ "$(grep -c 's == "trend" || s == "range" || s == "volatile"' ctx/snapshot.hpp)" = "1" ] || {
@@ -302,7 +302,7 @@ if grep -nE "confidence\s*\(\s*\)" jev_validate.hpp jev_state.hpp kernel_state.h
     echo "GATE FAIL: confidence accessor present"
     exit 1
 fi
-# Confidence must never be READ on any kernel path (comments may name it).
+# Confidence must never be read on any kernel path (comments may name it).
 if grep -nE "\.confidence|->confidence" jev_state.hpp kernel_state.hpp decision_table.hpp; then
     echo "GATE FAIL: confidence read on kernel path"
     exit 1

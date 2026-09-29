@@ -133,13 +133,10 @@ int main() {
                                  "i", nullptr),
               "id-rejects-null");
     }
-    // 1b. Identity-hash inputs are length-bounded (doc 06 sec.
-    // 6.1b): a full-width UNTERMINATED context hashes exactly
-    // its 64 bytes — never stack garbage past them — identical
-    // to the NUL-terminated form, and stable across different
-    // trailing garbage. (Unterminated 64-char fields once made
-    // order ids nondeterministic across restarts, breaking
-    // pre-flight dedupe.)
+    // 1b. Identity-hash inputs are length-bounded (doc 06 6.1b): a full-width
+    // unterminated context hashes exactly its 64 bytes, identical to the
+    // NUL-terminated form and stable across different trailing garbage (else
+    // order ids would differ across restarts and break pre-flight dedupe).
     {
         char ctx[65];
         for (int i = 0; i < 64; ++i) ctx[i] = 'a';
@@ -237,7 +234,7 @@ int main() {
         Check(Has(ack.broker_order_id,
                   "6d7c5cb4-2682-4a53-a742-5df876a2d1aa"),
               "post-uuid-captured");
-        // Legs missing from the reply -> protection NOT accepted.
+        // Legs missing from the reply -> protection not accepted.
         // (Markers outside a legs array prove nothing: this body
         // carries both markers with NO legs and must still refuse.)
         g_reply = "{\"id\":\"o2\",\"filled_qty\":\"0\",\"take_profit\":{},\"stop_loss\":{}}";
@@ -466,7 +463,7 @@ int main() {
                   cx_names[ci]);
         }
         g_status = 200;
-        // Lookup with no id marker on 200: MALFORMED, not absent.
+        // Lookup with no id marker on 200: malformed, not absent.
         g_reply = "{}";
         auto qmal = ad.QueryOnce(id);
         Check(!qmal.found && !qmal.transport_ok, "query-malformed");
@@ -533,7 +530,7 @@ int main() {
             Check(!qq.found && !qq.transport_ok, qty_names[qi]);
         }
         // P0-1 by-client-ID shape: bracket held as a unit with legs
-        // null (unexpanded) -> bracket_class, NOT protection-absent.
+        // null (unexpanded) -> bracket_class, not protection-absent.
         g_reply =
             "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
             "\"client_order_id\":\"qqqq\",\"status\":\"filled\","
@@ -690,7 +687,7 @@ int main() {
                   Has(mc.broker_order_id,
                       "0193abcd-1234-5678-9abc-def012345678"),
               "close-fill-executed");
-        // Bare trade-event "fill" is NOT an order status -> UNKNOWN.
+        // Bare trade-event "fill" is not an order status -> UNKNOWN.
         g_reply =
             "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
             "\"status\":\"fill\",\"filled_qty\":\"10\"}";
@@ -715,7 +712,7 @@ int main() {
                   mdu.state == CloseState::UNKNOWN,
               "close-dead-no-qty-unknown");
         // accepted/new/pending/stopped/held -> PENDING
-        // (wait/reconcile, NOT closed). calculated is quarantine
+        // (wait/reconcile, not closed). calculated is quarantine
         // (UNKNOWN), not pending — see close-quarantine-waits.
         const char* pend[4] = {"accepted", "new", "pending_new",
                                "stopped"};
@@ -803,11 +800,10 @@ int main() {
                       mg.state == CloseState::UNKNOWN,
                   "close-quarantine-waits");
         }
-        // Ambiguous close (response lost): not executed, no UUID —
-        // the caller reconciles by client ID, never re-sends blind.
-        // (g_reply must not dangle at the dead gb buffer above:
-        // the reply body is unread on a 500, but the Fake still
-        // copies it, so point at live storage. ASan caught this.)
+        // Ambiguous close (response lost): not executed, no UUID; the caller
+        // reconciles by client ID, never re-sends blind. (g_reply must point at
+        // live storage: the Fake copies the body even though a 500 leaves it
+        // unread.)
         g_reply = "";
         g_status = 500;
         auto mc2 = ad.MarketClose("AAPL", 10, OrderSide::SELL, xid);

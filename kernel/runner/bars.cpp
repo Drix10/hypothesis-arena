@@ -9,10 +9,6 @@
 
 namespace jev {
 namespace runner {
-namespace {
-
-
-}  // namespace
 
 std::string UrlEncode(const std::string& s) {
     static const char* hex = "0123456789ABCDEF";
@@ -48,7 +44,7 @@ bool ParseIsoZ(const std::string& s, int64_t* utc_s) {
 std::string FormatIsoZ(int64_t utc_s) {
     if (utc_s < 0) return "";
     int64_t day = utc_s / 86400, rem = utc_s % 86400;
-    // civil from days (inverse of DaysFromCivil)
+    // inverse of DaysFromCivil
     int64_t z = day + 719468;
     int64_t era = (z >= 0 ? z : z - 146096) / 146097;
     unsigned doe = (unsigned)(z - era * 146097);

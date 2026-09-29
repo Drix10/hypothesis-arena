@@ -351,16 +351,16 @@ bool PaperLoop::Tick(int64_t now_ns) {
         ++stats_.seen;
         exec::EntryDecision d;
         const char* submit = "none";
-        JVal rec;
+        JVal cand;
         std::string err;
         if (line.size() > kMaxLine) {
             ++stats_.skipped_long;
             d.reason = "line-too-long";
-        } else if (!ParseJson(line, rec, err)) {
+        } else if (!ParseJson(line, cand, err)) {
             d.reason = "cand-shape";
         } else {
             exec::DecideInput in;
-            in.record = &rec;
+            in.record = &cand;
             in.tables = cfg_.tables;
             in.tables.held.clear();
             for (const auto& p : held)
@@ -376,9 +376,9 @@ bool PaperLoop::Tick(int64_t now_ns) {
             int64_t hwm = ReadInt(cfg_.dir + "/hwm.txt");
             if (av.equity_cents > hwm) hwm = av.equity_cents;
             s.daily_close_hwm_cents = s.intraday_hwm_cents = hwm;
-            int64_t today = (now_s + EtOffsetSeconds(now_s)) / 86400;
+            int64_t session_day = (now_s + EtOffsetSeconds(now_s)) / 86400;
             s.settled_cash_cents =
-                book_.SettledCents(av.settled_cash_cents, today) - spent_cents;
+                book_.SettledCents(av.settled_cash_cents, session_day) - spent_cents;
             CountSubmitted(cfg_.dir, now_ns, &s.day_count, &s.hour_count);
             s.entry_halt = unexplained || FileExists(cfg_.dir + "/HALT");
             for (const auto& p : held) {
@@ -396,7 +396,7 @@ bool PaperLoop::Tick(int64_t now_ns) {
             s.hour_bucket = now_ns / 1000 / (3600LL * 1000000LL);
             s.stage = risk::Stage::G0_PAPER;
             ingest::CandOutcome pre =
-                ingest::ValidateCandidate(rec, in.tables, now_ns);
+                ingest::ValidateCandidate(cand, in.tables, now_ns);
             if (pre.accepted)
                 MeasureRisk(io_, cfg_, pre.symbol, held, now_s, &s);
             d = exec::Decide(in);

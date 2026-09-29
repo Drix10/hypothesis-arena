@@ -59,7 +59,7 @@ int main(int argc, char** argv) {
     OrderQuery q = ad.QueryOnce(o.client_order_id);
     CHECK("real-query-found", q.found && q.protection_active);
 
-    g_cap = 2048;  // the old body cap: legs cut off, protection unproven
+    g_cap = 2048;  // a small body cap cuts off the legs: protection unproven
     OrderAck t = ad.SubmitProtected(o);
     CHECK("truncated-reply-not-protected", !t.protection_accepted);
 

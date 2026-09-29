@@ -1,16 +1,13 @@
 #include "settle.hpp"
 
+#include "calendar.hpp"
+
 namespace jev {
 namespace runner {
 
-static bool IsSession(int64_t day, const std::set<int64_t>& holidays) {
-    int64_t wd = ((day % 7) + 7 + 4) % 7;  // 0 = Sunday; day 0 was a Thursday
-    return wd != 0 && wd != 6 && holidays.count(day) == 0;
-}
-
 int64_t NextSessionDay(int64_t day, const std::set<int64_t>& holidays) {
     int64_t d = day + 1;
-    while (!IsSession(d, holidays)) ++d;
+    while (!IsSessionDay(d, holidays)) ++d;
     return d;
 }
 

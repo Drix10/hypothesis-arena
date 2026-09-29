@@ -1,44 +1,38 @@
-// P3.3 (corrected) — Typed JEVStateV3: the EXACT frozen §3.4 state contract.
+// Typed JEVStateV3: the frozen 3.4 state contract (P3.3).
 //
-// plan/03 §3.4 defines the JEV request state (17 top-level keys, full
-// feature records, full portfolio/event_window/calibration/risk_flags).
-// An earlier P3.3 revision carried only a subset (feature IDs); that was
-// a functional architecture bug (review: research evidence must REACH
-// JEV, not just feature IDs). This header is the full contract.
+// plan/03 3.4 defines the JEV request state (17 top-level keys, full feature
+// records, full portfolio/event_window/calibration/risk_flags), so research
+// evidence reaches JEV as records, not just feature IDs.
 //
 // Closed schema, both directions:
 //   BUILD (kernel -> wire): setters take C++ types, Serialize() emits
-//     canonical bytes bit-equal to frozen jev.py canon().
-//   CHECK (parsed external state -> typed): FromJVal() enforces exact
-//     key sets at EVERY level (top + all nested objects + feature/value
-//     members). Unknown keys, missing required containers, non-object
-//     feature members, wrong scalar types, non-finite doubles, and
-//     out-of-range integers all fail closed (state-shape).
-// No raw text, no prose, no unbounded output: strings are bounded,
-// value payloads are the frozen typed forms (enum/bucket/bool/count).
+//     canonical bytes bit-equal to jev.py canon().
+//   CHECK (parsed external state -> typed): FromJVal() enforces exact key sets
+//     at every level. Unknown keys, missing containers, non-object feature
+//     members, wrong scalar types, non-finite doubles and out-of-range
+//     integers all fail closed (state-shape).
+// No raw text or unbounded output: strings are bounded and value payloads are
+// the typed forms (enum/bucket/bool/count).
 //
-// Frozen vocabularies (plan/03 §3.4 + collector/ctx_read.py f2 X11):
+// Vocabularies (plan/03 3.4 + collector/ctx_read.py f2 X11):
 //   session{asia,london,new_york,us_open,closed} regime{trend,range,volatile}
 //   kind(6) effect(6) evidence{source,derived,inference} conf{low,medium,high}
 //   vtype{enum,bucket,bool,count} stage(4) impact(5) phase(4)
 //   vs_baseline{better,equal,worse,insufficient} gate{pass,insufficient,breach}
 //   source_status values{healthy,stale,failed,not_scheduled,unavailable,na}
-// kind is the closed ontology (ctx owns WHICH kinds exist); source_id is
-// a bounded non-empty string (the source NAMESPACE is owned by ctx/X11 —
-// the JEV boundary checks shape, ctx checks membership; same separation
-// of verifiers as context_hash vs state_hash).
+// kind is the closed ontology (ctx owns which kinds exist); source_id is a
+// bounded non-empty string whose namespace ctx/X11 owns. The JEV boundary
+// checks shape and ctx checks membership, as with context_hash vs state_hash.
 //
-// Definitional numeric bounds (market/math truth, not invented policy):
-// price/spread_bps/atr >= 0; enter_brier_200 in [0,1] (Brier definition);
-// counts/epochs/ages/positions non-negative int64 (checked, never stoll).
+// Numeric bounds are definitional: price/spread_bps/atr >= 0; enter_brier_200
+// in [0,1]; counts/epochs/ages/positions non-negative int64 (checked, never
+// stoll).
 //
-// feature_revision quirk (FROZEN recipe, not our choice): the sidecar
-// recipe hashes comma-joined sorted feature IDs with "?" for members
-// lacking one — and §3.4 features carry NO feature_id field. So over full
-// states the revision is sha256("?,?...") (count-only). The kernel MUST
-// reproduce this exactly (it verifies artifact decision_keys); making the
-// revision content-aware would DIVERGE from the sidecar. A content-aware
-// revision needs a plan amendment + version bump, never a silent fix.
+// feature_revision follows the frozen sidecar recipe: sha256 of comma-joined
+// sorted feature IDs, "?" for members lacking one. 3.4 features carry no
+// feature_id, so over full states the revision is sha256("?,?...") (count-only).
+// The kernel must reproduce this to verify artifact decision_keys; a
+// content-aware revision needs a plan amendment and version bump.
 //
 // P3.4 default (b): no confidence anywhere in this file.
 #pragma once
@@ -50,10 +44,9 @@
 
 namespace jev {
 
-// Strict UTF-8 -> code points. Rejects overlongs, surrogate halves,
-// >0x10FFFF, truncated sequences: kernel states never carry them, and a
-// lone-surrogate Python str has no canonical form here -> construction
-// fails closed (state-shape) instead of emitting wrong bytes.
+// Strict UTF-8 -> code points. Rejects overlongs, surrogate halves, >0x10FFFF
+// and truncated sequences; a lone-surrogate Python str has no canonical form
+// here, so construction fails closed (state-shape).
 inline bool DecodeUtf8(const std::string& in, std::u32string& out,
                        std::string& why) {
     out.clear();
@@ -104,9 +97,8 @@ inline bool DecodeUtf8(const std::string& in, std::u32string& out,
     return true;
 }
 
-// Checked non-negative int64 parse (blocker #3): strict digits, overflow
-// fails closed. ONE path for every integer the state boundary reads
-// (epochs, ages, counts, positions) — no stoll anywhere near state input.
+// Checked non-negative int64 parse: strict digits, overflow fails closed. The
+// one path for every integer the state boundary reads (no stoll).
 inline bool ParseNonNegInt64(const std::string& tok, int64_t& out) {
     if (tok.empty()) return false;
     int64_t v = 0;
@@ -119,7 +111,7 @@ inline bool ParseNonNegInt64(const std::string& tok, int64_t& out) {
     return true;
 }
 
-// Frozen enum matcher: exact membership, no prefixes, no case folding.
+// Enum matcher: exact membership, no prefixes, no case folding.
 inline bool MatchEnum(const std::string& v, const char* const* set,
                       size_t n) {
     for (size_t i = 0; i < n; i++)
@@ -127,9 +119,9 @@ inline bool MatchEnum(const std::string& v, const char* const* set,
     return false;
 }
 
-// One scalar state field in BOTH renderings the frozen recipe needs:
-// json_fragment (canonical bytes) and pystr (decision_key part). Stored,
-// never recomputed, so Serialize() and DecisionKey() cannot drift apart.
+// One scalar state field in both renderings the recipe needs: json_fragment
+// (canonical bytes) and pystr (decision_key part). Stored, never recomputed,
+// so Serialize() and DecisionKey() cannot drift apart.
 struct ScalarField {
     std::string json;    // canonical fragment: "quoted" | 12 | 1.5 | true
     std::string pystr;   // PyStr() form: raw | 12 | 1.5 | True
@@ -168,7 +160,7 @@ inline void ScalarBool(ScalarField& f, bool v) {
     f.present = true;
 }
 
-// Frozen §3.4 vocabularies.
+// 3.4 vocabularies.
 static const char* SESSION_SET[] = {"asia", "london", "new_york", "us_open",
                                     "closed"};
 static const char* REGIME_SET[] = {"trend", "range", "volatile"};
@@ -196,7 +188,7 @@ static const size_t MAX_STATE_FEATURES = 16;  // §3.4: max 16 in payload
 static const size_t MAX_FEATURE_SYMBOLS = 16;  // ctx f2 parity
 static const size_t MAX_SOURCE_STATUS = 64;
 
-// Full §3.4 feature record (closed: exactly these members, this order).
+// Full 3.4 feature record (closed: exactly these members, this order).
 struct StateFeature {
     ScalarField age_s, conf_bucket, effect, evidence, kind, source_id;
     std::vector<std::string> symbols;  // 1..16, insertion order
@@ -444,8 +436,8 @@ class JEVStateV3 {
         src_status_.push_back({k, v});
         return true;
     }
-    // Full feature record (closed §3.4 member set). v_* : exactly one must
-    // be set, matching vtype (enum/bucket=str, bool=bool, count=int>=0).
+    // Full feature record (closed 3.4 member set). v_*: exactly one must be
+    // set, matching vtype (enum/bucket=str, bool=bool, count=int>=0).
     bool add_feature(const std::string& kind,
                      const std::vector<std::string>& symbols,
                      const std::string& vtype, const std::string& v_str,
@@ -554,9 +546,9 @@ class JEVStateV3 {
         }
         return true;
     }
-    // Canonical bytes, bit-equal to frozen jev.py canon() over the same
-    // logical state (code-point key order; insertion order inside arrays;
-    // source_status sorted by key like Python sort_keys).
+    // Canonical bytes, bit-equal to jev.py canon() over the same logical state
+    // (code-point key order; insertion order inside arrays; source_status
+    // sorted by key like Python sort_keys).
     std::string Serialize() const {
         std::string o = "{";
         bool first = true;
@@ -589,11 +581,10 @@ class JEVStateV3 {
         return o;
     }
     std::string StateHash() const { return Sha256Hex(Serialize()); }
-    // decision_key over the SAME stored renderings (no re-parse, no drift).
-    // feature_revision is the FROZEN sidecar recipe: comma-joined sorted
-    // IDs with "?" for members lacking one — and full §3.4 features carry
-    // NO feature_id, so every member contributes "?". Count-sensitive,
-    // content-blind, exactly like Python. (See header-top note.)
+    // decision_key over the same stored renderings (no re-parse, no drift).
+    // feature_revision is the sidecar recipe: full 3.4 features carry no
+    // feature_id, so every member contributes "?" (count-sensitive,
+    // content-blind, like Python; see the header note).
     std::string DecisionKey() const {
         std::string joined;
         for (size_t i = 0; i < features_.size(); i++) {
@@ -818,8 +809,8 @@ class JEVStateV3 {
                 why = std::string("state-shape:") + k;
                 return false;
             }
-            // Negation overflow guard: -(INT64_MAX+1) is INT64_MIN,
-            // computed unsigned to avoid signed UB.
+            // Negation overflow guard: -(INT64_MAX+1) is INT64_MIN, computed
+            // unsigned to avoid signed UB.
             ival = neg ? (t > INT64_MAX
                                ? INT64_MIN
                                : -t)
@@ -871,9 +862,9 @@ class JEVStateV3 {
     std::vector<StateFeature> features_;
 };
 
-// Strict closed-schema construction from a parsed state object: the exact
-// frozen §3.4 member set at every level, required everywhere. Used by
-// tests and by any kernel path adopting an externally supplied state.
+// Strict closed-schema construction from a parsed state object: the exact 3.4
+// member set at every level. Used by tests and by any kernel path adopting an
+// externally supplied state.
 inline bool JEVStateV3::FromJVal(const JVal& st, JEVStateV3& out,
                                  std::string& why) {
     if (st.t != JVal::T::OBJ) {

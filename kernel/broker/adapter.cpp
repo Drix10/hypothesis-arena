@@ -1,5 +1,5 @@
-// H1 — broker recipe implementations (pure; transport only inside
-// the Alpaca adapter methods, which fail closed without one).
+// Broker recipe implementations (pure; transport is used only inside the
+// Alpaca adapter methods, which fail closed without one).
 #include "adapter.hpp"
 
 #include "../jev_validate.hpp"  // Sha256Hex (cycle path only)
@@ -8,11 +8,9 @@ namespace jev {
 namespace broker {
 
 namespace {
-// Length-bounded append for the frozen id recipe: valid inputs
-// (NUL inside the cap) hash byte-identically to before; a
-// full-width unterminated field truncates instead of reading
-// stack garbage into the identity (nondeterministic ids across
-// restarts would break pre-flight dedupe — doc 06 sec. 6.1b).
+// Length-bounded append for the id recipe: a full-width unterminated field
+// truncates instead of reading stack garbage into the identity (ids must be
+// stable across restarts for pre-flight dedupe, doc 06 6.1b).
 void AppendCapped(std::string& out, const char* s,
                   std::size_t cap) {
     if (!s) return;

@@ -1,7 +1,6 @@
-// US equity session calendar for the hourly data-age gate (R6/R7).
-// Regular-session hourly bars start at 09:00..15:00 America/New_York
-// (hour-aligned, the first covers 09:30-10:00). Early closes are not modeled;
-// they make the gate stricter, never looser.
+// US equity session calendar for the hourly data-age gate (R6/R7). Regular
+// session hourly bars start at 09:00..15:00 America/New_York (the first covers
+// 09:30-10:00). Early closes are not modeled, which makes the gate stricter.
 #pragma once
 #include <cstdint>
 #include <set>

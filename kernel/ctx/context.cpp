@@ -1,4 +1,4 @@
-// Slice G implementation. Canonical recipe frozen in snapshot.hpp.
+// Slice G implementation. Canonical recipe: see snapshot.hpp.
 #include "snapshot.hpp"
 
 #include <cstdio>
@@ -28,8 +28,7 @@ bool NameOk(const std::string& s) {
 }
 
 bool Hex64(const std::string& s) {
-    // Lowercase 64-hex ONLY: matches the frozen Slice C ingest
-    // contract (which rejects uppercase). One representation.
+    // Lowercase 64-hex only, matching Slice C ingest (which rejects uppercase).
     if (s.size() != 64) return false;
     for (char c : s) {
         if ((c < '0' || c > '9') && (c < 'a' || c > 'f')) return false;
@@ -71,9 +70,8 @@ std::string ValidateSnapshot(const Snapshot& s) {
         for (size_t j = i + 1; j < s.marks.size(); ++j)
             if (s.marks[i].symbol == s.marks[j].symbol)
                 return "mark-duplicate";
-    // Bidirectional mask coherence: set => populated+valid, clear =>
-    // canonical empty. Ghost data (populated but declared absent) is
-    // malformed — downstream must never read it.
+    // Bidirectional mask coherence: set => populated and valid, clear =>
+    // canonical empty. Ghost data (populated but declared absent) is malformed.
     bool has_marks = !s.marks.empty();
     if ((s.present_mask & kMarks) && !has_marks) return "marks-incoherent";
     if (!(s.present_mask & kMarks) && has_marks) return "marks-ghost";
@@ -107,8 +105,8 @@ std::string ValidateSnapshot(const Snapshot& s) {
     if (s.var_corr_flags & ~0x3u) return "varcorr-reserved";
     bool has_vc = s.var_corr_flags != 0;
     if (!(s.present_mask & kVarCorr) && has_vc) return "varcorr-ghost";
-    // Portfolio: explicitly present zero is legitimate (flat book);
-    // ghost = nonzero while clear.
+    // Portfolio: an explicitly present zero is legitimate (flat book); ghost
+    // = nonzero while clear.
     if ((s.present_mask & kPortfolio) &&
         (s.equity_ud < 0 || s.exposure_ud < 0 || s.buying_power_ud < 0))
         return "portfolio-negative";

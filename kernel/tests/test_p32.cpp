@@ -1,5 +1,5 @@
 // P3.2 interop suite: committed Python->C++ vectors for canonical bytes,
-// SHA-256, Ed25519. Reads ONLY committed files (kernel/vectors/); never
+// SHA-256, Ed25519. Reads only committed files (kernel/vectors/); never
 // invokes Python. Ends at the interoperable cryptographic artifact (P3.3
 // owns the typed decision layer).
 #include <cstdio>
@@ -171,7 +171,7 @@ int main(int argc, char** argv) {
             CHECK("v2-no-inf", canon.find("Infinity") == std::string::npos);
         }
     }
-    // 5. response_hash is a recomputation-checked claim, NOT signature-covered:
+    // 5. response_hash is a recomputation-checked claim, not signature-covered:
     // flipping it breaks the hash check while the signature over the payload
     // bytes still verifies (frozen sidecar scope, recorded in plan/13.2).
     {

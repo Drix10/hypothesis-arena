@@ -146,8 +146,8 @@ int main() {
         s.regime = "trend";
         Check(ValidateSnapshot(s) == "regime-ghost", "ghost-regime");
     }
-    // source vocabulary is the frozen JEV set; the old G-local
-    // spellings are rejected, never mapped.
+    // source vocabulary is the frozen JEV set; other spellings are rejected,
+    // never mapped.
     {
         Snapshot s = Full();
         s.sources[0].state = "fresh";
@@ -282,7 +282,7 @@ int main() {
         Check(ValidateSnapshot(s) == "calib-incoherent",
               "set-empty-calib");
     }
-    // The 2 pure-integer sections: all-zero is BOTH the empty state
+    // The 2 pure-integer sections: all-zero is both the empty state
     // and a legitimate present value, so set+zero is VALID (solo-bit
     // masks prove no ghost trip either).
     {

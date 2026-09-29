@@ -1,26 +1,25 @@
-// S4 — JEV v4 candidate-bound validation + table (ADDITIVE; v3 untouched).
+// JEV v4 candidate-bound validation + table (S4; additive, v3 untouched).
 //
-// JEV evaluates an already-constructed c1 Candidate, never originates side
+// JEV evaluates an already-constructed c1 Candidate and never originates side
 // or economics. Kernel-owned identity (expected cid/symbol/feature-hash,
 // supplied by the engine, never the artifact) is the trust anchor.
 //
-// Identity path has ZERO float rendering: the artifact carries the exact
-// CID strings Python hashed (ints as decimal, floats as Python repr);
-// C++ joins them in _ID_FIELDS order and hashes. The same strings are
-// parsed to doubles for coherence (full-consumption strtod, finite,
-// positive, side-consistent). Floats elsewhere in the payload (answer
-// probabilities) ride the frozen CanonDouble==PyFloatRepr contract.
+// The identity path has no float rendering: the artifact carries the exact
+// CID strings Python hashed (ints as decimal, floats as Python repr); C++
+// joins them in _ID_FIELDS order and hashes. The same strings are parsed to
+// doubles for coherence (full-consumption strtod, finite, positive,
+// side-consistent). Other floats (answer probabilities) use the
+// CanonDouble==PyFloatRepr contract.
 //
-// v4 decision_key (frozen here; Python mirrors field-for-field):
+// v4 decision_key (Python mirrors field-for-field):
 //   sha256_hex(cid|symbol|snapshot_epoch|price_s|spread_bps_s|session|
 //              regime|feature_snapshot_hash|v4)
-// Table: doc 03 §3.2 rows with candidate-specific enter. Verdicts carry
-// no side, no family, no size — PASS_BASE / PASS_ELEVATED_ELIGIBLE /
-// HOLD+reason only.
+// Table: doc 03 3.2 rows with candidate-specific enter. Verdicts carry no
+// side, family or size: PASS_BASE / PASS_ELEVATED_ELIGIBLE / HOLD+reason.
 //
-// Build (explicit; build.sh untouched — frozen gate):
+// Build (explicit; not in build.sh):
 //   g++ -std=c++17 -O2 -o /tmp/test_v4 tests/test_v4.cpp && /tmp/test_v4 v4
-// Vectors: kernel/v4/*.json (committed, Python-generated, stable).
+// Vectors: kernel/v4/*.json (committed, Python-generated).
 #pragma once
 #include <cstdint>
 #include <cstdlib>
@@ -177,8 +176,8 @@ inline V4Verdict ValidateV4(const std::string& artifact_json,
     if (!getStr(a, "edge_family", afam) || afam != fam)
         return Hold("v4_family_binding");
     // 6. Decision-key recompute. Wire types are strict per field:
-    // snapshot_epoch must be an integer JSON number (never a string,
-    // never a double); all other parts must be JSON strings.
+    // snapshot_epoch must be an integer JSON number (never a string or
+    // double); all other parts must be JSON strings.
     {
         std::string parts;
         for (int i = 0; i < 9; i++) {
@@ -221,7 +220,7 @@ inline V4Verdict ValidateV4(const std::string& artifact_json,
                        canon.size(), sigraw))
         return Hold("v4_unauthenticated");
     // 8. Freshness (integer seconds; 60 s skew mirrors the sidecar).
-    // Frozen artifact rule: expires_at == created_at + 60 exactly.
+    // Artifact rule: expires_at == created_at + 60 exactly.
     int64_t created = 0, expires = 0;
     const jev::JVal* jcr = get(p, "created_at");
     const jev::JVal* jex = get(p, "expires_at");

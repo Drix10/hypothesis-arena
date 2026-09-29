@@ -1,6 +1,6 @@
-// P3.3 (corrected) suite: full §3.4 state contract + closed nested schema +
-// checked integers + micros internals + hardened kernel + decision table.
-// Committed files only (no Python). All fixtures share the P3.1 test key.
+// P3.3 suite: full 3.4 state contract, closed nested schema, checked integers,
+// micros internals, hardened kernel and decision table. Committed files only
+// (no Python). All fixtures share the P3.1 test key.
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -519,7 +519,7 @@ int main(int argc, char** argv) {
                  jev::VetoReason::NONE);
         // Case 29 (doc 03 §3.7), table-isolation component: t_max_elevated
         // is the adversarial optimistic answer proxy (E .93 / macro / max
-        // / L .1, calib pass — NOT a claim the recorded answer was wrong).
+        // / L .1, calib pass — not a claim the recorded answer was wrong).
         // With a forbidding deterministic state the table must HOLD on
         // row 0 with the coded reason. The full end-to-end proof (real R2
         // pending-risk detected by EvaluateVeto, mapped by

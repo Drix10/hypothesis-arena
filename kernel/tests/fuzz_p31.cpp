@@ -1,6 +1,6 @@
 // P3.1 deterministic adversarial fuzz: fixed-seed PRNG, no external input.
 // Invariant: validate_jev() never crashes, never hangs, and returns ok=true
-// ONLY for fully contract-valid artifacts. Any ok=true on mutated input, or
+// only for fully contract-valid artifacts. Any ok=true on mutated input, or
 // any crash/hang, fails the run. Usage: fuzz_p31 [iterations] [seed].
 #include <cstdint>
 #include <cstdio>
