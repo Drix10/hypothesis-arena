@@ -83,7 +83,7 @@ A box is checked only with evidence (commit + test output / report path).
 - [ ] K1 (DONE 2026-09-29: libcurl decision, `broker/http_curl.cpp`, `--paper` flag, live smoke PASS on Alpaca paper, real-reply fixture test, adapter body cap 8 KiB and legs rule fixed against the live shape; OPEN: 429 drill, WS trade_updates, MOC/reconcile smoke, fault-injection suite) P3.5-T transport: decision record (libcurl+TLS vs `mirotrade`
       gateway) → implementation behind the seam → fault-injection suite →
       Alpaca paper smoke (submit/protect/query/cancel/reconcile/MOC, 429).
-- [ ] K2 Always-take path (filter policy `none`), bit-identical where the
+- [ ] K2 (DONE: `exec/decide.cpp` = the no-filter path, candidate gate + sizing (doc 03 3.3, `risk/sizing.cpp`) + veto -> OrderIntent, 20+19 checks, grep gate against AnswerSet; OPEN: jev_v4 filter policy input on BuildEngineInputs, bit-identical-where-PASS proof) Always-take path (filter policy `none`), bit-identical where the
       filter passes; cannot read an AnswerSet (compile/grep gate).
 - [ ] K3 Snapshot v2 + settlement ledger + committed vectors (v1 vectors
       still verified).

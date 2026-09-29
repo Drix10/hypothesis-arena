@@ -106,6 +106,15 @@ g++ $FLAGS -o test_features ingest/test_features.cpp ingest/features.cpp
 ./test_features
 g++ $FLAGS -o test_candidates ingest/test_candidates.cpp ingest/candidates.cpp
 ./test_candidates
+g++ $FLAGS -o test_sizing risk/test_sizing.cpp risk/sizing.cpp
+./test_sizing
+g++ $FLAGS -o test_decide exec/test_decide.cpp exec/decide.cpp risk/veto.cpp risk/sizing.cpp ingest/candidates.cpp
+./test_decide
+# The no-filter decision path must never reach a JEV AnswerSet.
+if grep -nE "AnswerSet|jev_v4|jev_state|validate_jev" exec/decide.cpp exec/decide.hpp risk/sizing.cpp risk/sizing.hpp; then
+    echo "GATE FAIL: no-filter path touches the AnswerSet surface"
+    exit 1
+fi
 # Slice C zero-malloc contract: validation + retention allocate nothing
 # (comments stripped: the discipline note names the forbidden tokens).
 # U8()/JVal::find are forbidden in the ingest path: both build key

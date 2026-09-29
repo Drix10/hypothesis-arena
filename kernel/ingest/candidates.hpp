@@ -48,6 +48,9 @@ struct CandOutcome {
     std::string cid;     // set when the CID recomputed OK
     std::string symbol;  // set when accepted
     std::string side;    // "BUY" | "SELL" when accepted
+    int64_t entry_cents = 0;  // parsed from the exact price strings
+    int64_t stop_cents = 0;
+    int64_t tp_cents = 0;
 };
 
 CandOutcome ValidateCandidate(const JVal& rec, const CandidateTables& t,

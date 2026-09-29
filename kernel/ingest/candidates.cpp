@@ -40,6 +40,25 @@ bool ParseNonNegI64(const std::string& s, int64_t& out) {
     out = (int64_t)v;
     return true;
 }
+// Decimal price with at most two places -> cents; false on anything else.
+bool ParseCents(const std::string& s, int64_t& out) {
+    size_t dot = s.find('.');
+    std::string whole = dot == std::string::npos ? s : s.substr(0, dot);
+    std::string frac = dot == std::string::npos ? "" : s.substr(dot + 1);
+    if (whole.empty() || whole.size() > 12 || frac.size() > 2) return false;
+    if (whole.size() > 1 && whole[0] == '0') return false;
+    int64_t w = 0;
+    for (char c : whole) {
+        if (c < '0' || c > '9') return false;
+        w = w * 10 + (c - '0');
+    }
+    if (dot != std::string::npos && frac.empty()) return false;
+    for (char c : frac)
+        if (c < '0' || c > '9') return false;
+    while (frac.size() < 2) frac += '0';
+    out = w * 100 + (frac.empty() ? 0 : (frac[0] - '0') * 10 + (frac[1] - '0'));
+    return out > 0;
+}
 bool In(const std::vector<std::string>& v, const std::string& s) {
     for (auto& x : v)
         if (x == s) return true;
@@ -91,6 +110,12 @@ CandOutcome ValidateCandidate(const JVal& rec, const CandidateTables& t,
 
     int64_t snap = 0;
     if (!ParseNonNegI64(f[2], snap)) return Rej(CandReject::SHAPE);
+    int64_t entry = 0, stop = 0, tp = 0;
+    if (!ParseCents(f[5], entry) || !ParseCents(f[6], stop) ||
+        !ParseCents(f[7], tp))
+        return Rej(CandReject::SHAPE);
+    if (side == "BUY" && !(stop < entry && entry < tp))
+        return Rej(CandReject::SHAPE);
     if (snap > now_ns) return Rej(CandReject::FRESHNESS);
     __int128 age = (__int128)now_ns - snap;
     if (age > (__int128)sl->window_s * 1000000000LL)
@@ -108,6 +133,9 @@ CandOutcome ValidateCandidate(const JVal& rec, const CandidateTables& t,
     o.cid = cid;
     o.symbol = symbol;
     o.side = side;
+    o.entry_cents = entry;
+    o.stop_cents = stop;
+    o.tp_cents = tp;
     return o;
 }
 

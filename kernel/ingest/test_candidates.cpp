@@ -21,6 +21,7 @@ using namespace jev;
 using namespace jev::ingest;
 
 static const int64_t NOW = 1800000000000000000LL;
+static const char* PX[3] = {nullptr, nullptr, nullptr};
 static const char* BASE[12] = {"trend_etf_v1", "VTI", "", "BUY", "trend",
                             "250.5", "230.0", "999.0", "0",
                             "exit_trend_v1", "cost_v2", "f1"};
@@ -32,6 +33,8 @@ static std::string Rec(std::string ts, std::string side = "BUY",
     std::string f[12];
     for (int i = 0; i < 12; i++) f[i] = BASE[i];
     f[0] = sleeve; f[1] = sym; f[2] = ts; f[3] = side;
+    for (int k = 0; k < 3; k++)
+        if (PX[k]) f[5 + k] = PX[k];
     std::string joined;
     static const char* K[12] = {"strategy_version","symbol","snapshot_ts_ns",
         "proposed_side","proposed_family","entry_px","stop_px","tp_px",
@@ -69,6 +72,9 @@ int main() {
     std::string fresh = std::to_string(NOW - 60LL * 1000000000LL);
 
     CandOutcome o = Run(Rec(fresh), t);
+    CHECK("prices-parsed", Run(Rec(fresh), t).entry_cents == 25050 &&
+                               Run(Rec(fresh), t).stop_cents == 23000 &&
+                               Run(Rec(fresh), t).tp_cents == 99900);
     CHECK("valid-buy", o.accepted && o.side == "BUY" && o.symbol == "VTI" &&
                            o.cid.size() == 64);
     CHECK("cid-mismatch", Run(Rec(fresh, "BUY", "trend_etf_v1", "VTI", "c1",
@@ -94,6 +100,16 @@ int main() {
                            CandReject::SHAPE);
     CHECK("pipe-in-field", Run(Rec(fresh, "BUY", "trend|etf_v1"), t).code ==
                                CandReject::SHAPE);
+    const char* bad[][3] = {{"250.555", "230.0", "999.0"}, {"1e3", "230.0", "999.0"},
+                            {".5", "0.4", "9.0"}, {"05.00", "1.0", "9.0"},
+                            {"250.", "230.0", "999.0"}, {"230.0", "230.0", "999.0"},
+                            {"250.5", "230.0", "250.5"}, {"0", "0", "0"},
+                            {"250.5", "-1", "999"}};
+    for (auto& b : bad) {
+        PX[0] = b[0]; PX[1] = b[1]; PX[2] = b[2];
+        CHECK("bad-price", Run(Rec(fresh), t).code == CandReject::SHAPE);
+    }
+    PX[0] = PX[1] = PX[2] = nullptr;
     CHECK("bad-ts", Run(Rec("-5"), t).code == CandReject::SHAPE);
     CHECK("ts-leading-zero", Run(Rec("0123"), t).code == CandReject::SHAPE);
     CHECK("not-object", Run("[1]", t).code == CandReject::SHAPE);
