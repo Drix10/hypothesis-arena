@@ -4,7 +4,9 @@
 A signal filed on session d is decided at d's close and enters at the next
 open; a position exits at the open of its 22nd session or after a close below
 entry - 3 x ATR20. `raw` (price and volume as traded) drives the liquidity
-filter; `adj` (split adjusted) drives returns and ATR."""
+filter; `adj` (split adjusted) drives returns and ATR. Symbols in
+`never_eligible` have data but never passed the liquidity filter, so their
+events count as ineligible rather than as missing data."""
 import bisect
 import statistics
 
@@ -14,8 +16,9 @@ MIN_HISTORY = 40
 class InsiderSleeve:
     def __init__(self, events, raw, adj, sessions, *, min_price,
                  min_dollar_volume, min_value=25000.0, min_insiders=1,
-                 hold=21, slots=5, atr_mult=3.0):
+                 hold=21, slots=5, atr_mult=3.0, never_eligible=()):
         self.raw, self.adj = raw, adj
+        self.never = frozenset(never_eligible)
         self.sessions = sessions
         self.idx = {d: i for i, d in enumerate(sessions)}
         self.p = dict(min_price=min_price, min_dv=min_dollar_volume,
@@ -81,6 +84,9 @@ class InsiderSleeve:
                 self.stats["ineligible"] += 1
                 continue
             self.stats["considered"] += 1
+            if s in self.never:
+                self.stats["ineligible"] += 1
+                continue
             ok = self._eligible(s, d)
             stop = self._stop(s, d) if ok else None
             if ok is None or (ok and stop is None):

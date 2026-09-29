@@ -96,12 +96,14 @@ def folder_digest(directory, syms):
 
 
 def eligible_symbols(events, raw_syms, sessions):
-    """Symbols with at least one tier-A-eligible event (superset of tiers)."""
-    keep = set()
+    """(keep, with_data): symbols with a tier-A-eligible event (a superset of
+    the other tiers) and symbols that have any bars at all."""
+    keep, with_data = set(), set()
     for s in raw_syms:
         bars = read_symbol(RAW, s)
         if not bars:
             continue
+        with_data.add(s)
         raw = {s: {d: (b[0], b[3], b[4]) for d, b in bars.items()}}
         sl = InsiderSleeve([], raw, {}, sessions, min_price=2.0,
                            min_dollar_volume=2e6)
@@ -109,7 +111,7 @@ def eligible_symbols(events, raw_syms, sessions):
             if e["symbol"] == s and sl._eligible(s, _session(sessions, e["date"])):
                 keep.add(s)
                 break
-    return keep
+    return keep, with_data
 
 
 def _session(sessions, d):
@@ -118,8 +120,8 @@ def _session(sessions, d):
     return sessions[min(i, len(sessions) - 1)]
 
 
-def entered_symbols(events, raw, adj, sessions, tier):
-    sl = _sleeve(events, raw, adj, sessions, tier)
+def entered_symbols(events, raw, adj, sessions, tier, never=()):
+    sl = _sleeve(events, raw, adj, sessions, tier, never)
     ent = set()
     for d in sessions:
         w = sl.target_fn(d, {})
@@ -127,11 +129,12 @@ def entered_symbols(events, raw, adj, sessions, tier):
     return ent
 
 
-def _sleeve(events, raw, adj, sessions, tier):
+def _sleeve(events, raw, adj, sessions, tier, never=()):
     t = TIERS[tier]
     return InsiderSleeve(events, raw, adj, sessions, min_price=t["min_price"],
                          min_dollar_volume=t["min_dollar_volume"],
-                         min_insiders=t["min_insiders"], min_value=MIN_VALUE)
+                         min_insiders=t["min_insiders"], min_value=MIN_VALUE,
+                         never_eligible=never)
 
 
 def run(pre, pre_hash, log=print):
@@ -147,8 +150,9 @@ def run(pre, pre_hash, log=print):
                 if os.path.exists(sip_fetch.dataset_paths(
                     RAW, s, "bars", "1Day", "raw")[1])]
     log(f"event symbols {len(ev_syms)} with raw bars {len(raw_syms)}")
-    keep = eligible_symbols(events, raw_syms, sessions)
-    log(f"tier-A eligible symbols {len(keep)}")
+    keep, with_data = eligible_symbols(events, raw_syms, sessions)
+    never = with_data - keep
+    log(f"symbols with data {len(with_data)}, tier-A eligible {len(keep)}")
     _, failed = bulk_bars.fetch_all(sorted(keep), "split", SPLIT, FETCH_START,
                                     FETCH_END, log=log)
     if failed:
@@ -195,12 +199,12 @@ def run(pre, pre_hash, log=print):
     try:
         res, sl_stats = {}, {}
         for v in variants:
-            ent = entered_symbols(events, raw, adj, sessions, v)
+            ent = entered_symbols(events, raw, adj, sessions, v, never)
             prices = {s: {d: (b[0], b[3]) for d, b in adj[s].items()}
                       for s in ent}
             prices["BIL"] = ref["BIL"]
             for mult in (1.0, 2.0):
-                sl = _sleeve(events, raw, adj, sessions, v)
+                sl = _sleeve(events, raw, adj, sessions, v, never)
                 res[(v, mult)] = portfolio.run(
                     sessions, prices, sl.target_fn,
                     spread_bps=TIERS[v]["spread_bps"], cost_mult=mult,

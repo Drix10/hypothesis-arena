@@ -80,6 +80,15 @@ class Sleeve(unittest.TestCase):
         self.assertEqual(sl.stats["no_data"], 1)
         self.assertEqual(sl.stats["entered"], 1)
 
+    def test_never_eligible_symbols_are_ineligible_not_missing(self):
+        d = days(120)[60]
+        sess, raw, adj, sl = make([ev(d, "ILLIQ"), ev(d, "AAA")],
+                                  {"AAA": {}}, never_eligible={"ILLIQ"})
+        for x in sess[:61]:
+            sl.target_fn(x, {})
+        self.assertEqual(sl.stats["no_data"], 0)
+        self.assertEqual(sl.stats["ineligible"], 1)
+
     def test_catastrophe_stop_exits_early(self):
         d = days(120)[60]
         sess, raw, adj, sl = make([ev(d, "AAA")], {"AAA": {"drop_at": 65}})

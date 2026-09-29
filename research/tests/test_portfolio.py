@@ -115,6 +115,8 @@ class T(unittest.TestCase):
                                places=4)
         with self.assertRaises(P.PortfolioError):
             P.run(sess, px, lambda d, h: None, cash_returns=[0.0])
+        neg = P.run(sess, px, lambda d, h: None, cash_returns=[-0.001] * n)
+        self.assertLess(neg["equity"][-1], 100000.0)
 
     def test_hold_does_not_drift_rebalance(self):
         sess, px = mkdata()

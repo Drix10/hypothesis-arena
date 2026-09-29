@@ -79,3 +79,9 @@ class CashLedger:
         if not math.isfinite(amount) or amount < 0:
             raise SettlementError("bad-credit")
         self.settled += amount
+
+    def accrue(self, amount):
+        """Signed yield on idle cash (a total-return series can dip)."""
+        if not math.isfinite(amount):
+            raise SettlementError("bad-accrual")
+        self.settled = max(0.0, self.settled + amount)

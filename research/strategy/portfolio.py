@@ -32,7 +32,7 @@ def run(sessions, prices, target_fn, cash0=100000.0, spread_bps=2.0,
         if i > 0:
             led.advance(d)
             if cash_returns is not None:
-                led.credit(led.total_cash() * cash_returns[i])
+                led.accrue(led.total_cash() * cash_returns[i])
         if pending is not None and i < len(sessions) - 1:
             cost, unfinished = _rebalance(led, prices, d, pending,
                                           spread_bps, cost_mult,
