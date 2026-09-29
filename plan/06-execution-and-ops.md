@@ -22,12 +22,15 @@ Ordering rules that every sleeve obeys:
   happen; an unfilled entry is cancelled at the sleeve's window end —
   no chasing).
 - MOC exits go in before the broker-declared MOC cutoff (adapter data).
-  MOC vs protective stop: the stop is cancelled only after the MOC is
-  acknowledged; if the stop fills first, the MOC becomes an over-sell that
-  a cash account rejects — the router treats that reject as the expected
-  terminal for the MOC (journaled, reconciled), never as an error loop.
-  If the MOC is rejected or missed, the position stays protected and the
-  exit is retried at the next session open (journaled incident).
+  MOC vs protective stop (K5 live finding 2026-09-29): Alpaca rejects both
+  MOC and market sells when an OTO stop is live; the stop must be cancelled
+  first. The stop is cancelled before MOC submission if it is currently live
+  (postpones the close to the next cycle when the stop is no longer active).
+  If the stop fills first, the MOC becomes an over-sell that a cash account
+  rejects — the router treats that reject as the expected terminal for the
+  MOC (journaled, reconciled), never as an error loop. If the MOC is
+  rejected or missed, the position stays protected and the exit is retried
+  at the next session open (journaled incident).
 - Whole shares for protected orders (adapter constraint); rounding is the
   last step of the sizing hierarchy and never rounds up past a cap.
 - No extended-hours orders in v1. No order in the first 5 minutes after

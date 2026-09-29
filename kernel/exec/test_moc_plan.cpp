@@ -27,8 +27,9 @@ static MocAction P(StopState s, MocState m, long long now = 100,
 }
 
 int main() {
-    CHECK("submit-before-cutoff",
-          P(StopState::LIVE, MocState::NOT_SENT) == MocAction::SUBMIT_MOC);
+    // K5 live finding: Alpaca rejects MOC while stop is live, so cancel stop first.
+    CHECK("cancel-stop-before-moc",
+          P(StopState::LIVE, MocState::NOT_SENT) == MocAction::CANCEL_STOP);
     CHECK("submit-unprotected-entry-too",
           P(StopState::NONE, MocState::NOT_SENT) == MocAction::SUBMIT_MOC);
     CHECK("cutoff-missed-stays-protected",
@@ -36,8 +37,6 @@ int main() {
               MocAction::KEEP_PROTECTED);
     CHECK("stop-released-only-after-moc-ack",
           P(StopState::LIVE, MocState::ACCEPTED) == MocAction::CANCEL_STOP);
-    CHECK("stop-not-released-before-ack",
-          P(StopState::LIVE, MocState::NOT_SENT) != MocAction::CANCEL_STOP);
     CHECK("after-stop-cancel-wait-for-auction",
           P(StopState::CANCELLED, MocState::ACCEPTED) == MocAction::WAIT);
     CHECK("moc-fill-clears-stale-stop",
