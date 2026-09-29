@@ -55,11 +55,10 @@ long long FileSizeBytes(const char* path);
 // Fields carry no pipes (intent ids [A-Za-z0-9_.-], lowercase hex hashes,
 // frozen kinds).
 bool JournalAppend(const char* path, const journal::Row& r);
-// A journal larger than JournalCap() bytes refuses to load, which the runner
-// treats like a corrupt file (halt). Rows are ~250 bytes and a trade writes a
-// handful, so the default 64 MiB covers decades at G3 order rates; the daily
-// roll alerts at half the cap. Rotation with a chain anchor is the follow-up
-// if that ever tightens. SetJournalCap exists for tests.
+// A journal larger than JournalCap() bytes refuses to load; the runner treats
+// that like a corrupt file (halt). Rows are ~250 bytes, so 64 MiB covers
+// decades at G3 order rates; the daily roll alerts at half the cap.
+// SetJournalCap is for tests.
 constexpr std::size_t kJournalDefaultCap = 64u << 20;
 std::size_t JournalCap();
 void SetJournalCap(std::size_t bytes);

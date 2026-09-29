@@ -195,8 +195,6 @@ bool TradeStream::Connect() {
     if (!inited) return false;
     h_ = curl_easy_init();
     if (!h_) return false;
-    // libcurl carries TCP and TLS; the WebSocket layer is ours (the system
-    // libcurl is built without ws support).
     std::string url = "https://paper-api.alpaca.markets/stream";
 #ifdef G0_TEST_BASE
     // The test build never reaches the real host: no mock URL, no stream.
@@ -219,7 +217,6 @@ bool TradeStream::Connect() {
     curl_easy_setopt(h_, CURLOPT_FOLLOWLOCATION, 0L);
     curl_easy_setopt(h_, CURLOPT_NOSIGNAL, 1L);
     if (curl_easy_perform(h_) != CURLE_OK) return false;
-    // host[:port] and path from the URL for the upgrade request.
     size_t p = url.find("://");
     std::string rest = p == std::string::npos ? url : url.substr(p + 3);
     size_t slash = rest.find('/');
