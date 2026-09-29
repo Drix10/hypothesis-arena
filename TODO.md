@@ -108,7 +108,7 @@ A box is checked only with evidence (commit and test output, or a report path).
   - Done: `ProtectedOrder.protection = OTO_STOP` + `gtc`, strict one-leg stop proof, stop-only repair order, `CloseAtClose` (time_in_force cls).
   - Done: `exec/moc_plan` sequencing with the stop-fills-first, MOC-reject, cutoff-missed and unknown-state drills (14 checks); live paper smoke accepts the OTO order with its stop leg and a cls order.
   - Done: wiring: `exit_intraday_v1` and `exit_event_v1` candidates become OTO stop-only orders (event is GTC); `exit_trend_v1` and `exit_profile_v1` stay bracket; unknown profiles are held; 5 decide checks and 6 loop checks over the real transport.
-  - Open: whether Alpaca accepts a sell or MOC while the stop leg reserves the share, decided by `kernel/broker/live_drill.cpp` in an open session, and the trend-profile switch that depends on it.
+  - **Live finding (2026-09-29 15:33 UTC)**: Alpaca **rejects both MOC and market sells while an OTO stop is live** (moc_sell transport_ok=0, market_sell transport_ok=0 with stop.protected=1). Exit logic must cancel the stop first, then close. Router change + mock drill needed before K10.
 - [x] K6 (`ingest/candidates.{hpp,cpp}`, 17 checks, wire record frozen in doc 04 2b; tailer/stage-manifest feed is runner wiring in K1/G0) `ingest/candidates.cpp`: CID recompute, sleeve approval,
       allowlist, freshness, long-only side policy, adversarial vectors.
 - [x] K7 (`ops/alert_relay.py`, 6 tests; tail+redact+HTTPS POST, no listener, at-least-once; needs ALERT_WEBHOOK_URL at deploy [HUMAN]) Outbound-only alert adapter (no inbound, no commands, redacted).
