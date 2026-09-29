@@ -1,14 +1,8 @@
-"""Global trial ledger (doc 11 §11.0a, freeze v3 A0.1). Stdlib only.
-
-Append-only, hash-chained JSONL. Every backtest / variant / evaluation
-appends an `open` row BEFORE results exist and a `close` row after; a run
-that never closes is an abandoned/crashed trial and still counts. The
-search count N used by every multiple-testing correction is
-`count_trials()` — the only source. A declared count that disagrees voids
-the run (`assert_declared_n`). Rows are never edited or deleted; the head
-checkpoint (`write_checkpoint`) is meant to be copied off-host, and
-`verify(checkpoint=...)` catches tail truncation and rewrites.
-"""
+"""Global trial ledger: append-only, hash-chained JSONL. Every evaluation
+registers an `open` row before results exist and a `close` row after; an
+unclosed trial is abandoned but still counts. N for multiple-testing
+corrections is `count_trials()`. Copy the head checkpoint off-host and pass
+it to `verify` to detect tail truncation and rewrites."""
 import hashlib
 import json
 import os
@@ -46,7 +40,6 @@ class TrialLedger:
     def __init__(self, path):
         self.path = path
 
-    # -- reading ------------------------------------------------------
     def rows(self):
         """Verified rows; raises LedgerError on any structural break."""
         out = []
@@ -110,10 +103,11 @@ class TrialLedger:
                               % (declared, actual))
         return actual
 
-    # -- writing ------------------------------------------------------
-    def _append(self, fields):
+    def _append(self, fields, check=None):
         with locks.FileLock(self.path + ".lock", purpose="general"):
             rows = self.rows()
+            if check:
+                check(rows)
             prev = rows[-1]["digest"] if rows else GENESIS
             row = dict(fields)
             row.update(seq=len(rows), prev=prev, ts=int(time.time()))
@@ -137,29 +131,40 @@ class TrialLedger:
         if missing or extra:
             raise LedgerError("open-fields:missing=%s extra=%s"
                               % (missing, extra))
+        for k in ("trial_id", "hypothesis_card_id", "family", "variant",
+                  "cost_model_version", "split_scheme", "runner"):
+            if not isinstance(f[k], str) or not f[k]:
+                raise LedgerError("open-field-type:" + k)
+        if not isinstance(f["window"], (str, dict)) or not f["window"]:
+            raise LedgerError("open-field-type:window")
         if not _is_hex64(f["prereg_hash"]) or not _is_hex64(f["code_hash"]):
             raise LedgerError("open-hash-shape")
         if not isinstance(f["dataset_hashes"], list) or not f["dataset_hashes"] \
                 or not all(_is_hex64(h) for h in f["dataset_hashes"]):
             raise LedgerError("open-dataset-hashes")
-        for r in self.rows():
-            if r["kind"] == "open" and r["trial_id"] == f["trial_id"]:
+
+        def unused(rows):
+            if any(r["kind"] == "open" and r["trial_id"] == f["trial_id"]
+                   for r in rows):
                 raise LedgerError("trial-id-reused")
-        return self._append(dict(f, kind="open"))
+        return self._append(dict(f, kind="open"), unused)
 
     def close_trial(self, trial_id, verdict, metrics):
         if verdict not in CLOSE_VERDICTS:
             raise LedgerError("close-verdict")
-        state = None
-        for r in self.rows():
-            if r["trial_id"] == trial_id:
-                state = "closed" if r["kind"] == "close" else "open"
-        if state is None:
-            raise LedgerError("close-unknown-trial")
-        if state == "closed":
-            raise LedgerError("close-twice")
+
+        def open_only(rows):
+            state = None
+            for r in rows:
+                if r["trial_id"] == trial_id:
+                    state = "closed" if r["kind"] == "close" else "open"
+            if state is None:
+                raise LedgerError("close-unknown-trial")
+            if state == "closed":
+                raise LedgerError("close-twice")
         return self._append({"kind": "close", "trial_id": trial_id,
-                             "verdict": verdict, "metrics": metrics})
+                             "verdict": verdict, "metrics": metrics},
+                            open_only)
 
     def write_checkpoint(self, path):
         rows = self.rows()

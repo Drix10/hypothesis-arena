@@ -1,15 +1,20 @@
-"""Cash-account settlement simulation (doc 11 §11.0d, doc 06 §6.0b, R18).
+"""Cash-account settlement (R18): T+1 proceeds, buys funded only from settled
+cash, whole shares, long only."""
+import math
 
-T+1 on the supplied session calendar. A BUY may only be funded from
-SETTLED cash (fail closed: no margin, no unsettled-proceeds purchases, so
-good-faith and free-riding violations cannot occur by construction). SELL
-proceeds settle on the next session. Long only: selling more than held is
-an error. Stdlib only.
-"""
+EPS = 1e-9
 
 
 class SettlementError(ValueError):
     pass
+
+
+def _whole(q):
+    return isinstance(q, int) and not isinstance(q, bool) and q > 0
+
+
+def _finite_pos(x):
+    return isinstance(x, (int, float)) and math.isfinite(x) and x > 0
 
 
 class CashLedger:
@@ -17,7 +22,7 @@ class CashLedger:
         s = list(sessions)
         if len(s) < 2 or s != sorted(set(s)):
             raise SettlementError("sessions-must-be-sorted-unique")
-        if cash < 0:
+        if not math.isfinite(cash) or cash < 0:
             raise SettlementError("negative-cash")
         self.sessions = s
         self._pos = {d: i for i, d in enumerate(s)}
@@ -46,19 +51,19 @@ class CashLedger:
         self.settled += sum(due)
 
     def can_buy(self, notional):
-        return 0 < notional <= self.settled + 1e-9
+        return 0 < notional <= self.settled + EPS
 
     def buy(self, sym, qty, notional):
-        if qty <= 0 or notional <= 0:
+        if not _whole(qty) or not _finite_pos(notional):
             raise SettlementError("bad-buy")
-        if notional > self.settled + 1e-9:
+        if notional > self.settled + EPS:
             raise SettlementError("r18-insufficient-settled-cash")
-        self.settled -= notional
+        self.settled = max(0.0, self.settled - notional)
         self.shares[sym] = self.shares.get(sym, 0) + qty
 
     def sell(self, sym, qty, proceeds):
         held = self.shares.get(sym, 0)
-        if qty <= 0 or proceeds < 0:
+        if not _whole(qty) or not math.isfinite(proceeds) or proceeds < 0:
             raise SettlementError("bad-sell")
         if qty > held:
             raise SettlementError("short-sale-refused")
@@ -71,6 +76,6 @@ class CashLedger:
 
     def credit(self, amount):
         """Dividends: cash on receipt (already settled by the issuer)."""
-        if amount < 0:
+        if not math.isfinite(amount) or amount < 0:
             raise SettlementError("bad-credit")
         self.settled += amount

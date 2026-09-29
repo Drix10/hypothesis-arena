@@ -1,13 +1,11 @@
-"""A-gate runner for sleeve T1 (doc 11 §11.3a). Stdlib only.
+"""A-gate runner for sleeve T1.
 
     python3 -m research.strategy.a_run t1
 
-Registers one ledger trial per pre-registered variant BEFORE any result is
-computed, runs each through the settled-cash portfolio engine at 1x and 2x
-cost, gates the primary variant on the untouched holdout, and closes every
-trial. A second run of unchanged code is refused (trial id reuse): the
-holdout is looked at once.
-"""
+Opens one ledger trial per pre-registered variant before computing anything,
+runs each through the settled-cash engine at 1x and 2x cost, gates it on the
+holdout and closes every trial. Unchanged code cannot be run twice: the
+trial id is derived from the code hash and a reused id is refused."""
 import hashlib
 import json
 import os
@@ -25,11 +23,13 @@ DATA = os.path.join(ROOT, "data", "sip")
 LEDGER = os.path.join(ROOT, "research", "ledger", "trials.jsonl")
 CHECKPOINT = os.path.join(ROOT, "research", "ledger", "checkpoint.json")
 REPORTS = os.path.join(ROOT, "research", "reports")
-CODE = ("strategy/a_run.py", "strategy/portfolio.py", "strategy/costs_v2.py",
-        "strategy/settlement.py", "strategy/stats.py", "strategy/gates.py",
-        "strategy/benchmarks.py", "strategy/sleeves/trend.py")
+CODE = ("strategy/a_run.py", "strategy/portfolio.py", "strategy/costs.py",
+        "strategy/costs_v2.py", "strategy/settlement.py", "strategy/stats.py",
+        "strategy/gates.py", "strategy/benchmarks.py", "strategy/ledger.py",
+        "strategy/prereg.py", "strategy/sip_fetch.py",
+        "strategy/sleeves/trend.py")
 ALLOWLIST = frozenset({"VTI", "VEU", "VNQ", "IEF", "DBC", "BIL"})
-FETCH_START = "2016-01-01T00:00:00Z"  # earliest history on the free feed
+FETCH_START = "2016-01-01T00:00:00Z"  # free feed starts 2016-01-04
 
 
 def code_hash():
@@ -42,17 +42,15 @@ def code_hash():
 
 
 def load_bars(symbols, end):
-    """Fetch (or reuse) adjusted daily SIP bars; returns manifests by symbol."""
+    """Adjusted daily SIP bars: fetch what is missing, verify what exists."""
     manifests = {}
     for s in symbols:
-        tag = f"{s}_bars_1Day_all"
-        mp = os.path.join(DATA, tag + ".manifest.json")
-        if not os.path.exists(mp):
+        args = (DATA, s, "bars", "1Day", "all")
+        if not os.path.exists(sip_fetch.dataset_paths(*args)[1]):
             _load_env()
             sip_fetch.write_dataset(s, "bars", FETCH_START, end, DATA,
                                     "1Day", "all")
-        with open(mp) as f:
-            manifests[s] = json.load(f)
+        manifests[s] = sip_fetch.verify_dataset(*args)
     return manifests
 
 
@@ -138,6 +136,9 @@ def run_t1(pre, pre_hash, end):
     lo, hi = ho[0], ho[-1] + 1
 
     led = ledger.TrialLedger(LEDGER)
+    if os.path.exists(CHECKPOINT):
+        led.verify(CHECKPOINT)
+    prior = led.count_trials()
     ch = code_hash()
     dh = sorted({m["sha256"] for m in manifests.values()})
     tids = {}
@@ -164,10 +165,13 @@ def run_t1(pre, pre_hash, end):
         ew = benchmarks.buy_and_hold(sessions, prices, universe)["returns"]
         cash = close_returns(prices, trend.CASH_LEG, sessions)
         sl = slice(lo, hi)
-        n = led.count_trials(pre["family"])
-        sharpes = [stats.sharpe(res[(v, 1.0)]["returns"][sl])
-                   for v in variants]
-        sr_var = statistics.variance(sharpes) if len(sharpes) > 1 else None
+        n = led.count_trials()
+        sharpes = [stats.sharpe([a - c for a, c in zip(
+            res[(v, 1.0)]["returns"][sl], cash[sl])]) for v in variants]
+        # Variance across a handful of variants is noise: floor it at the
+        # sampling variance of a single Sharpe estimate.
+        sr_var = max(statistics.variance(sharpes) if len(sharpes) > 1 else 0.0,
+                     1.0 / (hi - lo - 1))
         matrix = [[res[(v, 1.0)]["returns"][i] for v in variants]
                   for i in range(lo, hi)]
         reports = {}
@@ -180,16 +184,19 @@ def run_t1(pre, pre_hash, end):
                 r1, r2, cash[sl], passive[sl], n, sr_var, seed=0,
                 variants_matrix=matrix if len(variants) > 1 else None,
                 literature=True, haircut_ok=haircut_ok(r1, r2, cash[sl]),
-                transfer_ok=True, participation_ok=part)
+                transfer_ok=set(symbols) <= ALLOWLIST, participation_ok=part,
+                decision=pre["decision"], cost_multiple=2.0)
+            ex = [a - c for a, c in zip(r1, cash[sl])]
             rep.update(variant=v, trial_id=tids[v], prereg_hash=pre_hash,
-                       n_trials=n, holdout=[sessions[lo], sessions[hi - 1]],
+                       n_trials=n, prior_trials=prior,
+                       holdout=[sessions[lo], sessions[hi - 1]],
                        sessions=hi - lo,
                        trades=len(res[(v, 1.0)]["trades"]),
                        max_participation=worst,
                        cost_usd_1x=res[(v, 1.0)]["cost_usd"],
                        full_sample_sharpe=stats.sharpe(
                            res[(v, 1.0)]["returns"], 252),
-                       holdout_sharpe=stats.sharpe(r1, 252),
+                       holdout_sharpe_excess=stats.sharpe(ex, 252),
                        holdout_max_dd=stats.max_drawdown(r1),
                        passive_holdout_sharpe=stats.sharpe(passive[sl], 252),
                        equal_weight_bh_holdout_sharpe=stats.sharpe(
@@ -204,7 +211,7 @@ def run_t1(pre, pre_hash, end):
         r = reports[v]
         led.close_trial(tids[v], "pass" if r["verdict"] == "PASS" else "fail",
                         {"failed": r["failed"],
-                         "holdout_sharpe": r["holdout_sharpe"]})
+                         "holdout_sharpe_excess": r["holdout_sharpe_excess"]})
     led.write_checkpoint(CHECKPOINT)
     return reports
 

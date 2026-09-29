@@ -42,7 +42,7 @@ class T(unittest.TestCase):
         self.assertIn("missing:holdout", P.validate(b))
         b = copy.deepcopy(BASE)
         b["decision"]["min_cost_multiple"] = 1
-        self.assertIn("decision.min_cost_multiple<2", P.validate(b))
+        self.assertIn("bad-value:min_cost_multiple", P.validate(b))
         b = copy.deepcopy(BASE)
         b["decision"]["new_signal_tstat_min"] = 2.0
         self.assertTrue(P.validate(b))
@@ -54,6 +54,15 @@ class T(unittest.TestCase):
         self.assertTrue(P.validate(b))
         with self.assertRaises(P.PreregError):
             P.require_valid({})
+
+    def test_malformed_thresholds_are_errors_not_exceptions(self):
+        for k, v in (("min_days", 0), ("min_net_sharpe", -1),
+                     ("max_drawdown_pct", 1e9), ("min_cost_multiple", "2"),
+                     ("new_signal_tstat_min", True),
+                     ("min_net_sharpe", float("nan"))):
+            b = copy.deepcopy(BASE)
+            b["decision"][k] = v
+            self.assertIn("bad-value:" + k, P.validate(b))
 
     def test_contamination_boundary(self):
         b = copy.deepcopy(BASE)

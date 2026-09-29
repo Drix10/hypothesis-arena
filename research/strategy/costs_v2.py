@@ -1,13 +1,9 @@
-"""cost_v2 (doc 06 §6.0a, freeze v3 A0.3). Stdlib only.
+"""cost_v2: paper_fill_v1 priced off an NBBO quote, plus Section 31 and TAF on
+sells, a participation cap, and dividends. Fee rates are the conservative
+historical maxima, so backtests can only understate edge; stress multiplies
+spread and fees."""
+import math
 
-paper_fill_v1 (costs.fill_px, unchanged) priced from an NBBO quote, plus
-SEC Section 31 + FINRA TAF on SELLS, a participation cap, and dividends.
-Fee rates are held at CONSERVATIVE flat historical maxima for backtests:
-the Section 31 rate was $27.80/M for long stretches and is $20.60/M since
-2026-04-04 (it was $0.00 for part of 2025-26); using the maximum can only
-under-state edge, and fees are ~0.3 bps against spreads of 1-10 bps.
-TAF: $0.000166/share, max $8.30/trade. Stress multiplies spread AND fee.
-"""
 from research.strategy.costs import fill_px
 
 COST_MODEL_VERSION = "cost_v2"
@@ -23,10 +19,10 @@ class CostError(ValueError):
 
 
 def quote_mid_spread_bps(bid, ask):
-    """(mid, spread_bps) from an NBBO quote; crossed/locked/absent = error."""
+    """(mid, spread_bps) from an NBBO quote; crossed or non-finite = error."""
     for v in (bid, ask):
         if not isinstance(v, (int, float)) or isinstance(v, bool) \
-                or not v > 0:
+                or not math.isfinite(v) or not v > 0:
             raise CostError("bad-quote")
     if ask < bid:
         raise CostError("crossed-quote")

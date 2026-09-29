@@ -1,12 +1,7 @@
-"""T1 trend_etf_v1 signal (doc 02 §2.3). Pure, stdlib only, no lookahead.
-
-`make_target_fn(sessions, universe, variant)` returns a stateful target_fn
-for portfolio.run: it only sees closes up to `date`, acts on the last
-session of each calendar month, and returns None (hold) on other days.
-Slots that are off-trend (and every slot during warm-up) are parked in the
-cash leg (BIL), so the sleeve earns the T-bill return it is benchmarked
-against. Equal weight 1/len(universe) per slot.
-"""
+"""T1 trend_etf_v1 signal. `make_target_fn` returns a stateful target function
+for portfolio.run (one instance per run): on the last session of each month
+it holds an asset iff it is in an uptrend and parks the slot in BIL
+otherwise. Equal weight per slot; no data past `date` is read."""
 MA_MONTHS = 10
 MOM_MONTHS = 12
 VARIANTS = ("ma10", "mom12_vs_tbill")
@@ -18,17 +13,10 @@ class TrendError(ValueError):
 
 
 def month_end_flags(sessions):
-    """{date: True} for the last session of each calendar month in-sample.
-
-    The final session is NOT flagged unless the next session is unknown
-    to be in the same month: with no future info we cannot call it a
-    month end, so it is left unflagged (fail closed, no lookahead).
-    """
-    flags = {}
-    for i in range(len(sessions) - 1):
-        if sessions[i][:7] != sessions[i + 1][:7]:
-            flags[sessions[i]] = True
-    return flags
+    """Sessions followed by a session in a later month. The final session is
+    never flagged: without the next date it cannot be known to be a month end."""
+    return {sessions[i]: True for i in range(len(sessions) - 1)
+            if sessions[i][:7] != sessions[i + 1][:7]}
 
 
 def make_target_fn(sessions, universe, variant="ma10", park=True):

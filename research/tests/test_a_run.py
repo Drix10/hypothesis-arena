@@ -54,6 +54,92 @@ class RunnerHelpers(unittest.TestCase):
         self.assertTrue(u | {"BIL"} <= A.ALLOWLIST)
 
 
+def weekdays(start, n):
+    import datetime
+    d, out = datetime.date.fromisoformat(start), []
+    while len(out) < n:
+        if d.weekday() < 5:
+            out.append(d.isoformat())
+        d += datetime.timedelta(days=1)
+    return out
+
+
+class EndToEnd(unittest.TestCase):
+    def setUp(self):
+        import json
+        import random
+        import tempfile
+        from research.strategy import sip_fetch
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        t = self.tmp.name
+        self.saved = (A.DATA, A.LEDGER, A.CHECKPOINT)
+        A.DATA = os.path.join(t, "sip")
+        A.LEDGER = os.path.join(t, "trials.jsonl")
+        A.CHECKPOINT = os.path.join(t, "cp.json")
+        self.addCleanup(lambda: setattr(A, "DATA", self.saved[0]) or
+                        setattr(A, "LEDGER", self.saved[1]) or
+                        setattr(A, "CHECKPOINT", self.saved[2]))
+        days = weekdays("2023-01-02", 460)
+        rng = random.Random(3)
+        os.makedirs(A.DATA)
+        for k, sym in enumerate(["VTI", "VEU", "VNQ", "IEF", "DBC", "BIL"]):
+            p, rows = 100.0, []
+            drift = 0.0001 if sym == "BIL" else 0.0004
+            vol = 0.0001 if sym == "BIL" else 0.01
+            for d in days:
+                c = p * (1 + rng.gauss(drift, vol))
+                rows.append({"t": d + "T05:00:00Z", "o": p, "c": c,
+                             "h": max(p, c), "l": min(p, c), "v": 1e6})
+                p = c
+            q = sip_fetch.build_query(sym, "bars", A.FETCH_START,
+                                      "2026-01-01T00:00:00Z", "1Day", "all")
+            dp, mp = sip_fetch.dataset_paths(A.DATA, sym, "bars", "1Day",
+                                             "all")
+            sip_fetch._atomic_write(dp, sip_fetch.serialize(rows))
+            sip_fetch._atomic_write(mp, json.dumps(
+                sip_fetch.manifest(sym, "bars", q, rows)).encode())
+        with open(os.path.join(A.ROOT, "research", "prereg",
+                               "t1_trend_etf_v1.json")) as f:
+            self.pre = json.load(f)
+        self.pre["holdout"] = {"start": days[300], "end": "2026-01-01",
+                               "rule": "test"}
+        self.pre["decision"]["min_days"] = 100
+
+    def test_full_pipeline_ledgers_gates_and_refuses_rerun(self):
+        from research.strategy import ledger, prereg
+        h = prereg.require_valid(self.pre)
+        reports = A.run_t1(self.pre, h, "2026-01-01T00:00:00Z")
+        self.assertEqual(set(reports), {"ma10", "mom12_vs_tbill"})
+        for r in reports.values():
+            self.assertIn(r["verdict"], ("PASS", "FAIL"))
+            self.assertEqual(r["prior_trials"], 0)
+            self.assertEqual(r["n_trials"], 2)
+        led = ledger.TrialLedger(A.LEDGER)
+        kinds = [r["kind"] for r in led.rows()]
+        self.assertEqual(kinds, ["open", "open", "close", "close"])
+        self.assertEqual(led.verify(A.CHECKPOINT), 4)
+        with self.assertRaises(ledger.LedgerError):
+            A.run_t1(self.pre, h, "2026-01-01T00:00:00Z")
+
+    def test_tampered_dataset_is_refused(self):
+        from research.strategy import prereg, sip_fetch
+        dp, _ = sip_fetch.dataset_paths(A.DATA, "VTI", "bars", "1Day", "all")
+        with open(dp, "a") as f:
+            f.write("{}\n")
+        with self.assertRaises(sip_fetch.SipError):
+            A.run_t1(self.pre, prereg.require_valid(self.pre),
+                     "2026-01-01T00:00:00Z")
+
+    def test_deleted_ledger_is_refused(self):
+        from research.strategy import ledger, prereg
+        h = prereg.require_valid(self.pre)
+        A.run_t1(self.pre, h, "2026-01-01T00:00:00Z")
+        os.remove(A.LEDGER)
+        with self.assertRaises(ledger.LedgerError):
+            A.run_t1(self.pre, h, "2026-01-01T00:00:00Z")
+
+
 if __name__ == "__main__":
     r = unittest.main(exit=False, verbosity=0).result
     if r.wasSuccessful():

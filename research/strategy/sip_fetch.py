@@ -1,13 +1,9 @@
-"""SIP research datasets (doc 09 §9.1a, freeze v3 A0.2). Stdlib only.
-
-Alpaca Basic: SIP history is only available with an end >= 15 minutes in
-the past; the fetcher clamps/refuses anything newer. Transport is injected
-(`http_get(url, headers) -> dict`) so tests never touch the network; the
-default transport reads credentials from the environment and never logs
-or writes them. Every dataset is a manifest (source, endpoint, query,
-range, feed, adjustment, rows, content hash, fetch time); a run that
-cannot name its manifest hashes is void.
-"""
+"""SIP research datasets. Alpaca Basic serves SIP history only with an end
+at least 15 minutes in the past; newer ends are refused. Transport is
+injectable so tests never touch the network. Each dataset is a JSONL file
+plus a manifest (source, endpoint, query, range, feed, adjustment, rows,
+sha256 of the file bytes, fetch time); a run that cannot name its manifest
+hashes is void."""
 import hashlib
 import json
 import os
@@ -37,8 +33,8 @@ def _utc(s):
     return d.astimezone(timezone.utc)
 
 
-def clamp_end(end, now=None):
-    """Return end unchanged if >= 15 min old, else refuse (fail closed)."""
+def check_end(end, now=None):
+    """Return `end` if it is at least 15 minutes old, else refuse."""
     now = now or datetime.now(timezone.utc)
     if _utc(end) > now - DELAY:
         raise SipError("end-within-sip-delay")
@@ -80,7 +76,7 @@ def _headers():
 def fetch(symbol, kind, start, end, timeframe=None, adjustment="raw",
           http_get=default_http_get, headers=None, now=None):
     """Paginated fetch -> (rows, query). Rows are the raw provider dicts."""
-    clamp_end(end, now)
+    check_end(end, now)
     q = build_query(symbol, kind, start, end, timeframe, adjustment)
     hdr = headers if headers is not None else _headers()
     rows, token, pages = [], None, 0
@@ -99,10 +95,13 @@ def fetch(symbol, kind, start, end, timeframe=None, adjustment="raw",
             raise SipError("pagination-runaway")
 
 
+def serialize(rows):
+    return "".join(json.dumps(r, sort_keys=True, separators=(",", ":")) + "\n"
+                   for r in rows).encode()
+
+
 def content_hash(rows):
-    blob = "\n".join(json.dumps(r, sort_keys=True, separators=(",", ":"))
-                     for r in rows)
-    return hashlib.sha256(blob.encode()).hexdigest()
+    return hashlib.sha256(serialize(rows)).hexdigest()
 
 
 def manifest(symbol, kind, q, rows, fetched_utc=None):
@@ -116,17 +115,42 @@ def manifest(symbol, kind, q, rows, fetched_utc=None):
             datetime.now(timezone.utc).isoformat()}
 
 
+def _atomic_write(path, data):
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def dataset_paths(outdir, symbol, kind, timeframe, adjustment):
+    tag = f"{symbol}_{kind}_{timeframe or 'tick'}_{adjustment}"
+    return (os.path.join(outdir, tag + ".jsonl"),
+            os.path.join(outdir, tag + ".manifest.json"))
+
+
 def write_dataset(symbol, kind, start, end, outdir, timeframe=None,
                   adjustment="raw", **kw):
     rows, q = fetch(symbol, kind, start, end, timeframe, adjustment, **kw)
     os.makedirs(outdir, exist_ok=True)
-    tag = f"{symbol}_{kind}_{timeframe or 'tick'}_{adjustment}"
-    path = os.path.join(outdir, tag + ".jsonl")
-    with open(path, "w") as f:
-        for r in rows:
-            f.write(json.dumps(r, sort_keys=True, separators=(",", ":"))
-                    + "\n")
+    data_path, man_path = dataset_paths(outdir, symbol, kind, timeframe,
+                                        adjustment)
     m = manifest(symbol, kind, q, rows)
-    with open(os.path.join(outdir, tag + ".manifest.json"), "w") as f:
-        json.dump(m, f, indent=2, sort_keys=True)
+    _atomic_write(data_path, serialize(rows))
+    _atomic_write(man_path, json.dumps(m, indent=2, sort_keys=True).encode())
+    return m
+
+
+def verify_dataset(outdir, symbol, kind, timeframe, adjustment):
+    """Return the manifest iff the data file still hashes to it."""
+    data_path, man_path = dataset_paths(outdir, symbol, kind, timeframe,
+                                        adjustment)
+    with open(man_path) as f:
+        m = json.load(f)
+    with open(data_path, "rb") as f:
+        digest = hashlib.sha256(f.read()).hexdigest()
+    if digest != m.get("sha256") or m.get("feed") != FEED \
+            or m.get("symbol") != symbol or m.get("adjustment") != adjustment:
+        raise SipError("dataset-manifest-mismatch:" + symbol)
     return m

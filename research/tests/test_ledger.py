@@ -148,6 +148,46 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual(self.led.verify(), 20)
         self.assertEqual(self.led.count_trials(), 20)
 
+    def test_concurrent_duplicate_open_and_double_close(self):
+        import threading
+        errs, lock = [], threading.Lock()
+
+        def go(fn):
+            try:
+                fn()
+            except L.LedgerError as e:
+                with lock:
+                    errs.append(str(e))
+        ts = [threading.Thread(target=go, args=(
+            lambda: self.led.open_trial(**mk("dup")),)) for _ in range(6)]
+        [t.start() for t in ts]
+        [t.join() for t in ts]
+        self.assertEqual(self.led.count_trials(), 1)
+        self.assertEqual(errs.count("trial-id-reused"), 5)
+        errs.clear()
+        ts = [threading.Thread(target=go, args=(
+            lambda: self.led.close_trial("dup", "fail", {}),))
+            for _ in range(6)]
+        [t.start() for t in ts]
+        [t.join() for t in ts]
+        self.assertEqual(errs.count("close-twice"), 5)
+        self.assertEqual(self.led.verify(), 2)
+
+    def test_unhashable_and_mistyped_fields_refused(self):
+        for bad in (dict(trial_id=["x"]), dict(trial_id=""),
+                    dict(family=3), dict(window=5), dict(variant=None)):
+            with self.assertRaises(L.LedgerError):
+                self.led.open_trial(**mk(**bad))
+        self.assertEqual(self.led.count_trials(), 0)
+
+    def test_deleted_ledger_is_caught_by_checkpoint(self):
+        self.led.open_trial(**mk("a"))
+        cp = os.path.join(self.d.name, "cp.json")
+        self.led.write_checkpoint(cp)
+        os.remove(self.led.path)
+        with self.assertRaises(L.LedgerError):
+            self.led.verify(cp)
+
     def test_empty_ledger(self):
         self.assertEqual(self.led.count_trials(), 0)
         self.assertEqual(self.led.verify(), 0)

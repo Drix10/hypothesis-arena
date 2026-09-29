@@ -1,13 +1,7 @@
-"""Daily long-only cash-account portfolio engine (doc 11 §11.0d, doc 12).
-
-Decision at the CLOSE of session t (target_fn sees only data through t);
-orders execute at the OPEN of t+1 at `cost_v2` prices. Sells run first and
-their proceeds settle T+1 (CashLedger); buys are funded only from settled
-cash and whole shares (R18, no margin). Equity is marked at each close;
-cash earns nothing here (compare against the cash benchmark instead).
-No trading on the last session (its proceeds could not settle in-window).
-Stdlib only.
-"""
+"""Daily long-only cash-account portfolio engine. A target decided at the
+close of session t executes at the open of t+1 at cost_v2 prices: sells
+first, buys from settled cash only, whole shares. Equity is marked at each
+close and idle cash earns nothing. No trading on the last session."""
 import math
 
 from research.strategy import costs_v2 as C
@@ -21,10 +15,11 @@ class PortfolioError(ValueError):
 def run(sessions, prices, target_fn, cash0=100000.0, spread_bps=2.0,
         cost_mult=1.0, median_volume=None, min_trade_usd=50.0,
         min_trade_pct=0.005):
-    """prices[sym][date] = (open, close). target_fn(date, closes_by_sym) ->
-    {sym: weight}, or None to hold; weights >= 0, sum <= 1. `closes_by_sym[sym]` is the
-    list of closes through `date` inclusive. Returns dict(returns, equity,
-    trades, cost_usd, weights)."""
+    """prices[sym][date] = (open, close). target_fn(date, closes) returns
+    {sym: weight} (weights >= 0, sum <= 1) or None to hold, where
+    closes[sym] lists closes through `date`. An unfinished target is retried
+    on later sessions. Returns dict(returns, equity, trades, cost_usd,
+    weights)."""
     led = CashLedger(sessions, cash0)
     hist = {s: [] for s in prices}
     equity, rets, trades, cost_total, wlog = [], [], [], 0.0, []

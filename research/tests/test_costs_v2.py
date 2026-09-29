@@ -13,10 +13,11 @@ class CostV2Test(unittest.TestCase):
         mid, sp = C.quote_mid_spread_bps(99.99, 100.01)
         self.assertAlmostEqual(mid, 100.0)
         self.assertAlmostEqual(sp, 2.0, places=6)
-        for b, a in ((100, 99), (0, 1), (-1, 1), (None, 1), (True, 2)):
+        for b, a in ((100, 99), (0, 1), (-1, 1), (None, 1), (True, 2),
+                     (1, float("inf")), (float("nan"), 1)):
             with self.assertRaises(C.CostError):
                 C.quote_mid_spread_bps(b, a)
-        self.assertEqual(C.quote_mid_spread_bps(100, 100)[1], 0.0)  # locked ok
+        self.assertEqual(C.quote_mid_spread_bps(100, 100)[1], 0.0)
 
     def test_buy_pays_no_reg_fee_sell_pays(self):
         self.assertEqual(C.regulatory_fees("BUY", 100, 50.0), 0.0)

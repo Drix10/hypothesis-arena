@@ -1,13 +1,10 @@
-"""Pre-registration validator + contamination guard (doc 11 §11.0b/c).
-
-A pre-registration is a JSON object committed BEFORE any result exists; its
-canonical SHA-256 is the `prereg_hash` every ledger row carries. The
-validator is fail-closed: any missing/odd field is an error, never a
-default. Stdlib only.
-"""
+"""Pre-registration validator and contamination guard. A pre-registration is
+committed before any result exists; its canonical SHA-256 is the prereg_hash
+carried by every ledger row. Any missing or malformed field is an error."""
 import datetime
 import hashlib
 import json
+import math
 
 SCHEMA = "prereg_v1"
 REQUIRED = ("schema", "experiment_id", "family", "hypothesis", "sleeve",
@@ -105,18 +102,23 @@ def validate(p):
     except ValueError:
         errs.append("date-format")
         return errs
-    d = p["decision"]
-    if d["min_cost_multiple"] < 2:
-        errs.append("decision.min_cost_multiple<2")
-    if d["new_signal_tstat_min"] < 3.0:
-        errs.append("decision.new_signal_tstat_min<3.0")
-    if not (isinstance(d["min_net_sharpe"], (int, float))
-            and d["min_net_sharpe"] > 0):
-        errs.append("decision.min_net_sharpe")
-    if p["split"]["n_splits"] < 2:
-        errs.append("split.n_splits")
-    if p["split"]["label_horizon_days"] < 0 or p["split"]["embargo_days"] < 0:
-        errs.append("split.purge")
+    d, sp = p["decision"], p["split"]
+    for blk, k, lo, hi in (
+            (d, "min_net_sharpe", 0.0, None),
+            (d, "max_drawdown_pct", 0.0, 100.0),
+            (d, "min_cost_multiple", 2.0, None),
+            (d, "new_signal_tstat_min", 3.0, None),
+            (sp, "label_horizon_days", 0, None),
+            (sp, "embargo_days", 0, None)):
+        v = blk[k]
+        ok = isinstance(v, (int, float)) and not isinstance(v, bool) \
+            and math.isfinite(v) and v >= lo and (hi is None or v <= hi)
+        if not ok or (k in ("min_net_sharpe", "max_drawdown_pct") and v == 0):
+            errs.append("bad-value:" + k)
+    for blk, k, lo in ((d, "min_days", 1), (sp, "n_splits", 2)):
+        v = blk[k]
+        if not isinstance(v, int) or isinstance(v, bool) or v < lo:
+            errs.append("bad-value:" + k)
     if p.get("llm") is not None:
         errs.extend(contamination_errors(p["llm"],
                                          p["llm"].get("evidence_start")

@@ -25,10 +25,10 @@ def fake(pages):
 class SipTest(unittest.TestCase):
     def test_delay_refused_and_boundary(self):
         with self.assertRaises(S.SipError):
-            S.clamp_end((NOW - timedelta(minutes=14)).isoformat(), NOW)
-        S.clamp_end((NOW - timedelta(minutes=15)).isoformat(), NOW)
+            S.check_end((NOW - timedelta(minutes=14)).isoformat(), NOW)
+        S.check_end((NOW - timedelta(minutes=15)).isoformat(), NOW)
         with self.assertRaises(S.SipError):
-            S.clamp_end("2026-01-01T00:00:00", NOW)  # naive
+            S.check_end("2026-01-01T00:00:00", NOW)  # naive
 
     def test_query_validation(self):
         q = S.build_query("SPY", "bars", START, OLD, "1Day", "split")
@@ -89,6 +89,28 @@ class SipTest(unittest.TestCase):
             with open(os.path.join(
                     d, "SPY_bars_1Day_raw.manifest.json")) as fh:
                 self.assertEqual(json.load(fh)["sha256"], m["sha256"])
+
+    def test_verify_dataset_detects_tampering(self):
+        get, _ = fake([{"bars": {"SPY": [{"t": "a", "c": 1}]}}])
+        with tempfile.TemporaryDirectory() as d:
+            S.write_dataset("SPY", "bars", START, OLD, d, "1Day", "raw",
+                            http_get=get, headers={}, now=NOW)
+            m = S.verify_dataset(d, "SPY", "bars", "1Day", "raw")
+            self.assertEqual(m["rows"], 1)
+            with open(os.path.join(d, "SPY_bars_1Day_raw.jsonl"), "a") as f:
+                f.write("{}\n")
+            with self.assertRaises(S.SipError):
+                S.verify_dataset(d, "SPY", "bars", "1Day", "raw")
+
+    def test_manifest_hash_is_the_file_hash(self):
+        import hashlib
+        get, _ = fake([{"bars": {"SPY": [{"t": "a", "c": 1}]}}])
+        with tempfile.TemporaryDirectory() as d:
+            m = S.write_dataset("SPY", "bars", START, OLD, d, "1Day", "raw",
+                                http_get=get, headers={}, now=NOW)
+            with open(os.path.join(d, "SPY_bars_1Day_raw.jsonl"), "rb") as f:
+                self.assertEqual(hashlib.sha256(f.read()).hexdigest(),
+                                 m["sha256"])
 
     def test_hash_deterministic_and_sensitive(self):
         a = [{"t": "a", "c": 1}]

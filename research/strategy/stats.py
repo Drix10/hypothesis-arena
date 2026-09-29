@@ -1,10 +1,7 @@
-"""Statistics standard (doc 11 §11.0b, freeze v3 A0.5). Stdlib only.
-
-Necessary, never sufficient: passing DSR/PBO proves little, failing is
-decisive. Every stochastic routine takes an explicit seed (replayable).
-Inputs are DAILY portfolio returns as plain floats; all rates are per
-period unless a function says `ann`.
-"""
+"""Sharpe inference and overfitting diagnostics (PSR/DSR, MinTRL, HAC t-stat,
+stationary bootstrap, purged splits, CPCV, PBO, Holm). Inputs are periodic
+returns as floats, already net of the risk-free leg; stochastic routines take
+an explicit seed."""
 import itertools
 import math
 import random

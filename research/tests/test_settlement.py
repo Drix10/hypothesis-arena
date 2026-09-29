@@ -53,6 +53,18 @@ class SettlementTest(unittest.TestCase):
             L2.sell("A", 1, 10)  # would settle past the calendar: refuse
         self.assertEqual(L2.shares, {"A": 1})  # refusal is atomic
 
+    def test_whole_shares_and_finite_amounts(self):
+        L = CashLedger(D, 1000)
+        for bad in (0.5, 0, -1, True, float("nan")):
+            with self.assertRaises(E):
+                L.buy("A", bad, 10)
+        with self.assertRaises(E):
+            L.buy("A", 1, float("inf"))
+        L.buy("A", 2, 1000.0 + 5e-10)  # within tolerance, never negative
+        self.assertEqual(L.settled, 0.0)
+        with self.assertRaises(E):
+            L.sell("A", 1.5, 10)
+
     def test_total_cash_conserved_and_dividend(self):
         L = CashLedger(D, 500)
         L.buy("A", 5, 200)
