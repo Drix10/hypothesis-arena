@@ -45,6 +45,8 @@ def _load_dotenv():
     with fh:
         for line in fh:
             line = line.strip()
+            if line.startswith("export "):
+                line = line[7:].lstrip()
             if not line or line.startswith("#") or "=" not in line:
                 continue
             k, v = line.split("=", 1)
@@ -53,6 +55,8 @@ def _load_dotenv():
                 continue
             if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
                 v = v[1:-1]
+            else:
+                v = v.split(" #", 1)[0].rstrip()  # inline comment, unquoted
             os.environ[k] = v
 
 

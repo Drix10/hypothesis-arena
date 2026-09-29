@@ -241,6 +241,7 @@ def fetch(url, cache_key, extra_headers=None):
                               "modified": hdrs.get("Last-Modified")}
                 return "ok", body, hdrs, validators
         except urllib.error.HTTPError as e:
+            e.close()
             last_err = f"HTTP {e.code}"
             if e.code == 304:
                 return "not-modified", b"", {}, {}

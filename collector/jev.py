@@ -77,15 +77,22 @@ CONVICTIONS = {"flat", "lean", "strong", "max"}
 
 
 def api_key():
+    # The exported variable wins over .env (as config.py documents), so a
+    # rotated key takes effect without editing the file.
+    v = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if v:
+        return v
     try:
         with open(os.path.join(ROOT, ".env"), encoding="utf-8") as fh:
             for line in fh:
                 line = line.strip()
+                if line.startswith("export "):
+                    line = line[7:].lstrip()
                 if line.startswith("OPENROUTER_API_KEY="):
                     return line.split("=", 1)[1].strip().strip("'\"")
     except OSError:
         pass
-    return os.environ.get("OPENROUTER_API_KEY", "")
+    return ""
 
 
 def canon(obj):
@@ -1073,6 +1080,7 @@ def post(body, key):
                 return None, "provider-error:oversize-response"
             return json.loads(raw), None
     except urllib.error.HTTPError as e:
+        e.close()
         return None, "provider-http-%d" % e.code
     except Exception as e:
         return None, "provider-error:%s" % type(e).__name__

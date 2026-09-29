@@ -38,7 +38,7 @@ jobs:
           python-version: "3.11"
       - name: collector suites (mocked IO, no network)
         run: |
-          for t in test_ctx test_jev test_pipeline test_config test_collect; do
+          for t in test_ctx test_jev test_pipeline test_config test_collect test_o7; do
             python3 collector/tests/$t.py
           done
           # CI-only fixture (soak_check alone): it requires effective
